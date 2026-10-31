@@ -184,6 +184,7 @@ export function dispatchChatEvent(
       ...(ev.verifierReceipt !== undefined ? { verifierReceipt: ev.verifierReceipt } : {}),
       ...(ev.blockedReport !== undefined ? { blockedReport: ev.blockedReport } : {}),
       ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+      ...(event.reason_detail !== undefined ? { reason_detail: event.reason_detail } : {}),
       ...(event.cause_class !== undefined ? { cause_class: event.cause_class } : {}),
     };
   }

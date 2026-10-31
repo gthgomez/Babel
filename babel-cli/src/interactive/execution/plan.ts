@@ -1,161 +1,63 @@
-// ─── Plan Task Execution ────────────────────────────────────────────────────
-// Extracted from interactive.ts — plan-then-approve flow. Shows a plan via
-// renderInteractivePlan, then promotes to deep mode on approval.
-
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import type { ReplContext } from '../context.js';
-import type { AgentTargetContext } from '../../services/targetResolver.js';
-import { runBabelPipeline, BabelEventBus } from '../../pipeline.js';
-import { renderInteractivePlan, type DisplayPlan, type PlanDecision } from '../../ui/planView.js';
-import { buildRunResultPayload, formatRunResultHuman } from '../../cli/structuredOutput.js';
-import { globalCostTracker } from '../../services/costTracker.js';
-import {
-  stdinCoordinatorPauseForRun,
-  stdinCoordinatorResumeAfterRun,
-} from '../../ui/inputCoordinator.js';
-import { BABEL_RUNS_DIR } from '../../cli/constants.js';
-import { accentBright, muted, primary } from '../../ui/theme.js';
-import { userStatusForRun } from '../utils.js';
-import { openEditor } from '../openEditor.js';
-import { updateConversationMemory } from '../turns.js';
-import { alert } from '../../ui/dialog.js';
+/** Read-only planning with an explicit saved handoff for application. */
+import type { ReplContext } from '../context.js'
+import type { AgentTargetContext } from '../../services/targetResolver.js'
+import { runBabelPipeline, BabelEventBus } from '../../pipeline.js'
+import type { PlanDecision } from '../../ui/planView.js'
+import { stdinCoordinatorPauseForRun, stdinCoordinatorResumeAfterRun } from '../../ui/inputCoordinator.js'
+import { resolveEffectiveSettings } from '../../config/userSettings.js'
+import { savePlan, shouldAutoApplyPlan, withSavedPlanApplication } from '../../services/savedPlan.js'
+import { withProjectRootEnv } from '../../commands/projectRootEnv.js'
+import { userStatusForRun } from '../utils.js'
+import { assertFiniteBudgetSupported } from '../../config/laneBudget.js'
 
 export function planDecisionShellOutcome(decision: PlanDecision | null): string {
-  return decision === null ? 'cancelled' : 'blocked';
+  return decision === null ? 'cancelled' : 'blocked'
 }
 
-export async function executePlanTask(
-  ctx: ReplContext,
-  input: string,
-  task: string,
-  target: AgentTargetContext,
-): Promise<void> {
-  const withExclusiveTerminal = <T>(
-    reason: string,
-    work: () => Promise<T>,
-  ): Promise<T> =>
-    ctx.withExclusiveTerminal ? ctx.withExclusiveTerminal(reason, work) : work();
-
-  ctx.isRunning = true;
-  stdinCoordinatorPauseForRun(ctx.rl);
-  const bus = new BabelEventBus();
-  const projectRoot = target.targetRoot;
-  ctx.lastTargetRoot = target.targetRoot;
-  ctx.lastWorkspaceRoot = target.workspaceRoot;
-  ctx.state.lastRunTargetRoot = target.targetRoot;
-  const shellTurnEpoch = ctx.shellRuntime?.store.epoch;
-
+export async function executePlanTask(ctx: ReplContext, input: string, task: string, target: AgentTargetContext): Promise<void> {
+  assertFiniteBudgetSupported('Plan', target.targetRoot)
+  ctx.isRunning = true
+  stdinCoordinatorPauseForRun(ctx.rl)
+  const bus = new BabelEventBus()
+  const epoch = ctx.shellRuntime?.store.epoch
   try {
-    process.stdout.write(primary(`\n  Planning: ${task.slice(0, 80)}\n`));
-    process.stdout.write(muted('  Running orchestrator + planner (Stage 1-2)…\n'));
-
-    const result = await runBabelPipeline(task, {
-      ...(ctx.state.project !== undefined ? { project: ctx.state.project } : {}),
-      mode: 'plan',
-      orchestratorVersion: ctx.state.router,
-      ...(ctx.state.model !== undefined ? { modelOverride: ctx.state.model } : {}),
-      eventBus: bus,
-    });
-
-    ctx.lastRunDir = result.runDir;
-
-    // Extract plan from the result
-    const planSteps = (result as any).plan?.minimal_action_set ?? [];
-    const displayPlan: DisplayPlan = {
-      taskSummary: task,
-      planType: (result as any).plan?.plan_type ?? 'IMPLEMENTATION_PLAN',
-      steps: planSteps.map((s: any) => ({
-        description: s.description ?? s.target ?? '',
-        tool: s.tool ?? 'unknown',
-        target: s.TargetFile ?? s.target ?? s.path ?? '',
-      })),
-      runDir: result.runDir,
-    };
-
-    const decision: PlanDecision | null = await withExclusiveTerminal(
-      'plan-review',
-      () => renderInteractivePlan(displayPlan),
-    );
-
-    if (decision === 'approve') {
-      // Promote to Deep: re-run with same task + plan handoff
-      process.stdout.write(primary('\n  Promoting to Deep mode…\n'));
-      const deepResult = await runBabelPipeline(task, {
-        ...(ctx.state.project !== undefined ? { project: ctx.state.project } : {}),
-        mode: 'deep',
-        orchestratorVersion: ctx.state.router,
-        ...(ctx.state.model !== undefined ? { modelOverride: ctx.state.model } : {}),
-      });
-      ctx.lastRunDir = deepResult.runDir;
-      ctx.state.lastRunUserStatus = userStatusForRun(deepResult.status);
-      const payload = buildRunResultPayload(deepResult, {
-        task,
-        mode: 'deep',
-        ...(ctx.state.project !== undefined ? { project: ctx.state.project } : {}),
-        ...(projectRoot ? { projectRoot } : {}),
-        orchestrator: ctx.state.router,
-      });
-      const human = formatRunResultHuman(payload);
-      updateConversationMemory(ctx, payload as unknown as Record<string, unknown>, task);
-      ctx.appendTurn({
-        role: 'assistant',
-        ...(ctx.lastAssistantAnswer
-          ? { answer: ctx.lastAssistantAnswer, summary: ctx.lastAssistantAnswer }
-          : {}),
-        run_dir: deepResult.runDir,
-        changed_files: (payload as any).changed_files ?? [],
-        verification: 'not required - plan-then-execute',
-        next: ctx.lastAssistantNext,
-      }, String(deepResult.status ?? 'completed'));
-      console.log(`\n${human}\n`);
-    } else if (decision === 'edit') {
-      process.stdout.write(primary('\n  Opening editor to refine the task prompt…\n'));
-      const edited = await withExclusiveTerminal('external-editor', () =>
-        openEditor({ rl: ctx.rl }),
-      );
-      if (edited) {
-        // Re-plan with edited prompt
-        process.stdout.write(muted('  Re-planning with edited prompt…\n'));
-        await executePlanTask(ctx, input, edited.trim(), target);
-      } else {
-        ctx.state.lastRunUserStatus = 'blocked';
-        ctx.settleShellTurn?.('cancelled', shellTurnEpoch);
-        console.log(muted('\n  Plan cancelled — editor returned empty.\n'));
-      }
-    } else {
-      // Rejected or cancelled
-      ctx.state.lastRunUserStatus = 'blocked';
-      ctx.settleShellTurn?.(planDecisionShellOutcome(decision), shellTurnEpoch);
-      console.log(
-        muted(
-          '\n  Plan rejected. Refine your task and try again, or switch to /mode deep for governed execution.\n',
-        ),
-      );
+    const effective = resolveEffectiveSettings({ projectRoot: target.targetRoot })
+    console.log(`Planning only. Automatic application: ${effective.autoApply.value ? 'enabled' : 'off'} (${effective.autoApply.source}).`)
+    const result = await withProjectRootEnv(target.targetRoot, [target.targetRoot], () => runBabelPipeline(task, {
+      ...(ctx.state.project ? { project: ctx.state.project } : {}), mode: 'plan', orchestratorVersion: ctx.state.router,
+      ...(ctx.state.model ? { modelOverride: ctx.state.model } : {}), eventBus: bus,
+    }))
+    ctx.lastRunDir = result.runDir
+    if (userStatusForRun(result.status) !== 'complete' || !result.plan) throw new Error('The planning run did not produce a usable plan; inspect the run evidence.')
+    const body = JSON.stringify(result.plan, null, 2)
+    const saved = savePlan({ projectRoot: target.targetRoot, task, body })
+    ctx.state.savedPlanId = saved.id
+    ctx.lastAssistantAnswer = body
+    ctx.lastAssistantStatus = 'PLAN_READY'
+    ctx.state.lastRunUserStatus = 'complete'
+    console.log(`${body}\nPlan saved: ${saved.id}\nApply with /apply ${saved.id}.`)
+    ctx.appendTurn({ role: 'assistant', answer: body, summary: `Plan ${saved.id}`, run_dir: result.runDir, changed_files: [], verification: 'read-only plan', next: `/apply ${saved.id}` }, 'PLAN_READY')
+    if (shouldAutoApplyPlan(task, effective.autoApply.value, ctx.state.operatorMode === 'hard_plan' || ctx.state.operatorMode === 'dry_run')) {
+      await withSavedPlanApplication(saved.id, { projectRoot: target.targetRoot, operatorMode: ctx.state.operatorMode, execute: async plan => {
+        const applied = await withProjectRootEnv(plan.projectRoot, [plan.projectRoot], () => runBabelPipeline(
+          `Implement this approved plan within current permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`, {
+            ...(ctx.state.project ? { project: ctx.state.project } : {}), mode: 'deep', orchestratorVersion: ctx.state.router,
+            ...(ctx.state.model ? { modelOverride: ctx.state.model } : {}),
+          }))
+        ctx.lastRunDir = applied.runDir
+        ctx.state.lastRunUserStatus = userStatusForRun(applied.status)
+        if (!['COMPLETE', 'COMPLETE_NO_MODIFICATION'].includes(applied.status)) throw new Error('Plan implementation stopped; inspect the run evidence.')
+      } })
     }
-    } catch (error: any) {
-      ctx.state.lastRunUserStatus = 'failed';
-      ctx.settleShellTurn?.('failed', shellTurnEpoch);
-    console.error(accentBright(`\n  Plan failed: ${error.message ?? String(error)}\n`));
-    if (process.stdout.isTTY && !process.env['CI']) {
-      try {
-        const showAlert = () =>
-          alert({
-            title: 'Planning Failed',
-            message: error.message ?? String(error),
-          });
-        if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('error-alert', showAlert);
-        else await showAlert();
-        (error as any)[Symbol.for('babel.error.alerted')] = true;
-      } catch {
-        // alert() itself failed — already logged via console.error above
-      }
-    }
+    ctx.saveSessionState()
+    ctx.settleShellTurn?.('complete', epoch)
+  } catch (error) {
+    ctx.state.lastRunUserStatus = 'failed'
+    ctx.settleShellTurn?.('failed', epoch)
+    console.error(error instanceof Error ? error.message : 'Planning failed.')
   } finally {
-    bus.removeAllListeners();
-    ctx.isRunning = false;
-    stdinCoordinatorResumeAfterRun(ctx.rl);
+    bus.removeAllListeners()
+    ctx.isRunning = false
+    stdinCoordinatorResumeAfterRun(ctx.rl)
   }
 }
-
-

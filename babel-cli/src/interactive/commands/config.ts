@@ -6,6 +6,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type { ReplContext } from '../context.js';
+import { connectionStatus, selectedConnectionModel } from '../../services/connectionSettings.js';
 import {
   resolveModelAlias,
   describeVisibleMode,
@@ -54,9 +55,6 @@ import {
 // ── Session control ──────────────────────────────────────────────────────────
 
 export function handleClear(ctx: ReplContext, _args: string[]): void {
-  ctx.chatEngine?.closeAdmissionStore?.();
-  ctx.chatEngine = undefined;
-  ctx.lastRoutingLabel = null;
   if (ctx.shellHost && ctx.clearHostedShell) {
     ctx.clearHostedShell();
     return;
@@ -128,15 +126,25 @@ export function handleNotifications(_ctx: ReplContext, args: string[]): void {
 export function handleMode(ctx: ReplContext, args: string[]): void {
   if (args[0]) {
     const requested = args[0].toLowerCase();
+    const review = args[1] === '--review' ? args[2] : requested === 'work' ? connectionStatus({}, ctx.resolveCurrentTarget().targetRoot).review.value : undefined;
+    if (review && !['standard', 'thorough'].includes(review)) throw new Error('Review must be standard or thorough.');
+    const workflow = requested === 'work' && review === 'thorough' ? 'deep' : MODE_ALIAS_TO_RUNTIME[requested];
+    if (workflow && VALID_MODES.includes(workflow)) {
+      ctx.state.mode = workflow;
+      ctx.state.modeExplicit = true;
+      ctx.chatEngine?.closeAdmissionStore?.();
+      ctx.chatEngine = undefined;
+      ctx.saveSessionState();
+      console.log(primary(`\n  Workflow: ${workflow === 'chat' ? 'work' : workflow === 'deep' ? 'work (thorough review)' : workflow}`));
+      return;
+    }
     // Implementor operator modes (orthogonal to chat/plan/deep).
     const op = normalizeChatOperatorMode(requested);
     if (op) {
       ctx.state.operatorMode = op;
       if (operatorModeImpliesDryRun(op)) {
         process.env['BABEL_DRY_RUN'] = '1';
-      } else if (process.env['BABEL_DRY_RUN'] === '1' && op !== 'dry_run') {
-        // Leaving dry-run: clear only if we own it via operator mode switch.
-        delete process.env['BABEL_DRY_RUN'];
+      // Switching workflow cannot clear an independently imposed read-only restriction.
       }
       // Force new engine so hard_plan / handoff options take effect.
       ctx.chatEngine?.closeAdmissionStore?.();
@@ -154,21 +162,7 @@ export function handleMode(ctx: ReplContext, args: string[]): void {
       );
       return;
     }
-    const mode = MODE_ALIAS_TO_RUNTIME[requested];
-    if (mode && VALID_MODES.includes(mode)) {
-      ctx.state.mode = mode;
-      ctx.saveSessionState();
-      console.log(primary(`\n  Mode set to ${accentBright(describeVisibleMode(mode))}`));
-    } else {
-      console.log(accentBright(`\n  Invalid mode: "${args[0]}". Available options:`));
-      Object.entries(MODE_DESCRIPTIONS).forEach(([k, v]) =>
-        console.log(`    - ${accentBright(padRight(k, 12))} ${muted(v)}`),
-      );
-      console.log(muted('\n  Operator modes (implementor):'));
-      for (const [k, v] of Object.entries(OPERATOR_MODE_HELP)) {
-        console.log(`    - ${accentBright(padRight(k, 14))} ${muted(v)}`);
-      }
-    }
+    console.log(accentBright(`\n  Invalid workflow: "${args[0]}". Use /mode work, /mode plan, or /mode work --review thorough.`));
   } else {
     console.log(primary('\n  Available Modes:'));
     Object.entries(MODE_DESCRIPTIONS).forEach(([k, v]) =>
@@ -214,9 +208,6 @@ export function handleExecutePlan(ctx: ReplContext, args: string[]): void {
   ctx.state.operatorMode = 'default';
   ctx.chatEngine?.closeAdmissionStore?.();
   ctx.chatEngine = undefined;
-  if (process.env['BABEL_DRY_RUN'] === '1') {
-    delete process.env['BABEL_DRY_RUN'];
-  }
   ctx.saveSessionState();
   console.log(
     primary(
@@ -228,9 +219,31 @@ export function handleExecutePlan(ctx: ReplContext, args: string[]): void {
 
 // ── Project ──────────────────────────────────────────────────────────────────
 
+function refreshProjectDefaults(ctx: ReplContext): void {
+  const root = ctx.resolveCurrentTarget().targetRoot;
+  const status = connectionStatus({}, root);
+  if (!ctx.state.modeExplicit) ctx.state.mode = status.workflow.value === 'plan' ? 'plan' : status.review.value === 'thorough' ? 'deep' : 'chat';
+  if (ctx.state.modelSource === 'session' || ctx.state.modelSource === 'invocation' ||
+    (!ctx.state.modelSource && ctx.state.model)) return;
+  const model = selectedConnectionModel({}, root);
+  delete ctx.state.model;
+  delete ctx.state.connectionId;
+  delete ctx.state.resolvedModelId;
+  delete ctx.state.approximateCostPerRunUsd;
+  if (model) ctx.state.model = model;
+  if (status.connection) ctx.state.connectionId = status.connection;
+  if (status.model) ctx.state.resolvedModelId = status.model;
+  ctx.state.modelSource = status.modelSource;
+  ctx.state.readinessState = status.state as NonNullable<typeof ctx.state.readinessState>;
+  resetModelSnapshotCache();
+}
+
 export function handleProject(ctx: ReplContext, args: string[]): void {
+  delete ctx.state.savedPlanId;
+  delete ctx.state.pendingPlanBody;
   if (args[0]) {
     ctx.state.project = args[0];
+    refreshProjectDefaults(ctx);
     ctx.saveSessionState();
     // Invalidate stale engine so the next turn picks up the new root
     ctx.chatEngine?.closeAdmissionStore?.();
@@ -238,6 +251,7 @@ export function handleProject(ctx: ReplContext, args: string[]): void {
     console.log(primary(`\n  Project set to ${accentBright(args[0])}`));
   } else {
     delete (ctx.state as any).project;
+    refreshProjectDefaults(ctx);
     ctx.saveSessionState();
     // Invalidate stale engine so the next turn picks up the new root
     ctx.chatEngine?.closeAdmissionStore?.();
@@ -247,9 +261,12 @@ export function handleProject(ctx: ReplContext, args: string[]): void {
 }
 
 export function handleRetarget(ctx: ReplContext, args: string[]): void {
+  delete ctx.state.savedPlanId;
+  delete ctx.state.pendingPlanBody;
   const requested = args.join(' ').trim();
   ctx.targetOverrideRoot = requested ? path.resolve(requested) : null;
   const target = ctx.resolveCurrentTarget();
+  refreshProjectDefaults(ctx);
   ctx.saveSessionState();
   // Invalidate stale engine so the next turn uses the new target root
   ctx.chatEngine?.closeAdmissionStore?.();

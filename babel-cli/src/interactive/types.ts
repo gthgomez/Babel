@@ -7,6 +7,11 @@ import type { ModelPolicyModelEntry } from '../modelPolicy.js';
 import type { LiteSessionVerb } from '../agent/contracts.js';
 
 export interface SessionState {
+  connectionId?: string;
+  modelSource?: 'session' | 'user' | 'project' | 'environment' | 'invocation' | 'connection' | 'built-in';
+  modeExplicit?: boolean;
+  readinessState?: 'setup_required' | 'configured_unverified' | 'action_required';
+  savedPlanId?: string;
   mode: ValidMode;
   project?: string;
   model?: string;
@@ -73,13 +78,13 @@ export interface InteractiveTurn {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const MODE_DESCRIPTIONS: Record<string, string> = {
-  chat: 'Conversational agent — ask questions, explore code, get answers with live tool visibility.',
-  'chat-headless': 'Headless conversational agent — same as chat with JSON output, no TUI.',
-  plan: 'Plan-only — shows a detailed plan, waits for approval before any changes.',
-  deep: 'Full governed pipeline — planning, review, execution, and verification.',
+  work: 'Inspect, answer or implement within the current permissions.',
+  plan: 'Produce a read-only plan. Apply it separately unless auto-apply is explicitly enabled.',
+  'work --review thorough': 'Use the governed planning, review and execution pipeline.',
 };
 
 export const MODE_ALIAS_TO_RUNTIME: Record<string, ValidMode> = {
+  work: 'chat',
   chat: 'chat',
   'chat-headless': 'chat-headless',
   plan: 'plan',
@@ -117,13 +122,16 @@ export const INTERACTIVE_COMMAND_GROUPS = [
   {
     title: 'Daily',
     commands: [
-      ['/doctor', 'Run workspace health checks'],
+      ['/setup', 'Connect a provider, model and budget'],
+      ['/provider list|connect|use|status', 'Manage provider accounts and current selection'],
+      ['/settings show|set', 'Inspect values and sources; save preferences explicitly'],
+      ['/doctor', 'Check local execution prerequisites'],
       ['/status', 'Show current session state'],
       ['/permissions [profile]', 'Show or set approval profile'],
-      ['/mode [name]', 'List or switch mode — chat (default), chat-headless (CI/headless), plan (ask-first), deep (governed)'],
-      ['/execute-plan', 'Stage plan → implement handoff (after hard-plan)'],
+      ['/mode work|plan', 'Work or plan; /mode work --review thorough selects governed execution'],
+      ['/apply <plan-id>', 'Apply a saved plan after project and permission checks'],
       ['/why-stopped', 'Explain last run terminal (phase-gate / policy)'],
-      ['/model [show|why|health|<key>]', 'Model detail, why it was chosen, route health, list, or set active model'],
+      ['/model list|use|show', 'List known models, select an exact ID, or inspect the active route'],
       ['/project [name]', 'Set project context or clear it'],
       ['/target', 'Show current target root'],
       ['/retarget [path]', 'Override target root for this session'],
@@ -149,7 +157,7 @@ export const INTERACTIVE_COMMAND_GROUPS = [
       ['/chain [run]', 'Show worker_chain_manifest.json status'],
       ['/checkpoint', 'List, inspect, or restore run checkpoints'],
       ['/restore <id>', 'Restore a checkpoint by id'],
-      ['/resume [id]', 'List chat sessions or resume a persisted conversation'],
+      ['/conversation list|resume <id>', 'List or resume persisted conversations'],
       ['/fork [cell_id]', 'Fork session at checkpoint into a new thread branch'],
       ['/rewind <cell_id>', 'Rewind session to a prior checkpoint'],
       ['/session', 'Show resume context for a run'],
@@ -185,10 +193,10 @@ export const INTERACTIVE_COMMAND_GROUPS = [
       ['/scrollback', 'Browse scrollback history (pager)'],
       ['/cost', 'Show session financial summary'],
       ['/history', 'Show persistent command history'],
-      ['/chat', 'Show this session transcript'],
+      ['/transcript', 'Show this session conversation transcript'],
       ['/copy', 'Copy the latest completed output'],
       ['/verbose', 'Toggle verbose log output'],
-      ['/compact [on|off]', 'Toggle conversational vs waterfall renderer'],
+      ['/display renderer <conversational|stages|auto>', 'Choose a renderer without changing workflow or context'],
       ['/notifications [on|off]', 'Toggle desktop notifications for task completion'],
       ['/clear', 'Clear the terminal'],
       ['/exit', 'End session'],
@@ -266,5 +274,5 @@ export function resolveModelAlias(
 
 export function describeVisibleMode(mode: ValidMode): string {
   const normalized = MODE_ALIAS_TO_RUNTIME[mode] ?? mode;
-  return normalized;
+  return normalized === 'chat' ? 'work' : normalized === 'chat-headless' ? 'work (headless)' : normalized === 'deep' ? 'work (thorough review)' : normalized;
 }

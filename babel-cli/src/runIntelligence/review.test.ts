@@ -109,7 +109,8 @@ test('ordinary review deduplicates tasks, preserves corrections and minimizes ev
     cwd: process.cwd(), encoding: 'utf8', env: { PATH: process.env['PATH'], NODE_OPTIONS: '--no-warnings' }, timeout: 30000,
   })
   assert.notEqual(blankUntil.status, 0)
-  assert.ok(blankUntil.stderr.includes('valid --until'))
+  assert.equal(JSON.parse(blankUntil.stdout).status, 'error')
+  assert.match(JSON.parse(blankUntil.stdout).message, /valid --until/)
   assert.ok(report.runs.every((r: { friction: { providerRetriesScheduled: number } }) => r.friction.providerRetriesScheduled === 1))
   assert.ok(report.runs.some((r: { friction: { completionBlocks: number } }) => r.friction.completionBlocks === 1))
   assert.equal(report.summary.runs, 5)
@@ -253,8 +254,10 @@ test('ordinary CLI refuses real and symbolic active-WAL catalogs and reports com
     for (const selectedPath of [path, alias]) {
       const active = invoke(selectedPath)
       assert.notEqual(active.status, 0)
-      assert.ok(active.stderr.includes('checkpointed catalog'))
-      assert.equal(active.stdout.trim(), '')
+      const failure = JSON.parse(active.stdout)
+      assert.deepEqual(Object.keys(failure).sort(), ['message', 'status'])
+      assert.equal(failure.status, 'error')
+      assert.match(failure.message, /checkpointed catalog/)
       refused++
     }
     assert.deepEqual(readdirSync(root), before)

@@ -8,7 +8,8 @@ import { ShellRuntimeBinding } from './shellRuntimeBinding.js'
 import { ShellSources } from './shellSources.js'
 import { ShellInspectorStore } from './shellInspector.js'
 import { planShellLayout } from './shellLayout.js'
-import type { ShellCommandOperations } from './shellOperations.js'
+import { createShellCommandOperations, type ShellCommandOperations } from './shellOperations.js'
+import type { ReplContext } from '../../interactive/context.js'
 
 function key(name: string): KeyEvent {
   return { name, ctrl: false, meta: false, shift: false, sequence: name }
@@ -37,7 +38,7 @@ function createHandlerSubject() {
       runtime.hydrateTurns([], id)
       return { ok: true }
     },
-    newSession: () => {},
+    newSession: () => ({ ok: true }),
     setTarget: () => {},
     toggleDirectory: () => {},
     setMode: () => {},
@@ -96,4 +97,31 @@ test('BabelRepl handler: cursoring does not touch the active thread; Enter rebin
   await new Promise((resolve) => setImmediate(resolve))
   assert.deepEqual(resumed, ['s2'])
   assert.equal(runtime.getSnapshot().threadId, 's2')
+})
+
+test('BabelRepl handler: active New conversation preserves cancellation and shows recovery', async () => {
+  const { repl, runtime, navigator, dispatch } = createHandlerSubject()
+  let closed = 0
+  let cancelled = 0
+  const engine = { closeAdmissionStore: () => { closed++ }, abortTurn: () => { cancelled++ } }
+  repl['chatEngine'] = engine
+  repl['isRunning'] = true
+  repl['shellCommandOperations'] = createShellCommandOperations(repl as unknown as ReplContext, {
+    invalidate: () => {}, onSessionChanged: () => { throw new Error('Active session must remain bound') },
+  })
+  navigator.setRows('sessions', [{ id: 'new', label: 'New conversation', command: { kind: 'session.new' } }])
+  const messages: string[] = []
+  const log = console.log
+  console.log = message => { messages.push(String(message)) }
+  try {
+    dispatch(key('enter'), undefined, { processKey: () => {} }, planShellLayout({ cols: 160, rows: 40 }))
+    await new Promise(resolve => setImmediate(resolve))
+  } finally { console.log = log }
+  assert.equal(repl['chatEngine'], engine)
+  assert.equal(runtime.getSnapshot().threadId, 'thread-original')
+  assert.equal(closed, 0)
+  assert.equal(repl['cachedTargetRoot'], null)
+  assert.match(messages.join('\n'), /wait.*cancel/i)
+  ;(repl['chatEngine'] as typeof engine).abortTurn()
+  assert.equal(cancelled, 1)
 })

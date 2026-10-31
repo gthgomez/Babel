@@ -1,16 +1,16 @@
 import { parseRetryAfterHeader } from './providerNormalize.js';
 
 
-const _rawRequestTimeoutMs = Number(process.env['BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS'] ?? '120000');
+const _rawRequestTimeoutMs = Number(process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] ?? process.env['BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS'] ?? '120000');
 
 const REQUEST_TIMEOUT_MS =
   Number.isFinite(_rawRequestTimeoutMs) && _rawRequestTimeoutMs > 0 ? _rawRequestTimeoutMs : 120000;
 
-const _rawRequestMaxRetries = Number(process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES'] ?? '4');
+const _rawRequestMaxRetries = Number(process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] ?? process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES'] ?? '4');
 
 
 export const REQUEST_MAX_RETRIES =
-  Number.isFinite(_rawRequestMaxRetries) && _rawRequestMaxRetries > 0
+  Number.isFinite(_rawRequestMaxRetries) && _rawRequestMaxRetries >= 0
     ? Math.min(Math.floor(_rawRequestMaxRetries), 10)
     : 4;
 
@@ -41,12 +41,14 @@ export function readPositiveIntEnv(name: string, fallback: number, max?: number)
 
 
 export function getRequestTimeoutMs(): number {
-  return readPositiveIntEnv('BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS', REQUEST_TIMEOUT_MS);
+  return readPositiveIntEnv(process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] === undefined ? 'BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS' : 'BABEL_PROVIDER_REQUEST_TIMEOUT_MS', REQUEST_TIMEOUT_MS);
 }
 
 
 export function getRequestMaxRetries(): number {
-  return readPositiveIntEnv('BABEL_DEEPINFRA_REQUEST_MAX_RETRIES', REQUEST_MAX_RETRIES, 10);
+  const raw = process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] ?? process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES'];
+  const value = raw === undefined ? REQUEST_MAX_RETRIES : Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), 10) : REQUEST_MAX_RETRIES;
 }
 
 /** Node's fetch redirect values, kept local because this project omits DOM lib types. */

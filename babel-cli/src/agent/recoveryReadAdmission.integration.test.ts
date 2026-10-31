@@ -18,7 +18,7 @@ function fixture(t: TestContext) {
   for (const args of [['init', '-q'], ['add', '--all'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture']]) execFileSync('git', args, { cwd: root, stdio: 'pipe', windowsHide: true })
   const previous = process.env['BABEL_LIVE']; process.env['BABEL_LIVE'] = 'true'
   t.after(() => { if (previous === undefined) delete process.env['BABEL_LIVE']; else process.env['BABEL_LIVE'] = previous; rmSync(storage, { recursive: true, force: true }) })
-  const engine = new ChatEngine({ task: 'Fix implementation. Preserve the regression and package metadata.', projectRoot: root })
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Fix implementation. Preserve the regression and package metadata.', projectRoot: root })
   const host = engine as unknown as { workingState: WorkingState; currentRecoveryBinding: () => RecoveryCandidateBinding; activeSubmissionGeneration: number;
     executeOneAction: (action: ChatToolAction, context: object, callbacks: object, meta: object) => Promise<{ observation: string }> }
   let state = applyWorkingStateEvent(createWorkingState('fix'), { type: 'verifier', identity: 'npm test', exitCode: 1, summary: 'red' })

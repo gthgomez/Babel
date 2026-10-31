@@ -163,7 +163,7 @@ program
     .alias("app")
     .description("Default: enter persistent interactive Babel session (REPL)")
     .option("-p, --project <name>", "Default project for this session")
-    .option("--mode <mode>", "Default mode for this session", "chat")
+    .option("--mode <mode>", "Workflow for this session: work or plan")
     .option(
       "--resume [sessionId]",
       "Resume a prior session (latest if omitted)",
@@ -199,7 +199,7 @@ Interactive slash command map:
             ...(options.project !== undefined
               ? { project: options.project }
               : {}),
-            mode: options.mode as never,
+            ...(options.mode !== undefined ? { mode: (options.mode === 'work' ? 'chat' : options.mode) as never, modeExplicit: true } : {}),
           });
         } catch (err: unknown) {
           console.error(
@@ -209,6 +209,17 @@ Interactive slash command map:
         }
       },
     );
+
+// Conversation recovery is explicit; legacy `session` commands retain evidence inspection.
+const conversation = program.command('conversation').description('List or resume persisted conversations');
+conversation.command('list').description('List saved conversations without model requests').option('--json').action(async () => {
+  const { listResumableSessions } = await import('../services/chatSessionIndex.js');
+  process.stdout.write(`${JSON.stringify(await listResumableSessions({ limit: 30 }), null, 2)}\n`);
+});
+conversation.command('resume <id>').description('Open the interactive session with a saved conversation').action(async (id: string) => {
+  process.env['BABEL_RESUME_SESSION'] = id;
+  await startInteractiveSession();
+});
 
 const mcpCommand = program
     .command("mcp")

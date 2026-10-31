@@ -68,7 +68,7 @@ for (const fixture of fixtures) for (const priorMutation of [false,true]) test(`
     try{return {exit_code:0,stdout:execFileSync(process.execPath,['--test','--test-reporter=tap',fixture.testPath],{cwd:root,env:childEnv,encoding:'utf8',windowsHide:true}),stderr:'',process_started:true,process_termination:'exited' as const}}
     catch(error){const e=error as {status:number|null;stdout:string;stderr:string};return {exit_code:e.status??1,stdout:String(e.stdout),stderr:String(e.stderr),process_started:Number.isInteger(e.status)}}
   })
-  const engine=new ChatEngine({task:'Fix the failing tests. Preserve tests and package metadata.',projectRoot:root})
+  const engine=new ChatEngine({ model: 'deepseek-v4-flash-openrouter',task:'Fix the failing tests. Preserve tests and package metadata.',projectRoot:root})
   const probe=engine as unknown as {workingState:WorkingState;lastVerifierReceipt:{exit_code:number;stale:boolean}|null;executeActions:(actions:ChatToolAction[],callbacks:object)=>Promise<unknown>;executeOneAction:(action:ChatToolAction,context:ToolContext,callbacks:object,meta:{index:number;ownerGeneration:number})=>Promise<{observation:string}>}
   const context:ToolContext={agentId:'test',runId:'test',runDir,babelRoot:root,projectRoot:root}
   let index=0
@@ -143,7 +143,7 @@ test('an actually started red without a receipt can rerun through normal governe
     return compute(...args)
   })
   const task = 'Fix the implementation and run npm test. Preserve the test.'
-  const engine = new ChatEngine({task,projectRoot:root,requiredVerifierCommands:['npm test']})
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',task,projectRoot:root,requiredVerifierCommands:['npm test']})
   engine.admitUserSubmission({userInput:task},{model:'fixture-model',provider:'ollama'})
   const host = engine as unknown as { _turnIndex:number; workingState:WorkingState; parity: import('./chatEngineParityBridge.js').ParityRuntime;
     toolCallLog:Array<{exit_code?:number;error?:string}>; executeOneAction:(action:ChatToolAction,context:ToolContext,callbacks:object,meta:object)=>Promise<{observation:string}>;
@@ -219,7 +219,7 @@ test('governed Python write/check/read/repair path avoids host bytecode drift', 
   })
 
   const task = 'Fix the failing doctest in solution.py. Run `python -m doctest solution.py -v` before completion. Preserve the examples.'
-  const engine = new ChatEngine({ task, projectRoot:root, requiredVerifierCommands:[command] })
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot:root, requiredVerifierCommands:[command] })
   engine.admitUserSubmission({ userInput:task }, { model:'fixture-model', provider:'ollama' })
   const host = engine as unknown as {
     _turnIndex:number; parity:{turnId:string;sessionEvents:import('./sessionEvents.js').SessionEventLog};

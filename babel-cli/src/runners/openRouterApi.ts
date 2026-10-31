@@ -3,14 +3,18 @@
  *
  * OpenRouter (https://openrouter.ai) is a unified API gateway for hundreds of
  * LLMs. Its chat-completions endpoint is OpenAI-compatible, so we reuse the
- * full DeepInfraApiRunner implementation and only override the API URL and
+ * full OpenAiCompatibleRunner implementation and only override the API URL and
  * API-key source.
  *
  * Usage:
  *   OPENROUTER_API_KEY=sk-or-v1-...  // in babel-cli/.env
  */
 
-import { DeepInfraApiRunner } from './deepInfraApi.js';
+import { OpenAiCompatibleRunner } from './protocol/openai-chat-completions.js';
+import { applyCampaignOpenRouterWireBody } from '../eval/campaign-openrouter-wire.js'
+import { isCampaignQualifiedModelRoute } from '../eval/campaign-qualified-routes.js'
+import { CampaignRouteUnsupportedError } from './campaignDispatchGate.js'
+import type { RunnerCallbacks } from './base.js'
 import type { RunnerInvocationMetadata } from './base.js';
 import {
   isOpenRouterDeepSeekLiveModelId,
@@ -21,7 +25,7 @@ import { normalizeOpenRouterExecutionObservation, validateOpenRouterExecutionObs
 
 export interface OpenRouterRoutingPolicy extends ProviderRoutingPolicy {}
 
-export class OpenRouterApiRunner extends DeepInfraApiRunner {
+export class OpenRouterApiRunner extends OpenAiCompatibleRunner {
   private readonly environment: NodeJS.ProcessEnv;
   private readonly requireExactModelId: boolean;
 
@@ -34,6 +38,7 @@ export class OpenRouterApiRunner extends DeepInfraApiRunner {
     sampling: { maxTokens?: number; temperature?: number } = {},
     credential: {
       apiKeyEnvVar?: string;
+      contextWindowTokens?: number;
       explicitCredential?: string;
       env?: NodeJS.ProcessEnv;
       executionEnvelope?: ResolvedExecutionEnvelope;
@@ -42,6 +47,7 @@ export class OpenRouterApiRunner extends DeepInfraApiRunner {
   ) {
     super(model, credential.apiKeyEnvVar ?? 'OPENROUTER_API_KEY', sampling, {
       provider: 'openrouter',
+      ...(credential.contextWindowTokens ? { contextWindowTokens: credential.contextWindowTokens } : {}),
       ...(credential.explicitCredential
         ? { explicitCredential: credential.explicitCredential }
         : {}),
@@ -50,6 +56,12 @@ export class OpenRouterApiRunner extends DeepInfraApiRunner {
     });
     this.environment = credential.env ?? process.env;
     this.requireExactModelId = credential.requireExactModelId === true;
+  }
+
+  protected override sealCampaignWireBody(body: Record<string, unknown>, callbacks?: RunnerCallbacks): Record<string, unknown> {
+    if (!callbacks?.campaignMeter) return body
+    if (!isCampaignQualifiedModelRoute('openrouter', this.model)) throw new CampaignRouteUnsupportedError()
+    return applyCampaignOpenRouterWireBody(body, this.model)
   }
 
   protected override getRequestBodyExtras(): Record<string, unknown> {

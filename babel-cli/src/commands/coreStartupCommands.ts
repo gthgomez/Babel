@@ -1,4 +1,5 @@
 import { resolveRuntimePaths } from '../config/runtimePaths.js';
+import { getSetupStatus, runProviderSetup } from '../services/providerSetup.js';
 import { runInstalledDoctor, installedSetupChecklist } from '../installedDoctor.js';
 import { join, resolve } from "node:path";
 import { Command } from "commander";
@@ -294,10 +295,12 @@ program
 program
     .command("setup")
     .option("--contributor", "Show source contributor setup")
-    .description("Show the read-only first-five-minutes setup checklist")
+    .description("Guide provider, credential, model and budget setup; no inference is sent")
     .option("--json", "Emit structured JSON only")
-    .action((options: { json?: boolean; contributor?: boolean }) => {
-      printSetupChecklist(options);
+    .action(async (options: { json?: boolean; contributor?: boolean }) => {
+      if (options.contributor) printSetupChecklist(options);
+      else if (options.json) printJsonOrHuman({ ...installedSetupChecklist(), ...getSetupStatus(), nextCommand: 'babel-agent setup', networkRequests: false }, '', true);
+      else await runProviderSetup();
     });
 
 program

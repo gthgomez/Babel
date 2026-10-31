@@ -506,16 +506,18 @@ export { renderProgressLabel };
  */
 export function renderOperatorHeader(state: Record<string, unknown>): string {
   const userStatus: string = (state.lastRunUserStatus as string) ?? "ready";
-  // Show [READY] for fresh/ready state — a positive status, not a pending warning
+  // Configuration is not evidence of connectivity; fresh profiles need setup.
   const badgeStatus =
-    userStatus === "ready" ? "READY" : userStatus.toUpperCase();
+    ['ready', 'blocked'].includes(userStatus) && state.readinessState === 'setup_required' ? 'SETUP' :
+    ['ready', 'blocked'].includes(userStatus) && state.readinessState === 'action_required' ? 'ACTION REQUIRED' :
+    userStatus === "ready" && typeof state.readinessState === 'string' ? 'PENDING' : userStatus === "ready" ? "READY" : userStatus.toUpperCase();
   const statusBadge = renderBadge(badgeStatus);
   const project = state.project
     ? accentBright(state.project as string)
     : muted("global");
   const currentMode = (state.mode as string)?.toLowerCase() ?? "chat";
   const modelDisplay = state.model
-    ? accentBlue(humanizeModelId(state.model as string))
+    ? accentBlue(state.exactModelLabel === true ? state.model as string : humanizeModelId(state.model as string))
     : muted("auto");
   const mode = state.mode
     ? accentBright((state.mode as string).toUpperCase())

@@ -12,7 +12,7 @@ import {
   resolveModelByKey,
   resolveOpenRouterDeepSeekBackendKey,
 } from '../modelPolicy.js';
-import { isOfflineChatMode } from '../agent/chatModelPolicy.js';
+import { resolveChatModelPolicy, isOfflineChatMode } from '../agent/chatModelPolicy.js';
 import { accentBright } from '../ui/theme.js';
 import { saveTokenHistory, loadTokenHistory } from '../ui/tokenHistory.js';
 import type { ReplContext } from './context.js';
@@ -116,10 +116,8 @@ export function restoreSessionState(ctx: ReplContext, saved: SessionState): void
 export function resolveSessionModel(ctx: ReplContext): void {
   if (!ctx.state.model) return;
   try {
-    const requestedKey = !isOfflineChatMode()
-      ? resolveOpenRouterDeepSeekBackendKey(ctx.state.model) ?? ctx.state.model
-      : ctx.state.model;
-    const resolved = resolveModelByKey({ key: requestedKey });
+    const requestedKey = ctx.state.model;
+    const resolved = resolveChatModelPolicy({ model: requestedKey }).policy;
     if (!isOfflineChatMode()) {
       ctx.state.model = resolved.resolvedBackendKey;
     }

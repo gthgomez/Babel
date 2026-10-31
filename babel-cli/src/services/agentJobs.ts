@@ -16,6 +16,9 @@ import {
   type ModelEscalationRecommendation,
 } from './modelEscalationRules.js';
 import { resolveApprovedWorkspacePath } from './workspaceManager.js';
+import { selectedConnectionModel } from './connectionSettings.js';
+import { currentInvocationSettings } from '../config/invocationSettings.js';
+import { assertFiniteBudgetSupported } from '../config/laneBudget.js';
 
 export const JOB_STATUSES = [
   'queued',
@@ -65,6 +68,20 @@ export interface AgentJob {
 export interface AgentJobRegistry {
   schema_version: 1;
   jobs: AgentJob[];
+}
+
+/** Resolve job inference before changing status; ambient credentials never select a route. */
+export function resolveAgentJobModel(job: Pick<AgentJob, 'model' | 'project_root'>): string | undefined {
+  const root = job.project_root ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
+  assertFiniteBudgetSupported('Scheduled jobs', root);
+  const model = currentInvocationSettings()?.connection
+    ? selectedConnectionModel({}, root)
+    : job.model ?? selectedConnectionModel({}, root) ?? process.env['BABEL_MODEL'];
+  const offline = process.env['BABEL_PIPELINE_V9_OFFLINE'] === '1' || process.env['BABEL_LITE_OFFLINE'] === '1' || ['1', 'true'].includes(process.env['BABEL_OFFLINE'] ?? '');
+  if (!model && !offline && !process.env['BABEL_DESKTOP_PROVIDER']) {
+    throw new Error('SETUP_REQUIRED: Run babel-agent setup or save an explicit job model before starting this job.');
+  }
+  return model ?? undefined;
 }
 
 export interface CreateAgentJobOptions {

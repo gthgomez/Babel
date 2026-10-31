@@ -26,6 +26,7 @@ const env = consumerEnvironment(process.env, scratch)
 writeFileSync(env.npm_config_userconfig, '')
 writeFileSync(env.npm_config_globalconfig, '')
 const guardedEnv = { ...env, NODE_OPTIONS: `--import=${pathToFileURL(guard).href}` }
+const configuredTuiEnv = { ...guardedEnv, BABEL_STATE_DIR: join(scratch, 'configured TUI state'), OPENAI_API_KEY: 'fixture-only' }
 const records = []
 function command(binary, args, options = {}) {
   const result = spawnSync(binary, args, { cwd: project, env, encoding: 'utf8',
@@ -83,8 +84,9 @@ function readonly(dir, value) {
   }
   chmodSync(dir, value ? 0o555 : 0o755)
 }
-async function tui() {
-  const child = spawn(process.execPath, [bin, 'interactive'], { cwd: project, env: guardedEnv, windowsHide: true })
+async function tui(configured = false) {
+  const tuiEnv = configured ? configuredTuiEnv : guardedEnv
+  const child = spawn(process.execPath, [bin, 'interactive'], { cwd: project, env: tuiEnv, windowsHide: true })
   let transcript = ''
   let sent = false
   const timer = setTimeout(() => child.kill(), 20000)
@@ -107,9 +109,16 @@ async function tui() {
     assert.match(transcript, /Docker server (?:available|unavailable)/)
     assert.doesNotMatch(transcript, /Auto-spawn(?:ing|ed) daemon|\[preamble-budget\]/,
       'Startup diagnostics must not enter the conversation')
-    const diagnostics = readFileSync(join(env.BABEL_STATE_DIR, 'diagnostics', `interactive-${child.pid}.jsonl`), 'utf8')
+    const diagnostics = readFileSync(join(tuiEnv.BABEL_STATE_DIR, 'diagnostics', `interactive-${child.pid}.jsonl`), 'utf8')
       .trim().split(/\r?\n/).map(line => JSON.parse(line))
     const ready = diagnostics.find(entry => entry.channel === 'status' && /Auto-spawned daemon ready\. PID: \d+/.test(entry.message))
+    assert.ok(diagnostics.some(entry => entry.channel === 'startup' && entry.message.includes(`Setup state: ${configured ? 'configured_unverified' : 'setup_required'}`)), 'Startup records its actual setup state')
+    if (!configured) {
+      assert.equal(ready, undefined, 'Fresh setup must not warm up a daemon')
+      assert.match(transcript, /SETUP|[Ss]etup required|[Nn]ot configured/)
+      records.push({ check: 'fresh TUI setup/doctor/exit without daemon warmup', status: 'pass', transport: 'pipes; PTY qualification separately recorded' })
+      return
+    }
     const daemonPid = Number(ready?.message.match(/PID: (\d+)/)?.[1])
     assert.ok(daemonPid > 0, 'Production installed startup recorded its own ready daemon')
     assert.throws(() => process.kill(daemonPid, 0), /ESRCH/, 'Owned daemon exited before successful UI termination')
@@ -211,6 +220,10 @@ try {
   cli(['dry', 'on', '--json'])
   assert.ok(existsSync(join(env.BABEL_CONFIG_DIR, 'runtime-flags.json')))
   await tui()
+  const profileProbe = join(scratch, 'configured-profile.mjs')
+  writeFileSync(profileProbe, `import {updateUserSettings} from ${JSON.stringify(pathToFileURL(join(installed, 'dist/config/userSettings.js')).href)};\nupdateUserSettings({connections:{fixture:{id:'fixture',provider:'openai',model:'fixture-model'}},defaults:{connection:'fixture',model:'fixture-model',budgetUsd:'unlimited'},setup:{completed:true}});\n`)
+  command(process.execPath, [profileProbe], { env: configuredTuiEnv })
+  await tui(true)
   const stateProbe = join(scratch, 'state-probe.mjs')
   const installedModule = relativePath => JSON.stringify(pathToFileURL(join(installed, relativePath)).href)
   writeFileSync(stateProbe, `

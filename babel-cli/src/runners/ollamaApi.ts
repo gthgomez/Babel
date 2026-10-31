@@ -1,7 +1,7 @@
 /**
  * ollamaApi.ts — Ollama Local API Runner (OpenAI-compatible)
  *
- * Provides zero-cost local inference via Ollama's OpenAI-compatible endpoint.
+ * Provides Ollama inference (price is unknown unless established by usage metadata) via Ollama's OpenAI-compatible endpoint.
  * Used as the primary runner in offline mode (--offline / BABEL_OFFLINE=1).
  *
  * Ollama serves an OpenAI-compatible chat completions API at:
@@ -18,15 +18,15 @@
  */
 
 import type { RunnerInvocationMetadata } from './base.js';
-import { classifyProviderError } from './providerNormalize.js';
-import { DeepInfraApiRunner } from './deepInfraApi.js';
+import type { NativeRunnerOptions } from './protocol/native-messages.js';
+import { OpenAiCompatibleRunner } from './protocol/openai-chat-completions.js';
 
 function resolveOllamaTokens(): number {
   const raw = Number(process.env['BABEL_OLLAMA_TOKENS'] ?? '4096');
   return Number.isFinite(raw) && raw > 0 ? raw : 4096;
 }
 
-export class OllamaApiRunner extends DeepInfraApiRunner {
+export class OllamaApiRunner extends OpenAiCompatibleRunner {
   protected override get apiUrl(): string {
     const base = process.env['BABEL_DESKTOP_PROVIDER']
       ? 'http://127.0.0.1:11434/v1'
@@ -34,13 +34,25 @@ export class OllamaApiRunner extends DeepInfraApiRunner {
     return `${base.replace(/\/$/, '')}/chat/completions`;
   }
 
-  constructor(model: string) {
+  constructor(model: string, options: NativeRunnerOptions = {}) {
     super(
       model,
       'OLLAMA_API_KEY',
-      { maxTokens: resolveOllamaTokens(), temperature: 0 },
-      { provider: 'ollama', explicitCredential: 'ollama-no-auth' },
+      { maxTokens: options.maxTokens ?? resolveOllamaTokens(), temperature: options.temperature ?? 0 },
+      { provider: 'ollama', explicitCredential: 'ollama-no-auth', ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}) },
     );
+  }
+
+  protected override getAuthenticationHeaders(): Record<string, string> { return {} }
+
+  protected override getRequestTimeoutMs(): number {
+    const value = Number(process.env['BABEL_OLLAMA_REQUEST_TIMEOUT_MS'] ?? process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] ?? '300000')
+    return Number.isFinite(value) && value > 0 ? value : 300000
+  }
+
+  protected override getRequestMaxRetries(): number {
+    const value = Number(process.env['BABEL_OLLAMA_REQUEST_MAX_RETRIES'] ?? process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] ?? '1')
+    return Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), 10) : 1
   }
 
   override getLastInvocationMetadata(): RunnerInvocationMetadata | null {
@@ -52,7 +64,7 @@ export class OllamaApiRunner extends DeepInfraApiRunner {
       prompt_tokens: parent.prompt_tokens ?? null,
       completion_tokens: parent.completion_tokens ?? null,
       total_tokens: parent.total_tokens ?? null,
-      estimated_cost_usd: 0,
+      estimated_cost_usd: parent.estimated_cost_usd ?? null,
     };
   }
 }

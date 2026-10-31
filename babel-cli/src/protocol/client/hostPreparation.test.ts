@@ -104,7 +104,7 @@ async function createThread(
       jsonrpc: '2.0',
       id: 1,
       method: 'thread.create',
-      params: { project_root: projectRoot, ...(mode ? { mode } : {}) },
+      params: { project_root: projectRoot, model: 'deepseek-v4-flash-openrouter', ...(mode ? { mode } : {}) },
     },
     state,
   );

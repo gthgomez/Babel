@@ -104,7 +104,7 @@ test('adversarial review requires a different enabled model and records its rout
   try {
     const result = await withPipelineModelRoute('deepseek-v4-flash-openrouter', () => runAdversarialQaGate(makeSwePlan(),makePassVerdict(),'public fixture',1,root,()=>{}));
     assert.equal(result.passed,false);
-    assert.match(result.reason??'',/another enabled OpenRouter model/);
+    assert.match(result.reason??'',/explicit provider connection|configured independent model route/);
     assert.equal(result.allFailures?.length,1);
     assert.deepEqual(models,[]);
     policy.models['deepseek-v4-pro-openrouter'].enabled=true;

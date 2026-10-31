@@ -39,6 +39,7 @@ export interface ReviewCardProjection {
   showPatchActions: boolean;
   /** D03: structured reason carried to the review card. */
   reasonCode?: TerminalReasonCode | undefined;
+  reasonDetail?: string | undefined;
   causeClass?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null | undefined;
 }
 
@@ -84,6 +85,7 @@ export function projectTurnViewState(
   let terminalStatus: 'completed' | 'cancelled' | 'blocked' | 'budget_exhausted' | 'failed' | 'in_progress' =
     'in_progress';
   let terminalReasonCode: TerminalReasonCode | undefined;
+  let terminalReasonDetail: string | undefined;
   let terminalCauseClass:
     | 'model'
     | 'provider'
@@ -189,6 +191,7 @@ export function projectTurnViewState(
         // is authoritative and follows completion_decision in the durable log).
         if (isTerminal && ev.reason_code !== undefined) {
           terminalReasonCode = ev.reason_code;
+          terminalReasonDetail = ev.reason_detail;
         }
         if (isTerminal && ev.cause_class !== undefined) {
           terminalCauseClass = ev.cause_class;
@@ -229,6 +232,8 @@ export function projectTurnViewState(
       cardTitle = verifiedBadge === 'failed' ? 'Verification failed' : 'Complete — unverified';
     } else if (terminalOutcome === 'BLOCKED_POLICY') {
       cardTitle = 'Blocked by policy';
+    } else if (terminalOutcome === 'BLOCKED_EXTERNAL') {
+      cardTitle = terminalReasonDetail === 'credential_missing' ? 'Provider setup required' : 'Action required';
     } else if (terminalOutcome === 'BUDGET_EXHAUSTED') {
       cardTitle = 'Budget exhausted';
     } else if (terminalOutcome === 'INFRA_FAILURE') {
@@ -266,6 +271,7 @@ export function projectTurnViewState(
       changedFiles,
       hasMutations,
       showPatchActions: hasMutations && terminalOutcome !== 'CANCELLED',
+      ...(terminalReasonDetail !== undefined ? { reasonDetail: terminalReasonDetail } : {}),
       ...(terminalReasonCode !== undefined ? { reasonCode: terminalReasonCode } : {}),
       ...(terminalCauseClass !== undefined ? { causeClass: terminalCauseClass } : {}),
     },
@@ -328,6 +334,7 @@ export function renderProjectedReviewCard(
     status: proj.status,
     changedFiles: [...proj.changedFiles],
     mutated: proj.hasMutations,
+    ...(proj.reasonDetail !== undefined ? { reasonDetail: proj.reasonDetail } : {}),
     ...(proj.reasonCode !== undefined ? { reasonCode: proj.reasonCode } : {}),
     ...(proj.causeClass !== undefined ? { causeClass: proj.causeClass } : {}),
     verification: proj.verifierCommand

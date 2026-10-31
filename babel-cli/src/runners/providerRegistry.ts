@@ -11,6 +11,7 @@ export const PROVIDER_IDS = [
   'gemini',
   'groq',
   'ollama',
+  'openai-compatible',
 ] as const
 
 export type ProviderId = (typeof PROVIDER_IDS)[number]
@@ -120,29 +121,30 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     // Certification does not qualify model quality, budget durability or other modes.
     authorityConformance: 'certified',
   },
+  // Native Chat denial/result delivery: directProviderAuthority.test.ts; wire: directProviderTools.test.ts.
   openai: {
     id: 'openai',
     credentialEnvVar: 'OPENAI_API_KEY',
     protocol: 'openai_compatible',
     requiresCredential: true,
-    operations: ['structured'],
-    authorityConformance: 'untested',
+    operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    authorityConformance: 'certified',
   },
   anthropic: {
     id: 'anthropic',
     credentialEnvVar: 'ANTHROPIC_API_KEY',
     protocol: 'anthropic',
     requiresCredential: true,
-    operations: ['structured'],
-    authorityConformance: 'untested',
+    operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    authorityConformance: 'certified',
   },
   gemini: {
     id: 'gemini',
     credentialEnvVar: 'GEMINI_API_KEY',
     protocol: 'gemini',
     requiresCredential: true,
-    operations: ['structured'],
-    authorityConformance: 'untested',
+    operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    authorityConformance: 'certified',
   },
   groq: {
     id: 'groq',
@@ -151,6 +153,11 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     requiresCredential: true,
     operations: ['structured'],
     authorityConformance: 'untested',
+  },
+  'openai-compatible': {
+    id: 'openai-compatible', credentialEnvVar: 'BABEL_COMPATIBLE_API_KEY', protocol: 'openai_compatible',
+    requiresCredential: true, operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
+    authorityConformance: 'certified',
   },
 })
 

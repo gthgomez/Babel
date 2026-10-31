@@ -35,7 +35,7 @@ function fakeOperations(
       calls.push(`resume:${id}`)
       return { ok: true }
     },
-    newSession: () => calls.push('new'),
+    newSession: () => { calls.push('new'); return { ok: true } },
     setTarget: (root) => calls.push(`target:${root}`),
     toggleDirectory: (root) => calls.push(`toggle:${root}`),
     setMode: (mode) => calls.push(`mode:${mode}`),

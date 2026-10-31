@@ -127,8 +127,8 @@ test('exact GLM critic phases ignore mixed-model overrides and stay on OpenRoute
     const noFallback = (): CriticRunner => {
       throw new Error('fallback must not be reached for exact GLM');
     };
-    const flash = resolveOrCreateCriticRunner(EXACT_GLM_MODEL, null, noFallback);
-    const pro = resolveOrCreateCriticProRunner(EXACT_GLM_MODEL, null, noFallback);
+    const flash = resolveOrCreateCriticRunner(EXACT_GLM_MODEL, null, noFallback, 'openrouter');
+    const pro = resolveOrCreateCriticProRunner(EXACT_GLM_MODEL, null, noFallback, 'openrouter');
     assert.ok(flash.runner instanceof OpenRouterApiRunner);
     assert.ok(pro.runner instanceof OpenRouterApiRunner);
   } finally {

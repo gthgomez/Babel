@@ -147,6 +147,7 @@ test('stale critic inference cannot mutate the current task owner', async () => 
       task: 'Task A: mutate the project',
       projectRoot: root,
       model: 'deepseek-v4-flash',
+      providerRunner: criticRunner as never,
       runId: 'r0-critic-' + Math.random().toString(36).slice(2, 10),
     })
     const box = internals(engine)
@@ -275,7 +276,7 @@ test('stale critic inference cannot mutate the current task owner', async () => 
       effect_status: 'confirmed_change',
       mutation_paths: ['main.ts'],
     })
-    box.criticRunner = {
+    Object.assign(criticRunner, {
       async executeRaw(_prompt: string, callbacks?: CriticProviderCallbacks) {
         callbacks?.onInvocationStarted?.({
           inference_id: 'current-critic-inference',
@@ -297,7 +298,7 @@ test('stale critic inference cannot mutate the current task owner', async () => 
       getLastInvocationMetadata() {
         return usageMetadata()
       },
-    }
+    })
     const currentDecision = await box.runAsymmetricDiffCritic(
       'Task B final answer',
       {},

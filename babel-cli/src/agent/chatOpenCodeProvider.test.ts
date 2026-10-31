@@ -6,8 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ChatEngine } from './chatEngine.js';
-import { OpenCodeApiRunner } from '../runners/openCodeApi.js';
-import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
+import { ProviderEngine } from '../runners/providerEngine.js';
 import { estimateTokens } from './chatCompaction.js';
 import { resolveChatModelPolicy } from './chatModelPolicy.js';
 import { resolveAskModelPolicyWithLiveGate } from '../services/askAnswer.js';
@@ -56,7 +55,7 @@ function withTestEnv(fn: () => void): void {
   }
 }
 
-test('default and generic DeepSeek standard Chat use current OpenRouter Flash without changing explicit selections', () => {
+test('missing selection requires setup while explicit legacy DeepSeek routes remain compatible', () => {
   const previousSelectionEnv = MODEL_SELECTION_ENV_KEYS.map((key) => process.env[key]);
   process.env['BABEL_DESKTOP_PROVIDER'] = 'deepseek';
   process.env['BABEL_DESKTOP_MODEL_ROUTE'] = 'deepseek-v4-pro';
@@ -65,10 +64,7 @@ test('default and generic DeepSeek standard Chat use current OpenRouter Flash wi
   process.env['BABEL_ROOT'] = '/tmp/babel-model-default-test-root';
   try {
     withTestEnv(() => {
-      const defaultPolicy = resolveChatModelPolicy({}).policy;
-      assert.equal(defaultPolicy.provider, 'openrouter');
-      assert.equal(defaultPolicy.selectedTier, 'standard');
-      assert.equal(defaultPolicy.providerModelId, 'deepseek/deepseek-v4.1-flash-1017');
+      assert.throws(() => resolveChatModelPolicy({}), /SETUP_REQUIRED/);
 
       const genericStandard = resolveChatModelPolicy({ model: 'deepseek', modelTier: 'standard' }).policy;
       assert.equal(genericStandard.provider, 'openrouter');
@@ -122,7 +118,9 @@ test('live ChatEngine routes an explicit opencode request to the OpenCode runner
     const runner = (
       engine as unknown as { resolveDeliberationRunner: () => unknown }
     ).resolveDeliberationRunner();
-    assert.ok(runner instanceof OpenCodeApiRunner);
+    assert.ok(runner instanceof ProviderEngine);
+    assert.equal(runner.provider, 'opencode');
+    assert.equal(runner.getPinnedModelId(), 'x-preview-f-free');
   });
 });
 
@@ -150,7 +148,9 @@ test('live chat resolves the exact GLM campaign model through OpenRouter', () =>
     const runner = (
       engine as unknown as { resolveDeliberationRunner: () => unknown }
     ).resolveDeliberationRunner();
-    assert.ok(runner instanceof OpenRouterApiRunner);
+    assert.ok(runner instanceof ProviderEngine);
+    assert.equal(runner.provider, 'openrouter');
+    assert.equal(runner.getPinnedModelId(), 'z-ai/glm-5.3-flash');
   });
 });
 
@@ -169,7 +169,9 @@ test('exact GLM route overrides phase model settings instead of substituting pro
       const routed = (
         engine as unknown as { resolveRoutedRunner: () => unknown }
       ).resolveRoutedRunner();
-      assert.ok(routed instanceof OpenRouterApiRunner);
+      assert.ok(routed instanceof ProviderEngine);
+      assert.equal(routed.provider, 'openrouter');
+      assert.equal(routed.getPinnedModelId(), 'z-ai/glm-5.3-flash');
       const limits = (
         engine as unknown as {
           limits: { investigateModel?: string; mutateModel?: string };

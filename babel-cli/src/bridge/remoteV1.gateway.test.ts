@@ -66,7 +66,7 @@ describe('Babel Remote V1 gateway', () => {
       allowedWorkspaceRoot: tmp,
       allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: descriptor.task ?? 'v1',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -353,7 +353,7 @@ describe('Babel Remote V1 gateway', () => {
       authToken: TOKEN,
       allowedWorkspaceRoot: tmp,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'integrity',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',

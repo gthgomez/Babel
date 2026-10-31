@@ -184,7 +184,7 @@ test('rejected native completion feedback is controller-owned, durable, and chan
   const existingBytes = 'mode=safe\n'
   writeFileSync(join(root, 'settings.txt'), existingBytes)
   const task = 'Fix settings.txt so mode is safe.'
-  const engine = new ChatEngine({ task, projectRoot: root, maxTurns: 6 })
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: root, maxTurns: 6 })
   const runner = installFeedbackSensitiveScript(engine)
 
   const events = await run(engine, task)
@@ -243,7 +243,7 @@ test('fresh nonoverlapping ranges on one file preserve inspection and reach natu
     `range-evidence-${index + 1}`).join('\n') + '\n')
   const rangeCount = 12
   const task = 'Inspect twelve distinct sections of large.txt and summarize their evidence. Do not edit.'
-  const engine = new ChatEngine({ task, projectRoot: root, maxTurns: rangeCount + 3 })
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: root, maxTurns: rangeCount + 3 })
   const runner = installProductiveRangeScript(engine, file, rangeCount)
   const events = await run(engine, task)
   const done = finalDone(events)

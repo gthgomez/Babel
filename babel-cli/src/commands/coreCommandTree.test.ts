@@ -27,9 +27,15 @@ function commandTree(command: Command): CommandContract {
 function withoutIntentionalCommandExtensions(contract: CommandContract): CommandContract {
   return {
     ...contract,
+    options: contract.options.filter(option => option.flags !== '--connection <id>'),
     children: contract.children
-      .filter(child => child.name !== 'research')
-      .map(child => child.name === 'evidence'
+      .filter(child => !['research', 'provider', 'model', 'settings', 'conversation'].includes(child.name))
+      .map(child => child.name === 'setup'
+        ? { ...child, description: 'Show the read-only first-five-minutes setup checklist' }
+        : child.name === 'interactive'
+          ? { ...child, options: child.options.map(option => option.flags === '--mode <mode>'
+            ? { ...option, description: 'Default mode for this session' } : option) }
+        : child.name === 'evidence'
         ? { ...child, children: child.children.filter(sub => sub.name !== 'replay') }
         : child.name === 'runs'
           ? { ...child, children: child.children.filter(sub => sub.name !== 'review') }
@@ -41,6 +47,19 @@ test('core registration preserves the complete existing command contract', () =>
   const program = new Command();
   registerCoreCommands(program);
   const contract = commandTree(program);
+  // Bind the approved setup/connection extensions separately; retain the original
+  // digest for every unrelated command, argument, option, alias and ordering.
+  for (const name of ['provider', 'model', 'settings', 'conversation']) {
+    assert.equal(contract.children.filter(child => child.name === name).length, 1);
+  }
+  assert.deepEqual(contract.options.find(option => option.flags === '--connection <id>'), {
+    flags: '--connection <id>', description: 'Use a configured provider connection for this invocation', mandatory: false,
+  });
+  assert.equal(contract.children.find(child => child.name === 'setup')?.description,
+    'Guide provider, credential, model and budget setup; no inference is sent');
+  assert.equal(contract.children.find(child => child.name === 'interactive')?.options.find(option => option.flags === '--mode <mode>')?.description,
+    'Workflow for this session: work or plan');
+  assert.equal(program.commands.find(child => child.name() === 'interactive')?.options.find(option => option.flags === '--mode <mode>')?.defaultValue, undefined);
   const research = contract.children.filter(child => child.name === 'research');
   assert.equal(research.length, 1);
   assert.equal(contract.children.at(-1)?.name, 'research', 'the intentional new group is appended after the existing contract');

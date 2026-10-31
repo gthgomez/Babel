@@ -352,6 +352,7 @@ export type SessionEvent =
       policy_version: string;
       /** D03: structured reason code — `reason` stays free-text/diagnostic. */
       reason_code?: TerminalReasonCode;
+      reason_detail?: string;
       /** D03: separate model-vs-harness cause axis; null = not established. */
       cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     })
@@ -399,6 +400,7 @@ export type SessionEvent =
       status: string;
       /** D03: structured terminal reason; survives persistence/replay. */
       reason_code?: TerminalReasonCode;
+      reason_detail?: string;
       /** D03: separate model-vs-harness cause axis; null = not established. */
       cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
     })

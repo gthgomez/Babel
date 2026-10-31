@@ -251,7 +251,7 @@ for (const outcome of ['green', 'red'] as const) {
       fs.writeFileSync(join(f.root, 'source.mjs'), 'export const value = 5\n')
     }
     const task = 'Inspect the parser implementation and explain its behavior.'
-    const engine = new ChatEngine({ task, projectRoot: f.alias })
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: f.alias })
     engine.applyUserSubmission({ userInput: task })
     const host = engine as unknown as {
       currentVerifierOwner(): import('../executor/contracts.js').VerifierEvidenceOwner

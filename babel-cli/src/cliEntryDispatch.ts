@@ -7,5 +7,11 @@ export async function dispatchExecutableCli(argv: string[] = process.argv): Prom
     return
   }
   const { startCli } = await import('./cliMain.js')
-  await startCli(argv)
+  try { await startCli(argv) }
+  catch (error) {
+    const message = error instanceof Error ? error.message : 'Command failed.';
+    if (argv.includes('--json')) process.stdout.write(`${JSON.stringify({ status: 'error', message })}\n`);
+    else process.stderr.write(`${message}\n`);
+    process.exitCode = 1;
+  }
 }

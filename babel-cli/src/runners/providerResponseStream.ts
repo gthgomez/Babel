@@ -17,14 +17,14 @@ const DEFAULT_STREAM_MAX_RETRIES = 1;
 
 export function getStreamIdleTimeoutMs(): number {
   return readPositiveIntEnv(
-    'BABEL_DEEPINFRA_STREAM_IDLE_TIMEOUT_MS',
+    process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] === undefined ? 'BABEL_DEEPINFRA_STREAM_IDLE_TIMEOUT_MS' : 'BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS',
     DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   );
 }
 
 
 export function getStreamMaxRetries(): number {
-  const parsed = Number(process.env['BABEL_DEEPINFRA_STREAM_MAX_RETRIES'] ?? '');
+  const parsed = Number(process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'] ?? process.env['BABEL_DEEPINFRA_STREAM_MAX_RETRIES'] ?? '');
   const value =
     Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : DEFAULT_STREAM_MAX_RETRIES;
   return Math.min(value, 5);
@@ -203,7 +203,7 @@ export function parseSseLine(line: string): SseLineResult {
       routerMetadata: null,
       finishReason: null,
       isDone: false,
-      malformed: `[deepInfraApi] Malformed SSE event chunk: ${data.slice(0, 100)}`,
+      malformed: `[provider stream] Malformed SSE event chunk: ${data.slice(0, 100)}`,
     };
   }
 }
@@ -221,7 +221,7 @@ export async function readStreamingResponse(
   signal?: AbortSignal,
 ): Promise<string> {
   if (!response.body) {
-    throw new Error('[deepInfraApi] Streaming response had no body.');
+    throw new Error('[provider stream] Streaming response had no body.');
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -278,7 +278,7 @@ export async function readStreamingResponse(
         // Reject before cancelling. Some ReadableStream implementations
         // resolve the pending read as `done` synchronously during cancel;
         // that must not turn an idle timeout into a misleading clean EOF.
-        reject(new Error(`[deepInfraApi] stream idle timeout after ${idleTimeoutMs}ms`));
+        reject(new Error(`[provider stream] stream idle timeout after ${idleTimeoutMs}ms`));
         reader.cancel().catch(() => {});
       }, idleTimeoutMs);
     });
@@ -352,7 +352,7 @@ export async function readStreamingResponse(
     state.generationMs = Date.now() - startedAt - state.ttftMs;
   }
   if (!state.sawDone) {
-    throw new Error('[deepInfraApi] stream closed before terminal [DONE] marker');
+    throw new Error('[provider stream] stream closed before terminal [DONE] marker');
   }
   return text;
 }

@@ -38,6 +38,10 @@ export async function executeTask(
   const executeGovernedTask = deps?.executeGovernedTask ?? _executeGovernedTask;
   const resolveIdentity = deps?.loadSessionIdentity ?? loadSessionIdentity;
   try {
+    if (ctx.state.readinessState === 'setup_required' || ctx.state.readinessState === 'action_required') {
+      console.log('Action required: run /setup to select a provider, exact model and credential before starting a task. Use /provider status for details.');
+      return;
+    }
     const explicitDailyCommand = parseInteractiveDailyCommand(input);
     const emptyExplicitTask = /^(?:bl|babel)\s*$/i.test(input.trim());
     // Phase 4A: Deprecation warning for `bl` prefix in REPL (CLI already blocks it)

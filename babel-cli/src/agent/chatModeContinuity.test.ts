@@ -15,7 +15,7 @@ function fixture(mode:'chat'|'plan',body:(engine:ChatEngine,runDir:string)=>void
   const root=mkdtempSync(join(tmpdir(),'babel-mode-continuity-')),prior=process.env['BABEL_RUNS_DIR'];
   process.env['BABEL_RUNS_DIR']=join(root,'runs');
   try{
-    const engine=new ChatEngine({task:'Fix the fixture and run its required tests',projectRoot:root,executionProfile:mode,requiredVerifierCommands:['node --test fixture.test.mjs'],maxTurns:12});
+    const engine=new ChatEngine({ model: 'deepseek-v4-flash-openrouter',task:'Fix the fixture and run its required tests',projectRoot:root,executionProfile:mode,requiredVerifierCommands:['node --test fixture.test.mjs'],maxTurns:12});
     body(engine,chatSessionDir(engine.getEngineRunId()));
   }finally{if(prior===undefined)delete process.env['BABEL_RUNS_DIR'];else process.env['BABEL_RUNS_DIR']=prior;rmSync(root,{recursive:true,force:true});}
 }
@@ -46,12 +46,12 @@ for(const fromCells of [false,true])test(`the ${fromCells?'cells':'event-log'} r
   const runtime=engine.getParityRuntime(),turnId=startTurn(runtime.eventLog,{task:original.user_request,model:'fixture',provider:'ollama',projectRoot:scope.projectRoot,policyPreset:'safe_repo'});
   recordUserSubmitted(runtime.sessionEvents,{turn_id:turnId,task:original.user_request});
   assert.equal(checkpointParityEventLogStrictSync(runtime,runDir).status,'committed');
-  const options={task:'Resumed session fixture',projectRoot:scope.projectRoot,runtimeMode:'tui' as const};
+  const options={model:'deepseek-v4-flash-openrouter',task:'Resumed session fixture',projectRoot:scope.projectRoot,runtimeMode:'tui' as const};
   const restored=fromCells?createEngineFromThreadCells(engine.getEngineRunId(),options,[]):createEngineFromEventLog(options,runtime.eventLog);
   assert.equal(restored.getTaskContract()!.mode,'plan');assert.equal(restored.getTaskContract()!.contract_id,original.contract_id);
   assert.deepEqual(restored.getResolvedRequiredVerifiers(),original.verifier_requirements);
   assert.equal(loadLiveSessionAuthorityStrict(runDir).taskContract.contract_id,original.contract_id);
-  const direct=new ChatEngine({task:'Resumed session fixture',projectRoot:scope.projectRoot,runId:engine.getEngineRunId(),resumeExisting:true});
+  const direct=new ChatEngine({ model: 'deepseek-v4-flash-openrouter',task:'Resumed session fixture',projectRoot:scope.projectRoot,runId:engine.getEngineRunId(),resumeExisting:true});
   assert.equal(direct.getTaskContract()!.contract_id,original.contract_id);
   assert.equal(direct.getInstructionManifest()!.mode,'plan');
 }));
@@ -59,7 +59,7 @@ for(const fromCells of [false,true])test(`the ${fromCells?'cells':'event-log'} r
 test('the primary event-log factory preserves derived mode lineage on resume',()=>fixture('chat',(engine,runDir)=>{
   engine.applyTurnPreparation({task:'continue',executionProfile:'plan'});
   const accepted=engine.getTaskContract()!,scope=engine.getExecutionScope();if(scope.kind!=='project')throw new Error('Project fixture required');
-  const restored=createEngineFromEventLog({task:'Resumed session fixture',projectRoot:scope.projectRoot},engine.getParityEventLog());
+  const restored=createEngineFromEventLog({ model: 'deepseek-v4-flash-openrouter',task:'Resumed session fixture',projectRoot:scope.projectRoot},engine.getParityEventLog());
   assert.equal(restored.getTaskContract()!.contract_id,accepted.contract_id);
   assert.equal(loadLiveSessionAuthorityStrict(runDir).taskContract.contract_id,accepted.contract_id);
 }));
@@ -69,7 +69,7 @@ for(const hasAuthority of [true,false])test(`a later mode selection after legacy
   const runtime=engine.getParityRuntime();recordUserSubmitted(runtime.sessionEvents,{turn_id:'legacy-turn',task:'Retained legacy objective'});
   writeFileSync(join(runDir,SESSION_EVENTS_FILENAME),serializeSessionEventLog(runtime.sessionEvents));
   if(!hasAuthority)for(const name of [INSTRUCTION_MANIFEST_FILENAME,TASK_CONTRACT_FILENAME,TASK_MODE_HISTORY_FILENAME])rmSync(join(runDir,name),{force:true});
-  const restored=createEngineFromThreadCells(engine.getEngineRunId(),{task:'Resumed legacy session',projectRoot:scope.projectRoot},[]);
+  const restored=createEngineFromThreadCells(engine.getEngineRunId(),{ model: 'deepseek-v4-flash-openrouter',task:'Resumed legacy session',projectRoot:scope.projectRoot},[]);
   const before=new Map(readdirSync(runDir).filter(name=>lstatSync(join(runDir,name)).isFile()).map(name=>[name,readFileSync(join(runDir,name),'utf8')]));
   assert.throws(()=>restored.applyTurnPreparation({task:'continue',executionProfile:'plan'}),/MODE_HISTORY_SOURCE_MISSING/);
   assert.deepEqual(readdirSync(runDir).filter(name=>lstatSync(join(runDir,name)).isFile()),[...before.keys()]);
@@ -84,7 +84,7 @@ for(const hasAuthority of [true,false])test(`a later cells-resume mode selection
   assert.equal(checkpointParityEventLogStrictSync(runtime,runDir).status,'committed');
   const before=readFileSync(join(runDir,THREAD_EVENT_LOG_FILENAME),'utf8');
   if(!hasAuthority)for(const name of [INSTRUCTION_MANIFEST_FILENAME,TASK_CONTRACT_FILENAME,TASK_MODE_HISTORY_FILENAME])rmSync(join(runDir,name),{force:true});
-  const restored=createEngineFromThreadCells(engine.getEngineRunId(),{task:'Resumed cells',projectRoot:scope.projectRoot},[]);
+  const restored=createEngineFromThreadCells(engine.getEngineRunId(),{ model: 'deepseek-v4-flash-openrouter',task:'Resumed cells',projectRoot:scope.projectRoot},[]);
   restored.applyTurnPreparation({task:'continue',executionProfile:'plan'});
   assert.equal(readFileSync(join(runDir,THREAD_EVENT_LOG_FILENAME),'utf8'),before);
   assert.equal(readFileSync(join(runDir,SESSION_EVENTS_FILENAME),'utf8').includes(submitted.event_id),true);
@@ -118,7 +118,7 @@ test('a cold requested mode uses the retained objective and its original Chat ce
   engine.applyTurnPreparation({task:'continue',executionProfile:'plan'});
   const plan=engine.getTaskContract()!;
   const threadBefore=readFileSync(join(runDir,THREAD_EVENT_LOG_FILENAME),'utf8');
-  const restored=new ChatEngine({task:'continue',projectRoot:scope.projectRoot,executionProfile:'chat',runId:engine.getEngineRunId(),resumeExisting:true});
+  const restored=new ChatEngine({ model: 'deepseek-v4-flash-openrouter',task:'continue',projectRoot:scope.projectRoot,executionProfile:'chat',runId:engine.getEngineRunId(),resumeExisting:true});
   assert.equal(restored.getTaskContract()!.mode,'chat');
   assert.equal(restored.getTaskContract()!.task_id,original.task_id);
   assert.equal(restored.getTaskContract()!.provenance.parent_contract_id,plan.contract_id);

@@ -8,6 +8,8 @@ import {
   type ResolvedModelPolicy,
 } from '../modelPolicy.js';
 import { getProviderSpec, providerSupportsOperation } from '../runners/providerRegistry.js';
+import { resolveConnectionModelPolicy } from '../config/connectionModelPolicy.js';
+import { selectedConnectionModel } from '../services/connectionSettings.js';
 
 /** Exact existing Go routes allowed for explicit Chat selection; native budget gates still apply. */
 export function isChatOpenCodeGoRoute(
@@ -37,9 +39,7 @@ export function isOfflineChatMode(): boolean {
   );
 }
 
-/** Resolve ChatEngine's model policy while applying live-only routing rules.
- *  Explicit OpenRouter/GLM and OpenCode requests are resolved as their named
- *  provider routes; the default live DeepSeek lane uses OpenRouter. */
+/** Resolve explicit connections and retain named legacy routes under their live gates. */
 export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   policy: ResolvedModelPolicy;
   offline: boolean;
@@ -50,6 +50,13 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const desktopProvider = process.env['BABEL_DESKTOP_PROVIDER'];
   const desktopModel = process.env['BABEL_DESKTOP_MODEL_ROUTE'];
   const explicitModel = options.model ?? desktopModel;
+  const connectionSelector = explicitModel && !explicitModel.startsWith('connection/') && !desktopProvider
+    ? selectedConnectionModel({ model: explicitModel }) ?? explicitModel : explicitModel;
+  const connectionPolicy = resolveConnectionModelPolicy(connectionSelector, { models: configuredModels });
+  if (connectionPolicy) return { policy: connectionPolicy, offline };
+  if (!explicitModel && !desktopProvider && !offline) {
+    throw new Error('SETUP_REQUIRED: Select your provider and exact model with babel-agent setup. No cloud provider is selected.');
+  }
 
   const selectedModel = !offline
     ? (desktopProvider === 'deepseek'

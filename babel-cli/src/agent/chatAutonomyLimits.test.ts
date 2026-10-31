@@ -98,7 +98,7 @@ function makeEngine(overrides?: {
   maxTurns?: number;
 }): ChatEngine {
   const root = mkdtempSync(join(tmpdir(), 'babel-f5-limits-'));
-  return new ChatEngine({
+  return new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
     task: 'fix a small bug',
     projectRoot: root,
     ...(overrides?.maxWallMs !== undefined ? { maxWallMs: overrides.maxWallMs } : {}),

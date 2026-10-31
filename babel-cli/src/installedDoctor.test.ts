@@ -24,7 +24,7 @@ it('diagnoses an installed user without contributor files or all provider creden
     const paths = { packageRoot: root, resourceRoot: join(root, 'resources'), isInstalled: true,
       userConfigRoot: join(root, 'config'), userStateRoot: join(root, 'state'),
       userCacheRoot: join(root, 'cache'), targetProjectRoot: root }
-    const result = runInstalledDoctor({ paths, env: { OPENROUTER_API_KEY: 'doctor-secret-sentinel',BABEL_BENCHMARK_DOCKER_IMAGE:`sha256:${'a'.repeat(64)}` }, dockerProbe: () => true,imageProbe:()=>true })
+    const result = runInstalledDoctor({ paths, env: { OPENROUTER_API_KEY: 'doctor-secret-sentinel',BABEL_BENCHMARK_DOCKER_IMAGE:`sha256:${'a'.repeat(64)}` }, settings: { schemaVersion: 1, connections: { chosen: { id: 'chosen', provider: 'openrouter', model: 'fixture-model' } }, defaults: { connection: 'chosen' } }, dockerProbe: () => true,imageProbe:()=>true })
     assert.equal(result.status, 'ok')
     assert.equal(result.checks.find(c => c.id === 'provider')?.status, 'ok')
     assert.doesNotMatch(JSON.stringify(result), /doctor-secret-sentinel|workspace-map|pwsh|sibling/)
@@ -38,4 +38,11 @@ it('diagnoses an installed user without contributor files or all provider creden
     assert.ok(setup.provider_configuration.credential_env_vars.includes('OPENROUTER_API_KEY'))
     assert.doesNotMatch(JSON.stringify(setup), /doctor-secret-sentinel/)
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+
+it('does not treat an unrelated ambient provider key as a selected connection', () => {
+  const result = runInstalledDoctor({ env: { OPENROUTER_API_KEY: 'fixture-only' }, settings: { schemaVersion: 1, connections: {} }, dockerProbe: () => false })
+  assert.equal(result.checks.find(check => check.id === 'provider')?.status, 'warn')
+  assert.match(result.checks.find(check => check.id === 'provider')?.message ?? '', /setup/)
 })

@@ -45,6 +45,7 @@ export function createOpenCodeHarnessEngine(options: OpenCodeHarnessEngineOption
   const registry = options.registry;
   const descriptor = options.descriptor;
   const engine = new ChatEngine({
+    inferenceOwner: 'external-harness',
     task: descriptor.task ?? 'opencode-harness',
     projectRoot: descriptor.projectRoot,
     executionProfile: 'chat',

@@ -40,6 +40,7 @@ function makeTarget(root = process.cwd()): AgentTargetContext {
 function makeReplContext(): ReplContext {
   const ctx = Object.create(BabelRepl.prototype) as ReplContext;
   ctx.state = {
+    model: 'deepseek-v4-flash-openrouter',
     mode: 'chat',
     router: 'v9',
     costTotals: {
@@ -409,15 +410,18 @@ describe('resume then follow-up and cancel', () => {
 });
 
 describe('interactive process launch', () => {
-  test('babel interactive prints a ready prompt once and exits on /exit', async () => {
+  test('babel interactive prints honest pending readiness and exits on /exit', async () => {
     const cli = join(process.cwd(), 'src', 'index.ts');
+    const profile = mkdtempSync(join(tmpdir(), 'babel-daily-driver-profile-'));
+    mkdirSync(join(profile, 'config'));
     const child = spawn(
       process.execPath,
       ['--import', 'tsx', '--no-warnings=ExperimentalWarning', cli, 'interactive', '--mode', 'chat'],
       {
         cwd: process.cwd(),
         env: {
-          ...process.env,
+          PATH: process.env['PATH'], SystemRoot: process.env['SystemRoot'],
+          BABEL_CONFIG_DIR: join(profile, 'config'), BABEL_STATE_DIR: profile, BABEL_CACHE_DIR: join(profile, 'cache'), BABEL_RUNS_DIR: join(profile, 'runs'),
           CI: '1',
           BABEL_SKIP_RESUME_PICKER: '1',
           BABEL_SKIP_KG_INDEX: '1',
@@ -435,14 +439,14 @@ describe('interactive process launch', () => {
     });
     const ready = await new Promise<boolean>((resolve) => {
       const alreadyBuffered = stripAnsi(out);
-      if (/BABEL/i.test(alreadyBuffered) && /\[READY\]/i.test(alreadyBuffered)) {
+      if (/BABEL/i.test(alreadyBuffered) && /\[SETUP\]/i.test(alreadyBuffered)) {
         resolve(true);
         return;
       }
       const timer = setTimeout(() => resolve(false), 30_000);
       const onData = () => {
         const text = stripAnsi(out);
-        if (/BABEL/i.test(text) && /\[READY\]/i.test(text)) {
+        if (/BABEL/i.test(text) && /\[SETUP\]/i.test(text)) {
           clearTimeout(timer);
           resolve(true);
         }
@@ -467,9 +471,9 @@ describe('interactive process launch', () => {
     });
     const text = stripAnsi(out);
     assert.equal(ready, true, `ready prompt missing: ${text.slice(0, 400)}`);
-    const readyHits = text.match(/\[READY\]/g)?.length ?? 0;
+    const readyHits = text.match(/\[SETUP\]/g)?.length ?? 0;
     assert.ok(readyHits >= 1, text.slice(0, 400));
-    assert.match(text, /CHAT/i);
+    assert.match(text, /Work/i);
     assert.ok(exitCode === 0 || exitCode === null || exitCode === 1);
   });
 });

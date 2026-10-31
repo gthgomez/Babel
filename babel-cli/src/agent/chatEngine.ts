@@ -1,3 +1,4 @@
+import type { ChatLlmRunner } from '../runners/base.js'
 import { restoreFailedVerifierHistory, unresolvedFailedVerifierHistory, attestedFailedVerifierExecution } from './codingLoop/failedVerifierExecution.js';
 import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js';
 import { greenProof, selectCompletionProof } from './completionGatePolicy.js';
@@ -73,11 +74,7 @@ import {
   transcriptPath as layoutTranscriptPath,
 } from "../cli/runsLayout.js";
 import { allocateThreadId } from "../services/threadStore/threadIds.js";
-import { DeepInfraApiRunner } from "../runners/deepInfraApi.js";
-import { DeepSeekApiRunner } from "../runners/deepSeekApi.js";
-import { OllamaApiRunner } from "../runners/ollamaApi.js";
 
-import { OpenRouterApiRunner } from "../runners/openRouterApi.js";
 import type { ProviderMessage, RunnerCallbacks } from "../runners/base.js";
 import { mapProviderMessagesToWire } from "../runners/providerMessages.js";
 import {
@@ -478,22 +475,13 @@ export class ChatEngine {
   private limits: ChatEngineLimits;
   private modelPolicy: ResolvedModelPolicy | undefined;
   private synthesisRunner:
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner
+    ChatLlmRunner
     | null = null;
   private deliberationRunner:
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner
+    ChatLlmRunner
     | null = null;
   private fallbackRunner:
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner
+    ChatLlmRunner
     | null = null;
   private toolCallLog: Array<{
     toolCallId?: string;
@@ -716,16 +704,10 @@ export class ChatEngine {
   private operatorMode: ChatOperatorMode = "default";
   private _lastPhase: ChatPhase | null = null;
   private investigateRunner:
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner
+    ChatLlmRunner
     | null = null;
   private mutateRunner:
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner
+    ChatLlmRunner
     | null = null;
   private repetitionDetector: RepetitionDetector;
   private policyEventLog = new PolicyEventLog(); // A2: policy event log
@@ -882,6 +864,10 @@ export class ChatEngine {
     this.taskAllowanceOwner.markChildBudgetExhausted(limiter, reason);
   }
   constructor(options: ChatEngineOptions) {
+    if (options.inferenceOwner === 'external-harness' &&
+        (options.providerRunner || options.providerPolicy || options.model || options.provider || options.modelTier)) {
+      throw new Error('EXTERNAL_HARNESS_INFERENCE_CONFLICT: External adapters cannot configure Babel inference.');
+    }
     const scope=normalizeChatExecutionScope(options);
     options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null};
     if(scope.kind==="conversation"&&(options.instructionRoot||options.workspaceRoot||options.compiledChatStack?.project_root))throw new Error("Conflicting project context in conversation scope");
@@ -938,7 +924,7 @@ export class ChatEngine {
           : {}),
       },
       undefined,
-      { taskClass: this.taskClass, taskText: options.task },
+      { taskClass: this.taskClass, taskText: options.task, ...(options.projectRoot ? { projectRoot: options.projectRoot } : {}) },
     );
     this.abortController = new AbortController();
     this.engineRunId = options.runId ?? allocateThreadId();
@@ -1051,10 +1037,11 @@ export class ChatEngine {
       this.hardPlanMode = this.executionProfile === "plan";
     }
 
-    // Resolve model policy for provider selection.
-    // Always resolve — when no model is specified, use the policy default tier.
+    // External session adapters own their inference; native sessions require explicit selection.
     const { policy: modelPolicy, offline: isOffline } =
-      options.providerPolicy && options.providerRunner
+      options.inferenceOwner === 'external-harness'
+        ? { policy: undefined, offline: false }
+        : options.providerPolicy && options.providerRunner
         ? { policy: options.providerPolicy, offline: false }
         : resolveChatModelPolicy({
             ...(options.model !== undefined ? { model: options.model } : {}),
@@ -1071,7 +1058,7 @@ export class ChatEngine {
     this.modelPolicy = modelPolicy;
     // Packet D2: resolve the per-model edit-format session deterministically
     // from model identity; outcomes later adjust it within this session only.
-    this.editFormatSession = createEditFormatSession({
+    if (modelPolicy) this.editFormatSession = createEditFormatSession({
       family: resolveEditFormatFamily({
         policyFamily: modelPolicy.family,
         provider: modelPolicy.provider,
@@ -1087,7 +1074,7 @@ export class ChatEngine {
     // Exact experimental routes are campaign boundaries: phase-specific
     // environment overrides must not recruit another provider/model.
     if (
-      this.modelPolicy.provider === "openrouter" &&
+      this.modelPolicy?.provider === "openrouter" &&
       this.modelPolicy.providerModelId === LIVE_OPENROUTER_MODEL_ID
     ) {
       this.limits = {
@@ -1213,7 +1200,7 @@ export class ChatEngine {
       ...(this.modelPolicy?.providerModelId
         ? {
             primaryModel: this.modelPolicy.providerModelId,
-            pinSelectedModel: this.options.model !== undefined || this.options.providerPolicy !== undefined,
+            pinSelectedModel: this.modelPolicy.connectionId !== undefined || this.options.model !== undefined || this.options.providerPolicy !== undefined,
             // Offline CLI compatibility keeps its injected/cached critic. Desktop
             // (including Ollama), live calls, Go and Command Code bind the provider.
             ...(!isOfflineChatMode() || process.env['BABEL_DESKTOP_IPC'] === '1' ||
@@ -1914,6 +1901,7 @@ export class ChatEngine {
       budgetExceeded?: boolean;
       /** D03: structured reason from the terminal event. */
       reason_code?: TerminalReasonCode;
+      reason_detail?: string;
       cause_class?:
         | "model"
         | "provider"
@@ -2001,6 +1989,7 @@ export class ChatEngine {
                 ? { outcome: event.outcome }
                 : {}),
               ...(event.budgetExceeded ? { budgetExceeded: true } : {}),
+              ...(event.reason_detail !== undefined ? { reason_detail: event.reason_detail } : {}),
               ...(event.reason_code !== undefined
                 ? { reason_code: event.reason_code }
                 : {}),
@@ -2016,6 +2005,7 @@ export class ChatEngine {
               ...(event.outcome !== undefined
                 ? { outcome: event.outcome }
                 : {}),
+              ...(event.reason_detail !== undefined ? { reason_detail: event.reason_detail } : {}),
               ...(event.reason_code !== undefined
                 ? { reason_code: event.reason_code }
                 : {}),
@@ -2027,6 +2017,7 @@ export class ChatEngine {
           case "cancelled":
             terminal = {
               kind: "cancelled",
+              ...(event.reason_detail !== undefined ? { reason_detail: event.reason_detail } : {}),
               ...(event.reason_code !== undefined
                 ? { reason_code: event.reason_code }
                 : {}),
@@ -2075,6 +2066,7 @@ export class ChatEngine {
       terminal.reason_code !== undefined
         ? {
             code: terminal.reason_code,
+            ...(terminal.reason_detail ? { detail: terminal.reason_detail } : {}),
             cause_class: terminal.cause_class ?? null,
           }
         : undefined;
@@ -2169,6 +2161,9 @@ export class ChatEngine {
     taskIntent?: TaskIntent,
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
+    if (this.options.inferenceOwner === 'external-harness') {
+      throw new Error('EXTERNAL_HARNESS_INFERENCE_OWNED: This session requires its external adapter; Babel inference is disabled.');
+    }
     return scopeAsyncGenerator(
       () => this.buildBaseExecutionContext(),
       this.submitMessageStreamBody(userInput, taskIntent, submitOpts),
@@ -2835,6 +2830,14 @@ export class ChatEngine {
     // Deprecated. We rebuild from event log.
   }
 
+  /** Last primary invocation evidence; configuration alone never supplies observed identity. */
+  getProviderSelectionStatus() {
+    const metadata = this.deliberationRunner?.getLastInvocationMetadata() ?? null;
+    return { provider: this.modelPolicy?.provider ?? null, connection: this.modelPolicy?.connectionId ?? null,
+      requestedModel: this.modelPolicy?.providerModelId ?? null, sentModel: metadata?.sent_model_id ?? null,
+      observedModel: metadata?.observed_model_id ?? null };
+  }
+
   getProviderConversation(): ProviderMessage[] {
     return this.services.conversation.rebuildProviderMessages(
       this.parity.eventLog,
@@ -2917,7 +2920,7 @@ export class ChatEngine {
   }
 
   private resolveSubmissionLimits(runtime:TurnRuntimeSnapshot):ChatEngineLimits {
-    const limits=resolveChatEngineLimits({...this.options,...(this.limits.costBudget?{costBudget:this.limits.costBudget}:{})},undefined,{taskClass:runtime.taskClass,taskText:runtime.taskText});
+    const limits=resolveChatEngineLimits({...this.options,...(this.limits.costBudget?{costBudget:this.limits.costBudget}:{})},undefined,{taskClass:runtime.taskClass,taskText:runtime.taskText,...(this.options.projectRoot?{projectRoot:this.options.projectRoot}:{})});
     return this.modelPolicy?.provider==='openrouter'&&this.modelPolicy.providerModelId===LIVE_OPENROUTER_MODEL_ID?{...limits,investigateModel:LIVE_OPENROUTER_MODEL_ID,mutateModel:LIVE_OPENROUTER_MODEL_ID}:limits;
   }
 
@@ -3872,7 +3875,7 @@ export class ChatEngine {
       task: currentRequest,
       toolObservations,
     });
-    this.synthesisRunner = resolveChatSynthesisRunner(
+    this.synthesisRunner = this.options.providerRunner ?? resolveChatSynthesisRunner(
       this.synthesisRunner,
       this.modelPolicy,
       this.modelPolicy?.provider === "opencode-go" && !this.options.providerRunner
@@ -3904,10 +3907,7 @@ export class ChatEngine {
    *  #12: Also accumulates API-reported token counts for accurate estimation. */
   private trackRunnerUsage(
     runner:
-      | DeepInfraApiRunner
-      | DeepSeekApiRunner
-      | OllamaApiRunner
-      | OpenRouterApiRunner,
+      ChatLlmRunner,
     usageScope?: ChatUsageScope,
   ): void {
     trackProviderRunnerUsage(this.providerAccountingHost(), runner, usageScope);
@@ -4033,9 +4033,8 @@ export class ChatEngine {
     return parseChatTurnLenient(rawText);
   }
   private resolveDeliberationRunner():
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner {
+    ChatLlmRunner {
+    if (this.options.providerRunner) return this.options.providerRunner;
     this.deliberationRunner = resolveChatDeliberationRunner(
       this.deliberationRunner,
       this.modelPolicy,
@@ -4206,7 +4205,7 @@ export class ChatEngine {
     ownerGeneration?: number,
   ): AsyncGenerator<
     ChatEvent,
-    DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner | null,
+    ChatLlmRunner | null,
     undefined
   > {
     return yield* resolveChatFallbackOrFail({
@@ -4491,13 +4490,11 @@ export class ChatEngine {
   /** B4: Resolve runner with phase-aware model routing.
    *  Model-name resolution extracted to phaseModelRouting.ts for testability. */
   private resolveRoutedRunner():
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner {
+    ChatLlmRunner {
+    if (this.options.providerRunner) return this.options.providerRunner;
     // Desktop settings admit one primary route. Legacy phase overrides loaded
     // during CLI bootstrap cannot replace it, including after a task reset.
-    if (process.env["BABEL_DESKTOP_PROVIDER"] || this.options.model !== undefined || this.options.providerPolicy !== undefined)
+    if (this.modelPolicy?.connectionId || process.env["BABEL_DESKTOP_PROVIDER"] || this.options.model !== undefined || this.options.providerPolicy !== undefined)
       return this.resolveDeliberationRunner();
     const modelName = this.modelPolicy?.provider === "opencode-go" ? undefined : resolvePhaseModelName(this._lastPhase, {
       investigateModel: this.limits.investigateModel,
@@ -4509,10 +4506,10 @@ export class ChatEngine {
     }
     const isInvestigate = !this._lastPhase || this._lastPhase === "investigate";
     if (isInvestigate) {
-      this.investigateRunner ??= makeChatRunner(modelName);
+      this.investigateRunner ??= makeChatRunner(modelName, this.modelPolicy?.provider);
       return this.investigateRunner;
     }
-    this.mutateRunner ??= makeChatRunner(modelName);
+    this.mutateRunner ??= makeChatRunner(modelName, this.modelPolicy?.provider);
     return this.mutateRunner;
   }
 

@@ -1,3 +1,8 @@
+import { selectedConnectionModel } from '../services/connectionSettings.js'
+import { savePlan, shouldAutoApplyPlan, withSavedPlanApplication, type SavedPlan } from '../services/savedPlan.js'
+import { assertFiniteBudgetSupported } from '../config/laneBudget.js'
+import { resolveEffectiveSettings } from '../config/userSettings.js'
+import { currentInvocationSettings } from '../config/invocationSettings.js'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as readline from 'node:readline/promises';
@@ -178,6 +183,11 @@ async function promptPlanApproval(task: string, autoApprove = false): Promise<bo
 }
 
 async function runDeepCommand(taskParts: string[], options: DeepCommandOptions): Promise<void> {
+  if (!options.model) {
+    const selected = selectedConnectionModel({}, options.projectRoot ?? process.cwd());
+    if (selected) options = { ...options, model: selected };
+    else if (process.env['BABEL_OFFLINE'] !== '1' && process.env['BABEL_OFFLINE'] !== 'true') throw new Error('SETUP_REQUIRED: Run babel-agent setup before starting model-backed work.');
+  }
   const task = normalizeLiteTask(taskParts);
   if (!task) {
     throw new Error('babel deep requires task text.');
@@ -270,6 +280,7 @@ async function runDeepCommand(taskParts: string[], options: DeepCommandOptions):
     process.exitCode = 1;
     return;
   }
+  assertFiniteBudgetSupported('Thorough Work', resolvedProjectRoot);
 
   const effectiveAllowExpensive = resolveEffectiveAllowExpensive({
     task,
@@ -1075,7 +1086,7 @@ async function runLiteCommand(
   verb: LiteVerb,
   taskParts: string[],
   options: LiteCommandOptions,
-): Promise<void> {
+): Promise<void | SavedPlan> {
   let task = normalizeLiteTask(taskParts);
   if (!task) {
     if (verb === 'undo') {
@@ -1350,6 +1361,9 @@ async function runLiteCommand(
       ? formatLiteResultHuman(result.payload as LiteResultPayload)
       : null);
   const payloadRecord = result.payload as Record<string, unknown>;
+  const savedPlan = verb === 'plan' && result.exitCode === 0 && humanText
+    ? savePlan({ projectRoot: resolvedProjectRoot ?? process.cwd(), task, body: humanText }) : undefined;
+  if (savedPlan) { payloadRecord['plan_id'] = savedPlan.id; payloadRecord['apply_command'] = `babel-agent apply --plan ${savedPlan.id}`; }
   const runDir = typeof payloadRecord['run_dir'] === 'string' ? payloadRecord['run_dir'] : null;
   const progressTranscript =
     fixProgress !== undefined ? fixProgress.getTranscript().join('\n') : '';
@@ -1385,6 +1399,7 @@ async function runLiteCommand(
   if (result.exitCode !== 0) {
     process.exitCode = result.exitCode;
   }
+  return savedPlan;
 }
 
 async function handleResumeCommand(options: {
@@ -1894,6 +1909,8 @@ Notes:
       'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | example_game_workspace | example_mobile_reference)',
     )
     .option('--mode <mode>', `Pipeline mode: ${VALID_MODES.join(' | ')}`, 'chat')
+    .option('--review <depth>', 'Review depth: standard or thorough; defaults to private preferences')
+    .option('--headless', 'Use plain output; preserve workflow, review and permission settings')
     .option(
       '-m, --model <model>',
       'Override the Orchestrator and force a specific model family (qwen3|deepseek|step-flash|scout|nemotron|qwen3-32b, case-insensitive)',
@@ -2529,7 +2546,7 @@ Notes:
               writeJson(payload);
             } else {
               const usedConversational =
-                process.stdout.isTTY && !process.env['CI'] && !process.env['NO_COLOR'];
+                process.stdout.isTTY && !process.env['CI'] && !process.env['NO_COLOR'] && currentInvocationSettings()?.['presentation'] !== 'plain';
               if (!usedConversational) {
                 const human = formatRunResultHuman(payload);
                 process.stdout.write(`${human}\n`);
@@ -2803,7 +2820,7 @@ Notes:
 
   program
     .command('plan')
-    .description('Prepare a plan, ask for approval, then apply it in the same terminal flow')
+    .description('Produce a read-only plan; use apply --plan <id> for implementation')
     .argument('<intent...>', 'Task text, or legacy: <project> <task...>')
     .option('-p, --project <name>', 'Target project for the user-facing plan lane')
     .option(
@@ -2834,8 +2851,9 @@ Notes:
       'Advanced: override orchestrator contract version (default v9)',
     )
     .option('--final-only', 'Send progress to stderr and the final answer to stdout')
-    .option('--approve', 'Auto-approve apply in non-TTY environments (explicit opt-in)')
-    .option('--shadow', 'Apply to shadow root only (dry-run preview before live apply)')
+    .option('--approve', 'Legacy option; automatic application now requires an explicit plans.autoApply preference')
+    .option('--plan-only', 'Always stop after planning, overriding automatic application')
+    .option('--shadow', 'Deprecated preview restriction: produce a read-only plan without automatic application')
     .option('--json', 'Emit structured JSON only')
     .addHelpText(
       'after',
@@ -2847,7 +2865,8 @@ Examples:
   $ babel plan example_llm_router "Draft migration plan" --model deepseek --model-tier standard --show-model-policy
 
 Notes:
-  - babel plan runs a planner, a separate review agent, then asks whether to apply it now.
+  - babel-agent plan stops after the read-only plan unless a saved plans.autoApply preference enables application.
+  - --plan-only always stops; explicit apply --plan <id> rechecks project scope and permissions.
   - --json keeps the read-only plan artifact contract for automation.
   - babel plan <known-project> "<task>" is kept as the legacy Manual Bridge JSON flow.
 `,
@@ -2868,6 +2887,7 @@ Notes:
           orchestrator?: string;
           finalOnly?: boolean;
           approve?: boolean;
+          planOnly?: boolean;
           shadow?: boolean;
           json?: boolean;
         },
@@ -2880,89 +2900,17 @@ Notes:
 
         if (legacyProject === undefined) {
           try {
-            await runLiteCommand('plan', intent, options);
-            if (options.json === true || options.finalOnly === true) {
+            const saved = await runLiteCommand('plan', intent, options);
+            if (!saved) return;
+            const effective = resolveEffectiveSettings({ projectRoot: saved.projectRoot });
+            if (options.shadow) process.stderr.write('--shadow now keeps planning read-only. Inspect the saved plan before an explicit apply.\n');
+            if (!shouldAutoApplyPlan(saved.task, effective.autoApply.value, options.shadow === true || options.planOnly === true || options.json === true || options.finalOnly === true)) {
+              if (!options.json) process.stderr.write(`Plan saved as ${saved.id}. No project files were changed. Apply: babel-agent apply --plan ${saved.id}\n`);
               return;
             }
-            const task = normalizeLiteTask(intent);
-            if (!task) {
-              return;
-            }
-            const projectRoot =
-              options.projectRoot !== undefined
-                ? resolve(options.projectRoot)
-                : process.env['BABEL_PROJECT_ROOT'] !== undefined
-                  ? resolve(process.env['BABEL_PROJECT_ROOT'])
-                  : process.cwd();
-            const handoff = loadPlanHandoff({ repoPath: projectRoot, task });
-            if (handoff !== null) {
-              const review = await runPlanReviewLane({
-                task,
-                planRunDir: handoff.planRunDir,
-                projectRoot,
-              });
-              process.stderr.write(`${review.humanText}\n`);
-            }
-            const routeDecision = routeLiteOrFull(task, {
-              requestedVerb: 'do',
-              dailyProfile: resolveDailyProfile(),
-            });
-            if (!routeDecision.intent.mutation_allowed) {
-              process.stderr.write(
-                'Plan is ready. This task remains no-write until you ask Babel to apply a concrete change.\n',
-              );
-              return;
-            }
-            const approved = await promptPlanApproval(task, options.approve === true);
-            if (!approved) {
-              return;
-            }
-            const previousDryRun = process.env['BABEL_DRY_RUN'];
-            const previousDryRunSource = process.env['BABEL_DRY_RUN_SOURCE'];
-            if (options.shadow === true) {
-              process.env['BABEL_DRY_RUN'] = 'true';
-              process.env['BABEL_DRY_RUN_SOURCE'] = 'cli';
-            }
-            if (routeDecision.selected_lane === 'deep_lane') {
-              await runDeepCommand(intent, {
-                ...(options.project !== undefined ? { project: options.project } : {}),
-                ...(options.projectRoot !== undefined ? { projectRoot: options.projectRoot } : {}),
-                ...(options.model !== undefined ? { model: options.model } : {}),
-                ...(options.modelTier !== undefined ? { modelTier: options.modelTier } : {}),
-                ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
-                ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
-                ...(((options as { json?: boolean }).json ?? false) ? { json: true } : {}),
-              });
-              if (options.shadow === true) {
-                if (previousDryRun === undefined) {
-                  delete process.env['BABEL_DRY_RUN'];
-                } else {
-                  process.env['BABEL_DRY_RUN'] = previousDryRun;
-                }
-                if (previousDryRunSource === undefined) {
-                  delete process.env['BABEL_DRY_RUN_SOURCE'];
-                } else {
-                  process.env['BABEL_DRY_RUN_SOURCE'] = previousDryRunSource;
-                }
-              }
-              return;
-            }
-            try {
-              await runLiteCommand('do', intent, options);
-            } finally {
-              if (options.shadow === true) {
-                if (previousDryRun === undefined) {
-                  delete process.env['BABEL_DRY_RUN'];
-                } else {
-                  process.env['BABEL_DRY_RUN'] = previousDryRun;
-                }
-                if (previousDryRunSource === undefined) {
-                  delete process.env['BABEL_DRY_RUN_SOURCE'];
-                } else {
-                  process.env['BABEL_DRY_RUN_SOURCE'] = previousDryRunSource;
-                }
-              }
-            }
+            process.stderr.write(`Automatic application enabled by ${effective.autoApply.source} preference. Applying ${saved.id}.\n`);
+            await withSavedPlanApplication(saved.id, { projectRoot: saved.projectRoot,
+              execute: async plan => { await runDeepCommand([`Implement this approved plan within the existing permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`], { ...options, projectRoot: plan.projectRoot }); if (process.exitCode) throw new Error("Plan application did not complete; inspect the run before retrying."); } });
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             if (options.json === true) {
@@ -3184,7 +3132,7 @@ Important:
 
   program
     .command('apply')
-    .description('Legacy alias for resume (Manual Bridge resume flow)')
+    .description('Apply a saved plan ID; legacy manual plan paths retain their resume contract')
     .option('--run <run_dir>', 'Existing Babel run directory path')
     .option('--project <name>', 'Use latest run pointer for this project when --run is omitted')
     .option(
@@ -3201,6 +3149,12 @@ Notes:
 `,
     )
     .action(async (options: { run?: string; plan?: string; project?: string }) => {
+      if (options.plan?.startsWith('plan_')) {
+        const projectRoot = options.project ? resolveProjectRoot(options.project) : process.cwd();
+        if (!projectRoot) throw new Error('Unknown target project.');
+        await withSavedPlanApplication(options.plan, { projectRoot, execute: async plan => { await runDeepCommand([`Implement this approved plan within the existing permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`], { projectRoot: plan.projectRoot }); if (process.exitCode) throw new Error("Plan application did not complete; inspect the run before retrying."); } });
+        return;
+      }
       await handleResumeCommand(options);
     });
 

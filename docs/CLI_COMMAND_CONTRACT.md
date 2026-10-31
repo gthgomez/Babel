@@ -1,10 +1,10 @@
 <!--
 status: ACTIVE
-last_verified: 2026-08-22
+last_verified: 2026-10-30
 -->
 # Babel CLI Command Contract
 
-Date: 2026-06-05 (amended 2026-08-22)
+Date: 2026-06-05 (amended 2026-10-30)
 
 This document is the canonical user-facing command contract for Babel CLI.
 
@@ -17,10 +17,40 @@ Target product identity:
 
 ```text
 Babel default       = daily coding path
-Babel plan          = approval-first planning and apply
+Babel plan          = read-only plan; separate explicit apply by default
 Babel deep          = critique/refine/governed execution
 Babel chat-headless = CI/testing path with JSON output
 ```
+
+## Current first-run and command amendment
+
+The npm executables are `babel-harness` and `babel-agent`, avoiding the unrelated
+BabelJS executable. A fresh profile has no cloud provider/model selected. `setup`
+is guided in a terminal; `setup --json` reports local setup state without prompts
+or inference. Direct OpenAI, Gemini and Anthropic connections do not require
+OpenRouter. `provider list/connect/use/status`, `model list/use/show`, and
+`settings show/set` share application handlers with the TUI. See
+[package first-run and defaults](../babel-cli/README.md#first-run-connections-and-defaults).
+
+Public workflow vocabulary is Work, Plan, and Work with thorough review.
+`work` maps to internal Chat; `work --review thorough` maps to Deep. Internal mode
+IDs and advanced operator aliases remain for compatibility. Planning never grants
+execution authority. `plans.autoApply` defaults false and only trusted private
+user/project preferences can grant that transition.
+
+Use `conversation list/resume` for conversation recovery and `run resume <id>`
+for execution worker-chain continuation. CLI `session` remains read-only evidence
+inspection; legacy `resume`, manual `apply`, and `continue` retain their effects.
+TUI `/session list|resume` and `/resume` remain conversation aliases. `/display
+renderer ...`, `/transcript`, `/history`, `/clear`, and context compaction have
+separate presentation/history/context meanings.
+
+Settings carry value/source/scope. Invocation flags outrank session, explicit
+environment, private project overrides, user defaults, then built-ins. API keys
+never go in preferences or command arguments. Credentials, provider, exact model,
+endpoint and account remain bound; failures never select another provider.
+Optional `reason_detail` adds recovery context to existing terminal event schemas;
+completion authority and legacy event IDs remain unchanged.
 
 ## Active Entry Path
 
@@ -34,14 +64,14 @@ babel
 -> babel-cli/src/commands/workflowCommands.ts
 ```
 
-Removed bins (`bl`, `babel-lite`) and the removed surface tokens (`lite`, `l`, `full`, `daily`) exit `1` with stderr hints before Commander dispatch. Bare `babel "<task>"` rewrites to `run --mode chat` and executes through the AgentSession loop. Unregistered daily verbs such as `ask`, `do`, `fix`, `propose`, or `patch` are not intercepted: they flow through the same bare-task rewrite into the chat lane as free-form task text. (`review` passes argv whitelisting but has no top-level registration, so Commander rejects it as an unknown command.)
+Removed bins (`bl`, `babel-lite`) and the removed surface tokens (`lite`, `l`, `full`, `daily`) exit `1` with stderr hints before Commander dispatch. Bare `babel "<task>"` rewrites to `run --mode chat` and executes through the AgentSession loop. Unregistered daily verbs such as `ask`, `do`, `fix`, `propose`, or `patch` are not intercepted: they flow through the same bare-task rewrite into the chat lane as free-form task text. Only actual Commander command names/aliases take precedence over bare task text.
 
 ## Target Commands
 
 | Command | Target behavior | Mutation policy | Current status |
 | --- | --- | --- | --- |
 | `babel "..."` | Default daily path that routes by intent. | Safe by default; read-only requests stay read-only, clear implementation requests may mutate after plan and verification gates. | Implemented via bare task routing and the Lite/full intent contract. |
-| `babel plan "..."` | Produce an implementation plan, run a separate review agent (warn only), ask for approval, then apply and verify in the same flow after approval. | No mutation before approval. | Implemented via plan lane, `planReviewLane`, and approval-first terminal flow. |
+| `babel plan "..."` | Produce and save a read-only plan. | Stops by default. Explicit apply or saved trusted auto-apply preference enters implementation after freshness and permission checks. Explicit plan-only always stops. | Saved private handoff; `apply --plan <plan_id>`. JSON stays plan-only. |
 | `babel deep "..."` | Run the heavier critique/refine/governed path for higher-risk work. | May mutate after governed plan and verification gates. | Implemented via governed pipeline execution. |
 | `babel undo` | Restore the last checkpoint or show recovery state. | Mutates only through explicit restore behavior. | Implemented via `undoLane` → `restoreCheckpoint`. |
 | `babel resume [run]` | Resume a retryable run. | May continue a prior mutation lane. | Implemented. |

@@ -212,7 +212,7 @@ function stageCell5cCrashState(
 }
 
 function restoreEngine(threadId: string, projectRoot: string): Promise<ChatEngine> {
-  return ChatEngine.restore(threadId, { task: 'R1 6b-1 restore', projectRoot });
+  return ChatEngine.restore(threadId, { model: 'deepseek-v4-flash-openrouter', task: 'R1 6b-1 restore', projectRoot });
 }
 
 function capsuleCount(log: ThreadEventLog): number {

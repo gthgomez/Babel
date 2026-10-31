@@ -12,7 +12,7 @@
  *        a. Pass 0 (Sentinel extraction): Extract content between sentinel
  *           markers directly from rawStdout, then re-validate with the schema.
  *        b. Pass 1 (API repair): Send rawStdout to an API repair runner
- *           (Gemini API → Anthropic) with a targeted "extract the JSON" prompt.
+ *           (an explicitly supplied runner on the selected route) with a targeted "extract the JSON" prompt.
  *      If both passes fail, the original StructuredOutputError is re-thrown so the
  *      outer waterfall cascade in execute.ts continues to the next tier.
  *
@@ -27,7 +27,6 @@ import {
   type LlmRunner,
   type RunnerCallbacks,
 } from './base.js';
-import { GeminiApiRunner } from './geminiApi.js';
 import { extractJson } from '../utils/extractJson.js';
 
 // ─── Sentinel constants ────────────────────────────────────────────────────────
@@ -79,21 +78,6 @@ function buildRepairPrompt(rawStdout: string): string {
   ].join('\n');
 }
 
-/**
- * Attempts to construct a repair API runner.
- *   Gemini API (GEMINI_API_KEY) — large context window, near-zero cost;
- *   best choice for repairing large EVIDENCE_REQUEST log outputs.
- * Returns null if GEMINI_API_KEY is not configured.
- */
-function createRepairRunner(): LlmRunner | null {
-  try {
-    return new GeminiApiRunner();
-  } catch {
-    /* GEMINI_API_KEY not set */
-  }
-  return null;
-}
-
 // ─── StructuredRunner ─────────────────────────────────────────────────────────
 
 export class StructuredRunner implements LlmRunner {
@@ -105,7 +89,7 @@ export class StructuredRunner implements LlmRunner {
    * @param label  Human-readable label for log messages. Defaults to the inner
    *               runner's constructor name.
    */
-  constructor(inner: LlmRunner, label?: string) {
+  constructor(inner: LlmRunner, label?: string, private readonly repairRunner?: LlmRunner) {
     this.inner = inner;
     this.label = label ?? inner.constructor.name;
   }
@@ -150,9 +134,9 @@ export class StructuredRunner implements LlmRunner {
 
     // ── Step 4: API repair loop. ─────────────────────────────────────────────
     // Send the raw stdout to a fresh API runner with a targeted repair prompt.
-    const repairRunner = createRepairRunner();
+    const repairRunner = this.repairRunner;
     if (!repairRunner) {
-      // No API keys configured — re-throw the original StructuredOutputError so the
+      // No explicit repair route — re-throw the original StructuredOutputError so the
       // outer waterfall can cascade to the next tier.
       throw cliErr;
     }

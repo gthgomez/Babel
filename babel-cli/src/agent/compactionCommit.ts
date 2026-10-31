@@ -1125,17 +1125,17 @@ export function resolveCompactionAdmissionContext(
   host: ChatEngineCompactionHost,
   modelId: string,
 ): { contextWindowTokens: number; reservedCompletionTokens: number } {
-  const caps = resolveProviderCapabilities(modelId);
+  const caps = resolveProviderCapabilities(modelId, undefined, host.compactionProviderId);
   const harnessReserve = host.shouldUseTextTools()
     ? host.textToolsReserve
     : host.reserveTokens;
   const policyContextWindow =
     host.modelPolicy?.contextWindow ?? host.modelPolicy?.contextLimit ?? 0;
   const contextWindowTokens =
-    caps.contextWindow > 0
-      ? caps.contextWindow
-      : policyContextWindow > 0
-        ? policyContextWindow
+    policyContextWindow > 0
+      ? policyContextWindow
+      : caps.contextWindow > 0
+        ? caps.contextWindow
         : host.limits.maxEstimatedTokens;
   const reservedCompletionTokens =
     host.providerReservedCompletionTokens != null &&

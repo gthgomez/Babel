@@ -1,3 +1,6 @@
+import { createProviderRunner } from './runners/providerEngine.js'
+import { assertFiniteBudgetSupported } from './config/laneBudget.js'
+import { isProviderId, providerSupportsOperation } from './runners/providerRegistry.js'
 /**
  * execute.ts — Per-Stage LLM Waterfall Executor
  *
@@ -50,8 +53,6 @@ import type { ZodType } from 'zod';
 // in the `runners/` directory for public-use fallback capabilities, but the internal
 // Babel system uses API runners across all stages.
 import { DeepInfraApiRunner } from './runners/deepInfraApi.js';
-import { DeepSeekApiRunner } from './runners/deepSeekApi.js';
-import { OpenRouterApiRunner } from './runners/openRouterApi.js';
 import type {
   LlmRunner,
   RunnerInvocationMetadata,
@@ -106,24 +107,18 @@ export function getPipelineSelectedModel(): string | undefined {
 }
 
 function explicitModelTier(model: string, liveOnly: boolean, allowExpensive = false): TierSpec {
-  if (liveOnly) assertLiveModelId(model, 'live pipeline selection');
+  if (liveOnly && !model.startsWith('connection/')) assertLiveModelId(model, 'live pipeline selection');
   const resolved = resolveModelByKey({key:model, liveOnly, allowExpensive, bindStagesToSelectedModel:true});
   const selectedProvider = process.env['BABEL_DESKTOP_PROVIDER'];
   if (selectedProvider && resolved.provider !== selectedProvider) {
     throw new Error('The requested pipeline model does not belong to the selected provider. Choose its provider in Desktop Settings before running this profile.');
   }
-  if (!['openrouter', 'deepseek', 'deepinfra'].includes(resolved.provider)) {
-    throw new Error(`Provider "${resolved.provider}" is not supported in Plan or Deep. Use Chat mode.`);
-  }
-  return {
-    kind:'api', name:resolved.resolvedBackendKey, provider:resolved.provider,
-    backendKey:resolved.resolvedBackendKey,
-    factory:resolved.provider === 'openrouter'
-      ? () => new OpenRouterApiRunner(resolved.providerModelId)
-      : resolved.provider === 'deepseek'
-        ? () => new DeepSeekApiRunner(resolved.providerModelId)
-        : () => new DeepInfraApiRunner(resolved.providerModelId),
-  };
+  if (!isProviderId(resolved.provider) || !providerSupportsOperation(resolved.provider, 'structured')) throw new Error('Selected provider does not support Plan or thorough Work.')
+  const provider = resolved.provider
+  return { kind: 'api', name: resolved.resolvedBackendKey, provider, backendKey: resolved.resolvedBackendKey,
+    factory: () => createProviderRunner({ provider, modelId: resolved.providerModelId,
+      ...(resolved.contextWindow ? { contextWindowTokens: resolved.contextWindow } : {}), ...(resolved.authentication ? { authentication: resolved.authentication } : {}), ...(resolved.requestedOutputTokens ? { sampling: { maxTokens: resolved.requestedOutputTokens } } : {}), ...(resolved.apiKeyEnvVar ? { apiKeyEnvVar: resolved.apiKeyEnvVar } : {}), ...(resolved.baseUrl ? { baseUrl: resolved.baseUrl } : {}) }) }
+
 }
 
 export async function withPipelineModelRoute<T>(model: string, run: () => Promise<T>, options: {liveOnly?: boolean; allowExpensive?: boolean} = {}): Promise<T> {
@@ -428,13 +423,13 @@ const ORCHESTRATOR_WATERFALL: TierSpec[] = [
     kind: 'api',
     name: 'qwen3-32b',
     provider: 'deepinfra',
-    factory: () => new DeepInfraApiRunner(QWEN3_32B),
+    factory: () => createProviderRunner({ provider: 'deepinfra', modelId: QWEN3_32B }),
   },
   {
     kind: 'api',
     name: 'scout',
     provider: 'deepinfra',
-    factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
+    factory: () => createProviderRunner({ provider: 'deepinfra', modelId: LLAMA4_SCOUT }),
   },
 ];
 
@@ -446,13 +441,13 @@ const PLANNING_WATERFALL: TierSpec[] = [
     kind: 'api',
     name: 'qwen3-32b',
     provider: 'deepinfra',
-    factory: () => new DeepInfraApiRunner(QWEN3_32B),
+    factory: () => createProviderRunner({ provider: 'deepinfra', modelId: QWEN3_32B }),
   },
   {
     kind: 'api',
     name: 'scout',
     provider: 'deepinfra',
-    factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
+    factory: () => createProviderRunner({ provider: 'deepinfra', modelId: LLAMA4_SCOUT }),
   },
 ];
 
@@ -464,25 +459,25 @@ const QA_WATERFALL: TierSpec[] = [
     kind: 'api',
     name: 'deepseek',
     provider: 'deepinfra',
-    factory: () => new DeepInfraApiRunner(DEEPSEEK_V3),
+    factory: () => createProviderRunner({ provider: 'deepinfra', modelId: DEEPSEEK_V3 }),
   },
   {
     kind: 'api',
     name: 'nemotron',
     provider: 'deepinfra',
-    factory: () => new DeepInfraApiRunner(NEMOTRON),
+    factory: () => createProviderRunner({ provider: 'deepinfra', modelId: NEMOTRON }),
   },
   {
     kind: 'api',
     name: 'step-flash',
     provider: 'deepinfra',
-    factory: () => new DeepInfraApiRunner(STEP_FLASH),
+    factory: () => createProviderRunner({ provider: 'deepinfra', modelId: STEP_FLASH }),
   },
   {
     kind: 'api',
     name: 'qwen3-32b',
     provider: 'deepinfra',
-    factory: () => new DeepInfraApiRunner(QWEN3_32B),
+    factory: () => createProviderRunner({ provider: 'deepinfra', modelId: QWEN3_32B }),
   },
 ];
 
@@ -494,25 +489,25 @@ const EXECUTOR_WATERFALL: TierSpec[] = [
     kind: 'api',
     name: 'scout',
     provider: 'deepinfra',
-    factory: () => new DeepInfraApiRunner(LLAMA4_SCOUT),
+    factory: () => createProviderRunner({ provider: 'deepinfra', modelId: LLAMA4_SCOUT }),
   },
   {
     kind: 'api',
     name: 'qwen3',
     provider: 'deepinfra',
-    factory: () => new DeepInfraApiRunner(QWEN3_235B),
+    factory: () => createProviderRunner({ provider: 'deepinfra', modelId: QWEN3_235B }),
   },
   {
     kind: 'api',
     name: 'qwen3-32b',
     provider: 'deepinfra',
-    factory: () => new DeepInfraApiRunner(QWEN3_32B),
+    factory: () => createProviderRunner({ provider: 'deepinfra', modelId: QWEN3_32B }),
   },
   {
     kind: 'api',
     name: 'nemotron',
     provider: 'deepinfra',
-    factory: () => new DeepInfraApiRunner(NEMOTRON),
+    factory: () => createProviderRunner({ provider: 'deepinfra', modelId: NEMOTRON }),
   },
 ];
 
@@ -556,39 +551,9 @@ function getPolicyDisplayName(entry: ResolvedModelPolicyEntry): string {
 }
 
 function tierSpecFromPolicyEntry(entry: ResolvedModelPolicyEntry): TierSpec {
-  if (entry.provider === 'deepseek') {
-    return {
-      kind: 'api',
-      name: getPolicyDisplayName(entry),
-      provider: entry.provider,
-      backendKey: entry.backendKey,
-      factory: () => new DeepSeekApiRunner(entry.providerModelId),
-    };
-  }
-
-  if (entry.provider === 'openrouter') {
-    return {
-      kind: 'api',
-      name: getPolicyDisplayName(entry),
-      provider: entry.provider,
-      backendKey: entry.backendKey,
-      factory: () => new OpenRouterApiRunner(entry.providerModelId),
-    };
-  }
-
-  if (entry.provider !== 'deepinfra') {
-    throw new Error(
-      `Unsupported stage policy provider "${entry.provider}" for backend "${entry.backendKey}".`,
-    );
-  }
-
-  return {
-    kind: 'api',
-    name: getPolicyDisplayName(entry),
-    provider: entry.provider,
-    backendKey: entry.backendKey,
-    factory: () => new DeepInfraApiRunner(entry.providerModelId),
-  };
+  if (!isProviderId(entry.provider) || !providerSupportsOperation(entry.provider, 'structured')) throw new Error('Unsupported stage policy provider.')
+  return { kind: 'api', name: getPolicyDisplayName(entry), provider: entry.provider, backendKey: entry.backendKey,
+    factory: () => createProviderRunner({ provider: entry.provider as import('./runners/providerRegistry.js').ProviderId, modelId: entry.providerModelId }) }
 }
 
 function resolvePolicyWaterfall(
@@ -962,6 +927,7 @@ async function runWaterfall<T>(
   onUsageRecorded?: (metadata: RunnerInvocationMetadata) => void,
   usageAttribution?: Pick<UsageAttribution, 'taskOwnerId' | 'parentTaskOwnerId' | 'projectRoot' | 'projectRootVersion'>,
 ): Promise<WaterfallRunResult<T>> {
+  if (!budgetGuard || !usageAttribution?.taskOwnerId) assertFiniteBudgetSupported('This pipeline lane', usageAttribution?.projectRoot);
   // Capture the parent's external cell gate once. All tiers/retries retain the
   // same boundary; child task-cost attribution remains independently owned.
   const campaignContext = getExecutionContext();
@@ -1456,9 +1422,10 @@ export async function runWithFallback<T>(
   if (liveOnly) {
     waterfall = waterfall.filter(
       (tier) =>
-        tier.provider === 'openrouter' &&
+        (explicitModel?.startsWith('connection/') === true && tier.backendKey === explicitModel) ||
+        (tier.provider === 'openrouter' &&
         (tier.backendKey === LIVE_OPENROUTER_BACKEND_KEY ||
-          tier.backendKey?.endsWith('-openrouter') === true),
+          tier.backendKey?.endsWith('-openrouter') === true)),
     );
     if (waterfall.length === 0) {
       throw new Error(
@@ -1680,7 +1647,7 @@ export function runWithPrimaryOnlyFallback<T>(
 /**
  * Direct model call that bypasses the waterfall machinery entirely.
  *
- * Creates a single DeepInfraApiRunner with the default chat model (QWEN3_32B)
+ * Creates the explicitly selected provider adapter through the canonical factory
  * and executes the prompt directly. Includes a simple retry loop for transient
  * failures but no tier management, no heartbeat, no timeout extension, and no
  * fixture detection.
@@ -1703,7 +1670,7 @@ export async function runDirectAsk<T>(
     signal?: AbortSignal;
   } = {},
 ): Promise<T> {
-  const runner = new OpenRouterApiRunner('deepseek/deepseek-v4-flash-0731');
+  const runner = createProviderRunner({ provider: 'openrouter', modelId: 'deepseek/deepseek-v4-flash-0731' });
 
   let lastError: Error | null = null;
   const maxAttempts = options.maxAttempts ?? 2;

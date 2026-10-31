@@ -433,7 +433,7 @@ test("does not normalize arbitrary provider failure text into a visible category
 });
 
 test("preserves runs as a top-level command instead of rewriting it to run", () => {
-  assert.deepEqual(rewriteArgv(["node", "babel", "runs", "coverage"]), [
+  assert.deepEqual(rewriteArgv(["node", "babel", "runs", "coverage"], new Set(["runs"])), [
     "node",
     "babel",
     "runs",

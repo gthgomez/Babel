@@ -85,7 +85,7 @@ test('ProviderEngine exposes operation capabilities before invocation', () => {
     explicitCredential: 'synthetic-openai-key',
   })
   assert.equal(native.supports('native_tool_stream'), true)
-  assert.equal(structuredOnly.supports('native_tool_stream'), false)
+  assert.equal(structuredOnly.supports('native_tool_stream'), true)
 })
 
 test('ProviderEngine registers explicit OpenCode Go with exact model selection', async (t) => {

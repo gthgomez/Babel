@@ -373,7 +373,7 @@ describe('S04/#214 C1/I1 — production turn binding is scoped and unwound', () 
 
     try {
       resetChatApprovalSession('fallback-before');
-      const engine = new ChatEngine({ task: 'first turn', projectRoot: root });
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'first turn', projectRoot: root });
       install(engine, 'turn1');
       await engine.submitMessage('first turn', {});
 
@@ -389,7 +389,7 @@ describe('S04/#214 C1/I1 — production turn binding is scoped and unwound', () 
 
       // A second engine turn must derive from the (reset) fallback, not from a
       // leaked prior turn's approval session.
-      const engine2 = new ChatEngine({ task: 'second turn', projectRoot: root });
+      const engine2 = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'second turn', projectRoot: root });
       let sessionDuringTurn: string | undefined;
       const anyEngine2 = engine2 as unknown as {
         deliberationRunner: unknown;
@@ -424,7 +424,7 @@ describe('S04/#214 T6 — same-parent child serialization retained', () => {
     process.env['BABEL_LITE_OFFLINE'] = '1';
     const root = mkdtempSync(join(tmpdir(), 'babel-serial-'));
     const { ChatEngine } = await import('./chatEngine.js');
-    const engine = new ChatEngine({ task: 'serialize children', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'serialize children', projectRoot: root });
     const sequence: string[] = [];
     const internals = engine as unknown as {
       executeActions: (
@@ -461,7 +461,7 @@ describe('R1 — the production sub_agent seam leaves no child context bound', (
     process.env['BABEL_LITE_OFFLINE'] = '1';
     const root = mkdtempSync(join(tmpdir(), 'babel-r1-scope-'));
     const { ChatEngine } = await import('./chatEngine.js');
-    const engine = new ChatEngine({ task: 'r1 parent', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'r1 parent', projectRoot: root });
     const internals = engine as unknown as {
       executeActions: (
         actions: Array<{ type: 'sub_agent'; task: string; mutation?: boolean }>,

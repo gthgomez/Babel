@@ -11,9 +11,10 @@ import {
   type ResolvedModelPolicy,
 } from '../modelPolicy.js';
 import type { RunnerInvocationMetadata } from '../runners/base.js';
-import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
-import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
-import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
+import { createProviderRunner } from '../runners/providerEngine.js';
+import { selectedConnectionModel } from './connectionSettings.js';
+import { assertFiniteBudgetSupported } from '../config/laneBudget.js';
+import { isProviderId } from '../runners/providerRegistry.js';
 import { globalCostTracker } from './costTracker.js';
 import type { SparkSynthesis } from './babelFull.js';
 import type { LiteFixProgressReporter } from '../ui/liteFixProgress.js';
@@ -109,112 +110,17 @@ function assertLiveProviderCredential(
   }
 }
 
-export function classifySmallFixProviderFailure(
-  error: unknown,
-  provider?: string,
-): {
-  failureCode: string;
-  message: string;
-  next: string[];
-} {
+export function classifySmallFixProviderFailure(error: unknown, provider?: string): { failureCode: string; message: string; next: string[] } {
   const message = error instanceof Error ? error.message : String(error);
-  if (/OPENROUTER_API_KEY is not set/i.test(message)) {
-    return {
-      failureCode: 'credential_missing',
-      message:
-        'OPENROUTER_API_KEY is not set. Direct GLM/OpenRouter requires OPENROUTER_API_KEY in environment or .env.',
-      next: ['check OPENROUTER_API_KEY', 'babel undo'],
-    };
-  }
-  if (
-    /DEEPSEEK_API_KEY is not set/i.test(message) ||
-    (/deepseek/i.test(message) && /API_KEY is not set/i.test(message))
-  ) {
-    return {
-      failureCode: 'credential_missing',
-      message:
-        'DEEPSEEK_API_KEY is not set. Direct DeepSeek requires DEEPSEEK_API_KEY in environment or .env. Adjust key or run Full Babel (governed mode) to allow backup cascading.',
-      next: ['check DEEPSEEK_API_KEY', 'babel undo'],
-    };
-  }
-  if (
-    /DEEPINFRA_API_KEY is not set/i.test(message) ||
-    /API_KEY is not set/i.test(message) ||
-    /\bcredential\b/i.test(message)
-  ) {
-    return {
-      failureCode: 'credential_missing',
-      message:
-        'DEEPINFRA_API_KEY is not set. Live bl fix requires a DeepInfra API key.',
-      next: ['check DEEPINFRA_API_KEY', 'babel undo'],
-    };
-  }
-  if (
-    /network error/i.test(message) ||
-    /request timeout/i.test(message) ||
-    /ECONNREFUSED|ENOTFOUND|fetch failed|ETIMEDOUT|socket hang up/i.test(
-      message,
-    )
-  ) {
-    const isDeepSeek =
-      /\[deepSeekApi\]/i.test(message) || /DEEPSEEK_API_KEY/i.test(message);
-    return {
-      failureCode: 'provider_network_failed',
-      message,
-      next: [
-        provider === 'openrouter'
-          ? 'check OPENROUTER_API_KEY'
-          : isDeepSeek
-            ? 'check DEEPSEEK_API_KEY'
-            : 'check DEEPINFRA_API_KEY',
-        'babel undo',
-      ],
-    };
-  }
-  if (/timeout/i.test(message)) {
-    const isDeepSeek =
-      /\[deepSeekApi\]/i.test(message) || /DEEPSEEK_API_KEY/i.test(message);
-    return {
-      failureCode: 'provider_timeout',
-      message,
-      next: [
-        provider === 'openrouter'
-          ? 'check OPENROUTER_API_KEY'
-          : isDeepSeek
-            ? 'check DEEPSEEK_API_KEY'
-            : 'check DEEPINFRA_API_KEY',
-        'babel undo',
-      ],
-    };
-  }
-  if (/zod|schema|invalid json|parse/i.test(message)) {
-    return {
-      failureCode: 'provider_schema_invalid',
-      message,
-      next: ['Retry the fix with the same task', 'babel undo'],
-    };
-  }
-  if (/waterfall failed/i.test(message) || /all \d+ runner/i.test(message)) {
-    return {
-      failureCode: 'provider_request_failed',
-      message: `${message}. [Recovery Hint] Stage execution failed under 'primary_only' policy. Please ensure the primary provider API key is set, or run in Full Babel mode (governed mode) to allow backup cascades.`,
-      next: ['check DEEPSEEK_API_KEY', 'check DEEPINFRA_API_KEY', 'babel undo'],
-    };
-  }
-  const isDeepSeek =
-    /\[deepSeekApi\]/i.test(message) || /DEEPSEEK_API_KEY/i.test(message);
-  return {
-    failureCode: 'provider_request_failed',
-    message,
-    next: [
-      provider === 'openrouter'
-        ? 'check OPENROUTER_API_KEY'
-        : isDeepSeek
-          ? 'check DEEPSEEK_API_KEY'
-          : 'check DEEPINFRA_API_KEY',
-      'babel undo',
-    ],
-  };
+  const route = provider ?? 'selected provider';
+  if (/SETUP_REQUIRED|API_KEY.*(?:not set|missing)|credential/i.test(message)) return { failureCode: 'credential_missing', message: `${route} setup is incomplete. Inspect its credential reference with babel-agent provider status.`, next: ['babel-agent setup', 'babel-agent provider status'] };
+  if (/HTTP (401|403)|auth_fatal/i.test(message)) return { failureCode: 'provider_authentication_failed', message: `${route} authentication was rejected. Update the selected credential and restart Babel.`, next: ['babel-agent provider status'] };
+  if (/HTTP 402|quota|insufficient.*credit/i.test(message)) return { failureCode: 'provider_quota_exhausted', message: `${route} quota or credit is exhausted.`, next: ['Review quota with the selected provider', 'Select another connection explicitly if needed'] };
+  if (/HTTP 429|rate.?limit/i.test(message)) return { failureCode: 'provider_rate_limited', message: `${route} rate limit reached.`, next: ['Wait for the provider retry window', 'Retry the same connection'] };
+  if (/timeout|ETIMEDOUT/i.test(message)) return { failureCode: 'provider_timeout', message, next: ['babel-agent provider status', 'Retry the same connection'] };
+  if (/network|ECONNREFUSED|ENOTFOUND|fetch failed|socket hang up/i.test(message)) return { failureCode: 'provider_network_failed', message, next: ['Check connectivity to the selected endpoint', 'babel-agent provider status'] };
+  if (/zod|schema|invalid json|parse/i.test(message)) return { failureCode: 'provider_schema_invalid', message, next: ['Retry the same connection with the requested output format'] };
+  return { failureCode: 'provider_request_failed', message, next: ['babel-agent provider status', 'Inspect the run evidence'] };
 }
 
 function failureCodeForError(error: unknown): string {
@@ -291,11 +197,13 @@ export async function runSmallFixModel(
   executionMode?: SmallFixExecutionMode;
 }> {
   const provider = resolveSmallFixProvider(options);
+  if (provider !== 'mock') assertFiniteBudgetSupported('Small-fix compatibility lane', options.projectRoot);
   const liveOnly = provider === 'live';
-  const selectedModel = liveOnly
-    ? resolveOpenRouterDeepSeekBackendKey(options.model ?? '') ??
-      (options.model ?? 'deepseek-v4-flash-openrouter')
-    : options.model;
+  const explicitConnection = selectedConnectionModel(options.model ? { model: options.model } : {}, options.projectRoot);
+  const selectedModel = options.model?.startsWith('connection/') ? options.model : explicitConnection ?? (liveOnly
+    ? resolveOpenRouterDeepSeekBackendKey(options.model ?? '') ?? options.model
+    : options.model);
+  if (liveOnly && !selectedModel) throw new Error('SETUP_REQUIRED: Select a provider connection and exact model with babel-agent setup.');
   const selectedBackendKey = selectedModel
     ? resolveModelPolicyBackendKey(selectedModel, BABEL_ROOT)
     : undefined;
@@ -320,7 +228,7 @@ export async function runSmallFixModel(
       : undefined;
 
   if (provider === 'live') {
-    assertLiveProviderCredential(modelPolicy?.provider);
+    if (!selectedModel?.startsWith('connection/')) assertLiveProviderCredential(modelPolicy?.provider);
   }
   if (provider === 'mock') {
     const offlineAnswer = tryOfflineDemoAnswer(options, detected);
@@ -341,22 +249,26 @@ export async function runSmallFixModel(
   }
 
   if (
+    selectedModel?.startsWith('connection/') ||
     modelPolicy?.provider === 'deepinfra' ||
     modelPolicy?.provider === 'deepseek' ||
     modelPolicy?.provider === 'openrouter'
   ) {
+    if (!modelPolicy) throw new Error('Selected model policy is unavailable.');
     const policyProvider = modelPolicy.provider;
-    if (policyProvider === 'deepseek' && liveOnly) {
+    if (!isProviderId(policyProvider)) throw new Error('Unsupported selected provider; refusing substitution.');
+    if (policyProvider === 'deepseek' && liveOnly && !selectedModel?.startsWith('connection/')) {
       throw new Error(
         '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
       );
     }
-    const runner =
-      policyProvider === 'deepseek'
-        ? new DeepSeekApiRunner(modelPolicy.providerModelId)
-        : policyProvider === 'openrouter'
-          ? new OpenRouterApiRunner(modelPolicy.providerModelId)
-          : new DeepInfraApiRunner(modelPolicy.providerModelId);
+    const runner = createProviderRunner({ provider: policyProvider, modelId: modelPolicy.providerModelId,
+      ...(modelPolicy.apiKeyEnvVar ? { apiKeyEnvVar: modelPolicy.apiKeyEnvVar } : {}),
+      ...(modelPolicy.baseUrl ? { baseUrl: modelPolicy.baseUrl } : {}),
+      ...(modelPolicy.authentication ? { authentication: modelPolicy.authentication } : {}),
+      ...(modelPolicy.contextWindow ? { contextWindowTokens: modelPolicy.contextWindow } : {}),
+      ...(modelPolicy.requestedOutputTokens ? { sampling: { maxTokens: modelPolicy.requestedOutputTokens } } : {}),
+    });
     try {
       const answer = await runner.execute(prompt, SmallFixAnswerSchema);
       const metadata = runner.getLastInvocationMetadata?.() ?? null;
@@ -371,6 +283,7 @@ export async function runSmallFixModel(
           metadata.completion_tokens,
           metadata.prompt_cache_hit_tokens,
           metadata.prompt_cache_miss_tokens,
+          undefined, true, metadata.provider, metadata.provider_reported_total_charge_usd,
         );
       }
       appendDirectSmallFixTelemetry({

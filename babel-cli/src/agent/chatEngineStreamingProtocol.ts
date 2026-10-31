@@ -1,3 +1,4 @@
+import type { ProviderToolCall, ToolStreamEvent } from '../runners/base.js';
 import { WORKING_STATE_MARKER } from './codingLoop/workingState.js';
 
 /** Hold only the canonical top-level controller prefix, including split deltas. */
@@ -50,4 +51,23 @@ export function reconcileStreamedAnswer(
   if (final === streamed) return null;
   if (final.startsWith(streamed)) return final.slice(streamed.length);
   return final;
+}
+
+
+/** Keep opaque provider state bound to the canonical call identity used by execution. */
+export function retainNativeToolCall(event: Extract<ToolStreamEvent, { type: 'tool_use' }>, context: {
+  turn: number; actionIndex: number; seen: Set<string>; ids: string[];
+  metadata: Map<string, ProviderToolCall['providerMetadata']>;
+}): string {
+  const id = canonicalizeToolCallId(event, context.turn, context.actionIndex, context.seen);
+  context.ids.push(id);
+  if (event.providerMetadata) context.metadata.set(id, event.providerMetadata);
+  return id;
+}
+
+export function attachNativeToolMetadata(calls: ProviderToolCall[], metadata: ReadonlyMap<string, ProviderToolCall['providerMetadata']>): ProviderToolCall[] {
+  return calls.map(call => {
+    const value = metadata.get(call.id);
+    return value ? { ...call, providerMetadata: value } : call;
+  });
 }

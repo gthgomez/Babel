@@ -781,7 +781,7 @@ export function recordTurnEnded(
     ...(input.outcome !== undefined ? { outcome: input.outcome } : {}),
     status: input.status,
     ...(input.reason !== undefined
-      ? { reason_code: input.reason.code, cause_class: input.reason.cause_class }
+      ? { reason_code: input.reason.code, cause_class: input.reason.cause_class, ...(input.reason.detail !== undefined ? { reason_detail: input.reason.detail } : {}) }
       : {}),
   });
 }
@@ -850,6 +850,8 @@ export function amendLatestTurnEndedForTurn(
       event.outcome = input.outcome;
       event.status = input.status;
       event.reason_code = input.reason.code;
+      if (input.reason.detail !== undefined) event.reason_detail = input.reason.detail;
+      else delete event.reason_detail;
       event.cause_class = input.reason.cause_class;
       return true;
     }

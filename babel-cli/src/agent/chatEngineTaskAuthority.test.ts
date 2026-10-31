@@ -56,7 +56,7 @@ test('submitMessageStream: merge it with two leased PRs yields clarification, no
       ],
       { constraints: { allowedPullRequests: [88, 90] } },
     );
-    const engine = new ChatEngine({ task: 'merge it', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'merge it', projectRoot: root });
     const events = await collect(engine, 'merge it');
     assert.equal(events.some((e) => e.type === 'tool_start'), false);
     const done = events.find((e) => e.type === 'done');
@@ -71,7 +71,7 @@ test('submitMessageStream: merge PR #88 without merge capability yields deny, no
   const root = mkdtempSync(join(tmpdir(), 'babel-halt-deny-'));
   try {
     installLease(['inspect_repository', 'edit_task_files', 'run_tests']);
-    const engine = new ChatEngine({ task: 'merge PR #88', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'merge PR #88', projectRoot: root });
     const events = await collect(engine, 'merge PR #88');
     assert.equal(events.some((e) => e.type === 'tool_start'), false);
     const failed = events.find((e) => e.type === 'failed');

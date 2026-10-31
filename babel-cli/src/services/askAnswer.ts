@@ -1,3 +1,7 @@
+import { selectedConnectionModel } from './connectionSettings.js';
+import { assertFiniteBudgetSupported } from '../config/laneBudget.js';
+import { createProviderRunner, type ProviderEngine } from '../runners/providerEngine.js'
+import { isProviderId } from '../runners/providerRegistry.js'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -22,10 +26,6 @@ import {
   loadModelPolicyConfig,
   type ResolvedModelPolicy,
 } from '../modelPolicy.js';
-import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
-import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
-import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
-import { OpenCodeApiRunner } from '../runners/openCodeApi.js';
 import type { RunnerInvocationMetadata } from '../runners/base.js';
 import { AskAnswerSchema, type AskAnswer } from '../schemas/agentContracts.js';
 import { globalCostTracker, type SessionUsageSummary } from './costTracker.js';
@@ -100,10 +100,9 @@ export function resolveAskModelPolicyWithLiveGate(
   babelRoot: string = BABEL_ROOT,
 ): ResolvedModelPolicy | undefined {
   if (!options.model && !liveOnly) return undefined;
-  const selectedModel = liveOnly
-    ? resolveOpenRouterDeepSeekBackendKey(options.model ?? '') ??
-      (options.model ?? LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0])
-    : options.model;
+  const connection = options.model?.startsWith('connection/') ? options.model : selectedConnectionModel(options.model ? { model: options.model } : {});
+  const selectedModel = connection ?? (liveOnly ? resolveOpenRouterDeepSeekBackendKey(options.model ?? '') ?? options.model : options.model);
+  if (liveOnly && !selectedModel) throw new Error('SETUP_REQUIRED: Select your provider and exact model with babel-agent setup.');
   const backendKey = selectedModel
     ? resolveModelPolicyBackendKey(selectedModel, babelRoot)
     : undefined;
@@ -446,29 +445,10 @@ function failureCodeForError(error: unknown): string {
   return 'provider_request_failed';
 }
 
-function createAskRunner(
-  modelPolicy: ResolvedModelPolicy,
-  liveOnly: boolean,
-): DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner | OpenCodeApiRunner {
-  if (modelPolicy.provider === 'opencode') {
-    return new OpenCodeApiRunner(modelPolicy.providerModelId);
-  }
-  if (modelPolicy.provider === 'openrouter') {
-    return new OpenRouterApiRunner(modelPolicy.providerModelId);
-  }
-  if (modelPolicy.provider === 'deepseek') {
-    if (liveOnly) {
-      const routedModel = resolveOpenRouterDeepSeekModelId(modelPolicy.providerModelId);
-      if (!routedModel) {
-        throw new Error(
-          '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
-        );
-      }
-      return new OpenRouterApiRunner(routedModel);
-    }
-    return new DeepSeekApiRunner(modelPolicy.providerModelId);
-  }
-  return new DeepInfraApiRunner(modelPolicy.providerModelId);
+function createAskRunner(modelPolicy: ResolvedModelPolicy, _liveOnly: boolean): ProviderEngine {
+  if (!isProviderId(modelPolicy.provider)) throw new Error('Unsupported selected provider; refusing substitution.')
+  return createProviderRunner({ provider: modelPolicy.provider, modelId: modelPolicy.providerModelId,
+    ...(modelPolicy.contextWindow ? { contextWindowTokens: modelPolicy.contextWindow } : {}), ...(modelPolicy.authentication ? { authentication: modelPolicy.authentication } : {}), ...(modelPolicy.requestedOutputTokens ? { sampling: { maxTokens: modelPolicy.requestedOutputTokens } } : {}), ...(modelPolicy.apiKeyEnvVar ? { apiKeyEnvVar: modelPolicy.apiKeyEnvVar } : {}), ...(modelPolicy.baseUrl ? { baseUrl: modelPolicy.baseUrl } : {}) })
 }
 
 async function runDirectAsk(
@@ -495,6 +475,7 @@ async function runDirectAsk(
         metadata.completion_tokens,
         metadata.prompt_cache_hit_tokens,
         metadata.prompt_cache_miss_tokens,
+        undefined, true, metadata.provider, metadata.provider_reported_total_charge_usd,
       );
     }
     appendDirectRunnerTelemetry(evidence, metadata, true, null, provider);
@@ -569,6 +550,7 @@ function writeFastPathErrorArtifacts(runDir: string, error: unknown): void {
 export async function runAskAnswerFastPath(
   options: RunAskAnswerPathOptions,
 ): Promise<AskAnswerPathResult> {
+  assertFiniteBudgetSupported('Fast Ask compatibility lane', options.projectRoot);
   const repoPath = resolveLiteRepoRoot(options.projectRoot);
 
   // Build prompt with project context — no discovery loop, no evidence session
@@ -585,10 +567,7 @@ export async function runAskAnswerFastPath(
 
   try {
     const isDirectApi =
-      modelPolicy?.provider === 'deepinfra' ||
-      modelPolicy?.provider === 'deepseek' ||
-      modelPolicy?.provider === 'openrouter' ||
-      modelPolicy?.provider === 'opencode';
+Boolean(modelPolicy && isProviderId(modelPolicy.provider));
 
     if (isDirectApi) {
       // Direct API call — structured JSON with schema validation
@@ -628,6 +607,7 @@ export async function runAskAnswerFastPath(
           metadata.completion_tokens,
           metadata.prompt_cache_hit_tokens,
           metadata.prompt_cache_miss_tokens,
+          undefined, true, metadata.provider, metadata.provider_reported_total_charge_usd,
         );
       }
     } else {
@@ -683,6 +663,7 @@ export async function runAskAnswerFastPath(
 export async function runAskAnswerPath(
   options: RunAskAnswerPathOptions,
 ): Promise<AskAnswerPathResult> {
+  assertFiniteBudgetSupported('Ask compatibility lane', options.projectRoot);
   const repoPath = resolveLiteRepoRoot(options.projectRoot);
   const { run: liteRun, evidence } = beginLiteEvidenceSession({
     command: 'ask',
@@ -732,10 +713,7 @@ export async function runAskAnswerPath(
   let answer: AskAnswer;
   try {
     const runAsk = (onChunk?: (chunk: string) => void) =>
-      modelPolicy?.provider === 'deepinfra' ||
-      modelPolicy?.provider === 'deepseek' ||
-      modelPolicy?.provider === 'openrouter' ||
-      modelPolicy?.provider === 'opencode'
+modelPolicy && isProviderId(modelPolicy.provider)
         ? runDirectAsk(
             prompt,
             modelPolicy,
@@ -786,7 +764,7 @@ export async function runAskAnswerPath(
       const routeHint = modelPolicy?.provider === 'openrouter'
         ? 'OpenRouter DeepSeek request failed. Please check your OPENROUTER_API_KEY.'
         : 'Direct DeepSeek request failed. Please check the configured direct-provider credential.';
-      message = `${message}\n\n[Recovery Hint] ${routeHint} Alternatively, run in Full Babel mode (governed mode) if backup routes and automated cascading are desired.`;
+      message = `${message}\n\n[Recovery Hint] ${routeHint} Choose another configured connection explicitly if needed.`;
     } else {
       message = `${message}\n\n[Recovery Hint] Stage execution failed under 'primary_only' policy. Please ensure the primary provider API key is set, or run in Full Babel mode (governed mode) to allow backup cascades.`;
     }

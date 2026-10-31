@@ -107,18 +107,20 @@ export async function runChatEngineCompactionFor(
   });
   const usageScope = engine.captureProviderUsageScope(ownerGeneration);
   const compactionModelId = resolveCompactionModelId({
-    pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined,
+    pinSelection: Boolean(engine.modelPolicy?.connectionId) || engine.options.model !== undefined || engine.options.providerPolicy !== undefined,
     ...(engine.modelPolicy?.providerModelId
       ? { providerModelId: engine.modelPolicy.providerModelId }
       : {}),
     ...(engine.modelPolicy?.family ? { family: engine.modelPolicy.family } : {}),
   });
-  const summarizationProvider = resolveCompactionSummarizationProvider({
-    pinSelection: engine.options.model !== undefined || engine.options.providerPolicy !== undefined,
+  const deliberationRunner = engine.resolveDeliberationRunnerForCompaction();
+  const summarizationProvider = engine.modelPolicy?.connectionId || engine.options.providerRunner
+    ? { runner: deliberationRunner as import('../runners/base.js').ChatLlmRunner, defaultModel: compactionModelId }
+    : resolveCompactionSummarizationProvider({
+    pinSelection: Boolean(engine.modelPolicy?.connectionId) || engine.options.model !== undefined || engine.options.providerPolicy !== undefined,
     chatProvider: engine.modelPolicy?.provider ?? null,
     compactionModel: compactionModelId,
   });
-  const deliberationRunner = engine.resolveDeliberationRunnerForCompaction();
   const runnerReserved = input.recoveryPressure?.textRequest
     ? input.recoveryPressure.reservedCompletionTokens : (
     deliberationRunner as { getNativeRequestReservedCompletionTokens?: () => number | null }

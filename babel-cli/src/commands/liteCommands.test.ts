@@ -138,7 +138,7 @@ describe('Babel CLI command registration', () => {
     });
 
     assert.throws(() => program.parse(['node', 'babel', '--help']));
-    assert.match(help, /plan .*Prepare a plan/i);
+    assert.match(help, /plan .*Produce a read-only plan/i);
     assert.match(help, /deep .*governed apply-and-verify path/i);
     assert.match(help, /advanced .*advanced Babel command groups/i);
     assert.doesNotMatch(help, /\blite\b/i);

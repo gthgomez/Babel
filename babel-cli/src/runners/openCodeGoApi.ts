@@ -12,7 +12,7 @@ import type {
   ToolDefinition,
   ToolStreamEvent,
 } from './base.js'
-import { DeepInfraApiRunner, type FetchRedirectPolicy } from './deepInfraApi.js'
+import { OpenAiCompatibleRunner, type FetchRedirectPolicy } from './protocol/openai-chat-completions.js'
 import { PreparedRequestAdmissionError } from './preparedProviderRequest.js'
 import {
   resolveOpenCodeGoCredential,
@@ -64,6 +64,7 @@ export class OpenCodeGoError extends Error {
 }
 
 export interface OpenCodeGoRunnerOptions {
+  contextWindowTokens?: number
   /** Explicit source wins; otherwise a configured Go key selects network-secret. */
   budget?: OpenCodeGoBudget
   env?: NodeJS.ProcessEnv
@@ -120,7 +121,7 @@ function classifyError(error: unknown): OpenCodeGoError {
  * both the endpoint and model allowlist, and maintains one session header for
  * the runner lifetime without selecting any fallback provider.
  */
-export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
+export class OpenCodeGoApiRunner extends OpenAiCompatibleRunner {
   private readonly budget: OpenCodeGoBudget | undefined
   private readonly outputTokenLimit: number
   private readonly pinnedModel: OpenCodeGoModel
@@ -158,6 +159,7 @@ export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
         })
     super(model, 'OPENCODE_GO_AUTH_HELPER', sampling, {
       provider: 'opencode-go',
+      ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}),
       explicitCredential: resolution.credential,
       ...(options.executionEnvelope ? { executionEnvelope: options.executionEnvelope } : {}),
     })

@@ -24,6 +24,7 @@ import {
   isLocalEnvironmentErrorText,
   isPolicyErrorText,
   isProviderOutputLimitText,
+  providerFailureDetail,
 } from './chatFailureClassification.js';
 
 export type { TerminalReasonCode };
@@ -116,6 +117,14 @@ export function terminalReasonGuidance(
   code: TerminalReasonCode,
   detail?: string,
 ): TerminalReasonGuidance {
+  const providerGuidance: Record<string, TerminalReasonGuidance> = {
+    credential_missing: { message: 'Provider setup is incomplete', nextActions: ['Run /setup or babel-agent setup', 'Use /provider status to inspect the selected connection'] },
+    authentication: { message: 'Provider authentication was rejected', nextActions: ['Update the selected credential environment variable and restart Babel', 'Inspect /provider status before trying again'] },
+    quota: { message: 'Provider quota or credit was exhausted', nextActions: ['Review quota with the selected provider', 'Choose another configured connection explicitly if needed'] },
+    rate_limit: { message: 'Provider rate limit reached', nextActions: ['Wait for the provider retry window', 'Retry the same selected connection'] },
+    model_unavailable: { message: 'Selected model is unavailable', nextActions: ['Use /model list or /model use <exact-id> on this connection'] },
+  };
+  if (detail && providerGuidance[detail]) return { ...providerGuidance[detail]!, nextActions: [...providerGuidance[detail]!.nextActions] };
   const base = GUIDANCE[code];
   const message =
     code === 'recovery_exhausted' && detail === 'zero_write_hard_stop'
@@ -169,6 +178,8 @@ export function terminalReasonFromFailureText(
   error: string | null | undefined,
 ): TerminalReason | undefined {
   if (!error) return undefined;
+  const providerDetail = providerFailureDetail(error);
+  if (providerDetail) return { code: providerDetail === 'credential_missing' ? 'external_dependency' : 'provider_failure', cause_class: providerDetail === 'credential_missing' ? 'environment' : 'provider', detail: providerDetail };
   // Compatibility for durable failures recorded before the typed producer.
   if (/^P11 context installation was blocked;|^Could not prepare context:|^An uninstalled compaction capsule cannot authorize provider dispatch\./.test(error)) {
     return { code: 'context_preparation_failed', cause_class: 'harness' };

@@ -44,7 +44,7 @@ test('change tasks retain productive investigation and may find no required chan
     getLastInvocationMetadata() { return null },
   }
   const task = 'Investigate each module and fix any constant that disagrees with its filename.'
-  const engine = new ChatEngine({ task, projectRoot: root, maxTurns: 24 })
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: root, maxTurns: 24 })
   const host = engine as unknown as { deliberationRunner: unknown; synthesisRunner: unknown; shouldUseNativeTools: () => boolean }
   host.deliberationRunner = runner
   host.synthesisRunner = runner

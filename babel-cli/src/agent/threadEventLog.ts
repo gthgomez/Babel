@@ -153,6 +153,7 @@ export type ThreadEvent =
       status: string;
       /** D03: structured terminal reason survives thread-log persistence/replay. */
       reason_code?: string;
+      reason_detail?: string;
       cause_class?: string | null;
       response?: ThreadTerminalResponse;
     })
@@ -308,7 +309,7 @@ export function endTurn(
   turnId: string,
   outcome: TerminalOutcome | undefined,
   status: string,
-  reason?: { code: string; cause_class: string | null },
+  reason?: { code: string; cause_class: string | null; detail?: string },
   response?: ThreadTerminalResponse,
 ): void {
   appendThreadEvent(log, {
@@ -318,7 +319,7 @@ export function endTurn(
     status,
     ...(response !== undefined ? { response } : {}),
     ...(reason !== undefined
-      ? { reason_code: reason.code, cause_class: reason.cause_class }
+      ? { reason_code: reason.code, cause_class: reason.cause_class, ...(reason.detail !== undefined ? { reason_detail: reason.detail } : {}) }
       : {}),
   });
 }
@@ -330,7 +331,7 @@ export function amendLatestTurnEndedForTurn(
   input: {
     outcome: TerminalOutcome;
     status: string;
-    reason: { code: string; cause_class: string | null };
+    reason: { code: string; cause_class: string | null; detail?: string };
   },
 ): boolean {
   for (let i = log.events.length - 1; i >= 0; i -= 1) {
@@ -339,6 +340,8 @@ export function amendLatestTurnEndedForTurn(
       event.outcome = input.outcome;
       event.status = input.status;
       event.reason_code = input.reason.code;
+      if (input.reason.detail !== undefined) event.reason_detail = input.reason.detail;
+      else delete event.reason_detail;
       event.cause_class = input.reason.cause_class;
       return true;
     }

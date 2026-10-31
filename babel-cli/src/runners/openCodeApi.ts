@@ -3,7 +3,7 @@
  *
  * OpenCode Zen (https://opencode.ai/docs/zen/) is a model gateway operated by
  * the OpenCode team. Its chat-completions endpoint is OpenAI-compatible, so we
- * reuse the full DeepInfraApiRunner implementation and only override the API
+ * reuse the full OpenAiCompatibleRunner implementation and only override the API
  * URL and API-key source.
  *
  * Usage:
@@ -15,7 +15,7 @@
  *                             Default: "x-preview-f-free" (Ox Alpha Free).
  */
 
-import { DeepInfraApiRunner } from './deepInfraApi.js';
+import { OpenAiCompatibleRunner } from './protocol/openai-chat-completions.js';
 import type { RunnerInvocationMetadata } from './base.js';
 
 export const OPENCODE_DEFAULT_BASE_URL = 'https://opencode.ai/zen/v1';
@@ -26,7 +26,7 @@ function resolveOpenCodeBaseUrl(): string {
   return (override || OPENCODE_DEFAULT_BASE_URL).replace(/\/$/, '');
 }
 
-export class OpenCodeApiRunner extends DeepInfraApiRunner {
+export class OpenCodeApiRunner extends OpenAiCompatibleRunner {
   protected override get apiUrl(): string {
     return `${resolveOpenCodeBaseUrl()}/chat/completions`;
   }
@@ -36,12 +36,14 @@ export class OpenCodeApiRunner extends DeepInfraApiRunner {
     sampling: { maxTokens?: number; temperature?: number } = {},
     credential: {
       apiKeyEnvVar?: string;
+      contextWindowTokens?: number;
       explicitCredential?: string;
       env?: NodeJS.ProcessEnv;
     } = {},
   ) {
     super(model, credential.apiKeyEnvVar ?? 'OPENCODE_API_KEY', sampling, {
       provider: 'opencode',
+      ...(credential.contextWindowTokens ? { contextWindowTokens: credential.contextWindowTokens } : {}),
       ...(credential.explicitCredential
         ? { explicitCredential: credential.explicitCredential }
         : {}),

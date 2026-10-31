@@ -12,13 +12,35 @@ Full license: https://github.com/gthgomez/Babel/blob/main/LICENSE
 Docs map: [README.md](./README.md).
 
 Babel is a **local coding agent**. The primary interface is the interactive
-**TUI/REPL**. Daily work uses three product modes: **chat**, **plan**, and
-**deep**.
+**TUI/REPL**. Daily work uses **Work**, **Plan**, and **Work with thorough review**.
+The internal controller names Chat/Plan/Deep remain compatible.
 
 These commands are for a **current-source clone**. The published Windows x64
 Desktop [0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3) bundles Node and the CLI; see [START_HERE.md](../START_HERE.md)
 for choosing between them. The PowerShell examples use an absolute `$BabelCli`
 path defined after the build below, so they also work outside the Babel checkout.
+
+## npm first run
+
+```sh
+npm install --global babel-harness@latest
+babel-agent setup
+babel-agent provider status
+babel-agent settings show
+babel-agent work "Explain this project"
+```
+
+Setup requires an explicit connection/model and budget choice; no cloud provider
+is preselected. OpenAI/Gemini/Anthropic can be used directly. Configuration is not
+proof of authentication. `doctor` checks local execution prerequisites. In a pipe,
+use `setup --json` for setup state and instructions. Details and migration commands:
+[package README](../babel-cli/README.md#first-run-connections-and-defaults).
+
+Plan stops by default. Only an explicitly saved `plans.autoApply` preference can
+enable automatic implementation; explicit plan-only intent and permissions win.
+`work --review thorough` is the public spelling for the existing Deep controller.
+Workflow, permissions and display are independent. `conversation list/resume`
+recovers conversations; `run resume <id>` recovers execution worker chains.
 
 ## Requirements
 
@@ -161,10 +183,11 @@ node "$BabelCli" chat --headless "Summarize the failing test"
 
 ## Plan
 
-Plan first, approve, then apply:
+Plan first, inspect the saved result, then explicitly apply:
 
 ```powershell
-node "$BabelCli" plan "Split the auth module safely"
+node "$BabelCli" plan "Split the auth module safely" --plan-only
+node "$BabelCli" apply --plan <plan_id>
 ```
 
 Use when you want an explicit plan gate before mutations.

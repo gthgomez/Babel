@@ -3,10 +3,10 @@ import { join, dirname } from 'node:path';
 import { resolveRuntimePaths } from './runtimePaths.js';
 import { type ExecutorMode } from '../sandbox.js';
 
-function getModeFilePath(): string {
-  const paths = resolveRuntimePaths();
+function getModeFilePath(env: NodeJS.ProcessEnv = process.env): string {
+  const paths = resolveRuntimePaths(env);
   // Keep the historical package-local mode file for an unconfigured source checkout.
-  const configRoot = !paths.isInstalled && !process.env['BABEL_CONFIG_DIR'] && !process.env['BABEL_ROOT']
+  const configRoot = !paths.isInstalled && !env['BABEL_CONFIG_DIR'] && !env['BABEL_ROOT']
     ? join(paths.packageRoot, 'config')
     : paths.userConfigRoot;
   return join(configRoot, 'runtime-mode.json');
@@ -21,13 +21,13 @@ interface RuntimeModeFile {
  * Reads the current runtime mode from the persistence layer.
  * Defaults to 'act' if no mode is set.
  */
-export function readRuntimeMode(): ExecutorMode {
-  const envMode = process.env['BABEL_RUNTIME_MODE']?.trim().toLowerCase();
+export function readRuntimeMode(env: NodeJS.ProcessEnv = process.env): ExecutorMode {
+  const envMode = env['BABEL_RUNTIME_MODE']?.trim().toLowerCase();
   if (envMode === 'act' || envMode === 'plan') {
     return envMode;
   }
 
-  const path = getModeFilePath();
+  const path = getModeFilePath(env);
   if (!existsSync(path)) {
     return 'act';
   }

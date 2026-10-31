@@ -56,7 +56,7 @@ async function runFixture(scenario: string): Promise<void> {
       }
     }
     const runner = new Runner()
-    const engine = new ChatEngine({task:'Inspect the repository.', projectRoot:root, operation:'READ_ONLY',
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',task:'Inspect the repository.', projectRoot:root, operation:'READ_ONLY',
       systemContext:policy, providerRunner:runner, maxTurns:20})
     const internal = engine as unknown as {
       synthesisRunner: unknown
@@ -119,7 +119,7 @@ async function runFixture(scenario: string): Promise<void> {
     override async *executeRawStream(prompt:string, system?:string) {yield await this.executeRaw(prompt,undefined,system)}
   }
   const runner = new Runner()
-  const engine = new ChatEngine({task:scope==='change'?'Create a brief.txt file.':'Inspect the files.',
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',task:scope==='change'?'Create a brief.txt file.':'Inspect the files.',
     projectRoot:scope==='conversation'?null:root,
     ...(scope==='conversation'?{executionScope:{kind:'conversation' as const}}:{}),
     operation:scope==='change'?'CHANGE':'READ_ONLY',providerRunner:runner,maxTurns:4,

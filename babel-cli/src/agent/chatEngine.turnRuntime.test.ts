@@ -18,7 +18,7 @@ test('live ChatEngine rejects legacy provider model before runner/network creati
 });
 
 test('applyUserSubmission isolates writeCount so prior task cannot satisfy later gate', () => {
-  const engine = new ChatEngine({ task: 'fix parser', projectRoot: process.cwd() });
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'fix parser', projectRoot: process.cwd() });
   engine.applyUserSubmission({ userInput: 'fix parser' });
   (engine as unknown as { writeCount: number }).writeCount = 7;
   (engine as unknown as { gateStrikes: number }).gateStrikes = 2;
@@ -36,7 +36,7 @@ test('applyUserSubmission isolates writeCount so prior task cannot satisfy later
 });
 
 test('applyUserSubmission continueTask preserves sticky counters and intent', () => {
-  const engine = new ChatEngine({ task: 'implement feature', projectRoot: process.cwd() });
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'implement feature', projectRoot: process.cwd() });
   engine.applyUserSubmission({ userInput: 'implement feature', taskIntent: 'execute' });
   (engine as unknown as { writeCount: number }).writeCount = 3;
 
@@ -64,7 +64,7 @@ test('getTurnRuntimeSnapshot reflects live writeCount after mutation', () => {
 });
 
 test('resyncTurnStateAfterBranch drops the old task runtime and clears writeCount', () => {
-  const engine = new ChatEngine({ task: 't', projectRoot: process.cwd() });
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 't', projectRoot: process.cwd() });
   engine.applyUserSubmission({ userInput: 't' });
   (engine as unknown as { writeCount: number }).writeCount = 4;
   engine.resyncTurnStateAfterBranch();
@@ -73,7 +73,7 @@ test('resyncTurnStateAfterBranch drops the old task runtime and clears writeCoun
 });
 
 test('P0-C: isolated submission reloads limits for new task class', () => {
-  const engine = new ChatEngine({
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
     task: 'explain the architecture without editing any files',
     projectRoot: process.cwd(),
   });
@@ -96,7 +96,7 @@ test('P0-C: isolated submission reloads limits for new task class', () => {
 });
 
 test('P0-C: continueTask keeps limits class sticky with prior taskClass', () => {
-  const engine = new ChatEngine({ task: 'fix parser bug', projectRoot: process.cwd() });
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'fix parser bug', projectRoot: process.cwd() });
   const first = engine.applyUserSubmission({
     userInput: 'fix parser bug',
     taskIntent: 'execute',
@@ -111,7 +111,7 @@ test('P0-C: continueTask keeps limits class sticky with prior taskClass', () => 
 
 test('explicit artifact work with a scoped dependency constraint enters the mutating operation', () => {
   const task = 'Implement the requested function. Create solution.py. Do not add third-party dependencies.';
-  const engine = new ChatEngine({ task, projectRoot: process.cwd() });
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: process.cwd() });
   const runtime = engine.applyUserSubmission({ userInput: task });
 
   assert.equal(runtime.effectiveOperation, 'HYBRID');
@@ -120,7 +120,7 @@ test('explicit artifact work with a scoped dependency constraint enters the muta
 });
 
 test('status? after a mutation submission is a read-only presentation, not execute', () => {
-  const engine = new ChatEngine({
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
     task: 'fix the failing authentication test',
     projectRoot: process.cwd(),
   });

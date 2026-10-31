@@ -11,6 +11,7 @@
  */
 
 import { realpathSync } from 'node:fs';
+import { assertChildBudgetSupported } from '../../config/laneBudget.js';
 import { BABEL_ROOT } from '../../cli/constants.js';
 import {
   buildDiscoveryAnchorWarmupActions,
@@ -456,6 +457,7 @@ async function resolveLiveActionTurn(
 export async function runReadOnlyAgentLoop(
   input: ReadOnlyAgentLoopInput,
 ): Promise<ReadOnlyAgentLoopResult> {
+  if (!input.useDeterministicMock && input.provider !== 'mock' && process.env['BABEL_LITE_OFFLINE'] !== '1') assertChildBudgetSupported('Standalone discovery', input.projectRoot, input.inheritedAllowance);
   // This lane is a read port. Caller-supplied presets must not widen its
   // authority (especially for the fix-discovery verb).
   const preset: PermissionPreset = 'read_only';

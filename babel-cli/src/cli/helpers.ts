@@ -50,6 +50,7 @@ export function normalizeModelName(value: string | undefined): string | undefine
     return undefined;
   }
   const trimmed=value.trim();
+  if (trimmed.startsWith('connection/')) return trimmed;
   // Local model names are case-sensitive identifiers, unlike family aliases.
   if(trimmed.toLowerCase().startsWith('ollama/')) return `ollama/${trimmed.slice(7)}`;
   // Explicit provider-bound model IDs retain the provider's case-sensitive identity.

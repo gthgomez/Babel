@@ -1,3 +1,6 @@
+import { resolveEffectiveSettings } from '../../config/userSettings.js'
+import { getSetupStatus, runProviderSetup } from '../../services/providerSetup.js'
+import { selectedConnectionModel } from '../../services/connectionSettings.js'
 import process from 'node:process';
 
 import logUpdate from 'log-update';
@@ -17,6 +20,7 @@ import { InputCoordinator } from '../../ui/inputCoordinator.js';
 import { stopTuiObservation } from '../../ui/observe/observeSession.js';
 import { DEC_2026_END } from '../../ui/terminalEscapeSequences.js';
 import { primary, error, muted } from '../../ui/theme.js';
+import { recordInteractiveDiagnostic } from '../../ui/interactiveDiagnostics.js';
 import type { ReplContext } from '../context.js';
 import type { SessionState } from '../types.js';
 import * as Session from '../session.js';
@@ -83,59 +87,51 @@ export async function bootstrapReplSession(
   // Clear viewport + scrollback so prior-session error boxes do not linger above the picker.
   OutputBuffer.getInstance().writeControl('\x1b[2J\x1b[3J\x1b[H');
 
-  if (typeof hooks.warmRuntime === 'function') {
-    hooks.warmRuntime();
-  } else if (hooks.warmRuntime !== false && process.env['NODE_ENV'] !== 'test' && !process.env['BABEL_TEST']) {
-    warmReplRuntime();
-  }
-
-  if (typeof hooks.startIndexing === 'function') {
-    hooks.startIndexing();
-  } else if (hooks.startIndexing !== false && !resolveRuntimePaths().isInstalled && process.env['NODE_ENV'] !== 'test' && !process.env['BABEL_TEST']) {
-    startBackgroundIndexing();
-  }
-
-  // Fresh interactive process: never inherit ~/.babel/session.json cost.
-  // Conversation resume is explicit (/resume); do not reload last process totals.
-  globalCostTracker.resetSession();
-
-  if (!ctx.projectSettingsApplied) {
-    const currentTarget = ctx.resolveCurrentTarget();
-    if (currentTarget.targetRoot) {
-      const projSettings = readProjectSettings(currentTarget.targetRoot);
-      if (Object.keys(projSettings).length > 0) {
-        const merged = mergeProjectSettings(ctx.state, projSettings, false);
-        ctx.projectSettingsApplied = merged.applied;
-        if (merged.mode !== undefined) ctx.state.mode = merged.mode;
-        if (merged.model !== undefined) ctx.state.model = merged.model;
-        if (merged.model) ctx.resolveSessionModel();
-      }
-    }
-  }
-
+  // Configuration and local prerequisites precede indexing or daemon warmup.
+  globalCostTracker.resetSession()
+  const target = ctx.resolveCurrentTarget().targetRoot ?? process.cwd()
+  const effective = resolveEffectiveSettings({ projectRoot: target,
+    ...(ctx.state.connectionId ? { session: { connection: ctx.state.connectionId } } : {}) })
   if (!ctx.state.model) {
-    try {
-      const available = getAvailableModels();
-      const enabled = available.filter((m) => m.entry.enabled !== false);
-      if (enabled.length > 0) {
-        enabled.sort(
-          (a, b) =>
-            (a.entry.estimated_cost_per_1m_output ?? Infinity) -
-            (b.entry.estimated_cost_per_1m_output ?? Infinity),
-        );
-        const cheapest = enabled[0]!;
-        ctx.state.model = cheapest.key;
-        ctx.state.resolvedModelId = cheapest.entry.model_id;
-      }
-    } catch {
-      /* policy optional */
+    const selector = selectedConnectionModel({}, target)
+    if (selector) {
+      ctx.state.model = selector
+      if (effective.connection.value) ctx.state.connectionId = effective.connection.value.id
+      ctx.state.modelSource = effective.connection.source
+      ctx.resolveSessionModel()
     }
   }
-
-  void readRuntimeMode();
-  if (isFirstRun()) {
-    showOnboarding();
+  if (!ctx.state.modeExplicit && (effective.workflow.source !== 'built-in' || effective.review.source !== 'built-in')) {
+    ctx.state.mode = effective.workflow.value === 'plan' ? 'plan' : effective.review.value === 'thorough' ? 'deep' : 'chat'
   }
+  if (!ctx.projectSettingsApplied) {
+    const projectSettings = readProjectSettings(target)
+    if (!ctx.state.modeExplicit && effective.workflow.source === 'built-in' && effective.review.source === 'built-in' && projectSettings.mode) ctx.state.mode = projectSettings.mode
+    const merged = mergeProjectSettings(ctx.state, projectSettings, false)
+    ctx.projectSettingsApplied = true
+    // Repository settings cannot select a credential destination for a fresh profile.
+    if (!ctx.state.model && merged.model) OutputBuffer.getInstance().write(muted('Legacy project model found. Use /setup to explicitly select its provider and account.\n'))
+  }
+  if (isFirstRun()) showOnboarding()
+  if (!ctx.state.model && process.stdin.isTTY && process.stderr.isTTY && !process.env['CI']) {
+    const setup = () => runProviderSetup()
+    if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('first-run-setup', setup)
+    else await setup()
+    const selected = selectedConnectionModel({}, target)
+    if (selected) { ctx.state.model = selected; ctx.state.modelSource = 'user'; const id = resolveEffectiveSettings({ projectRoot: target }).connection.value?.id; if (id) ctx.state.connectionId = id; ctx.resolveSessionModel() }
+  }
+  const status = getSetupStatus(process.env, ctx.state.connectionId ? { connection: ctx.state.connectionId } : {}, target)
+  ctx.state.readinessState = status.state
+  recordInteractiveDiagnostic('startup', `Setup state: ${status.state}; runtime warmup: ${ctx.state.model && status.state !== 'action_required' ? 'eligible' : 'skipped'}`)
+  if (!ctx.state.model || status.state === 'action_required') ctx.state.lastRunUserStatus = 'blocked'
+  if (ctx.state.model && status.state !== 'action_required') {
+    if (typeof hooks.warmRuntime === 'function') hooks.warmRuntime()
+    else if (hooks.warmRuntime !== false && process.env['NODE_ENV'] !== 'test' && !process.env['BABEL_TEST']) warmReplRuntime()
+    if (typeof hooks.startIndexing === 'function') hooks.startIndexing()
+    else if (hooks.startIndexing !== false && !resolveRuntimePaths().isInstalled && process.env['NODE_ENV'] !== 'test' && !process.env['BABEL_TEST']) startBackgroundIndexing()
+  }
+  void readRuntimeMode()
+
 }
 
 export { formatResumeHint, shouldForceResumePicker } from './startupResumeHint.js';

@@ -31,7 +31,7 @@ describe('shared host-run resume route compatibility', () => {
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'resume-route',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',

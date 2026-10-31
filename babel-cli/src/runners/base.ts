@@ -366,6 +366,8 @@ export interface ProviderMessage {
 
 /** A single native tool call within an assistant ProviderMessage. */
 export interface ProviderToolCall {
+  /** Opaque protocol state, never tool arguments or execution authority. */
+  providerMetadata?: { provider: string; parts: Record<string, unknown>[] };
   id: string;
   type: 'function';
   function: {
@@ -407,7 +409,7 @@ export interface ToolDefinition {
 export type ToolStreamEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'thought_delta'; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; idWasNormalized?: true }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; idWasNormalized?: true; providerMetadata?: ProviderToolCall['providerMetadata'] }
   | { type: 'done'; finishReason: string }
   | { type: 'error'; message: string; malformedToolArguments?: {
       callId: string; name: string; finishReason: string; idWasNormalized: boolean;
@@ -466,6 +468,18 @@ export interface LlmRunner {
     toolChoice?: 'auto' | 'required',
     callbacks?: RunnerCallbacks,
   ): AsyncGenerator<ToolStreamEvent, void, undefined>;
+}
+
+/** Conversation inference contract; callers depend on operations rather than vendor inheritance. */
+export interface ChatLlmRunner extends LlmRunner {
+  executeRaw(prompt: string, callbacks?: RunnerCallbacks, systemPrompt?: string, signal?: AbortSignal): Promise<string>
+  executeRawStream(prompt: string, systemPrompt?: string, signal?: AbortSignal, callbacks?: RunnerCallbacks): AsyncGenerator<string, void, undefined>
+  executeWithToolsStream(messages: ProviderMessage[], tools: ToolDefinition[], systemPrompt?: string, signal?: AbortSignal,
+    toolChoice?: 'auto' | 'required', callbacks?: RunnerCallbacks): AsyncGenerator<ToolStreamEvent, void, undefined>
+  getLastInvocationMetadata(): RunnerInvocationMetadata | null
+  buildNativeToolsWireBody?(messages: ProviderMessage[], tools: ToolDefinition[], systemPrompt?: string,
+    options?: { stream?: boolean; toolChoice?: 'auto' | 'required' }): string
+  getNativeRequestReservedCompletionTokens?(): number | null
 }
 
 /**

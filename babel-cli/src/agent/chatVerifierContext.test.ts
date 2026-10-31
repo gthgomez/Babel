@@ -38,7 +38,7 @@ test('default engine currency uses live bytes; explicit missing-currency test ov
   try {
     writeFileSync(join(root,'package.json'),'{"scripts":{"test":"node --test"}}\n');writeFileSync(join(root,'source.js'),'export const value=1;\n')
     for(const args of [['init','-q'],['add','--all'],['-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','-qm','fixture']])execFileSync('git',args,{cwd:root,windowsHide:true})
-    const engine=new ChatEngine({task:'Run npm test before completing.',projectRoot:root,requiredVerifierCommands:['npm test']})
+    const engine=new ChatEngine({ model: 'deepseek-v4-flash-openrouter',task:'Run npm test before completing.',projectRoot:root,requiredVerifierCommands:['npm test']})
     const host=engine as unknown as {currentVerifierOwner:()=>import('../executor/contracts.js').VerifierEvidenceOwner;parity:import('./chatEngineParityBridge.js').ParityRuntime;executedVerifierLedger:import('../evidence/chatRevisionBinding.js').BoundChatVerifierReceipt[];verifierReceiptCache:Map<string,never>;buildVerifierInput:()=>{currentWorkspaceRevisionHash?:string;currentReceiptRevisionHashes:Record<string,string>}}
     const receipt=await captureAndRecordVerifierReceipt({projectRoot:root,command:'npm test',exitCode:0,summary:'# tests 1\n# skipped 0',mutationPaths:['source.js'],sessionEvents:host.parity.sessionEvents,turnId:'fixture',ledger:host.executedVerifierLedger,cache:host.verifierReceiptCache,writeCount:1,verifierOwner:host.currentVerifierOwner()})
     assert.ok(receipt)

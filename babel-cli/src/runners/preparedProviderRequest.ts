@@ -85,9 +85,10 @@ function resolveContextLimit(input: PrepareProviderRequestInput): {
   }
 
   const modelId = input.sentModelId ?? input.normalizedModelId ?? input.requestedModelId;
-  const policyCapabilities = getNormalizedModelCapabilities(modelId);
+  const candidateCapabilities = getNormalizedModelCapabilities(modelId);
+  const policyCapabilities = candidateCapabilities?.provider === input.provider ? candidateCapabilities : null;
   const reverseLookupLimit = policyCapabilities === null
-    ? getAvailableModels().find(({ entry }) => entry.model_id === modelId)?.entry.context_window
+    ? getAvailableModels().find(({ entry }) => entry.provider === input.provider && entry.model_id === modelId)?.entry.context_window
     : undefined;
   const policyLimit = normalizeTokenLimit(
     policyCapabilities?.contextWindow ?? reverseLookupLimit,

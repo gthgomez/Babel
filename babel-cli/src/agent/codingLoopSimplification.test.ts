@@ -177,7 +177,7 @@ describe('ordinary coding-loop behaviors', () => {
     refreshDryRunState();
     resetCircuitBreaker();
     const runId = `coding-loop-cert-${Date.now()}`;
-    const engine = new ChatEngine({ task: 'fix fixture', projectRoot: root, runId });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'fix fixture', projectRoot: root, runId });
     const internals = engine as unknown as { engineRunId: string };
     assert.equal(internals.engineRunId, runId);
     engine.applyUserSubmission({ userInput: 'Fix the fixture.' });
@@ -235,7 +235,7 @@ describe('ordinary coding-loop behaviors', () => {
     const root = project();
     writeFileSync(join(root, 'parser.ts'), 'export const add = (a: number, b: number) => a + b;\n');
     const task = 'Fix add so it returns the sum of its arguments.';
-    const engine = new ChatEngine({ task, projectRoot: root, maxTurns: 5 });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: root, maxTurns: 5 });
     const runner = installScript(engine, [
       [
         { type: 'tool_use', id: 'read-existing-change', name: 'read_file', input: { path: 'parser.ts' } },
@@ -272,7 +272,7 @@ describe('ordinary coding-loop behaviors', () => {
       }));
       initializeGitFixture(root);
       const task = 'Fix add so it returns the sum of its arguments; run `npm test` before finishing.';
-      const engine = new ChatEngine({ task, projectRoot: root, maxTurns: 5 });
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: root, maxTurns: 5 });
       const runner = installScript(engine, [
         [{ type: 'tool_use', id: 'inspect-already-correct', name: 'read_file', input: { path: 'parser.ts' } },
           { type: 'done', finishReason: 'tool_calls' }],
@@ -323,7 +323,7 @@ describe('ordinary coding-loop behaviors', () => {
       { type: 'done', finishReason: 'stop' },
     ]);
     const task = 'Investigate all module files and summarize the distinct exported constants. Do not edit.';
-    const engine = new ChatEngine({ task, projectRoot: root, maxTurns: numberOfFiles + 3 });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: root, maxTurns: numberOfFiles + 3 });
     const runner = installScript(engine, readSteps);
 
     const events = await run(engine, task);
@@ -351,7 +351,7 @@ describe('ordinary coding-loop behaviors', () => {
         scripts: { test: 'node verify.mjs' },
       }));
       const task = 'Fix left.ts and right.ts so both exported constants equal 1.';
-      const engine = new ChatEngine({ task, projectRoot: root, maxTurns: 6 });
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: root, maxTurns: 6 });
       const runner = installScript(engine, [
         [{ type: 'tool_use', id: 'left-edit', name: 'str_replace', input: {
           file_path: 'left.ts', old_str: 'export const left = 0;', new_str: 'export const left = 1;',
@@ -394,7 +394,7 @@ describe('ordinary coding-loop behaviors', () => {
         scripts: { test: 'node --test verify.mjs' },
       }));
       const task = 'Use current external release information to update version.txt. Run `npm test`.';
-      const engine = new ChatEngine({ task, projectRoot: root, operation: 'CHANGE', maxTurns: 6 });
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: root, operation: 'CHANGE', maxTurns: 6 });
       const runner = installScript(engine, [
         [{ type: 'tool_use', id: 'current-search', name: 'web_search', input: {
           query: 'Fixture library current stable release', max_results: 1,
@@ -444,7 +444,7 @@ describe('ordinary coding-loop behaviors', () => {
       assert.match(baseline.stderr, /pre-existing baseline failure/);
 
       const task = 'Investigate the existing failure. Do not edit files. Run `npm test` and report its result.';
-      const engine = new ChatEngine({ task, projectRoot: root, maxTurns: 4 });
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: root, maxTurns: 4 });
       const runner = installScript(engine, [
         [{ type: 'tool_use', id: 'baseline-test', name: 'run_command', input: { command: 'npm test' } },
           { type: 'done', finishReason: 'tool_calls' }],
@@ -482,7 +482,7 @@ describe('ordinary coding-loop behaviors', () => {
         scripts: { test: 'node verify.mjs' },
       }));
       const task = 'Change value.txt from 0 to 1, run `npm test`, then change the value to 2.';
-      const engine = new ChatEngine({ task, projectRoot: root, maxTurns: 8 });
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: root, maxTurns: 8 });
       const runner = installScript(engine, [
         [{ type: 'tool_use', id: 'first-revision', name: 'str_replace', input: {
           file_path: 'value.txt', old_str: 'value=0', new_str: 'value=1',
@@ -541,7 +541,7 @@ describe('ordinary coding-loop behaviors', () => {
         scripts: { test: 'node verify.mjs' },
       }));
       const task = 'Fix the fixture and verify it with `npm test`.';
-      const engine = new ChatEngine({ task, projectRoot: root, maxTurns: 4 });
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: root, maxTurns: 4 });
       const runner = installScript(engine, [
         [{ type: 'tool_use', id: 'unavailable-test', name: 'test_run', input: { command: 'npm test' } },
           { type: 'done', finishReason: 'tool_calls' }],

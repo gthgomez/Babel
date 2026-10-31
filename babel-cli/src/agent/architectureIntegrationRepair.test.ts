@@ -102,6 +102,7 @@ test('I02: OpenCode Go adapter preserves PreparedRequestAdmissionError before tr
   }
   try {
     const runner = new OpenCodeGoApiRunner('deepseek-v4-flash', {}, {
+      contextWindowTokens: 128_000,
       credentialSource: 'explicit-test',
       explicitCredential: 'fixture-only',
     })
@@ -122,7 +123,7 @@ test('I03: repeated Chat preamble budget uses resident history not apiTokenCount
   writeFileSync(join(root, 'src', 'seed.ts'), 'export const seed = 1\n')
   const { ChatEngine } = await import('./chatEngine.js')
   const { computePreambleBudget } = await import('./preambleBudget.js')
-  const engine = new ChatEngine({
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
     task: 'inspect seed.ts',
     projectRoot: root,
     maxEstimatedTokens: 128_000,

@@ -14,6 +14,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { readUserSettings } from '../../config/userSettings.js';
 import { resolveChatModelPolicy, isOfflineChatMode } from '../../agent/chatModelPolicy.js';
 import {
   getAvailableModels,
@@ -97,6 +98,7 @@ export interface LastRouteFacts {
 interface SnapshotCacheKey {
   sessionModel: string;
   offline: boolean;
+  preferencesStamp: string;
   policyPath: string;
   mtimeMs: number;
   size: number;
@@ -125,6 +127,7 @@ export function resolveModelSnapshot(sessionModel?: string): ModelSnapshot | nul
   const key: SnapshotCacheKey = {
     sessionModel: sessionModel ?? '',
     offline,
+    preferencesStamp: JSON.stringify({ settings: readUserSettings(), connection: process.env['BABEL_CONNECTION'], model: process.env['BABEL_MODEL'], desktopModel: process.env['BABEL_DESKTOP_MODEL_ROUTE'] }),
     policyPath: stamp.path,
     mtimeMs: stamp.mtimeMs,
     size: stamp.size,
@@ -150,9 +153,13 @@ export function resetModelSnapshotCache(): void {
 
 /** Status-bar/header label: session override, else the resolved default key, else 'auto'. */
 export function resolveStatusBarModelLabel(sessionModel: string | undefined): string {
+  if (sessionModel?.startsWith('connection/')) {
+    const snapshot = resolveModelSnapshot(sessionModel);
+    return snapshot ? `${snapshot.policy.provider}/${snapshot.policy.providerModelId}` : 'not configured';
+  }
   if (sessionModel) return sessionModel;
   const snapshot = resolveModelSnapshot(undefined);
-  return snapshot ? snapshot.policy.resolvedBackendKey : 'auto';
+  return snapshot ? snapshot.policy.resolvedBackendKey : 'not configured';
 }
 
 function findPolicyEntry(backendKey: string): ModelPolicyModelEntry | undefined {

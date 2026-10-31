@@ -873,7 +873,7 @@ function makeResumeCtx(): ReplContext {
     cwd: process.cwd(),
   };
   return {
-    state: {},
+    state: { model: STATIC_MODEL },
     turns: [],
     turnCounter: 0,
     chatEngine: undefined,

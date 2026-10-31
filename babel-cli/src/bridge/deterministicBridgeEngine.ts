@@ -11,6 +11,7 @@ import type { ProtocolHostState } from '../protocol/client/host.js';
 export function createDeterministicBridgeEngineFactory(): ProtocolHostState['engineFactory'] {
   return (descriptor: SessionDescriptor) => {
     const engine = new ChatEngine({
+      inferenceOwner: 'external-harness',
       task: descriptor.task ?? 'deterministic-bridge',
       projectRoot: descriptor.projectRoot,
       executionProfile: 'chat',

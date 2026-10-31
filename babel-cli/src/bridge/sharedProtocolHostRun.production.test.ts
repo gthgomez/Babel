@@ -67,6 +67,7 @@ describe('sharedProtocolHostRun production contracts', () => {
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) =>
         new ChatEngine({
+          model: 'deepseek-v4-flash-openrouter',
           task: 'cancel',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -146,7 +147,7 @@ describe('sharedProtocolHostRun production contracts', () => {
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'child-exit',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',

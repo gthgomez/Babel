@@ -51,7 +51,7 @@ test('createEngineFromThreadCells restores conversation without transcript.jsonl
   ];
   const engine = createEngineFromThreadCells(
     threadId,
-    { task: 'rewind test', projectRoot: process.cwd() },
+    { task: 'rewind test', projectRoot: process.cwd(), model: 'deepseek-v4-flash-openrouter' },
     records,
   );
 
@@ -66,7 +66,7 @@ test('resyncEngineToThreadCells resets live turn state after rewind', () => {
   const threadId = 'chat-resync-turn';
   const engine = createEngineFromThreadCells(
     threadId,
-    { task: 'rewind live engine', projectRoot: process.cwd() },
+    { task: 'rewind live engine', projectRoot: process.cwd(), model: 'deepseek-v4-flash-openrouter' },
     [makeRecord('a1', 'assistant_message', threadId)],
   );
   type EngineInternals = { apiTokenCount: number; compactionConsecutiveFailures: number };
@@ -85,7 +85,7 @@ test('applyCellsToChatEngine preserves an existing system row', () => {
   const threadId = 'chat-apply-cells';
   const engine = createEngineFromThreadCells(
     threadId,
-    { task: 'fork test', projectRoot: process.cwd() },
+    { task: 'fork test', projectRoot: process.cwd(), model: 'deepseek-v4-flash-openrouter' },
     [makeRecord('a-old', 'assistant_message', threadId)],
   );
   engine.replaceConversation([

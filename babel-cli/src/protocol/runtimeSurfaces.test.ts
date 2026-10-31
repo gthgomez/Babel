@@ -22,7 +22,7 @@ test("protocol host stub handles turn.submit with simulated events", async () =>
   const threadId = allocateThreadId();
   ensureThread(threadId, { project_root: process.cwd() });
 
-  const engine = new ChatEngine({ task: "test", projectRoot: process.cwd() });
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: "test", projectRoot: process.cwd() });
   engine.assignRunId(threadId);
   state.engines.set(threadId, engine);
 

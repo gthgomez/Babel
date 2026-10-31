@@ -38,6 +38,7 @@ test('SharedProtocolRun reply accepts broker-shaped approval after host-run NDJS
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
         const engine = new ChatEngine({
+          inferenceOwner: 'external-harness',
           task: 'shared-run-approval',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',

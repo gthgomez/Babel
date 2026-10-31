@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { before, after } from 'node:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -20,6 +20,11 @@ import {
   resetModelSnapshotCache,
 } from './modelDetail.js';
 import type { ReplContext } from '../context.js';
+
+// An explicit legacy route qualifies these inspection fixtures; fresh profiles have no default.
+const priorFixtureModel = process.env['BABEL_DESKTOP_MODEL_ROUTE'];
+before(() => { process.env['BABEL_DESKTOP_MODEL_ROUTE'] = 'deepseek-v4-flash-openrouter'; resetModelSnapshotCache(); });
+after(() => { if (priorFixtureModel === undefined) delete process.env['BABEL_DESKTOP_MODEL_ROUTE']; else process.env['BABEL_DESKTOP_MODEL_ROUTE'] = priorFixtureModel; resetModelSnapshotCache(); });
 
 function makeCtx(partial?: Partial<ReplContext>): ReplContext {
   const state: ReplContext['state'] = {

@@ -85,7 +85,7 @@ describe('shared host-run remote lease fencing', () => {
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'lease-hold',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',

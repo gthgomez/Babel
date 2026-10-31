@@ -54,7 +54,7 @@ test('OllamaApiRunner respects BABEL_OLLAMA_BASE_URL', async () => {
   delete process.env['BABEL_OLLAMA_BASE_URL'];
 });
 
-test('OllamaApiRunner getLastInvocationMetadata returns null tokens and zero cost', async () => {
+test('OllamaApiRunner getLastInvocationMetadata returns null tokens and unknown cost', async () => {
   process.env['BABEL_OLLAMA_TOKENS'] = '256';
 
   // Mock a successful response with no usage field (Ollama may omit it)
@@ -75,7 +75,7 @@ test('OllamaApiRunner getLastInvocationMetadata returns null tokens and zero cos
 
   assert.deepEqual(result, { ok: true });
   assert.equal(metadata?.provider, 'ollama');
-  assert.equal(metadata?.estimated_cost_usd, 0);
+  assert.equal(metadata?.estimated_cost_usd, null);
   // Token counts should be null when Ollama doesn't report them
   assert.equal(metadata?.prompt_tokens, null);
   assert.equal(metadata?.completion_tokens, null);
@@ -104,7 +104,7 @@ test('OllamaApiRunner preserves token counts when Ollama reports them', async ()
   assert.equal(metadata?.prompt_tokens, 10);
   assert.equal(metadata?.completion_tokens, 5);
   assert.equal(metadata?.total_tokens, 15);
-  assert.equal(metadata?.estimated_cost_usd, 0);
+  assert.equal(metadata?.estimated_cost_usd, null);
 });
 
 test('OllamaApiRunner does not leak BABEL_DEEPINFRA_TOKENS override', async () => {

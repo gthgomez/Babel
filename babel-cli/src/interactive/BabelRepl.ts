@@ -210,6 +210,8 @@ export class BabelRepl {
     const detectedProject = initialState?.project ?? detectInitialProject();
     this.state = {
       mode: initialState?.mode ?? 'chat',
+      modeExplicit: initialState?.modeExplicit ?? initialState?.mode !== undefined,
+      ...(initialState?.connectionId ? { connectionId: initialState.connectionId } : {}),
       ...(detectedProject !== undefined ? { project: detectedProject } : {}),
       router: 'v9',
       ...(initialState?.model !== undefined ? { model: initialState.model } : {}),
@@ -644,7 +646,12 @@ export class BabelRepl {
       host?.invalidate('activate-noop');
       return;
     }
-    await runShellCommand(command, operations);
+    const outcome = await runShellCommand(command, operations);
+    if (!outcome.handled) {
+      if (outcome.message) console.log(outcome.message);
+      host?.holdRepaint();
+      return;
+    }
     if (
       command.kind === 'session.resume' ||
       command.kind === 'session.new' ||

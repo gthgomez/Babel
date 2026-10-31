@@ -58,7 +58,7 @@ test('a fresh fork admits a new objective without importing source execution aut
     const fork = await forkThread(source.getEngineRunId())
     const engine = createEngineFromThreadCells(
       fork.new_thread_id,
-      {
+      { model: 'deepseek-v4-flash-openrouter',
         task: 'Forked fixture',
         projectRoot: scope.projectRoot,
       },
@@ -99,7 +99,7 @@ test('a fresh fork admits a new objective without importing source execution aut
       ),
       before,
     )
-    const headless = new ChatEngine({
+    const headless = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'Explain fixture C',
       projectRoot: scope.projectRoot,
     })
@@ -140,7 +140,7 @@ test('cold continuation records the instructions actually delivered without repl
     )
     const accepted = engine.getTaskContract()!
     writeFileSync(instructions, '# Fixture\nUse fixture instruction TWO.\n')
-    const restored = await ChatEngine.restore(engine.getEngineRunId(), {
+    const restored = await ChatEngine.restore(engine.getEngineRunId(), { model: 'deepseek-v4-flash-openrouter',
       task: 'Resume',
       projectRoot: scope.projectRoot,
     })
@@ -167,7 +167,7 @@ async function fixture(
     prior = process.env['BABEL_RUNS_DIR']
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
   try {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'Fix fixture A and run its tests',
       projectRoot: root,
     })
@@ -183,7 +183,7 @@ test('identical initial requests in separate conversations have distinct task id
   fixture((engine) => {
     const scope = engine.getExecutionScope()
     if (scope.kind !== 'project') throw new Error('Project fixture required')
-    const other = new ChatEngine({
+    const other = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: engine.getTaskContract()!.user_request,
       projectRoot: scope.projectRoot,
     })
@@ -291,7 +291,7 @@ for (const fromCells of [false, true])
             throw new Error('Project fixture required')
           engine = createEngineFromThreadCells(
             engine.getEngineRunId(),
-            {
+            { model: 'deepseek-v4-flash-openrouter',
               task: 'Resume fixture',
               projectRoot: scope.projectRoot,
             },
@@ -363,7 +363,7 @@ test('cells-resumed admission publishes each committed event once to retained ob
     )
     const engine = createEngineFromThreadCells(
       source.getEngineRunId(),
-      {
+      { model: 'deepseek-v4-flash-openrouter',
         task: 'Resume fixture',
         projectRoot: scope.projectRoot,
       },
@@ -479,7 +479,7 @@ test('a postcommit installation failure reloads the accepted objective and its o
       () => engine.admitUserSubmission({ userInput: 'continue' }, route),
       /OBJECTIVE_RELOAD_REQUIRED/,
     )
-    const restored = await ChatEngine.restore(engine.getEngineRunId(), {
+    const restored = await ChatEngine.restore(engine.getEngineRunId(), { model: 'deepseek-v4-flash-openrouter',
       task: 'Resume',
       projectRoot: scope.projectRoot,
     })
@@ -509,7 +509,7 @@ for (const budget of ['missing', 'mismatched'])
       else writeFileSync(join(runDir, 'task-budget.json'), oldBudget)
       const resumed = createEngineFromThreadCells(
         engine.getEngineRunId(),
-        {
+        { model: 'deepseek-v4-flash-openrouter',
           task: 'Resume fixture',
           projectRoot: scope.projectRoot,
         },
@@ -571,7 +571,7 @@ test('an old allowance and verification cannot become the new objective after re
       'Prior objective verification must remain historical',
     )
     writeFileSync(join(runDir, 'task-budget.json'), priorBudget)
-    const restored = await ChatEngine.restore(engine.getEngineRunId(), {
+    const restored = await ChatEngine.restore(engine.getEngineRunId(), { model: 'deepseek-v4-flash-openrouter',
       task: 'Resume',
       projectRoot: scope.projectRoot,
     })
@@ -660,7 +660,7 @@ test('independent objectives and their first attempts commit together before exe
       loadLiveSessionAuthorityStrict(runDir).taskContract.contract_hash,
       next.contract_hash,
     )
-    const restored = await ChatEngine.restore(engine.getEngineRunId(), {
+    const restored = await ChatEngine.restore(engine.getEngineRunId(), { model: 'deepseek-v4-flash-openrouter',
       task: 'Resume',
       projectRoot: scope.projectRoot,
     })

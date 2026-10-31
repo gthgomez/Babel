@@ -2,6 +2,7 @@
 // Centralized command dispatch: routes slash commands to extracted handler
 // modules. Replaces the ~315-line switch statement that was in BabelRepl.
 
+import { getSetupStatus } from '../services/providerSetup.js';
 import { accentBright, muted } from '../ui/theme.js';
 import { findClosestCommands } from './utils.js';
 import type { ReplContext } from './context.js';
@@ -74,6 +75,9 @@ import { KeybindingManager } from '../ui/keybindings.js';
 
 // Help
 import { showHelp } from './help.js';
+import { handleConnectionCommand } from '../commands/connectionCommands.js';
+import { runProviderSetup } from '../services/providerSetup.js';
+import { withSavedPlanApplication } from '../services/savedPlan.js';
 
 export async function handleCommand(ctx: ReplContext, input: string): Promise<void> {
   const parts = input.slice(1).split(' ');
@@ -81,6 +85,38 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
   const args = parts.slice(1);
 
   switch (cmd) {
+    case 'apply': {
+      const id = args[0] ?? ctx.state.savedPlanId;
+      if (!id) throw new Error('Use /apply <plan-id> after producing a plan.');
+      const target = ctx.resolveCurrentTarget();
+      await withSavedPlanApplication(id, { projectRoot: target.targetRoot, operatorMode: ctx.state.operatorMode, execute: async plan => {
+        const { executeGovernedTask } = await import('./execution/governed.js');
+        await executeGovernedTask(ctx, input, `Implement this approved plan within current permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`, target, 'deep');
+        if (ctx.state.lastRunUserStatus !== 'complete') throw new Error('Plan implementation stopped; inspect the run evidence.');
+      } });
+      break;
+    }
+    case 'setup': {
+      const setup = () => runProviderSetup();
+      if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('provider-setup', setup);
+      else await setup();
+      const { selectedConnectionModel, connectionStatus } = await import('../services/connectionSettings.js');
+      const root = ctx.resolveCurrentTarget().targetRoot;
+      const selected = selectedConnectionModel({}, root);
+      const status = connectionStatus({}, root);
+      delete ctx.state.model; delete ctx.state.connectionId; delete ctx.state.resolvedModelId;
+      if (selected) { ctx.state.model = selected; ctx.resolveSessionModel(); }
+      if (status.connection) ctx.state.connectionId = status.connection;
+      if (status.model) ctx.state.resolvedModelId = status.model;
+      ctx.state.modelSource = status.modelSource;
+      ctx.state.readinessState = status.state as NonNullable<typeof ctx.state.readinessState>;
+      delete ctx.state.savedPlanId;
+      delete ctx.state.pendingPlanBody;
+      ctx.chatEngine?.closeAdmissionStore?.();
+      ctx.chatEngine = undefined;
+      ctx.saveSessionState();
+      break;
+    }
     // ── Session control ──────────────────────────────────────────────
     case 'exit':
     case 'quit':
@@ -100,6 +136,7 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
       handleHistory(ctx, []);
       break;
     case 'chat':
+    case 'transcript':
       handleChat(ctx, []);
       break;
     case 'last':
@@ -115,13 +152,24 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
       handleVerbose(ctx, []);
       break;
     case 'compact':
+      console.log('Legacy display alias. Use /display renderer conversational|stages|auto; this does not compact model context.');
       handleCompact(ctx, args);
       break;
+    case 'display': {
+      if (args[0] !== 'renderer' || !['conversational', 'stages', 'auto'].includes(args[1] ?? '')) throw new Error('Use /display renderer conversational|stages|auto.');
+      if (args[1] === 'auto') { delete ctx.state.compactMode; ctx.saveSessionState(); }
+      else handleCompact(ctx, [args[1] === 'conversational' ? 'on' : 'off']);
+      break;
+    }
     case 'notifications':
       handleNotifications(ctx, args);
       break;
     case 'settings':
-      handleSettings(ctx, args);
+      if (args.length && !['show', 'set'].includes(args[0]!)) handleSettings(ctx, args);
+      else await handleConnectionCommand(ctx, 'settings', args);
+      break;
+    case 'provider':
+      await handleConnectionCommand(ctx, 'provider', args);
       break;
     case 'theme':
       await handleTheme(ctx, args);
@@ -185,8 +233,19 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
     case 'restore':
       handleRestore(ctx, args);
       break;
+    case 'conversation':
+      if (args[0] !== 'list' && args[0] !== 'resume') throw new Error('Use /conversation list or /conversation resume <id>.');
+      return handleCommand(ctx, `/session ${args.join(' ')}`);
     case 'session':
-      handleSession(ctx, args);
+      if (args[0] === 'resume') await handleResume(ctx, args.slice(1));
+      else if (args[0] === 'list') {
+        const { listResumableSessions } = await import('../services/chatSessionIndex.js');
+        console.log(JSON.stringify(await listResumableSessions({ limit: 30 }), null, 2));
+      } else handleSession(ctx, args);
+      break;
+    case 'run':
+      if (args[0] !== 'resume') throw new Error('Use /run resume <run> for execution recovery; /session resume <id> resumes a conversation.');
+      await handleContinue(ctx, args.slice(1));
       break;
     case 'continue':
       await handleContinue(ctx, args);
@@ -242,7 +301,8 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
     // ── Model ────────────────────────────────────────────────────────
     case 'model':
     case 'm':
-      handleModel(ctx, args);
+      if (args.length && !['list', 'use', 'show'].includes(args[0]!)) handleModel(ctx, args);
+      else await handleConnectionCommand(ctx, 'model', args);
       break;
 
     // ── Thinking ─────────────────────────────────────────────────────

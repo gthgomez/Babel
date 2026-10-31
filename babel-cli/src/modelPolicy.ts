@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveRuntimeConfigPath, resolveRuntimePaths } from './config/runtimePaths.js';
+import { resolveConnectionModelPolicy } from './config/connectionModelPolicy.js';
 
 import {
   evaluateModelBackendPolicy,
@@ -264,6 +265,13 @@ export interface ResolvedModelPolicyStageRoute {
 }
 
 export interface ResolvedModelPolicy {
+  /** Explicit requested output budget; model capacity alone never selects it. */
+  requestedOutputTokens?: number;
+  /** Trusted user connection metadata; never contains a credential value. */
+  connectionId?: string;
+  authentication?: 'api-key' | 'none';
+  apiKeyEnvVar?: string;
+  baseUrl?: string;
   policyPath: string;
   family: string;
   selectedTier: ModelPolicyTier;
@@ -505,6 +513,7 @@ export function resolveModelPolicyBackendKey(
   modelOrBackendKey: string,
   babelRoot?: string,
 ): string | undefined {
+  if (modelOrBackendKey.startsWith('connection/')) return modelOrBackendKey;
   const { config } = loadModelPolicyConfig(babelRoot);
   const normalized = modelOrBackendKey.trim().toLowerCase();
   if (config.models?.[normalized]) return normalized;
@@ -797,6 +806,11 @@ export function resolveModelByKey(options: {
   /** Bind every pipeline phase to this explicit selection instead of stage defaults. */
   bindStagesToSelectedModel?: boolean;
 }): ResolvedModelPolicy {
+  if (options.key.startsWith('connection/')) {
+    const connection = resolveConnectionModelPolicy(options.key, { models: loadModelPolicyConfig(options.babelRoot).config.models ?? {} });
+    if (!connection) throw new Error('Selected connection is unavailable. Use babel-agent setup.');
+    return connection;
+  }
   const { path: policyPath, config } = loadModelPolicyConfig(options.babelRoot);
   const hardFail = config.hard_fail_on_unknown_model !== false;
 

@@ -507,3 +507,14 @@ Do not create a second active implementation backlog for these gaps.
 - **SUPERSEDES**: prior informal “primary harness” claims in overview/mode docs.
 - **Version**: `harness-v1` — increment only with ADR + conformance updates.
 - **last_verified**: 2026-09-18 against live `babel-cli` sources (runtime coordinator extraction P03; shadow `RuntimeFactV1` contract + pure `TaskProjection` P04; verifier authority/completion hardening, validated Chat + pipeline episode producers, quarantine/resume, offline integration boundary, and release-gate caveats).
+
+## CLI and provider selection contract (2026-10-30 amendment)
+
+The normative coherence amendment in [ADR-012](../adr/ADR-012-canonical-harness-architecture-v1.md#approved-cliprovider-coherence-amendment-2026-10-30)
+applies to all entry points. Work/Plan/thorough review preserve Chat/Plan/Deep
+controller identities. A fresh profile has no cloud route. The private settings
+resolver owns explicit connections, exact model IDs and provenance; ProviderEngine
+owns construction. Protocol owners are `runners/protocol/openai-chat-completions.ts`
+and `runners/protocol/native-messages.ts`. Native adapters cannot grant tool or
+completion authority. Saved auto-apply enables only the transition between separate
+planning and implementation stages; it cannot override permissions or stale scope.

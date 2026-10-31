@@ -1,169 +1,37 @@
-/**
- * openAiApi.ts — OpenAI API Runner (Structural Backup — Tier 2)
- *
- * Calls the OpenAI Chat Completions API using Node.js native `fetch` (≥ 20).
- * No extra npm package required.
- *
- * This is the backup runner for the structural waterfall, activated when the
- * primary Groq API fails or is unavailable. Designed for pure JSON-output
- * tasks (Orchestrator, QA Reviewer, Executor turns) where a reasoning model
- * that strictly follows schemas is more valuable than raw throughput.
- *
- * Configuration (environment variables):
- *   OPENAI_API_KEY        — Required. Set in your local .env file.
- *   BABEL_OPENAI_MODEL    — Model ID. Default: "o3-mini"
- *   BABEL_OPENAI_TOKENS   — max_completion_tokens for the response. Default: 8096
- *
- * Error policy:
- *   HTTP 429 is re-thrown with a "rate limit:" prefix so the waterfall
- *   cascade detects it and skips to the next tier immediately (no retry).
- *   All other errors are thrown with an "[openAiApi]" prefix.
- */
+/** Direct OpenAI Chat Completions adapter over the shared protocol. */
+import { OpenAiCompatibleRunner } from './protocol/openai-chat-completions.js'
+import type { NativeRunnerOptions } from './protocol/native-messages.js'
+import type { ProviderMessage, ToolDefinition } from './base.js'
+import { validateProviderBaseUrl } from './providerEndpoint.js'
 
-import type { ZodType } from 'zod';
-import { classifyProviderError } from './providerNormalize.js';
-import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
-import { extractJson } from '../utils/extractJson.js';
-import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
-import { resolveProviderCredential } from './credentialHub.js';
+export class OpenAiApiRunner extends OpenAiCompatibleRunner {
+  private readonly endpointBase: string
+  private readonly explicitTemperature: boolean
+  protected override get apiUrl(): string { return `${this.endpointBase.replace(/\/$/, '')}/chat/completions` }
+  protected override getRequestRedirect(): 'error' { return 'error' }
 
-// ─── Configuration ────────────────────────────────────────────────────────────
-
-const OPENAI_MODEL = process.env['BABEL_OPENAI_MODEL'] ?? 'o3-mini';
-const MAX_TOKENS = Number(process.env['BABEL_OPENAI_TOKENS'] ?? '8096');
-const API_URL = 'https://api.openai.com/v1/chat/completions';
-
-const SYSTEM_PROMPT =
-  'You are executing a Babel pipeline agent. ' +
-  'Follow all instructions in the user message exactly. ' +
-  'Your response MUST be a single valid JSON object only — ' +
-  'no markdown, no explanation, no code fences. ' +
-  'Output only raw JSON.';
-
-// ─── OpenAI response shape (minimal, just what we need) ─────────────────────
-
-interface OpenAiChoice {
-  message?: { content?: string | null };
-}
-
-interface OpenAiResponse {
-  choices?: OpenAiChoice[];
-}
-
-// ─── Runner implementation ────────────────────────────────────────────────────
-
-export class OpenAiApiRunner implements LlmRunner {
-  private readonly apiKey: string;
-  private readonly model: string;
-  private readonly maxTokens: number;
-  private readonly temperature: number | undefined;
-
-  constructor(options: { explicitCredential?: string; env?: NodeJS.ProcessEnv; modelId?: string; maxTokens?: number; temperature?: number } = {}) {
-    this.apiKey = resolveProviderCredential('openai', options) ?? '';
-    this.model = options.modelId ?? OPENAI_MODEL;
-    this.maxTokens = options.maxTokens ?? MAX_TOKENS;
-    this.temperature = options.temperature;
+  constructor(options: NativeRunnerOptions = {}) {
+    if (options.baseUrl) validateProviderBaseUrl(options.baseUrl)
+    const env = options.env ?? process.env
+    const model = options.modelId ?? env['BABEL_OPENAI_MODEL'];
+    if (!model) throw new Error('SETUP_REQUIRED: Select an exact OpenAI model; no model is chosen automatically.');
+    super(model, options.apiKeyEnvVar ?? 'OPENAI_API_KEY',
+      { maxTokens: options.maxTokens ?? Number(env['BABEL_OPENAI_TOKENS'] ?? 8096), ...(options.temperature !== undefined ? { temperature: options.temperature } : {}) },
+      { provider: 'openai', ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}), ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}), ...(options.env ? { env: options.env } : {}) })
+    this.endpointBase = options.baseUrl ?? 'https://api.openai.com/v1'
+    this.explicitTemperature = options.temperature !== undefined
   }
 
-  async execute<T>(
-    prompt: string,
-    schema: ZodType<T, unknown>,
-    callbacks?: RunnerCallbacks,
-  ): Promise<T> {
-    // ── HTTP request ─────────────────────────────────────────────────────────
-    let response: Response;
-    try {
-      response = await fetch(API_URL, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: this.model,
-          max_completion_tokens: this.maxTokens,
-          ...(this.temperature === undefined ? {} : { temperature: this.temperature }),
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: prompt },
-          ],
-        }),
-      });
-    } catch (err) {
-      throw new Error(
-        `[openAiApi] Network error: ` + `${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      const classification = classifyProviderError(new Error(body), response.status);
-      if (classification === 'rate_limit') {
-        throw new Error(`rate limit: [openAiApi] HTTP ${response.status} — ${body.slice(0, 200)}`);
-      }
-      if (classification === 'auth_fatal' || classification === 'quota_fatal') {
-        throw new Error(`fatal: [openAiApi] HTTP ${response.status} — ${body.slice(0, 200)}`);
-      }
-      throw new Error(`[openAiApi] HTTP ${response.status}: ${body.slice(0, 200)}`);
-    }
-    parseRateLimitHeaders(response.headers, 'openai');
-
-    // ── Extract text content ─────────────────────────────────────────────────
-    let dataText = '';
-    let data: OpenAiResponse;
-    try {
-      dataText = await response.text();
-      data = JSON.parse(dataText) as OpenAiResponse;
-    } catch (err) {
-      throw buildStructuredOutputError({
-        failure_kind: 'failed_to_parse_api_json',
-        provider: 'openai',
-        model: this.model,
-        message: `[openAiApi] Failed to parse API response as JSON: ${String(err)}`,
-        raw_output: dataText,
-        cause: err instanceof Error ? err : undefined,
-      });
-    }
-
-    const text = data?.choices?.[0]?.message?.content ?? '';
-    if (!text.trim()) {
-      throw buildStructuredOutputError({
-        failure_kind: 'empty_response',
-        provider: 'openai',
-        model: this.model,
-        message: '[openAiApi] OpenAI API returned an empty response.',
-        raw_output: JSON.stringify(data),
-      });
-    }
-
-    // ── JSON extraction + Zod validation ─────────────────────────────────────
-    let parsed: unknown;
-    try {
-      parsed = extractJson(text);
-    } catch (err) {
-      throw buildStructuredOutputError({
-        failure_kind: 'invalid_json',
-        provider: 'openai',
-        model: this.model,
-        message: `[openAiApi] invalid json: ${err instanceof Error ? err.message : String(err)}`,
-        raw_output: text,
-        cause: err instanceof Error ? err : undefined,
-      });
-    }
-
-    const result = schema.safeParse(parsed);
-    if (!result.success) {
-      throw buildStructuredOutputError({
-        failure_kind: 'zod_validation_failed',
-        provider: 'openai',
-        model: this.model,
-        message: `[openAiApi] Zod validation failed:\n${result.error.toString()}`,
-        raw_output: text,
-        parsed_json: parsed,
-        zod_issues: result.error,
-      });
-    }
-
-    return result.data;
+  private nativeBody(body: Record<string, unknown>): Record<string, unknown> {
+    const result = { ...body }
+    if (result['max_tokens'] !== undefined) { result['max_completion_tokens'] = result['max_tokens']; delete result['max_tokens'] }
+    if (!this.explicitTemperature) delete result['temperature']
+    if (Array.isArray(result['tools']) && !result['tools'].length) { delete result['tools']; delete result['tool_choice'] }
+    return result
+  }
+  protected override sealCampaignWireBody(body: Record<string, unknown>): Record<string, unknown> { return this.nativeBody(body) }
+  override buildNativeToolsWireBody(messages: ProviderMessage[], tools: ToolDefinition[], systemPrompt?: string,
+    options?: { stream?: boolean; toolChoice?: 'auto' | 'required' }): string {
+    return JSON.stringify(this.nativeBody(JSON.parse(super.buildNativeToolsWireBody(messages, tools, systemPrompt, options)) as Record<string, unknown>))
   }
 }

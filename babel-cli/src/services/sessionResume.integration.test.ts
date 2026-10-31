@@ -63,6 +63,7 @@ function makeResumeCtx(target: AgentTargetContext): ReplContext {
   screenManager.attachHistoryCellViewport(viewport);
 
   const state: SessionState = {
+    model: 'deepseek-v4-flash-openrouter',
     mode: 'chat',
     router: 'v9',
     costTotals: {
@@ -162,7 +163,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
       mkdirSync(sessionDir, { recursive: true });
       writeFileSync(join(sessionDir, 'transcript.jsonl'), `${JSON.stringify({ role: 'user', content: 'valid durable history' })}\n`, 'utf8');
-      new ChatEngine({ task: 'valid durable history', projectRoot: target.targetRoot, runId: sessionId });
+      new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'valid durable history', projectRoot: target.targetRoot, runId: sessionId });
       const log = createSessionEventLog(sessionId);
       recordUserSubmitted(log, { turn_id: 'turn-1', task: 'valid durable history' });
       flushSessionEventLog(sessionDir, log);

@@ -63,7 +63,7 @@ function stubEngine(
   body: (message: string) => AsyncGenerator<Record<string, unknown>, void, unknown>,
 ): (descriptor: { projectRoot: string; task?: string }) => ChatEngine {
   return (descriptor) => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ inferenceOwner: 'external-harness',
       task: descriptor.task ?? 'journey',
       projectRoot: descriptor.projectRoot,
       executionProfile: 'chat',

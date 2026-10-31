@@ -1,8 +1,9 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { resolveRuntimePaths } from './config/runtimePaths.js'
-import { listProviderSpecs } from './runners/providerRegistry.js'
+import { readUserSettings, resolveEffectiveSettings, type UserSettings } from './config/userSettings.js'
+import { getProviderSpec, listProviderSpecs } from './runners/providerRegistry.js'
 import {probeInstalledSandboxImage} from './config/installedSandbox.js'
 
 type Check = { id: string; status: 'ok' | 'warn' | 'fail'; message: string }
@@ -17,25 +18,33 @@ export function runInstalledDoctor(options: {
   paths?: ReturnType<typeof resolveRuntimePaths>
   env?: NodeJS.ProcessEnv
   strict?: boolean
+  settings?: UserSettings
   dockerProbe?: () => boolean
   imageProbe?: (image:string) => boolean
 } = {}): { status: 'ok' | 'warn' | 'fail'; kind: string; paths: ReturnType<typeof resolveRuntimePaths>; checks: Check[] } {
   const env = options.env ?? process.env
   const paths = options.paths ?? resolveRuntimePaths(env)
   const nodeReady = supportsInstalledNode(process.versions.node)
-  const configured = listProviderSpecs().filter(p => p.authorityConformance === 'certified' && p.credentialEnvVar && env[p.credentialEnvVar]?.trim()).map(p => p.id)
+  const effective = resolveEffectiveSettings({ settings: options.settings ?? readUserSettings({ env }), env, projectRoot: paths.targetProjectRoot })
+  const connection = effective.connection.value
+  const spec = connection ? getProviderSpec(connection.provider) : null
+  const keyName = connection?.apiKeyEnvVar ?? spec?.credentialEnvVar
+  const configured = Boolean(connection && effective.model.value && (connection.authentication === 'none' || !spec?.requiresCredential || (keyName && env[keyName]?.trim())))
   const dockerReady = options.dockerProbe ? options.dockerProbe() :
     spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 3000, stdio: 'ignore', env }).status === 0
   const image=env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim()
   const imageReady=Boolean(dockerReady&&image&&(options.imageProbe?options.imageProbe(image):probeInstalledSandboxImage(image,{
     env,execute:(_binary,args,settings)=>spawnSync('docker',args,settings),
   })))
+  let version = 'unknown';
+  try { version = String((JSON.parse(readFileSync(join(paths.packageRoot, 'package.json'), 'utf8')) as { version?: string }).version ?? 'unknown') } catch { /* Missing fixture metadata stays unknown. */ }
   const checks: Check[] = [
     { id: 'node', status: nodeReady ? 'ok' : 'fail', message: `Node ${process.versions.node}; requires ^22.19.0 or ^24.13.1` },
     { id: 'resources', status: existsSync(join(paths.resourceRoot, 'prompt_catalog.yaml')) ? 'ok' : 'fail', message: paths.resourceRoot },
-    { id: 'provider', status: configured.length ? 'ok' : 'warn', message: configured.length ?
-      `Credential environment configured for: ${configured.join(', ')} (not authenticated)` :
-      'No provider credentials configured. Read-only commands work; configure one supported provider or a local Ollama model for model-backed tasks. No connection was attempted.' },
+    { id: 'provider', status: configured ? 'ok' : 'warn', message: configured ?
+      `Selected ${connection!.id}: ${connection!.provider}/${effective.model.value}; source ${effective.connection.source}. Credential presence checked; connectivity and observed model unverified.` :
+      'Selected provider/model or credentials are missing. Run babel-agent setup. Read-only commands work; no connection was attempted.' },
+    { id: 'executable', status: 'ok', message: `Babel ${version}; CLI entry ${process.argv[1] ?? 'unknown'}; Node executable ${process.execPath}; package ${paths.packageRoot}` },
     { id: 'docker', status: dockerReady ? 'ok' : 'fail', message: dockerReady ?
       'Docker server available; required by the default safe_repo execution profile.' :
       'Docker server unavailable; safe_repo requires Docker. Start Docker before executing tasks; no fallback is enabled.' },
@@ -56,7 +65,7 @@ export function installedSetupChecklist(options: { paths?: ReturnType<typeof res
   }, first_five_minutes: [
     { step: 'diagnose_installation', command: 'babel-agent doctor --json' },
     { step: 'preview_project_context', command: 'babel-agent context preview @file README.md --json', note: 'Run inside your target project, with an existing file.' },
-    { step: 'configure_provider', command: 'babel-agent doctor', note: `Create ${envFile} yourself and set one supported credential (${credentialEnvVars.join(', ')}), or configure a local Ollama model. Diagnostics never send provider requests.` },
+    { step: 'configure_provider', command: 'babel-agent setup', note: 'Choose a provider connection, exact model and budget. Guided credentials are masked; diagnostics never send provider requests.' },
     { step: 'start_safe_execution', command: 'babel-agent interactive', note: 'The default safe_repo profile requires Docker plus a usable BABEL_BENCHMARK_DOCKER_IMAGE. Desktop Setup can prepare and save the recommended image.' },
   ], next_command: 'babel-agent doctor --json', mutates_workspace: false, remote_side_effects: false }
 }

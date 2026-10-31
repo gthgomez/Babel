@@ -1,3 +1,7 @@
+import { createChatProviderAdapter } from '../runners/providerEngine.js'
+import { isProviderId } from '../runners/providerRegistry.js'
+import { resolveModelByKey } from '../modelPolicy.js'
+import type { ChatLlmRunner } from '../runners/base.js'
 /**
  * Thin observability helpers for ChatEngine terminal payloads (Tier A).
  * Keeps size pressure off chatEngine.ts — prefer growing this module.
@@ -10,10 +14,6 @@ import { projectChatArchive } from './chatArchiveProjection.js';
 import { retainedLegacyArchive } from './chatArchiveLegacy.js';
 import { writeCheckpointFileSync } from '../utils/atomicCheckpointFile.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
-import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
-import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
-import { OllamaApiRunner } from '../runners/ollamaApi.js';
-import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import { globalCostTracker, type SessionUsageSummary } from '../services/costTracker.js';
 import type { BlockedReport, TerminalOutcome, TerminalReasonCode } from '../schemas/agentContracts.js';
 import type {
@@ -182,6 +182,7 @@ export type StreamDoneEvent = {
   runAllowance?: ChatEngineRunAllowanceReport;
   /** D03: structured terminal reason code (UI authority; prose stays diagnostic). */
   reason_code?: TerminalReasonCode;
+  reason_detail?: string;
   /** D03: separate model-vs-harness cause axis; null = not established. */
   cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
   /** Effective completion verification policy for this turn (includes host overrides). */
@@ -203,6 +204,7 @@ export type StreamFailedEvent = {
   runAllowance?: ChatEngineRunAllowanceReport;
   /** D03: structured terminal reason code. */
   reason_code?: TerminalReasonCode;
+  reason_detail?: string;
   /** D03: separate model-vs-harness cause axis; null = not established. */
   cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
 };
@@ -344,6 +346,7 @@ export function buildStreamDone(
   if (extra.runAllowance) event.runAllowance = extra.runAllowance;
   if (extra.reason) {
     event.reason_code = extra.reason.code;
+    if (extra.reason.detail !== undefined) event.reason_detail = extra.reason.detail;
     event.cause_class = extra.reason.cause_class;
   }
   if (extra.gatePolicy != null) {
@@ -385,6 +388,7 @@ export function buildStreamFailed(
   if (extra?.runAllowance) event.runAllowance = extra.runAllowance;
   if (extra?.reason) {
     event.reason_code = extra.reason.code;
+    if (extra.reason.detail !== undefined) event.reason_detail = extra.reason.detail;
     event.cause_class = extra.reason.cause_class;
   }
   return event;
@@ -1063,27 +1067,12 @@ export function pushProviderTurnMessages(input: {
 
 /** Create the appropriate runner for a model name.
  *  Extracted from ChatEngine._makeRunner to keep chatEngine.ts under size ratchet. */
-export function makeChatRunner(
-  modelName: string,
-): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner {
-  if (!isOfflineChatMode()) assertLiveModelId(modelName, 'live chat phase routing');
-  const isDS = modelName.toLowerCase().includes('deepseek');
-  const isOL = modelName.toLowerCase().includes('ollama') || modelName.includes(':');
-  if (modelName === LIVE_OPENROUTER_MODEL_ID || modelName === LIVE_OPENROUTER_BACKEND_KEY) {
-    return new OpenRouterApiRunner(LIVE_OPENROUTER_MODEL_ID);
-  }
-  const openRouterDeepSeekModel = resolveOpenRouterDeepSeekModelId(modelName);
-  if (openRouterDeepSeekModel && !isOfflineChatMode()) {
-    return new OpenRouterApiRunner(openRouterDeepSeekModel);
-  }
-  if (isDS && !isOfflineChatMode()) {
-    throw new Error(
-      '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
-    );
-  }
-  return isOL ? new OllamaApiRunner(modelName)
-    : isDS ? new DeepSeekApiRunner(modelName)
-    : new DeepInfraApiRunner(modelName);
+export function makeChatRunner(modelName: string, primaryProvider?: string): ChatLlmRunner {
+  if (primaryProvider && isProviderId(primaryProvider)) return createChatProviderAdapter({ provider: primaryProvider, modelId: modelName })
+  const selected = resolveModelByKey({ key: modelName })
+  if (!isProviderId(selected.provider)) throw new Error('Unsupported phase route; select a provider explicitly.')
+  return createChatProviderAdapter({ provider: selected.provider, modelId: selected.providerModelId,
+    ...(selected.apiKeyEnvVar ? { apiKeyEnvVar: selected.apiKeyEnvVar } : {}), ...(selected.baseUrl ? { baseUrl: selected.baseUrl } : {}) })
 }
 
 // ─── Transcript persistence ──────────────────────────────────────────────

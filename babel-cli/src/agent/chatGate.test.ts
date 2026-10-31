@@ -306,7 +306,7 @@ describe('Completion gate logic', () => {
   let engine: ChatEngine;
 
   beforeEach(() => {
-    engine = new ChatEngine({
+    engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the failing test in src/math.js',
       projectRoot: '/tmp/test-project',
     });
@@ -404,7 +404,7 @@ describe('Completion gate — positive paths', () => {
   let engine: ChatEngine;
 
   beforeEach(() => {
-    engine = new ChatEngine({
+    engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the failing test in src/math.js',
       projectRoot: '/tmp/test-project',
       requiredVerifierCommands: ['npm test'],
@@ -531,7 +531,7 @@ describe('Completion gate — positive paths', () => {
   });
 
   test('gate requires verifier when task asks to run tests', () => {
-    const verifyEngine = new ChatEngine({
+    const verifyEngine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the bug and run npm test after making changes',
       projectRoot: '/tmp/test-project',
     });
@@ -546,7 +546,7 @@ describe('Completion gate — positive paths', () => {
   });
 
   test('gate allows with write + green verifier when task asks for tests', () => {
-    const verifyEngine = new ChatEngine({
+    const verifyEngine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the bug and run npm test after making changes',
       projectRoot: '/tmp/test-project',
     });
@@ -563,7 +563,7 @@ describe('Completion gate — positive paths', () => {
 
   // Chat path logs verifiers as run_command
   test('gate allows with str_replace + run_command when task asks for tests', () => {
-    const verifyEngine = new ChatEngine({
+    const verifyEngine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the bug and run npm test after making changes',
       projectRoot: '/tmp/test-project',
     });
@@ -582,7 +582,7 @@ describe('Completion gate — positive paths', () => {
     const prev = process.env['BABEL_CHAT_TASK_CLASS'];
     process.env['BABEL_CHAT_TASK_CLASS'] = 'general_swe';
     try {
-      const eng = new ChatEngine({
+      const eng = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
         task: 'fix the multi-file regression',
         requiredVerifierCommands: ['pytest -q'],
         projectRoot: '/tmp/test-project',
@@ -606,7 +606,7 @@ describe('Completion gate — positive paths', () => {
     const prev = process.env['BABEL_CHAT_TASK_CLASS'];
     process.env['BABEL_CHAT_TASK_CLASS'] = 'governance';
     try {
-      const eng = new ChatEngine({
+      const eng = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
         task: 'fix the multi-file regression',
         requiredVerifierCommands: ['pytest -q'],
         projectRoot: '/tmp/test-project',
@@ -660,7 +660,7 @@ describe('Gate helpers', () => {
   });
 
   test('hasAnyWrites true with write_file', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the bug',
       projectRoot: '/tmp/test-project',
     });
@@ -673,7 +673,7 @@ describe('Gate helpers', () => {
   });
 
   test('hasAnyWrites true with sub_agent writes', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the bug',
       projectRoot: '/tmp/test-project',
     });
@@ -689,7 +689,7 @@ describe('Gate helpers', () => {
   });
 
   test('hasAnyWrites false with only reads', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the bug',
       projectRoot: '/tmp/test-project',
     });
@@ -698,7 +698,7 @@ describe('Gate helpers', () => {
   });
 
   test('buildRejectionMessage includes tool-call summary with no writes', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the bug',
       projectRoot: '/tmp/test-project',
     });
@@ -713,7 +713,7 @@ describe('Gate helpers', () => {
   });
 
   test('buildRejectionMessage with writes but no verifier', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the bug',
       projectRoot: '/tmp/test-project',
     });
@@ -728,7 +728,7 @@ describe('Gate helpers', () => {
   });
 
   test('currentTurnHasMutation false when turn is all reads', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the bug',
       projectRoot: '/tmp/test-project',
     });
@@ -739,7 +739,7 @@ describe('Gate helpers', () => {
   });
 
   test('currentTurnHasMutation true when turn includes write_file', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the bug',
       projectRoot: '/tmp/test-project',
     });
@@ -900,7 +900,7 @@ describe('extractVerifierCommand', () => {
 
 describe('post-edit static check', () => {
   test('returns null for unsupported extensions (.md, .json, .css)', async () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the bug',
       projectRoot: '/tmp/test-project',
     });
@@ -923,7 +923,7 @@ describe('post-edit static check', () => {
     try {
       const badFile = join(tmpDir, 'syntax-error.js');
       writeFileSync(badFile, 'const x = ;\n');
-      const engine = new ChatEngine({
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
         task: 'fix the bug',
         projectRoot: tmpDir,
       });
@@ -940,7 +940,7 @@ describe('post-edit static check', () => {
     try {
       const goodFile = join(tmpDir, 'valid.js');
       writeFileSync(goodFile, 'const x = 1;\n');
-      const engine = new ChatEngine({
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
         task: 'fix the bug',
         projectRoot: tmpDir,
       });
@@ -958,7 +958,7 @@ describe('post-edit static check', () => {
       const badFile = join(tmpDir, 'syntax-error.ts');
       writeFileSync(badFile, 'const x: string = ;\n');
       // projectRoot must contain node_modules/typescript
-      const engine = new ChatEngine({
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
         task: 'fix the bug',
         projectRoot: process.cwd(),
       });
@@ -984,7 +984,7 @@ describe('post-edit static check', () => {
         validFile,
         `\uFEFF# coding: utf-8\nfrom pathlib import Path\nPath(${JSON.stringify(marker)}).write_text('ran', encoding='utf-8')\n`,
       );
-      const validEngine = new ChatEngine({ task: 'fix the bug', projectRoot: validRoot });
+      const validEngine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'fix the bug', projectRoot: validRoot });
       const validResult = await (validEngine as any).runPostEditStaticCheck(validFile);
       assert.match(validResult, /^exit_code: 0/);
       assert.equal(existsSync(marker), false, 'syntax checking must not execute the target module');
@@ -992,14 +992,14 @@ describe('post-edit static check', () => {
 
       const encodedFile = join(encodedRoot, 'latin1.py');
       writeFileSync(encodedFile, Buffer.from('# coding: latin-1\nvalue = "caf\u00e9"\n', 'latin1'));
-      const encodedEngine = new ChatEngine({ task: 'fix the bug', projectRoot: encodedRoot });
+      const encodedEngine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'fix the bug', projectRoot: encodedRoot });
       const encodedResult = await (encodedEngine as any).runPostEditStaticCheck(encodedFile);
       assert.match(encodedResult, /^exit_code: 0/);
       assert.equal(existsSync(join(encodedRoot, '__pycache__')), false);
 
       const invalidFile = join(invalidRoot, 'invalid.py');
       writeFileSync(invalidFile, '# coding: utf-8\ndef broken(:\n');
-      const invalidEngine = new ChatEngine({ task: 'fix the bug', projectRoot: invalidRoot });
+      const invalidEngine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'fix the bug', projectRoot: invalidRoot });
       const invalidResult = await (invalidEngine as any).runPostEditStaticCheck(invalidFile);
       assert.match(invalidResult, /^exit_code: 1/);
       assert.match(invalidResult, /SyntaxError/);
@@ -1020,7 +1020,7 @@ describe('post-edit static check', () => {
       writeFileSync(target, 'def answer(): return 42\n');
       process.env.PYTHONPATH = tmpDir;
 
-      const engine = new ChatEngine({ task: 'fix the bug', projectRoot: tmpDir });
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'fix the bug', projectRoot: tmpDir });
       const result = await (engine as any).runPostEditStaticCheck(target);
       assert.match(result, /^exit_code: 0/);
       assert.equal(existsSync(marker), false, 'interpreter startup must not execute project or ambient hooks');

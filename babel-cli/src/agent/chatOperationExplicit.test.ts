@@ -77,14 +77,14 @@ test('explicit operation replaces a continued task operation, not its runtime gr
 
 test('fresh and reused engines consume explicit operation and clear omitted overrides', () => {
   const root = fixture()
-  const engine = new ChatEngine({ task: 'Fix the parser.', projectRoot: root, operation: 'READ_ONLY' })
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Fix the parser.', projectRoot: root, operation: 'READ_ONLY' })
   assert.equal(engine.applyUserSubmission({ userInput: 'Fix the parser.' }).effectiveOperation, 'READ_ONLY')
   engine.applyTurnPreparation({ task: 'Fix the parser.', projectRoot: root })
   assert.equal(engine.applyUserSubmission({ userInput: 'Fix the parser.' }).effectiveOperation, 'MUTATING')
 })
 
 test('all protocols retain caller policy and task verifier context once', () => {
-  const engine = new ChatEngine({
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
     task: 'Fix the parser. Run `npm test` to verify the result.', projectRoot: fixture(),
     appendSystemPrompt: 'CALLER_POLICY: use only the authorized project.',
   })
@@ -100,7 +100,7 @@ test('direct engines deliver complete required repository context and record tha
   const root = fixture()
   const contract = 'DIRECT_REPO_CONTRACT: preserve scope.\n' + 'x'.repeat(300) + '\nTAIL_REQUIRED_RULE'
   writeFileSync(join(root, 'AGENTS.md'), contract)
-  const engine = new ChatEngine({ task: 'Explain the code.', projectRoot: root, systemContext: 'CALLER_CONTEXT' })
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Explain the code.', projectRoot: root, systemContext: 'CALLER_CONTEXT' })
   const host = engine as unknown as { getOrBuildSystemPrompt(mode: 'native'): string }
   const prompt = host.getOrBuildSystemPrompt('native')
   assert.ok(prompt.includes(contract))
@@ -113,7 +113,7 @@ test('direct engines deliver complete required repository context and record tha
 test('direct engines fail before dispatch when required policy cannot fit', () => {
   const root = fixture()
   writeFileSync(join(root, 'AGENTS.md'), 'required rule\n'.repeat(2000))
-  assert.throws(() => new ChatEngine({ task: 'Explain the code.', projectRoot: root }), /required|mandatory|budget/i)
+  assert.throws(() => new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Explain the code.', projectRoot: root }), /required|mandatory|budget/i)
 })
 
 for (const scenario of [
@@ -126,7 +126,7 @@ for (const scenario of [
   delete process.env['BABEL_READ_ONLY']
   process.env['BABEL_EXECUTION_PROFILE'] = scenario.profileReadOnly ? 'read_only_audit' : 'safe_repo'
   let advertised: string[] = []
-  const engine = new ChatEngine({ task: 'Fix the parser.', projectRoot: fixture(), operation: 'READ_ONLY' })
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Fix the parser.', projectRoot: fixture(), operation: 'READ_ONLY' })
   const host = engine as unknown as {
     shouldUseNativeTools: () => boolean
     deliberationRunner: unknown

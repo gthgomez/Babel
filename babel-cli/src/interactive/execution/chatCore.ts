@@ -1,4 +1,5 @@
 import { isReadOnlyChat } from '../../agent/chatReadOnly.js';
+import { currentInvocationSettings } from '../../config/invocationSettings.js';
 import { chatInspectionCoverage } from '../../agent/chatInspectionCoverage.js';
 import { terminalReasonGuidance } from '../../agent/chatTerminalReason.js';
 // ─── Chat Core ──────────────────────────────────────────────────────────────
@@ -418,6 +419,7 @@ export async function consumeChatStream(
   let doneRunAllowance: ChatResult['runAllowance'];
   let donePolicyEvents: ChatResult['policyEvents'];
   let doneReasonCode: ChatResult['reason_code'];
+  let doneReasonDetail: string | undefined;
   let doneCauseClass: ChatResult['cause_class'];
   let doneGatePolicy: ChatResult['gatePolicy'];
   let doneToolCallAggregates: ChatResult['toolCallAggregates'];
@@ -508,6 +510,7 @@ export async function consumeChatStream(
         doneRunAllowance = event.runAllowance ?? doneRunAllowance;
         donePolicyEvents = event.policyEvents ?? donePolicyEvents;
         doneReasonCode = event.reason_code ?? doneReasonCode;
+        doneReasonDetail = event.reason_detail ?? doneReasonDetail;
         doneCauseClass = event.cause_class ?? doneCauseClass;
         doneGatePolicy = event.gatePolicy ?? doneGatePolicy;
         doneToolCallAggregates = event.toolCallAggregates ?? doneToolCallAggregates;
@@ -523,6 +526,7 @@ export async function consumeChatStream(
           usage: globalCostTracker.getSessionSummary(),
           conversation: [],
           reason_code: event.reason_code ?? 'cancelled',
+          ...(event.reason_detail !== undefined ? { reason_detail: event.reason_detail } : {}),
           cause_class: event.cause_class ?? null,
           ...snapshotEvidence(),
           ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
@@ -565,6 +569,7 @@ export async function consumeChatStream(
     ...(doneRunAllowance ? { runAllowance: doneRunAllowance } : {}),
     ...(donePolicyEvents ? { policyEvents: donePolicyEvents } : {}),
     ...(doneStatus !== undefined ? { status: doneStatus } : {}),
+    ...(doneReasonDetail !== undefined ? { reason_detail: doneReasonDetail } : {}),
     ...(doneReasonCode !== undefined ? { reason_code: doneReasonCode } : {}),
     ...(doneCauseClass !== undefined ? { cause_class: doneCauseClass } : {}),
     ...(doneGatePolicy != null ? { gatePolicy: doneGatePolicy } : {}),
@@ -723,7 +728,7 @@ export async function runChatEngineOnce(input: {
   const limits = resolveChatEngineLimits(
     {},
     input.model,
-    { taskClass: resolvedTaskClass, taskText: input.task },
+    { taskClass: resolvedTaskClass, taskText: input.task, ...(projectRoot ? { projectRoot } : {}) },
   );
 
   // Smallest compiled chat stack (identity / project / safety / provider / verifier)
@@ -1573,6 +1578,7 @@ export function buildChatRunPayload(
 function shouldUseConversationalRenderer(outputFormat: 'text' | 'json' | 'stream-json'): boolean {
   return (
     outputFormat === 'text' &&
+    currentInvocationSettings()?.['presentation'] !== 'plain' &&
     process.stdout.isTTY &&
     !process.env['CI'] &&
     !process.env['NO_COLOR']
@@ -1589,7 +1595,7 @@ function finishConversationalRenderer(
   for (const message of result.accountingWarnings ?? []) console.warn(`Warning: ${message}`);
   const postRunCost = globalCostTracker.getSessionSummary().totalCostUSD;
   if (result.status === 'failed') {
-    convRenderer.fail(new Error(result.answer || 'Chat task failed'));
+    convRenderer.fail(new Error(result.answer || 'Chat task failed'), { render: false });
   } else {
     convRenderer.onSummary({
       status: 'pass',

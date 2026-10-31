@@ -79,7 +79,7 @@ test('turn.submit and history.lookup roundtrip', async () => {
   const client = new BabelProtocolClient();
   let threadId: string | undefined;
   try {
-    const created = await client.threadCreate({ project_root: fixture.root, task: 'hello' });
+    const created = await client.threadCreate({ project_root: fixture.root, task: 'hello', model: 'deepseek-v4-flash-openrouter' });
     threadId = created.thread_id;
     const submitted = await client.turnSubmit({
       thread_id: created.thread_id,
@@ -137,7 +137,7 @@ test('turn.cancel returns cancelled=true for active thread', async () => {
       jsonrpc: '2.0',
       id: 2,
       method: 'thread.create',
-      params: { project_root: process.cwd() },
+      params: { project_root: process.cwd(), model: 'deepseek-v4-flash-openrouter' },
     },
     state,
   );
@@ -149,7 +149,7 @@ test('turn.cancel returns cancelled=true for active thread', async () => {
     state,
   );
 
-  const engine = new ChatEngine({ task: 'cancel test', projectRoot: process.cwd() });
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'cancel test', projectRoot: process.cwd() });
   engine.assignRunId(threadId);
   state.engines.set(threadId, engine);
 

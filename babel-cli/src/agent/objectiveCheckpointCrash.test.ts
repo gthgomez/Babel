@@ -49,7 +49,7 @@ import fs from 'node:fs';
 import {join,basename} from 'node:path';
 import {syncBuiltinESMExports} from 'node:module';
 const {ChatEngine}=await import(${JSON.stringify(new URL('./chatEngine.ts', import.meta.url).href)});
-const engine=new ChatEngine({task:${JSON.stringify(initialRequest)},projectRoot:${JSON.stringify(fixture.cwd)},runId:'objective-crash'});
+const engine=new ChatEngine({model:'deepseek-v4-flash-openrouter',task:${JSON.stringify(initialRequest)},projectRoot:${JSON.stringify(fixture.cwd)},runId:'objective-crash'});
 const route={model:'fixture-model',provider:'ollama'};
 engine.admitUserSubmission({userInput:${JSON.stringify(initialRequest)}},route);
 const allowance=engine.getTaskAllowanceSnapshot();
