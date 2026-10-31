@@ -9,8 +9,23 @@
  * `?token=<token>` query parameter for WebSocket connections.
  */
 
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fchmodSync,
+  fsyncSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -101,10 +116,19 @@ export function verifyToken(provided: string, expected: string): boolean {
 export function loadBridgeConfig(): BridgeConfigFile {
   const configPath = getBridgeConfigPath();
   try {
-    if (!existsSync(configPath)) {
+    const dir = join(homedir(), '.babel');
+    if (!existsSync(dir)) {
       return { authToken: generateToken(), port: DEFAULT_BRIDGE_PORT };
     }
-    const raw = readFileSync(configPath, 'utf-8');
+    assertPrivateBridgeDirectory(dir, false);
+    if (!pathEntryExists(configPath)) return { authToken: generateToken(), port: DEFAULT_BRIDGE_PORT };
+    const fd = openPrivateBridgeConfig(configPath);
+    let raw: string;
+    try {
+      raw = readFileSync(fd, 'utf-8');
+    } finally {
+      closeSync(fd);
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw) as unknown;
@@ -131,19 +155,105 @@ export function loadBridgeConfig(): BridgeConfigFile {
 /**
  * Persist a bridge configuration to `~/.babel/bridge.json`.
  *
- * Creates the `~/.babel/` directory if it does not exist.
- * Best-effort — never throws.
+ * Creates the `~/.babel/` directory if needed and atomically replaces the
+ * config using a unique owner-only temporary file on POSIX. Windows inherits
+ * the home directory ACL; this module does not independently verify that ACL.
+ * Persistence errors throw.
  */
 export function persistBridgeConfig(config: BridgeConfigFile): void {
   const configPath = getBridgeConfigPath();
+  const dir = join(homedir(), '.babel');
+  assertPrivateBridgeDirectory(dir, true);
+  if (pathEntryExists(configPath)) assertPrivateBridgeConfigFile(configPath);
+  const tempPath = join(dir, `.bridge.json.${randomUUID()}.tmp`);
+  let fd: number | undefined;
   try {
-    const dir = join(homedir(), '.babel');
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+    const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+    fd = openSync(tempPath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollow, 0o600);
+    const tempStats = fstatSync(fd);
+    if (!tempStats.isFile() || (typeof process.getuid === 'function' && tempStats.uid !== process.getuid())) {
+      throw new Error('Bridge config temporary file ownership is invalid');
     }
-    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
-  } catch {
-    // best-effort
+    if (process.platform !== 'win32') fchmodSync(fd, 0o600);
+    writeFileSync(fd, JSON.stringify(config, null, 2), 'utf8');
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(tempPath, configPath);
+    if (process.platform !== 'win32') {
+      const dirFd = openSync(dir, fsConstants.O_RDONLY);
+      try {
+        fsyncSync(dirFd);
+      } finally {
+        closeSync(dirFd);
+      }
+    }
+  } catch (error) {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Retain the original persistence failure.
+      }
+    }
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // The temporary file may not have been created or may already be renamed.
+    }
+    throw error;
+  }
+}
+
+function assertPrivateBridgeDirectory(dir: string, create: boolean): void {
+  if (!existsSync(dir) && create) mkdirSync(dir, { mode: 0o700 });
+  const stats = lstatSync(dir);
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error('Bridge config directory must be an owned directory, not a symlink');
+  }
+  if (typeof process.getuid === 'function' && stats.uid !== process.getuid()) {
+    throw new Error('Bridge config directory is not owned by the current user');
+  }
+  if (process.platform !== 'win32' && (stats.mode & 0o777) !== 0o700) {
+    chmodSync(dir, 0o700);
+  }
+}
+
+function assertPrivateBridgeConfigFile(configPath: string, repairPermissions = true): void {
+  const fd = openPrivateBridgeConfig(configPath, repairPermissions);
+  closeSync(fd);
+}
+
+function openPrivateBridgeConfig(configPath: string, repairPermissions = true): number {
+  const entry = lstatSync(configPath);
+  if (entry.isSymbolicLink() || !entry.isFile()) {
+    throw new Error('Bridge config must be a regular file, not a symlink');
+  }
+  const fd = openSync(configPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const stats = fstatSync(fd);
+    if (!stats.isFile() || (typeof process.getuid === 'function' && stats.uid !== process.getuid())) {
+      throw new Error('Bridge config file ownership or type is invalid');
+    }
+    if (repairPermissions && process.platform !== 'win32' && (stats.mode & 0o777) !== 0o600) {
+      fchmodSync(fd, 0o600);
+    }
+    return fd;
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+}
+
+function pathEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
   }
 }
 

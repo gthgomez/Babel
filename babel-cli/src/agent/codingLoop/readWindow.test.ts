@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, test } from 'node:test'
 
 import {
@@ -10,6 +13,7 @@ import {
   invalidateReadCacheForPath,
   makeReadInjectionKey,
   selectReadWindow,
+  readFileWindow,
   type ReadInjectionCache,
 } from './readWindow.js'
 
@@ -20,6 +24,90 @@ function fixtureLines(count: number): string {
   }
   return lines.join('\n')
 }
+
+describe('streaming read range windows', () => {
+  test('preserves CRLF and UTF-8 lines across small stream chunks', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-read-window-'))
+    const path = join(dir, 'chunked.txt')
+    try {
+      writeFileSync(path, 'one\r\ntwø\r\nthree')
+      const result = await readFileWindow(path, { kind: 'range', startLine: 2, endLine: 2 }, { chunkBytes: 3 })
+      assert.deepEqual(result.window.lines, ['twø'])
+      assert.equal(result.window.totalLines, 3)
+      assert.equal(result.window.byteTruncated, false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('caps an overlong selected line and marks the read byte-truncated', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-read-window-'))
+    const path = join(dir, 'long.txt')
+    try {
+      writeFileSync(path, `${'x'.repeat(5000)}\nnext`)
+      const result = await readFileWindow(path, { kind: 'range', startLine: 1, endLine: 2 }, {
+        maxLineBytes: 1024,
+        chunkBytes: 128,
+      })
+      assert.equal(result.window.totalLines, 2)
+      assert.equal(result.window.byteTruncated, true)
+      assert.match(result.window.numberedText, /line clipped/)
+      assert.doesNotMatch(formatReadObservation('read_range', 'long.txt', result.window), /complete file/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('caps total selected bytes on line boundaries and reports the retained range', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-read-window-'))
+    const path = join(dir, 'many-lines.txt')
+    try {
+      writeFileSync(path, 'first\nsecond\nthird\nfourth')
+      const result = await readFileWindow(path, { kind: 'range', startLine: 1, endLine: 4 }, {
+        maxBytes: 13,
+        chunkBytes: 4,
+      })
+      assert.deepEqual(result.window.lines, ['first'])
+      assert.equal(result.window.endLine, 1)
+      assert.equal(result.window.remainingAfter, 3)
+      assert.equal(result.window.byteTruncated, true)
+      assert.match(formatReadObservation('read_range', 'many-lines.txt', result.window), /byte-capped/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('rejects a cancelled read before opening the file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-read-window-'))
+    const path = join(dir, 'cancel.txt')
+    const controller = new AbortController()
+    controller.abort()
+    try {
+      writeFileSync(path, 'line')
+      await assert.rejects(readFileWindow(path, { kind: 'range', startLine: 1, endLine: 1 }, { signal: controller.signal }))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('clips a range beyond EOF and supports parallel bounded reads', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-read-window-'))
+    try {
+      const paths = Array.from({ length: 3 }, (_, index) => {
+        const path = join(dir, `parallel-${index}.txt`)
+        writeFileSync(path, `a${index}\nb${index}`)
+        return path
+      })
+      const results = await Promise.all(paths.map((path) =>
+        readFileWindow(path, { kind: 'range', startLine: 2, endLine: 10 }, { chunkBytes: 2 }),
+      ))
+      assert.deepEqual(results.map((result) => result.window.lines[0]), ['b0', 'b1', 'b2'])
+      assert.ok(results.every((result) => result.window.truncated && result.window.totalLines === 2))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('read window + injection keys (shipped)', () => {
   test('bounded first read returns only its window and names what remains', () => {

@@ -270,84 +270,100 @@ class FrameBuffer {
     sendFrame: (frame: Buffer) => void,
   ): string[] {
     const frames: string[] = [];
-
-    if (this.buffer.length + data.length > MAX_WS_FRAME_BYTES + 14) {
-      this.closeRequested = true;
-      this.closeCode = 1009;
-      sendFrame(buildWsCloseFrame(1009));
-      return frames;
-    }
-    this.buffer = Buffer.concat([this.buffer, data]);
-
-    while (true) {
-      let result: ReturnType<typeof tryParseWsFrame>;
-      try {
-        result = tryParseWsFrame(this.buffer, { requireMask: true });
-      } catch (error) {
-        this.closeRequested = true;
-        this.closeCode = /too large/i.test(String(error)) ? 1009 : 1002;
-        sendFrame(buildWsCloseFrame(this.closeCode));
-        this.buffer = Buffer.alloc(0);
-        break;
+    let offset = 0;
+    const bufferLimit = MAX_WS_FRAME_BYTES + 14;
+    while (offset < data.length || this.buffer.length > 0) {
+      if (offset < data.length) {
+        const room = bufferLimit - this.buffer.length;
+        if (room <= 0) {
+          this.closeRequested = true;
+          this.closeCode = 1009;
+          sendFrame(buildWsCloseFrame(1009));
+          return frames;
+        }
+        const count = Math.min(room, data.length - offset);
+        this.buffer = Buffer.concat([this.buffer, data.subarray(offset, offset + count)]);
+        offset += count;
       }
-      if (!result) break; // Need more data
 
-      this.buffer = result.remainder;
+      while (true) {
+        let result: ReturnType<typeof tryParseWsFrame>;
+        try {
+          result = tryParseWsFrame(this.buffer, { requireMask: true });
+        } catch (error) {
+          this.closeRequested = true;
+          this.closeCode = /too large/i.test(String(error)) ? 1009 : 1002;
+          sendFrame(buildWsCloseFrame(this.closeCode));
+          this.buffer = Buffer.alloc(0);
+          return frames;
+        }
+        if (!result) break;
 
-      switch (result.opcode) {
-        case OPCODE_TEXT:
-          if (this.fragmentedText) {
-            this.closeRequested = true;
-            this.closeCode = 1002;
-            sendFrame(buildWsCloseFrame(1002));
-          } else if (result.fin) {
-            frames.push(result.payload);
-          } else {
-            this.fragmentedText = [result.payloadData];
-            this.fragmentedBytes = result.payloadData.length;
-          }
-          break;
-        case OPCODE_CONTINUATION:
-          if (!this.fragmentedText) {
-            this.closeRequested = true;
-            this.closeCode = 1002;
-            sendFrame(buildWsCloseFrame(1002));
+        this.buffer = result.remainder;
+        switch (result.opcode) {
+          case OPCODE_TEXT:
+            if (this.fragmentedText) {
+              this.closeRequested = true;
+              this.closeCode = 1002;
+              sendFrame(buildWsCloseFrame(1002));
+            } else if (result.fin) {
+              frames.push(result.payload);
+            } else {
+              this.fragmentedText = [result.payloadData];
+              this.fragmentedBytes = result.payloadData.length;
+            }
             break;
-          }
-          this.fragmentedBytes += result.payloadData.length;
-          if (this.fragmentedBytes > MAX_WS_MESSAGE_BYTES) {
-            this.closeRequested = true;
-            this.closeCode = 1009;
-            sendFrame(buildWsCloseFrame(1009));
-            this.fragmentedText = null;
+          case OPCODE_CONTINUATION:
+            if (!this.fragmentedText) {
+              this.closeRequested = true;
+              this.closeCode = 1002;
+              sendFrame(buildWsCloseFrame(1002));
+              break;
+            }
+            this.fragmentedBytes += result.payloadData.length;
+            if (this.fragmentedBytes > MAX_WS_MESSAGE_BYTES) {
+              this.closeRequested = true;
+              this.closeCode = 1009;
+              sendFrame(buildWsCloseFrame(1009));
+              this.fragmentedText = null;
+              break;
+            }
+            this.fragmentedText.push(result.payloadData);
+            if (result.fin) {
+              frames.push(Buffer.concat(this.fragmentedText).toString('utf8'));
+              this.fragmentedText = null;
+              this.fragmentedBytes = 0;
+            }
             break;
-          }
-          this.fragmentedText.push(result.payloadData);
-          if (result.fin) {
-            frames.push(Buffer.concat(this.fragmentedText).toString('utf8'));
-            this.fragmentedText = null;
-            this.fragmentedBytes = 0;
-          }
-          break;
-        case OPCODE_BINARY:
-          this.closeRequested = true;
-          this.closeCode = 1003;
-          sendFrame(buildWsCloseFrame(1003));
-          break;
-        case OPCODE_CLOSE:
-          this.closeRequested = true;
-          // Echo close frame back
-          sendFrame(buildWsCloseFrame(1000));
-          break;
-        case OPCODE_PING:
-          sendFrame(buildWsPongFrame(result.payloadData));
-          break;
-        case OPCODE_PONG:
-          // Ignore unsolicited pongs
-          break;
-        default:
-          // Unknown opcode — ignore
-          break;
+          case OPCODE_BINARY:
+            this.closeRequested = true;
+            this.closeCode = 1003;
+            sendFrame(buildWsCloseFrame(1003));
+            break;
+          case OPCODE_CLOSE:
+            this.closeRequested = true;
+            sendFrame(buildWsCloseFrame(1000));
+            break;
+          case OPCODE_PING:
+            sendFrame(buildWsPongFrame(result.payloadData));
+            break;
+          case OPCODE_PONG:
+            break;
+          default:
+            break;
+        }
+        if (this.closeRequested) {
+          this.buffer = Buffer.alloc(0);
+          return frames;
+        }
+      }
+
+      if (offset >= data.length) break;
+      if (this.buffer.length >= bufferLimit) {
+        this.closeRequested = true;
+        this.closeCode = 1009;
+        sendFrame(buildWsCloseFrame(1009));
+        return frames;
       }
     }
 

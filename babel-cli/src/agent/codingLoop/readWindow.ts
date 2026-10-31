@@ -7,11 +7,17 @@
 
 import { normalizeReadCacheKey } from '../readThrashPolicy.js'
 import { compileObservation, formatCompiledObservation } from './observationCompiler.js'
+import { open, stat } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 
 /** Default first-window size when the model asks for an unbounded full read. */
 export const DEFAULT_READ_WINDOW_LINES = 200
 /** Hard cap for a single explicit read_range to prevent pathological injection. */
 export const EXPLICIT_RANGE_LINE_CAP = 1000
+/** Bound retained selected content independently of the file's total size. */
+export const READ_WINDOW_BYTE_CAP = 1024 * 1024
+/** Keep a single pathological line from dominating a selected window. */
+export const READ_WINDOW_LINE_BYTE_CAP = 256 * 1024
 
 export type ReadRangeRequest =
   | { kind: 'full' }
@@ -30,6 +36,159 @@ export interface ReadWindow {
   requestedEndLine?: number
   nextSuggestedStartLine?: number
   nextSuggestedEndLine?: number
+  byteTruncated?: boolean
+  sourceBytes?: number
+  returnedBytes?: number
+}
+
+export interface StreamedReadWindow {
+  window: ReadWindow
+  fileHash: string
+  sourceBytes: number
+}
+
+/**
+ * Read a line range with bounded retained memory while hashing and counting the
+ * complete file. The source is re-statted through the same open descriptor so
+ * a concurrent replacement or write cannot be reported as a stable snapshot.
+ */
+export async function readFileWindow(
+  filePath: string,
+  request: ReadRangeRequest,
+  options: {
+    signal?: AbortSignal
+    maxBytes?: number
+    maxLineBytes?: number
+    chunkBytes?: number
+    explicitRangeCap?: number
+  } = {},
+): Promise<StreamedReadWindow> {
+  options.signal?.throwIfAborted()
+  const file = await open(filePath, 'r')
+  try {
+    const before = await file.stat({ bigint: true })
+    if (!before.isFile()) throw new Error('read_range target is not a regular file')
+    const selectedStart = request.kind === 'range' ? Math.max(1, Math.floor(request.startLine)) : 1
+    const requestedEnd = request.kind === 'range'
+      ? Math.max(selectedStart, Math.floor(request.endLine))
+      : Number.MAX_SAFE_INTEGER
+    const rangeCap = options.explicitRangeCap ?? EXPLICIT_RANGE_LINE_CAP
+    const selectedEnd = request.kind === 'range'
+      ? Math.min(requestedEnd, selectedStart + rangeCap - 1)
+      : DEFAULT_READ_WINDOW_LINES
+    const maxBytes = options.maxBytes ?? READ_WINDOW_BYTE_CAP
+    const maxLineBytes = options.maxLineBytes ?? READ_WINDOW_LINE_BYTE_CAP
+    const hash = createHash('sha256')
+    const lines: string[] = []
+    let numberedBytes = 0
+    let totalLines = 0
+    let sourceBytes = 0
+    let byteTruncated = false
+    let outputCapHit = false
+    let storedEndLine = selectedStart - 1
+    let pending = Buffer.alloc(0)
+    let pendingOverflow = false
+
+    const keepLinePart = (part: Buffer): void => {
+      const room = Math.max(0, maxLineBytes - pending.length)
+      if (part.length > room) pendingOverflow = true
+      if (room > 0) pending = Buffer.concat([pending, part.subarray(0, room)])
+    }
+    const finishLine = (): void => {
+      totalLines += 1
+      const selected = totalLines >= selectedStart && totalLines <= selectedEnd
+      if (selected) {
+        let lineBytes = pending
+        if (!pendingOverflow && lineBytes.at(-1) === 0x0d) lineBytes = lineBytes.subarray(0, -1)
+        let line = lineBytes.toString('utf8')
+        if (pendingOverflow) {
+          byteTruncated = true
+          line += ' …[line clipped at byte limit]'
+        }
+        const row = `${totalLines}:${line}`
+        const rowBytes = Buffer.byteLength(row) + (lines.length > 0 ? 1 : 0)
+        if (!outputCapHit && numberedBytes + rowBytes <= maxBytes) {
+          lines.push(row)
+          numberedBytes += rowBytes
+          storedEndLine = totalLines
+        } else {
+          byteTruncated = true
+          outputCapHit = true
+        }
+      }
+      pending = Buffer.alloc(0)
+      pendingOverflow = false
+    }
+
+    const stream = file.createReadStream({
+      autoClose: false,
+      highWaterMark: options.chunkBytes ?? 64 * 1024,
+      ...(options.signal ? { signal: options.signal } : {}),
+    })
+    for await (const chunk of stream) {
+      options.signal?.throwIfAborted()
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      sourceBytes += bytes.length
+      hash.update(bytes)
+      let start = 0
+      for (let index = 0; index < bytes.length; index += 1) {
+        if (bytes[index] !== 0x0a) continue
+        keepLinePart(bytes.subarray(start, index))
+        finishLine()
+        start = index + 1
+      }
+      keepLinePart(bytes.subarray(start))
+    }
+    if (pending.length > 0 || pendingOverflow) finishLine()
+
+    const after = await file.stat({ bigint: true })
+    const pathAfter = await stat(filePath, { bigint: true })
+    if (
+      before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
+      before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs ||
+      BigInt(sourceBytes) !== after.size || pathAfter.dev !== after.dev || pathAfter.ino !== after.ino
+    ) {
+      throw new Error('read_range target changed during the read')
+    }
+
+    const endLine = Math.min(storedEndLine, totalLines)
+    const actualStart = lines.length > 0 ? selectedStart : selectedStart
+    const numberedText = lines.join('\n')
+    const clippedRange = requestedEnd > selectedEnd || requestedEnd > totalLines
+    const truncated = clippedRange || byteTruncated || endLine < selectedEnd
+    const remainingBefore = Math.min(totalLines, selectedStart - 1)
+    const remainingAfter = Math.max(0, totalLines - endLine)
+    const nextSuggestedStartLine = remainingAfter > 0 ? endLine + 1 : undefined
+    const nextSuggestedEndLine = nextSuggestedStartLine !== undefined
+      ? Math.min(totalLines, nextSuggestedStartLine + rangeCap - 1)
+      : undefined
+    const window: ReadWindow = {
+      startLine: actualStart,
+      endLine,
+      totalLines,
+      lines: lines.map((row) => row.slice(row.indexOf(':') + 1)),
+      numberedText,
+      truncated,
+      remainingBefore,
+      remainingAfter,
+      ...(request.kind === 'range' ? { requestedStartLine: selectedStart, requestedEndLine: requestedEnd } : {}),
+      ...(nextSuggestedStartLine !== undefined ? { nextSuggestedStartLine } : {}),
+      ...(nextSuggestedEndLine !== undefined ? { nextSuggestedEndLine } : {}),
+      byteTruncated,
+      sourceBytes,
+      returnedBytes: numberedBytes,
+    }
+    // Preserve empty/out-of-range behavior used by selectReadWindow.
+    if (request.kind === 'range' && selectedStart > totalLines) {
+      window.endLine = selectedStart - 1
+      window.remainingBefore = totalLines
+      window.remainingAfter = 0
+      window.truncated = true
+    }
+    return { window, fileHash: hash.digest('hex'), sourceBytes }
+  } finally {
+    await file.close()
+  }
 }
 
 export interface ReadCacheEntry {
@@ -210,8 +369,10 @@ export function formatReadObservation(
   },
 ): string {
   const banner =
-    completeness && !completeness.complete
-      ? `returned lines ${window.startLine}-${window.endLine} of at least ${window.totalLines} (source byte-capped: ${completeness.returned_bytes} of ${completeness.original_bytes} bytes; use read_range to inspect more)`
+    window.byteTruncated
+      ? `returned lines ${window.startLine}-${window.endLine} of ${window.totalLines} (content byte-capped: ${window.returnedBytes ?? 0} of ${window.sourceBytes ?? 0} source bytes returned; one or more selected lines were clipped or omitted)`
+      : completeness && !completeness.complete
+        ? `returned lines ${window.startLine}-${window.endLine} of at least ${window.totalLines} (source byte-capped: ${completeness.returned_bytes} of ${completeness.original_bytes} bytes; use read_range to inspect more)`
       : formatReadWindowBanner(target, window)
   const body = window.numberedText.length > 0 ? window.numberedText : '(empty window)'
   return [

@@ -117,6 +117,52 @@ describe('WebSocket framing', () => {
     transport.close();
   });
 
+  it('closes a socket whose pending writes exceed the bounded budget', () => {
+    class PausedSocket extends EventEmitter {
+      destroyed = false;
+      writableLength = 2 * 1024 * 1024;
+      write(_frame: Buffer): boolean { return false; }
+      end(): void { this.destroyed = true; }
+      destroy(): void { this.destroyed = true; }
+    }
+    const socket = new PausedSocket();
+    const transport = new WebSocketTransport(socket as unknown as Socket);
+    let closeReason: string | undefined;
+    transport.onClose((reason) => { closeReason = reason; });
+    transport.sendText('slow client');
+    assert.equal(transport.closed, true);
+    assert.equal(socket.destroyed, true);
+    assert.match(closeReason ?? '', /backpressure/i);
+  });
+
+  it('processes a large burst of individually bounded frames without unbounded buffering', () => {
+    class MemorySocket extends EventEmitter {
+      destroyed = false;
+      writableLength = 0;
+      write(_frame: Buffer): boolean { return true; }
+      end(): void { this.destroyed = true; }
+      destroy(): void { this.destroyed = true; }
+    }
+    const maskTextFrame = (payload: Buffer): Buffer => {
+      const key = Buffer.from([4, 8, 12, 16]);
+      const header = Buffer.alloc(4);
+      header[0] = 0x81;
+      header[1] = 0xfe;
+      header.writeUInt16BE(payload.length, 2);
+      const masked = Buffer.from(payload.map((byte, index) => byte ^ key[index % 4]!));
+      return Buffer.concat([header, key, masked]);
+    };
+    const socket = new MemorySocket();
+    const transport = new WebSocketTransport(socket as unknown as Socket);
+    let delivered = 0;
+    transport.onText(() => { delivered += 1; });
+    const frame = maskTextFrame(Buffer.alloc(60 * 1024, 0x61));
+    socket.emit('data', Buffer.concat(Array.from({ length: 40 }, () => frame)));
+    assert.equal(delivered, 40);
+    assert.equal(transport.closed, false);
+    transport.close();
+  });
+
   it('computes the accept key correctly', () => {
     // RFC 6455 §1.3 example — derive key from plain text (avoid hardcoded base64 literals).
     const key = Buffer.from('the sample nonce', 'utf8').toString('base64');

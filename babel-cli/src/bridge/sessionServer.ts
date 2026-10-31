@@ -430,21 +430,28 @@ export class BridgeServer {
 
     return new Promise<void>((resolve, reject) => {
       this.server.on('listening', () => {
-        const bound = this.server.address();
-        if (bound && typeof bound === 'object' && bound.port > 0) {
-          this._port = bound.port;
-        }
-        // Persist config with the actual auth token
-        const config = loadBridgeConfig();
-        if (!config.authToken || config.authToken !== this.authToken) {
-          persistBridgeConfig({
-            ...config,
-            authToken: this.authToken,
-            port: this._port,
+        try {
+          const bound = this.server.address();
+          if (bound && typeof bound === 'object' && bound.port > 0) {
+            this._port = bound.port;
+          }
+          // Persist config with the actual auth token.
+          const config = loadBridgeConfig();
+          if (!config.authToken || config.authToken !== this.authToken) {
+            persistBridgeConfig({
+              ...config,
+              authToken: this.authToken,
+              port: this._port,
+            });
+          }
+          this.options.onListening?.(this._port);
+          resolve();
+        } catch (error) {
+          this.server.close(() => {
+            this._started = false;
+            reject(error instanceof Error ? error : new Error('Bridge config persistence failed'));
           });
         }
-        this.options.onListening?.(this._port);
-        resolve();
       });
 
       this.server.on('error', (err: Error) => {
