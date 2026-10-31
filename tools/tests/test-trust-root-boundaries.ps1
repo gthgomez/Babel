@@ -157,6 +157,12 @@ if ($workflow -match [regex]::Escape("@('unexpected_pr_base_branch'")) { throw '
 if (@([regex]::Matches($workflow, [regex]::Escape('auditBenignBlockers'))).Count -lt 2) {
   throw 'Both audit steps (inline and workflow_run listener) must read auditBenignBlockers from the policy.'
 }
+if ($workflow -match [regex]::Escape("throw 'Draft pull requests stay out of the merge audit.'")) {
+  throw 'Release-gate listener must report draft applicability instead of throwing a product defect.'
+}
+if ($workflow -notmatch [regex]::Escape('scripts/merge-audit-eligibility.psm1')) {
+  throw 'Release-gate listener must resolve applicability through the trusted merge-audit eligibility helper.'
+}
 
 # Execute the actual no-checkout refresh body with GitHub and sleep mocked.
 # This keeps lifecycle regressions covered without credentials or API writes.
