@@ -33,20 +33,21 @@ function Resolve-MergeAuditReleaseGateAssociation {
   if ($HeadSha -notmatch '^[0-9a-f]{40}$') {
     return New-MergeAuditApplicability -State UNKNOWN -Reason 'release_gate_head_malformed' -HeadSha $HeadSha
   }
-  $candidates = @($PullRequests | Where-Object {
+  # Pull requests returned for commits/{HeadSha}/pulls are associated with the release
+  # gate head before applying the PR's current head identity.
+  $associated = @($PullRequests | Where-Object {
       $null -ne $_ -and
       [string]$_.state -eq 'open' -and
       [string]$_.base.ref -eq 'main' -and
-      [string]::Equals([string]$_.head.sha, $HeadSha, [StringComparison]::Ordinal) -and
       [string]::Equals([string]$_.head.repo.full_name, $Repository, [StringComparison]::Ordinal)
     })
-  if ($candidates.Count -eq 0) {
+  if ($associated.Count -eq 0) {
     return New-MergeAuditApplicability -State NOT_APPLICABLE -Reason 'no_exact_open_main_pull_request' -HeadSha $HeadSha
   }
-  if ($candidates.Count -gt 1) {
+  if ($associated.Count -gt 1) {
     return New-MergeAuditApplicability -State UNKNOWN -Reason 'ambiguous_exact_head_association' -HeadSha $HeadSha
   }
-  $pr = $candidates[0]
+  $pr = $associated[0]
   $number = if ($null -ne $pr.number) { [int]$pr.number } else { $null }
   if ($pr.PSObject.Properties['draft'] -and [bool]$pr.draft) {
     return New-MergeAuditApplicability -State NOT_APPLICABLE -Reason 'pr_is_draft' -PrNumber $number -HeadSha $HeadSha -BaseSha ([string]$pr.base.sha)

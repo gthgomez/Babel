@@ -63,17 +63,47 @@ export function reportPerformance(runsDoc, jobsDoc) {
   if (!pages || !Number.isInteger(pages.fetched) || !Number.isInteger(pages.expected) || pages.fetched < 1 || pages.fetched !== pages.expected) {
     addGap(gaps, { reason: 'run_pages_missing' })
   }
+
+  const rawRunRows = runsDoc.workflow_runs
+  const rawRunIds = []
+  const runIdSet = new Set()
+  for (const run of rawRunRows) {
+    if (!run || typeof run !== 'object' || !Number.isInteger(run.id)) {
+      addGap(gaps, { reason: 'run_identity_malformed' })
+      continue
+    }
+    if (runIdSet.has(run.id)) addGap(gaps, { reason: 'duplicate_run_id', runId: run.id })
+    runIdSet.add(run.id)
+    rawRunIds.push(run.id)
+  }
+  const selectedRunCount = rawRunIds.length
+  const requested = Number.isInteger(runsDoc.sampleRequested) ? runsDoc.sampleRequested : null
+  if (requested !== null && selectedRunCount !== requested) {
+    addGap(gaps, { reason: 'sample_requested_mismatch', requested, selectedRunCount })
+  }
+
+  const attemptKeySet = new Set()
   const attemptsByRun = new Map()
+  let rawAttemptCount = 0
+  let rawJobRecordCount = 0
   for (const attempt of jobsDoc.attempts) {
+    rawAttemptCount++
     if (!attempt || typeof attempt !== 'object' || !Number.isInteger(attempt.run_id) || !Number.isInteger(attempt.run_attempt)) {
       addGap(gaps, { reason: 'attempt_identity_malformed' })
       continue
     }
+    if (attempt.run_attempt < 1) addGap(gaps, { reason: 'attempt_out_of_range', runId: attempt.run_id, attempt: attempt.run_attempt })
+    const attemptKey = `${attempt.run_id}:${attempt.run_attempt}`
+    if (attemptKeySet.has(attemptKey)) addGap(gaps, { reason: 'duplicate_attempt_identity', runId: attempt.run_id, attempt: attempt.run_attempt })
+    attemptKeySet.add(attemptKey)
+    if (!runIdSet.has(attempt.run_id)) addGap(gaps, { reason: 'orphan_attempt_record', runId: attempt.run_id, attempt: attempt.run_attempt })
     const key = String(attempt.run_id)
     if (!attemptsByRun.has(key)) attemptsByRun.set(key, [])
     attemptsByRun.get(key).push(attempt)
     const declared = attempt.total_count
-    const collected = Array.isArray(attempt.jobs) ? attempt.jobs.length : null
+    const jobs = Array.isArray(attempt.jobs) ? attempt.jobs : []
+    rawJobRecordCount += jobs.length
+    const collected = jobs.length
     const pagesOk = Number.isInteger(attempt.pages_fetched) && Number.isInteger(attempt.pages_expected) && attempt.pages_fetched === attempt.pages_expected && attempt.pages_expected >= 1
     if (!pagesOk || !Number.isInteger(declared) || collected !== declared || attempt.read_error) {
       addGap(gaps, {
@@ -84,22 +114,26 @@ export function reportPerformance(runsDoc, jobsDoc) {
         collectedJobCount: collected,
       })
     }
+    const jobIdSet = new Set()
+    for (const job of jobs) {
+      if (!job || typeof job !== 'object' || !Number.isInteger(job.id)) continue
+      if (jobIdSet.has(job.id)) addGap(gaps, { reason: 'duplicate_job_identity', runId: attempt.run_id, attempt: attempt.run_attempt, jobId: job.id })
+      jobIdSet.add(job.id)
+    }
   }
 
   const observations = []
-  const runIds = []
-  for (const run of runsDoc.workflow_runs) {
-    if (!run || typeof run !== 'object' || !Number.isInteger(run.id)) {
-      addGap(gaps, { reason: 'run_identity_malformed' })
-      continue
-    }
-    runIds.push(run.id)
-    const latest = run.run_attempt
-    const recorded = attemptsByRun.get(String(run.id)) ?? []
-    if (!Number.isInteger(latest) || latest < 1) addGap(gaps, { reason: 'run_attempt_missing', runId: run.id })
+  for (const runId of rawRunIds) {
+    const run = rawRunRows.find(row => row?.id === runId)
+    const latest = run?.run_attempt
+    const recorded = attemptsByRun.get(String(runId)) ?? []
+    if (!Number.isInteger(latest) || latest < 1) addGap(gaps, { reason: 'run_attempt_missing', runId })
     else {
+      for (const attempt of recorded) {
+        if (attempt.run_attempt > latest) addGap(gaps, { reason: 'attempt_out_of_range', runId, attempt: attempt.run_attempt, latestAttempt: latest })
+      }
       for (let number = 1; number <= latest; number++) {
-        if (!recorded.some(attempt => attempt.run_attempt === number)) addGap(gaps, { reason: 'attempt_missing', runId: run.id, attempt: number })
+        if (!recorded.some(attempt => attempt.run_attempt === number)) addGap(gaps, { reason: 'attempt_missing', runId, attempt: number })
       }
     }
     for (const attempt of recorded) {
@@ -119,12 +153,12 @@ export function reportPerformance(runsDoc, jobsDoc) {
           runId: attempt.run_id,
           jobId: job.id,
           attempt: attempt.run_attempt,
-          event: typeof run.event === 'string' ? run.event : 'unknown',
-          revision: typeof run.head_sha === 'string' ? run.head_sha : 'unknown',
-          changeClass: typeof run.changeClass === 'string' ? run.changeClass : 'unknown',
+          event: typeof run?.event === 'string' ? run.event : 'unknown',
+          revision: typeof run?.head_sha === 'string' ? run.head_sha : 'unknown',
+          changeClass: typeof run?.changeClass === 'string' ? run.changeClass : 'unknown',
           os: os.length ? os.join(',') : 'unknown',
-          outcome: typeof job.conclusion === 'string' ? job.conclusion : (typeof run.conclusion === 'string' ? run.conclusion : 'unknown'),
-          runOutcome: typeof run.conclusion === 'string' ? run.conclusion : 'unknown',
+          outcome: typeof job.conclusion === 'string' ? job.conclusion : (typeof run?.conclusion === 'string' ? run.conclusion : 'unknown'),
+          runOutcome: typeof run?.conclusion === 'string' ? run.conclusion : 'unknown',
           cache: cacheState(job),
           status: job.status ?? null,
           name: typeof job.name === 'string' ? job.name : 'unknown',
@@ -139,9 +173,12 @@ export function reportPerformance(runsDoc, jobsDoc) {
     }
   }
 
-  const complete = gaps.length === 0
+  const collectionComplete = gaps.length === 0
+  const timingComplete = unknowns.filter(row => row.reason === 'timing_unknown').length === 0
   const executed = observations.filter(row => row.classification === 'executed-this-attempt' && Number.isFinite(row.executedSeconds))
   const observedExecutedSeconds = executed.reduce((sum, row) => sum + row.executedSeconds, 0)
+  const executedJobsFresh = executed.length
+
   const groups = new Map()
   for (const row of observations) {
     const key = [row.revision, row.event, row.changeClass, row.os, row.cache, row.outcome].join('|')
@@ -161,6 +198,7 @@ export function reportPerformance(runsDoc, jobsDoc) {
   }
   const stepRows = []
   for (const row of observations) {
+    if (row.classification !== 'executed-this-attempt') continue
     if (!row.name.startsWith('platform-core') || !Array.isArray(row.steps)) continue
     for (const step of row.steps) {
       const start = stamp(step?.started_at)
@@ -180,27 +218,47 @@ export function reportPerformance(runsDoc, jobsDoc) {
     return { os: key.slice(0, splitAt), name: key.slice(splitAt + 1), ...{ count: values.length, p50: percentile(values, 50), p90: percentile(values, 90) } }
   }).sort((a, b) => (b.p50 ?? -1) - (a.p50 ?? -1))
 
+  const reconciliation = {
+    rawRunRows: rawRunRows.length,
+    uniqueRunIds: rawRunIds.length,
+    rawAttemptRows: rawAttemptCount,
+    uniqueAttemptKeys: attemptKeySet.size,
+    rawJobRows: rawJobRecordCount,
+    observationRows: observations.length,
+    declaredSampleRequested: requested,
+    declaredRepositoryTotal: Number.isInteger(runsDoc.repositoryTotal) ? runsDoc.repositoryTotal : null,
+    matchesSelectedRuns: selectedRunCount === rawRunIds.length && rawRunIds.length === runIdSet.size,
+    attemptRowsMatchSelectedRuns: jobsDoc.attempts.every(row => row && runIdSet.has(row.run_id)),
+  }
+  if (reconciliation.rawRunRows !== reconciliation.uniqueRunIds) addGap(gaps, { reason: 'run_row_count_mismatch', rawRunRows: reconciliation.rawRunRows, uniqueRunIds: reconciliation.uniqueRunIds })
+  if (observations.length !== rawJobRecordCount) addGap(gaps, { reason: 'job_observation_count_mismatch', rawJobRows: rawJobRecordCount, observationRows: observations.length })
+
+  const collectionCompleteFinal = gaps.length === 0
+
   return {
     schemaVersion: 1,
     advisoryOnly: true,
     publishesChecks: false,
     mergeReady: false,
     sample: {
-      selectedRuns: runIds.length,
-      requested: Number.isInteger(runsDoc.sampleRequested) ? runsDoc.sampleRequested : null,
+      selectedRuns: selectedRunCount,
+      requested,
       repositoryTotal: Number.isInteger(runsDoc.repositoryTotal) ? runsDoc.repositoryTotal : null,
       attemptRecords: jobsDoc.attempts.length,
       jobRecords: observations.length,
     },
-    completeness: complete,
+    completeness: collectionCompleteFinal,
+    timingComplete,
+    reconciliation,
     byCategory,
     executionAccounting: {
-      complete,
-      executedJobs: observations.filter(row => row.classification === 'executed-this-attempt').length,
+      collectionComplete: collectionCompleteFinal,
+      timingComplete,
+      executedJobs: executedJobsFresh,
       carriedForwardJobs: observations.filter(row => row.classification === 'carried-forward').length,
       notExecutedJobs: observations.filter(row => row.classification === 'not-executed').length,
       unknownJobs: observations.filter(row => row.classification === 'unknown').length,
-      executedSeconds: complete ? observedExecutedSeconds : null,
+      executedSeconds: collectionCompleteFinal && timingComplete ? observedExecutedSeconds : null,
       observedExecutedSeconds,
       carriedForwardCountedAsNewExecution: false,
     },
@@ -214,14 +272,16 @@ export function reportPerformance(runsDoc, jobsDoc) {
     platformCoreSteps,
     unknowns,
     gaps,
-    sources: { runIds, jobIds: observations.map(row => row.jobId) },
+    sources: { runIds: rawRunIds, jobIds: observations.map(row => row.jobId) },
     formulas: {
       percentile: 'nearest-rank: sort ascending, index = ceil(p/100 * n) - 1',
-      executedSeconds: 'completed_at - started_at for status=completed when both are at or after attempt run_started_at',
+      executedSeconds: 'sum of executed-this-attempt job seconds; null unless collection and timing are both complete',
+      observedExecutedSeconds: 'partial sum from classified fresh executions even when timing is incomplete',
       carriedForward: 'started_at and completed_at are both strictly before attempt run_started_at; executedSeconds is 0',
       schedulingProxy: 'created_at to started_at; not provider capacity and not workflow dependency delay',
       updatedAt: 'not used as qualification completion',
-      completeness: 'false when any selected run/attempt/job page, declared count, or attempt is missing; executedSeconds is then null',
+      completeness: 'collection completeness from identity, pagination, orphan, duplicate, and raw-count reconciliation',
+      timingComplete: 'false when any completed job lacks provable execution timestamps',
     },
   }
 }

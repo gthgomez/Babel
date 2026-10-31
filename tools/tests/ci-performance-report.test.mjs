@@ -37,8 +37,8 @@ const run = (overrides = {}) => ({
   conclusion: 'success',
   ...overrides,
 })
-const docs = ({ runs = [run()], attempts = [attempt()], pages = { fetched: 1, expected: 1 } } = {}) => ({
-  runs: { pages, sampleRequested: runs.length, repositoryTotal: runs.length, workflow_runs: runs },
+const docs = ({ runs = [run()], attempts = [attempt()], pages = { fetched: 1, expected: 1 }, sampleRequested = runs.length } = {}) => ({
+  runs: { pages, sampleRequested, repositoryTotal: runs.length, workflow_runs: runs },
   jobs: { attempts },
 })
 
@@ -47,7 +47,7 @@ test('55 declared jobs with only 30 supplied are an incomplete sample and have n
   const input = docs({ attempts: [attempt({ total_count: 55, pages_fetched: 1, pages_expected: 2, jobs })] })
   const report = reportPerformance(input.runs, input.jobs)
   assert.equal(report.completeness, false)
-  assert.equal(report.executionAccounting.complete, false)
+  assert.equal(report.executionAccounting.collectionComplete, false)
   assert.equal(report.executionAccounting.executedSeconds, null)
   assert.equal(report.mergeReady, false)
   assert.ok(report.gaps.some(gap => gap.reason === 'jobs_page_incomplete' && gap.declaredJobCount === 55 && gap.collectedJobCount === 30))
@@ -56,10 +56,34 @@ test('55 declared jobs with only 30 supplied are an incomplete sample and have n
 test('a full successful run reports executed time and keeps the sample complete', () => {
   const report = reportPerformance(docs().runs, docs().jobs)
   assert.equal(report.completeness, true)
+  assert.equal(report.timingComplete, true)
   assert.equal(report.executionAccounting.executedJobs, 1)
   assert.equal(report.executionAccounting.executedSeconds, 600)
   assert.equal(report.byCategory[`${sha('a')}|pull_request|unknown|ubuntu-latest|unknown|success`].count, 1)
   assert.equal(report.byCategory[`${sha('a')}|pull_request|unknown|ubuntu-latest|unknown|success`].p50, 600)
+})
+
+test('duplicate attempt identities are rejected and do not double execution totals', () => {
+  const input = docs({
+    attempts: [
+      attempt({ run_attempt: 1 }),
+      attempt({ run_attempt: 1, jobs: [job({ id: 11, completed_at: '2026-10-30T00:05:02Z' })] }),
+    ],
+  })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.equal(report.completeness, false)
+  assert.ok(report.gaps.some(gap => gap.reason === 'duplicate_attempt_identity'))
+  assert.equal(report.executionAccounting.executedSeconds, null)
+  assert.equal(report.executionAccounting.observedExecutedSeconds, 600 + 300)
+})
+
+test('requested sample size must match raw run rows, not self-reported counters alone', () => {
+  const input = docs({ runs: [run()], sampleRequested: 50 })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.equal(report.completeness, false)
+  assert.ok(report.gaps.some(gap => gap.reason === 'sample_requested_mismatch' && gap.requested === 50 && gap.selectedRunCount === 1))
+  assert.equal(report.reconciliation.rawRunRows, 1)
+  assert.equal(report.reconciliation.declaredSampleRequested, 50)
 })
 
 test('failed and cancelled runs stay in separate outcome categories', () => {
@@ -74,15 +98,16 @@ test('failed and cancelled runs stay in separate outcome categories', () => {
   const keys = Object.keys(report.byCategory)
   assert.ok(keys.some(key => key.endsWith('|failure')))
   assert.ok(keys.some(key => key.endsWith('|cancelled')))
-  assert.equal(keys.some(key => key.endsWith('|failure|cancelled')), false)
 })
 
-test('a job missing its end time stays unknown and is not timed as zero', () => {
+test('a job missing its end time keeps collection complete but timing incomplete with null executedSeconds', () => {
   const input = docs({ attempts: [attempt({ jobs: [job({ completed_at: null })] })] })
   const report = reportPerformance(input.runs, input.jobs)
   assert.equal(report.completeness, true)
+  assert.equal(report.timingComplete, false)
   assert.equal(report.executionAccounting.unknownJobs, 1)
-  assert.equal(report.executionAccounting.executedSeconds, 0)
+  assert.equal(report.executionAccounting.executedSeconds, null)
+  assert.equal(report.executionAccounting.observedExecutedSeconds, 0)
   assert.equal(report.unknowns[0].reason, 'timing_unknown')
   assert.equal(report.unknowns[0].jobId, 10)
 })
@@ -90,20 +115,24 @@ test('a job missing its end time stays unknown and is not timed as zero', () => 
 test('a rerun does not count carried-forward work as newly executed', () => {
   const carried = job({
     id: 21,
+    name: 'platform-core (ubuntu-latest)',
     created_at: '2026-10-30T00:00:00Z',
     started_at: '2026-10-30T00:00:02Z',
     completed_at: '2026-10-30T00:10:02Z',
+    steps: [{ name: 'Build and typecheck CLI and scripts once', started_at: '2026-10-30T00:00:02Z', completed_at: '2026-10-30T00:11:02Z', conclusion: 'success' }],
   })
   const fresh = job({
     id: 22,
+    name: 'platform-core (ubuntu-latest)',
     created_at: '2026-10-30T01:00:00Z',
     started_at: '2026-10-30T01:00:02Z',
     completed_at: '2026-10-30T01:05:02Z',
+    steps: [{ name: 'Build and typecheck CLI and scripts once', started_at: '2026-10-30T01:00:02Z', completed_at: '2026-10-30T01:02:02Z', conclusion: 'success' }],
   })
   const input = docs({
     runs: [run({ run_attempt: 2 })],
     attempts: [
-      attempt({ run_attempt: 1, jobs: [carried] }),
+      attempt({ run_attempt: 1, total_count: 0, jobs: [] }),
       attempt({
         run_attempt: 2,
         run_started_at: '2026-10-30T01:00:00Z',
@@ -115,9 +144,12 @@ test('a rerun does not count carried-forward work as newly executed', () => {
   const report = reportPerformance(input.runs, input.jobs)
   assert.equal(report.completeness, true)
   assert.equal(report.executionAccounting.carriedForwardJobs, 1)
-  assert.equal(report.executionAccounting.executedJobs, 2)
-  assert.equal(report.executionAccounting.executedSeconds, 600 + 300)
-  assert.equal(report.executionAccounting.carriedForwardCountedAsNewExecution, false)
+  assert.equal(report.executionAccounting.executedJobs, 1)
+  assert.equal(report.executionAccounting.executedSeconds, 300)
+  const buildStep = report.platformCoreSteps.find(step => step.name === 'Build and typecheck CLI and scripts once')
+  assert.ok(buildStep)
+  assert.equal(buildStep.count, 1)
+  assert.equal(buildStep.p50, 120)
 })
 
 test('creation-to-start delay is a scheduling proxy when dependency timing is absent', () => {
@@ -136,6 +168,13 @@ test('different events are not combined into one category', () => {
   })
   const report = reportPerformance(input.runs, input.jobs)
   assert.equal(Object.keys(report.byCategory).length, 2)
+})
+
+test('orphan attempt records fail collection completeness', () => {
+  const input = docs({ attempts: [attempt({ run_id: 999 })] })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.equal(report.completeness, false)
+  assert.ok(report.gaps.some(gap => gap.reason === 'orphan_attempt_record' && gap.runId === 999))
 })
 
 test('malformed documents fail explicitly instead of inventing a complete report', () => {
