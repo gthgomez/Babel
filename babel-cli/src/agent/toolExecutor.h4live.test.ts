@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import {
   createToolExecutor,
   executeActionWithPolicy,
+  mapAgentActionToToolCalls,
   resetCircuitBreaker,
   resetCircuitBreakerForRun,
   retireLiveCertificationForRun,
@@ -266,6 +267,28 @@ describe('H4 executeActionWithPolicy live capability gates', () => {
     assert.equal(result.results[0]?.exit_code, 1);
     assert.equal(existsSync(file), false);
     assert.equal(result.effectTransaction?.status, 'rollback');
+  });
+
+  it('reports unowned created-file residue when the executor throws', async () => {
+    const file = join(tmp, 'created-throwing.ts');
+    const outsiderContent = 'created by a competing writer\n';
+    const action: AgentAction = {
+      type: 'write_file', path: file, content: 'expected content\n', createOnly: true,
+    };
+    const executor: ToolExecutor = {
+      mapAction: mapAgentActionToToolCalls,
+      async execute() {
+        writeFileSync(file, outsiderContent, 'utf8');
+        throw new Error('injected executor exception');
+      },
+    };
+    await assert.rejects(
+      executeActionWithPolicy(action, 'workspace_write', ctx('r-create-throw', tmp), {
+        executor, mode: 'chat', mutationRoot: tmp,
+      }),
+      /injected executor exception[\s\S]*\[ROLLBACK_CONFLICT\]/,
+    );
+    assert.equal(readFileSync(file, 'utf8'), outsiderContent);
   });
 
   it('records successful rollback evidence when a tool returns a nonzero exit code', async () => {

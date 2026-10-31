@@ -1648,6 +1648,8 @@ export async function executeActionWithPolicy(
       } : {})
     };
   } catch (error) {
+    let errorToThrow: unknown = error;
+    let rollbackConflicts: string[] = [];
     if (effectIntent && context.runDir) {
       recordEffectTerminal(context.runDir, effectIntent, {
         status: context.signal?.aborted || error instanceof RunStoppedError ? 'cancelled' : 'failed',
@@ -1667,6 +1669,7 @@ export async function executeActionWithPolicy(
             lockContext: deps.lockContext,
           });
           rollbackResult = undo.verification ? 'success' : 'partial';
+          rollbackConflicts = undo.conflicts;
         } catch {
           rollbackResult = 'failed';
         }
@@ -1679,6 +1682,14 @@ export async function executeActionWithPolicy(
             : captureWorkspaceRevisionIdentity(workspaceRoot),
       };
     }
-    throw error;
+    if (rollbackConflicts.length > 0) {
+      const conflictDetail = `[ROLLBACK_CONFLICT] ${rollbackConflicts.join('; ')}`;
+      if (error instanceof Error) {
+        error.message = `${error.message}\n${conflictDetail}`;
+      } else {
+        errorToThrow = new Error(`${String(error)}\n${conflictDetail}`, { cause: error });
+      }
+    }
+    throw errorToThrow;
   }
 }
