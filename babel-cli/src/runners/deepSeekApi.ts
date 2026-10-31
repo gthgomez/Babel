@@ -513,11 +513,16 @@ export class DeepSeekApiRunner implements LlmRunner {
   private readonly model: DeepSeekModelId;
   private lastInvocationMetadata: RunnerInvocationMetadata | null = null;
 
+  private readonly maxTokens: number;
+  private readonly contextWindowTokens: number | undefined;
+
   constructor(
     model = 'deepseek-v4-flash',
-    credential: { explicitCredential?: string; env?: NodeJS.ProcessEnv } = {},
+    credential: { explicitCredential?: string; env?: NodeJS.ProcessEnv; envVarOverride?: string; maxTokens?: number; contextWindowTokens?: number } = {},
   ) {
     const key = resolveProviderCredential('deepseek', credential);
+    this.maxTokens = credential.maxTokens ?? MAX_TOKENS;
+    this.contextWindowTokens = credential.contextWindowTokens;
     if (key === null) throw new Error('[deepSeekApi] credential resolution failed');
     // Validate expected provider shape without including any secret fragment.
     if (!key.startsWith('sk-')) {
@@ -577,7 +582,7 @@ export class DeepSeekApiRunner implements LlmRunner {
       const thinkingEnabled = process.env['BABEL_DEEPSEEK_THINKING'] !== 'disabled';
       return JSON.stringify({
         model: this.model,
-        max_tokens: MAX_TOKENS,
+        max_tokens: this.maxTokens,
         temperature: 0,
         ...(raw ? {} : { response_format: { type: 'json_object' as const } }),
         stream: isStreaming,
@@ -595,12 +600,13 @@ export class DeepSeekApiRunner implements LlmRunner {
       body: buildBody(),
       mode: 'legacy',
       provider: 'deepseek',
+      ...(this.contextWindowTokens ? { contextLimitTokens: this.contextWindowTokens, contextLimitSource: 'explicit' as const } : {}),
       requestedModelId: this.model,
       requestId: inferenceId,
       ...(callbacks?.parentRequestId !== undefined
         ? { parentRequestId: callbacks.parentRequestId }
         : {}),
-      reservedCompletionTokens: MAX_TOKENS,
+      reservedCompletionTokens: this.maxTokens,
     });
     assertPreparedProviderRequestAdmissible(preparedRequest);
     const requestBody = preparedRequest.body;
@@ -624,8 +630,8 @@ export class DeepSeekApiRunner implements LlmRunner {
       ...(requestAccounting.input_message_count === null
         ? {}
         : { input_message_count: requestAccounting.input_message_count }),
-      requested_output_budget: MAX_TOKENS,
-      effective_output_budget: MAX_TOKENS,
+      requested_output_budget: this.maxTokens,
+      effective_output_budget: this.maxTokens,
     });
     let completionSent = false;
     let lastAttempt = 0;
@@ -1189,7 +1195,7 @@ export class DeepSeekApiRunner implements LlmRunner {
    * a `done` event is yielded (text content arrived via `text_delta`).
    */
   getNativeRequestReservedCompletionTokens(): number | null {
-    return MAX_TOKENS;
+    return this.maxTokens;
   }
 
   buildNativeToolsWireBody(
@@ -1200,7 +1206,7 @@ export class DeepSeekApiRunner implements LlmRunner {
   ): string {
     return buildDeepSeekNativeToolsWireBody({
       model: this.model,
-      maxTokens: MAX_TOKENS,
+      maxTokens: this.maxTokens,
       messages,
       tools,
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
@@ -1249,12 +1255,13 @@ export class DeepSeekApiRunner implements LlmRunner {
       body: buildBody(),
       mode: 'native',
       provider: 'deepseek',
+      ...(this.contextWindowTokens ? { contextLimitTokens: this.contextWindowTokens, contextLimitSource: 'explicit' as const } : {}),
       requestedModelId: this.model,
       requestId: inferenceId,
       ...(callbacks?.parentRequestId !== undefined
         ? { parentRequestId: callbacks.parentRequestId }
         : {}),
-      reservedCompletionTokens: MAX_TOKENS,
+      reservedCompletionTokens: this.maxTokens,
     });
     assertPreparedProviderRequestAdmissible(preparedRequest);
     const requestBody = preparedRequest.body;
@@ -1278,8 +1285,8 @@ export class DeepSeekApiRunner implements LlmRunner {
       ...(requestAccounting.input_message_count === null
         ? {}
         : { input_message_count: requestAccounting.input_message_count }),
-      requested_output_budget: MAX_TOKENS,
-      effective_output_budget: MAX_TOKENS,
+      requested_output_budget: this.maxTokens,
+      effective_output_budget: this.maxTokens,
       capability_bindings: tools.map((tool) => ({
         capability: tool.function.name,
         advertised: true,

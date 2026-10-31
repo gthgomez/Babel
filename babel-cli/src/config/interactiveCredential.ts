@@ -93,6 +93,22 @@ function appendCredential(envFile: string, name: string, key: string): void {
   renameSync(temp, envFile);
 }
 
+/** Prompt only for the explicitly selected connection's credential. */
+export async function promptForProviderCredential(name: string, env: NodeJS.ProcessEnv = process.env,
+  options: InteractiveCredentialOptions = {}): Promise<boolean> {
+  if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error('Invalid credential environment variable name.')
+  if (env[name]?.trim()) return true
+  const inStream = options.input ?? input
+  const outStream = options.output ?? output
+  if (!isInteractive(inStream, outStream, env)) return false
+  const key = (await readMaskedLine(inStream, outStream)).trim()
+  if (!safeApiKey(key)) throw new Error('Credential was not saved: invalid token format.')
+  appendCredential(resolvePrivateCredentialEnvPath(env), name, key)
+  env[name] = key
+  outStream.write('Credential saved to your private Babel profile.\n')
+  return true
+}
+
 /**
  * When a human runs an interactive CLI command and a certified provider credential
  * is missing, offer a masked setup flow. Noninteractive invocations fail closed.

@@ -6,8 +6,9 @@ import type {
   RunnerInvocationMetadata,
   ToolDefinition,
   ToolStreamEvent,
+  ChatLlmRunner,
 } from './base.js'
-import { ApiFallbackRunner } from './apiFallback.js'
+import { AnthropicApiRunner } from './anthropicApi.js'
 import { DeepInfraApiRunner } from './deepInfraApi.js'
 import { DeepSeekApiRunner } from './deepSeekApi.js'
 import { GeminiApiRunner } from './geminiApi.js'
@@ -20,6 +21,8 @@ import type { OpenCodeGoCredentialSource } from './openCodeGoCredential.js'
 import type { OpenCodeGoBudget } from './openCodeGoBudget.js'
 import { OpenRouterApiRunner } from './openRouterApi.js'
 import { CommandCodeApiRunner } from './commandCodeApi.js'
+import { CompatibleApiRunner } from './compatibleApi.js'
+import { resolveProviderCredential } from './credentialHub.js'
 import {
   providerSupportsOperation,
   type BenchmarkProviderId,
@@ -39,6 +42,7 @@ interface RawLlmRunner extends LlmRunner {
     prompt: string,
     systemPrompt?: string,
     signal?: AbortSignal,
+    callbacks?: RunnerCallbacks,
   ) => AsyncGenerator<string, void, undefined>
 }
 
@@ -54,14 +58,22 @@ export interface ProviderEngineOptions {
   budget?: OpenCodeGoBudget
   /** Explicit Go credential source; default remains the approved helper. */
   credentialSource?: OpenCodeGoCredentialSource
+  resolvedCredential?: string
+  sessionId?: string
   benchmarkRunId?: string
   requestTimeoutMs?: number
+  requireExactModelId?: boolean
+  /** Explicit user-owned compatible endpoint; never read from project instructions. */
+  baseUrl?: string
+  contextWindowTokens?: number
+  authentication?: 'api-key' | 'none'
   /** Optional immutable capability-resolved policy for this invocation lane. */
   executionEnvelope?: ResolvedExecutionEnvelope
 }
 
-function createAdapter(options: ProviderEngineOptions): RawLlmRunner {
+export function createProviderAdapter(options: ProviderEngineOptions): RawLlmRunner {
   const credential = {
+    ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}),
     ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}),
     ...(options.env ? { env: options.env } : {}),
     ...(options.executionEnvelope ? { executionEnvelope: options.executionEnvelope } : {}),
@@ -71,8 +83,14 @@ function createAdapter(options: ProviderEngineOptions): RawLlmRunner {
     ...(options.sampling?.maxTokens === undefined ? {} : { maxTokens: options.sampling.maxTokens }),
     ...(options.sampling?.temperature === undefined ? {} : { temperature: options.sampling.temperature }),
     ...credential,
+    ...(options.apiKeyEnvVar ? { apiKeyEnvVar: options.apiKeyEnvVar } : {}),
+    ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
+    ...(options.authentication ? { authentication: options.authentication } : {}),
   }
   switch (options.provider) {
+    case 'openai-compatible':
+      if (!options.baseUrl) throw new Error('Custom compatible connections require an explicit base URL.')
+      return new CompatibleApiRunner(options.modelId, { ...runtimeOptions, baseUrl: options.baseUrl })
     case 'command-code':
       return new CommandCodeApiRunner(options.modelId, options.sampling, {
         ...(options.apiKeyEnvVar ? { apiKeyEnvVar: options.apiKeyEnvVar } : {}),
@@ -86,38 +104,48 @@ function createAdapter(options: ProviderEngineOptions): RawLlmRunner {
         { provider: 'deepinfra', ...credential },
       )
     case 'deepseek':
-      return new DeepSeekApiRunner(options.modelId, credential)
+      return new DeepSeekApiRunner(options.modelId, { ...credential, ...(options.apiKeyEnvVar ? { envVarOverride: options.apiKeyEnvVar } : {}), ...(options.sampling?.maxTokens ? { maxTokens: options.sampling.maxTokens } : {}) })
     case 'openrouter':
       return new OpenRouterApiRunner(options.modelId, options.sampling, {
         ...(options.apiKeyEnvVar ? { apiKeyEnvVar: options.apiKeyEnvVar } : {}),
         ...credential,
+        ...(options.requireExactModelId ? { requireExactModelId: true } : {}),
       })
     case 'opencode':
       return new OpenCodeApiRunner(options.modelId, options.sampling, {
         ...(options.apiKeyEnvVar ? { apiKeyEnvVar: options.apiKeyEnvVar } : {}),
         ...credential,
       })
-    case 'opencode-go':
+    case 'opencode-go': {
+      // Map the selected reference only inside this transport handoff. Missing
+      // selected credentials must never fall back to the canonical account/helper.
+      const env = options.apiKeyEnvVar ? { ...(options.env ?? process.env),
+        BABEL_OPENCODE_GO_API_KEY: resolveProviderCredential('opencode-go', { env: options.env ?? process.env,
+          envVarOverride: options.apiKeyEnvVar, ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}) }) ?? '' } : options.env
       return new OpenCodeGoApiRunner(options.modelId, options.sampling, {
+        ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}),
         ...(options.budget ? { budget: options.budget } : {}),
-        ...(options.env ? { env: options.env } : {}),
+        ...(options.resolvedCredential ? { resolvedCredential: options.resolvedCredential } : {}),
+        ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+        ...(env ? { env } : {}),
         ...(options.executionEnvelope ? { executionEnvelope: options.executionEnvelope } : {}),
-        credentialSource: options.credentialSource ?? (options.explicitCredential ? 'explicit-test' :
+        credentialSource: options.apiKeyEnvVar ? 'network-secret' : options.credentialSource ?? (options.explicitCredential ? 'explicit-test' :
           (options.env ?? process.env)['BABEL_OPENCODE_GO_API_KEY']?.trim() ? 'network-secret' : 'opencode-auth-helper'),
         ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}),
         ...(options.benchmarkRunId ? { benchmarkRunId: options.benchmarkRunId } : {}),
         ...(options.requestTimeoutMs ? { requestTimeoutMs: options.requestTimeoutMs } : {}),
       })
+    }
     case 'opencode-zen':
       throw new Error('MODEL_UNAVAILABLE: benchmark provider opencode-zen is not registered in ProviderEngine.')
     case 'openai':
       return new OpenAiApiRunner(runtimeOptions)
     case 'anthropic':
-      return new ApiFallbackRunner(runtimeOptions)
+      return new AnthropicApiRunner(runtimeOptions)
     case 'gemini':
       return new GeminiApiRunner(runtimeOptions)
     case 'ollama':
-      return new OllamaApiRunner(options.modelId)
+      return new OllamaApiRunner(options.modelId, { ...options.sampling, ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}) })
     case 'groq':
       return new GroqApiRunner(runtimeOptions) as RawLlmRunner
   }
@@ -132,7 +160,34 @@ export class ProviderEngine implements LlmRunner {
   constructor(options: ProviderEngineOptions) {
     this.provider = options.provider
     this.modelId = options.modelId
-    this.adapter = createAdapter(options)
+    this.adapter = createProviderAdapter(options)
+  }
+
+  /** Identity of the configured route, independent of any observed response. */
+  getPinnedModelId(): string { return this.modelId }
+
+  /** Compatibility accessor for retained OpenCode conversation consumers. */
+  getLastOpenCodeSessionId(): string | null {
+    const adapter = this.adapter as RawLlmRunner & { getLastOpenCodeSessionId?: () => string | null }
+    return adapter.getLastOpenCodeSessionId?.() ?? null
+  }
+
+  /** Preserve the explicit task-owned Go allowance across cached construction. */
+  usesBudget(budget: OpenCodeGoBudget): boolean {
+    return this.adapter instanceof OpenCodeGoApiRunner && this.adapter.usesBudget(budget)
+  }
+
+  /** Serialize using the same adapter as dispatch, including vendor request fields. */
+  buildNativeToolsWireBody(messages: ProviderMessage[], tools: ToolDefinition[], systemPrompt?: string,
+    options?: { stream?: boolean; toolChoice?: 'auto' | 'required' }): string {
+    const adapter = this.adapter as RawLlmRunner & { buildNativeToolsWireBody?: ProviderEngine['buildNativeToolsWireBody'] }
+    if (!adapter.buildNativeToolsWireBody) throw new Error(`[${this.provider}] Native request serialization is unsupported.`)
+    return adapter.buildNativeToolsWireBody(messages, tools, systemPrompt, options)
+  }
+
+  getNativeRequestReservedCompletionTokens(): number | null {
+    const adapter = this.adapter as RawLlmRunner & { getNativeRequestReservedCompletionTokens?: () => number | null }
+    return adapter.getNativeRequestReservedCompletionTokens?.() ?? null
   }
 
   execute<T>(
@@ -161,11 +216,12 @@ export class ProviderEngine implements LlmRunner {
     prompt: string,
     systemPrompt?: string,
     signal?: AbortSignal,
+    callbacks?: RunnerCallbacks,
   ): AsyncGenerator<string, void, undefined> {
     if (!this.adapter.executeRawStream) {
       throw new Error(`[ProviderEngine] ${this.provider} does not support raw chat streaming.`)
     }
-    return this.adapter.executeRawStream(prompt, systemPrompt, signal)
+    return this.adapter.executeRawStream(prompt, systemPrompt, signal, callbacks)
   }
 
   executeWithToolsStream(
@@ -198,4 +254,13 @@ export class ProviderEngine implements LlmRunner {
 /** Construct a provider-neutral model runner. */
 export function createProviderRunner(options: ProviderEngineOptions): ProviderEngine {
   return new ProviderEngine(options)
+}
+
+/** Compatibility for callers needing the concrete adapter's qualified conversation operations. */
+export function createChatProviderAdapter(options: ProviderEngineOptions): ChatLlmRunner {
+  const adapter = createProviderAdapter(options)
+  if (!adapter.executeRaw || !adapter.executeRawStream || !adapter.executeWithToolsStream || !adapter.getLastInvocationMetadata) {
+    throw new Error(`[${options.provider}] Conversation inference is unsupported.`)
+  }
+  return adapter as ChatLlmRunner
 }

@@ -6,7 +6,7 @@
  */
 
 import type { ProviderCapabilities } from '../runners/base.js';
-import { getModelContextWindow, getNormalizedModelCapabilities } from '../modelPolicy.js';
+import { getAvailableModels, getModelContextWindow, getNormalizedModelCapabilities } from '../modelPolicy.js';
 
 export const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
 export const DEFAULT_TOOL_SCHEMA_RESERVE = 4_096;
@@ -96,17 +96,6 @@ const CAPABILITY_DEFAULTS: Record<string, Partial<ProviderCapabilities>> = {
   },
 };
 
-function inferProvider(modelId: string): string {
-  const m = modelId.toLowerCase();
-  if (m.includes('deepseek')) return 'deepseek';
-  if (m.includes('ollama') || m.includes(':')) return 'ollama';
-  if (m.includes('qwen') || m.includes('llama') || m.includes('deepinfra')) {
-    return 'deepinfra';
-  }
-  if (m === 'z-ai/glm-5.3-flash') return 'openrouter';
-  return 'unknown';
-}
-
 /**
  * Resolve one ProviderCapabilities record for a model.
  * Uses model-policy context_window only (never conflicting context_limit).
@@ -114,8 +103,11 @@ function inferProvider(modelId: string): string {
 export function resolveProviderCapabilities(
   modelId: string,
   overrides?: Partial<ProviderCapabilities>,
+  providerId?: string,
 ): ProviderCapabilities {
-  const provider = inferProvider(modelId);
+  const candidate = getNormalizedModelCapabilities(modelId);
+  const norm = !providerId || candidate?.provider === providerId ? candidate : null;
+  const provider = providerId ?? norm?.provider ?? 'unknown';
   const defaults = CAPABILITY_DEFAULTS[provider] ?? {
     maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
     supportsThinking: false,
@@ -125,8 +117,9 @@ export function resolveProviderCapabilities(
     thinkingWithTools: 'unknown' as const,
   };
   // Canonical window from policy; 0 if unknown.
-  const norm = getNormalizedModelCapabilities(modelId);
-  const contextWindow = norm?.contextWindow ?? getModelContextWindow(modelId) ?? 0;
+  const contextWindow = norm?.contextWindow ?? (providerId
+    ? getAvailableModels().find(({ entry }) => entry.provider === providerId && entry.model_id === modelId)?.entry.context_window
+    : getModelContextWindow(modelId)) ?? 0;
   const maxOutputTokens = norm?.maxOutputTokens ?? defaults.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
 
   const base: ProviderCapabilities = {

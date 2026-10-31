@@ -2,7 +2,7 @@
 
 `babel-cli/` is the only authoritative CLI package root.
 
-Babel CLI is the local coding-agent runtime for **Chat**, **Plan**, and **Deep**.
+Babel CLI is the local coding-agent runtime for **Work**, **Plan**, and **Work with thorough review** (internal controllers remain Chat/Plan/Deep).
 The Prompt OS (catalog, resolver, typed contracts) is the inspectable control
 architecture underneath that runtime.
 
@@ -28,7 +28,7 @@ separate directory:
 ```sh
 npm install --global babel-harness@latest
 babel-harness --version
-babel-harness setup --json
+babel-harness setup
 babel-harness doctor --json
 ```
 
@@ -53,7 +53,7 @@ and `~/.babel/cache` for caches. Override these with `BABEL_CONFIG_DIR`,
 run evidence. An installed package ignores `BABEL_ROOT` for resource discovery.
 An optional user configuration file is `~/.babel/config/.env`; ordinary provider
 environment variables also work. Set credentials securely outside the checkout;
-setup and doctor never print them or contact inference providers. Configure one
+Guided setup uses masked credential entry in the private profile. Setup and doctor never print keys or contact inference providers. Configure one
 supported provider for model-backed tasks; presence alone is not authentication.
 A local Ollama route needs its service and selected model available.
 
@@ -198,11 +198,130 @@ $env:BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS='120000'
 node --env-file=.\babel-cli\.env .\babel-cli\dist\index.js run --project example_mobile_reference --mode deep --json "Read PROJECT_CONTEXT.md and create a new file named babel-deep-smoke.txt containing one sentence that says the smoke test passed."
 ```
 
-- `BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS` is a per-request abort timeout; timed-out model calls cascade to the next configured backend. The default is `120000`.
+- `BABEL_PROVIDER_REQUEST_TIMEOUT_MS` is the shared per-request abort timeout (default `120000`); `BABEL_DEEPINFRA_REQUEST_TIMEOUT_MS` remains a compatibility alias. Explicit connections retry only their selected route and end with an actionable failure. Legacy explicitly configured waterfalls retain their own fallback policy.
 - `BABEL_DEEPINFRA_REQUEST_MAX_RETRIES` controls retryable transport/HTTP attempts. The default is `4`.
 - `BABEL_DEEPINFRA_STREAM_IDLE_TIMEOUT_MS` controls how long a streaming response may stay silent before retry/failure. The default is `60000`.
 - `BABEL_DEEPINFRA_STREAM_MAX_RETRIES` controls stream-idle retries. The default is `1`; set `0` to classify the first idle stream as failed.
 - `BABEL_CONTEXT_PRUNING=true` enables model-backed context pruning. By default, pruning is skipped so smoke and release-gate runs avoid an extra provider call.
+
+## First run, connections, and defaults
+
+A fresh profile has **no cloud provider or model selected**. Launching the interactive
+CLI offers setup before indexing or runtime warmup. Setup explains Babel, records
+an explicit provider connection and exact model ID, asks for a per-task budget
+(including an explicit `unlimited` choice), and confirms the initial user default.
+Interrupted setup retains completed non-secret choices. In a pipe or CI,
+`setup --json` reports local setup state without waiting for input.
+
+```sh
+babel-agent provider list
+babel-agent provider connect openai --name personal --model <exact-model-id>
+babel-agent provider connect gemini --name work --model <exact-model-id>
+babel-agent provider use work --save user
+babel-agent model use <exact-model-id> --save project
+babel-agent provider status
+babel-agent settings show
+```
+
+OpenAI and Gemini keys work directly; OpenRouter is optional. Anthropic uses its
+native Messages API. Several accounts can use the same provider. Model names
+never choose a provider. `model use` stays on the selected connection. Manual
+exact model IDs are supported even when absent from the local catalog; availability
+and pricing remain unverified until evidence exists. `provider list` exposes
+qualified operations; saving a connection does not certify unsupported operations.
+
+Custom Chat Completions endpoints require `provider connect openai-compatible
+--name <id> --base-url <url> --model <id> --api-key-env <VARIABLE_NAME>`.
+Only an explicit compatible connection may use `--no-auth`. Endpoints require
+HTTPS except loopback HTTP and reject embedded credentials, query strings and
+fragments. Redirects are refused. Repositories cannot supply connection endpoints
+or credential destinations. `--context-window` and `--max-output-tokens` allow
+explicit limits for a model absent from the catalog; unknown capacity is not
+claimed as a measured context window.
+
+Preferences contain env-variable **names**, never keys. They live in private
+`preferences.json` under the user state root; project preferences are stored
+there by resolved project root. Precedence is invocation, TUI session, explicit
+environment, private project preference, user default, then built-in. Inside the
+TUI, `/provider use` and `/model use` last for that session. CLI selection requires
+`--save user|project`; an individual invocation can use `--connection <id>`.
+Switching connection invalidates the old engine and pending plan. Legacy
+repository `.babel/settings.json` never automatically selects a fresh user's account.
+
+`provider status` distinguishes configured/unverified from missing setup or a
+missing credential. It does not claim authentication. `doctor` also identifies
+the executing package/version/path and checks Node, bundled resources, Docker and
+the sandbox image. Failed credentials, quota, rate limits and missing models get
+specific recovery guidance. No failure silently chooses another provider.
+
+### Workflow and recovery
+
+| Intent | CLI | Interactive |
+| --- | --- | --- |
+| Work | `babel-agent work "task"` | `/mode work` |
+| Plan without edits | `babel-agent plan "task" --plan-only` | `/mode plan` |
+| Apply saved plan | `babel-agent apply --plan <plan_id>` | `/apply <plan_id>` |
+| Thorough review | `babel-agent work --review thorough "task"` | `/mode work --review thorough` |
+| Conversation recovery | `babel-agent conversation list/resume` | `/conversation list/resume` |
+| Execution recovery | `babel-agent run resume <id>` | `/run resume <id>` |
+| Display density | interactive only | `/display renderer conversational|stages|auto` |
+
+Planning stops by default and saves a private handoff. Application rechecks the
+project identity, working-tree freshness, current read-only policy, and exclusive
+application state before entering the existing governed executor. A failed or
+started plan cannot be blindly applied again. Only explicitly saved
+`settings set plans.autoApply true` enables automatic implementation; explicit
+`--plan-only`, read-only task intent and current permissions still win. JSON plan
+output stays plan-only for automation compatibility.
+
+`plan --shadow` is a deprecated read-only restriction; it never automatically
+applies a plan. Finite saved USD caps currently work with standard Work's task
+allowance. Plan, thorough Work, Apply and unmetered compatibility lanes reject
+finite caps before inference. Use standard Work or explicitly choose an
+`unlimited` budget to use those lanes without a dollar ceiling. Setup and
+`settings show` report this limitation.
+
+`--headless` selects plain output after workflow resolution and grants no extra
+permissions. The advanced literal `chat-headless` compatibility lane retains
+its previous approval behavior; use Work with explicit permission settings for
+new integrations.
+
+The existing `session` CLI remains a **run-evidence inspection** interface.
+Its `resume` view does not execute a task. Legacy `resume`/manual `apply` and
+`continue` retain their existing recovery effects; use the explicit namespaces
+above for new scripts. `/session list|resume` and `/resume` remain conversation
+aliases. `/transcript` shows conversation text; `/history` shows entered commands;
+`/clear` clears the display; context compaction remains separate. Operator modes
+remain advanced compatibility controls rather than additional primary workflows.
+
+### Defaults and instructions
+
+`settings show` reports effective values and sources, runtime limits, permissions,
+model identity status, persistence, and instruction owners. Built-ins are Work,
+standard review, auto-apply off, `safe_repo` isolation, unlimited cost and whole-task
+wall time, a 200-turn safety ceiling, 20 conversation messages, a 128,000 estimated
+context threshold, 8 stall turns, and 200,000 tokens per round. Task tunes, explicit
+environment and saved preferences can change effective limits. Setup asks for a
+budget; it does not silently choose a dollar amount. Workflow, permissions, review
+depth and renderer selection are independent.
+
+Ordinary Work uses the built-in Chat behavior and canonical project instruction
+compiler, including scoped AGENTS.md/ENGINEERING.md. Thorough review retains the
+existing Deep stack assembly. The actual run instruction manifest records included,
+omitted and truncated fragments; help does not imply that the whole Prompt OS is
+loaded. Requested/sent/observed models are separate. Missing usage or price remains
+unknown, including local/custom inference. Remote tracing remains opt-in.
+
+### Provider architecture and migration
+
+`ProviderEngine` owns construction. Shared Chat Completions request/stream behavior
+lives in `runners/protocol/openai-chat-completions.ts`; DeepInfra's file contains
+only its adapter. Gemini and Anthropic translate their own message protocols using
+`protocol/native-messages.ts` for the shared lifecycle. Existing DeepInfra exports
+and `BABEL_DEEPINFRA_*` settings remain compatible; neutral `BABEL_PROVIDER_*`
+settings take precedence. Ollama has its own documented timeout/attempt defaults.
+Native tool proposals always pass through Babel's existing execution authority.
+Mock conformance evidence establishes mechanics, not live model quality.
 
 ## Provider configuration
 

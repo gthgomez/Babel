@@ -14,7 +14,7 @@ import {
 
 describe('research v2 CLI routes (offline injected)', () => {
   it('argv dispatches research without -- passthrough', () => {
-    const rewritten = rewriteArgv(['node', 'babel', 'research', 'v2', 'live-status'])
+    const rewritten = rewriteArgv(['node', 'babel', 'research', 'v2', 'live-status'], new Set(['research']))
     assert.equal(rewritten[2], 'research')
     assert.equal(rewritten[3], 'v2')
     assert.equal(rewritten[4], 'live-status')

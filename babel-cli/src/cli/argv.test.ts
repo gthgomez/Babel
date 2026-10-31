@@ -1,9 +1,31 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { rewriteArgv } from './argv.js';
+import { rewriteArgv as rewrite } from './argv.js';
+import { createCliProgram } from '../cliMain.js';
+const registered = new Set(createCliProgram().commands.flatMap(command => [command.name(), ...command.aliases()]));
+const rewriteArgv = (argv: string[], names: ReadonlySet<string> = registered) => rewrite(argv, names);
 
 describe('rewriteArgv', () => {
+  it('uses actual registrations for exec, daemon, goal and provider help', () => {
+    for (const name of ['exec', 'daemon', 'goal', 'provider']) {
+      const args = ['node', 'babel', name, '--help']; assert.deepEqual(rewriteArgv(args), args)
+    }
+  })
+  it('accepts standard review and rejects invalid review values', () => {
+    assert.deepEqual(rewriteArgv(['node', 'babel', 'work', '--review', 'standard', 'explain']), ['node', 'babel', 'run', '--mode', 'chat', '--review', 'standard', 'explain']);
+    assert.throws(() => rewriteArgv(['node', 'babel', 'work', '--review', 'invalid', 'explain']), /standard or thorough/);
+  });
+  it('routes explicit execution recovery and headless Work', () => {
+    assert.deepEqual(rewriteArgv(['node', 'babel', 'run', 'resume', 'latest']), ['node', 'babel', 'continue', 'latest'])
+    assert.deepEqual(rewriteArgv(['node', 'babel', 'work', '--headless', 'explain']), ['node', 'babel', 'run', '--mode', 'chat', '--headless', 'explain'])
+  })
+  it('uses registered command names instead of rewriting them into task prose', () => {
+    for (const command of ['exec', 'daemon', 'goal', 'provider', 'model', 'settings']) {
+      const args = ['node', 'babel', command, '--help']
+      assert.deepEqual(rewriteArgv(args, new Set([command])), args)
+    }
+  })
   it('keeps execution scope and resume identity separate from the task',()=>{
     const args=['node','babel','run','--mode','chat','--execution-scope','conversation','--resume-chat','session-123','--','Hello again'];
     assert.deepEqual(rewriteArgv(args),args);
@@ -56,32 +78,31 @@ describe('rewriteArgv', () => {
     );
   });
 
-  it('maps a bare quoted task to run chat mode', () => {
+  it('maps a bare quoted task to run without overriding saved workflow preferences', () => {
     assert.deepEqual(rewriteArgv(['node', 'babel', 'fix failing tests']), [
       'node',
       'babel',
       'run',
-      '--mode',
-      'chat',
       'fix failing tests',
     ]);
   });
 
-  it('maps chat --headless to run --mode chat-headless (hybrid P3.2)', () => {
+  it('keeps headless presentation separate from the chat workflow', () => {
     assert.deepEqual(rewriteArgv(['node', 'babel', 'chat', '--headless', 'run benchmark']), [
       'node',
       'babel',
       'run',
       '--mode',
-      'chat-headless',
+      'chat',
+      '--headless',
       'run benchmark',
     ]);
   });
 
-  it('maps run --mode chat --headless to chat-headless', () => {
+  it('preserves the explicit workflow alongside headless presentation', () => {
     assert.deepEqual(
       rewriteArgv(['node', 'babel', 'run', '--mode', 'chat', '--headless', 'fix it']),
-      ['node', 'babel', 'run', '--mode', 'chat-headless', 'fix it'],
+      ['node', 'babel', 'run', '--mode', 'chat', '--headless', 'fix it'],
     );
   });
 

@@ -21,7 +21,7 @@ import {
   synthesizeAdversarialResult,
 } from '../agent/lanes/adversarialQALane.js';
 import type { AdversarialQAInput } from '../agent/lanes/adversarialQALane.js';
-import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
+import { createProviderRunner } from '../runners/providerEngine.js';
 import {runWithFallback, getPipelineSelectedModel, withPipelineModelRoute} from '../execute.js';
 import {getAvailableModels, resolveStagePolicyRoutes, isLiveModelId} from '../modelPolicy.js';
 import { QaVerdictSchema } from '../schemas/agentContracts.js';
@@ -85,12 +85,13 @@ export async function runAdversarialQaGate(
 
   try {
     const originalBackend = primaryModel ?? (legacyOffline ? undefined : resolveStagePolicyRoutes({liveOnly:true}).find(route => route.stage === 'qa')?.primaryBackendKey);
-    const reviewBackend = legacyOffline ? undefined : getAvailableModels().find(({key,entry}) =>
+    const selectedConnection = primaryModel?.startsWith('connection/') ? primaryModel : undefined;
+    const reviewBackend = selectedConnection ? { key: selectedConnection } : legacyOffline ? undefined : getAvailableModels().find(({key,entry}) =>
       key !== originalBackend && entry.enabled !== false && entry.provider === 'openrouter' && isLiveModelId(key));
-    if (!legacyOffline && !reviewBackend) throw new Error('Independent adversarial review requires another enabled OpenRouter model. Enable a second model before using adversarial review.');
+    if (!legacyOffline && !reviewBackend) throw new Error('Independent adversarial review requires an explicit provider connection or a configured independent model route.');
     logDetail(`Running independent adversarial QA with model: ${reviewBackend?.key ?? adversaryModel}`);
     const advVerdict = legacyOffline
-      ? await new DeepInfraApiRunner(modelId).execute(advPrompt, QaVerdictSchema)
+      ? await createProviderRunner({ provider: 'deepinfra', modelId }).execute(advPrompt, QaVerdictSchema)
       : await withPipelineModelRoute(reviewBackend!.key, () => runWithFallback(advPrompt, QaVerdictSchema, {stage:'qa',schemaName:'AdversarialQaVerdict',fallbackPolicy:'primary_only'}));
 
     // Write adversarial verdict to evidence directory

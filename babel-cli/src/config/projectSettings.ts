@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { ValidMode } from '../cli/constants.js';
 import { VALID_MODES } from '../cli/constants.js';
 
@@ -69,9 +70,15 @@ export function writeProjectSettings(
       return { ok: false, error: 'No project root available' };
     }
 
+    if (settings.mode !== undefined && !VALID_MODES.includes(settings.mode)) throw new Error('Invalid project workflow.');
+    if (settings.model !== undefined && (typeof settings.model !== 'string' || !settings.model.trim())) throw new Error('Invalid project model.');
+    const previous: unknown = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+    if (!previous || typeof previous !== 'object' || Array.isArray(previous)) throw new Error('Invalid existing project settings; file preserved.');
     const dir = path.dirname(settingsPath);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    const temporary = `${settingsPath}.${randomUUID()}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify({ ...previous, ...settings }, null, 2), { flag: 'wx', mode: 0o600 });
+    fs.renameSync(temporary, settingsPath);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

@@ -17,39 +17,41 @@ import { registerCoreBenchmarkCommands } from './coreBenchmarkCommands.js';
 import { registerCoreMemoryPlanCommands } from './coreMemoryPlanCommands.js';
 import { registerCoreExecutionCommands } from './coreExecutionCommands.js';
 import { registerResearchCommands } from './researchCommands.js';
+import { registerConnectionCommands } from './connectionCommands.js';
+import { currentInvocationSettings } from '../config/invocationSettings.js';
+import { selectedConnectionModel } from '../services/connectionSettings.js';
+import { resolveEffectiveSettings } from '../config/userSettings.js';
+import { resolveAgentTarget } from '../services/targetResolver.js';
+import { resolveProjectRoot } from '../cli/helpers.js';
+import { assertFiniteBudgetSupported } from '../config/laneBudget.js';
 export { validateRuntimeEnvForCommand } from './coreCommandSupport.js';
 export { buildApprovalProfilePayload } from './coreCommandSupport.js';
 export { resolveBenchmarkProvider } from './coreCommandSupport.js';
 export { resolveBenchmarkAnalyzeRun } from './coreCommandSupport.js';
 
 const TOP_LEVEL_HELP_TEXT = `
-Examples:
-  $ babel                  # Launches interactive TUI session
-  $ babel "Fix failing tests"
-  $ babel plan "Split this safely"
-  $ babel deep "Harden the migration path"
-  $ babel doctor
-  $ babel resume latest
-  $ babel undo
-  $ babel advanced
+Start:
+  babel-agent setup                         Connect your provider, exact model and budget
+  babel-agent                               Open the interactive coding session
+  babel-agent work "Explain this project"    Inspect or implement within current permissions
+  babel-agent plan "Design this change"      Produce a read-only plan
+  babel-agent apply --plan <id>              Apply a saved plan after scope checks
+  babel-agent work --review thorough "..."   Use governed planning, review and execution
 
-Command Guide:
-  Interactive:  babel                  (or babel interactive / babel app)
-  Default:      babel "<task...>"
-  Plan:         babel plan "<task...>"
-  Deep:         babel deep "<task...>"
-  Recovery:     babel resume, babel undo
-  Health:       babel doctor, babel inspect
-  Advanced:     babel advanced
+Settings:
+  babel-agent provider list
+  babel-agent provider use <connection> --save user
+  babel-agent model use <exact-id> --save project
+  babel-agent settings show
+  babel-agent conversation list             List saved conversations
+  babel-agent conversation resume <id>      Resume a conversation
+  babel-agent run resume <id>               Recover an execution worker chain
+  babel-agent doctor
 
-Notes:
-  - Bare babel with no arguments launches the interactive TUI (REPL) session.
-  - babel "<task...>" is the default one-shot action path — runs the task and exits.
-  - babel plan prepares a plan, asks for approval in the terminal, then applies the approved task.
-  - babel deep uses the heavier governed path when you want extra critique and execution rigor.
-  - Daily work uses babel "<task>"; babel plan and babel deep cover planning and governed execution.
-  - Shorthand is supported: babel <Project> "<task...>" maps to babel run --project <Project> "<task...>"
-  - Use "babel advanced" for babel run, audit, benchmark, git, MCP, and inspection surfaces.
+Plan stops by default. Only an explicitly saved plans.autoApply preference enables
+automatic implementation. --plan-only always stops. No cloud provider is preselected.
+Model/provider choices inside the TUI are session-scoped; --save user|project makes
+persistence explicit. Advanced and compatibility commands: babel-agent advanced.
 `;
 
 export function applyProgramMetadata(program: Command): void {
@@ -69,7 +71,7 @@ export function applyProgramMetadata(program: Command): void {
   program
     .name(installed ? 'babel-agent' : 'babel')
     .description(
-      "Babel Multi-Agent OS — local runtime harness for multi-repo workspaces",
+      "Babel coding agent — inspect, plan and change projects using your chosen provider",
     )
     .version((JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }).version)
     .addHelpText("after", TOP_LEVEL_HELP_TEXT);
@@ -77,6 +79,10 @@ export function applyProgramMetadata(program: Command): void {
 
 const DEFAULT_HELP_COMMANDS = new Set([
   "setup",
+  "provider",
+  "model",
+  "settings",
+  "conversation",
   "doctor",
   "dry",
   "permissions",
@@ -253,6 +259,44 @@ function collectOption(value: string, previous: string[]): string[] {
 }
 
 export function registerCoreCommands(program: Command): void {
+  registerConnectionCommands(program, { projectRoot: resolveAgentTarget().targetRoot });
+  program.option('--connection <id>', 'Use a configured provider connection for this invocation');
+  program.hook('preAction', (_root, action) => {
+    const connection = program.opts()['connection'];
+    const invocation = currentInvocationSettings();
+    if (typeof connection === 'string' && invocation) invocation.connection = connection;
+    if (action.opts()['headless'] === true && invocation) invocation['presentation'] = 'plain';
+    // Nested commands such as agents run have their own offline/service contracts.
+    if (action.parent !== program) return;
+    const explicitModel = action.getOptionValueSource('model') === 'cli' ? action.opts()['model'] : undefined;
+    if (typeof explicitModel === 'string' && invocation) invocation.model = explicitModel;
+    const planArgs = action.name() === 'plan' && Array.isArray(action.processedArgs[0]) ? action.processedArgs[0] as string[] : [];
+    const project = action.opts()['project'] ?? (planArgs.length > 1 && resolveProjectRoot(planArgs[0]!) ? planArgs[0] : undefined);
+    const target = resolveAgentTarget({ ...(project ? { project } : {}),
+      ...(action.opts()['projectRoot'] ? { projectRoot: action.opts()['projectRoot'] } : {}), cwd: process.env['BABEL_PROJECT_ROOT'] ?? process.cwd() }).targetRoot;
+    if (action.name() === 'run') {
+      const effective = resolveEffectiveSettings({ projectRoot: target });
+      const explicitMode = action.getOptionValueSource('mode') === 'cli';
+      const mode = explicitMode ? action.opts()['mode'] : effective.workflow.value === 'plan' ? 'plan' : 'chat';
+      const review = action.opts()['review'] ?? effective.review.value;
+      if (!['standard', 'thorough'].includes(review)) throw new Error('Review must be standard or thorough.');
+      action.setOptionValueWithSource('mode', ['chat', 'chat-headless'].includes(mode) && review === 'thorough' ? 'deep' : mode, explicitMode ? 'cli' : 'config');
+      if (['plan', 'deep'].includes(action.opts()['mode'])) assertFiniteBudgetSupported('Plan or thorough Work', target);
+    }
+    if (['run', 'plan', 'deep', 'interactive', 'app'].includes(action.name()) && action.opts()['model'] === undefined) {
+      const selected = selectedConnectionModel({}, target);
+      if (selected) action.setOptionValue('model', selected);
+      else if (process.env['BABEL_MODEL']) action.setOptionValue('model', process.env['BABEL_MODEL']);
+    } else if (['run', 'plan', 'deep', 'interactive', 'app'].includes(action.name()) && typeof action.opts()['model'] === 'string' && !action.opts()['model'].startsWith('connection/')) {
+      const selected = selectedConnectionModel({ model: action.opts()['model'] }, target);
+      if (selected) action.setOptionValue('model', selected);
+    }
+    if (['run', 'plan', 'deep'].includes(action.name()) && !action.opts()['model'] && !action.opts()['manual'] &&
+      !process.env['BABEL_DESKTOP_PROVIDER'] && process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1' &&
+      process.env['BABEL_LITE_OFFLINE'] !== '1' && !['1', 'true'].includes(process.env['BABEL_OFFLINE'] ?? '')) {
+      throw new Error('SETUP_REQUIRED: Run babel-agent setup to choose a provider connection and exact model before starting work.');
+    }
+  });
   registerCoreStartupCommands(program);
   registerCoreAutomationCommands(program);
   registerCoreLearningCommands(program);

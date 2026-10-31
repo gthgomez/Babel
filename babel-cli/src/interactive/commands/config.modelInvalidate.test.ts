@@ -39,11 +39,11 @@ function makeCtx(partial?: Partial<ReplContext>): ReplContext {
   } as ReplContext;
 }
 
-test('handleClear invalidates chatEngine so next turn rebuilds', () => {
+test('handleClear preserves the live conversation engine', () => {
   const ctx = makeCtx();
   assert.ok(ctx.chatEngine);
   handleClear(ctx, []);
-  assert.equal(ctx.chatEngine, undefined);
+  assert.ok(ctx.chatEngine);
 });
 
 test('handleProject invalidates chatEngine for next-turn root/model truth', () => {
@@ -65,6 +65,22 @@ test('operator /mode hard-plan invalidates chatEngine for next turn', () => {
   assert.equal(ctx.chatEngine, undefined);
   assert.equal(ctx.state.operatorMode, 'hard_plan');
 });
+
+test('/mode plan selects the read-only workflow before legacy operator aliases', () => {
+  const ctx = makeCtx()
+  handleMode(ctx, ['plan'])
+  assert.equal(ctx.state.mode, 'plan')
+  assert.equal(ctx.state.modeExplicit, true)
+  assert.equal(ctx.chatEngine, undefined)
+})
+
+test('/mode work preserves the independent hard-plan restriction', () => {
+  const ctx = makeCtx()
+  ctx.state.operatorMode = 'hard_plan'
+  handleMode(ctx, ['work'])
+  assert.equal(ctx.state.mode, 'chat')
+  assert.equal(ctx.state.operatorMode, 'hard_plan')
+})
 
 test('P0-C: /model invalidates chatEngine so next turn uses new provider', () => {
   const ctx = makeCtx();

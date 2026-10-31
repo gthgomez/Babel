@@ -9,7 +9,9 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { describe, test } from 'node:test';
+import { mkdtempSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { describe, test, afterEach } from 'node:test';
 import { stripAnsi } from '../../ui/theme.js';
 
 const READY_TIMEOUT_MS = 30_000;
@@ -39,7 +41,7 @@ function waitForReady(
     };
     const onData = (): void => {
       const text = stripAnsi(getOutput());
-      if (/BABEL/i.test(text) && /\[READY\]/i.test(text)) finish(true);
+      if (/BABEL/i.test(text) && /\[SETUP\]/i.test(text)) finish(true);
     };
     const onExit = (): void => finish(false);
     const timer = setTimeout(() => finish(false), timeoutMs);
@@ -66,14 +68,19 @@ function waitForExit(child: ReturnType<typeof spawn>, timeoutMs = EXIT_TIMEOUT_M
 describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certification', () => {
   const cliPath = join(process.cwd(), 'src', 'index.ts');
 
+  const children: ReturnType<typeof spawn>[] = [];
+  afterEach(() => { for (const child of children.splice(0)) if (child.exitCode === null) child.kill(); });
   function spawnInteractiveCli(extraEnv: Record<string, string> = {}) {
-    return spawn(
+    const profile = mkdtempSync(join(tmpdir(), 'babel-cli-process-profile-'));
+    mkdirSync(join(profile, 'config'));
+    const child = spawn(
       process.execPath,
       ['--import', 'tsx', '--no-warnings=ExperimentalWarning', cliPath, 'interactive', '--mode', 'chat'],
       {
         cwd: process.cwd(),
         env: {
-          ...process.env,
+          PATH: process.env['PATH'], SystemRoot: process.env['SystemRoot'],
+          BABEL_CONFIG_DIR: join(profile, 'config'), BABEL_STATE_DIR: profile, BABEL_CACHE_DIR: join(profile, 'cache'), BABEL_RUNS_DIR: join(profile, 'runs'),
           CI: '1',
           BABEL_SKIP_RESUME_PICKER: '1',
           BABEL_SKIP_KG_INDEX: '1',
@@ -83,9 +90,10 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
         stdio: ['pipe', 'pipe', 'pipe'],
       },
     );
+    children.push(child); return child;
   }
 
-  test('PROC-01: Real CLI process boots, displays startup banner and ready prompt', async () => {
+  test('PROC-01: Real CLI process boots, displays startup banner and pending setup prompt', async () => {
     const child = spawnInteractiveCli();
     let out = '';
     child.stdout.on('data', (chunk) => {
@@ -96,7 +104,7 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
     });
 
     const isReady = await waitForReady(child, () => out);
-    assert.equal(isReady, true, `CLI failed to reach ready state: ${stripAnsi(out).slice(0, 400)}`);
+    assert.equal(isReady, true, `CLI failed to reach ready state: ${stripAnsi(out).slice(-1800)}`);
 
     const exitCodePromise = waitForExit(child);
     child.stdin.write('/exit\n');
@@ -118,7 +126,7 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
     });
 
     const isReady = await waitForReady(child, () => out);
-    assert.equal(isReady, true, `CLI failed to reach ready state: ${stripAnsi(out).slice(0, 400)}`);
+    assert.equal(isReady, true, `CLI failed to reach ready state: ${stripAnsi(out).slice(-1800)}`);
 
     // Send Unicode command and /exit
     const exitCodePromise = waitForExit(child);
@@ -140,7 +148,7 @@ describe('PR-76 REAL_PROCESS: Spawned Real Babel CLI Interactive Process Certifi
       output += String(chunk);
     });
     const isReady = await waitForReady(child, () => output);
-    assert.equal(isReady, true, `CLI failed to reach ready state: ${stripAnsi(output).slice(0, 400)}`);
+    assert.equal(isReady, true, `CLI failed to reach ready state: ${stripAnsi(output).slice(-1800)}`);
 
     const exitCodePromise = waitForExit(child);
     child.stdin.write('/exit\n');

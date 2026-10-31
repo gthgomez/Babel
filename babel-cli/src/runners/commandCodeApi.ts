@@ -1,8 +1,8 @@
-import { DeepInfraApiRunner, type FetchRedirectPolicy } from './deepInfraApi.js'
+import { OpenAiCompatibleRunner, type FetchRedirectPolicy } from './protocol/openai-chat-completions.js'
 import type { ResolvedExecutionEnvelope } from '../intelligence/types.js'
 
 /** Command Code's native API transport; tool execution stays in Babel. */
-export class CommandCodeApiRunner extends DeepInfraApiRunner {
+export class CommandCodeApiRunner extends OpenAiCompatibleRunner {
   protected override get apiUrl(): string {
     return 'https://api.commandcode.ai/provider/v1/chat/completions'
   }
@@ -12,6 +12,7 @@ export class CommandCodeApiRunner extends DeepInfraApiRunner {
     sampling: { maxTokens?: number; temperature?: number } = {},
     credential: {
       apiKeyEnvVar?: string
+      contextWindowTokens?: number
       explicitCredential?: string
       env?: NodeJS.ProcessEnv
       executionEnvelope?: ResolvedExecutionEnvelope
@@ -19,6 +20,7 @@ export class CommandCodeApiRunner extends DeepInfraApiRunner {
   ) {
     super(model, credential.apiKeyEnvVar ?? 'COMMAND_CODE_API_KEY', sampling, {
       provider: 'command-code',
+      ...(credential.contextWindowTokens ? { contextWindowTokens: credential.contextWindowTokens } : {}),
       ...(credential.explicitCredential ? { explicitCredential: credential.explicitCredential } : {}),
       ...(credential.env ? { env: credential.env } : {}),
       ...(credential.executionEnvelope ? { executionEnvelope: credential.executionEnvelope } : {}),

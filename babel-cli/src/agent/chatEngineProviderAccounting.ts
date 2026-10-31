@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
+import type { ChatLlmRunner } from '../runners/base.js';
 import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
 import { OllamaApiRunner } from '../runners/ollamaApi.js';
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
@@ -790,7 +790,7 @@ export function runnerTokenHistoryCostUsd(
 
 export function trackRunnerUsage(
   host: ChatProviderRetryHost,
-  runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner | OpenRouterApiRunner,
+  runner: ChatLlmRunner,
   usageScope?: ChatUsageScope,
 ): void {
     // A task charge must be tied to an observed invocation start. Test/offline

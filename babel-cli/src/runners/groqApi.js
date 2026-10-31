@@ -46,7 +46,7 @@ export class GroqApiRunner {
     this.model = options.modelId ?? GROQ_MODEL;
     this.maxTokens = options.maxTokens ?? MAX_TOKENS;
     this.temperature = options.temperature ?? 0;
-    this.client = new Groq({ apiKey });
+    this.client = new Groq({ apiKey, fetch: (...args) => globalThis.fetch(...args) });
   }
   async execute(prompt, schema) {
     let completion;

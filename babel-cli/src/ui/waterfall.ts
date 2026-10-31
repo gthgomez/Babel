@@ -1,4 +1,5 @@
 import { error } from './theme.js';
+import { currentInvocationSettings } from '../config/invocationSettings.js';
 import { isA11yMode, a11yActivityEvent } from './a11y.js';
 import { StateStore, type TuiMutation, type TuiState } from './stateMutationBus.js';
 import { conversationalToolLabel } from './toolDisplay.js';
@@ -162,7 +163,7 @@ export function createLiveRunRenderer(
   stream: NodeJS.WriteStream = process.stdout,
   stateStore?: StateStore<TuiState, TuiMutation> | undefined,
 ): AppendOnlyRenderer | ConversationalRenderer {
-  if (!stream?.isTTY) {
+  if (!stream?.isTTY || currentInvocationSettings()?.['presentation'] === 'plain') {
     return new AppendOnlyRenderer(eventBus, context);
   }
   if (process.env.NO_COLOR || process.env.CI || isA11yMode()) {

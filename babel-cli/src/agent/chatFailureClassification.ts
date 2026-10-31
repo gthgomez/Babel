@@ -19,6 +19,16 @@ const LOCAL_ENV_CODE_RE = /\b(?:ENOSPC|EROFS|EIO|EBUSY|EMFILE|ENFILE)\b/i;
 /** Network/transport errnos: an external endpoint/transport is implicated. */
 const NETWORK_CODE_RE = /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH)\b/i;
 
+/** Stable presentation categories for trusted transport/configuration failures. */
+export function providerFailureDetail(error: string): string | null {
+  if (/SETUP_REQUIRED|PROVIDER_CREDENTIAL_MISSING|\[provider:[^\]]+\].*(?:not set|missing)/i.test(error)) return 'credential_missing';
+  if (/\bHTTP\s+(?:401|403)\b|auth_fatal/i.test(error)) return 'authentication';
+  if (/\bHTTP\s+402\b|quota_fatal|insufficient[_ ]quota/i.test(error)) return 'quota';
+  if (/\bHTTP\s+429\b|rate limit/i.test(error)) return 'rate_limit';
+  if (/\bHTTP\s+404\b.*model|model.*(?:unavailable|not found)/i.test(error)) return 'model_unavailable';
+  return null;
+}
+
 /**
  * Local machine/environment failure (disk full, read-only filesystem, IO error,
  * file-descriptor exhaustion). This is not provider blame and must never be
@@ -43,7 +53,7 @@ export function isInfrastructureErrorText(error: string): boolean {
     /socket hang up|connection reset|fetch failed|undici|network (?:error|timeout)|broken pipe/i.test(error) ||
     /provider (?:startup|stream) idle|idle timeout|request deadline|request timeout|timeout exceeded/i.test(error) ||
     /stream closed before terminal|malformed sse|provider stream error|finish_reason: error/i.test(error) ||
-    /\[(?:deepSeekApi|deepInfraApi|openRouterApi|provider)\]/i.test(error) ||
+    /\[(?:deepSeekApi|deepInfraApi|openRouterApi|deepinfra|deepseek|openrouter|openai|gemini|anthropic|openai-compatible|provider)(?::[^\]]+)?\]/i.test(error) ||
     /provider (?:error|disconnected)|overloaded|service unavailable|bad gateway|rate limit|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout/i.test(error)
   );
 }
@@ -72,6 +82,7 @@ export function isEnvironmentErrorText(error: string): boolean {
  */
 export function classifyFailureText(error: string): TerminalOutcome | undefined {
   if (!error) return undefined;
+  if (providerFailureDetail(error) === 'credential_missing') return 'BLOCKED_EXTERNAL';
   if (isProviderOutputLimitText(error)) return 'BUDGET_EXHAUSTED';
   if (isBudgetErrorText(error)) return 'BUDGET_EXHAUSTED';
   if (isPolicyErrorText(error)) return 'BLOCKED_POLICY';

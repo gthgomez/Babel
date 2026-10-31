@@ -1,14 +1,14 @@
+import { createChatProviderAdapter, ProviderEngine } from '../runners/providerEngine.js'
+import { isProviderId } from '../runners/providerRegistry.js'
+import { resolveModelByKey } from '../modelPolicy.js'
+import type { ChatLlmRunner } from '../runners/base.js'
 /**
  * Diff-critic + budget helpers extracted from ChatEngine (file-size ratchet).
  * Keeps the agent loop thin; all strike/hard-block policy stays here.
  */
 
-import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
-import { DeepSeekApiRunner } from '../runners/deepSeekApi.js';
-import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import { CommandCodeApiRunner } from '../runners/commandCodeApi.js';
 import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js';
-import {OllamaApiRunner} from '../runners/ollamaApi.js';
 import type { BlockedReport } from '../schemas/agentContracts.js';
 import {
   isSweChatProfileEnabled,
@@ -364,7 +364,7 @@ export function mutationTargetsFromLog(toolCallLog: CriticToolLogEntry[]): strin
   return targets.filter((target, index, all) => target.length > 0 && all.indexOf(target) === index);
 }
 
-export type CriticRunner = DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner;
+export type CriticRunner = ChatLlmRunner;
 
 export function resolveOrCreateCriticRunner(
   modelId: string,
@@ -374,7 +374,7 @@ export function resolveOrCreateCriticRunner(
 ): { runner: CriticRunner; cache: CriticRunner } {
   if (primaryProvider === 'command-code') {
     const runner = fallback()
-    if (!(runner instanceof CommandCodeApiRunner)) {
+    if (!(runner instanceof CommandCodeApiRunner) && !(runner instanceof ProviderEngine && runner.provider === primaryProvider)) {
       throw new Error('[LIVE_MODEL_POLICY] Command Code critic refuses provider substitution.')
     }
     return { runner, cache: runner }
@@ -385,94 +385,27 @@ export function resolveOrCreateCriticRunner(
     }
     // Resolve from the current owner instead of trusting a prior task's critic cache.
     const runner = fallback()
-    if (!(runner instanceof OpenCodeGoApiRunner) || runner.getPinnedModelId() !== modelId) {
+    if (!(runner instanceof OpenCodeGoApiRunner && runner.getPinnedModelId() === modelId) && !(runner instanceof ProviderEngine && runner.provider === primaryProvider && runner.getPinnedModelId() === modelId)) {
       throw new Error('[LIVE_MODEL_POLICY] Go critic refuses provider/model substitution.')
     }
     return { runner, cache: runner }
   }
-  // Explicit provider selection wins over model-name heuristics and ambient keys.
-  if (primaryProvider && primaryProvider !== 'openrouter') {
-    const runner = primaryProvider === 'deepseek'
-      ? new DeepSeekApiRunner(modelId)
-      : primaryProvider === 'deepinfra'
-        ? new DeepInfraApiRunner(modelId)
-        : primaryProvider === 'ollama'
-          ? new OllamaApiRunner(modelId)
-          : null;
-    if (!runner) throw new Error(`[LIVE_MODEL_POLICY] Unsupported critic provider "${primaryProvider}"; refusing provider substitution.`);
-    return {runner,cache:runner};
+  if (primaryProvider) {
+    if (!isProviderId(primaryProvider)) throw new Error('Unsupported critic provider; refusing substitution.')
+    const runner = createChatProviderAdapter({ provider: primaryProvider, modelId })
+    return { runner, cache: runner }
   }
-  if (cached) return { runner: cached, cache: cached };
-  if (!isOfflineChatMode()) assertLiveModelId(modelId, 'live chat diff critic');
-  const lower = modelId.toLowerCase();
-  const isGlm = modelId === LIVE_OPENROUTER_MODEL_ID || modelId === LIVE_OPENROUTER_BACKEND_KEY;
-  const openRouterDeepSeekModel = resolveOpenRouterDeepSeekModelId(modelId);
-  let runner: CriticRunner;
-  try {
-    runner = openRouterDeepSeekModel
-      ? new OpenRouterApiRunner(openRouterDeepSeekModel)
-      : isGlm
-      ? new OpenRouterApiRunner(LIVE_OPENROUTER_MODEL_ID)
-      : lower.includes('deepseek')
-      ? new DeepSeekApiRunner(modelId)
-      : new DeepInfraApiRunner(modelId);
-  } catch {
-    if (isGlm) {
-      throw new Error(
-        '[LIVE_MODEL_POLICY] Exact GLM critic route could not initialize OpenRouter; refusing silent model substitution.',
-      );
-    }
-    if (openRouterDeepSeekModel && !isOfflineChatMode()) {
-      throw new Error(
-        '[LIVE_MODEL_POLICY] Live OpenRouter critic route could not initialize; refusing direct-provider substitution.',
-      );
-    }
-    try {
-      runner = new DeepSeekApiRunner('deepseek-v4-flash');
-    } catch {
-      runner = fallback();
-    }
-  }
-  return { runner, cache: runner };
+  if (cached) return { runner: cached, cache: cached }
+  const selected = resolveModelByKey({ key: modelId })
+  if (!isProviderId(selected.provider)) throw new Error('Unsupported critic route; refusing substitution.')
+  const runner = createChatProviderAdapter({ provider: selected.provider, modelId: selected.providerModelId,
+    ...(selected.baseUrl ? { baseUrl: selected.baseUrl } : {}), ...(selected.apiKeyEnvVar ? { apiKeyEnvVar: selected.apiKeyEnvVar } : {}) })
+  return { runner, cache: runner }
 }
 
-export function resolveOrCreateCriticProRunner(
-  modelId: string,
-  cached: CriticRunner | null,
-  flashFallback: () => CriticRunner,
-  primaryProvider?: string,
-): { runner: CriticRunner; cache: CriticRunner } {
-  if (primaryProvider) {
-    return resolveOrCreateCriticRunner(modelId, cached, flashFallback, primaryProvider)
-  }
-  if (cached) return { runner: cached, cache: cached };
-  if (!isOfflineChatMode()) assertLiveModelId(modelId, 'live chat pro diff critic');
-  const lower = modelId.toLowerCase();
-  const isGlm = modelId === LIVE_OPENROUTER_MODEL_ID || modelId === LIVE_OPENROUTER_BACKEND_KEY;
-  const openRouterDeepSeekModel = resolveOpenRouterDeepSeekModelId(modelId);
-  let runner: CriticRunner;
-  try {
-    runner = openRouterDeepSeekModel
-      ? new OpenRouterApiRunner(openRouterDeepSeekModel)
-      : isGlm
-      ? new OpenRouterApiRunner(LIVE_OPENROUTER_MODEL_ID)
-      : lower.includes('deepseek')
-      ? new DeepSeekApiRunner(modelId)
-      : new DeepInfraApiRunner(modelId);
-  } catch {
-    if (isGlm) {
-      throw new Error(
-        '[LIVE_MODEL_POLICY] Exact GLM pro-critic route could not initialize OpenRouter; refusing silent model substitution.',
-      );
-    }
-    if (openRouterDeepSeekModel && !isOfflineChatMode()) {
-      throw new Error(
-        '[LIVE_MODEL_POLICY] Live OpenRouter pro-critic route could not initialize; refusing direct-provider substitution.',
-      );
-    }
-    runner = flashFallback();
-  }
-  return { runner, cache: runner };
+export function resolveOrCreateCriticProRunner(modelId: string, cached: CriticRunner | null,
+  fallback: () => CriticRunner, primaryProvider?: string): { runner: CriticRunner; cache: CriticRunner } {
+  return resolveOrCreateCriticRunner(modelId, cached, fallback, primaryProvider)
 }
 
 /**
@@ -616,7 +549,8 @@ export async function runAsymmetricDiffCritic(
 
     const modelId = state.pinSelectedModel || state.primaryProvider === 'opencode-go'
       ? state.primaryModel ?? '' : resolveDiffCriticModel(state.primaryModel);
-    const flashResolved = resolveOrCreateCriticRunner(
+    const inherited = state.pinSelectedModel ? state.resolveDeliberationRunner() : null;
+    const flashResolved = inherited ? { runner: inherited, cache: inherited } : resolveOrCreateCriticRunner(
       modelId,
       state.criticRunner,
       state.resolveDeliberationRunner,
@@ -668,7 +602,7 @@ export async function runAsymmetricDiffCritic(
         requireGreenVerifier: sweTier,
         strictSymbolCoverage: sweTier,
         invokePro: async (prompt, systemPrompt) => {
-          const proResolved = resolveOrCreateCriticProRunner(
+          const proResolved = inherited ? { runner: inherited, cache: inherited } : resolveOrCreateCriticProRunner(
             proModelId,
             state.criticProRunner,
             () =>

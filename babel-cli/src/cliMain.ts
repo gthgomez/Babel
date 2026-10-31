@@ -1,6 +1,7 @@
 import { loadBabelCliEnv } from './config/envBootstrap.js';
 import { conversationScopeRequested } from './config/conversationScope.js';
 import { desktopCapabilities, isDesktopCapabilityProbe } from './config/desktopCapabilities.js';
+import { withInvocationSettings } from './config/invocationSettings.js';
 import { Command } from 'commander';
 import { rewriteArgv } from './cli/argv.js';
 import { isDeprecatedSurfaceCommand, printDeprecatedSurfaceAndExit } from './cli/deprecation.js';
@@ -13,7 +14,20 @@ import { registerProjectCommands } from './commands/projectCommands.js';
 import { registerRemoteCommands } from './commands/remoteCommands.js';
 import { registerWorkflowCommands } from './commands/workflowCommands.js';
 
-export function runCli(argv: string[] = process.argv) {
+/** One registration graph for execution and command recognition. */
+export function createCliProgram(): Command {
+  const program = new Command();
+  applyProgramMetadata(program);
+  registerCoreCommands(program);
+  registerProjectCommands(program);
+  registerWorkflowCommands(program);
+  registerRemoteCommands(program);
+  applyUserFocusedHelpTiers(program);
+
+  return program;
+}
+
+export async function runCli(argv: string[] = process.argv): Promise<void> {
   if (isDesktopCapabilityProbe(argv)) {
     process.stdout.write(JSON.stringify(desktopCapabilities()) + '\n');
     return;
@@ -28,20 +42,15 @@ export function runCli(argv: string[] = process.argv) {
     }
   }
 
-  const program = new Command();
-  applyProgramMetadata(program);
-  registerCoreCommands(program);
-  registerProjectCommands(program);
-  registerWorkflowCommands(program);
-  registerRemoteCommands(program);
-  applyUserFocusedHelpTiers(program);
+  const program = createCliProgram();
 
-  const rewrittenArgv = rewriteArgv(argv);
+  const registeredCommands = new Set(program.commands.flatMap(command => [command.name(), ...command.aliases()]));
+  const rewrittenArgv = rewriteArgv(argv, registeredCommands);
   const surfaceCommand = rewrittenArgv[2];
   if (typeof surfaceCommand === 'string' && isDeprecatedSurfaceCommand(surfaceCommand)) {
     printDeprecatedSurfaceAndExit(surfaceCommand);
   }
-  program.parse(rewrittenArgv);
+  await withInvocationSettings({}, () => program.parseAsync(rewrittenArgv));
 }
 
 export async function startCli(argv: string[] = process.argv) {
@@ -51,5 +60,5 @@ export async function startCli(argv: string[] = process.argv) {
     });
     process.env['BABEL_ENV_LOADED'] = 'true';
   }
-  runCli(argv);
+  await runCli(argv);
 }

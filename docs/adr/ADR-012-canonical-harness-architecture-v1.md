@@ -37,6 +37,37 @@ Without a frozen contract, agents and humans re-discover or accidentally weaken 
 7. Use one validated, hash-linked `episode-events.jsonl` producer per Chat/pipeline run. Pipeline episode persistence is supplemental to the authoritative `EvidenceBundle`, reports degradation, and fails closed on invalid resume/quarantine boundaries. This remains **PARTIAL** until phase instrumentation, offline integration, and full-suite release gates are green.
 8. Give each Chat submission one monotonic `RunControl` bound to existing run/turn/generation identities. It owns continuation only; durable admission, permissions and completion retain their current owners. Recheck at every physical tool/provider start after suspension, including retries and compaction. Preserve settlement of already-started work under its original owner. Typed host stops replace tool-prose control. A mutable shared abort controller alone cannot fence approval races or prevent a new session from resetting old terminal state; this small latch adds no persisted identity or parallel completion evaluator.
 
+## Approved CLI/provider coherence amendment (2026-10-30)
+
+The preferred `--headless` flag changes presentation after workflow resolution;
+it MUST NOT select Work over a saved Plan or grant execution permissions. The
+advanced literal `chat-headless` lane retains its existing compatibility contract.
+
+The three internal controllers remain distinct. Public Work maps to Chat; Plan
+MUST stop after producing its read-only handoff unless a trusted user-owned
+`plans.autoApply` preference explicitly enables the implementation transition.
+Explicit plan-only intent and existing read-only authority MUST override that
+preference. Apply MUST bind the saved plan to project identity and source freshness,
+serialize application, and retain current budgets, isolation and kernel authority.
+No new completion evaluator is introduced.
+
+A fresh profile MUST NOT select a cloud provider/model from installed keys or model
+substrings. The private user settings resolver owns connection selection and its
+provenance across CLI and TUI. Repository content MUST NOT choose credential
+sources or endpoints. ProviderEngine owns adapter construction; protocol sharing
+MUST live under a neutral protocol owner. Vendor files retain vendor wire details.
+Automatic cross-provider fallback is forbidden for an explicitly selected connection.
+Native tool events MUST pass through existing Babel tool authorization, execution,
+accounting and completion. Unsupported operations remain visible and fail closed.
+
+Persisted `preferences.json` and saved plan records use schema version 1 with
+validation before atomic replacement. Existing harness event IDs and completion
+schemas remain unchanged; optional `reason_detail` refines presentation without
+changing terminal authority. Legacy manual plan/recovery interfaces retain their
+effects. The unambiguous new conversation namespace is `conversation list/resume`;
+CLI `session` remains evidence inspection for compatibility. See the
+[approved design](../superpowers/specs/2026-10-30-cli-backend-coherence-design.md).
+
 ## Alternatives considered
 
 | Alternative | Why rejected |

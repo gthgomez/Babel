@@ -1,154 +1,89 @@
-/**
- * geminiApi.ts — Gemini API Runner (repair loop / background tasks)
- *
- * Thin fetch-based wrapper around the Gemini generateContent REST endpoint.
- * Intended as the first-choice repair runner in structuredRunner.ts because
- * gemini-2.5-flash-lite has a very large context window and near-zero cost,
- * making it ideal for extracting JSON from large EVIDENCE_REQUEST logs without
- * risking Groq context-window overflows.
- *
- * Configuration (environment variables):
- *   GEMINI_API_KEY        - Required. Google AI Studio key.
- *   BABEL_GEMINI_MODEL    - Model ID. Default: "gemini-2.5-flash-lite"
- *   BABEL_GEMINI_TOKENS   - maxOutputTokens. Default: 8192
- */
+/** Gemini native generateContent adapter. */
+import { randomUUID } from 'node:crypto'
+import { normalizeProviderMessages } from './providerMessages.js'
+import type { ProviderMessage, ToolDefinition, ToolStreamEvent } from './base.js'
+import { NativeMessagesRunner, nativeRecord, type NativeRunnerOptions, type NativeStreamState } from './protocol/native-messages.js'
 
-import type { ZodType } from 'zod';
-import { classifyProviderError } from './providerNormalize.js';
-import { type LlmRunner, type RunnerCallbacks, buildStructuredOutputError } from './base.js';
-import { extractJson } from '../utils/extractJson.js';
-import { parseRateLimitHeaders } from '../ui/rateLimitWidget.js';
-import { resolveProviderCredential } from './credentialHub.js';
+export class GeminiApiRunner extends NativeMessagesRunner {
+  constructor(options: NativeRunnerOptions = {}) {
+    const env = options.env ?? process.env
+    super('gemini', env['BABEL_GEMINI_MODEL'] ?? 'gemini-2.5-flash-lite', { ...options,
+      maxTokens: options.maxTokens ?? Number(env['BABEL_GEMINI_TOKENS'] ?? 8192), temperature: options.temperature ?? 0 })
+  }
+  protected endpoint(stream: boolean): string {
+    const base = this.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta'
+    return `${base.replace(/\/$/, '')}/models/${encodeURIComponent(this.model)}${stream ? ':streamGenerateContent?alt=sse' : ':generateContent'}`
+  }
+  protected headers(): Record<string, string> { return { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey } }
 
-// ─── Configuration ─────────────────────────────────────────────────────────
-
-const GEMINI_MODEL = process.env['BABEL_GEMINI_MODEL'] ?? 'gemini-2.5-flash-lite';
-const _rawGeminiTokens = Number(process.env['BABEL_GEMINI_TOKENS'] ?? '8192');
-const MAX_TOKENS =
-  Number.isFinite(_rawGeminiTokens) && _rawGeminiTokens > 0 ? _rawGeminiTokens : 8192;
-const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
-
-// ─── Runner implementation ──────────────────────────────────────────────────
-
-export class GeminiApiRunner implements LlmRunner {
-  private readonly apiKey: string;
-  private readonly model: string;
-  private readonly maxTokens: number;
-  private readonly temperature: number;
-
-  constructor(options: { explicitCredential?: string; env?: NodeJS.ProcessEnv; modelId?: string; maxTokens?: number; temperature?: number } = {}) {
-    this.apiKey = resolveProviderCredential('gemini', options) ?? '';
-    this.model = options.modelId ?? GEMINI_MODEL;
-    this.maxTokens = options.maxTokens ?? MAX_TOKENS;
-    this.temperature = options.temperature ?? 0;
+  buildNativeToolsWireBody(inputMessages: ProviderMessage[], tools: ToolDefinition[], systemPrompt?: string,
+    options: { stream?: boolean; toolChoice?: 'auto' | 'required' } = {}): string {
+    const messages = normalizeProviderMessages(inputMessages, '', systemPrompt)
+    const calls = new Map(messages.flatMap(message => message.tool_calls ?? []).map(call => [call.id, call]))
+    const contents: Array<{ role: string; parts: Record<string, unknown>[] }> = []
+    const systems = messages.filter(message => message.role === 'system').map(message => message.content)
+    for (const message of messages) {
+      if (message.role === 'system') continue
+      let parts: Record<string, unknown>[]
+      if (message.role === 'tool') {
+        const call = message.tool_call_id ? calls.get(message.tool_call_id) : undefined
+        if (!call) throw new Error('[gemini] Tool result has no matching function call.')
+        parts = [{ functionResponse: { id: call.id, name: call.function.name, response: { result: message.content } } }]
+      } else if (message.tool_calls?.length) {
+        const metadata = message.tool_calls.find(call => call.providerMetadata?.provider === 'gemini')?.providerMetadata
+        parts = metadata ? metadata.parts : message.tool_calls.map(call => ({ functionCall: { id: call.id, name: call.function.name, args: nativeRecord(JSON.parse(call.function.arguments)) } }))
+      } else parts = [{ text: message.content }]
+      const role = message.role === 'assistant' ? 'model' : 'user'
+      const last = contents.at(-1)
+      if (last?.role === role) last.parts.push(...parts)
+      else contents.push({ role, parts })
+    }
+    return JSON.stringify({ contents, ...(systems.length ? { systemInstruction: { parts: [{ text: systems.join('\n\n') }] } } : {}),
+      generationConfig: { maxOutputTokens: this.maxTokens, ...(this.temperature !== undefined ? { temperature: this.temperature } : {}) },
+      ...(tools.length ? { tools: [{ functionDeclarations: tools.map(tool => ({ name: tool.function.name, description: tool.function.description, parameters: tool.function.parameters })) }], toolConfig: { functionCallingConfig: { mode: options.toolChoice === 'required' ? 'ANY' : 'AUTO' } } } : {}) })
   }
 
-  async execute<T>(
-    prompt: string,
-    schema: ZodType<T, unknown>,
-    callbacks?: RunnerCallbacks,
-  ): Promise<T> {
-    const url = `${API_BASE}/${this.model}:generateContent`;
+  protected bufferedFrames(frame: Record<string, unknown>): Record<string, unknown>[] {
+    const candidates = Array.isArray(frame['candidates']) ? frame['candidates'].map(value => {
+      const candidate = nativeRecord(value)
+      return { ...candidate, finishReason: candidate['finishReason'] ?? 'STOP' }
+    }) : []
+    return [{ ...frame, candidates }]
+  }
 
-    let res: Response;
-    let rawJsonText = '';
-    try {
-      res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': this.apiKey,
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: this.temperature,
-            maxOutputTokens: this.maxTokens,
-          },
-          systemInstruction: {
-            parts: [
-              {
-                text:
-                  'You are executing a Babel pipeline agent. ' +
-                  'Follow all instructions in the user message exactly. ' +
-                  'Your response MUST be a single valid JSON object only — ' +
-                  'no markdown, no explanation, no code fences. ' +
-                  'Output only raw JSON.',
-              },
-            ],
-          },
-        }),
-      });
-    } catch (err) {
-      throw new Error(
-        `[geminiApi] fetch failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+  protected consume(frame: Record<string, unknown>, state: NativeStreamState): ToolStreamEvent[] {
+    if (frame['error']) throw new Error('[gemini] Provider stream error.')
+    if (typeof frame['modelVersion'] === 'string') state.model = frame['modelVersion']
+    const usage = frame['usageMetadata'] ? nativeRecord(frame['usageMetadata']) : null
+    if (usage) {
+      if (typeof usage['promptTokenCount'] === 'number') state.inputTokens = usage['promptTokenCount']
+      if (typeof usage['candidatesTokenCount'] === 'number') state.outputTokens = usage['candidatesTokenCount'] + (typeof usage['thoughtsTokenCount'] === 'number' ? usage['thoughtsTokenCount'] : 0)
     }
-
-    if (res.status === 429) {
-      throw new Error(`rate limit: geminiApi quota exceeded (HTTP 429)`);
+    const events: ToolStreamEvent[] = []
+    const candidates = frame['candidates']
+    if (!Array.isArray(candidates)) return events
+    const candidate = candidates[0] ? nativeRecord(candidates[0]) : {}
+    const content = candidate['content'] ? nativeRecord(candidate['content']) : {}
+    if (Array.isArray(content['parts'])) for (const rawPart of content['parts']) {
+      const part = nativeRecord(rawPart)
+      state.outputMaterial += JSON.stringify(part)
+      state.parts.push(part)
+      if (typeof part['text'] === 'string') events.push({ type: part['thought'] === true ? 'thought_delta' : 'text_delta', text: part['text'] })
+      if (part['functionCall']) {
+        const call = nativeRecord(part['functionCall'])
+        if (typeof call['name'] !== 'string') throw new Error('[gemini] Function name missing.')
+        const id = typeof call['id'] === 'string' ? call['id'] : `gemini_${randomUUID()}`
+        // Normalize omitted IDs in the retained parts as well as the canonical call.
+        part['functionCall'] = { ...call, id }
+        const args = nativeRecord(call['args'] ?? {})
+        state.calls.set(state.calls.size, { id, name: call['name'], arguments: JSON.stringify(args), providerMetadata: { provider: 'gemini', parts: state.parts } })
+      }
     }
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`[geminiApi] HTTP ${String(res.status)}: ${body.slice(0, 200)}`);
+    if (typeof candidate['finishReason'] === 'string') {
+      if (!['STOP', 'MAX_TOKENS'].includes(candidate['finishReason'])) throw new Error('[gemini] Response blocked or stopped before normal completion.')
+      state.finishReason = candidate['finishReason'] === 'MAX_TOKENS' ? 'length' : state.calls.size ? 'tool_calls' : 'stop'
+      state.complete = true
     }
-    parseRateLimitHeaders(res.headers, 'gemini');
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let json: any;
-    try {
-      rawJsonText = await res.text();
-      json = JSON.parse(rawJsonText);
-    } catch (err) {
-      throw buildStructuredOutputError({
-        failure_kind: 'failed_to_parse_api_json',
-        provider: 'gemini',
-        model: this.model,
-        message: `[geminiApi] Failed to parse API response as JSON: ${err instanceof Error ? err.message : String(err)}`,
-        raw_output: rawJsonText,
-        cause: err instanceof Error ? err : undefined,
-      });
-    }
-
-    const text: string = json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-    if (!text.trim()) {
-      throw buildStructuredOutputError({
-        failure_kind: 'empty_response',
-        provider: 'gemini',
-        model: this.model,
-        message: '[geminiApi] Gemini API returned an empty response.',
-        raw_output: rawJsonText,
-      });
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = extractJson(text);
-    } catch (err) {
-      throw buildStructuredOutputError({
-        failure_kind: 'invalid_json',
-        provider: 'gemini',
-        model: this.model,
-        message: `[geminiApi] invalid json: ${err instanceof Error ? err.message : String(err)}`,
-        raw_output: text,
-        cause: err instanceof Error ? err : undefined,
-      });
-    }
-
-    const result = schema.safeParse(parsed);
-    if (!result.success) {
-      throw buildStructuredOutputError({
-        failure_kind: 'zod_validation_failed',
-        provider: 'gemini',
-        model: this.model,
-        message: `[geminiApi] Zod validation failed:\n${result.error.toString()}`,
-        raw_output: text,
-        parsed_json: parsed,
-        zod_issues: result.error,
-      });
-    }
-
-    return result.data;
+    return events
   }
 }

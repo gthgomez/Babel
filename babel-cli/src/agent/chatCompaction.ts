@@ -34,8 +34,8 @@ import { prepareProviderRequest } from '../runners/preparedProviderRequest.js';
 import { CampaignBudgetDeniedError, CampaignRouteUnsupportedError } from '../runners/campaignDispatchGate.js';
 import { applyCampaignOpenRouterWireBody } from '../eval/campaign-openrouter-wire.js';
 import { buildInvocationMetadata } from '../runners/providerResponseMetadata.js';
-import type { RunnerCallbacks } from '../runners/base.js';
-import type { ProviderId } from '../runners/providerRegistry.js';
+import type { RunnerCallbacks, ChatLlmRunner } from '../runners/base.js';
+import { isProviderId, type ProviderId } from '../runners/providerRegistry.js';
 import type { CompactionRecoveryPressure } from './compactionRequestPressure.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -352,7 +352,7 @@ export class HeuristicTruncationStrategy implements CompactionStrategy {
 /**
  * Provider configuration for LLM-based compaction.
  */
-export interface LlmCompactionProvider {
+export interface HttpCompactionProvider {
   /** Base URL for the chat completions API */
   baseUrl: string;
   /** API key */
@@ -360,6 +360,8 @@ export interface LlmCompactionProvider {
   /** Default model ID if none is specified in options */
   defaultModel: string;
 }
+
+export type LlmCompactionProvider = HttpCompactionProvider | { runner: ChatLlmRunner; defaultModel: string };
 
 /**
  * Result from calling the compaction LLM.
@@ -606,6 +608,21 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     options: CompactionOptions,
   ): Promise<CompactionApiResult> {
     const injected = options.summarizationProvider;
+    const prompt = buildCompactionPrompt(toCompact, targetTokens);
+    if (injected && 'runner' in injected) {
+      let inferenceId = '';
+      const summary = await injected.runner.executeRaw(prompt, { ...options.callbacks,
+        onInvocationStarted: event => { inferenceId = event.inference_id; options.callbacks?.onInvocationStarted?.(event) },
+      }, 'You are a precise conversation summarizer. Output only the structured summary with no preamble.', options.signal);
+      const metadata = injected.runner.getLastInvocationMetadata();
+      if (inferenceId) options.onUsageRecorded?.({ inferenceId, modelId: metadata?.provider_model_id ?? injected.defaultModel,
+        inputTokens: metadata?.prompt_tokens ?? null, outputTokens: metadata?.completion_tokens ?? null,
+        ...(metadata?.provider && isProviderId(metadata.provider) ? { provider: metadata.provider } : {}),
+        ...(metadata?.provider_reported_total_charge_usd != null ? { reportedCostUsd: metadata.provider_reported_total_charge_usd } : {}),
+      });
+      if (!summary.trim()) throw new Error('Compaction API returned empty summary');
+      return { summary, inputTokens: metadata?.prompt_tokens ?? 0, outputTokens: metadata?.completion_tokens ?? 0, observedModelId: metadata?.observed_model_id ?? null };
+    }
     const target = injected
       ? {
           apiKey: injected.apiKey,
@@ -621,7 +638,6 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     const isAnthropic = baseUrl.includes('anthropic.com');
     const signal = options.signal;
 
-    const prompt = buildCompactionPrompt(toCompact, targetTokens);
 
     if (isAnthropic) {
       return this.callAnthropicApi(prompt, model, apiKey, targetTokens, signal, options.callbacks, options.onUsageRecorded);
@@ -1157,7 +1173,7 @@ export function resolveCompactionSummarizationProvider(input: {
   pinSelection?: boolean;
   chatProvider?: string | null;
   compactionModel: string;
-}): LlmCompactionProvider | null {
+}): HttpCompactionProvider | null {
   const explicitKey = process.env['BABEL_COMPACTION_API_KEY']?.trim();
   const explicitBase = process.env['BABEL_COMPACTION_API_BASE']?.trim();
   // Bootstrap may reload auxiliary overrides from a private profile after the

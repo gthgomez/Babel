@@ -24,6 +24,7 @@ describe('provider credential hub', () => {
         'gemini',
         'groq',
         'ollama',
+        'openai-compatible',
       ],
     )
     assert.equal(getProviderSpec('opencode').credentialEnvVar, 'OPENCODE_API_KEY')
@@ -75,7 +76,7 @@ describe('provider credential hub', () => {
 
   it('declares operation capabilities independently of credentials', () => {
     assert.equal(getProviderSpec('deepseek').operations.includes('native_tool_stream'), true)
-    assert.equal(getProviderSpec('openai').operations.includes('native_tool_stream'), false)
+    assert.equal(getProviderSpec('openai').operations.includes('native_tool_stream'), true)
   })
 
   it('keeps benchmark provider identities separate from production ProviderId', () => {

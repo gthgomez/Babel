@@ -45,7 +45,7 @@ test('mapChatEventToTurnStreamEvent normalizes answer chunks', () => {
 test('beginProtocolTurn issues turn.submit for engine thread id', async () => {
   const fixture = withTempRunsDir();
   try {
-    const engine = new ChatEngine({ task: 'protocol turn', projectRoot: fixture.root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'protocol turn', projectRoot: fixture.root });
     const threadId = 'chat-transport-turn';
     engine.assignRunId(threadId);
 
@@ -63,7 +63,7 @@ test('protocol turn emits turn.event and cell.committed notifications', async ()
   const notifications: ProtocolNotification[] = [];
   setProtocolNotificationSink((notification) => notifications.push(notification));
   try {
-    const engine = new ChatEngine({ task: 'protocol notify', projectRoot: fixture.root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'protocol notify', projectRoot: fixture.root });
     const threadId = 'chat-transport-notify';
     engine.assignRunId(threadId);
 

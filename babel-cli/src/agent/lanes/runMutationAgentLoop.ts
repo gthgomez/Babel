@@ -11,6 +11,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { assertChildBudgetSupported } from '../../config/laneBudget.js';
 import { readFileSync, realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
@@ -407,6 +408,7 @@ export function buildMutationAgentTurnPrompt(input: {
 export async function runMutationAgentLoop(
   input: MutationAgentLoopInput,
 ): Promise<MutationAgentLoopResult> {
+  if (!input.useDeterministicMock) assertChildBudgetSupported('Standalone mutation loop', input.projectRoot, input.inheritedAllowance);
   const executor = input.executor ?? defaultToolExecutor;
   const maxRounds = input.maxRounds ?? DEFAULT_MUTATION_LOOP_MAX_ROUNDS;
   const projectRoot = input.projectRoot;

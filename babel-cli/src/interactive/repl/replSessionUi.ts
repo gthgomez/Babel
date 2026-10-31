@@ -14,18 +14,21 @@ import type { ReplContext } from '../context.js';
 export function printIdleHeader(ctx: ReplContext): void {
   const header = renderOperatorHeader({
     ...ctx.state,
+    mode: describeVisibleMode(ctx.state.mode),
     turnCount: ctx.turnCounter,
     resolvedModelId: ctx.state.resolvedModelId || ctx.state.model,
     // Never display a model the policy didn't resolve — fall back to the
     // resolved default key, then the honest 'auto' label.
-    model: ctx.state.model || resolveStatusBarModelLabel(undefined),
+    model: resolveStatusBarModelLabel(ctx.state.model),
+    exactModelLabel: ctx.state.model?.startsWith('connection/') === true,
   } as Record<string, unknown>);
   const runtimePlan = readRuntimeMode() === 'plan';
   const sessionPlan = ctx.state.mode === 'plan';
   const planWarning = runtimePlan || sessionPlan ? `\n${renderPlanModeWarning()}\n` : '';
+  const readiness = ctx.state.readinessState ? muted(`  Connection: ${ctx.state.readinessState.replaceAll('_', ' ')}. /provider status for details.\n`) : '';
   const hint = muted('  › type a task, or /help for commands\n');
   // Unified write path — avoids interleaving with SessionPicker / PromptInput frames
-  OutputBuffer.getInstance().write(header + planWarning + hint);
+  OutputBuffer.getInstance().write(header + planWarning + readiness + hint);
 }
 
 export function renderTurnStatusBar(ctx: ReplContext): void {
@@ -46,7 +49,7 @@ export function renderTurnStatusBar(ctx: ReplContext): void {
   }
 
   const barState: Parameters<typeof renderStatusBar>[0] = {
-    model: humanizeModelId(resolveStatusBarModelLabel(ctx.state.model)),
+    model: ctx.state.model?.startsWith('connection/') ? resolveStatusBarModelLabel(ctx.state.model) : humanizeModelId(resolveStatusBarModelLabel(ctx.state.model)),
     ...(ctx.state.resolvedModelId !== undefined ? { modelId: ctx.state.resolvedModelId } : {}),
     mode: describeVisibleMode(ctx.state.mode).toLowerCase(),
     project: ctx.state.project ?? 'global',
@@ -60,7 +63,7 @@ export function renderTurnStatusBar(ctx: ReplContext): void {
     hasUnknownCost: (ctx.state.costTotals.unknownChargeCount ?? 0) > 0 || ctx.state.costTotals.completeCostUSD === null,
     unknownChargeCount: ctx.state.costTotals.unknownChargeCount,
     turnCount: ctx.turnCounter,
-    status: ctx.state.lastRunUserStatus ?? 'ready',
+    status: ctx.turnCounter === 0 && ctx.state.readinessState ? ctx.state.readinessState.replaceAll('_', ' ') : ctx.state.lastRunUserStatus ?? 'ready',
     gitBranch,
     gitDirty,
   };

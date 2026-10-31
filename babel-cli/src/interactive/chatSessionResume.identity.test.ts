@@ -62,6 +62,7 @@ function makeResumeCtx(target: AgentTargetContext): ReplContext {
   });
   screenManager.attachHistoryCellViewport(viewport);
   const state: SessionState = {
+    model: 'deepseek-v4-flash-openrouter',
     mode: 'chat',
     router: 'v9',
     costTotals: { totalCostUSD: 0, totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0 },
@@ -193,7 +194,7 @@ test('D04 resume seam identity', { concurrency: false }, async (t) => {
       const sessionDir = writeTranscript(fixture.root, sessionId, 'events identity match');
       // A real resumed session has live-session authority on disk; the minimal
       // engine construction persists it, mirroring the integration fixture.
-      new ChatEngine({ task: 'events identity match', projectRoot: targetRoot, runId: sessionId });
+      new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'events identity match', projectRoot: targetRoot, runId: sessionId });
       const log = createSessionEventLog(sessionId);
       recordUserSubmitted(log, { turn_id: 'turn-1', task: 't', projectRoot: targetRoot });
       flushSessionEventLog(sessionDir, log);

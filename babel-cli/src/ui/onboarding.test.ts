@@ -7,46 +7,40 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, writeFileSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import { isFirstRun, showOnboarding } from './onboarding.js';
 import { stripAnsi } from './theme.js';
+import { updateUserSettings } from '../config/userSettings.js';
 
-// Same path used by onboarding.ts and ../services/history.ts
-const HISTORY_FILE = join(process.cwd(), '.babel_history');
+function withProfile(run: (root: string) => void): void {
+  const root = mkdtempSync(join(tmpdir(), 'babel-onboarding-'));
+  const previous = process.env['BABEL_STATE_DIR'];
+  process.env['BABEL_STATE_DIR'] = root;
+  try { run(root); } finally {
+    if (previous === undefined) delete process.env['BABEL_STATE_DIR'];
+    else process.env['BABEL_STATE_DIR'] = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 // ─── isFirstRun ──────────────────────────────────────────────────────────────
 
-test('isFirstRun returns true when no history file exists', () => {
-  // Remove the file if it exists
-  const existed = existsSync(HISTORY_FILE);
-  if (existed) {
-    unlinkSync(HISTORY_FILE);
-  }
+test('isFirstRun returns true for a fresh private profile', () => withProfile(() => {
+  assert.equal(isFirstRun(), true);
+}));
 
-  try {
-    const result = isFirstRun();
-    assert.equal(result, true);
-  } finally {
-    // Restore if we removed it
-    if (existed) {
-      writeFileSync(HISTORY_FILE, '[]', 'utf-8');
-    }
-  }
-});
+test('command history does not suppress incomplete provider setup', () => withProfile(root => {
+  writeFileSync(join(root, '.babel_history'), '["test command"]', 'utf-8');
+  assert.equal(isFirstRun(), true);
+}));
 
-test('isFirstRun returns false when history file exists', () => {
-  // Ensure the file exists
-  writeFileSync(HISTORY_FILE, '["test command"]', 'utf-8');
-
-  try {
-    const result = isFirstRun();
-    assert.equal(result, false);
-  } finally {
-    unlinkSync(HISTORY_FILE);
-  }
-});
+test('completed user setup is independent of command history', () => withProfile(() => {
+  updateUserSettings({ setup: { completed: true } });
+  assert.equal(isFirstRun(), false);
+}));
 
 // ─── showOnboarding ──────────────────────────────────────────────────────────
 
@@ -98,5 +92,24 @@ test('showOnboarding output includes rule separator', () => {
     assert.ok(output.includes('─'), 'Output should include a separator rule');
   } finally {
     process.stdout.write = origWrite;
+  }
+});
+
+test('narrow onboarding uses a compact brand and explicit model command', () => {
+  const previousColumns = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
+  const previousWrite = process.stdout.write;
+  const chunks: string[] = [];
+  Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
+  process.stdout.write = ((chunk: string) => { chunks.push(String(chunk)); return true; }) as typeof process.stdout.write;
+  try {
+    showOnboarding();
+    const output = stripAnsi(chunks.join(''));
+    assert.match(output, /BABEL/);
+    assert.doesNotMatch(output, /██/);
+    assert.match(output, /\/model use <id>/);
+  } finally {
+    process.stdout.write = previousWrite;
+    if (previousColumns) Object.defineProperty(process.stdout, 'columns', previousColumns);
+    else Reflect.deleteProperty(process.stdout, 'columns');
   }
 });

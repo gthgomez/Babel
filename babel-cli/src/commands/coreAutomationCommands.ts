@@ -11,6 +11,7 @@ import { evaluateCompletionVerification, type CompletionVerificationGate } from 
 import { diagnoseRun, formatHaltDiagnosisHuman, type HaltDiagnosis } from "../services/haltDiagnosis.js";
 import { formatEscalationRecommendationHuman, recommendModelEscalation } from "../services/modelEscalationRules.js";
 import { verifyWorkspaceProject } from "../services/workspaceManager.js";
+import { resolveAgentJobModel } from '../services/agentJobs.js';
 
 
 function parseApprovalStatus(
@@ -124,6 +125,7 @@ async function runAgentJobNow(jobId: string): Promise<AgentJob> {
     });
   }
 
+  const model = resolveAgentJobModel(existing);
   const running = updateAgentJob(existing.id, {
     status: "running",
     error: null,
@@ -134,7 +136,7 @@ async function runAgentJobNow(jobId: string): Promise<AgentJob> {
     const result = await withJobEnv(running, () =>
       runBabelPipeline(running.task, {
         mode: running.mode,
-        ...(running.model ? { modelOverride: running.model as never } : {}),
+        ...(model ? { modelOverride: model } : {}),
         ...(running.model_tier ? { modelTier: running.model_tier } : {}),
         ...(running.execution_profile
           ? { executionProfile: running.execution_profile as never }

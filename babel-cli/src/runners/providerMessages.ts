@@ -33,10 +33,12 @@ export function accountProviderRequest(
   let input_message_count: number | null = null;
   let estimated_input_tokens: number | null = null;
   try {
-    const body = JSON.parse(requestBody) as { messages?: unknown; tools?: unknown };
-    const messages = Array.isArray(body.messages) ? body.messages : [];
+    const body = JSON.parse(requestBody) as { messages?: unknown; contents?: unknown; system?: unknown; systemInstruction?: unknown; tools?: unknown };
+    const messages = Array.isArray(body.contents) ? body.contents : Array.isArray(body.messages) ? body.messages : [];
     input_message_count = messages.length;
-    const inputPayload = JSON.stringify({ messages, tools: body.tools ?? [] });
+    const inputPayload = JSON.stringify({ messages, tools: body.tools ?? [],
+      ...(body.system !== undefined ? { system: body.system } : {}),
+      ...(body.systemInstruction !== undefined ? { systemInstruction: body.systemInstruction } : {}) });
     estimated_input_tokens = Math.ceil(Buffer.byteLength(inputPayload, 'utf8') / 4) + messages.length * 4;
   } catch {
     // The provider transport owns request validation; accounting stays explicit UNKNOWN.
@@ -89,7 +91,7 @@ export interface ProviderProtocolIssue {
  *   system context (notably a committed compaction capsule)
  * - Preserves assistant tool_calls and tool tool_call_id
  */
-export function mapProviderMessagesToWire(
+export function normalizeProviderMessages(
   messages: ProviderMessage[],
   defaultSystemPrompt: string,
   systemPromptOverride?: string,
@@ -157,6 +159,11 @@ export function mapProviderMessagesToWire(
   }
 
   return result;
+}
+
+/** Compatibility entry point for compatible transports using neutral provenance normalization. */
+export function mapProviderMessagesToWire(messages: ProviderMessage[], defaultSystemPrompt: string, systemPromptOverride?: string): WireProviderMessage[] {
+  return normalizeProviderMessages(messages, defaultSystemPrompt, systemPromptOverride);
 }
 
 /** Minimal read-only shape the protocol validator needs (wire or neutral). */

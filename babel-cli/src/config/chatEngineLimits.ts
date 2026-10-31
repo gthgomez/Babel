@@ -8,6 +8,7 @@ import {
   resolveChatTaskClass,
   type ChatTaskClass,
 } from './chatTaskClass.js';
+import { resolveEffectiveSettings } from './userSettings.js';
 
 /** JSON-safe wall evidence; only the runtime arithmetic uses Infinity. */
 export type ChatWallAllowance = { kind: 'finite'; ms: number } | { kind: 'unlimited' };
@@ -552,7 +553,7 @@ function parseRawFloat(
 export function resolveChatEngineLimits(
   overrides: Partial<ChatEngineLimits> = {},
   model?: string,
-  options?: { taskClass?: ChatTaskClass; taskText?: string },
+  options?: { taskClass?: ChatTaskClass; taskText?: string; projectRoot?: string },
 ): ChatEngineLimits {
   const taskClass =
     options?.taskClass ??
@@ -665,13 +666,15 @@ export function resolveChatEngineLimits(
   const requestedOverrideMaxCostUsd = parseExplicitCostOverrideUsd(
     overrides.maxCostUsd,
   );
+  const savedBudget = resolveEffectiveSettings({ projectRoot: options?.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd() }).budgetUsd.value;
   const rawEnvCost = process.env['BABEL_CHAT_MAX_COST'];
   const explicitCostCeiling =
     requestedOverrideMaxCostUsd !== undefined ||
+    savedBudget !== null ||
     (rawEnvCost !== undefined && rawEnvCost.trim() !== '');
   const requestedMaxCostUsd =
     requestedOverrideMaxCostUsd ??
-    parseEnvCostUsd(rawEnvCost, baseDefaults.maxCostUsd);
+    parseEnvCostUsd(rawEnvCost, savedBudget === 'unlimited' ? Infinity : savedBudget ?? baseDefaults.maxCostUsd);
 
   const resolvedMaxCostUsd = requestedMaxCostUsd;
 

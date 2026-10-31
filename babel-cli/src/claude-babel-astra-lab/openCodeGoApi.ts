@@ -2,7 +2,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ZodType } from 'zod';
-import { DeepInfraApiRunner } from '../runners/deepInfraApi.js';
+import { OpenAiCompatibleRunner } from '../runners/protocol/openai-chat-completions.js';
 import type { RunnerCallbacks, RunnerInvocationMetadata } from '../runners/base.js';
 import { isOpenCodeGoModel, type OpenCodeGoModel } from './models.js';
 import { resolveOpenCodeGoCredential, type OpenCodeGoCredentialSource } from './credentialResolver.js';
@@ -43,7 +43,7 @@ export interface OpenCodeGoRunnerOptions {
   requestTimeoutMs?: number;
 }
 
-export class OpenCodeGoApiRunner extends DeepInfraApiRunner {
+export class OpenCodeGoApiRunner extends OpenAiCompatibleRunner {
   private readonly benchmarkRunId: string; private readonly pinnedModel: OpenCodeGoModel; private readonly requestTimeoutMs: number | null; private currentSessionId: string | null = null;
   protected override get apiUrl(): string { return `${resolveBaseUrl()}/chat/completions`; }
   constructor(model: string, sampling: { maxTokens?: number; temperature?: number } = {}, options: OpenCodeGoRunnerOptions = {}) {

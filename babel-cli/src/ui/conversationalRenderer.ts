@@ -1454,7 +1454,7 @@ export class ConversationalRenderer extends BaseRenderer {
   }
 
   /** Error — clear thinking line, unregister tick, show error, stop. */
-  fail(error?: unknown): void {
+  fail(error?: unknown, options: { render?: boolean } = {}): void {
     this._flushPendingToolExecutions();
     if (this.outputBroken) return;
     this.finalizeAnswerStream(false);
@@ -1489,9 +1489,9 @@ export class ConversationalRenderer extends BaseRenderer {
     // Render a styled error box with context-sensitive details.
     const width = Math.min(getEffectiveTerminalWidth(), 80);
     const lines = renderErrorBox(message, error, width);
-    this._writeCommitted(`\n${lines.join('\n')}\n`);
-    for (const line of lines) {
-      this._pushLinesToScrollback(line);
+    if (options.render !== false) {
+      this._writeCommitted(`\n${lines.join('\n')}\n`);
+      for (const line of lines) this._pushLinesToScrollback(line);
     }
     this.stop();
   }

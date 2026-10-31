@@ -48,7 +48,8 @@ import { projectTurnViewState, renderProjectedReviewCard } from '../projection/t
 import { rememberReviewDiff } from '../../ui/diffReview.js';
 import { isOperatorAbortError } from '../../agent/operatorAbort.js';
 import { isSessionConsistencyFailureMessage } from '../../agent/sessionEventDiagnostics.js';
-import { projectChatTerminal } from '../../agent/chatFailureClassification.js';
+import { projectChatTerminal, classifyFailureText } from '../../agent/chatFailureClassification.js';
+import { terminalReasonFromFailureText } from '../../agent/chatTerminalReason.js';
 
 /**
  * Extract changed file paths from a ChatResult's tool-call log.
@@ -159,6 +160,7 @@ export async function executeChatTask(
     const limits = resolveChatEngineLimits({}, ctx.state.model, {
       taskClass: activeProfile,
       taskText: task,
+      projectRoot: target.targetRoot,
     });
     // S01/#211: share the one resolved contract (activeProfile above was
     // resolved with autoClassify:true); TaskShape operation gates the plan.
@@ -309,6 +311,7 @@ export async function executeChatTask(
         // D03: the TUI card is rendered from this synthetic event, so the
         // structured terminal reason must be carried onto it (otherwise the
         // card falls back to the legacy "Review the blocked capability").
+        ...(result.reason_detail !== undefined ? { reason_detail: result.reason_detail } : {}),
         ...(result.reason_code !== undefined ? { reason_code: result.reason_code } : {}),
         ...(result.cause_class !== undefined ? { cause_class: result.cause_class } : {}),
       },
@@ -365,7 +368,7 @@ export async function executeChatTask(
       } else if (result.reason_code === 'context_preparation_failed') {
         convRenderer.stop();
       } else {
-        convRenderer.fail(new Error(result.answer || review.title));
+        convRenderer.fail(new Error(result.answer || review.title), { render: false });
       }
       const threadId = ctx.chatEngine?.getEngineRunId();
       if (threadId && review.kind === 'VERIFIED_COMPLETE') {
@@ -563,11 +566,12 @@ export async function executeChatTask(
       return;
     }
     const message = err?.message ?? String(err);
-    console.error(`\n  ${error('✖')} ${message}\n`);
-    ctx.state.lastRunUserStatus = 'failed';
-    if (convRenderer) {
-      convRenderer.fail(err);
-    }
+    const reason = terminalReasonFromFailureText(message);
+    const outcome = classifyFailureText(message);
+    ctx.state.lastRunUserStatus = outcome === 'BLOCKED_EXTERNAL' ? 'blocked' : 'failed';
+    convRenderer?.fail(err, { render: false });
+    const failure = presentChatReview({ status: ctx.state.lastRunUserStatus, ...(outcome ? { outcome } : {}), summary: message, ...(reason ? { reasonCode: reason.code, reasonDetail: reason.detail, causeClass: reason.cause_class } : {}) });
+    console.log(`\n${failure.body}\n`);
     // Record the failure in turn history so the session transcript is continuous
     updateConversationMemory(
       ctx,
@@ -596,20 +600,7 @@ export async function executeChatTask(
       verification: 'failed',
       next: null,
     }, 'failed');
-    if (process.stdout.isTTY && !process.env['CI']) {
-      try {
-        const showAlert = () =>
-          alert({
-            title: 'Chat Failed',
-            message: err.message ?? String(err),
-          });
-        if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('error-alert', showAlert);
-        else await showAlert();
-        (err as any)[Symbol.for('babel.error.alerted')] = true;
-      } catch (alertErr) {
-        console.error('[chat] alert display failed:', (alertErr as Error)?.message ?? alertErr);
-      }
-    }
+
   } finally {
     ctx.isRunning = false;
     notifyRunEnded();

@@ -7,20 +7,15 @@
  * @module onboarding
  */
 
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { OutputBuffer } from './outputBuffer.js';
 import { primary, accentBright, muted, dim, bold, success } from './theme.js';
-
-// Same history file path used by ../services/history.ts
-const HISTORY_FILE = join(process.cwd(), '.babel_history');
+import { readUserSettings } from '../config/userSettings.js';
 
 /**
- * Returns true when no persistent command history exists, indicating
- * this is likely the user's first run.
+ * Returns true until the private user profile records completed setup.
  */
 export function isFirstRun(): boolean {
-  return !existsSync(HISTORY_FILE);
+  return readUserSettings().setup?.completed !== true;
 }
 
 /**
@@ -28,12 +23,14 @@ export function isFirstRun(): boolean {
  * Keep this list short and focused on what a new user needs first.
  */
 const QUICK_COMMANDS: Array<[string, string]> = [
+  ['/setup', 'Connect your provider, model and budget'],
+  ['/provider status', 'Show connection and credential readiness'],
   ['/help', 'Show all commands and groups'],
-  ['/model', 'Switch AI model'],
+  ['/model use <id>', 'Choose an exact model on this connection'],
   ['/theme', 'Pick a color theme'],
-  ['/mode', 'Chat, plan, or deep mode'],
+  ['/mode work|plan', 'Work or produce a read-only plan'],
   ['/status', 'Session stats and costs'],
-  ['/clear', 'Start a fresh conversation'],
+  ['/clear', 'Clear the terminal display'],
   ['/scrollback', 'Browse conversation history'],
   ['Ctrl+P', 'Command palette (search all commands)'],
   ['@filename', 'Search files with fuzzy matching'],
@@ -50,7 +47,7 @@ const QUICK_COMMANDS: Array<[string, string]> = [
 export function showOnboarding(): void {
   const width = Math.min(process.stdout.columns ?? 80, 80);
 
-  const logo = [
+  const logo = width < 48 ? accentBright('  BABEL') : [
     accentBright('  ██████╗  █████╗ ██████╗ ███████╗██╗     '),
     accentBright('  ██╔══██╗██╔══██╗██╔══██╗██╔════╝██║     '),
     accentBright('  ██████╔╝███████║██████╔╝█████╗  ██║     '),
@@ -60,7 +57,7 @@ export function showOnboarding(): void {
   ].join('\n');
 
   // Quick-reference command table
-  const cmdWidth = 14;
+  const cmdWidth = Math.max(...QUICK_COMMANDS.map(([cmd]) => cmd.length));
   const cmdLines = QUICK_COMMANDS.map(
     ([cmd, desc]) =>
       `  ${bold(cmd.padEnd(cmdWidth))}  ${muted(desc)}`,

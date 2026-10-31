@@ -209,13 +209,13 @@ test('conformance: live providers are authority-certified', () => {
     assert.ok(specs[id], `provider ${id} registered`);
   }
   // The live lanes today (per execute.ts liveOnly filtering and modelPolicy):
-  // Go additionally exercises real Chat native-tool denial/result delivery in
-  // chatOpenCodeGoProvider.test.ts; transport identity/budget controls remain separate.
-  for (const live of ['deepseek', 'deepinfra', 'ollama', 'openrouter', 'opencode-go', 'command-code'] as const) {
+  // Native direct providers additionally exercise actual Chat denial/result delivery
+  // in directProviderAuthority.test.ts; Go retains its separate native budget proof.
+  for (const live of ['deepseek', 'deepinfra', 'ollama', 'openrouter', 'opencode-go', 'command-code', 'openai', 'anthropic', 'gemini', 'openai-compatible'] as const) {
     assert.equal(specs[live]!.authorityConformance, 'certified', `${live} must be certified`);
   }
   // Dormant providers must NOT be certified until they pass this suite.
-  for (const dormant of ['openai', 'anthropic', 'gemini', 'groq', 'opencode'] as const) {
+  for (const dormant of ['groq', 'opencode'] as const) {
     assert.equal(
       specs[dormant]!.authorityConformance,
       'untested',

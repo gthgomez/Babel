@@ -124,6 +124,7 @@ export interface TurnTerminalResolvedEvent {
   finalAnswer: string;
   /** D03: structured terminal reason carried through projection. */
   reason_code?: TerminalReasonCode;
+  reason_detail?: string;
   cause_class?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
 }
 
@@ -240,6 +241,7 @@ export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): Canonical
         ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
         status: terminal.status,
         finalAnswer: ev.reason,
+        ...(ev.reason_detail !== undefined ? { reason_detail: ev.reason_detail } : {}),
         ...(ev.reason_code !== undefined ? { reason_code: ev.reason_code } : {}),
         ...(ev.cause_class !== undefined ? { cause_class: ev.cause_class } : {}),
       };
@@ -260,6 +262,7 @@ export function mapSessionEventToCanonicalTurnEvent(ev: SessionEvent): Canonical
         ...(terminal.outcome !== undefined ? { outcome: terminal.outcome } : {}),
         status: terminal.status,
         finalAnswer: '',
+        ...(ev.reason_detail !== undefined ? { reason_detail: ev.reason_detail } : {}),
         ...(ev.reason_code !== undefined ? { reason_code: ev.reason_code } : {}),
         ...(ev.cause_class !== undefined ? { cause_class: ev.cause_class } : {}),
       };

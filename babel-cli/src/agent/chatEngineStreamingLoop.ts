@@ -4,7 +4,7 @@ import type {
   TaskIntent,
 } from "./chatEngineContracts.js";
 import {
-  canonicalizeToolCallId,
+  retainNativeToolCall, attachNativeToolMetadata,
   reconcileStreamedAnswer,
   withholdNativeControllerText, isNativeControllerCompletion, NATIVE_CONTROLLER_PROTOCOL_CORRECTION,
 } from "./chatEngineStreamingProtocol.js";
@@ -459,6 +459,7 @@ export class ChatEngineStreamingLoop {
         return;
       }
 
+      const providerToolMetadata = new Map<string, import('../runners/base.js').ProviderToolCall['providerMetadata']>();
       let turnResult: ChatTurn;
       let toolsAnnouncedInStream = false;
       // Visible answer text already emitted chunk-by-chunk by this turn's
@@ -663,15 +664,10 @@ export class ChatEngineStreamingLoop {
                 const action = decodeNativeCall(event);
                 if (!action) break;
                 nativeActions.push(action);
-                nativeToolCallIds.push(
-                  canonicalizeToolCallId(
-                    event,
-                    turn,
-                    nativeActions.length - 1,
-                    seenToolCallIds,
-                  ),
-                );
-                const toolCallId = nativeToolCallIds.at(-1)!;
+                const toolCallId = retainNativeToolCall(event, {
+                  turn, actionIndex: nativeActions.length - 1, seen: seenToolCallIds,
+                  ids: nativeToolCallIds, metadata: providerToolMetadata,
+                });
                 toolsAnnouncedInStream = true;
                 yield {
                   type: "tool_start",
@@ -868,19 +864,14 @@ export class ChatEngineStreamingLoop {
                   yield { type: "thought", text: event.text };
                   break;
                 case "tool_use": {
-                  if (event.idWasNormalized) nativeIdentityNormalized = true;
+                    if (event.idWasNormalized) nativeIdentityNormalized = true;
                   const action = decodeNativeCall(event);
                   if (!action) break;
                   nativeActions.push(action);
-                  nativeToolCallIds.push(
-                    canonicalizeToolCallId(
-                      event,
-                      turn,
-                      nativeActions.length - 1,
-                      seenToolCallIds,
-                    ),
-                  );
-                  const toolCallId = nativeToolCallIds.at(-1)!;
+                  const toolCallId = retainNativeToolCall(event, {
+                  turn, actionIndex: nativeActions.length - 1, seen: seenToolCallIds,
+                  ids: nativeToolCallIds, metadata: providerToolMetadata,
+                });
                   toolsAnnouncedInStream = true;
                   yield {
                     type: "tool_start",
@@ -1427,7 +1418,7 @@ export class ChatEngineStreamingLoop {
             ...(turnResult.type === "tool_calls" && turnResult.thinking
               ? { thinking: turnResult.thinking }
               : {}),
-            toolCalls: projected.toolCalls,
+            toolCalls: attachNativeToolMetadata(projected.toolCalls, providerToolMetadata),
             results: projected.results,
             patchAttempted: turnSlice.some((t) =>
               isConfirmedMutation({

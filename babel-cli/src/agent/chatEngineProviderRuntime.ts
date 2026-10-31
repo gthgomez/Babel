@@ -1,8 +1,8 @@
+import { createProviderRunner, ProviderEngine } from '../runners/providerEngine.js'
+import { isProviderId } from '../runners/providerRegistry.js'
+import type { ChatLlmRunner } from '../runners/base.js'
 /** Provider selection and inference orchestration; accounting remains owner-scoped. */
-import { DeepInfraApiRunner } from '../runners/deepInfraApi.js'
-import { DeepSeekApiRunner } from '../runners/deepSeekApi.js'
 import { OllamaApiRunner } from '../runners/ollamaApi.js'
-import { OpenCodeApiRunner } from '../runners/openCodeApi.js'
 import { OpenCodeGoApiRunner, type OpenCodeGoRunnerOptions } from '../runners/openCodeGoApi.js'
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js'
 import { CommandCodeApiRunner } from '../runners/commandCodeApi.js'
@@ -47,10 +47,7 @@ import type { ChatEngineServices } from './chatEngineServices.js'
 import type { FailoverDecision } from './providerCapabilities.js'
 
 export type ChatProviderRunner =
-  | DeepInfraApiRunner
-  | DeepSeekApiRunner
-  | OllamaApiRunner
-  | OpenRouterApiRunner
+  ChatLlmRunner
 export type ChatProviderRetryContext = NonNullable<
   Parameters<typeof buildProviderRetryCallbacks>[1]
 >
@@ -61,308 +58,73 @@ export type ChatProviderUsageEffects = {
 }
 const TURN_TIMEOUT_MS = 120_000
 
-/** Resolve the configured deliberation runner while preserving provider fallback diagnostics. */
+/** Preserve explicit OpenRouter routes and the retained exact campaign contract. */
+function isExactOpenRouterRoute(policy: ResolvedModelPolicy | undefined): boolean {
+  return policy?.provider === 'openrouter' &&
+    (policy.providerModelId === LIVE_OPENROUTER_MODEL_ID || policy.resolvedBackendKey?.startsWith('openrouter/') === true)
+}
+
+/** Resolve the selected route once; configuration failures never choose another provider. */
 export function resolveChatDeliberationRunner(
   current: ChatProviderRunner | null,
   modelPolicy: ResolvedModelPolicy | undefined,
   goOptions?: OpenCodeGoRunnerOptions,
-): DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner {
-  let runner = current
-
-  if (modelPolicy?.provider === 'openrouter' && modelPolicy.resolvedBackendKey?.startsWith('openrouter/') &&
-    (!(runner instanceof OpenRouterApiRunner) || runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
-
-  if (modelPolicy?.provider === 'command-code' &&
-    (!(runner instanceof CommandCodeApiRunner) || runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
-  if (modelPolicy?.provider === 'opencode-go' && goOptions?.budget &&
-    (!(runner instanceof OpenCodeGoApiRunner) || !runner.usesBudget(goOptions.budget) ||
-      runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
-
-  if (!runner) {
-    const provider = modelPolicy?.provider
-    const modelId = modelPolicy?.providerModelId
-    if (provider === 'ollama' && modelId) {
-      try {
-        runner = new OllamaApiRunner(modelId)
-      } catch (err) {
-        throw new Error(
-          `Cannot start chat: Ollama runner failed to initialize.\n` +
-            `  ${err instanceof Error ? err.message : String(err)}\n` +
-            `  Is Ollama running? Start it with: ollama serve\n` +
-            `  Then pull a model: ollama pull gemma3:4b`,
-        )
-      }
-    } else if (provider === 'deepinfra' && modelId) {
-      try {
-        runner = new DeepInfraApiRunner(modelId)
-      } catch (err) {
-        throw new Error(
-          `Cannot start chat: DeepInfra runner failed to initialize.\n` +
-            `  ${err instanceof Error ? err.message : String(err)}\n` +
-            `  Set DEEPINFRA_API_KEY in your environment.\n` +
-            `  Use /model to see available providers.`,
-        )
-      }
-    } else if (provider === 'deepseek' && modelId) {
-      if (!isOfflineChatMode() && process.env['BABEL_DESKTOP_PROVIDER'] !== 'deepseek') {
-        throw new Error(
-          '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
-        )
-      }
-      try {
-        runner = new DeepSeekApiRunner(modelId)
-      } catch (err) {
-        if (process.env['BABEL_DESKTOP_PROVIDER']) throw err
-        if (!isOfflineChatMode() && process.env['BABEL_DESKTOP_PROVIDER'] !== 'deepseek') {
-          throw new Error(
-            'Cannot start live chat: DeepSeek runner is unavailable. ' +
-              'Set DEEPSEEK_API_KEY in your environment.',
-          )
-        }
-        // Fall back to DeepSeek Flash if v4 Pro is unavailable
-        try {
-          runner = new DeepSeekApiRunner('deepseek-v4-flash')
-        } catch (fallbackErr) {
-          throw new Error(
-            `Cannot start chat: DeepSeek runner failed to initialize.\n` +
-              `  v4 Pro: ${err instanceof Error ? err.message : String(err)}\n` +
-              `  v4 Flash: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}\n` +
-              `  Set DEEPSEEK_API_KEY in your environment.\n` +
-              `  Use /model to see available providers.`,
-          )
-        }
-      }
-    } else if (provider === 'opencode-go') {
-      if (!isChatOpenCodeGoRoute(modelPolicy)) {
-        throw new Error('[LIVE_MODEL_POLICY] Chat requires the qualified explicit OpenCode Go route.')
-      }
-      runner = new OpenCodeGoApiRunner(modelId!, {}, goOptions)
-    } else if (provider === 'opencode' && modelId) {
-      // OpenCode Zen (e.g. ox-alpha-free): explicit backend-key opt-in.
-      try {
-        runner = new OpenCodeApiRunner(modelId)
-      } catch (err) {
-        throw new Error(
-          `Cannot start chat: OpenCode runner failed to initialize.\n` +
-            `  ${err instanceof Error ? err.message : String(err)}\n` +
-            `  Set OPENCODE_API_KEY in your environment.\n` +
-            `  Use /model to see available providers.`,
-        )
-      }
-    } else if (provider === 'command-code' && modelId) {
-      runner = new CommandCodeApiRunner(modelId)
-    } else if (provider === 'openrouter' && modelId) {
-      try {
-        runner = new OpenRouterApiRunner(modelId, {}, { requireExactModelId: modelPolicy.resolvedBackendKey?.startsWith('openrouter/') === true })
-      } catch (err) {
-        throw new Error(
-          `Cannot start chat: OpenRouter runner failed to initialize.\n` +
-            `  ${err instanceof Error ? err.message : String(err)}\n` +
-            `  Set OPENROUTER_API_KEY in your environment.\n` +
-            `  Use /model to see available models.`,
-        )
-      }
-    } else if (modelId) {
-      const offline = isOfflineChatMode()
-      if (!offline) {
-        assertLiveModelId(modelId, 'live chat')
-        const routedModel = resolveOpenRouterDeepSeekModelId(modelId)
-        if (!routedModel) {
-          throw new Error(
-            '[LIVE_MODEL_POLICY] Live chat requires an OpenRouter-approved model route.',
-          )
-        }
-        runner = new OpenRouterApiRunner(routedModel)
-        return runner
-      }
-      try {
-        runner = offline
-          ? new DeepInfraApiRunner(modelId)
-          : new DeepSeekApiRunner(modelId)
-      } catch (err) {
-        throw new Error(
-          `Cannot start chat: ${offline ? 'DeepInfra' : 'DeepSeek'} runner failed to initialize.\n  ${err instanceof Error ? err.message : String(err)}\n  Set ${offline ? 'DEEPINFRA_API_KEY' : 'DEEPSEEK_API_KEY'} in your environment.\n  Use /model to see available providers.`,
-        )
-      }
-    } else {
-      // No model configured — resolve from policy default tier.
-      const fallbackId = resolveFallbackModelId()
-      try {
-        runner = isOfflineChatMode()
-          ? new DeepSeekApiRunner(fallbackId)
-          : new OpenRouterApiRunner(LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0])
-      } catch {
-        if (!isOfflineChatMode()) {
-          throw new Error(
-            'Cannot start live chat: OpenRouter DeepSeek runner is unavailable. Set OPENROUTER_API_KEY in your environment.',
-          )
-        }
-        try {
-          runner = new DeepInfraApiRunner(fallbackId)
-        } catch (err) {
-          throw new Error(
-            `Cannot start chat: no LLM runner is available.\n` +
-              `  ${err instanceof Error ? err.message : String(err)}\n` +
-              `  Set DEEPSEEK_API_KEY in your environment.\n` +
-              `  Use /model to see available providers.`,
-          )
-        }
-      }
-    }
+): ChatProviderRunner {
+  if (!modelPolicy?.providerModelId || !isProviderId(modelPolicy.provider)) {
+    if (current) return current // explicit embedding owns its injected runner
+    throw new Error('SETUP_REQUIRED: Select a provider connection and model with babel-agent setup.')
   }
-  return runner
+  const provider = modelPolicy.provider
+  const modelId = modelPolicy.providerModelId
+  if (current instanceof ProviderEngine) {
+    if (current.provider === provider && current.modelId === modelId &&
+      (!goOptions?.budget || current.usesBudget(goOptions.budget))) return current
+  } else if (current) {
+    // Trusted embedding runners remain usable; exact vendor routes must still match.
+    if (provider === 'opencode-go') {
+      if (current instanceof OpenCodeGoApiRunner && current.getPinnedModelId() === modelId &&
+        (!goOptions?.budget || current.usesBudget(goOptions.budget))) return current
+    } else if (provider === 'command-code') {
+      if (current instanceof CommandCodeApiRunner && current.getPinnedModelId() === modelId) return current
+    } else if (isExactOpenRouterRoute(modelPolicy)) {
+      if (current instanceof OpenRouterApiRunner && current.getPinnedModelId() === modelId) return current
+    } else return current
+  }
+  if (provider === 'opencode-go' && !isChatOpenCodeGoRoute(modelPolicy)) {
+    throw new Error('[LIVE_MODEL_POLICY] Chat requires the qualified explicit OpenCode Go route.')
+  }
+  return createProviderRunner({
+    provider, modelId,
+    ...(modelPolicy.authentication ? { authentication: modelPolicy.authentication } : {}),
+    ...(modelPolicy.contextWindow ? { contextWindowTokens: modelPolicy.contextWindow } : {}),
+    ...(modelPolicy.maxOutputTokens ? { sampling: { maxTokens: modelPolicy.maxOutputTokens } } : {}),
+    ...goOptions,
+    ...(modelPolicy.apiKeyEnvVar ? { apiKeyEnvVar: modelPolicy.apiKeyEnvVar } : {}),
+    ...(modelPolicy.baseUrl ? { baseUrl: modelPolicy.baseUrl } : {}),
+    requireExactModelId: isExactOpenRouterRoute(modelPolicy),
+  })
 }
 
-/** Resolve an allowed fallback without crossing exact live-provider route constraints. */
+/** An explicit fallback model stays on the selected provider and account. */
 export function resolveChatFallbackRunner(
   current: ChatProviderRunner | null,
   options: Pick<ChatEngineOptions, 'providerRunner' | 'fallbackModel'>,
   modelPolicy: ResolvedModelPolicy | undefined,
 ): ChatProviderRunner | null {
-  let runner = current
-
   if (options.providerRunner) return options.providerRunner
-  if (modelPolicy?.provider === 'command-code') return null
-  if (modelPolicy?.provider === 'opencode-go') return null
-  if (
-    !isOfflineChatMode() &&
-    modelPolicy?.provider === 'openrouter' &&
-    modelPolicy.providerModelId
-  ) {
-    if (!runner) {
-      try {
-        // Campaign invariant: an exact GLM run may retry the same model, but
-        // may not silently fail over to a different provider/model.
-        runner = new OpenRouterApiRunner(modelPolicy.providerModelId)
-      } catch {
-        return null
-      }
-    }
-    return runner
-  }
-  if (!options.fallbackModel) return null
-  if (!isOfflineChatMode()) {
-    assertLiveModelId(options.fallbackModel, 'live chat fallback')
-    const routedModel = resolveOpenRouterDeepSeekModelId(options.fallbackModel)
-    if (!routedModel) {
-      return null
-    }
-    if (!runner) {
-      try {
-        runner = new OpenRouterApiRunner(routedModel)
-      } catch {
-        return null
-      }
-    }
-    return runner
-  }
-  if (!runner) {
-    try {
-      runner = new OllamaApiRunner(options.fallbackModel)
-    } catch {
-      try {
-        runner = new DeepInfraApiRunner(options.fallbackModel)
-      } catch {
-        try {
-          runner = new DeepSeekApiRunner(options.fallbackModel)
-        } catch {
-          return null
-        }
-      }
-    }
-  }
-  return runner
+  if (!options.fallbackModel || !modelPolicy || modelPolicy.provider === 'opencode-go') return null
+  if (modelPolicy.provider === 'command-code' || isExactOpenRouterRoute(modelPolicy)) return null
+  if (current) return current
+  return resolveChatDeliberationRunner(null, { ...modelPolicy, providerModelId: options.fallbackModel })
 }
 
-/** Resolve the synthesis route independently from deliberation with the existing offline fallbacks. */
+/** Synthesis inherits the same selection and credentials as deliberation. */
 export function resolveChatSynthesisRunner(
   current: ChatProviderRunner | null,
   modelPolicy: ResolvedModelPolicy | undefined,
   goOptions?: OpenCodeGoRunnerOptions,
 ): ChatProviderRunner {
-  let runner = current
-  if (modelPolicy?.provider === 'openrouter' && modelPolicy.resolvedBackendKey?.startsWith('openrouter/') &&
-    (!(runner instanceof OpenRouterApiRunner) || runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
-  if (modelPolicy?.provider === 'command-code' &&
-    (!(runner instanceof CommandCodeApiRunner) || runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
-  if (modelPolicy?.provider === 'opencode-go' && goOptions?.budget &&
-    (!(runner instanceof OpenCodeGoApiRunner) || !runner.usesBudget(goOptions.budget) ||
-      runner.getPinnedModelId() !== modelPolicy.providerModelId)) runner = null
-  if (!runner) {
-    const provider = modelPolicy?.provider
-    const modelId = modelPolicy?.providerModelId
-    const offline = isOfflineChatMode()
-    if (provider === 'ollama' && modelId) {
-      if (!offline && process.env['BABEL_DESKTOP_PROVIDER'] !== 'ollama')
-        throw new Error(
-          '[LIVE_MODEL_POLICY] Ollama is not a valid live chat provider.',
-        )
-      try {
-        runner = new OllamaApiRunner(modelId)
-      } catch (err) {
-        if (process.env['BABEL_DESKTOP_PROVIDER']) throw err
-        runner = new DeepInfraApiRunner(resolveFallbackModelId())
-      }
-    } else if (provider === 'deepinfra' && modelId) {
-      try {
-        runner = new DeepInfraApiRunner(modelId)
-      } catch (err) {
-        if (process.env['BABEL_DESKTOP_PROVIDER']) throw err
-        runner = new DeepInfraApiRunner(resolveFallbackModelId())
-      }
-    } else if (provider === 'deepseek' && modelId) {
-      if (!offline && process.env['BABEL_DESKTOP_PROVIDER'] !== 'deepseek') {
-        throw new Error(
-          '[LIVE_MODEL_POLICY] Direct DeepSeek live calls are disabled; use the OpenRouter DeepSeek control route.',
-        )
-      }
-      try {
-        runner = new DeepSeekApiRunner(modelId)
-      } catch (err) {
-        if (process.env['BABEL_DESKTOP_PROVIDER']) throw err
-        if (!offline && process.env['BABEL_DESKTOP_PROVIDER'] !== 'deepseek')
-          throw new Error(
-            'Cannot start live chat synthesis: DeepSeek runner is unavailable. Set DEEPSEEK_API_KEY in your environment.',
-          )
-        runner = new DeepInfraApiRunner(resolveFallbackModelId())
-      }
-    } else if (provider === 'opencode-go') {
-      if (!isChatOpenCodeGoRoute(modelPolicy)) {
-        throw new Error('[LIVE_MODEL_POLICY] Chat requires the qualified explicit OpenCode Go route.')
-      }
-      runner = new OpenCodeGoApiRunner(modelId!, {}, goOptions)
-    } else if (provider === 'opencode' && modelId) {
-      runner = new OpenCodeApiRunner(modelId)
-    } else if (provider === 'command-code' && modelId) {
-      runner = new CommandCodeApiRunner(modelId)
-    } else if (provider === 'openrouter' && modelId) {
-      try {
-        runner = new OpenRouterApiRunner(modelId, {}, { requireExactModelId: modelPolicy.resolvedBackendKey?.startsWith('openrouter/') === true })
-      } catch {
-        throw new Error(
-          'Cannot start live chat synthesis: OpenRouter runner is unavailable. Set OPENROUTER_API_KEY in your environment.',
-        )
-      }
-    } else if (modelId) {
-      if (!offline) {
-        assertLiveModelId(modelId, 'live chat synthesis')
-        const routedModel = resolveOpenRouterDeepSeekModelId(modelId)
-        if (!routedModel) {
-          throw new Error(
-            '[LIVE_MODEL_POLICY] Live chat synthesis requires an OpenRouter-approved model route.',
-          )
-        }
-        runner = new OpenRouterApiRunner(routedModel)
-      } else {
-        runner = new DeepInfraApiRunner(modelId)
-      }
-    } else {
-      runner = offline
-        ? new DeepInfraApiRunner(resolveFallbackModelId())
-        : new OpenRouterApiRunner(LIVE_OPENROUTER_DEEPSEEK_MODEL_IDS[0])
-    }
-  }
-  return runner
+  return resolveChatDeliberationRunner(current, modelPolicy, goOptions)
 }
 
 /** Synthesize an answer and settle usage against the captured submission owner. */
@@ -451,7 +213,7 @@ export async function executeChatRunnerWithTimeout(
 export function shouldUseChatNativeTools(runner: ChatProviderRunner): boolean {
   // Ollama models generally don't support native OpenAI tool calling.
   // The legacy JSON path handles tool use via prompt formatting instead.
-  if (runner instanceof OllamaApiRunner) return false
+  if (runner instanceof OllamaApiRunner || (runner instanceof ProviderEngine && runner.provider === 'ollama')) return false
   return (
     process.env['BABEL_NATIVE_TOOLS'] !== 'disabled' &&
     typeof runner.executeWithToolsStream === 'function'
@@ -466,7 +228,7 @@ export function shouldUseChatTextTools(
   if (process.env['BABEL_TOOL_PROFILE'] === 'text') return true
   if (process.env['BABEL_TOOL_PROFILE'] === 'native') return false
   const runner = resolveRunner()
-  return runner instanceof OllamaApiRunner
+  return runner instanceof OllamaApiRunner || (runner instanceof ProviderEngine && runner.provider === 'ollama')
 }
 
 export interface ChatDeliberationInput {
@@ -668,7 +430,7 @@ export async function* resolveChatFallbackOrFail(
   input: ChatFallbackInput,
 ): AsyncGenerator<
   ChatEvent,
-  DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner | null,
+  ChatLlmRunner | null,
   undefined
 > {
   const { err, turn, ownerGeneration } = input
@@ -717,54 +479,20 @@ export async function* resolveChatFallbackOrFail(
     yield input.failed(`${err.message} [LIVE_MODEL_POLICY] exact Command Code route refuses provider substitution`)
     return null
   }
-  if (input.modelPolicy?.provider === 'openrouter' && input.modelPolicy.resolvedBackendKey?.startsWith('openrouter/')) {
-    yield input.failed(`${err.message} [LIVE_MODEL_POLICY] exact configured OpenRouter route refuses provider substitution`)
+  if (isExactOpenRouterRoute(input.modelPolicy)) {
+    const route = input.modelPolicy?.providerModelId === LIVE_OPENROUTER_MODEL_ID ? 'GLM' : 'configured OpenRouter'
+    yield input.failed(`${err.message} [LIVE_MODEL_POLICY] exact ${route} route refuses provider substitution`)
     return null
   }
   if (input.modelPolicy?.provider === 'opencode-go') {
     yield input.failed(`${err.message} [LIVE_MODEL_POLICY] exact Go route refuses provider substitution`)
     return null
   }
-  // Runtime Pro → Flash failover with visible reason (not verification)
-  const modelId = input.options.model ?? 'deepseek-v4-pro'
-  const decision = input.tryFailover(modelId, err)
-  const exactGlmLocked =
-    input.modelPolicy?.provider === 'openrouter' &&
-    input.modelPolicy.providerModelId === LIVE_OPENROUTER_MODEL_ID
-  if (exactGlmLocked && decision) {
-    // The exact GLM campaign is provider/model locked. A generic Pro→Flash
-    // decision must never cross that boundary into DeepSeek.
-    yield input.failed(
-      `${err.message} [LIVE_MODEL_POLICY] exact GLM route refuses provider substitution`,
-    )
-    return null
-  }
-  let fb = input.resolveFallback()
-  if (!fb && decision) {
-    const routedModel = resolveOpenRouterDeepSeekModelId(decision.toModel)
-    if (!routedModel) {
-      yield input.failed(
-        `${err.message} [LIVE_MODEL_POLICY] failover route is not OpenRouter-approved`,
-      )
-      return null
-    }
-    fb = new OpenRouterApiRunner(routedModel)
-    input.installFailover(fb, decision)
-    yield {
-      type: 'thought',
-      text: `[Failover] ${decision.reason} (not independent verification)`,
-    }
-    return fb
-  }
-  if (!fb) {
+  const fallback = input.resolveFallback()
+  if (!fallback) {
     yield input.failed(err.message)
     return null
   }
-  yield {
-    type: 'thought',
-    text: decision
-      ? `[Failover] ${decision.reason}`
-      : 'Retrying with fallback model…',
-  }
-  return fb
+  yield { type: 'thought', text: 'Using the explicitly configured fallback on the selected provider.' }
+  return fallback
 }

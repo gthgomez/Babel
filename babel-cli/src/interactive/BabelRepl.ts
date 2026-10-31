@@ -210,6 +210,8 @@ export class BabelRepl {
     const detectedProject = initialState?.project ?? detectInitialProject();
     this.state = {
       mode: initialState?.mode ?? 'chat',
+      modeExplicit: initialState?.modeExplicit ?? initialState?.mode !== undefined,
+      ...(initialState?.connectionId ? { connectionId: initialState.connectionId } : {}),
       ...(detectedProject !== undefined ? { project: detectedProject } : {}),
       router: 'v9',
       ...(initialState?.model !== undefined ? { model: initialState.model } : {}),

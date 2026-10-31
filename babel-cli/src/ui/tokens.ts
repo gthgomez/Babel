@@ -449,6 +449,8 @@ export const FALLBACK_FG: Record<string, number | undefined> = {
 };
 
 export const BADGE_TONES: Record<string, string> = {
+  SETUP: "warning",
+  "ACTION REQUIRED": "warning",
   PASS: "success",
   ACTIVE: "accentActive",
   PENDING: "textMuted",

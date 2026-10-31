@@ -1,71 +1,9 @@
 import { resolveProjectRoot } from './helpers.js';
 import { DEPRECATED_SURFACE_COMMANDS } from './deprecation.js';
 
-const KNOWN_TOP_LEVEL_COMMANDS = new Set([
-  'setup',
-  'mode',
-  'doctor',
-  'simplify',
-  'docs',
-  'skill',
-  'codex',
-  'shadow-diff',
-  'dry',
-  'permissions',
-  'approvals',
-  'jobs',
-  'escalation',
-  'diagnose',
-  'models',
-  'evidence',
-  'prove',
-  'learn',
-  'tools',
-  'session',
-  'inspect',
-  'checkpoint',
-  'interactive',
-  'app',
-  'mcp',
-  'context',
-  'events',
-  'stats',
-  'plugins',
-  'agents',
-  'schedule',
-  'ci',
-  'git',
-  'ship',
-  'bench',
-  'benchmark',
-  'files',
-  'verify',
-  'diff',
-  'repo-map',
-  'onboard-project',
-  'create',
-  'plan',
-  'deep',
-  'run',
-  'runs',
-  'resolve',
-  'continue',
-  'resume',
-  'remote',
-  'apply',
-  'smoke',
-  'test',
-  'advanced',
-  'internals',
-  'text-provider',
-  'help',
-  'undo',
-  'review',
-  'research',
-  ...DEPRECATED_SURFACE_COMMANDS,
-]);
-
 const VALUE_OPTIONS = new Set([
+  '--connection',
+  '--review',
   '-p',
   '--project',
   '--mode',
@@ -104,7 +42,6 @@ function rewriteRunArgs(argsAfterRun: string[]): string[] {
   const passthrough: string[] = [];
   const taskParts: string[] = [];
   let headlessFlag = false;
-  let modeValue: string | null = null;
 
   for (let i = 0; i < argsAfterRun.length; i++) {
     const token = argsAfterRun[i]!;
@@ -119,9 +56,6 @@ function rewriteRunArgs(argsAfterRun: string[]): string[] {
       const value = argsAfterRun[i + 1];
       if (value !== undefined) {
         passthrough.push(value);
-        if (token === '--mode') {
-          modeValue = value.toLowerCase();
-        }
         i++;
       }
       continue;
@@ -135,25 +69,7 @@ function rewriteRunArgs(argsAfterRun: string[]): string[] {
     taskParts.push(token);
   }
 
-  // Hybrid: --headless with chat (or default) upgrades to chat-headless mode.
-  if (headlessFlag) {
-    const effective = modeValue ?? 'chat';
-    if (effective === 'chat' || effective === 'chat-headless') {
-      const withoutMode: string[] = [];
-      for (let i = 0; i < passthrough.length; i++) {
-        if (passthrough[i] === '--mode') {
-          i++; // skip value
-          continue;
-        }
-        withoutMode.push(passthrough[i]!);
-      }
-      passthrough.length = 0;
-      passthrough.push(...withoutMode, '--mode', 'chat-headless');
-    } else {
-      // Non-chat modes ignore --headless for mode identity (still set env later if desired)
-      passthrough.push('--headless');
-    }
-  }
+  if (headlessFlag) passthrough.push('--headless');
 
   if (taskParts.length === 0) {
     return ['run', ...passthrough];
@@ -163,12 +79,10 @@ function rewriteRunArgs(argsAfterRun: string[]): string[] {
 }
 
 function rewriteDefaultTaskArgs(args: string[]): string[] {
-  const rewritten = rewriteRunArgs(args);
-  // Route bare tasks to chat mode — the default fast capable agent
-  return rewritten[0] === 'run' ? ['run', '--mode', 'chat', ...rewritten.slice(1)] : rewritten;
+  return rewriteRunArgs(args);
 }
 
-export function rewriteArgv(argv: string[]): string[] {
+export function rewriteArgv(argv: string[], registeredCommands: ReadonlySet<string> = new Set()): string[] {
   const head = argv.slice(0, 2);
   const tail = argv.slice(2);
 
@@ -177,17 +91,27 @@ export function rewriteArgv(argv: string[]): string[] {
   }
 
   const first = tail[0]!;
-
-  if (first === 'chat' || first === 'chat-headless') {
-    // Hybrid (product lock): chat-headless remains a stable mode alias.
-    // Preferred long-term form: `babel chat --headless` → same as chat-headless.
-    const rest = tail.slice(1);
-    if (first === 'chat' && rest.includes('--headless')) {
-      const filtered = rest.filter((a) => a !== '--headless');
-      return [...head, 'run', '--mode', 'chat-headless', ...filtered];
-    }
-    return [...head, 'run', '--mode', first, ...rest];
+  const prefixLength = first === '--connection' ? 2 : first.startsWith('--connection=') ? 1 : 0;
+  if (prefixLength && tail.length >= prefixLength) {
+    const nested = rewriteArgv([...head, ...tail.slice(prefixLength)], registeredCommands);
+    return [...head, ...tail.slice(0, prefixLength), ...nested.slice(2)];
   }
+
+  if (first === 'work' || first === 'chat' || first === 'chat-headless') {
+    // The literal chat-headless compatibility lane retains its old semantics.
+    // The preferred --headless flag changes presentation only.
+    const reviewIndex = tail.indexOf('--review');
+    const hasReview = first === 'work' && reviewIndex >= 0;
+    const review = hasReview ? tail[reviewIndex + 1] : undefined;
+    if (hasReview && !['standard', 'thorough'].includes(review ?? '')) throw new Error('Review must be standard or thorough.');
+    const thorough = review === 'thorough';
+    const rest = tail.slice(1).filter((_value, index) => !hasReview || (index !== reviewIndex - 1 && index !== reviewIndex));
+    if (review === 'standard') rest.push('--review', 'standard');
+    if (thorough) return [...head, ...rewriteRunArgs(['--mode', 'deep', ...rest])];
+    return [...head, ...rewriteRunArgs(['--mode', first === 'work' ? 'chat' : first, ...rest])];
+  }
+
+  if (first === 'run' && tail[1] === 'resume') return [...head, 'continue', ...tail.slice(2)];
 
   if (first === 'run') {
     return [...head, ...rewriteRunArgs(tail.slice(1))];
@@ -198,7 +122,7 @@ export function rewriteArgv(argv: string[]): string[] {
   }
 
   // Known commands take priority over project name detection
-  if (KNOWN_TOP_LEVEL_COMMANDS.has(first)) {
+  if (registeredCommands.has(first) || DEPRECATED_SURFACE_COMMANDS.has(first)) {
     return argv;
   }
 

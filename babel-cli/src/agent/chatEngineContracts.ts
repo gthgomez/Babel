@@ -1,3 +1,4 @@
+import type { ChatLlmRunner } from '../runners/base.js'
 import type { FailureCapsuleV1 } from './taskContract.js'
 
 import type {ChatExecutionScope} from './chatExecutionScope.js'
@@ -8,9 +9,6 @@ import type {
 import type { LiveSessionV1 } from './liveSession.js'
 import type { IsolationBrokerFlags } from './chatEngineIsolationFlags.js'
 import type { ChatToolAction, ChatTurn } from './chatToolDefinitions.js'
-import type { DeepSeekApiRunner } from '../runners/deepSeekApi.js'
-import type { OllamaApiRunner } from '../runners/ollamaApi.js'
-import type { OpenRouterApiRunner } from '../runners/openRouterApi.js'
 import type { ProviderMessage, RunnerCallbacks } from '../runners/base.js'
 import type { ChatRunLimiter } from '../config/chatEngineLimits.js'
 import type { ChatTaskClass, RequestedTaskOperation } from '../config/chatTaskClass.js'
@@ -38,7 +36,6 @@ import type { ChatStreamDoneExtra } from './chatEngineTerminalRuntime.js'
 
 import type { RepetitionDetector } from './repetitionDetector.js'
 /** Public chat submission, event, and result contracts. */
-import type { DeepInfraApiRunner } from '../runners/deepInfraApi.js'
 import type { ResolvedModelPolicy } from '../modelPolicy.js'
 import type { SessionUsageSummary } from '../services/costTracker.js'
 import type {
@@ -167,7 +164,7 @@ export interface ChatEngineOptions {
   compiledChatStack?: ChatCompiledStack
   instructionRoot?: string
   /** Trusted embedding seam: pins all inference phases to one observed runner. */
-  providerRunner?: DeepInfraApiRunner
+  providerRunner?: ChatLlmRunner
   /** Immutable policy for a trusted embedded provider, never model-supplied. */
   providerPolicy?: ResolvedModelPolicy
   task: string
@@ -431,6 +428,7 @@ export type ChatEvent =
       fixture_kind?: string
       /** D03: structured terminal reason code (additive; outcome unchanged). */
       reason_code?: TerminalReasonCode
+      reason_detail?: string
       cause_class?:
         | 'model'
         | 'provider'
@@ -467,6 +465,7 @@ export type ChatEvent =
       runAllowance?: ChatEngineRunAllowanceReport
       /** D03: structured terminal reason code. */
       reason_code?: TerminalReasonCode
+      reason_detail?: string
       cause_class?:
         | 'model'
         | 'provider'
@@ -482,6 +481,7 @@ export type ChatEvent =
       turnTelemetry?: ChatTurnTelemetryRecord
       /** D03: cancelled is a structured terminal reason too. */
       reason_code?: TerminalReasonCode
+      reason_detail?: string
       cause_class?:
         | 'model'
         | 'provider'
@@ -571,6 +571,7 @@ export interface ChatResult {
   runAllowance?: ChatEngineRunAllowanceReport
   /** D03: structured terminal reason code; survives engine → payload → clients. */
   reason_code?: TerminalReasonCode
+  reason_detail?: string
   /** D03: separate model-vs-harness cause axis; null = not established. */
   cause_class?:
     | 'model'
@@ -752,23 +753,18 @@ export interface ChatEngineStreamingLoopHost {
   /** Set when a write drops repoMapCache; cleared once a refresh is attempted. */
   repoMapInvalidated: boolean
   readonly resolveDeliberationRunner: () =>
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
+    ChatLlmRunner
   readonly resolveFallbackOrFail: (
     err: any,
     turn: number,
     ownerGeneration?: number,
   ) => AsyncGenerator<
     ChatEvent,
-    DeepInfraApiRunner | DeepSeekApiRunner | OpenRouterApiRunner | null,
+    ChatLlmRunner | null,
     undefined
   >
   readonly resolveRoutedRunner: () =>
-    | DeepInfraApiRunner
-    | DeepSeekApiRunner
-    | OllamaApiRunner
-    | OpenRouterApiRunner
+    ChatLlmRunner
   restrictToolsNextTurn: boolean
   readonly runAsymmetricDiffCritic: (
     answer: string,
@@ -778,7 +774,7 @@ export interface ChatEngineStreamingLoopHost {
   ) => Promise<'allow' | 'reject' | 'block'>
   readonly services: ChatEngineServices
   readonly shouldUseNativeTools: (
-    runner: DeepInfraApiRunner | DeepSeekApiRunner | OllamaApiRunner,
+    runner: ChatLlmRunner,
   ) => boolean
   readonly shouldUseTextTools: () => boolean
   stallState: StallState
@@ -825,10 +821,7 @@ export interface ChatEngineStreamingLoopHost {
   toolsWithoutWrite: number
   readonly trackRunnerUsage: (
     runner:
-      | DeepInfraApiRunner
-      | DeepSeekApiRunner
-      | OllamaApiRunner
-      | OpenRouterApiRunner,
+      ChatLlmRunner,
     usageScope?: ChatUsageScope,
   ) => void
   turnsWithoutWrite: number

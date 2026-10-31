@@ -1115,7 +1115,7 @@ export function parityEndTurn(
     const code = TerminalReasonCodeSchema.safeParse(existingTerminal.reason_code);
     const cause = FailureDomainSchema.nullable().safeParse(existingTerminal.cause_class ?? null);
     recordSessionTerminalOnce(rt, existingTerminal.outcome, existingTerminal.status,
-      code.success && cause.success ? { code: code.data, cause_class: cause.data } : undefined);
+      code.success && cause.success ? { code: code.data, cause_class: cause.data, ...(existingTerminal.reason_detail !== undefined ? { detail: existingTerminal.reason_detail } : {}) } : undefined);
     return;
   }
   if (terminal.outcome !== undefined) {

@@ -11,6 +11,18 @@ last_verified: 2026-08-04
 > **Harness (normative):** [architecture/HARNESS_ARCHITECTURE_V1.md](./architecture/HARNESS_ARCHITECTURE_V1.md).
 > **Harness (explanatory):** [architecture/HARNESS_OVERVIEW.md](./architecture/HARNESS_OVERVIEW.md).
 
+## Public naming and first run (2026-10-30)
+
+This document describes the internal Chat controller, presented as **Work** in the
+CLI/TUI. Start npm installations with `babel-agent setup`; no cloud provider/model
+is selected for a fresh profile. `/provider use <connection>` and `/model use
+<exact-id>` change only the session; `--save user|project` makes persistence explicit.
+`/mode plan` produces a read-only saved handoff and stops by default. `/apply <id>`
+rechecks scope/permissions before the existing governed executor. `/mode work
+--review thorough` selects Deep. See the
+[current command contract](./CLI_COMMAND_CONTRACT.md#current-first-run-and-command-amendment)
+for defaults, precedence and recovery namespaces.
+
 ## Purpose
 
 Chat mode is the default runtime mode — `babel "<task>"`. It is designed as a lightweight conversational coding agent loop. No v9 orchestrator, no waterfall stages, no QA review gate.

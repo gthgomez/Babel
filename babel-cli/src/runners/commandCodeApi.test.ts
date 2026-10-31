@@ -113,12 +113,12 @@ if (!isSyntheticProviderFixtureReady()) {
     await assert.rejects(runner().executeRaw('Reply'), /model.*(mismatch|expected|requested)/i)
   })
 
-  test('explicit Chat selection pins all stages while default selection remains available', () => {
+  test('explicit Chat selection pins all stages while an unconfigured profile requires setup', () => {
     const { policy } = resolveChatModelPolicy({ model: backendKey })
     assert.equal(policy.provider, 'command-code')
     assert.equal(policy.providerModelId, model)
     assert.ok(policy.stagePolicies.every(stage => stage.primaryProvider === 'command-code' && stage.orderedBackends.every(backend => backend.provider === 'command-code' && backend.providerModelId === model)))
-    assert.equal(resolveChatModelPolicy({}).policy.provider, 'openrouter')
+    assert.throws(() => resolveChatModelPolicy({}), /SETUP_REQUIRED/)
   })
 
   test('offline selection rejects the remote Command Code API route', () => {

@@ -4,15 +4,19 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const thisFile = fileURLToPath(import.meta.url);
 const cliRoot = resolve(dirname(thisFile), '..', '..');
 const entry = join(cliRoot, 'src', 'index.ts');
+const smokeProfile = mkdtempSync(join(tmpdir(), 'babel-command-smoke-profile-'));
+mkdirSync(join(smokeProfile, 'config'));
+const smokeEnv = { PATH: process.env['PATH'], SystemRoot: process.env['SystemRoot'], CI: '1', BABEL_CONFIG_DIR: join(smokeProfile, 'config'), BABEL_STATE_DIR: smokeProfile, BABEL_CACHE_DIR: join(smokeProfile, 'cache'), BABEL_RUNS_DIR: join(smokeProfile, 'runs') };
 
-function runCli(args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, ['--import', 'tsx', entry, ...args], {
+function runCli(args: string[], overrides: NodeJS.ProcessEnv = {}): { status: number | null; stdout: string; stderr: string } {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', '--import', pathToFileURL(join(cliRoot, 'scripts/block_consumer_network.mjs')).href, entry, ...args], {
     cwd: cliRoot,
+    env: { ...smokeEnv, ...overrides },
     encoding: 'utf8',
     timeout: 180_000,
     maxBuffer: 10 * 1024 * 1024,
@@ -28,11 +32,11 @@ test('top-level help is user-shaped before internals', () => {
   const result = runCli(['--help']);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Default:[\s\S]*babel "<task\.\.\.>"/i);
-  assert.match(result.stdout, /plan[\s\S]*approval/i);
-  assert.match(result.stdout, /deep[\s\S]*governed path/i);
-  assert.match(result.stdout, /babel "<task\.\.\.>"/);
-  assert.match(result.stdout, /Daily work uses babel "<task>"/i);
+  assert.match(result.stdout, /babel-agent setup/);
+  assert.match(result.stdout, /plan[\s\S]*read-only plan/i);
+  assert.match(result.stdout, /work --review thorough/i);
+  assert.match(result.stdout, /No cloud provider is preselected/);
+  assert.match(result.stdout, /Plan stops by default/);
   assert.doesNotMatch(result.stdout, /\bmcp\s+Manage MCP/);
 });
 
@@ -288,3 +292,43 @@ test('learn propose, test, promote, and inspect support shadow lesson lifecycle'
   assert.match(inspect.stdout, /babel_lesson_candidate/);
   assert.match(inspect.stdout, /"status": "shadow"/);
 });
+
+
+test('fresh setup and settings are noninteractive, provider neutral and model identity stays unobserved', () => {
+  const setup = runCli(['setup', '--json']); assert.equal(setup.status, 0, setup.stderr);
+  const status = JSON.parse(setup.stdout); assert.equal(status.mutates_workspace, false); assert.equal(status.state, 'setup_required'); assert.equal(status.provider, null);
+  const settings = runCli(['settings', 'show', '--json']); assert.equal(settings.status, 0, settings.stderr);
+  const inventory = JSON.parse(settings.stdout); assert.equal(inventory.effective.connection.value, null);
+  assert.equal(inventory.effective.autoApply.value, false); assert.equal(inventory.identity.observedModel, null);
+  for (const name of ['exec', 'daemon', 'goal', 'provider', 'model', 'conversation']) {
+    const help = runCli([name, '--help']); assert.equal(help.status, 0, help.stderr); assert.doesNotMatch(help.stderr, /API_KEY|inference/);
+  }
+})
+
+
+test('fresh plan fails with setup guidance before choosing a cloud account', () => {
+  const result = runCli(['plan', 'Explain the intended changes', '--json']);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout + result.stderr, /SETUP_REQUIRED/);
+  assert.doesNotMatch(result.stdout + result.stderr, /HTTP 401|\[openRouterApi\]|at new ChatEngine/);
+})
+
+
+test('a CLI connection flag has invocation provenance and does not save or leak a default', () => {
+  const connected = runCli(['provider', 'connect', 'openai', '--name', 'fixture-account', '--model', 'Vendor/ExactCase']); assert.equal(connected.status, 0, connected.stderr)
+  const status = runCli(['--connection', 'fixture-account', 'provider', 'status', '--json']); assert.equal(status.status, 0, status.stderr)
+  const selection = JSON.parse(status.stdout); assert.equal(selection.provider, 'openai'); assert.equal(selection.model, 'Vendor/ExactCase'); assert.equal(selection.selectionSource, 'invocation')
+  const next = runCli(['provider', 'status', '--json']); assert.equal(JSON.parse(next.stdout).connection, null)
+})
+
+test('plan shadow restriction overrides saved automatic application through the real entry point', () => {
+  const profile = mkdtempSync(join(tmpdir(), 'babel-shadow-profile-'))
+  const project = mkdtempSync(join(tmpdir(), 'babel-shadow-project-'))
+  writeFileSync(join(project, 'README.md'), 'Fixture project\n')
+  writeFileSync(join(profile, 'preferences.json'), JSON.stringify({ schemaVersion: 1, connections: {}, defaults: { plans: { autoApply: true }, budgetUsd: 'unlimited' } }))
+  const result = runCli(['plan', 'Plan a documentation change', '--project-root', project, '--shadow'], { BABEL_STATE_DIR: profile, BABEL_LITE_OFFLINE: '1', BABEL_OFFLINE: '1' })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stderr, /--shadow now keeps planning read-only/)
+  assert.doesNotMatch(result.stderr, /Automatic application enabled/)
+  assert.equal(existsSync(join(project, 'README.md')), true)
+})

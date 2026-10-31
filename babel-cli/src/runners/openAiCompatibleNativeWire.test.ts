@@ -31,7 +31,7 @@ test('DeepInfra native transport body matches compaction admission helper', () =
     'deepseek-v4-flash',
     'DEEPINFRA_API_KEY',
     { maxTokens: 32_000, temperature: 0 },
-    { provider: 'deepinfra', explicitCredential: 'fixture-only' },
+    { provider: 'deepinfra', explicitCredential: 'fixture-only', contextWindowTokens: 128_000 },
   );
   const threadLog = createThreadEventLog('wire-parity');
   const turnId = startTurn(threadLog, {
@@ -63,6 +63,8 @@ test('DeepInfra native transport body matches compaction admission helper', () =
     {
       conversation: [],
       options: { task: 'parity' },
+      modelPolicy: { contextWindow: 128_000 },
+      compactionProviderId: 'deepinfra',
       limits: { maxEstimatedTokens: 128_000 },
       abortSignal: new AbortController().signal,
       writeCount: 0,
@@ -95,6 +97,7 @@ test('DeepInfra native transport body matches compaction admission helper', () =
     provider: 'deepinfra',
     requestedModelId: 'deepseek-v4-flash',
     reservedCompletionTokens: reserved,
+    contextLimitTokens: 128_000,
   }).admission;
   assert.equal(compactionAdmission, transportAdmission);
 });

@@ -64,6 +64,10 @@ const SRC_DIR = path.resolve(RUNNERS_DIR, '..');
  */
 const API_TRANSPORT_MODULES = [
   'providerEngine.ts',
+  'protocol/openai-chat-completions.ts',
+  'protocol/native-messages.ts',
+  'anthropicApi.ts',
+  'compatibleApi.ts',
   'apiFallback.ts',
   'deepSeekApi.ts',
   'deepInfraApi.ts',
@@ -131,27 +135,33 @@ const ADAPTER_INDEX: Readonly<Record<ProviderId, { module: string; adapterClass:
   opencode: { module: 'openCodeApi.ts', adapterClass: 'OpenCodeApiRunner' },
   'opencode-go': { module: 'openCodeGoApi.ts', adapterClass: 'OpenCodeGoApiRunner' },
   openai: { module: 'openAiApi.ts', adapterClass: 'OpenAiApiRunner' },
-  anthropic: { module: 'apiFallback.ts', adapterClass: 'ApiFallbackRunner' },
+  anthropic: { module: 'anthropicApi.ts', adapterClass: 'AnthropicApiRunner' },
+  'openai-compatible': { module: 'compatibleApi.ts', adapterClass: 'CompatibleApiRunner' },
   gemini: { module: 'geminiApi.ts', adapterClass: 'GeminiApiRunner' },
   groq: { module: 'groqApi.js', adapterClass: 'GroqApiRunner' },
   ollama: { module: 'ollamaApi.ts', adapterClass: 'OllamaApiRunner' },
 };
 
 const ADAPTER_MODULE_OF_CLASS: Readonly<Record<string, { module: string }>> = Object.fromEntries(
-  Object.values(ADAPTER_INDEX).map((entry) => [entry.adapterClass, { module: entry.module }]),
+  [...Object.values(ADAPTER_INDEX).map((entry) => [entry.adapterClass, { module: entry.module }]),
+    ['OpenAiCompatibleRunner', { module: 'protocol/openai-chat-completions.ts' }], ['NativeMessagesRunner', { module: 'protocol/native-messages.ts' }]],
 );
 
 /** Adapter inheritance (OpenRouter/Ollama/OpenCode inherit the DeepInfra implementation). */
 const CLASS_EXTENDS: Readonly<Record<string, string | null>> = {
   DeepSeekApiRunner: null,
-  DeepInfraApiRunner: null,
-  OllamaApiRunner: 'DeepInfraApiRunner',
-  OpenRouterApiRunner: 'DeepInfraApiRunner',
-  CommandCodeApiRunner: 'DeepInfraApiRunner',
-  OpenCodeApiRunner: 'DeepInfraApiRunner',
-  OpenCodeGoApiRunner: 'DeepInfraApiRunner',
-  OpenAiApiRunner: null,
-  GeminiApiRunner: null,
+  DeepInfraApiRunner: 'OpenAiCompatibleRunner',
+  OpenAiCompatibleRunner: null,
+  NativeMessagesRunner: null,
+  CompatibleApiRunner: 'OpenAiCompatibleRunner',
+  AnthropicApiRunner: 'NativeMessagesRunner',
+  OllamaApiRunner: 'OpenAiCompatibleRunner',
+  OpenRouterApiRunner: 'OpenAiCompatibleRunner',
+  CommandCodeApiRunner: 'OpenAiCompatibleRunner',
+  OpenCodeApiRunner: 'OpenAiCompatibleRunner',
+  OpenCodeGoApiRunner: 'OpenAiCompatibleRunner',
+  OpenAiApiRunner: 'OpenAiCompatibleRunner',
+  GeminiApiRunner: 'NativeMessagesRunner',
   ApiFallbackRunner: null,
   GroqApiRunner: null,
 };
@@ -171,7 +181,9 @@ const OPERATION_METHOD: Readonly<Record<ProviderOperation, RegExp>> = {
  * structural check below. Certifying a new provider means adding it here AND
  * to ADAPTER_INDEX AND wiring it in providerEngine.ts — all enforced.
  */
-const EVIDENCE_VETTED_PROVIDERS: readonly ProviderId[] = ['deepseek', 'deepinfra', 'ollama', 'openrouter', 'opencode-go', 'command-code'];
+// Direct-provider wire and actual Chat denial/result delivery are independently exercised in
+// directProviderTools.test.ts and agent/directProviderAuthority.test.ts. No live quality claim.
+const EVIDENCE_VETTED_PROVIDERS: readonly ProviderId[] = ['deepseek', 'deepinfra', 'ollama', 'openrouter', 'opencode-go', 'command-code', 'openai', 'gemini', 'anthropic', 'openai-compatible'];
 
 /** Independent evidence record — registry claims must agree with it. */
 const EVIDENCE_EXPECTATIONS: Readonly<
@@ -189,6 +201,7 @@ const EVIDENCE_EXPECTATIONS: Readonly<
   anthropic: { protocol: 'anthropic', requiresCredential: true },
   gemini: { protocol: 'gemini', requiresCredential: true },
   groq: { protocol: 'groq', requiresCredential: true },
+  'openai-compatible': { protocol: 'openai_compatible', requiresCredential: true },
 };
 
 // ─── Structural scanning helpers ─────────────────────────────────────────────
@@ -278,7 +291,7 @@ function methodImplemented(adapterClass: string, op: ProviderOperation): boolean
 
 /** Every non-test, non-fixture module in the transport directory. */
 function listTransportFiles(): string[] {
-  return readdirSync(RUNNERS_DIR)
+  return readdirSync(RUNNERS_DIR, { recursive: true }).filter((f): f is string => typeof f === 'string')
     .filter((f) => /\.(ts|js)$/.test(f))
     .filter((f) => !f.endsWith('.test.ts'))
     .filter((f) => !f.includes('.fixture.'));
@@ -437,11 +450,9 @@ test('transport: authority certification is derived from structural evidence', (
   }
 
   // Credential-free provider must never receive a credential at construction.
-  assert.match(
-    engine,
-    /new OllamaApiRunner\(\s*options\.modelId\s*\)/,
-    'ollama (credential-free) must be constructed without a credential',
-  );
+  const ollamaFactory = engine.slice(engine.indexOf("case 'ollama':"), engine.indexOf("case 'groq':"));
+  assert.match(ollamaFactory, /new OllamaApiRunner\(/);
+  assert.doesNotMatch(ollamaFactory, /credential|runtimeOptions|apiKey/i, 'Ollama construction must not receive credentials');
 
   // Dormant providers must NOT be certified without structural evidence.
   for (const provider of PROVIDER_IDS) {

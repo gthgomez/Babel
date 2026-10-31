@@ -48,6 +48,7 @@ if (!isSyntheticProviderFixtureReady()) {
     resolveChatFallbackRunner, resolveChatFallbackOrFail,
   } = await import('./chatEngineProviderRuntime.js')
   const { OpenCodeGoApiRunner } = await import('../runners/openCodeGoApi.js')
+  const { ProviderEngine } = await import('../runners/providerEngine.js')
   const { OpenCodeGoBudget, OpenCodeGoBudgetError } = await import('../runners/openCodeGoBudget.js')
   const { loadModelPolicyConfig } = await import('../modelPolicy.js')
   const { BABEL_RUNS_DIR } = await import('../cli/constants.js')
@@ -110,7 +111,7 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.ok(policy.stagePolicies.every(stage => stage.primaryProvider === 'opencode-go' &&
       stage.primaryProviderModelId === modelId && stage.orderedBackends.length === 1))
     assert.throws(() => resolveChatModelPolicy({ model: 'unqualified-go-model' }), /LIVE_MODEL_POLICY/)
-    assert.equal(resolveChatModelPolicy({}).policy.provider, 'openrouter')
+    assert.throws(() => resolveChatModelPolicy({}), /SETUP_REQUIRED/)
   })
 
   test('configured current Go Flash route resolves exact 4.1 identity without substitution', t => {
@@ -138,7 +139,7 @@ if (!isSyntheticProviderFixtureReady()) {
     const { root, runId } = fixture(t)
     const engine = new ChatEngine({ task: codingTask, projectRoot: root, model: currentBackendKey, runId })
     const internal = engine as unknown as {
-      resolveDeliberationRunner(): InstanceType<typeof OpenCodeGoApiRunner>
+      resolveDeliberationRunner(): InstanceType<typeof ProviderEngine>
       synthesizeAnswer(observations: string, callbacks: {}): Promise<string>
       startIndependentTaskCostScope(): void
     }
@@ -336,8 +337,11 @@ if (!isSyntheticProviderFixtureReady()) {
 
   test('Go Chat deliberation and synthesis use the approved helper and pinned transport', t => {
     fixture(t)
-    assert.ok(resolveChatDeliberationRunner(null, goPolicy) instanceof OpenCodeGoApiRunner)
-    assert.ok(resolveChatSynthesisRunner(null, goPolicy) instanceof OpenCodeGoApiRunner)
+    for (const runner of [resolveChatDeliberationRunner(null, goPolicy), resolveChatSynthesisRunner(null, goPolicy)]) {
+      assert.ok(runner instanceof ProviderEngine)
+      assert.equal(runner.provider, 'opencode-go')
+      assert.equal(runner.getPinnedModelId(), modelId)
+    }
   })
 
   test('Go Chat refuses configured and generic cross-provider fallbacks', async t => {
@@ -375,7 +379,9 @@ if (!isSyntheticProviderFixtureReady()) {
     }
     internal._lastPhase = 'investigate'
     const runner = internal.resolveRoutedRunner()
-    assert.ok(runner instanceof OpenCodeGoApiRunner)
+    assert.ok(runner instanceof ProviderEngine)
+    assert.equal(runner.provider, 'opencode-go')
+    assert.equal(runner.getPinnedModelId(), modelId)
     internal._lastPhase = 'mutate'
     assert.ok(internal.resolveRoutedRunner() === runner, 'Go phases must retain the pinned runner')
     // Go follows the accepted task's native tune, including the constructor's
