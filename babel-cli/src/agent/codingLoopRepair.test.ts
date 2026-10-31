@@ -545,7 +545,7 @@ test('serialized native, text, and legacy requests replace policy A with policy 
     process.env['BABEL_USER_CONTEXT'] = join(repo, 'missing-user-context.md');
     writeFileSync(join(repo, 'AGENTS.md'), 'POLICY_A_OBSOLETE\n');
     const task = 'Explain the fix without changing files';
-    const engine = new ChatEngine({ task, projectRoot: repo });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: repo });
     const serialized = (mode: 'native' | 'text' | 'legacy'): string => {
       const host = engine as unknown as {
         getOrBuildSystemPrompt: (kind: 'native' | 'text' | 'legacy') => string;

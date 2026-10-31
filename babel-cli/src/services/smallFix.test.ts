@@ -322,19 +322,19 @@ test('classifySmallFixProviderFailure maps credential and network errors to reco
     new Error('[deepInfraApi] DEEPINFRA_API_KEY is not set.'),
   );
   assert.equal(credential.failureCode, 'credential_missing');
-  assert.deepEqual(credential.next, ['check DEEPINFRA_API_KEY', 'babel undo']);
+  assert.deepEqual(credential.next, ['babel-agent setup', 'babel-agent provider status']);
 
   const deepSeekCredential = classifySmallFixProviderFailure(
     new Error('[deepSeekApi] DEEPSEEK_API_KEY is not set.'),
   );
   assert.equal(deepSeekCredential.failureCode, 'credential_missing');
-  assert.deepEqual(deepSeekCredential.next, ['check DEEPSEEK_API_KEY', 'babel undo']);
+  assert.deepEqual(deepSeekCredential.next, ['babel-agent setup', 'babel-agent provider status']);
 
   const network = classifySmallFixProviderFailure(
     new Error('[deepInfraApi] Network error (model): fetch failed'),
   );
   assert.equal(network.failureCode, 'provider_network_failed');
-  assert.deepEqual(network.next, ['check DEEPINFRA_API_KEY', 'babel undo']);
+  assert.deepEqual(network.next, ['Check connectivity to the selected endpoint', 'babel-agent provider status']);
 });
 
 test(
@@ -360,7 +360,7 @@ test(
           assert.ok(error instanceof SmallFixRecoverableError);
           assert.equal(error.failureCode, 'credential_missing');
           assert.equal(error.recoverable, true);
-          assert.deepEqual(error.next, ['check OPENROUTER_API_KEY', 'babel undo']);
+          assert.deepEqual(error.next, ['babel-agent setup', 'babel-agent provider status']);
           assert.ok(error.runDir.replace(/\\/g, '/').includes('runs/babel-lite'));
           assert.equal(existsSync(join(error.runDir, 'small_fix_failure_capsule.json')), true);
           return true;
@@ -397,7 +397,7 @@ test(
         (error: unknown) => {
           assert.ok(error instanceof SmallFixRecoverableError);
           assert.equal(error.failureCode, 'provider_network_failed');
-          assert.deepEqual(error.next, ['check OPENROUTER_API_KEY', 'babel undo']);
+          assert.deepEqual(error.next, ['Check connectivity to the selected endpoint', 'babel-agent provider status']);
           return true;
         },
       );
@@ -431,7 +431,7 @@ test(
         provider: 'mock',
       });
 
-      assert.equal(result.status, 'SMALL_FIX_COMPLETE');
+      assert.equal(result.status, 'SMALL_FIX_COMPLETE', 'checks' in result ? result.checks.join('\n') : result.status);
       assert.equal(result.executionMode, 'offline_demo');
       assert.equal(
         readFileSync(join(root, 'src', 'math.js'), 'utf-8'),

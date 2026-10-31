@@ -35,7 +35,7 @@ describe('governedApplyPatch multi-file transactional atomicity', () => {
       for (const args of [['init', '-q'], ['add', '--all'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture']]) {
         execFileSync('git', args, { cwd: root, stdio: 'pipe', windowsHide: true });
       }
-      const engine = new ChatEngine({ task: 'Update first.txt and preserve last.txt', projectRoot: root });
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Update first.txt and preserve last.txt', projectRoot: root });
       const host = engine as unknown as {
         activeSubmissionGeneration: number;
         executeOneAction: (action: ChatToolAction, context: ToolContext, callbacks: object, meta: object) => Promise<{ observation: string }>;

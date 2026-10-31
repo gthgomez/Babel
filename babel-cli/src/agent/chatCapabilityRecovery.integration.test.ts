@@ -179,7 +179,7 @@ function withFixture(
   process.env['BABEL_AUTONOMY_LEASE'] = SYNTHETIC_LEASE;
 
   const calls: ToolCallRequest[] = [];
-  const engine = new ChatEngine({
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
     task: 'List the project tree',
     projectRoot: root,
     toolExecutorForTesting: createToolExecutor({
@@ -478,7 +478,7 @@ test('applyUserSubmission continueTask preserves taskOwnerId for capability prob
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
   process.env['BABEL_AUTONOMY_LEASE'] = SYNTHETIC_LEASE;
   try {
-    const engine = new ChatEngine({ task: 'Implement listing', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Implement listing', projectRoot: root });
     engine.applyUserSubmission({ userInput: 'Implement listing', taskIntent: 'execute' });
     const ownerBefore = (engine as unknown as { taskAllowance: { taskOwnerId: string } }).taskAllowance
       .taskOwnerId;

@@ -97,7 +97,7 @@ export function resolveChatDeliberationRunner(
     provider, modelId,
     ...(modelPolicy.authentication ? { authentication: modelPolicy.authentication } : {}),
     ...(modelPolicy.contextWindow ? { contextWindowTokens: modelPolicy.contextWindow } : {}),
-    ...(modelPolicy.maxOutputTokens ? { sampling: { maxTokens: modelPolicy.maxOutputTokens } } : {}),
+    ...(modelPolicy.requestedOutputTokens ? { sampling: { maxTokens: modelPolicy.requestedOutputTokens } } : {}),
     ...goOptions,
     ...(modelPolicy.apiKeyEnvVar ? { apiKeyEnvVar: modelPolicy.apiKeyEnvVar } : {}),
     ...(modelPolicy.baseUrl ? { baseUrl: modelPolicy.baseUrl } : {}),

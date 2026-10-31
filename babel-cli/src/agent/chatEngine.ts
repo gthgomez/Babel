@@ -864,6 +864,10 @@ export class ChatEngine {
     this.taskAllowanceOwner.markChildBudgetExhausted(limiter, reason);
   }
   constructor(options: ChatEngineOptions) {
+    if (options.inferenceOwner === 'external-harness' &&
+        (options.providerRunner || options.providerPolicy || options.model || options.provider || options.modelTier)) {
+      throw new Error('EXTERNAL_HARNESS_INFERENCE_CONFLICT: External adapters cannot configure Babel inference.');
+    }
     const scope=normalizeChatExecutionScope(options);
     options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null};
     if(scope.kind==="conversation"&&(options.instructionRoot||options.workspaceRoot||options.compiledChatStack?.project_root))throw new Error("Conflicting project context in conversation scope");
@@ -1033,10 +1037,11 @@ export class ChatEngine {
       this.hardPlanMode = this.executionProfile === "plan";
     }
 
-    // Resolve model policy for provider selection.
-    // Always resolve — when no model is specified, use the policy default tier.
+    // External session adapters own their inference; native sessions require explicit selection.
     const { policy: modelPolicy, offline: isOffline } =
-      options.providerPolicy && options.providerRunner
+      options.inferenceOwner === 'external-harness'
+        ? { policy: undefined, offline: false }
+        : options.providerPolicy && options.providerRunner
         ? { policy: options.providerPolicy, offline: false }
         : resolveChatModelPolicy({
             ...(options.model !== undefined ? { model: options.model } : {}),
@@ -1053,7 +1058,7 @@ export class ChatEngine {
     this.modelPolicy = modelPolicy;
     // Packet D2: resolve the per-model edit-format session deterministically
     // from model identity; outcomes later adjust it within this session only.
-    this.editFormatSession = createEditFormatSession({
+    if (modelPolicy) this.editFormatSession = createEditFormatSession({
       family: resolveEditFormatFamily({
         policyFamily: modelPolicy.family,
         provider: modelPolicy.provider,
@@ -1069,7 +1074,7 @@ export class ChatEngine {
     // Exact experimental routes are campaign boundaries: phase-specific
     // environment overrides must not recruit another provider/model.
     if (
-      this.modelPolicy.provider === "openrouter" &&
+      this.modelPolicy?.provider === "openrouter" &&
       this.modelPolicy.providerModelId === LIVE_OPENROUTER_MODEL_ID
     ) {
       this.limits = {
@@ -2156,6 +2161,9 @@ export class ChatEngine {
     taskIntent?: TaskIntent,
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
+    if (this.options.inferenceOwner === 'external-harness') {
+      throw new Error('EXTERNAL_HARNESS_INFERENCE_OWNED: This session requires its external adapter; Babel inference is disabled.');
+    }
     return scopeAsyncGenerator(
       () => this.buildBaseExecutionContext(),
       this.submitMessageStreamBody(userInput, taskIntent, submitOpts),
@@ -3867,7 +3875,7 @@ export class ChatEngine {
       task: currentRequest,
       toolObservations,
     });
-    this.synthesisRunner = resolveChatSynthesisRunner(
+    this.synthesisRunner = this.options.providerRunner ?? resolveChatSynthesisRunner(
       this.synthesisRunner,
       this.modelPolicy,
       this.modelPolicy?.provider === "opencode-go" && !this.options.providerRunner
@@ -4026,6 +4034,7 @@ export class ChatEngine {
   }
   private resolveDeliberationRunner():
     ChatLlmRunner {
+    if (this.options.providerRunner) return this.options.providerRunner;
     this.deliberationRunner = resolveChatDeliberationRunner(
       this.deliberationRunner,
       this.modelPolicy,
@@ -4482,6 +4491,7 @@ export class ChatEngine {
    *  Model-name resolution extracted to phaseModelRouting.ts for testability. */
   private resolveRoutedRunner():
     ChatLlmRunner {
+    if (this.options.providerRunner) return this.options.providerRunner;
     // Desktop settings admit one primary route. Legacy phase overrides loaded
     // during CLI bootstrap cannot replace it, including after a task reset.
     if (this.modelPolicy?.connectionId || process.env["BABEL_DESKTOP_PROVIDER"] || this.options.model !== undefined || this.options.providerPolicy !== undefined)

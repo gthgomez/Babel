@@ -267,7 +267,7 @@ export async function runSmallFixModel(
       ...(modelPolicy.baseUrl ? { baseUrl: modelPolicy.baseUrl } : {}),
       ...(modelPolicy.authentication ? { authentication: modelPolicy.authentication } : {}),
       ...(modelPolicy.contextWindow ? { contextWindowTokens: modelPolicy.contextWindow } : {}),
-      ...(modelPolicy.maxOutputTokens ? { sampling: { maxTokens: modelPolicy.maxOutputTokens } } : {}),
+      ...(modelPolicy.requestedOutputTokens ? { sampling: { maxTokens: modelPolicy.requestedOutputTokens } } : {}),
     });
     try {
       const answer = await runner.execute(prompt, SmallFixAnswerSchema);

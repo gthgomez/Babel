@@ -48,7 +48,7 @@ async function fixture(body: (engine: ChatEngine, runDir: string, root: string) 
   const previous = process.env['BABEL_RUNS_DIR']
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
   try {
-    const engine = new ChatEngine({ task: request, projectRoot: root, executionProfile: mode })
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: request, projectRoot: root, executionProfile: mode })
     if(legacy){
       const authority=engine.getParityRuntime().liveAuthority!
       const {acceptance:_acceptance,acceptance_criteria:_criteria,provenance:_provenance,...body}=authority.taskContract
@@ -109,7 +109,7 @@ test('status and continuation preserve amended requirements through mode changes
     engine.applyTurnPreparation({ task: 'continue', executionProfile: 'plan' })
     assert.deepEqual(engine.getTaskContract()!.acceptance, accepted.acceptance)
     engine.applyTurnPreparation({ task: 'continue', executionProfile: 'chat' })
-    const restored = await ChatEngine.restore(engine.getEngineRunId(), { task: 'Resume', projectRoot: root })
+    const restored = await ChatEngine.restore(engine.getEngineRunId(), { model: 'deepseek-v4-flash-openrouter', task: 'Resume', projectRoot: root })
     assert.deepEqual(restored.getTaskContract()!.acceptance, accepted.acceptance)
     assert.equal(restored.getTaskContract()!.task_id, accepted.task_id)
     assert.equal(loadLiveSessionAuthorityStrict(runDir).taskModeHistory!.schema_version, 2)
@@ -157,7 +157,7 @@ test('an acceptance-changing revision retains prior checks as historical even wi
     engine.admitUserSubmission({userInput:addition,continueTask:true},route)
     assert.equal(engine.getLiveSession().verifier.attempts,0,'Old-contract checks cannot establish new acceptance')
     assert.ok(engine.getParityRuntime().sessionEvents.events.some(event=>event.event_id===receipt.event_id))
-    const restored=await ChatEngine.restore(engine.getEngineRunId(),{task:'Resume',projectRoot:root})
+    const restored=await ChatEngine.restore(engine.getEngineRunId(),{ model: 'deepseek-v4-flash-openrouter',task:'Resume',projectRoot:root})
     assert.equal(restored.getLiveSession().verifier.attempts,0)
     assert.ok(restored.getParityRuntime().sessionEvents.events.some(event=>event.event_id===receipt.event_id))
   }))
@@ -166,7 +166,7 @@ test('legacy placeholder initialization retains frozen bytes and binds meaning t
   fixture(async (engine,runDir,root)=>{
     const previous=engine.getTaskContract()!,bytes=JSON.stringify(previous)
     assert.deepEqual(previous.acceptance_criteria,['Task acceptance criteria as stated in the user request'])
-    const restored=await ChatEngine.restore(engine.getEngineRunId(),{task:'Resume',projectRoot:root})
+    const restored=await ChatEngine.restore(engine.getEngineRunId(),{ model: 'deepseek-v4-flash-openrouter',task:'Resume',projectRoot:root})
     restored.admitUserSubmission({userInput:'continue'},route)
     const current=restored.getTaskContract()!
     assert.deepEqual(current.acceptance_criteria,['Preserve the existing API.'])
@@ -198,7 +198,7 @@ test('legacy initialization replays accepted canonical additions without trustin
   fixture(async (engine,runDir,root)=>{
     appendLegacySubmission(engine,runDir,addition)
     assert.deepEqual(loadLiveSessionAuthorityStrict(runDir).taskContract.acceptance_criteria,['Task acceptance criteria as stated in the user request'])
-    const restored=await ChatEngine.restore(engine.getEngineRunId(),{task:'Resume',projectRoot:root})
+    const restored=await ChatEngine.restore(engine.getEngineRunId(),{ model: 'deepseek-v4-flash-openrouter',task:'Resume',projectRoot:root})
     restored.admitUserSubmission({userInput:'continue'},route)
     assert.deepEqual(loadLiveSessionAuthorityStrict(runDir).taskContract.acceptance_criteria,['Preserve the existing API.','The task survives restart.'])
   },'chat',true))
@@ -333,7 +333,7 @@ test('cold continued-task restore keeps old working context but marks its verifi
     const snapshot=recordWorkingStateSnapshot(engine.getParityRuntime().sessionEvents,state,engine.getParityRuntime().turnId!)
     engine.admitUserSubmission({userInput:addition,continueTask:true},route)
     assert.equal((engine as unknown as {workingState:WorkingState}).workingState.lastVerifier!.fresh,false)
-    const restored=await ChatEngine.restore(engine.getEngineRunId(),{task:'Resume',projectRoot:root})
+    const restored=await ChatEngine.restore(engine.getEngineRunId(),{ model: 'deepseek-v4-flash-openrouter',task:'Resume',projectRoot:root})
     const working=(restored as unknown as {workingState:WorkingState}).workingState
     assert.equal(working.lastVerifier!.fresh,false)
     assert.ok(working.evidence.includes('Preserved fixture investigation.'))
@@ -427,7 +427,7 @@ test('v2 trailing polite question rejects additive amendments that stay v1-unres
 test('legacy replay cannot silently omit an additive requirement followed by a question',()=>
   fixture(async (engine,runDir,root)=>{
     appendLegacySubmission(engine,runDir,compoundQuestion)
-    const restored=await ChatEngine.restore(engine.getEngineRunId(),{task:'Resume',projectRoot:root})
+    const restored=await ChatEngine.restore(engine.getEngineRunId(),{ model: 'deepseek-v4-flash-openrouter',task:'Resume',projectRoot:root})
     const before=restored.getTaskContract()!
     assert.throws(()=>restored.admitUserSubmission({userInput:'continue'},route),/TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED/)
     assert.equal(restored.getTaskContract(),before)
@@ -465,7 +465,7 @@ test(`a query cannot hide ${verb} behind ${separator.trim()}`,()=>
 test('legacy replay rejects a query with an embedded inferred obligation',()=>
   fixture(async (engine,runDir,root)=>{
     appendLegacySubmission(engine,runDir,'Also what is the current status; ensure restart recovery; can you do that?')
-    const restored=await ChatEngine.restore(engine.getEngineRunId(),{task:'Resume',projectRoot:root})
+    const restored=await ChatEngine.restore(engine.getEngineRunId(),{ model: 'deepseek-v4-flash-openrouter',task:'Resume',projectRoot:root})
     const before=restored.getTaskContract()!
     assert.throws(()=>restored.admitUserSubmission({userInput:'continue'},route),/TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED/)
     assert.equal(restored.getTaskContract(),before)
@@ -511,7 +511,7 @@ for (const { label, input } of [
 test('legacy replay rejects an unsupported compound directive instead of exempting its question',()=>
   fixture(async (engine,runDir,root)=>{
     appendLegacySubmission(engine,runDir,'Also implement restart.\nCan you do that?')
-    const restored=await ChatEngine.restore(engine.getEngineRunId(),{task:'Resume',projectRoot:root})
+    const restored=await ChatEngine.restore(engine.getEngineRunId(),{ model: 'deepseek-v4-flash-openrouter',task:'Resume',projectRoot:root})
     const before=restored.getTaskContract()!
     assert.throws(()=>restored.admitUserSubmission({userInput:'continue'},route),/TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED/)
     assert.equal(restored.getTaskContract(),before)
@@ -520,7 +520,7 @@ test('legacy replay rejects an unsupported compound directive instead of exempti
 test('legacy replay rejects joined obligations outside the supported verb vocabulary',()=>
   fixture(async (engine,runDir,root)=>{
     appendLegacySubmission(engine,runDir,'Also what is the current status and always log failed checks?')
-    const restored=await ChatEngine.restore(engine.getEngineRunId(),{task:'Resume',projectRoot:root})
+    const restored=await ChatEngine.restore(engine.getEngineRunId(),{ model: 'deepseek-v4-flash-openrouter',task:'Resume',projectRoot:root})
     const before=restored.getTaskContract()!
     assert.throws(()=>restored.admitUserSubmission({userInput:'continue'},route),/TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED/)
     assert.equal(restored.getTaskContract(),before)

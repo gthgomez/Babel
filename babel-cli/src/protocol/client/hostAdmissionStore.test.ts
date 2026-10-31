@@ -43,7 +43,7 @@ test('a hydration-throw retry never orphans the previous admission reference', a
     const host = createProtocolHostState({ executeWithoutNotifications: true });
 
     const created = await handleProtocolRequest(
-      { jsonrpc: '2.0', id: 1, method: 'thread.create', params: { project_root: fixture.root } },
+      { jsonrpc: '2.0', id: 1, method: 'thread.create', params: { project_root: fixture.root, model: 'deepseek-v4-flash-openrouter' } },
       host,
     );
     assert.ok('result' in created, JSON.stringify(created));

@@ -135,6 +135,12 @@ export function createShellCommandOperations(
       return { ok: false, message: outcome.message }
     },
     newSession(): void {
+      ctx.chatEngine = undefined
+      ctx.lastRoutingLabel = null
+      if (ctx.state) {
+        delete ctx.state.savedPlanId
+        delete ctx.state.pendingPlanBody
+      }
       handleClear(ctx, [])
       if (!ctx.shellHost) {
         resetHostedConversation(ctx)

@@ -76,7 +76,7 @@ for (const profile of ['safe_repo', 'dev_local']) test(`${profile} LSP is denied
 
   const root = mkdtempSync(join(tmpdir(), 'babel-lsp-policy-'))
   temporaryRoots.push(root)
-  const engine = new ChatEngine({ task: 'Fix project symbols', operation: 'CHANGE', projectRoot: root })
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Fix project symbols', operation: 'CHANGE', projectRoot: root })
   let dispatched = false
   ;(engine as any).persistToolStartedAtExecutorDispatch = () => { dispatched = true }
   const result = await (engine as any).executeOneAction(

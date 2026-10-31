@@ -40,6 +40,7 @@ export function resolveConnectionModelPolicy(
   }
   return {
     connectionId: connection.id,
+    ...(connection.maxOutputTokens ? { requestedOutputTokens: connection.maxOutputTokens } : {}),
     ...(connection.authentication ? { authentication: connection.authentication } : {}),
     ...(connection.apiKeyEnvVar ? { apiKeyEnvVar: connection.apiKeyEnvVar } : {}),
     ...(connection.baseUrl ? { baseUrl: connection.baseUrl } : {}),

@@ -448,7 +448,7 @@ function failureCodeForError(error: unknown): string {
 function createAskRunner(modelPolicy: ResolvedModelPolicy, _liveOnly: boolean): ProviderEngine {
   if (!isProviderId(modelPolicy.provider)) throw new Error('Unsupported selected provider; refusing substitution.')
   return createProviderRunner({ provider: modelPolicy.provider, modelId: modelPolicy.providerModelId,
-    ...(modelPolicy.contextWindow ? { contextWindowTokens: modelPolicy.contextWindow } : {}), ...(modelPolicy.authentication ? { authentication: modelPolicy.authentication } : {}), ...(modelPolicy.maxOutputTokens ? { sampling: { maxTokens: modelPolicy.maxOutputTokens } } : {}), ...(modelPolicy.apiKeyEnvVar ? { apiKeyEnvVar: modelPolicy.apiKeyEnvVar } : {}), ...(modelPolicy.baseUrl ? { baseUrl: modelPolicy.baseUrl } : {}) })
+    ...(modelPolicy.contextWindow ? { contextWindowTokens: modelPolicy.contextWindow } : {}), ...(modelPolicy.authentication ? { authentication: modelPolicy.authentication } : {}), ...(modelPolicy.requestedOutputTokens ? { sampling: { maxTokens: modelPolicy.requestedOutputTokens } } : {}), ...(modelPolicy.apiKeyEnvVar ? { apiKeyEnvVar: modelPolicy.apiKeyEnvVar } : {}), ...(modelPolicy.baseUrl ? { baseUrl: modelPolicy.baseUrl } : {}) })
 }
 
 async function runDirectAsk(

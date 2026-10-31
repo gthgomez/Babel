@@ -158,6 +158,8 @@ export interface SubmitMessageOptions {
  */
 
 export interface ChatEngineOptions {
+  /** Trusted external session adapter owns inference; Babel native dispatch stays disabled. */
+  inferenceOwner?: 'external-harness'
   /** Caller-selected intent only; never grants effects or bypasses admission. */
   operation?: RequestedTaskOperation
   /** Exact repository context selected by preparation; compiled locally when omitted. */

@@ -427,7 +427,7 @@ function makeRecoveryStallWebSocket(stallRecoveryConnect: () => boolean): typeof
 }
 
 function cooperativeCancelEngine(descriptor: { projectRoot: string }, taskLabel: string): ChatEngine {
-  const engine = new ChatEngine({
+  const engine = new ChatEngine({ inferenceOwner: 'external-harness',
     task: taskLabel,
     projectRoot: descriptor.projectRoot,
     executionProfile: 'chat',
@@ -640,7 +640,7 @@ describe('shared host-run emergency stop lifecycle', { concurrency: 1 }, () => {
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'fail-before-emergency',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -705,7 +705,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'never-settles',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -795,7 +795,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'failed-after-ack',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -875,7 +875,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'reconcile-error',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -974,7 +974,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'rpc-hang',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -1077,7 +1077,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'approval-hang',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -1202,7 +1202,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         desktopControllerClientId: desktopId,
         desktopControllerProofKey: desktopProofKey,
         engineFactory: (descriptor) => {
-          const engine = new ChatEngine({
+          const engine = new ChatEngine({ inferenceOwner: 'external-harness',
             task: 'approval-ticket-race',
             projectRoot: descriptor.projectRoot,
             executionProfile: 'chat',
@@ -1327,7 +1327,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'approval-ticket-manual-clock',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -1439,7 +1439,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'approval-pre-ack',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -1554,7 +1554,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         desktopControllerClientId: desktopId,
         desktopControllerProofKey: desktopProofKey,
         engineFactory: (descriptor) => {
-          const engine = new ChatEngine({
+          const engine = new ChatEngine({ inferenceOwner: 'external-harness',
             task: 'ticket-hang',
             projectRoot: descriptor.projectRoot,
             executionProfile: 'chat',
@@ -1754,7 +1754,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'history-hang',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -1872,7 +1872,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'verification-hang',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -2026,7 +2026,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'ws-open-hang',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -2131,7 +2131,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'no-late-cancel',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -2266,7 +2266,7 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         desktopControllerClientId: desktopId,
         desktopControllerProofKey: desktopProofKey,
         engineFactory: (descriptor) => {
-          const engine = new ChatEngine({
+          const engine = new ChatEngine({ inferenceOwner: 'external-harness',
             task: `live-${scenario.name}-during-pre-ack`,
             projectRoot: descriptor.projectRoot,
             executionProfile: 'chat',

@@ -20,7 +20,7 @@ function setupMockSession(tempRoot: string): string {
   const sessionId = `test-session-${randomBytes(4).toString('hex')}`;
   const sessionDir = join(tempRoot, sessionId);
   mkdirSync(sessionDir, { recursive: true });
-  new ChatEngine({ task: 'Resume test', projectRoot: '/tmp', runId: sessionId });
+  new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Resume test', projectRoot: '/tmp', runId: sessionId });
   const sessionLog = createSessionEventLog(sessionId);
   recordUserSubmitted(sessionLog, { turn_id: 'restore-turn', task: 'Resume test' });
   flushSessionEventLog(sessionDir, sessionLog);
@@ -73,7 +73,7 @@ describe('ChatEngine.restore()', () => {
     const sessionId = setupMockSession(testRoot);
     createdSessions.push(sessionId);
 
-    const engine = await ChatEngine.restore(sessionId, {
+    const engine = await ChatEngine.restore(sessionId, { model: 'deepseek-v4-flash-openrouter',
       task: 'Resume test',
       projectRoot: '/tmp',
     });
@@ -107,7 +107,7 @@ describe('ChatEngine.restore()', () => {
     const sessionId = setupMockSession(testRoot);
     createdSessions.push(sessionId);
 
-    const engine = await ChatEngine.restore(sessionId, {
+    const engine = await ChatEngine.restore(sessionId, { model: 'deepseek-v4-flash-openrouter',
       task: 'Resume test',
       projectRoot: '/tmp',
     });
@@ -131,7 +131,7 @@ describe('ChatEngine.restore()', () => {
 
     await assert.rejects(
       async () => {
-        await ChatEngine.restore(fakeId, {
+        await ChatEngine.restore(fakeId, { model: 'deepseek-v4-flash-openrouter',
           task: 'Should fail',
           projectRoot: '/tmp',
         });
@@ -154,7 +154,7 @@ describe('ChatEngine.restore()', () => {
 
     await assert.rejects(
       async () => {
-        await ChatEngine.restore(badId, {
+        await ChatEngine.restore(badId, { model: 'deepseek-v4-flash-openrouter',
           task: 'Should fail',
           projectRoot: '/tmp',
         });
@@ -182,7 +182,7 @@ describe('BABEL.md project memory', () => {
   it('does not copy BABEL.md into the system prompt', () => {
     writeFileSync(join(tmpDir, 'BABEL.md'), '# Test Project\nBABEL_MEMORY_SHOULD_NOT_LOAD\n', 'utf8');
 
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'what command runs tests?',
       projectRoot: tmpDir,
     });
@@ -215,7 +215,7 @@ describe('ChatEngine active verifier ledger & invalidation', () => {
     const sessionId = setupMockSession(testRoot);
     createdSessions.push(sessionId);
 
-    const engine = await ChatEngine.restore(sessionId, {
+    const engine = await ChatEngine.restore(sessionId, { model: 'deepseek-v4-flash-openrouter',
       task: 'Restore evidence test',
       projectRoot: '/tmp',
     });
@@ -228,7 +228,7 @@ describe('ChatEngine active verifier ledger & invalidation', () => {
 
 describe('ChatEngine recursive shell degradation & suppression loop', () => {
   it('suppresses recursive shell commands and emits list_dir advisory after repeat failures', async () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'Find all files in repo',
       projectRoot: '/tmp',
     });
@@ -265,7 +265,7 @@ describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
   it('synthesizes informational answer and completes normally with blockedReport: null on hard cap', async (t) => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'babel-readonly-cap-'));
     t.after(() => rmSync(projectRoot, { recursive: true, force: true }));
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'how many services exist in this project',
       projectRoot,
       maxTurns: 20,
@@ -324,7 +324,7 @@ describe('ChatEngine read-only inspection hard cap answer synthesis', () => {
   it('truthfully reports synthesis failure when synthesis runner errors without misreporting inspection budget', async (t) => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'babel-readonly-cap-'));
     t.after(() => rmSync(projectRoot, { recursive: true, force: true }));
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'how many services exist in this project',
       projectRoot,
       maxTurns: 20,

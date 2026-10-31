@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, isAbsolute } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { runGitCommand, runGitCommandBytes } from '../utils/gitExec.js'
 import { z } from 'zod'
 import { resolveRuntimeUserStateRoot } from '../config/runtimePaths.js'
 import { readRuntimeMode } from '../config/runtimeMode.js'
@@ -28,11 +28,11 @@ function atomicPlanWrite(path: string, plan: SavedPlan): void {
 /** Freshness uses names, commit identity and filesystem metadata, never credential file contents. */
 function projectFingerprint(root: string, env: NodeJS.ProcessEnv): string {
   const hash = createHash('sha256').update(root)
-  const git = spawnSync('git', ['-C', root, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], { encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 16 * 1024 * 1024 })
+  const git = runGitCommandBytes(['ls-files', '--cached', '--others', '--exclude-standard', '-z'], root, { env, timeoutMs: 10000, maxBuffer: 16 * 1024 * 1024 })
   let paths: string[]
   if (git.status === 0) {
-    paths = [...new Set(git.stdout.split('\0').filter(Boolean))]
-    const head = spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true, timeout: 3000 })
+    paths = [...new Set(git.stdout.toString('utf8').split('\0').filter(Boolean))]
+    const head = runGitCommand(['rev-parse', 'HEAD'], root, { env, timeoutMs: 3000 })
     hash.update(head.status === 0 ? head.stdout.trim() : 'unborn')
   } else {
     paths = []

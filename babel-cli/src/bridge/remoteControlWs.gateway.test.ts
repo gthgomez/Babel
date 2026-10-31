@@ -164,7 +164,7 @@ describe('Remote control WebSocket gateway', () => {
       allowedOrigins: ['http://127.0.0.1:*', 'http://localhost:*'],
       enforceControlLease: true,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'ws',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',

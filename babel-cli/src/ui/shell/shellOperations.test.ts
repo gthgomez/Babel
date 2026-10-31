@@ -75,6 +75,7 @@ test('New conversation clears the hosted transcript and rebinds to no session', 
   operations.newSession()
   assert.deepEqual(ctx.turns, [])
   assert.equal(ctx.chatEngine, undefined)
+  assert.equal(ctx.lastRoutingLabel, null)
   assert.equal(ctx.lastAssistantAnswer, null)
   assert.equal(ctx.lastResolvedTask, null)
   assert.equal(ctx.lastSessionRunDir, null)

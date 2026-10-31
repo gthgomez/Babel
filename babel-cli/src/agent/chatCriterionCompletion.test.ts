@@ -12,7 +12,7 @@ test('Chat supplies the current frozen head and private context to the shared ke
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
   try {
     const request = 'Update fixture.\nAcceptance criteria:\n- Preserve fixture output.'
-    const engine = new ChatEngine({ task: request, projectRoot: root })
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: request, projectRoot: root })
     engine.admitUserSubmission({ userInput: request }, { model: 'fixture-model', provider: 'ollama' })
     const box = engine as unknown as {
       executorKernel: ExecutorKernel

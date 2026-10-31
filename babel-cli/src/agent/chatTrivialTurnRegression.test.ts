@@ -118,7 +118,7 @@ describe('conversational turn classification', () => {
 describe('trivial text-only turns terminate normally', () => {
   test("'?' completes in one provider round without re-query", async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: '?',
       projectRoot: makeRoot(),
       maxTurns: 6,
@@ -141,7 +141,7 @@ describe('trivial text-only turns terminate normally', () => {
 
   test('unsupported final answers terminate through bounded completion recovery', async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       // Mutation-shaped fixture: the subject under test is the execute-intent
       // text-only loop guard, so the prompt must resolve to an effective
       // mutating operation (a bare problem statement is READ_ONLY-shaped).
@@ -185,7 +185,7 @@ describe('streamed answers are not duplicated', () => {
 
   test('final answer chunk is not re-emitted after live deltas', async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'hello',
       projectRoot: makeRoot(),
       maxTurns: 4,
@@ -219,7 +219,7 @@ describe('streamed answers are not duplicated', () => {
 
   test('zero-stream completion emits the answer exactly once', async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'hello',
       projectRoot: makeRoot(),
       maxTurns: 4,
@@ -248,7 +248,7 @@ describe('streamed answers are not duplicated', () => {
   });
 
   test('normalized legacy JSON final is buffered — parsed answer emitted exactly once', async () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'hello',
       projectRoot: makeRoot(),
       maxTurns: 4,
@@ -285,7 +285,7 @@ describe('streamed answers are not duplicated', () => {
 
   test('BLOCKED-declared completions are emitted once without prose promotion', async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'check the service status',
       projectRoot: makeRoot(),
       maxTurns: 4,
@@ -322,7 +322,7 @@ describe('streamed answers are not duplicated', () => {
 describe('per-round budget terminal precedes continuation mechanisms', () => {
   test('a single over-limit text round hard-stops after one provider call', async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'the login page is broken',
       projectRoot: makeRoot(),
       maxTurns: 8,
@@ -378,7 +378,7 @@ describe('per-round budget terminal precedes continuation mechanisms', () => {
 describe('generation boundaries (thinking without tools) segment streams', () => {
   test('engine emits thinking between consecutive text-only generations', async () => {
     const state = { calls: 0 };
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       // Mutation-shaped fixture: this test exercises the execute-intent
       // multi-generation loop, so the prompt must resolve to an effective
       // mutating operation.
@@ -514,7 +514,7 @@ describe('non-streaming path preserves generation boundaries', () => {
       // executor path and records real toolCallLog evidence.
       mkdirSync(join(wsRoot, 'src'), { recursive: true });
       writeFileSync(join(wsRoot, 'src', 'login.ts'), 'export const login = () => true\n', 'utf8');
-      const engine = new ChatEngine({
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
         task: 'fix the login page',
         projectRoot: wsRoot,
         maxTurns: 6,
@@ -621,7 +621,7 @@ describe('non-streaming path preserves generation boundaries', () => {
     try {
       const state = { calls: 0 };
       const wsRoot = makeRoot();
-      const engine = new ChatEngine({
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
         task: 'explain the parser behavior',
         projectRoot: wsRoot,
         maxTurns: 4,
@@ -711,7 +711,7 @@ describe('cancelled turn reports consistent per-turn telemetry', () => {
       getLastInvocationMetadata: () => ({ ...meta }),
     };
 
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'read the config file',
       projectRoot: makeRoot(),
       maxTurns: 6,

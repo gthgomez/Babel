@@ -100,7 +100,7 @@ interface ProtocolDescriptor {
  * production path end to end.
  */
 function realEngineFactory(descriptor: ProtocolDescriptor): ChatEngine {
-  const engine = new ChatEngine({
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
     task: `R1 6b-2 protocol resume ${descriptor.threadId}`,
     projectRoot: descriptor.projectRoot,
     runtimeMode: 'direct',

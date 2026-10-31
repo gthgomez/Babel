@@ -726,7 +726,7 @@ test('production hydrate: a stale historical checkpoint A fails validation after
       // Phase 1: restore (no checkpoint yet) and admit the durable owner of
       // record through the real production seam.
       const store = requireStore(threadId);
-      const engine1 = await ChatEngine.restore(threadId, {
+      const engine1 = await ChatEngine.restore(threadId, { model: 'deepseek-v4-flash-openrouter',
         task: 'task 4 currency fixture',
         projectRoot,
         admissionStore: store,
@@ -773,7 +773,7 @@ test('production hydrate: a stale historical checkpoint A fails validation after
 
       // Phase 2: production cold resume with the stale checkpoint file A.
       const store2 = requireStore(threadId);
-      const engine2 = await ChatEngine.restore(threadId, {
+      const engine2 = await ChatEngine.restore(threadId, { model: 'deepseek-v4-flash-openrouter',
         task: 'task 4 currency fixture resume',
         projectRoot,
         admissionStore: store2,

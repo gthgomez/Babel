@@ -158,7 +158,7 @@ test('a bound Chat engine cannot carry Git governance authority into another pro
     const { ChatEngine } = await import('../agent/chatEngine.js');
     const { readFileSync } = await import('node:fs');
     const { chatSessionDir } = await import('../cli/runsLayout.js');
-    const engine = new ChatEngine({ task: 'Inspect source files', projectRoot: f.worktree, trustedGitCommonDir: f.common });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Inspect source files', projectRoot: f.worktree, trustedGitCommonDir: f.common });
     try {
       const state = join(chatSessionDir(engine.getEngineRunId()), 'authority-session.json');
       const original = readFileSync(state, 'utf8');

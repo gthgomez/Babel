@@ -89,7 +89,7 @@ import { startBackgroundShell } from './backgroundShell.js';
 
 describe('H2 ChatEngine live authority freeze', () => {
   it('constructor freezes InstructionManifestV1 + TaskContractV1 and persists them', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix auth bug without expanding scope',
       projectRoot: process.cwd(),
     });
@@ -110,7 +110,7 @@ describe('H2 ChatEngine live authority freeze', () => {
   });
 
   it('policy fragments on manifest survive serialize/deserialize (handoff/resume)', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 't',
       projectRoot: process.cwd(),
     });
@@ -205,7 +205,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
   }
 
   it('restoreSessionEvents reloads authority and projects LiveSession with task/manifest/tools/revision/terminal', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix auth bug',
       projectRoot: process.cwd(),
     });
@@ -214,7 +214,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     const log = seedFullSession(runDir, 'fix auth bug');
 
     // Simulate cold resume on a fresh engine instance
-    const engine2 = new ChatEngine({
+    const engine2 = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'placeholder',
       projectRoot: process.cwd(),
     });
@@ -241,7 +241,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
   });
 
   it('checkpoint dual-writes budget_snapshot and live-session snapshot', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'checkpoint task',
       projectRoot: process.cwd(),
     });
@@ -345,7 +345,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
   });
 
   it('production checkpoint recovers durable infra terminal after flush fault removal', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'finalize flush resume',
       projectRoot: process.cwd(),
     });
@@ -387,7 +387,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     assert.ok(eq.ok, eq.mismatches.join(','));
     assert.equal(eq.live?.terminal?.outcome, 'INFRA_FAILURE');
 
-    const engine2 = new ChatEngine({
+    const engine2 = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'placeholder',
       projectRoot: process.cwd(),
       runId,
@@ -398,7 +398,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
   });
 
   it('production finalize commits session evidence before snapshot fault and repairs on retry', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'snapshot fault resume',
       projectRoot: process.cwd(),
     });
@@ -464,7 +464,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     assert.ok(existsSync(snapPath));
     const eq = resumeEquivalenceFromDisk(runDir);
     assert.ok(eq.ok, eq.mismatches.join(','));
-    const engine2 = new ChatEngine({
+    const engine2 = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'placeholder',
       projectRoot: process.cwd(),
       runId,
@@ -475,7 +475,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
   });
 
   it('stream and callback surfaces agree with durable terminal after snapshot fault', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'stream snapshot fault',
       projectRoot: process.cwd(),
     });
@@ -529,7 +529,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
     finalizeParityTurnSync(rt, runDir, terminalOutcome, 'completed');
     const eq = resumeEquivalenceFromDisk(runDir);
     assert.ok(eq.ok, eq.mismatches.join(','));
-    const engine2 = new ChatEngine({
+    const engine2 = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'placeholder',
       projectRoot: process.cwd(),
       runId,
@@ -540,7 +540,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
   });
 
   it('production finalize aligns session frontier and survives idempotent repeat finalize', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'prod finalize frontier',
       projectRoot: process.cwd(),
     });
@@ -606,7 +606,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
 
     const eq = resumeEquivalenceFromDisk(runDir);
     assert.ok(eq.ok, eq.mismatches.join(','));
-    const engine2 = new ChatEngine({
+    const engine2 = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'placeholder',
       projectRoot: process.cwd(),
       runId,
@@ -617,7 +617,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
   });
 
   it('disk resume equivalence of projected LiveSession', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'resume eq',
       projectRoot: process.cwd(),
     });
@@ -636,7 +636,7 @@ describe('H2 ChatEngine resume + LiveSession projection', () => {
 
 describe('H2 forced-termination at controller-visible boundaries', () => {
   it('interrupted mid-effect is not blindly retried after restore settle', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'kill mid write',
       projectRoot: process.cwd(),
     });
@@ -688,14 +688,14 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
       effect_class: 'non_idempotent_local_effect',
     });
     log.nextSeq = 1;
-    const engine = new ChatEngine({ task: 'reject orphan start', projectRoot: process.cwd() });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'reject orphan start', projectRoot: process.cwd() });
     assert.throws(
       () => engine.restoreSessionEvents(log),
       /tool_started requires exactly one prior tool_proposed/,
     );
   });
   it('fails closed when a persisted C2 commit does not match its durable thread capsule', () => {
-    const engine = new ChatEngine({ task: 'reject forged C2 link', projectRoot: process.cwd() });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'reject forged C2 link', projectRoot: process.cwd() });
     const threadLog = engine.getParityRuntime().eventLog;
     const turn = startTurn(threadLog, {
       task: 'C2 restore', model: 'test', provider: 'test', projectRoot: process.cwd(), policyPreset: 'safe',
@@ -817,7 +817,7 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
         paritySettleToolStarted(runtime, { id: entry.id, name: entry.name }, caseRunDir);
         const reloaded = loadSessionEventLogFromDir(caseRunDir)!;
         markInterruptedToolsOnResume(reloaded);
-        const engine = new ChatEngine({ task: `direct ${entry.name}`, projectRoot: process.cwd() });
+        const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: `direct ${entry.name}`, projectRoot: process.cwd() });
         engine.restoreSessionEvents(reloaded);
         const recovery = engine.getLiveSession().tools.recovery.find((item) => item.idempotencyKey === entry.id);
         assert.strictEqual(recovery?.state, 'TOOL_OUTCOME_UNKNOWN', entry.name);
@@ -840,7 +840,7 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
     ];
     for (const entry of cases) {
       const runId = `b2-direct-${entry.suffix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const engine = new ChatEngine({ task: `direct ${entry.suffix}`, projectRoot: process.cwd(), runId });
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: `direct ${entry.suffix}`, projectRoot: process.cwd(), runId });
       const awaitJob = entry.suffix === 'await'
         ? startBackgroundShell({ command: 'echo babel-b2-await', cwd: process.cwd(), timeoutMs: 5_000, ownerId: runId })
         : undefined;
@@ -894,7 +894,7 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
       markInterruptedToolsOnResume(afterDispatch);
       flushSessionEventLog(runDir, afterDispatch);
 
-      const resumed = new ChatEngine({ task: `direct ${entry.suffix}`, projectRoot: process.cwd(), runId, resumeExisting: true });
+      const resumed = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: `direct ${entry.suffix}`, projectRoot: process.cwd(), runId, resumeExisting: true });
       resumed.restoreSessionEvents(loadSessionEventLogFromDir(runDir)!, { runDir });
       const blocked = await (resumed as unknown as {
         executeOneAction: (input: typeof action, context: object, callbacks: object, meta: { index: number; subAgentCounter: number; idempotencyKey: string }) => Promise<{ observation: string }>;
@@ -912,7 +912,7 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
     ];
     for (const entry of cases) {
       const runId = `b2-not-started-${entry.suffix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const engine = new ChatEngine({ task: entry.suffix, projectRoot: process.cwd(), runId });
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: entry.suffix, projectRoot: process.cwd(), runId });
       const runDir = (engine as unknown as { engineRunDir: string }).engineRunDir;
       const log = createSessionEventLog(runId);
       recordUserSubmitted(log, { turn_id: 't', task: entry.suffix });
@@ -944,7 +944,7 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
   it('requires and durably audits explicit reconciliation before an equivalent fresh-id retry', async () => {
     const action = { type: 'run_command' as const, command: 'echo guarded' };
     const fingerprint = operationFingerprint('run_command', action);
-    const engine = new ChatEngine({ task: 'recover shell', projectRoot: process.cwd() });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'recover shell', projectRoot: process.cwd() });
     const log = createSessionEventLog('fresh-id-recovery');
     recordUserSubmitted(log, { turn_id: 't', task: 'recover shell' });
     recordToolProposed(log, {
@@ -1024,13 +1024,13 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
       reconciliation_ref: 'operator-ticket-B2-forged',
     });
 
-    const engine = new ChatEngine({ task: 'reject forged recovery', projectRoot: process.cwd() });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'reject forged recovery', projectRoot: process.cwd() });
     assert.throws(
       () => engine.restoreSessionEvents(log),
       /tool lifecycle cannot record a terminal after a terminal/,
     );
   });  it('projects unknown outcomes and injects explicit repair guidance on restore', () => {
-    const engine = new ChatEngine({ task: 'recover interrupted tool', projectRoot: process.cwd() });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'recover interrupted tool', projectRoot: process.cwd() });
     const log = createSessionEventLog('unknown-outcome');
     recordUserSubmitted(log, { turn_id: 't', task: 'recover interrupted tool' });
     recordToolProposed(log, {
@@ -1113,7 +1113,7 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
       'before_terminal',
       'after_terminal',
     ];
-    const engine = new ChatEngine({ task: 't', projectRoot: process.cwd() });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 't', projectRoot: process.cwd() });
     for (const b of boundaries) {
       const events = sliceSessionAtBoundary(full, b);
       const partial = {
@@ -1140,7 +1140,7 @@ describe('H2 forced-termination at controller-visible boundaries', () => {
 describe('H2 plan mode contract is read-only', () => {
   it('plan-profile TaskContract only allows read_only effects', () => {
     // ChatEngine uses executionProfile; construct with plan profile when available
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'plan a fix',
       projectRoot: process.cwd(),
       executionProfile: 'plan',
@@ -1154,7 +1154,7 @@ describe('H2 plan mode contract is read-only', () => {
 
 describe('H3/H4 live ChatEngine wiring', () => {
   it('failure budgets: infra consume does not touch implementation budget', () => {
-    const engine = new ChatEngine({ task: 't', projectRoot: process.cwd() });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 't', projectRoot: process.cwd() });
     const before = engine.getFailureBudgets();
     assert.ok(engine.consumeFailureBudget(makeFailureCapsule('infrastructure', 't', 'timeout')));
     const after = engine.getFailureBudgets();
@@ -1180,7 +1180,7 @@ describe('H3/H4 live ChatEngine wiring', () => {
   });
 
   it('H4: completed idempotency keys deny double mutation', async () => {
-    const engine = new ChatEngine({ task: 't', projectRoot: process.cwd() });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 't', projectRoot: process.cwd() });
     const log = createSessionEventLog('idemp');
     recordUserSubmitted(log, { turn_id: 't', task: 't' });
     recordToolProposed(log, {
@@ -1232,7 +1232,7 @@ describe('H3/H4 live ChatEngine wiring', () => {
 
 describe('H6 golden from ChatEngine session path', () => {
   it('builds and validates golden from controller-owned session events with live_runtime provenance', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'golden task',
       projectRoot: process.cwd(),
     });

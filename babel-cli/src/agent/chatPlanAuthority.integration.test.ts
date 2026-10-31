@@ -23,7 +23,7 @@ if(!isSyntheticProviderFixtureReady()){
   test('preparing Plan rebinds the kernel tool policy before dispatch',async()=>{
     const target=join(process.cwd(),'kernel-plan.txt');
     writeFileSync(target,'unchanged fixture bytes');
-    const engine=new ChatEngine({task:'Inspect the proposed change',projectRoot:process.cwd(),executionProfile:'chat'});
+    const engine=new ChatEngine({ model: 'deepseek-v4-flash-openrouter',task:'Inspect the proposed change',projectRoot:process.cwd(),executionProfile:'chat'});
     try{
       engine.applyTurnPreparation({task:'Plan the change without applying it',executionProfile:'plan'});
       const kernel=(engine as unknown as {executorKernel:import('../executor/kernel.js').ExecutorKernel}).executorKernel;
@@ -38,7 +38,7 @@ if(!isSyntheticProviderFixtureReady()){
   for(const reused of [false,true])test(`active Plan denies mutation before dispatch despite a ${reused?'retained':'constructor'} implementation handoff`,async()=>{
     const target=join(process.cwd(),`plan-${reused}.txt`);
     writeFileSync(target,'unchanged fixture bytes');
-    const engine=new ChatEngine({task:'Inspect the proposed change',projectRoot:process.cwd(),executionProfile:reused?'chat':'plan',planHandoff:handoff});
+    const engine=new ChatEngine({ model: 'deepseek-v4-flash-openrouter',task:'Inspect the proposed change',projectRoot:process.cwd(),executionProfile:reused?'chat':'plan',planHandoff:handoff});
     try{
       if(reused)engine.applyTurnPreparation({task:'Plan the change without applying it',executionProfile:'plan'});
       // Drive the real tool boundary without inference. Even the unfixed path

@@ -392,7 +392,7 @@ describe('Live resume via event log', () => {
       assert.match(tool?.content ?? '', /hello world/);
 
       // applyEventLogToChatEngine is the live resume path
-      const engine2 = new ChatEngine({ task: 'x', projectRoot: root });
+      const engine2 = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'x', projectRoot: root });
       applyEventLogToChatEngine(engine2, log, { systemPrompt: 'sys' });
       assert.ok(
         engine2.getProviderConversation().some((m) => m.tool_call_id === 'call_live_1'),
@@ -760,7 +760,7 @@ describe('Live failover on engine', () => {
 
 describe('C1 model-visible equals persisted', () => {
   test('ChatEngine shadows a mutated final native wire request', () => {
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 't', projectRoot: process.cwd(), runtimeInvariantMode: 'shadow',
     });
     const turnId = startTurn(engine.getParityRuntime().eventLog, {
@@ -789,7 +789,7 @@ describe('Live cancel without input arbiter coupling', () => {
     dispatchInputArbiter({ type: 'run_started' });
     assert.equal(getInputArbiterState().mode, 'running');
 
-    const engine = new ChatEngine({ task: 't', projectRoot: process.cwd() });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 't', projectRoot: process.cwd() });
     engine.cancel();
     assert.equal(getInputArbiterState().cancelArmed, false);
     assert.equal(engine.getParityRuntime().loop.outcome, 'CANCELLED');

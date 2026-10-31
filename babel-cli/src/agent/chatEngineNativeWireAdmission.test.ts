@@ -126,7 +126,7 @@ test('empty Python workspace guidance does not invent a Node test target', () =>
   const root = mkdtempSync(join(tmpdir(), 'babel-empty-python-tests-'))
   try {
     writeFileSync(join(root, 'solution.py'), 'def add(a, b):\n    return a + b\n')
-    const engine = new ChatEngine({ task: 'Implement the requested Python function and report verification accurately.', projectRoot: root })
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Implement the requested Python function and report verification accurately.', projectRoot: root })
     const internal = engine as unknown as { getOrBuildSystemPrompt: (mode: 'native') => string; discoveredTestCommands: unknown[] }
     const prompt = internal.getOrBuildSystemPrompt('native')
     assert.equal(internal.discoveredTestCommands.length, 0)

@@ -265,6 +265,8 @@ export interface ResolvedModelPolicyStageRoute {
 }
 
 export interface ResolvedModelPolicy {
+  /** Explicit requested output budget; model capacity alone never selects it. */
+  requestedOutputTokens?: number;
   /** Trusted user connection metadata; never contains a credential value. */
   connectionId?: string;
   authentication?: 'api-key' | 'none';

@@ -36,7 +36,7 @@ describe('shared host-run approval journey (broker → NDJSON → stdin decide)'
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'approval-journey',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',

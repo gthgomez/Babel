@@ -29,13 +29,14 @@ test('GLM backend key creates the exact OpenRouter phase runner', () => {
   }
 });
 
-test('phase runner uses OpenRouter for the exact GLM live route', () => {
+test('phase runner accepts the exact GLM ID with an explicit OpenRouter provider', () => {
   const previousOffline = process.env['BABEL_OFFLINE'];
   const previousKey = process.env['OPENROUTER_API_KEY'];
   delete process.env['BABEL_OFFLINE'];
   process.env['OPENROUTER_API_KEY'] = 'test-openrouter-key';
   try {
-    assert.ok(makeChatRunner('z-ai/glm-5.3-flash') instanceof OpenRouterApiRunner);
+    const runner = makeChatRunner('z-ai/glm-5.3-flash', 'openrouter');
+    assert.ok(runner instanceof OpenRouterApiRunner);
   } finally {
     if (previousOffline === undefined) delete process.env['BABEL_OFFLINE'];
     else process.env['BABEL_OFFLINE'] = previousOffline;

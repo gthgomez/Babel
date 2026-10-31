@@ -33,7 +33,7 @@ describe('shared host-run transport recovery with authoritative approval lookup'
       desktopControllerClientId: desktopId,
       desktopControllerProofKey: desktopProofKey,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'transport-recovery',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',

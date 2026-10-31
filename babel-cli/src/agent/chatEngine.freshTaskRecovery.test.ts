@@ -107,7 +107,7 @@ function recoveryInspectionFixture() {
   execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
   execFileSync('git', ['add', 'package.json', target, 'src/agent/unrelated.ts'], { cwd: root, windowsHide: true });
   commitFixture(root);
-  const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: root });
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'repair the parser failure', projectRoot: root });
   const binding = (engine as any).currentRecoveryBinding();
   assert.ok(binding?.workspaceRevision, 'fixture requires a physically captured committed candidate');
   (engine as any).workingState = redRecoveryState(engine, root);
@@ -253,7 +253,7 @@ test('R1 recovery permit is invalidated by external workspace drift before mutat
     writeFileSync(file, 'export const value = 1\n');
     execFileSync('git', ['add', 'src/parser.ts'], { cwd: root, windowsHide: true });
     commitFixture(root);
-    const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'repair parser', projectRoot: root });
     let state = applyWorkingStateEvent(createWorkingState('repair parser'), {
       type: 'mutation', path: 'src/parser.ts', fingerprint: 'failed-patch',
     });
@@ -292,7 +292,7 @@ test('R1 repair plan rejects a repeated edit and admits one changed scoped edit'
     writeFileSync(file, 'export const value = 2\n');
     execFileSync('git', ['add', 'src/parser.ts'], { cwd: root, windowsHide: true });
     commitFixture(root);
-    const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'repair parser', projectRoot: root });
     const failedAction = { type: 'str_replace' as const, file_path: 'src/parser.ts', old_str: 'value = 1', new_str: 'value = 2' };
     const failedEdit = actualRecoveryEdit(failedAction, root)!;
     let state = applyWorkingStateEvent(createWorkingState('repair parser'), {
@@ -418,7 +418,7 @@ test('R1 snapshot persistence failure blocks mutation without running the shell'
   const root = mkdtempSync(join(tmpdir(), 'babel-r1-persistence-'));
   const marker = join(root, 'executed.txt');
   try {
-    const engine = new ChatEngine({ task: 'repair parser', projectRoot: process.cwd() });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'repair parser', projectRoot: process.cwd() });
     (engine as any).recoveryStatePersistenceUnavailable = true;
     const result = await (engine as any).executeOneAction(
       { type: 'run_command', command: `node -e "require('fs').writeFileSync('${marker.replaceAll('\\', '/')}', 'executed')"` },
@@ -448,7 +448,7 @@ test('R1 arbitrary interpreter failure is not authoritative verifier evidence', 
     });
     process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
     process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
-    const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'repair parser', projectRoot: root });
     process.env['BABEL_DRY_RUN'] = 'false';
     process.env['BABEL_DRY_RUN_SOURCE'] = 'session';
     const state = applyWorkingStateEvent(createWorkingState('repair parser'), {
@@ -485,7 +485,7 @@ test('R1 no-target red localizes through a related read before admitting a plan'
     writeFileSync(file, 'export function parseToken() {\n  return 1\n}\n');
     execFileSync('git', ['add', 'src/parser.js'], { cwd: root, windowsHide: true });
     commitFixture(root);
-    const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'repair parser', projectRoot: root });
     const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
     (engine as any).workingState = ingestVerifierResult({
       state: createWorkingState('repair parser'), tool: 'test_run', target: 'npm test', exitCode: 1,
@@ -548,7 +548,7 @@ test('recovery evidence cannot authorize an edit after switching from the projec
   delete process.env['BABEL_LIVE'];
   delete process.env['BABEL_DRY_RUN_SOURCE'];
   try {
-    const engine = new ChatEngine({ task: 'repair the parser failure', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'repair the parser failure', projectRoot: root });
     const context = { agentId: 'test', runId: 'test', runDir: storage, babelRoot: root, projectRoot: root };
     const binding = (engine as any).currentRecoveryBinding();
     assert.ok(binding, 'the ordinary project tree supports recovery binding');
@@ -621,7 +621,7 @@ test('PR242: proven old_str mismatch permits one fresh corrected repair through 
     writeFileSync(file, 'export function parseToken() {\n  return 1\n}\n');
     execFileSync('git', ['add', 'src/parser.js'], { cwd: root, windowsHide: true });
     commitFixture(root);
-    const engine = new ChatEngine({ task: 'repair parser', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'repair parser', projectRoot: root });
     const context = { agentId: 'test', runId: 'test', runDir: root, babelRoot: root };
     (engine as any).workingState = ingestVerifierResult({
       state: createWorkingState('repair parser'), tool: 'test_run', target: 'npm test', exitCode: 1,
@@ -670,7 +670,7 @@ test('R1 no-target test name needs a bounded glob followed by a corroborating re
     writeFileSync(join(root, 'tests', 'parser.test.ts'), 'test("parser handles tokens", () => {})\n');
     execFileSync('git', ['add', 'tests/parser.test.ts'], { cwd: root, windowsHide: true });
     commitFixture(root);
-    const engine = new ChatEngine({ task: 'repair parser test', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'repair parser test', projectRoot: root });
     (engine as any).workingState = ingestVerifierResult({
       state: createWorkingState('repair parser test'), tool: 'test_run',
       target: 'npm test -- parser.test.ts', exitCode: 1,
@@ -717,7 +717,7 @@ test('R1 legacy exhausted localization resumes governed inspection with counters
 });
 
 test('#216 [REPRODUCTION] fresh submission must not inherit task-local recovery punishment', () => {
-  const engine = new ChatEngine({ task: 'A: investigate stall', projectRoot: process.cwd() });
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'A: investigate stall', projectRoot: process.cwd() });
   engine.applyUserSubmission({ userInput: 'A: investigate stall' });
   driveToTerminalBlocked(engine);
 
@@ -741,7 +741,7 @@ test('#216 [REPRODUCTION] fresh submission must not inherit task-local recovery 
 });
 
 test('#216 continueTask preserves task-local recovery state (positive control)', () => {
-  const engine = new ChatEngine({ task: 'A: investigate stall', projectRoot: process.cwd() });
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'A: investigate stall', projectRoot: process.cwd() });
   engine.applyUserSubmission({ userInput: 'A: investigate stall' });
   driveToTerminalBlocked(engine);
 
@@ -759,7 +759,7 @@ test('#216 continueTask preserves task-local recovery state (positive control)',
 });
 
 test('#216 capability health survives a task boundary and is not blanked', () => {
-  const engine = new ChatEngine({ task: 'Find all files in repo', projectRoot: '/tmp' });
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Find all files in repo', projectRoot: '/tmp' });
   const controller = progress(engine);
 
   // Only a genuine capability failure degrades the family. An isolation or

@@ -121,8 +121,8 @@ export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
         }
         retry = !!failure && attempt === 1 && metadata?.provider === 'opencode-go' &&
           (metadata.observed_model_id === null || metadata.observed_model_id === this.reviewModel) && (
-          /^\[deepInfraApi\] (Network error|request timeout|HTTP 50[234]\b)/i.test(failure.message) ||
-          failure.message === '[deepInfraApi] stream closed before terminal [DONE] marker'
+          /^\[opencode-go\] (Network error|request timeout|HTTP 50[234]\b)/i.test(failure.message) ||
+          failure.message === '[opencode-go] stream closed before terminal [DONE] marker'
         );
         if (!retry) {
           if (failure) yield failure;

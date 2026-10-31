@@ -41,6 +41,7 @@ export function createCommandCodeHarnessEngine(options: CommandCodeHarnessEngine
   const registry = options.registry;
   const descriptor = options.descriptor;
   const engine = new ChatEngine({
+    inferenceOwner: 'external-harness',
     task: descriptor.task ?? 'command-code-harness',
     projectRoot: descriptor.projectRoot,
     executionProfile: 'chat',

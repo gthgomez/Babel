@@ -270,7 +270,7 @@ describe('backgroundShell', () => {
       'setTimeout(()=>{},60000);',
     ].join(''));
     const runId = 'bg-shell-abort-tree';
-    const engine = new ChatEngine({ task: 't', projectRoot: process.cwd(), runId });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 't', projectRoot: process.cwd(), runId });
     let grandchildPid: number | undefined;
     try {
       const job = startBackgroundShell({ command: `node ${parentScript} ${grandchildScript}`, cwd: process.cwd(), timeoutMs: 60_000, ownerId: runId });
@@ -289,7 +289,7 @@ describe('backgroundShell', () => {
     const sleeper =
       process.platform === 'win32' ? 'ping -n 10 127.0.0.1' : 'sleep 8';
     const runId = 'bg-shell-abort-test';
-    const engine = new ChatEngine({ task: 't', projectRoot: process.cwd(), runId });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 't', projectRoot: process.cwd(), runId });
     const job = startBackgroundShell({
       command: sleeper,
       cwd: process.cwd(),

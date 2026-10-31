@@ -279,7 +279,7 @@ describe('R0-A: streaming terminal authority', () => {
     const wsRoot = makeRoot();
     mkdirSync(join(wsRoot, 'src'), { recursive: true });
     writeFileSync(join(wsRoot, 'src', 'service.ts'), 'export const ping = () => true\n', 'utf8');
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'check the service status',
       projectRoot: wsRoot,
       maxTurns: 6,
@@ -301,7 +301,7 @@ describe('R0-A: streaming terminal authority', () => {
 
   test('R0-5: a missing file + BLOCKED is repairable, not a terminal block', async () => {
     const wsRoot = makeRoot();
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'read the config file',
       projectRoot: wsRoot,
       maxTurns: 6,
@@ -336,7 +336,7 @@ describe('R0-A: streaming terminal authority', () => {
     const secret = join(wsRoot, 'secret.txt');
     writeFileSync(secret, 'top secret\n', 'utf8');
     chmodSync(secret, 0o000);
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'read the secret file',
       projectRoot: wsRoot,
       maxTurns: 6,
@@ -362,7 +362,7 @@ describe('R0-A: streaming terminal authority', () => {
 
   test('R0-9: an unsupported_operation failed stream carries a coherent tuple', async () => {
     const wsRoot = makeRoot();
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'run the unsupported operation',
       projectRoot: wsRoot,
       maxTurns: 3,
@@ -402,7 +402,7 @@ describe('R0-A: callback/non-stream terminal authority', () => {
     const wsRoot = makeRoot();
     mkdirSync(join(wsRoot, 'src'), { recursive: true });
     writeFileSync(join(wsRoot, 'src', 'service.ts'), 'export const ping = () => true\n', 'utf8');
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'check the service status',
       projectRoot: wsRoot,
       maxTurns: 6,
@@ -440,7 +440,7 @@ describe('R0-A: callback/non-stream terminal authority', () => {
 
 describe('R0-A: buildVerifierBlockedReport emits a schema-valid, evidence-backed report', () => {
   function engineWith(overrides: Record<string, unknown> = {}): ChatEngine {
-    const engine = new ChatEngine({ task: 'finish the task', projectRoot: makeRoot(), maxTurns: 2 });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'finish the task', projectRoot: makeRoot(), maxTurns: 2 });
     Object.assign(engine as unknown as Record<string, unknown>, overrides);
     return engine;
   }

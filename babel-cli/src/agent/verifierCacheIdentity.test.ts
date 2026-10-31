@@ -283,7 +283,7 @@ describe('verifier cache executions follow argv identity', { concurrency: false 
   });
 
   function harness() {
-    const engine = new ChatEngine({ task: 'verify the fixture', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'verify the fixture', projectRoot: root });
     const host = engine as unknown as {
       executeOneAction: (...args: unknown[]) => Promise<{ observation: string }>;
       lastVerifierReceipt: Awaited<ReturnType<typeof bindChatVerifierReceipt>> | null;
@@ -389,7 +389,7 @@ describe('verifier cache executions follow argv identity', { concurrency: false 
     const lines = (): string[] => existsSync(log)
       ? readFileSync(log, 'utf8').trim().split(/\r?\n/).filter((line) => line.length > 0)
       : [];
-    const engine = new ChatEngine({ task: 'verify the fixture', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'verify the fixture', projectRoot: root });
     const context = {
       runId: 'verifier-argv',
       agentId: 'test-agent',

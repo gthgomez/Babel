@@ -107,7 +107,7 @@ test('unlimited wall survives active work, JSON roundtrip and cold resume withou
   let now = 1_800_000_000_000
   Date.now = () => now
   try {
-    const engine = new ChatEngine({ task: 'Count repository files', projectRoot: root })
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Count repository files', projectRoot: root })
     engine.applyUserSubmission({ userInput: 'Count repository files' })
     const access = allowanceAccess(engine)
     access.beginActiveExecution()
@@ -118,7 +118,7 @@ test('unlimited wall survives active work, JSON roundtrip and cold resume withou
     const snapshot = JSON.parse(JSON.stringify(access.getTaskAllowanceSnapshot()))
     assert.deepEqual(snapshot.grant.wallAllowance, { kind: 'unlimited' })
     assert.ok(parseTaskAllowance(snapshot))
-    const resumed = new ChatEngine({ task: 'Count repository files', projectRoot: root,
+    const resumed = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'Count repository files', projectRoot: root,
       runId: engine.getEngineRunId(), resumeExisting: true })
     assert.equal(allowanceAccess(resumed).checkBudgets().ok, true)
     assert.equal(allowanceAccess(resumed).getTaskAllowanceSnapshot()!.consumed.activeWallMs, 1_200_000)
@@ -164,7 +164,7 @@ test('unlimited repair survives the old 180-second cap and cold resume with stal
   let now = 1_800_000_000_000
   Date.now = () => now
   try {
-    const engine = new ChatEngine({ task: 'fix the failing implementation', projectRoot: root })
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'fix the failing implementation', projectRoot: root })
     engine.applyUserSubmission({ userInput: 'fix the failing implementation' })
     const access = allowanceAccess(engine)
     const internals = engine as unknown as {
@@ -198,7 +198,7 @@ test('unlimited repair survives the old 180-second cap and cold resume with stal
     assert.equal(internals.taskAllowanceOwner.deriveChildAllowance(2).deadlineAtMs, null)
     access.pauseActiveExecution()
     const before = access.getTaskAllowanceSnapshot()!
-    const resumed = new ChatEngine({ task: 'fix the failing implementation', projectRoot: root,
+    const resumed = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'fix the failing implementation', projectRoot: root,
       runId: engine.getEngineRunId(), resumeExisting: true })
     const restored = allowanceAccess(resumed).getTaskAllowanceSnapshot()!
     assert.equal(allowanceAccess(resumed).checkBudgets().ok, true)
@@ -225,7 +225,7 @@ test('historical finite wall evidence expires honestly after cold resume under u
   let now = 1_800_000_000_000
   Date.now = () => now
   try {
-    const engine = new ChatEngine({ task: 'finite task', projectRoot: root, maxWallMs: 600_000 })
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'finite task', projectRoot: root, maxWallMs: 600_000 })
     engine.applyTurnPreparation({ task: 'finite task', projectRoot: root, limits: resolveChatEngineLimits() })
     engine.applyUserSubmission({ userInput: 'finite task' })
     assert.equal(engine.getTaskAllowanceSnapshot()!.grant.wallCapMs, 600_000)
@@ -237,7 +237,7 @@ test('historical finite wall evidence expires honestly after cold resume under u
     const historical = JSON.parse(readFileSync(file, 'utf8'))
     delete historical.grant.wallAllowance
     writeFileSync(file, JSON.stringify(historical))
-    const resumed = new ChatEngine({ task: 'finite task', projectRoot: root,
+    const resumed = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'finite task', projectRoot: root,
       runId: engine.getEngineRunId(), resumeExisting: true })
     const result = allowanceAccess(resumed).checkBudgets()
     assert.equal(result.ok, false)
@@ -261,7 +261,7 @@ test('historical finite repair caps survive cold resume under unlimited defaults
   const previousRuns = process.env['BABEL_RUNS_DIR']
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
   try {
-    const engine = new ChatEngine({ task: 'finite repair', projectRoot: root, maxWallMs: 600_000 })
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'finite repair', projectRoot: root, maxWallMs: 600_000 })
     engine.applyUserSubmission({ userInput: 'finite repair' })
     const internals = engine as unknown as {
       postWriteRepairWallCapMs: number | null
@@ -270,7 +270,7 @@ test('historical finite repair caps survive cold resume under unlimited defaults
     internals.postWriteRepairWallCapMs = 180_000
     internals.taskAllowance.consumed.activeWallMs = 200_000
     allowanceAccess(engine).persistTaskAllowance()
-    const resumed = new ChatEngine({ task: 'finite repair', projectRoot: root,
+    const resumed = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'finite repair', projectRoot: root,
       runId: engine.getEngineRunId(), resumeExisting: true })
     assert.equal(allowanceAccess(resumed).getTaskAllowanceSnapshot()!.repair.postWriteRepairWallCapMs, 180_000)
     assert.equal(allowanceAccess(resumed).checkBudgets().limiter, 'wall_repair')
@@ -291,7 +291,7 @@ test('fresh objectives use current wall environment without promoting it to a co
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
   process.env['BABEL_CHAT_MAX_WALL_MS'] = '40000'
   try {
-    const engine = new ChatEngine({ task: 'first task', projectRoot: root })
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'first task', projectRoot: root })
     const prepare = (task: string) => engine.applyTurnPreparation({ task, projectRoot: root, limits: resolveChatEngineLimits() })
     prepare('first task')
     engine.applyUserSubmission({ userInput: 'first task' })
@@ -308,7 +308,7 @@ test('fresh objectives use current wall environment without promoting it to a co
     assert.equal(allowanceAccess(engine).checkBudgets().limiter, 'wall')
     allowanceAccess(engine).pauseActiveExecution()
 
-    const constructor = new ChatEngine({ task: 'explicit constructor task', projectRoot: root, maxWallMs: 30_000 })
+    const constructor = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'explicit constructor task', projectRoot: root, maxWallMs: 30_000 })
     constructor.applyTurnPreparation({ task: 'explicit constructor task', projectRoot: root, limits: resolveChatEngineLimits() })
     constructor.applyUserSubmission({ userInput: 'explicit constructor task' })
     assert.equal(constructor.getTaskAllowanceSnapshot()!.grant.wallCapMs, 30_000)
@@ -329,7 +329,7 @@ test('fresh objectives use current wall environment without promoting it to a co
 
 test('user cancellation still stops a real owned background process under the default wall allowance', { timeout: 10_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-wall-cancel-'))
-  const engine = new ChatEngine({ task: 'cancel controlled work', projectRoot: root })
+  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'cancel controlled work', projectRoot: root })
   const ownerId = engine.getEngineRunId()
   const script = join(root, 'wait.cjs')
   writeFileSync(script, 'setInterval(function () {}, 1000)')

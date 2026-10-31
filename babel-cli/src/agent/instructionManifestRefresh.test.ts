@@ -42,7 +42,7 @@ describe('#216(#4) reused-engine manifest refresh', () => {
     writeAgents(rootA, 'NONCE_A_ONLY');
     writeAgents(rootB, 'NONCE_B_ONLY');
 
-    const engine = new ChatEngine({ task: 'first task', projectRoot: rootA });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'first task', projectRoot: rootA });
     const first = engine.getInstructionManifest();
     assert.ok(first, 'engine must expose an instruction manifest after construction');
     const firstAgents = first!.fragments.find((f) => f.rule_id === 'identity:agents');
@@ -72,7 +72,7 @@ describe('#216(#4) reused-engine manifest refresh', () => {
     process.env['BABEL_RUNS_DIR'] = makeRoot('babel-refresh-runs-');
     const root = makeRoot('babel-refresh-same-');
     writeAgents(root, 'NONCE_SAME');
-    const engine = new ChatEngine({ task: 'same root', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'same root', projectRoot: root });
     const before = engine.getInstructionManifest();
     engine.applyTurnPreparation({ task: 'same root again', projectRoot: root });
     const after = engine.getInstructionManifest();
@@ -88,7 +88,7 @@ describe('#216(#4) reused-engine manifest refresh', () => {
     process.env['BABEL_RUNS_DIR'] = makeRoot('babel-refresh-runs-');
     const root = makeRoot('babel-refresh-content-');
     writeAgents(root, 'NONCE_V1');
-    const engine = new ChatEngine({ task: 'same root', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'same root', projectRoot: root });
     const before = engine
       .getInstructionManifest()!
       .fragments.find((f) => f.rule_id === 'identity:agents');
@@ -111,7 +111,7 @@ describe('#216(#4) reused-engine manifest refresh', () => {
     process.env['BABEL_RUNS_DIR'] = makeRoot('babel-refresh-runs-');
     const root = makeRoot('babel-refresh-cont-');
     writeAgents(root, 'NONCE_V1');
-    const engine = new ChatEngine({ task: 'same root', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'same root', projectRoot: root });
     engine.applyUserSubmission({ userInput: 'first task' });
     const before = engine
       .getInstructionManifest()!

@@ -88,7 +88,7 @@ describe('ADR-010 bridge gateway', () => {
       allowedWorkspaceRoot: tmp,
       allowedOrigins: ['http://127.0.0.1'],
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: descriptor.task ?? 'spike',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',
@@ -238,7 +238,7 @@ describe('ADR-010 bridge gateway', () => {
       authToken: TOKEN,
       allowedWorkspaceRoot: tmp,
       engineFactory: (descriptor) => {
-        const engine = new ChatEngine({
+        const engine = new ChatEngine({ inferenceOwner: 'external-harness',
           task: 'cancel',
           projectRoot: descriptor.projectRoot,
           executionProfile: 'chat',

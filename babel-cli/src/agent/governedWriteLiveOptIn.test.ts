@@ -153,7 +153,7 @@ describe('governed mutations carry an invocation-scoped live decision', { concur
       `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'ran');\nprocess.exit(1);\n`,
       'utf8',
     );
-    const engine = new ChatEngine({ task: 'update the fixture and verify it', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'update the fixture and verify it', projectRoot: root });
     const context = { ...ctx('live-optin-verifier', root), runDir: root };
     await (engine as unknown as {
       executeOneAction: (...args: unknown[]) => Promise<{ observation: string }>;
@@ -200,7 +200,7 @@ describe('governed mutations carry an invocation-scoped live decision', { concur
       `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'ran');\nprocess.exit(1);\n`,
       'utf8',
     );
-    const engine = new ChatEngine({ task: 'update the fixture and verify it', projectRoot: root });
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'update the fixture and verify it', projectRoot: root });
     const context = { ...ctx('live-optin-dry-verifier', root), runDir: root };
     const call = (engine as unknown as {
       executeOneAction: (...args: unknown[]) => Promise<{ observation: string }>;

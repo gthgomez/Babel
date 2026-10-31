@@ -21,6 +21,7 @@ export function createClaudeCodeHarnessEngine(options: ClaudeCodeHarnessEngineOp
   const registry = options.registry;
   const descriptor = options.descriptor;
   const engine = new ChatEngine({
+    inferenceOwner: 'external-harness',
     task: descriptor.task ?? 'claude-code-harness',
     projectRoot: descriptor.projectRoot,
     executionProfile: 'chat',

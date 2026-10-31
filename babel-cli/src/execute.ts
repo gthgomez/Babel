@@ -117,7 +117,7 @@ function explicitModelTier(model: string, liveOnly: boolean, allowExpensive = fa
   const provider = resolved.provider
   return { kind: 'api', name: resolved.resolvedBackendKey, provider, backendKey: resolved.resolvedBackendKey,
     factory: () => createProviderRunner({ provider, modelId: resolved.providerModelId,
-      ...(resolved.contextWindow ? { contextWindowTokens: resolved.contextWindow } : {}), ...(resolved.authentication ? { authentication: resolved.authentication } : {}), ...(resolved.maxOutputTokens ? { sampling: { maxTokens: resolved.maxOutputTokens } } : {}), ...(resolved.apiKeyEnvVar ? { apiKeyEnvVar: resolved.apiKeyEnvVar } : {}), ...(resolved.baseUrl ? { baseUrl: resolved.baseUrl } : {}) }) }
+      ...(resolved.contextWindow ? { contextWindowTokens: resolved.contextWindow } : {}), ...(resolved.authentication ? { authentication: resolved.authentication } : {}), ...(resolved.requestedOutputTokens ? { sampling: { maxTokens: resolved.requestedOutputTokens } } : {}), ...(resolved.apiKeyEnvVar ? { apiKeyEnvVar: resolved.apiKeyEnvVar } : {}), ...(resolved.baseUrl ? { baseUrl: resolved.baseUrl } : {}) }) }
 
 }
 

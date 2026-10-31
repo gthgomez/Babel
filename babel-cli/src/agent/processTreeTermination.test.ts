@@ -275,7 +275,7 @@ describe('real process-tree termination (qualifying)', () => {
     const marker = join(dir, 'post-terminal.txt');
     const scripts = writeTreeScripts(dir, marker);
     const runId = `ptree-${Date.now()}`;
-    const engine = new ChatEngine({
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 't',
       projectRoot: dir,
       runId,
