@@ -85,10 +85,23 @@ test('targeted host requirement has one result under both ordinary phrasings', (
   assert.equal(gate(['node --test'], [receipt(command, 1)]), 'reject')
 })
 
-test('integrity findings survive successful current proof selection', () => {
+test('stale textual tamper claims do not survive as independent integrity findings', () => {
   const old = receipt('node --test', 1, { stale: true, exit_code: 1, summary: 'VERIFIER_DEF_TAMPERED' })
-  assert.equal(gate(['node --test'], [old, receipt('node --test', 2)]), 'reject')
+  assert.equal(gate(['node --test'], [old, receipt('node --test', 2)]), 'allow')
   assert.equal(gate(['node --test'], [receipt('node --test', 2)], { adversarial: { tests_deleted: true } }), 'reject')
+})
+
+test('filenames and verifier summary text do not become authoritative adversarial signals', () => {
+  const cases = [
+    { target: 'src/keyboardShortcuts.ts', summary: '# tests 3\n# pass 3\nfixture green' },
+    { target: 'src/noop.ts', summary: '# tests 3\n# pass 3\n# skipped 0' },
+    { target: 'src/value.ts', summary: '# tests 3\n# pass 3\nVERIFIER_DEF_TAMPERED' },
+  ]
+  for (const { target, summary } of cases) {
+    assert.equal(gate(['node --test'], [receipt('node --test', 1, { summary })], {
+      toolCallLog: [{ tool: 'write_file', target, effect_status: 'confirmed_change' }],
+    }), 'allow', `${target}: ${summary}`)
+  }
 })
 
 test('only explicit predispatch no-effect denials allow inspected no-change', () => {
@@ -130,9 +143,10 @@ test('structured verifier argv is the same argv the executor parses', async () =
     ['--test', '--test-name-pattern=A  B'])
 })
 
-test('caller false flags cannot erase independently observed verifier tampering', () => {
+test('textual tamper claims are not authoritative, while trusted explicit tamper signals remain blocking', () => {
   const old = receipt('node --test', 1, { stale: true, exit_code: 1, summary: 'VERIFIER_DEF_TAMPERED' })
-  assert.equal(gate(['node --test'], [old, receipt('node --test', 2)], { adversarial: { verifier_def_tampered: false } }), 'reject')
+  assert.equal(gate(['node --test'], [old, receipt('node --test', 2)], { adversarial: { verifier_def_tampered: false } }), 'allow')
+  assert.equal(gate(['node --test'], [receipt('node --test', 2)], { adversarial: { verifier_def_tampered: true } }), 'reject')
 })
 
 test('an unordered current failure cannot disappear beside valid green proof', () => {
