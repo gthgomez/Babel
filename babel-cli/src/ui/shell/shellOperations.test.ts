@@ -56,8 +56,9 @@ test('resume failure is surfaced and does not rebind the active thread', async (
 })
 
 test('New conversation clears the hosted transcript and rebinds to no session', () => {
+  let closed = 0
   const ctx = {
-    chatEngine: { getEngineRunId: () => 'old' },
+    chatEngine: { getEngineRunId: () => 'old', closeAdmissionStore: () => { closed++ } },
     lastRoutingLabel: 'x',
     turns: [{ turn_id: 1 }, { turn_id: 2 }],
     lastAssistantAnswer: 'answer',
@@ -80,6 +81,30 @@ test('New conversation clears the hosted transcript and rebinds to no session', 
   assert.equal(ctx.lastResolvedTask, null)
   assert.equal(ctx.lastSessionRunDir, null)
   assert.deepEqual(changed, [undefined])
+  assert.equal(closed, 1)
+})
+
+test('New conversation refuses an active turn without detaching its owner or plan', async () => {
+  let closed = 0
+  const engine = { getEngineRunId: () => 'active', closeAdmissionStore: () => { closed++ } }
+  const ctx = {
+    chatEngine: engine, isRunning: true, lastRoutingLabel: 'active route',
+    turns: [{ turn_id: 1 }], state: { savedPlanId: 'saved', pendingPlanBody: 'plan' },
+  } as unknown as ReplContext
+  const changed: Array<string | undefined> = []
+  const operations = createShellCommandOperations(ctx, {
+    invalidate: () => {}, onSessionChanged: id => changed.push(id),
+  })
+  const result = await runShellCommand({ kind: 'session.new' }, operations)
+  assert.equal(result.handled, false)
+  assert.match(result.message ?? '', /wait|cancel/i)
+  assert.equal(ctx.chatEngine, engine)
+  assert.equal(ctx.lastRoutingLabel, 'active route')
+  assert.equal(ctx.state.savedPlanId, 'saved')
+  assert.equal(ctx.state.pendingPlanBody, 'plan')
+  assert.equal(ctx.turns.length, 1)
+  assert.equal(closed, 0)
+  assert.deepEqual(changed, [])
 })
 
 test('resetHostedConversation clears hosted fields idempotently', () => {

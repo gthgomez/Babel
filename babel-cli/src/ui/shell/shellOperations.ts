@@ -52,7 +52,7 @@ export function resetHostedConversation(
 /** Real operations an activation can perform. */
 export interface ShellCommandOperations {
   resumeSession(id: string): Promise<ShellResumeResult>
-  newSession(): void
+  newSession(): ShellResumeResult
   setTarget(root: string): void
   toggleDirectory(root: string): void
   runAction(command: string): Promise<void>
@@ -81,9 +81,11 @@ export async function runShellCommand(
         ...(result.message !== undefined ? { message: result.message } : {}),
       }
     }
-    case 'session.new':
-      operations.newSession()
-      return { command: command.kind, handled: true }
+    case 'session.new': {
+      const result = operations.newSession()
+      return { command: command.kind, handled: result.ok,
+        ...(result.message !== undefined ? { message: result.message } : {}) }
+    }
     case 'target.set':
       operations.setTarget(command.root)
       return { command: command.kind, handled: true }
@@ -134,7 +136,9 @@ export function createShellCommandOperations(
       }
       return { ok: false, message: outcome.message }
     },
-    newSession(): void {
+    newSession(): ShellResumeResult {
+      if (ctx.isRunning) return { ok: false, message: 'Wait for the current task to finish or cancel it before starting a new conversation.' }
+      ctx.chatEngine?.closeAdmissionStore()
       ctx.chatEngine = undefined
       ctx.lastRoutingLabel = null
       if (ctx.state) {
@@ -146,6 +150,7 @@ export function createShellCommandOperations(
         resetHostedConversation(ctx)
         host.onSessionChanged(undefined)
       }
+      return { ok: true }
     },
     setTarget(root: string): void {
       handleRetarget(ctx, [root])

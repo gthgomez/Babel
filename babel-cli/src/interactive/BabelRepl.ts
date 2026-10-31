@@ -646,7 +646,12 @@ export class BabelRepl {
       host?.invalidate('activate-noop');
       return;
     }
-    await runShellCommand(command, operations);
+    const outcome = await runShellCommand(command, operations);
+    if (!outcome.handled) {
+      if (outcome.message) console.log(outcome.message);
+      host?.holdRepaint();
+      return;
+    }
     if (
       command.kind === 'session.resume' ||
       command.kind === 'session.new' ||
