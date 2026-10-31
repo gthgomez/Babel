@@ -40,8 +40,8 @@ function runFixture(home: string, script: string): void {
 }
 
 describe('bridge credential persistence', () => {
-  it('creates private directory and file despite umask 022 and repairs file mode before loading', (context) => {
-    if (process.platform === 'win32') return context.skip('Windows ACL privacy is not asserted by POSIX mode tests');
+  if (process.platform !== 'win32') {
+    it('creates private directory and file despite umask 022 and repairs file mode before loading', () => {
     withIsolatedHome((home) => runFixture(home, `
       import assert from 'node:assert/strict';
       import { chmodSync, statSync } from 'node:fs';
@@ -59,10 +59,9 @@ describe('bridge credential persistence', () => {
       if (loaded.authToken !== config.authToken) throw new Error('existing config was not loaded after repair');
       if ((statSync(path).mode & 0o777) !== 0o600) throw new Error('existing file mode was not repaired');
     `));
-  });
+    });
 
-  it('rejects a bridge config symlink without following it', (context) => {
-    if (process.platform === 'win32') return context.skip('Windows symlink creation requires platform-specific privileges');
+    it('rejects a bridge config symlink without following it', () => {
     withIsolatedHome((home) => runFixture(home, `
       import assert from 'node:assert/strict';
       import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -81,7 +80,8 @@ describe('bridge credential persistence', () => {
       symlinkSync(outsideDir, dir, 'dir');
       assert.throws(() => persistBridgeConfig({ authToken: generateToken(), port: 4545 }), /symlink/i);
     `));
-  });
+    });
+  }
 
   it('surfaces config path write failures', () => {
     withIsolatedHome((home) => runFixture(home, `
@@ -148,8 +148,8 @@ describe('bridge credential persistence', () => {
     `));
   });
 
-  it('persists bridge credentials with a verified owner-only DACL on native Windows', (context) => {
-    if (process.platform !== 'win32') return context.skip('native Windows DACL acceptance check');
+  if (process.platform === 'win32') {
+    it('persists bridge credentials with a verified owner-only DACL on native Windows', () => {
     withIsolatedHome((home) => runFixture(home, `
       import assert from 'node:assert/strict';
       import { spawnSync } from 'node:child_process';
@@ -158,30 +158,31 @@ describe('bridge credential persistence', () => {
       const config = { authToken: generateToken(), port: 4545 };
       persistBridgeConfig(config);
       const script = [
-        '$ErrorActionPreference = \'Stop\'',
+        '$ErrorActionPreference = \\'Stop\\'',
         '$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
         '$sections = [System.Security.AccessControl.AccessControlSections]::Access',
-        '$dir = Join-Path $env:USERPROFILE \'.babel\'',
-        '$file = Join-Path $dir \'bridge.json\'',
+        '$dir = Join-Path $env:USERPROFILE \\'.babel\\'',
+        '$file = Join-Path $dir \\'bridge.json\\'',
         'foreach ($item in @(@($dir, $true), @($file, $false))) {',
         '  if ($item[1]) { $acl = [System.Security.AccessControl.DirectorySecurity]::new($item[0], $sections) } else { $acl = [System.Security.AccessControl.FileSecurity]::new($item[0], $sections) }',
         '  $rules = @($acl.Access)',
-        '  if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1) { throw \'unprotected or extra DACL entries\' }',
+        '  if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1) { throw \\'unprotected or extra DACL entries\\' }',
         '  $rule = $rules[0]',
-        '  if ($rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $sid) { throw \'wrong DACL owner\' }',
-        '  if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $rule.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl -or $rule.IsInherited) { throw \'DACL is not owner-only full control\' }',
-        '  if ($item[1] -and $rule.InheritanceFlags -ne ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit)) { throw \'directory inheritance flags are invalid\' }',
-        '  if (-not $item[1] -and $rule.InheritanceFlags -ne [System.Security.AccessControl.InheritanceFlags]::None) { throw \'file inheritance flags are invalid\' }',
+        '  if ($rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $sid) { throw \\'wrong DACL owner\\' }',
+        '  if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $rule.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl -or $rule.IsInherited) { throw \\'DACL is not owner-only full control\\' }',
+        '  if ($item[1] -and $rule.InheritanceFlags -ne ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit)) { throw \\'directory inheritance flags are invalid\\' }',
+        '  if (-not $item[1] -and $rule.InheritanceFlags -ne [System.Security.AccessControl.InheritanceFlags]::None) { throw \\'file inheritance flags are invalid\\' }',
         '}',
       ].join('; ');
       const powershell = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
       const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true });
       assert.equal(result.status, 0, result.stderr);
     `));
-  });
+    });
+  }
 
-  it('fails closed at startup when credential persistence is blocked', (context) => {
-    if (process.platform === 'win32') return context.skip('Windows symlink creation requires platform-specific privileges');
+  if (process.platform !== 'win32') {
+    it('fails closed at startup when credential persistence is blocked', () => {
     withIsolatedHome((home) => runFixture(home, `
       import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
       import { join } from 'node:path';
@@ -206,5 +207,6 @@ describe('bridge credential persistence', () => {
       }
       if (reportedListening) throw new Error('bridge reported listening after persistence failed');
     `));
-  });
+    });
+  }
 });

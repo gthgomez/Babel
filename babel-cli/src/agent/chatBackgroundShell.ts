@@ -19,7 +19,11 @@ import {
 import { SafeExecutor, validateExecutorShellCommand, type ToolResult } from '../sandbox.js';
 import { readRuntimeMode } from '../config/runtimeMode.js';
 import { isToolAllowedForExecutionProfile } from '../config/executionProfiles.js';
-import { shouldUseDockerSandbox } from '../config/benchmarkContainer.js';
+import { evaluateGovernedIsolation, shouldUseDockerSandbox } from '../config/benchmarkContainer.js';
+import { requiresDockerIsolation } from '../authority/commandSpec.js';
+import { resolveAndClassifyCommand } from '../authority/commandResolver.js';
+import { childEnvForSandbox } from '../authority/unprivilegedChildEnv.js';
+import { parseCommandArgv } from '../utils/commandArgv.js';
 import {
   formatRegisteredToolObservation,
   type RunArtifactAccess,
@@ -345,11 +349,47 @@ export function executeBackgroundRunCommandAction(
     return denyBg(msg, 'cwd_denied');
   }
 
+  let commandPolicy: ReturnType<typeof resolveAndClassifyCommand>;
+  try {
+    const [executable, ...args] = parseCommandArgv(action.command, process.platform);
+    commandPolicy = resolveAndClassifyCommand(executable ?? '', args, {
+      cwd: safeCwd,
+      env: childEnvForSandbox(),
+      platform: process.platform,
+      repoRoot: ctx.projectRoot,
+      controlledRoots: [ctx.projectRoot, ...(process.env['BABEL_SHADOW_ROOT'] ? [process.env['BABEL_SHADOW_ROOT']] : [])],
+    });
+  } catch (err) {
+    return denyBg(err instanceof Error ? err.message : String(err), 'command_policy_denied');
+  }
+  if (!commandPolicy.executable || commandPolicy.classification.executionRisk === 'forbidden') {
+    return denyBg(
+      `Command rejected — ${commandPolicy.classification.reason ?? 'executable could not be resolved'}: "${action.command}"`,
+      'command_policy_denied',
+    );
+  }
+  const isolation = evaluateGovernedIsolation(
+    process.env['BABEL_EXECUTION_PROFILE'],
+    process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim(),
+  );
+  const hostFallbackAuthorized = ['1', 'true', 'yes'].includes(
+    (process.env['BABEL_ALLOW_HOST_FALLBACK'] ?? '').toLowerCase(),
+  );
+  if (requiresDockerIsolation(commandPolicy.classification.executionRisk) &&
+      (isolation.kind === 'fail_closed' || isolation.kind === 'docker' || !hostFallbackAuthorized)) {
+    return denyBg(
+      `[sandbox] isolation_required: ${commandPolicy.classification.base || action.command} executes project or container-only code and is denied on the host.`,
+      'isolation_required',
+    );
+  }
+
   try {
     ctx.onBeforeSpawn?.();
     const job = startBackgroundShell({
       command: action.command,
       cwd: safeCwd,
+      projectRoot: ctx.projectRoot,
+      resolvedExecutable: commandPolicy.executable,
       timeoutMs: DEFAULT_BACKGROUND_JOB_TIMEOUT_MS,
       detached: action.detached === true,
       ...(ctx.ownerId !== undefined ? { ownerId: ctx.ownerId } : {}),

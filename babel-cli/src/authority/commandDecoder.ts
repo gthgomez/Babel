@@ -1066,6 +1066,7 @@ function applyIsolationFloor(decoded: DecodedCommand, raw: string, repoRoot?: st
     cwd: cwd ?? repoRoot ?? process.cwd(),
     env: process.env,
     platform: process.platform,
+    controlledRoots: [repoRoot ?? cwd ?? process.cwd()],
     ...(repoRoot !== undefined ? { repoRoot } : {}),
   }).classification;
   if (requiresDockerIsolation(classified.executionRisk)) {
@@ -1097,6 +1098,7 @@ export function decodeCommand(command: string, opts: { repoRoot?: string; cwd?: 
       cwd: opts.cwd ?? opts.repoRoot ?? process.cwd(),
       env: process.env,
       platform: process.platform,
+      controlledRoots: [opts.repoRoot ?? opts.cwd ?? process.cwd()],
       ...(opts.repoRoot !== undefined ? { repoRoot: opts.repoRoot } : {}),
     });
     const outerRisk = outerResolution.classification;
@@ -1110,6 +1112,7 @@ export function decodeCommand(command: string, opts: { repoRoot?: string; cwd?: 
         cwd: opts.cwd ?? opts.repoRoot ?? process.cwd(),
         env: process.env,
         platform: process.platform,
+        controlledRoots: [opts.repoRoot ?? opts.cwd ?? process.cwd()],
         ...(opts.repoRoot !== undefined ? { repoRoot: opts.repoRoot } : {}),
       });
       const actualTokens = resolution.executable

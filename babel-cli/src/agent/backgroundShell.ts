@@ -74,6 +74,10 @@ export interface StartBackgroundShellInput {
   toolCallId?: string;
   /** Optional explicit BDNS process witness; defaults to Babel's bounded witness. */
   processWitness?: ProcessWitness;
+  /** Trusted project boundary supplied by the session owner. */
+  projectRoot?: string;
+  /** Preflight resolution from the policy boundary, reused for the pinned spawn. */
+  resolvedExecutable?: ResolvedCommandExecutable;
 }
 
 export interface AwaitBackgroundShellResult {
@@ -158,15 +162,20 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
   const argv = parseCommandArgv(command, process.platform);
   const rawCmd = argv[0] ?? '';
   const childEnvironment = childEnvForSandbox();
-  const resolvedExecutable = resolveCommandExecutable(rawCmd, {
+  const resolvedExecutable = input.resolvedExecutable ?? resolveCommandExecutable(rawCmd, {
     cwd,
     env: childEnvironment,
     platform: process.platform,
+    controlledRoots: [
+      ...(input.projectRoot ? [input.projectRoot] : []),
+      ...(process.env['BABEL_SHADOW_ROOT'] ? [process.env['BABEL_SHADOW_ROOT']!] : []),
+    ],
   });
-  if (!resolvedExecutable || !resolvedExecutable.trusted) {
-    throw new Error(`background shell denied: executable identity is unresolved or untrusted (${rawCmd})`);
+  if (!resolvedExecutable) {
+    throw new Error(`background shell denied: executable identity is unresolved (${rawCmd})`);
   }
-  const identityPolicy = classifyResolvedCommand(resolvedExecutable, argv.slice(1));
+  const identityPolicy = classifyResolvedCommand(resolvedExecutable, argv.slice(1),
+    input.projectRoot ? { repoRoot: input.projectRoot } : {});
   if (identityPolicy.reason === 'indirect_executable_dispatch') {
     throw new Error('background shell denied: indirect executable dispatch cannot be pinned');
   }

@@ -1,7 +1,7 @@
 /** Resolve and pin the executable identity used for host process dispatch. */
-import { accessSync, constants, existsSync, realpathSync, statSync } from 'node:fs';
+import { accessSync, constants, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep, win32 } from 'node:path';
-import { classifyExecutionRisk, normalizeExecutionBase, type ClassifiedInvocation } from './commandSpec.js';
+import { classifyExecutionRisk, COMMAND_SPECS, normalizeExecutionBase, type ClassifiedInvocation } from './commandSpec.js';
 
 export interface ResolvedCommandExecutable {
   path: string;
@@ -15,10 +15,26 @@ export interface CommandResolverOptions {
   env: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   trustedRoots?: string[];
+  /** Host-configured PATH captured by the trusted caller, never a model command override. */
+  hostPath?: string;
+  /** Host-configured Windows extension search order, paired with hostPath. */
+  hostPathExt?: string;
+  /** Test seam for the expected host owner when running a privileged fixture. */
+  hostPathOwnerUid?: number;
+  /** Repository/shadow/task-controlled roots that can contain mutable lookalikes. */
+  controlledRoots?: string[];
   isFile?: (path: string) => boolean;
   realpath?: (path: string) => string;
   fileIdentity?: (path: string) => string | undefined;
   isWritableByCurrentUser?: (path: string) => boolean;
+  /** Test seam for shared-path trust checks; production inspects POSIX mode bits. */
+  isWritableByOtherPrincipal?: (path: string) => boolean;
+  /** Test seam for deterministic ownership checks; SafeExecutor uses the OS default. */
+  isOwnedByCurrentUser?: (path: string) => boolean;
+  /** Test seam for privileged-runtime policy fixtures; SafeExecutor uses process identity. */
+  effectiveUid?: number;
+  /** Test seam for deterministic owner fixtures; SafeExecutor reads stat ownership. */
+  ownerUid?: (path: string) => number | undefined;
 }
 
 export interface ResolvedCommandPolicy {
@@ -30,14 +46,30 @@ function pathApi(platform: NodeJS.Platform) {
   return platform === 'win32' ? win32 : { basename, resolve, dirname, extname, isAbsolute, relative, sep };
 }
 
+function envValue(env: NodeJS.ProcessEnv, key: string, platform: NodeJS.Platform): string | undefined {
+  if (platform !== 'win32') return env[key];
+  const normalizedKey = key.toLowerCase();
+  const matchingValues = Object.entries(env)
+    .filter(([name]) => name.toLowerCase() === normalizedKey)
+    .map(([, value]) => value);
+  if (matchingValues.length === 0) return undefined;
+  if (!matchingValues.every((value) => value === matchingValues[0])) return undefined;
+  return matchingValues[0];
+}
+
+// Freeze the operator's startup search path before any request-specific or
+// test fixture environment can modify process.env.
+const HOST_CONFIGURED_PATH = envValue(process.env, 'PATH', process.platform);
+const HOST_CONFIGURED_PATHEXT = envValue(process.env, 'PATHEXT', process.platform);
+
 function defaultTrustedRoots(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
   if (platform === 'win32') {
-    const systemRoot = env['SystemRoot'] ?? env['SYSTEMROOT'] ?? 'C:\\Windows';
+    const systemRoot = envValue(env, 'SystemRoot', platform) ?? 'C:\\Windows';
     const roots = [
       `${systemRoot}\\System32`,
       `${systemRoot}\\SysWOW64`,
-      `${env['ProgramFiles'] ?? 'C:\\Program Files'}\\Git\\cmd`,
-      `${env['ProgramFiles'] ?? 'C:\\Program Files'}\\Git\\bin`,
+      `${envValue(env, 'ProgramFiles', platform) ?? 'C:\\Program Files'}\\Git\\cmd`,
+      `${envValue(env, 'ProgramFiles', platform) ?? 'C:\\Program Files'}\\Git\\bin`,
     ];
     return roots.map((root) => platform === process.platform ? canonicalPath(root) : root);
   }
@@ -110,6 +142,76 @@ function isPathChainWritable(
   }
 }
 
+function isWritableByOtherPrincipal(path: string, platform: NodeJS.Platform): boolean {
+  if (platform === 'win32') return false;
+  try {
+    return (statSync(path).mode & 0o022) !== 0;
+  } catch {
+    return true;
+  }
+}
+
+function isPathChainWritableByOtherPrincipal(
+  path: string,
+  platform: NodeJS.Platform,
+  check: (path: string) => boolean,
+): boolean {
+  const api = pathApi(platform);
+  let current = path;
+  while (true) {
+    if (check(current)) return true;
+    const parent = api.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
+function hostPathOwnerUid(): number | undefined {
+  const effectiveUid = process.geteuid?.();
+  if (effectiveUid !== 0) return effectiveUid;
+  const sudoUid = Number(process.env['SUDO_UID']);
+  if (Number.isInteger(sudoUid) && sudoUid > 0) return sudoUid;
+  const home = process.env['HOME'];
+  if (home) {
+    try {
+      const owner = statSync(home).uid;
+      if (owner > 0) return owner;
+    } catch { /* missing host home cannot establish a non-root owner */ }
+  }
+  return undefined;
+}
+
+const HOST_PATH_OWNER_UID = hostPathOwnerUid();
+
+function isPathChainOwnedByTrustedHostPrincipal(
+  path: string,
+  platform: NodeJS.Platform,
+  check: (path: string) => boolean,
+): boolean {
+  const api = pathApi(platform);
+  let current = path;
+  while (true) {
+    if (!check(current)) return false;
+    const parent = api.dirname(current);
+    if (parent === current) return true;
+    current = parent;
+  }
+}
+
+function isPathChainOwnedByUid(
+  path: string,
+  platform: NodeJS.Platform,
+  expectedUid: number,
+  ownerUid: (path: string) => number | undefined = (candidate) => {
+    try { return statSync(candidate).uid; } catch { return undefined; }
+  },
+): boolean {
+  if (platform === 'win32') return false;
+  return isPathChainOwnedByTrustedHostPrincipal(path, platform, (candidate) => {
+    return ownerUid(candidate) === expectedUid;
+  });
+}
+
 function hasPathSeparator(command: string): boolean {
   return /[\\/]/.test(command) || /^[A-Za-z]:/.test(command);
 }
@@ -122,17 +224,36 @@ export function resolveCommandExecutable(
   const platform = options.platform ?? process.platform;
   const api = pathApi(platform);
   const sepChar = platform === 'win32' ? ';' : ':';
-  const pathValue = options.env['PATH'] ?? '';
+  const pathValue = envValue(options.env, 'PATH', platform) ?? '';
+  const trustedHostPath = options.hostPath ?? (platform === process.platform
+    ? HOST_CONFIGURED_PATH ?? ''
+    : pathValue);
   const extensions = platform === 'win32'
-    ? (options.env['PATHEXT'] ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    ? (envValue(options.env, 'PATHEXT', platform) ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : [''];
+  const hostExtensions = platform === 'win32'
+    ? (options.hostPathExt ?? (platform === process.platform ? HOST_CONFIGURED_PATHEXT : envValue(options.env, 'PATHEXT', platform)) ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
     : [''];
   const commandHasExtension = Boolean(api.extname(command));
   const names = extensions.length === 1 && extensions[0] === '' || commandHasExtension
     ? [command]
     : extensions.map((extension) => `${command}${extension}`);
   const candidates: string[] = [];
+  const hostPathCandidates: string[] = [];
+  const hostPathNames = hasPathSeparator(command)
+    ? (api.extname(command) ? [api.basename(command)] : hostExtensions.map((extension) => `${api.basename(command)}${extension}`))
+    : (platform === 'win32' && !commandHasExtension
+      ? hostExtensions.map((extension) => `${command}${extension}`)
+      : names);
+  const appendPathCandidates = (target: string[], searchPath: string): void => {
+    for (const directory of searchPath.split(sepChar)) {
+      const searchDirectory = directory || options.cwd;
+      for (const name of hostPathNames) target.push(api.resolve(options.cwd, searchDirectory, name));
+    }
+  };
   if (hasPathSeparator(command)) {
     for (const name of names) candidates.push(api.resolve(options.cwd, name));
+    appendPathCandidates(hostPathCandidates, trustedHostPath);
   } else {
     if (platform === 'win32') {
       for (const name of names) candidates.push(api.resolve(options.cwd, name));
@@ -141,6 +262,7 @@ export function resolveCommandExecutable(
       const searchDirectory = directory || options.cwd;
       for (const name of names) candidates.push(api.resolve(options.cwd, searchDirectory, name));
     }
+    appendPathCandidates(hostPathCandidates, trustedHostPath);
   }
 
   const isFile = options.isFile ?? ((path: string) => {
@@ -164,29 +286,72 @@ export function resolveCommandExecutable(
     return isPosixPathWritableByCurrentUser(path);
   });
   const isProtectedPathWritableByCurrentUser = (path: string): boolean => {
-    if (platform !== 'win32' && isPosixPathOwnedByCurrentUser(path)) return true;
+    const isOwnedByCurrentUser = options.isOwnedByCurrentUser ?? isPosixPathOwnedByCurrentUser;
+    if (platform !== 'win32' && isOwnedByCurrentUser(path)) return true;
     return isWritableByCurrentUser(path);
   };
   const roots = options.trustedRoots ?? defaultTrustedRoots(platform, options.env);
   const canonicalRoots = roots.map((root) => {
     try { return (options.realpath ?? canonicalPath)(root); } catch { return api.resolve(options.cwd, root); }
   });
+  const canonicalControlledRoots = (options.controlledRoots ?? []).map((root) => {
+    try { return (options.realpath ?? canonicalPath)(root); } catch { return api.resolve(options.cwd, root); }
+  });
+  const canonicalHostCandidates = new Set(hostPathCandidates.flatMap((candidate) => {
+    try { return [(options.realpath ?? realpathSync)(candidate)]; } catch { return []; }
+  }));
 
   for (const candidate of candidates) {
     if (!isFile(candidate)) continue;
     let canonical: string;
     try { canonical = realpath(candidate); } catch { continue; }
     const trustedRoot = canonicalRoots.find((root) => isInsideRoot(root, canonical, platform));
+    const isHostPathIdentity = canonicalHostCandidates.has(canonical);
+    const isControlled = canonicalControlledRoots.some((root) => isInsideRoot(root, canonical, platform));
+    const sharedWritablePath = isPathChainWritableByOtherPrincipal(
+      canonical,
+      platform,
+      options.isWritableByOtherPrincipal ?? ((path) => isWritableByOtherPrincipal(path, platform)),
+    );
+    const expectedHostOwnerUid = options.hostPathOwnerUid ?? HOST_PATH_OWNER_UID ??
+      (platform !== 'win32' && process.geteuid?.() === 0
+        ? options.controlledRoots?.map((root) => {
+          try { return statSync(root).uid; } catch { return undefined; }
+        }).find((uid): uid is number => uid !== undefined && uid > 0)
+        : undefined);
+    const ownerUid = options.ownerUid ?? ((path: string): number | undefined => {
+      try { return statSync(path).uid; } catch { return undefined; }
+    });
+    const trustedHostOwnership = platform !== 'win32' && isPathChainOwnedByTrustedHostPrincipal(
+      canonical,
+      platform,
+      (path) => {
+        const uid = ownerUid(path);
+        const effectiveUid = options.effectiveUid ?? process.geteuid?.();
+        if (uid === 0 || uid === effectiveUid) return true;
+        return effectiveUid === 0 && expectedHostOwnerUid !== undefined && uid === expectedHostOwnerUid;
+      },
+    );
     const protectedPath = !isPathChainWritable(
       canonical,
       platform,
       isProtectedPathWritableByCurrentUser,
     );
-    const trusted = protectedPath && (
+    const rootOwnedSystemPath = platform !== 'win32' && (options.effectiveUid ?? process.geteuid?.()) === 0 &&
+      trustedRoot !== undefined && isPathChainOwnedByUid(canonical, platform, 0, ownerUid) && !sharedWritablePath;
+    const trustedSystemIdentity = (protectedPath || rootOwnedSystemPath) && (
       trustedRoot !== undefined ||
       (options.trustedRoots === undefined && defaultTrustedExecutables(platform).includes(canonical))
     );
     const identity = fileIdentity(canonical);
+    const knownCommand = COMMAND_SPECS[normalizeExecutionBase(api.basename(canonical))] !== undefined;
+    // Host PATH is an operator-selected source of tools, including user-installed
+    // toolchains. Pin the canonical file identity; never infer trust from a name
+    // alone, and never trust a project/shadow lookalike even if it is on PATH.
+    const trustedHostPathIdentity = platform !== 'win32' && knownCommand && trustedRoot === undefined && isHostPathIdentity &&
+      trustedHostOwnership &&
+      !isControlled && !sharedWritablePath && identity !== undefined;
+    const trusted = trustedSystemIdentity || trustedHostPathIdentity;
     return {
       path: canonical,
       base: normalizeExecutionBase(api.basename(canonical)),

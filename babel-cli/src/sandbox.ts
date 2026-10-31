@@ -1835,7 +1835,12 @@ export class SafeExecutor {
     let env = childEnvForSandbox();
     const resolvedExecutable = useDockerSandbox
       ? null
-      : resolveCommandExecutable(rawCmd, { cwd: resolvedCwd, env, platform: process.platform });
+      : resolveCommandExecutable(rawCmd, {
+        cwd: resolvedCwd,
+        env,
+        platform: process.platform,
+        controlledRoots: [this.projectRoot, ...(process.env['BABEL_SHADOW_ROOT'] ? [process.env['BABEL_SHADOW_ROOT']] : [])],
+      });
     if (!useDockerSandbox && !resolvedExecutable) {
       return policyDeniedResult(
         'executable_resolution_failed',
@@ -2068,6 +2073,18 @@ export class SafeExecutor {
     signal?: AbortSignal,
     processContext?: Pick<ProcessWitnessInput, 'sessionId' | 'turnId' | 'toolCallId'>,
   ): Promise<ToolResult> {
+    // Settle an already-cancelled request before executable resolution. In
+    // particular, Windows PATH may not resolve shell built-ins such as `echo`,
+    // but a request cancelled before launch must not depend on that lookup.
+    if (signal?.aborted) {
+      return {
+        exit_code: 1,
+        stdout: '',
+        stderr: '[sandbox] Command aborted before execution.',
+        process_started: false,
+        process_termination: 'cancelled',
+      };
+    }
     const prepared = this.prepareShellExecution(command, cwd, toolName);
     if ('exit_code' in prepared) return prepared;
 
