@@ -391,9 +391,14 @@ export function resolveCommandExecutable(
       trustedRoot !== undefined && isPathChainOwnedByUid(canonical, platform, 0, ownerUid) && !sharedWritablePath;
     const invokedBase = normalizeExecutionBase(command);
     const compatibleHostIdentity = hostExecutableNameMatches(invokedBase, api.basename(canonical));
-    const trustedSystemIdentity = compatibleHostIdentity && !isControlled && (protectedPath || rootOwnedSystemPath) && (
-      trustedRoot !== undefined ||
-      (options.trustedRoots === undefined && defaultTrustedExecutables(platform).includes(canonical))
+    // The already-running interpreter has a stronger identity source than a
+    // PATH name: its canonical process.execPath is captured by this process.
+    // It remains project-code risk, so this only lets semantic parsing retain
+    // intent; it never makes scripts intrinsic or bypasses isolation.
+    const activeHostExecutable = defaultTrustedExecutables(platform).includes(canonical);
+    const trustedSystemIdentity = compatibleHostIdentity && !isControlled && (
+      activeHostExecutable ||
+      ((protectedPath || rootOwnedSystemPath) && trustedRoot !== undefined)
     );
     const hostSystem32 = options.hostWindowsSystem32 ?? (platform === process.platform ? HOST_WINDOWS_SYSTEM32 : undefined);
     const identity = fileIdentity(canonical);

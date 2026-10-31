@@ -37,6 +37,7 @@ test('trusted resolved Git keeps its ordinary command policy', () => {
     realpath: (path) => path,
     fileIdentity: () => 'file-v1',
     isWritableByCurrentUser: () => false,
+    isOwnedByCurrentUser: () => false,
   });
 
   assert.equal(resolution?.path, '/usr/bin/git');
@@ -99,9 +100,7 @@ test('privileged runtimes may trust a root-owned system tool with a protected pa
   assert.equal(classifyResolvedCommand(resolution!, ['status']).executionRisk, 'intrinsic');
 });
 
-test('user-owned executable paths are untrusted even when current mode bits are read-only', {
-  skip: process.platform === 'win32',
-}, () => {
+if (process.platform !== 'win32') test('user-owned executable paths are untrusted even when current mode bits are read-only', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-owned-tool-'));
   const executable = join(root, 'git');
   writeFileSync(executable, 'fixture', { mode: 0o555 });
@@ -165,7 +164,7 @@ test('the active Node executable is trusted exactly by canonical identity', () =
   assert.equal(resolution?.trusted, true);
 });
 
-test('a host-selected active Node runtime stays project code even when its identity is pinned', () => {
+test('the exact active Node executable stays project code even when its file is user-writable', () => {
   const canonicalNode = realpathSync(process.execPath);
   const resolution = resolveCommandExecutable(process.execPath, {
     platform: process.platform,
@@ -176,12 +175,8 @@ test('a host-selected active Node runtime stays project code even when its ident
     fileIdentity: () => 'active-node-runtime',
     isWritableByCurrentUser: () => true,
   });
-  if (process.platform === 'win32') {
-    assert.equal(resolution?.trusted, true, 'captured host PATH identity may pin the active runtime without DACL proof');
-    assert.equal(classifyResolvedCommand(resolution!, ['-e', 'process.exit(0)']).executionRisk, 'project_code');
-  } else {
-    assert.equal(resolution?.trusted, false, 'POSIX current-user writable path remains untrusted');
-  }
+  assert.equal(resolution?.trusted, true, 'exact process.execPath identity remains pinned independent of PATH ownership');
+  assert.equal(classifyResolvedCommand(resolution!, ['-e', 'process.exit(0)']).executionRisk, 'project_code');
 });
 
 test('Windows resolution checks cwd before PATH and honors PATHEXT', () => {
@@ -466,6 +461,20 @@ test('Windows captured host PATH can identify known tools without trusting child
   assert.equal(programFilesGit?.trusted, true,
     'the exact known tool selected by captured host PATH remains resolvable despite Windows W_OK reporting writable');
   assert.equal(classifyResolvedCommand(programFilesGit!, ['status']).executionRisk, 'intrinsic');
+
+  const npmAlias = resolveCommandExecutable('npm', {
+    platform: 'win32', cwd: 'C:\\repo',
+    env: { Path: 'C:\\Toolchain\\npm', PathExt: '.EXE' },
+    hostPath: 'C:\\Toolchain\\npm', hostPathExt: '.EXE',
+    controlledRoots: ['C:\\repo'],
+    isFile: (path) => path.toLowerCase() === 'c:\\toolchain\\npm\\npm.exe',
+    realpath: (path) => path.toLowerCase() === 'c:\\toolchain\\npm\\npm.exe'
+      ? 'C:\\Toolchain\\node_modules\\npm\\bin\\npm-cli.js'
+      : path,
+    fileIdentity: () => 'windows-user-npm-cli-v1',
+  });
+  assert.equal(npmAlias?.trusted, true, 'the explicit npm CLI alias is compatible on Windows too');
+  assert.equal(classifyResolvedCommand(npmAlias!, ['test'], { invokedBase: 'npm' }).executionRisk, 'project_code');
 });
 
 test('canonical System32 cmd identity stays trusted when W_OK reports writable', () => {

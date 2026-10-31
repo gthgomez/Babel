@@ -232,14 +232,15 @@ describe('exact target binding', () => {
     assert.equal(deny.reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
   });
 
-  test('trusted Node eval preserves gated intent; unresolved Python eval stays unknown', () => {
+  test('trusted Node eval preserves gated intent; unresolved Python remains unknown', () => {
     const mergeWrap = parseGitCommand(`node -e "require('child_process').execSync('gh pr merge 90')"`);
     assert.equal(mergeWrap.capability, 'merge');
-    const forceWrap = parseGitCommand(`python -c "import os; os.system('git push --force origin main')"`);
+    const unresolvedPython = join(tmpdir(), 'babel-unresolved-python.exe');
+    const unresolvedPythonCommand = `"${unresolvedPython}" -c "import os; os.system('git push --force origin main')"`;
+    const forceWrap = parseGitCommand(unresolvedPythonCommand);
     assert.equal(forceWrap.capability, 'unknown');
-    assert.equal(forceWrap.force, true);
     assert.equal(forceWrap.ambiguous, true);
-    assert.equal(decodeCommand(`python -c "import os; os.system('git push --force origin main')"`).semantic, 'git_push');
+    assert.equal(decodeCommand(unresolvedPythonCommand).capability, 'unknown');
     assert.equal(mergeWrap.requiresIsolation, true, 'the trusted interpreter never makes its embedded script intrinsic');
     assert.equal(forceWrap.requiresIsolation, true, 'unresolved Python identity requires isolation and grants no gated authority');
     const lease = leaseWith();

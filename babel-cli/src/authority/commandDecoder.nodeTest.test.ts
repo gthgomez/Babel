@@ -107,7 +107,7 @@ test('startup Git stays inspectable while late PATH Git is semantic-only and den
   }
 });
 
-test('npm alias parses by invoked name while dispatch retains the canonical host identity', { skip: process.platform === 'win32' }, () => {
+if (process.platform !== 'win32') test('npm alias parses by invoked name while dispatch retains the canonical host identity', () => {
   const hostNpmDir = (process.env['PATH'] ?? '').split(':').find((directory) => existsSync(join(directory, 'npm')));
   assert.ok(hostNpmDir, 'CI/runtime provides its configured npm command');
   const canonicalNpm = realpathSync(join(hostNpmDir!, 'npm'));

@@ -44,14 +44,9 @@ import {
   readdirSync,
   statSync,
   lstatSync,
-  fstatSync,
-  writeFileSync,
   existsSync,
   realpathSync,
-  openSync,
-  closeSync,
   renameSync,
-  constants as fsConstants,
 } from 'node:fs';
 import { resolve, sep, dirname, basename, isAbsolute, relative } from 'node:path';
 import {
@@ -84,6 +79,8 @@ import { classifyResolvedCommand, commandControlledRoots, hostWindowsSystem32Dir
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
+import { writeUtf8FileSafely, type TrustedFileCreationEvidence } from './sandboxFileWrites.js';
+export type { TrustedFileCreationEvidence } from './sandboxFileWrites.js';
 import type { ProcessWitness, ProcessWitnessInput } from './diagnostics/bdns/processWitness.js';
 import { MAX_SHELL_OUTPUT_BYTES, normalizeShellOutput } from './shellOutputNormalize.js';
 import {
@@ -183,12 +180,6 @@ export interface ToolResult {
    * never ran, and it must not be recorded as verifier evidence.
    */
   simulated?: boolean;
-}
-
-export interface TrustedFileCreationEvidence {
-  path: string;
-  device: string;
-  inode: string;
 }
 
 const trustedFileCreationEvidence = new WeakMap<object, TrustedFileCreationEvidence>();
@@ -1415,34 +1406,8 @@ export class SafeExecutor {
     enforceProjectRoot: boolean,
     options?: { createOnly?: true; onCreated?: (evidence: TrustedFileCreationEvidence) => void },
   ): void {
-    this.assertSafeWritableTarget(inputPath, targetPath, enforceProjectRoot);
-
-    const noFollowFlag = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
-    const baseFlags = fsConstants.O_WRONLY | fsConstants.O_CREAT |
-      (options?.createOnly ? fsConstants.O_EXCL : fsConstants.O_TRUNC);
-
-    let fd: number;
-    try {
-      fd = openSync(targetPath, baseFlags | noFollowFlag, 0o666);
-    } catch (error: unknown) {
-      const code = (error as NodeJS.ErrnoException | undefined)?.code;
-      if (noFollowFlag !== 0 && (code === 'EINVAL' || code === 'UNKNOWN' || code === 'ENOSYS')) {
-        fd = openSync(targetPath, baseFlags, 0o666);
-      } else {
-        throw error;
-      }
-    }
-
-    try {
-      if (options?.createOnly) {
-        const stat = fstatSync(fd, { bigint: true });
-        options.onCreated?.({ path: targetPath, device: stat.dev.toString(), inode: stat.ino.toString() });
-      }
-      this.assertSafeWritableTarget(inputPath, targetPath, enforceProjectRoot);
-      writeFileSync(fd, content, 'utf-8');
-    } finally {
-      closeSync(fd);
-    }
+    writeUtf8FileSafely(inputPath, targetPath, content, enforceProjectRoot,
+      (input, target, enforceRoot) => this.assertSafeWritableTarget(input, target, enforceRoot), options);
   }
 
   /**

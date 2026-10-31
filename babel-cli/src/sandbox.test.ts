@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -137,7 +138,11 @@ test('create-only file writes refuse existing empty files and preserve contents'
     const result = executor.fileWrite('new.txt', 'created\n', { createOnly: true });
     assert.equal(result.exit_code, 0);
     assert.equal(readFileSync(join(fixture.projectRoot, 'new.txt'), 'utf-8'), 'created\n');
-    assert.ok(getTrustedFileCreationEvidence(result));
+    const evidence = getTrustedFileCreationEvidence(result);
+    assert.ok(evidence);
+    const createdStat = statSync(join(fixture.projectRoot, 'new.txt'), { bigint: true });
+    assert.equal(evidence.device, createdStat.dev.toString());
+    assert.equal(evidence.inode, createdStat.ino.toString(), 'creation evidence identifies the completed file');
   } finally {
     fixture.cleanup();
   }
