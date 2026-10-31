@@ -96,6 +96,90 @@ describe('bridge credential persistence', () => {
     `));
   });
 
+  it('verifies temp ACL before writing token bytes and preserves existing config on ACL failure', () => {
+    withIsolatedHome((home) => runFixture(home, `
+      import assert from 'node:assert/strict';
+      import { readdirSync, readFileSync, statSync } from 'node:fs';
+      import { join } from 'node:path';
+      import { generateToken, loadBridgeConfig, persistBridgeConfig } from './src/bridge/auth.ts';
+      const original = { authToken: generateToken(), port: 4545 };
+      persistBridgeConfig(original);
+      const dir = join(process.env.HOME, '.babel');
+      const path = join(dir, 'bridge.json');
+      const events = [];
+      const replacement = { authToken: generateToken(), port: 4546 };
+      assert.throws(() => persistBridgeConfig(replacement, {
+        enforceAcl(target, directory) {
+          events.push({ target, directory });
+          if (target.endsWith('.tmp')) {
+            if (statSync(target).size !== 0) throw new Error('token bytes written before temp ACL verification');
+            return { ok: false, code: 'fixture_acl_denied' };
+          }
+          return { ok: true, code: 'ok' };
+        },
+      }), /ACL could not be verified/);
+      assert.equal(events.some((event) => event.target === dir && event.directory), true);
+      assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), original);
+      assert.deepEqual(readdirSync(dir).sort(), ['bridge.json']);
+      assert.throws(() => loadBridgeConfig({ enforceAcl: () => ({ ok: false, code: 'fixture_acl_denied' }) }), /ACL could not be verified/);
+      assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), original);
+    `));
+  });
+
+  it('restores the prior config if final ACL verification fails after replacement', () => {
+    withIsolatedHome((home) => runFixture(home, `
+      import assert from 'node:assert/strict';
+      import { readdirSync, readFileSync } from 'node:fs';
+      import { join } from 'node:path';
+      import { generateToken, persistBridgeConfig } from './src/bridge/auth.ts';
+      const original = { authToken: generateToken(), port: 4545 };
+      persistBridgeConfig(original);
+      const dir = join(process.env.HOME, '.babel');
+      const path = join(dir, 'bridge.json');
+      let finalChecks = 0;
+      assert.throws(() => persistBridgeConfig({ authToken: generateToken(), port: 4546 }, {
+        enforceAcl(target) {
+          if (target === path && ++finalChecks === 2) return { ok: false, code: 'fixture_final_acl_denied' };
+          return { ok: true, code: 'ok' };
+        },
+      }), /ACL could not be verified/);
+      assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), original);
+      assert.deepEqual(readdirSync(dir), ['bridge.json']);
+    `));
+  });
+
+  it('persists bridge credentials with a verified owner-only DACL on native Windows', (context) => {
+    if (process.platform !== 'win32') return context.skip('native Windows DACL acceptance check');
+    withIsolatedHome((home) => runFixture(home, `
+      import assert from 'node:assert/strict';
+      import { spawnSync } from 'node:child_process';
+      import { join } from 'node:path';
+      import { generateToken, persistBridgeConfig } from './src/bridge/auth.ts';
+      const config = { authToken: generateToken(), port: 4545 };
+      persistBridgeConfig(config);
+      const script = [
+        '$ErrorActionPreference = \'Stop\'',
+        '$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+        '$sections = [System.Security.AccessControl.AccessControlSections]::Access',
+        '$dir = Join-Path $env:USERPROFILE \'.babel\'',
+        '$file = Join-Path $dir \'bridge.json\'',
+        'foreach ($item in @(@($dir, $true), @($file, $false))) {',
+        '  if ($item[1]) { $acl = [System.Security.AccessControl.DirectorySecurity]::new($item[0], $sections) } else { $acl = [System.Security.AccessControl.FileSecurity]::new($item[0], $sections) }',
+        '  $rules = @($acl.Access)',
+        '  if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 1) { throw \'unprotected or extra DACL entries\' }',
+        '  $rule = $rules[0]',
+        '  if ($rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -ne $sid) { throw \'wrong DACL owner\' }',
+        '  if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $rule.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl -or $rule.IsInherited) { throw \'DACL is not owner-only full control\' }',
+        '  if ($item[1] -and $rule.InheritanceFlags -ne ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit)) { throw \'directory inheritance flags are invalid\' }',
+        '  if (-not $item[1] -and $rule.InheritanceFlags -ne [System.Security.AccessControl.InheritanceFlags]::None) { throw \'file inheritance flags are invalid\' }',
+        '}',
+      ].join('; ');
+      const powershell = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true });
+      assert.equal(result.status, 0, result.stderr);
+    `));
+  });
+
   it('fails closed at startup when credential persistence is blocked', (context) => {
     if (process.platform === 'win32') return context.skip('Windows symlink creation requires platform-specific privileges');
     withIsolatedHome((home) => runFixture(home, `
