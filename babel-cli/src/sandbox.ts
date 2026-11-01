@@ -196,6 +196,32 @@ export function preserveTrustedFileCreationEvidence<T extends object>(source: ob
   return target;
 }
 
+/** Match host-attested creation paths to governed mutation targets (Windows 8.3 safe). */
+export function matchesTrustedCreationPath(evidencePath: string, targetPath: string): boolean {
+  if (process.platform !== 'win32') return evidencePath === targetPath;
+  try {
+    return realpathSync.native(evidencePath).toLowerCase() === realpathSync.native(targetPath).toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+/** Bind rollback ownership only after full create-only settlement (never partial/incomplete). */
+export function creationOwnershipFromTrustedEvidence(
+  evidence: TrustedFileCreationEvidence | undefined,
+  targetPath: string,
+  intendedContent: string,
+): { device: string; inode: string; expectedContent: string } | undefined {
+  if (!evidence || evidence.settlementIncomplete || !matchesTrustedCreationPath(evidence.path, targetPath)) {
+    return undefined;
+  }
+  return {
+    device: evidence.device,
+    inode: evidence.inode,
+    expectedContent: intendedContent,
+  };
+}
+
 function attachTrustedFileCreationEvidence<T extends object>(
   target: T,
   evidence: TrustedFileCreationEvidence | undefined,

@@ -36,6 +36,7 @@ import { describe, test } from 'node:test';
 
 import type { ToolContext } from '../localTools.js';
 import { getTrustedFileCreationEvidence, preserveTrustedFileCreationEvidence, SafeExecutor } from '../sandbox.js';
+import { __testOnlySetWriteUtf8ToFd, __testOnlyBeforePartialAttest } from '../sandboxFileWrites.js';
 import { loadEffectLedger } from '../executor/effectLedger.js';
 import type { AgentAction } from './actions.js';
 import { governedApplyPatch, type GovernedApplyPatchResult } from './governedMutations.js';
@@ -233,8 +234,9 @@ interface FaultScript {
    * `reject` — the executor returns a nonzero result without writing.
    * `fail_after_write` — the executor writes, then reports failure, so the
    * failing file has an observed effect and its own cleanup runs.
+   * `truncated_write` — the host write stops after partial bytes and throws.
    */
-  fault: 'throw' | 'reject' | 'fail_after_write';
+  fault: 'throw' | 'reject' | 'fail_after_write' | 'truncated_write';
   /** For `throw`: perform the file write before raising. */
   writeBeforeFault?: boolean;
   /** Runs after each successful write (external interference hook). */
@@ -298,6 +300,27 @@ function scriptedExecutor(projectRoot: string, script: FaultScript) {
           terminal: false,
           results: [{ exit_code: 1, stdout: '', stderr: 'injected dispatch rejection' }],
         };
+      }
+      if (script.fault === 'truncated_write') {
+        if (action.type !== 'write_file') throw new Error('truncated_write requires write_file');
+        const intended = action.content;
+        const prefix = intended.slice(0, Math.min(20, intended.length));
+        __testOnlySetWriteUtf8ToFd((fd, content) => {
+          if (content !== intended) {
+            writeFileSync(fd, content, 'utf-8');
+            return;
+          }
+          writeFileSync(fd, prefix, 'utf-8');
+          throw new Error('truncated write fault');
+        });
+        try {
+          const settled = await base.execute(action, context, budget);
+          script.onAfterWrite?.(writes, resolve(projectRoot, action.path), settled);
+          captureAtFault(action.path);
+          return settled;
+        } finally {
+          __testOnlySetWriteUtf8ToFd(null);
+        }
       }
       let settled: ToolExecutionResult | undefined;
       if (script.fault === 'fail_after_write' || script.writeBeforeFault) {
@@ -874,6 +897,96 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       assert.equal(readFileSync(unrelated, 'utf8'), 'external owner\n');
       assert.equal(snapshot(join(root, 'file1.txt')).kind, 'missing');
       assert.match(result.observation, /Rolled back 1 file\(s\)/);
+    } finally {
+      undo.mock.restore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('10. preserves ambiguous truncated create — no misleading rolled-back success', async () => {
+    resetCircuitBreaker();
+    const root = tmpRoot('babel-m1-truncated-create-');
+    const undo = mock.method(WorkspaceTransactionManager, 'undoLastMutationBatch', async () => {
+      throw new Error('fixture transaction rollback unavailable');
+    });
+    try {
+      const file1 = join(root, 'file1.txt');
+      const prefix = FILE1_CREATED.slice(0, 20);
+      const script = scriptedExecutor(root, {
+        faultAt: 1,
+        fault: 'truncated_write',
+        onAfterWrite: (_index, absolutePath, result) => {
+          assert.equal(absolutePath, file1);
+          assert.equal(snapshot(file1).bytes, prefix);
+          const evidence = getTrustedFileCreationEvidence(result.results[0]!);
+          assert.equal(evidence?.settlementIncomplete, true);
+          assert.equal(evidence?.unsettledSizeBytes, Buffer.byteLength(prefix));
+        },
+      });
+      const result = await governedApplyPatch(
+        { patch: SINGLE_FILE_CREATE_PATCH },
+        { projectRoot: root, context: ctx(root), executor: script.executor },
+      );
+      assert.equal(result.exit_code, 1);
+      assert.equal(snapshot(file1).kind, 'file');
+      assert.equal(snapshot(file1).bytes, prefix);
+      assert.doesNotMatch(result.observation, /Rolled back 1 file\(s\)/);
+      assert.match(result.observation, /Not restored|State unknown/i);
+    } finally {
+      undo.mock.restore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('10b. concurrent external bytes before attestation survive cleanup attempt', async () => {
+    resetCircuitBreaker();
+    const root = tmpRoot('babel-m1-truncated-external-');
+    const undo = mock.method(WorkspaceTransactionManager, 'undoLastMutationBatch', async () => {
+      throw new Error('fixture transaction rollback unavailable');
+    });
+    try {
+      const file1 = join(root, 'file1.txt');
+      const external = 'EXTERNAL_BEFORE_ATTEST\n';
+      const base = createToolExecutor({
+        executeTool: async (req) => {
+          if (req.tool === 'file_write' && req.createOnly) {
+            __testOnlySetWriteUtf8ToFd((fd, content) => {
+              if (content !== FILE1_CREATED) {
+                writeFileSync(fd, content, 'utf-8');
+                return;
+              }
+              writeFileSync(fd, FILE1_CREATED.slice(0, 20), 'utf-8');
+              throw new Error('truncated write fault');
+            });
+            __testOnlyBeforePartialAttest(({ targetPath }) => {
+              writeFileSync(join(root, 'file1.txt'), external);
+              void targetPath;
+            });
+            try {
+              const safe = new SafeExecutor(root);
+              const settled = safe.fileWrite(req.path, req.content, { createOnly: true });
+              assert.equal(getTrustedFileCreationEvidence(settled)?.settlementIncomplete, true);
+              assert.equal(readFileSync(file1, 'utf8'), external);
+              return settled;
+            } finally {
+              __testOnlySetWriteUtf8ToFd(null);
+              __testOnlyBeforePartialAttest(null);
+            }
+          }
+          return { exit_code: 0, stdout: '', stderr: '' };
+        },
+      });
+      const executor: ToolExecutor = {
+        mapAction: (action) => base.mapAction(action),
+        execute: (action, context, budget) => base.execute(action, context, budget),
+      };
+      const result = await governedApplyPatch(
+        { patch: SINGLE_FILE_CREATE_PATCH },
+        { projectRoot: root, context: ctx(root), executor },
+      );
+      assert.equal(result.exit_code, 1);
+      assert.equal(readFileSync(file1, 'utf8'), external);
+      assert.doesNotMatch(result.observation, /Rolled back 1 file\(s\)/);
     } finally {
       undo.mock.restore();
       rmSync(root, { recursive: true, force: true });

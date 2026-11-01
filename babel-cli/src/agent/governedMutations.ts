@@ -7,7 +7,7 @@ import { captureRecoveryPatchSnapshot, recoveryPatchSnapshotMatches, recoveryPat
  * Callers must not bypass this with direct writeFile.
  */
 
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { assessMutationEffect, type MutationEffectAssessment } from './mutationTools.js';
 import { pinProjectRootEnv } from './projectRootPin.js';
 import { getExecutionContext } from './executionContext.js';
@@ -16,7 +16,7 @@ import { compensatePatchWrites, type PatchRollbackOutcome } from './patchCompens
 import type { EffectLedgerRecord } from '../executor/effectLedger.js';
 import { captureEffectParentIdentity, type EffectParentIdentity } from '../executor/effectPathIdentity.js';
 import { isAbsolute, resolve } from 'node:path';
-import { getTrustedFileCreationEvidence } from '../sandbox.js';
+import { getTrustedFileCreationEvidence, creationOwnershipFromTrustedEvidence, matchesTrustedCreationPath } from '../sandbox.js';
 
 import { FileWriteMutex, canonicalizeLockPath, type FileLockHandle } from '../services/editReliability.js';
 import { applyUniqueEdit, formatEditObservation } from './codingLoop/editApply.js';
@@ -70,14 +70,7 @@ function resolveProjectPath(projectRoot: string, filePath: string): string {
 }
 
 function matchesCreatedTargetPath(evidencePath: string, targetPath: string): boolean {
-  if (process.platform !== 'win32') return evidencePath === targetPath;
-  try {
-    // Windows temporary roots may be supplied in 8.3 form while SafeExecutor
-    // canonicalizes its project root to the long path before writing.
-    return realpathSync.native(evidencePath).toLowerCase() === realpathSync.native(targetPath).toLowerCase();
-  } catch {
-    return false;
-  }
+  return matchesTrustedCreationPath(evidencePath, targetPath);
 }
 
 function governedControl(result: PolicyGatedExecutionResult | null | undefined, whollyUnstarted = true): Pick<PolicyGatedExecutionResult, 'stopRequest' | 'notStarted'> {
@@ -495,12 +488,9 @@ export async function governedApplyPatch(
     const ownership = new Map(createdFileOwnership);
     if (createsFile && lastResult) {
       const creation = getTrustedFileCreationEvidence(lastResult);
-      if (creation && matchesCreatedTargetPath(creation.path, absolutePath)) {
-        ownership.set(absolutePath, {
-          device: creation.device,
-          inode: creation.inode,
-          expectedContent: intendedContent,
-        });
+      const ownershipRecord = creationOwnershipFromTrustedEvidence(creation, absolutePath, intendedContent);
+      if (ownershipRecord) {
+        ownership.set(absolutePath, ownershipRecord);
       }
     }
     if (!writtenParents.has(absolutePath)) {
@@ -792,12 +782,9 @@ export async function governedApplyPatch(
         });
         if (fileSection?.createsFile && last) {
           const creation = getTrustedFileCreationEvidence(last);
-          if (creation && matchesCreatedTargetPath(creation.path, absolutePath)) {
-            createdFileOwnership.set(absolutePath, {
-              device: creation.device,
-              inode: creation.inode,
-              expectedContent: result.content,
-            });
+          const ownershipRecord = creationOwnershipFromTrustedEvidence(creation, absolutePath, result.content);
+          if (ownershipRecord) {
+            createdFileOwnership.set(absolutePath, ownershipRecord);
           }
         }
         if (assessMutationEffect({

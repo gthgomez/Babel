@@ -273,28 +273,3 @@ for (const failureAt of ['intent', 'settlement', 'none'] as const) {
     }
   })
 }
-
-test('compensation removes a host-attested partial create when durable effect evidence matches', async () => {
-  const root = fs.mkdtempSync(join(tmpdir(), 'babel-compensation-partial-create-'))
-  const path = join(root, 'created.txt')
-  const expected = 'created by this dispatch\n'
-  try {
-    fs.writeFileSync(path, expected)
-    const stat = fs.statSync(path)
-    const original = recordEffectIntent({ runDir: root, sessionId: 'session', mutationBatchId: 'batch',
-      effectClass: 'reconcilable_mutation', toolName: 'write_file', targetPaths: [path],
-      targetParentIdentities: { [path]: captureEffectParentIdentity(path) },
-      preImageHashes: { [path]: WorkspaceTransactionManager.missingPathDigest() }, intendedContent: expected })
-    recordEffectTerminal(root, original, { status: 'failed', error: 'dispatch reported failure after create' })
-    const result = await compensatePatchWrites([path], new Map(), new Set([path]),
-      new Map([[path, expected]]), new Map([[path, original]]),
-      { runDir: root, runId: 'session', agentId: 'test', babelRoot: root }, undefined,
-      new Map([[path, {
-        device: stat.dev.toString(),
-        inode: stat.ino.toString(),
-        expectedContent: expected,
-      }]]))
-    assert.equal(result.rolledBack.length, 1)
-    assert.equal(fs.existsSync(path), false)
-  } finally { fs.rmSync(root, { recursive: true, force: true }) }
-})
