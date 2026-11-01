@@ -476,10 +476,52 @@ export async function governedApplyPatch(
   }
 
   /**
+   * When executor rollback is incomplete, patch compensation must consume host
+   * attestation from the failing dispatch (including exit-nonzero results).
+   * Success-path ownership alone is insufficient: a partial create can land
+   * before the dispatch reports failure.
+   */
+  const compensateFailingDispatchTarget = async (
+    absolutePath: string,
+    intendedContent: string,
+    createsFile: boolean | undefined,
+    dispatch: PolicyGatedExecutionResult,
+    lastResult: ToolResult | undefined,
+  ): Promise<PatchRollbackOutcome> => {
+    const effects = new Map(writtenEffects);
+    if (dispatch.effectLedgerRecord) {
+      effects.set(absolutePath, dispatch.effectLedgerRecord);
+    }
+    const ownership = new Map(createdFileOwnership);
+    if (createsFile && lastResult) {
+      const creation = getTrustedFileCreationEvidence(lastResult);
+      if (creation && matchesCreatedTargetPath(creation.path, absolutePath)) {
+        ownership.set(absolutePath, {
+          device: creation.device,
+          inode: creation.inode,
+          expectedContent: intendedContent,
+        });
+      }
+    }
+    if (!writtenParents.has(absolutePath)) {
+      writtenParents.set(absolutePath, captureEffectParentIdentity(absolutePath));
+    }
+    return compensatePatchWrites(
+      [absolutePath],
+      contents,
+      createdPaths,
+      writtenContents,
+      effects,
+      options.context,
+      writtenParents,
+      ownership,
+    );
+  };
+
+  /**
    * Report the failing dispatch target's own residual state. Earlier files are
-   * covered by rollbackWrittenPaths; the failing file is cleaned up inside the
-   * executor, so its outcome is observed here instead of assumed — a swallow
-   * there must not turn a file left holding this patch's bytes into silence.
+   * covered by rollbackWrittenPaths; failing-target compensation runs when
+   * executor rollback is incomplete. Residual text must still match disk.
    */
   const dispatchTargetResidual = async (target: string): Promise<string> => {
     const preImage = createdPaths.has(target) ? null : (contents.get(target) ?? null);
@@ -713,6 +755,14 @@ export async function governedApplyPatch(
             );
             observation += formatRollbackOutcome(rollback);
           }
+          const failingRollback = await compensateFailingDispatchTarget(
+            absolutePath,
+            result.content,
+            fileSection?.createsFile,
+            dispatch,
+            last,
+          );
+          observation += formatRollbackOutcome(failingRollback);
           observation += await dispatchTargetResidual(absolutePath);
           const effectTransaction = batchScopedEffectTransaction(dispatch, absolutePaths);
           throw Object.assign(new Error(stderr), {

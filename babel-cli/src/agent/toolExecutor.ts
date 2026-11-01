@@ -1421,7 +1421,7 @@ export async function executeActionWithPolicy(
     if (toolFailed) {
       let rollbackConflicts: string[] = [];
       if (effectIntent && context.runDir) {
-        recordEffectTerminal(context.runDir, effectIntent, {
+        effectIntent = recordEffectTerminal(context.runDir, effectIntent, {
           status: 'failed',
           error: toolDenied ? 'tool execution denied' : 'tool returned a nonzero exit code',
         });
@@ -1463,6 +1463,7 @@ export async function executeActionWithPolicy(
         } : {}),
         policyDecision: toolDenied ? 'deny' : policyDecision,
         policyBlocked: toolDenied,
+        ...(effectIntent ? { effectLedgerRecord: effectIntent } : {}),
         ...(effectTx ? { effectTransaction: effectTx } : {}),
       };
     }
