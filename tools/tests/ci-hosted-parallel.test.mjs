@@ -72,9 +72,10 @@ test('qualify:build negative control fails on deliberate compile error before la
       cwd: babelCli,
       encoding: 'utf8',
       timeout: 180000,
+      ...(process.platform === 'win32' ? { shell: true } : {}),
     });
-    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(`${result.stdout}\n${result.stderr}`, /error TS/i);
+    assert.notEqual(result.status, 0, `${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+    assert.match(`${result.stdout ?? ''}\n${result.stderr ?? ''}`, /error TS/i);
   } finally {
     rmSync(stamp, { force: true });
   }
