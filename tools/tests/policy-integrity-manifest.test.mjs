@@ -10,6 +10,9 @@ import {
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { coveredPaths } from "../policy-integrity-manifest.mjs";
 const source = readFileSync(
   new URL("../policy-integrity-manifest.mjs", import.meta.url),
   "utf8",
@@ -31,6 +34,15 @@ test('every tracked host-protected path has a manifest registration', () => {
   const registered = new Set([...source.matchAll(/^  "([^"]+)",?$/gm)].map(m => m[1]));
   assert.deepEqual(tracked.stdout.trim().split('\n').filter(path =>
     policy.hostProtectedPrefixes.some(prefix => path.startsWith(prefix)) && !registered.has(path)), []);
+});
+test('trusted control-plane merge-audit eligibility helper is explicitly registered', () => {
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const path = 'scripts/merge-audit-eligibility.psm1';
+  assert.ok(coveredPaths.includes(path), 'coveredPaths must register trusted evaluator helper');
+  const manifest = JSON.parse(readFileSync(join(root, 'POLICY_MANIFEST.json'), 'utf8'));
+  assert.match(manifest.files[path], /^[a-f0-9]{64}$/);
+  const bytes = readFileSync(join(root, path));
+  assert.equal(manifest.files[path], createHash('sha256').update(bytes).digest('hex'));
 });
 const paths = [
   ".github/workflows/public-pr-metadata.yml",
@@ -177,6 +189,7 @@ const paths = [
   "scripts/agent-pr-merge.ps1",
   "scripts/agent-review-evidence.ps1",
   "scripts/materialize-independent-review-receipt.ps1",
+  "scripts/merge-audit-eligibility.psm1",
   "scripts/trusted-merge-gate.ps1",
   "scripts/verify-independent-review.mjs",
   "scripts/verify-trust-root-upgrade.mjs",
