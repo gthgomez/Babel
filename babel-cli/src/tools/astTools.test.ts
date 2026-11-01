@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -19,7 +19,7 @@ test('handleGetCodeOutline outputs symbols and line numbers', async () => {
     'utf-8',
   );
 
-  const res = await handleGetCodeOutline(filePath, [root]);
+  const res = await handleGetCodeOutline(filePath, root, [root]);
   assert.equal(res.exit_code, 0);
   assert.match(res.stdout, /Line 1: \[class\] AlphaClass/);
   assert.match(res.stdout, /Line 4: \[function\] alphaFunc/);
@@ -31,9 +31,26 @@ test('handleGetCodeOutline sandboxing blocks out-of-bounds files', async () => {
   writeFileSync(filePath, 'class Test {}', 'utf-8');
 
   // Request outline with approvedReadRoots set to a different root
-  const res = await handleGetCodeOutline(filePath, [join(tmpdir(), 'other-dir')]);
+  const res = await handleGetCodeOutline(filePath, join(tmpdir(), 'other-dir'));
   assert.equal(res.exit_code, 1);
   assert.match(res.stderr, /Access Denied/);
+});
+
+test('explicit approved read roots can narrow AST reads within the invocation project', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-ast-narrow-read-'));
+  const approved = join(root, 'approved');
+  const deniedFile = join(root, 'denied.ts');
+  writeFileSync(deniedFile, 'export function DeniedFromNarrowRoot() {}');
+  try {
+    const outline = await handleGetCodeOutline(deniedFile, root, [approved]);
+    assert.equal(outline.exit_code, 1);
+    assert.match(outline.stderr, /Access Denied/);
+
+    const definition = await handleFindCodeDefinition('DeniedFromNarrowRoot', root, [approved]);
+    assert.match(definition.stdout, /definition not found/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('handleGetCodeOutline rejects unsupported file extensions', async () => {
@@ -41,7 +58,7 @@ test('handleGetCodeOutline rejects unsupported file extensions', async () => {
   const filePath = join(root, 'readme.md');
   writeFileSync(filePath, '# Readme', 'utf-8');
 
-  const res = await handleGetCodeOutline(filePath, [root]);
+  const res = await handleGetCodeOutline(filePath, root, [root]);
   assert.equal(res.exit_code, 1);
   assert.match(res.stderr, /Unsupported file type/);
 });
@@ -67,7 +84,7 @@ test('handleFindCodeDefinition extracts TS brace-balanced functions skipping tem
       'utf-8',
     );
 
-    const res = await handleFindCodeDefinition('alphaFunc', [root]);
+    const res = await handleFindCodeDefinition('alphaFunc', root, [root]);
     assert.equal(res.exit_code, 0);
     assert.match(res.stdout, /export function alphaFunc\(\)/);
     assert.match(res.stdout, /console\.log\("test"\)/);
@@ -96,7 +113,7 @@ test('handleFindCodeDefinition extracts Python indentation-balanced functions', 
       'utf-8',
     );
 
-    const res = await handleFindCodeDefinition('alpha_func', [root]);
+    const res = await handleFindCodeDefinition('alpha_func', root, [root]);
     assert.equal(res.exit_code, 0);
     assert.match(res.stdout, /def alpha_func\(\)/);
     assert.match(res.stdout, /print\("hello"\)/);
@@ -126,7 +143,7 @@ test('handleFindCodeReferences locates occurrences while ignoring definition', a
       'utf-8',
     );
 
-    const res = await handleFindCodeReferences('alphaFunc', [root]);
+    const res = await handleFindCodeReferences('alphaFunc', root, [root]);
     assert.equal(res.exit_code, 0);
     // Should match references in code.ts:2 and other.ts:1
     assert.match(res.stdout, /code\.ts:2: const a = alphaFunc\(\);/);

@@ -204,7 +204,10 @@ export interface VerifierPromotionInput {
   receipts: readonly VerifierReceiptV2[];
   current_revision_hash: string;
   current_revision_hashes?: Readonly<Record<string, string>>;
-  /** Detected adversarial signals from fixtures / review. */
+  /**
+   * Structured signals from trusted specialized detectors or review. Never infer
+   * these from free-text summaries or path names.
+   */
   adversarial?: {
     tests_deleted?: boolean;
     shortcut_noop?: boolean;

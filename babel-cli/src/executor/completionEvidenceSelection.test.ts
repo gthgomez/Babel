@@ -56,15 +56,18 @@ test(`owned criterion acceptance rejects weaker red, stale or wrong-context proo
       executedVerifierLedger: receipts, currentWorkspaceRevisionHash, proof: { compliant: true }, acceptance,
     })
     assert.equal(decide([adapted.receipt]).finalOutcome, 'VERIFIED_COMPLETE')
-    for (const receipts of [
-      [{ ...adapted.receipt, exitCode: 1 }], [{ ...adapted.receipt, stale: true }],
+    assert.equal(decide([
+      { ...adapted.receipt, order: { sessionId: 'session', seq: 0 }, summary: 'VERIFIER_DEF_TAMPERED', stale: true },
+      adapted.receipt,
+    ]).finalOutcome, 'VERIFIED_COMPLETE', 'stale free-text history does not override later current host-bound proof')
+    for (const [negativeCase, receipts] of [
+      [{ ...adapted.receipt, exitCode: 1 }], [{ ...adapted.receipt, exitCode: 1, exit_code: 1 }], [{ ...adapted.receipt, stale: true }],
       [{ ...adapted.receipt, executionContext: { ...executionContext, workingDirectory: join(root, 'other') } }],
       [{ ...adapted.receipt, executionContext: { ...executionContext, environmentFingerprint: 'unrelated-env' } }],
-      [{ ...adapted.receipt, order: { sessionId: 'session', seq: 0 }, summary: 'VERIFIER_DEF_TAMPERED', stale: true }, adapted.receipt],
-    ]) {
+    ].entries()) {
       const decision = decide(receipts)
-      assert.equal(decision.allowed, false)
-      assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
+      assert.equal(decision.allowed, false, `negative case ${negativeCase} must be rejected`)
+      assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH', `negative case ${negativeCase} must remain unverified`)
     }
     assert.equal(decide([adapted.receipt], 'wrong-current-revision').finalOutcome, 'UNVERIFIED_PATCH')
   } finally { rmSync(base, { recursive: true, force: true }) }

@@ -14,6 +14,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseGitCommand } from './gitCommand.js';
+import { decodeCommand } from './commandDecoder.js';
 import { classifyCommandSemantics, splitChains } from '../agent/commandSemantics.js';
 
 // ─── git option-argument consumption ───────────────────────────────────────
@@ -97,11 +98,14 @@ test('P0-2: gh api -X POST on a privileged endpoint is repo_admin (guard)', () =
 
 // ─── SQL behind DB clients ─────────────────────────────────────────────────
 
-test('P0-2: psql -c "DROP TABLE" is destructive_data_delete (guard)', () => {
-  const p = parseGitCommand('psql mydb -c "DROP TABLE users"');
-  // Guard: #86's DANGEROUS_TOOL_PATTERNS text scan already catches embedded SQL —
-  // the merged parser must keep this.
-  assert.equal(p.capability, 'destructive_data_delete');
+test('P0-2: psql DROP TABLE retains destructive semantics without trusting an unresolved client', () => {
+  const command = 'psql mydb -c "DROP TABLE users"';
+  const parsed = parseGitCommand(command);
+  const decoded = decodeCommand(command);
+  assert.equal(decoded.semantic, 'infrastructure_mutation');
+  assert.equal(decoded.requiresIsolation, true);
+  assert.ok(['destructive_data_delete', 'unknown'].includes(parsed.capability));
+  if (parsed.capability === 'unknown') assert.equal(parsed.ambiguous, true);
 });
 
 // ─── Git global options that consume a following token (L14–L17) ───────────

@@ -27,7 +27,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import { z } from 'zod';
-import { preserveTrustedShellExecutionBackend, SafeExecutor } from './sandbox.js';
+import { preserveTrustedFileCreationEvidence, preserveTrustedShellExecutionBackend, SafeExecutor } from './sandbox.js';
 import { getDefaultProcessWitness } from './diagnostics/bdns/processWitness.js';
 import type { ToolResult, ExecutorMode } from './sandbox.js';
 import { isDryRunEnabled } from './config/dryRun.js';
@@ -349,6 +349,8 @@ export const ToolCallRequestSchema = z.discriminatedUnion('tool', [
     tool: z.literal('file_write'),
     path: z.string().min(1),
     content: z.string(),
+    /** Host-only create mode; not exposed in model tool definitions. */
+    createOnly: z.literal(true).optional(),
   }),
   z.object({
     tool: z.literal('shell_exec'),
@@ -602,7 +604,7 @@ function handleFileWrite(req: Extract<ToolCallRequest, { tool: 'file_write' }>, 
 
   if (!isInvocationLive()) {
     if (process.env['BABEL_SHADOW_ROOT']) {
-      const result = getExecutor(context.projectRoot).fileWrite(req.path, req.content);
+      const result = getExecutor(context.projectRoot).fileWrite(req.path, req.content, req.createOnly ? { createOnly: true } : undefined);
       console.log(`  [DRY RUN] file_write → ${req.path} (${result.stdout})`);
       return {
         ...result,
@@ -620,7 +622,7 @@ function handleFileWrite(req: Extract<ToolCallRequest, { tool: 'file_write' }>, 
     };
   }
 
-  return getExecutor(context.projectRoot).fileWrite(req.path, req.content);
+  return getExecutor(context.projectRoot).fileWrite(req.path, req.content, req.createOnly ? { createOnly: true } : undefined);
 }
 
 function handleFileDelete(req: Extract<ToolCallRequest, { tool: 'file_delete' }>, context: ToolContext): ToolResult {
@@ -1223,7 +1225,8 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     },
     handler: (req, context) => {
       const typedReq = req as Extract<ToolCallRequest, { tool: 'grep' }>;
-      const approvedReadRoots = getApprovedReadRoots(getExecutorProjectRoot());
+      const projectRoot = getExecutorProjectRoot(context.projectRoot);
+      const approvedReadRoots = getApprovedReadRoots(projectRoot);
       return handleGrepTool(
         {
           pattern: typedReq.pattern,
@@ -1238,6 +1241,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
             : {}),
           ...(context.signal ? { signal: context.signal } : {}),
         },
+        projectRoot,
         approvedReadRoots,
       );
     },
@@ -1250,9 +1254,10 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'live',
     policyTags: ['search', 'read', 'filesystem'],
     input: { required: ['pattern'], optional: ['max_paths', 'output_format'] },
-    handler: (req) => {
+    handler: (req, context) => {
       const typedReq = req as Extract<ToolCallRequest, { tool: 'glob' }>;
-      const approvedReadRoots = getApprovedReadRoots(getExecutorProjectRoot());
+      const projectRoot = getExecutorProjectRoot(context.projectRoot);
+      const approvedReadRoots = getApprovedReadRoots(projectRoot);
       return handleGlobTool(
         {
           pattern: typedReq.pattern,
@@ -1261,6 +1266,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
             ? { output_format: typedReq.output_format }
             : {}),
         },
+        projectRoot,
         approvedReadRoots,
       );
     },
@@ -1273,14 +1279,16 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'live',
     policyTags: ['search', 'read', 'filesystem'],
     input: { required: ['query'], optional: ['max_matches'] },
-    handler: (req) => {
+    handler: (req, context) => {
       const typedReq = req as Extract<ToolCallRequest, { tool: 'workspace_symbol_search' }>;
-      const approvedReadRoots = getApprovedReadRoots(getExecutorProjectRoot());
+      const projectRoot = getExecutorProjectRoot(context.projectRoot);
+      const approvedReadRoots = getApprovedReadRoots(projectRoot);
       return handleWorkspaceSymbolSearch(
         {
           query: typedReq.query,
           ...(typedReq.max_matches !== undefined ? { max_matches: typedReq.max_matches } : {}),
         },
+        projectRoot,
         approvedReadRoots,
       );
     },
@@ -1293,9 +1301,10 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'live',
     policyTags: ['search', 'read'],
     input: { required: [], optional: ['max_depth', 'max_files', 'output_format'] },
-    handler: (req) => {
+    handler: (req, context) => {
       const typedReq = req as Extract<ToolCallRequest, { tool: 'workspace_map' }>;
-      const approvedReadRoots = getApprovedReadRoots(getExecutorProjectRoot());
+      const projectRoot = getExecutorProjectRoot(context.projectRoot);
+      const approvedReadRoots = getApprovedReadRoots(projectRoot);
       return handleWorkspaceMapTool(
         {
           ...(typedReq.max_depth !== undefined ? { max_depth: typedReq.max_depth } : {}),
@@ -1304,6 +1313,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
             ? { output_format: typedReq.output_format }
             : {}),
         },
+        projectRoot,
         approvedReadRoots,
       );
     },
@@ -1406,10 +1416,11 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'live',
     policyTags: ['search', 'read', 'filesystem'],
     input: { required: ['path'], optional: [] },
-    handler: (req) => {
+    handler: (req, context) => {
       const typedReq = req as Extract<ToolCallRequest, { tool: 'get_code_outline' }>;
-      const approvedReadRoots = getApprovedReadRoots(getExecutorProjectRoot());
-      return handleGetCodeOutline(typedReq.path, approvedReadRoots);
+      const projectRoot = getExecutorProjectRoot(context.projectRoot);
+      const approvedReadRoots = [projectRoot, ...getApprovedReadRoots(projectRoot)];
+      return handleGetCodeOutline(typedReq.path, projectRoot, approvedReadRoots);
     },
   },
   {
@@ -1421,10 +1432,11 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'live',
     policyTags: ['search', 'read', 'filesystem'],
     input: { required: ['symbol'], optional: [] },
-    handler: (req) => {
+    handler: (req, context) => {
       const typedReq = req as Extract<ToolCallRequest, { tool: 'find_code_definition' }>;
-      const approvedReadRoots = getApprovedReadRoots(getExecutorProjectRoot());
-      return handleFindCodeDefinition(typedReq.symbol, approvedReadRoots);
+      const projectRoot = getExecutorProjectRoot(context.projectRoot);
+      const approvedReadRoots = [projectRoot, ...getApprovedReadRoots(projectRoot)];
+      return handleFindCodeDefinition(typedReq.symbol, projectRoot, approvedReadRoots);
     },
   },
   {
@@ -1436,10 +1448,11 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     dryRunBehavior: 'live',
     policyTags: ['search', 'read', 'filesystem'],
     input: { required: ['symbol'], optional: ['max_matches'] },
-    handler: (req) => {
+    handler: (req, context) => {
       const typedReq = req as Extract<ToolCallRequest, { tool: 'find_code_references' }>;
-      const approvedReadRoots = getApprovedReadRoots(getExecutorProjectRoot());
-      return handleFindCodeReferences(typedReq.symbol, approvedReadRoots, typedReq.max_matches);
+      const projectRoot = getExecutorProjectRoot(context.projectRoot);
+      const approvedReadRoots = [projectRoot, ...getApprovedReadRoots(projectRoot)];
+      return handleFindCodeReferences(typedReq.symbol, projectRoot, approvedReadRoots, typedReq.max_matches);
     },
   },
   {
@@ -1982,10 +1995,11 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
     return result;
   }
 
-  return preserveTrustedShellExecutionBackend(result, {
+  const finalizedResult = preserveTrustedShellExecutionBackend(result, {
     ...result,
     checkpoint_ids: [...(result.checkpoint_ids ?? []), finalized.id],
   });
+  return preserveTrustedFileCreationEvidence(result, finalizedResult);
 }
 
 /**

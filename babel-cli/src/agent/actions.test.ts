@@ -56,6 +56,12 @@ describe('parseAgentActions', () => {
     ]);
   });
 
+  it('does not accept host-only create flags from provider output', () => {
+    assert.deepEqual(parseAgentActions({
+      actions: [{ type: 'write_file', path: 'new.txt', content: 'data', createOnly: true }],
+    }), [{ type: 'write_file', path: 'new.txt', content: 'data' }]);
+  });
+
   it('parses nested ask_approval actions', () => {
     const actions = parseAgentActions({
       action: {

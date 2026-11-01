@@ -133,7 +133,7 @@ test('environment serialization cannot alias embedded separators with separate v
   assert.notEqual(verifierEnvironmentKey({ A: 'x\nB=y' }), verifierEnvironmentKey({ A: 'x', B: 'y' }))
 })
 
-test('canonical adaptation preserves independent historical integrity evidence', async () => {
+test('historical integrity prose cannot veto green proof while corrupt adaptation remains invalid', async () => {
   const { prepareKernelVerifierInput } = await import('./chatEngineVerifierAdapter.js')
   const { evaluateCompletionGateForEngine } = await import('./completionGatePolicy.js')
   const root = mkdtempSync(join(tmpdir(), 'babel-verifier-integrity-'))
@@ -156,7 +156,7 @@ test('canonical adaptation preserves independent historical integrity evidence',
       executedVerifierLedger: adapted.executedVerifierLedger, requiredVerifierCommands: ['node --test'],
       requiredVerifiers: [{ command: 'node --test', executionContext: current.executionContext!, requiredScope: 'full_suite', greenRequired: true }],
       verifierOwner: boundOwner, currentWorkspaceRevisionHash: current.boundRevision!.compositeTreeHash,
-    }), 'reject')
+    }), 'allow')
     // A corrupt later current red is retained so its adaptation error cannot vanish on restore.
     const event = log.events[1]!
     if (event.kind === 'verifier_attempt' && event.receipt) event.receipt.receiptId = ''

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { request, type IncomingMessage } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -9,11 +9,25 @@ import { connect } from 'node:net';
 
 import { ChatEngine } from '../agent/chatEngine.js';
 import { BridgeServer } from './sessionServer.js';
-import { buildWsTextFrame, tryParseWsFrame } from './transport.js';
+import { tryParseWsFrame } from './transport.js';
 
 const PORT = 14680;
 const TOKEN = 'ws-control-test-token-value-01';
 const ORIGIN = 'http://127.0.0.1';
+
+function buildMaskedClientTextFrame(payload: string): Buffer {
+  const data = Buffer.from(payload, 'utf8');
+  const mask = randomBytes(4);
+  const header = data.length < 126
+    ? Buffer.from([0x81, 0x80 | data.length])
+    : data.length <= 0xffff
+      ? Buffer.from([0x81, 0xfe, data.length >>> 8, data.length & 0xff])
+      : Buffer.concat([Buffer.from([0x81, 0xff]), Buffer.alloc(8)]);
+  if (data.length > 0xffff) header.writeBigUInt64BE(BigInt(data.length), 2);
+  const masked = Buffer.alloc(data.length);
+  for (let i = 0; i < data.length; i++) masked[i] = data[i]! ^ mask[i % 4]!;
+  return Buffer.concat([header, mask, masked]);
+}
 
 function httpRequest(
   url: string,
@@ -102,45 +116,54 @@ async function wsConnect(path: string): Promise<{
       let upgradeResponse = '';
       let upgraded = false;
       let buffer: Buffer = Buffer.alloc(0);
-      client.on('data', (data: Buffer) => {
+      const messages: string[] = [];
+      const waiters: Array<{ resolve: (message: string) => void; reject: (error: Error) => void }> = [];
+      const receiveFrames = (data: Buffer): void => {
+        buffer = Buffer.concat([buffer, data]);
+        while (true) {
+          const parsed = tryParseWsFrame(buffer);
+          if (!parsed) return;
+          buffer = parsed.remainder;
+          if (parsed.opcode !== 0x1) continue;
+          const waiter = waiters.shift();
+          if (waiter) waiter.resolve(parsed.payload);
+          else messages.push(parsed.payload);
+        }
+      };
+      const onHandshakeData = (data: Buffer): void => {
         if (!upgraded) {
           upgradeResponse += data.toString('utf8');
           if (!upgradeResponse.includes('\r\n\r\n')) return;
+          if (!upgradeResponse.startsWith('HTTP/1.1 101 ')) {
+            client.destroy();
+            reject(new Error(`WebSocket upgrade rejected: ${upgradeResponse.split('\r\n')[0]}`));
+            return;
+          }
           upgraded = true;
           const headerEnd = upgradeResponse.indexOf('\r\n\r\n') + 4;
           buffer = Buffer.from(upgradeResponse.slice(headerEnd), 'utf8');
+          client.off('data', onHandshakeData);
+          client.on('data', receiveFrames);
+          receiveFrames(Buffer.alloc(0));
           resolve({
-            send: (payload: string) => client.write(buildWsTextFrame(payload)),
-            waitForMessage: () =>
-              new Promise((res) => {
-                const tryParse = () => {
-                  const parsed = tryParseWsFrame(buffer);
-                  if (parsed) {
-                    buffer = parsed.remainder;
-                    res(parsed.payload);
-                    return;
-                  }
-                  const onChunk = (chunk: Buffer) => {
-                    buffer = Buffer.concat([buffer, chunk]);
-                    const p = tryParseWsFrame(buffer);
-                    if (p) {
-                      buffer = p.remainder;
-                      client.off('data', onChunk);
-                      res(p.payload);
-                    }
-                  };
-                  client.on('data', onChunk);
-                };
-                tryParse();
-              }),
+            send: (payload: string) => client.write(buildMaskedClientTextFrame(payload)),
+            waitForMessage: () => {
+              const queued = messages.shift();
+              if (queued !== undefined) return Promise.resolve(queued);
+              return new Promise((res, rej) => waiters.push({ resolve: res, reject: rej }));
+            },
             close: () => {
               client.end();
               client.destroy();
             },
           });
         }
-      });
+      };
+      client.on('data', onHandshakeData);
       client.on('error', reject);
+      client.on('close', () => {
+        for (const waiter of waiters.splice(0)) waiter.reject(new Error('WebSocket closed before a message arrived'));
+      });
     });
   });
 }

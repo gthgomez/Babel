@@ -350,9 +350,9 @@ export async function handleGrepTool(
     context_lines?: number;
     signal?: AbortSignal;
   },
+  projectRoot: string,
   approvedReadRoots?: string[],
 ): Promise<{ exit_code: number; stdout: string; stderr: string }> {
-  const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
   try {
     const result = await grepContent(
       projectRoot,
@@ -390,9 +390,9 @@ export async function handleGlobTool(
     max_paths?: number;
     output_format?: 'text' | 'json';
   },
+  projectRoot: string,
   approvedReadRoots?: string[],
 ): Promise<import('../sandbox.js').ToolResult> {
-  const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
   try {
     const { paths, truncated } = await globPathResult(projectRoot, input.pattern, input.max_paths, approvedReadRoots);
     const output =
@@ -574,9 +574,9 @@ export async function handleWorkspaceSymbolSearch(
     query: string;
     max_matches?: number;
   },
+  projectRoot: string,
   approvedReadRoots?: string[],
 ): Promise<{ exit_code: number; stdout: string; stderr: string }> {
-  const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
   try {
     const result = await searchSymbols(
       projectRoot,
@@ -722,9 +722,9 @@ export async function handleWorkspaceMapTool(
     max_files?: number;
     output_format?: 'text' | 'json';
   },
+  projectRoot: string,
   approvedReadRoots?: string[],
 ): Promise<{ exit_code: number; stdout: string; stderr: string }> {
-  const projectRoot = process.env['BABEL_PROJECT_ROOT'] ?? process.cwd();
   try {
     const tree = await buildWorkspaceMap(
       projectRoot,

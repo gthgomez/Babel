@@ -52,6 +52,9 @@ export const COMMAND_SPECS: Readonly<Record<string, CommandSpec>> = {
   env: spec('intrinsic', 'none'),
 
   git: spec('intrinsic', 'git'),
+  // GitHub CLI operations are separately gated by decoded command semantics
+  // and lease authority. This entry only classifies the trusted CLI runtime.
+  gh: spec('intrinsic', 'none'),
 
   node: spec('project_code', 'compiler_or_build'),
   nodejs: spec('project_code', 'compiler_or_build'),
@@ -78,6 +81,27 @@ export const COMMAND_SPECS: Readonly<Record<string, CommandSpec>> = {
   'g++': spec('project_code', 'compiler_or_build'),
   bash: spec('project_code', 'compiler_or_build'),
   sh: spec('project_code', 'compiler_or_build'),
+
+  // External platform/database tools are known executable identities, but
+  // their command payloads still require isolation and their side effects
+  // remain subject to the decoder's explicit capability gates.
+  terraform: spec('project_code', 'compiler_or_build'),
+  kubectl: spec('project_code', 'compiler_or_build'),
+  helm: spec('project_code', 'compiler_or_build'),
+  aws: spec('project_code', 'compiler_or_build'),
+  gcloud: spec('project_code', 'compiler_or_build'),
+  az: spec('project_code', 'compiler_or_build'),
+  docker: spec('project_code', 'compiler_or_build'),
+  podman: spec('project_code', 'compiler_or_build'),
+  vercel: spec('project_code', 'compiler_or_build'),
+  fly: spec('project_code', 'compiler_or_build'),
+  netlify: spec('project_code', 'compiler_or_build'),
+  railway: spec('project_code', 'compiler_or_build'),
+  render: spec('project_code', 'compiler_or_build'),
+  psql: spec('project_code', 'compiler_or_build'),
+  mysql: spec('project_code', 'compiler_or_build'),
+  mariadb: spec('project_code', 'compiler_or_build'),
+  sqlite3: spec('project_code', 'compiler_or_build'),
 
   npm: spec('project_code', 'package_manager'),
   pnpm: spec('project_code', 'package_manager'),
@@ -122,11 +146,8 @@ export function normalizeExecutionBase(raw: string): string {
 
 export function isProjectRelativeExecutable(rawCommand: string): boolean {
   const normalized = rawCommand.trim().replace(/\\/g, '/');
-  return (
-    normalized.startsWith('./') ||
-    normalized.startsWith('/project/') ||
-    normalized.startsWith('/app/')
-  );
+  const executable = firstToken(normalized);
+  return /[\\/]/.test(executable) || /^[A-Za-z]:/.test(executable);
 }
 
 function firstToken(command: string): string {

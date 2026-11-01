@@ -21,8 +21,9 @@ export interface PatchHunk {
   newLines: number
   /** Patch body lines without the leading op character. */
   lines: { op: ' ' | '-' | '+'; text: string }[]
-  /** True when the hunk explicitly removes the trailing newline. */
-  noNewlineAtEof: boolean
+  /** Newline markers attached to old and new EOF lines, respectively. */
+  oldNoNewlineAtEof: boolean
+  newNoNewlineAtEof: boolean
 }
 
 export interface PatchFileSection {
@@ -40,7 +41,7 @@ export interface ParseSuccess {
 
 export interface ParseFailure {
   ok: false
-  reason: 'empty_patch' | 'no_file_header' | 'bad_hunk_header' | 'bad_hunk_body' | 'hunk_count_mismatch'
+  reason: 'empty_patch' | 'no_file_header' | 'bad_hunk_header' | 'bad_hunk_body' | 'hunk_count_mismatch' | 'invalid_file_operation'
   message: string
   /** 1-based line number in the patch text where the error was found. */
   lineNo: number
@@ -86,12 +87,10 @@ export function parseHunkHeader(line: string): HunkHeaderCounts | null {
   if (!match) return null
   // Unified diff omits ",1" for single-line ranges; a missing count means 1.
   // An explicit ",0" only appears for empty files and means 0.
-  return {
-    oldStart: Number(match[1]),
-    oldLines: match[2] !== undefined ? Number(match[2]) : 1,
-    newStart: Number(match[3]),
-    newLines: match[4] !== undefined ? Number(match[4]) : 1,
-  }
+  const values = [Number(match[1]), match[2] !== undefined ? Number(match[2]) : 1,
+    Number(match[3]), match[4] !== undefined ? Number(match[4]) : 1]
+  if (values.some((value) => !Number.isSafeInteger(value))) return null
+  return { oldStart: values[0]!, oldLines: values[1]!, newStart: values[2]!, newLines: values[3]! }
 }
 
 function stripTimestamp(path: string): string {
@@ -133,7 +132,9 @@ export function parseUnifiedDiff(patchText: string): ParseResult {
 
     if (hunk !== null) {
       if (line.startsWith('\\')) {
-        hunk.noNewlineAtEof = true
+        const previous = hunk.lines[hunk.lines.length - 1]
+        if (previous?.op === '-' || previous?.op === ' ') hunk.oldNoNewlineAtEof = true
+        if (previous?.op === '+' || previous?.op === ' ') hunk.newNoNewlineAtEof = true
         continue
       }
       // '--- '/'+++ ' lines are ambiguous with '-'/'+' hunk lines. When the
@@ -187,10 +188,9 @@ export function parseUnifiedDiff(patchText: string): ParseResult {
         }
       }
       const path = normalizePatchPath(line.slice(4))
-      if (path !== null) {
-        current.newPath = path
-        if (current.oldPath === '') current.oldPath = path
-      }
+      if (path === null) return fileOperationFailure(lineNo, 'file deletion is unsupported')
+      current.newPath = path
+      if (current.oldPath === '') current.oldPath = path
       seenNew = true
       continue
     }
@@ -217,7 +217,7 @@ export function parseUnifiedDiff(patchText: string): ParseResult {
         }
         current = { oldPath: lastPath, newPath: lastPath, createsFile: false, hunks: [] }
       }
-      current.hunks.push({ ...counts, lines: [], noNewlineAtEof: false })
+      current.hunks.push({ ...counts, lines: [], oldNoNewlineAtEof: false, newNoNewlineAtEof: false })
       hunk = current.hunks[current.hunks.length - 1] ?? null
       if (current.oldPath) lastPath = current.oldPath
       continue
@@ -239,6 +239,9 @@ export function parseUnifiedDiff(patchText: string): ParseResult {
       line.startsWith('rename to') ||
       line.startsWith('Binary files')
     ) {
+      if (line.startsWith('deleted file mode') || line.startsWith('rename from') || line.startsWith('rename to')) {
+        return fileOperationFailure(lineNo, 'deletion and rename metadata are unsupported')
+      }
       continue
     }
     return {
@@ -262,7 +265,16 @@ export function parseUnifiedDiff(patchText: string): ParseResult {
       lineNo: 1,
     }
   }
+  const targetPaths = files.map((file) => file.newPath || file.oldPath)
+  if (new Set(targetPaths).size !== targetPaths.length) return fileOperationFailure(rawLines.length, 'duplicate target sections are unsupported')
+  if (files.some((file) => !file.oldPath || !file.newPath || file.oldPath !== file.newPath)) {
+    return fileOperationFailure(rawLines.length, 'path changes are unsupported')
+  }
   return { ok: true, files }
+}
+
+function fileOperationFailure(lineNo: number, message: string): ParseFailure {
+  return { ok: false, reason: 'invalid_file_operation', message: `apply_patch: ${message}`, lineNo }
 }
 
 function validateHunkCounts(hunk: PatchHunk, lineNo: number): ParseFailure | null {
@@ -322,28 +334,32 @@ function locateSequence(
 ): LocateResult | LocateMiss | LocateAmbiguous {
   if (seq.length === 0) return { kind: 'found', index: hintIndex, strategy }
   const cmp = makeComparator(strategy)
-  const matches: number[] = []
-  // Prefer the declared hunk position: scan an expanding window around the
-  // hint first, then the remainder of the file. Uniqueness is still global.
-  const maxOffset = Math.max(contentLines.length, hintIndex + seq.length)
-  for (let offset = 0; offset <= maxOffset; offset++) {
-    for (const start of offset === 0 ? [hintIndex] : [hintIndex - offset, hintIndex + offset]) {
-      if (start < 0 || start + seq.length > contentLines.length) continue
-      if (matches.includes(start)) continue
-      let ok = true
-      for (let i = 0; i < seq.length; i++) {
-        if (!cmp(contentLines[start + i] ?? '', seq[i] ?? '')) {
-          ok = false
-          break
-        }
+  let firstMatch: number | null = null
+  let matchCount = 0
+  const maxStart = contentLines.length - seq.length
+  const nearestStart = Math.min(maxStart, Math.max(0, Math.trunc(hintIndex)))
+  let left = nearestStart
+  let right = nearestStart + 1
+  while (left >= 0 || right <= maxStart) {
+    let start: number
+    if (left < 0) start = right++
+    else if (right > maxStart) start = left--
+    else if (Math.abs(left - hintIndex) <= Math.abs(right - hintIndex)) start = left--
+    else start = right++
+    let ok = true
+    for (let i = 0; i < seq.length; i++) {
+      if (!cmp(contentLines[start + i] ?? '', seq[i] ?? '')) {
+        ok = false
+        break
       }
-      if (ok) matches.push(start)
     }
-    // Early exit only for the hinted hit: once we have a match at the declared
-    // position and full-file scan is still required for uniqueness, continue.
+    if (ok) {
+      firstMatch ??= start
+      matchCount++
+    }
   }
-  if (matches.length === 1) return { kind: 'found', index: matches[0] ?? 0, strategy }
-  if (matches.length > 1) return { kind: 'ambiguous', count: matches.length, strategy }
+  if (matchCount === 1) return { kind: 'found', index: firstMatch ?? 0, strategy }
+  if (matchCount > 1) return { kind: 'ambiguous', count: matchCount, strategy }
   return { kind: 'not_found', strategy }
 }
 
@@ -407,17 +423,27 @@ export function applyHunk(content: string, hunk: PatchHunk): HunkApplyResult {
   const lineEnding = content.includes('\r\n') ? '\r\n' : '\n'
   const bom = content.startsWith('\uFEFF') ? '\uFEFF' : ''
   const body = bom ? content.slice(1) : content
+  if ((content.includes('\r\n') && /(?<!\r)\n/.test(body)) || /\r(?!\n)/.test(body)) {
+    return { ok: false, reason: 'not_found', strategy: 'exact', message: 'mixed line endings are unsupported' }
+  }
   const trailingNewline = body.endsWith('\n') || body.length === 0
-  const contentLines = body.length === 0 ? [] : body.replace(/\n$/, '').split('\n')
-  const hint = Math.max(0, hunk.oldStart - 1)
+  const contentLines = body.length === 0 ? [] : body.replace(/\r?\n$/, '').split(/\r?\n/)
+  const hint = hunk.oldLines === 0 ? hunk.oldStart : hunk.oldStart - 1
 
   const before = beforeLines(hunk)
   const after = afterLines(hunk)
 
-  // New-file / append semantics (Aider do_replace: empty before → append).
-  if (before.every((l) => l.trim() === '') && hunk.oldStart === 0) {
-    const newContent = joinLines(after, lineEnding, trailingNewline && !hunk.noNewlineAtEof)
-    return { ok: true, content: bom + newContent, strategy: 'append' }
+  // Context-free insertion position is defined by the number of old lines
+  // preceding the insertion (oldStart), including zero for prepend.
+  if (before.length === 0) {
+    if (hint < 0 || hint > contentLines.length) {
+      return { ok: false, reason: 'not_found', strategy: 'append', message: 'insertion position is outside the file' }
+    }
+    const newLines = [...contentLines]
+    newLines.splice(hint, 0, ...after)
+    const atEof = hint === contentLines.length
+    const finalNewline = atEof ? eofNewlineState(trailingNewline, hunk) : trailingNewline
+    return { ok: true, content: bom + joinLines(newLines, lineEnding, finalNewline), strategy: 'append' }
   }
 
   // Ladder levels 1–2: full before-sequence match at decreasing strictness.
@@ -426,9 +452,10 @@ export function applyHunk(content: string, hunk: PatchHunk): HunkApplyResult {
     if (located.kind === 'found') {
       const newLines = [...contentLines]
       newLines.splice(located.index, before.length, ...after)
+      const atEof = located.index + before.length === contentLines.length
       return {
         ok: true,
-        content: bom + joinLines(newLines, lineEnding, trailingNewline && !hunk.noNewlineAtEof),
+        content: bom + joinLines(newLines, lineEnding, atEof ? eofNewlineState(trailingNewline, hunk) : trailingNewline),
         strategy,
       }
     }
@@ -464,9 +491,10 @@ export function applyHunk(content: string, hunk: PatchHunk): HunkApplyResult {
           if (located.kind === 'found') {
             const newLines = [...contentLines]
             newLines.splice(located.index, reducedBefore.length, ...reducedAfter)
+            const atEof = located.index + reducedBefore.length === contentLines.length
             return {
               ok: true,
-              content: bom + joinLines(newLines, lineEnding, trailingNewline && !hunk.noNewlineAtEof),
+              content: bom + joinLines(newLines, lineEnding, atEof ? eofNewlineState(trailingNewline, hunk) : trailingNewline),
               strategy: 'fuzzy_anchored',
             }
           }
@@ -491,6 +519,12 @@ export function applyHunk(content: string, hunk: PatchHunk): HunkApplyResult {
       `hunk @@ -${hunk.oldStart},${hunk.oldLines} does not apply: these ` +
       `${before.length} lines are not present (exact, whitespace-stripped, or fuzzy-anchored):\n${before.map((l) => ' ' + l).join('\n')}`,
   }
+}
+
+function eofNewlineState(existing: boolean, hunk: PatchHunk): boolean {
+  if (hunk.newNoNewlineAtEof) return false
+  if (hunk.oldNoNewlineAtEof) return true
+  return existing
 }
 
 function joinLines(lines: string[], lineEnding: string, trailingNewline: boolean): string {
@@ -521,10 +555,11 @@ export function applyPatchInMemory(
     const content = readContent(path)
     let current = content
     const strategies: MatchStrategy[] = []
+    let lineDelta = 0
     for (let h = 0; h < file.hunks.length; h++) {
       const hunk = file.hunks[h]
       if (!hunk) continue
-      const outcome = applyHunk(current, hunk)
+      const outcome = applyHunk(current, { ...hunk, oldStart: hunk.oldStart + lineDelta })
       if (!outcome.ok) {
         failures.push({
           file: path,
@@ -538,6 +573,7 @@ export function applyPatchInMemory(
       }
       current = outcome.content
       strategies.push(outcome.strategy)
+      lineDelta += hunk.newLines - hunk.oldLines
     }
     results.push({ path, content: current, appliedHunks: strategies.length, strategies })
   }
@@ -567,7 +603,8 @@ export function reverseParsedPatch(files: PatchFileSection[]): PatchFileSection[
       oldLines: hunk.newLines,
       newStart: hunk.oldStart,
       newLines: hunk.oldLines,
-      noNewlineAtEof: hunk.noNewlineAtEof,
+      oldNoNewlineAtEof: hunk.newNoNewlineAtEof,
+      newNoNewlineAtEof: hunk.oldNoNewlineAtEof,
       lines: hunk.lines.map((l) => ({ op: l.op === '-' ? ('+' as const) : l.op === '+' ? ('-' as const) : l.op, text: l.text })),
     })),
   }))

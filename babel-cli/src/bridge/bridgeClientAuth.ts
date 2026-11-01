@@ -38,7 +38,14 @@ export function pairingCookieToken(req: IncomingMessage): string | undefined {
   for (const part of raw.split(';')) {
     const trimmed = part.trim();
     if (trimmed.startsWith(`${REMOTE_PAIRING_COOKIE}=`)) {
-      return decodeURIComponent(trimmed.slice(REMOTE_PAIRING_COOKIE.length + 1));
+      const encodedToken = trimmed.slice(REMOTE_PAIRING_COOKIE.length + 1);
+      if (encodedToken.length > 8192) return undefined;
+      try {
+        const token = decodeURIComponent(encodedToken);
+        return token.length <= 4096 ? token : undefined;
+      } catch {
+        return undefined;
+      }
     }
   }
   return undefined;

@@ -7,6 +7,7 @@ export interface PreparedShellInvocation {
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  validateExecutable?: () => boolean;
   ownedContainerName?: string;
 }
 

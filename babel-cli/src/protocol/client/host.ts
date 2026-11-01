@@ -445,6 +445,27 @@ export async function handleProtocolRequest(
 ): Promise<JsonRpcResponse> {
   const id = request.id;
 
+  // Saved thread identity is authorized before any cache hydration, lease
+  // admission, history lookup, or turn/approval side effect.
+  const savedParams = (request as { params?: { thread_id?: unknown; project_root?: unknown } }).params;
+  const savedThreadId = typeof savedParams?.thread_id === 'string' ? savedParams.thread_id : undefined;
+  if (savedThreadId && request.method !== 'thread.create') {
+    const persisted = loadSessionDescriptor(savedThreadId);
+    if (state.projectRootGuard) {
+      try {
+        if (!persisted?.projectRoot) {
+          return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Saved thread is not available in this workspace.');
+        }
+        state.projectRootGuard(persisted.projectRoot);
+        if (request.method === 'thread.resume' && typeof savedParams?.project_root === 'string') {
+          state.projectRootGuard(savedParams.project_root);
+        }
+      } catch {
+        return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Saved thread is not available in this workspace.');
+      }
+    }
+  }
+
   try {
     switch (request.method) {
       case 'thread.create': {

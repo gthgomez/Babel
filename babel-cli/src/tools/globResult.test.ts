@@ -14,11 +14,12 @@ for (const fallback of [false, true]) {
     const root = mkdtempSync(join(tmpdir(), 'babel-glob-result-'))
     const previousRoot = process.env.BABEL_PROJECT_ROOT
     const previousPath = process.env.PATH
+    let activeRoot = root
     process.env.BABEL_PROJECT_ROOT = root
     if (fallback) { process.env.PATH = ''; resetRipgrepDetection() }
     try {
       const action = { type: 'glob', pattern: '*' } as const
-      const run = (max_paths?: number) => handleGlobTool({ pattern: '*', ...(max_paths ? { max_paths } : {}) })
+      const run = (max_paths?: number) => handleGlobTool({ pattern: '*', ...(max_paths ? { max_paths } : {}) }, activeRoot)
       const empty = await run()
       assert.equal(empty.stdout, 'No paths matched.')
       assert.equal(formatResultDetail(action, empty), '0 matches')
@@ -42,7 +43,7 @@ for (const fallback of [false, true]) {
       assert.equal(bounded.glob_result?.returned_count, 2)
       assert.equal(bounded.glob_result?.truncated, true)
       assert.equal(formatResultDetail(action, bounded), '2 matches (truncated)')
-      const json = await handleGlobTool({ pattern: '*', max_paths: 2, output_format: 'json' })
+      const json = await handleGlobTool({ pattern: '*', max_paths: 2, output_format: 'json' }, root)
       assert.equal(JSON.parse(json.stdout).truncated, true)
       assert.equal(JSON.parse(json.stdout).matches.length, 2)
       const observation = formatRegisteredToolObservation(action, all, { read: () => '', writeSpill: () => { throw Error('unexpected spill') } }, 'glob-fixture')
@@ -50,6 +51,7 @@ for (const fallback of [false, true]) {
       assert.ok(line, 'actual registered observation must carry structured data to the model')
       assert.deepEqual(JSON.parse(line.slice('glob_result: '.length)), data)
       process.env.BABEL_PROJECT_ROOT = join(root, 'absent')
+      activeRoot = process.env.BABEL_PROJECT_ROOT
       const failure = await run()
       assert.equal(failure.exit_code, 1)
       assert.equal(failure.glob_result, undefined, 'errors cannot masquerade as zero matches')
@@ -94,12 +96,12 @@ test('fallback glob keeps traversal exclusions and discloses incomplete depth sc
     }
     const indexed = await collectTextFiles(root, [], { projectRoot: root })
     assert.deepEqual(indexed, [join(root, 'source.ts')], 'text indexing does not inherit glob enumeration semantics')
-    const complete = await handleGlobTool({ pattern: '**/*' })
+    const complete = await handleGlobTool({ pattern: '**/*' }, root)
     assert.deepEqual(complete.glob_result, { paths: ['LICENSE', 'source.ts'], returned_count: 2, truncated: false })
     const deep = join(root, ...Array.from({ length: 17 }, () => 'nested'))
     mkdirSync(deep, { recursive: true })
     writeFileSync(join(deep, 'unseen'), 'unseen')
-    const partial = await handleGlobTool({ pattern: '**/unseen' })
+    const partial = await handleGlobTool({ pattern: '**/unseen' }, root)
     assert.deepEqual(partial.glob_result, { paths: [], returned_count: 0, truncated: true })
   } finally {
     if (oldRoot === undefined) delete process.env.BABEL_PROJECT_ROOT; else process.env.BABEL_PROJECT_ROOT = oldRoot

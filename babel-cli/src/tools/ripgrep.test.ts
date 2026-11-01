@@ -114,12 +114,12 @@ describe('ripgrep wrapper (when available)', () => {
       assert.equal(result.matches.length, 0);
       assert.equal(result.truncated, false);
       // This existing case is required to execute under pinned native rg on both CI OSes.
-      const empty = await handleGlobTool({ pattern: 'missing-sentinel-*' });
+      const empty = await handleGlobTool({ pattern: 'missing-sentinel-*' }, fixture.root);
       assert.equal(formatResultDetail({ type: 'glob', pattern: 'missing-sentinel-*' }, empty), '0 matches');
       // Win32 normal filenames cannot retain a trailing dot or a newline.
       const sentinel = process.platform === 'win32' ? 'No paths matched..txt' : 'No paths matched.';
       writeFileSync(path.join(fixture.root, sentinel), 'public native glob fixture');
-      const one = await handleGlobTool({ pattern: sentinel });
+      const one = await handleGlobTool({ pattern: sentinel }, fixture.root);
       assert.equal(one.stdout, sentinel);
       assert.deepEqual(one.glob_result, { paths: [sentinel], returned_count: 1, truncated: false });
       assert.equal(formatResultDetail({ type: 'glob', pattern: sentinel }, one), '1 matches');

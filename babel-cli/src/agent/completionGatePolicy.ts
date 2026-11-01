@@ -44,8 +44,9 @@ export function receiptScopeFromLedgerEntry(r: unknown): VerifierScope {
 }
 
 /**
- * Derive adversarial promotion signals from ledger + tool log (not only flag injection).
- * Specialized detectors may also pass opts.adversarial; these are mechanical heuristics.
+ * Derive only structured adversarial facts from verifier receipts.
+ * Free-text summaries and write-target names are descriptive, not authoritative;
+ * specialized trusted detectors may supply explicit adversarial flags separately.
  */
 export function deriveAdversarialSignals(opts: {
   toolCallLog: readonly { tool: string; target?: string; exit_code?: number }[];
@@ -84,34 +85,6 @@ export function deriveAdversarialSignals(opts: {
       (r.exit_code ?? 1) === 0
     ) {
       signals.tests_deleted = true;
-    }
-    const summary = String(r.summary ?? '');
-    if (/HARDCODED_FIXTURE|fixture.?green|always.?pass/i.test(summary)) {
-      signals.hardcoded_fixture = true;
-    }
-    if (/VERIFIER_DEF_TAMPERED|tampered.?verifier/i.test(summary)) {
-      signals.verifier_def_tampered = true;
-    }
-  }
-
-  // Shortcut/no-op: writes claimed but every write target is empty / noop marker
-  if (opts.hasWrite) {
-    const writes = opts.toolCallLog.filter(
-      (e) => e.tool === 'write_file' || e.tool === 'str_replace' || e.tool === 'apply_patch',
-    );
-    if (
-      writes.length > 0 &&
-      writes.every(
-        (w) =>
-          !w.target ||
-          /noop|shortcut|empty/i.test(String(w.target)) ||
-          w.exit_code === 0 && String(w.target).endsWith('.noop'),
-      )
-    ) {
-      // Only flag when all writes look like deliberate shortcuts
-      if (writes.some((w) => /noop|shortcut|\.noop$/i.test(String(w.target ?? '')))) {
-        signals.shortcut_noop = true;
-      }
     }
   }
 
@@ -1606,8 +1579,8 @@ export function evaluateCompletionGateForEngine(opts: {
   /** Host dispatch environment for truthful unplanned-attempt delivery only. */
   unplannedAttemptEnvironmentFingerprint?: string;
   /**
-   * Optional explicit adversarial signals (specialized detectors / tests).
-   * Live path also derives mechanical signals via deriveAdversarialSignals.
+   * Optional explicit adversarial signals from trusted specialized detectors.
+   * Free-text summaries and write-target names are not authoritative signals.
    */
   adversarial?: {
     tests_deleted?: boolean;
