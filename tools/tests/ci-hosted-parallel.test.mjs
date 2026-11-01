@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -59,6 +60,24 @@ test('platform-core reports compiler failures before long merge-control fixtures
     1,
     'platform-core must not duplicate qualify:build',
   );
+});
+
+test('qualify:build negative control fails on deliberate compile error before later platform-core work', () => {
+  const babelCli = fileURLToPath(new URL('../../babel-cli', import.meta.url));
+  const stamp = join(babelCli, 'src', '__ci_compile_negative_control.ts');
+  writeFileSync(stamp, 'export const __ciCompileNegativeControl: number = "deliberate"\n');
+  try {
+    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const result = spawnSync(npm, ['run', 'qualify:build'], {
+      cwd: babelCli,
+      encoding: 'utf8',
+      timeout: 180000,
+    });
+    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(`${result.stdout}\n${result.stderr}`, /error TS/i);
+  } finally {
+    rmSync(stamp, { force: true });
+  }
 });
 
 test('the final combined stack enforces all real architecture budgets on Linux and Windows', () => {

@@ -160,6 +160,9 @@ jobs:
         shell: pwsh
         run: |
           pwsh -NoProfile -NonInteractive -File tools/tests/test-trust-root-boundaries.ps1 -RepoRoot .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -NonInteractive -File tools/tests/test-merge-audit-eligibility.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   merge-audit-after-release-gate:
     name: trusted-control-plane
     if: >-
