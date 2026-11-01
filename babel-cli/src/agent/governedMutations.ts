@@ -7,7 +7,7 @@ import { captureRecoveryPatchSnapshot, recoveryPatchSnapshotMatches, recoveryPat
  * Callers must not bypass this with direct writeFile.
  */
 
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { assessMutationEffect, type MutationEffectAssessment } from './mutationTools.js';
 import { pinProjectRootEnv } from './projectRootPin.js';
 import { getExecutionContext } from './executionContext.js';
@@ -16,7 +16,7 @@ import { compensatePatchWrites, type PatchRollbackOutcome } from './patchCompens
 import type { EffectLedgerRecord } from '../executor/effectLedger.js';
 import { captureEffectParentIdentity, type EffectParentIdentity } from '../executor/effectPathIdentity.js';
 import { isAbsolute, resolve } from 'node:path';
-import { getTrustedFileCreationEvidence } from '../sandbox.js';
+import { getTrustedFileCreationEvidence, creationOwnershipFromTrustedEvidence, matchesTrustedCreationPath } from '../sandbox.js';
 
 import { FileWriteMutex, canonicalizeLockPath, type FileLockHandle } from '../services/editReliability.js';
 import { applyUniqueEdit, formatEditObservation } from './codingLoop/editApply.js';
@@ -70,14 +70,7 @@ function resolveProjectPath(projectRoot: string, filePath: string): string {
 }
 
 function matchesCreatedTargetPath(evidencePath: string, targetPath: string): boolean {
-  if (process.platform !== 'win32') return evidencePath === targetPath;
-  try {
-    // Windows temporary roots may be supplied in 8.3 form while SafeExecutor
-    // canonicalizes its project root to the long path before writing.
-    return realpathSync.native(evidencePath).toLowerCase() === realpathSync.native(targetPath).toLowerCase();
-  } catch {
-    return false;
-  }
+  return matchesTrustedCreationPath(evidencePath, targetPath);
 }
 
 function governedControl(result: PolicyGatedExecutionResult | null | undefined, whollyUnstarted = true): Pick<PolicyGatedExecutionResult, 'stopRequest' | 'notStarted'> {
@@ -476,10 +469,49 @@ export async function governedApplyPatch(
   }
 
   /**
+   * When executor rollback is incomplete, patch compensation must consume host
+   * attestation from the failing dispatch (including exit-nonzero results).
+   * Success-path ownership alone is insufficient: a partial create can land
+   * before the dispatch reports failure.
+   */
+  const compensateFailingDispatchTarget = async (
+    absolutePath: string,
+    intendedContent: string,
+    createsFile: boolean | undefined,
+    dispatch: PolicyGatedExecutionResult,
+    lastResult: ToolResult | undefined,
+  ): Promise<PatchRollbackOutcome> => {
+    const effects = new Map(writtenEffects);
+    if (dispatch.effectLedgerRecord) {
+      effects.set(absolutePath, dispatch.effectLedgerRecord);
+    }
+    const ownership = new Map(createdFileOwnership);
+    if (createsFile && lastResult) {
+      const creation = getTrustedFileCreationEvidence(lastResult);
+      const ownershipRecord = creationOwnershipFromTrustedEvidence(creation, absolutePath, intendedContent);
+      if (ownershipRecord) {
+        ownership.set(absolutePath, ownershipRecord);
+      }
+    }
+    if (!writtenParents.has(absolutePath)) {
+      writtenParents.set(absolutePath, captureEffectParentIdentity(absolutePath));
+    }
+    return compensatePatchWrites(
+      [absolutePath],
+      contents,
+      createdPaths,
+      writtenContents,
+      effects,
+      options.context,
+      writtenParents,
+      ownership,
+    );
+  };
+
+  /**
    * Report the failing dispatch target's own residual state. Earlier files are
-   * covered by rollbackWrittenPaths; the failing file is cleaned up inside the
-   * executor, so its outcome is observed here instead of assumed — a swallow
-   * there must not turn a file left holding this patch's bytes into silence.
+   * covered by rollbackWrittenPaths; failing-target compensation runs when
+   * executor rollback is incomplete. Residual text must still match disk.
    */
   const dispatchTargetResidual = async (target: string): Promise<string> => {
     const preImage = createdPaths.has(target) ? null : (contents.get(target) ?? null);
@@ -713,6 +745,14 @@ export async function governedApplyPatch(
             );
             observation += formatRollbackOutcome(rollback);
           }
+          const failingRollback = await compensateFailingDispatchTarget(
+            absolutePath,
+            result.content,
+            fileSection?.createsFile,
+            dispatch,
+            last,
+          );
+          observation += formatRollbackOutcome(failingRollback);
           observation += await dispatchTargetResidual(absolutePath);
           const effectTransaction = batchScopedEffectTransaction(dispatch, absolutePaths);
           throw Object.assign(new Error(stderr), {
@@ -742,12 +782,9 @@ export async function governedApplyPatch(
         });
         if (fileSection?.createsFile && last) {
           const creation = getTrustedFileCreationEvidence(last);
-          if (creation && matchesCreatedTargetPath(creation.path, absolutePath)) {
-            createdFileOwnership.set(absolutePath, {
-              device: creation.device,
-              inode: creation.inode,
-              expectedContent: result.content,
-            });
+          const ownershipRecord = creationOwnershipFromTrustedEvidence(creation, absolutePath, result.content);
+          if (ownershipRecord) {
+            createdFileOwnership.set(absolutePath, ownershipRecord);
           }
         }
         if (assessMutationEffect({

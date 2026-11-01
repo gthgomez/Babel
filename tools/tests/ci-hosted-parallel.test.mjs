@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -39,6 +40,74 @@ test('combined qualification preserves emitting compiler and scripts checks with
   const skipped = structuredClone(workflow);
   skipped.jobs['platform-core'].steps.find(step => step.run === 'npm run qualify:build').if = 'false';
   assert.throws(() => assertCombinedQualification(skipped, cliPackage, 'ubuntu-latest'));
+});
+
+test('platform-core reports compiler failures before long merge-control fixtures', () => {
+  const names = workflow.jobs['platform-core'].steps.map(step => step.name);
+  const install = names.indexOf('Install dependencies');
+  const qualify = names.indexOf('Build and typecheck CLI and scripts once');
+  assert.ok(install >= 0 && qualify > install, 'qualify:build must follow dependency installation');
+  for (const longStep of [
+    'Test merge control and Git readiness',
+    'Run required review control-plane PowerShell contract',
+    'Run required review control-plane TypeScript contract',
+  ]) {
+    const index = names.indexOf(longStep);
+    if (index >= 0) assert.ok(qualify < index, `${longStep} must stay after combined qualification`);
+  }
+  assert.equal(
+    workflow.jobs['platform-core'].steps.filter(step => step.run === 'npm run qualify:build').length,
+    1,
+    'platform-core must not duplicate qualify:build',
+  );
+});
+
+test('architecture-regressions TAP selects merge-control script timing wrapper tests', () => {
+  const step = workflow.jobs['architecture-regressions'].steps.find(item => item.run?.includes('node --test --test-reporter=tap'))
+  assert.ok(step)
+  assert.match(step.run, /tools\/tests\/ci-record-script-timing\.test\.mjs/)
+})
+
+test('merge-control Windows step records whole-script timing sidecar without masking failures', () => {
+  const step = workflow.jobs['platform-core'].steps.find(item => item.name === 'Test merge control and Git readiness')
+  assert.ok(step)
+  assert.equal(step.if, 'matrix.os == \'windows-latest\'')
+  assert.equal(step.env?.BABEL_CI_CANDIDATE_HEAD, '${{ github.event.pull_request.head.sha || github.sha }}')
+  assert.match(step.run, /BABEL_CI_CHECKOUT_HEAD/)
+  assert.match(step.run, /merge-control-script-timing\.jsonl/)
+  assert.match(step.run, /ci-record-script-timing\.ps1/)
+  assert.match(step.run, /InvokeJson/)
+  for (const script of [
+    'tools/tests/test-agent-pr-gate.ps1',
+    'tools/tests/test-agent-git-readiness.ps1',
+    'tools/tests/test-trusted-control-plane-integration.ps1',
+  ]) {
+    assert.match(step.run, new RegExp(script.replaceAll('/', '\\/')))
+    assert.match(step.run, new RegExp(`-Script ${script.replaceAll('/', '\\/')} -InvokeJson`))
+  }
+  assert.equal((step.run.match(/if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/g) ?? []).length, 4)
+  const upload = workflow.jobs['platform-core'].steps.find(item => item.name === 'Upload candidate identity')
+  assert.equal(upload.if, 'always()')
+  assert.match(upload.with.path, /artifacts\/ci-validation/)
+})
+
+test('qualify:build negative control fails on deliberate compile error before later platform-core work', () => {
+  const babelCli = fileURLToPath(new URL('../../babel-cli', import.meta.url));
+  const stamp = join(babelCli, 'src', '__ci_compile_negative_control.ts');
+  writeFileSync(stamp, 'export const __ciCompileNegativeControl: number = "deliberate"\n');
+  try {
+    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const result = spawnSync(npm, ['run', 'qualify:build'], {
+      cwd: babelCli,
+      encoding: 'utf8',
+      timeout: 180000,
+      ...(process.platform === 'win32' ? { shell: true } : {}),
+    });
+    assert.notEqual(result.status, 0, `${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+    assert.match(`${result.stdout ?? ''}\n${result.stderr ?? ''}`, /error TS/i);
+  } finally {
+    rmSync(stamp, { force: true });
+  }
 });
 
 test('the final combined stack enforces all real architecture budgets on Linux and Windows', () => {
@@ -113,6 +182,21 @@ test('every pre-optimization Linux and Windows command remains covered on its or
         assert.match(step.run, new RegExp(`New-Item -ItemType Directory -Force \\.\\./artifacts/${suite} \\| Out-Null`));
         assert.match(step.run, new RegExp(`npm run test:${suite}[^\\n]*Tee-Object -FilePath \\.\\./artifacts/${suite}/full\\.tap`));
         assert.match(step.run, /exit \$LASTEXITCODE/);
+        continue;
+      }
+      if (stepName === 'Test merge control and Git readiness') {
+        const step = workflow.jobs['platform-core'].steps.find(candidate => candidate.name === stepName);
+        assert.ok(step, `${name}: merge control step missing`);
+        assert.match(step.run, /ci-record-script-timing\.ps1/);
+        assert.match(step.run, /merge-control-script-timing\.jsonl/);
+        for (const script of [
+          'tools/tests/test-agent-pr-gate.ps1',
+          'tools/tests/test-agent-git-readiness.ps1',
+          'tools/tests/test-trusted-control-plane-integration.ps1',
+        ]) {
+          assert.match(step.run, new RegExp(script.replaceAll('/', '\\/')));
+          assert.match(step.run, new RegExp(`-Script ${script.replaceAll('/', '\\/')} -InvokeJson`));
+        }
         continue;
       }
       assert.ok(actual.includes(signature), `${name}: missing original command ${signature}`);

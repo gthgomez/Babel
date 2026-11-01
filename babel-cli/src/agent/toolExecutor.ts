@@ -46,7 +46,7 @@ import {
   type ToolResult,
 } from '../localTools.js';
 import { resolveExecutorDryRun } from '../config/dryRun.js';
-import { getTrustedFileCreationEvidence } from '../sandbox.js';
+import { getTrustedFileCreationEvidence, creationOwnershipFromTrustedEvidence } from '../sandbox.js';
 import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js';
 import { isPathInside } from '../services/targetResolver.js';
 import type { AgentAction } from './actions.js';
@@ -1343,13 +1343,13 @@ export async function executeActionWithPolicy(
     if (batchTx && action.type === 'write_file' && action.createOnly) {
       const target = resolveWriteFileMutationPath(action.path, workspaceRoot);
       for (const result of execution.results) {
-        const evidence = getTrustedFileCreationEvidence(result);
-        if (evidence?.path === target) {
-          WorkspaceTransactionManager.recordCreatedFileOwnership(batchTx, target, {
-            device: evidence.device,
-            inode: evidence.inode,
-            expectedContent: action.content,
-          });
+        const ownership = creationOwnershipFromTrustedEvidence(
+          getTrustedFileCreationEvidence(result),
+          target,
+          action.content,
+        );
+        if (ownership) {
+          WorkspaceTransactionManager.recordCreatedFileOwnership(batchTx, target, ownership);
           break;
         }
       }
@@ -1421,7 +1421,7 @@ export async function executeActionWithPolicy(
     if (toolFailed) {
       let rollbackConflicts: string[] = [];
       if (effectIntent && context.runDir) {
-        recordEffectTerminal(context.runDir, effectIntent, {
+        effectIntent = recordEffectTerminal(context.runDir, effectIntent, {
           status: 'failed',
           error: toolDenied ? 'tool execution denied' : 'tool returned a nonzero exit code',
         });
@@ -1463,6 +1463,7 @@ export async function executeActionWithPolicy(
         } : {}),
         policyDecision: toolDenied ? 'deny' : policyDecision,
         policyBlocked: toolDenied,
+        ...(effectIntent ? { effectLedgerRecord: effectIntent } : {}),
         ...(effectTx ? { effectTransaction: effectTx } : {}),
       };
     }

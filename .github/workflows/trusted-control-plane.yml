@@ -160,6 +160,9 @@ jobs:
         shell: pwsh
         run: |
           pwsh -NoProfile -NonInteractive -File tools/tests/test-trust-root-boundaries.ps1 -RepoRoot .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -NonInteractive -File tools/tests/test-merge-audit-eligibility.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   merge-audit-after-release-gate:
     name: trusted-control-plane
     if: >-
@@ -172,34 +175,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Resolve pull request for completed release gate
-        id: pr
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $prs = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:HEAD_SHA/pulls" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0) { throw 'Unable to read pull requests associated with the release gate head.' }
-          $exact = @($prs | Where-Object {
-            [string]$_.state -eq 'open' -and
-            [string]$_.base.ref -eq 'main' -and
-            [string]::Equals([string]$_.head.sha, $env:HEAD_SHA, [StringComparison]::Ordinal) -and
-            [string]::Equals([string]$_.head.repo.full_name, $env:GITHUB_REPOSITORY, [StringComparison]::Ordinal)
-          })
-          if ($exact.Count -eq 0) {
-            throw 'No exact-head open main pull request in this repository for the release gate head.'
-          }
-          if ($exact.Count -gt 1) {
-            throw 'Multiple exact-head open main pull requests; audit association is ambiguous.'
-          }
-          $pr = $exact[0]
-          if ($pr.PSObject.Properties['draft'] -and [bool]$pr.draft) { throw 'Draft pull requests stay out of the merge audit.' }
-          if ([string]$pr.head.sha -ne [string]$env:HEAD_SHA) { throw 'PR head advanced past the release gate head; audit must re-run on the current head.' }
-          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "number=$($pr.number)"
-          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "base_sha=$($pr.base.sha)"
-          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "head_sha=$env:HEAD_SHA"
       - name: Resolve authenticated target
         id: trusted_target
         shell: pwsh
@@ -221,7 +196,30 @@ jobs:
           ref: ${{ steps.trusted_target.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Resolve pull request for completed release gate
+        id: pr
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module "$env:GITHUB_WORKSPACE/scripts/merge-audit-eligibility.psm1" -Force
+          $apiError = $null
+          $payload = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:HEAD_SHA/pulls"
+          if ($LASTEXITCODE -ne 0) { $apiError = 'pull_request_association_unreadable' }
+          $prs = if ($null -eq $apiError) { @($payload | ConvertFrom-Json) } else { @() }
+          $applicability = Resolve-MergeAuditReleaseGateAssociation -PullRequests $prs -HeadSha $env:HEAD_SHA -Repository $env:GITHUB_REPOSITORY -ApiError $apiError
+          Write-MergeAuditApplicabilityOutputs -Applicability $applicability
+          if (Test-MergeAuditTransportFailure -Applicability $applicability) {
+            throw "Merge audit association is $($applicability.state): $($applicability.reason)."
+          }
+          if (-not (Test-MergeAuditShouldRun -Applicability $applicability)) {
+            Write-Output 'Merge audit skipped; applicability is not eligible and merge readiness is unchanged.'
+            exit 0
+          }
       - name: Fetch exact candidate object
+        if: steps.pr.outputs.state == 'ELIGIBLE'
         shell: pwsh
         env:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
@@ -229,6 +227,7 @@ jobs:
           git fetch --no-tags origin $env:HEAD_SHA
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Materialize candidate as data only
+        if: steps.pr.outputs.state == 'ELIGIBLE'
         shell: pwsh
         env:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
@@ -236,6 +235,7 @@ jobs:
           git worktree add --detach "$env:GITHUB_WORKSPACE/candidate" $env:HEAD_SHA
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Skip when the inline audit already covered this head
+        if: steps.pr.outputs.state == 'ELIGIBLE'
         id: dedupe
         shell: pwsh
         env:
@@ -266,7 +266,8 @@ jobs:
           }
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'skip=false'
       - name: Run base-rooted merge audit
-        if: steps.dedupe.outputs.skip != 'true'
+        if: steps.pr.outputs.state == 'ELIGIBLE' && steps.dedupe.outputs.skip != 'true'
+        id: merge_audit
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -285,6 +286,7 @@ jobs:
             -OutputFormat json > $log
           $code = $LASTEXITCODE
           Get-Content -LiteralPath $log
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value 'audit_executed=true'
           if ($code -eq 0) { exit 0 }
           $parsed = Get-Content -LiteralPath $log -Raw | ConvertFrom-Json
           # Benign blockers are single-sourced in the reviewed policy file; an
