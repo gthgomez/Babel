@@ -13,6 +13,12 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { coveredPaths } from "../policy-integrity-manifest.mjs";
+
+/** Match tools/policy-integrity-manifest.mjs hashBytes (CRLF → LF only). */
+function manifestNormalizedSha256(bytes) {
+  const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  return createHash("sha256").update(text.replace(/\r\n/g, "\n"), "utf8").digest("hex");
+}
 const source = readFileSync(
   new URL("../policy-integrity-manifest.mjs", import.meta.url),
   "utf8",
@@ -42,7 +48,18 @@ test('trusted control-plane merge-audit eligibility helper is explicitly registe
   const manifest = JSON.parse(readFileSync(join(root, 'POLICY_MANIFEST.json'), 'utf8'));
   assert.match(manifest.files[path], /^[a-f0-9]{64}$/);
   const bytes = readFileSync(join(root, path));
-  assert.equal(manifest.files[path], createHash('sha256').update(bytes).digest('hex'));
+  assert.equal(manifest.files[path], manifestNormalizedSha256(bytes));
+});
+test('merge-audit registration hash matches verifier CRLF normalization', () => {
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const path = 'scripts/merge-audit-eligibility.psm1';
+  const bytes = readFileSync(join(root, path));
+  const manifest = JSON.parse(readFileSync(join(root, 'POLICY_MANIFEST.json'), 'utf8'));
+  const crlf = Buffer.from(bytes.toString('utf8').replace(/\n/g, '\r\n'), 'utf8');
+  assert.notEqual(manifestNormalizedSha256(crlf), createHash('sha256').update(crlf).digest('hex'),
+    'sanity: raw-byte hash must differ from normalized when CRLF is present');
+  assert.equal(manifest.files[path], manifestNormalizedSha256(crlf),
+    'manifest entry must follow utf8_crlf_to_lf normalization');
 });
 const paths = [
   ".github/workflows/public-pr-metadata.yml",
