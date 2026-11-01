@@ -3,13 +3,13 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "b0149463a84e2c92d7178809617e00d9240c86ea84823405bac69c210eef8a0e",
+  "policy_bundle_id": "6ec24162ed4fba4d20e8fda459a50636fd783775573a3bf7dbc57a157826f269",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
     ".github/workflows/release.yml": "6d0c4591f8c57497c9c8a33d2d069219d9fc02d05cae18f63d271f5ca839a20d",
-    ".github/workflows/trusted-control-plane.yml": "d85e4239c815e77303883d8466276e954d4e41088157a7d735fae94ab7891c4a",
-    ".github/workflows/typecheck.yml": "46553f25759b6cebe135a02993a278b73897bd7ea1a140e9e110cc7b8942abcd",
+    ".github/workflows/trusted-control-plane.yml": "d042a42e7479537fcb12a72a27a1ebb9a3b95cb1be6b9c0cc221c8c396a7b6ff",
+    ".github/workflows/typecheck.yml": "03906552ecaa4bc9d62f36238c2fb4af876ba5a223af74e35669453522316a68",
     "AGENTS.md": "d8ac18573ddc1bc8f538d91adec66dfe078016beaa78ac54c612f8520e49fc34",
     "babel-cli/src/agent/autonomyEnforcement.ts": "942e1f789c54c7c8d6d8ffeb0dfe48974932bddc0ad2da989aa845b8baa92928",
     "babel-cli/src/authority/actionRequest.ts": "e17df5cebed675ebfff4bc512d280d0a0bd38fd2b968fc9f19e5a397deda8335",
@@ -149,6 +149,7 @@
     "scripts/agent-pr-merge.ps1": "b85bcd60bdfd4597a76aa1ada164a8f1ae3cb81856d44a6582927c405993aece",
     "scripts/agent-review-evidence.ps1": "de3ba52ffb6d1307d40f41727c8ed86c40d10dbd4bcb7b6441ff244c18210e8b",
     "scripts/materialize-independent-review-receipt.ps1": "0f7def159b62359ccc44d4392635b56c854d3c57fea60d440b21fe9e5277dcb6",
+    "scripts/merge-audit-eligibility.psm1": "66739fe26a14f4ad03b64e60197f466fc9f8f296db52f2aa0223512068ee081e",
     "scripts/trusted-merge-gate.ps1": "14cb60632b3e77bcd7e2f152a17b16784252a29ad20f2f8fc5ee5102e8c4dd85",
     "scripts/verify-independent-review.mjs": "388e4a011c33b3f1d9cdbb7645f4b6420d783e583f81db5d96468f338e631c37",
     "scripts/verify-trust-root-upgrade.mjs": "6cabd63955de69874c66a689662760284c96d3769a861737a960990b6ad4ca8c",
@@ -156,7 +157,7 @@
     "tools/babel-pr-orchestrate-opencode.mts": "52b030c4ada9940ad8290872d453ef518bc5989475095787cc21ee579b62cf29",
     "tools/babel-pr-orchestrate.mts": "e2b8f541f807e5e7544534a3eb5804ec14395b05a6fc97a813c82269f7fc32a0",
     "tools/host-review-worker.mts": "751b80e69888ec098ff2e190bf487f1962bbb104ea87d7494b68e654009b336a",
-    "tools/policy-integrity-manifest.mjs": "0ec44af6a836bb31840b7ea61da6b5c40b9fc127d107e9970e6db897a4a7159d",
+    "tools/policy-integrity-manifest.mjs": "e72da24f86c587d0003305372b018d381ba118554f92e0a4f4be070bad0e172c",
     "tools/resolve-release-tag.mjs": "9b5f769ed1b49c3f829c9a4e4b9a982803ead642180a3941559967bd0f4347e2"
   }
 }

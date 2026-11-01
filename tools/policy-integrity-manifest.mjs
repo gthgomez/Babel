@@ -155,6 +155,7 @@ export const coveredPaths = [
   "scripts/agent-pr-merge.ps1",
   "scripts/agent-review-evidence.ps1",
   "scripts/materialize-independent-review-receipt.ps1",
+  "scripts/merge-audit-eligibility.psm1",
   "scripts/trusted-merge-gate.ps1",
   "scripts/verify-independent-review.mjs",
   "scripts/verify-trust-root-upgrade.mjs",

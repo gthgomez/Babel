@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -39,6 +40,44 @@ test('combined qualification preserves emitting compiler and scripts checks with
   const skipped = structuredClone(workflow);
   skipped.jobs['platform-core'].steps.find(step => step.run === 'npm run qualify:build').if = 'false';
   assert.throws(() => assertCombinedQualification(skipped, cliPackage, 'ubuntu-latest'));
+});
+
+test('platform-core reports compiler failures before long merge-control fixtures', () => {
+  const names = workflow.jobs['platform-core'].steps.map(step => step.name);
+  const install = names.indexOf('Install dependencies');
+  const qualify = names.indexOf('Build and typecheck CLI and scripts once');
+  assert.ok(install >= 0 && qualify > install, 'qualify:build must follow dependency installation');
+  for (const longStep of [
+    'Test merge control and Git readiness',
+    'Run required review control-plane PowerShell contract',
+    'Run required review control-plane TypeScript contract',
+  ]) {
+    const index = names.indexOf(longStep);
+    if (index >= 0) assert.ok(qualify < index, `${longStep} must stay after combined qualification`);
+  }
+  assert.equal(
+    workflow.jobs['platform-core'].steps.filter(step => step.run === 'npm run qualify:build').length,
+    1,
+    'platform-core must not duplicate qualify:build',
+  );
+});
+
+test('qualify:build negative control fails on deliberate compile error before later platform-core work', () => {
+  const babelCli = fileURLToPath(new URL('../../babel-cli', import.meta.url));
+  const stamp = join(babelCli, 'src', '__ci_compile_negative_control.ts');
+  writeFileSync(stamp, 'export const __ciCompileNegativeControl: number = "deliberate"\n');
+  try {
+    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const result = spawnSync(npm, ['run', 'qualify:build'], {
+      cwd: babelCli,
+      encoding: 'utf8',
+      timeout: 180000,
+    });
+    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(`${result.stdout}\n${result.stderr}`, /error TS/i);
+  } finally {
+    rmSync(stamp, { force: true });
+  }
 });
 
 test('the final combined stack enforces all real architecture budgets on Linux and Windows', () => {
