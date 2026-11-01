@@ -4,160 +4,101 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/gthgomez/Babel/typecheck.yml?branch=main&label=Public%20Release%20Gate)](https://github.com/gthgomez/Babel/actions)
 
-**Open-source coding agent for real repositories — with inspectable prompts, permissions, and verification.**
+**Babel is an open-source coding agent for your repositories.** Use Chat for day-to-day tasks, Plan when you want to review a proposal first, or Deep for a more structured workflow. Babel makes its instructions, permissions, tool activity, and verification evidence visible as it works.
 
-Babel runs locally in your terminal. Chat is the default. Plan and Deep are additional modes when you want more ceremony. The harness underneath keeps instructions, tools, and evidence visible instead of burying them in an opaque prompt.
+Babel is pre-1.0 and still being qualified for ordinary coding work. Provider setup and repository execution requirements vary; a saved key or selected model does not confirm provider access. See [project status](docs/STATUS.md) for current evidence and limits.
 
-> **Pre-1.0.** The public checkout builds and typechecks. Model choice, provider setup, sandboxing, and repo-specific execution policy still matter. **Ordinary coding-loop reliability is still under active qualification** — see [project status](./docs/STATUS.md).
+## What you can do
 
-## See Babel in action
+| Mode | Good for |
+| --- | --- |
+| **Chat** | Investigate a repository, ask questions, and work through coding tasks |
+| **Plan** | Review a proposed approach before asking Babel to make changes |
+| **Deep** | Follow a more structured workflow for riskier work; this is not a reliability upgrade by itself |
 
-![Real Babel CLI command guide from an offline source build](docs/assets/showcase/cli-help.png)
+Babel also provides command-line runs, a read-only MCP control surface, inspectable prompt stacks, configurable execution profiles, checkpoints, diagnostics, and recovery tools such as `undo`. File changes and commands follow the active permissions and execution profile. Verification applies to declared or inferred checks; it is not a guarantee for every task.
 
-**[Watch the 18-second CLI walkthrough (MP4)](docs/assets/showcase/offline-cli.mp4)** · [Animated preview](docs/assets/showcase/offline-cli.gif) · [Commands and capture provenance](docs/assets/showcase/README.md)
+## See Babel
 
-This real offline capture uses source revision [`9f70c0abf384`](https://github.com/gthgomez/Babel/commit/9f70c0abf384e21f6755a72c0524c35403155060), reporting CLI **0.2.0**. It shows version, help, and environment diagnostics in a temporary empty provider profile. The viewer plays actual command output at a reading pace; the missing-provider warning is intentional.
+### CLI
 
-This walkthrough demonstrates local inspection commands. Model-backed coding requires provider setup and execution prerequisites below; the capture does not establish coding-loop reliability or show a completed coding task. See [project status](./docs/STATUS.md) for qualification limits.
+![Babel CLI help and command guide from an offline source build](docs/assets/showcase/cli-help.png)
 
-## Choose an install path
+[Watch the 18-second CLI walkthrough](docs/assets/showcase/offline-cli.mp4) · [Animated preview](docs/assets/showcase/offline-cli.gif)
 
-- **Windows x64 — Babel Desktop 0.1.3 (published release):** download the Setup.exe or portable ZIP from the [v0.1.3 release](https://github.com/gthgomez/Babel/releases/tag/v0.1.3). It bundles Node and the Babel CLI; you do not need to clone or build. Follow the [setup guide for that release](https://github.com/gthgomez/Babel/blob/v0.1.3/babel-desktop/docs/INSTALL-WINDOWS.md).
-- **Current source (any OS):** follow the build instructions below. Source builds can contain behavior that is not included in the published Desktop application.
+This capture shows real `--version`, `--help`, and environment-diagnostics output from Babel CLI 0.2.0. It uses an empty provider profile and makes no model request. The missing-provider warning is expected. It demonstrates local setup commands, not a completed coding task or model-backed reliability. See [capture details](docs/assets/showcase/README.md).
 
-## Quick start (from source)
+## Install with npm
 
-The instructions in this section build the CLI from a clone of current source.
+The CLI is the quickest way to try Babel. It runs on **Node.js 22.19.0+ in the 22.x line or 24.13.1+ in the 24.x line**. The current npm release is `babel-harness@0.2.0`. The current source has a newer default-model snapshot than this npm release; use the published package as it is.
 
-**Requirements:** Node.js 22.19.0+ in the 22.x line, or 24.13.1+ in the 24.x line, a clone of this repo, and (for model sessions) a provider key.
+```sh
+npm install --global babel-harness@0.2.0
+babel-harness --version
+babel-harness setup
+babel-harness doctor
+```
 
-```powershell
+`setup` lists the first steps; `doctor` reports what is configured on your machine. Before model-backed work, configure a supported provider key in your private Babel profile (`~/.babel/config/.env`, or `%USERPROFILE%/.babel/config/.env` on Windows). For example, if you use OpenRouter:
+
+```dotenv
+OPENROUTER_API_KEY=your-key
+```
+
+Keep the key out of your project and source checkout. Babel's diagnostics do not send provider requests. A saved key does not confirm that the provider accepts it.
+
+For project tasks, the default `safe_repo` profile requires Docker and a usable project-tools image. `doctor` reports whether these are ready; it does not silently fall back to running project commands on your host. Desktop Setup can prepare the recommended image. See [execution profiles](docs/CLI_QUICKSTART.md#execution-profile-read-this-before-the-first-edit) for details.
+
+Once your provider and execution setup are ready, start Babel from the repository you want to work in:
+
+```sh
+cd /path/to/your/repository
+babel-harness interactive
+```
+
+Then describe the task you want help with. Babel selects the nearest recognized project at or above the current directory; check the displayed target before you continue. For a bounded first request, ask Babel to trace a documented behavior and its nearest test without changing files.
+
+## Babel Desktop
+
+Babel Desktop provides a Windows interface for the Babel CLI. The only downloadable desktop build is **Windows x64 0.1.3**. Get the [Setup installer or portable ZIP](https://github.com/gthgomez/Babel/releases/tag/v0.1.3); both include the CLI. The app is unsigned, and Windows may show a SmartScreen warning. The [release-pinned setup guide](https://github.com/gthgomez/Babel/blob/v0.1.3/babel-desktop/docs/INSTALL-WINDOWS.md) covers checksums and installation. Desktop is not currently published as an npm package, and the 0.1.3 app bundles its own CLI, so it does not include every change in the newer npm release.
+
+The images and video below are a **browser-rendered preview of the current source interface**. They show the real renderer and setup screen, but a browser has no native desktop connection: the preview cannot run tasks, configure providers, or show model responses.
+
+![Current-source Babel Desktop renderer preview in its setup-required state](docs/assets/showcase/desktop-renderer-preview.png)
+
+![Current-source Babel Desktop setup dialog preview](docs/assets/showcase/desktop-setup-preview.png)
+
+[Watch the desktop interface preview](docs/assets/showcase/desktop-renderer-preview.mp4)
+
+The packaged desktop release is Windows-only. For other platforms, use the npm CLI above. Source developers can build the Desktop app from [`babel-desktop/`](babel-desktop/README.md); a source build is not a downloadable installer.
+
+## Build from source
+
+Source developers can build the CLI with Node.js 22.19.0+ or 24.13.1+:
+
+```sh
 git clone https://github.com/gthgomez/Babel.git
 cd Babel
-npm --prefix .\babel-cli ci
-npm --prefix .\babel-cli run build
-$BabelRoot = (Get-Location).Path
-$BabelCli = Join-Path $BabelRoot 'babel-cli\dist\index.js'
-node "$BabelCli" doctor
+npm --prefix ./babel-cli ci
+npm --prefix ./babel-cli run build
+node ./babel-cli/dist/index.js doctor
 ```
 
-```bash
-# macOS / Linux
-git clone https://github.com/gthgomez/Babel.git
-cd Babel
-npm --prefix ./babel-cli ci && npm --prefix ./babel-cli run build
-BabelRoot="$PWD"
-BabelCli="$BabelRoot/babel-cli/dist/index.js"
-node "$BabelCli" doctor
-```
-
-1. Configure only the providers you use in the private CLI profile (`~/.babel/config/.env` or `%USERPROFILE%\.babel\config\.env` on Windows). The old source-checkout `babel-cli/.env` requires explicit `BABEL_LEGACY_CLI_ENV=1` compatibility opt-in. Installed Desktop now provides a masked **Configure provider** action, saving outside the target project by default.
-2. Keep the default `safe_repo` profile for project execution and prepare a Docker image containing your project's tools (`BABEL_BENCHMARK_DOCKER_IMAGE`); `safe_repo` fail-closes without Docker and an image. `dev_local` permits supported host inspection (for example `rg`, `git status`) without Docker; selecting it alone does **not** enable repository test or build commands.
-3. A saved credential and a listed model do not confirm account access or successful inference. Select the provider and model you intend to use, then send your first useful task.
-4. Change into **your own** repository and start the TUI there, keeping the absolute paths defined above in the same shell:
-
-```powershell
-Set-Location -LiteralPath 'C:\path with spaces\your-repo'
-node "$BabelCli" interactive
-```
-
-```bash
-cd '/path with spaces/your-repo'
-node "$BabelCli" interactive
-```
-
-The CLI selects the nearest recognized project at or above the working directory,
-falling back to that directory. Explicit project/target selection and session
-resume can override it; check the displayed target.
-
-A good first task requests a bounded investigation without changes. This prompt
-does not enforce a read-only security mode; normal permissions still apply:
-
-```text
-> Using this repository's README and code, trace one small documented behavior from its entry point to its implementation and nearest relevant test. Cite file paths and identify the test command documented or configured in the repository. Do not change files, install dependencies, or run tests or builds. If you cannot find a test or command, say so.
-```
-
-Ask for changes (for example `Fix the failing auth test`) as an explicit follow-up once the execution prerequisites above are in place.
-
-Full first-success path (profiles, one-shots, recovery): **[START_HERE.md](./START_HERE.md)**.  
-Operational command reference: **[docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md)**.
-
-Babel Desktop lives in [`babel-desktop/`](./babel-desktop/README.md): a Windows UI that runs the real Babel CLI harness. The published Windows x64 build is [0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3); the Desktop README describes current source, which may include behavior not in 0.1.3. Coding behavior remains in `babel-cli`.
-
-## What Babel does
-
-| Mode | Use it when |
-|---|---|
-| **Chat** | Daily work — ask, inspect, edit with permission, verify |
-| **Plan** | You want a reviewable proposal before anything changes |
-| **Deep** | Higher-ceremony path for riskier work (maturing; not a reliability upgrade by itself) |
-
-Also available as CLI entrypoints: headless chat for scripts/CI, checkpoints / `undo`, cost and diagnostics, and a read-only MCP control-plane surface. Entrypoint availability is not a reliability claim.
-
-```powershell
-node "$BabelCli" "Fix the failing webhook retry test"
-node "$BabelCli" plan "Split the auth module safely"
-node "$BabelCli" deep "Harden the migration path and verify it"
-node "$BabelCli" chat --headless "Summarize the failing test"
-```
-
-## Why the harness matters
-
-Most coding agents expose a model and a tool loop. Babel also exposes the harness:
-
-- **Permissions and execution profiles** — host vs isolated defaults you can reason about
-- **Inspectable Prompt OS** — modular instructions you can preview and validate before a model runs
-- [Policy integrity](./docs/guides/POLICY_INTEGRITY.md) — verify drift across the registered policy and gate text
-- **Evidence** — checkpoints, artifacts, diagnostics, recovery tools such as `undo`
-
-You should be able to **use Babel before you understand Babel's architecture**. Deeper design lives under [docs/architecture](./docs/architecture/ARCHITECTURE.md).
-
-Optional for source users: return to the Babel checkout to validate the public
-tree and preview an instruction stack **without** a model key:
-
-```powershell
-Set-Location -LiteralPath $BabelRoot
-pwsh -File .\tools\validate-public-release.ps1
-pwsh -File .\tools\resolve-local-stack.ps1 -TaskCategory backend -Project example_saas_backend -Model codex -PipelineMode deep -Format json
-```
-
-## Project status
-
-| | |
-|---|---|
-| **Maturity** | Pre-1.0 public source |
-| **Install** | Windows x64 Desktop 0.1.3 download, or clone + build from current source |
-| **Present in the public tree** | CLI entrypoints (chat / plan / deep), catalog/stack validation tooling, typed contracts, read-only MCP inspection, release/scrub/secret-scan gates |
-| **Still under active qualification** | Ordinary coding-loop reliability |
-| **Depends on your environment** | Provider credentials, Docker image with your project tools (`dev_local` alone does not run tests/builds), repo policy |
-
-Honest detail: **[docs/STATUS.md](./docs/STATUS.md)**. Product direction: **[docs/VISION.md](./docs/VISION.md)**.
-
-We do **not** claim: universal verifiers, unrestricted autonomous workers, mutating subagent teams, sandbox parity across every host, market parity with other agents, or that everyday coding-loop reliability is already settled.
+The published npm package is 0.2.0. Later source changes may not be included in that package. For contributor setup and deeper command examples, start with [CONTRIBUTING.md](CONTRIBUTING.md), [the CLI quickstart](docs/CLI_QUICKSTART.md), and [the contributor guide](START_HERE.md).
 
 ## Documentation
 
-| Doc | Purpose |
-|---|---|
-| [START_HERE.md](./START_HERE.md) | First success, then optional inspect path |
-| [docs/STATUS.md](./docs/STATUS.md) | Availability, narrow verification, limits |
-| [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md) | Commands: chat, plan, deep, doctor, MCP |
-| [docs/CHAT_MODE.md](./docs/CHAT_MODE.md) | Default daily runtime in depth |
-| [docs/VISION.md](./docs/VISION.md) | Principles and public scope |
-| [docs/architecture/ARCHITECTURE.md](./docs/architecture/ARCHITECTURE.md) | System shape (when you want depth) |
-| [CONTRIBUTING.md](./CONTRIBUTING.md) | How to contribute |
-| [SECURITY.md](./SECURITY.md) | Vulnerability reporting |
+| Guide | What it covers |
+| --- | --- |
+| [Project status](docs/STATUS.md) | Maturity, evidence, and known limits |
+| [CLI quickstart](docs/CLI_QUICKSTART.md) | Providers, execution profiles, and CLI commands |
+| [Chat mode](docs/CHAT_MODE.md) | How the default daily workflow works |
+| [Vision](docs/VISION.md) | Product direction and scope |
+| [Architecture](docs/architecture/ARCHITECTURE.md) | System design and implementation |
+| [Research and evaluation](docs/benchmarks/claude-babel-astra-lab/README.md) | Scope, methods, and evidence for the comparative research lab |
+| [Contributing](CONTRIBUTING.md) | Development and review workflow |
+| [Security](SECURITY.md) | Vulnerability reporting |
 
-## Feedback and contributing
+## Feedback and license
 
-- **Bugs / features:** [GitHub Issues](https://github.com/gthgomez/Babel/issues)
-- **Changes:** see [CONTRIBUTING.md](./CONTRIBUTING.md) — highest-value work improves the daily chat loop, plan/deep UX, examples, and public gates
-- Keep credentials, private paths, and operator-only notes out of public docs and fixtures
-
-## License
-
-Apache License 2.0. Use it, fork it, and build on it.
-
-Historical tagged releases that shipped under MIT remain MIT for those snapshots. This tree is Apache-2.0 going forward.
-
-Full text: [LICENSE](./LICENSE)
+Report bugs or suggest features in [GitHub Issues](https://github.com/gthgomez/Babel/issues). Babel is licensed under [Apache-2.0](LICENSE). Historical tagged releases that shipped under MIT remain MIT for those snapshots.
