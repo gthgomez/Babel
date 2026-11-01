@@ -19,6 +19,16 @@ function manifestNormalizedSha256(bytes) {
   const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   return createHash("sha256").update(text.replace(/\r\n/g, "\n"), "utf8").digest("hex");
 }
+
+/** Simulate LF vs CRLF checkout bytes; canonicalize CRLF→LF before building CRLF variant. */
+function checkoutLineEndingBytes(utf8Bytes, ending) {
+  const lfText = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
+    .decode(utf8Bytes)
+    .replace(/\r\n/g, "\n");
+  if (ending === "LF") return Buffer.from(lfText, "utf8");
+  if (ending === "CRLF") return Buffer.from(lfText.replace(/\n/g, "\r\n"), "utf8");
+  throw new Error("invalid checkout ending");
+}
 const source = readFileSync(
   new URL("../policy-integrity-manifest.mjs", import.meta.url),
   "utf8",
@@ -55,11 +65,21 @@ test('merge-audit registration hash matches verifier CRLF normalization', () => 
   const path = 'scripts/merge-audit-eligibility.psm1';
   const bytes = readFileSync(join(root, path));
   const manifest = JSON.parse(readFileSync(join(root, 'POLICY_MANIFEST.json'), 'utf8'));
-  const crlf = Buffer.from(bytes.toString('utf8').replace(/\n/g, '\r\n'), 'utf8');
-  assert.notEqual(manifestNormalizedSha256(crlf), createHash('sha256').update(crlf).digest('hex'),
-    'sanity: raw-byte hash must differ from normalized when CRLF is present');
-  assert.equal(manifest.files[path], manifestNormalizedSha256(crlf),
-    'manifest entry must follow utf8_crlf_to_lf normalization');
+  const entry = manifest.files[path];
+  const lfBytes = checkoutLineEndingBytes(bytes, 'LF');
+  const crlfFromLf = checkoutLineEndingBytes(lfBytes, 'CRLF');
+  const crlfFromAlreadyCrlf = checkoutLineEndingBytes(crlfFromLf, 'CRLF');
+  assert.equal(manifestNormalizedSha256(crlfFromLf), manifestNormalizedSha256(crlfFromAlreadyCrlf),
+    'CRLF checkout simulation must be idempotent when input is already CRLF');
+  for (const ending of ['LF', 'CRLF']) {
+    const checkoutBytes = checkoutLineEndingBytes(bytes, ending);
+    assert.equal(entry, manifestNormalizedSha256(checkoutBytes),
+      `manifest entry must follow utf8_crlf_to_lf normalization (${ending} checkout)`);
+    if (ending === 'CRLF') {
+      assert.notEqual(manifestNormalizedSha256(checkoutBytes), createHash('sha256').update(checkoutBytes).digest('hex'),
+        'sanity: raw-byte hash must differ from normalized when CRLF is present');
+    }
+  }
 });
 const paths = [
   ".github/workflows/public-pr-metadata.yml",
