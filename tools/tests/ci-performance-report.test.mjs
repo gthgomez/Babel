@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { reportPerformance } from '../ci-performance-report.mjs'
+import { reportPerformance, classifyPlatformStep } from '../ci-performance-report.mjs'
 
 const sha = digit => digit.repeat(40)
 const job = (overrides = {}) => ({
@@ -119,7 +119,7 @@ test('a rerun does not count carried-forward work as newly executed', () => {
     created_at: '2026-10-30T00:00:00Z',
     started_at: '2026-10-30T00:00:02Z',
     completed_at: '2026-10-30T00:10:02Z',
-    steps: [{ name: 'Build and typecheck CLI and scripts once', started_at: '2026-10-30T00:00:02Z', completed_at: '2026-10-30T00:11:02Z', conclusion: 'success' }],
+    steps: [{ name: 'Build and typecheck CLI and scripts once', status: 'completed', started_at: '2026-10-30T00:00:02Z', completed_at: '2026-10-30T00:11:02Z', conclusion: 'success' }],
   })
   const fresh = job({
     id: 22,
@@ -127,7 +127,7 @@ test('a rerun does not count carried-forward work as newly executed', () => {
     created_at: '2026-10-30T01:00:00Z',
     started_at: '2026-10-30T01:00:02Z',
     completed_at: '2026-10-30T01:05:02Z',
-    steps: [{ name: 'Build and typecheck CLI and scripts once', started_at: '2026-10-30T01:00:02Z', completed_at: '2026-10-30T01:02:02Z', conclusion: 'success' }],
+    steps: [{ name: 'Build and typecheck CLI and scripts once', status: 'completed', started_at: '2026-10-30T01:00:02Z', completed_at: '2026-10-30T01:02:02Z', conclusion: 'success' }],
   })
   const input = docs({
     runs: [run({ run_attempt: 2 })],
@@ -148,8 +148,12 @@ test('a rerun does not count carried-forward work as newly executed', () => {
   assert.equal(report.executionAccounting.executedSeconds, 300)
   const buildStep = report.platformCoreSteps.find(step => step.name === 'Build and typecheck CLI and scripts once')
   assert.ok(buildStep)
+  assert.equal(buildStep.platformCoreStepSchema, 2)
+  assert.equal(buildStep.executionSampleCount, 1)
   assert.equal(buildStep.count, 1)
+  assert.equal(buildStep.executionP50, 120)
   assert.equal(buildStep.p50, 120)
+  assert.equal(buildStep.stepCountReconciles, true)
 })
 
 test('creation-to-start delay is a scheduling proxy when dependency timing is absent', () => {
@@ -226,4 +230,198 @@ test('malformed documents fail explicitly instead of inventing a complete report
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }
+})
+
+test('classifyPlatformStep: skipped steps are never execution samples', () => {
+  const skipped = classifyPlatformStep({
+    name: 'Run required review control-plane PowerShell contract',
+    status: 'completed',
+    conclusion: 'skipped',
+    started_at: '2026-10-30T00:00:00Z',
+    completed_at: '2026-10-30T00:00:00Z',
+  })
+  assert.equal(skipped.bucket, 'skipped')
+  assert.equal(skipped.executionSeconds, null)
+})
+
+test('platformCoreSteps: all-skipped OS/step combo has zero execution samples and null execution percentiles', () => {
+  const steps = Array.from({ length: 50 }, () => ({
+    name: 'Run required review control-plane TypeScript contract',
+    status: 'completed',
+    conclusion: 'skipped',
+    started_at: '2026-10-30T00:00:00Z',
+    completed_at: '2026-10-30T00:00:00Z',
+  }))
+  const input = docs({
+    attempts: [attempt({
+      jobs: [job({
+        id: 20,
+        name: 'platform-core (windows-latest)',
+        labels: ['windows-latest'],
+        steps,
+      })],
+    })],
+  })
+  const report = reportPerformance(input.runs, input.jobs)
+  const row = report.platformCoreSteps.find(step => step.name.includes('TypeScript contract'))
+  assert.ok(row)
+  assert.equal(row.total, 50)
+  assert.equal(row.skippedSampleCount, 50)
+  assert.equal(row.executionSampleCount, 0)
+  assert.equal(row.executionP50, null)
+  assert.equal(row.p50, null)
+  assert.equal(row.stepCountReconciles, true)
+})
+
+test('platformCoreSteps: mixed skipped and executed steps reconcile totals and percentiles', () => {
+  const input = docs({
+    attempts: [attempt({
+      jobs: [job({
+        id: 20,
+        name: 'platform-core (windows-latest)',
+        labels: ['windows-latest'],
+        steps: [
+          { name: 'Build and typecheck CLI and scripts once', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:00:02Z', completed_at: '2026-10-30T00:02:02Z' },
+          { name: 'Run required review control-plane PowerShell contract', status: 'completed', conclusion: 'skipped', started_at: '2026-10-30T00:00:00Z', completed_at: '2026-10-30T00:00:00Z' },
+        ],
+      })],
+    })],
+  })
+  const report = reportPerformance(input.runs, input.jobs)
+  const build = report.platformCoreSteps.find(step => step.name === 'Build and typecheck CLI and scripts once')
+  const skipped = report.platformCoreSteps.find(step => step.name.includes('PowerShell contract'))
+  assert.equal(build.executionSampleCount, 1)
+  assert.equal(build.executionP50, 120)
+  assert.equal(skipped.skippedSampleCount, 1)
+  assert.equal(skipped.executionSampleCount, 0)
+})
+
+test('platformCoreSteps: failed step with valid timing counts as executed execution sample', () => {
+  const input = docs({
+    attempts: [attempt({
+      jobs: [job({
+        id: 20,
+        name: 'platform-core (ubuntu-latest)',
+        steps: [{
+          name: 'Validate catalog',
+          status: 'completed',
+          conclusion: 'failure',
+          started_at: '2026-10-30T00:00:02Z',
+          completed_at: '2026-10-30T00:00:32Z',
+        }],
+      })],
+    })],
+  })
+  const report = reportPerformance(input.runs, input.jobs)
+  const row = report.platformCoreSteps.find(step => step.name === 'Validate catalog')
+  assert.equal(row.executionSampleCount, 1)
+  assert.equal(row.executionP50, 30)
+})
+
+test('platformCoreSteps: cancelled step with partial timing is labeled partial-cancelled, not execution', () => {
+  const input = docs({
+    attempts: [attempt({
+      jobs: [job({
+        id: 20,
+        name: 'platform-core (ubuntu-latest)',
+        steps: [{
+          name: 'Install dependencies',
+          status: 'completed',
+          conclusion: 'cancelled',
+          started_at: '2026-10-30T00:00:02Z',
+          completed_at: '2026-10-30T00:01:02Z',
+        }],
+      })],
+    })],
+  })
+  const report = reportPerformance(input.runs, input.jobs)
+  const row = report.platformCoreSteps.find(step => step.name === 'Install dependencies')
+  assert.equal(row.partialCancelledSampleCount, 1)
+  assert.equal(row.executionSampleCount, 0)
+  assert.equal(row.executionP50, null)
+  assert.equal(row.observedPartialP50, 60)
+})
+
+test('platformCoreSteps: invalid or missing timing is unknown, never zero execution', () => {
+  assert.equal(classifyPlatformStep({ name: 'Install dependencies', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:00:02Z', completed_at: null }).bucket, 'unknown')
+  assert.equal(classifyPlatformStep({ name: 'Install dependencies', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:00:10Z', completed_at: '2026-10-30T00:00:02Z' }).bucket, 'unknown')
+  const input = docs({
+    attempts: [attempt({
+      jobs: [job({
+        id: 20,
+        name: 'platform-core (ubuntu-latest)',
+        steps: [{ name: 'Install dependencies', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:00:02Z', completed_at: null }],
+      })],
+    })],
+  })
+  const report = reportPerformance(input.runs, input.jobs)
+  const row = report.platformCoreSteps.find(step => step.name === 'Install dependencies')
+  assert.equal(row.unknownSampleCount, 1)
+  assert.equal(row.executionSampleCount, 0)
+  assert.equal(row.executionP50, null)
+})
+
+test('platformCoreSteps: running step is incomplete, not execution or zero', () => {
+  assert.equal(classifyPlatformStep({ name: 'Install dependencies', status: 'in_progress', conclusion: null, started_at: '2026-10-30T00:00:02Z', completed_at: null }).bucket, 'incomplete')
+  const input = docs({
+    attempts: [attempt({
+      jobs: [job({
+        id: 20,
+        name: 'platform-core (ubuntu-latest)',
+        steps: [{ name: 'Install dependencies', status: 'in_progress', conclusion: null, started_at: '2026-10-30T00:00:02Z', completed_at: null }],
+      })],
+    })],
+  })
+  const report = reportPerformance(input.runs, input.jobs)
+  const row = report.platformCoreSteps.find(step => step.name === 'Install dependencies')
+  assert.equal(row.incompleteSampleCount, 1)
+  assert.equal(row.executionSampleCount, 0)
+})
+
+test('classifyPlatformStep: missing status with success conclusion stays unknown, not executed', () => {
+  const row = classifyPlatformStep({
+    name: 'Install dependencies',
+    conclusion: 'success',
+    started_at: '2026-10-30T00:00:02Z',
+    completed_at: '2026-10-30T00:01:02Z',
+  })
+  assert.equal(row.bucket, 'unknown')
+  assert.equal(row.executionSeconds, null)
+})
+
+test('classifyPlatformStep: unrecognized status stays unknown, not executed', () => {
+  const row = classifyPlatformStep({
+    name: 'Install dependencies',
+    status: 'action_required',
+    conclusion: 'success',
+    started_at: '2026-10-30T00:00:02Z',
+    completed_at: '2026-10-30T00:01:02Z',
+  })
+  assert.equal(row.bucket, 'unknown')
+})
+
+test('platformCoreSteps: nameless and null step observations reconcile via unnamed bucket', () => {
+  const input = docs({
+    attempts: [attempt({
+      jobs: [job({
+        id: 20,
+        name: 'platform-core (ubuntu-latest)',
+        steps: [
+          null,
+          { status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:00:02Z', completed_at: '2026-10-30T00:00:03Z' },
+          { name: 'Install dependencies', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:00:02Z', completed_at: '2026-10-30T00:00:12Z' },
+        ],
+      })],
+    })],
+  })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.equal(report.platformCoreStepAccounting.observationCount, 3)
+  assert.equal(report.platformCoreStepAccounting.excludedUnnamedStepCount, 2)
+  assert.equal(report.platformCoreStepAccounting.observationCountReconciles, true)
+  const unnamed = report.platformCoreSteps.find(step => step.name === '<unnamed-step>')
+  assert.ok(unnamed)
+  assert.equal(unnamed.total, 2)
+  assert.equal(unnamed.unknownSampleCount, 2)
+  const install = report.platformCoreSteps.find(step => step.name === 'Install dependencies')
+  assert.equal(install.executionSampleCount, 1)
 })

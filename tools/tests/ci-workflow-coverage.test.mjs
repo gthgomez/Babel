@@ -34,7 +34,7 @@ test('publication and scheduling regressions execute on both hosted platforms', 
   assert.equal(step.if, undefined);
   assert.equal(step['continue-on-error'], undefined);
   assert.match(step.run.replace(/\s+/g, ' ').trim(), /^node --test --test-reporter=tap(?: tools\/tests\/[a-z0-9-]+\.test\.mjs)+ 2>&1 \| Tee-Object artifacts\/architecture-regressions\/full\.tap exit \$LASTEXITCODE$/);
-  for (const file of ['push-preflight', 'public-content-worker', 'pre-commit-batch', 'logged-tap-child', 'installed-dependencies', 'unit-scheduling']) {
+  for (const file of ['push-preflight', 'public-content-worker', 'pre-commit-batch', 'logged-tap-child', 'installed-dependencies', 'unit-scheduling', 'ci-record-script-timing']) {
     assert.ok(step.run.includes(` tools/tests/${file}.test.mjs `));
   }
   for (const gate of ['linux-validation', 'windows-portability']) {
