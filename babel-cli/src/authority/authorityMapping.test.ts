@@ -14,6 +14,7 @@ import { actionRequestFromAction } from './actionRequest.js';
 import { decideWithLease, resetLeaseInvalidations } from './wire.js';
 import { decideActionRequest } from './pdp.js';
 import { parseGitCommand } from './gitCommand.js';
+import { decodeCommand } from './commandDecoder.js';
 import { buildBaseline } from './integrity.js';
 import { establishAuthoritySession, restoreAuthoritySession } from './sessionContext.js';
 import { executeActionWithPolicy, createToolExecutor } from '../agent/toolExecutor.js';
@@ -231,12 +232,17 @@ describe('exact target binding', () => {
     assert.equal(deny.reasonCode, 'DENY_CAPABILITY_CONSTRAINT');
   });
 
-  test('node -e / python -c wrapping gh merge or force-push is not run_local_command', () => {
+  test('trusted Node eval preserves gated intent; unresolved Python remains unknown', () => {
     const mergeWrap = parseGitCommand(`node -e "require('child_process').execSync('gh pr merge 90')"`);
     assert.equal(mergeWrap.capability, 'merge');
-    assert.equal(mergeWrap.target, '90');
-    const forceWrap = parseGitCommand(`python -c "import os; os.system('git push --force origin main')"`);
-    assert.equal(forceWrap.capability, 'force_push');
+    const unresolvedPython = join(tmpdir(), 'babel-unresolved-python.exe');
+    const unresolvedPythonCommand = `"${unresolvedPython}" -c "import os; os.system('git push --force origin main')"`;
+    const forceWrap = parseGitCommand(unresolvedPythonCommand);
+    assert.equal(forceWrap.capability, 'unknown');
+    assert.equal(forceWrap.ambiguous, true);
+    assert.equal(decodeCommand(unresolvedPythonCommand).capability, 'unknown');
+    assert.equal(mergeWrap.requiresIsolation, true, 'the trusted interpreter never makes its embedded script intrinsic');
+    assert.equal(forceWrap.requiresIsolation, true, 'unresolved Python identity requires isolation and grants no gated authority');
     const lease = leaseWith();
     const ctx = ctxFor(lease);
     const r = decideWithLease(
@@ -277,8 +283,7 @@ describe('exact target binding', () => {
       },
     });
     const decoded = parseGitCommand('vercel deploy --prod');
-    assert.equal(decoded.capability, 'production_deploy');
-    assert.equal(decoded.environment, 'production');
+    assert.equal(decoded.capability, 'unknown', 'a missing host deploy executable cannot claim production deployment authority');
     const ok = decideActionRequest(
       { capability: 'production_deploy', environment: 'production' },
       lease,
@@ -297,7 +302,8 @@ describe('exact target binding', () => {
     assert.equal(stagingCmd.decision, 'deny');
     const prodReq = actionRequestFromAction({ type: 'run_command', command: 'vercel deploy --prod' });
     assert.ok(prodReq);
-    assert.equal(decideActionRequest(prodReq, lease).outcome, 'verify');
+    assert.equal(prodReq.capability, 'unknown', 'an unresolved/untrusted deploy lookalike cannot claim production deployment authority');
+    assert.equal(decideActionRequest(prodReq, lease).outcome, 'deny');
   });
 });
 

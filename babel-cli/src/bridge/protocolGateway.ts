@@ -138,6 +138,18 @@ export class ProtocolGateway {
     }
   }
 
+  private savedThreadIsAllowed(threadId: string, resumeRoot?: string): boolean {
+    const descriptor = loadSessionDescriptor(threadId) ?? this.host.descriptors.get(threadId) ?? null;
+    if (!descriptor?.projectRoot) return false;
+    try {
+      assertAllowedProjectRoot(descriptor.projectRoot, this.registeredWorkspaceRoot);
+      if (resumeRoot !== undefined) assertAllowedProjectRoot(resumeRoot, this.registeredWorkspaceRoot);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async dispatch(
     raw: string,
     dispatchContext?: ProtocolDispatchContext,
@@ -223,9 +235,17 @@ export class ProtocolGateway {
       if (typeof envelope.method === 'string' && envelope.method.startsWith('control.')) {
         parsedId =
           typeof envelope.id === 'string' || typeof envelope.id === 'number' ? envelope.id : null;
+        const controlParams = ((envelope as { params?: unknown }).params ?? {}) as Record<string, unknown>;
+        if (typeof controlParams.thread_id === 'string' && !this.savedThreadIsAllowed(controlParams.thread_id)) {
+          return {
+            jsonrpc: '2.0',
+            id: parsedId ?? 0,
+            error: { code: BabelProtocolErrorCode.INVALID_PARAMS, message: 'Saved thread is not available in this workspace.' },
+          };
+        }
         return this.dispatchControlRpc(
           envelope.method,
-          (envelope as { params?: unknown }).params,
+          controlParams,
           parsedId,
           dispatchContext,
         );
@@ -243,6 +263,17 @@ export class ProtocolGateway {
           message: 'Invalid JSON-RPC request',
         },
       };
+    }
+    const threadId = (parsed as { params?: { thread_id?: unknown } }).params?.thread_id;
+    if (typeof threadId === 'string' && parsed.method !== 'thread.create') {
+      const resumeRoot = (parsed as { params?: { project_root?: unknown } }).params?.project_root;
+      if (!this.savedThreadIsAllowed(threadId,
+        parsed.method === 'thread.resume' && typeof resumeRoot === 'string' ? resumeRoot : undefined)) {
+        return {
+          jsonrpc: '2.0', id: parsed.id,
+          error: { code: BabelProtocolErrorCode.INVALID_PARAMS, message: 'Saved thread is not available in this workspace.' },
+        };
+      }
     }
     const clientKind = dispatchContext?.client.authKind;
     const mustCheckLease =
@@ -601,6 +632,8 @@ export class ProtocolGateway {
       this.host.descriptors.has(input.threadId) ||
       threadStoreExists(input.threadId) ||
       this.threadOwnership.ownerOf(input.threadId) !== undefined;
+    if (!threadExists) return { ok: false, error: 'unknown_thread' };
+    if (!this.savedThreadIsAllowed(input.threadId)) return { ok: false, error: 'unowned_thread' };
     return this.threadOwnership.authorizeMint({
       threadId: input.threadId,
       sessionId: input.sessionId,

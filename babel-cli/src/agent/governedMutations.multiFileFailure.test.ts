@@ -21,8 +21,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -32,6 +35,7 @@ import { join, resolve } from 'node:path';
 import { describe, test } from 'node:test';
 
 import type { ToolContext } from '../localTools.js';
+import { getTrustedFileCreationEvidence, SafeExecutor } from '../sandbox.js';
 import { loadEffectLedger } from '../executor/effectLedger.js';
 import type { AgentAction } from './actions.js';
 import { governedApplyPatch, type GovernedApplyPatchResult } from './governedMutations.js';
@@ -224,7 +228,7 @@ interface FaultScript {
   /** For `throw`: perform the file write before raising. */
   writeBeforeFault?: boolean;
   /** Runs after each successful write (external interference hook). */
-  onAfterWrite?: (writeIndex: number, absolutePath: string) => void;
+  onAfterWrite?: (writeIndex: number, absolutePath: string, result: ToolExecutionResult) => void;
   /**
    * Runs at the start of the faulting dispatch, after every earlier dispatch
    * has fully settled (external interference hook).
@@ -239,9 +243,11 @@ interface BarrierState {
 }
 
 function scriptedExecutor(projectRoot: string, script: FaultScript) {
+  const safe = new SafeExecutor(projectRoot);
   const base = createToolExecutor({
     executeTool: async (req) => {
       if (req.tool === 'file_write') {
+        if (req.createOnly) return safe.fileWrite(req.path, req.content, { createOnly: true });
         writeFileSync(resolve(projectRoot, req.path), req.content, 'utf8');
         return { exit_code: 0, stdout: `wrote ${req.path}`, stderr: '' };
       }
@@ -270,7 +276,7 @@ function scriptedExecutor(projectRoot: string, script: FaultScript) {
       if (writes !== script.faultAt) {
         const settled = await base.execute(action, context, budget);
         writtenPaths.push(action.path);
-        script.onAfterWrite?.(writes, resolve(projectRoot, action.path));
+        script.onAfterWrite?.(writes, resolve(projectRoot, action.path), settled);
         return settled;
       }
       barrier.faultPath = action.path;
@@ -284,8 +290,8 @@ function scriptedExecutor(projectRoot: string, script: FaultScript) {
         };
       }
       if (script.fault === 'fail_after_write' || script.writeBeforeFault) {
-        await base.execute(action, context, budget);
-        script.onAfterWrite?.(writes, resolve(projectRoot, action.path));
+        const settled = await base.execute(action, context, budget);
+        script.onAfterWrite?.(writes, resolve(projectRoot, action.path), settled);
       }
       captureAtFault(action.path);
       if (script.fault === 'fail_after_write') {
@@ -533,6 +539,18 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
     resetCircuitBreaker();
     const root = tmpRoot('babel-m1-created-rollback-');
     try {
+      const shortPathComponent = /(?:^|[\\/])[A-Z0-9]{1,6}~\d+(?:\.[A-Z0-9]{1,3})?(?=[\\/]|$)/i;
+      if (process.platform === 'win32' && shortPathComponent.test(root)) {
+        const ordinaryPath = realpathSync(root);
+        const nativePath = realpathSync.native(root);
+        if (!shortPathComponent.test(nativePath)) {
+          assert.notEqual(
+            ordinaryPath.toLowerCase(),
+            nativePath.toLowerCase(),
+            'fixture must prove native expansion of its Windows 8.3 temporary path',
+          );
+        }
+      }
       const file1 = join(root, 'file1.txt');
       const file2 = join(root, 'file2.txt');
       writeFileSync(file2, FILE2_ORIGINAL, 'utf8');
@@ -541,9 +559,32 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       const script = scriptedExecutor(root, {
         faultAt: 2,
         fault: 'reject',
-        onAfterWrite: (writeIndex, absolutePath) => {
+        onAfterWrite: (writeIndex, absolutePath, result) => {
           assert.equal(writeIndex, 1);
           assert.equal(snapshot(absolutePath).bytes, FILE1_CREATED, 'creation must land before the fault');
+          const creation = getTrustedFileCreationEvidence(result.results[0]!);
+          assert.ok(creation, 'SafeExecutor must attest the created file');
+          const exactIdentity = lstatSync(absolutePath, { bigint: true });
+          assert.equal(creation.device, exactIdentity.dev.toString());
+          assert.equal(creation.inode, exactIdentity.ino.toString());
+          assert.ok(exactIdentity.isFile());
+          const evidencePath = realpathSync.native(creation.path);
+          const targetPath = realpathSync.native(absolutePath);
+          assert.equal(
+            process.platform === 'win32' ? evidencePath.toLowerCase() : evidencePath,
+            process.platform === 'win32' ? targetPath.toLowerCase() : targetPath,
+            'host-attested creation path must identify the exact patch target',
+          );
+          if (process.platform === 'win32') {
+            const numericIdentity = lstatSync(absolutePath);
+            const exactInode = exactIdentity.ino;
+            const roundedInode = BigInt(Number(exactInode));
+            if (exactInode > BigInt(Number.MAX_SAFE_INTEGER) && roundedInode !== exactInode) {
+              const numericInode = BigInt(numericIdentity.ino);
+              assert.equal(numericInode, roundedInode, 'ordinary Windows Stats should report its rounded inode');
+              assert.notEqual(numericInode, exactInode, 'fixture should expose numeric inode precision loss');
+            }
+          }
         },
       });
 
@@ -556,6 +597,55 @@ describe('governedApplyPatch multi-file failure and rollback integrity', { concu
       assert.equal(result.preDispatchNoEffect, false);
       assert.match(result.observation, /Rolled back 1 file\(s\)/);
       assert.equal(snapshot(file1).kind, 'missing', 'created file must be removed, not emptied');
+      assert.equal(snapshot(file2).bytes, FILE2_ORIGINAL);
+      assert.equal(classifyAsCaller(result).status, 'indeterminate');
+      assertNoDanglingEffectIntent(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('6b. preserves an identical-byte replacement of the created file during later-file rollback', async () => {
+    resetCircuitBreaker();
+    const root = tmpRoot('babel-m1-created-replacement-');
+    try {
+      const file1 = join(root, 'file1.txt');
+      const file2 = join(root, 'file2.txt');
+      writeFileSync(file2, FILE2_ORIGINAL, 'utf8');
+      let replacementIdentity: { dev: number; ino: number } | undefined;
+      const script = scriptedExecutor(root, {
+        faultAt: 2,
+        fault: 'reject',
+        onAfterWrite: (writeIndex, absolutePath) => {
+          assert.equal(writeIndex, 1);
+          assert.equal(absolutePath, file1);
+          assert.equal(snapshot(file1).bytes, FILE1_CREATED);
+          const replaced = statSync(file1);
+          const replacement = join(root, 'same-byte-replacement.txt');
+          writeFileSync(replacement, FILE1_CREATED, 'utf8');
+          replacementIdentity = statSync(replacement);
+          assert.notEqual(replacementIdentity.ino, replaced.ino);
+          rmSync(file1);
+          renameSync(replacement, file1);
+          const installed = statSync(file1);
+          assert.equal(installed.dev, replacementIdentity.dev);
+          assert.equal(installed.ino, replacementIdentity.ino);
+        },
+      });
+
+      const result = await governedApplyPatch(
+        { patch: CREATE_THEN_MODIFY_PATCH },
+        { projectRoot: root, context: ctx(root), executor: script.executor },
+      );
+
+      assert.equal(result.exit_code, 1);
+      assert.equal(result.preDispatchNoEffect, false);
+      assert.equal(snapshot(file1).bytes, FILE1_CREATED);
+      const installed = statSync(file1);
+      assert.equal(installed.dev, replacementIdentity!.dev);
+      assert.equal(installed.ino, replacementIdentity!.ino);
+      assert.match(result.observation, /identity|ownership|not restored|restore failed/i);
+      assert.doesNotMatch(result.observation, /Rolled back 1 file\(s\)/);
       assert.equal(snapshot(file2).bytes, FILE2_ORIGINAL);
       assert.equal(classifyAsCaller(result).status, 'indeterminate');
       assertNoDanglingEffectIntent(root);

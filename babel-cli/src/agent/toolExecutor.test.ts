@@ -74,6 +74,10 @@ describe('mapAgentActionToToolCalls', () => {
       mapAgentActionToToolCalls({ type: 'write_file', path: 'x.txt', content: 'ok' }),
       [{ kind: 'execute', request: { tool: 'file_write', path: 'x.txt', content: 'ok' } }],
     );
+    assert.deepEqual(
+      mapAgentActionToToolCalls({ type: 'write_file', path: 'new.txt', content: 'ok', createOnly: true }),
+      [{ kind: 'execute', request: { tool: 'file_write', path: 'new.txt', content: 'ok', createOnly: true } }],
+    );
 
     const patchCalls = mapAgentActionToToolCalls({
       type: 'apply_patch',

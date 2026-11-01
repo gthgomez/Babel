@@ -44,13 +44,9 @@ import {
   readdirSync,
   statSync,
   lstatSync,
-  writeFileSync,
   existsSync,
   realpathSync,
-  openSync,
-  closeSync,
   renameSync,
-  constants as fsConstants,
 } from 'node:fs';
 import { resolve, sep, dirname, basename, isAbsolute, relative } from 'node:path';
 import {
@@ -79,12 +75,16 @@ import {
   parseCommandArgv,
 } from './utils/commandArgv.js';
 import { classifyExecutionRisk, requiresDockerIsolation } from './authority/commandSpec.js';
+import { classifyResolvedCommand, commandControlledRoots, hostWindowsSystem32Directory, isCanonicalWindowsSystemShell, isResolvedCommandCurrent, resolveCommandExecutable, type ResolvedCommandExecutable } from './authority/commandResolver.js';
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
+import { writeUtf8FileSafely, type TrustedFileCreationEvidence } from './sandboxFileWrites.js';
+export type { TrustedFileCreationEvidence } from './sandboxFileWrites.js';
 import type { ProcessWitness, ProcessWitnessInput } from './diagnostics/bdns/processWitness.js';
 import { MAX_SHELL_OUTPUT_BYTES, normalizeShellOutput } from './shellOutputNormalize.js';
 import {
+  cancelledBeforeSpawnShellResult,
   isChildRuntimeSupervisorError,
   isSpawnSyncRuntimeSupervisorError,
   normalizeSupervisorTerminatedShellOutput,
@@ -180,6 +180,28 @@ export interface ToolResult {
    * never ran, and it must not be recorded as verifier evidence.
    */
   simulated?: boolean;
+}
+
+const trustedFileCreationEvidence = new WeakMap<object, TrustedFileCreationEvidence>();
+
+export function getTrustedFileCreationEvidence(
+  result: object,
+): TrustedFileCreationEvidence | undefined {
+  return trustedFileCreationEvidence.get(result);
+}
+
+export function preserveTrustedFileCreationEvidence<T extends object>(source: object, target: T): T {
+  const evidence = trustedFileCreationEvidence.get(source);
+  if (evidence) trustedFileCreationEvidence.set(target, evidence);
+  return target;
+}
+
+function attachTrustedFileCreationEvidence<T extends object>(
+  target: T,
+  evidence: TrustedFileCreationEvidence | undefined,
+): T {
+  if (evidence) trustedFileCreationEvidence.set(target, evidence);
+  return target;
 }
 
 export type ShellExecutionBackend = 'docker-container' | 'host-process';
@@ -829,17 +851,6 @@ function isDependencyInstallCommand(command: string): boolean {
   );
 }
 
-function resolveWindowsCommandShell(): string {
-  const comspec = process.env['ComSpec'] ?? process.env['COMSPEC'];
-  if (comspec && existsSync(comspec)) {
-    return comspec;
-  }
-
-  const systemRoot = process.env['SystemRoot'] ?? process.env['SYSTEMROOT'] ?? 'C:\\Windows';
-  const systemCmd = `${systemRoot}\\System32\\cmd.exe`;
-  return existsSync(systemCmd) ? systemCmd : 'cmd.exe';
-}
-
 export function getAllowedShellCommands(
   executionProfile: string | null | undefined = process.env['BABEL_EXECUTION_PROFILE'],
 ): string[] {
@@ -1145,6 +1156,8 @@ function maybePolicyDeniedResult(
 
 export type ExecutorMode = 'plan' | 'act';
 
+const MAX_FILE_READ_SOURCE_BYTES = 1024 * 1024;
+
 export class SafeExecutor {
   private readonly projectRoot: string;
   private readonly shadowRoot: string | null;
@@ -1391,30 +1404,10 @@ export class SafeExecutor {
     targetPath: string,
     content: string,
     enforceProjectRoot: boolean,
+    options?: { createOnly?: true; onCreated?: (evidence: TrustedFileCreationEvidence) => void },
   ): void {
-    this.assertSafeWritableTarget(inputPath, targetPath, enforceProjectRoot);
-
-    const noFollowFlag = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
-    const baseFlags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC;
-
-    let fd: number;
-    try {
-      fd = openSync(targetPath, baseFlags | noFollowFlag, 0o666);
-    } catch (error: unknown) {
-      const code = (error as NodeJS.ErrnoException | undefined)?.code;
-      if (noFollowFlag !== 0 && (code === 'EINVAL' || code === 'UNKNOWN' || code === 'ENOSYS')) {
-        fd = openSync(targetPath, baseFlags, 0o666);
-      } else {
-        throw error;
-      }
-    }
-
-    try {
-      this.assertSafeWritableTarget(inputPath, targetPath, enforceProjectRoot);
-      writeFileSync(fd, content, 'utf-8');
-    } finally {
-      closeSync(fd);
-    }
+    writeUtf8FileSafely(inputPath, targetPath, content, enforceProjectRoot,
+      (input, target, enforceRoot) => this.assertSafeWritableTarget(input, target, enforceRoot), options);
   }
 
   /**
@@ -1550,6 +1543,9 @@ export class SafeExecutor {
           }
           const stats = statSync(effectiveShadowPath);
           if (!stats.isDirectory()) {
+            if (stats.size > MAX_FILE_READ_SOURCE_BYTES) {
+              throw new Error('File is too large for file_read; use read_range to inspect it.');
+            }
             const content = readFileSync(effectiveShadowPath, 'utf-8');
             return this.formatFileContent(content, options);
           }
@@ -1563,6 +1559,9 @@ export class SafeExecutor {
           .map((entry) => `${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
         const listing = [`Directory: ${safePath}`, ...entries].join('\n');
         return { exit_code: 0, stdout: listing, stderr: '' };
+      }
+      if (stats.size > MAX_FILE_READ_SOURCE_BYTES) {
+        throw new Error('File is too large for file_read; use read_range to inspect it.');
       }
       const content = readFileSync(safePath, 'utf-8');
       return this.formatFileContent(content, options);
@@ -1637,12 +1636,13 @@ export class SafeExecutor {
     }
   }
 
-  fileWrite(inputPath: string, content: string): ToolResult {
+  fileWrite(inputPath: string, content: string, options?: { createOnly?: true }): ToolResult {
     const planDenial = this.checkPlanModeDenial('file_write');
     if (planDenial) return planDenial;
     const profileDenial = this.checkExecutionProfileToolDenial('file_write');
     if (profileDenial) return profileDenial;
 
+    let creationEvidence: TrustedFileCreationEvidence | undefined;
     try {
       const requestedPath = this.resolveProjectPath(inputPath);
       this.ensureWithinProjectRoot(inputPath, requestedPath);
@@ -1657,16 +1657,19 @@ export class SafeExecutor {
       }
 
       mkdirSync(dirname(targetPath), { recursive: true });
-      this.writeUtf8FileSafely(inputPath, targetPath, content, targetPath === safePath);
-      return {
+      this.writeUtf8FileSafely(inputPath, targetPath, content, targetPath === safePath, {
+        ...(options?.createOnly ? { createOnly: true as const } : {}),
+        onCreated: evidence => { creationEvidence = evidence; },
+      });
+      return attachTrustedFileCreationEvidence({
         exit_code: 0,
         stdout: `Written: ${inputPath}${targetPath === safePath ? '' : ' (shadowed)'}`,
         stderr: '',
-      };
+      }, creationEvidence);
     } catch (err) {
       const denied = maybePolicyDeniedResult(err, 'file_write', [inputPath]);
-      if (denied) return denied;
-      return { exit_code: 1, stdout: '', stderr: String(err) };
+      if (denied) return attachTrustedFileCreationEvidence(denied, creationEvidence);
+      return attachTrustedFileCreationEvidence({ exit_code: 1, stdout: '', stderr: String(err) }, creationEvidence);
     }
   }
 
@@ -1786,16 +1789,33 @@ export class SafeExecutor {
       resolvedCwd = safeCwd;
     }
     const isWin = process.platform === 'win32';
-    const spawnCmd = isWin ? resolveWindowsCommandShell() : normalizedRawCmd;
-    const spawnArgs = isWin
-      ? buildWindowsCommandShellArgs([normalizedRawCmd, ...argv.slice(1)])
-      : argv.slice(1);
 
     const benchmarkDockerImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim();
     const isolation = evaluateGovernedIsolation(
       process.env['BABEL_EXECUTION_PROFILE'],
       benchmarkDockerImage,
     );
+    const useDockerSandbox =
+      isolation.kind === 'docker' &&
+      shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']);
+    let env = childEnvForSandbox();
+    const resolvedExecutable = useDockerSandbox ? null : resolveCommandExecutable(rawCmd, {
+      cwd: resolvedCwd,
+      env,
+      platform: process.platform,
+      controlledRoots: commandControlledRoots(this.projectRoot, process.env['BABEL_SHADOW_ROOT']),
+    });
+    if (!useDockerSandbox && !resolvedExecutable) {
+      return policyDeniedResult(
+        'executable_resolution_failed',
+        `[sandbox] Command rejected — executable could not be resolved in the child environment: "${rawCmd}"`,
+        toolName,
+        [rawCmd],
+      );
+    }
+    const classified = useDockerSandbox
+      ? classifyExecutionRisk(command, { repoRoot: this.projectRoot })
+      : classifyResolvedCommand(resolvedExecutable!, argv.slice(1), { repoRoot: this.projectRoot, invokedBase: rawCmd });
     // H13: isolation-required profiles fail closed unless Docker is active or
     // the operator explicitly escalates to host (BABEL_ALLOW_HOST_FALLBACK /
     // BABEL_DOCKER_DISABLE). Profiles with dockerSandbox:false stay on host.
@@ -1807,7 +1827,6 @@ export class SafeExecutor {
         [command],
       );
     }
-    const classified = classifyExecutionRisk(command, { repoRoot: this.projectRoot });
     // Project-or-container-only commands stay denied on host profiles even
     // when the governed isolation decision resolved to a host kind — unless
     // the operator explicitly authorized a host fallback for this run. The
@@ -1846,9 +1865,6 @@ export class SafeExecutor {
       );
     }
 
-    const useDockerSandbox =
-      isolation.kind === 'docker' &&
-      shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']);
     // Legacy one-time warning path (host_escalated already logged above).
     if (
       isolation.kind === 'host_escalated' &&
@@ -1893,14 +1909,46 @@ export class SafeExecutor {
       }
     }
 
-    let env = childEnvForSandbox();
     if (classified.effectFamily === 'git') {
       env = hardenGitHostEnvironment(env);
     }
 
+    let hostExecutable = resolvedExecutable?.path ?? normalizedRawCmd;
+    let hostArgs = argv.slice(1);
+    let commandShell: ResolvedCommandExecutable | undefined;
+    if (isWin && !useDockerSandbox) {
+      const hostSystem32 = hostWindowsSystem32Directory();
+      const expectedShell = hostSystem32 ? resolve(hostSystem32, 'cmd.exe') : undefined;
+      const resolvedShell = expectedShell ? resolveCommandExecutable(expectedShell, {
+        cwd: resolvedCwd,
+        env,
+        platform: process.platform,
+        controlledRoots: commandControlledRoots(this.projectRoot, env['BABEL_SHADOW_ROOT']),
+      }) : null;
+      if (!resolvedShell?.trusted || !hostSystem32 || !isCanonicalWindowsSystemShell(resolvedShell.path, hostSystem32)) {
+        return policyDeniedResult(
+          'executable_resolution_failed',
+          '[sandbox] Command rejected — trusted Windows command shell could not be resolved.',
+          toolName,
+          ['cmd.exe'],
+        );
+      }
+      commandShell = resolvedShell;
+      hostExecutable = commandShell.path;
+      hostArgs = buildWindowsCommandShellArgs([resolvedExecutable!.path, ...argv.slice(1)]);
+    }
+
     return useDockerSandbox
       ? prepareOwnedContainerInvocation({ dockerImage: benchmarkDockerImage!, projectRoot: this.projectRoot, cwd: safeCwd, command }, env)
-      : { executable: spawnCmd, args: spawnArgs, cwd: resolvedCwd, env };
+      : {
+          executable: hostExecutable,
+          args: hostArgs,
+          cwd: resolvedCwd,
+          env,
+          validateExecutable: () =>
+            isResolvedCommandCurrent(resolvedExecutable!) &&
+            (commandShell === undefined || isResolvedCommandCurrent(commandShell)),
+        };
   }
 
   /**
@@ -1915,6 +1963,9 @@ export class SafeExecutor {
     let transientRetryCount = 0;
     let result: SpawnSyncReturns<string>;
     while (true) {
+      if (prepared.validateExecutable && !prepared.validateExecutable()) {
+        return policyDeniedResult('executable_identity_changed', '[sandbox] Command rejected — executable identity changed before spawn.', toolName, [prepared.executable]);
+      }
       result = spawnSync(prepared.executable, prepared.args, {
         cwd: prepared.cwd,
         timeout: timeoutMs,
@@ -1987,6 +2038,8 @@ export class SafeExecutor {
     signal?: AbortSignal,
     processContext?: Pick<ProcessWitnessInput, 'sessionId' | 'turnId' | 'toolCallId'>,
   ): Promise<ToolResult> {
+    // Settle cancellation before lookup; Windows shell built-ins may be unresolvable.
+    if (signal?.aborted) return cancelledBeforeSpawnShellResult();
     const prepared = this.prepareShellExecution(command, cwd, toolName);
     if ('exit_code' in prepared) return prepared;
 
@@ -1994,6 +2047,9 @@ export class SafeExecutor {
     let result: AsyncSpawnResult;
     const sessionId = processContext?.sessionId ?? process.env['BABEL_SESSION_ID'];
     while (true) {
+      if (prepared.validateExecutable && !prepared.validateExecutable()) {
+        return policyDeniedResult('executable_identity_changed', '[sandbox] Command rejected — executable identity changed before spawn.', toolName, [prepared.executable]);
+      }
       result = await spawnCommandAsync(prepared.executable, prepared.args, {
         cwd: prepared.cwd,
         timeoutMs,

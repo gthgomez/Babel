@@ -20,6 +20,7 @@ import { terminateChildTree } from '../sandbox.js';
 import type { ShellExecutionBackend } from '../sandbox.js';
 import { buildWindowsCommandShellArgs, parseCommandArgv } from '../utils/commandArgv.js';
 import { childEnvForSandbox } from '../authority/unprivilegedChildEnv.js';
+import { classifyResolvedCommand, commandControlledRoots, hostWindowsSystem32Directory, isCanonicalWindowsSystemShell, isResolvedCommandCurrent, resolveCommandExecutable, type ResolvedCommandExecutable } from '../authority/commandResolver.js';
 import { getDefaultProcessWitness, type ProcessWitness } from '../diagnostics/bdns/processWitness.js';
 
 /** Cap retained on the job record (same ballpark as SafeExecutor maxBuffer). */
@@ -73,6 +74,10 @@ export interface StartBackgroundShellInput {
   toolCallId?: string;
   /** Optional explicit BDNS process witness; defaults to Babel's bounded witness. */
   processWitness?: ProcessWitness;
+  /** Trusted project boundary supplied by the session owner. */
+  projectRoot?: string;
+  /** Preflight resolution from the policy boundary, reused for the pinned spawn. */
+  resolvedExecutable?: ResolvedCommandExecutable;
 }
 
 export interface AwaitBackgroundShellResult {
@@ -90,10 +95,6 @@ type InternalJob = BackgroundShellJob & { child?: ChildProcessWithoutNullStreams
 
 let nextId = 1;
 const jobs = new Map<string, InternalJob>();
-
-function resolveWindowsCommandShell(): string {
-  return process.env['ComSpec']?.trim() || 'cmd.exe';
-}
 
 function appendCapped(current: string, chunk: string, label: 'stdout' | 'stderr'): string {
   if (Buffer.byteLength(current, 'utf8') >= MAX_OUTPUT_BYTES) {
@@ -160,13 +161,40 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
   // foreground shell contract; shell operators remain rejected by admission.
   const argv = parseCommandArgv(command, process.platform);
   const rawCmd = argv[0] ?? '';
-  const normalizedRawCmd = isWin
-    ? rawCmd.replace(/^\.\//, '.\\').replace(/\//g, '\\')
-    : rawCmd;
-  const spawnCmd = isWin ? resolveWindowsCommandShell() : normalizedRawCmd;
-  const spawnArgs = isWin
-    ? buildWindowsCommandShellArgs([normalizedRawCmd, ...argv.slice(1)])
-    : argv.slice(1);
+  const childEnvironment = childEnvForSandbox();
+  const resolvedExecutable = input.resolvedExecutable ?? resolveCommandExecutable(rawCmd, {
+    cwd,
+    env: childEnvironment,
+    platform: process.platform,
+    controlledRoots: commandControlledRoots(input.projectRoot, process.env['BABEL_SHADOW_ROOT']),
+  });
+  if (!resolvedExecutable) {
+    throw new Error(`background shell denied: executable identity is unresolved (${rawCmd})`);
+  }
+  const identityPolicy = classifyResolvedCommand(resolvedExecutable, argv.slice(1),
+    { ...(input.projectRoot ? { repoRoot: input.projectRoot } : {}), invokedBase: rawCmd });
+  if (identityPolicy.reason === 'indirect_executable_dispatch') {
+    throw new Error('background shell denied: indirect executable dispatch cannot be pinned');
+  }
+  let spawnCmd = resolvedExecutable.path;
+  let spawnArgs = argv.slice(1);
+  let commandShell: ResolvedCommandExecutable | undefined;
+  if (isWin) {
+    const hostSystem32 = hostWindowsSystem32Directory();
+    const expectedShell = hostSystem32 ? pathResolve(hostSystem32, 'cmd.exe') : undefined;
+    const resolvedShell = expectedShell ? resolveCommandExecutable(expectedShell, {
+      cwd,
+      env: childEnvironment,
+      platform: process.platform,
+      controlledRoots: commandControlledRoots(input.projectRoot, process.env['BABEL_SHADOW_ROOT']),
+    }) : null;
+    if (!resolvedShell?.trusted || !hostSystem32 || !isCanonicalWindowsSystemShell(resolvedShell.path, hostSystem32)) {
+      throw new Error('background shell denied: trusted Windows command shell could not be resolved');
+    }
+    commandShell = resolvedShell;
+    spawnCmd = commandShell.path;
+    spawnArgs = buildWindowsCommandShellArgs([resolvedExecutable.path, ...argv.slice(1)]);
+  }
 
   let resolveDone!: () => void;
   const done = new Promise<void>((resolve) => {
@@ -210,10 +238,14 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
   let processStarted = false;
   let processExitRecorded = false;
   try {
+    if (!isResolvedCommandCurrent(resolvedExecutable) ||
+        (commandShell !== undefined && !isResolvedCommandCurrent(commandShell))) {
+      throw new Error('background shell denied: executable identity changed before spawn');
+    }
     child = spawn(spawnCmd, spawnArgs, {
       cwd,
       // M10 parity with SafeExecutor.shellExec — strip secrets from child env.
-      env: childEnvForSandbox(),
+      env: childEnvironment,
       windowsHide: true,
       ...(isWin ? { windowsVerbatimArguments: true } : {}),
       // POSIX: new process group so terminateChildTree can SIGTERM -pid.

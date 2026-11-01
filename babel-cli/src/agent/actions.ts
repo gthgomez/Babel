@@ -16,7 +16,13 @@ export type AgentAction =
   | { type: 'search'; query: string }
   | { type: 'grep'; pattern: string; path?: string }
   | { type: 'glob'; pattern: string }
-  | { type: 'write_file'; path: string; content: string }
+  | {
+      type: 'write_file';
+      path: string;
+      content: string;
+      /** Host-only; never parsed from model output. */
+      createOnly?: true;
+    }
   | { type: 'apply_patch'; patch: string }
   | { type: 'run_command'; command: string; cwd?: string }
   | {

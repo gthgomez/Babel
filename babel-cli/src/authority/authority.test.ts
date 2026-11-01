@@ -11,6 +11,7 @@ import { after, describe, test } from 'node:test';
 import { parseLeaseJson, validateLease, loadLeaseFromEnv, type AutonomyLease } from './lease.js';
 import { decideActionRequest, askCodeForCapability } from './pdp.js';
 import { parseGitCommand } from './gitCommand.js';
+import { decodeCommand } from './commandDecoder.js';
 import { isProtectedBranch, isAllowedBranchPrefix, CAPABILITY_KINDS } from './capabilities.js';
 import {
   createCiController,
@@ -22,7 +23,7 @@ import {
 import { buildBaseline, isGovernancePath } from './integrity.js';
 import { decideWithLease } from './wire.js';
 import type { AgentAction } from '../agent/actions.js';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -599,10 +600,26 @@ describe('wire: lease-aware dispatch composite', () => {
     assert.equal(r.reasonCode, 'DENY_UNKNOWN_EXTERNAL_SIDE_EFFECT');
   });
 
-  test('known-dangerous tool (terraform apply) → deny (DENY_MISSING_AUTHORITY)', () => {
-    const r = decideWithLease(runCmd('terraform apply -auto-approve'), 'workspace_write', ctx);
-    assert.equal(r.decision, 'deny');
-    assert.equal(r.reasonCode, 'DENY_MISSING_AUTHORITY');
+  test('project-controlled Terraform lookalike keeps deploy semantics but receives no host authority', () => {
+    const executable = join(baselineRoot, process.platform === 'win32' ? 'terraform.cmd' : 'terraform');
+    const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+    const previousPath = process.env[pathKey];
+    try {
+      writeFileSync(executable, process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\nexit 0\n');
+      if (process.platform !== 'win32') chmodSync(executable, 0o755);
+      process.env[pathKey] = `${baselineRoot}${process.platform === 'win32' ? ';' : ':'}${previousPath ?? ''}`;
+      const decoded = decodeCommand('terraform apply -auto-approve', { repoRoot: baselineRoot });
+      assert.equal(decoded.capability, 'unknown');
+      assert.equal(decoded.semantic, 'infrastructure_mutation');
+      assert.equal(decoded.requiresIsolation, true);
+      const r = decideWithLease(runCmd('terraform apply -auto-approve'), 'workspace_write', ctx);
+      assert.equal(r.decision, 'deny');
+      assert.equal(r.reasonCode, 'DENY_UNKNOWN_EXTERNAL_SIDE_EFFECT');
+    } finally {
+      if (previousPath === undefined) delete process.env[pathKey];
+      else process.env[pathKey] = previousPath;
+      rmSync(executable, { force: true });
+    }
   });
 
   test('ordinary unclassified command (git status) → allow (local)', () => {

@@ -5,12 +5,13 @@ import {requireProjectRoot} from '../chatExecutionScope.js';
  * background-shell handlers in chatBackgroundShell.ts).
  */
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
 
 import { resolveChatRangePath } from "../chatReadOnly.js";
 import {
-  evaluateReadRequest,
+  decideReadInjection,
   formatReadObservation,
+  readFileWindow,
+  rememberReadInjection,
 } from "./readWindow.js";
 import {
   applyWorkingStateEvent,
@@ -32,6 +33,7 @@ export interface ReadRangeActionContext {
   meta: { index: number; idempotencyKey?: string };
   ownerGeneration: number;
   callbacks: ChatCallbacks;
+  signal?: AbortSignal;
 }
 
 /** Execute a read_range action: windowed read with cache + recovery evidence. */
@@ -43,7 +45,11 @@ export async function executeReadRangeAction(
   host.persistToolStartedAtExecutorDispatch(action, meta);
   const bindingBefore = host.workingState.recoveryGate ? host.currentRecoveryBinding() : null;
   const targetBefore = recoveryTargetIdentity(requireProjectRoot(host.options), action.file_path);
-  const rContent = await readFile(rPath, "utf-8");
+  const streamed = await readFileWindow(rPath, {
+    kind: "range",
+    startLine: action.start_line,
+    endLine: action.end_line,
+  }, { ...(ctx.signal ? { signal: ctx.signal } : {}) });
   // R0-8: the read is a suspension point; a superseded submission must not
   // append its result for the new task.
   if (!host.isSubmissionCurrent(ctx.ownerGeneration)) {
@@ -54,22 +60,27 @@ export async function executeReadRangeAction(
       "parent submission superseded before the action settled",
     );
   }
-  const rHash = host.hashContent(rContent);
+  const rHash = streamed.fileHash;
   const rKey = host.readCacheKey(rPath);
+  const evaluated = {
+    decision: decideReadInjection({
+      pathKey: rKey,
+      fileHash: rHash,
+      request: {
+        kind: "range" as const,
+        startLine: action.start_line,
+        endLine: action.end_line,
+      },
+      cache: host.readCache,
+      contextEpoch: host.readContextEpoch,
+    }),
+    window: streamed.window,
+  };
+  if (!evaluated.decision.skip) {
+    rememberReadInjection(host.readCache, evaluated.decision.cacheKey, rHash);
+  }
   // read_range does not bump fullReadCounts (line windows allowed)
   host.noteToolForReadThrash(tool);
-  const evaluated = evaluateReadRequest({
-    pathKey: rKey,
-    fileHash: rHash,
-    content: rContent,
-    request: {
-      kind: "range",
-      startLine: action.start_line,
-      endLine: action.end_line,
-    },
-    cache: host.readCache,
-    contextEpoch: host.readContextEpoch,
-  });
   if (
     evaluated.window.lines.length === 0 &&
     (action.start_line > Math.max(1, evaluated.window.totalLines))
@@ -111,8 +122,8 @@ export async function executeReadRangeAction(
       host.workingState.recoveryGate ? host.currentRecoveryBinding() : null,
       createHash("sha256").update(evaluated.window.lines.join("\n")).digest("hex"),
       { startLine: evaluated.window.startLine, endLine: evaluated.window.endLine, totalLines: evaluated.window.totalLines,
-        completeFile: !evaluated.window.truncated && evaluated.window.startLine === 1 && evaluated.window.endLine === evaluated.window.totalLines,
-        byteTruncated: false },
+        completeFile: !evaluated.window.truncated && !evaluated.window.byteTruncated && evaluated.window.startLine === 1 && evaluated.window.endLine === evaluated.window.totalLines,
+        byteTruncated: evaluated.window.byteTruncated === true },
       bindingBefore,
     );
     host.workingState = applyWorkingStateEvent(host.workingState, {

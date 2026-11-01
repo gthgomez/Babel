@@ -23,6 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { validateDockerIsolationArgs } from '../config/dockerIsolationArgs.js';
 import { SafeExecutor, validateExecutorShellCommand } from '../sandbox.js';
 import { hardenGitHostEnvironment } from './unprivilegedChildEnv.js';
+import { resolveAndClassifyCommand } from './commandResolver.js';
 
 if (!process.env['BABEL_ALLOW_HOST_FALLBACK'] && process.env['BABEL_DOCKER_DISABLE'] !== 'true') {
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
@@ -56,6 +57,8 @@ test('project-relative executables are project_code', () => {
   assert.equal(classifyExecutionRisk('./cli_tool').executionRisk, 'project_code');
   assert.equal(classifyExecutionRisk('/app/bin/tool').executionRisk, 'project_code');
   assert.equal(classifyExecutionRisk('/project/bin/tool').executionRisk, 'project_code');
+  assert.equal(classifyExecutionRisk('/usr/bin/git status').executionRisk, 'project_code');
+  assert.equal(classifyExecutionRisk('C:\\Windows\\System32\\where.exe node').executionRisk, 'project_code');
 });
 
 test('jvm and language run/build carriers require isolation', () => {
@@ -77,7 +80,15 @@ test('jvm and language run/build carriers require isolation', () => {
 test('host-safe inspection does not require isolation', () => {
   assert.equal(parseGitCommand('git status').requiresIsolation, undefined);
   assert.equal(parseGitCommand('rg foo').capability, 'run_local_command');
-  assert.equal(parseGitCommand('rg foo').requiresIsolation, undefined);
+  const rgResolution = resolveAndClassifyCommand('rg', ['foo'], {
+    cwd: process.cwd(),
+    env: process.env,
+    platform: process.platform,
+  });
+  assert.equal(
+    parseGitCommand('rg foo').requiresIsolation,
+    rgResolution.executable?.trusted ? undefined : true,
+  );
 });
 
 test('git global options that change execution fail closed', () => {
@@ -599,6 +610,15 @@ test('git fetch --upload-pack and git push --receive-pack fail closed before spa
 test('SafeExecutor denies gradlew test on host profile without authority stack', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-se-gradle-'));
   roots.push(root);
+  const marker = join(root, 'GRADLE_WRAPPER_EXECUTED');
+  const windows = process.platform === 'win32';
+  const wrapper = join(root, windows ? 'gradlew.bat' : 'gradlew');
+  if (windows) {
+    writeFileSync(wrapper, `@echo off\r\necho executed>"${marker}"\r\nexit /b 0\r\n`);
+  } else {
+    writeFileSync(wrapper, `#!/bin/sh\nprintf executed > '${marker}'\nexit 0\n`);
+    chmodSync(wrapper, 0o755);
+  }
   const prev = process.env['BABEL_EXECUTION_PROFILE'];
   const prevHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
@@ -607,15 +627,27 @@ test('SafeExecutor denies gradlew test on host profile without authority stack',
   delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
   try {
     const se = new SafeExecutor(root);
-    const result = se.shellExec('gradlew test', root, 5_000);
+    const result = se.shellExec(windows ? './gradlew.bat test' : './gradlew test', root, 5_000);
     assert.notEqual(result.exit_code, 0);
-    assert.match(result.stderr, /isolation_required|project or container-only/i);
+    assert.match(result.stderr, /isolation_required/);
+    assert.equal(existsSync(marker), false);
   } finally {
     if (prev === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
     else process.env['BABEL_EXECUTION_PROFILE'] = prev;
     if (prevHostFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
     else process.env['BABEL_ALLOW_HOST_FALLBACK'] = prevHostFallback;
   }
+});
+
+test('missing Gradle wrapper resolution is distinct from host isolation denial', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-se-gradle-missing-'));
+  roots.push(root);
+  const result = resolveAndClassifyCommand(process.platform === 'win32' ? './gradlew.bat' : './gradlew', ['test'], {
+    cwd: root,
+    env: process.env,
+    platform: process.platform,
+  });
+  assert.equal(result.classification.reason, 'executable_resolution_failed');
 });
 
 test('validateExecutorShellCommand denies git -c execution config', () => {
@@ -719,8 +751,8 @@ const HOST_PROCESS_SURFACE = new Set([
   'executor/effectDirectoryAnchors.ts',
   // Fixed Docker removal arguments require a validated Babel-owned UUID name.
   'sandboxContainerLifecycle.ts',
-  // Admission state applies and verifies owner-only Windows DACLs via System32 tools.
-  'runtime/admission.ts',
+  // Extracted admission ACL helper uses only fixed System32 identity/ACL executables and a fixed PowerShell verifier script.
+  'runtime/windowsOwnerAcl.ts',
   // Review workers are contained by the watchdog / Windows Job Object helper.
   'services/reviewProcessContainment.ts',
   // Command Code ACP managed child: argv from registry launch seam only; stdio JSON-RPC; bounded line framing.

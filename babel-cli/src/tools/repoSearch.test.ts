@@ -54,7 +54,7 @@ test('grep tool reports missing scope as an error, not a successful empty search
   const previousRoot = process.env['BABEL_PROJECT_ROOT'];
   try {
     process.env['BABEL_PROJECT_ROOT'] = root;
-    const result = await handleGrepTool({ path: 'missing.ts', pattern: 'class' });
+    const result = await handleGrepTool({ path: 'missing.ts', pattern: 'class' }, process.cwd());
     assert.equal(result.exit_code, 1);
     assert.equal(result.stdout, '');
     assert.match(result.stderr, /ENOENT/);

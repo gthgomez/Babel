@@ -1150,6 +1150,7 @@ export class ChatEngineActionExecutor {
           meta,
           ownerGeneration,
           callbacks,
+          ...(toolContext.signal ? { signal: toolContext.signal } : {}),
         });
       }
 

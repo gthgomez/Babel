@@ -206,6 +206,7 @@ for (const created of [false, true]) {
         targetParentIdentities: { [path]: captureEffectParentIdentity(path) },
         preImageHashes: { [path]: created ? WorkspaceTransactionManager.missingPathDigest() : hash('before') }, intendedContent: 'after' })
       recordEffectTerminal(root, original, { status: 'completed', postImageHashes: { [path]: hash('after') } })
+      const createdIdentity = fs.statSync(path)
       let checks = 0
       let replaced = false
       fsPromises.lstat = (async (...args: Parameters<typeof fsPromises.lstat>) => {
@@ -216,7 +217,12 @@ for (const created of [false, true]) {
       syncBuiltinESMExports()
       const result = await compensatePatchWrites([path], new Map([[path, 'before']]), created ? new Set([path]) : new Set(),
         new Map([[path, 'after']]), new Map([[path, original]]),
-        { runDir: root, runId: 'session', agentId: 'test', babelRoot: root })
+        { runDir: root, runId: 'session', agentId: 'test', babelRoot: root }, undefined,
+        created ? new Map([[path, {
+          device: createdIdentity.dev.toString(),
+          inode: createdIdentity.ino.toString(),
+          expectedContent: 'after',
+        }]]) : undefined)
       assert.equal(replaced, true, 'external write must actually land at the barrier')
       assert.equal(fs.existsSync(path), true, 'external replacement must not be deleted')
       assert.equal(fs.readFileSync(path, 'utf8'), 'external-newer')

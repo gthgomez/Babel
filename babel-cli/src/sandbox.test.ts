@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -18,6 +19,7 @@ import { PassThrough } from 'node:stream';
 
 import {
   SafeExecutor,
+  getTrustedFileCreationEvidence,
   getTrustedShellExecutionBackend,
   validateHighRiskToolResult,
   awaitPendingProcessTerminations,
@@ -117,6 +119,57 @@ test('sandbox file operations stay usable for in-root paths', () => {
       'created\n',
     );
   } finally {
+    fixture.cleanup();
+  }
+});
+
+test('create-only file writes refuse existing empty files and preserve contents', () => {
+  const fixture = makeFixture();
+  try {
+    const executor = new SafeExecutor(fixture.projectRoot);
+    writeFileSync(join(fixture.projectRoot, 'existing-empty.txt'), '');
+    writeFileSync(join(fixture.projectRoot, 'existing.txt'), 'outside bytes\n');
+    for (const name of ['existing-empty.txt', 'existing.txt']) {
+      const before = readFileSync(join(fixture.projectRoot, name), 'utf-8');
+      const result = executor.fileWrite(name, 'new bytes\n', { createOnly: true });
+      assert.equal(result.exit_code, 1);
+      assert.equal(readFileSync(join(fixture.projectRoot, name), 'utf-8'), before);
+    }
+    const result = executor.fileWrite('new.txt', 'created\n', { createOnly: true });
+    assert.equal(result.exit_code, 0);
+    assert.equal(readFileSync(join(fixture.projectRoot, 'new.txt'), 'utf-8'), 'created\n');
+    const evidence = getTrustedFileCreationEvidence(result);
+    assert.ok(evidence);
+    const createdStat = statSync(join(fixture.projectRoot, 'new.txt'), { bigint: true });
+    assert.equal(evidence.device, createdStat.dev.toString());
+    assert.equal(evidence.inode, createdStat.ino.toString(), 'creation evidence identifies the completed file');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('sandbox file reads reject oversized sources before loading them', () => {
+  const fixture = makeFixture();
+  try {
+    writeFileSync(join(fixture.projectRoot, 'oversized.txt'), 'x'.repeat(1024 * 1024 + 1));
+    const result = new SafeExecutor(fixture.projectRoot).fileRead('oversized.txt');
+    assert.equal(result.exit_code, 1);
+    assert.match(result.stderr, /too large.*use read_range/i);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('sandbox shadow reads reject oversized sources before loading them', () => {
+  const fixture = makeFixture();
+  const shadowRoot = mkdtempSync(join(tmpdir(), 'babel-sandbox-shadow-size-'));
+  try {
+    writeFileSync(join(shadowRoot, 'oversized-shadow.txt'), 'x'.repeat(1024 * 1024 + 1));
+    const result = new SafeExecutor(fixture.projectRoot, shadowRoot).fileRead('oversized-shadow.txt');
+    assert.equal(result.exit_code, 1);
+    assert.match(result.stderr, /too large.*use read_range/i);
+  } finally {
+    rmSync(shadowRoot, { recursive: true, force: true });
     fixture.cleanup();
   }
 });
@@ -955,9 +1008,11 @@ test('shellExecAsync correlates process witness observations with toolCallId', a
   try {
     const kinds: string[] = [];
     const ids: Array<string | undefined> = [];
+    const dispatchedExecutables: string[] = [];
     witness.subscribe((observation) => {
       kinds.push(observation.kind);
       ids.push(observation.correlation.toolCallId);
+      if (observation.kind === 'process_requested') dispatchedExecutables.push(observation.payload.executable);
     }, { id: 'sandbox-toolcall' });
     const executor = new SafeExecutor(fixture.projectRoot, null, 'act', witness);
     const result = await executor.shellExecAsync(
@@ -972,6 +1027,12 @@ test('shellExecAsync correlates process witness observations with toolCallId', a
     await witness.bus.flush();
     assert.ok(kinds.includes('process_requested'));
     assert.ok(kinds.includes('process_exited'));
+    assert.notEqual(dispatchedExecutables[0], 'echo');
+    if (process.platform === 'win32') {
+      assert.match(dispatchedExecutables[0] ?? '', /[\\/]System32[\\/]cmd\.exe$/i);
+    } else {
+      assert.match(dispatchedExecutables[0] ?? '', /(?:^|[\\/])echo(?:\.exe)?$/i);
+    }
     assert.ok(ids.includes('tool-shell-1'));
   } finally {
     await witness.close();

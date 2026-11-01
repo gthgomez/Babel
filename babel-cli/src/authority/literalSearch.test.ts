@@ -9,10 +9,21 @@ for (const pattern of ['npm publish', 'DROP TABLE', '.env', 'curl', 'npm install
     const command = `rg '${pattern}' README.md`
     const decoded = decodeCommand(command)
     assert.equal(decoded.capability, 'run_local_command')
-    assert.equal(decoded.requiresIsolation, undefined)
-    assert.equal(decideWithLease({ type: 'run_command', command }, 'workspace_write', { lease: null }).decision, 'allow')
-    assert.equal(decideWithLease({ type: 'run_command', command }, 'read_only', { lease: null }).decision, 'deny')
-    assert.equal(decideWithLease({ type: 'run_command', command }, 'ask_before_mutation', { lease: null }).decision, 'ask')
+    const ordinary = "rg 'ordinary' README.md"
+    const ordinaryDecoded = decodeCommand(ordinary)
+    // Pattern text must not change command semantics or the executable-trust
+    // isolation floor. An untrusted resolved rg remains denied in every mode.
+    assert.equal(decoded.semantic, ordinaryDecoded.semantic)
+    assert.equal(decoded.requiresIsolation, ordinaryDecoded.requiresIsolation)
+    for (const mode of ['workspace_write', 'read_only', 'ask_before_mutation'] as const) {
+      assert.equal(
+        decideWithLease({ type: 'run_command', command }, mode, { lease: null }).decision,
+        decideWithLease({ type: 'run_command', command: ordinary }, mode, { lease: null }).decision,
+      )
+      if (decoded.requiresIsolation) {
+        assert.equal(decideWithLease({ type: 'run_command', command }, mode, { lease: null }).decision, 'deny')
+      }
+    }
   })
 }
 
@@ -47,7 +58,11 @@ for (const command of [
   "rg --regexp='.env' README.md", "rg -- '.env' README.md",
 ]) {
   test(`supported search spelling keeps pattern as data: ${command}`, () => {
-    assert.equal(decideWithLease({ type: 'run_command', command }, 'workspace_write', { lease: null }).decision, 'allow')
+    assert.equal(decodeCommand(command).capability, 'run_local_command')
+    assert.equal(
+      decodeCommand(command).requiresIsolation,
+      decodeCommand('rg ordinary README.md').requiresIsolation,
+    )
   })
 }
 

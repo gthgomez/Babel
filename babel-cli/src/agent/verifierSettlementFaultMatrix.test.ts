@@ -588,20 +588,22 @@ describe('verifier settlement fault matrix', { concurrency: false }, () => {
     }
   });
 
-  test('a delegated range read fault settles through the executor catch', async (t) => {
+  test('a delegated range read fault settles through the executor catch', async () => {
     const root = makeFixture();
     process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
     const engine = makeEngine(root, 'matrix-range-fault', 'read a.txt');
     const host = engine as unknown as ChatEngineActionExecutorHost;
     const telemetry = new ChatTurnTelemetryCollector();
     host.currentTurnTelemetry = telemetry;
-    t.mock.method(host, 'hashContent', () => { throw new Error('FAULT_INJECTED_RANGE_HASH'); });
+    // read_range now streams and hashes the source itself, so fault the actual
+    // delegated read boundary instead of the legacy full-file hash hook.
+    rmSync(join(root, 'a.txt'));
     try {
       const result = await new ChatEngineActionExecutor(host).executeOneAction(
         { type: 'read_range', file_path: 'a.txt', start_line: 1, end_line: 1 },
         { agentId: 'chat', runId: 'matrix-range-fault', babelRoot: root }, {}, { index: 0 },
       );
-      assert.match(result.observation, /FAULT_INJECTED_RANGE_HASH/);
+      assert.match(result.observation, /ENOENT|no such file|not found/i);
       assert.equal(host.toolCallLog.length, 1);
       assert.equal(host.toolCallLog[0]?.exit_code, 1);
       const counts = telemetryCounts(telemetry);

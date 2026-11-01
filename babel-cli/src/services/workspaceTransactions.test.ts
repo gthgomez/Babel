@@ -143,3 +143,129 @@ test('a missing path and an empty file never share a digest', async () => {
     fs.rmSync(testDir, { recursive: true, force: true });
   }
 });
+
+test('rollback preserves paths that appeared after an absent pre-image without ownership evidence', async () => {
+  const root = fs.mkdtempSync(path.join(process.cwd(), 'test-tx-created-outsider-'));
+  try {
+    for (const [name, content] of [['nonempty', 'concurrent bytes\n'], ['empty', '']] as const) {
+      const target = path.join(root, name);
+      const tx = await WorkspaceTransactionManager.beginBatch([target]);
+      fs.writeFileSync(target, content);
+      const result = await WorkspaceTransactionManager.undoLastMutationBatch(tx);
+      assert.equal(result.verification, false);
+      assert.match(result.conflicts[0] ?? '', /no trusted creation identity/);
+      assert.equal(fs.readFileSync(target, 'utf8'), content);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rollback removes a confirmed creation only while identity and content match', async () => {
+  const root = fs.mkdtempSync(path.join(process.cwd(), 'test-tx-owned-create-'));
+  try {
+    const target = path.join(root, 'created.txt');
+    const expected = 'created by this dispatch\n';
+    const tx = await WorkspaceTransactionManager.beginBatch([target]);
+    fs.writeFileSync(target, expected);
+    const stat = fs.statSync(target);
+    WorkspaceTransactionManager.recordCreatedFileOwnership(tx, target, {
+      device: stat.dev.toString(),
+      inode: stat.ino.toString(),
+      expectedContent: expected,
+    });
+    const result = await WorkspaceTransactionManager.undoLastMutationBatch(tx);
+    assert.equal(result.verification, true);
+    assert.equal(fs.existsSync(target), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rollback preserves edited, same-byte replacement, and partial creation contents', async () => {
+  const root = fs.mkdtempSync(path.join(process.cwd(), 'test-tx-created-conflict-'));
+  try {
+    for (const scenario of ['edited', 'same_bytes_replaced', 'partial'] as const) {
+      const target = path.join(root, `${scenario}.txt`);
+      const expected = 'expected creation bytes\n';
+      const tx = await WorkspaceTransactionManager.beginBatch([target]);
+      fs.writeFileSync(target, expected);
+      const original = fs.statSync(target);
+      WorkspaceTransactionManager.recordCreatedFileOwnership(tx, target, {
+        device: original.dev.toString(),
+        inode: original.ino.toString(),
+        expectedContent: expected,
+      });
+      if (scenario === 'edited') {
+        fs.writeFileSync(target, 'edited bytes\n');
+      } else if (scenario === 'same_bytes_replaced') {
+        const replacement = path.join(root, `${scenario}.replacement`);
+        fs.writeFileSync(replacement, expected);
+        assert.notEqual(fs.statSync(replacement).ino, original.ino);
+        fs.renameSync(replacement, target);
+      } else {
+        fs.writeFileSync(target, 'partial');
+      }
+      const content = fs.readFileSync(target, 'utf8');
+      const replacementStat = scenario === 'same_bytes_replaced' ? fs.statSync(target) : undefined;
+      const result = await WorkspaceTransactionManager.undoLastMutationBatch(tx);
+      assert.equal(result.verification, false, scenario);
+      assert.ok(result.conflicts.length > 0, scenario);
+      assert.equal(fs.readFileSync(target, 'utf8'), content, scenario);
+      if (replacementStat) {
+        assert.equal(fs.statSync(target).dev, replacementStat.dev);
+        assert.equal(fs.statSync(target).ino, replacementStat.ino);
+      }
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rollback restores a same-byte replacement captured between validation and rename', async () => {
+  const root = fs.mkdtempSync(path.join(process.cwd(), 'test-tx-created-capture-race-'));
+  const target = path.join(root, 'created.txt');
+  const displaced = path.join(root, 'displaced-owned-file.txt');
+  const replacement = path.join(root, 'same-byte-replacement.txt');
+  const expected = 'expected creation bytes\n';
+  const tx = await WorkspaceTransactionManager.beginBatch([target]);
+  try {
+    fs.writeFileSync(target, expected);
+    const original = fs.statSync(target);
+    WorkspaceTransactionManager.recordCreatedFileOwnership(tx, target, {
+      device: original.dev.toString(),
+      inode: original.ino.toString(),
+      expectedContent: expected,
+    });
+    fs.writeFileSync(replacement, expected);
+    const replacementStat = fs.statSync(replacement);
+    assert.notEqual(replacementStat.ino, original.ino);
+
+    const originalRename = fs.promises.rename;
+    let injected = false;
+    fs.promises.rename = async (source, destination) => {
+      if (!injected && source === target && String(destination).includes('.babel-created-rollback-')) {
+        injected = true;
+        fs.renameSync(target, displaced);
+        fs.renameSync(replacement, target);
+      }
+      return originalRename(source, destination);
+    };
+    let result;
+    try {
+      result = await WorkspaceTransactionManager.undoLastMutationBatch(tx);
+    } finally {
+      fs.promises.rename = originalRename;
+    }
+
+    assert.equal(injected, true);
+    assert.equal(result.verification, false);
+    assert.match(result.conflicts[0] ?? '', /during capture/);
+    assert.equal(fs.readFileSync(target, 'utf8'), expected);
+    assert.equal(fs.statSync(target).dev, replacementStat.dev);
+    assert.equal(fs.statSync(target).ino, replacementStat.ino);
+    assert.equal(fs.readFileSync(displaced, 'utf8'), expected);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
