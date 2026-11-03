@@ -131,8 +131,6 @@ try {
   command(appimageTool, ['--no-appstream', '--runtime-file', appimageRuntime,
     '--mksquashfs-opt', '-reproducible',
     '--mksquashfs-opt', '-processors', '--mksquashfs-opt', '1',
-    '--mksquashfs-opt', '-mkfs-time', '--mksquashfs-opt', '0',
-    '--mksquashfs-opt', '-all-time', '--mksquashfs-opt', '0',
     '--mksquashfs-opt', '-no-xattrs',
     bundle, appImage], output, {
     capture: false,
