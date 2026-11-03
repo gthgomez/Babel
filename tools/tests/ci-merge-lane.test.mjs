@@ -10,6 +10,7 @@ import {
   trustedPathForcesFullLane,
   installerSensitiveChange,
   classifyFromBaseSha,
+  linuxDesktopPackageChange,
 } from "../ci-merge-lane.mjs";
 
 test("trusted base materialization preserves policy and ignores candidate policy edits", async () => {
@@ -147,4 +148,13 @@ test("rename detection cannot hide runtime paths moved into docs prefixes", () =
   assert.deepEqual(withoutRename, ["babel-cli/src/agent.ts", "docs/agent.ts"]);
   const lane = classifyMergeLane({ event: "pull_request", files: withoutRename });
   assert.equal(lane.full, true);
+});
+
+test("linux desktop packaging is a path filter and does not change the merge lane", () => {
+  assert.equal(linuxDesktopPackageChange(["README.md"]), false);
+  assert.equal(linuxDesktopPackageChange(["babel-cli/src/agent.ts"]), false);
+  assert.equal(linuxDesktopPackageChange(["babel-desktop/src/app.mjs"]), true);
+  assert.equal(linuxDesktopPackageChange(["babel-cli/scripts/research-v2-canvas-platform-binding.mjs"]), true);
+  assert.equal(linuxDesktopPackageChange([".github/workflows/release.yml"]), true);
+  assert.deepEqual(classifyMergeLane({ event: "pull_request", files: ["babel-desktop/src/app.mjs"] }), { full: true, installer: false });
 });

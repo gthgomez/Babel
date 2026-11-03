@@ -3,7 +3,7 @@ import {spawn} from 'node:child_process';
 import {lstatSync,readFileSync} from 'node:fs';
 import {dirname, isAbsolute, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {bundledEnvironment} from '../app/native/runtime.mjs';
+import {bundledEnvironment, bundledNodeFileName, defaultDesktopProfile} from '../app/native/runtime.mjs';
 import {resolvePackagedEngine} from '../app/native/engine-manager.mjs';
 import {applyCliCredentialScope} from '../app/native/childEnv.mjs';
 import {parsePreferences} from '../app/native/security.mjs';
@@ -13,11 +13,11 @@ const runtime = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 const separator = args.indexOf('--');
 const profileArg = args.findIndex((arg,index) => (separator<0||index<separator) && arg.startsWith('--profile-dir='));
-const profile = profileArg < 0 ? join(process.env.APPDATA || process.env.USERPROFILE, 'babel-north-star-desktop') : args.splice(profileArg, 1)[0].slice('--profile-dir='.length);
+const profile = profileArg < 0 ? defaultDesktopProfile(process.env, process.platform) : args.splice(profileArg, 1)[0].slice('--profile-dir='.length);
 if (!isAbsolute(profile)) throw new Error('--profile-dir must be an absolute directory');
 
 const bundledEntry = join(runtime, 'cli', 'dist', 'index.js');
-const nodeExe = join(runtime, 'node', 'node.exe');
+const nodeExe = join(runtime, 'node', bundledNodeFileName(process.platform));
 const resourcesPath = dirname(runtime);
 const bundled = {
   path: bundledEntry,

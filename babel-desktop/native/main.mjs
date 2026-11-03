@@ -15,7 +15,7 @@ import {ProjectAuthority,inspectProjectIdentity} from './project-authority.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
-import {applySandboxEnvironment,configureSandboxImage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
+import {applySandboxEnvironment,configureSandboxImage,packagedSandboxPrerequisiteMessage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
 import {configureCredentialProtection,hasProviderCredential,saveProviderCredential,providerCredentialStatus,removeProviderCredential,migrateProviderCredential} from './credentials.mjs';
 import {saveDesktopProviderRoute} from './provider-route-save.mjs';
 import {assertCredentialEngineCapability} from './credential-engine.mjs';
@@ -161,6 +161,7 @@ async function getInfo(){
     officialCliReady:official.ready,
     runtimeSource:!app.isPackaged&&preferences.cliEntry?'advanced':official.ready?official.source:'missing',
     packaged:app.isPackaged,
+    platform:process.platform,
     diagnostics,
     engine,
     sandbox:{image:runtimeEnvironment().BABEL_BENCHMARK_DOCKER_IMAGE??null,reference:preferences.sandboxImageReference??runtimeEnvironment().BABEL_BENCHMARK_DOCKER_IMAGE??null,recommended:RECOMMENDED_IMAGE},
@@ -569,13 +570,13 @@ async function start(){
     try{
     if(!request||typeof request!=='object'||typeof request.runId!=='string'||!/^[\w-]{1,100}$/.test(request.runId))throw new Error('Invalid run request');
     const cliEntry=activeCliEntry();
-    if(!cliEntry)throw new Error(app.isPackaged?'Bundled CLI or Node is missing. Extract the complete ZIP again.':'The official Babel CLI is not built. Build babel-cli/dist/index.js, or choose another entry from Advanced.');
+    if(!cliEntry)throw new Error(app.isPackaged?(process.platform==='win32'?'Bundled CLI or Node is missing. Extract the complete ZIP again.':'Bundled CLI or Node is missing. Download the complete AppImage again.'):'The official Babel CLI is not built. Build babel-cli/dist/index.js, or choose another entry from Advanced.');
     const conversationOnly=!preferences.projectRoot;
     if(!conversationOnly)await projectAuthority.admit(preferences.projectRoot);
     if(!(await getInfo()).ready)throw new Error('The selected Babel CLI or project is no longer available');
     if(app.isPackaged&&!conversationOnly){
       diagnostics=await diagnoseRuntime(officialRuntime(),{env:await ownedCliEnvironment(),cwd:app.getPath('userData')});
-      if(!diagnostics.ready)throw new Error('Execution prerequisites are missing or unverified. Open Setup, start Docker Desktop and prepare or validate a sandbox image, then recheck setup.');
+      if(!diagnostics.ready)throw new Error(packagedSandboxPrerequisiteMessage());
     }
     // Validate native-bound scope and route before spawning; no arbitrary flags.
     const route = readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR);
@@ -682,11 +683,16 @@ function updateTray(){
   ]));
 }
 function ensureTray(){
-  if(!tray||tray.isDestroyed()){
-    tray=new Tray(join(packageRoot,'assets','babel-mark.png'));
-    tray.on('click',showWindow);tray.on('balloon-click',showWindow);
+  try{
+    if(!tray||tray.isDestroyed()){
+      tray=new Tray(join(packageRoot,'assets','babel-mark.png'));
+      tray.on('click',showWindow);tray.on('balloon-click',showWindow);
+    }
+    updateTray();
+  }catch(error){
+    if(process.platform==='win32')throw error;
+    tray=null;
   }
-  updateTray();
 }
 function handleBabelPacket(packet){
   if(packet?.runId){

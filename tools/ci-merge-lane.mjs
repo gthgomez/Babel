@@ -59,6 +59,22 @@ export function trustedPathForcesFullLane(files) {
   return meaningful.some((file) => fileMatchesPrefix(file, TRUSTED_ALWAYS_FULL_PREFIXES));
 }
 
+/** Desktop packaging inputs. Pull requests touching these build the Linux AppImage. */
+export const LINUX_DESKTOP_PACKAGE_PATHS = [
+  "babel-desktop/",
+  "babel-cli/scripts/research-v2-canvas-platform-binding.mjs",
+  "babel-cli/scripts/research-v2-canvas-vendor-allowlist.mjs",
+  ".github/workflows/typecheck.yml",
+  ".github/workflows/release.yml",
+  "tools/resolve-release-tag.mjs",
+];
+
+export function linuxDesktopPackageChange(files) {
+  const meaningful = files.filter((file) => file && !file.endsWith("/"));
+  return meaningful.some((file) => LINUX_DESKTOP_PACKAGE_PATHS.some((entry) =>
+    entry.endsWith("/") ? file.startsWith(entry) : file === entry));
+}
+
 export function installerSensitiveChange(files) {
   const meaningful = files.filter((file) => file && !file.endsWith("/"));
   return meaningful.some((file) => fileMatchesPrefix(file, INSTALLER_SENSITIVE_PREFIXES));
@@ -136,7 +152,8 @@ async function main() {
       process.stderr.write("Trusted base classification unavailable; requiring full qualification\n");
     }
   }
-  const lines = [`full=${lane.full}`, `installer=${lane.installer}`];
+  const linuxDesktop = event === "pull_request" && linuxDesktopPackageChange(files);
+  const lines = [`full=${lane.full}`, `installer=${lane.installer}`, `linux_desktop=${linuxDesktop}`];
   process.stderr.write(`merge lane ${lines.join(" ")}\n`);
   process.stdout.write(`${lines.join("\n")}\n`);
 }

@@ -5,7 +5,7 @@ import {mkdtempSync, mkdirSync, writeFileSync, rmSync,readFileSync,lstatSync} fr
 import {dirname, join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Script} from 'node:vm';
-import {bundledEnvironment} from '../native/runtime.mjs';
+import {bundledEnvironment, bundledNodeFileName, defaultDesktopProfile} from '../native/runtime.mjs';
 import {applyProviderRoute,saveProviderRoute} from '../native/provider-routing.mjs';
 import {applyCliCredentialScope} from '../native/childEnv.mjs';
 import {parsePreferences} from '../native/security.mjs';
@@ -26,8 +26,8 @@ test('installed launcher pins both critic tiers and excludes inherited summarize
       const inherited={APPDATA:profile,BABEL_COMPACTION_API_KEY:'synthetic',BABEL_COMPACTION_API_BASE:'https://other.invalid',BABEL_DIFF_CRITIC_PRO_MODEL:'disabled-model'};
       let launch;
       new Script(source).runInNewContext({scriptUrl,dirname,join,isAbsolute,fileURLToPath,resolvePackagedEngine,
-        bundledEnvironment:userData=>bundledEnvironment(userData,inherited),applyProviderRoute,applyCliCredentialScope,applySandboxEnvironment,parsePreferences,lstatSync,readFileSync,
-        process:{argv:['node','launcher',`--profile-dir=${profile}`,'doctor'],env:inherited,cwd:()=>profile},
+        bundledEnvironment:userData=>bundledEnvironment(userData,inherited),bundledNodeFileName,defaultDesktopProfile,applyProviderRoute,applyCliCredentialScope,applySandboxEnvironment,parsePreferences,lstatSync,readFileSync,
+        process:{platform:'win32',argv:['node','launcher',`--profile-dir=${profile}`,'doctor'],env:inherited,cwd:()=>profile},
         spawn:(exe,args,options)=>{launch={exe,args,options};return {on(){}};},console});
       for(const key of ['BABEL_COMPACTION_MODEL','BABEL_DIFF_CRITIC_MODEL','BABEL_DIFF_CRITIC_PRO_MODEL'])assert.equal(launch.options.env[key],modelId);
       assert.equal(launch.options.env.BABEL_COMPACTION_API_KEY,undefined);
@@ -45,8 +45,8 @@ test('actual installed launcher consumes the same saved provider/default/private
     const source=readFileSync(new URL(scriptUrl),'utf8').replace(/^import .*;\r?\n/gm,'').replaceAll('import.meta.url','scriptUrl');
     let launch;
     new Script(source).runInNewContext({scriptUrl,dirname,join,isAbsolute,fileURLToPath,resolvePackagedEngine,
-      bundledEnvironment:userData=>bundledEnvironment(userData,{APPDATA:profile}),applyProviderRoute,applyCliCredentialScope,applySandboxEnvironment,parsePreferences,lstatSync,readFileSync,
-      process:{argv:['node','launcher',`--profile-dir=${profile}`,'doctor','--json'],env:{APPDATA:profile},cwd:()=>profile},
+      bundledEnvironment:userData=>bundledEnvironment(userData,{APPDATA:profile}),bundledNodeFileName,defaultDesktopProfile,applyProviderRoute,applyCliCredentialScope,applySandboxEnvironment,parsePreferences,lstatSync,readFileSync,
+      process:{platform:'win32',argv:['node','launcher',`--profile-dir=${profile}`,'doctor','--json'],env:{APPDATA:profile},cwd:()=>profile},
       spawn:(exe,args,options)=>{launch={exe,args,options};return {on(){}};},console});
     assert.equal(launch.options.env.BABEL_DESKTOP_PROVIDER,'opencode-go');
     assert.equal(launch.options.env.BABEL_DESKTOP_MODEL_ROUTE,'opencode-go/deepseek-v4.1-flash');
@@ -102,6 +102,28 @@ test('production launch selection keeps bundled entry when install is missing bu
   const selected = selectPackagedCliEntry({userData, resourcesPath: resources, bundled});
   assert.equal(selected, bundledCli);
   rmSync(userData, {recursive: true, force: true});
+});
+
+test('linux launcher selects the bundled node binary and the XDG profile', () => {
+  const home = mkdtempSync(join(tmpdir(), 'babel-linux-home-'));
+  const profile = join(home, '.config', 'babel-north-star-desktop');
+  try {
+    const scriptUrl = new URL('../scripts/cli-launch.mjs', import.meta.url).href;
+    const source = readFileSync(new URL(scriptUrl), 'utf8').replace(/^import .*;\r?\n/gm, '').replaceAll('import.meta.url', 'scriptUrl');
+    let launch;
+    new Script(source).runInNewContext({
+      scriptUrl, dirname, join, isAbsolute, fileURLToPath, resolvePackagedEngine,
+      bundledEnvironment: userData => bundledEnvironment(userData, {HOME: home}),
+      bundledNodeFileName, defaultDesktopProfile, applyProviderRoute, applyCliCredentialScope,
+      applySandboxEnvironment, parsePreferences, lstatSync, readFileSync,
+      process: {platform: 'linux', argv: ['node', 'launcher', 'doctor'], env: {HOME: home}, cwd: () => home},
+      spawn: (exe, args, options) => { launch = {exe, args, options}; return {on() {}}; },
+      console,
+    });
+    assert.equal(launch.exe.endsWith(join('node', 'node')), true);
+    assert.equal(launch.exe.endsWith('node.exe'), false);
+    assert.equal(launch.options.env.BABEL_CONFIG_DIR, join(profile, 'engine', 'config'));
+  } finally { rmSync(home, {recursive: true, force: true}); }
 });
 
 test('production launch selection does not select missing bundled runtime', () => {

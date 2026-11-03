@@ -8,6 +8,8 @@ import {join as joinPath} from 'node:path';
 import * as manager from '../native/engine-manager.mjs';
 import * as runtime from '../native/runtime.mjs';
 
+const nodeName = runtime.bundledNodeFileName();
+
 const SHA = 'b'.repeat(40);
 
 test('installed runtime never falls back to a developer checkout', async () => {
@@ -15,7 +17,7 @@ test('installed runtime never falls back to a developer checkout', async () => {
   try {
     const resourcesPath = join(root, 'resources');
     const cli = join(resourcesPath, 'babel-runtime', 'cli', 'dist', 'index.js');
-    const node = join(resourcesPath, 'babel-runtime', 'node', 'node.exe');
+    const node = join(resourcesPath, 'babel-runtime', 'node', nodeName);
     await mkdir(join(resourcesPath, 'babel-runtime', 'cli', 'dist'), {recursive:true});
     await mkdir(join(resourcesPath, 'babel-runtime', 'node'), {recursive:true});
     await writeFile(cli, '');
@@ -37,7 +39,7 @@ test('installed active build resolves ready through the production runtime entry
   try {
     const resourcesPath = join(root, 'resources');
     const bundledCli = join(resourcesPath, 'babel-runtime', 'cli', 'dist', 'index.js');
-    const node = join(resourcesPath, 'babel-runtime', 'node', 'node.exe');
+    const node = join(resourcesPath, 'babel-runtime', 'node', nodeName);
     await mkdir(join(resourcesPath, 'babel-runtime', 'cli', 'dist'), {recursive: true});
     await mkdir(join(resourcesPath, 'babel-runtime', 'node'), {recursive: true});
     await writeFile(bundledCli, 'bundled');
@@ -60,6 +62,17 @@ test('installed active build resolves ready through the production runtime entry
   } finally {
     await rm(root, {recursive: true, force: true});
   }
+});
+
+test('desktop profile and bundled node follow the host platform', () => {
+  assert.equal(runtime.bundledNodeFileName('win32'), 'node.exe');
+  assert.equal(runtime.bundledNodeFileName('linux'), 'node');
+  assert.equal(runtime.defaultDesktopProfile({APPDATA: 'C:\\profiles\\roaming'}, 'win32'), join('C:\\profiles\\roaming', 'babel-north-star-desktop'));
+  assert.equal(runtime.defaultDesktopProfile({USERPROFILE: 'C:\\profiles\\user'}, 'win32'), join('C:\\profiles\\user', 'babel-north-star-desktop'));
+  assert.equal(runtime.defaultDesktopProfile({HOME: '/srv/desktop'}, 'linux'), join('/srv/desktop', '.config', 'babel-north-star-desktop'));
+  assert.equal(runtime.defaultDesktopProfile({HOME: '/srv/desktop', XDG_CONFIG_HOME: '/srv/desktop/cfg'}, 'linux'), join('/srv/desktop/cfg', 'babel-north-star-desktop'));
+  assert.throws(() => runtime.defaultDesktopProfile({}, 'win32'), /APPDATA or USERPROFILE/);
+  assert.throws(() => runtime.defaultDesktopProfile({}, 'linux'), /HOME/);
 });
 
 test('bundled environment owns writable paths without importing developer configuration', () => {
