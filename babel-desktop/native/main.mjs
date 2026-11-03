@@ -13,9 +13,9 @@ import {listDirectory,readProjectFile} from './workspace.mjs';
 import {readProjectDiff} from './project-diff.mjs';
 import {ProjectAuthority,inspectProjectIdentity} from './project-authority.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
-import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
+import {resolveOfficialCli,bundledEnvironment,resolveDesktopProfile} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
-import {applySandboxEnvironment,configureSandboxImage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
+import {applySandboxEnvironment,configureSandboxImage,packagedSandboxPrerequisiteMessage,probeDockerInstallation,sandboxIpcFailureMessage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
 import {configureCredentialProtection,hasProviderCredential,saveProviderCredential,providerCredentialStatus,removeProviderCredential,migrateProviderCredential} from './credentials.mjs';
 import {saveDesktopProviderRoute} from './provider-route-save.mjs';
 import {assertCredentialEngineCapability} from './credential-engine.mjs';
@@ -46,6 +46,10 @@ if(profileArgument){
   const profile=profileArgument.slice('--profile-dir='.length);
   if(!isAbsolute(profile))throw new Error('--profile-dir must be an absolute directory');
   app.setPath('userData',profile);
+}else{
+  const resolved=resolveDesktopProfile(process.env,process.platform);
+  if(resolved.action==='failed')console.error(`[babel-desktop] Kept the previous settings folder because profile migration failed: ${resolved.error}`);
+  app.setPath('userData',resolved.profile);
 }
 const officialRuntime=()=>resolveOfficialCli(packageRoot,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath,userData:app.getPath('userData')});
 function bundledBuildRecord(){
@@ -70,6 +74,12 @@ async function ownedCliEnvironment(){
   return runtimeEnvironment({credentials:true});
 }
 let diagnostics=null;
+let dockerInstallationCache;
+async function linuxDockerInstallation(){
+  if(process.platform!=='linux')return null;
+  if(dockerInstallationCache===undefined)dockerInstallationCache=await probeDockerInstallation();
+  return dockerInstallationCache;
+}
 let window=null;
 let tray=null;
 let backgroundStatus='Babel is working';
@@ -161,6 +171,8 @@ async function getInfo(){
     officialCliReady:official.ready,
     runtimeSource:!app.isPackaged&&preferences.cliEntry?'advanced':official.ready?official.source:'missing',
     packaged:app.isPackaged,
+    platform:process.platform,
+    dockerInstallation:process.platform==='linux'?await linuxDockerInstallation():null,
     diagnostics,
     engine,
     sandbox:{image:runtimeEnvironment().BABEL_BENCHMARK_DOCKER_IMAGE??null,reference:preferences.sandboxImageReference??runtimeEnvironment().BABEL_BENCHMARK_DOCKER_IMAGE??null,recommended:RECOMMENDED_IMAGE},
@@ -275,14 +287,20 @@ async function start(){
     if(!draftCloseRequest||request?.token!==draftCloseRequest.token)return {accepted:false};
     draftCloseRequest.finish(request.saved===true);return {accepted:true};
   });
-  handle('babel:refresh-diagnostics',async()=>{assertIdle();diagnostics=null;return getInfo();});
+  handle('babel:refresh-diagnostics',async()=>{assertIdle();diagnostics=null;dockerInstallationCache=undefined;return getInfo();});
   handle('babel:configure-sandbox',async options=>withConnectionChange(async()=>{
     if(!options||typeof options!=='object')throw new Error('Invalid sandbox setup request.');
-    const configured=await configureSandboxImage({reference:options.reference,prepareRecommended:options.prepareRecommended??false});
+    let configured;
+    try{configured=await configureSandboxImage({reference:options.reference,prepareRecommended:options.prepareRecommended??false});}
+    catch(error){
+      console.error(`[babel:configure-sandbox] ${error?.stack||error}`);
+      return {sandboxError:sandboxIpcFailureMessage(error)};
+    }
     const previous={sandboxImage:preferences.sandboxImage,sandboxImageReference:preferences.sandboxImageReference};
     Object.assign(preferences,configured);
     try{await savePreferences();}catch(error){Object.assign(preferences,previous);throw error;}
     diagnostics=null;
+    dockerInstallationCache=undefined;
     return getInfo();
   }));
   handle('babel:check-cli-update',async()=>{
@@ -569,13 +587,13 @@ async function start(){
     try{
     if(!request||typeof request!=='object'||typeof request.runId!=='string'||!/^[\w-]{1,100}$/.test(request.runId))throw new Error('Invalid run request');
     const cliEntry=activeCliEntry();
-    if(!cliEntry)throw new Error(app.isPackaged?'Bundled CLI or Node is missing. Extract the complete ZIP again.':'The official Babel CLI is not built. Build babel-cli/dist/index.js, or choose another entry from Advanced.');
+    if(!cliEntry)throw new Error(app.isPackaged?(process.platform==='win32'?'Bundled CLI or Node is missing. Extract the complete ZIP again.':'Bundled CLI or Node is missing. Download the complete AppImage again.'):'The official Babel CLI is not built. Build babel-cli/dist/index.js, or choose another entry from Advanced.');
     const conversationOnly=!preferences.projectRoot;
     if(!conversationOnly)await projectAuthority.admit(preferences.projectRoot);
     if(!(await getInfo()).ready)throw new Error('The selected Babel CLI or project is no longer available');
     if(app.isPackaged&&!conversationOnly){
       diagnostics=await diagnoseRuntime(officialRuntime(),{env:await ownedCliEnvironment(),cwd:app.getPath('userData')});
-      if(!diagnostics.ready)throw new Error('Execution prerequisites are missing or unverified. Open Setup, start Docker Desktop and prepare or validate a sandbox image, then recheck setup.');
+      if(!diagnostics.ready)throw new Error(packagedSandboxPrerequisiteMessage());
     }
     // Validate native-bound scope and route before spawning; no arbitrary flags.
     const route = readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR);
@@ -682,11 +700,16 @@ function updateTray(){
   ]));
 }
 function ensureTray(){
-  if(!tray||tray.isDestroyed()){
-    tray=new Tray(join(packageRoot,'assets','babel-mark.png'));
-    tray.on('click',showWindow);tray.on('balloon-click',showWindow);
+  try{
+    if(!tray||tray.isDestroyed()){
+      tray=new Tray(join(packageRoot,'assets','babel-mark.png'));
+      tray.on('click',showWindow);tray.on('balloon-click',showWindow);
+    }
+    updateTray();
+  }catch(error){
+    if(process.platform==='win32')throw error;
+    tray=null;
   }
-  updateTray();
 }
 function handleBabelPacket(packet){
   if(packet?.runId){

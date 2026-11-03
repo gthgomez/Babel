@@ -21,6 +21,22 @@ test('only an explicit native conversation binding removes project prerequisites
  assert.equal(isConversationOnlyConnection({projectRoot:null,projectAuthority:{scope:'conversation',trusted:false,identity:null}}),true);
 });
 
+test('linux setup names a missing Docker engine and Windows conversation copy stays unchanged', async () => {
+  const {setupDockerLabel, runtimeProviderLabel, runtimeDockerLabel, runtimeReadinessLabel, composerSendBlockMessage} = await load();
+  assert.equal(setupDockerLabel({platform:'win32', conversationOnly:true, docker:'unknown'}), 'Not required for conversation');
+  assert.equal(setupDockerLabel({platform:'win32', conversationOnly:false, docker:'unavailable'}), 'Start Docker Desktop for project tools');
+  assert.match(setupDockerLabel({platform:'linux', conversationOnly:true, dockerInstallation:'missing'}), /Not installed\. Install Docker Engine/);
+  assert.equal(setupDockerLabel({platform:'linux', dockerInstallation:'running'}), 'Running');
+  assert.equal(runtimeProviderLabel({platform:'linux', providerConfigured:false, reported:'unknown'}), 'Not selected');
+  assert.equal(runtimeProviderLabel({platform:'win32', providerConfigured:false, reported:'unknown'}), 'unknown');
+  assert.equal(runtimeDockerLabel({platform:'linux', dockerInstallation:'missing'}), 'Not installed');
+  assert.equal(runtimeDockerLabel({platform:'win32', docker:'unknown'}), 'unknown');
+  assert.equal(runtimeReadinessLabel({platform:'linux', providerConfigured:false, engineReady:true}), 'Not ready');
+  assert.equal(runtimeReadinessLabel({platform:'win32', providerConfigured:false, engineReady:true}), 'Ready');
+  assert.equal(composerSendBlockMessage({platform:'linux', providerConfigured:false}), 'Choose a model provider first.');
+  assert.equal(composerSendBlockMessage({platform:'win32', providerConfigured:false}), '');
+});
+
 test('HTML renderer escapes untrusted model content', async () => {
   const { escapeHtml } = await load();
   assert.equal(typeof escapeHtml, 'function', 'escapeHtml must exist');

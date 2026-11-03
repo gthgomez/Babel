@@ -42,7 +42,7 @@ function readGitHub(endpoint) {
 }
 
 /** Verify exactly one BUILD record and freeze a path-free release evidence record. */
-export function verifyReleaseBuild({ directory, identity }) {
+export function verifyReleaseBuild({ directory, identity, platform = 'win32-x64' }) {
   function find(dir) {
     return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
       const path = resolve(dir, entry.name)
@@ -55,10 +55,11 @@ export function verifyReleaseBuild({ directory, identity }) {
   assert.equal(build.sourceSha, identity.sourceSha, 'BUILD source must match the frozen tag commit')
   assert.equal(build.version, identity.version, 'BUILD version must match the exact tag')
   assert.equal(build.signed, false)
-  assert.equal(build.platform, 'win32-x64')
-  const artifacts = readdirSync(directory).filter(name => /\.(zip|tgz)$/.test(name)).sort().map(name => ({ name,
+  assert.equal(build.platform, platform)
+  const primary = platform === 'linux-x64' ? '.AppImage' : '.zip'
+  const artifacts = readdirSync(directory).filter(name => name.endsWith(primary) || name.endsWith('.tgz')).sort().map(name => ({ name,
     sha256: createHash('sha256').update(readFileSync(resolve(directory, name))).digest('hex') }))
-  assert.equal(artifacts.filter(file => file.name.endsWith('.zip')).length, 1, 'Portable qualification requires exactly one archive')
+  assert.equal(artifacts.filter(file => file.name.endsWith(primary)).length, 1, 'Portable qualification requires exactly one archive')
   const cli = artifacts.filter(file => file.name.endsWith('.tgz'))
   assert.equal(cli.length, 1, 'Portable qualification requires exactly one CLI archive')
   assert.equal(cli[0].sha256, build.cliArchiveSha256, 'BUILD CLI archive digest must match distributed bytes')
@@ -67,11 +68,11 @@ export function verifyReleaseBuild({ directory, identity }) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const { values } = parseArgs({ options: Object.fromEntries(['repository', 'tag', 'expect-object', 'expect-source', 'build-directory', 'identity-out'].map(key => [key, { type: 'string' }])) })
+    const { values } = parseArgs({ options: Object.fromEntries(['repository', 'tag', 'expect-object', 'expect-source', 'build-directory', 'identity-out', 'platform'].map(key => [key, { type: 'string' }])) })
     const identity = resolveReleaseTag({ repository: values.repository, tag: values.tag, read: readGitHub,
       expectedTagObjectSha: values['expect-object'], expectedSourceSha: values['expect-source'] })
     if (values['build-directory']) {
-      const evidence = verifyReleaseBuild({ directory: values['build-directory'], identity })
+      const evidence = verifyReleaseBuild({ directory: values['build-directory'], identity, platform: values.platform || 'win32-x64' })
       Object.assign(evidence, { workflowSha: process.env.RELEASE_WORKFLOW_SHA, runId: process.env.GITHUB_RUN_ID })
       writeFileSync(resolve(values['build-directory'], 'release-evidence.json'), JSON.stringify(evidence, null, 2) + '\n')
     }

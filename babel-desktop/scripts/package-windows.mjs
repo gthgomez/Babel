@@ -49,6 +49,7 @@ renameSync(join(bundle,'electron.exe'), join(bundle,'Babel Desktop.exe'));
 const app = join(bundle, 'resources', 'app');
 mkdirSync(app, {recursive:true});
 for (const name of ['native','src','dist','assets','LICENSE','NOTICE']) cpSync(join(desktop,name), join(app,name), {recursive:true});
+// Keep this Electron app id. Settings are babel-desktop via setPath('userData'), not this name.
 writeFileSync(join(app,'package.json'), JSON.stringify({name:'babel-north-star-desktop',version,main:'native/main.mjs',type:'module',private:true},null,2));
 assertAppImportsResolve(app);
 const runtime = join(bundle,'resources','babel-runtime');

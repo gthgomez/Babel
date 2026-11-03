@@ -1,8 +1,64 @@
 import { existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {resolvePackagedEngine} from './engine-manager.mjs';
+import {DESKTOP_PROFILE_DIRECTORY, LEGACY_DESKTOP_PROFILE_DIRECTORY, migrateDesktopProfile} from './profile-migration.mjs';
 
 export const OFFICIAL_CLI_LABEL = 'babel-cli/dist/index.js';
+export {DESKTOP_PROFILE_DIRECTORY, LEGACY_DESKTOP_PROFILE_DIRECTORY};
+
+/** Packaged Node file name. Windows builds ship node.exe; Linux builds ship node. */
+export function bundledNodeFileName(platform = process.platform) {
+  return platform === 'win32' ? 'node.exe' : 'node';
+}
+
+/**
+ * Parent of the Desktop settings directory.
+ * Windows: %APPDATA% (USERPROFILE fallback). Linux: $XDG_CONFIG_HOME or ~/.config.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [platform]
+ * @returns {string}
+ */
+export function desktopProfileParent(env = process.env, platform = process.platform) {
+  if (platform === 'win32') {
+    const base = env.APPDATA || env.USERPROFILE;
+    if (!base) throw new Error('Windows Desktop profile requires APPDATA or USERPROFILE');
+    return base;
+  }
+  if (!env.HOME) throw new Error('Desktop profile requires HOME');
+  return env.XDG_CONFIG_HOME || join(env.HOME, '.config');
+}
+
+/**
+ * Settings directory used by this version. Electron's package name stays the
+ * historical app id; callers set userData to this path explicitly.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [platform]
+ * @returns {string}
+ */
+export function defaultDesktopProfile(env = process.env, platform = process.platform) {
+  return join(desktopProfileParent(env, platform), DESKTOP_PROFILE_DIRECTORY);
+}
+
+/** Previous settings directory, kept after a verified copy. */
+export function legacyDesktopProfile(env = process.env, platform = process.platform) {
+  return join(desktopProfileParent(env, platform), LEGACY_DESKTOP_PROFILE_DIRECTORY);
+}
+
+/**
+ * Settings directory to open. A failed copy keeps the old directory so
+ * existing settings remain readable.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [platform]
+ * @returns {{profile: string, action: string, error?: string, filesCopied?: number, filesKept?: number}}
+ */
+export function resolveDesktopProfile(env = process.env, platform = process.platform) {
+  const parent = desktopProfileParent(env, platform);
+  try {
+    return migrateDesktopProfile(parent);
+  } catch (error) {
+    return {profile: join(parent, LEGACY_DESKTOP_PROFILE_DIRECTORY), action: 'failed', error: error instanceof Error ? error.message : String(error)};
+  }
+}
 
 /** Bundled fallback runtime inside a packaged Desktop install. */
 export function resolveBundledCli(packageRoot, {resourcesPath, executable = process.execPath} = {}) {
@@ -10,7 +66,7 @@ export function resolveBundledCli(packageRoot, {resourcesPath, executable = proc
     throw new TypeError('packageRoot is required');
   }
   const path = resolve(resourcesPath, 'babel-runtime', 'cli', 'dist', 'index.js');
-  const node = resolve(resourcesPath, 'babel-runtime', 'node', 'node.exe');
+  const node = resolve(resourcesPath, 'babel-runtime', 'node', bundledNodeFileName());
   const isFile = value => existsSync(value) && statSync(value).isFile();
   return {
     path,

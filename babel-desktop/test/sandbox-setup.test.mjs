@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {applySandboxEnvironment,configureSandboxImage,RECOMMENDED_IMAGE,validateSandboxImageReference} from '../native/sandbox-setup.mjs';
+import {applySandboxEnvironment,configureSandboxImage,packagedSandboxPrerequisiteMessage,RECOMMENDED_IMAGE,sandboxArchitectureMessage,sandboxHostFailureMessage,validateSandboxImageReference} from '../native/sandbox-setup.mjs';
 import {parsePreferences} from '../native/security.mjs';
 
 const id=`sha256:${'a'.repeat(64)}`;
@@ -66,6 +66,19 @@ test('saved configuration pins the exact inspected image for Desktop and CLI env
   assert.equal(applySandboxEnvironment(env,preferences),env);
   assert.equal(env.BABEL_BENCHMARK_DOCKER_IMAGE,id);
   assert.equal(parsePreferences({sandboxImage:'--unsafe'}).sandboxImage,null);
+});
+
+test('windows sandbox failures keep Docker Desktop wording and linux names the engine', async () => {
+  const missing = Object.assign(new Error('spawn docker ENOENT'), {code: 'ENOENT'});
+  assert.equal(sandboxHostFailureMessage('pull', missing, 'win32'), 'Sandbox download failed or timed out. Start Docker Desktop with Linux containers, then retry preparation.');
+  assert.equal(sandboxHostFailureMessage('inspect', missing, 'win32'), 'Sandbox image is not available locally. Start Docker Desktop, then prepare the recommended image or select an existing image.');
+  assert.equal(sandboxArchitectureMessage('win32'), 'Choose a Linux amd64 Docker image for this Windows x64 application.');
+  assert.equal(packagedSandboxPrerequisiteMessage('win32'), 'Execution prerequisites are missing or unverified. Open Setup, start Docker Desktop and prepare or validate a sandbox image, then recheck setup.');
+  assert.match(sandboxHostFailureMessage('pull', missing, 'linux'), /Install Docker Engine, start it, and choose Prepare recommended image again/);
+  assert.match(sandboxHostFailureMessage('inspect', new Error('down'), 'linux'), /Start the Docker engine/);
+  assert.match(sandboxArchitectureMessage('linux'), /linux\/amd64 container/);
+  await assert.rejects(() => configureSandboxImage({prepareRecommended: true, platform: 'linux', execute: async () => { throw missing; }}), /Install Docker Engine/);
+  await assert.rejects(() => configureSandboxImage({reference: 'custom:v1', platform: 'win32', execute: async () => { throw missing; }}), /Start Docker Desktop, then prepare/);
 });
 
 test('a failed or timed-out preparation probe cleans up only its own container',async()=>{

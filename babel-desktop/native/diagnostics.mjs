@@ -11,9 +11,16 @@ export function prerequisiteStatus(report) {
     sandboxImage:good('sandbox_image') ? 'available' : 'unavailable'};
 }
 
+/** Failure text for the doctor child. Windows keeps the Babel Harness.cmd name. */
+export function runtimeDiagnosticsFailureMessage({killed = false, platform = process.platform} = {}) {
+  if (killed) return 'Runtime diagnostics timed out. Retry after checking the installation and Docker.';
+  const launcher = platform === 'win32' ? 'Babel Harness.cmd' : 'babel-harness';
+  return `Runtime diagnostics failed. Run ${launcher} doctor --json for local details.`;
+}
+
 /** Read-only doctor: bounded execution, no inference, no raw stdout/stderr in the UI. */
 export async function diagnoseRuntime(runtime, {env, cwd}) {
-  if (!runtime.ready) return {...prerequisiteStatus(null), error:'Bundled runtime files are missing. Extract the complete ZIP again.'};
+  if (!runtime.ready) return {...prerequisiteStatus(null), error:process.platform==='win32'?'Bundled runtime files are missing. Extract the complete ZIP again.':'Bundled runtime files are missing. Download the complete AppImage again.'};
   return new Promise(resolve => {
     execFile(runtime.executable, [runtime.path, 'doctor', '--json'], {
       cwd, env, windowsHide:true, timeout:30000, maxBuffer:256 * 1024,
@@ -23,7 +30,7 @@ export async function diagnoseRuntime(runtime, {env, cwd}) {
         if (report.kind !== 'installed_user') throw new Error('Unexpected doctor');
         resolve(prerequisiteStatus(report));
       } catch {
-        resolve({...prerequisiteStatus(null), error:error?.killed ? 'Runtime diagnostics timed out. Retry after checking the installation and Docker.' : 'Runtime diagnostics failed. Run Babel Harness.cmd doctor --json for local details.'});
+        resolve({...prerequisiteStatus(null), error:runtimeDiagnosticsFailureMessage({killed:Boolean(error?.killed)})});
       }
     });
   });

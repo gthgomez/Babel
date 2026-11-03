@@ -3,13 +3,13 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "21f370309179eeca0474304a3032e40fe965591ef8191ecaf24cddaac0bb3f3c",
+  "policy_bundle_id": "da64e2b784cea4181a616da04ff36d60676162316d681de6a8220b7461c3f21e",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
-    ".github/workflows/release.yml": "6d0c4591f8c57497c9c8a33d2d069219d9fc02d05cae18f63d271f5ca839a20d",
+    ".github/workflows/release.yml": "330d74ac8e3bfac879d12ca10ac893a41e9a53926711844371fb8c1341a5bf1d",
     ".github/workflows/trusted-control-plane.yml": "d042a42e7479537fcb12a72a27a1ebb9a3b95cb1be6b9c0cc221c8c396a7b6ff",
-    ".github/workflows/typecheck.yml": "95b0c7439f95decca11eaa9b15dae1cec2ce1e59648c9e0b5dcf6868170708fe",
+    ".github/workflows/typecheck.yml": "ba07cffd896f52bdd11ab207b5d252641e6e8c52a607a6fa71103c1f2a35b425",
     "AGENTS.md": "d8ac18573ddc1bc8f538d91adec66dfe078016beaa78ac54c612f8520e49fc34",
     "babel-cli/src/agent/autonomyEnforcement.ts": "942e1f789c54c7c8d6d8ffeb0dfe48974932bddc0ad2da989aa845b8baa92928",
     "babel-cli/src/authority/actionRequest.ts": "e17df5cebed675ebfff4bc512d280d0a0bd38fd2b968fc9f19e5a397deda8335",
@@ -158,6 +158,6 @@
     "tools/babel-pr-orchestrate.mts": "e2b8f541f807e5e7544534a3eb5804ec14395b05a6fc97a813c82269f7fc32a0",
     "tools/host-review-worker.mts": "751b80e69888ec098ff2e190bf487f1962bbb104ea87d7494b68e654009b336a",
     "tools/policy-integrity-manifest.mjs": "e72da24f86c587d0003305372b018d381ba118554f92e0a4f4be070bad0e172c",
-    "tools/resolve-release-tag.mjs": "9b5f769ed1b49c3f829c9a4e4b9a982803ead642180a3941559967bd0f4347e2"
+    "tools/resolve-release-tag.mjs": "6d43e1ef832bd1cf7308672151e873c1dee474ecf3b28801ca50dd959aa9d288"
   }
 }

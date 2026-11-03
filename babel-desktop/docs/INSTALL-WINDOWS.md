@@ -27,7 +27,7 @@ For diagnostics without a provider call, open Command Prompt in the extracted fo
 
 `Babel CLI.cmd` remains available as a compatibility alias for earlier preview instructions.
 
-By default Desktop stores UI preferences under `%APPDATA%\babel-north-star-desktop`, and CLI configuration/state/cache under its `engine` directory. Nothing is written back to bundled resources. Existing CLI profiles and saved sessions elsewhere are not imported. To use a separate profile, launch:
+Desktop stores UI preferences, provider settings, and chat history under `%APPDATA%\babel-desktop`. CLI configuration, state, and cache are in that folder's `engine` directory. Nothing is written back to bundled resources. The first launch after this change copies `%APPDATA%\babel-north-star-desktop` into `%APPDATA%\babel-desktop` when the new folder is missing those files, writes `profile-migration.json` only after the copy verifies, and leaves the old folder in place. Files already present in `%APPDATA%\babel-desktop` are not replaced. A failed copy keeps using the old folder. Existing CLI profiles outside this directory are not imported. To use a separate profile, launch:
 
 ```bat
 "Babel Desktop.exe" "--profile-dir=C:\Babel Profiles\Test One"

@@ -39,3 +39,9 @@ test('a healthy daemon cannot make an absent, failed or ambiguous sandbox image 
     assert.equal(result.sandboxImage,'unavailable');
   }
 });
+
+test('doctor failure names the platform launcher and keeps the Windows command', () => {
+  assert.equal(diagnostics.runtimeDiagnosticsFailureMessage({platform: 'win32'}), 'Runtime diagnostics failed. Run Babel Harness.cmd doctor --json for local details.');
+  assert.equal(diagnostics.runtimeDiagnosticsFailureMessage({platform: 'linux'}), 'Runtime diagnostics failed. Run babel-harness doctor --json for local details.');
+  assert.match(diagnostics.runtimeDiagnosticsFailureMessage({killed: true, platform: 'linux'}), /timed out/);
+});

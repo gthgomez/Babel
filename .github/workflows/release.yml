@@ -1,9 +1,10 @@
 name: Release
 
-# Builds the Windows portable bundle for a v* tag and opens a DRAFT GitHub
-# Release for owner review. Publishing the draft is a separate, deliberate
-# owner action (distribution authorization); this workflow never publishes.
-# Policy: docs/guides/RELEASE.md; artifact producer: babel-desktop/scripts/package-windows.mjs.
+# Builds the Windows portable bundle and the Linux AppImage for a v* tag,
+# then opens one DRAFT GitHub Release for owner review. Publishing the draft
+# is a separate, deliberate owner action; this workflow never publishes.
+# Policy: docs/guides/RELEASE.md. Producers: babel-desktop/scripts/package-windows.mjs
+# and babel-desktop/scripts/package-linux.mjs. npm publish is a different workflow.
 
 on:
   push:
@@ -27,10 +28,10 @@ jobs:
     name: Build Windows portable bundle
     runs-on: windows-latest
     timeout-minutes: 45
-    # contents: write is required solely to create the DRAFT release; the
-    # workflow never publishes (the owner publishes the reviewed draft).
-    permissions:
-      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      source_sha: ${{ steps.tag.outputs.source_sha }}
+      tag_object_sha: ${{ steps.tag.outputs.tag_object_sha }}
     steps:
       - name: Check out trusted workflow source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -200,18 +201,13 @@ jobs:
           node "$env:RUNNER_TEMP/resolve-release-tag.mjs" --repository "$env:GITHUB_REPOSITORY" --tag "$env:RELEASE_TAG" --expect-object "$env:RELEASE_OBJECT" --expect-source "$env:RELEASE_SOURCE"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Create draft GitHub release with artifacts
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+      - name: Upload Windows release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: "Babel ${{ steps.tag.outputs.tag }}"
-          draft: true
-          prerelease: false
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: release-dist/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: release-windows
+          path: release-dist/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload build evidence
         if: success()
@@ -222,3 +218,183 @@ jobs:
             ${{ runner.temp }}/release-out/release-evidence.json
           if-no-files-found: error
           retention-days: 14
+
+  build-linux:
+    name: Build Linux AppImage
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      source_sha: ${{ steps.tag.outputs.source_sha }}
+      tag_object_sha: ${{ steps.tag.outputs.tag_object_sha }}
+    steps:
+      - name: Check out trusted workflow source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Resolve exact annotated release tag before project execution
+        id: tag
+        env:
+          RAW_REF: ${{ inputs.tag || github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp tools/resolve-release-tag.mjs "$RUNNER_TEMP/resolve-release-tag.mjs"
+          node "$RUNNER_TEMP/resolve-release-tag.mjs" --repository "$GITHUB_REPOSITORY" --tag "$RAW_REF"
+      - name: Check out frozen tag commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ steps.tag.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js 24.13.1 (pinned runtime required by the packager)
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "24.13.1"
+      - name: Verify frozen source and package version before lifecycle code
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_OBJECT: ${{ steps.tag.outputs.tag_object_sha }}
+          RELEASE_SOURCE: ${{ steps.tag.outputs.source_sha }}
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE"
+          test "$(node -p "require('./babel-cli/package.json').version")" = "$RELEASE_VERSION"
+          node "$RUNNER_TEMP/resolve-release-tag.mjs" --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --expect-object "$RELEASE_OBJECT" --expect-source "$RELEASE_SOURCE"
+      - name: Install desktop dependencies
+        run: npm --prefix babel-desktop ci --ignore-scripts
+      - name: Install CLI dependencies
+        run: npm --prefix babel-cli ci
+      - name: Download pinned Linux archives
+        run: |
+          set -euo pipefail
+          cache="$RUNNER_TEMP/linux-desktop-cache"
+          mkdir -p "$cache"
+          curl -fsSL -o "$cache/node-v24.13.1-linux-x64.tar.xz" https://nodejs.org/dist/v24.13.1/node-v24.13.1-linux-x64.tar.xz
+          echo "30215f90ea3cd04dfbc06e762c021393fa173a1d392974298bbc871a8e461089  $cache/node-v24.13.1-linux-x64.tar.xz" | sha256sum -c -
+          curl -fsSL -o "$cache/electron-v44.5.1-linux-x64.zip" https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-linux-x64.zip
+          echo "5bcd217611d6843ececd6c9e9c1fcd1da3ab066c43d8b1a9e4b44689a1fba6f5  $cache/electron-v44.5.1-linux-x64.zip" | sha256sum -c -
+          curl -fsSL -o "$cache/appimagetool-x86_64.AppImage" https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $cache/appimagetool-x86_64.AppImage" | sha256sum -c -
+          chmod +x "$cache/appimagetool-x86_64.AppImage"
+          curl -fsSL -o "$cache/runtime-x86_64" https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          echo "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  $cache/runtime-x86_64" | sha256sum -c -
+      - name: Build the Linux AppImage
+        run: |
+          npm --prefix babel-desktop run package:linux -- \
+            --node-archive="$RUNNER_TEMP/linux-desktop-cache/node-v24.13.1-linux-x64.tar.xz" \
+            --electron-archive="$RUNNER_TEMP/linux-desktop-cache/electron-v44.5.1-linux-x64.zip" \
+            --appimage-tool="$RUNNER_TEMP/linux-desktop-cache/appimagetool-x86_64.AppImage" \
+            --runtime-archive="$RUNNER_TEMP/linux-desktop-cache/runtime-x86_64" \
+            --output="$RUNNER_TEMP/release-linux-out"
+      - name: Revalidate tag object and source before promotion
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_OBJECT: ${{ steps.tag.outputs.tag_object_sha }}
+          RELEASE_SOURCE: ${{ steps.tag.outputs.source_sha }}
+          RELEASE_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node "$RUNNER_TEMP/resolve-release-tag.mjs" --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --expect-object "$RELEASE_OBJECT" --expect-source "$RELEASE_SOURCE" --build-directory "$RUNNER_TEMP/release-linux-out" --platform=linux-x64
+      - name: Re-verify SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/release-linux-out"
+          test "$(grep -cve '^$' SHA256SUMS)" = "1"
+          sha256sum -c SHA256SUMS
+      - name: Stage Linux release files
+        run: |
+          set -euo pipefail
+          mkdir -p release-linux-dist
+          cp "$RUNNER_TEMP"/release-linux-out/*.AppImage release-linux-dist/
+          cp "$RUNNER_TEMP"/release-linux-out/*.build.json release-linux-dist/
+          cp "$RUNNER_TEMP"/release-linux-out/SHA256SUMS release-linux-dist/
+          cp "$RUNNER_TEMP"/release-linux-out/manifest.json release-linux-dist/
+          find release-linux-dist -maxdepth 1 -type f -printf 'staged: %f\n' | sort
+      - name: Upload Linux release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-linux
+          path: release-linux-dist/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Linux build evidence
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-linux-evidence
+          path: ${{ runner.temp }}/release-linux-out/release-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+
+  draft-release:
+    name: Open draft release
+    needs:
+      - build-portable
+      - build-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Check out trusted workflow source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Revalidate tag object and source before promotion
+        id: tag
+        env:
+          RAW_REF: ${{ inputs.tag || github.ref_name }}
+          WINDOWS_SOURCE: ${{ needs.build-portable.outputs.source_sha }}
+          LINUX_SOURCE: ${{ needs.build-linux.outputs.source_sha }}
+          WINDOWS_OBJECT: ${{ needs.build-portable.outputs.tag_object_sha }}
+          LINUX_OBJECT: ${{ needs.build-linux.outputs.tag_object_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$WINDOWS_SOURCE" = "$LINUX_SOURCE"
+          test "$WINDOWS_OBJECT" = "$LINUX_OBJECT"
+          node tools/resolve-release-tag.mjs --repository "$GITHUB_REPOSITORY" --tag "$RAW_REF" --expect-object "$WINDOWS_OBJECT" --expect-source "$WINDOWS_SOURCE"
+      - name: Download Windows release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-windows
+          path: release-windows
+      - name: Download Linux release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-linux
+          path: release-linux
+      - name: Combine checksums and stage the draft
+        run: |
+          set -euo pipefail
+          test -d release-windows
+          test -d release-linux
+          mkdir -p release-dist
+          cp release-windows/*.zip release-windows/*.tgz release-windows/manifest.json release-dist/
+          cp release-windows/*.exe release-windows/*.exe.sha256 release-windows/*.build.json release-dist/
+          cp release-linux/*.AppImage release-linux/*.build.json release-dist/
+          cp release-linux/manifest.json release-dist/manifest-linux-x64.json
+          {
+            grep -v '^$' release-windows/SHA256SUMS
+            grep -v '^$' release-linux/SHA256SUMS
+          } | sort -k2 > release-dist/SHA256SUMS
+          cd release-dist
+          sha256sum -c SHA256SUMS
+          find . -maxdepth 1 -type f -printf 'draft: %f\n' | sort
+      - name: Create draft GitHub release with artifacts
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: "Babel ${{ inputs.tag || github.ref_name }}"
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: release-dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
