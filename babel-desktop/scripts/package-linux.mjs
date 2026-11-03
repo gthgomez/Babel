@@ -2,13 +2,14 @@
 // Linux x64 AppImage builder. Mirrors package-windows.mjs: pinned official
 // Node and Electron archives, the same CLI pack, and a file inventory.
 // It does not build a .deb, sign the AppImage, or embed an update channel.
-import {chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readlinkSync, readdirSync, renameSync, statSync, writeFileSync} from 'node:fs';
+import {chmodSync, cpSync, existsSync, lutimesSync, mkdirSync, readFileSync, readlinkSync, readdirSync, renameSync, statSync, utimesSync, writeFileSync} from 'node:fs';
 import {basename, dirname, isAbsolute, join, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {homedir} from 'node:os';
 import {assertAppImportsResolve} from './lib/verify-app-imports.mjs';
+import {assertLinuxPackagingTools} from './lib/linux-package-preflight.mjs';
 import {installCanvasPlatformBinding} from '../../babel-cli/scripts/research-v2-canvas-platform-binding.mjs';
 import {isAllowlistedCanvasVendorNativeArtifact} from '../../babel-cli/scripts/research-v2-canvas-vendor-allowlist.mjs';
 
@@ -31,6 +32,14 @@ const appimageTool = resolve(option('appimage-tool') || '');
 const appimageRuntime = resolve(option('runtime-archive') || '');
 const output = resolve(option('output') || join(desktop, 'artifacts', 'linux'));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+try {
+  assertLinuxPackagingTools();
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
+// Clamp archive metadata so two builds from the same commit and pinned inputs match.
+process.env.SOURCE_DATE_EPOCH = '0';
 if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error('This Linux builder supports linux x64 only');
 if (process.versions.node !== nodeVersion) throw new Error(`Build with Node ${nodeVersion} for the pinned runtime`);
 if (!existsSync(archive) || sha(readFileSync(archive)) !== nodeArchiveSha) throw new Error('Provide --node-archive=<official node-v24.13.1-linux-x64.tar.xz>; checksum must match the pinned value');
@@ -117,11 +126,37 @@ const metadata = {
 writeFileSync(join(bundle, 'BUILD.json'), JSON.stringify(metadata, null, 2) + '\n');
 writeFileSync(join(output, `${bundleName}.build.json`), JSON.stringify(metadata, null, 2) + '\n');
 chmodSync(appimageTool, 0o755);
-command(appimageTool, ['--no-appstream', '--runtime-file', appimageRuntime, bundle, appImage], output, {
-  capture: false,
-  timeout: 600000,
-  env: {...process.env, ARCH: 'x86_64', APPIMAGE_EXTRACT_AND_RUN: '1'},
-});
+clampTimestamps(bundle);
+try {
+  command(appimageTool, ['--no-appstream', '--runtime-file', appimageRuntime,
+    '--mksquashfs-opt', '-reproducible',
+    '--mksquashfs-opt', '-processors', '--mksquashfs-opt', '1',
+    '--mksquashfs-opt', '-mkfs-time', '--mksquashfs-opt', '0',
+    '--mksquashfs-opt', '-all-time', '--mksquashfs-opt', '0',
+    '--mksquashfs-opt', '-no-xattrs',
+    bundle, appImage], output, {
+    capture: false,
+    timeout: 600000,
+    env: {...process.env, ARCH: 'x86_64', APPIMAGE_EXTRACT_AND_RUN: '1', SOURCE_DATE_EPOCH: '0'},
+  });
+} catch (error) {
+  const detail = String(error.stderr || error.stdout || error.message || '').split('\n').filter(Boolean).slice(-12).join('\n');
+  console.error(`AppImage packaging failed.\n${detail}`);
+  process.exit(1);
+}
+function clampTimestamps(dir) {
+  const stamp = new Date(0);
+  for (const item of readdirSync(dir, {withFileTypes: true})) {
+    const path = join(dir, item.name);
+    if (item.isSymbolicLink()) {
+      try { lutimesSync(path, stamp, stamp); } catch { /* Some filesystems reject link times. */ }
+      continue;
+    }
+    if (item.isDirectory()) clampTimestamps(path);
+    try { utimesSync(path, stamp, stamp); } catch { /* A refused timestamp must not hide a later checksum. */ }
+  }
+  try { utimesSync(dir, stamp, stamp); } catch { /* Root time is also clamped by mksquashfs -all-time. */ }
+}
 if (!existsSync(appImage)) throw new Error('appimagetool reported success but the AppImage is missing');
 chmodSync(appImage, 0o755);
 const files = [];

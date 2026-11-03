@@ -120,6 +120,11 @@ file inventory is attached as `manifest-linux-x64.json` so it does not replace
 the Windows `manifest.json`. The Setup.exe checksum stays in its `.exe.sha256`
 sidecar. The AppImage is unsigned and has no AppImage update channel. A `.deb`
 is not published. npm publish is unchanged and is still a separate workflow.
+The packager sets `SOURCE_DATE_EPOCH=0` and asks mksquashfs for one
+processor so a rebuild from the same commit and the same pinned archives
+can match. The `SHA256SUMS` file attached to the draft release is still
+the authority for the published bytes. Verify a download against that
+file. A checksum copied from another machine is not a substitute.
 
 ## Additional release automation (Future)
 

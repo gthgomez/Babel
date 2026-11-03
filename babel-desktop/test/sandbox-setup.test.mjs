@@ -74,10 +74,10 @@ test('windows sandbox failures keep Docker Desktop wording and linux names the e
   assert.equal(sandboxHostFailureMessage('inspect', missing, 'win32'), 'Sandbox image is not available locally. Start Docker Desktop, then prepare the recommended image or select an existing image.');
   assert.equal(sandboxArchitectureMessage('win32'), 'Choose a Linux amd64 Docker image for this Windows x64 application.');
   assert.equal(packagedSandboxPrerequisiteMessage('win32'), 'Execution prerequisites are missing or unverified. Open Setup, start Docker Desktop and prepare or validate a sandbox image, then recheck setup.');
-  assert.match(sandboxHostFailureMessage('pull', missing, 'linux'), /Docker was not found on PATH/);
+  assert.match(sandboxHostFailureMessage('pull', missing, 'linux'), /Install Docker Engine, start it, and choose Prepare recommended image again/);
   assert.match(sandboxHostFailureMessage('inspect', new Error('down'), 'linux'), /Start the Docker engine/);
   assert.match(sandboxArchitectureMessage('linux'), /linux\/amd64 container/);
-  await assert.rejects(() => configureSandboxImage({prepareRecommended: true, platform: 'linux', execute: async () => { throw missing; }}), /Docker was not found on PATH/);
+  await assert.rejects(() => configureSandboxImage({prepareRecommended: true, platform: 'linux', execute: async () => { throw missing; }}), /Install Docker Engine/);
   await assert.rejects(() => configureSandboxImage({reference: 'custom:v1', platform: 'win32', execute: async () => { throw missing; }}), /Start Docker Desktop, then prepare/);
 });
 

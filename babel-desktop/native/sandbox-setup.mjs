@@ -37,7 +37,7 @@ export function sandboxHostFailureMessage(kind, error, platform = process.platfo
       ? 'Sandbox download failed or timed out. Start Docker Desktop with Linux containers, then retry preparation.'
       : 'Sandbox image is not available locally. Start Docker Desktop, then prepare the recommended image or select an existing image.';
   }
-  if (error?.code === 'ENOENT') return 'Docker was not found on PATH. Install Docker Engine, start it, and retry preparation. Conversation still works without a sandbox image.';
+  if (error?.code === 'ENOENT') return 'Docker is not installed. Install Docker Engine, start it, and choose Prepare recommended image again.';
   return kind === 'pull'
     ? 'Sandbox download failed or timed out. Start the Docker engine and retry preparation.'
     : 'Sandbox image is not available locally. Start the Docker engine, then prepare the recommended image or select an existing image.';
@@ -55,6 +55,31 @@ export function packagedSandboxPrerequisiteMessage(platform = process.platform) 
   return platform === 'win32'
     ? 'Execution prerequisites are missing or unverified. Open Setup, start Docker Desktop and prepare or validate a sandbox image, then recheck setup.'
     : 'Execution prerequisites are missing or unverified. Open Setup, start the Docker engine and prepare or validate a sandbox image, then recheck setup.';
+}
+
+/** Dialog text for a failed setup. Uses the thrown message when it is already user-facing. */
+export function sandboxIpcFailureMessage(error, platform = process.platform) {
+  const message = typeof error?.message === 'string' ? error.message.split('\n')[0].trim() : '';
+  if (/^(?:Docker |Sandbox |Choose a Linux )/.test(message)) return message;
+  return platform === 'win32'
+    ? 'Sandbox setup failed. Start Docker Desktop and try again.'
+    : 'Sandbox setup failed. Install Docker Engine, start it, and try again.';
+}
+
+/**
+ * Linux setup asks whether the docker binary and daemon are present.
+ * `missing` means the command is not on PATH. `stopped` means the command
+ * exists but the daemon did not answer. `running` means the daemon answered.
+ * @param {Function} [execute]
+ * @returns {Promise<'missing'|'stopped'|'running'>}
+ */
+export async function probeDockerInstallation(execute = executeFile) {
+  try {
+    await execute('docker', ['version', '--format', '{{.Server.Version}}'], {shell:false, windowsHide:true, timeout:4000, maxBuffer:64 * 1024});
+    return 'running';
+  } catch (error) {
+    return error?.code === 'ENOENT' ? 'missing' : 'stopped';
+  }
 }
 
 /** Explicit preparation never runs project code, mounts files, or enables host fallback. */

@@ -15,7 +15,7 @@ import {ProjectAuthority,inspectProjectIdentity} from './project-authority.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
-import {applySandboxEnvironment,configureSandboxImage,packagedSandboxPrerequisiteMessage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
+import {applySandboxEnvironment,configureSandboxImage,packagedSandboxPrerequisiteMessage,probeDockerInstallation,sandboxIpcFailureMessage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
 import {configureCredentialProtection,hasProviderCredential,saveProviderCredential,providerCredentialStatus,removeProviderCredential,migrateProviderCredential} from './credentials.mjs';
 import {saveDesktopProviderRoute} from './provider-route-save.mjs';
 import {assertCredentialEngineCapability} from './credential-engine.mjs';
@@ -70,6 +70,12 @@ async function ownedCliEnvironment(){
   return runtimeEnvironment({credentials:true});
 }
 let diagnostics=null;
+let dockerInstallationCache;
+async function linuxDockerInstallation(){
+  if(process.platform!=='linux')return null;
+  if(dockerInstallationCache===undefined)dockerInstallationCache=await probeDockerInstallation();
+  return dockerInstallationCache;
+}
 let window=null;
 let tray=null;
 let backgroundStatus='Babel is working';
@@ -162,6 +168,7 @@ async function getInfo(){
     runtimeSource:!app.isPackaged&&preferences.cliEntry?'advanced':official.ready?official.source:'missing',
     packaged:app.isPackaged,
     platform:process.platform,
+    dockerInstallation:process.platform==='linux'?await linuxDockerInstallation():null,
     diagnostics,
     engine,
     sandbox:{image:runtimeEnvironment().BABEL_BENCHMARK_DOCKER_IMAGE??null,reference:preferences.sandboxImageReference??runtimeEnvironment().BABEL_BENCHMARK_DOCKER_IMAGE??null,recommended:RECOMMENDED_IMAGE},
@@ -276,14 +283,20 @@ async function start(){
     if(!draftCloseRequest||request?.token!==draftCloseRequest.token)return {accepted:false};
     draftCloseRequest.finish(request.saved===true);return {accepted:true};
   });
-  handle('babel:refresh-diagnostics',async()=>{assertIdle();diagnostics=null;return getInfo();});
+  handle('babel:refresh-diagnostics',async()=>{assertIdle();diagnostics=null;dockerInstallationCache=undefined;return getInfo();});
   handle('babel:configure-sandbox',async options=>withConnectionChange(async()=>{
     if(!options||typeof options!=='object')throw new Error('Invalid sandbox setup request.');
-    const configured=await configureSandboxImage({reference:options.reference,prepareRecommended:options.prepareRecommended??false});
+    let configured;
+    try{configured=await configureSandboxImage({reference:options.reference,prepareRecommended:options.prepareRecommended??false});}
+    catch(error){
+      console.error(`[babel:configure-sandbox] ${error?.stack||error}`);
+      return {sandboxError:sandboxIpcFailureMessage(error)};
+    }
     const previous={sandboxImage:preferences.sandboxImage,sandboxImageReference:preferences.sandboxImageReference};
     Object.assign(preferences,configured);
     try{await savePreferences();}catch(error){Object.assign(preferences,previous);throw error;}
     diagnostics=null;
+    dockerInstallationCache=undefined;
     return getInfo();
   }));
   handle('babel:check-cli-update',async()=>{

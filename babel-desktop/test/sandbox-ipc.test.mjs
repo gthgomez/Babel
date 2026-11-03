@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {isAppUrl,APP_URL} from '../native/security.mjs';
+import {sandboxIpcFailureMessage} from '../native/sandbox-setup.mjs';
 import {extractBusyBinding} from './main-busy-source.mjs';
 
 const source=readFileSync(new URL('../native/main.mjs',import.meta.url),'utf8');
@@ -15,6 +16,7 @@ function sandboxHandler(overrides={}){
     ipcMain:{handle:(_channel,callback)=>registered=callback},
     runner:null,remoteBridge:null,runAdmission:false,updateBusy:false,connectionChangeBusy:false,
     diagnostics:{ready:false},preferences:{sandboxImage:null,sandboxImageReference:null},
+    console:{error(){}},process:{platform:'linux'},sandboxIpcFailureMessage,
     configureSandboxImage:async()=>({sandboxImage:'sha256:'+'a'.repeat(64),sandboxImageReference:'custom:v1'}),
     savePreferences:async()=>{},getInfo:async()=>({ready:true}),...overrides,
   };
@@ -61,4 +63,16 @@ test('sandbox IPC restores persisted settings and releases admission after a wri
   assert.equal(preferences.sandboxImageReference,'previous:v1');
   assert.equal(handler.context.connectionChangeBusy,false);
   await assert.rejects(()=>handler.call(null),/Invalid sandbox setup request/);
+});
+
+test('sandbox IPC keeps a Docker failure in the dialog text and logs the stack',async()=>{
+  const logs=[];
+  const handler=sandboxHandler({
+    console:{error:(...parts)=>logs.push(parts.join(' '))},
+    configureSandboxImage:async()=>{const error=new Error('Docker is not installed. Install Docker Engine, start it, and choose Prepare recommended image again.');error.stack='Error: Docker is not installed\n    at probe';throw error;},
+  });
+  const result=await handler.call({prepareRecommended:true});
+  assert.match(result.sandboxError,/Install Docker Engine/);
+  assert.equal(result.sandboxError.includes('at probe'),false);
+  assert.match(logs.join('\n'),/at probe/);
 });

@@ -1,4 +1,4 @@
-import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus, modeUnavailableReason,isConversationOnlyConnection,hydrateArchivedMessage } from './core.mjs';
+import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus, modeUnavailableReason,isConversationOnlyConnection,hydrateArchivedMessage,setupDockerLabel,runtimeProviderLabel,runtimeDockerLabel,runtimeReadinessLabel,composerSendBlockMessage } from './core.mjs';
 import { icon } from './icons.mjs';
 const MODE_OPTIONS=[{id:'chat',label:'Chat',description:'Coding tasks'},{id:'plan',label:'Plan',description:'Read-only planning'},{id:'deep',label:'Deep',description:'Governed workflow'}];
 
@@ -167,10 +167,10 @@ function renderRuntime() {
     runtimeRow('CLI source', sourceText, source.dirty ? 'warn' : ''),
     runtimeRow('Engine origin', originLabels[engine.origin] ?? engine.origin ?? 'unknown'),
     runtimeRow('Execution profile', engine.executionProfile ?? 'unknown'),
-    runtimeRow('Provider', engine.readiness?.provider ?? 'unknown'),
-    runtimeRow('Docker', engine.readiness?.docker ?? 'unknown'),
+    runtimeRow('Provider', runtimeProviderLabel({platform:nativeInfo?.platform, providerConfigured:Boolean(configuredRoute), reported:engine.readiness?.provider})),
+    runtimeRow('Docker', runtimeDockerLabel({platform:nativeInfo?.platform, docker:engine.readiness?.docker, dockerInstallation:nativeInfo?.dockerInstallation})),
     runtimeRow('Sandbox image', engine.readiness?.sandboxImage ?? 'unknown'),
-    runtimeRow('Readiness', engine.readiness?.ready ? 'Ready' : 'Not ready'),
+    runtimeRow('Readiness', runtimeReadinessLabel({platform:nativeInfo?.platform, providerConfigured:Boolean(configuredRoute), engineReady:Boolean(engine.readiness?.ready)})),
     runtimeRow('Update channel', update.channel === 'preview' ? 'development build' : update.channel === 'stable' ? 'stable release' : (update.channel ?? 'not set')),
     runtimeRow('Update', runtimeUpdateText(update), update.state === 'available' ? 'warn' : ''),
     runtimeRow('Effective route', configuredRouteLabel || 'Not configured'),
@@ -360,7 +360,10 @@ $('#dialog').addEventListener('click',ev=>{if(ev.target === $('#dialog')) { cons
 
 function connectionDialog() {
   const d=nativeInfo?.diagnostics;
-  openDialog('BABEL SETUP',`<p>Choose a provider and model to chat. Select and trust a project when you need files or commands.</p>
+  const intro=nativeInfo?.platform==='linux'&&!configuredRoute
+    ? 'Choose a model provider first. Your message stays in the composer. Select and trust a project when you need files or commands.'
+    : 'Choose a provider and model to chat. Select and trust a project when you need files or commands.';
+  openDialog('BABEL SETUP',`<p>${intro}</p>
     ${runtimeRow('Harness',nativeInfo?.officialCliReady?'Available':'Connecting or unavailable')}
     ${runtimeRow('Project',nativeInfo?.projectName??'Not selected')}
     ${runtimeRow('Project path',nativeInfo?.projectRoot??'No project')}
@@ -368,7 +371,7 @@ function connectionDialog() {
     ${runtimeRow('Project access',isConversationOnlyConnection(nativeInfo)?'Conversation only':nativeInfo?.projectAuthority?.trusted?'Trusted':nativeInfo?.projectAuthority?.reason??'Unknown or not trusted')}
     ${nativeInfo?.projectRoot?`<div class="dialog-actions"><button class="button" data-action="${nativeInfo.projectAuthority?.trusted?'revoke-trust':'trust-project'}">${nativeInfo.projectAuthority?.trusted?'Revoke project trust':'Trust selected project'}</button></div>`:''}
     ${runtimeRow('Provider',configuredRouteLabel||'Not selected')}
-    ${runtimeRow('Docker',isConversationOnlyConnection(nativeInfo)?'Not required for conversation':d?.docker==='available'?'Running':nativeInfo?.platform==='linux'?'Start the Docker engine for project tools':'Start Docker Desktop for project tools')}
+    ${runtimeRow('Docker',setupDockerLabel({platform:nativeInfo?.platform,conversationOnly:isConversationOnlyConnection(nativeInfo),docker:d?.docker,dockerInstallation:nativeInfo?.dockerInstallation}))}
     ${runtimeRow('Sandbox',isConversationOnlyConnection(nativeInfo)?'Not required for conversation':d?.sandboxImage==='available'?'Verified':'Prepare an image for project tools')}
     <p class="fine-print">The recommended Linux image includes Git, Node 24 and npm. Preparing it downloads Docker image layers and may take several minutes. Other projects may need an image with their own test tools.</p>
     <div class="dialog-actions"><button class="button" data-action="prepare-sandbox" ${sandboxBusy?'disabled':''}>Prepare recommended image</button></div>
@@ -385,9 +388,10 @@ async function configureSandboxFromDialog(prepareRecommended){
   sandboxBusy=true;sandboxStatus=prepareRecommended?'Downloading and verifying the recommended image…':'Verifying the local image…';
   renderControls();connectionDialog();
   try{
-    nativeInfo=await native.configureSandbox(options);
-    connectionError='';sandboxStatus='Sandbox verified and saved. Desktop and the installed CLI use the same image.';
-  }catch(error){sandboxStatus=String(error?.message??(nativeInfo?.platform==='linux'?'Sandbox setup failed. Start the Docker engine and try again.':'Sandbox setup failed. Start Docker Desktop and try again.'));}
+    const result=await native.configureSandbox(options);
+    if(result?.sandboxError){sandboxStatus=result.sandboxError;}
+    else{nativeInfo=result;connectionError='';sandboxStatus='Sandbox verified and saved. Desktop and the installed CLI use the same image.';}
+  }catch(error){sandboxStatus=String(error?.message??(nativeInfo?.platform==='linux'?'Sandbox setup failed. Install Docker Engine, start it, and try again.':'Sandbox setup failed. Start Docker Desktop and try again.'));}
   finally{sandboxBusy=false;renderControls();connectionDialog();}
 }
 async function providerCredentialsDialog() {
@@ -672,7 +676,7 @@ async function sendMessage() {
   if(unavailableMode){toast(unavailableMode);return;}
   const input=$('#composer-input');const text=input.value.trim();
   if(!text||activeRun)return;
-  if(executionBlocked()){connectionDialog();return;}
+  if(executionBlocked()){const blocked=composerSendBlockMessage({platform:nativeInfo?.platform,providerConfigured:Boolean(configuredRoute)});if(blocked)toast(blocked);connectionDialog();return;}
   if(text.length>24000){toast('Please keep a single message under 24,000 characters.');return;}
   const session=activeSession();
   if(session.loadingLatestForSend)return;
@@ -685,7 +689,7 @@ async function sendMessage() {
     if(activeSession()!==session||activeRun)return;
     renderConversation();
     if(input.value.trim()!==text||selection.mode!==state.mode||selection.model!==state.model||selection.provider!==configuredRoute?.provider){toast('The draft or route changed while history loaded. Send again when ready.');return;}
-    if(executionBlocked()||modeBlockReason(state.mode,configuredRoute?.provider)){renderControls();connectionDialog();return;}
+    if(executionBlocked()||modeBlockReason(state.mode,configuredRoute?.provider)){const blocked=composerSendBlockMessage({platform:nativeInfo?.platform,providerConfigured:Boolean(configuredRoute)});if(blocked)toast(blocked);renderControls();connectionDialog();return;}
   }
   session.messages.push({role:'user',text});
   if(session.title==='New session'||session.title==='New read-only run') session.title=text.length>27?text.slice(0,27)+'...':text;

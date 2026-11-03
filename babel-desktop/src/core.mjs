@@ -8,6 +8,42 @@ export function hydrateArchivedMessage(message) {
     : [...(message.activity?.kind==='tools'?(message.assistantText?[{kind:'text',text:message.assistantText}]:[]):[{kind:'text',text:message.text}]),...tools.map(tool=>({kind:'tool',tool}))];
   return {...base,role:'assistant',status:message.activity?null:message.status??'unverified',tools,blocks};
 }
+/** Setup dialog Docker row. Windows conversation copy stays fixed. */
+export function setupDockerLabel({platform, conversationOnly, docker, dockerInstallation} = {}) {
+  if (platform === 'linux') {
+    if (docker === 'available' || dockerInstallation === 'running') return 'Running';
+    if (dockerInstallation === 'missing' || docker === 'unavailable') return 'Not installed. Install Docker Engine, start it, and choose Prepare recommended image again.';
+    if (dockerInstallation === 'stopped') return 'Docker is installed but not running. Start the Docker engine, then retry.';
+    return 'Not checked';
+  }
+  if (conversationOnly) return 'Not required for conversation';
+  if (docker === 'available') return 'Running';
+  return 'Start Docker Desktop for project tools';
+}
+
+/** Runtime panel labels. Windows keeps the raw readiness tokens. */
+export function runtimeProviderLabel({platform, providerConfigured, reported} = {}) {
+  if (platform === 'linux' && !providerConfigured) return 'Not selected';
+  return reported ?? 'unknown';
+}
+export function runtimeDockerLabel({platform, docker, dockerInstallation} = {}) {
+  if (platform !== 'linux') return docker ?? 'unknown';
+  if (docker === 'available' || dockerInstallation === 'running') return 'Running';
+  if (dockerInstallation === 'missing' || docker === 'unavailable') return 'Not installed';
+  if (dockerInstallation === 'stopped') return 'Not running';
+  return 'Not checked';
+}
+export function runtimeReadinessLabel({platform, providerConfigured, engineReady} = {}) {
+  if (platform === 'linux' && !providerConfigured) return 'Not ready';
+  return engineReady ? 'Ready' : 'Not ready';
+}
+
+/** Shown when Send is blocked. Empty on Windows so that path stays unchanged. */
+export function composerSendBlockMessage({platform, providerConfigured} = {}) {
+  if (platform === 'linux' && !providerConfigured) return 'Choose a model provider first.';
+  return '';
+}
+
 export function isConversationOnlyConnection(info) {
   return info?.projectRoot===null&&info?.projectAuthority?.scope==='conversation'&&info.projectAuthority.identity===null&&info.projectAuthority.trusted===false;
 }
