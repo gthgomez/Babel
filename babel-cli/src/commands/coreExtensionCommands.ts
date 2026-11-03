@@ -50,9 +50,9 @@ const checkpointCommand = program
       "after",
       `
 Examples:
-  $ babel checkpoint list --run latest
-  $ babel checkpoint inspect <checkpoint_id> --run <run_dir>
-  $ babel checkpoint restore <checkpoint_id> --run <run_dir> --json
+  $ babel-harness checkpoint list --run latest
+  $ babel-harness checkpoint inspect <checkpoint_id> --run <run_dir>
+  $ babel-harness checkpoint restore <checkpoint_id> --run <run_dir> --json
 `,
     );
 
@@ -230,10 +230,10 @@ const mcpCommand = program
       "after",
       `
 Examples:
-  $ babel mcp list
-  $ babel mcp add filesystem npx -y @modelcontextprotocol/server-filesystem C:/Workspace
-  $ babel mcp remove filesystem
-  $ babel mcp serve
+  $ babel-harness mcp list
+  $ babel-harness mcp add filesystem npx -y @modelcontextprotocol/server-filesystem C:/Workspace
+  $ babel-harness mcp remove filesystem
+  $ babel-harness mcp serve
 
 Notes:
   - Bare "babel mcp" is kept as a compatibility alias for "babel mcp serve".

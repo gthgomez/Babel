@@ -7,7 +7,7 @@ export class ProviderCredentialError extends Error {
   readonly envVar: string
 
   constructor(provider: ProviderId, envVar: string) {
-    super(`[provider:${provider}] ${envVar} is not set. Set it in the host environment or ${resolveRuntimePaths().isInstalled ? 'the user config .env shown by babel-agent setup' : 'babel-cli/.env'}.`)
+    super(`[provider:${provider}] ${envVar} is not set. Set it in the host environment or ${resolveRuntimePaths().isInstalled ? 'the user config .env shown by babel-harness setup' : 'babel-cli/.env'}.`)
     this.name = 'ProviderCredentialError'
     this.provider = provider
     this.envVar = envVar

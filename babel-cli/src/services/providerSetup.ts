@@ -2,8 +2,11 @@
 import { createInterface } from 'node:readline/promises'
 import { readUserSettings, updateUserSettings, resolveEffectiveSettings } from '../config/userSettings.js'
 import { promptForProviderCredential } from '../config/interactiveCredential.js'
+import { resolvePrivateCredentialEnvPath } from '../config/envBootstrap.js'
 import { connectionStatus, type SelectionSession } from './connectionSettings.js'
 import { getProviderSpec, isProviderId, listProviderSpecs } from '../runners/providerRegistry.js'
+import { CLI_COMMAND } from '../cli/commandName.js'
+import { formatManualProviderEnvExample } from '../cli/firstRunText.js'
 
 export interface SetupResult {
   state: 'setup_required' | 'configured_unverified' | 'action_required'
@@ -27,10 +30,14 @@ export async function runProviderSetup(options: {
 } = {}): Promise<SetupResult> {
   const env = options.env ?? process.env
   const write = options.write ?? (text => process.stderr.write(text))
+  const envFile = resolvePrivateCredentialEnvPath(env)
   write('\nBabel is a coding agent that can inspect your project, make requested changes, and verify the result using the model provider you choose.\n')
   write('Setup sends no model requests. Credentials stay in your private profile; preferences never contain API keys.\n')
+  write(`Private provider file: ${envFile}\n`)
   if (!(options.interactive ?? (process.stdin.isTTY && process.stderr.isTTY && !env['CI']))) {
-    write('Run babel-agent setup in a terminal for guided setup.\nOr use provider list, provider connect <provider> --model <exact-id>, then provider use <connection> --save user.\nUse settings set budgetUsd <amount|unlimited> to choose a budget.\n')
+    write(`${formatManualProviderEnvExample(envFile)}\n`)
+    write(`Or use provider list, provider connect <provider> --model <exact-id>, then provider use <connection> --save user.\n`)
+    write(`Use settings set budgetUsd <amount|unlimited> to choose a budget.\n`)
     return getSetupStatus(env)
   }
   let rl: ReturnType<typeof createInterface> | undefined
@@ -68,9 +75,9 @@ export async function runProviderSetup(options: {
     updateUserSettings({ connections: { [id]: updated }, setup: { step: 'credential', connection: id } }, { env })
     const variable = updated.apiKeyEnvVar ?? spec.credentialEnvVar
     if (connection.authentication !== 'none' && spec.requiresCredential && variable && !env[variable]?.trim()) {
-      write(`This connection uses ${variable}.\n`)
+      write(`This connection uses ${variable}. A masked prompt can store it in ${envFile} without printing the key.\n`)
       if (!/^(?:y|yes)$/i.test((await ask('Save a key to your private profile using masked entry? [y/N]: ')).trim())) {
-        write(`Set ${variable} in your environment, then resume setup.\n`)
+        write(`Set ${variable} in ${envFile} (for example ${variable}=your-key-here) or in your environment, then resume setup.\n`)
         return { state: 'action_required', connection: id, provider: selected, model }
       }
       rl?.close(); rl = undefined
@@ -84,11 +91,11 @@ export async function runProviderSetup(options: {
     write(`Connection: ${id} (${selected}); model: ${model}; budget: ${budget === 'unlimited' ? 'unlimited' : `$${budget} per task`}.\n`)
     write('Plan is read-only by default. Execution uses the active permission policy and safe_repo sandbox; Docker and a usable sandbox image are required for sandboxed commands.\n')
     if (!/^(?:y|yes)$/i.test((await ask('Save this connection and budget as your user default? [y/N]: ')).trim())) {
-      write('Connection saved; your default selection was not changed. Resume with babel-agent setup.\n')
+      write(`Connection saved; your default selection was not changed. Resume with ${CLI_COMMAND} setup.\n`)
       return getSetupStatus(env)
     }
     updateUserSettings({ defaults: { connection: id, model, budgetUsd: budget }, setup: { completed: true, step: 'complete', connection: id } }, { env })
-    write('Configured, connectivity unverified. No request has been sent.\nNext: babel-agent doctor for execution prerequisites, then babel-agent work "Explain this project".\nCommands: /provider status, /model use <id>, /mode plan, /settings show, /help.\n')
+    write(`Configured, connectivity unverified. No request has been sent.\nNext: ${CLI_COMMAND} doctor for execution prerequisites, then ${CLI_COMMAND} work "Explain this project".\nCommands: /provider status, /model use <id>, /mode plan, /settings show, /help.\n`)
     return getSetupStatus(env)
   } finally { rl?.close() }
 }

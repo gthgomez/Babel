@@ -133,7 +133,7 @@ export function resolveEffectiveSettings(options: {
   }
   const selected = field('connection', null)
   const connection = selected.value ? settings.connections[String(selected.value)] : undefined
-  if (selected.value && !connection) throw new Error('Selected Babel connection is unavailable. Use babel-agent provider list or setup.')
+  if (selected.value && !connection) throw new Error('Selected Babel connection is unavailable. Use babel-harness provider list or setup.')
   const model: EffectiveValue<string | null> = { value: null, source: 'built-in' }
   const connectionLayer = layers.findIndex(([source]) => source === selected.source)
   if (connection) for (const [index, [source, layer]] of layers.entries()) {

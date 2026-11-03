@@ -102,7 +102,7 @@ export function resolveAskModelPolicyWithLiveGate(
   if (!options.model && !liveOnly) return undefined;
   const connection = options.model?.startsWith('connection/') ? options.model : selectedConnectionModel(options.model ? { model: options.model } : {});
   const selectedModel = connection ?? (liveOnly ? resolveOpenRouterDeepSeekBackendKey(options.model ?? '') ?? options.model : options.model);
-  if (liveOnly && !selectedModel) throw new Error('SETUP_REQUIRED: Select your provider and exact model with babel-agent setup.');
+  if (liveOnly && !selectedModel) throw new Error('SETUP_REQUIRED: Select your provider and exact model with babel-harness setup.');
   const backendKey = selectedModel
     ? resolveModelPolicyBackendKey(selectedModel, babelRoot)
     : undefined;

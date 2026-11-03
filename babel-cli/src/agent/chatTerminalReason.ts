@@ -118,7 +118,7 @@ export function terminalReasonGuidance(
   detail?: string,
 ): TerminalReasonGuidance {
   const providerGuidance: Record<string, TerminalReasonGuidance> = {
-    credential_missing: { message: 'Provider setup is incomplete', nextActions: ['Run /setup or babel-agent setup', 'Use /provider status to inspect the selected connection'] },
+    credential_missing: { message: 'Provider setup is incomplete', nextActions: ['Run /setup or babel-harness setup', 'Use /provider status to inspect the selected connection'] },
     authentication: { message: 'Provider authentication was rejected', nextActions: ['Update the selected credential environment variable and restart Babel', 'Inspect /provider status before trying again'] },
     quota: { message: 'Provider quota or credit was exhausted', nextActions: ['Review quota with the selected provider', 'Choose another configured connection explicitly if needed'] },
     rate_limit: { message: 'Provider rate limit reached', nextActions: ['Wait for the provider retry window', 'Retry the same selected connection'] },

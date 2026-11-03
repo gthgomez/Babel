@@ -4,6 +4,21 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+test('noninteractive setup prints the private file and a placeholder example', async () => {
+  const { runProviderSetup } = await import('./providerSetup.js')
+  const dir = mkdtempSync(join(tmpdir(), 'babel-setup-example-'))
+  const env = { BABEL_CONFIG_DIR: dir, OPENROUTER_API_KEY: 'sentinel-do-not-print' }
+  let output = ''
+  const result = await runProviderSetup({ env, interactive: false, write: text => { output += text } })
+  assert.equal(result.state, 'setup_required')
+  assert.match(output, /babel-harness setup/)
+  assert.match(output, /your-key-here/)
+  assert.match(output, /DEEPINFRA_API_KEY=your-key-here/)
+  assert.match(output, /Ollama/)
+  assert.ok(output.includes(join(dir, '.env')))
+  assert.equal(output.includes('sentinel-do-not-print'), false)
+})
+
 test('noninteractive fresh setup provides guidance without inference or selecting a provider', async () => {
   const { runProviderSetup } = await import('./providerSetup.js')
   const env = { BABEL_STATE_DIR: mkdtempSync(join(tmpdir(), 'babel-setup-')) }
