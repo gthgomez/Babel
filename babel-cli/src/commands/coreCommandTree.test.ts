@@ -29,7 +29,7 @@ function withoutIntentionalCommandExtensions(contract: CommandContract): Command
     ...contract,
     options: contract.options.filter(option => option.flags !== '--connection <id>'),
     children: contract.children
-      .filter(child => !['research', 'provider', 'model', 'settings', 'conversation'].includes(child.name))
+      .filter(child => !['research', 'provider', 'model', 'settings', 'conversation', 'sandbox'].includes(child.name))
       .map(child => child.name === 'setup'
         ? { ...child, description: 'Show the read-only first-five-minutes setup checklist' }
         : child.name === 'interactive'
@@ -84,6 +84,11 @@ test('core registration preserves the complete existing command contract', () =>
     children: [],
   });
   assert.equal(program.commands.find(child => child.name() === 'runs')?.commands.find(child => child.name() === 'review')?.options.find(option => option.flags === '--last-hours <hours>')?.defaultValue, '24');
+  const sandbox = contract.children.find(child => child.name === 'sandbox');
+  assert.ok(sandbox);
+  assert.equal(sandbox.description, 'Prepare the Linux sandbox image used for project commands');
+  assert.deepEqual(sandbox.children.map(child => child.name), ['prepare']);
+  assert.equal(sandbox.children[0]?.description, 'Download the pinned image, check shell and Git, and save it for this user');
   const legacy = withoutIntentionalCommandExtensions(contract);
   const digest = createHash('sha256').update(JSON.stringify(legacy)).digest('hex');
   assert.equal(digest, '5a7149653f90ac455439e49e107a93853b16c738aa04bf07674c23ceb0fa6541');

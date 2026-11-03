@@ -95,9 +95,9 @@ export function registerDogfoodCommands(program: Command): void {
       'after',
       `
 Examples:
-  $ babel dogfood "Fix stale pointers" --isolation shadow --from-plan 20260610T180000Z-plan-abc123
-  $ babel dogfood "Fix stale pointers" --isolation git_worktree --project-root .
-  $ babel dogfood promote 20260610T180000Z-dogfood-deadbeef --json
+  $ babel-harness dogfood "Fix stale pointers" --isolation shadow --from-plan 20260610T180000Z-plan-abc123
+  $ babel-harness dogfood "Fix stale pointers" --isolation git_worktree --project-root .
+  $ babel-harness dogfood promote 20260610T180000Z-dogfood-deadbeef --json
 
 Notes:
   - shadow copies the project to a temp workspace and leaves the live tree unchanged.

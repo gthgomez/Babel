@@ -141,8 +141,8 @@ export function registerProjectCommands(program: Command): void {
       'after',
       `
 Examples:
-  $ babel verify /tmp/SomeRepo --json
-  $ babel verify /tmp/example_game_suite\\MyGame --commands "npm test;npm run build" --json
+  $ babel-harness verify /tmp/SomeRepo --json
+  $ babel-harness verify /tmp/example_game_suite\\MyGame --commands "npm test;npm run build" --json
 
 Notes:
   - Uses execution profile workspace_manager.
@@ -212,9 +212,9 @@ Notes:
       'after',
       `
 Examples:
-  $ babel repo-map .
-  $ babel repo-map /tmp/SomeRepo --json
-  $ babel repo-map . --target src --limit 80 --preview
+  $ babel-harness repo-map .
+  $ babel-harness repo-map /tmp/SomeRepo --json
+  $ babel-harness repo-map . --target src --limit 80 --preview
 `,
     )
     .action(
@@ -257,9 +257,9 @@ Examples:
       'after',
       `
 Examples:
-  $ babel onboard-project .
-  $ babel onboard-project /tmp/SomeRepo --json
-  $ babel onboard-project . --write-project-context --force
+  $ babel-harness onboard-project .
+  $ babel-harness onboard-project /tmp/SomeRepo --json
+  $ babel-harness onboard-project . --write-project-context --force
 
 Notes:
   - The default command is read-only for the target project and writes only a run report under Babel runs/onboarding.
@@ -314,9 +314,9 @@ Notes:
       'after',
       `
 Examples:
-  $ babel create node-cli .\\scratch\\hello-cli
-  $ babel create python-cli .\\scratch\\hello-py --json
-  $ babel create vite-react .\\scratch\\hello-web
+  $ babel-harness create node-cli .\\scratch\\hello-cli
+  $ babel-harness create python-cli .\\scratch\\hello-py --json
+  $ babel-harness create vite-react .\\scratch\\hello-web
 `,
     )
     .action(

@@ -22,7 +22,7 @@ export function savePreferences(preferences: UserPreferences, scope: SaveScope, 
 export function connectProvider(provider: string, options: {
   name?: string; model?: string; baseUrl?: string; apiKeyEnvVar?: string; contextWindow?: number; maxOutputTokens?: number; authentication?: 'api-key' | 'none'
 } = {}): Connection {
-  if (!isProviderId(provider)) throw new Error('Unknown provider. Use babel-agent provider list.')
+  if (!isProviderId(provider)) throw new Error('Unknown provider. Use babel-harness provider list.')
   const id = options.name ?? provider
   const previous = readUserSettings().connections[id]
   if (previous && previous.provider !== provider) throw new Error('Connection name already belongs to another provider; choose another --name.')
@@ -48,7 +48,7 @@ export function connectionStatus(session: SelectionSession = {}, projectRoot = p
     operations: spec?.operations ?? [], authorityConformance: spec?.authorityConformance ?? 'unknown',
     connectivity: 'unverified', observedModel: null,
     autoApply: effective.autoApply, workflow: effective.workflow, review: effective.review, budgetUsd: effective.budgetUsd,
-    nextCommand: !connection || !effective.model.value ? 'babel-agent setup' : !configured ? 'babel-agent setup' : 'babel-agent work "Explain this project"',
+    nextCommand: !connection || !effective.model.value ? 'babel-harness setup' : !configured ? 'babel-harness setup' : 'babel-harness work "Explain this project"',
   }
 }
 

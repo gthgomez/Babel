@@ -212,10 +212,10 @@ const approvalsCommand = program
       "after",
       `
 Examples:
-  $ babel approvals list --json
-  $ babel approvals approve dep-abc123 --json
-  $ babel approvals deny model-abc123
-  $ babel approvals request-install --command "npm install" --project-root /tmp/scratch\\hello-cli --json
+  $ babel-harness approvals list --json
+  $ babel-harness approvals approve dep-abc123 --json
+  $ babel-harness approvals deny model-abc123
+  $ babel-harness approvals request-install --command "npm install" --project-root /tmp/scratch\\hello-cli --json
 
 Notes:
   - OpenClaw manager creates pending install approvals automatically when blocked.
@@ -409,12 +409,12 @@ const jobsCommand = program
       "after",
       `
 Examples:
-  $ babel jobs create "Fix tests" --project-root /tmp/scratch\\hello-cli --json
-  $ babel jobs list --json
-  $ babel jobs status job-20260428T010000Z --json
-  $ babel jobs approve job-20260428T010000Z --json
-  $ babel jobs run job-20260428T010000Z --json
-  $ babel jobs report job-20260428T010000Z
+  $ babel-harness jobs create "Fix tests" --project-root /tmp/scratch\\hello-cli --json
+  $ babel-harness jobs list --json
+  $ babel-harness jobs status job-20260428T010000Z --json
+  $ babel-harness jobs approve job-20260428T010000Z --json
+  $ babel-harness jobs run job-20260428T010000Z --json
+  $ babel-harness jobs report job-20260428T010000Z
 
 Notes:
   - Jobs default to execution profile workspace_manager.

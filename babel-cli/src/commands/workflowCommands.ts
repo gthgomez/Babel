@@ -186,7 +186,7 @@ async function runDeepCommand(taskParts: string[], options: DeepCommandOptions):
   if (!options.model) {
     const selected = selectedConnectionModel({}, options.projectRoot ?? process.cwd());
     if (selected) options = { ...options, model: selected };
-    else if (process.env['BABEL_OFFLINE'] !== '1' && process.env['BABEL_OFFLINE'] !== 'true') throw new Error('SETUP_REQUIRED: Run babel-agent setup before starting model-backed work.');
+    else if (process.env['BABEL_OFFLINE'] !== '1' && process.env['BABEL_OFFLINE'] !== 'true') throw new Error('SETUP_REQUIRED: Run babel-harness setup before starting model-backed work.');
   }
   const task = normalizeLiteTask(taskParts);
   if (!task) {
@@ -1363,7 +1363,7 @@ async function runLiteCommand(
   const payloadRecord = result.payload as Record<string, unknown>;
   const savedPlan = verb === 'plan' && result.exitCode === 0 && humanText
     ? savePlan({ projectRoot: resolvedProjectRoot ?? process.cwd(), task, body: humanText }) : undefined;
-  if (savedPlan) { payloadRecord['plan_id'] = savedPlan.id; payloadRecord['apply_command'] = `babel-agent apply --plan ${savedPlan.id}`; }
+  if (savedPlan) { payloadRecord['plan_id'] = savedPlan.id; payloadRecord['apply_command'] = `babel-harness apply --plan ${savedPlan.id}`; }
   const runDir = typeof payloadRecord['run_dir'] === 'string' ? payloadRecord['run_dir'] : null;
   const progressTranscript =
     fixProgress !== undefined ? fixProgress.getTranscript().join('\n') : '';
@@ -1813,8 +1813,8 @@ export function registerWorkflowCommands(program: Command): void {
       'after',
       `
 Examples:
-  $ babel deep "Harden the implementation plan for this repo-wide migration"
-  $ babel deep "Apply the bounded migration and verify it" --project-root /tmp/example_game_suite\\MyGame
+  $ babel-harness deep "Harden the implementation plan for this repo-wide migration"
+  $ babel-harness deep "Apply the bounded migration and verify it" --project-root /tmp/example_game_suite\\MyGame
 
 Notes:
   - babel deep runs the governed pipeline with planning, review, execution, and verification.
@@ -1833,9 +1833,9 @@ Notes:
         'after',
         `
 Examples:
-  $ babel undo
-  $ babel undo --project example_saas_backend
-  $ babel undo --project-root /tmp/my-repo
+  $ babel-harness undo
+  $ babel-harness undo --project example_saas_backend
+  $ babel-harness undo --project-root /tmp/my-repo
 
 Notes:
   - Restores files captured before the last mutating Babel run.
@@ -1868,9 +1868,9 @@ Notes:
       'after',
       `
 Examples:
-  $ babel continue latest
-  $ babel continue <BABEL_REPO_ROOT>\\runs\\20260601_010101_task
-  $ babel continue latest --inspect-only
+  $ babel-harness continue latest
+  $ babel-harness continue <BABEL_REPO_ROOT>\\runs\\20260601_010101_task
+  $ babel-harness continue latest --inspect-only
 
 Notes:
   - continue resumes linked worker-chain steps when a manifest exists.
@@ -1989,19 +1989,19 @@ Notes:
       'after',
       `
 Examples:
-  $ babel "Fix failing tests"
-  $ babel plan "Compare the implementation options"
-  $ babel deep "Harden the migration path"
-  $ babel run "Add dark mode toggle" --mode deep
-  $ babel run "Fan out investigation" --mode deep
-  $ babel run "Prepare rollout plan" --mode plan --show-model-policy
-  $ babel run "Refine ingestion worker" --model deepseek --model-tier standard
-  $ babel run "Inspect catalog" --json
-  $ babel run "Fix lint" --output-format stream-json
-  $ babel run "Audit only" --allowed-tools directory_list,file_read,semantic_search
-  $ babel run "Fix tests" --execution-profile dev_local
-  $ babel run "Fix tests" --execution-profile workspace_manager --project-root /tmp/example_game_suite\\MyGame
-  $ babel run "Solve task" --execution-profile benchmark_container --mode deep
+  $ babel-harness "Fix failing tests"
+  $ babel-harness plan "Compare the implementation options"
+  $ babel-harness deep "Harden the migration path"
+  $ babel-harness run "Add dark mode toggle" --mode deep
+  $ babel-harness run "Fan out investigation" --mode deep
+  $ babel-harness run "Prepare rollout plan" --mode plan --show-model-policy
+  $ babel-harness run "Refine ingestion worker" --model deepseek --model-tier standard
+  $ babel-harness run "Inspect catalog" --json
+  $ babel-harness run "Fix lint" --output-format stream-json
+  $ babel-harness run "Audit only" --allowed-tools directory_list,file_read,semantic_search
+  $ babel-harness run "Fix tests" --execution-profile dev_local
+  $ babel-harness run "Fix tests" --execution-profile workspace_manager --project-root /tmp/example_game_suite\\MyGame
+  $ babel-harness run "Solve task" --execution-profile benchmark_container --mode deep
 
 Notes:
   - Prefer babel "<task>", babel plan, and babel deep for the user-facing CLI.
@@ -2859,13 +2859,13 @@ Notes:
       'after',
       `
 Examples:
-  $ babel plan "Prepare rollout plan"
-  $ babel plan "Compare the implementation options"
-  $ babel plan example_saas_backend "Prepare rollout plan"
-  $ babel plan example_llm_router "Draft migration plan" --model deepseek --model-tier standard --show-model-policy
+  $ babel-harness plan "Prepare rollout plan"
+  $ babel-harness plan "Compare the implementation options"
+  $ babel-harness plan example_saas_backend "Prepare rollout plan"
+  $ babel-harness plan example_llm_router "Draft migration plan" --model deepseek --model-tier standard --show-model-policy
 
 Notes:
-  - babel-agent plan stops after the read-only plan unless a saved plans.autoApply preference enables application.
+  - babel-harness plan stops after the read-only plan unless a saved plans.autoApply preference enables application.
   - --plan-only always stops; explicit apply --plan <id> rechecks project scope and permissions.
   - --json keeps the read-only plan artifact contract for automation.
   - babel plan <known-project> "<task>" is kept as the legacy Manual Bridge JSON flow.
@@ -2905,7 +2905,7 @@ Notes:
             const effective = resolveEffectiveSettings({ projectRoot: saved.projectRoot });
             if (options.shadow) process.stderr.write('--shadow now keeps planning read-only. Inspect the saved plan before an explicit apply.\n');
             if (!shouldAutoApplyPlan(saved.task, effective.autoApply.value, options.shadow === true || options.planOnly === true || options.json === true || options.finalOnly === true)) {
-              if (!options.json) process.stderr.write(`Plan saved as ${saved.id}. No project files were changed. Apply: babel-agent apply --plan ${saved.id}\n`);
+              if (!options.json) process.stderr.write(`Plan saved as ${saved.id}. No project files were changed. Apply: babel-harness apply --plan ${saved.id}\n`);
               return;
             }
             process.stderr.write(`Automatic application enabled by ${effective.autoApply.source} preference. Applying ${saved.id}.\n`);
@@ -3097,10 +3097,10 @@ Notes:
       'after',
       `
 Examples:
-  $ babel resume latest
+  $ babel-harness resume latest
   $ bl resume latest
-  $ babel resume --run C:/path/to/run --plan C:/path/to/plan.json
-  $ babel resume --project example_saas_backend --plan clipboard
+  $ babel-harness resume --run C:/path/to/run --plan C:/path/to/plan.json
+  $ babel-harness resume --project example_saas_backend --plan clipboard
   $ type ./plan.json | babel resume --run C:/path/to/run --plan -
 
 Important:
@@ -3171,7 +3171,7 @@ Notes:
       'after',
       `
 Examples:
-  $ babel smoke --project example_saas_backend
+  $ babel-harness smoke --project example_saas_backend
 
 Notes:
   - This is a diagnostic harness for Manual Bridge executor behavior, not a normal product test runner.

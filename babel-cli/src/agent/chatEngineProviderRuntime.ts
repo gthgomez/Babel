@@ -72,7 +72,7 @@ export function resolveChatDeliberationRunner(
 ): ChatProviderRunner {
   if (!modelPolicy?.providerModelId || !isProviderId(modelPolicy.provider)) {
     if (current) return current // explicit embedding owns its injected runner
-    throw new Error('SETUP_REQUIRED: Select a provider connection and model with babel-agent setup.')
+    throw new Error('SETUP_REQUIRED: Select a provider connection and model with babel-harness setup.')
   }
   const provider = modelPolicy.provider
   const modelId = modelPolicy.providerModelId

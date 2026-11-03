@@ -188,7 +188,7 @@ export function formatEnvFileInactiveMessage(missingKeys: string[], envFilePath:
     'Env-gated CLI features may be silently disabled.',
     'Canonical invocations:',
     '  Babel normally loads the private profile .env automatically.',
-    '  babel <command>   (after npm --prefix ./babel-cli run build)',
+    '  babel-harness <command>',
     '  npm --prefix ./babel-cli run dev -- <command>',
     'Use --strict-env (or set BABEL_STRICT_ENV=true / CI=true) to fail instead of warn.',
   ].join('\n');

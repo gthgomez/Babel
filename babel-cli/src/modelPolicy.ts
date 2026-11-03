@@ -808,7 +808,7 @@ export function resolveModelByKey(options: {
 }): ResolvedModelPolicy {
   if (options.key.startsWith('connection/')) {
     const connection = resolveConnectionModelPolicy(options.key, { models: loadModelPolicyConfig(options.babelRoot).config.models ?? {} });
-    if (!connection) throw new Error('Selected connection is unavailable. Use babel-agent setup.');
+    if (!connection) throw new Error('Selected connection is unavailable. Use babel-harness setup.');
     return connection;
   }
   const { path: policyPath, config } = loadModelPolicyConfig(options.babelRoot);

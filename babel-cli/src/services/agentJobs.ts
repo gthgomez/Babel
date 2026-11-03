@@ -79,7 +79,7 @@ export function resolveAgentJobModel(job: Pick<AgentJob, 'model' | 'project_root
     : job.model ?? selectedConnectionModel({}, root) ?? process.env['BABEL_MODEL'];
   const offline = process.env['BABEL_PIPELINE_V9_OFFLINE'] === '1' || process.env['BABEL_LITE_OFFLINE'] === '1' || ['1', 'true'].includes(process.env['BABEL_OFFLINE'] ?? '');
   if (!model && !offline && !process.env['BABEL_DESKTOP_PROVIDER']) {
-    throw new Error('SETUP_REQUIRED: Run babel-agent setup or save an explicit job model before starting this job.');
+    throw new Error('SETUP_REQUIRED: Run babel-harness setup or save an explicit job model before starting this job.');
   }
   return model ?? undefined;
 }

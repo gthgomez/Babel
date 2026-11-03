@@ -16,10 +16,10 @@ import { redactSecrets } from '../utils/redaction.js';
 
 const LITE_COMMAND_HELP = `
 Examples:
-  $ babel advanced text-provider providers
-  $ babel advanced text-provider plan --repo . --task "Add a focused test"
-  $ babel advanced text-provider ask --provider mock --task "Explain the failure"
-  $ babel advanced text-provider patch --provider mock --task "Propose a diff only"
+  $ babel-harness advanced text-provider providers
+  $ babel-harness advanced text-provider plan --repo . --task "Add a focused test"
+  $ babel-harness advanced text-provider ask --provider mock --task "Explain the failure"
+  $ babel-harness advanced text-provider patch --provider mock --task "Propose a diff only"
 
 Notes:
   - Internal text-provider lane only. Daily work uses babel "<task>", babel plan, and babel deep.
@@ -30,10 +30,10 @@ Notes:
 
 const LITE_ROOT_HELP = `
 Examples:
-  $ babel advanced text-provider providers
-  $ babel advanced text-provider plan --repo . --task "Add a focused test"
-  $ babel advanced text-provider ask --provider mock --task "Explain the failure"
-  $ babel advanced text-provider patch --provider mock --task "Propose a diff only"
+  $ babel-harness advanced text-provider providers
+  $ babel-harness advanced text-provider plan --repo . --task "Add a focused test"
+  $ babel-harness advanced text-provider ask --provider mock --task "Explain the failure"
+  $ babel-harness advanced text-provider patch --provider mock --task "Propose a diff only"
 
 Notes:
   - Internal text-provider lane only. Daily work uses babel "<task>", babel plan, and babel deep.

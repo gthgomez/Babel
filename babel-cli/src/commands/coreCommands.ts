@@ -24,6 +24,7 @@ import { resolveEffectiveSettings } from '../config/userSettings.js';
 import { resolveAgentTarget } from '../services/targetResolver.js';
 import { resolveProjectRoot } from '../cli/helpers.js';
 import { assertFiniteBudgetSupported } from '../config/laneBudget.js';
+import { CLI_COMMAND } from '../cli/commandName.js';
 export { validateRuntimeEnvForCommand } from './coreCommandSupport.js';
 export { buildApprovalProfilePayload } from './coreCommandSupport.js';
 export { resolveBenchmarkProvider } from './coreCommandSupport.js';
@@ -31,27 +32,28 @@ export { resolveBenchmarkAnalyzeRun } from './coreCommandSupport.js';
 
 const TOP_LEVEL_HELP_TEXT = `
 Start:
-  babel-agent setup                         Connect your provider, exact model and budget
-  babel-agent                               Open the interactive coding session
-  babel-agent work "Explain this project"    Inspect or implement within current permissions
-  babel-agent plan "Design this change"      Produce a read-only plan
-  babel-agent apply --plan <id>              Apply a saved plan after scope checks
-  babel-agent work --review thorough "..."   Use governed planning, review and execution
+  ${CLI_COMMAND} setup                         Connect your provider, exact model and budget
+  ${CLI_COMMAND}                               Open the interactive coding session
+  ${CLI_COMMAND} work "Explain this project"    Inspect or implement within current permissions
+  ${CLI_COMMAND} plan "Design this change"      Produce a read-only plan
+  ${CLI_COMMAND} apply --plan <id>              Apply a saved plan after scope checks
+  ${CLI_COMMAND} work --review thorough "..."   Use governed planning, review and execution
 
 Settings:
-  babel-agent provider list
-  babel-agent provider use <connection> --save user
-  babel-agent model use <exact-id> --save project
-  babel-agent settings show
-  babel-agent conversation list             List saved conversations
-  babel-agent conversation resume <id>      Resume a conversation
-  babel-agent run resume <id>               Recover an execution worker chain
-  babel-agent doctor
+  ${CLI_COMMAND} provider list
+  ${CLI_COMMAND} provider use <connection> --save user
+  ${CLI_COMMAND} model use <exact-id> --save project
+  ${CLI_COMMAND} settings show
+  ${CLI_COMMAND} conversation list             List saved conversations
+  ${CLI_COMMAND} conversation resume <id>      Resume a conversation
+  ${CLI_COMMAND} run resume <id>               Recover an execution worker chain
+  ${CLI_COMMAND} doctor
 
+The command name is babel-harness. babel-agent is an installed alias for this same program.
 Plan stops by default. Only an explicitly saved plans.autoApply preference enables
 automatic implementation. --plan-only always stops. No cloud provider is preselected.
 Model/provider choices inside the TUI are session-scoped; --save user|project makes
-persistence explicit. Advanced and compatibility commands: babel-agent advanced.
+persistence explicit. Advanced and compatibility commands: ${CLI_COMMAND} advanced.
 `;
 
 export function applyProgramMetadata(program: Command): void {
@@ -69,7 +71,7 @@ export function applyProgramMetadata(program: Command): void {
     }
   });
   program
-    .name(installed ? 'babel-agent' : 'babel')
+    .name(CLI_COMMAND)
     .description(
       "Babel coding agent — inspect, plan and change projects using your chosen provider",
     )
@@ -79,6 +81,7 @@ export function applyProgramMetadata(program: Command): void {
 
 const DEFAULT_HELP_COMMANDS = new Set([
   "setup",
+  "sandbox",
   "provider",
   "model",
   "settings",
@@ -170,7 +173,7 @@ function formatHelpGroups(
     }
     lines.push("");
   }
-  lines.push('Tip: run "babel <command> --help" for command-specific options.');
+  lines.push(`Tip: run "${CLI_COMMAND} <command> --help" for command-specific options.`);
   return lines.join("\n");
 }
 
@@ -188,10 +191,10 @@ export function applyUserFocusedHelpTiers(program: Command): void {
       "after",
       `
 Notes:
-  - Prefer babel "<task>", babel plan, and babel deep for daily work.
-  - babel run is for explicit pipeline modes, audit flags, JSON event streams, and governed controls.
-  - Prefer babel "<task>", babel plan, and babel deep before advanced run flags.
-  - Internal pipeline mode names stay under "babel run --help".
+  - Prefer ${CLI_COMMAND} "<task>", ${CLI_COMMAND} plan, and ${CLI_COMMAND} deep for daily work.
+  - ${CLI_COMMAND} run is for explicit pipeline modes, audit flags, JSON event streams, and governed controls.
+  - Prefer ${CLI_COMMAND} "<task>", ${CLI_COMMAND} plan, and ${CLI_COMMAND} deep before advanced run flags.
+  - Internal pipeline mode names stay under "${CLI_COMMAND} run --help".
 `,
     )
     .action(() => {
@@ -248,7 +251,7 @@ export function printBanner(): void {
 
   process.stdout.write(
     renderProductBanner(
-      "Multi-Agent OS Runtime Harness",
+      "Coding agent",
       `${modeTag}${dryTag}`,
     ) + "\n",
   );
@@ -294,7 +297,7 @@ export function registerCoreCommands(program: Command): void {
     if (['run', 'plan', 'deep'].includes(action.name()) && !action.opts()['model'] && !action.opts()['manual'] &&
       !process.env['BABEL_DESKTOP_PROVIDER'] && process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1' &&
       process.env['BABEL_LITE_OFFLINE'] !== '1' && !['1', 'true'].includes(process.env['BABEL_OFFLINE'] ?? '')) {
-      throw new Error('SETUP_REQUIRED: Run babel-agent setup to choose a provider connection and exact model before starting work.');
+      throw new Error(`SETUP_REQUIRED: Run ${CLI_COMMAND} setup to choose a provider connection and exact model before starting work.`);
     }
   });
   registerCoreStartupCommands(program);

@@ -16,6 +16,8 @@ import { printDryRunState, readDryRunState, resolveProjectRoot, writeDryRunState
 import { formatSkillDoctorHuman, runSkillDoctor } from "../services/skillForge.js";
 import { formatLocalStackResolveHuman, resolveLocalStack, type LocalCodexAdapter, type LocalModel, type LocalPipelineMode, type LocalProject, type LocalTaskCategory } from "../control-plane/localStackResolver.js";
 import { buildApprovalProfilePayload, describePermissionProfile, exitWithRuntimeValidationFailure, validateRuntimeEnvForCommand } from './coreCommandSupport.js';
+import { prepareRecommendedSandbox } from '../config/sandboxPrepare.js';
+import { CLI_COMMAND } from '../cli/commandName.js';
 
 function handleDryMode(
   action: "status" | "on" | "off",
@@ -153,7 +155,7 @@ function printSetupChecklist(options: { json?: boolean; contributor?: boolean })
       {
         step: "terminal_daily_profile",
         command: "set BABEL_DAILY_PROFILE=terminal",
-        note: "Keeps daily CLI tasks on lite lanes unless you explicitly use babel deep or repo-wide risk applies.",
+        note: `Keeps daily CLI tasks on lite lanes unless you explicitly use ${CLI_COMMAND} deep or repo-wide risk applies.`,
       },
     ],
     next_command:
@@ -299,7 +301,7 @@ program
     .option("--json", "Emit structured JSON only")
     .action(async (options: { json?: boolean; contributor?: boolean }) => {
       if (options.contributor) printSetupChecklist(options);
-      else if (options.json) printJsonOrHuman({ ...installedSetupChecklist(), ...getSetupStatus(), nextCommand: 'babel-agent setup', networkRequests: false }, '', true);
+      else if (options.json) printJsonOrHuman({ ...installedSetupChecklist(), ...getSetupStatus(), nextCommand: `${CLI_COMMAND} setup`, networkRequests: false }, '', true);
       else await runProviderSetup();
     });
 
@@ -350,12 +352,12 @@ program
       "after",
       `
 Examples:
-  $ babel doctor
-  $ babel doctor --scope env --json --verbose
-  $ babel doctor --scope repos
-  $ babel doctor --scope enterprise --strict-enterprise
-  $ babel doctor --scope export --strict
-  $ babel doctor --json
+  $ babel-harness doctor
+  $ babel-harness doctor --scope env --json --verbose
+  $ babel-harness doctor --scope repos
+  $ babel-harness doctor --scope enterprise --strict-enterprise
+  $ babel-harness doctor --scope export --strict
+  $ babel-harness doctor --json
 `,
     )
     .action(
@@ -462,6 +464,36 @@ Examples:
       },
     );
 
+const sandbox = program
+    .command("sandbox")
+    .description("Prepare the Linux sandbox image used for project commands");
+sandbox
+    .command("prepare")
+    .description("Download the pinned image, check shell and Git, and save it for this user")
+    .option("--json", "Emit structured JSON only")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  $ ${CLI_COMMAND} sandbox prepare
+  $ ${CLI_COMMAND} sandbox prepare --json
+
+Downloads the same pinned Linux amd64 image Babel Desktop prepares on Windows,
+checks that a shell and Git run, and saves the image id in the private config
+file. A working image is left unchanged. Credential values are not printed.
+On Windows, Babel Desktop Setup → Prepare recommended image does this too.
+`,
+    )
+    .action((options: { json?: boolean }) => {
+      const result = prepareRecommendedSandbox();
+      printJsonOrHuman(
+        { status: result.status, message: result.message, env_file: result.envFile, pulled: result.pulled, mutates_workspace: false },
+        result.message,
+        options.json === true,
+      );
+      if (result.status === "fail") process.exitCode = 1;
+    });
+
 registerMaintenanceCommands(program);
 
 registerSkillCommands(program);
@@ -479,8 +511,8 @@ program
       "after",
       `
 Examples:
-  $ babel shadow-diff
-  $ babel shadow-diff --project example_saas_backend
+  $ babel-harness shadow-diff
+  $ babel-harness shadow-diff --project example_saas_backend
 
 Notes:
   - Requires BABEL_SHADOW_ROOT to be set.
@@ -530,9 +562,9 @@ const dryCommand = program
       "after",
       `
 Examples:
-  $ babel dry status --json
-  $ babel dry on
-  $ babel dry off --json
+  $ babel-harness dry status --json
+  $ babel-harness dry on
+  $ babel-harness dry off --json
 
 Notes:
   - Dry mode ON keeps mutating tools in dry-run mode.
@@ -584,9 +616,9 @@ program
       "after",
       `
 Examples:
-  $ babel permissions
-  $ babel permissions suggest
-  $ babel permissions auto-edit --json
+  $ babel-harness permissions
+  $ babel-harness permissions suggest
+  $ babel-harness permissions auto-edit --json
 
 Notes:
   - suggest maps to plan mode plus dry-run.
