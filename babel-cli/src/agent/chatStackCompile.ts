@@ -56,7 +56,11 @@ export interface ChatCompiledStack {
   delivered_content_digest: string;
   /** Selection entries retained for audit even when their content was omitted. */
   content_disposition: ChatStackContentDisposition[];
-  /** Explicit when mandatory safety/provider/verifier content cannot fit. */
+  /**
+   * Reserved for callers that surface a context failure. compileChatStack()
+   * never sets it: over-budget required content throws
+   * `required_instruction_exceeds_prompt_budget` instead.
+   */
   context_error?: string;
   /** True when planner/QA deep stages were NOT included (default). */
   deep_stages_excluded: true;
@@ -438,7 +442,6 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     });
   const content_disposition: ChatStackContentDisposition[] = [];
   let system_context = '';
-  let context_error: string | undefined;
 
   if (requiredText.length > budget) {
     throw new Error('required_instruction_exceeds_prompt_budget');
@@ -500,7 +503,6 @@ export function compileChatStack(options: CompileChatStackOptions): ChatCompiled
     delivered_content_digest: hashContent(system_context),
     content_disposition: content_disposition.sort((a, b) =>
       entries.findIndex(entry => entry.id === a.id) - entries.findIndex(entry => entry.id === b.id)),
-    ...(context_error ? { context_error } : {}),
     deep_stages_excluded: true,
     estimated_tokens: Math.ceil(system_context.length / 4),
     budget_unit: 'utf16_code_units',

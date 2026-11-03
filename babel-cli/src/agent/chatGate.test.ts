@@ -1,3 +1,4 @@
+import { clearPythonInterpreterCache } from '../services/pythonInterpreter.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
 import { chatVerifierRequirements } from './chatVerifierContext.js';
 /**
@@ -966,6 +967,31 @@ describe('post-edit static check', () => {
       assert.notEqual(result, null);
       assert.ok((result as string).startsWith('exit_code: 1'));
     } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('reports Python check unavailable (not failed) when no interpreter exists', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'babel-python-missing-'));
+    const prevPath = process.env.PATH;
+    const prevOverride = process.env.BABEL_PYTHON;
+    const prevWs = process.env.BABEL_WORKSPACE_PYTHON;
+    try {
+      const file = join(tmpDir, 'ok.py');
+      writeFileSync(file, 'x = 1\n');
+      process.env.PATH = join(tmpDir, 'no-bin');
+      delete process.env.BABEL_WORKSPACE_PYTHON;
+      delete process.env.BABEL_PYTHON;
+      clearPythonInterpreterCache();
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'fix the bug', projectRoot: tmpDir });
+      const result = await (engine as any).runPostEditStaticCheck(file);
+      assert.doesNotMatch(result, /exit_code: 1/);
+      assert.match(result, /^static_check_unavailable: python interpreter not found/);
+    } finally {
+      process.env.PATH = prevPath;
+      if (prevOverride !== undefined) process.env.BABEL_PYTHON = prevOverride;
+      if (prevWs !== undefined) process.env.BABEL_WORKSPACE_PYTHON = prevWs;
+      clearPythonInterpreterCache();
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
