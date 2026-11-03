@@ -5,7 +5,7 @@ import {mkdtempSync, mkdirSync, writeFileSync, rmSync,readFileSync,lstatSync} fr
 import {dirname, join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Script} from 'node:vm';
-import {bundledEnvironment, bundledNodeFileName, defaultDesktopProfile} from '../native/runtime.mjs';
+import {bundledEnvironment, bundledNodeFileName, defaultDesktopProfile, resolveDesktopProfile} from '../native/runtime.mjs';
 import {applyProviderRoute,saveProviderRoute} from '../native/provider-routing.mjs';
 import {applyCliCredentialScope} from '../native/childEnv.mjs';
 import {parsePreferences} from '../native/security.mjs';
@@ -106,7 +106,7 @@ test('production launch selection keeps bundled entry when install is missing bu
 
 test('linux launcher selects the bundled node binary and the XDG profile', () => {
   const home = mkdtempSync(join(tmpdir(), 'babel-linux-home-'));
-  const profile = join(home, '.config', 'babel-north-star-desktop');
+  const profile = join(home, '.config', 'babel-desktop');
   try {
     const scriptUrl = new URL('../scripts/cli-launch.mjs', import.meta.url).href;
     const source = readFileSync(new URL(scriptUrl), 'utf8').replace(/^import .*;\r?\n/gm, '').replaceAll('import.meta.url', 'scriptUrl');
@@ -114,7 +114,7 @@ test('linux launcher selects the bundled node binary and the XDG profile', () =>
     new Script(source).runInNewContext({
       scriptUrl, dirname, join, isAbsolute, fileURLToPath, resolvePackagedEngine,
       bundledEnvironment: userData => bundledEnvironment(userData, {HOME: home}),
-      bundledNodeFileName, defaultDesktopProfile, applyProviderRoute, applyCliCredentialScope,
+      bundledNodeFileName, defaultDesktopProfile, resolveDesktopProfile, applyProviderRoute, applyCliCredentialScope,
       applySandboxEnvironment, parsePreferences, lstatSync, readFileSync,
       process: {platform: 'linux', argv: ['node', 'launcher', 'doctor'], env: {HOME: home}, cwd: () => home},
       spawn: (exe, args, options) => { launch = {exe, args, options}; return {on() {}}; },

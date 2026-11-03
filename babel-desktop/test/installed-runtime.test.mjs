@@ -67,10 +67,11 @@ test('installed active build resolves ready through the production runtime entry
 test('desktop profile and bundled node follow the host platform', () => {
   assert.equal(runtime.bundledNodeFileName('win32'), 'node.exe');
   assert.equal(runtime.bundledNodeFileName('linux'), 'node');
-  assert.equal(runtime.defaultDesktopProfile({APPDATA: 'C:\\profiles\\roaming'}, 'win32'), join('C:\\profiles\\roaming', 'babel-north-star-desktop'));
-  assert.equal(runtime.defaultDesktopProfile({USERPROFILE: 'C:\\profiles\\user'}, 'win32'), join('C:\\profiles\\user', 'babel-north-star-desktop'));
-  assert.equal(runtime.defaultDesktopProfile({HOME: '/srv/desktop'}, 'linux'), join('/srv/desktop', '.config', 'babel-north-star-desktop'));
-  assert.equal(runtime.defaultDesktopProfile({HOME: '/srv/desktop', XDG_CONFIG_HOME: '/srv/desktop/cfg'}, 'linux'), join('/srv/desktop/cfg', 'babel-north-star-desktop'));
+  assert.equal(runtime.defaultDesktopProfile({APPDATA: 'C:\\profiles\\roaming'}, 'win32'), join('C:\\profiles\\roaming', 'babel-desktop'));
+  assert.equal(runtime.defaultDesktopProfile({USERPROFILE: 'C:\\profiles\\user'}, 'win32'), join('C:\\profiles\\user', 'babel-desktop'));
+  assert.equal(runtime.legacyDesktopProfile({APPDATA: 'C:\\profiles\\roaming'}, 'win32'), join('C:\\profiles\\roaming', 'babel-north-star-desktop'));
+  assert.equal(runtime.defaultDesktopProfile({HOME: '/srv/desktop'}, 'linux'), join('/srv/desktop', '.config', 'babel-desktop'));
+  assert.equal(runtime.defaultDesktopProfile({HOME: '/srv/desktop', XDG_CONFIG_HOME: '/srv/desktop/cfg'}, 'linux'), join('/srv/desktop/cfg', 'babel-desktop'));
   assert.throws(() => runtime.defaultDesktopProfile({}, 'win32'), /APPDATA or USERPROFILE/);
   assert.throws(() => runtime.defaultDesktopProfile({}, 'linux'), /HOME/);
 });

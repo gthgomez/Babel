@@ -13,7 +13,7 @@ import {listDirectory,readProjectFile} from './workspace.mjs';
 import {readProjectDiff} from './project-diff.mjs';
 import {ProjectAuthority,inspectProjectIdentity} from './project-authority.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
-import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
+import {resolveOfficialCli,bundledEnvironment,resolveDesktopProfile} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
 import {applySandboxEnvironment,configureSandboxImage,packagedSandboxPrerequisiteMessage,probeDockerInstallation,sandboxIpcFailureMessage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
 import {configureCredentialProtection,hasProviderCredential,saveProviderCredential,providerCredentialStatus,removeProviderCredential,migrateProviderCredential} from './credentials.mjs';
@@ -46,6 +46,10 @@ if(profileArgument){
   const profile=profileArgument.slice('--profile-dir='.length);
   if(!isAbsolute(profile))throw new Error('--profile-dir must be an absolute directory');
   app.setPath('userData',profile);
+}else{
+  const resolved=resolveDesktopProfile(process.env,process.platform);
+  if(resolved.action==='failed')console.error(`[babel-desktop] Kept the previous settings folder because profile migration failed: ${resolved.error}`);
+  app.setPath('userData',resolved.profile);
 }
 const officialRuntime=()=>resolveOfficialCli(packageRoot,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath,userData:app.getPath('userData')});
 function bundledBuildRecord(){
