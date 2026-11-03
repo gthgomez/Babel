@@ -6,6 +6,7 @@
  * - Early-stop: abort after N consecutive identical failure signatures
  * - Harvests policy_events for offline shadow precision/recall
  */
+import { defaultPythonBin, resolvePythonInterpreter } from './pythonInterpreter.js';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { parseSweStringList } from './agentBenchmarkHarness.js';
@@ -314,7 +315,8 @@ export function runFailToPassCheck(
   const pythonBin =
     options?.pythonBin?.trim() ||
     env['BABEL_WORKSPACE_PYTHON']?.trim() ||
-    (process.platform === 'win32' ? 'python' : 'python3');
+    resolvePythonInterpreter().interpreter?.bin ||
+    defaultPythonBin();
   const command = `${pythonBin} -m pytest ${targets.join(' ')} -q --tb=short`;
   try {
     const timeoutMs = validateNonNegativeTimeout(

@@ -263,6 +263,22 @@ export async function ripgrep(
 }
 
 /**
+ * ripgrep's globset (observed with rg 14.1.1) silently fails to match a glob
+ * whose final character is a literal `.` (e.g. `No paths matched.` or
+ * `*matched.`), which made glob report 0 matches for files that exist.
+ * Express that trailing dot as a one-character class so the match is exact
+ * and independent of rg's literal/extension fast paths.
+ */
+export function normalizeRgGlob(globPattern: string): string {
+  if (!globPattern.endsWith('.')) return globPattern;
+  // Count preceding backslashes: an escaped dot (`\.`) is already literal.
+  let slashes = 0;
+  for (let i = globPattern.length - 2; i >= 0 && globPattern[i] === '\\'; i--) slashes++;
+  if (slashes % 2 === 1) return `${globPattern.slice(0, -2)}[.]`;
+  return `${globPattern.slice(0, -1)}[.]`;
+}
+
+/**
  * Run `rg --files --glob <pattern>` and return matching file paths.
  * Useful for fast glob matching when rg is available.
  */
@@ -275,7 +291,7 @@ export function rgGlobFiles(
     throw new Error('ripgrep (rg) is not available');
   }
 
-  const args: string[] = ['--files', '--null', '--glob', globPattern, '--no-ignore-vcs'];
+  const args: string[] = ['--files', '--null', '--glob', normalizeRgGlob(globPattern), '--no-ignore-vcs'];
 
   const result = spawnSync('rg', args, {
     cwd: projectRoot,

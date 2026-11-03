@@ -525,7 +525,8 @@ function getTokenCount(text: string): number {
   if (tokenizer === undefined) {
     try {
       const mod = _require('js-tiktoken');
-      tokenizer = (mod.encodingForModel ?? mod.default?.encodingForModel)('gpt-4o');
+      const encodingForModel = mod.encodingForModel ?? mod.default?.encodingForModel;
+      tokenizer = typeof encodingForModel === 'function' ? encodingForModel('gpt-4o') : null;
     } catch {
       tokenizer = null;
     }
