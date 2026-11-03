@@ -54,7 +54,7 @@ On linux x64, with Node 24.13.1, a clean commit, and the pinned archives:
 ```sh
 npm ci --ignore-scripts
 npm --prefix ../babel-cli ci
-npm run package:linux -- --node-archive=<official-node-v24.13.1-linux-x64.tar.xz> --electron-archive=<official-electron-v44.5.1-linux-x64.zip> --appimage-tool=<appimagetool-1.9.1-x86_64.AppImage>
+npm run package:linux -- --node-archive=<official-node-v24.13.1-linux-x64.tar.xz> --electron-archive=<official-electron-v44.5.1-linux-x64.zip> --appimage-tool=<appimagetool-1.9.1-x86_64.AppImage> --runtime-archive=<type2-runtime-20251108-x86_64>
 ```
 
 The script checks those three SHA256 values, packs the same CLI production tree the Windows builder packs, and writes `Babel-Desktop-<version>-linux-x64.AppImage`, `manifest.json`, and `SHA256SUMS`. It does not build a `.deb`. Run it with `chmod +x`. See [Linux setup](docs/INSTALL-LINUX.md). A pull request that changes Desktop packaging files also builds this AppImage on `ubuntu-latest`; that job is not part of the Windows installer lane.

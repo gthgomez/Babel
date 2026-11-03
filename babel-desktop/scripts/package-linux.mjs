@@ -2,8 +2,8 @@
 // Linux x64 AppImage builder. Mirrors package-windows.mjs: pinned official
 // Node and Electron archives, the same CLI pack, and a file inventory.
 // It does not build a .deb, sign the AppImage, or embed an update channel.
-import {chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync} from 'node:fs';
-import {basename, dirname, join, resolve} from 'node:path';
+import {chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readlinkSync, readdirSync, renameSync, statSync, writeFileSync} from 'node:fs';
+import {basename, dirname, isAbsolute, join, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
@@ -22,10 +22,13 @@ const electronVersion = '44.5.1';
 const electronArchiveSha = '5bcd217611d6843ececd6c9e9c1fcd1da3ab066c43d8b1a9e4b44689a1fba6f5';
 const appimageToolVersion = '1.9.1';
 const appimageToolSha = 'ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0';
+const appimageRuntimeTag = '20251108';
+const appimageRuntimeSha = '2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d';
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
 const archive = resolve(option('node-archive') || '');
 const electronArchive = resolve(option('electron-archive') || '');
 const appimageTool = resolve(option('appimage-tool') || '');
+const appimageRuntime = resolve(option('runtime-archive') || '');
 const output = resolve(option('output') || join(desktop, 'artifacts', 'linux'));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error('This Linux builder supports linux x64 only');
@@ -34,6 +37,7 @@ if (!existsSync(archive) || sha(readFileSync(archive)) !== nodeArchiveSha) throw
 if (desktopPackage.devDependencies.electron !== electronVersion) throw new Error('Update the pinned Electron archive and checksum when changing the Electron dependency');
 if (!existsSync(electronArchive) || !statSync(electronArchive).isFile() || sha(readFileSync(electronArchive)) !== electronArchiveSha) throw new Error('Provide --electron-archive=<official electron-v44.5.1-linux-x64.zip>; checksum must match the pinned value');
 if (!existsSync(appimageTool) || !statSync(appimageTool).isFile() || sha(readFileSync(appimageTool)) !== appimageToolSha) throw new Error(`Provide --appimage-tool=<appimagetool ${appimageToolVersion} x86_64 AppImage>; checksum must match the pinned value`);
+if (!existsSync(appimageRuntime) || !statSync(appimageRuntime).isFile() || sha(readFileSync(appimageRuntime)) !== appimageRuntimeSha) throw new Error(`Provide --runtime-archive=<type2-runtime ${appimageRuntimeTag} runtime-x86_64>; checksum must match the pinned value`);
 const npmCli = option('npm-cli') || process.env.npm_execpath;
 if (!npmCli || !existsSync(npmCli)) throw new Error('Provide --npm-cli=<npm/bin/npm-cli.js> or invoke through npm');
 const command = (exe, args, cwd = repo, {capture = true, timeout = 300000, env} = {}) => execFileSync(exe, args, {
@@ -106,13 +110,14 @@ const metadata = {
   version, sourceSha, platform: 'linux-x64', electron: electronVersion, electronArchiveSha256: electronArchiveSha,
   node: nodeVersion, nodeArchiveSha256: nodeArchiveSha, cliVersion: pack.version,
   cliArchiveSha256: sha(readFileSync(join(output, pack.filename))),
-  appimageTool: appimageToolVersion, appimageToolSha256: appimageToolSha, signed: false,
+  appimageTool: appimageToolVersion, appimageToolSha256: appimageToolSha,
+  appimageRuntime: appimageRuntimeTag, appimageRuntimeSha256: appimageRuntimeSha, signed: false,
   updateChannel: null,
 };
 writeFileSync(join(bundle, 'BUILD.json'), JSON.stringify(metadata, null, 2) + '\n');
 writeFileSync(join(output, `${bundleName}.build.json`), JSON.stringify(metadata, null, 2) + '\n');
 chmodSync(appimageTool, 0o755);
-command(appimageTool, ['--no-appstream', bundle, appImage], output, {
+command(appimageTool, ['--no-appstream', '--runtime-file', appimageRuntime, bundle, appImage], output, {
   capture: false,
   timeout: 600000,
   env: {...process.env, ARCH: 'x86_64', APPIMAGE_EXTRACT_AND_RUN: '1'},
@@ -124,7 +129,14 @@ const buildPrefixes = [homedir(), repo];
 function inventory(dir, prefix = '') {
   for (const item of readdirSync(dir, {withFileTypes: true})) {
     const rel = prefix + item.name, path = join(dir, item.name);
-    if (item.isSymbolicLink()) throw new Error(`Unexpected link: ${rel}`);
+    if (item.isSymbolicLink()) {
+      const link = readlinkSync(path);
+      const resolved = resolve(dir, link);
+      const relToBundle = relative(bundle, resolved);
+      if (isAbsolute(link) || relToBundle.startsWith('..') || isAbsolute(relToBundle)) throw new Error(`Link escapes package: ${rel}`);
+      files.push({path: rel, link});
+      continue;
+    }
     if (item.isDirectory()) inventory(path, rel + '/');
     else {
       if (/(?:^|\/)(?:\.env(?:\..*)?|\.git|auth\.json|ui-connection\.json|transcript\.jsonl)$|\.(?:log|pem|key)$/i.test(rel)) throw new Error(`Forbidden package file: ${rel}`);

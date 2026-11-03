@@ -112,7 +112,8 @@ distribution. No release was performed by the CI implementation campaign.
 
 The same tag workflow also builds `Babel-Desktop-<version>-linux-x64.AppImage`
 on `ubuntu-latest` (`babel-desktop/scripts/package-linux.mjs`, pinned Node
-24.13.1 linux-x64, Electron 44.5.1 linux-x64, and appimagetool 1.9.1). The
+24.13.1 linux-x64, Electron 44.5.1 linux-x64, appimagetool 1.9.1, and
+type2-runtime 20251108). The
 draft release is created only after the Windows and Linux jobs both finish.
 `SHA256SUMS` lists the Windows portable ZIP and the Linux AppImage. The Linux
 file inventory is attached as `manifest-linux-x64.json` so it does not replace
