@@ -1421,6 +1421,7 @@ jobs:
           test "$(grep -cve '^$' SHA256SUMS)" = "1"
           sha256sum -c SHA256SUMS
       - name: Launch the packaged app under Xvfb
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           version="$(node -p "require('./babel-desktop/package.json').version")"

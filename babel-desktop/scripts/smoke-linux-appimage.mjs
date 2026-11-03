@@ -6,6 +6,7 @@ import {spawn, spawnSync} from 'node:child_process';
 import {mkdtempSync, mkdirSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
 
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -15,11 +16,37 @@ function windowVisible() {
   return listed.status === 0 && /Babel/.test(listed.stdout ?? '');
 }
 
-function stop(child) {
-  if (!child || child.exitCode !== null || child.signalCode) return;
-  child.kill('SIGTERM');
-  const timer = setTimeout(() => { if (child.exitCode === null) child.kill('SIGKILL'); }, 4000);
-  child.once('exit', () => clearTimeout(timer));
+function finished(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function waitForExit(child, ms) {
+  if (finished(child)) return Promise.resolve(true);
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(finished(child)), ms);
+    child.once('exit', () => { clearTimeout(timer); resolve(true); });
+  });
+}
+
+/**
+ * Stop an AppImage process group. Electron children inherit the smoke
+ * process's pipes, so killing only the direct child leaves Node waiting
+ * until the CI job times out.
+ * @param {import('node:child_process').ChildProcess | null | undefined} child
+ */
+export async function stopProcessTree(child) {
+  if (!child) return;
+  const signal = name => {
+    if (finished(child)) return;
+    try { process.kill(-child.pid, name); }
+    catch { try { child.kill(name); } catch { /* The process is already gone. */ } }
+  };
+  if (!finished(child)) signal('SIGTERM');
+  if (!await waitForExit(child, 2000)) signal('SIGKILL');
+  await waitForExit(child, 2000);
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  child.unref();
 }
 
 async function attempt(appimage, mode) {
@@ -27,6 +54,7 @@ async function attempt(appimage, mode) {
   const chunks = [];
   const child = spawn(appimage, [`--profile-dir=${profile}`, ...mode.args], {
     env: {...process.env, ...mode.env},
+    detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout.on('data', chunk => chunks.push(chunk));
@@ -41,14 +69,14 @@ async function attempt(appimage, mode) {
     await delay(500);
   }
   const log = Buffer.concat(chunks).toString('utf8').slice(-8000);
-  if (!seen) stop(child);
+  if (!seen) await stopProcessTree(child);
   return {child: seen ? child : null, seen, exited, log, profile};
 }
 
 async function capture(child, screenshot, width, height) {
   mkdirSync(dirname(screenshot), {recursive: true});
   const shot = spawnSync('ffmpeg', ['-y', '-f', 'x11grab', '-video_size', `${width}x${height}`, '-i', process.env.DISPLAY, '-frames:v', '1', screenshot], {encoding: 'utf8'});
-  stop(child);
+  await stopProcessTree(child);
   return shot.status === 0;
 }
 
@@ -94,4 +122,8 @@ async function main() {
   return outcome.ok ? 0 : 1;
 }
 
-process.exitCode = await main();
+const entry = process.argv[1];
+if (entry && import.meta.url === pathToFileURL(entry).href) {
+  const code = await main();
+  process.exit(code);
+}
