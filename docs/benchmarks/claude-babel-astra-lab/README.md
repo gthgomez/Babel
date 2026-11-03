@@ -1,5 +1,7 @@
 # Claude Code vs Babel Astra Lab
 
+Internal lab notes. This is one comparison setup, not a general product claim and not a ranking against other coding tools.
+
 The lab is benchmark-only and sequential (`MAX_ACTIVE_WORKER_HARNESSES=1`).
 It compares only Claude Code and Babel Live on OpenCode Go using the exact
 models MiMo-V2.5, LongCat-2.0, and DeepSeek V4 Flash. GLM is excluded.

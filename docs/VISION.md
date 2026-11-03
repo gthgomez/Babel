@@ -12,10 +12,11 @@ execution begins.
 
 This repository is Babel's canonical, community-safe public source.
 
-What works today from a fresh clone:
+What you can try today:
 
-- build the public CLI and start the interactive TUI
-- use the default conversational **chat** loop, with **plan** and **deep** for stronger gates
+- install `babel-harness@0.2.0` from npm and run `doctor` and `setup` (see the README)
+- from a fresh clone, build the public CLI and start it with `node ./babel-cli/dist/index.js`
+- use a quoted task, with `plan` and `deep` as separate commands
 - configure a local provider and run model-backed sessions when credentials are present
 - inspect, resume, and recover work (sessions, checkpoints, `undo`)
 - validate the public catalog and release surface

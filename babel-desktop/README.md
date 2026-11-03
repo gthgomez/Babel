@@ -4,7 +4,7 @@ Babel Desktop is the Windows UI for the authoritative Babel CLI harness. It star
 
 ## Install and configure
 
-> **Version note:** this README describes **current source**. The published Windows x64 build is [0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3); use its [release-pinned setup guide](https://github.com/gthgomez/Babel/blob/v0.1.3/babel-desktop/docs/INSTALL-WINDOWS.md). In 0.1.3, private keys are stored in a private plaintext `.env` in the Desktop profile, and setup expects a project and Docker before sending. OS-protected credential storage and conversation-only Chat described below are current-source behavior, not 0.1.3.
+> **Version note:** this README describes **current source**. Published Desktop downloads are **Windows x64 only**. [v0.2.0](https://github.com/gthgomez/Babel/releases/tag/v0.2.0) and [v0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3) both attach a Setup.exe and a portable ZIP. Linux and macOS users should use the npm CLI in the [repository README](../README.md). The Windows setup steps for the v0.2.0 tag are in [INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md). OS-protected credential storage described below is current-source behavior and may differ from an installer you download.
 
 Use the versioned Windows Setup.exe from the release/download page, or extract the complete portable ZIP. The bundle includes pinned Node, Electron, CLI, dependencies and immutable prompt resources. See [Windows setup](docs/INSTALL-WINDOWS.md).
 

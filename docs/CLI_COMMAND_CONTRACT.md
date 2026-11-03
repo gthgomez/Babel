@@ -6,7 +6,9 @@ last_verified: 2026-10-30
 
 Date: 2026-06-05 (amended 2026-10-30)
 
-This document is the canonical user-facing command contract for Babel CLI.
+The install path and the commands that worked on published `babel-harness@0.2.0` are in [CLI_QUICKSTART.md](./CLI_QUICKSTART.md). This page describes the command grammar in the current source tree, including `work`, `provider`, and `settings`. Those three were not commands in the `0.2.0` package tested on 2026-11-03: unknown words were treated as a chat task, or `--help` printed `run` help.
+
+This document is the source-tree command contract for Babel CLI.
 
 **Lite is not the current product.** `bl` / `babel-lite` are removed shims
 that exit 1. Daily verbs are `babel "<task>"`, `babel plan`, `babel deep`,

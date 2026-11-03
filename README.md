@@ -1,104 +1,118 @@
 # Babel
 
+[![npm](https://img.shields.io/npm/v/babel-harness)](https://www.npmjs.com/package/babel-harness)
 [![Release](https://img.shields.io/github/v/release/gthgomez/Babel?display_name=tag&sort=semver)](https://github.com/gthgomez/Babel/releases/latest)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/gthgomez/Babel/typecheck.yml?branch=main&label=Public%20Release%20Gate)](https://github.com/gthgomez/Babel/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/gthgomez/Babel/typecheck.yml?branch=main&label=Public%20Release%20Gate)](https://github.com/gthgomez/Babel/actions/workflows/typecheck.yml)
 
-**Babel is an open-source coding agent for your repositories.** Use Chat for day-to-day tasks, Plan when you want to review a proposal first, or Deep for a more structured workflow. Babel makes its instructions, permissions, tool activity, and verification evidence visible as it works.
+Babel is an **agent harness**. It runs on your computer, talks to a model you choose, and stands between that model and your repository. The model can propose a change. Babel is what decides which commands and file edits are allowed to happen, and it keeps a local record of the run.
 
-Babel is pre-1.0 and still being qualified for ordinary coding work. Provider setup and repository execution requirements vary; a saved key or selected model does not confirm provider access. See [project status](docs/STATUS.md) for current evidence and limits.
+It is for developers who want a coding agent in a project they already have, including Python and Java projects. You do not have to learn Babel's internals first.
 
-## What you can do
+Use it when you want the agent on your machine, with a provider you pick, and with project commands kept in a Docker sandbox by default instead of running straight on the host.
 
-| Mode | Good for |
-| --- | --- |
-| **Chat** | Investigate a repository, ask questions, and work through coding tasks |
-| **Plan** | Review a proposed approach before asking Babel to make changes |
-| **Deep** | Follow a more structured workflow for riskier work; this is not a reliability upgrade by itself |
+<!-- TODO: add a short Desktop demo video here once the recording exists. Do not link a file until it is in the repo. -->
 
-Babel also provides command-line runs, a read-only MCP control surface, inspectable prompt stacks, configurable execution profiles, checkpoints, diagnostics, and recovery tools such as `undo`. File changes and commands follow the active permissions and execution profile. Verification applies to declared or inferred checks; it is not a guarantee for every task.
+## Try it
 
-## See Babel
+You need **Node.js 22.19.0 or newer on the 22 line, or Node.js 24.13.1 or newer on the 24 line**. Other major versions are rejected. Check before you install:
 
-### CLI
+```sh
+node --version
+```
 
-![Babel CLI help and command guide from an offline source build](docs/assets/showcase/cli-help.png)
-
-[Watch the 18-second CLI walkthrough](docs/assets/showcase/offline-cli.mp4) · [Animated preview](docs/assets/showcase/offline-cli.gif)
-
-This capture shows real `--version`, `--help`, and environment-diagnostics output from Babel CLI 0.2.0. It uses an empty provider profile and makes no model request. The missing-provider warning is expected. It demonstrates local setup commands, not a completed coding task or model-backed reliability. See [capture details](docs/assets/showcase/README.md).
-
-## Install with npm
-
-The CLI is the quickest way to try Babel. It runs on **Node.js 22.19.0+ in the 22.x line or 24.13.1+ in the 24.x line**. The current npm release is `babel-harness@0.2.0`. The current source has a newer default-model snapshot than this npm release; use the published package as it is.
+Then install the published package and run the commands that were checked against `babel-harness@0.2.0`:
 
 ```sh
 npm install --global babel-harness@0.2.0
 babel-harness --version
-babel-harness setup
+babel-harness --help
 babel-harness doctor
+babel-harness setup
 ```
 
-`setup` lists the first steps; `doctor` reports what is configured on your machine. Before model-backed work, configure a supported provider key in your private Babel profile (`~/.babel/config/.env`, or `%USERPROFILE%/.babel/config/.env` on Windows). For example, if you use OpenRouter:
+The command name to use in these docs is `babel-harness`. The installer also adds `babel-agent`, which is the same program. Help text still says `babel` and `babel-agent`. There is no `babel` command on your PATH.
+
+`doctor` exits 1 on a machine without Docker. That means the default sandbox is not ready. The install itself succeeded. `setup` prints a checklist. It does not ask you questions and it does not call a model.
+
+Create a private env file and set **one** key. `setup` on 0.2.0 lists these names:
+
+```sh
+mkdir -p ~/.babel/config
+```
 
 ```dotenv
+# ~/.babel/config/.env
 OPENROUTER_API_KEY=your-key
 ```
 
-Keep the key out of your project and source checkout. Babel's diagnostics do not send provider requests. A saved key does not confirm that the provider accepts it.
+The same checklist also accepts `DEEPINFRA_API_KEY`, `DEEPSEEK_API_KEY`, `BABEL_OPENCODE_GO_API_KEY`, or `COMMAND_CODE_API_KEY`. Local Ollama does not use a cloud key. On macOS and Linux, make the file owner-only after you write it (`chmod 600 ~/.babel/config/.env`). A saved key is not proof that the provider accepts it.
 
-For project tasks, the default `safe_repo` profile requires Docker and a usable project-tools image. `doctor` reports whether these are ready; it does not silently fall back to running project commands on your host. Desktop Setup can prepare the recommended image. See [execution profiles](docs/CLI_QUICKSTART.md#execution-profile-read-this-before-the-first-edit) for details.
-
-Once your provider and execution setup are ready, start Babel from the repository you want to work in:
+From the repository you want to work in, this read-only command works with no key:
 
 ```sh
 cd /path/to/your/repository
-babel-harness interactive
+babel-harness context preview @file README.md --json
 ```
 
-Then describe the task you want help with. Babel selects the nearest recognized project at or above the current directory; check the displayed target before you continue. For a bounded first request, ask Babel to trace a documented behavior and its nearest test without changing files.
-
-## Babel Desktop
-
-Babel Desktop provides a Windows interface for the Babel CLI. The only downloadable desktop build is **Windows x64 0.1.3**. Get the [Setup installer or portable ZIP](https://github.com/gthgomez/Babel/releases/tag/v0.1.3); both include the CLI. The app is unsigned, and Windows may show a SmartScreen warning. The [release-pinned setup guide](https://github.com/gthgomez/Babel/blob/v0.1.3/babel-desktop/docs/INSTALL-WINDOWS.md) covers checksums and installation. Desktop is not currently published as an npm package, and the 0.1.3 app bundles its own CLI, so it does not include every change in the newer npm release.
-
-The images and video below are a **browser-rendered preview of the current source interface**. They show the real renderer and setup screen, but a browser has no native desktop connection: the preview cannot run tasks, configure providers, or show model responses.
-
-![Current-source Babel Desktop renderer preview in its setup-required state](docs/assets/showcase/desktop-renderer-preview.png)
-
-![Current-source Babel Desktop setup dialog preview](docs/assets/showcase/desktop-setup-preview.png)
-
-[Watch the desktop interface preview](docs/assets/showcase/desktop-renderer-preview.mp4)
-
-The packaged desktop release is Windows-only. For other platforms, use the npm CLI above. Source developers can build the Desktop app from [`babel-desktop/`](babel-desktop/README.md); a source build is not a downloadable installer.
-
-## Build from source
-
-Source developers can build the CLI with Node.js 22.19.0+ or 24.13.1+:
+This is the smallest model task. Without a key it exits 1 and tells you which key is missing:
 
 ```sh
-git clone https://github.com/gthgomez/Babel.git
-cd Babel
-npm --prefix ./babel-cli ci
-npm --prefix ./babel-cli run build
-node ./babel-cli/dist/index.js doctor
+babel-harness "Explain this repository in one sentence. Do not change files."
 ```
 
-The published npm package is 0.2.0. Later source changes may not be included in that package. For contributor setup and deeper command examples, start with [CONTRIBUTING.md](CONTRIBUTING.md), [the CLI quickstart](docs/CLI_QUICKSTART.md), and [the contributor guide](START_HERE.md).
+More commands: [Start here](START_HERE.md), [CLI reference](docs/CLI_QUICKSTART.md), [Troubleshooting](docs/TROUBLESHOOTING.md).
+
+## What to expect
+
+Babel is pre-1.0. A green `doctor` line, a saved key, and a finished answer are three different things.
+
+- `doctor` checks Node, the installed files, whether a key is present, Docker, and a sandbox image. It does not call the provider.
+- The default execution profile is `safe_repo`. Project commands are meant to run in Docker. Without Docker and a usable image, `doctor` fails those two checks and does not switch to your host.
+- `plan` prepares a plan and asks before it applies. `deep` is a heavier command for riskier work. Having the command does not make it more reliable than a normal task.
+- Checks Babel runs are the checks it was given or could infer. They are not a guarantee for every task.
+- Node may print `ExperimentalWarning` lines about SQLite and WebAssembly. On Node 22.23.4 those warnings showed up while `doctor`, `setup`, and `context preview` still ran. See [Troubleshooting](docs/TROUBLESHOOTING.md).
+
+## How this is different
+
+These are things you can see in this repo and in the published 0.2.0 package. They are not a benchmark against other tools.
+
+- The agent runs locally. You bring the model account. Babel does not ship one.
+- The instructions it loads are files in this repository: `prompt_catalog.yaml` and the numbered folders `00_` through `07_`. You can open them.
+- Project commands use the `safe_repo` profile unless you choose another one. `doctor` fails closed when Docker or the sandbox image is missing.
+- `babel-harness --help` shows separate `plan` and `deep` commands, plus a default task command.
+
+## Desktop
+
+Published Desktop builds are **Windows x64 only** (a Setup `.exe` and a portable `.zip`). [v0.2.0](https://github.com/gthgomez/Babel/releases/tag/v0.2.0) and [v0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3) both include those files. Linux and macOS should use the npm CLI above.
+
+The Windows installer is unsigned, and SmartScreen can warn. Setup steps for the v0.2.0 tag: [babel-desktop/docs/INSTALL-WINDOWS.md](babel-desktop/docs/INSTALL-WINDOWS.md).
+
+## Providers and the sandbox
+
+`babel-harness setup` on 0.2.0 tells you to set one of the five keys above, or to use Ollama. The package also contains ids for OpenAI, Anthropic, Gemini, Groq, OpenCode, and a generic OpenAI-compatible endpoint. In that package those ids are marked untested, and `setup` does not list their keys. The source tree on `main` has moved since 0.2.0, so a later install can differ. Trust `setup` on the version you installed.
+
+Docker is required for the default `safe_repo` profile so project commands run in a container. There is no Babel image and no Dockerfile in this repo. Windows Desktop Setup pulls a pinned public Node image. The same pull is the non-Windows path, if you already have Docker:
+
+```sh
+docker pull --platform=linux/amd64 docker.io/library/node:24-bookworm@sha256:9af606de2e947cfb3f276633b7c5130c4cd22365aa10f5a647b7675d5cfce0c0
+export BABEL_BENCHMARK_DOCKER_IMAGE=docker.io/library/node:24-bookworm@sha256:9af606de2e947cfb3f276633b7c5130c4cd22365aa10f5a647b7675d5cfce0c0
+```
+
+That image is checked for a Linux amd64 OS, a shell, and Git. Desktop also checks Node and npm. It is not a Python or Java toolchain. A Python or Java project needs an image that already contains the tools its tests use. This pull was not run in the docs pass that wrote this page, because Docker was not installed there. Details: [Troubleshooting](docs/TROUBLESHOOTING.md).
 
 ## Documentation
 
 | Guide | What it covers |
 | --- | --- |
-| [Project status](docs/STATUS.md) | Maturity, evidence, and known limits |
-| [CLI quickstart](docs/CLI_QUICKSTART.md) | Providers, execution profiles, and CLI commands |
-| [Chat mode](docs/CHAT_MODE.md) | How the default daily workflow works |
-| [Vision](docs/VISION.md) | Product direction and scope |
-| [Architecture](docs/architecture/ARCHITECTURE.md) | System design and implementation |
-| [Research and evaluation](docs/benchmarks/claude-babel-astra-lab/README.md) | Scope, methods, and evidence for the comparative research lab |
-| [Contributing](CONTRIBUTING.md) | Development and review workflow |
-| [Security](SECURITY.md) | Vulnerability reporting |
+| [Start here](START_HERE.md) | The same npm path, plus Desktop and a source build |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Node version, command names, Docker, keys, warnings |
+| [CLI reference](docs/CLI_QUICKSTART.md) | Commands checked on 0.2.0 |
+| [Docs index](docs/README.md) | Getting started, CLI, Desktop, architecture, contributing |
+| [Project status](docs/STATUS.md) | What is in the tree and what is not claimed |
+| [Contributing](CONTRIBUTING.md) | How to work on Babel |
+| [Security](SECURITY.md) | How to report a vulnerability |
 
-## Feedback and license
+## License
 
-Report bugs or suggest features in [GitHub Issues](https://github.com/gthgomez/Babel/issues). Babel is licensed under [Apache-2.0](LICENSE). Historical tagged releases that shipped under MIT remain MIT for those snapshots.
+Babel is licensed under [Apache-2.0](LICENSE). Tagged releases that shipped under MIT stay MIT for those snapshots. Report bugs in [GitHub Issues](https://github.com/gthgomez/Babel/issues).

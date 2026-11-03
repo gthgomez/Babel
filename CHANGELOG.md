@@ -1,5 +1,46 @@
 # Changelog
 
+Entries below are taken from git tags and GitHub release notes. They do not add changes that those notes do not list. The published npm versions queried on 2026-11-03 were `0.0.0-stage`, `0.1.3`, and `0.2.0`.
+
+## [0.2.0] - 2026-10-30
+
+GitHub release: [v0.2.0](https://github.com/gthgomez/Babel/releases/tag/v0.2.0). Compare: [v0.1.3...v0.2.0](https://github.com/gthgomez/Babel/compare/v0.1.3...v0.2.0).
+
+### Published
+
+- npm package `babel-harness@0.2.0` (package `engines.node` is `^22.19.0 || ^24.13.1`).
+- GitHub release assets observed on that tag: Windows x64 `Babel-Desktop-Setup-0.2.0-win-x64.exe` (plus `.sha256` and `.build.json`), `Babel-Desktop-0.2.0-win-x64.zip`, `babel-harness-0.2.0.tgz`, `manifest.json`, and `SHA256SUMS`.
+
+### Notes
+
+- The release body is the list of pull requests merged since v0.1.3, from #376 through #471, ending with "chore(release): prepare Babel 0.2.0". This changelog does not restate that list.
+- The Windows installer was not run while writing this entry.
+
+## [0.1.3] - 2026-10-14
+
+GitHub release: [Babel Desktop 0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3).
+
+### Published
+
+- Windows x64 Desktop app for the Babel harness, bundling the CLI, prompt resources, production dependencies, and a Node runtime.
+- Assets: Setup `.exe`, portable ZIP, CLI tarball, `manifest.json`, and `SHA256SUMS`.
+
+### Notes from the release text
+
+- Download `Babel-Desktop-Setup-0.1.3-win-x64.exe`, or use the ZIP. The installer and portable bundle are unsigned. The release notes tell you to verify Setup against its `.exe.sha256` file.
+- Start Docker Desktop with Linux containers. Desktop Setup can prepare the recommended image or validate an existing local toolchain image.
+- Open a project, select a provider, add its API key, enable models, and choose a default. API keys are stored in a private profile `.env` (plaintext), not an OS keychain.
+- The release notes say Plan and Deep required OpenRouter in this version, and that other supported providers offered Chat.
+- Custom project tools may require a custom sandbox image. Automatic Desktop updates are unavailable.
+- The release notes also record the post-merge CI run, checksum checks, and installer checks that were done for that release. Those checks are not restated here as a general reliability claim.
+
+## [0.1.2] - 2026-10-14
+
+- Annotated tag `v0.1.2` exists. Compare: [v0.1.1...v0.1.2](https://github.com/gthgomez/Babel/compare/v0.1.1...v0.1.2).
+- On 2026-11-03, `gh release view v0.1.2` showed a **draft** GitHub release titled "Babel v0.1.2", with Windows Desktop and `babel-harness` tarball assets attached to that draft.
+- `0.1.2` was not in the npm version list queried the same day (`0.0.0-stage`, `0.1.3`, `0.2.0`).
+- The draft notes list pull requests from #315 through #374. This changelog does not restate that list and does not treat the draft as a published GitHub Release.
+
 ## [0.1.1] - 2026-10-07
 
 

@@ -6,6 +6,8 @@ last_verified: 2026-08-22
 
 Date: 2026-05-31
 
+This is a product-direction note from May 2026, not the install guide. For commands that work today, use [CLI_QUICKSTART.md](./CLI_QUICKSTART.md).
+
 This guide captures the product direction for making Babel easier to use
 without weakening internal routing, evidence, and safety contracts.
 

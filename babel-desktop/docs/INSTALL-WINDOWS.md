@@ -1,6 +1,6 @@
 # Babel Desktop — Windows installation
 
-> **Version note:** these steps match the published [0.1.3 release](https://github.com/gthgomez/Babel/releases/tag/v0.1.3), including its private plaintext `.env` credential storage. Current-source builds may differ (for example OS-protected credential storage); see the [Desktop README](../README.md).
+> **Version note:** published Desktop downloads are Windows x64 only (Setup.exe and a portable ZIP). This page matches the [v0.2.0 tag](https://github.com/gthgomez/Babel/blob/v0.2.0/babel-desktop/docs/INSTALL-WINDOWS.md). The package is unsigned, and Windows SmartScreen can warn. Linux and macOS users should use the npm CLI in the [repository README](../../README.md). Current-source builds may differ (for example OS-protected credential storage); see the [Desktop README](../README.md).
 
 The installer and portable package include Babel Desktop, the authoritative Babel CLI, prompt assets, production dependencies, and Node 24.13.1. They require Windows x64. You do not need Node, npm, a source checkout, or a separate CLI build to launch them.
 

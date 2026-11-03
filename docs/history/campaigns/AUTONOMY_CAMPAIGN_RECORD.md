@@ -21,7 +21,7 @@ verification log below and in
   blocked on the signed CERTIFIED tier: both registered authorities are
   `LEGACY_UNPROVEN_AUTHORITY` with proof-of-possession history `NOT_FOUND`
   and custody `AUTHORITY_STATUS_UNKNOWN` — a genuine owner boundary
-  ([TRUST_SIGNING_CUSTODY.md](../architecture/TRUST_SIGNING_CUSTODY.md)).
+  ([TRUST_SIGNING_CUSTODY.md](../../architecture/TRUST_SIGNING_CUSTODY.md)).
   #144 is NOT weakened by this campaign; it stays on its bootstrap path.
 - Ruleset `protect-main`: active, zero bypass actors, six required checks,
   review-thread resolution required.
@@ -107,7 +107,7 @@ Recorded after merge in the verification log below and in
 - R2 worktree lease/registration + guarded reaping (eval E13 is a GAP).
 - R3 retire close/reopen from documented practice after #144 lands.
 - R4 merge-queue-style serial-landing relief (see
-  [MERGE_CONTROL_PLANE_V1.md](../architecture/MERGE_CONTROL_PLANE_V1.md)).
+  [MERGE_CONTROL_PLANE_V1.md](../../architecture/MERGE_CONTROL_PLANE_V1.md)).
 - R5 deterministic CI-failure classification with bounded auto-retry.
 - R6 `babel status`-shaped operator surface per
   `docs/architecture/operator-status-taxonomy.md`.
