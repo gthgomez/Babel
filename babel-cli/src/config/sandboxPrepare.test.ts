@@ -64,7 +64,7 @@ test('prepare downloads the pinned image, checks it, and stores only the digest'
     assert.match(text, /OPENROUTER_API_KEY=sentinel-secret/)
     assert.match(text, new RegExp(`BABEL_BENCHMARK_DOCKER_IMAGE=${imageId}`))
     assert.doesNotMatch(text, new RegExp(`sha256:${'c'.repeat(64)}`))
-    assert.equal(statSync(envFile).mode & 0o777, 0o600)
+    if (process.platform !== 'win32') assert.equal(statSync(envFile).mode & 0o777, 0o600)
     assert.equal(result.message.includes('sentinel-secret'), false)
     assert.ok(seen.every((env) => env['OPENROUTER_API_KEY'] === undefined))
     assert.equal(seen[0]?.['PATH'], '/usr/bin')

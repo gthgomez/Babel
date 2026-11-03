@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { resolveRuntimePaths } from './config/runtimePaths.js'
 import { readUserSettings, resolveEffectiveSettings, type UserSettings } from './config/userSettings.js'
 import { getProviderSpec, listProviderSpecs } from './runners/providerRegistry.js'
@@ -9,6 +9,14 @@ import { CLI_COMMAND } from './cli/commandName.js'
 import { dockerCheckMessage, formatManualProviderEnvExample, sandboxImageCheckMessage } from './cli/firstRunText.js'
 
 type Check = { id: string; status: 'ok' | 'warn' | 'fail'; message: string }
+
+/** Fixed-argument Docker calls for installed diagnostics. The host-process manifest owns this file. */
+export function runInstalledDockerCommand(args: readonly string[], timeout: number, env: NodeJS.ProcessEnv): { status: number | null; stdout: string } {
+  const result: SpawnSyncReturns<string> = spawnSync('docker', args, {
+    timeout, encoding: 'utf8', shell: false, windowsHide: true, maxBuffer: 256 * 1024, env,
+  })
+  return { status: result.status, stdout: typeof result.stdout === 'string' ? result.stdout : '' }
+}
 
 export function supportsInstalledNode(version: string): boolean {
   const [major = 0, minor = 0, patch = 0] = version.replace(/^v/, '').split('.').map(Number)

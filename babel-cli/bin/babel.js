@@ -22,7 +22,7 @@ const dispatchEntry = resolve(__dirname, '../dist/cliEntryDispatch.js');
 
 if (!existsSync(dispatchEntry)) {
   console.error(
-    `[babel-harness] Missing build output at "${dispatchEntry}". From a checkout, run "npm --prefix babel-cli run build" first.`,
+    `[babel-harness] Missing build output at "${dispatchEntry}". From the repo root, run "npm --prefix .\\babel-cli run build" first.`,
   );
   process.exit(1);
 }

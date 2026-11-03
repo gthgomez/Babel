@@ -1,11 +1,11 @@
 // License: Apache-2.0
 // The pinned image matches babel-desktop/native/sandbox-setup.mjs RECOMMENDED_IMAGE.
 import { randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { resolvePrivateCredentialEnvPath } from './envBootstrap.js';
 import { probeInstalledSandboxImage } from './installedSandbox.js';
+import { runInstalledDockerCommand } from '../installedDoctor.js';
 import { dockerCheckMessage, sandboxImageGuidance } from '../cli/firstRunText.js';
 import { CLI_COMMAND } from '../cli/commandName.js';
 
@@ -30,12 +30,7 @@ function dockerEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function defaultExecute(): DockerExecute {
-  return (args, timeout, env) => {
-    const result = spawnSync('docker', args, {
-      timeout, encoding: 'utf8', shell: false, windowsHide: true, maxBuffer: 256 * 1024, env,
-    });
-    return { status: result.status, stdout: typeof result.stdout === 'string' ? result.stdout : '' };
-  };
+  return (args, timeout, env) => runInstalledDockerCommand(args, timeout, env);
 }
 
 /** Store only a verified image digest. Existing credential lines are preserved and never logged. */
