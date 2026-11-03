@@ -3,9 +3,9 @@
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export const EXPERIMENTAL_WARNING_FLAG = '--disable-warning=ExperimentalWarning';
+const suppressedEmitters = new WeakSet();
 
-/** True for Node ^22.19.0 or ^24.13.1. Other majors, including 20, 23, and 25, fail. */
+/** True for Node ^22.19.0 or ^24.13.1. */
 export function nodeEngineSupported(version) {
   const [major = 0, minor = 0, patch = 0] = String(version).replace(/^v/, '').split('.').map(Number);
   return (major === 22 && minor >= 19) || (major === 24 && (minor > 13 || (minor === 13 && patch >= 1)));
@@ -37,17 +37,24 @@ export function formatNodeEngineError(version, phase = 'command') {
   ].join('\n');
 }
 
-/** Relaunch once so end users do not see ExperimentalWarning. Other warnings stay visible. */
-export function shouldRelaunchWithoutExperimentalWarnings({ execArgv = [], env = {} } = {}) {
-  const show = env.BABEL_SHOW_NODE_WARNINGS;
+/**
+ * Hide ExperimentalWarning in this process. DeprecationWarning and other
+ * warnings still emit. This does not start another process, so the command
+ * keeps the process id that diagnostics and tests record.
+ * @param {NodeJS.Process} [proc]
+ */
+export function suppressExperimentalWarnings(proc = process) {
+  const show = proc.env?.BABEL_SHOW_NODE_WARNINGS;
   if (show === '1' || show === 'true') return false;
-  const parts = [...execArgv];
-  if (typeof env.NODE_OPTIONS === 'string' && env.NODE_OPTIONS.trim()) parts.push(env.NODE_OPTIONS);
-  const haystack = ` ${parts.join(' ')} `;
-  if (/\s--trace-warnings(?:\s|=)/.test(haystack)) return false;
-  // A bare --no-warnings already hides every warning, including experimental ones.
-  if (/\s--no-warnings(?:\s|=|$)/.test(haystack)) return false;
-  if (haystack.includes('--disable-warning=ExperimentalWarning')) return false;
+  const traced = [...(proc.execArgv ?? []), proc.env?.NODE_OPTIONS ?? ''].join(' ');
+  if (/(?:^|\s)--trace-warnings(?:\s|=|$)/.test(` ${traced} `)) return false;
+  if (suppressedEmitters.has(proc)) return true;
+  const emit = proc.emit.bind(proc);
+  proc.emit = function (event, warning, ...rest) {
+    if (event === 'warning' && warning && typeof warning === 'object' && warning.name === 'ExperimentalWarning') return false;
+    return emit(event, warning, ...rest);
+  };
+  suppressedEmitters.add(proc);
   return true;
 }
 
