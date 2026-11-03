@@ -34,7 +34,7 @@ test('an old profile is copied, verified, and left in place', () => {
     assert.equal(result.filesCopied, 2);
     assert.equal(readFileSync(join(nextRoot, 'ui-connection.json'), 'utf8'), '{"provider":"ollama"}\n');
     assert.equal(readFileSync(join(nextRoot, 'engine', 'config', '.env'), 'utf8'), 'OLLAMA_HOST=local\n');
-    assert.equal(statSync(join(nextRoot, 'ui-connection.json')).mode & 0o777, 0o600);
+    assert.equal(statSync(join(nextRoot, 'ui-connection.json')).mode & 0o777, statSync(join(oldRoot, 'ui-connection.json')).mode & 0o777);
     assert.equal(readFileSync(join(oldRoot, 'ui-connection.json'), 'utf8'), '{"provider":"ollama"}\n');
     const record = JSON.parse(readFileSync(marker, 'utf8'));
     assert.equal(record.status, 'copied');

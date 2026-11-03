@@ -175,7 +175,7 @@ function inventory(dir, prefix = '') {
     else {
       if (/(?:^|\/)(?:\.env(?:\..*)?|\.git|auth\.json|ui-connection\.json|transcript\.jsonl)$|\.(?:log|pem|key)$/i.test(rel)) throw new Error(`Forbidden package file: ${rel}`);
       const bytes = readFileSync(path);
-      if (containsPersonalBuildPath(rel, bytes, {home: homedir(), repo, isCanvasPrebuild: isAllowlistedCanvasVendorNativeArtifact(rel, bytes)})) throw new Error(`Personal build path in package: ${rel}`);
+      if (containsPersonalBuildPath(rel, bytes, {home: homedir(), repo, output, isCanvasPrebuild: isAllowlistedCanvasVendorNativeArtifact(rel, bytes)})) throw new Error(`Personal build path in package: ${rel}`);
       files.push({path: rel, bytes: statSync(path).size, sha256: sha(bytes)});
     }
   }
