@@ -290,7 +290,7 @@ jobs:
             --appimage-tool="$RUNNER_TEMP/linux-desktop-cache/appimagetool-x86_64.AppImage" \
             --runtime-archive="$RUNNER_TEMP/linux-desktop-cache/runtime-x86_64" \
             --output="$RUNNER_TEMP/release-linux-out"
-      - name: Verify unique build provenance against frozen tag identity
+      - name: Revalidate tag object and source before promotion
         env:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
           RELEASE_OBJECT: ${{ steps.tag.outputs.tag_object_sha }}

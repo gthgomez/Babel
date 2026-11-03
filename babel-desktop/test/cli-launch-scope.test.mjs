@@ -9,6 +9,7 @@ import vm from 'node:vm';
 import * as childEnvironment from '../native/childEnv.mjs';
 import {parsePreferences} from '../native/security.mjs';
 import {applySandboxEnvironment} from '../native/sandbox-setup.mjs';
+import {bundledNodeFileName} from '../native/runtime.mjs';
 
 const projectA=resolve(tmpdir(),'babel-scope-project-a');
 const projectB=resolve(tmpdir(),'babel-scope-project-b');
@@ -23,7 +24,7 @@ function launcherEnvironment(args,preferences,{unsafe=false}={}) {
     dirname,join,isAbsolute,resolve,fileURLToPath,console,
     readFileSync:()=>JSON.stringify(preferences),
     lstatSync:()=>({isFile:()=>true,isSymbolicLink:()=>unsafe,nlink:1,size:100}),
-    parsePreferences,applySandboxEnvironment,
+    parsePreferences,applySandboxEnvironment,bundledNodeFileName,
     bundledEnvironment:()=>({BABEL_CONFIG_DIR:join(profile,'missing-config'),BABEL_PROJECT_CREDENTIALS_DIR:projectA}),
     resolvePackagedEngine:()=>({ready:true,path:'synthetic-entry'}),
     applyProviderRoute:env=>env,

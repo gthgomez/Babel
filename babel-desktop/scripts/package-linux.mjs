@@ -12,6 +12,7 @@ import {assertAppImportsResolve} from './lib/verify-app-imports.mjs';
 import {assertLinuxPackagingTools} from './lib/linux-package-preflight.mjs';
 import {installCanvasPlatformBinding} from '../../babel-cli/scripts/research-v2-canvas-platform-binding.mjs';
 import {isAllowlistedCanvasVendorNativeArtifact} from '../../babel-cli/scripts/research-v2-canvas-vendor-allowlist.mjs';
+import {containsPersonalBuildPath} from './lib/linux-package-paths.mjs';
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(desktop, '..');
@@ -159,7 +160,6 @@ function clampTimestamps(dir) {
 if (!existsSync(appImage)) throw new Error('appimagetool reported success but the AppImage is missing');
 chmodSync(appImage, 0o755);
 const files = [];
-const buildPrefixes = [homedir(), repo];
 function inventory(dir, prefix = '') {
   for (const item of readdirSync(dir, {withFileTypes: true})) {
     const rel = prefix + item.name, path = join(dir, item.name);
@@ -175,8 +175,7 @@ function inventory(dir, prefix = '') {
     else {
       if (/(?:^|\/)(?:\.env(?:\..*)?|\.git|auth\.json|ui-connection\.json|transcript\.jsonl)$|\.(?:log|pem|key)$/i.test(rel)) throw new Error(`Forbidden package file: ${rel}`);
       const bytes = readFileSync(path);
-      const isCanvasPrebuild = isAllowlistedCanvasVendorNativeArtifact(rel, bytes);
-      if (!isCanvasPrebuild && buildPrefixes.some(prefix => bytes.includes(Buffer.from(prefix)))) throw new Error(`Personal build path in package: ${rel}`);
+      if (containsPersonalBuildPath(rel, bytes, {home: homedir(), repo, isCanvasPrebuild: isAllowlistedCanvasVendorNativeArtifact(rel, bytes)})) throw new Error(`Personal build path in package: ${rel}`);
       files.push({path: rel, bytes: statSync(path).size, sha256: sha(bytes)});
     }
   }

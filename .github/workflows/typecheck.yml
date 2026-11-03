@@ -1371,6 +1371,7 @@ jobs:
     name: linux-desktop-package
     needs:
       - detect-scope
+      - dependency-preflight
     if: needs.detect-scope.outputs.linux_desktop == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
