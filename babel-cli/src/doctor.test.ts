@@ -433,6 +433,8 @@ test('doctor scope all allows documented external repo-map prerequisite to remai
     strict: false,
     verbose: true,
     scope: 'all',
+    // Hermetic: this test covers repo-map prerequisites, not host PowerShell presence.
+    powerShellProbe: () => ({ exitCode: 0, stdout: '7.5.5', stderr: '' }),
     powerShellRunner: (path, args) => {
       if (path.endsWith('export-babel-public.ps1')) {
         const destinationRoot = args[args.indexOf('-DestinationRoot') + 1];
