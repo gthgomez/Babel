@@ -42,7 +42,7 @@ export function lookupReviewEntity(db: DatabaseSync, id: string): Record<string,
   if (cluster) return { entityType: 'failure_cluster', ...cluster, reviewStatus: 'REVIEW_ONLY', resolution: 'NOT_ESTABLISHED',
     runRefs: refs(db, `SELECT DISTINCT t.run_id AS ref FROM failure_occurrences f JOIN trials t ON t.logical_id=f.trial_id
       JOIN failure_clusters c ON c.signature_id=f.signature_id WHERE c.cluster_id=? ORDER BY t.run_id LIMIT 50`, id),
-    lineageRefs: refs(db, 'SELECT edge_id AS ref FROM lineage_edges WHERE from_id=?1 OR to_id=?1 ORDER BY rowid LIMIT 20', id),
+    lineageRefs: refs(db, 'SELECT edge_id AS ref FROM lineage_edges WHERE ? IN (from_id, to_id) ORDER BY rowid LIMIT 20', id),
     scope: 'All catalog evidence, outside the batch time window; reference lists are bounded. Cause/fix prose is withheld.',
     nextAction: 'Inspect signature, supporting runs and lineage; obtain independent task-specific validation before choosing or certifying a repair' }
   const observation = one(db, `SELECT observation_id,trial_id,dimension,value,validity,availability,authority,revision_binding FROM outcome_observations WHERE observation_id=?`, id)

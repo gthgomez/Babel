@@ -32,7 +32,7 @@ export function probeInstalledSandboxImage(image:string|undefined,options:{env?:
         if(command[0]==='git'?!lines.some(line=>/^git version \d+\.\d+(?:\.[0-9A-Za-z]+)*$/.test(line)):!lines.includes(marker))return false;
       }finally{
         // Client timeout does not terminate the daemon-owned container.
-        try{run(['rm','--force',containerName],1500);}catch{}
+        try{run(['rm','--force',containerName],1500);}catch{/* best-effort cleanup: a failed rm must not mask the probe verdict */}
       }
     }
     return true;

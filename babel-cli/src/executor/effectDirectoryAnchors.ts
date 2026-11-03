@@ -82,7 +82,7 @@ async function pinWindowsDirectories(paths: string[]): Promise<EffectDirectoryAn
     await new Promise<void>((ready, reject) => {
       let output = ''
       const timeout = setTimeout(() => { child.kill(); reject(new Error('EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows handle acquisition timed out')) }, WINDOWS_ANCHOR_STARTUP_TIMEOUT_MS)
-      const finish = (error?: Error): void => { clearTimeout(timeout); error ? reject(error) : ready() }
+      const finish = (error?: Error): void => { clearTimeout(timeout); if (error) reject(error); else ready() }
       child.once('error', () => finish(new Error('EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows helper unavailable')))
       child.once('exit', () => { if (!output.startsWith(readyLine)) finish(new Error(`EFFECT_DIRECTORY_ANCHOR_UNAVAILABLE: Windows handles refused ${output.trim() || diagnostic}`)) })
       child.stdout.on('data', (chunk: Buffer) => {

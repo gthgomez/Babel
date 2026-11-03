@@ -12,6 +12,7 @@
  * No network assumptions beyond what `pip`/`npm` need when install=true.
  */
 
+import { defaultPythonBin } from './pythonInterpreter.js';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -419,7 +420,7 @@ function resolveSystemPythonBin(min?: { major: number; minor: number }): string 
     requireMin: false,
   });
   if (resolved.ok) return resolved.python.bin;
-  return process.platform === 'win32' ? 'python' : 'python3';
+  return defaultPythonBin();
 }
 
 /**

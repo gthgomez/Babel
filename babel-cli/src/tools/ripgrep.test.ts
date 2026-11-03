@@ -316,3 +316,13 @@ describe('workspace_map', () => {
     );
   });
 });
+
+describe('normalizeRgGlob', () => {
+  it('rewrites a trailing literal dot so rg matches it exactly', async () => {
+    const { normalizeRgGlob } = await import('./ripgrep.js');
+    assert.equal(normalizeRgGlob('No paths matched.'), 'No paths matched[.]');
+    assert.equal(normalizeRgGlob('*matched.'), '*matched[.]');
+    assert.equal(normalizeRgGlob('a\\.'), 'a[.]');
+    assert.equal(normalizeRgGlob('*.ts'), '*.ts');
+  });
+});

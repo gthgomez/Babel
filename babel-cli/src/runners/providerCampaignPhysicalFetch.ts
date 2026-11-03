@@ -77,11 +77,7 @@ export class CampaignPhysicalFetchSession {
       })
     } catch (error) {
       if (error instanceof RunStoppedError) {
-        try {
-          this.settleOpenAdmissionAfterRunStopped()
-        } catch (settleError) {
-          throw settleError
-        }
+        this.settleOpenAdmissionAfterRunStopped()
       }
       throw error
     }
