@@ -24,7 +24,8 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { runSwarmPipeline } from './runners/swarmRunner.js';
-import { runAdversarialQaGate } from './pipeline/qaStage.js';
+import { runAdversarialQaGate, compileQaReviewContext, reviewDeepPlan } from './pipeline/qaStage.js';
+import { proposeDeepPlan } from './pipeline/deepPlanning.js';
 import { runChatExecutorLoop, formatToolCallForDisplay } from './pipeline/chatExecutorLoop.js';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { z } from 'zod';
@@ -48,7 +49,6 @@ import { resolveFamilyModelPolicy, resolveModelByKey, loadModelPolicyConfig } fr
 import { connect } from 'node:net';
 import { confirmCost, ConfirmDialog } from './ui/dialog.js';
 import { isRunningInDaemon } from './daemon/client.js';
-import { assessPlanningComplexity } from './services/plannerRouter.js';
 import { EvidenceBundle } from './evidence.js';
 import {
   createEpisodeLifecycleForEvidence,
@@ -170,7 +170,6 @@ import {
 import { buildOrchestratorTask } from './pipeline/orchestratorTask.js';
 import { writeLatestRunPointers } from './pipeline/runPointers.js';
 import { buildSweTask } from './pipeline/sweTask.js';
-import { buildQaTask } from './pipeline/qaTask.js';
 import { buildPipelineFinalTerminalState } from './pipeline/finalization.js';
 import {
   finalizeV9LiveSessionForPipeline,
@@ -239,7 +238,6 @@ import {
   BABEL_RUNS_DIR,
   MAX_SWE_QA_LOOPS,
   MAX_EVIDENCE_LOOPS,
-  QA_PATHS,
   abs,
   resolveOrchestratorVersion,
   getOrchestratorPaths,
@@ -263,9 +261,6 @@ import {
   maybeEnrichPipelineStageIds,
 } from './pipeline/manifestPatching.js';
 import {
-  sanitizeQaVerdictForDeterministicGradleBootstrapLane,
-  sanitizeWindowsGradlewPermissionQaVerdict,
-  sanitizeExistingWrapperQaVerdict,
   sanitizeGroundingViolationsForAndroidSdkLane,
 } from './pipeline/qaVerdictSanitizers.js';
 import { runExecutorLoop } from './pipeline/executorLoop.js';
@@ -2130,93 +2125,14 @@ export async function _runBabelPipelineInternal(
             : `\n  Revising plan (attempt ${attempt}/${MAX_SWE_QA_LOOPS})…\n`,
         );
 
-        // prompt_manifest contains ordered absolute path strings — use directly.
-        const swePaths = manifest.prompt_manifest;
-
-        const sweTask = buildSweTask(
-          manifest,
-          task,
-          qaRejections,
-          proposedFixStrategy,
-          additionalEvidenceContext,
-          groundingContext,
-          executionProfile.name,
-        );
-        const sweContext = await compileContext(
-          swePaths,
-          sweTask,
-          inferProjectRoot(manifest),
-          pruningStubs,
-        );
-        evidence.writeCompiledContext(`swe_v${attempt}`, sweContext);
-
-        // ── Smart Planner: assess task difficulty for model selection ────────
-        let plannerStartTierIndex: number | undefined;
-        let plannerSkipTierNames: string[] | undefined;
-
-        if (SMART_PLANNER_ENABLED) {
-          const complexityEstimate = manifest.analysis?.complexity_estimate;
-          const plannerDecision = assessPlanningComplexity({
-            task: mergedTaskContext,
-            ...(complexityEstimate === 'Low' ||
-            complexityEstimate === 'Medium' ||
-            complexityEstimate === 'High'
-              ? { manifestComplexity: complexityEstimate }
-              : {}),
-            qaRejections,
-            previousRejectionTags,
-            attempt,
-          });
-
-          if (plannerDecision.startTierIndex > 0 || plannerDecision.skipTierKeys.length > 0) {
-            plannerStartTierIndex = plannerDecision.startTierIndex;
-            plannerSkipTierNames = plannerDecision.skipTierKeys;
-            log(
-              `  Smart Planner: ${plannerDecision.rationale}` +
-                (plannerDecision.escalatedByRepeatedFailure
-                  ? ' [REPEATED FAILURE ESCALATION]'
-                  : ''),
-            );
-            // Persist the decision for post-run analysis.
-            evidence.writeDebugFile(
-              `debug_smart_planner_v${attempt}.json`,
-              `${JSON.stringify(plannerDecision, null, 2)}\n`,
-            );
-          }
-
-          // Apply the recommended reasoning effort for this planning call.
-          // The DeepSeek runner reads BABEL_REASONING_EFFORT from the environment.
-          // Auto-scaling: "max" effort also increases waterfall timeout by 2x
-          // since deeper reasoning takes longer.
-          if (plannerDecision.recommendedEffort === 'max') {
-            process.env['BABEL_REASONING_EFFORT'] = 'max';
-          }
-        }
-
-        const swePlanRaw = await runWithFallback(sweContext, SwePlanSchema, {
-          evidence,
-          stage: 'planning',
-          schemaName: 'SwePlanSchema',
-          ...(plannerStartTierIndex !== undefined ? { startTierIndex: plannerStartTierIndex } : {}),
-          ...(plannerSkipTierNames !== undefined ? { skipTierNames: plannerSkipTierNames } : {}),
+        const { plan: swePlan, warnings: planWarnings } = await proposeDeepPlan({
+          manifest, ownerTask: task, planningContext: mergedTaskContext,
+          qaRejections, proposedFixStrategy, additionalEvidenceContext,
+          groundingContext, taskGrounding, executionProfile: executionProfile.name,
+          attempt, previousRejectionTags, smartPlannerEnabled: SMART_PLANNER_ENABLED,
+          evidence, pruningStubs,
         });
-        const { plan: normalizedPlan, warnings: planWarnings } = normalizeSwePlan(swePlanRaw);
-        const { plan: groundedPlan, warnings: groundingWarnings } =
-          normalizePlanTargetsAgainstGrounding(taskGrounding, normalizedPlan);
-        const { plan: requestedTargetPlan, warnings: requestedTargetWarnings } = process.env['BABEL_PARITY_OFFLINE_FIX_MAP']?.trim() ? { plan: groundedPlan, warnings: [] as string[] } : normalizePlanTargetsAgainstRequestedOutputs(task, groundedPlan);
-        const swePlan = splitChainedShellSteps(requestedTargetPlan);
-        if (
-          planWarnings.length > 0 ||
-          groundingWarnings.length > 0 ||
-          requestedTargetWarnings.length > 0
-        ) {
-          executionReportWarnings.push(...planWarnings);
-          executionReportWarnings.push(...groundingWarnings);
-          executionReportWarnings.push(...requestedTargetWarnings);
-          planWarnings.forEach((w) => logDetail(`SWE plan warning: ${w}`));
-          groundingWarnings.forEach((w) => logDetail(`SWE plan warning: ${w}`));
-          requestedTargetWarnings.forEach((w) => logDetail(`SWE plan warning: ${w}`));
-        }
+        executionReportWarnings.push(...planWarnings);
         evidence.writeSwePlan(swePlan, attempt); episodeLifecycle.recordPhase('swe_planning', 'completed');
         await runPluginHooks('PostPlan', {
           runId: evidence.runId,
@@ -2345,23 +2261,12 @@ export async function _runBabelPipelineInternal(
             : `\n  Re-reviewing (attempt ${attempt}/${MAX_SWE_QA_LOOPS})…\n`,
         );
 
-        const deterministicGradleBootstrapLaneActive = shouldUseDeterministicGradleBootstrapLane(
-          inferProjectRoot(manifest),
-        );
-        const qaContext = await compileContext(
-          abs(QA_PATHS),
-          buildQaTask(
-            swePlan,
-            javaRuntimeStatus,
-            gradleRuntimeStatus,
-            detectAndroidSdkStatus(),
-            task,
-            deterministicGradleBootstrapLaneActive,
-            executionProfile.name,
-          ),
-          inferProjectRoot(manifest),
-        );
-        evidence.writeCompiledContext(`qa_v${attempt}`, qaContext);
+        const qaContext = await compileQaReviewContext({
+          plan: swePlan, manifest, ownerTask: task, javaRuntimeStatus, gradleRuntimeStatus,
+          androidSdkStatus: detectAndroidSdkStatus(),
+          deterministicGradleBootstrapLaneActive: shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest)),
+          executionProfile: executionProfile.name, evidence, attempt,
+        });
 
         const qaSpan = pipelineTrace.startChildSpan('babel.qa', {
           'babel.qa.attempt': attempt,
@@ -2369,18 +2274,7 @@ export async function _runBabelPipelineInternal(
         });
         let verdict: z.infer<typeof QaVerdictSchema>;
         try {
-          verdict = await runWithFallback(qaContext, QaVerdictSchema, {
-            evidence,
-            stage: 'qa',
-            schemaName: 'QaVerdictSchema',
-          });
-          verdict = sanitizeQaVerdictForDeterministicGradleBootstrapLane(
-            verdict,
-            swePlan,
-            manifest,
-          );
-          verdict = sanitizeWindowsGradlewPermissionQaVerdict(verdict, swePlan);
-          verdict = sanitizeExistingWrapperQaVerdict(verdict, swePlan, manifest);
+          verdict = await reviewDeepPlan({ context: qaContext, plan: swePlan, manifest, evidence });
         } catch (error) {
           endSpan(qaSpan, SpanStatusCode.ERROR, {}, error); episodeLifecycle.recordPhase('qa_review', 'failed', { error: error instanceof Error ? error.message : String(error) });
           log(
@@ -3146,31 +3040,14 @@ export async function resumeManualBridge(
 
   const targetModel = manifest.worker_configuration.assigned_model as TargetModel;
    manualEpisodeLifecycle.recordPhase('qa_review', 'started'); log('Stage 3 / 4  —  Reviewing (resume)');
-  const qaContext = await compileContext(
-    abs(QA_PATHS),
-    buildQaTask(
-      swePlan,
-      detectJavaRuntimeStatus(),
-      detectCommandOnPath('gradle'),
-      detectAndroidSdkStatus(),
-      manifest.handoff_payload.user_request,
-      shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest)),
-    ),
-    inferProjectRoot(manifest),
-  );
-  evidence.writeCompiledContext('qa_v1', qaContext);
-
-  const verdict = sanitizeQaVerdictForDeterministicGradleBootstrapLane(
-    await runWithFallback(qaContext, QaVerdictSchema, {
-      evidence,
-      stage: 'qa',
-      schemaName: 'QaVerdictSchema',
-    }),
-    swePlan,
-    manifest,
-  );
-  const sanitizedVerdict = sanitizeWindowsGradlewPermissionQaVerdict(verdict, swePlan);
-  const normalizedVerdict = sanitizeExistingWrapperQaVerdict(sanitizedVerdict, swePlan, manifest);
+  const qaContext = await compileQaReviewContext({
+    plan: swePlan, manifest, ownerTask: manifest.handoff_payload.user_request,
+    javaRuntimeStatus: detectJavaRuntimeStatus(), gradleRuntimeStatus: detectCommandOnPath('gradle'),
+    androidSdkStatus: detectAndroidSdkStatus(),
+    deterministicGradleBootstrapLaneActive: shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest)),
+    evidence, attempt: 1,
+  });
+  const normalizedVerdict = await reviewDeepPlan({ context: qaContext, plan: swePlan, manifest, evidence });
    evidence.writeQaVerdict(normalizedVerdict, 1); manualEpisodeLifecycle.recordPhase('qa_review', 'completed', { verdict: normalizedVerdict.verdict });
 
   if (normalizedVerdict.verdict !== 'PASS') {

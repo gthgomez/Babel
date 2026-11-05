@@ -3,17 +3,22 @@
  *
  * Extracted from pipeline.ts (P1.2 decomposition). Encapsulates:
  * - Adversarial QA gate — second-pass review with a different enabled model
- * - QA rejection state population
- *
- * The QA model invocation itself stays in pipeline.ts (tightly coupled to
- * context compilation and waterfall configuration). This module handles
- * the verdict processing that follows the model call.
+ * - Standard review compilation, invocation and normalization shared by Deep
+ *   and manual resume. The pipeline retains attempt and approval authority.
  */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { SwePlan, QaVerdict, QaVerdictReject } from '../schemas/agentContracts.js';
+import type { SwePlan, QaVerdict, QaVerdictReject, OrchestratorManifest } from '../schemas/agentContracts.js';
+import {compileContext} from '../compiler.js';
+import type {EvidenceBundle} from '../evidence.js';
+import type {ExecutionProfileName} from '../config/executionProfiles.js';
+import type {JavaRuntimeStatus,CommandRuntimeStatus,AndroidSdkStatus} from '../stages/runtimePreflight.js';
+import {buildQaTask} from './qaTask.js';
+import {inferProjectRoot} from './manifestContext.js';
+import {abs,QA_PATHS} from './paths.js';
+import {sanitizeQaVerdictForDeterministicGradleBootstrapLane,sanitizeWindowsGradlewPermissionQaVerdict,sanitizeExistingWrapperQaVerdict} from './qaVerdictSanitizers.js';
 
 import {
   pickAdversarialModel,
@@ -27,6 +32,59 @@ import {getAvailableModels, resolveStagePolicyRoutes, isLiveModelId} from '../mo
 import { QaVerdictSchema } from '../schemas/agentContracts.js';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
 import type { z } from 'zod';
+
+export interface QaReviewInput {
+  plan: SwePlan;
+  manifest: OrchestratorManifest;
+  ownerTask: string;
+  javaRuntimeStatus: JavaRuntimeStatus;
+  gradleRuntimeStatus: CommandRuntimeStatus;
+  androidSdkStatus: AndroidSdkStatus;
+  deterministicGradleBootstrapLaneActive: boolean;
+  executionProfile?: ExecutionProfileName;
+  evidence: EvidenceBundle;
+  attempt: number;
+}
+
+export async function compileQaReviewContext(
+  input: QaReviewInput,
+): Promise<string> {
+  const context = await compileContext(
+    abs(QA_PATHS),
+    buildQaTask(
+      input.plan,
+      input.javaRuntimeStatus,
+      input.gradleRuntimeStatus,
+      input.androidSdkStatus,
+      input.ownerTask,
+      input.deterministicGradleBootstrapLaneActive,
+      input.executionProfile,
+    ),
+    inferProjectRoot(input.manifest),
+  );
+  input.evidence.writeCompiledContext(`qa_v${input.attempt}`, context);
+  return context;
+}
+
+export async function reviewDeepPlan(input: {
+  context: string;
+  plan: SwePlan;
+  manifest: OrchestratorManifest;
+  evidence: EvidenceBundle;
+}): Promise<QaVerdict> {
+  let verdict = await runWithFallback(input.context, QaVerdictSchema, {
+    evidence: input.evidence,
+    stage: 'qa',
+    schemaName: 'QaVerdictSchema',
+  });
+  verdict = sanitizeQaVerdictForDeterministicGradleBootstrapLane(
+    verdict,
+    input.plan,
+    input.manifest,
+  );
+  verdict = sanitizeWindowsGradlewPermissionQaVerdict(verdict, input.plan);
+  return sanitizeExistingWrapperQaVerdict(verdict, input.plan, input.manifest);
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
