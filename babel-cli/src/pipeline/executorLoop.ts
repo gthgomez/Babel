@@ -18,6 +18,7 @@ import {
 } from '../localTools.js';
 import { type RuntimeHookTraceEvent } from '../runtime/hooks.js';
 import type { ChatEngineServices } from '../agent/chatEngineServices.js';
+import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
 import { applyPreToolUseHooks } from './executorPreToolHooks.js';
 import {
   IncrementalToolDetector,
@@ -281,6 +282,7 @@ function evictFileReadCache(
  */ const appendExecutorToolLog = (toolCallLog: ToolCallLog[], entry: ToolCallLog, episodeSink?: { recordExecutorToolCall(entry: ToolCallLog): void } | null): void => { toolCallLog.push(entry); episodeSink?.recordExecutorToolCall(entry); };
 
 async function runDirectBoundedWritePlan(
+  kernel: ExecutorKernel,
   reliabilityRepairProofEnabled: boolean,
   approvedPlan: SwePlan,
   rawTask: string,
@@ -295,7 +297,7 @@ async function runDirectBoundedWritePlan(
     details?: { terminalStatus?: string; haltTag?: string; condition?: string },
   ) => Promise<void>, episodeSink?: { recordExecutorToolCall(entry: ToolCallLog): void } | null,
 ): Promise<ExecutorLoopResult | null> {
-  const directBoundedPlan = reliabilityRepairProofEnabled
+  const directBoundedPlan = reliabilityRepairProofEnabled || getRequestedTargetContract(rawTask).readOnly
     ? null
     : getDirectBoundedWritePlan(approvedPlan, rawTask, getExecutorProjectRoot());
   if (!directBoundedPlan) {
@@ -319,6 +321,7 @@ async function runDirectBoundedWritePlan(
         runDir: evidence.runDir,
         babelRoot: BABEL_ROOT,
       },
+      kernel,
     );
 
     const entry: ToolCallLog = {
@@ -1363,6 +1366,7 @@ export async function runExecutorLoop(
 
   const reliabilityRepairProofEnabled = isReliabilityRepairProofEnabled(rawTask);
   const requestedTargetContract = getRequestedTargetContract(rawTask);
+  const kernel = createExecutorKernel(requestedTargetContract.readOnly ? 'plan' : 'deep', services);
   const compactFileOnlyExecutor =
     !isExternalBenchmarkTask(rawTask) &&
     requestedTargetContract.bounded &&
@@ -1862,7 +1866,7 @@ export async function runExecutorLoop(
     nextTurnPrompt: string,
     reason: string,
   ): Promise<ExecutorLoopResult | null> => {
-    if (!isExternalBenchmarkTask(rawTask)) {
+    if (requestedTargetContract.readOnly || !isExternalBenchmarkTask(rawTask)) {
       return null;
     }
 
@@ -1892,6 +1896,7 @@ export async function runExecutorLoop(
   };
 
   const directBoundedResult = await runDirectBoundedWritePlan(
+    kernel,
     reliabilityRepairProofEnabled,
     approvedPlan,
     rawTask,
@@ -2153,6 +2158,7 @@ export async function runExecutorLoop(
             runDir: evidence.runDir,
             babelRoot: BABEL_ROOT,
           },
+          kernel,
         );
 
         const entry: ToolCallLog = {
@@ -2650,7 +2656,7 @@ export async function runExecutorLoop(
         runId: evidence.runId,
         runDir: evidence.runDir,
         babelRoot: BABEL_ROOT,
-      }));
+      }, kernel));
 
     const entry: ToolCallLog = {
       step: stepNum,
@@ -2847,7 +2853,7 @@ export async function runExecutorLoop(
   }
 
   // Exceeded max turns without a terminal signal.
-  const deterministicRepair = repairExactOutputSchemaArtifacts(rawTask, getExecutorProjectRoot());
+  const deterministicRepair = requestedTargetContract.readOnly ? null : repairExactOutputSchemaArtifacts(rawTask, getExecutorProjectRoot());
   if (deterministicRepair) {
     reportWarnings.push(deterministicRepair);
     const completion = {

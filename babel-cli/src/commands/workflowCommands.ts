@@ -1,4 +1,5 @@
 import { selectedConnectionModel } from '../services/connectionSettings.js'
+import {runDesktopPlan,type DesktopPlanOptions} from './desktopPlan.js';
 import { savePlan, shouldAutoApplyPlan, withSavedPlanApplication, type SavedPlan } from '../services/savedPlan.js'
 import { assertFiniteBudgetSupported } from '../config/laneBudget.js'
 import { resolveEffectiveSettings } from '../config/userSettings.js'
@@ -854,6 +855,8 @@ function normalizeLiteTask(taskParts: string[]): string {
 }
 
 type LiteCommandOptions = {
+  onResult?: DesktopPlanOptions['onResult'];
+  toolStream?: DesktopPlanOptions['toolStream'];
   project?: string;
   model?: string;
   modelTier?: string;
@@ -1237,7 +1240,8 @@ async function runLiteCommand(
       schema_retries: 0,
       recovered_after_schema_retry: false,
     } as LiteResultPayload;
-    if (options.json === true || options.stream === true) {
+    if (options.onResult) options.onResult(payload as unknown as Record<string,unknown>);
+    else if (options.json === true || options.stream === true) {
       writeJson(payload);
     } else {
       process.stdout.write(`${formatLiteResultHuman(payload)}\n`);
@@ -1268,6 +1272,7 @@ async function runLiteCommand(
       })
     : undefined;
   const sessionOptions: ConstructorParameters<typeof AgentSession>[0] = {
+    ...(options.toolStream!==undefined?{toolStream:options.toolStream}:{}),
     task,
     verb: toSessionVerb(verb),
     ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
@@ -1375,7 +1380,8 @@ async function runLiteCommand(
   const progressTranscript =
     fixProgress !== undefined ? fixProgress.getTranscript().join('\n') : '';
 
-  if (options.json === true) {
+  if (options.onResult) options.onResult(payloadRecord,humanText??undefined);
+  else if (options.json === true) {
     writeJson(result.payload);
     if (humanText && runDir && (options.humanSummary === true || usesSmallFixProgress)) {
       writeHumanSummaryArtifact(runDir, humanText, progressTranscript);
@@ -2320,6 +2326,10 @@ Notes:
           }
         }
 
+        if (mode==='plan' && outputFormat==='stream-json' && process.env['BABEL_DESKTOP_IPC']==='1') {
+          await runDesktopPlan(task,{...options,...(normalizedModel!==undefined?{model:normalizedModel}:{}),...(resolvedProjectRoot!==undefined?{projectRoot:resolvedProjectRoot}:{})},runLiteCommand);
+          return;
+        }
         if (mode === 'manual') {
           try {
             await withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () =>

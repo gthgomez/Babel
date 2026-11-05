@@ -414,9 +414,9 @@ export {
 // ─── Chat mode pipeline ────────────────────────────────────────────────────────
 
 interface ChatPipelineContext {
+  ownerTask: string;
   abortSignal?: AbortSignal;
   manifest: OrchestratorManifest;
-  mergedTaskContext: string;
   evidence: EvidenceBundle;
   groundingContext: string;
   executionProfileName: ExecutionProfileName;
@@ -434,7 +434,7 @@ async function runChatPipeline(
   let { v9StackTelemetry } = ctx;
   const {
     manifest,
-    mergedTaskContext,
+    ownerTask,
     evidence,
     groundingContext,
     executionProfileName,
@@ -451,7 +451,7 @@ async function runChatPipeline(
   let chatContract: LiteTaskContract | null = null;
   try {
     chatContract = buildLiteTaskContract({
-      task: mergedTaskContext,
+      task: ownerTask,
       repoPath: projectRoot,
       maxPromptTokens: 2500,
       fileScanLimit: 600,
@@ -465,7 +465,7 @@ async function runChatPipeline(
   log('Stage 2 / 3  —  Planning');
   const chatTask = buildSweTask(
     manifest,
-    mergedTaskContext,
+    ownerTask,
     [],
     undefined,
     '',
@@ -492,7 +492,7 @@ async function runChatPipeline(
     normalizedPlan,
   );
   const { plan: chatPlan } = normalizePlanTargetsAgainstRequestedOutputs(
-    mergedTaskContext,
+    ownerTask,
     groundedPlan,
   );
   const swePlan = splitChainedShellSteps(chatPlan);
@@ -515,7 +515,7 @@ async function runChatPipeline(
     }
 
     log('Stage 3 / 3  —  Applying changes');
-    const chatResult = await runChatExecutorLoop(swePlan, evidence, mergedTaskContext, {
+    const chatResult = await runChatExecutorLoop(swePlan, evidence, ownerTask, {
       projectRoot,
       ...(abortSignal ? { signal: abortSignal } : {}),
     });
@@ -1694,7 +1694,7 @@ export async function _runBabelPipelineInternal(
     });
 
     const mergedTaskContext = mergeTaskContext(task, manifest.handoff_payload.user_request);
-    const originalIntentContract = inferIntentContract(mergedTaskContext);
+    const originalIntentContract = inferIntentContract(task);
     evidence.writeDebugFile(
       'intent_contract.json',
       `${JSON.stringify(originalIntentContract, null, 2)}\n`,
@@ -1712,12 +1712,12 @@ export async function _runBabelPipelineInternal(
       'deepseek-v4-pro') as TargetModel;
     v9LiveSession = maybeInitializeV9LiveSession(evidence.runDir, manifest.session_id ?? sessionId, effectiveMode, mergedTaskContext,
       inferProjectRoot(manifest) ?? runtimeProjectRoot, manifest.prompt_manifest, effectiveModel);
-    const exactInvariantRegistry = getRequestedTargetContract(mergedTaskContext).exactInvariants;
+    const exactInvariantRegistry = getRequestedTargetContract(task).exactInvariants;
     evidence.writeDebugFile(
       '11_exact_invariants.json',
       `${JSON.stringify(exactInvariantRegistry, null, 2)}\n`,
     );
-    const taskContract = classifyTaskContract(mergedTaskContext);
+    const taskContract = classifyTaskContract(task);
     const taskGrounding = buildTaskGrounding(taskContract, inferProjectRoot(manifest));
     const planHandoff = loadPlanHandoff({
       repoPath: runtimeProjectRoot,
@@ -1873,7 +1873,7 @@ export async function _runBabelPipelineInternal(
     };
 
     // ── Swarm Dispatch ────────────────────────────────────────────────────────
-    const requestedTargetContractForMode = getRequestedTargetContract(mergedTaskContext);
+    const requestedTargetContractForMode = getRequestedTargetContract(task);
     if (
       effectiveMode === 'plan' &&
       shouldRefuseWriteRequestForMode(
@@ -1945,7 +1945,7 @@ export async function _runBabelPipelineInternal(
       log('Stage 2 / 4  —  Exporting the plan');
       const sweTask = buildSweTask(
         manifest,
-        mergedTaskContext,
+        task,
         [],
         undefined,
         '',
@@ -1981,8 +1981,8 @@ export async function _runBabelPipelineInternal(
       requirePostMutationVerification = true;
       return await runChatPipeline(
         {
+          ownerTask: task,
           manifest,
-          mergedTaskContext,
           evidence,
           groundingContext,
           executionProfileName: executionProfile.name,
@@ -2135,7 +2135,7 @@ export async function _runBabelPipelineInternal(
 
         const sweTask = buildSweTask(
           manifest,
-          mergedTaskContext,
+          task,
           qaRejections,
           proposedFixStrategy,
           additionalEvidenceContext,
@@ -2203,7 +2203,7 @@ export async function _runBabelPipelineInternal(
         const { plan: normalizedPlan, warnings: planWarnings } = normalizeSwePlan(swePlanRaw);
         const { plan: groundedPlan, warnings: groundingWarnings } =
           normalizePlanTargetsAgainstGrounding(taskGrounding, normalizedPlan);
-        const { plan: requestedTargetPlan, warnings: requestedTargetWarnings } = process.env['BABEL_PARITY_OFFLINE_FIX_MAP']?.trim() ? { plan: groundedPlan, warnings: [] as string[] } : normalizePlanTargetsAgainstRequestedOutputs(mergedTaskContext, groundedPlan);
+        const { plan: requestedTargetPlan, warnings: requestedTargetWarnings } = process.env['BABEL_PARITY_OFFLINE_FIX_MAP']?.trim() ? { plan: groundedPlan, warnings: [] as string[] } : normalizePlanTargetsAgainstRequestedOutputs(task, groundedPlan);
         const swePlan = splitChainedShellSteps(requestedTargetPlan);
         if (
           planWarnings.length > 0 ||
@@ -2296,7 +2296,7 @@ export async function _runBabelPipelineInternal(
         const executorSafetyReject = collectExecutorSafetyViolations(
           swePlan,
           manifest,
-          mergedTaskContext,
+          task,
           executionProfile.name,
         );
         if (executorSafetyReject) {
@@ -2355,7 +2355,7 @@ export async function _runBabelPipelineInternal(
             javaRuntimeStatus,
             gradleRuntimeStatus,
             detectAndroidSdkStatus(),
-            mergedTaskContext,
+            task,
             deterministicGradleBootstrapLaneActive,
             executionProfile.name,
           ),
@@ -2544,7 +2544,7 @@ export async function _runBabelPipelineInternal(
       if (approvedPlan !== null && effectiveMode === 'deep') {
         const boundedActivationReject = assertBoundedPlanActivationContract(
           approvedPlan,
-          mergedTaskContext,
+          task,
         );
         if (boundedActivationReject) {
           log(`  Executor: ACTIVATION_REFUSED [ACTIVATION_GATE_FAIL]`);
@@ -2579,7 +2579,7 @@ export async function _runBabelPipelineInternal(
       if (effectiveMode === 'deep' && approvedPlan !== null) {
         const preChecklistInjection = injectVerificationStepsIntoPlan(
           approvedPlan,
-          mergedTaskContext,
+          task,
           inferProjectRoot(manifest) ?? runtimeProjectRoot,
         );
         if (preChecklistInjection.injected) {
@@ -2667,7 +2667,7 @@ export async function _runBabelPipelineInternal(
         // user-modified plan must be re-validated before the executor activates.
         const postEscalationBoundedReject = assertBoundedPlanActivationContract(
           approvedPlan,
-          mergedTaskContext,
+          task,
         );
         if (postEscalationBoundedReject) {
           log(`  Executor: ACTIVATION_REFUSED [ACTIVATION_GATE_FAIL] (post-escalation)`);
@@ -2738,7 +2738,7 @@ export async function _runBabelPipelineInternal(
       episodeLifecycle.recordPhase('executor', 'started'); const preExecutorResult = await runPreExecutorSafetyGates({
         approvedPlan,
         projectRoot: inferProjectRoot(manifest) ?? runtimeProjectRoot,
-        taskContext: mergedTaskContext,
+        taskContext: task,
         intentContract: originalIntentContract,
         babelRoot: BABEL_ROOT,
       });
@@ -2795,7 +2795,7 @@ export async function _runBabelPipelineInternal(
           evidence,
           targetModel: effectiveModel,
           manifest,
-          rawTask: mergedTaskContext,
+          rawTask: task,
           reportWarnings: executionReportWarnings,
           initialExecutorLog,
           pruningStubs, episodeSink: pipelineEpisodeSink,
@@ -3007,52 +3007,56 @@ async function runStagedExecutor(
     pruningStubs, episodeSink,
   } = opts;
 
-  const scaffoldSeed = seedGodotMobileScaffold({
-    rawTask: manifest.handoff_payload.user_request,
-    projectRoot: getExecutorProjectRoot() ?? inferProjectRoot(manifest) ?? null,
-    toolCallLog: initialExecutorLog,
-    babelRoot: BABEL_ROOT,
-  });
-  evidence.writeDebugFile(
-    '09_scaffold_seed.json',
-    `${JSON.stringify(scaffoldSeed, null, 2)}\n`,
-  );
-  if (scaffoldSeed.status === 'SEEDED') {
-    logDetail(
-      `Deterministic Godot scaffold seed copied ${scaffoldSeed.filesCopied.length} file(s).`,
+  // Bootstrap helpers can write directly, so they must obey owner intent too.
+  if (!getRequestedTargetContract(rawTask).readOnly) {
+    const scaffoldSeed = seedGodotMobileScaffold({
+      rawTask,
+      projectRoot: getExecutorProjectRoot() ?? inferProjectRoot(manifest) ?? null,
+      toolCallLog: initialExecutorLog,
+      babelRoot: BABEL_ROOT,
+    });
+    evidence.writeDebugFile(
+      '09_scaffold_seed.json',
+      `${JSON.stringify(scaffoldSeed, null, 2)}\n`,
     );
-  }
-
-  if (shouldUseDeterministicAndroidSdkBootstrapLane(inferProjectRoot(manifest))) {
-    logDetail('Deterministic Android SDK bootstrap lane activated.');
-    const androidSdkBootstrapResult = await runDeterministicAndroidSdkBootstrapLane(manifest);
-    initialExecutorLog.push(...androidSdkBootstrapResult.toolCallLog);
-    if (androidSdkBootstrapResult.haltedReport) {
-      writeValidatedExecutionReport(
-        evidence,
-        androidSdkBootstrapResult.haltedReport,
-        initialExecutorLog,
-        reportWarnings,
+    if (scaffoldSeed.status === 'SEEDED') {
+      logDetail(
+        `Deterministic Godot scaffold seed copied ${scaffoldSeed.filesCopied.length} file(s).`,
       );
-      log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Android SDK bootstrap lane'); recordExecutorToolLog(episodeSink, initialExecutorLog);
-      return { ok: false };
     }
-  }
 
-  if (shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest))) {
-    logDetail('Deterministic Gradle bootstrap lane activated.');
-    const bootstrapResult = await runDeterministicGradleBootstrapLane(manifest, evidence);
-    initialExecutorLog.push(...bootstrapResult.toolCallLog);
-    if (bootstrapResult.haltedReport) {
-      writeValidatedExecutionReport(
-        evidence,
-        bootstrapResult.haltedReport,
-        initialExecutorLog,
-        reportWarnings,
-      );
-      log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Gradle bootstrap lane'); recordExecutorToolLog(episodeSink, initialExecutorLog);
-      return { ok: false };
+    if (shouldUseDeterministicAndroidSdkBootstrapLane(inferProjectRoot(manifest))) {
+      logDetail('Deterministic Android SDK bootstrap lane activated.');
+      const androidSdkBootstrapResult = await runDeterministicAndroidSdkBootstrapLane(manifest);
+      initialExecutorLog.push(...androidSdkBootstrapResult.toolCallLog);
+      if (androidSdkBootstrapResult.haltedReport) {
+        writeValidatedExecutionReport(
+          evidence,
+          androidSdkBootstrapResult.haltedReport,
+          initialExecutorLog,
+          reportWarnings,
+        );
+        log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Android SDK bootstrap lane'); recordExecutorToolLog(episodeSink, initialExecutorLog);
+        return { ok: false };
+      }
     }
+
+    if (shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest))) {
+      logDetail('Deterministic Gradle bootstrap lane activated.');
+      const bootstrapResult = await runDeterministicGradleBootstrapLane(manifest, evidence);
+      initialExecutorLog.push(...bootstrapResult.toolCallLog);
+      if (bootstrapResult.haltedReport) {
+        writeValidatedExecutionReport(
+          evidence,
+          bootstrapResult.haltedReport,
+          initialExecutorLog,
+          reportWarnings,
+        );
+        log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Gradle bootstrap lane'); recordExecutorToolLog(episodeSink, initialExecutorLog);
+        return { ok: false };
+      }
+    }
+
   }
 
   const executorResult = await runExecutorLoop(

@@ -75,7 +75,7 @@ export function buildSweTask(
   const executionProfileLines = buildExecutionProfilePromptLines(executionProfileName, 'swe');
   const benchmarkShellSyntaxAllowed = shouldUseDockerSandbox(executionProfileName);
   const projectRoot = inferProjectRoot(manifest);
-  const boundedPlanningLines = getBoundedTaskPlanningLines(userRequest);
+  const boundedPlanningLines = getBoundedTaskPlanningLines(originalTaskContext);
   const benchmarkHarnessPlanningLines = getBenchmarkHarnessPlanningLines(userRequest);
   const manyFileAggregationPlanningLines = getManyFileAggregationPlanningLines(userRequest);
   const benchmarkRuntimeInventoryLines = getBenchmarkRuntimeInventoryLines(executionProfileName);

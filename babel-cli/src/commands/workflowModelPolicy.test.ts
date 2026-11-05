@@ -33,7 +33,7 @@ test('streaming Plan admission reports the exact Desktop model policy refusal as
     const policyPath = join(fixture.root, 'model-policy.json');
     writeFileSync(policyPath, JSON.stringify(policy));
     const preload = join(fixture.root, 'desktop-route.mjs');
-    writeFileSync(preload, `process.env.BABEL_MODEL_POLICY_PATH=${JSON.stringify(policyPath)};process.env.BABEL_DESKTOP_PROVIDER='openrouter';process.env.BABEL_DESKTOP_MODEL_ROUTE=${JSON.stringify(model)};`);
+    writeFileSync(preload, `process.env.BABEL_MODEL_POLICY_PATH=${JSON.stringify(policyPath)};process.env.BABEL_DESKTOP_PROVIDER='openrouter';process.env.BABEL_DESKTOP_IPC='1';process.env.BABEL_DESKTOP_MODEL_ROUTE=${JSON.stringify(model)};`);
     const child = spawnSync(process.execPath, [
       '--experimental-wasm-modules', '--import', new URL('../testinfra/synthetic-provider-fixture.mjs', import.meta.url).href,
       '--import', import.meta.resolve('tsx'), '--import', pathToFileURL(preload).href,

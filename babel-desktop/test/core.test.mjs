@@ -3,6 +3,15 @@ import assert from 'node:assert/strict';
 
 const load = () => import('../src/core.mjs').catch(() => ({}));
 
+test('plan readiness is distinct from verified implementation and transport poison downgrades it',async()=>{
+ const {normalizeEvent,verifiedStatus}=await load();
+ assert.equal(normalizeEvent({type:'run_complete',result:{command:'plan',status:'PLAN_READY',changed_files:[],answer:{answer:'Read-only plan'}}}).status,'plan_ready');
+ assert.equal(normalizeEvent({type:'run_complete',result:{command:'plan',status:'PLAN_READY',changed_files:['unexpected.txt']}}).status,'unverified');
+ assert.equal(verifiedStatus('plan_ready',true),'unverified');
+ for(const [terminal_outcome,expected] of [['CANCELLED','cancelled'],['AGENT_FAILURE','failed'],['INFRA_FAILURE','failed'],['BLOCKED_POLICY','blocked']])assert.equal(normalizeEvent({type:'run_complete',result:{command:'plan',status:'PLAN_READY',changed_files:[],terminal_outcome}}).status,expected);
+ assert.equal(normalizeEvent({type:'run_complete',result:{user_status:'failed',errors:['Plan mode cannot execute file writes.']}}).text,'Plan mode cannot execute file writes.');
+});
+
 test('provider mode support is explicit and unsupported pipeline routes are blocked', async () => {
   const {modeUnavailableReason} = await load();
   for(const provider of ['openrouter','opencode-go','ollama','deepseek','deepinfra']) {

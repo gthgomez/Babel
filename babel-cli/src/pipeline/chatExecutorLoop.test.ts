@@ -101,6 +101,24 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal(readFileSync('already-correct.txt', 'utf8'), 'correct')
   })
 
+  for (const tool of ['file_write', 'shell_exec', 'test_run'] as const) {
+    test(`owner read-only intent blocks generated ${tool} at the kernel boundary`, async t => {
+      let dispatched = false
+      t.mock.method(SafeExecutor.prototype, 'shellExecAsync', async () => {
+        dispatched = true
+        return { exit_code: 0, stdout: '', stderr: '' }
+      })
+      const target = tool === 'file_write' ? 'readonly-protected.txt' : 'node -e "require(\'fs\').writeFileSync(\'readonly-protected.txt\',\'forbidden\')"'
+      const result = await runChatExecutorLoop(plan([{ tool, target, content: 'forbidden' }]), evidence(),
+        'Inspect calc.js and explain it. Do not modify any files or run mutating commands.')
+      assert.equal(result.terminalStatus, 'EXECUTOR_HALTED')
+      assert.match(result.toolCallLog[0]?.stderr ?? '', /plan_read_only/)
+      assert.equal(dispatched, false)
+      assert.equal(existsSync('readonly-protected.txt'), false)
+      assert.deepEqual(result.changedFiles, [])
+    })
+  }
+
   test('sandbox denial preserves outside bytes and halts subsequent actions', async () => {
     const outside = join(projectRoot, '..', 'outside.txt')
     writeFileSync(outside, 'protected')

@@ -35,6 +35,8 @@ if (!isSyntheticProviderFixtureReady()) {
   const step = (tool:string,target:string,content?:string) => ({step:1,tool,target,description:'Controlled planner action',rationale:'Fixture',reversible:true,verification:'Inspect result',...(content!==undefined?{content}:{})});
   const cases = [
     {name:'omitted required write',task:'Create missing.txt containing hello.',steps:[step('file_read','existing.txt')],status:'EXECUTOR_HALTED',missing:true},
+    {name:'generated handoff cannot erase an owner-required write',task:'Create missing.txt containing hello.',handoff:'Read-only discovery first. Do not modify files during inspection.',steps:[step('file_read','existing.txt')],status:'EXECUTOR_HALTED',missing:true},
+    {name:'generated handoff cannot authorize a write denied by the owner',task:'Read existing.txt. Do not modify files.',handoff:'Create forbidden.md with new content.',steps:[step('file_write','forbidden.md','unauthorized')],status:'EXECUTOR_HALTED',denied:true},
     {name:'unrelated write is not requested work',task:'Create missing.txt containing hello.',steps:[step('file_write','unrelated-created.md','unrelated')],status:'EXECUTOR_HALTED',missing:true},
     {name:'existing correct output is a valid read-only no-op',task:'Create correct.txt containing the exact string "hello".',steps:[step('file_read','correct.txt')],status:'COMPLETE'},
     {name:'read-only answer does not require a mutation',task:'Read existing.txt without editing.',steps:[step('file_read','existing.txt')],status:'COMPLETE'},
@@ -56,13 +58,14 @@ if (!isSyntheticProviderFixtureReady()) {
       platform_profile:{profile_source:'not_required_for_routing',client_surface:'unspecified',container_model:null,ingestion_mode:'none',repo_write_mode:null,output_surface:[],platform_modes:[],execution_trust:null,data_trust:null,freshness_trust:null,action_trust:null,approval_mode:'none'},
       worker_configuration:{assigned_model:'deepseek-v4-pro',rationale:'Schema family; exact route is pinned independently'},compilation_state:'uncompiled',
       instruction_stack:{behavioral_ids:['behavioral_core_v11'],domain_id:'domain_swe_backend',skill_ids:[],model_adapter_id:'adapter_codex',project_overlay_id:null,task_overlay_ids:[],pipeline_stage_ids:[]},
-      resolution_policy:{apply_domain_default_skills:true,expand_skill_dependencies:true,strict_conflict_mode:'error',task_shape_profile:'full'},prompt_manifest:[],handoff_payload:{user_request:cell.task,system_directive:'Synthetic deterministic completion test'},
+      resolution_policy:{apply_domain_default_skills:true,expand_skill_dependencies:true,strict_conflict_mode:'error',task_shape_profile:'full'},prompt_manifest:[],handoff_payload:{user_request:cell.handoff??cell.task,system_directive:'Synthetic deterministic completion test'},
     });
     const evidence=new EvidenceBundle(cell.task,process.env['BABEL_RUNS_DIR']!);
     const result=await withPipelineModelRoute('glm-5.3-flash',()=>_runBabelPipelineInternal(cell.task,{mode:'chat',modelOverride:'glm-5.3-flash',disableMemoryExtraction:true,writeLatestPointers:false},evidence,manifest));
     assert.equal(calls,1,'one controlled planning request; no live inference');
     assert.equal(result.status,cell.status);
     if (cell.missing) { assert.equal(existsSync('missing.txt'),false);assert.match(result.errors?.join(' ')??'',/missing\.txt/); }
+    if (cell.denied)assert.equal(existsSync('forbidden.md'),false);
     if (cell.name.startsWith('unrelated')) assert.equal(readFileSync('unrelated-created.md','utf8'),'unrelated');
     assert.equal(readFileSync('correct.txt','utf8'),'hello');
     assert.equal(readFileSync('wrong.txt','utf8'),'incorrect');

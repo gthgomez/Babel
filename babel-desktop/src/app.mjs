@@ -196,7 +196,7 @@ function executionBlocked() {
 function renderStatus(status) {
   const msg = activeSession().messages.filter(m => m.role === 'assistant').at(-1);
   const s = status ?? (activeRun ? activeRun.terminalReceived ? 'finishing' : 'running' : msg?.status ?? 'ready');
-  const names={running:'Running',finishing:'Finishing',failed:'Failed',blocked:'Blocked',cancelled:'Stopped',complete:'Verified',no_change:'No change',unverified:'Unverified',ready:'Ready'};
+  const names={running:'Running',finishing:'Finishing',failed:'Failed',blocked:'Blocked',cancelled:'Stopped',complete:'Verified',plan_ready:'Plan ready',no_change:'No change',unverified:'Unverified',ready:'Ready'};
   $('#main-status').textContent = !activeRun&&executionBlocked() ? (!nativeInfo&&!connectionError&&native?'Connecting':'Setup required') : names[s] ?? 'Ready';
   $('#main-status-dot').className = `status-dot ${['failed','blocked'].includes(s) ? s : ''}`;
   $('.status-main').className = `status-main ${['failed','blocked'].includes(s) ? s : ''}`;
@@ -274,7 +274,7 @@ function messageMarkup(m, index) {
   const approval = m.pendingApproval ? `<div class="approval-card"><p>${e(m.pendingApproval)}</p>${m.approvalCommand?`<p>Operation</p><pre class="tool-detail">${e(m.approvalCommand)}</pre>${m.approvalCwd?`<p>Working directory: ${e(m.approvalCwd)}</p>`:''}${m.approvalDetails?`<details><summary>Operation payload</summary><pre class="tool-detail">${e(m.approvalDetails)}</pre></details>`:''}`:'<p class="fine-print">Operation details unavailable. Deny this request and update the runtime before retrying.</p>'}${!canApprove?'<p class="fine-print">Approval identity is missing, expired or superseded. Update an older runtime before retrying this operation.</p>':''}<div class="dialog-actions"><button class="button primary" data-action="approve-run" ${canApprove&&m.approvalCommand?'':'disabled'}>Allow</button><button class="button" data-action="deny-run" ${canApprove?'':'disabled'}>Deny</button></div></div>` : '';
   const review = m.review?.reasons?.length ? `<section class="approval-card"><strong>${e(m.review.title || 'REVIEW')}</strong><ul>${m.review.reasons.map(reason=>`<li>${e(reason)}</li>`).join('')}</ul></section>` : '';
   const evidence = m.result && ['failed','blocked','unverified'].includes(m.status) ? `<details class="raw-result"><summary>CLI result / evidence</summary><pre class="tool-detail">${e(JSON.stringify(m.result,null,2))}</pre></details>` : '';
-  return `<article class="message assistant-message"${identity}><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${expansion}${archiveInfo}${m.toolsTruncated?'<p class="fine-print">Tool preview limited to 100 entries. Complete retained details are available in message sections.</p>':''}${m.terminalConflict?'<p class="fine-print">Terminal records disagree. Refresh or inspect the session evidence.</p>':''}${review}${approval}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${''}${e(({complete:'Response complete',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions"><button data-action="copy-message" data-index="${index}" ${!m.text || m.status === 'running' ? 'disabled' : ''}>${icon('copy')} Copy</button></div></article>`;
+  return `<article class="message assistant-message"${identity}><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${expansion}${archiveInfo}${m.toolsTruncated?'<p class="fine-print">Tool preview limited to 100 entries. Complete retained details are available in message sections.</p>':''}${m.terminalConflict?'<p class="fine-print">Terminal records disagree. Refresh or inspect the session evidence.</p>':''}${review}${approval}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${''}${e(({complete:'Response complete',plan_ready:'Plan ready · no project files changed',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions"><button data-action="copy-message" data-index="${index}" ${!m.text || m.status === 'running' ? 'disabled' : ''}>${icon('copy')} Copy</button></div></article>`;
 }
 let conversationFrame = null;
 function scheduleConversationRender() {
@@ -797,7 +797,7 @@ function handleNativeEvent(packet) {
       message.status=status;
       // Terminal task evidence is not evidence that each outstanding tool succeeded.
       settleTools(message, status==='cancelled'?'cancelled':'unverified');
-      if(!message.text&&ev.text)appendLiveText(message,ev.text.slice(0,250000));
+      if(ev.text && (!message.text || (['failed','blocked'].includes(status) && !message.text.includes(ev.text))))appendLiveText(message,`${message.text?'\n\n':''}${ev.text.slice(0,250000)}`);
       if(!message.text)appendLiveText(message,'Babel returned a structured result.');
       message.result=ev.raw;
       message.review=reviewFromResult(ev.raw);
