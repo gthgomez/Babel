@@ -544,12 +544,17 @@ export function hasExplicitEditDenial(taskText: string): boolean {
   return false;
 }
 
+/** Remove conversational wrappers without consuming an action clause. */
+export function stripTaskRequestPrefix(taskText: string): string {
+  return taskText.replace(/^\s*(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?/i, '');
+}
+
 /** An explanation/review topic is not an imperative, even if named add/fix. */
 export function isReadOnlyTaskFrame(taskText: string): boolean {
-  const unfenced = stripFencedCodeBodies(taskText);
+  const unfenced = stripTaskRequestPrefix(stripFencedCodeBodies(taskText));
   const adviceQuestion = /^\s*(?:should\s+(?:i|we)\b|tell\s+me\s+whether\b|if\s+(?:i|we)\b[^.;!?\n]*\?)/i.test(unfenced);
   const prose = stripInformationalFrames(unfenced);
-  if (!adviceQuestion && !/^\s*(?:explain|describe|summarize|review|audit|what|why|how)\b/i.test(prose)) return false;
+  if (!adviceQuestion && !/^\s*(?:explain|describe|summarize|review|audit|what|why|how)\b/i.test(unfenced)) return false;
   // Bare coordinated names ("explain add and remove behavior") are topics.
   // A separate imperative, an immediate "review and fix", or an explicit
   // object after the paired verb is needed to leave the read-only frame.

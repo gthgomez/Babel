@@ -1,8 +1,8 @@
 // Real Electron main/preload IPC with a synthetic, credential-free child.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
-import {join} from 'node:path';
+import {mkdtemp,mkdir,writeFile,readFile,rename,rm} from 'node:fs/promises';
+import {dirname,join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {_electron} from 'playwright';
 import {saveProviderRoute} from '../native/provider-routing.mjs';
@@ -59,8 +59,19 @@ await import(${JSON.stringify(new URL('../native/main.mjs',import.meta.url).href
     await page.evaluate(()=>window.babelDesktop.revokeProjectTrust());
     await assert.rejects(()=>submit(page,'revoked'),/trust/i);
     await page.evaluate(()=>window.babelDesktop.trustProject());
+    await application.evaluate(()=>{globalThis.__holdClaim=true;globalThis.__claimReached=new Promise(resolve=>{globalThis.__markClaimReached=resolve;});});
+    const swapped=page.evaluate(()=>window.babelDesktop.run({runId:'replaced-project',task:'Never launch in a replacement directory',mode:'chat'})).then(value=>({value}),error=>({error:String(error)}));
+    await application.evaluate(()=>globalThis.__claimReached);
+    const saved=join(root,'saved-project'),replacement=join(root,'replacement-project');
+    for(const path of [project,saved,replacement])assert.equal(dirname(resolve(path)),resolve(root),'moves must stay inside the owned fixture');
+    await rename(project,saved);await mkdir(project);
+    await application.evaluate(()=>globalThis.__releaseClaim());
+    assert.match((await swapped).error??'',/trust|identity/i,'physical identity replacement during persistence must prevent launch');
+    assert.equal(await readFile(receipt,'utf8'),'same-submission\nnext-submission\n');
+    await rename(project,replacement);await rename(saved,project);
+    await application.evaluate(()=>{globalThis.__holdClaim=false;});
     await page.evaluate(()=>window.babelDesktop.startRemoteBridge({port:4545}));
-    await application.evaluate(()=>{globalThis.__holdClaim=true;});
+    await application.evaluate(()=>{globalThis.__holdClaim=true;globalThis.__claimReached=new Promise(resolve=>{globalThis.__markClaimReached=resolve;});});
     const pending=page.evaluate(()=>window.babelDesktop.run({runId:'stopped-bridge',task:'Never launch after remote stop',mode:'chat'}));
     await application.evaluate(()=>globalThis.__claimReached);
     await page.evaluate(()=>window.babelDesktop.stopRemoteBridge());

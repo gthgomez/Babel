@@ -7,7 +7,7 @@
 
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { hasExplicitEditDenial, isReadOnlyTaskFrame, resolveTaskShape } from '../config/chatTaskClass.js';
+import { hasExplicitEditDenial, isReadOnlyTaskFrame, resolveTaskShape, stripTaskRequestPrefix } from '../config/chatTaskClass.js';
 
 import type { OrchestratorManifest } from '../schemas/agentContracts.js';
 import {
@@ -419,7 +419,7 @@ export function normalizeRequestedFileTargetsForBoundedContract(userRequest: str
 export function getRequestedTargetContract(rawTask: string): BoundedTaskContract {
   // Mentioned input paths remain useful for discovery, but a read-only task
   // must never turn them into mandatory file_write postconditions.
-  const inspection = /^\s*(?:read|inspect|list|view|scan|check|open|find|locate)\b/i.test(rawTask) && resolveTaskShape(rawTask).operation==='READ_ONLY';
+  const inspection = /^(?:read|inspect|list|view|scan|check|open|find|locate)\b/i.test(stripTaskRequestPrefix(rawTask)) && resolveTaskShape(rawTask).operation==='READ_ONLY';
   const readOnly = hasExplicitEditDenial(rawTask) || isReadOnlyTaskFrame(rawTask) || inspection;
   const requestedTargets = readOnly
     ? [] : normalizeRequestedFileTargetsForBoundedContract(rawTask);

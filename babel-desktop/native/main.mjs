@@ -622,6 +622,11 @@ async function start(){
       throw new Error('Shared remote sessions require an open project.');
     }
     if(!await runAdmissionLedger.claim(request.runId))return {started:false,reason:'run_already_admitted'};
+    if(runAuthority){
+      const admittedIdentity=runAuthority.identity;
+      const current=await projectAuthority.admit(preferences.projectRoot);
+      if(current.identity.id!==admittedIdentity.id)throw new Error('Project identity changed while admitting the run.');
+    }
     // Claim persistence yields to cancellation/revocation. Fence again before spawn.
     if(admissionEpoch!==runAdmissionEpoch||(runAuthority&&!projectAuthority.isCurrent(runAuthority))){runAuthority=null;return {started:false};}
     if(sharedBridge&&(remoteBridge!==bridge||remoteEpoch!==remoteAdmissionEpoch||bridge.state!=='ready')){runAuthority=null;return {started:false};}

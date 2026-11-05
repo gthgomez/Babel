@@ -37,6 +37,7 @@ if (!isSyntheticProviderFixtureReady()) {
     {name:'omitted required write',task:'Create missing.txt containing hello.',steps:[step('file_read','existing.txt')],status:'EXECUTOR_HALTED',missing:true},
     {name:'generated handoff cannot erase an owner-required write',task:'Create missing.txt containing hello.',handoff:'Read-only discovery first. Do not modify files during inspection.',steps:[step('file_read','existing.txt')],status:'EXECUTOR_HALTED',missing:true},
     {name:'generated handoff cannot authorize a write denied by the owner',task:'Read existing.txt. Do not modify files.',handoff:'Create forbidden.md with new content.',steps:[step('file_write','forbidden.md','unauthorized')],status:'EXECUTOR_HALTED',denied:true},
+    {name:'polite explanation cannot authorize a generated write to its input',task:'Could you explain how to update existing.txt?',steps:[step('file_write','existing.txt','unauthorized')],status:'EXECUTOR_HALTED'},
     {name:'unrelated write is not requested work',task:'Create missing.txt containing hello.',steps:[step('file_write','unrelated-created.md','unrelated')],status:'EXECUTOR_HALTED',missing:true},
     {name:'existing correct output is a valid read-only no-op',task:'Create correct.txt containing the exact string "hello".',steps:[step('file_read','correct.txt')],status:'COMPLETE'},
     {name:'read-only answer does not require a mutation',task:'Read existing.txt without editing.',steps:[step('file_read','existing.txt')],status:'COMPLETE'},
@@ -45,6 +46,7 @@ if (!isSyntheticProviderFixtureReady()) {
     {name:'existing wrong content is not a proven no-op',task:'Create wrong.txt containing the exact string "hello".',steps:[step('file_read','wrong.txt')],status:'EXACT_INSTRUCTION_DRIFT'},
   ];
   for (const cell of cases) test(cell.name,async t=>{
+    writeFileSync('existing.txt','original');
     const plan=SwePlanSchema.parse({plan_version:'1.0',plan_type:'IMPLEMENTATION_PLAN',task_summary:'Planner claims done',assumptions:[],risks:[],out_of_scope:[],root_cause:'Fixture',minimal_action_set:cell.steps});
     let calls=0;
     t.mock.method(globalThis,'fetch',async(url:Parameters<typeof fetch>[0],init?:RequestInit)=>{
@@ -66,6 +68,7 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal(result.status,cell.status);
     if (cell.missing) { assert.equal(existsSync('missing.txt'),false);assert.match(result.errors?.join(' ')??'',/missing\.txt/); }
     if (cell.denied)assert.equal(existsSync('forbidden.md'),false);
+    assert.equal(readFileSync('existing.txt','utf8'),'original');
     if (cell.name.startsWith('unrelated')) assert.equal(readFileSync('unrelated-created.md','utf8'),'unrelated');
     assert.equal(readFileSync('correct.txt','utf8'),'hello');
     assert.equal(readFileSync('wrong.txt','utf8'),'incorrect');

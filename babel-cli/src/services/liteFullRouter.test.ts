@@ -16,6 +16,8 @@ test('imperative additions and transformations retain implementation intent', ()
     'Insert a validation check into calc.js.',
     'Extend calc.js with a clamp function.',
     'Refactor calc.js to remove duplicated validation.',
+    'Explain calc.js, then update it.',
+    'Could you explain calc.js and fix bugs?',
     'Rename the clamp function in calc.js.',
     'Add a clamp function to calc.js. Do not modify the test file.',
     'Add an exported clamp(value,min,max) function to calc.js. Clamp finite values inclusively to [min,max], throw TypeError for NaN input and RangeError when min > max. Preserve sum. Add tests in a new file, do not modify existing tests. Run npm test and report the actual result.',

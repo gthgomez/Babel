@@ -1,4 +1,4 @@
-import { isScopedEditObject, stripFencedCodeBodies } from '../config/chatTaskClass.js';
+import { isReadOnlyTaskFrame, isScopedEditObject, stripFencedCodeBodies } from '../config/chatTaskClass.js';
 
 export type LiteFullSelectedLane =
   | 'lite_ask'
@@ -232,9 +232,7 @@ export function inferIntentContract(
   const hasMutationWord = MUTATION_PATTERN.test(normalizedTask);
   const recommendationReadOnly =
     RECOMMENDATION_PATTERN.test(normalizedTask) && ASK_PATTERN.test(normalizedTask);
-  const explanationOnly =
-    /^\s*(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:explain|describe|what|why|how)\b/i.test(normalizedTask) &&
-    !hasMutationInstructionOutsideProhibition(normalizedTask);
+  const explanationOnly = isReadOnlyTaskFrame(normalizedTask);
 
   let taskKind: BabelTaskKind;
   if (requestedVerb === 'ask') {
