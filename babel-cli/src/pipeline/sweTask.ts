@@ -296,6 +296,15 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       'Use only the tools listed in the JSON shape above; unsupported required steps halt Chat rather than being skipped.',
       '',
     ] : []),
+    ...(mode === 'chat' ? [
+      '  --- VERIFICATION RULE ---',
+      '  Put verification AFTER the final file_write. Earlier passing tests cannot verify later changes.',
+      '  Run every verifier required by the user verbatim after the last write. Missing or stale required verification blocks completion.',
+      '  Discover the project test/typecheck command; do not invent npm test when no test script exists.',
+      '  For a text-only file task with no test suite, read back the written file after writing and do not claim tests ran.',
+      '  Example: file_read src/math.js; file_write src/math.js with complete content; test_run npm test.',
+      '',
+    ] : [
     '  --- VERIFICATION RULE (NON-NEGOTIABLE — plans are BLOCKED without this) ---',
     '  This is the #1 reason plans are rejected by the executor safety gate.',
     '  Every IMPLEMENTATION_PLAN with file_write steps MUST include at least one',
@@ -343,6 +352,7 @@ Your JSON output MUST include a "thinking" field. Use this field to:
     '  Plans without a verification step will be REJECTED by the executor safety gate.',
     '  If your plan is rejected, you will be asked to replan — save time by getting it right the first time.',
     '',
+    ]),
     '  --- TOOL USAGE RULES ---',
     '  - Use "directory_list" to inspect folders. Do NOT use "file_read" on a directory path.',
     '  - Use "file_read" only for actual files whose contents need inspection.',

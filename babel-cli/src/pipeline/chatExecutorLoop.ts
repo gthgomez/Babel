@@ -17,6 +17,7 @@ import { executeExecutorTool } from './executorToolDispatch.js';
 import { EvidenceBundle } from '../evidence.js';
 import { BABEL_ROOT } from '../cli/constants.js';
 import { writeValidatedExecutionReport } from './executionReports.js';
+import { createRunControl } from '../runtime/run-control.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -69,9 +70,17 @@ export async function runChatExecutorLoop(
   const toolCallLog: ToolCallLog[] = [];
   const changedFiles: string[] = [];
   const steps = approvedPlan.minimal_action_set;
+  const runControl = createRunControl({ runId: evidence.runId, turnId: 'chat-plan', generation: 1 });
+  const cancel = (): void => {
+    runControl.requestStop({ owner: runControl.owner, kind: 'cancelled', reasonCode: 'cancelled', source: 'user' });
+  };
+  toolContext.signal?.addEventListener('abort', cancel, { once: true });
+  if (toolContext.signal?.aborted) cancel();
 
   const finish = (haltReason?: string, haltedAtStep = 1): ChatExecutorResult => {
     const halted = haltReason !== undefined;
+    runControl.requestStop({ owner: runControl.owner, kind: halted ? 'failed' : 'completed', reasonCode: halted ? 'chat_halted' : 'tools_complete', source: 'executor' });
+    toolContext.signal?.removeEventListener('abort', cancel);
     writeValidatedExecutionReport(evidence, halted ? {
       status: 'EXECUTION_HALTED',
       steps_executed: toolCallLog.length,
@@ -119,6 +128,8 @@ export async function runChatExecutorLoop(
         runDir: evidence.runDir,
         babelRoot: BABEL_ROOT,
         ...toolContext,
+        runControl,
+        signal: runControl.signal,
       });
     } catch (error) {
       result = {

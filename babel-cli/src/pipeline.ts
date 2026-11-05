@@ -964,6 +964,7 @@ export async function _runBabelPipelineInternal(
   }
 
   let resolvedModelPolicy: ResolvedModelPolicy | undefined;
+  let requirePostMutationVerification = false;
   const traceOptions = {
     runDir: evidence.runDir,
     orchestratorVersion,
@@ -997,6 +998,7 @@ export async function _runBabelPipelineInternal(
       task,
       toolCallLog: terminalContext.toolCallLog,
       runDir: evidence.runDir,
+      requirePostMutationVerification,
     });
     evidence.writeDebugFile(
       'verifier_plan.json',
@@ -1976,6 +1978,7 @@ export async function _runBabelPipelineInternal(
 
     // ── Chat mode: fast capable coding agent ──────────────────────────────
     if (effectiveMode === 'chat') {
+      requirePostMutationVerification = true;
       return await runChatPipeline(
         {
           manifest,

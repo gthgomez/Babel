@@ -43,6 +43,7 @@ if (!isSyntheticProviderFixtureReady()) {
   const { buildVerifierContractArtifacts } = await import('../services/requiredVerifierContract.js')
   const { SafeExecutor } = await import('../sandbox.js')
   const { setDockerAvailableForTest, resetDockerAvailabilityCache } = await import('../config/benchmarkContainer.js')
+  const { ConfirmDialog } = await import('../ui/dialog.js')
   const projectRoot = process.cwd()
 
   function plan(steps: { tool: string; target: string; content?: string }[]) {
@@ -143,6 +144,40 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal(result.toolCallLog.length, 1)
     assert.equal(result.toolCallLog[0]?.verified, false)
     assert.equal(collectTerminalContext(bundle.runDir).toolCallLog.length, 1)
+  })
+
+  test('approving a pending write after cancellation cannot dispatch late bytes', async t => {
+    const controller = new AbortController()
+    const tty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
+    const names = ['BABEL_ASK', 'BABEL_UNIT_TEST', 'CI', 'BABEL_NON_INTERACTIVE'] as const
+    const previous = names.map(name => [name, process.env[name]] as const)
+    t.after(() => {
+      if (tty) Object.defineProperty(process.stdout, 'isTTY', tty)
+      else delete (process.stdout as { isTTY?: boolean }).isTTY
+      for (const [name, value] of previous) { if (value === undefined) delete process.env[name]; else process.env[name] = value }
+    })
+    process.env['BABEL_ASK'] = 'true'
+    process.env['BABEL_UNIT_TEST'] = 'true'
+    delete process.env['CI']
+    delete process.env['BABEL_NON_INTERACTIVE']
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true })
+    let entered!: () => void
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    let approve!: (value: boolean) => void
+    t.mock.method(ConfirmDialog, 'show', async () => {
+      entered()
+      return new Promise<boolean>(resolve => { approve = resolve })
+    })
+    writeFileSync('late-approval.txt', 'original')
+    const pending = runChatExecutorLoop(plan([{ tool: 'file_write', target: 'late-approval.txt', content: 'late write' }]), evidence(), 'Update late-approval.txt', { signal: controller.signal })
+    await Promise.race([waiting, pending.then(() => { throw new Error('Write settled before reaching its approval prompt') })])
+    controller.abort()
+    const result = await pending
+    assert.equal(result.terminalStatus, 'EXECUTOR_HALTED')
+    approve(true)
+    await new Promise(resolve => setImmediate(resolve))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(readFileSync('late-approval.txt', 'utf8'), 'original')
   })
 
   test('successful execution persists its log for required-verifier finalization', async t => {

@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { decodeCommand } from '../authority/commandDecoder.js';
 
 import { extractRequiredVerifierCommandsFromTask } from '../pipeline/planVerifierInjection.js';
 import type { ToolCallLog } from '../schemas/agentContracts.js';
@@ -86,9 +87,24 @@ export function buildVerifierContractArtifacts(input: {
   runDir: string;
   /** Scope-resolved verifiers (e.g. small-fix lane) not spelled out in task text. */
   additionalRequiredVerifiers?: readonly string[];
+  /** Simplified Chat requires fresh verification after writes or other effectful commands. */
+  requirePostMutationVerification?: boolean;
 }): VerifierContractArtifacts {
   const planned = buildVerifierPlan(input.task, input.additionalRequiredVerifiers ?? []);
-  const executed = reconcileVerifierPlan(planned, input.toolCallLog ?? []);
+  const log = input.toolCallLog ?? [];
+  let lastMutation = -1;
+  if (input.requirePostMutationVerification) {
+    for (let index = log.length - 1; index >= 0; index--) {
+      const entry = log[index]!;
+      if (entry.exit_code === 0 && (entry.tool === 'file_write' ||
+          ((entry.tool === 'shell_exec' || entry.tool === 'test_run') &&
+            !isVerifierCommand(entry.target) && decodeCommand(entry.target).semantic !== 'read_local'))) {
+        lastMutation = index;
+        break;
+      }
+    }
+  }
+  const executed = reconcileVerifierPlan(planned, log.slice(lastMutation + 1));
   const summary = summarizeVerifierContract(executed);
   return {
     plan: {
