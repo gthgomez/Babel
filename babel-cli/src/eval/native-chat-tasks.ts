@@ -1,6 +1,5 @@
 /** Native Chat execution plus host-owned artifact grading; never trusts success prose. */
 import { createHash, randomUUID } from 'node:crypto'
-import { spawnSync } from 'node:child_process'
 import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +12,7 @@ import { gradeJourneyCode } from './harness-journey-code-oracle.js'
 import { gradeInCleanRoom } from './cleanRoomGrade.js'
 import { calibrationPolicy, calibrationReferences, createCalibrationRunner } from './native-chat-calibration.js'
 import type { NativeTaskTerminal } from './native-chat-cli.js'
+import { runGitCommand } from '../utils/gitExec.js'
 
 const TaskSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]*$/), journeyId: z.enum(['J03', 'J05', 'J06']),
@@ -86,8 +86,8 @@ export function scoreNativeTask(terminal: Terminal | null, verdict: OracleVerdic
 }
 
 function git(root: string, args: string[]): string {
-  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 10_000, windowsHide: true })
-  if (result.error || result.status !== 0) throw new Error('Evaluator Git identity unavailable')
+  const result = runGitCommand(args, root, { timeoutMs: 10_000 })
+  if (result.status !== 0) throw new Error('Evaluator Git identity unavailable')
   return result.stdout.trim()
 }
 
@@ -133,7 +133,7 @@ export async function runNativeChatTasks(options: {
     'harness-journey-fixtures.ts', 'harness-journey-code-oracle.ts', 'harness-journey-checks.ts', 'cleanRoomGrade.ts',
     '../config/benchmarkContainer.ts', '../config/dockerIsolationArgs.ts', '../config/executionProfiles.ts',
     '../authority/protectedPath.ts', '../authority/commandSpec.ts', '../authority/literalSearch.ts',
-    '../authority/unprivilegedChildEnv.ts', '../utils/commandArgv.ts', '../utils/safeEnv.ts',
+    '../authority/unprivilegedChildEnv.ts', '../utils/commandArgv.ts', '../utils/safeEnv.ts', '../utils/gitExec.ts',
   ].map(path => join(root, 'babel-cli/src/eval', path))]
   const sourceHashes = await Promise.all(protectedFiles.map(async path => ({ path: relative(root, path).replaceAll('\\', '/'), sha256: digest(await readFile(path)) })))
   const calibration = options.mode === 'calibration'

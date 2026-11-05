@@ -72,19 +72,25 @@ test('capture freezes bytes and rejects symlinks instead of following candidate 
   }
 })
 
-test('mode-only read-only mutations are visible even with identical captured bytes', { skip: process.platform === 'win32' }, async () => {
+test('mode-only read-only mutations are visible even with identical captured bytes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'babel-native-modes-'))
   const file = join(root, 'REPO_MAP.md')
   await writeFile(file, 'unchanged bytes\n', { mode: 0o644 })
   const beforeModes = new Map<string, number>()
   const before = await captureNativeTaskFiles(root, beforeModes)
-  await chmod(file, 0o755)
-  await mkdir(join(root, 'empty'))
-  const afterModes = new Map<string, number>()
-  const after = await captureNativeTaskFiles(root, afterModes)
-  const baseline = new Map([...before].map(([path, bytes]) => [path, createHash('sha256').update(bytes).digest('hex')]))
-  assert.deepEqual(before.get('REPO_MAP.md'), after.get('REPO_MAP.md'))
-  assert.deepEqual(nativeChangedPaths(baseline, beforeModes, after, afterModes), ['REPO_MAP.md', 'empty/'])
+  try {
+    // Windows implements chmod's write bit through the read-only attribute;
+    // executable-bit changes are POSIX-specific and do not exercise that path.
+    await chmod(file, 0o444)
+    await mkdir(join(root, 'empty'))
+    const afterModes = new Map<string, number>()
+    const after = await captureNativeTaskFiles(root, afterModes)
+    const baseline = new Map([...before].map(([path, bytes]) => [path, createHash('sha256').update(bytes).digest('hex')]))
+    assert.deepEqual(before.get('REPO_MAP.md'), after.get('REPO_MAP.md'))
+    assert.deepEqual(nativeChangedPaths(baseline, beforeModes, after, afterModes), ['REPO_MAP.md', 'empty/'])
+  } finally {
+    await chmod(file, beforeModes.get('REPO_MAP.md')!)
+  }
 })
 
 test('native Chat calibration retains all four scenarios, rejects deception and never qualifies a model', { timeout: 90_000 }, async () => {
