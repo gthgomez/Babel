@@ -148,7 +148,12 @@ if (!isSyntheticProviderFixtureReady()) {
         system_directive: 'Controlled Deep stage-order fixture',
       },
     });
-  for (const kind of ['evidence', 'qa-reject', 'wrong-plan-type'] as const)
+  for (const kind of [
+    'evidence',
+    'answer-unavailable',
+    'qa-reject',
+    'wrong-plan-type',
+  ] as const)
     test(`Deep planning contract: ${kind}`, async (t) => {
       const rejected = kind === 'qa-reject';
       writeFileSync('existing.txt', 'preserved owner source');
@@ -182,6 +187,10 @@ if (!isSyntheticProviderFixtureReady()) {
                   tool: 'file_read',
                   path: 'existing.txt',
                 },
+                {
+                  answer:
+                    'existing.txt contains "preserved owner source". No source files were modified.',
+                },
               ];
       let calls = 0;
       t.mock.method(
@@ -195,6 +204,21 @@ if (!isSyntheticProviderFixtureReady()) {
           const body = JSON.parse(String(init?.body));
           assert.equal(body.model, 'z-ai/glm-5.3-flash');
           const turn = turns[calls++];
+          if (!rejected && kind !== 'wrong-plan-type' && calls >= 4) {
+            assert.match(String(init?.body), /preserved owner source/);
+            assert.match(String(init?.body), /ORIGINAL OWNER REQUEST/);
+            assert.match(String(init?.body), /untrusted evidence/);
+            if (kind === 'answer-unavailable')
+              return new Response(
+                JSON.stringify({
+                  error: {
+                    message: 'Controlled unavailable answer',
+                    code: 401,
+                  },
+                }),
+                { status: 401 },
+              );
+          }
           assert.notEqual(
             turn,
             undefined,
@@ -244,13 +268,25 @@ if (!isSyntheticProviderFixtureReady()) {
         readFileSync('existing.txt', 'utf8'),
         'preserved owner source',
       );
-      assert.equal(calls, turns.length);
+      if (kind === 'answer-unavailable') assert.ok(calls >= 4);
+      else assert.equal(calls, turns.length);
       if (rejected) assert.equal(result.status, 'QA_REJECTED_MAX_LOOPS');
       else if (kind === 'wrong-plan-type')
         assert.equal(result.status, 'EXECUTOR_HALTED');
-      else {
+      else if (kind === 'answer-unavailable') {
+        assert.equal(result.status, 'EXECUTOR_HALTED');
+        assert.match(
+          result.errors?.join(' ') ?? '',
+          /could not produce the requested answer/,
+        );
+        assert.doesNotMatch(
+          result.finalAnswer ?? '',
+          /Evidence gathered and finalized/,
+        );
+      } else {
         assert.equal(result.status, 'READ_ONLY_NO_MODIFICATION');
         assert.match(result.finalAnswer ?? '', /existing\.txt/);
+        assert.match(result.finalAnswer ?? '', /preserved owner source/);
       }
     });
 }

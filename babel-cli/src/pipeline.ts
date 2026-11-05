@@ -26,6 +26,7 @@ import { dirname, join, resolve } from 'node:path';
 import { runSwarmPipeline } from './runners/swarmRunner.js';
 import { runAdversarialQaGate, compileQaReviewContext, reviewDeepPlan } from './pipeline/qaStage.js';
 import { proposeDeepPlan } from './pipeline/deepPlanning.js';
+import { answerDeepEvidence } from './pipeline/deepEvidenceReport.js';
 import { runChatExecutorLoop, formatToolCallForDisplay } from './pipeline/chatExecutorLoop.js';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { z } from 'zod';
@@ -2773,16 +2774,17 @@ export async function _runBabelPipelineInternal(
           originalIntentContract.task_kind !== 'implementation'
         ) {
           const reportFinalizer = buildEvidenceReportFinalizerArtifact({
-            task: mergedTaskContext,
+            task,
             toolCallLog,
             intent: originalIntentContract,
             runDir: evidence.runDir,
+            answer: await answerDeepEvidence({ ownerTask: task, toolCallLog, evidence }),
           });
           evidence.writeDebugFile(
             'report_finalizer.json',
             `${JSON.stringify(reportFinalizer, null, 2)}\n`,
           );
-          log('Nothing more to learn — wrapping up.');
+          log('Read-only evidence report ready.');
           v9StackTelemetry = markRuntimeTelemetryOutcome(
             v9StackTelemetry,
             'READ_ONLY_NO_MODIFICATION',
