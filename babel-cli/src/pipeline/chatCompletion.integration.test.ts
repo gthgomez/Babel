@@ -35,9 +35,12 @@ if (!isSyntheticProviderFixtureReady()) {
   const step = (tool:string,target:string,content?:string) => ({step:1,tool,target,description:'Controlled planner action',rationale:'Fixture',reversible:true,verification:'Inspect result',...(content!==undefined?{content}:{})});
   const cases = [
     {name:'omitted required write',task:'Create missing.txt containing hello.',steps:[step('file_read','existing.txt')],status:'EXECUTOR_HALTED',missing:true},
+    {name:'polite creation still requires independently observed output',task:'Could you create missing.txt containing hello?',steps:[step('file_read','existing.txt')],status:'EXECUTOR_HALTED',missing:true},
+    {name:'a request wrapper after then still requires output',task:'Read existing.txt, then I need you to create missing.txt containing hello.',steps:[step('file_read','existing.txt')],status:'EXECUTOR_HALTED',missing:true},
     {name:'generated handoff cannot erase an owner-required write',task:'Create missing.txt containing hello.',handoff:'Read-only discovery first. Do not modify files during inspection.',steps:[step('file_read','existing.txt')],status:'EXECUTOR_HALTED',missing:true},
     {name:'generated handoff cannot authorize a write denied by the owner',task:'Read existing.txt. Do not modify files.',handoff:'Create forbidden.md with new content.',steps:[step('file_write','forbidden.md','unauthorized')],status:'EXECUTOR_HALTED',denied:true},
     {name:'polite explanation cannot authorize a generated write to its input',task:'Could you explain how to update existing.txt?',steps:[step('file_write','existing.txt','unauthorized')],status:'EXECUTOR_HALTED'},
+    {name:'owner desire to explain cannot authorize a generated write',task:'I want you to explain how to update existing.txt.',steps:[step('file_write','existing.txt','unauthorized')],status:'EXECUTOR_HALTED'},
     {name:'unrelated write is not requested work',task:'Create missing.txt containing hello.',steps:[step('file_write','unrelated-created.md','unrelated')],status:'EXECUTOR_HALTED',missing:true},
     {name:'existing correct output is a valid read-only no-op',task:'Create correct.txt containing the exact string "hello".',steps:[step('file_read','correct.txt')],status:'COMPLETE'},
     {name:'read-only answer does not require a mutation',task:'Read existing.txt without editing.',steps:[step('file_read','existing.txt')],status:'COMPLETE'},

@@ -35,7 +35,8 @@ test('direct artifact repair respects read-only intent while preserving authoriz
 test('read-only task contracts reject writes to mentioned and unrelated paths before activation',()=>{
  for(const task of ['Inspect calc.js. Do not modify files.',
   'Could you explain how to update calc.js?', 'Please describe how to refactor calc.js.',
-  'Would you please inspect calc.js?', 'How should I rename calc.js?'])for(const plan_type of ['IMPLEMENTATION_PLAN','EVIDENCE_REQUEST'] as const)for(const target of ['calc.js','unrelated.md']){
+  'Would you please inspect calc.js?', 'How should I rename calc.js?',
+  'I want you to explain how to update calc.js.', 'I need you to inspect calc.js.'])for(const plan_type of ['IMPLEMENTATION_PLAN','EVIDENCE_REQUEST'] as const)for(const target of ['calc.js','unrelated.md']){
   const plan=makePlan({plan_type,minimal_action_set:[fileWriteStep(1,target)]});
   assert.notEqual(collectBoundedContractViolations(plan,task),null);
   assert.match(assertBoundedPlanActivationContract(plan,task)??'',/READ_ONLY_TASK/);

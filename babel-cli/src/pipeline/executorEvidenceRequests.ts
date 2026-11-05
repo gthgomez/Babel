@@ -9,13 +9,11 @@ function normalizeEvidenceStepTarget(tool: string, target: unknown): string {
   return raw.replace(/\s+/g, ' ').toLowerCase();
 }
 
-export function isEvidenceRequestPlanSatisfied(
+/** Match controller-recorded verified results to every approved action. */
+export function arePlannedActionsSatisfied(
   approvedPlan: SwePlan,
   toolCallLog: readonly ToolCallLog[],
 ): boolean {
-  if (approvedPlan.plan_type !== 'EVIDENCE_REQUEST') {
-    return false;
-  }
   if (approvedPlan.minimal_action_set.length === 0) {
     return false;
   }
@@ -29,4 +27,11 @@ export function isEvidenceRequestPlanSatisfied(
         normalizeEvidenceStepTarget(entry.tool, entry.target) === expectedTarget,
     );
   });
+}
+
+export function isEvidenceRequestPlanSatisfied(
+  approvedPlan: SwePlan,
+  toolCallLog: readonly ToolCallLog[],
+): boolean {
+  return approvedPlan.plan_type === 'EVIDENCE_REQUEST' && arePlannedActionsSatisfied(approvedPlan, toolCallLog);
 }

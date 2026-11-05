@@ -544,9 +544,12 @@ export function hasExplicitEditDenial(taskText: string): boolean {
   return false;
 }
 
+/** Supported owner-request wrappers, shared by action-clause recognizers. */
+export const TASK_REQUEST_PREFIX_SOURCE = String.raw`\s*(?:(?:can|could|would)\s+you\s+|i\s+(?:want|need)\s+you\s+to\s+)?(?:please\s+)?`;
+
 /** Remove conversational wrappers without consuming an action clause. */
 export function stripTaskRequestPrefix(taskText: string): string {
-  return taskText.replace(/^\s*(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?/i, '');
+  return taskText.replace(new RegExp(`^${TASK_REQUEST_PREFIX_SOURCE}`, 'i'), '');
 }
 
 /** An explanation/review topic is not an imperative, even if named add/fix. */
@@ -560,13 +563,13 @@ export function isReadOnlyTaskFrame(taskText: string): boolean {
   // object after the paired verb is needed to leave the read-only frame.
   const verbs = `(?:${READ_ONLY_VERB_SOURCE}|make|order|sort)`;
   const directive = new RegExp(
-    `(?:\\b(?:then|afterwards)\\s+|[.;!?\\r\\n]\\s*|^\\s*(?:review|audit)\\s+and\\s+)(?:please\\s+)?${verbs}\\b|\\band\\s+${verbs}\\s+(?:it|this|that|the|a|an|any|all)\\b`, 'i');
+    `(?:\\b(?:then|afterwards)\\s+|[.;!?\\r\\n]\\s*|^\\s*(?:review|audit)\\s+and\\s+)${TASK_REQUEST_PREFIX_SOURCE}${verbs}\\b|\\band\\s+${TASK_REQUEST_PREFIX_SOURCE}${verbs}\\s+(?:it|this|that|the|a|an|any|all)\\b`, 'i');
   if (directive.test(prose)) return false;
   // Coordinated API names remain topics. A repair predicate with its own
   // ordinary object ("and fix bugs", "and repair parser.js") is an action.
   const topicName = '[A-Za-z_$][\\w$]*';
   const topicList = new RegExp(`^\\s*(?:explain|describe|summarize|review|audit|what|why|how)\\s+(?:how\\s+)?${topicName}(?:\\s*(?:,|and|or)\\s*${topicName})+\\s+(?:behavior|semantics|work|operations?|functions?|methods?|apis?)\\b`, 'i');
-  const coordinatedEdit = new RegExp(`\\band\\s+(?:please\\s+)?(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|make|order|sort)\\s+\\S+`, 'i');
+  const coordinatedEdit = new RegExp(`\\band\\s+${TASK_REQUEST_PREFIX_SOURCE}(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|make|order|sort)\\s+\\S+`, 'i');
   const topic = topicList.exec(prose);
   return !coordinatedEdit.test(topic ? prose.slice(topic[0].length) : prose);
 }

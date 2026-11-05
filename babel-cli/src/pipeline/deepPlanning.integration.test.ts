@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   isSyntheticProviderFixtureReady,
@@ -155,6 +158,8 @@ if (!isSyntheticProviderFixtureReady()) {
     'cancel-during-answer',
     'qa-reject',
     'wrong-plan-type',
+    'evidence-godot',
+    'premature-completion',
   ] as const)
     test(`Deep planning contract: ${kind}`, async (t) => {
       const rejected = kind === 'qa-reject';
@@ -162,6 +167,30 @@ if (!isSyntheticProviderFixtureReady()) {
       globalCostTracker.resetSession();
       const controller = new AbortController();
       const cancelled = kind === 'cancel-before-answer' || kind === 'cancel-during-answer';
+      const godot = kind === 'evidence-godot' || kind === 'premature-completion';
+      const ownerTask = godot ? `${task} Do not run any commands.` : task;
+      let hostVerifications = 0;
+      if (godot) {
+        const wrapper = join(process.cwd(), 'synthetic-godot.ps1');
+        writeFileSync(wrapper, '# Controlled wrapper marker; never executed.');
+        writeFileSync('project.godot', '[application]\nconfig/name="Read-only fixture"\n');
+        process.env['BABEL_GODOT_COMMAND'] = wrapper;
+        process.env['BABEL_GODOT_POWERSHELL'] = 'synthetic-godot';
+        const spawnSync = childProcess.spawnSync;
+        t.mock.method(childProcess, 'spawnSync', (...args: Parameters<typeof spawnSync>) => {
+          if (args[0] === 'synthetic-godot') {
+            hostVerifications++;
+            return {pid:0,output:['','',''],stdout:'',stderr:'',status:0,signal:null};
+          }
+          return spawnSync(...args);
+        });
+        syncBuiltinESMExports();
+        t.after(() => {
+          t.mock.restoreAll();syncBuiltinESMExports();
+          delete process.env['BABEL_GODOT_COMMAND'];delete process.env['BABEL_GODOT_POWERSHELL'];
+          rmSync('project.godot', {force:true});rmSync(wrapper, {force:true});
+        });
+      }
       const reject = {
         verdict: 'REJECT',
         failure_count: 1,
@@ -180,6 +209,8 @@ if (!isSyntheticProviderFixtureReady()) {
       const turns =
         kind === 'wrong-plan-type'
           ? [{ ...plan, plan_type: 'IMPLEMENTATION_PLAN' }, pass]
+          : kind === 'premature-completion'
+            ? [plan, pass, {type:'completion',status:'EXECUTION_COMPLETE'}]
           : rejected
             ? [plan, reject, plan, reject, plan, reject]
             : [
@@ -255,7 +286,7 @@ if (!isSyntheticProviderFixtureReady()) {
           );
         },
       );
-      const evidence = new EvidenceBundle(task, process.env['BABEL_RUNS_DIR']!);
+      const evidence = new EvidenceBundle(ownerTask, process.env['BABEL_RUNS_DIR']!);
       if (kind === 'cancel-before-answer') {
         const writeContext = evidence.writeCompiledContext.bind(evidence);
         t.mock.method(evidence, 'writeCompiledContext', (stage: string, context: string) => {
@@ -265,7 +296,7 @@ if (!isSyntheticProviderFixtureReady()) {
       }
       const result = await withPipelineModelRoute('glm-5.3-flash', () =>
         _runBabelPipelineInternal(
-          task,
+          ownerTask,
           {
             mode: 'deep',
             modelOverride: 'glm-5.3-flash',
@@ -285,11 +316,22 @@ if (!isSyntheticProviderFixtureReady()) {
         readFileSync('existing.txt', 'utf8'),
         'preserved owner source',
       );
+      if (godot) {
+        t.diagnostic(`DEEP_PLANNING_FIXTURE ${JSON.stringify({kind,modelCalls:calls,hostVerifications})}`);
+        assert.equal(hostVerifications,0,'read-only completion must not execute runtime verification or artifact repair');
+      }
       if (kind === 'answer-unavailable') assert.ok(calls >= 4);
       else assert.equal(calls, kind === 'cancel-before-answer' ? 3 : turns.length);
       if (rejected) assert.equal(result.status, 'QA_REJECTED_MAX_LOOPS');
       else if (kind === 'wrong-plan-type')
         assert.equal(result.status, 'EXECUTOR_HALTED');
+      else if (kind === 'premature-completion') {
+        assert.equal(result.status, 'EXECUTOR_HALTED');
+        const report = JSON.parse(readFileSync(join(evidence.runDir,'04_execution_report.json'),'utf8'));
+        assert.equal(report.pipeline_error.halt_tag,'STEP_VERIFICATION_FAIL');
+        assert.match(report.pipeline_error.condition, /EVIDENCE_REQUEST/);
+        assert.equal(existsSync(join(evidence.runDir,'10_runtime_verification.json')),false);
+      }
       else if (cancelled) {
         assert.equal(result.status, 'EXECUTOR_HALTED');
         const {buildRunResultPayload} = await import('../cli/structuredOutput.js');

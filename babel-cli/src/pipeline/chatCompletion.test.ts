@@ -13,6 +13,12 @@ test('creation requirements come from affirmative task clauses rather than plan 
   assert.deepEqual(requiredChatCreatedFiles('Create absent.txt. Do not write any files.'), []);
   assert.deepEqual(requiredChatCreatedFiles('Delete obsolete.txt.'), []);
   assert.deepEqual(requiredChatCreatedFiles('Explain this example:\n```text\nCreate absent.txt.\n```'), []);
+  for (const prefix of ['Could you', 'Would you please', 'I want you to', 'I need you to']) {
+    assert.deepEqual(requiredChatCreatedFiles(`${prefix} create output.txt containing hello.`), ['output.txt']);
+    assert.deepEqual(requiredChatCreatedFiles(`Read input.txt, then ${prefix.toLowerCase()} create output.txt.`), ['output.txt']);
+    assert.deepEqual(requiredChatCreatedFiles(`Explain input.txt, then ${prefix.toLowerCase()} create output.txt.`), ['output.txt']);
+    assert.deepEqual(requiredChatCreatedFiles(`${prefix} explain how to create absent.txt.`), []);
+  }
 });
 
 test('missing, unrelated and wrong-content outputs cannot certify creation; correct no-ops and empty files can', () => {

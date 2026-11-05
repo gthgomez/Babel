@@ -1,6 +1,6 @@
 import { lstatSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { hasExplicitEditDenial, isReadOnlyTaskFrame, stripFencedCodeBodies, stripScopedEditProhibitions } from '../config/chatTaskClass.js';
+import { hasExplicitEditDenial, isReadOnlyTaskFrame, stripFencedCodeBodies, stripScopedEditProhibitions, TASK_REQUEST_PREFIX_SOURCE } from '../config/chatTaskClass.js';
 import { extractRequestedFileTargets } from '../stages/taskShape.js';
 import { extractExactInvariants, summarizeExactInvariantFailure, verifyExactInvariants } from '../stages/exactInvariants.js';
 
@@ -8,7 +8,7 @@ function chatCreationRequirements(task: string): Array<{path:string;empty:boolea
   if (hasExplicitEditDenial(task) || isReadOnlyTaskFrame(task)) return [];
   const prose = stripScopedEditProhibitions(stripFencedCodeBodies(task));
   const path = String.raw`[\x60"']?(?:[A-Za-z]:[\\/])?[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)*\.[A-Za-z0-9_-]{1,12}[\x60"']?`;
-  const requests = new RegExp(String.raw`(?:^|[.!?;\r\n]|\b(?:and|then|also)\b)\s*(?:please\s+)?(?:create|write|generate|add)\s+((?:(?:a|an|the|new|empty|file|named|called)\s+)*)(${path}(?:\s*(?:,|and)\s*${path})*)`, 'gi');
+  const requests = new RegExp(String.raw`(?:^|[.!?;\r\n]|\b(?:and|then|also)\b)${TASK_REQUEST_PREFIX_SOURCE}(?:create|write|generate|add)\s+((?:(?:a|an|the|new|empty|file|named|called)\s+)*)(${path}(?:\s*(?:,|and)\s*${path})*)`, 'gi');
   const requirements = new Map<string,{path:string;empty:boolean}>();
   for (const match of prose.matchAll(requests)) for (const target of extractRequestedFileTargets(match[2]!)) {
     requirements.set(target,{path:target,empty:requirements.get(target)?.empty === true || /\bempty\b/i.test(match[1] ?? '')});

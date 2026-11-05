@@ -177,7 +177,7 @@ import {
   isVerifierNotFoundFailure,
   shouldRecoverCommandFailure,
 } from './executorRecovery.js';
-import { isEvidenceRequestPlanSatisfied } from './executorEvidenceRequests.js';
+import { arePlannedActionsSatisfied, isEvidenceRequestPlanSatisfied } from './executorEvidenceRequests.js';
 import type { ExecutorLoopResult } from './executorLoopTypes.js';
 import {
   isExecutorToolShapePlaceholder,
@@ -437,9 +437,9 @@ async function handleExecutorCompletion(
   totalLockWaitMs: number,
   peakBufferBytes: number,
   getMissingSuccessfulPlannedFileWrites: () => string[],
-  haltForMissingPlannedFileWrites: (
+  haltForIncompletePlan: (
     nextTurnPrompt: string,
-    missingTargets: string[],
+    condition: string,
   ) => Promise<ExecutorLoopResult>,
   completeAfterDeterministicExternalRepair: (
     nextTurnPrompt: string,
@@ -459,7 +459,8 @@ async function handleExecutorCompletion(
       if (missingPlannedFileWrites.length > 0) {
         return {
           kind: 'return',
-          result: await haltForMissingPlannedFileWrites(turnPrompt, missingPlannedFileWrites),
+          result: await haltForIncompletePlan(turnPrompt,
+            `Executor reported EXECUTION_COMPLETE before successful file_write for planned target(s): ${missingPlannedFileWrites.join(', ')}`),
         };
       }
 
@@ -1757,13 +1758,10 @@ export async function runExecutorLoop(
     return plannedWrites.filter((target) => !successfulWrites.has(targetKey(target)));
   };
 
-  const haltForMissingPlannedFileWrites = async (
+  const haltForIncompletePlan = async (
     nextTurnPrompt: string,
-    missingTargets: string[],
+    condition: string,
   ): Promise<ExecutorLoopResult> => {
-    const condition =
-      `Executor reported EXECUTION_COMPLETE before successful file_write for planned target(s): ` +
-      `${missingTargets.join(', ')}`;
     const report = buildHaltReport(
       toolCallLog,
       'STEP_VERIFICATION_FAIL',
@@ -1776,7 +1774,7 @@ export async function runExecutorLoop(
       condition,
     });
     writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-    log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] after incomplete planned writes');
+    log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] after incomplete planned work');
     logDetail(condition);
     return {
       toolCallLog,
@@ -1838,11 +1836,7 @@ export async function runExecutorLoop(
     };
   };
 
-  const maybeCompleteEvidenceRequestPlan = async (nextTurnPrompt: string): Promise<ExecutorLoopResult | null> => {
-    if (!isEvidenceRequestPlanSatisfied(approvedPlan, toolCallLog)) {
-      return null;
-    }
-
+  const completeRecordedPlan = async (nextTurnPrompt: string): Promise<ExecutorLoopResult> => {
     const completion = {
       type: 'completion',
       status: 'EXECUTION_COMPLETE',
@@ -1850,14 +1844,19 @@ export async function runExecutorLoop(
     const report = buildTerminalReport(completion, toolCallLog, evidence);
     await persistExecutorContext('terminal', nextTurnPrompt, {
       terminalStatus: 'EXECUTION_COMPLETE',
-      condition: 'EVIDENCE_REQUEST minimal_action_set satisfied.',
+      condition: `${approvedPlan.plan_type} minimal_action_set satisfied.`,
     });
     writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-    log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps, evidence request satisfied)`);
+    log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps, planned evidence satisfied)`);
     return {
       toolCallLog,
       terminalStatus: 'EXECUTION_COMPLETE',
     };
+  };
+
+  const maybeCompleteEvidenceRequestPlan = async (nextTurnPrompt: string): Promise<ExecutorLoopResult | null> => {
+    if (!isEvidenceRequestPlanSatisfied(approvedPlan, toolCallLog)) return null;
+    return completeRecordedPlan(nextTurnPrompt);
   };
 
   const completeAfterDeterministicExternalRepair = async (
@@ -2294,6 +2293,11 @@ export async function runExecutorLoop(
       toolResult: null,
     });
 
+    if (requestedTargetContract.readOnly && executorTurn.type === 'completion' && executorTurn.status === 'EXECUTION_COMPLETE') {
+      if (arePlannedActionsSatisfied(approvedPlan, toolCallLog)) return completeRecordedPlan(turnPrompt);
+      return haltForIncompletePlan(turnPrompt, `Executor reported EXECUTION_COMPLETE before satisfying the ${approvedPlan.plan_type} minimal_action_set.`);
+    }
+
     const completionResult = await handleExecutorCompletion(
       executorTurn,
       rawTask,
@@ -2316,7 +2320,7 @@ export async function runExecutorLoop(
       totalLockWaitMs,
       peakBufferBytes,
       getMissingSuccessfulPlannedFileWrites,
-      haltForMissingPlannedFileWrites,
+      haltForIncompletePlan,
       completeAfterDeterministicExternalRepair,
       persistExecutorContext,
       writeRepairAttemptTimeline,

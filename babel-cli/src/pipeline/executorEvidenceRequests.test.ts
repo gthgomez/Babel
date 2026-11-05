@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { isEvidenceRequestPlanSatisfied } from './executorEvidenceRequests.js';
+import { arePlannedActionsSatisfied, isEvidenceRequestPlanSatisfied } from './executorEvidenceRequests.js';
 import type { SwePlan, ToolCallLog } from '../schemas/agentContracts.js';
 
 const baseEvidencePlan = {
@@ -89,4 +89,13 @@ test('non-evidence plans are not treated as evidence-satisfied', () => {
     ),
     false,
   );
+});
+
+test('recorded read-only actions can satisfy a legacy plan without relabeling its type', () => {
+  const plan: SwePlan = {...baseEvidencePlan,plan_type:'IMPLEMENTATION_PLAN',minimal_action_set:baseEvidencePlan.minimal_action_set.slice(0,1)};
+  const entry: ToolCallLog = {step:1,tool:'file_read',target:'src/input.ts',exit_code:0,stdout:'content',stderr:'',verified:true};
+  assert.equal(arePlannedActionsSatisfied(plan,[entry]),true);
+  assert.equal(isEvidenceRequestPlanSatisfied(plan,[entry]),false);
+  assert.equal(arePlannedActionsSatisfied(plan,[]),false);
+  assert.equal(arePlannedActionsSatisfied(plan,[{...entry,verified:false}]),false);
 });

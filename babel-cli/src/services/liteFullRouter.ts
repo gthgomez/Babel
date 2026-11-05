@@ -1,4 +1,4 @@
-import { isReadOnlyTaskFrame, isScopedEditObject, stripFencedCodeBodies } from '../config/chatTaskClass.js';
+import { isReadOnlyTaskFrame, isScopedEditObject, stripFencedCodeBodies, TASK_REQUEST_PREFIX_SOURCE } from '../config/chatTaskClass.js';
 
 export type LiteFullSelectedLane =
   | 'lite_ask'
@@ -189,7 +189,7 @@ function hasMutationInstructionOutsideProhibition(task: string): boolean {
     ' ',
   );
   // A report mentioning "the fix" also does not authorize implementation.
-  const mutationRequest = /^(?:(?:can|could|would)\s+you\s+|i\s+(?:want|need)\s+you\s+to\s+)?(?:please\s+)?(?:fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove|add|insert|extend|refactor|rename)\b/i;
+  const mutationRequest = new RegExp(`^${TASK_REQUEST_PREFIX_SOURCE}(?:fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove|add|insert|extend|refactor|rename)\\b`, 'i');
   return remainder.split(/\.(?=\s|$)|[;!?\r\n]/).some((clause) => mutationRequest.test(clause.trim()));
 }
 const PLAN_PATTERN = /\b(plan|design|approach|compare|implementation path|migration plan)\b/i;
