@@ -725,7 +725,7 @@ function handleNativeEvent(packet) {
       if(message.status==='running' && !message.text) appendLiveText(message,'\n\nThe CLI exited before Babel reported a result.');
       message.status='failed';
       settleTools(message,'failed');
-    } else if(poisoned && (message.status==='running' || message.status==='complete')){
+    } else if(poisoned && ['running','complete','plan_ready'].includes(message.status)){
       message.status='unverified';
       settleTools(message,'unverified');
       appendLiveText(message,'\n\nThe event stream was incomplete. Inspect Babel’s run evidence before trusting completion.');
@@ -797,7 +797,10 @@ function handleNativeEvent(packet) {
       message.status=status;
       // Terminal task evidence is not evidence that each outstanding tool succeeded.
       settleTools(message, status==='cancelled'?'cancelled':'unverified');
-      if(ev.text && (!message.text || (['failed','blocked'].includes(status) && !message.text.includes(ev.text))))appendLiveText(message,`${message.text?'\n\n':''}${ev.text.slice(0,250000)}`);
+      if(ev.text && !message.text.includes(ev.text)){
+        const missingText=ev.text.startsWith(message.text)?ev.text.slice(message.text.length):`${message.text?'\n\n':''}${ev.text}`;
+        appendLiveText(message,missingText.slice(0,250000));
+      }
       if(!message.text)appendLiveText(message,'Babel returned a structured result.');
       message.result=ev.raw;
       message.review=reviewFromResult(ev.raw);

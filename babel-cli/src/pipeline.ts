@@ -377,6 +377,8 @@ export interface PipelineResult {
   manifest: OrchestratorManifest;
   plan: SwePlan | null;
   status: TerminalStatus;
+  /** Controller-observed cancellation, independent of generated model output. */
+  terminalOutcome?: 'CANCELLED';
   finalAnswer?: string;
   manualPromptPath?: string;
   repairPromptPath?: string;
@@ -2773,12 +2775,27 @@ export async function _runBabelPipelineInternal(
           !originalIntentContract.mutation_allowed &&
           originalIntentContract.task_kind !== 'implementation'
         ) {
+          let answer: string;
+          try {
+            answer = await answerDeepEvidence({
+              ownerTask: task, toolCallLog, evidence,
+              ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+            });
+          } catch (error) {
+            if (!options.abortSignal?.aborted) throw error;
+            return await finalizeResult({
+              runDir: evidence.runDir, manifest, plan: approvedPlan,
+              status: 'EXECUTOR_HALTED', terminalOutcome: 'CANCELLED',
+              errors: ['Read-only answer generation was cancelled.'],
+              finalAnswer: 'Run cancelled before the read-only answer was completed.',
+            });
+          }
           const reportFinalizer = buildEvidenceReportFinalizerArtifact({
             task,
             toolCallLog,
             intent: originalIntentContract,
             runDir: evidence.runDir,
-            answer: await answerDeepEvidence({ ownerTask: task, toolCallLog, evidence }),
+            answer,
           });
           evidence.writeDebugFile(
             'report_finalizer.json',

@@ -151,6 +151,8 @@ if (!isSyntheticProviderFixtureReady()) {
   for (const kind of [
     'evidence',
     'answer-unavailable',
+    'cancel-before-answer',
+    'cancel-during-answer',
     'qa-reject',
     'wrong-plan-type',
   ] as const)
@@ -158,6 +160,8 @@ if (!isSyntheticProviderFixtureReady()) {
       const rejected = kind === 'qa-reject';
       writeFileSync('existing.txt', 'preserved owner source');
       globalCostTracker.resetSession();
+      const controller = new AbortController();
+      const cancelled = kind === 'cancel-before-answer' || kind === 'cancel-during-answer';
       const reject = {
         verdict: 'REJECT',
         failure_count: 1,
@@ -208,6 +212,11 @@ if (!isSyntheticProviderFixtureReady()) {
             assert.match(String(init?.body), /preserved owner source/);
             assert.match(String(init?.body), /ORIGINAL OWNER REQUEST/);
             assert.match(String(init?.body), /untrusted evidence/);
+            if (kind === 'cancel-during-answer') {
+              controller.abort();
+              assert.equal(init?.signal?.aborted, true, 'answer request must receive cancellation');
+              throw controller.signal.reason;
+            }
             if (kind === 'answer-unavailable')
               return new Response(
                 JSON.stringify({
@@ -247,6 +256,13 @@ if (!isSyntheticProviderFixtureReady()) {
         },
       );
       const evidence = new EvidenceBundle(task, process.env['BABEL_RUNS_DIR']!);
+      if (kind === 'cancel-before-answer') {
+        const writeContext = evidence.writeCompiledContext.bind(evidence);
+        t.mock.method(evidence, 'writeCompiledContext', (stage: string, context: string) => {
+          writeContext(stage, context);
+          if (stage === 'evidence_answer') controller.abort();
+        });
+      }
       const result = await withPipelineModelRoute('glm-5.3-flash', () =>
         _runBabelPipelineInternal(
           task,
@@ -255,6 +271,7 @@ if (!isSyntheticProviderFixtureReady()) {
             modelOverride: 'glm-5.3-flash',
             disableMemoryExtraction: true,
             writeLatestPointers: false,
+            abortSignal: controller.signal,
           },
           evidence,
           manifest(),
@@ -269,11 +286,17 @@ if (!isSyntheticProviderFixtureReady()) {
         'preserved owner source',
       );
       if (kind === 'answer-unavailable') assert.ok(calls >= 4);
-      else assert.equal(calls, turns.length);
+      else assert.equal(calls, kind === 'cancel-before-answer' ? 3 : turns.length);
       if (rejected) assert.equal(result.status, 'QA_REJECTED_MAX_LOOPS');
       else if (kind === 'wrong-plan-type')
         assert.equal(result.status, 'EXECUTOR_HALTED');
-      else if (kind === 'answer-unavailable') {
+      else if (cancelled) {
+        assert.equal(result.status, 'EXECUTOR_HALTED');
+        const {buildRunResultPayload} = await import('../cli/structuredOutput.js');
+        const payload = buildRunResultPayload(result, {task, mode:'deep'});
+        assert.equal(payload['terminal_outcome'], 'CANCELLED');
+        assert.doesNotMatch(result.finalAnswer ?? '', /preserved owner source/);
+      } else if (kind === 'answer-unavailable') {
         assert.equal(result.status, 'EXECUTOR_HALTED');
         assert.match(
           result.errors?.join(' ') ?? '',

@@ -11,7 +11,9 @@ export async function answerDeepEvidence(input: {
   ownerTask: string;
   toolCallLog: ToolCallLog[];
   evidence: EvidenceBundle;
+  signal?: AbortSignal;
 }): Promise<string> {
+  input.signal?.throwIfAborted();
   const context = [
     'Produce the final answer to the original owner request from the recorded evidence below.',
     'Answer the actual question, explain the relevant contents or findings, and cite inspected paths.',
@@ -30,13 +32,17 @@ export async function answerDeepEvidence(input: {
   ].join('\n\n');
   input.evidence.writeCompiledContext('evidence_answer', context);
   try {
+    input.signal?.throwIfAborted();
     const result = await runWithFallback(context, EvidenceAnswerSchema, {
       evidence: input.evidence,
       stage: 'executor',
       schemaName: 'DeepEvidenceAnswerSchema',
+      ...(input.signal ? { signal: input.signal } : {}),
     });
+    input.signal?.throwIfAborted();
     return result.answer;
   } catch (cause) {
+    input.signal?.throwIfAborted();
     // The runner retains diagnostics. Do not turn unavailable answer generation
     // into successful task completion merely because file inspection succeeded.
     throw new Error(

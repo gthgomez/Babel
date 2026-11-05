@@ -17,7 +17,9 @@ test('native renderer distinguishes a read-only plan and shows terminal errors a
   await writeFile(entry,`if(process.argv.includes('--desktop-capabilities')){console.log(JSON.stringify({schemaVersion:1,credentialEnvironment:'native-resolved-v1'}));process.exit(0);}
 const fail=process.argv.at(-1)==='Failure fixture';
 const emit=event=>process.stdout.write(JSON.stringify(event)+'\\n');emit({type:'run_start'});
-if(process.argv.at(-1)==='Budget fixture'){emit({type:'assistant_chunk',chunk:'Analyzing your request…'});emit({type:'run_complete',result:{status:'EXECUTOR_HALTED',user_status:'not_verified',errors:[],terminal_status:{condition_summary:'Token budget exceeded: 124819/3600 tokens used.'}}});process.exitCode=1;}
+if(process.argv.at(-1)==='Evidence fixture'){emit({type:'assistant_chunk',chunk:'Analyzing your request…'});emit({type:'run_complete',result:{status:'READ_ONLY_NO_MODIFICATION',answer:{answer:'calc.js exports the value 1. No source files were changed.'}}});}
+else if(process.argv.at(-1)==='Poison fixture'){emit({type:'run_complete',result:{command:'plan',status:'PLAN_READY',changed_files:[],answer:{answer:'Read-only plan before a malformed trailing record.'}}});process.stdout.write('malformed trailing record\\\\n');}
+else if(process.argv.at(-1)==='Budget fixture'){emit({type:'assistant_chunk',chunk:'Analyzing your request…'});emit({type:'run_complete',result:{status:'EXECUTOR_HALTED',user_status:'not_verified',errors:[],terminal_status:{condition_summary:'Token budget exceeded: 124819/3600 tokens used.'}}});process.exitCode=1;}
 else if(fail){emit({type:'assistant_chunk',chunk:'Analyzing your request…'});emit({type:'run_complete',result:{user_status:'failed',errors:['The requested plan cannot be produced.']}});process.exitCode=1;}
 else emit({type:'run_complete',result:{command:'plan',status:'PLAN_READY',changed_files:[],answer:{answer:'Inspect calc.js, decide validation semantics, then test before implementation.'}}});`);
   await writeFile(join(profile,'ui-connection.json'),JSON.stringify({projectRoot:project,cliEntry:entry}));
@@ -42,5 +44,14 @@ else emit({type:'run_complete',result:{command:'plan',status:'PLAN_READY',change
   await page.locator('[data-action="new-session"]').first().click();await page.locator('#composer-input').fill('Budget fixture');await page.locator('#composer-form').evaluate(form=>form.requestSubmit());
   await page.waitForFunction(()=>document.querySelector('#main-status').textContent==='Failed');
   assert.match(await page.locator('#conversation').innerText(),/Analyzing your request…[\s\S]*Token budget exceeded: 124819\/3600 tokens used\./);
+  await page.waitForFunction(()=>!document.querySelector('#send-button').disabled);
+  await page.locator('[data-action="new-session"]').first().click();await page.locator('.top-tab[data-mode="deep"]').click();
+  await page.locator('#composer-input').fill('Evidence fixture');await page.locator('#composer-form').evaluate(form=>form.requestSubmit());
+  await page.waitForFunction(()=>!document.querySelector('#send-button').disabled);
+  assert.match(await page.locator('#conversation').innerText(),/Analyzing your request…[\s\S]*calc\.js exports the value 1\./);
+  await page.locator('[data-action="new-session"]').first().click();await page.locator('.top-tab[data-mode="plan"]').click();
+  await page.locator('#composer-input').fill('Poison fixture');await page.locator('#composer-form').evaluate(form=>form.requestSubmit());
+  await page.waitForFunction(()=>!document.querySelector('#send-button').disabled);
+  assert.equal(await page.locator('#main-status').innerText(),'Unverified');
  }finally{if(app)await app.close();await rm(root,{recursive:true,force:true});}
 });
