@@ -1528,6 +1528,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
     let partialModelOutput = false;
     let toolCallCount = 0;
     let invocationFailed = false;
+    let responseValidationFailed = false;
     let sawDone = false;
 
     const streamState: StreamingState = {
@@ -1813,6 +1814,26 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
       streamState.generationMs = Date.now() - startedAt - (streamState.ttftMs ?? 0);
 
       streamState.finishReason = finishReason ?? (pendingToolCalls.size > 0 ? 'tool_calls' : 'stop');
+      // Admit the observed route before exposing executable tools or terminal success.
+      try {
+        this.validateObservedModelId(streamState.observedModelId);
+        this.validateObservedUpstream(streamState.upstreamProvider);
+        this.validateObservedRouterMetadata(streamState.routerMetadata, streamState.observedModelId, streamState.upstreamProvider);
+      } catch (error) {
+        responseValidationFailed = true;
+        this.lastInvocationMetadata = buildStreamingInvocationMetadata(
+          this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
+        );
+        notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
+          actualAttempt: lastAttempt,
+          details: { message: error instanceof Error ? error.message : String(error) },
+          failureStage: 'response_normalization',
+          partialModelOutput,
+          toolCallCount,
+          outputMaterial: outputReceipt,
+        });
+        throw error;
+      }
       if (finishReason === 'length') {
         if (pendingToolCalls.size > 0) {
           invocationFailed = true;
@@ -1939,6 +1960,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         yield { type: 'done', finishReason: finishReason ?? 'stop' };
       }
     } catch (err) {
+      if (responseValidationFailed) throw err;
       invocationFailed = true;
       notifyPhase('provider_error', undefined, 'stream');
       notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
@@ -1961,22 +1983,6 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
     if (!invocationFailed) {
       notifyPhase('stream_completed');
       notifyPhase('response_normalized');
-    }
-    try {
-      this.validateObservedModelId(streamState.observedModelId);
-      this.validateObservedUpstream(streamState.upstreamProvider);
-      this.validateObservedRouterMetadata(streamState.routerMetadata, streamState.observedModelId, streamState.upstreamProvider);
-    } catch (error) {
-      invocationFailed = true;
-      notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
-        actualAttempt: lastAttempt,
-        details: { message: error instanceof Error ? error.message : String(error) },
-        failureStage: 'response_normalization',
-        partialModelOutput,
-        toolCallCount,
-        outputMaterial: outputReceipt,
-      });
-      throw error;
     }
     notifyCompleted(invocationFailed ? 'failed' : 'delivered', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, invocationFailed ? {
       actualAttempt: lastAttempt,
