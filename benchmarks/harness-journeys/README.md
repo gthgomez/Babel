@@ -61,3 +61,69 @@ via `BABEL_JOURNEY_ORACLE_TEST_IMAGE` (local pinned image) and
 reference observations calibrate the oracles, never qualify a backend. Actual
 engine steering, provider execution, held-out outcomes and default selection
 remain separate qualification work. A rubric or prepared schedule is not a pass.
+
+## Native Chat task scorecard
+
+`native-chat-tasks.json` selects repository inspection (J03), a quantity bug fix
+(J05), an invoice feature (J06), and a scripted deceptive completion control.
+The manifest targets expansion to 16 tasks. Add fixtures and independent oracles
+to the existing corpus before extending this selection; repeated fixtures do
+not add task diversity.
+
+From `babel-cli`, run model-free calibration in a new directory outside the
+checkout:
+
+```sh
+node --import tsx scripts/run_native_chat_tasks.mjs \
+  --mode calibration --out /tmp/babel-native-calibration
+```
+
+This launches a fresh process with isolated home/config and no inherited
+credentials or experiment flags. A scripted runner invokes the actual
+`ChatEngine.submitMessage` loop and real file tools in disposable repositories.
+Correct reference bytes earn `CALIBRATION_PASS` only; accepted completions remain
+zero. A correct artifact can coexist with an incomplete engine session. The
+deceptive control writes incorrect code and claims completion; independent byte
+calibration rejects it. This mode does not execute candidate code on the host
+or qualify program behavior, providers, Docker, or installed packages.
+
+For a separately authorized live run using existing credentials, build current
+source, then select the approved exact model route:
+
+```sh
+npm run build
+node --import tsx scripts/run_native_chat_tasks.mjs \
+  --mode live --model opencode-go/deepseek-v4.1-flash \
+  --code-image <locally-installed-image@sha256:digest> \
+  --out /tmp/babel-native-live
+```
+
+Live cells use production `run --mode chat-headless` CLI preparation, credentials,
+permissions and sandbox policy. No evaluator spend, request, turn or wall caps
+are added; production limits remain. Source freshness and the normal OpenCode
+credential/durable-budget prerequisites still apply. Coordinate live runs with
+other campaigns; the evaluator does not create credentials or choose a fallback.
+
+Before coding cells, a trusted no-network Docker control must read its mounted
+workspace. A daemon version or cached image is insufficient. Missing
+image/runtime/mount access yields `UNAVAILABLE` and prevents live code admission.
+The read-only oracle checks named path facts and preservation, not prose quality.
+Live code uses the existing isolated computational ESM oracle over host-captured
+bytes. Oracles, references and protected baselines stay outside candidate grants.
+These are public development tasks, not held-out qualification.
+
+`report.json` and per-attempt records bind evaluator version/SHA/source hashes,
+candidate SHA/dirty status, disposable repository identity, fixture hashes,
+terminal outcome, artifact verdict, changes, operations, elapsed time,
+verification failures and route/usage evidence. Unknown cost/retry/request counts
+remain unknown; estimates and reported costs are separate from invoices. All
+scheduled rows are retained. Execution exceptions stop later live admissions
+without replay. The deceptive control runs only in calibration. TUI, Electron
+and installed release artifacts are separate qualification work.
+
+Focused model-free coverage:
+
+```sh
+node --import tsx --import ./src/testinfra/register-no-ambient-inference.mjs \
+  --test src/eval/native-chat-tasks.test.ts
+```

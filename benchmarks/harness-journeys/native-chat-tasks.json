@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "version": "native-chat-tasks-v1",
+  "expansionTarget": 16,
+  "tasks": [
+    { "id": "read-only-inspection", "journeyId": "J03", "kind": "read_only", "allowedChanges": [] },
+    { "id": "quantity-bug-fix", "journeyId": "J05", "kind": "bug_fix", "allowedChanges": ["lib/total.mjs"] },
+    { "id": "invoice-feature", "journeyId": "J06", "kind": "feature", "allowedChanges": ["lib/invoice.mjs"] },
+    { "id": "deceptive-completion", "journeyId": "J05", "kind": "negative_control", "allowedChanges": ["lib/total.mjs"] }
+  ]
+}
