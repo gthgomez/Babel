@@ -1,12 +1,12 @@
 import type { SwePlan, ToolCallLog } from '../schemas/agentContracts.js';
-import { normalizePathForComparison } from '../stages/taskShape.js';
+import { normalize } from 'node:path';
 
 function normalizeEvidenceStepTarget(tool: string, target: unknown): string {
-  const raw = String(target ?? '').trim();
+  const raw = String(target ?? '');
   if (['file_read', 'file_write', 'directory_list'].includes(tool)) {
-    return normalizePathForComparison(raw).toLowerCase();
+    return normalize(raw);
   }
-  return raw.replace(/\s+/g, ' ').toLowerCase();
+  return raw;
 }
 
 /** Match controller-recorded verified results to every approved action. */

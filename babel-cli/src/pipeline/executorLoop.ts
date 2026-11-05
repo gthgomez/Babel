@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 
 import { z } from 'zod';
 
@@ -155,7 +155,7 @@ import {
   buildExternalPostconditionFeedback,
   buildMaxTurnsExceededCondition,
   buildMissingPlannedFileWritesCondition,
-  getMissingSuccessfulPlannedFileWrites,
+  getMissingSuccessfulPlannedFileWrites as getCanonicalMissingSuccessfulPlannedFileWrites,
   shouldCompleteBoundedWriteTask,
 } from './executorCompletionGates.js';
 import {
@@ -459,8 +459,7 @@ async function handleExecutorCompletion(
       if (missingPlannedFileWrites.length > 0) {
         return {
           kind: 'return',
-          result: await haltForIncompletePlan(turnPrompt,
-            `Executor reported EXECUTION_COMPLETE before successful file_write for planned target(s): ${missingPlannedFileWrites.join(', ')}`),
+          result: await haltForIncompletePlan(turnPrompt, buildMissingPlannedFileWritesCondition(missingPlannedFileWrites)),
         };
       }
 
@@ -1725,38 +1724,9 @@ export async function runExecutorLoop(
     }
   };
 
-  const getMissingSuccessfulPlannedFileWrites = (): string[] => {
-    const plannedWrites = approvedPlan.minimal_action_set
-      .filter((step) => step.tool === 'file_write')
-      .map((step) => String(step.target ?? '').trim())
-      .filter((target) => target.length > 0);
-    if (plannedWrites.length === 0) {
-      return [];
-    }
-
-    const projectRoot = getExecutorProjectRoot();
-    const targetKey = (target: string): string => {
-      const normalized = normalizePathForComparison(target);
-      if (!projectRoot) {
-        return normalized.toLowerCase();
-      }
-
-      const resolved = resolveStepTargetPath(projectRoot, normalized);
-      if (isWithinProjectRootPath(projectRoot, resolved)) {
-        return relative(projectRoot, resolved).replace(/\\/g, '/').toLowerCase();
-      }
-
-      return resolved.replace(/\\/g, '/').toLowerCase();
-    };
-
-    const successfulWrites = new Set(
-      toolCallLog
-        .filter((entry) => entry.tool === 'file_write' && entry.exit_code === 0)
-        .map((entry) => targetKey(String(entry.target ?? ''))),
-    );
-
-    return plannedWrites.filter((target) => !successfulWrites.has(targetKey(target)));
-  };
+  const getMissingSuccessfulPlannedFileWrites = (): string[] => getCanonicalMissingSuccessfulPlannedFileWrites({
+    approvedPlan, toolCallLog, projectRoot: getExecutorProjectRoot(),
+  });
 
   const haltForIncompletePlan = async (
     nextTurnPrompt: string,
