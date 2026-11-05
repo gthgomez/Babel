@@ -779,10 +779,10 @@ describe('Babel Lite result output', () => {
         'Babel Ask Ready',
         '',
         'Target:',
-        '/tmp/example_game_suite/relicRun',
+        '/tmp/example_game_suite/exampleBrowserGame',
         '',
         'Answer:',
-        'relicRun is not recognized in this workspace.',
+        'exampleBrowserGame is not recognized in this workspace.',
         '',
         'Changed:',
         'none',
@@ -813,7 +813,7 @@ describe('Babel Lite result output', () => {
         'Babel Ask Ready',
         '',
         'Target:',
-        '/tmp/example_game_suite/relicRun',
+        '/tmp/example_game_suite/exampleBrowserGame',
         '',
         'Answer:',
         'This repo contains a game prototype.',
@@ -832,7 +832,7 @@ describe('Babel Lite result output', () => {
       ].join('\n'),
       '',
       {
-        expectedTargetRoot: '/tmp/example_game_suite/relicRun',
+        expectedTargetRoot: '/tmp/example_game_suite/exampleBrowserGame',
         manifestTargetRoot: '/tmp/example_game_suite',
       },
     );
@@ -887,7 +887,7 @@ describe('Babel Lite result output', () => {
         'Babel Run Complete',
         '',
         'Target:',
-        '/tmp/example_game_suite/relicRun',
+        '/tmp/example_game_suite/exampleBrowserGame',
         '',
         'Answer:',
         'Completed the run.',
@@ -906,7 +906,7 @@ describe('Babel Lite result output', () => {
       ].join('\n'),
       '',
       {
-        expectedTargetRoot: '/tmp/example_game_suite/relicRun',
+        expectedTargetRoot: '/tmp/example_game_suite/exampleBrowserGame',
         executedTargets: ['..\\README.md'],
       },
     );

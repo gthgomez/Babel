@@ -42,7 +42,7 @@ function printHelp(): void {
     '  --repo-manifest <path>  Repo manifest (default: fixtures/workspace-discovery/repos.json)',
     '  --scenarios <path>      Scenario matrix override',
     '  --workspace-root <path> Workspace root (default: /workspace)',
-    '  --repo-filter <ids>     Comma-separated repo ids (e.g. relic_run,simlife)',
+    '  --repo-filter <ids>     Comma-separated repo ids (e.g. example_browser_game,example_simulation)',
     '  --smoke                 Run smoke subset (2 scenarios x 4 repos)',
     '  --max-cells <n>         Cap executed cells',
     '  --evidence-dir <path>   Evidence root',

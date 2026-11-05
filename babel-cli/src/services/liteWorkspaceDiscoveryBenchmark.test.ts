@@ -101,14 +101,14 @@ test('workspace discovery fixtures load with 8 repos and 6 scenarios', () => {
 });
 
 test('resolveDiscoveryTaskTemplate substitutes slug and display name', () => {
-  const repo = readWorkspaceDiscoveryRepos().repos.find((entry) => entry.id === 'relic_run');
+  const repo = readWorkspaceDiscoveryRepos().repos.find((entry) => entry.id === 'example_browser_game');
   assert.ok(repo);
   const task = resolveDiscoveryTaskTemplate(
     'make a plan for adding new features to {slug} in {display_name}',
     repo,
   );
-  assert.match(task, /relicRun/);
-  assert.match(task, /Relic Run/);
+  assert.match(task, /exampleBrowserGame/);
+  assert.match(task, /Example Browser Game/);
 });
 
 test('findContextAnchorHits detects PROJECT_CONTEXT reads', () => {
@@ -116,11 +116,11 @@ test('findContextAnchorHits detects PROJECT_CONTEXT reads', () => {
     [
       {
         tool: 'read_file',
-        target: '/tmp/example_game_suite/relicRun/PROJECT_CONTEXT.md',
+        target: '/tmp/example_game_suite/exampleBrowserGame/PROJECT_CONTEXT.md',
         succeeded: true,
       },
     ],
-    '/tmp/example_game_suite/relicRun',
+    '/tmp/example_game_suite/exampleBrowserGame',
     ['PROJECT_CONTEXT.md', 'package.json'],
   );
   assert.ok(hits.includes('PROJECT_CONTEXT.md'));
@@ -171,7 +171,7 @@ test('scoreWorkspaceDiscoveryCell ignores policy-blocked out-of-scope tool targe
 });
 
 test('scoreWorkspaceDiscoveryCell fails parent-workspace path leaks', () => {
-  const repo = readWorkspaceDiscoveryRepos().repos.find((entry) => entry.id === 'relic_run');
+  const repo = readWorkspaceDiscoveryRepos().repos.find((entry) => entry.id === 'example_browser_game');
   const scenario = readWorkspaceDiscoveryScenarios().scenarios.find(
     (entry) => entry.id === 'disc_plan_named_features',
   );
@@ -181,8 +181,8 @@ test('scoreWorkspaceDiscoveryCell fails parent-workspace path leaks', () => {
   const scored = scoreWorkspaceDiscoveryCell({
     scenario,
     repo,
-    projectRoot: '/tmp/example_game_suite/relicRun',
-    resolvedTask: 'make a plan for adding new features to relicRun',
+    projectRoot: '/tmp/example_game_suite/exampleBrowserGame',
+    resolvedTask: 'make a plan for adding new features to exampleBrowserGame',
     exitCode: 0,
     stdout: '',
     stderr: '',
@@ -206,7 +206,7 @@ test('scoreWorkspaceDiscoveryCell fails parent-workspace path leaks', () => {
 });
 
 test('scoreWorkspaceDiscoveryCell passes grounded discovery with anchor hit', () => {
-  const repo = readWorkspaceDiscoveryRepos().repos.find((entry) => entry.id === 'simlife');
+  const repo = readWorkspaceDiscoveryRepos().repos.find((entry) => entry.id === 'example_simulation');
   const scenario = readWorkspaceDiscoveryScenarios().scenarios.find(
     (entry) => entry.id === 'disc_project_identity',
   );
@@ -216,7 +216,7 @@ test('scoreWorkspaceDiscoveryCell passes grounded discovery with anchor hit', ()
   const scored = scoreWorkspaceDiscoveryCell({
     scenario,
     repo,
-    projectRoot: '/tmp/example_game_suite/SimLife',
+    projectRoot: '/tmp/example_game_suite/ExampleSimulation',
     resolvedTask: 'what is this project?',
     exitCode: 0,
     stdout: '',
@@ -229,13 +229,13 @@ test('scoreWorkspaceDiscoveryCell passes grounded discovery with anchor hit', ()
         {
           step: 1,
           tool: 'read_file',
-          target: '/tmp/example_game_suite/SimLife/PROJECT_CONTEXT.md',
+          target: '/tmp/example_game_suite/ExampleSimulation/PROJECT_CONTEXT.md',
           exit_code: 0,
         },
         {
           step: 2,
           tool: 'directory_list',
-          target: '/tmp/example_game_suite/SimLife',
+          target: '/tmp/example_game_suite/ExampleSimulation',
           exit_code: 0,
         },
       ],
@@ -257,7 +257,7 @@ test('hasPlanArtifact detects non-empty plan.md', () => {
 });
 
 test('scoreWorkspaceDiscoveryCell requires plan artifact for plan scenarios', () => {
-  const repo = readWorkspaceDiscoveryRepos().repos.find((entry) => entry.id === 'webrpg');
+  const repo = readWorkspaceDiscoveryRepos().repos.find((entry) => entry.id === 'example_phaser_game');
   const scenario = readWorkspaceDiscoveryScenarios().scenarios.find(
     (entry) => entry.id === 'disc_roadmap_vague',
   );
@@ -275,7 +275,7 @@ test('scoreWorkspaceDiscoveryCell requires plan artifact for plan scenarios', ()
           {
             step: 1,
             tool: 'read_file',
-            target: '/tmp/example_game_suite/WebRPG/PROJECT_CONTEXT.md',
+            target: '/tmp/example_game_suite/ExamplePhaserGame/PROJECT_CONTEXT.md',
             exit_code: 0,
           },
           { step: 2, tool: 'grep', target: 'roadmap', exit_code: 0 },
@@ -287,7 +287,7 @@ test('scoreWorkspaceDiscoveryCell requires plan artifact for plan scenarios', ()
     const scored = scoreWorkspaceDiscoveryCell({
       scenario,
       repo,
-      projectRoot: '/tmp/example_game_suite/WebRPG',
+      projectRoot: '/tmp/example_game_suite/ExamplePhaserGame',
       resolvedTask: 'help me plan next features',
       exitCode: 0,
       stdout: '',
@@ -305,7 +305,7 @@ test('scoreWorkspaceDiscoveryCell requires plan artifact for plan scenarios', ()
     const scoredWithPlan = scoreWorkspaceDiscoveryCell({
       scenario,
       repo,
-      projectRoot: '/tmp/example_game_suite/WebRPG',
+      projectRoot: '/tmp/example_game_suite/ExamplePhaserGame',
       resolvedTask: 'help me plan next features',
       exitCode: 0,
       stdout: '',
@@ -319,7 +319,7 @@ test('scoreWorkspaceDiscoveryCell requires plan artifact for plan scenarios', ()
           {
             step: 1,
             tool: 'read_file',
-            target: '/tmp/example_game_suite/WebRPG/PROJECT_CONTEXT.md',
+            target: '/tmp/example_game_suite/ExamplePhaserGame/PROJECT_CONTEXT.md',
             exit_code: 0,
           },
           { step: 2, tool: 'grep', target: 'features', exit_code: 0 },

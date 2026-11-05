@@ -88,7 +88,6 @@ const PROJECT_MARKERS = [
 const FAMILY_DIRECTORIES = ['example_backend_suite', 'example_mobile_suite', 'example_game_suite'];
 
 const PROJECT_NAME_ALIASES: Record<string, string> = {
-  simlife: 'SimLife',
   aetherlyn: 'AetherlynGameDraft',
 };
 

@@ -200,7 +200,7 @@ describe('session-event lifecycle — required regressions', () => {
     const completionOrdered: DurableToolLogRow[] = [
       { tool: 'list_dir', target: 'scripts', index: 1 },
       { tool: 'list_dir', target: 'scenes', index: 2 },
-      { tool: 'read_file', target: 'SIMLIFE_ROADMAP_2026.md', index: 0 },
+      { tool: 'read_file', target: 'EXAMPLE_SIMULATION_ROADMAP_2026.md', index: 0 },
     ]
 
     const before = createSessionEventLog('incident-before')
@@ -395,21 +395,21 @@ describe('session-event lifecycle — required regressions', () => {
     assert.equal(validateSessionEventLog(log).status, 'PASS')
   })
 
-  test('Test 13 — SimLife incident-shaped fixture settles without append failure', () => {
-    const log = createSessionEventLog('simlife-fixture')
+  test('Test 13 — ExampleSimulation incident-shaped fixture settles without append failure', () => {
+    const log = createSessionEventLog('example_simulation-fixture')
     const batches: Array<Array<{ id: string; name: string; index: number; target: string }>> = [
       [
-        { id: 'call_00_list', name: 'list_dir', index: 0, target: 'SimLife' },
-        { id: 'call_01_ctx', name: 'read_file', index: 1, target: 'SimLife/PROJECT_CONTEXT.md' },
+        { id: 'call_00_list', name: 'list_dir', index: 0, target: 'ExampleSimulation' },
+        { id: 'call_01_ctx', name: 'read_file', index: 1, target: 'ExampleSimulation/PROJECT_CONTEXT.md' },
       ],
       [
-        { id: 'call_00_state', name: 'read_file', index: 0, target: 'SimLife/CURRENT_STATE.md' },
-        { id: 'call_01_readme', name: 'read_file', index: 1, target: 'SimLife/README.md' },
+        { id: 'call_00_state', name: 'read_file', index: 0, target: 'ExampleSimulation/CURRENT_STATE.md' },
+        { id: 'call_01_readme', name: 'read_file', index: 1, target: 'ExampleSimulation/README.md' },
       ],
       [
-        { id: 'call_00_road', name: 'read_file', index: 0, target: 'SimLife/SIMLIFE_ROADMAP_2026.md' },
-        { id: 'call_01_scripts', name: 'list_dir', index: 1, target: 'SimLife/scripts' },
-        { id: 'call_02_scenes', name: 'list_dir', index: 2, target: 'SimLife/scenes' },
+        { id: 'call_00_road', name: 'read_file', index: 0, target: 'ExampleSimulation/EXAMPLE_SIMULATION_ROADMAP_2026.md' },
+        { id: 'call_01_scripts', name: 'list_dir', index: 1, target: 'ExampleSimulation/scripts' },
+        { id: 'call_02_scenes', name: 'list_dir', index: 2, target: 'ExampleSimulation/scenes' },
       ],
     ]
     for (const batch of batches) {
@@ -431,7 +431,7 @@ describe('session-event lifecycle — required regressions', () => {
     const rows: DurableToolLogRow[] = [
       { tool: 'read_file', target: 'CURRENT_STATE.md', index: 0, stdout: 'state-content' },
       { tool: 'read_file', target: 'README.md', index: 1, stdout: 'readme-content' },
-      { tool: 'read_file', target: 'SIMLIFE_ROADMAP_2026.md', index: 2, stdout: 'roadmap-content' },
+      { tool: 'read_file', target: 'EXAMPLE_SIMULATION_ROADMAP_2026.md', index: 2, stdout: 'roadmap-content' },
     ]
 
     const projected = projectDurableToolBatch({
@@ -481,7 +481,7 @@ describe('session-event lifecycle — required regressions', () => {
     const rows: DurableToolLogRow[] = [
       { tool: 'read_file', target: 'CURRENT_STATE.md', index: 0, stdout: 'state' },
       { tool: 'read_file', target: 'README.md', index: 1, stdout: 'readme' },
-      { tool: 'read_file', target: 'SIMLIFE_ROADMAP_2026.md', index: 2, stdout: 'roadmap' },
+      { tool: 'read_file', target: 'EXAMPLE_SIMULATION_ROADMAP_2026.md', index: 2, stdout: 'roadmap' },
     ]
     const log = createSessionEventLog('same-name-swap')
     proposeAndStart(
@@ -509,11 +509,11 @@ describe('Test 14 — ChatEngine live path with reverse-order parallel reads', (
 
   before(() => {
     projectRoot = mkdtempSync(join(tmpdir(), 'babel-lifecycle-live-'))
-    mkdirSync(join(projectRoot, 'SimLife', 'scripts'), { recursive: true })
-    mkdirSync(join(projectRoot, 'SimLife', 'scenes'), { recursive: true })
-    writeFileSync(join(projectRoot, 'SimLife', 'CURRENT_STATE.md'), 'state\n', 'utf-8')
-    writeFileSync(join(projectRoot, 'SimLife', 'README.md'), 'readme\n', 'utf-8')
-    writeFileSync(join(projectRoot, 'SimLife', 'SIMLIFE_ROADMAP_2026.md'), 'roadmap\n', 'utf-8')
+    mkdirSync(join(projectRoot, 'ExampleSimulation', 'scripts'), { recursive: true })
+    mkdirSync(join(projectRoot, 'ExampleSimulation', 'scenes'), { recursive: true })
+    writeFileSync(join(projectRoot, 'ExampleSimulation', 'CURRENT_STATE.md'), 'state\n', 'utf-8')
+    writeFileSync(join(projectRoot, 'ExampleSimulation', 'README.md'), 'readme\n', 'utf-8')
+    writeFileSync(join(projectRoot, 'ExampleSimulation', 'EXAMPLE_SIMULATION_ROADMAP_2026.md'), 'roadmap\n', 'utf-8')
     runsRoot = mkdtempSync(join(tmpdir(), 'babel-lifecycle-runs-'))
     previousRunsDir = process.env['BABEL_RUNS_DIR']
     process.env['BABEL_RUNS_DIR'] = runsRoot
@@ -544,24 +544,24 @@ describe('Test 14 — ChatEngine live path with reverse-order parallel reads', (
             type: 'tool_use',
             id: PROVIDER_IDS[0],
             name: 'read_file',
-            input: { path: 'SimLife/SIMLIFE_ROADMAP_2026.md' },
+            input: { path: 'ExampleSimulation/EXAMPLE_SIMULATION_ROADMAP_2026.md' },
           }
           yield {
             type: 'tool_use',
             id: PROVIDER_IDS[1],
             name: 'list_dir',
-            input: { path: 'SimLife/scripts' },
+            input: { path: 'ExampleSimulation/scripts' },
           }
           yield {
             type: 'tool_use',
             id: PROVIDER_IDS[2],
             name: 'list_dir',
-            input: { path: 'SimLife/scenes' },
+            input: { path: 'ExampleSimulation/scenes' },
           }
           yield { type: 'done', finishReason: 'tool_calls' }
           return
         }
-        yield { type: 'text_delta', text: 'SimLife is a mid-stage prototype with a solid roadmap.' }
+        yield { type: 'text_delta', text: 'ExampleSimulation is a mid-stage prototype with a solid roadmap.' }
         yield { type: 'done', finishReason: 'stop' }
       },
       execute: async () => ({ type: 'completion', answer: 'done' }),
@@ -569,7 +569,7 @@ describe('Test 14 — ChatEngine live path with reverse-order parallel reads', (
     }
 
     const engine = new ChatEngine({
-      task: 'how well do you rate the current simlife game?',
+      task: 'how well do you rate the current example_simulation game?',
       projectRoot,
       model: 'deepseek-v4-flash',
       maxTurns: 4,
@@ -594,14 +594,14 @@ describe('Test 14 — ChatEngine live path with reverse-order parallel reads', (
     }
 
     const events: ChatEvent[] = []
-    for await (const event of engine.submitMessageStream('how well do you rate the current simlife game?')) {
+    for await (const event of engine.submitMessageStream('how well do you rate the current example_simulation game?')) {
       events.push(event)
     }
     const failed = events.find((event) => event.type === 'failed')
     assert.equal(failed, undefined, failed && failed.type === 'failed' ? failed.error : 'no failure')
     const done = events.find((event) => event.type === 'done')
     assert.ok(done && done.type === 'done')
-    assert.match(done.answer ?? '', /SimLife|prototype|roadmap/i)
+    assert.match(done.answer ?? '', /ExampleSimulation|prototype|roadmap/i)
 
     const session = engine.getParityRuntime().sessionEvents
     for (const id of PROVIDER_IDS) {
@@ -639,7 +639,7 @@ describe('Test 14 — ChatEngine live path with reverse-order parallel reads', (
     const stateRead = completed.find((event) => event.tool_call_id === PROVIDER_IDS[0])
     assert.ok(stateRead)
     assert.equal(stateRead.action_index, 0)
-    assert.equal(stateRead.target_summary, 'SimLife/SIMLIFE_ROADMAP_2026.md')
+    assert.equal(stateRead.target_summary, 'ExampleSimulation/EXAMPLE_SIMULATION_ROADMAP_2026.md')
     assert.ok(stateRead.batch_id && stateRead.batch_id.startsWith('batch_'), 'live batch_id persisted')
     assert.equal(new Set(completed.map((event) => event.batch_id)).size, 1, 'one batch for the turn')
 

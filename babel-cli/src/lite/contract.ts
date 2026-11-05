@@ -827,7 +827,7 @@ export function buildLiteTaskContract(options: BuildLiteContractOptions): LiteTa
     } catch {
       // workspace scan unavailable; silently skip
     }
-    // Scan one level deeper if no top-level match (e.g., Workspace/example_game_suite/relicRun)
+    // Scan one level deeper if no top-level match (e.g., Workspace/example_game_suite/exampleBrowserGame)
     if (workspaceHints.length === 0) {
       try {
         const wsRoot =

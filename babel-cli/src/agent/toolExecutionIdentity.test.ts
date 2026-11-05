@@ -12,7 +12,7 @@ import {
 const outOfOrderSlice: DurableToolLogRow[] = [
   { tool: 'read_file', target: 'CURRENT_STATE.md', index: 1 },
   { tool: 'list_dir', target: 'scripts', index: 2 },
-  { tool: 'read_file', target: 'SIMLIFE_ROADMAP_2026.md', index: 0 },
+  { tool: 'read_file', target: 'EXAMPLE_SIMULATION_ROADMAP_2026.md', index: 0 },
 ]
 
 const providerIds = [

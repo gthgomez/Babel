@@ -537,7 +537,7 @@ test('doctor workspace warns when interactive transcript target differs from man
   const runsDir = join(root, 'runs');
   const runDir = join(runsDir, '20260606_145627_bl-plan-a-fix');
   const sessionDir = join(runsDir, 'interactive-sessions', 'interactive_2026-06-06_195508');
-  const transcriptTarget = join(workspace, 'example_game_suite', 'relicRun');
+  const transcriptTarget = join(workspace, 'example_game_suite', 'exampleBrowserGame');
   const manifestTarget = join(workspace, 'example_game_suite');
   mkdirSync(runDir, { recursive: true });
   mkdirSync(sessionDir, { recursive: true });
