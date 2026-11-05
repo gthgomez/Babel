@@ -21,10 +21,10 @@ export function setupDockerLabel({platform, conversationOnly, docker, dockerInst
   return 'Start Docker Desktop for project tools';
 }
 
-/** Runtime panel labels. Windows keeps the raw readiness tokens. */
+/** A selected route is not proof of credentials; doctor may not inspect native storage. */
 export function runtimeProviderLabel({platform, providerConfigured, reported} = {}) {
-  if (platform === 'linux' && !providerConfigured) return 'Not selected';
-  return reported ?? 'unknown';
+  if (!providerConfigured) return 'Not selected';
+  return reported === 'configured' ? 'Configured' : 'Selected';
 }
 export function runtimeDockerLabel({platform, docker, dockerInstallation} = {}) {
   if (platform !== 'linux') return docker ?? 'unknown';
@@ -34,7 +34,7 @@ export function runtimeDockerLabel({platform, docker, dockerInstallation} = {}) 
   return 'Not checked';
 }
 export function runtimeReadinessLabel({platform, providerConfigured, engineReady} = {}) {
-  if (platform === 'linux' && !providerConfigured) return 'Not ready';
+  if (!providerConfigured) return 'Not ready';
   return engineReady ? 'Ready' : 'Not ready';
 }
 
@@ -257,13 +257,16 @@ export function normalizeEvent(event) {
     const outcome = result.terminal_outcome ?? result.outcome ?? '';
     // Mirrors cli/userFacingStatus.ts at blob b7cf206; unknown outcomes never pass.
     let status = statusFromTerminalOutcome(outcome);
+    if (outcome==='' && result.status==='EXECUTOR_HALTED') status='failed';
     if (outcome==='' && result.command==='plan' && result.status==='PLAN_READY' && Array.isArray(result.changed_files) && result.changed_files.length===0) status='plan_ready';
     if (status !== 'cancelled') {
       if (result.user_status === 'blocked' || result.approval_required === true) status = 'blocked';
       if (result.user_status === 'failed' || result.verification?.status === 'failed') status = 'failed';
     }
     let text = [result.answer?.answer, result.answer, result.summary, result.response, result.output].find(v => typeof v === 'string') ?? '';
-    const errors=Array.isArray(result.errors)?result.errors.filter(value=>typeof value==='string'&&value.trim()).join('\n'):typeof result.error==='string'?result.error:'';
+    const errors=(Array.isArray(result.errors)?result.errors.filter(value=>typeof value==='string'&&value.trim()).join('\n'):'') ||
+      (typeof result.error==='string'?result.error:'') ||
+      (status==='failed'&&typeof result.terminal_status?.condition_summary==='string'?result.terminal_status.condition_summary:'');
     if(errors && !['complete','no_change','plan_ready','cancelled'].includes(status))text=errors;
     const usage = result.usage && typeof result.usage === 'object' ? result.usage : null;
     return {kind:'terminal',status,text,raw:result,usage};

@@ -3,6 +3,15 @@ import assert from 'node:assert/strict';
 
 const load = () => import('../src/core.mjs').catch(() => ({}));
 
+test('runtime provider selection does not claim a missing or validated credential',async()=>{
+ const {runtimeProviderLabel}=await load();
+ for(const platform of ['win32','linux']){
+  assert.equal(runtimeProviderLabel({platform,providerConfigured:true,reported:'missing'}),'Selected');
+  assert.equal(runtimeProviderLabel({platform,providerConfigured:true,reported:'configured'}),'Configured');
+  assert.equal(runtimeProviderLabel({platform,providerConfigured:false,reported:'unknown'}),'Not selected');
+ }
+});
+
 test('plan readiness is distinct from verified implementation and transport poison downgrades it',async()=>{
  const {normalizeEvent,verifiedStatus}=await load();
  assert.equal(normalizeEvent({type:'run_complete',result:{command:'plan',status:'PLAN_READY',changed_files:[],answer:{answer:'Read-only plan'}}}).status,'plan_ready');
@@ -10,6 +19,9 @@ test('plan readiness is distinct from verified implementation and transport pois
  assert.equal(verifiedStatus('plan_ready',true),'unverified');
  for(const [terminal_outcome,expected] of [['CANCELLED','cancelled'],['AGENT_FAILURE','failed'],['INFRA_FAILURE','failed'],['BLOCKED_POLICY','blocked']])assert.equal(normalizeEvent({type:'run_complete',result:{command:'plan',status:'PLAN_READY',changed_files:[],terminal_outcome}}).status,expected);
  assert.equal(normalizeEvent({type:'run_complete',result:{user_status:'failed',errors:['Plan mode cannot execute file writes.']}}).text,'Plan mode cannot execute file writes.');
+ const halted=normalizeEvent({type:'run_complete',result:{status:'EXECUTOR_HALTED',user_status:'not_verified',errors:[],terminal_status:{condition_summary:'Token budget exceeded: 124819/3600 tokens used.'}}});
+ assert.equal(halted.status,'failed');assert.match(halted.text,/Token budget exceeded/);
+ assert.equal(normalizeEvent({type:'run_complete',result:{status:'EXECUTOR_HALTED',terminal_outcome:'CANCELLED'}}).status,'cancelled');
 });
 
 test('provider mode support is explicit and unsupported pipeline routes are blocked', async () => {
@@ -37,11 +49,11 @@ test('linux setup names a missing Docker engine and Windows conversation copy st
   assert.match(setupDockerLabel({platform:'linux', conversationOnly:true, dockerInstallation:'missing'}), /Not installed\. Install Docker Engine/);
   assert.equal(setupDockerLabel({platform:'linux', dockerInstallation:'running'}), 'Running');
   assert.equal(runtimeProviderLabel({platform:'linux', providerConfigured:false, reported:'unknown'}), 'Not selected');
-  assert.equal(runtimeProviderLabel({platform:'win32', providerConfigured:false, reported:'unknown'}), 'unknown');
+  assert.equal(runtimeProviderLabel({platform:'win32', providerConfigured:false, reported:'unknown'}), 'Not selected');
   assert.equal(runtimeDockerLabel({platform:'linux', dockerInstallation:'missing'}), 'Not installed');
   assert.equal(runtimeDockerLabel({platform:'win32', docker:'unknown'}), 'unknown');
   assert.equal(runtimeReadinessLabel({platform:'linux', providerConfigured:false, engineReady:true}), 'Not ready');
-  assert.equal(runtimeReadinessLabel({platform:'win32', providerConfigured:false, engineReady:true}), 'Ready');
+  assert.equal(runtimeReadinessLabel({platform:'win32', providerConfigured:false, engineReady:true}), 'Not ready');
   assert.equal(composerSendBlockMessage({platform:'linux', providerConfigured:false}), 'Choose a model provider first.');
   assert.equal(composerSendBlockMessage({platform:'win32', providerConfigured:false}), '');
 });
