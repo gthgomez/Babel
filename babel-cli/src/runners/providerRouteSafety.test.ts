@@ -208,10 +208,10 @@ if (!isSyntheticProviderFixtureReady()) {
       if (failure === 'cancel' || failure === 'idle') assert.equal(bodyCancelled, true)
     })
 
-    for (const observed of ['other-provider/model', null]) for (const payload of ['tools', 'text'] as const) {
-      test(`${route.provider} rejects ${observed === null ? 'missing' : 'substituted'} identity before emitting ${payload} completion`, async () => {
+    for (const observed of ['other-provider/model', null]) for (const payload of ['tools', 'text'] as const) for (const terminal of [false, true]) {
+      test(`${route.provider} rejects ${observed === null ? 'missing' : 'substituted'} identity before emitting ${payload} completion (${terminal ? 'complete' : 'interrupted'} stream)`, async () => {
         let requests = 0
-        globalThis.fetch = async () => { requests++; return response(observed, payload === 'tools' ? toolDelta : { content: 'unverified text' }) }
+        globalThis.fetch = async () => { requests++; return response(observed, payload === 'tools' ? toolDelta : { content: 'unverified text' }, terminal) }
         const api = runner()
         const events: ToolStreamEvent[] = []
         const completed: ProviderInvocationCompleted[] = []
@@ -226,7 +226,7 @@ if (!isSyntheticProviderFixtureReady()) {
         assert.equal(phases.includes('response_normalized'), false)
         assert.equal(completed.length, 1)
         assert.equal(completed[0]?.status, 'failed')
-        assert.equal(completed[0]?.failure_receipt?.failure_stage, 'response_normalization')
+        assert.equal(completed[0]?.failure_receipt?.failure_stage, terminal ? 'response_normalization' : 'stream')
         assert.equal(api.getLastInvocationMetadata()?.observed_model_id, observed)
         assert.equal(api.getLastInvocationMetadata()?.sent_model_id, route.model)
         assert.equal(requests, 1)

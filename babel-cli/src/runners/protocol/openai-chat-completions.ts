@@ -1980,7 +1980,11 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
     this.lastInvocationMetadata = buildStreamingInvocationMetadata(
       this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
     );
-    if (!invocationFailed) {
+    if (invocationFailed) {
+      this.validateObservedModelId(streamState.observedModelId);
+      this.validateObservedUpstream(streamState.upstreamProvider);
+      this.validateObservedRouterMetadata(streamState.routerMetadata, streamState.observedModelId, streamState.upstreamProvider);
+    } else {
       notifyPhase('stream_completed');
       notifyPhase('response_normalized');
     }
