@@ -57,6 +57,7 @@ test('completion outcome is never inferred from event name alone', async () => {
   assert.equal(normalizeEvent({type:'run_complete',result:{terminal_outcome:'VERIFIED_COMPLETE'}}).status, 'complete');
   assert.equal(normalizeEvent({type:'run_complete',result:{terminal_outcome:'BLOCKED_EXTERNAL'}}).status, 'blocked');
   assert.equal(normalizeEvent({type:'run_complete',result:{terminal_outcome:'CANCELLED'}}).status, 'cancelled');
+  assert.equal(normalizeEvent({type:'run_complete',result:{terminal_outcome:'CANCELLED',user_status:'failed',status:'NEEDS_MORE_CONTEXT'}}).status, 'cancelled');
   assert.equal(normalizeEvent({type:'run_complete',result:{}}).status, 'unverified');
 });
 test('assistant stream and error events are normalized without prose parsing', async () => {

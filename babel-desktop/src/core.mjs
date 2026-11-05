@@ -257,8 +257,10 @@ export function normalizeEvent(event) {
     const outcome = result.terminal_outcome ?? result.outcome ?? '';
     // Mirrors cli/userFacingStatus.ts at blob b7cf206; unknown outcomes never pass.
     let status = statusFromTerminalOutcome(outcome);
-    if (result.user_status === 'blocked' || result.approval_required === true) status = 'blocked';
-    if (result.user_status === 'failed' || result.verification?.status === 'failed') status = 'failed';
+    if (status !== 'cancelled') {
+      if (result.user_status === 'blocked' || result.approval_required === true) status = 'blocked';
+      if (result.user_status === 'failed' || result.verification?.status === 'failed') status = 'failed';
+    }
     let text = [result.answer?.answer, result.answer, result.summary, result.response, result.output].find(v => typeof v === 'string') ?? '';
     const usage = result.usage && typeof result.usage === 'object' ? result.usage : null;
     return {kind:'terminal',status,text,raw:result,usage};

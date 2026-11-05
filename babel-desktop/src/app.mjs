@@ -721,7 +721,7 @@ function handleNativeEvent(packet) {
   const run=activeRun;const message=run.message;
   if(packet.kind==='exit') {
     const poisoned = Boolean(run.transportError || packet.displayLimited);
-    if(packet.code!==0){
+    if(packet.code!==0 && !(run.terminalReceived && message.status==='cancelled' && !poisoned)){
       if(message.status==='running' && !message.text) appendLiveText(message,'\n\nThe CLI exited before Babel reported a result.');
       message.status='failed';
       settleTools(message,'failed');

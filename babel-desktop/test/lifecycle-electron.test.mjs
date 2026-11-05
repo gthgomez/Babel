@@ -21,7 +21,7 @@ test('actual Electron close choice backgrounds the same child, reopens, and stop
     await writeFile(entry,`if(process.argv.length===3&&process.argv[2]==='--desktop-capabilities'){console.log(JSON.stringify({schemaVersion:1,credentialEnvironment:'native-resolved-v1'}));process.exit(0);}
 import {writeFileSync,appendFileSync} from 'node:fs';appendFileSync(${JSON.stringify(started)},'started\\n');process.stdout.write(JSON.stringify({type:'run_start'})+'\\n');
 const timer=setInterval(()=>process.stdout.write(JSON.stringify({type:'thought',line:'owned child still running'})+'\\n'),200);
-process.stdin.on('data',data=>{if(data.toString().includes('cancel')){clearInterval(timer);setTimeout(()=>{writeFileSync(${JSON.stringify(receipt)},'cancel settled');process.stdout.write(JSON.stringify({type:'cancelled'})+'\\n');process.exit(0);},300);}});
+process.stdin.on('data',data=>{if(data.toString().includes('cancel')){clearInterval(timer);setTimeout(()=>{writeFileSync(${JSON.stringify(receipt)},'cancel settled');process.stdout.write(JSON.stringify({type:'cancelled'})+'\\n'+JSON.stringify({type:'run_complete',result:{terminal_outcome:'CANCELLED',user_status:'failed',status:'NEEDS_MORE_CONTEXT'}})+'\\n');process.exit(1);},300);}});
 setTimeout(()=>process.exit(2),30000).unref();`);
     await writeFile(join(profile,'ui-connection.json'),JSON.stringify({projectRoot:project,cliEntry:entry}));
     const bootstrap=join(root,'bootstrap.cjs');
@@ -71,6 +71,8 @@ setTimeout(()=>process.exit(2),30000).unref();`);
     await page.waitForFunction(()=>document.querySelector('#conversation').textContent.includes('owned child still running'));
     await page.evaluate(()=>window.babelDesktop.cancel());
     await page.waitForFunction(()=>!document.querySelector('#send-button').disabled);
+    assert.equal(await page.locator('#main-status').innerText(),'Stopped','authoritative cancellation survives the real CLI nonzero exit');
+    assert.equal(await page.locator('.message-status.cancelled').count(),1);
     await application.evaluate(()=>{globalThis.__staleQuit=globalThis.__trayTemplate.find(item=>item.label==='Quit Babel').click;});
     await writeFile(receipt,'');
     await page.locator('#composer-input').fill('Second synthetic run');

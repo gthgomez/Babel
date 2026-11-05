@@ -503,7 +503,7 @@ const SEQUENCED_MUTATION_SOURCE =
 // a complete known object list: unknown objects or trailing qualifications
 // remain global denials. This never supplies positive mutation intent.
 const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your|this|that)\\s+)?(?:' +
-  '(?:regression\\s+)?tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|' +
+  '(?:existing\\s+)?(?:regression\\s+)?tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|' +
   'scripts?(?:\\s+or\\s+data)?|data|(?:third[- ]party\\s+)?dependencies|' +
   'permissions?|verification\\s+gates?|provider\\s+accounting|unrelated\\s+(?:files?|code)|' +
   '[`"\\\']?[\\w./\\\\-]+\\.[A-Za-z0-9_-]{1,12}[`"\\\']?)';
@@ -518,7 +518,7 @@ export function isScopedEditObject(object: string): boolean {
 }
 
 /** Negated object/verb lists cannot supply a later positive mutation verb. */
-function stripScopedEditProhibitions(text: string): string {
+export function stripScopedEditProhibitions(text: string): string {
   let result = text;
   for (const directive of text.matchAll(new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'))) {
     const afterVerb = directive.index + directive[0].length;

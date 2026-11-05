@@ -18,6 +18,7 @@ test('imperative additions and transformations retain implementation intent', ()
     'Refactor calc.js to remove duplicated validation.',
     'Rename the clamp function in calc.js.',
     'Add a clamp function to calc.js. Do not modify the test file.',
+    'Add an exported clamp(value,min,max) function to calc.js. Clamp finite values inclusively to [min,max], throw TypeError for NaN input and RangeError when min > max. Preserve sum. Add tests in a new file, do not modify existing tests. Run npm test and report the actual result.',
   ]) {
     const intent = inferIntentContract(task);
     assert.equal(intent.task_kind, 'implementation', task);
@@ -36,6 +37,9 @@ test('addition vocabulary does not authorize an explicit read-only or planning r
     'Plan how to extend calc.js with validation.',
     'Add a clamp function to calc.js. Do not modify any files.',
     'Do not modify the test file.',
+    'Add a clamp function to calc.js. Do not modify existing files.',
+    'Add a clamp function to calc.js. Do not modify existing tests or any files.',
+    'Do not modify existing tests.',
   ]) {
     const intent = inferIntentContract(task);
     assert.equal(intent.mutation_allowed, false, task);

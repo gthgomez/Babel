@@ -18,6 +18,7 @@ import { EvidenceBundle } from '../evidence.js';
 import { BABEL_ROOT } from '../cli/constants.js';
 import { writeValidatedExecutionReport } from './executionReports.js';
 import { createRunControl } from '../runtime/run-control.js';
+import { verifyChatCreatedOutputs } from './chatCompletion.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -77,7 +78,8 @@ export async function runChatExecutorLoop(
   toolContext.signal?.addEventListener('abort', cancel, { once: true });
   if (toolContext.signal?.aborted) cancel();
 
-  const finish = (haltReason?: string, haltedAtStep = 1): ChatExecutorResult => {
+  const finish = (failureReason?: string, haltedAtStep = 1): ChatExecutorResult => {
+    const haltReason = failureReason ?? verifyChatCreatedOutputs(rawTask, toolContext.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? BABEL_ROOT) ?? undefined;
     const halted = haltReason !== undefined;
     runControl.requestStop({ owner: runControl.owner, kind: halted ? 'failed' : 'completed', reasonCode: halted ? 'chat_halted' : 'tools_complete', source: 'executor' });
     toolContext.signal?.removeEventListener('abort', cancel);
