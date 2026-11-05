@@ -25,7 +25,9 @@ process.stdin.on('data',data=>{if(data.toString().includes('cancel')){clearInter
 setTimeout(()=>process.exit(2),30000).unref();`);
     await writeFile(join(profile,'ui-connection.json'),JSON.stringify({projectRoot:project,cliEntry:entry}));
     const bootstrap=join(root,'bootstrap.cjs');
-    await writeFile(bootstrap,`const {app,dialog}=require('electron');dialog.showErrorBox=(title,message)=>{console.error(title+': '+message);app.quit();};import(${JSON.stringify(new URL('../native/main.mjs',import.meta.url).href)}).catch(error=>{console.error(error);app.quit();});`);
+    await writeFile(bootstrap,`const {app,dialog,ipcMain}=require('electron');
+const register=ipcMain.handle.bind(ipcMain);ipcMain.handle=(channel,handler)=>{if(channel==='babel:cancel'&&!globalThis.__cancelHandler)globalThis.__cancelHandler=handler;register(channel,handler);};
+dialog.showErrorBox=(title,message)=>{console.error(title+': '+message);app.quit();};import(${JSON.stringify(new URL('../native/main.mjs',import.meta.url).href)}).catch(error=>{console.error(error);app.quit();});`);
     saveProviderRoute({configDirectory:config,provider:'openrouter',model:'deepseek-v4-pro-openrouter'});
     const env={};
     for(const name of ['PATH','SystemRoot','WINDIR','TEMP','TMP','LOCALAPPDATA','APPDATA','USERPROFILE','HOME','COMSPEC','PATHEXT','DISPLAY','XAUTHORITY'])if(process.env[name])env[name]=process.env[name];
@@ -63,8 +65,27 @@ setTimeout(()=>process.exit(2),30000).unref();`);
     await application.evaluate(({app})=>app.emit('second-instance'));
     assert.equal(await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].isVisible()),true);
     await page.waitForFunction(()=>document.querySelector('#conversation').textContent.includes('owned child still running'));
-    await page.evaluate(()=>window.babelDesktop.cancel());
+    // Fail at the IPC boundary while the real owned child continues running.
+    await application.evaluate(({ipcMain})=>{
+      ipcMain.removeHandler('babel:cancel');
+      ipcMain.handle('babel:cancel',()=>{throw new Error('Synthetic native cancellation failure');});
+    });
+    await page.locator('[data-action="stop"]').click();
+    await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Stop request failed'),null,{timeout:2000});
+    assert.equal(await page.locator('#send-button').isDisabled(),true);
+    assert.doesNotMatch(await page.locator('#status-detail').innerText(),/Stopping/);
+    await assert.rejects(()=>readFile(receipt),{code:'ENOENT'});
+    assert.equal(await page.locator('.thought-note summary').filter({hasText:'Stop request failed'}).isVisible(),true);
+    assert.match(await page.locator('#conversation').textContent(),/still be running/);
+    assert.doesNotMatch(await page.locator('body').textContent(),/Synthetic native cancellation failure/);
+    if(process.env.BABEL_TEST_EVIDENCE_DIR){
+      await mkdir(process.env.BABEL_TEST_EVIDENCE_DIR,{recursive:true});
+      await page.screenshot({path:join(process.env.BABEL_TEST_EVIDENCE_DIR,'stop-request-failed.png')});
+    }
+    await application.evaluate(({ipcMain})=>{ipcMain.removeHandler('babel:cancel');ipcMain.handle('babel:cancel',globalThis.__cancelHandler);});
+    await page.locator('[data-action="stop"]').click();
     await page.waitForFunction(()=>!document.querySelector('#send-button').disabled);
+    assert.equal(await readFile(receipt,'utf8'),'cancel settled');
     await application.evaluate(()=>{globalThis.__staleQuit=globalThis.__trayTemplate.find(item=>item.label==='Quit Babel').click;});
     await writeFile(receipt,'');
     await page.locator('#composer-input').fill('Second synthetic run');
