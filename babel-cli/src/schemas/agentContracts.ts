@@ -898,6 +898,9 @@ export const ActionStepSchema = z.object({
     'lsp',
   ]),
   target: z.string().min(1), // File path or shell command
+  // Simplified Chat executes the plan directly; Deep may generate contents later.
+  // Missing contents are distinct from an intentional empty-file write.
+  content: z.string().optional(),
   rationale: z.string().min(1), // Why this step is in the minimal set
   reversible: z.boolean(),
   verification: z.string().min(1), // How the CLI Executor confirms this step succeeded

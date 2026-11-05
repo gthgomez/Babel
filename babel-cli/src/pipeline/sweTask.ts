@@ -68,6 +68,7 @@ export function buildSweTask(
   evidenceContext: string = '',
   groundingContext: string = '',
   executionProfileName: ExecutionProfileName = DEFAULT_EXECUTION_PROFILE,
+  mode: 'chat' | 'deep' = 'deep',
 ): string {
   const userRequest = mergeTaskContext(originalTaskContext, manifest.handoff_payload.user_request);
   const allowedShellCommands = getAllowedShellCommands(executionProfileName);
@@ -270,9 +271,10 @@ Your JSON output MUST include a "thinking" field. Use this field to:
     '  "risks": [{ "risk": "...", "likelihood": "low|medium|high", "mitigation": "..." }],',
     '  "minimal_action_set": [{',
     '    "step": 1, "description": "...",',
-    `    "tool": "${EXECUTOR_TOOL_NAMES.join('|')}",`,
+    `    "tool": "${(mode === 'chat' ? ['directory_list', 'file_read', 'file_write', 'shell_exec', 'test_run', 'grep', 'glob'] : EXECUTOR_TOOL_NAMES).join('|')}",`,
     '    "target": "<path or command>", "rationale": "...",',
-    '    "reversible": true, "verification": "<how to confirm success>"',
+    '    "reversible": true, "verification": "<how to confirm success>"' + (mode === 'chat' ? ',' : ''),
+    ...(mode === 'chat' ? ['    "content": "<complete file contents, only for file_write>"'] : []),
     '  }],',
     '  "root_cause": "N/A — feature request",',
     '  "out_of_scope": ["<excluded item>"]',
@@ -288,6 +290,12 @@ Your JSON output MUST include a "thinking" field. Use this field to:
     '',
     'Planning rules for executable steps:',
     '',
+    ...(mode === 'chat' ? [
+      'Chat executes this plan directly, without a later model turn to generate file contents.',
+      'Every file_write step MUST include a string content field with the complete intended file contents. Use content: "" only when an empty file is intended. Never omit content or use a placeholder.',
+      'Use only the tools listed in the JSON shape above; unsupported required steps halt Chat rather than being skipped.',
+      '',
+    ] : []),
     '  --- VERIFICATION RULE (NON-NEGOTIABLE — plans are BLOCKED without this) ---',
     '  This is the #1 reason plans are rejected by the executor safety gate.',
     '  Every IMPLEMENTATION_PLAN with file_write steps MUST include at least one',
