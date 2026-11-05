@@ -83,7 +83,8 @@ export function resolveBudgetEvaluationTokens(input: {
 }
 
 /**
- * Resolve the effective token budget hard limit from, in priority order:
+ * Resolve the compiled instruction-stack hard limit (not cumulative model
+ * consumption) from, in priority order:
  *   1. CLI override (`--budget` flag)
  *   2. BABEL_TOKEN_BUDGET environment variable
  *   3. Default (3600)

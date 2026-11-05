@@ -3,8 +3,23 @@ import test from 'node:test';
 
 import {
   extractBlankDefaultLiteral,
+  getRequestedTargetContract,
   normalizeRequestedFileTargetsForBoundedContract,
 } from './taskShape.js';
+
+test('read-only references never become mandatory file-write postconditions',()=>{
+  for(const task of [
+    'Inspect calc.js and explain the exported functions, their validation rules, and relevant edge cases. Do not modify any files or run mutating commands.',
+    'Inspect calc.js and its tests. Plan how to support an optional inclusive upper-bound flag in clamp while preserving current behavior. Do not modify files.',
+    'Explain how to update calc.js.',
+    'Inspect calc.js and report its exported functions.',
+    'Read calc.js and summarize it.',
+    'List the exports in calc.js.',
+  ])assert.deepEqual(getRequestedTargetContract(task).requestedTargets,[],task);
+  assert.deepEqual(getRequestedTargetContract('Update calc.js. Do not modify existing tests.').requestedTargets,['calc.js']);
+  assert.deepEqual(getRequestedTargetContract('Create output.txt.').requestedTargets,['output.txt']);
+  assert.deepEqual(getRequestedTargetContract('Inspect calc.js, then update calc.js with validation.').requestedTargets,['calc.js']);
+});
 
 test('bounded target normalization separates read inputs from write outputs', () => {
   assert.deepEqual(

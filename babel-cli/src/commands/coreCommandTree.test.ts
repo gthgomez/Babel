@@ -3,11 +3,13 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { Command } from 'commander';
 import { registerCoreCommands } from './coreCommands.js';
+import { registerWorkflowCommands } from './workflowCommands.js';
 
 // Captured before the ownership extraction. This binds names, ordering, aliases,
 // descriptions, arguments and option flags without machine-specific defaults.
 // Consumer packaging deliberately adds --contributor to setup and doctor.
 // Generic doctor project examples intentionally update its option description.
+// Budget help distinguishes compiled instruction capacity from cumulative goal usage.
 type CommandContract = {
   name: string; aliases: string[]; description: string;
   args: Array<{ name: string; required: boolean; variadic: boolean; description: string }>;
@@ -30,7 +32,10 @@ function withoutIntentionalCommandExtensions(contract: CommandContract): Command
     options: contract.options.filter(option => option.flags !== '--connection <id>'),
     children: contract.children
       .filter(child => !['research', 'provider', 'model', 'settings', 'conversation', 'sandbox'].includes(child.name))
-      .map(child => child.name === 'setup'
+      .map(child => ['exec', 'goal'].includes(child.name)
+        ? { ...child, options: child.options.map(option => option.flags === '--budget <tokens>'
+          ? { ...option, description: 'Token budget ceiling' } : option) }
+        : child.name === 'setup'
         ? { ...child, description: 'Show the read-only first-five-minutes setup checklist' }
         : child.name === 'interactive'
           ? { ...child, options: child.options.map(option => option.flags === '--mode <mode>'
@@ -47,7 +52,7 @@ test('core registration preserves the complete existing command contract', () =>
   const program = new Command();
   registerCoreCommands(program);
   const contract = commandTree(program);
-  // Bind the approved setup/connection extensions separately; retain the original
+  // Bind the approved help/connection extensions separately; retain the original
   // digest for every unrelated command, argument, option, alias and ordering.
   for (const name of ['provider', 'model', 'settings', 'conversation']) {
     assert.equal(contract.children.filter(child => child.name === name).length, 1);
@@ -60,6 +65,12 @@ test('core registration preserves the complete existing command contract', () =>
   assert.equal(contract.children.find(child => child.name === 'interactive')?.options.find(option => option.flags === '--mode <mode>')?.description,
     'Workflow for this session: work or plan');
   assert.equal(program.commands.find(child => child.name() === 'interactive')?.options.find(option => option.flags === '--mode <mode>')?.defaultValue, undefined);
+  assert.deepEqual(contract.children.find(child => child.name === 'exec')?.options.find(option => option.flags === '--budget <tokens>'), {
+    flags: '--budget <tokens>', description: 'Compiled instruction-stack token ceiling (not cumulative model usage)', mandatory: false,
+  }, 'exec budget help describes instruction admission');
+  assert.deepEqual(contract.children.find(child => child.name === 'goal')?.options.find(option => option.flags === '--budget <tokens>'), {
+    flags: '--budget <tokens>', description: 'Cumulative model-token budget shared across goal iterations', mandatory: false,
+  }, 'goal budget help describes cumulative usage');
   const research = contract.children.filter(child => child.name === 'research');
   assert.equal(research.length, 1);
   assert.equal(contract.children.at(-1)?.name, 'research', 'the intentional new group is appended after the existing contract');
@@ -138,5 +149,13 @@ test('core registration preserves the complete existing command contract', () =>
       { flags: '--runs-root <path>', description: 'runs root to search', mandatory: false },
       { flags: '--json', description: 'emit machine-readable output', mandatory: false },
     ], children: [],
+  });
+});
+
+test('run budget help describes instruction-stack admission', () => {
+  const program = new Command();
+  registerWorkflowCommands(program);
+  assert.deepEqual(commandTree(program).children.find(child => child.name === 'run')?.options.find(option => option.flags === '--budget <tokens>'), {
+    flags: '--budget <tokens>', description: 'Compiled instruction-stack token ceiling (not cumulative model usage)', mandatory: false,
   });
 });

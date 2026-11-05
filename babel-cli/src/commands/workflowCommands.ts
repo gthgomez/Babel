@@ -1,4 +1,5 @@
 import { selectedConnectionModel } from '../services/connectionSettings.js'
+import {runDesktopPlan,type DesktopPlanOptions} from './desktopPlan.js';
 import { savePlan, shouldAutoApplyPlan, withSavedPlanApplication, type SavedPlan } from '../services/savedPlan.js'
 import { assertFiniteBudgetSupported } from '../config/laneBudget.js'
 import { resolveEffectiveSettings } from '../config/userSettings.js'
@@ -567,6 +568,13 @@ function buildRunCommandFailurePayload(input: {
   return payload;
 }
 
+function writeRunAdmissionFailure(message: string, outputFormat?: string, json = false): void {
+  const result = buildRunCommandFailurePayload({status:'EXECUTOR_HALTED',message});
+  if (parseRunOutputFormat(outputFormat, json) === 'stream-json') {
+    writeNdjson(makeRunStreamEvent('run_error', {error:message,status:'EXECUTOR_HALTED',result}));
+  } else writeJson(result);
+}
+
 function isSuccessfulRunStatus(status: string): boolean {
   return (
     status === 'COMPLETE' ||
@@ -847,6 +855,8 @@ function normalizeLiteTask(taskParts: string[]): string {
 }
 
 type LiteCommandOptions = {
+  onResult?: DesktopPlanOptions['onResult'];
+  toolStream?: DesktopPlanOptions['toolStream'];
   project?: string;
   model?: string;
   modelTier?: string;
@@ -1230,7 +1240,8 @@ async function runLiteCommand(
       schema_retries: 0,
       recovered_after_schema_retry: false,
     } as LiteResultPayload;
-    if (options.json === true || options.stream === true) {
+    if (options.onResult) options.onResult(payload as unknown as Record<string,unknown>);
+    else if (options.json === true || options.stream === true) {
       writeJson(payload);
     } else {
       process.stdout.write(`${formatLiteResultHuman(payload)}\n`);
@@ -1261,6 +1272,7 @@ async function runLiteCommand(
       })
     : undefined;
   const sessionOptions: ConstructorParameters<typeof AgentSession>[0] = {
+    ...(options.toolStream!==undefined?{toolStream:options.toolStream}:{}),
     task,
     verb: toSessionVerb(verb),
     ...(resolvedProject !== undefined ? { project: resolvedProject } : {}),
@@ -1368,7 +1380,8 @@ async function runLiteCommand(
   const progressTranscript =
     fixProgress !== undefined ? fixProgress.getTranscript().join('\n') : '';
 
-  if (options.json === true) {
+  if (options.onResult) options.onResult(payloadRecord,humanText??undefined);
+  else if (options.json === true) {
     writeJson(result.payload);
     if (humanText && runDir && (options.humanSummary === true || usesSmallFixProgress)) {
       writeHumanSummaryArtifact(runDir, humanText, progressTranscript);
@@ -1977,7 +1990,7 @@ Notes:
     .option('--yes', 'Auto-approve all standard operations (headless/CI mode)')
     .option('--read-only', 'Auto-deny all mutating file writes (read-only audit mode)')
     .option('--strict-env', 'Fail when .env keys stay inactive after bootstrap')
-    .option('--budget <tokens>', 'Hard token budget ceiling; pipeline halts if exceeded')
+    .option('--budget <tokens>', 'Compiled instruction-stack token ceiling (not cumulative model usage)')
     .option('--reasoning-effort <level>', 'Model reasoning effort: low | medium | high')
     .option('--cost-optimize', 'Enable automated cost-aware model selection')
     .option('--offline', 'Use local models only (requires Ollama on localhost:11434)')
@@ -2055,7 +2068,7 @@ Notes:
         try{conversationOnly=resolveRunScope(options)==='conversation';}
         catch(error){
           const message=error instanceof Error?error.message:'Invalid execution scope';
-          if(options.json||options.outputFormat&&options.outputFormat!=='text')writeJson(buildRunCommandFailurePayload({status:'EXECUTOR_HALTED',message}));
+          if(options.json||options.outputFormat&&options.outputFormat!=='text')writeRunAdmissionFailure(message, options.outputFormat, options.json === true);
           else console.error(`Babel: ${message}`);
           process.exitCode=1;return;
         }
@@ -2124,7 +2137,7 @@ Notes:
         if (!VALID_MODES.includes(mode as ValidMode)) {
           const message = `Invalid mode "${mode}". Valid values: ${VALID_MODES.join(', ')}`;
           if (isStructuredOutput) {
-            writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+            writeRunAdmissionFailure(message, outputFormat);
           } else {
             console.error(`Babel: ${message}`);
           }
@@ -2134,7 +2147,7 @@ Notes:
         if (executionProfile === null) {
           const message = `Invalid execution profile "${options.executionProfile}". Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`;
           if (isStructuredOutput) {
-            writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+            writeRunAdmissionFailure(message, outputFormat);
           } else {
             console.error(`Babel: ${message}`);
           }
@@ -2153,7 +2166,7 @@ Notes:
           } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
             if (isStructuredOutput) {
-              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+              writeRunAdmissionFailure(message, outputFormat);
             } else {
               console.error(`Babel: ${message}`);
             }
@@ -2172,17 +2185,7 @@ Notes:
         if (!conversationOnly&&!existsSync(resolvedProjectRoot!)) {
           const message = `Resolved target root does not exist: ${resolvedProjectRoot}`;
           if (isStructuredOutput) {
-            if (outputFormat === 'stream-json') {
-              writeNdjson(
-                makeRunStreamEvent('run_error', {
-                  error: message,
-                  status: 'EXECUTOR_HALTED',
-                  result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
-                }),
-              );
-            } else {
-              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
-            }
+            writeRunAdmissionFailure(message, outputFormat);
           } else {
             process.stdout.write(
               `${formatRunResultHuman({
@@ -2232,7 +2235,7 @@ Notes:
             .map((m) => m.key)
             .join(', ')} (case-insensitive)`;
           if (isStructuredOutput) {
-            writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+            writeRunAdmissionFailure(message, outputFormat);
           } else {
             console.error(`Babel: ${message}`);
           }
@@ -2245,7 +2248,7 @@ Notes:
         ) {
           const message = `Invalid model tier "${options.modelTier}". Valid values: ${VALID_MODEL_TIERS.join(', ')}`;
           if (isStructuredOutput) {
-            writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+            writeRunAdmissionFailure(message, outputFormat);
           } else {
             console.error(`Babel: ${message}`);
           }
@@ -2258,7 +2261,7 @@ Notes:
         ) {
           const message = `Invalid orchestrator "${options.orchestrator}". Valid values: ${VALID_ORCHESTRATORS.join(', ')}`;
           if (isStructuredOutput) {
-            writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+            writeRunAdmissionFailure(message, outputFormat);
           } else {
             console.error(`Babel: ${message}`);
           }
@@ -2315,7 +2318,7 @@ Notes:
               process.exit(1);
             }
             if (isStructuredOutput) {
-              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+              writeRunAdmissionFailure(message, outputFormat);
             } else {
               console.error(`Babel: ${message}`);
             }
@@ -2323,6 +2326,10 @@ Notes:
           }
         }
 
+        if (mode==='plan' && outputFormat==='stream-json' && process.env['BABEL_DESKTOP_IPC']==='1') {
+          await runDesktopPlan(task,{...options,...(normalizedModel!==undefined?{model:normalizedModel}:{}),...(resolvedProjectRoot!==undefined?{projectRoot:resolvedProjectRoot}:{})},runLiteCommand);
+          return;
+        }
         if (mode === 'manual') {
           try {
             await withProjectRootEnv(resolvedProjectRoot, resolvedAllowedRoots, () =>

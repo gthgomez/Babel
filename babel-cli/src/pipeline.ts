@@ -24,7 +24,9 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { runSwarmPipeline } from './runners/swarmRunner.js';
-import { runAdversarialQaGate } from './pipeline/qaStage.js';
+import { runAdversarialQaGate, compileQaReviewContext, reviewDeepPlan } from './pipeline/qaStage.js';
+import { proposeDeepPlan } from './pipeline/deepPlanning.js';
+import { answerDeepEvidence } from './pipeline/deepEvidenceReport.js';
 import { runChatExecutorLoop, formatToolCallForDisplay } from './pipeline/chatExecutorLoop.js';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { z } from 'zod';
@@ -48,7 +50,6 @@ import { resolveFamilyModelPolicy, resolveModelByKey, loadModelPolicyConfig } fr
 import { connect } from 'node:net';
 import { confirmCost, ConfirmDialog } from './ui/dialog.js';
 import { isRunningInDaemon } from './daemon/client.js';
-import { assessPlanningComplexity } from './services/plannerRouter.js';
 import { EvidenceBundle } from './evidence.js';
 import {
   createEpisodeLifecycleForEvidence,
@@ -170,7 +171,6 @@ import {
 import { buildOrchestratorTask } from './pipeline/orchestratorTask.js';
 import { writeLatestRunPointers } from './pipeline/runPointers.js';
 import { buildSweTask } from './pipeline/sweTask.js';
-import { buildQaTask } from './pipeline/qaTask.js';
 import { buildPipelineFinalTerminalState } from './pipeline/finalization.js';
 import {
   finalizeV9LiveSessionForPipeline,
@@ -239,7 +239,6 @@ import {
   BABEL_RUNS_DIR,
   MAX_SWE_QA_LOOPS,
   MAX_EVIDENCE_LOOPS,
-  QA_PATHS,
   abs,
   resolveOrchestratorVersion,
   getOrchestratorPaths,
@@ -263,9 +262,6 @@ import {
   maybeEnrichPipelineStageIds,
 } from './pipeline/manifestPatching.js';
 import {
-  sanitizeQaVerdictForDeterministicGradleBootstrapLane,
-  sanitizeWindowsGradlewPermissionQaVerdict,
-  sanitizeExistingWrapperQaVerdict,
   sanitizeGroundingViolationsForAndroidSdkLane,
 } from './pipeline/qaVerdictSanitizers.js';
 import { runExecutorLoop } from './pipeline/executorLoop.js';
@@ -381,6 +377,8 @@ export interface PipelineResult {
   manifest: OrchestratorManifest;
   plan: SwePlan | null;
   status: TerminalStatus;
+  /** Controller-observed cancellation, independent of generated model output. */
+  terminalOutcome?: 'CANCELLED';
   finalAnswer?: string;
   manualPromptPath?: string;
   repairPromptPath?: string;
@@ -414,9 +412,9 @@ export {
 // ─── Chat mode pipeline ────────────────────────────────────────────────────────
 
 interface ChatPipelineContext {
+  ownerTask: string;
   abortSignal?: AbortSignal;
   manifest: OrchestratorManifest;
-  mergedTaskContext: string;
   evidence: EvidenceBundle;
   groundingContext: string;
   executionProfileName: ExecutionProfileName;
@@ -434,7 +432,7 @@ async function runChatPipeline(
   let { v9StackTelemetry } = ctx;
   const {
     manifest,
-    mergedTaskContext,
+    ownerTask,
     evidence,
     groundingContext,
     executionProfileName,
@@ -451,7 +449,7 @@ async function runChatPipeline(
   let chatContract: LiteTaskContract | null = null;
   try {
     chatContract = buildLiteTaskContract({
-      task: mergedTaskContext,
+      task: ownerTask,
       repoPath: projectRoot,
       maxPromptTokens: 2500,
       fileScanLimit: 600,
@@ -465,7 +463,7 @@ async function runChatPipeline(
   log('Stage 2 / 3  —  Planning');
   const chatTask = buildSweTask(
     manifest,
-    mergedTaskContext,
+    ownerTask,
     [],
     undefined,
     '',
@@ -492,7 +490,7 @@ async function runChatPipeline(
     normalizedPlan,
   );
   const { plan: chatPlan } = normalizePlanTargetsAgainstRequestedOutputs(
-    mergedTaskContext,
+    ownerTask,
     groundedPlan,
   );
   const swePlan = splitChainedShellSteps(chatPlan);
@@ -515,7 +513,7 @@ async function runChatPipeline(
     }
 
     log('Stage 3 / 3  —  Applying changes');
-    const chatResult = await runChatExecutorLoop(swePlan, evidence, mergedTaskContext, {
+    const chatResult = await runChatExecutorLoop(swePlan, evidence, ownerTask, {
       projectRoot,
       ...(abortSignal ? { signal: abortSignal } : {}),
     });
@@ -1694,7 +1692,7 @@ export async function _runBabelPipelineInternal(
     });
 
     const mergedTaskContext = mergeTaskContext(task, manifest.handoff_payload.user_request);
-    const originalIntentContract = inferIntentContract(mergedTaskContext);
+    const originalIntentContract = inferIntentContract(task);
     evidence.writeDebugFile(
       'intent_contract.json',
       `${JSON.stringify(originalIntentContract, null, 2)}\n`,
@@ -1712,12 +1710,12 @@ export async function _runBabelPipelineInternal(
       'deepseek-v4-pro') as TargetModel;
     v9LiveSession = maybeInitializeV9LiveSession(evidence.runDir, manifest.session_id ?? sessionId, effectiveMode, mergedTaskContext,
       inferProjectRoot(manifest) ?? runtimeProjectRoot, manifest.prompt_manifest, effectiveModel);
-    const exactInvariantRegistry = getRequestedTargetContract(mergedTaskContext).exactInvariants;
+    const exactInvariantRegistry = getRequestedTargetContract(task).exactInvariants;
     evidence.writeDebugFile(
       '11_exact_invariants.json',
       `${JSON.stringify(exactInvariantRegistry, null, 2)}\n`,
     );
-    const taskContract = classifyTaskContract(mergedTaskContext);
+    const taskContract = classifyTaskContract(task);
     const taskGrounding = buildTaskGrounding(taskContract, inferProjectRoot(manifest));
     const planHandoff = loadPlanHandoff({
       repoPath: runtimeProjectRoot,
@@ -1873,7 +1871,7 @@ export async function _runBabelPipelineInternal(
     };
 
     // ── Swarm Dispatch ────────────────────────────────────────────────────────
-    const requestedTargetContractForMode = getRequestedTargetContract(mergedTaskContext);
+    const requestedTargetContractForMode = getRequestedTargetContract(task);
     if (
       effectiveMode === 'plan' &&
       shouldRefuseWriteRequestForMode(
@@ -1945,7 +1943,7 @@ export async function _runBabelPipelineInternal(
       log('Stage 2 / 4  —  Exporting the plan');
       const sweTask = buildSweTask(
         manifest,
-        mergedTaskContext,
+        task,
         [],
         undefined,
         '',
@@ -1981,8 +1979,8 @@ export async function _runBabelPipelineInternal(
       requirePostMutationVerification = true;
       return await runChatPipeline(
         {
+          ownerTask: task,
           manifest,
-          mergedTaskContext,
           evidence,
           groundingContext,
           executionProfileName: executionProfile.name,
@@ -2130,93 +2128,14 @@ export async function _runBabelPipelineInternal(
             : `\n  Revising plan (attempt ${attempt}/${MAX_SWE_QA_LOOPS})…\n`,
         );
 
-        // prompt_manifest contains ordered absolute path strings — use directly.
-        const swePaths = manifest.prompt_manifest;
-
-        const sweTask = buildSweTask(
-          manifest,
-          mergedTaskContext,
-          qaRejections,
-          proposedFixStrategy,
-          additionalEvidenceContext,
-          groundingContext,
-          executionProfile.name,
-        );
-        const sweContext = await compileContext(
-          swePaths,
-          sweTask,
-          inferProjectRoot(manifest),
-          pruningStubs,
-        );
-        evidence.writeCompiledContext(`swe_v${attempt}`, sweContext);
-
-        // ── Smart Planner: assess task difficulty for model selection ────────
-        let plannerStartTierIndex: number | undefined;
-        let plannerSkipTierNames: string[] | undefined;
-
-        if (SMART_PLANNER_ENABLED) {
-          const complexityEstimate = manifest.analysis?.complexity_estimate;
-          const plannerDecision = assessPlanningComplexity({
-            task: mergedTaskContext,
-            ...(complexityEstimate === 'Low' ||
-            complexityEstimate === 'Medium' ||
-            complexityEstimate === 'High'
-              ? { manifestComplexity: complexityEstimate }
-              : {}),
-            qaRejections,
-            previousRejectionTags,
-            attempt,
-          });
-
-          if (plannerDecision.startTierIndex > 0 || plannerDecision.skipTierKeys.length > 0) {
-            plannerStartTierIndex = plannerDecision.startTierIndex;
-            plannerSkipTierNames = plannerDecision.skipTierKeys;
-            log(
-              `  Smart Planner: ${plannerDecision.rationale}` +
-                (plannerDecision.escalatedByRepeatedFailure
-                  ? ' [REPEATED FAILURE ESCALATION]'
-                  : ''),
-            );
-            // Persist the decision for post-run analysis.
-            evidence.writeDebugFile(
-              `debug_smart_planner_v${attempt}.json`,
-              `${JSON.stringify(plannerDecision, null, 2)}\n`,
-            );
-          }
-
-          // Apply the recommended reasoning effort for this planning call.
-          // The DeepSeek runner reads BABEL_REASONING_EFFORT from the environment.
-          // Auto-scaling: "max" effort also increases waterfall timeout by 2x
-          // since deeper reasoning takes longer.
-          if (plannerDecision.recommendedEffort === 'max') {
-            process.env['BABEL_REASONING_EFFORT'] = 'max';
-          }
-        }
-
-        const swePlanRaw = await runWithFallback(sweContext, SwePlanSchema, {
-          evidence,
-          stage: 'planning',
-          schemaName: 'SwePlanSchema',
-          ...(plannerStartTierIndex !== undefined ? { startTierIndex: plannerStartTierIndex } : {}),
-          ...(plannerSkipTierNames !== undefined ? { skipTierNames: plannerSkipTierNames } : {}),
+        const { plan: swePlan, warnings: planWarnings } = await proposeDeepPlan({
+          manifest, ownerTask: task, planningContext: mergedTaskContext,
+          qaRejections, proposedFixStrategy, additionalEvidenceContext,
+          groundingContext, taskGrounding, executionProfile: executionProfile.name,
+          attempt, previousRejectionTags, smartPlannerEnabled: SMART_PLANNER_ENABLED,
+          evidence, pruningStubs,
         });
-        const { plan: normalizedPlan, warnings: planWarnings } = normalizeSwePlan(swePlanRaw);
-        const { plan: groundedPlan, warnings: groundingWarnings } =
-          normalizePlanTargetsAgainstGrounding(taskGrounding, normalizedPlan);
-        const { plan: requestedTargetPlan, warnings: requestedTargetWarnings } = process.env['BABEL_PARITY_OFFLINE_FIX_MAP']?.trim() ? { plan: groundedPlan, warnings: [] as string[] } : normalizePlanTargetsAgainstRequestedOutputs(mergedTaskContext, groundedPlan);
-        const swePlan = splitChainedShellSteps(requestedTargetPlan);
-        if (
-          planWarnings.length > 0 ||
-          groundingWarnings.length > 0 ||
-          requestedTargetWarnings.length > 0
-        ) {
-          executionReportWarnings.push(...planWarnings);
-          executionReportWarnings.push(...groundingWarnings);
-          executionReportWarnings.push(...requestedTargetWarnings);
-          planWarnings.forEach((w) => logDetail(`SWE plan warning: ${w}`));
-          groundingWarnings.forEach((w) => logDetail(`SWE plan warning: ${w}`));
-          requestedTargetWarnings.forEach((w) => logDetail(`SWE plan warning: ${w}`));
-        }
+        executionReportWarnings.push(...planWarnings);
         evidence.writeSwePlan(swePlan, attempt); episodeLifecycle.recordPhase('swe_planning', 'completed');
         await runPluginHooks('PostPlan', {
           runId: evidence.runId,
@@ -2296,7 +2215,7 @@ export async function _runBabelPipelineInternal(
         const executorSafetyReject = collectExecutorSafetyViolations(
           swePlan,
           manifest,
-          mergedTaskContext,
+          task,
           executionProfile.name,
         );
         if (executorSafetyReject) {
@@ -2345,23 +2264,12 @@ export async function _runBabelPipelineInternal(
             : `\n  Re-reviewing (attempt ${attempt}/${MAX_SWE_QA_LOOPS})…\n`,
         );
 
-        const deterministicGradleBootstrapLaneActive = shouldUseDeterministicGradleBootstrapLane(
-          inferProjectRoot(manifest),
-        );
-        const qaContext = await compileContext(
-          abs(QA_PATHS),
-          buildQaTask(
-            swePlan,
-            javaRuntimeStatus,
-            gradleRuntimeStatus,
-            detectAndroidSdkStatus(),
-            mergedTaskContext,
-            deterministicGradleBootstrapLaneActive,
-            executionProfile.name,
-          ),
-          inferProjectRoot(manifest),
-        );
-        evidence.writeCompiledContext(`qa_v${attempt}`, qaContext);
+        const qaContext = await compileQaReviewContext({
+          plan: swePlan, manifest, ownerTask: task, javaRuntimeStatus, gradleRuntimeStatus,
+          androidSdkStatus: detectAndroidSdkStatus(),
+          deterministicGradleBootstrapLaneActive: shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest)),
+          executionProfile: executionProfile.name, evidence, attempt,
+        });
 
         const qaSpan = pipelineTrace.startChildSpan('babel.qa', {
           'babel.qa.attempt': attempt,
@@ -2369,18 +2277,7 @@ export async function _runBabelPipelineInternal(
         });
         let verdict: z.infer<typeof QaVerdictSchema>;
         try {
-          verdict = await runWithFallback(qaContext, QaVerdictSchema, {
-            evidence,
-            stage: 'qa',
-            schemaName: 'QaVerdictSchema',
-          });
-          verdict = sanitizeQaVerdictForDeterministicGradleBootstrapLane(
-            verdict,
-            swePlan,
-            manifest,
-          );
-          verdict = sanitizeWindowsGradlewPermissionQaVerdict(verdict, swePlan);
-          verdict = sanitizeExistingWrapperQaVerdict(verdict, swePlan, manifest);
+          verdict = await reviewDeepPlan({ context: qaContext, plan: swePlan, manifest, evidence });
         } catch (error) {
           endSpan(qaSpan, SpanStatusCode.ERROR, {}, error); episodeLifecycle.recordPhase('qa_review', 'failed', { error: error instanceof Error ? error.message : String(error) });
           log(
@@ -2544,7 +2441,7 @@ export async function _runBabelPipelineInternal(
       if (approvedPlan !== null && effectiveMode === 'deep') {
         const boundedActivationReject = assertBoundedPlanActivationContract(
           approvedPlan,
-          mergedTaskContext,
+          task,
         );
         if (boundedActivationReject) {
           log(`  Executor: ACTIVATION_REFUSED [ACTIVATION_GATE_FAIL]`);
@@ -2579,7 +2476,7 @@ export async function _runBabelPipelineInternal(
       if (effectiveMode === 'deep' && approvedPlan !== null) {
         const preChecklistInjection = injectVerificationStepsIntoPlan(
           approvedPlan,
-          mergedTaskContext,
+          task,
           inferProjectRoot(manifest) ?? runtimeProjectRoot,
         );
         if (preChecklistInjection.injected) {
@@ -2667,7 +2564,7 @@ export async function _runBabelPipelineInternal(
         // user-modified plan must be re-validated before the executor activates.
         const postEscalationBoundedReject = assertBoundedPlanActivationContract(
           approvedPlan,
-          mergedTaskContext,
+          task,
         );
         if (postEscalationBoundedReject) {
           log(`  Executor: ACTIVATION_REFUSED [ACTIVATION_GATE_FAIL] (post-escalation)`);
@@ -2738,7 +2635,7 @@ export async function _runBabelPipelineInternal(
       episodeLifecycle.recordPhase('executor', 'started'); const preExecutorResult = await runPreExecutorSafetyGates({
         approvedPlan,
         projectRoot: inferProjectRoot(manifest) ?? runtimeProjectRoot,
-        taskContext: mergedTaskContext,
+        taskContext: task,
         intentContract: originalIntentContract,
         babelRoot: BABEL_ROOT,
       });
@@ -2795,7 +2692,7 @@ export async function _runBabelPipelineInternal(
           evidence,
           targetModel: effectiveModel,
           manifest,
-          rawTask: mergedTaskContext,
+          rawTask: task,
           reportWarnings: executionReportWarnings,
           initialExecutorLog,
           pruningStubs, episodeSink: pipelineEpisodeSink,
@@ -2878,17 +2775,33 @@ export async function _runBabelPipelineInternal(
           !originalIntentContract.mutation_allowed &&
           originalIntentContract.task_kind !== 'implementation'
         ) {
+          let answer: string;
+          try {
+            answer = await answerDeepEvidence({
+              ownerTask: task, toolCallLog, evidence,
+              ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+            });
+          } catch (error) {
+            if (!options.abortSignal?.aborted) throw error;
+            return await finalizeResult({
+              runDir: evidence.runDir, manifest, plan: approvedPlan,
+              status: 'EXECUTOR_HALTED', terminalOutcome: 'CANCELLED',
+              errors: ['Read-only answer generation was cancelled.'],
+              finalAnswer: 'Run cancelled before the read-only answer was completed.',
+            });
+          }
           const reportFinalizer = buildEvidenceReportFinalizerArtifact({
-            task: mergedTaskContext,
+            task,
             toolCallLog,
             intent: originalIntentContract,
             runDir: evidence.runDir,
+            answer,
           });
           evidence.writeDebugFile(
             'report_finalizer.json',
             `${JSON.stringify(reportFinalizer, null, 2)}\n`,
           );
-          log('Nothing more to learn — wrapping up.');
+          log('Read-only evidence report ready.');
           v9StackTelemetry = markRuntimeTelemetryOutcome(
             v9StackTelemetry,
             'READ_ONLY_NO_MODIFICATION',
@@ -3007,52 +2920,56 @@ async function runStagedExecutor(
     pruningStubs, episodeSink,
   } = opts;
 
-  const scaffoldSeed = seedGodotMobileScaffold({
-    rawTask: manifest.handoff_payload.user_request,
-    projectRoot: getExecutorProjectRoot() ?? inferProjectRoot(manifest) ?? null,
-    toolCallLog: initialExecutorLog,
-    babelRoot: BABEL_ROOT,
-  });
-  evidence.writeDebugFile(
-    '09_scaffold_seed.json',
-    `${JSON.stringify(scaffoldSeed, null, 2)}\n`,
-  );
-  if (scaffoldSeed.status === 'SEEDED') {
-    logDetail(
-      `Deterministic Godot scaffold seed copied ${scaffoldSeed.filesCopied.length} file(s).`,
+  // Bootstrap helpers can write directly, so they must obey owner intent too.
+  if (!getRequestedTargetContract(rawTask).readOnly) {
+    const scaffoldSeed = seedGodotMobileScaffold({
+      rawTask,
+      projectRoot: getExecutorProjectRoot() ?? inferProjectRoot(manifest) ?? null,
+      toolCallLog: initialExecutorLog,
+      babelRoot: BABEL_ROOT,
+    });
+    evidence.writeDebugFile(
+      '09_scaffold_seed.json',
+      `${JSON.stringify(scaffoldSeed, null, 2)}\n`,
     );
-  }
-
-  if (shouldUseDeterministicAndroidSdkBootstrapLane(inferProjectRoot(manifest))) {
-    logDetail('Deterministic Android SDK bootstrap lane activated.');
-    const androidSdkBootstrapResult = await runDeterministicAndroidSdkBootstrapLane(manifest);
-    initialExecutorLog.push(...androidSdkBootstrapResult.toolCallLog);
-    if (androidSdkBootstrapResult.haltedReport) {
-      writeValidatedExecutionReport(
-        evidence,
-        androidSdkBootstrapResult.haltedReport,
-        initialExecutorLog,
-        reportWarnings,
+    if (scaffoldSeed.status === 'SEEDED') {
+      logDetail(
+        `Deterministic Godot scaffold seed copied ${scaffoldSeed.filesCopied.length} file(s).`,
       );
-      log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Android SDK bootstrap lane'); recordExecutorToolLog(episodeSink, initialExecutorLog);
-      return { ok: false };
     }
-  }
 
-  if (shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest))) {
-    logDetail('Deterministic Gradle bootstrap lane activated.');
-    const bootstrapResult = await runDeterministicGradleBootstrapLane(manifest, evidence);
-    initialExecutorLog.push(...bootstrapResult.toolCallLog);
-    if (bootstrapResult.haltedReport) {
-      writeValidatedExecutionReport(
-        evidence,
-        bootstrapResult.haltedReport,
-        initialExecutorLog,
-        reportWarnings,
-      );
-      log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Gradle bootstrap lane'); recordExecutorToolLog(episodeSink, initialExecutorLog);
-      return { ok: false };
+    if (shouldUseDeterministicAndroidSdkBootstrapLane(inferProjectRoot(manifest))) {
+      logDetail('Deterministic Android SDK bootstrap lane activated.');
+      const androidSdkBootstrapResult = await runDeterministicAndroidSdkBootstrapLane(manifest);
+      initialExecutorLog.push(...androidSdkBootstrapResult.toolCallLog);
+      if (androidSdkBootstrapResult.haltedReport) {
+        writeValidatedExecutionReport(
+          evidence,
+          androidSdkBootstrapResult.haltedReport,
+          initialExecutorLog,
+          reportWarnings,
+        );
+        log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Android SDK bootstrap lane'); recordExecutorToolLog(episodeSink, initialExecutorLog);
+        return { ok: false };
+      }
     }
+
+    if (shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest))) {
+      logDetail('Deterministic Gradle bootstrap lane activated.');
+      const bootstrapResult = await runDeterministicGradleBootstrapLane(manifest, evidence);
+      initialExecutorLog.push(...bootstrapResult.toolCallLog);
+      if (bootstrapResult.haltedReport) {
+        writeValidatedExecutionReport(
+          evidence,
+          bootstrapResult.haltedReport,
+          initialExecutorLog,
+          reportWarnings,
+        );
+        log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] during deterministic Gradle bootstrap lane'); recordExecutorToolLog(episodeSink, initialExecutorLog);
+        return { ok: false };
+      }
+    }
+
   }
 
   const executorResult = await runExecutorLoop(
@@ -3142,31 +3059,14 @@ export async function resumeManualBridge(
 
   const targetModel = manifest.worker_configuration.assigned_model as TargetModel;
    manualEpisodeLifecycle.recordPhase('qa_review', 'started'); log('Stage 3 / 4  —  Reviewing (resume)');
-  const qaContext = await compileContext(
-    abs(QA_PATHS),
-    buildQaTask(
-      swePlan,
-      detectJavaRuntimeStatus(),
-      detectCommandOnPath('gradle'),
-      detectAndroidSdkStatus(),
-      manifest.handoff_payload.user_request,
-      shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest)),
-    ),
-    inferProjectRoot(manifest),
-  );
-  evidence.writeCompiledContext('qa_v1', qaContext);
-
-  const verdict = sanitizeQaVerdictForDeterministicGradleBootstrapLane(
-    await runWithFallback(qaContext, QaVerdictSchema, {
-      evidence,
-      stage: 'qa',
-      schemaName: 'QaVerdictSchema',
-    }),
-    swePlan,
-    manifest,
-  );
-  const sanitizedVerdict = sanitizeWindowsGradlewPermissionQaVerdict(verdict, swePlan);
-  const normalizedVerdict = sanitizeExistingWrapperQaVerdict(sanitizedVerdict, swePlan, manifest);
+  const qaContext = await compileQaReviewContext({
+    plan: swePlan, manifest, ownerTask: manifest.handoff_payload.user_request,
+    javaRuntimeStatus: detectJavaRuntimeStatus(), gradleRuntimeStatus: detectCommandOnPath('gradle'),
+    androidSdkStatus: detectAndroidSdkStatus(),
+    deterministicGradleBootstrapLaneActive: shouldUseDeterministicGradleBootstrapLane(inferProjectRoot(manifest)),
+    evidence, attempt: 1,
+  });
+  const normalizedVerdict = await reviewDeepPlan({ context: qaContext, plan: swePlan, manifest, evidence });
    evidence.writeQaVerdict(normalizedVerdict, 1); manualEpisodeLifecycle.recordPhase('qa_review', 'completed', { verdict: normalizedVerdict.verdict });
 
   if (normalizedVerdict.verdict !== 'PASS') {

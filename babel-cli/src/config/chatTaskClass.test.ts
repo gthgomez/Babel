@@ -17,6 +17,15 @@ import {
 import { resolveChatEngineLimits, isSweChatProfileEnabled } from './chatEngineLimits.js';
 
 describe('chatTaskClass', () => {
+  test('protecting existing tests does not deny a separate implementation request', () => {
+    const task = 'Add an exported clamp function to calc.js. Add tests in a new file, do not modify existing tests. Run npm test and report the actual result.';
+    assert.equal(hasExplicitEditDenial(task), false);
+    assert.equal(resolveTaskShape(task, 'CHANGE').operation, 'MUTATING');
+    assert.equal(resolveTaskShape('Do not modify existing tests.').operation, 'READ_ONLY');
+    for (const object of ['existing files', 'existing tests or any files', 'existing tests and source code']) {
+      assert.equal(hasExplicitEditDenial(`Add a function to calc.js. Do not modify ${object}.`), true, object);
+    }
+  });
   test('protected test and package constraints preserve an explicit production repair', () => {
     const task = "Fix `add(a, b)` so it returns the sum for the finite numeric inputs covered by this repository's tests. Inspect the implementation and tests, make the smallest production-code repair, run the required tests, and report the changed files and actual verification result. Do not change the tests, package scripts, or unrelated files. Do not install dependencies or use project network access.";
     assert.equal(hasExplicitEditDenial(task), false);

@@ -3,12 +3,45 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { repairExactOutputSchemaArtifacts as repairExecutorArtifacts } from './exactOutputArtifacts.js';
 
 import {
   collectBoundedContractViolations,
+  assertBoundedPlanActivationContract,
   mergeLockedFiles,
   parseLockedFilesEnv,
+  repairExactOutputSchemaArtifacts,
 } from './contractEnforcement.js';
+
+test('direct artifact repair respects read-only intent while preserving authorized repair',()=>{
+ const root=mkdtempSync(join(tmpdir(),'babel-readonly-repair-'));
+ try{
+  mkdirSync(join(root,'logs'));
+  writeFileSync(join(root,'logs','2026-11-05_fixture.log'),'[ERROR] fixture\n');
+  const task='Terminal-Bench 2 task. Create summary.csv from logs named YYYY-MM-DD_<source>.log. The current date is 2026-11-05.\nperiod,severity,count\ntoday,ERROR,<count>';
+  for(const repair of [repairExactOutputSchemaArtifacts,repairExecutorArtifacts]){
+   writeFileSync(join(root,'summary.csv'),'preserved');
+   assert.equal(repair(task+'\nDo not modify any files.',root),null);
+   assert.equal(readFileSync(join(root,'summary.csv'),'utf8'),'preserved');
+   assert.notEqual(repair(task,root),null);
+   assert.equal(readFileSync(join(root,'summary.csv'),'utf8'),'period,severity,count\ntoday,ERROR,1\n');
+  }
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('read-only task contracts reject writes to mentioned and unrelated paths before activation',()=>{
+ for(const task of ['Inspect calc.js. Do not modify files.',
+  'Could you explain how to update calc.js?', 'Please describe how to refactor calc.js.',
+  'Would you please inspect calc.js?', 'How should I rename calc.js?',
+  'I want you to explain how to update calc.js.', 'I need you to inspect calc.js.'])for(const plan_type of ['IMPLEMENTATION_PLAN','EVIDENCE_REQUEST'] as const)for(const target of ['calc.js','unrelated.md']){
+  const plan=makePlan({plan_type,minimal_action_set:[fileWriteStep(1,target)]});
+  assert.notEqual(collectBoundedContractViolations(plan,task),null);
+  assert.match(assertBoundedPlanActivationContract(plan,task)??'',/READ_ONLY_TASK/);
+ }
+});
 import type { SwePlan, QaVerdictReject } from '../schemas/agentContracts.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
