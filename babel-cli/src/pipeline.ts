@@ -414,6 +414,7 @@ export {
 // ─── Chat mode pipeline ────────────────────────────────────────────────────────
 
 interface ChatPipelineContext {
+  abortSignal?: AbortSignal;
   manifest: OrchestratorManifest;
   mergedTaskContext: string;
   evidence: EvidenceBundle;
@@ -441,6 +442,7 @@ async function runChatPipeline(
     pruningStubs,
     taskGrounding,
     effectiveMode,
+    abortSignal,
   } = ctx;
 
   // Step 1: Build contract — scan repo for context (from Lite internals)
@@ -469,6 +471,7 @@ async function runChatPipeline(
     '',
     groundingContext,
     executionProfileName,
+    'chat',
   );
   const chatContext = await compileContext(
     manifest.prompt_manifest,
@@ -512,7 +515,10 @@ async function runChatPipeline(
     }
 
     log('Stage 3 / 3  —  Applying changes');
-    const chatResult = await runChatExecutorLoop(swePlan, evidence, mergedTaskContext);
+    const chatResult = await runChatExecutorLoop(swePlan, evidence, mergedTaskContext, {
+      projectRoot,
+      ...(abortSignal ? { signal: abortSignal } : {}),
+    });
 
     // Emit rich tool annotations to the TUI
     for (const entry of chatResult.toolCallLog) {
@@ -958,6 +964,7 @@ export async function _runBabelPipelineInternal(
   }
 
   let resolvedModelPolicy: ResolvedModelPolicy | undefined;
+  let requirePostMutationVerification = false;
   const traceOptions = {
     runDir: evidence.runDir,
     orchestratorVersion,
@@ -991,6 +998,7 @@ export async function _runBabelPipelineInternal(
       task,
       toolCallLog: terminalContext.toolCallLog,
       runDir: evidence.runDir,
+      requirePostMutationVerification,
     });
     evidence.writeDebugFile(
       'verifier_plan.json',
@@ -1970,6 +1978,7 @@ export async function _runBabelPipelineInternal(
 
     // ── Chat mode: fast capable coding agent ──────────────────────────────
     if (effectiveMode === 'chat') {
+      requirePostMutationVerification = true;
       return await runChatPipeline(
         {
           manifest,
@@ -1982,6 +1991,7 @@ export async function _runBabelPipelineInternal(
           taskGrounding,
           v9StackTelemetry,
           effectiveMode,
+          ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
         },
         finalizeResult,
       );

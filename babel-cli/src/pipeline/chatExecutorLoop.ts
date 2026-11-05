@@ -12,10 +12,12 @@
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolCallLog, SwePlan, ActionStep } from '../schemas/agentContracts.js';
-import type { ToolCallRequest } from '../localTools.js';
+import type { ToolCallRequest, ToolContext, ToolResult } from '../localTools.js';
 import { executeExecutorTool } from './executorToolDispatch.js';
 import { EvidenceBundle } from '../evidence.js';
 import { BABEL_ROOT } from '../cli/constants.js';
+import { writeValidatedExecutionReport } from './executionReports.js';
+import { createRunControl } from '../runtime/run-control.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -42,12 +44,10 @@ function mapStepToRequest(step: ActionStep): ToolCallRequest | null {
     case 'test_run':
       return { tool: 'shell_exec', command: step.target };
     case 'file_write':
-      // file_write requires content — the caller must have injected it
-      // into the step via an extended property
       return {
         tool: 'file_write',
         path: step.target,
-        content: (step as ActionStep & { content?: string }).content ?? '',
+        content: step.content ?? '',
       };
     default:
       // mcp_request, web_search, web_fetch, etc. — not supported in chat executor
@@ -65,24 +65,79 @@ export async function runChatExecutorLoop(
   approvedPlan: SwePlan,
   evidence: EvidenceBundle,
   rawTask: string,
+  toolContext: Pick<ToolContext, 'signal' | 'projectRoot'> = {},
 ): Promise<ChatExecutorResult> {
   const toolCallLog: ToolCallLog[] = [];
   const changedFiles: string[] = [];
   const steps = approvedPlan.minimal_action_set;
+  const runControl = createRunControl({ runId: evidence.runId, turnId: 'chat-plan', generation: 1 });
+  const cancel = (): void => {
+    runControl.requestStop({ owner: runControl.owner, kind: 'cancelled', reasonCode: 'cancelled', source: 'user' });
+  };
+  toolContext.signal?.addEventListener('abort', cancel, { once: true });
+  if (toolContext.signal?.aborted) cancel();
+
+  const finish = (haltReason?: string, haltedAtStep = 1): ChatExecutorResult => {
+    const halted = haltReason !== undefined;
+    runControl.requestStop({ owner: runControl.owner, kind: halted ? 'failed' : 'completed', reasonCode: halted ? 'chat_halted' : 'tools_complete', source: 'executor' });
+    toolContext.signal?.removeEventListener('abort', cancel);
+    writeValidatedExecutionReport(evidence, halted ? {
+      status: 'EXECUTION_HALTED',
+      steps_executed: toolCallLog.length,
+      tool_call_log: toolCallLog,
+      pipeline_error: {
+        halt_tag: 'STEP_VERIFICATION_FAIL',
+        halted_at_step: haltedAtStep,
+        condition: haltReason,
+      },
+    } : {
+      status: 'EXECUTION_COMPLETE',
+      stage_status: 'TOOL_EXECUTION_COMPLETE',
+      pipeline_completion_note: 'Tool execution finished; pipeline completion depends on downstream verification.',
+      steps_executed: toolCallLog.length,
+      tool_call_log: toolCallLog,
+      diff_path: join(evidence.runDir, '05_diff.patch'),
+      execution_log_path: join(evidence.runDir, '04_execution_report.json'),
+    }, toolCallLog);
+    return {
+      terminalStatus: halted ? 'EXECUTOR_HALTED' : 'EXECUTION_COMPLETE',
+      toolCallLog,
+      changedFiles,
+      ...(halted ? { haltReason } : {}),
+    };
+  };
 
   for (const step of steps) {
+    if (toolContext.signal?.aborted) {
+      return finish('Chat execution cancelled before the next step.', step.step);
+    }
+    if (step.tool === 'file_write' && typeof step.content !== 'string') {
+      return finish(`Step ${step.step} (file_write ${step.target}) has no content; the file was not written.`, step.step);
+    }
     const request = mapStepToRequest(step);
 
-    if (request === null) continue;
-    if (request.tool === 'file_write' && (!request.content || request.content.length === 0))
-      continue;
+    if (request === null) {
+      return finish(`Step ${step.step} (${step.tool} ${step.target}) is not supported by the Chat executor.`, step.step);
+    }
 
-    const result = await executeExecutorTool(request, {
-      agentId: 'chat-executor',
-      runId: evidence.runId,
-      runDir: evidence.runDir,
-      babelRoot: BABEL_ROOT,
-    });
+    let result: ToolResult;
+    try {
+      result = await executeExecutorTool(request, {
+        agentId: 'chat-executor',
+        runId: evidence.runId,
+        runDir: evidence.runDir,
+        babelRoot: BABEL_ROOT,
+        ...toolContext,
+        runControl,
+        signal: runControl.signal,
+      });
+    } catch (error) {
+      result = {
+        exit_code: toolContext.signal?.aborted ? 130 : 1,
+        stdout: '',
+        stderr: toolContext.signal?.aborted ? 'Chat execution cancelled during the tool call.' : error instanceof Error ? error.message : String(error),
+      };
+    }
 
     const entry: ToolCallLog = {
       step: step.step,
@@ -106,30 +161,16 @@ export async function runChatExecutorLoop(
 
     // Halt on failure
     if (result.exit_code !== 0 && !result.denial) {
-      return {
-        terminalStatus: 'EXECUTOR_HALTED',
-        toolCallLog,
-        changedFiles,
-        haltReason: `Step ${step.step} (${step.tool} ${step.target}) failed with exit code ${result.exit_code}: ${result.stderr || result.stdout || 'unknown error'}`,
-      };
+      return finish(`Step ${step.step} (${step.tool} ${step.target}) failed with exit code ${result.exit_code}: ${result.stderr || result.stdout || 'unknown error'}`, step.step);
     }
 
     // Denied tools halt
     if (result.denial) {
-      return {
-        terminalStatus: 'EXECUTOR_HALTED',
-        toolCallLog,
-        changedFiles,
-        haltReason: `Step ${step.step} (${step.tool} ${step.target}) was denied: ${result.denial.message ?? result.denial.reason_code}`,
-      };
+      return finish(`Step ${step.step} (${step.tool} ${step.target}) was denied: ${result.denial.message ?? result.denial.reason_code}`, step.step);
     }
   }
 
-  return {
-    terminalStatus: 'EXECUTION_COMPLETE',
-    toolCallLog,
-    changedFiles,
-  };
+  return toolContext.signal?.aborted ? finish('Chat execution cancelled.') : finish();
 }
 
 // ─── Display formatting (rich annotations for TUI) ──────────────────────────
@@ -140,6 +181,10 @@ export async function runChatExecutorLoop(
  */
 export function formatToolCallForDisplay(entry: ToolCallLog, projectRoot: string): string | null {
   const { tool, target, exit_code, stdout, stderr } = entry;
+
+  if (exit_code !== 0 || entry.denial) {
+    return `${tool} ${target} (${entry.denial ? 'denied' : `failed, exit ${exit_code}`})`;
+  }
 
   switch (tool) {
     case 'file_read': {

@@ -16,7 +16,7 @@ function makeWorkspaceFixture(): {
 } {
   const root = mkdtempSync(join(tmpdir(), 'babel-target-resolver-'));
   const workspace = join(root, 'example_game_suite');
-  const child = join(workspace, 'relicRun');
+  const child = join(workspace, 'exampleBrowserGame');
   const outside = join(root, 'OtherProject');
   mkdirSync(child, { recursive: true });
   mkdirSync(outside, { recursive: true });
@@ -25,7 +25,7 @@ function makeWorkspaceFixture(): {
     '# Project Games\n\nWorkspace for game projects.\n',
     'utf-8',
   );
-  writeFileSync(join(child, 'package.json'), '{"name":"relic-run"}\n', 'utf-8');
+  writeFileSync(join(child, 'package.json'), '{"name":"example-browser-game"}\n', 'utf-8');
   writeFileSync(join(outside, 'README.md'), '# Other\n', 'utf-8');
   return { root, workspace, child, outside };
 }
