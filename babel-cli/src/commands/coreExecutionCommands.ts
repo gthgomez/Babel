@@ -109,7 +109,7 @@ export function registerCoreExecutionCommands(program: Command): void {
       "deep",
     )
     .option("--background", "Enqueue as background task via daemon")
-    .option("--budget <tokens>", "Token budget ceiling")
+    .option("--budget <tokens>", "Compiled instruction-stack token ceiling (not cumulative model usage)")
     .option(
       "--reasoning-effort <level>",
       "Model reasoning effort: low | medium | high",
@@ -228,7 +228,7 @@ export function registerCoreExecutionCommands(program: Command): void {
     .description("Run an autonomous goal loop (experimental)")
     .argument("<goal...>", "Goal description")
     .option("--max-iterations <n>", "Maximum iterations (default: 5)", "5")
-    .option("--budget <tokens>", "Token budget ceiling")
+    .option("--budget <tokens>", "Cumulative model-token budget shared across goal iterations")
     .option(
       "--mode <mode>",
       "Pipeline mode: deep (or chat | chat-headless | plan)",

@@ -1990,7 +1990,7 @@ Notes:
     .option('--yes', 'Auto-approve all standard operations (headless/CI mode)')
     .option('--read-only', 'Auto-deny all mutating file writes (read-only audit mode)')
     .option('--strict-env', 'Fail when .env keys stay inactive after bootstrap')
-    .option('--budget <tokens>', 'Hard token budget ceiling; pipeline halts if exceeded')
+    .option('--budget <tokens>', 'Compiled instruction-stack token ceiling (not cumulative model usage)')
     .option('--reasoning-effort <level>', 'Model reasoning effort: low | medium | high')
     .option('--cost-optimize', 'Enable automated cost-aware model selection')
     .option('--offline', 'Use local models only (requires Ollama on localhost:11434)')

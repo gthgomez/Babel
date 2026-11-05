@@ -33,8 +33,6 @@ import {
 } from '../ui/inputCoordinator.js';
 import { getActiveRenderer } from '../ui/waterfall.js';
 import { autoCompactIfNeeded } from '../services/compaction.js';
-import { resolveBudgetLimit, type BudgetEnforcementResult } from '../services/tokenBudgetEnforcer.js';
-import { enforceTokenBudget } from './executorTokenBudget.js';
 import { verifyAndRepairFileWrite } from './executorPostWriteVerification.js';
 import type {
   AutonomousRepairProofAttemptEvidence,
@@ -1935,13 +1933,9 @@ export async function runExecutorLoop(
   for (let turn = 1; turn <= MAX_EXECUTOR_TURNS; turn++) {
     logDetail(`Executor turn ${turn}/${MAX_EXECUTOR_TURNS}...`);
 
-    // ── Phase 1d: Token budget enforcement ──────────────────────────────
-    const budgetResult = await enforceTokenBudget(
-      toolCallLog, reportWarnings, evidence, persistExecutorContext,
-      totalJitLatencyMs, totalStreamPauseDurationMs, totalLockWaitMs, peakBufferBytes,
-    );
-    if (budgetResult.kind === 'return') return budgetResult.result;
-
+    // Instruction-stack limits are enforced by the resolver/compiler admission
+    // path. Cumulative model consumption is accounting, not stack capacity.
+    // Keep executor turns and repair limits authoritative for this controller.
     // Evict stale file read cache entries (stale if turn - lastUsed > 5)
     const evictionResult = evictFileReadCache(
       turn,
