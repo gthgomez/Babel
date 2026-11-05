@@ -116,7 +116,7 @@ function renderControls() {
   $('.more-models').textContent = native ? 'Manage provider and models' : 'More models…';
   $('.preview-model-dot').style.background = transport === 'live' ? 'var(--muted)' : '';
   $('#top-model').textContent = liveModelLabel;
-  $('#tool-controls').innerHTML='<p class="fine-print">Babel requests approval for file changes and commands. Actual tool activity appears in each conversation.</p>';
+  $('#tool-controls').innerHTML='<p class="fine-print">Babel follows your execution profile and asks when an action needs approval. Actual tool activity appears in each conversation.</p>';
   const percent = null;
   $('#top-context').textContent = percent == null ? '—' : `${percent}%`;
   $('#context-value').textContent = percent == null ? '—' : `${percent}%`;
@@ -709,7 +709,7 @@ async function sendMessage() {
     try {
       const result=await native.run({runId,task:text,mode:state.mode,...((state.model||configuredRoute?.model)?{model:state.model||configuredRoute.model}:{}),...(state.mode==='chat'&&session.babelSessionId?{sessionId:session.babelSessionId}:{})});
       if(result.started&&activeRun?.runId===runId)activeRun.admitted=true;
-      if(!result.started && activeRun?.runId===runId){message.status='cancelled';message.text='Run was not started. No model call was made.';if(!input.value)input.value=text;resizeComposer();activeRun=null;renderConversation();renderControls();}
+      if(!result.started && activeRun?.runId===runId){message.status='cancelled';message.text=result.reason==='run_already_admitted'?'This submission was already admitted. Review its session before sending a new task.':'Run was not started. No model call was made.';if(!input.value)input.value=text;resizeComposer();activeRun=null;renderConversation();renderControls();}
     } catch(err){if(activeRun?.runId===runId){message.status='failed';message.text=err.message;if(!input.value)input.value=text;resizeComposer();activeRun=null;renderConversation();renderControls();}}
     finally{delete session.pendingDraft;persist();renderControls();}
     return;

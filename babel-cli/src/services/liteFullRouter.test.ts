@@ -10,6 +10,39 @@ import {
   shouldSpawnSparkReview,
 } from './liteFullRouter.js';
 
+test('imperative additions and transformations retain implementation intent', () => {
+  for (const task of [
+    'Add a clamp(value,min,max) function to calc.js. Export it and run npm test.',
+    'Insert a validation check into calc.js.',
+    'Extend calc.js with a clamp function.',
+    'Refactor calc.js to remove duplicated validation.',
+    'Rename the clamp function in calc.js.',
+    'Add a clamp function to calc.js. Do not modify the test file.',
+  ]) {
+    const intent = inferIntentContract(task);
+    assert.equal(intent.task_kind, 'implementation', task);
+    assert.equal(intent.mutation_allowed, true, task);
+    assert.equal(intent.write_intent, true, task);
+  }
+});
+
+test('addition vocabulary does not authorize an explicit read-only or planning request', () => {
+  for (const task of [
+    'Explain how to add a clamp function to calc.js without editing.',
+    'Explain how to add a clamp function to calc.js.',
+    'Could you explain how to extend calc.js?',
+    'Describe how to refactor calc.js.',
+    'How should I rename the clamp function?',
+    'Plan how to extend calc.js with validation.',
+    'Add a clamp function to calc.js. Do not modify any files.',
+    'Do not modify the test file.',
+  ]) {
+    const intent = inferIntentContract(task);
+    assert.equal(intent.mutation_allowed, false, task);
+    assert.equal(intent.write_intent, false, task);
+  }
+});
+
 test('Lite/Full router keeps simple daily work in Lite lanes', () => {
   assert.equal(routeLiteOrFull('Explain this failure without editing').selected_lane, 'lite_ask');
   assert.equal(routeLiteOrFull('Plan the safest parser cleanup').selected_lane, 'lite_plan');

@@ -19,7 +19,7 @@ test('actual Electron close choice backgrounds the same child, reopens, and stop
     await writeFile(join(project,'README.md'),'Synthetic project fixture');
     const receipt=join(root,'cancel-receipt.txt'),started=join(root,'start-receipt.txt');
     await writeFile(entry,`if(process.argv.length===3&&process.argv[2]==='--desktop-capabilities'){console.log(JSON.stringify({schemaVersion:1,credentialEnvironment:'native-resolved-v1'}));process.exit(0);}
-import {writeFileSync} from 'node:fs';writeFileSync(${JSON.stringify(started)},'started');process.stdout.write(JSON.stringify({type:'run_start'})+'\\n');
+import {writeFileSync,appendFileSync} from 'node:fs';appendFileSync(${JSON.stringify(started)},'started\\n');process.stdout.write(JSON.stringify({type:'run_start'})+'\\n');
 const timer=setInterval(()=>process.stdout.write(JSON.stringify({type:'thought',line:'owned child still running'})+'\\n'),200);
 process.stdin.on('data',data=>{if(data.toString().includes('cancel')){clearInterval(timer);setTimeout(()=>{writeFileSync(${JSON.stringify(receipt)},'cancel settled');process.stdout.write(JSON.stringify({type:'cancelled'})+'\\n');process.exit(0);},300);}});
 setTimeout(()=>process.exit(2),30000).unref();`);
@@ -57,6 +57,12 @@ setTimeout(()=>process.exit(2),30000).unref();`);
     await page.waitForFunction(()=>document.querySelector('#main-status').textContent==='Running');
     await page.waitForFunction(()=>document.querySelector('#conversation').textContent.includes('owned child still running'));
     assert.deepEqual(await application.evaluate(()=>globalThis.__dialogs),['Trust this project?'],'trusted runs need no second start popup');
+    const competing=await page.evaluate(()=>Promise.allSettled([
+      window.babelDesktop.run({runId:'competing-first',task:'Must not start twice',mode:'chat'}),
+      window.babelDesktop.run({runId:'competing-second',task:'Must not start twice',mode:'chat'}),
+    ]).then(results=>results.map(result=>({status:result.status,message:result.reason?.message}))));
+    assert.equal(competing.every(result=>result.status==='rejected'&&/current Babel run/.test(result.message)),true);
+    assert.equal(await readFile(started,'utf8'),'started\n','competing IPC submissions must not spawn another child');
     await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());
     await assertEventually(async()=>application.evaluate(({BrowserWindow})=>!BrowserWindow.getAllWindows()[0].isVisible()));
     assert.equal(await page.locator('#main-status').innerText(),'Running');
