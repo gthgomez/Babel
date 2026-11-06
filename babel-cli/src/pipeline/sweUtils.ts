@@ -138,6 +138,7 @@ export function buildEvidenceReportFinalizerArtifact(input: {
   toolCallLog: readonly ToolCallLog[];
   intent: BabelIntentContract;
   runDir: string;
+  answer: string;
 }): Record<string, unknown> & { answer: string } {
   const targets = uniqueList(input.toolCallLog.map((entry) => String(entry.target ?? '')));
   const readCount = input.toolCallLog.filter((entry) =>
@@ -157,30 +158,15 @@ export function buildEvidenceReportFinalizerArtifact(input: {
     targets.length > 0
       ? `Inspected ${Math.min(targets.length, 6)} target(s): ${targets.slice(0, 6).join(', ')}.`
       : 'Inspected available run evidence without recording a concrete file target.';
-  const compareLine = /\b(compare|versus|vs\.?|trade-?off|options?|paths?)\b/i.test(input.task)
-    ? 'Compared options by inspected scope, evidence confidence, implementation risk, and verification effort.'
-    : null;
-  const auditLine = /\b(audit|diagnos(?:e|is|tic)|assess|evaluate|investigate|findings?)\b/i.test(
-    input.task,
-  )
-    ? 'Observed evidence is sufficient for a read-only finding pass, but not for claiming an implementation or executed verification.'
-    : null;
   const findings = uniqueList([
     `Evidence gathering completed with ${readCount} read-only evidence step(s).`,
     targetSummary,
-    compareLine,
-    auditLine,
     'No source files were changed because the original intent resolved to a read-only task.',
   ]);
   const limitations = [
-    'This finalizer used already-gathered local evidence and did not make an extra model call.',
+    'The answer was synthesized from recorded tool results; no additional tools were invoked by the finalizer.',
     'No verification command was executed unless it appears in the execution report.',
   ];
-  const answer = [
-    'Evidence gathered and finalized without editing files.',
-    ...findings.map((finding) => `- ${finding}`),
-    `- Recommended next action: ${input.intent.task_kind === 'plan_only' ? 'review the plan evidence, then run a fix command when you want edits applied' : 'use the evidence artifact for follow-up implementation or a narrower report'}.`,
-  ].join('\n');
 
   return {
     schema_version: 1,
@@ -195,7 +181,7 @@ export function buildEvidenceReportFinalizerArtifact(input: {
       'Run a targeted verification command only after an implementation task produces changes.',
     ],
     run_dir: input.runDir,
-    answer,
+    answer: input.answer,
   };
 }
 

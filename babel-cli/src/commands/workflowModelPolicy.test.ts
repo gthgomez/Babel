@@ -8,6 +8,50 @@ import { prepareSyntheticProviderFixture, removeSyntheticProviderFixture } from 
 
 import { preflightRequestedModelPolicy } from './workflowModelPolicy.js';
 
+test('the json flag wins over stream-json on early execution-scope refusal', () => {
+  const fixture = prepareSyntheticProviderFixture();
+  try {
+    const child = spawnSync(process.execPath, [
+      '--experimental-wasm-modules', '--import', new URL('../testinfra/synthetic-provider-fixture.mjs', import.meta.url).href,
+      '--import', import.meta.resolve('tsx'), fileURLToPath(new URL('../index.ts', import.meta.url)),
+      'run', '--execution-scope', 'invalid', '--model', 'glm-5.3-flash', '--json', '--output-format', 'stream-json', '--', 'No model request.',
+    ], {cwd:fixture.cwd,env:fixture.env,encoding:'utf8',timeout:120_000,windowsHide:true});
+    assert.equal(child.error,undefined);
+    assert.equal(child.status,1);
+    const result = JSON.parse(child.stdout);
+    assert.equal(result.status,'EXECUTOR_HALTED',String(result.error ?? result.message));
+    assert.match(result.error,/execution scope/i);
+  } finally { removeSyntheticProviderFixture(fixture.root); }
+});
+
+test('streaming Plan admission reports the exact Desktop model policy refusal as NDJSON', () => {
+  const fixture = prepareSyntheticProviderFixture();
+  try {
+    const policy = JSON.parse(readFileSync(new URL('../../../config/model-policy.json', import.meta.url), 'utf8'));
+    const model = 'openrouter/deepseek/deepseek-v4.1-flash';
+    policy.models[model] = {provider:'openrouter',model_id:'deepseek/deepseek-v4.1-flash',tier:'standard',enabled:true,native_tool_use:true};
+    const policyPath = join(fixture.root, 'model-policy.json');
+    writeFileSync(policyPath, JSON.stringify(policy));
+    const preload = join(fixture.root, 'desktop-route.mjs');
+    writeFileSync(preload, `process.env.BABEL_MODEL_POLICY_PATH=${JSON.stringify(policyPath)};process.env.BABEL_DESKTOP_PROVIDER='openrouter';process.env.BABEL_DESKTOP_IPC='1';process.env.BABEL_DESKTOP_MODEL_ROUTE=${JSON.stringify(model)};`);
+    const child = spawnSync(process.execPath, [
+      '--experimental-wasm-modules', '--import', new URL('../testinfra/synthetic-provider-fixture.mjs', import.meta.url).href,
+      '--import', import.meta.resolve('tsx'), '--import', pathToFileURL(preload).href,
+      fileURLToPath(new URL('../index.ts', import.meta.url)), 'run', '--mode', 'plan', '--model', model,
+      '--output-format', 'stream-json', '--project-root', fixture.cwd, '--', 'Inspect this project and propose a plan. Do not modify files.',
+    ], {cwd:fixture.cwd,env:fixture.env,encoding:'utf8',timeout:120_000,windowsHide:true});
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 1);
+    const lines = child.stdout.trim().split('\n');
+    assert.doesNotThrow(() => lines.map(line => JSON.parse(line)), 'each streaming stdout line must be valid JSON');
+    const events = lines.map(line => JSON.parse(line));
+    assert.deepEqual(events.map(event => event.type), ['run_error', 'turn.failed']);
+    assert.match(events[0].error, /LIVE_MODEL_POLICY/);
+    assert.match(events[0].error, /deepseek-v4\.1-flash/);
+    assert.equal(events[0].result.status, 'EXECUTOR_HALTED');
+  } finally { removeSyntheticProviderFixture(fixture.root); }
+});
+
 test('workflow preflight accepts an exact configured provider model id', () => {
   const policy = preflightRequestedModelPolicy('z-ai/glm-5.3-flash', {
     liveOnly: true,

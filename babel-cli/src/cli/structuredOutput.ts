@@ -1914,7 +1914,10 @@ export function buildRunResultPayload(
 
   return {
     status,
-    user_status: getUserFacingStatus({ status, verification, changedFiles }),
+    user_status: result.terminalOutcome
+      ? userFacingStatusFromOutcome(result.terminalOutcome)
+      : getUserFacingStatus({ status, verification, changedFiles }),
+    ...(result.terminalOutcome ? { terminal_outcome: result.terminalOutcome } : {}),
     ...(getInternalStatus(status, result.status) !== undefined
       ? { internal_status: result.status }
       : {}),

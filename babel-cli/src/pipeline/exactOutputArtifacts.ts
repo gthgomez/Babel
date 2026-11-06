@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { getRequestedTargetContract } from '../stages/taskShape.js';
 
 export function verifyExactOutputSchemaArtifacts(
   rawTask: string,
@@ -75,6 +76,7 @@ export function repairExactOutputSchemaArtifacts(
   projectRoot: string | null,
 ): string | null {
   if (
+    getRequestedTargetContract(rawTask).readOnly ||
     !projectRoot ||
     !/\bsummary\.csv\b/i.test(rawTask) ||
     !/period,severity,count/i.test(rawTask)

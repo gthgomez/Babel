@@ -59,7 +59,7 @@ export class BabelChild {
     if (typeof request.runId !== 'string' || !/^[\w-]{1,100}$/.test(request.runId)) throw new TypeError('Invalid run ID');
     const args = buildRunArgs(this.entry, this.projectRoot, request);
     const send = packet => onPacket({runId: request.runId, ...packet});
-    let stderr = ''; let stderrBytes = 0; let stdoutBytes = 0; let displayLimited = false; let errors = 0;
+    let stderr = ''; let stderrBytes = 0; let stdoutBytes = 0; let displayLimited = false; let errors = 0; let terminalReceived=false;
     const report = error => { if (errors++ < 8) send({kind:'transport-error',error}); };
     this.#approval=null;this.#runId=request.runId;this.#approvalClosed=false;
     const decoder = new JsonlDecoder(event => {
@@ -67,7 +67,7 @@ export class BabelChild {
         const binding=scopedApproval(event.item?.approval);
         this.#approval=binding?.run_id===request.runId?binding:null;
       }
-      if(['run_complete','run_error','turn.completed','turn.failed','cancelled'].includes(event.type)){this.#approval=null;this.#approvalClosed=true;}
+      if(['run_complete','run_error','turn.completed','turn.failed','cancelled'].includes(event.type)){terminalReceived=true;this.#approval=null;this.#approvalClosed=true;}
       send({kind:'event',event});
     }, report);
     const child = spawn(this.executable, productionNodeCliArgv(this.entry, args.slice(1)), {
@@ -96,6 +96,9 @@ export class BabelChild {
       decoder.end();
       this.#child = null;
       this.#approval=null;this.#runId=null;this.#approvalClosed=true;
+      // Legacy controllers may ignore cooperative cancellation. Report the owned
+      // process's observed closure after Stop, without replacing a CLI terminal.
+      if(child.desktopCancelling&&!terminalReceived)send({kind:'event',event:{type:'cancelled',source:'desktop',reason:'owned_cli_closed_after_cancel'}});
       // stderr may contain provider diagnostics. Never forward raw stderr, environment,
       // keys, or credentials into the renderer. The CLI's structured error is preferred.
       send({kind:'exit', code, signal, diagnosticAvailable:stderr.length > 0, displayLimited});

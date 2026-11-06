@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {test} from 'node:test'
-import {mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs'
+import {existsSync,mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {ChatEngine} from './chatEngine.js'
@@ -110,8 +110,15 @@ test(`native schema recovery: ${scenario} preserves whole-batch denial and settl
     assert.ok((summary.unknownChargeCount ?? 0)>0)
   }
   for(const body of runner.bodies)assert.deepEqual(validateProviderMessageProtocol(body.messages).filter(issue=>issue.code!=='system_in_user_content'),[])
-  if(!accountingOnly&&scenario!=='truncated'){
-    const diagnostic=readFileSync(join(host.engineRunDir,'native-tool-rejection.json'),'utf8')
+  const diagnosticPath=join(host.engineRunDir,'native-tool-rejection.json')
+  // A provider-route rejection can precede schema decoding and its diagnostic.
+  if(scenario==='wrong_model'&&!existsSync(diagnosticPath)){
+    const failed=events.find(event=>event.type==='failed')
+    assert.ok(failed)
+    assert.match(failed.error,/\[LIVE_MODEL_POLICY\].*refusing model substitution/)
+    assert.equal(events.some(event=>event.type==='tool_start'||event.type==='tool_complete'||event.type==='tool_failed'),false,'route rejection must precede tool admission')
+  } else if(!accountingOnly&&scenario!=='truncated'){
+    const diagnostic=readFileSync(diagnosticPath,'utf8')
     assert.doesNotMatch(diagnostic,/PRIVATE_REJECTED_VALUE/)
     if(scenario==='raw_missing_id'||scenario==='raw_duplicate_id'||scenario==='malformed_raw_missing_id'||scenario==='malformed_raw_duplicate_id')assert.equal(JSON.parse(diagnostic).provider_call_id_normalized,true)
   }

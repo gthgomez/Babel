@@ -633,6 +633,37 @@ test('consumeChatStream maps DeepSeek operator cancel to CANCELLED', async () =>
   assert.equal(result.outcome, 'CANCELLED');
 });
 
+for (const terminal of [
+  {
+    type: 'done', answer: 'Verification failed; the patch remains unverified.', usage: EMPTY_USAGE,
+    outcome: 'UNVERIFIED_PATCH', reason_code: 'verification_failed',
+    reason_detail: 'npm test exited with status 1', cause_class: 'verification',
+  },
+  {
+    type: 'failed', error: 'Context preparation failed.',
+    outcome: 'BLOCKED_POLICY', reason_code: 'context_preparation_failed',
+    reason_detail: 'prepared_request_over_limit', cause_class: 'harness',
+  },
+  {
+    type: 'cancelled', outcome: 'CANCELLED', reason_code: 'cancelled',
+    reason_detail: 'operator_cancelled', cause_class: null,
+  },
+] satisfies ChatEvent[]) {
+  test(`consumeChatStream preserves the ${terminal.type} reason detail through the CLI payload`, async () => {
+    async function* stream(): AsyncGenerator<ChatEvent, void, undefined> {
+      yield terminal;
+    }
+
+    const result = await consumeChatStream(stream(), null);
+    assert.equal(result.outcome, terminal.outcome);
+    assert.equal(result.reason_code, terminal.reason_code);
+    assert.equal(result.reason_detail, terminal.reason_detail);
+    const payload = buildChatRunPayload(result, { task: 'Check the implementation', projectRoot: '/fixture' });
+    assert.equal(payload['terminal_outcome'], terminal.outcome);
+    assert.equal(payload['reason_detail'], terminal.reason_detail);
+  });
+}
+
 describe('completion_verification in buildChatRunPayload', () => {
   it('verifierReceipt with exit_code 0 sets status=pass required=true', () => {
     const payload = buildChatRunPayload(

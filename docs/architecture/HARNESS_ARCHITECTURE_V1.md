@@ -292,6 +292,16 @@ The in-process **runtime coordinator** (`runtime/coordinator.ts`, P03) selects e
 
 ## 6.6 Normative invariants
 
+The `run --budget` and `exec --budget` flags and `BABEL_TOKEN_BUDGET` configure compiled instruction-stack
+capacity through `budgetPolicy.ts` and the resolver/compiler admission path.
+Their default is 3,600 instruction tokens. They MUST NOT be compared with the
+sum of model input and output tokens across a run. Cumulative usage remains
+accounting; existing controller turn, review, repair and configured runtime
+limits remain authoritative. A separate cumulative ceiling requires its own
+explicit policy and MUST NOT silently borrow the instruction-stack default.
+The experimental `goal --budget` is a separate, explicit cumulative model-token
+ceiling shared across goal iterations; its existing enforcement is preserved.
+
 Language: **MUST** / **MUST NOT** / **SHOULD** / **MAY** / **OWNS** / **SUPERSEDES**.
 
 | ID | Invariant | Status |
