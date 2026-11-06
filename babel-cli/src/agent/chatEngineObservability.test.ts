@@ -11,7 +11,9 @@ import {
   pushRoutingReceiptFromMetadata,
 } from './chatEngineObservability.js';
 import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
-import { TurnRoutingReceiptLog } from './turnRoutingReceipt.js';
+import { buildInvocationMetadata } from '../runners/providerResponseMetadata.js';
+import { COST_BASIS } from '../services/causalCampaignContract.js';
+import { summarizeCellCost, TurnRoutingReceiptLog } from './turnRoutingReceipt.js';
 
 test('GLM backend key creates the exact OpenRouter phase runner', () => {
   const previousOffline = process.env['BABEL_OFFLINE'];
@@ -46,6 +48,38 @@ test('phase runner accepts the exact GLM ID with an explicit OpenRouter provider
 });
 
 describe('pushRoutingReceiptFromMetadata', () => {
+  test('preserves the OpenRouter reported charge and its provenance through routing rollup', () => {
+    for (const cost of [0, 0.0031]) {
+      const metadata = buildInvocationMetadata('openrouter', 'example/fixed-model', 1, {
+        prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cost,
+      });
+      const log = new TurnRoutingReceiptLog();
+      pushRoutingReceiptFromMetadata(log, 0, 'investigate', metadata);
+      const receipt = log.toJSON()[0]!;
+      assert.equal(receipt.cost_usd, cost);
+      assert.equal(receipt.cost_basis, 'provider_reported');
+      assert.notEqual(receipt.cost_basis, 'provider_billed');
+      assert.equal(summarizeCellCost(log.toJSON()).cost_basis, 'provider_reported');
+      assert.equal(COST_BASIS.some(value => String(value) === receipt.cost_basis), true);
+    }
+  });
+
+  test('withheld or invalid provider charges cannot become a stale registry estimate', () => {
+    for (const reported of [null, Number.NaN, Number.POSITIVE_INFINITY, -0.001]) {
+      const metadata = {
+        ...buildInvocationMetadata('openrouter', 'example/fixed-model', 1),
+        estimated_cost_usd: 0.1,
+        cost_precision: 'exact',
+        provider_reported_total_charge_usd: reported,
+      };
+      const log = new TurnRoutingReceiptLog();
+      pushRoutingReceiptFromMetadata(log, 0, null, metadata);
+      assert.equal(log.toJSON()[0]!.cost_usd, null);
+      assert.equal(log.toJSON()[0]!.cost_basis, 'unknown');
+      assert.equal(summarizeCellCost(log.toJSON()).estimated_usd, null);
+    }
+  });
+
   test('preserves requested/normalized/sent/observed effort (DeepSeek medium→high)', () => {
     const log = new TurnRoutingReceiptLog();
     pushRoutingReceiptFromMetadata(log, 3, 'mutate', {
