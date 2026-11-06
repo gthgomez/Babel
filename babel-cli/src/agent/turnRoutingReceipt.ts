@@ -18,10 +18,12 @@ export type EffortEffectiveSource =
 
 /**
  * Cost basis for estimated_usd (plan terminology).
- * Estimates use provider_usage_x_pinned_rate; never claim provider_billed without invoice.
+ * Estimates use provider_usage_x_pinned_rate. A gateway-reported charge uses
+ * provider_reported; never claim provider_billed without invoice evidence.
  */
 export type ReceiptCostBasis =
   | 'provider_billed'
+  | 'provider_reported'
   | 'provider_usage_x_pinned_rate'
   | 'unknown';
 
@@ -282,7 +284,7 @@ export function summarizeCellCost(
   let cache_miss_tokens = 0;
   let pricing_verified_at: string | null = null;
   let pricing_source_url: string | null = null;
-  let cost_basis: ReceiptCostBasis = 'unknown';
+  const costBases = new Set<ReceiptCostBasis>();
 
   for (const r of receipts) {
     if (r.cost_usd === null) unknown_cost_turn_count++;
@@ -293,7 +295,7 @@ export function summarizeCellCost(
     cache_miss_tokens += r.cache_miss_tokens ?? 0;
     if (r.pricing_verified_at) pricing_verified_at = r.pricing_verified_at;
     if (r.pricing_source_url) pricing_source_url = r.pricing_source_url;
-    if (r.cost_basis && r.cost_basis !== 'unknown') cost_basis = r.cost_basis;
+    costBases.add(r.cost_basis ?? 'unknown');
   }
 
   // Floating sum: treat near-equal as reconciled
@@ -305,7 +307,8 @@ export function summarizeCellCost(
     estimated_usd: unknown_cost_turn_count === 0 ? rounded : null,
     known_estimated_usd: rounded,
     unknown_cost_turn_count,
-    cost_basis: receipts.length === 0 || unknown_cost_turn_count > 0 ? 'unknown' : cost_basis,
+    cost_basis: receipts.length === 0 || unknown_cost_turn_count > 0 || costBases.size !== 1
+      ? 'unknown' : [...costBases][0] ?? 'unknown',
     pricing_verified_at,
     pricing_source_url,
     input_tokens,

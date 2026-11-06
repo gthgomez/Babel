@@ -119,6 +119,20 @@ describe('summarizeCellEffort', () => {
 });
 
 describe('summarizeCellCost', () => {
+  test('does not attribute a mixed cost subtotal to whichever basis arrived last', () => {
+    const entries = [
+      receipt({ turn: 0, model: 'estimated-model', cost_usd: 0.02, cost_basis: 'provider_usage_x_pinned_rate' }),
+      receipt({ turn: 1, model: 'billed-model', cost_usd: 0.03, cost_basis: 'provider_billed' }),
+    ];
+    for (const receipts of [entries, [...entries].reverse()]) {
+      const summary = summarizeCellCost(receipts);
+      assert.equal(summary.estimated_usd, 0.05);
+      assert.equal(summary.known_estimated_usd, 0.05);
+      assert.equal(summary.reconciled, true);
+      assert.equal(summary.cost_basis, 'unknown');
+    }
+  });
+
   test('sums tokens and cost; marks reconciled', () => {
     const receipts: TurnRoutingReceipt[] = [
       receipt({

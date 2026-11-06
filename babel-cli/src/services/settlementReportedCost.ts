@@ -8,7 +8,7 @@ import type { RunnerInvocationMetadata } from '../runners/base.js'
  * or `undefined` when no provider report exists (registry estimate may apply).
  */
 export function settlementReportedCostUsd(
-  metadata: RunnerInvocationMetadata | null | undefined,
+  metadata: Pick<RunnerInvocationMetadata, 'provider_reported_total_charge_usd'> | null | undefined,
 ): number | null | undefined {
   if (metadata === null || metadata === undefined) {
     return undefined

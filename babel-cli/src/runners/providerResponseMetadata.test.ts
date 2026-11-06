@@ -16,8 +16,8 @@ test('OpenRouter reported billing supports an unpriced model without substitutin
   assert.equal(absent.cost_precision, 'unknown')
 })
 
-test('invalid reported billing stays unknown even when a pricing estimate exists', () => {
-  for (const cost of [-1, NaN, Infinity, '0.01']) {
+test('withheld or invalid reported billing stays unknown even when a pricing estimate exists', () => {
+  for (const cost of [null, -1, NaN, Infinity, '0.01']) {
     const metadata = buildInvocationMetadata('openrouter', 'z-ai/glm-5.3-flash', 1,
       { prompt_tokens: 10, completion_tokens: 5, cost })
     assert.equal(metadata.estimated_cost_usd, null)

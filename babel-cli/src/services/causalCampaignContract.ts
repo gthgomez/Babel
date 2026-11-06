@@ -54,6 +54,7 @@ export type AttemptLifecycle = (typeof ATTEMPT_LIFECYCLE)[number];
 
 export const COST_BASIS = [
   'provider_billed',
+  'provider_reported',
   'provider_usage_x_pinned_rate',
   'unknown',
 ] as const;
