@@ -623,17 +623,33 @@ async function emergencyHostStopRun() {
   renderControls();
 }
 
-function stopRun() {
-  if (!activeRun) return;
+async function stopRun() {
+  if (!activeRun || activeRun.stopping) return;
   if (transport === 'live') {
-    native?.cancel?.();
-    activeRun.stopping = true;
-    activeRun.message.stopping = true;
-    activeRun.message.pendingApproval = '';
-    activeRun.message.approval = null;
+    const run = activeRun;
+    run.stopping = true;
+    run.message.stopping = true;
+    run.message.pendingApproval = '';
+    run.message.approval = null;
     renderConversation();
     renderControls();
     announce('Babel run stopping.');
+    try {
+      if (!native?.cancel) throw new Error('Cancellation unavailable');
+      await native.cancel();
+    } catch {
+      // A lost acknowledgement cannot settle the child or affect a newer run.
+      if (activeRun !== run) return;
+      run.stopping = false;
+      run.message.stopping = false;
+      const warning = 'Stop request failed. Babel may still be running. Retry Stop or inspect the active runtime.';
+      run.message.blocks ??= [];
+      run.message.blocks.push({kind:'note',label:'Stop request failed',text:warning});
+      toast(warning);
+      announce(warning);
+      renderConversation();
+      renderControls();
+    }
     return;
   }
   clearInterval(activeRun.timer);
@@ -644,7 +660,7 @@ function appendNote(message, extra) {
   const line = String(extra ?? '').slice(0, 4000);
   if (!line) return;
   message.blocks ??= [];
-  const note = [...message.blocks].reverse().find(block => block.kind === 'note');
+  const note = [...message.blocks].reverse().find(block => block.kind === 'note' && !block.label);
   if (note) note.text = `${note.text}\n${line}`.slice(0, 8000);
   else message.blocks.push({kind:'note', text:line});
 }
