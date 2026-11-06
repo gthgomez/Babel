@@ -57,17 +57,20 @@ for (const outcome of ['BUDGET_EXHAUSTED', 'BLOCKED_POLICY', 'BLOCKED_EXTERNAL',
   })
 }
 
-test('a signal-interrupted CLI cannot turn a printed failure card into settled task evidence', async () => {
+test('an interrupted CLI cannot turn a printed failure card into settled task evidence', async () => {
   const root = await mkdtemp(join(tmpdir(), 'babel-native-interrupted-'))
   try {
     const entry = join(root, 'fixture.mjs')
-    await writeFile(entry, 'process.stdout.write(JSON.stringify({ terminal_outcome: "BUDGET_EXHAUSTED", answer: "Budget exhausted.", run_dir: "run" }), () => process.kill(process.pid, "SIGTERM"))')
+    await writeFile(entry, 'process.stdout.write(JSON.stringify({ terminal_outcome: "BUDGET_EXHAUSTED", answer: "Budget exhausted.", run_dir: "run" }) + "\\n", () => process.stdout.write("x".repeat(12 * 1024 * 1024)))')
     const result = runBabelCli([], { projectRoot: root, cliEntry: entry, offlineDemo: false })
     const terminal = parseNativeCliPayload(result.payload)
     assert.equal(terminal?.outcome, 'BUDGET_EXHAUSTED')
     assert.equal(result.exitCode, 1)
+    assert.equal(result.timedOut, false)
+    assert.equal(result.failureCapsule, undefined)
+    assert.equal(result.processError, true)
     assert.equal(nativeCliProcessSettled(result, terminal), false)
-    assert.equal(result.signal, 'SIGTERM')
+    assert.equal(nativeCliProcessSettled({ ...result, processError: false, signal: 'SIGTERM' }, terminal), false)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
