@@ -2,6 +2,21 @@
 
 Entries below are taken from git tags and GitHub release notes. They do not add changes that those notes do not list. The published npm versions queried on 2026-11-03 were `0.0.0-stage`, `0.1.3`, and `0.2.0`.
 
+## [Unreleased]
+
+Changes on `main` after the npm `babel-harness@0.2.0` publish. A source build still reports `0.2.0` until the next version bump.
+
+### Changed
+- Default DeepSeek standard Chat routes to the current OpenRouter Flash model (#472).
+- Unified first-run setup, provider routing and CLI workflows (#475).
+- Repair-batch integration and conservative partial-write recovery (#476, #477).
+- README rewritten for users, with reviewed offline CLI captures (#473, #474).
+
+### Fixed
+- Python post-edit syntax check no longer hardcodes `python`: it resolves `python3`/`python` (POSIX) or `py -3`/`python` (Windows), honours `BABEL_WORKSPACE_PYTHON`/`BABEL_PYTHON`, and reports `static_check_unavailable` instead of a false `exit_code: 1` when no interpreter exists, so correct `.py` edits are not sent into repair loops.
+- `glob` found 0 matches for real files whose name ends in `.` (ripgrep globset quirk); trailing literal dots are now matched exactly.
+- Lint-flagged code defects: unsafe optional call in the repo-map tokenizer loader, a useless re-throw, an expression-statement ternary, a silent cleanup catch, and a never-assigned `context_error` local in chat stack compilation.
+
 ## [0.2.0] - 2026-10-30
 
 GitHub release: [v0.2.0](https://github.com/gthgomez/Babel/releases/tag/v0.2.0). Compare: [v0.1.3...v0.2.0](https://github.com/gthgomez/Babel/compare/v0.1.3...v0.2.0).

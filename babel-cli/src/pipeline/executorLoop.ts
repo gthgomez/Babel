@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 
 import { z } from 'zod';
 
@@ -18,6 +18,7 @@ import {
 } from '../localTools.js';
 import { type RuntimeHookTraceEvent } from '../runtime/hooks.js';
 import type { ChatEngineServices } from '../agent/chatEngineServices.js';
+import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
 import { applyPreToolUseHooks } from './executorPreToolHooks.js';
 import {
   IncrementalToolDetector,
@@ -32,8 +33,6 @@ import {
 } from '../ui/inputCoordinator.js';
 import { getActiveRenderer } from '../ui/waterfall.js';
 import { autoCompactIfNeeded } from '../services/compaction.js';
-import { resolveBudgetLimit, type BudgetEnforcementResult } from '../services/tokenBudgetEnforcer.js';
-import { enforceTokenBudget } from './executorTokenBudget.js';
 import { verifyAndRepairFileWrite } from './executorPostWriteVerification.js';
 import type {
   AutonomousRepairProofAttemptEvidence,
@@ -156,7 +155,7 @@ import {
   buildExternalPostconditionFeedback,
   buildMaxTurnsExceededCondition,
   buildMissingPlannedFileWritesCondition,
-  getMissingSuccessfulPlannedFileWrites,
+  getMissingSuccessfulPlannedFileWrites as getCanonicalMissingSuccessfulPlannedFileWrites,
   shouldCompleteBoundedWriteTask,
 } from './executorCompletionGates.js';
 import {
@@ -178,7 +177,7 @@ import {
   isVerifierNotFoundFailure,
   shouldRecoverCommandFailure,
 } from './executorRecovery.js';
-import { isEvidenceRequestPlanSatisfied } from './executorEvidenceRequests.js';
+import { arePlannedActionsSatisfied, isEvidenceRequestPlanSatisfied } from './executorEvidenceRequests.js';
 import type { ExecutorLoopResult } from './executorLoopTypes.js';
 import {
   isExecutorToolShapePlaceholder,
@@ -281,6 +280,7 @@ function evictFileReadCache(
  */ const appendExecutorToolLog = (toolCallLog: ToolCallLog[], entry: ToolCallLog, episodeSink?: { recordExecutorToolCall(entry: ToolCallLog): void } | null): void => { toolCallLog.push(entry); episodeSink?.recordExecutorToolCall(entry); };
 
 async function runDirectBoundedWritePlan(
+  kernel: ExecutorKernel,
   reliabilityRepairProofEnabled: boolean,
   approvedPlan: SwePlan,
   rawTask: string,
@@ -295,7 +295,7 @@ async function runDirectBoundedWritePlan(
     details?: { terminalStatus?: string; haltTag?: string; condition?: string },
   ) => Promise<void>, episodeSink?: { recordExecutorToolCall(entry: ToolCallLog): void } | null,
 ): Promise<ExecutorLoopResult | null> {
-  const directBoundedPlan = reliabilityRepairProofEnabled
+  const directBoundedPlan = reliabilityRepairProofEnabled || getRequestedTargetContract(rawTask).readOnly
     ? null
     : getDirectBoundedWritePlan(approvedPlan, rawTask, getExecutorProjectRoot());
   if (!directBoundedPlan) {
@@ -319,6 +319,7 @@ async function runDirectBoundedWritePlan(
         runDir: evidence.runDir,
         babelRoot: BABEL_ROOT,
       },
+      kernel,
     );
 
     const entry: ToolCallLog = {
@@ -436,9 +437,9 @@ async function handleExecutorCompletion(
   totalLockWaitMs: number,
   peakBufferBytes: number,
   getMissingSuccessfulPlannedFileWrites: () => string[],
-  haltForMissingPlannedFileWrites: (
+  haltForIncompletePlan: (
     nextTurnPrompt: string,
-    missingTargets: string[],
+    condition: string,
   ) => Promise<ExecutorLoopResult>,
   completeAfterDeterministicExternalRepair: (
     nextTurnPrompt: string,
@@ -458,7 +459,7 @@ async function handleExecutorCompletion(
       if (missingPlannedFileWrites.length > 0) {
         return {
           kind: 'return',
-          result: await haltForMissingPlannedFileWrites(turnPrompt, missingPlannedFileWrites),
+          result: await haltForIncompletePlan(turnPrompt, buildMissingPlannedFileWritesCondition(missingPlannedFileWrites)),
         };
       }
 
@@ -1363,6 +1364,7 @@ export async function runExecutorLoop(
 
   const reliabilityRepairProofEnabled = isReliabilityRepairProofEnabled(rawTask);
   const requestedTargetContract = getRequestedTargetContract(rawTask);
+  const kernel = createExecutorKernel(requestedTargetContract.readOnly ? 'plan' : 'deep', services);
   const compactFileOnlyExecutor =
     !isExternalBenchmarkTask(rawTask) &&
     requestedTargetContract.bounded &&
@@ -1722,46 +1724,14 @@ export async function runExecutorLoop(
     }
   };
 
-  const getMissingSuccessfulPlannedFileWrites = (): string[] => {
-    const plannedWrites = approvedPlan.minimal_action_set
-      .filter((step) => step.tool === 'file_write')
-      .map((step) => String(step.target ?? '').trim())
-      .filter((target) => target.length > 0);
-    if (plannedWrites.length === 0) {
-      return [];
-    }
+  const getMissingSuccessfulPlannedFileWrites = (): string[] => getCanonicalMissingSuccessfulPlannedFileWrites({
+    approvedPlan, toolCallLog, projectRoot: getExecutorProjectRoot(),
+  });
 
-    const projectRoot = getExecutorProjectRoot();
-    const targetKey = (target: string): string => {
-      const normalized = normalizePathForComparison(target);
-      if (!projectRoot) {
-        return normalized.toLowerCase();
-      }
-
-      const resolved = resolveStepTargetPath(projectRoot, normalized);
-      if (isWithinProjectRootPath(projectRoot, resolved)) {
-        return relative(projectRoot, resolved).replace(/\\/g, '/').toLowerCase();
-      }
-
-      return resolved.replace(/\\/g, '/').toLowerCase();
-    };
-
-    const successfulWrites = new Set(
-      toolCallLog
-        .filter((entry) => entry.tool === 'file_write' && entry.exit_code === 0)
-        .map((entry) => targetKey(String(entry.target ?? ''))),
-    );
-
-    return plannedWrites.filter((target) => !successfulWrites.has(targetKey(target)));
-  };
-
-  const haltForMissingPlannedFileWrites = async (
+  const haltForIncompletePlan = async (
     nextTurnPrompt: string,
-    missingTargets: string[],
+    condition: string,
   ): Promise<ExecutorLoopResult> => {
-    const condition =
-      `Executor reported EXECUTION_COMPLETE before successful file_write for planned target(s): ` +
-      `${missingTargets.join(', ')}`;
     const report = buildHaltReport(
       toolCallLog,
       'STEP_VERIFICATION_FAIL',
@@ -1774,7 +1744,7 @@ export async function runExecutorLoop(
       condition,
     });
     writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-    log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] after incomplete planned writes');
+    log('  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] after incomplete planned work');
     logDetail(condition);
     return {
       toolCallLog,
@@ -1836,11 +1806,7 @@ export async function runExecutorLoop(
     };
   };
 
-  const maybeCompleteEvidenceRequestPlan = async (nextTurnPrompt: string): Promise<ExecutorLoopResult | null> => {
-    if (!isEvidenceRequestPlanSatisfied(approvedPlan, toolCallLog)) {
-      return null;
-    }
-
+  const completeRecordedPlan = async (nextTurnPrompt: string): Promise<ExecutorLoopResult> => {
     const completion = {
       type: 'completion',
       status: 'EXECUTION_COMPLETE',
@@ -1848,21 +1814,26 @@ export async function runExecutorLoop(
     const report = buildTerminalReport(completion, toolCallLog, evidence);
     await persistExecutorContext('terminal', nextTurnPrompt, {
       terminalStatus: 'EXECUTION_COMPLETE',
-      condition: 'EVIDENCE_REQUEST minimal_action_set satisfied.',
+      condition: `${approvedPlan.plan_type} minimal_action_set satisfied.`,
     });
     writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-    log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps, evidence request satisfied)`);
+    log(`  Executor: EXECUTION_COMPLETE (${toolCallLog.length} steps, planned evidence satisfied)`);
     return {
       toolCallLog,
       terminalStatus: 'EXECUTION_COMPLETE',
     };
   };
 
+  const maybeCompleteEvidenceRequestPlan = async (nextTurnPrompt: string): Promise<ExecutorLoopResult | null> => {
+    if (!isEvidenceRequestPlanSatisfied(approvedPlan, toolCallLog)) return null;
+    return completeRecordedPlan(nextTurnPrompt);
+  };
+
   const completeAfterDeterministicExternalRepair = async (
     nextTurnPrompt: string,
     reason: string,
   ): Promise<ExecutorLoopResult | null> => {
-    if (!isExternalBenchmarkTask(rawTask)) {
+    if (requestedTargetContract.readOnly || !isExternalBenchmarkTask(rawTask)) {
       return null;
     }
 
@@ -1892,6 +1863,7 @@ export async function runExecutorLoop(
   };
 
   const directBoundedResult = await runDirectBoundedWritePlan(
+    kernel,
     reliabilityRepairProofEnabled,
     approvedPlan,
     rawTask,
@@ -1930,13 +1902,9 @@ export async function runExecutorLoop(
   for (let turn = 1; turn <= MAX_EXECUTOR_TURNS; turn++) {
     logDetail(`Executor turn ${turn}/${MAX_EXECUTOR_TURNS}...`);
 
-    // ── Phase 1d: Token budget enforcement ──────────────────────────────
-    const budgetResult = await enforceTokenBudget(
-      toolCallLog, reportWarnings, evidence, persistExecutorContext,
-      totalJitLatencyMs, totalStreamPauseDurationMs, totalLockWaitMs, peakBufferBytes,
-    );
-    if (budgetResult.kind === 'return') return budgetResult.result;
-
+    // Instruction-stack limits are enforced by the resolver/compiler admission
+    // path. Cumulative model consumption is accounting, not stack capacity.
+    // Keep executor turns and repair limits authoritative for this controller.
     // Evict stale file read cache entries (stale if turn - lastUsed > 5)
     const evictionResult = evictFileReadCache(
       turn,
@@ -2153,6 +2121,7 @@ export async function runExecutorLoop(
             runDir: evidence.runDir,
             babelRoot: BABEL_ROOT,
           },
+          kernel,
         );
 
         const entry: ToolCallLog = {
@@ -2294,6 +2263,11 @@ export async function runExecutorLoop(
       toolResult: null,
     });
 
+    if (requestedTargetContract.readOnly && executorTurn.type === 'completion' && executorTurn.status === 'EXECUTION_COMPLETE') {
+      if (arePlannedActionsSatisfied(approvedPlan, toolCallLog)) return completeRecordedPlan(turnPrompt);
+      return haltForIncompletePlan(turnPrompt, `Executor reported EXECUTION_COMPLETE before satisfying the ${approvedPlan.plan_type} minimal_action_set.`);
+    }
+
     const completionResult = await handleExecutorCompletion(
       executorTurn,
       rawTask,
@@ -2316,7 +2290,7 @@ export async function runExecutorLoop(
       totalLockWaitMs,
       peakBufferBytes,
       getMissingSuccessfulPlannedFileWrites,
-      haltForMissingPlannedFileWrites,
+      haltForIncompletePlan,
       completeAfterDeterministicExternalRepair,
       persistExecutorContext,
       writeRepairAttemptTimeline,
@@ -2650,7 +2624,7 @@ export async function runExecutorLoop(
         runId: evidence.runId,
         runDir: evidence.runDir,
         babelRoot: BABEL_ROOT,
-      }));
+      }, kernel));
 
     const entry: ToolCallLog = {
       step: stepNum,
@@ -2847,7 +2821,7 @@ export async function runExecutorLoop(
   }
 
   // Exceeded max turns without a terminal signal.
-  const deterministicRepair = repairExactOutputSchemaArtifacts(rawTask, getExecutorProjectRoot());
+  const deterministicRepair = requestedTargetContract.readOnly ? null : repairExactOutputSchemaArtifacts(rawTask, getExecutorProjectRoot());
   if (deterministicRepair) {
     reportWarnings.push(deterministicRepair);
     const completion = {

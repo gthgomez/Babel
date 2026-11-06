@@ -14,7 +14,6 @@ import { runBabelCli } from '../src/services/liteTrustDemo.js';
 import { buildOpenRouterDeepSeekLiveEnv } from '../src/modelPolicy.js';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const DEFAULT_RELIC_RUN = '/tmp/example_game_suite\\relicRun';
 
 dotenvConfig({
   path: join(packageRoot, '.env'),
@@ -26,7 +25,7 @@ type ProviderMode = 'live' | 'mock';
 
 interface DiscoveryScenario {
   id: string;
-  target: 'seeded' | 'relicrun';
+  target: 'seeded' | 'project';
   description: string;
   command: string[];
   acceptableStatuses: string[];
@@ -49,7 +48,7 @@ interface ScenarioResult {
 
 interface CliOptions {
   provider: ProviderMode;
-  relicRunPath: string;
+  projectPath?: string;
   evidenceDir?: string;
   json: boolean;
   help: boolean;
@@ -59,11 +58,11 @@ function printHelp(): void {
   process.stdout.write([
     'Usage: npm --prefix .\\babel-cli run test:live-lite-discovery -- [options]',
     '',
-    'Run Lite discovery scenarios on seeded fixtures and relicRun.',
+    'Run Lite discovery scenarios on seeded fixtures and an optional external project.',
     '',
     'Options:',
     '  --provider <mode>     live | mock (default: mock)',
-    '  --relic-run <path>    relicRun project root',
+    '  --project <path>      Optional external project root',
     '  --evidence-dir <path> Evidence root (default: runs/live-lite-discovery)',
     '  --json                Emit structured JSON report only',
     '  --help                Show this help',
@@ -74,7 +73,6 @@ function printHelp(): void {
 function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     provider: 'mock',
-    relicRunPath: DEFAULT_RELIC_RUN,
     json: false,
     help: false,
   };
@@ -96,8 +94,8 @@ function parseArgs(argv: string[]): CliOptions {
       options.provider = provider;
       continue;
     }
-    if (arg === '--relic-run') {
-      options.relicRunPath = readValue(argv, ++index, '--relic-run');
+    if (arg === '--project') {
+      options.projectPath = readValue(argv, ++index, '--project');
       continue;
     }
     if (arg === '--evidence-dir') {
@@ -169,18 +167,18 @@ function buildScenarios(): DiscoveryScenario[] {
       readOnly: true,
     },
     {
-      id: 'plan_vague_relicrun',
-      target: 'relicrun',
-      description: 'Vague roadmap plan on relicRun (repro case)',
+      id: 'plan_vague_project',
+      target: 'project',
+      description: 'Vague roadmap plan on external project (repro case)',
       command: ['plan', '--json', 'help me plan next features'],
       acceptableStatuses: ['PLAN_READY', 'NEEDS_MORE_CONTEXT'],
       allowBlocked: true,
       readOnly: true,
     },
     {
-      id: 'do_vague_readonly_relicrun',
-      target: 'relicrun',
-      description: 'Vague read-only do routing on relicRun',
+      id: 'do_vague_readonly_project',
+      target: 'project',
+      description: 'Vague read-only do routing on external project',
       command: ['daily', '--json', 'why is testing hard here? do not edit files'],
       acceptableStatuses: ['ANSWER_READY', 'PLAN_READY', 'REPORT_READY', 'PROPOSAL_READY', 'PATCH_READY', 'NEEDS_MORE_CONTEXT', 'READ_ONLY_NO_MODIFICATION'],
       allowBlocked: true,
@@ -310,30 +308,30 @@ async function main(): Promise<void> {
   writeParityCorpusRepo(seededRoot, task);
   writeFileSync(join(seededRoot, 'README.md'), '# Discovery Fixture\nA tiny Node math repo for Lite discovery.\n', 'utf-8');
 
-  const relicRunPath = resolve(options.relicRunPath);
-  const relicRunExists = existsSync(relicRunPath);
+  const projectPath = options.projectPath ? resolve(options.projectPath) : null;
+  const projectExists = projectPath !== null && existsSync(projectPath);
   const cliEntry = resolveBabelCliEntry();
   const results: ScenarioResult[] = [];
 
   try {
     for (const scenario of buildScenarios()) {
-      if (scenario.target === 'relicrun' && !relicRunExists) {
+      if (scenario.target === 'project' && !projectExists) {
         results.push({
           id: scenario.id,
-          target: relicRunPath,
+          target: projectPath ?? '(not configured)',
           status: 'skip',
           exit_code: 0,
           reported_status: null,
           run_dir: null,
           latency_ms: 0,
-          notes: [`relicRun path missing: ${relicRunPath}`],
+          notes: [projectPath ? `Project path missing: ${projectPath}` : 'No external project configured; pass --project <path>.'],
           stdout_path: '',
           stderr_path: '',
         });
         continue;
       }
 
-      const projectRoot = scenario.target === 'relicrun' ? relicRunPath : seededRoot;
+      const projectRoot = scenario.target === 'project' && projectPath ? projectPath : seededRoot;
       const started = performance.now();
       const scenarioDir = join(evidenceDir, scenario.id);
       mkdirSync(scenarioDir, { recursive: true });
@@ -375,8 +373,8 @@ async function main(): Promise<void> {
     report_type: 'babel_live_lite_discovery',
     generated_at: new Date().toISOString(),
     provider: options.provider,
-    relic_run_path: relicRunPath,
-    relic_run_present: relicRunExists,
+    project_path: projectPath,
+    project_present: projectExists,
     evidence_dir: evidenceDir,
     totals: {
       pass: results.filter(entry => entry.status === 'pass').length,

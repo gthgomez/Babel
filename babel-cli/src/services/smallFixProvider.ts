@@ -113,14 +113,14 @@ function assertLiveProviderCredential(
 export function classifySmallFixProviderFailure(error: unknown, provider?: string): { failureCode: string; message: string; next: string[] } {
   const message = error instanceof Error ? error.message : String(error);
   const route = provider ?? 'selected provider';
-  if (/SETUP_REQUIRED|API_KEY.*(?:not set|missing)|credential/i.test(message)) return { failureCode: 'credential_missing', message: `${route} setup is incomplete. Inspect its credential reference with babel-agent provider status.`, next: ['babel-agent setup', 'babel-agent provider status'] };
-  if (/HTTP (401|403)|auth_fatal/i.test(message)) return { failureCode: 'provider_authentication_failed', message: `${route} authentication was rejected. Update the selected credential and restart Babel.`, next: ['babel-agent provider status'] };
+  if (/SETUP_REQUIRED|API_KEY.*(?:not set|missing)|credential/i.test(message)) return { failureCode: 'credential_missing', message: `${route} setup is incomplete. Inspect its credential reference with babel-harness provider status.`, next: ['babel-harness setup', 'babel-harness provider status'] };
+  if (/HTTP (401|403)|auth_fatal/i.test(message)) return { failureCode: 'provider_authentication_failed', message: `${route} authentication was rejected. Update the selected credential and restart Babel.`, next: ['babel-harness provider status'] };
   if (/HTTP 402|quota|insufficient.*credit/i.test(message)) return { failureCode: 'provider_quota_exhausted', message: `${route} quota or credit is exhausted.`, next: ['Review quota with the selected provider', 'Select another connection explicitly if needed'] };
   if (/HTTP 429|rate.?limit/i.test(message)) return { failureCode: 'provider_rate_limited', message: `${route} rate limit reached.`, next: ['Wait for the provider retry window', 'Retry the same connection'] };
-  if (/timeout|ETIMEDOUT/i.test(message)) return { failureCode: 'provider_timeout', message, next: ['babel-agent provider status', 'Retry the same connection'] };
-  if (/network|ECONNREFUSED|ENOTFOUND|fetch failed|socket hang up/i.test(message)) return { failureCode: 'provider_network_failed', message, next: ['Check connectivity to the selected endpoint', 'babel-agent provider status'] };
+  if (/timeout|ETIMEDOUT/i.test(message)) return { failureCode: 'provider_timeout', message, next: ['babel-harness provider status', 'Retry the same connection'] };
+  if (/network|ECONNREFUSED|ENOTFOUND|fetch failed|socket hang up/i.test(message)) return { failureCode: 'provider_network_failed', message, next: ['Check connectivity to the selected endpoint', 'babel-harness provider status'] };
   if (/zod|schema|invalid json|parse/i.test(message)) return { failureCode: 'provider_schema_invalid', message, next: ['Retry the same connection with the requested output format'] };
-  return { failureCode: 'provider_request_failed', message, next: ['babel-agent provider status', 'Inspect the run evidence'] };
+  return { failureCode: 'provider_request_failed', message, next: ['babel-harness provider status', 'Inspect the run evidence'] };
 }
 
 function failureCodeForError(error: unknown): string {
@@ -203,7 +203,7 @@ export async function runSmallFixModel(
   const selectedModel = options.model?.startsWith('connection/') ? options.model : explicitConnection ?? (liveOnly
     ? resolveOpenRouterDeepSeekBackendKey(options.model ?? '') ?? options.model
     : options.model);
-  if (liveOnly && !selectedModel) throw new Error('SETUP_REQUIRED: Select a provider connection and exact model with babel-agent setup.');
+  if (liveOnly && !selectedModel) throw new Error('SETUP_REQUIRED: Select a provider connection and exact model with babel-harness setup.');
   const selectedBackendKey = selectedModel
     ? resolveModelPolicyBackendKey(selectedModel, BABEL_ROOT)
     : undefined;

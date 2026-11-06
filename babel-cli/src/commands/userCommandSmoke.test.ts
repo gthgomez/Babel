@@ -32,7 +32,7 @@ test('top-level help is user-shaped before internals', () => {
   const result = runCli(['--help']);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /babel-agent setup/);
+  assert.match(result.stdout, /babel-harness setup/);
   assert.match(result.stdout, /plan[\s\S]*read-only plan/i);
   assert.match(result.stdout, /work --review thorough/i);
   assert.match(result.stdout, /No cloud provider is preselected/);
@@ -87,7 +87,7 @@ test('removed lite surface exits with a canonical replacement hint', () => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /babel lite was removed/i);
-  assert.match(result.stderr, /babel "<task>"/);
+  assert.match(result.stderr, /babel-harness "<task>"/);
 });
 
 test('removed full surface exits with deep replacement hint', () => {
@@ -95,7 +95,7 @@ test('removed full surface exits with deep replacement hint', () => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /babel full was removed/i);
-  assert.match(result.stderr, /babel deep/);
+  assert.match(result.stderr, /babel-harness deep/);
 });
 
 test('ship help exposes the guarded GitHub workflow', () => {

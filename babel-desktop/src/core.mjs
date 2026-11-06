@@ -8,6 +8,42 @@ export function hydrateArchivedMessage(message) {
     : [...(message.activity?.kind==='tools'?(message.assistantText?[{kind:'text',text:message.assistantText}]:[]):[{kind:'text',text:message.text}]),...tools.map(tool=>({kind:'tool',tool}))];
   return {...base,role:'assistant',status:message.activity?null:message.status??'unverified',tools,blocks};
 }
+/** Setup dialog Docker row. Windows conversation copy stays fixed. */
+export function setupDockerLabel({platform, conversationOnly, docker, dockerInstallation} = {}) {
+  if (platform === 'linux') {
+    if (docker === 'available' || dockerInstallation === 'running') return 'Running';
+    if (dockerInstallation === 'missing' || docker === 'unavailable') return 'Not installed. Install Docker Engine, start it, and choose Prepare recommended image again.';
+    if (dockerInstallation === 'stopped') return 'Docker is installed but not running. Start the Docker engine, then retry.';
+    return 'Not checked';
+  }
+  if (conversationOnly) return 'Not required for conversation';
+  if (docker === 'available') return 'Running';
+  return 'Start Docker Desktop for project tools';
+}
+
+/** A selected route is not proof of credentials; doctor may not inspect native storage. */
+export function runtimeProviderLabel({platform, providerConfigured, reported} = {}) {
+  if (!providerConfigured) return 'Not selected';
+  return reported === 'configured' ? 'Configured' : 'Selected';
+}
+export function runtimeDockerLabel({platform, docker, dockerInstallation} = {}) {
+  if (platform !== 'linux') return docker ?? 'unknown';
+  if (docker === 'available' || dockerInstallation === 'running') return 'Running';
+  if (dockerInstallation === 'missing' || docker === 'unavailable') return 'Not installed';
+  if (dockerInstallation === 'stopped') return 'Not running';
+  return 'Not checked';
+}
+export function runtimeReadinessLabel({platform, providerConfigured, engineReady} = {}) {
+  if (!providerConfigured) return 'Not ready';
+  return engineReady ? 'Ready' : 'Not ready';
+}
+
+/** Shown when Send is blocked. Empty on Windows so that path stays unchanged. */
+export function composerSendBlockMessage({platform, providerConfigured} = {}) {
+  if (platform === 'linux' && !providerConfigured) return 'Choose a model provider first.';
+  return '';
+}
+
 export function isConversationOnlyConnection(info) {
   return info?.projectRoot===null&&info?.projectAuthority?.scope==='conversation'&&info.projectAuthority.identity===null&&info.projectAuthority.trusted===false;
 }
@@ -154,7 +190,7 @@ export function toolsFromResult(result, existing) {
   return rows;
 }
 export function verifiedStatus(status, poisoned) {
-  if (poisoned && status === 'complete') return 'unverified';
+  if (poisoned && ['complete','plan_ready'].includes(status)) return 'unverified';
   return status;
 }
 /** Map authoritative Babel terminal outcomes to Desktop message status (unknown → unverified). */
@@ -221,9 +257,17 @@ export function normalizeEvent(event) {
     const outcome = result.terminal_outcome ?? result.outcome ?? '';
     // Mirrors cli/userFacingStatus.ts at blob b7cf206; unknown outcomes never pass.
     let status = statusFromTerminalOutcome(outcome);
-    if (result.user_status === 'blocked' || result.approval_required === true) status = 'blocked';
-    if (result.user_status === 'failed' || result.verification?.status === 'failed') status = 'failed';
+    if (outcome==='' && result.status==='EXECUTOR_HALTED') status='failed';
+    if (outcome==='' && result.command==='plan' && result.status==='PLAN_READY' && Array.isArray(result.changed_files) && result.changed_files.length===0) status='plan_ready';
+    if (status !== 'cancelled') {
+      if (result.user_status === 'blocked' || result.approval_required === true) status = 'blocked';
+      if (result.user_status === 'failed' || result.verification?.status === 'failed') status = 'failed';
+    }
     let text = [result.answer?.answer, result.answer, result.summary, result.response, result.output].find(v => typeof v === 'string') ?? '';
+    const errors=(Array.isArray(result.errors)?result.errors.filter(value=>typeof value==='string'&&value.trim()).join('\n'):'') ||
+      (typeof result.error==='string'?result.error:'') ||
+      (status==='failed'&&typeof result.terminal_status?.condition_summary==='string'?result.terminal_status.condition_summary:'');
+    if(errors && !['complete','no_change','plan_ready','cancelled'].includes(status))text=errors;
     const usage = result.usage && typeof result.usage === 'object' ? result.usage : null;
     return {kind:'terminal',status,text,raw:result,usage};
   }

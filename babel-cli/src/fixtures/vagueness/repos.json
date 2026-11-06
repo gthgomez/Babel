@@ -10,8 +10,8 @@
       "description": "Babel prompt OS lab and CLI harness"
     },
     {
-      "id": "relic_run",
-      "path": "example_game_suite\\relicRun",
+      "id": "example_browser_game",
+      "path": "example_game_suite\\exampleBrowserGame",
       "required": false,
       "description": "Optional Godot game project for cross-repo vague plan/report tasks"
     }

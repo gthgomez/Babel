@@ -206,7 +206,7 @@ for (const created of [false, true]) {
         targetParentIdentities: { [path]: captureEffectParentIdentity(path) },
         preImageHashes: { [path]: created ? WorkspaceTransactionManager.missingPathDigest() : hash('before') }, intendedContent: 'after' })
       recordEffectTerminal(root, original, { status: 'completed', postImageHashes: { [path]: hash('after') } })
-      const createdIdentity = fs.statSync(path)
+      const createdIdentity = fs.statSync(path, { bigint: true })
       let checks = 0
       let replaced = false
       fsPromises.lstat = (async (...args: Parameters<typeof fsPromises.lstat>) => {

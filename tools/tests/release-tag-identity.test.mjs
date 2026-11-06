@@ -43,5 +43,15 @@ test('portable evidence requires one BUILD record matching the frozen source', a
     writeFileSync(join(directory, 'cli.tgz'), 'fixture')
     writeFileSync(join(directory, 'BUILD.json'), JSON.stringify(metadata))
     assert.throws(() => verifyReleaseBuild({directory, identity}), /exactly one/)
+    const linuxDir = mkdtempSync(join(tmpdir(), 'babel-release-linux-'))
+    try {
+      const linuxMeta = {...metadata, platform: 'linux-x64'}
+      mkdirSync(join(linuxDir, 'bundle'))
+      writeFileSync(join(linuxDir, 'bundle/BUILD.json'), JSON.stringify(linuxMeta))
+      writeFileSync(join(linuxDir, 'Babel-Desktop-1.2.3-linux-x64.AppImage'), 'appimage')
+      writeFileSync(join(linuxDir, 'cli.tgz'), 'fixture')
+      assert.equal(verifyReleaseBuild({directory: linuxDir, identity, platform: 'linux-x64'}).build.platform, 'linux-x64')
+      assert.throws(() => verifyReleaseBuild({directory: linuxDir, identity}), /linux-x64/)
+    } finally { rmSync(linuxDir, {recursive: true, force: true}) }
   } finally { rmSync(directory, {recursive: true, force: true}) }
 })

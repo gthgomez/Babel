@@ -547,6 +547,7 @@ export function parseSessionEventLog(
       (event): event is Extract<SessionEvent, { kind: 'provider_retry_settled' }> =>
         event.kind === 'provider_retry_settled' && event.turn_id === scheduled.turn_id &&
         event.provider === scheduled.provider && event.model === scheduled.model &&
+        event.request_id === scheduled.request_id &&
         event.attempt === scheduled.attempt,
     );
     if (settlements.length !== 1) {

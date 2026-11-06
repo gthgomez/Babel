@@ -1,4 +1,4 @@
-import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus, modeUnavailableReason,isConversationOnlyConnection,hydrateArchivedMessage } from './core.mjs';
+import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus, modeUnavailableReason,isConversationOnlyConnection,hydrateArchivedMessage,setupDockerLabel,runtimeProviderLabel,runtimeDockerLabel,runtimeReadinessLabel,composerSendBlockMessage } from './core.mjs';
 import { icon } from './icons.mjs';
 const MODE_OPTIONS=[{id:'chat',label:'Chat',description:'Coding tasks'},{id:'plan',label:'Plan',description:'Read-only planning'},{id:'deep',label:'Deep',description:'Governed workflow'}];
 
@@ -116,7 +116,7 @@ function renderControls() {
   $('.more-models').textContent = native ? 'Manage provider and models' : 'More models…';
   $('.preview-model-dot').style.background = transport === 'live' ? 'var(--muted)' : '';
   $('#top-model').textContent = liveModelLabel;
-  $('#tool-controls').innerHTML='<p class="fine-print">Babel requests approval for file changes and commands. Actual tool activity appears in each conversation.</p>';
+  $('#tool-controls').innerHTML='<p class="fine-print">Babel follows your execution profile and asks when an action needs approval. Actual tool activity appears in each conversation.</p>';
   const percent = null;
   $('#top-context').textContent = percent == null ? '—' : `${percent}%`;
   $('#context-value').textContent = percent == null ? '—' : `${percent}%`;
@@ -167,10 +167,10 @@ function renderRuntime() {
     runtimeRow('CLI source', sourceText, source.dirty ? 'warn' : ''),
     runtimeRow('Engine origin', originLabels[engine.origin] ?? engine.origin ?? 'unknown'),
     runtimeRow('Execution profile', engine.executionProfile ?? 'unknown'),
-    runtimeRow('Provider', engine.readiness?.provider ?? 'unknown'),
-    runtimeRow('Docker', engine.readiness?.docker ?? 'unknown'),
+    runtimeRow('Provider', runtimeProviderLabel({platform:nativeInfo?.platform, providerConfigured:Boolean(configuredRoute), reported:engine.readiness?.provider})),
+    runtimeRow('Docker', runtimeDockerLabel({platform:nativeInfo?.platform, docker:engine.readiness?.docker, dockerInstallation:nativeInfo?.dockerInstallation})),
     runtimeRow('Sandbox image', engine.readiness?.sandboxImage ?? 'unknown'),
-    runtimeRow('Readiness', engine.readiness?.ready ? 'Ready' : 'Not ready'),
+    runtimeRow('Readiness', runtimeReadinessLabel({platform:nativeInfo?.platform, providerConfigured:Boolean(configuredRoute), engineReady:Boolean(engine.readiness?.ready)})),
     runtimeRow('Update channel', update.channel === 'preview' ? 'development build' : update.channel === 'stable' ? 'stable release' : (update.channel ?? 'not set')),
     runtimeRow('Update', runtimeUpdateText(update), update.state === 'available' ? 'warn' : ''),
     runtimeRow('Effective route', configuredRouteLabel || 'Not configured'),
@@ -196,7 +196,7 @@ function executionBlocked() {
 function renderStatus(status) {
   const msg = activeSession().messages.filter(m => m.role === 'assistant').at(-1);
   const s = status ?? (activeRun ? activeRun.terminalReceived ? 'finishing' : 'running' : msg?.status ?? 'ready');
-  const names={running:'Running',finishing:'Finishing',failed:'Failed',blocked:'Blocked',cancelled:'Stopped',complete:'Verified',no_change:'No change',unverified:'Unverified',ready:'Ready'};
+  const names={running:'Running',finishing:'Finishing',failed:'Failed',blocked:'Blocked',cancelled:'Stopped',complete:'Verified',plan_ready:'Plan ready',no_change:'No change',unverified:'Unverified',ready:'Ready'};
   $('#main-status').textContent = !activeRun&&executionBlocked() ? (!nativeInfo&&!connectionError&&native?'Connecting':'Setup required') : names[s] ?? 'Ready';
   $('#main-status-dot').className = `status-dot ${['failed','blocked'].includes(s) ? s : ''}`;
   $('.status-main').className = `status-main ${['failed','blocked'].includes(s) ? s : ''}`;
@@ -274,7 +274,7 @@ function messageMarkup(m, index) {
   const approval = m.pendingApproval ? `<div class="approval-card"><p>${e(m.pendingApproval)}</p>${m.approvalCommand?`<p>Operation</p><pre class="tool-detail">${e(m.approvalCommand)}</pre>${m.approvalCwd?`<p>Working directory: ${e(m.approvalCwd)}</p>`:''}${m.approvalDetails?`<details><summary>Operation payload</summary><pre class="tool-detail">${e(m.approvalDetails)}</pre></details>`:''}`:'<p class="fine-print">Operation details unavailable. Deny this request and update the runtime before retrying.</p>'}${!canApprove?'<p class="fine-print">Approval identity is missing, expired or superseded. Update an older runtime before retrying this operation.</p>':''}<div class="dialog-actions"><button class="button primary" data-action="approve-run" ${canApprove&&m.approvalCommand?'':'disabled'}>Allow</button><button class="button" data-action="deny-run" ${canApprove?'':'disabled'}>Deny</button></div></div>` : '';
   const review = m.review?.reasons?.length ? `<section class="approval-card"><strong>${e(m.review.title || 'REVIEW')}</strong><ul>${m.review.reasons.map(reason=>`<li>${e(reason)}</li>`).join('')}</ul></section>` : '';
   const evidence = m.result && ['failed','blocked','unverified'].includes(m.status) ? `<details class="raw-result"><summary>CLI result / evidence</summary><pre class="tool-detail">${e(JSON.stringify(m.result,null,2))}</pre></details>` : '';
-  return `<article class="message assistant-message"${identity}><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${expansion}${archiveInfo}${m.toolsTruncated?'<p class="fine-print">Tool preview limited to 100 entries. Complete retained details are available in message sections.</p>':''}${m.terminalConflict?'<p class="fine-print">Terminal records disagree. Refresh or inspect the session evidence.</p>':''}${review}${approval}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${''}${e(({complete:'Response complete',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions"><button data-action="copy-message" data-index="${index}" ${!m.text || m.status === 'running' ? 'disabled' : ''}>${icon('copy')} Copy</button></div></article>`;
+  return `<article class="message assistant-message"${identity}><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${expansion}${archiveInfo}${m.toolsTruncated?'<p class="fine-print">Tool preview limited to 100 entries. Complete retained details are available in message sections.</p>':''}${m.terminalConflict?'<p class="fine-print">Terminal records disagree. Refresh or inspect the session evidence.</p>':''}${review}${approval}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${''}${e(({complete:'Response complete',plan_ready:'Plan ready · not applied',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions"><button data-action="copy-message" data-index="${index}" ${!m.text || m.status === 'running' ? 'disabled' : ''}>${icon('copy')} Copy</button></div></article>`;
 }
 let conversationFrame = null;
 function scheduleConversationRender() {
@@ -360,7 +360,10 @@ $('#dialog').addEventListener('click',ev=>{if(ev.target === $('#dialog')) { cons
 
 function connectionDialog() {
   const d=nativeInfo?.diagnostics;
-  openDialog('BABEL SETUP',`<p>Choose a provider and model to chat. Select and trust a project when you need files or commands.</p>
+  const intro=nativeInfo?.platform==='linux'&&!configuredRoute
+    ? 'Choose a model provider first. Your message stays in the composer. Select and trust a project when you need files or commands.'
+    : 'Choose a provider and model to chat. Select and trust a project when you need files or commands.';
+  openDialog('BABEL SETUP',`<p>${intro}</p>
     ${runtimeRow('Harness',nativeInfo?.officialCliReady?'Available':'Connecting or unavailable')}
     ${runtimeRow('Project',nativeInfo?.projectName??'Not selected')}
     ${runtimeRow('Project path',nativeInfo?.projectRoot??'No project')}
@@ -368,11 +371,11 @@ function connectionDialog() {
     ${runtimeRow('Project access',isConversationOnlyConnection(nativeInfo)?'Conversation only':nativeInfo?.projectAuthority?.trusted?'Trusted':nativeInfo?.projectAuthority?.reason??'Unknown or not trusted')}
     ${nativeInfo?.projectRoot?`<div class="dialog-actions"><button class="button" data-action="${nativeInfo.projectAuthority?.trusted?'revoke-trust':'trust-project'}">${nativeInfo.projectAuthority?.trusted?'Revoke project trust':'Trust selected project'}</button></div>`:''}
     ${runtimeRow('Provider',configuredRouteLabel||'Not selected')}
-    ${runtimeRow('Docker',isConversationOnlyConnection(nativeInfo)?'Not required for conversation':d?.docker==='available'?'Running':'Start Docker Desktop for project tools')}
+    ${runtimeRow('Docker',setupDockerLabel({platform:nativeInfo?.platform,conversationOnly:isConversationOnlyConnection(nativeInfo),docker:d?.docker,dockerInstallation:nativeInfo?.dockerInstallation}))}
     ${runtimeRow('Sandbox',isConversationOnlyConnection(nativeInfo)?'Not required for conversation':d?.sandboxImage==='available'?'Verified':'Prepare an image for project tools')}
     <p class="fine-print">The recommended Linux image includes Git, Node 24 and npm. Preparing it downloads Docker image layers and may take several minutes. Other projects may need an image with their own test tools.</p>
     <div class="dialog-actions"><button class="button" data-action="prepare-sandbox" ${sandboxBusy?'disabled':''}>Prepare recommended image</button></div>
-    <details><summary>Use an existing local image</summary><label class="credential-label" for="sandbox-image">Existing sandbox image</label><input class="credential-control" id="sandbox-image" spellcheck="false" value="${e(nativeInfo?.sandbox?.reference??'')}" ${sandboxBusy?'disabled':''}><div class="dialog-actions"><button class="button" data-action="save-sandbox" ${sandboxBusy?'disabled':''}>Validate and use image</button></div><p class="fine-print">Validation runs an isolated shell and Git check without mounting your project. The verified image is saved for Desktop and Babel Harness.cmd.</p></details>
+    <details><summary>Use an existing local image</summary><label class="credential-label" for="sandbox-image">Existing sandbox image</label><input class="credential-control" id="sandbox-image" spellcheck="false" value="${e(nativeInfo?.sandbox?.reference??'')}" ${sandboxBusy?'disabled':''}><div class="dialog-actions"><button class="button" data-action="save-sandbox" ${sandboxBusy?'disabled':''}>Validate and use image</button></div><p class="fine-print">Validation runs an isolated shell and Git check without mounting your project. The verified image is saved for Desktop and ${nativeInfo?.platform==='linux'?'babel-harness':'Babel Harness.cmd'}.</p></details>
     <p id="sandbox-status" class="fine-print" role="status">${e(sandboxStatus)}</p>
     ${d?.error||connectionError?`<p class="provider-error">${e(d?.error||connectionError)}</p>`:''}
     <div class="dialog-actions"><button class="button" data-action="open-project">Open project</button><button class="button" data-action="configure-provider">Choose provider and models</button><button class="button" data-action="refresh-diagnostics">Recheck setup</button><button class="button primary" data-action="use-live">Done</button></div>
@@ -385,9 +388,10 @@ async function configureSandboxFromDialog(prepareRecommended){
   sandboxBusy=true;sandboxStatus=prepareRecommended?'Downloading and verifying the recommended image…':'Verifying the local image…';
   renderControls();connectionDialog();
   try{
-    nativeInfo=await native.configureSandbox(options);
-    connectionError='';sandboxStatus='Sandbox verified and saved. Desktop and the installed CLI use the same image.';
-  }catch(error){sandboxStatus=String(error?.message??'Sandbox setup failed. Start Docker Desktop and try again.');}
+    const result=await native.configureSandbox(options);
+    if(result?.sandboxError){sandboxStatus=result.sandboxError;}
+    else{nativeInfo=result;connectionError='';sandboxStatus='Sandbox verified and saved. Desktop and the installed CLI use the same image.';}
+  }catch(error){sandboxStatus=String(error?.message??(nativeInfo?.platform==='linux'?'Sandbox setup failed. Install Docker Engine, start it, and try again.':'Sandbox setup failed. Start Docker Desktop and try again.'));}
   finally{sandboxBusy=false;renderControls();connectionDialog();}
 }
 async function providerCredentialsDialog() {
@@ -517,7 +521,7 @@ function settingsDialog() {
   openDialog('SETTINGS',`<div class="settings-row"><span>Provider and models</span><button class="button" data-action="configure-provider">Manage</button></div>
     <div class="settings-row"><span>Runtime setup</span><button class="button" data-action="connection">Open setup</button></div>
     <div class="settings-row"><label><input id="reduce-motion" type="checkbox" ${document.body.classList.contains('reduce-motion')?'checked':''}> Reduce motion</label></div>
-    <h3>KEYBOARD</h3><div class="settings-row"><span>Send message</span><code>Enter · Shift + Enter for newline</code></div><div class="settings-row"><span>Search sessions and files</span><code>Ctrl + K</code></div><div class="settings-row"><span>New session</span><code>Ctrl + Alt + N</code></div><div class="settings-row"><span>Switch Chat / Plan / Deep</span><code>Alt + 1 / 2 / 3</code></div>
+    <h3>KEYBOARD</h3><div class="settings-row"><span>Send message</span><code>Enter · Shift + Enter for newline</code></div><div class="settings-row"><span>Search sessions and files</span><code>Ctrl + K</code></div><div class="settings-row"><span>New session</span><code>Ctrl + Alt + N</code></div><div class="settings-row"><span>Switch Chat / Plan / Deep</span><code>Alt + 1 / 2 / 3</code></div>${nativeInfo?.platform==='linux'?'<p class="fine-print">Some Linux desktops reserve Alt+1, Alt+2, and Alt+3. Ctrl+K and the mode buttons still work.</p>':''}
     ${nativeInfo?.remoteBridge?`<details><summary>Remote access</summary><p>Loopback access uses a separate CLI session.</p><div class="dialog-actions"><button class="button" data-action="${nativeInfo.remoteBridge.running?'stop':'start'}-remote-bridge">${nativeInfo.remoteBridge.running?'Stop':'Start'} remote bridge</button></div></details>`:''}`);
   $('#reduce-motion').addEventListener('change',ev=>{document.body.classList.toggle('reduce-motion',ev.target.checked);try{localStorage.setItem('babel-motion',ev.target.checked?'reduce':'normal');}catch{}});
 }
@@ -619,17 +623,33 @@ async function emergencyHostStopRun() {
   renderControls();
 }
 
-function stopRun() {
-  if (!activeRun) return;
+async function stopRun() {
+  if (!activeRun || activeRun.stopping) return;
   if (transport === 'live') {
-    native?.cancel?.();
-    activeRun.stopping = true;
-    activeRun.message.stopping = true;
-    activeRun.message.pendingApproval = '';
-    activeRun.message.approval = null;
+    const run = activeRun;
+    run.stopping = true;
+    run.message.stopping = true;
+    run.message.pendingApproval = '';
+    run.message.approval = null;
     renderConversation();
     renderControls();
     announce('Babel run stopping.');
+    try {
+      if (!native?.cancel) throw new Error('Cancellation unavailable');
+      await native.cancel();
+    } catch {
+      // A lost acknowledgement cannot settle the child or affect a newer run.
+      if (activeRun !== run) return;
+      run.stopping = false;
+      run.message.stopping = false;
+      const warning = 'Stop request failed. Babel may still be running. Retry Stop or inspect the active runtime.';
+      run.message.blocks ??= [];
+      run.message.blocks.push({kind:'note',label:'Stop request failed',text:warning});
+      toast(warning);
+      announce(warning);
+      renderConversation();
+      renderControls();
+    }
     return;
   }
   clearInterval(activeRun.timer);
@@ -640,7 +660,7 @@ function appendNote(message, extra) {
   const line = String(extra ?? '').slice(0, 4000);
   if (!line) return;
   message.blocks ??= [];
-  const note = [...message.blocks].reverse().find(block => block.kind === 'note');
+  const note = [...message.blocks].reverse().find(block => block.kind === 'note' && !block.label);
   if (note) note.text = `${note.text}\n${line}`.slice(0, 8000);
   else message.blocks.push({kind:'note', text:line});
 }
@@ -672,7 +692,7 @@ async function sendMessage() {
   if(unavailableMode){toast(unavailableMode);return;}
   const input=$('#composer-input');const text=input.value.trim();
   if(!text||activeRun)return;
-  if(executionBlocked()){connectionDialog();return;}
+  if(executionBlocked()){const blocked=composerSendBlockMessage({platform:nativeInfo?.platform,providerConfigured:Boolean(configuredRoute)});if(blocked)toast(blocked);connectionDialog();return;}
   if(text.length>24000){toast('Please keep a single message under 24,000 characters.');return;}
   const session=activeSession();
   if(session.loadingLatestForSend)return;
@@ -685,7 +705,7 @@ async function sendMessage() {
     if(activeSession()!==session||activeRun)return;
     renderConversation();
     if(input.value.trim()!==text||selection.mode!==state.mode||selection.model!==state.model||selection.provider!==configuredRoute?.provider){toast('The draft or route changed while history loaded. Send again when ready.');return;}
-    if(executionBlocked()||modeBlockReason(state.mode,configuredRoute?.provider)){renderControls();connectionDialog();return;}
+    if(executionBlocked()||modeBlockReason(state.mode,configuredRoute?.provider)){const blocked=composerSendBlockMessage({platform:nativeInfo?.platform,providerConfigured:Boolean(configuredRoute)});if(blocked)toast(blocked);renderControls();connectionDialog();return;}
   }
   session.messages.push({role:'user',text});
   if(session.title==='New session'||session.title==='New read-only run') session.title=text.length>27?text.slice(0,27)+'...':text;
@@ -705,7 +725,7 @@ async function sendMessage() {
     try {
       const result=await native.run({runId,task:text,mode:state.mode,...((state.model||configuredRoute?.model)?{model:state.model||configuredRoute.model}:{}),...(state.mode==='chat'&&session.babelSessionId?{sessionId:session.babelSessionId}:{})});
       if(result.started&&activeRun?.runId===runId)activeRun.admitted=true;
-      if(!result.started && activeRun?.runId===runId){message.status='cancelled';message.text='Run was not started. No model call was made.';if(!input.value)input.value=text;resizeComposer();activeRun=null;renderConversation();renderControls();}
+      if(!result.started && activeRun?.runId===runId){message.status='cancelled';message.text=result.reason==='run_already_admitted'?'This submission was already admitted. Review its session before sending a new task.':'Run was not started. No model call was made.';if(!input.value)input.value=text;resizeComposer();activeRun=null;renderConversation();renderControls();}
     } catch(err){if(activeRun?.runId===runId){message.status='failed';message.text=err.message;if(!input.value)input.value=text;resizeComposer();activeRun=null;renderConversation();renderControls();}}
     finally{delete session.pendingDraft;persist();renderControls();}
     return;
@@ -717,11 +737,11 @@ function handleNativeEvent(packet) {
   const run=activeRun;const message=run.message;
   if(packet.kind==='exit') {
     const poisoned = Boolean(run.transportError || packet.displayLimited);
-    if(packet.code!==0){
+    if(packet.code!==0 && !(run.terminalReceived && message.status==='cancelled' && !poisoned)){
       if(message.status==='running' && !message.text) appendLiveText(message,'\n\nThe CLI exited before Babel reported a result.');
       message.status='failed';
       settleTools(message,'failed');
-    } else if(poisoned && (message.status==='running' || message.status==='complete')){
+    } else if(poisoned && ['running','complete','plan_ready'].includes(message.status)){
       message.status='unverified';
       settleTools(message,'unverified');
       appendLiveText(message,'\n\nThe event stream was incomplete. Inspect Babel’s run evidence before trusting completion.');
@@ -793,7 +813,10 @@ function handleNativeEvent(packet) {
       message.status=status;
       // Terminal task evidence is not evidence that each outstanding tool succeeded.
       settleTools(message, status==='cancelled'?'cancelled':'unverified');
-      if(!message.text&&ev.text)appendLiveText(message,ev.text.slice(0,250000));
+      if(ev.text && !message.text.includes(ev.text)){
+        const missingText=ev.text.startsWith(message.text)?ev.text.slice(message.text.length):`${message.text?'\n\n':''}${ev.text}`;
+        appendLiveText(message,missingText.slice(0,250000));
+      }
       if(!message.text)appendLiveText(message,'Babel returned a structured result.');
       message.result=ev.raw;
       message.review=reviewFromResult(ev.raw);

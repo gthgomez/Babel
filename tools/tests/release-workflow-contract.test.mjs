@@ -31,24 +31,44 @@ test('trusted publishing npm minimum rejects incompatible and unverifiable versi
   for (const version of ['11.5.1', '11.9.0\n', '12.0.0']) assert.doesNotThrow(() => assertTrustedPublishingNpm(version))
 })
 
-for (const name of ['release', 'publish-npm']) test(`${name} resolves trusted tag identity before executing project lifecycle code`, () => {
-  const workflow = load(readFileSync(new URL(`../../.github/workflows/${name}.yml`, import.meta.url), 'utf8'))
-  const job = Object.values(workflow.jobs)[0]
+function assertFrozenTagBeforeLifecycle(job, lifecycleName) {
   const checkouts = job.steps.filter(step => step.uses?.startsWith('actions/checkout@'))
   assert.equal(checkouts.length, 2)
   assert.equal(checkouts[0].with.ref, '${{ github.workflow_sha }}')
   assert.equal(checkouts[1].with.ref, '${{ steps.tag.outputs.source_sha }}')
   assert.ok(checkouts.every(step => step.with['persist-credentials'] === false))
   const resolve = job.steps.findIndex(step => step.id === 'tag')
-  const lifecycle = name === 'publish-npm'
-    ? job.steps.findIndex(step => step.id === 'pack')
-    : job.steps.findIndex(step => step.run?.includes('npm --prefix'))
+  const lifecycle = job.steps.findIndex(step => step.id === 'pack' || step.run?.includes(lifecycleName))
   const verify = job.steps.findIndex(step => step.name?.startsWith('Verify frozen source'))
   assert.ok(resolve >= 0 && resolve < verify && verify < lifecycle)
   const recheck = job.steps.findIndex(step => step.name?.startsWith('Revalidate tag object'))
-  const promote = job.steps.findIndex(step => step.name?.startsWith(name === 'release' ? 'Create draft' : 'Publish the validated'))
-  assert.ok(recheck > lifecycle && recheck < promote)
-  assert.match(job.steps[recheck].run, /RUNNER_TEMP\/resolve-release-tag\.mjs/)
+  assert.ok(recheck > lifecycle)
+  assert.match(job.steps[recheck].run, /resolve-release-tag\.mjs/)
+}
+
+for (const name of ['release', 'publish-npm']) test(`${name} resolves trusted tag identity before executing project lifecycle code`, () => {
+  const workflow = load(readFileSync(new URL(`../../.github/workflows/${name}.yml`, import.meta.url), 'utf8'))
+  if (name === 'publish-npm') {
+    const job = Object.values(workflow.jobs)[0]
+    assertFrozenTagBeforeLifecycle(job, 'npm --prefix')
+    const recheck = job.steps.findIndex(step => step.name?.startsWith('Revalidate tag object'))
+    const promote = job.steps.findIndex(step => step.name?.startsWith('Publish the validated'))
+    assert.ok(recheck < promote)
+    assert.match(job.steps[recheck].run, /RUNNER_TEMP\/resolve-release-tag\.mjs/)
+    return
+  }
+  for (const jobName of ['build-portable', 'build-linux']) {
+    assertFrozenTagBeforeLifecycle(workflow.jobs[jobName], 'npm --prefix')
+  }
+  const draft = workflow.jobs['draft-release']
+  const checkout = draft.steps.find(step => step.uses?.startsWith('actions/checkout@'))
+  assert.equal(checkout.with.ref, '${{ github.workflow_sha }}')
+  assert.equal(checkout.with['persist-credentials'], false)
+  const recheck = draft.steps.findIndex(step => step.name?.startsWith('Revalidate tag object'))
+  const promote = draft.steps.findIndex(step => step.name?.startsWith('Create draft'))
+  assert.ok(recheck >= 0 && recheck < promote)
+  assert.match(draft.steps[recheck].run, /resolve-release-tag\.mjs/)
+  assert.equal(draft.steps.filter(step => step.uses?.startsWith('actions/checkout@')).length, 1)
 })
 test('dry run and publication share validation, exact bytes and a registry integrity comparison', () => {
   const workflow = load(readFileSync(new URL('../../.github/workflows/publish-npm.yml', import.meta.url), 'utf8'))

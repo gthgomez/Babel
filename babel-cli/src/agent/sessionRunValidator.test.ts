@@ -137,7 +137,7 @@ describe('session run validator', () => {
 
   test('validate-run latest resolves through the inspect latest pointer', () => {
     const runsRoot = mkdtempSync(join(tmpdir(), 'babel-validate-latest-'))
-    const runDir = join(runsRoot, '20260815_120000_simlife')
+    const runDir = join(runsRoot, '20260815_120000_example_simulation')
     const previous = process.env['BABEL_RUNS_DIR']
     process.env['BABEL_RUNS_DIR'] = runsRoot
     try {
@@ -161,7 +161,7 @@ describe('session run validator', () => {
 
   test('validate-run latest without session events reports the resolved run dir, not a session named latest', () => {
     const runsRoot = mkdtempSync(join(tmpdir(), 'babel-validate-latest-missing-'))
-    const runDir = join(runsRoot, '20260815_120000_simlife')
+    const runDir = join(runsRoot, '20260815_120000_example_simulation')
     const previous = process.env['BABEL_RUNS_DIR']
     process.env['BABEL_RUNS_DIR'] = runsRoot
     try {

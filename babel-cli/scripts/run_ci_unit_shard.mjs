@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Exhaustive, disjoint selection from the canonical package unit command.
 import { createHash } from 'node:crypto';
-import { existsSync, globSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, globSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { runLoggedTapChild } from './run_logged_tap_child.mjs';
 
 const hash = files => createHash('sha256').update(files.join('\n')).digest('hex');
 
@@ -67,7 +67,7 @@ export function prepareUnitShard(packageRoot, index, count, { platform = process
   return { index, count, patterns, inventory, selected, args, inventoryHash: hash(inventory), selectionHash: hash(selected), scheduling: { platform, measuredFiles: Object.keys(durations).length, estimatedMs: plan[index].estimatedMs } };
 }
 
-function main() {
+async function main() {
   const { values } = parseArgs({ options: {
     'shard-index': { type: 'string' }, 'shard-count': { type: 'string' }, list: { type: 'boolean', default: false },
   } });
@@ -79,14 +79,27 @@ function main() {
   writeFileSync(join(artifacts, 'selection.json'), JSON.stringify({ ...selection, schemaVersion: 1, suite: 'unit', nodeVersion: process.version, platform: process.platform, arch: process.arch, packageScriptSha256: createHash('sha256').update(readFileSync(join(packageRoot, 'package.json'))).digest('hex'), files: selection.selected.map(path => ({ path, sha256: createHash('sha256').update(readFileSync(join(packageRoot, path))).digest('hex') })) }, null, 2) + '\n');
   console.log(`[ci-unit] shard ${selection.index + 1}/${selection.count}: ${selection.selected.length}/${selection.inventory.length} files; inventory ${selection.inventoryHash}`);
   if (values.list) return;
-  const result = spawnSync(process.execPath, [join(packageRoot, 'node_modules/tsx/dist/cli.mjs'), ...selection.args], {
-    cwd: packageRoot, env: { ...process.env, BABEL_TAP_EXECUTION_PATH: join(artifacts, 'execution.json') }, stdio: 'inherit', windowsHide: true,
-  });
+  // Keep growing logs outside the project while tests capture its source.
+  // CI's outer Tee-Object has its own full.tap; never write to that live file.
+  const captureDirectory = join(packageRoot, '..', 'artifacts', 'ci-unit');
+  mkdirSync(captureDirectory, { recursive: true });
+  const tapPath = join(captureDirectory, 'producer.tap');
+  for (const name of ['full.tap', 'full.tap.stderr.log', 'execution.json', 'results.json']) rmSync(join(artifacts, name), { force: true });
+  let result;
+  try {
+    result = await runLoggedTapChild(process.execPath, [join(packageRoot, 'node_modules/tsx/dist/cli.mjs'), ...selection.args], {
+      cwd: packageRoot, env: { ...process.env, BABEL_TAP_EXECUTION_PATH: join(artifacts, 'execution.json') }, tapPath, label: 'ci-unit',
+    });
+  } finally {
+    for (const suffix of ['', '.stderr.log']) {
+      if (existsSync(tapPath + suffix)) copyFileSync(tapPath + suffix, join(artifacts, 'full.tap' + suffix));
+    }
+  }
   if (result.error) throw result.error;
   if (result.signal || result.status === null) throw new Error(`Unit shard terminated without a successful exit: ${result.signal ?? 'unknown'}`);
   process.exitCode = result.status;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { main(); } catch (error) { console.error(error.message); process.exitCode = 1; }
+  try { await main(); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

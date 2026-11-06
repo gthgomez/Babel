@@ -1,21 +1,19 @@
 import type { SwePlan, ToolCallLog } from '../schemas/agentContracts.js';
-import { normalizePathForComparison } from '../stages/taskShape.js';
+import { normalize } from 'node:path';
 
 function normalizeEvidenceStepTarget(tool: string, target: unknown): string {
-  const raw = String(target ?? '').trim();
+  const raw = String(target ?? '');
   if (['file_read', 'file_write', 'directory_list'].includes(tool)) {
-    return normalizePathForComparison(raw).toLowerCase();
+    return normalize(raw);
   }
-  return raw.replace(/\s+/g, ' ').toLowerCase();
+  return raw;
 }
 
-export function isEvidenceRequestPlanSatisfied(
+/** Match controller-recorded verified results to every approved action. */
+export function arePlannedActionsSatisfied(
   approvedPlan: SwePlan,
   toolCallLog: readonly ToolCallLog[],
 ): boolean {
-  if (approvedPlan.plan_type !== 'EVIDENCE_REQUEST') {
-    return false;
-  }
   if (approvedPlan.minimal_action_set.length === 0) {
     return false;
   }
@@ -29,4 +27,11 @@ export function isEvidenceRequestPlanSatisfied(
         normalizeEvidenceStepTarget(entry.tool, entry.target) === expectedTarget,
     );
   });
+}
+
+export function isEvidenceRequestPlanSatisfied(
+  approvedPlan: SwePlan,
+  toolCallLog: readonly ToolCallLog[],
+): boolean {
+  return approvedPlan.plan_type === 'EVIDENCE_REQUEST' && arePlannedActionsSatisfied(approvedPlan, toolCallLog);
 }

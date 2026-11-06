@@ -7,23 +7,23 @@ import test from 'node:test';
 import { applyAskGroundingReview, buildAskPrompt, runAskAnswerPath } from './askAnswer.js';
 import type { AskAnswer } from '../schemas/agentContracts.js';
 
-function makeRelicRunFixture(): { root: string; workspace: string; target: string } {
+function makeExampleBrowserGameFixture(): { root: string; workspace: string; target: string } {
   const root = mkdtempSync(join(tmpdir(), 'babel-ask-target-'));
   const workspace = join(root, 'example_game_suite');
-  const target = join(workspace, 'relicRun');
+  const target = join(workspace, 'exampleBrowserGame');
   mkdirSync(target, { recursive: true });
   writeFileSync(
     join(target, 'README.md'),
-    '# relicRun\n\nA roguelike extraction prototype built for Godot.\n',
+    '# exampleBrowserGame\n\nA roguelike extraction prototype built for Godot.\n',
     'utf-8',
   );
   writeFileSync(
     join(target, 'PROJECT_CONTEXT.md'),
-    'RelicRun is the active child game project.\n',
+    'ExampleBrowserGame is the active child game project.\n',
     'utf-8',
   );
   writeFileSync(join(target, 'AGENTS.md'), 'Prefer target-local evidence.\n', 'utf-8');
-  writeFileSync(join(target, 'package.json'), '{"name":"relic-run"}\n', 'utf-8');
+  writeFileSync(join(target, 'package.json'), '{"name":"example-browser-game"}\n', 'utf-8');
   return { root, workspace, target };
 }
 
@@ -49,10 +49,10 @@ function streamingChatResponse(content: string): Response {
 }
 
 test('ask prompt includes target-local evidence and shallow listing', async () => {
-  const fixture = makeRelicRunFixture();
+  const fixture = makeExampleBrowserGameFixture();
   try {
     const prompt = await buildAskPrompt({
-      task: 'what is relicRun?',
+      task: 'what is exampleBrowserGame?',
       project: 'example_game_suite',
       projectRoot: fixture.target,
       workspaceRoot: fixture.workspace,
@@ -72,29 +72,29 @@ test('ask prompt includes target-local evidence and shallow listing', async () =
 });
 
 test('ask grounding review repairs unsupported absence claims using local target evidence', () => {
-  const fixture = makeRelicRunFixture();
+  const fixture = makeExampleBrowserGameFixture();
   try {
     const answer: AskAnswer = {
       schema_version: 1,
       status: 'ANSWER_READY',
-      summary: 'relicRun was not recognized',
-      answer: 'relicRun does not appear to be mentioned in the available project context.',
+      summary: 'exampleBrowserGame was not recognized',
+      answer: 'exampleBrowserGame does not appear to be mentioned in the available project context.',
       facts: [],
-      assumptions: ['relicRun is absent from the current workspace.'],
+      assumptions: ['exampleBrowserGame is absent from the current workspace.'],
       evidence: [],
       next: [],
     };
 
     const result = applyAskGroundingReview(answer, {
-      task: 'what is relicRun?',
+      task: 'what is exampleBrowserGame?',
       projectRoot: fixture.target,
       workspaceRoot: fixture.workspace,
     });
 
     assert.equal(result.review.status, 'repaired');
     assert.equal(result.review.contradiction, 'unsupported_absence_claim');
-    assert.match(result.answer.answer, /relicRun is a roguelike extraction prototype/);
-    assert.match(result.answer.facts.join('\n'), /relicRun exists at/);
+    assert.match(result.answer.answer, /exampleBrowserGame is a roguelike extraction prototype/);
+    assert.match(result.answer.facts.join('\n'), /exampleBrowserGame exists at/);
     assert.doesNotMatch(result.answer.assumptions.join('\n'), /absent/);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
@@ -102,7 +102,7 @@ test('ask grounding review repairs unsupported absence claims using local target
 });
 
 test('streamed ask retries non-streaming after schema failure without preserving partial chunks', async () => {
-  const fixture = makeRelicRunFixture();
+  const fixture = makeExampleBrowserGameFixture();
   const originalFetch = globalThis.fetch;
   const originalDeepSeekKey = process.env['DEEPSEEK_API_KEY'];
   const originalOpenRouterKey = process.env['OPENROUTER_API_KEY'];
@@ -135,12 +135,12 @@ test('streamed ask retries non-streaming after schema failure without preserving
                 content: JSON.stringify({
                   schema_version: 1,
                   status: 'ANSWER_READY',
-                  summary: 'relicRun is a game project.',
-                  answer: 'relicRun is a roguelike extraction prototype built for Godot.',
-                  facts: ['README.md identifies relicRun.'],
+                  summary: 'exampleBrowserGame is a game project.',
+                  answer: 'exampleBrowserGame is a roguelike extraction prototype built for Godot.',
+                  facts: ['README.md identifies exampleBrowserGame.'],
                   assumptions: [],
                   evidence: ['README.md'],
-                  next: ['Run bl plan "inspect relicRun architecture" for a deeper plan.'],
+                  next: ['Run bl plan "inspect exampleBrowserGame architecture" for a deeper plan.'],
                 }),
               },
             },
@@ -156,7 +156,7 @@ test('streamed ask retries non-streaming after schema failure without preserving
     }) as typeof fetch;
 
     const result = await runAskAnswerPath({
-      task: 'what is relicRun?',
+      task: 'what is exampleBrowserGame?',
       projectRoot: fixture.target,
       workspaceRoot: fixture.workspace,
       model: 'deepseek-v4-flash',

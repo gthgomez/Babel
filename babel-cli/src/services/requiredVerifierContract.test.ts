@@ -21,6 +21,45 @@ function command(command: string, exitCode: number, step = 1): ToolCallLog {
   };
 }
 
+for (const tool of ['file_write', 'shell_exec'] as const) for (const postWrite of [false, true]) {
+  test(`Chat verification ${postWrite ? 'accepts' : 'rejects'} a required verifier ${postWrite ? 'after' : 'before'} the final ${tool}`, () => {
+    const write: ToolCallLog = { step: 2, tool, target: tool === 'file_write' ? 'math.mjs' : 'node update.mjs', exit_code: 0, stdout: 'written', stderr: '', verified: true }
+    const log = postWrite ? [write, command('node --test math.test.mjs', 0, 3)] : [command('node --test math.test.mjs', 0, 1), write]
+    const artifacts = buildVerifierContractArtifacts({
+      task: 'Update math.mjs. Run node --test math.test.mjs before completing.',
+      toolCallLog: log, runDir: 'unused', requirePostMutationVerification: true,
+    })
+    assert.equal(artifacts.summary.requiredVerifierCount, 1)
+    assert.equal(artifacts.summary.verifierCompletionSatisfied, postWrite)
+    assert.equal(artifacts.summary.completionBlockingStatus, postWrite ? null : 'REQUIRED_VERIFIER_MISSING')
+  })
+}
+
+test('legacy verifier reconciliation keeps its default ordering contract', () => {
+  const artifacts = buildVerifierContractArtifacts({
+    task: 'Run npm test before completing.', runDir: 'unused',
+    toolCallLog: [command('npm test', 0), { step: 2, tool: 'file_write', target: 'math.mjs', exit_code: 0, stdout: 'written', stderr: '', verified: true }],
+  })
+  assert.equal(artifacts.summary.verifierCompletionSatisfied, true)
+})
+
+test('Chat records a failing post-mutation required verifier as failure', () => {
+  const artifacts = buildVerifierContractArtifacts({
+    task: 'Run npm test before completing.', runDir: 'unused', requirePostMutationVerification: true,
+    toolCallLog: [{ step: 1, tool: 'file_write', target: 'math.mjs', exit_code: 0, stdout: 'written', stderr: '', verified: true }, command('npm test', 1, 2)],
+  })
+  assert.equal(artifacts.summary.verifierCompletionSatisfied, false)
+  assert.equal(artifacts.summary.completionBlockingStatus, 'REQUIRED_VERIFIER_FAILED')
+})
+
+test('a final read-only git observation does not invalidate current Chat verification', () => {
+  const artifacts = buildVerifierContractArtifacts({
+    task: 'Run npm test before completing.', runDir: 'unused', requirePostMutationVerification: true,
+    toolCallLog: [command('npm test', 0), { step: 2, tool: 'shell_exec', target: 'git diff --stat', exit_code: 0, stdout: '', stderr: '', verified: true }],
+  })
+  assert.equal(artifacts.summary.verifierCompletionSatisfied, true)
+})
+
 test('verifier plan creation extracts declared required commands', () => {
   const plan = buildVerifierPlan(
     'Verifier commands: npm run typecheck && npm test -- --run src/a.test.ts && npm run build',

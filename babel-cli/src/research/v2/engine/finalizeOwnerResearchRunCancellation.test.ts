@@ -88,9 +88,13 @@ describe('finalizeOwnerResearchRunCancellation', () => {
     }
   })
 
-  it('runResearchV2MissionWithOwnerSession persists cancelled terminal when external cancel aborts inference', async () => {
+  it('runResearchV2MissionWithOwnerSession persists cancelled terminal when external cancel aborts inference', { timeout: 10_000 }, async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-research-v2-owner-cancel-run-'))
-    const model = new BlockingUntilAbortModel()
+    let signalModelEntry!: () => void
+    const modelEntered = new Promise<void>((resolve) => { signalModelEntry = resolve })
+    const model = new BlockingUntilAbortModel(undefined, (kind) => {
+      if (kind === 'plan_questions') signalModelEntry()
+    })
     try {
       const runPromise = runResearchV2MissionWithOwnerSession({
         storeDirectory: dir,
@@ -101,6 +105,11 @@ describe('finalizeOwnerResearchRunCancellation', () => {
         model,
       })
 
+      // Session publication precedes inference: wait for the operation this test cancels.
+      await Promise.race([modelEntered, runPromise.then(() => {
+        throw new Error('research run completed before model entry')
+      })])
+
       let sessionId = ''
       for (let i = 0; i < 50; i += 1) {
         await new Promise((r) => setTimeout(r, 20))
@@ -110,7 +119,7 @@ describe('finalizeOwnerResearchRunCancellation', () => {
       }
       assert.ok(sessionId.length > 0)
       await submitAdmittedOwnerCancelRequest(dir, sessionId)
-      await assert.rejects(() => runPromise)
+      await assert.rejects(() => runPromise, /planning iteration cancelled after model invoke/)
 
       const inspect = await ResearchEngineSession.openInspect(dir)
       const events = await inspect.listEvents(exampleTechnicalMissionFixture.mission_id)

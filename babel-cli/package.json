@@ -1,6 +1,6 @@
 {
   "name": "babel-harness",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local coding agent runtime for Babel — chat, plan, and deep modes with TUI/REPL",
   "license": "Apache-2.0",
   "author": "Jonathan Gomez Aguilar",
@@ -27,6 +27,7 @@
     "babel-harness": "bin/babel.js"
   },
   "scripts": {
+    "preinstall": "node bin/check-node-engine.mjs",
     "audit:pricing": "tsx --no-warnings=ExperimentalWarning scripts/audit_provider_pricing.ts",
     "audit:token-usage": "tsx --no-warnings=ExperimentalWarning scripts/audit_token_usage.ts",
     "audit:performance": "tsx --no-warnings=ExperimentalWarning scripts/audit_cli_performance.ts",
@@ -226,6 +227,7 @@
   },
   "files": [
     "bin/babel.js",
+    "bin/check-node-engine.mjs",
     "dist/**/*.js",
     "dist/bridge/opencode-acp-source-pin.json",
     "dist/bridge/claude-agent-sdk-pin.json",

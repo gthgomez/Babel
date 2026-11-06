@@ -14,8 +14,8 @@ describe('deprecation', () => {
   });
 
   it('teaches canonical replacements', () => {
-    assert.match(formatDeprecatedSurfaceMessage('lite'), /babel "<task>"/);
-    assert.match(formatDeprecatedSurfaceMessage('full'), /babel deep/);
-    assert.match(formatDeprecatedSurfaceMessage('bl'), /babel "<task>"/);
+    assert.match(formatDeprecatedSurfaceMessage('lite'), /babel-harness "<task>"/);
+    assert.match(formatDeprecatedSurfaceMessage('full'), /babel-harness deep/);
+    assert.match(formatDeprecatedSurfaceMessage('bl'), /babel-harness "<task>"/);
   });
 });

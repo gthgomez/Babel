@@ -817,6 +817,7 @@ const HOST_PROCESS_SURFACE = new Set([
   'services/maintenanceAudit.ts',
   'services/parityCorpus.ts',
   'services/productBenchmark.ts',
+  'services/pythonInterpreter.ts',
   'services/realTaskPilot.ts',
   'services/releaseReadinessBenchmark.ts',
   'services/shadowDiff.ts',

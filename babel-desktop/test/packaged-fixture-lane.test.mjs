@@ -7,7 +7,7 @@ import {join, dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 import {assertAcceptanceSource, writePackagedAcceptanceProfile, MISSING_INSTALL_ID, HISTORY_SESSION_ID} from './packaged-electron-acceptance/packaged-fixture-lane.mjs';
 import {readActiveEngine, resolvePackagedEngine} from '../native/engine-manager.mjs';
-import {resolveOfficialCli, resolveBundledCli} from '../native/runtime.mjs';
+import {bundledNodeFileName, resolveOfficialCli, resolveBundledCli} from '../native/runtime.mjs';
 import {readSavedChat} from '../native/sessions.mjs';
 
 test('installed acceptance refuses unknown BUILD provenance even without an expected SHA', () => {
@@ -27,7 +27,7 @@ test('missing installed selection stays on disk while real resolvers and history
     assert.equal(readActiveEngine(profile).id, MISSING_INSTALL_ID);
     const selectionFile = join(profile, 'engine', 'active-engine.json');
     const before = await readFile(selectionFile);
-    for (const path of [join(resourcesPath, 'babel-runtime', 'cli', 'dist', 'index.js'), join(resourcesPath, 'babel-runtime', 'node', 'node.exe')]) {
+    for (const path of [join(resourcesPath, 'babel-runtime', 'cli', 'dist', 'index.js'), join(resourcesPath, 'babel-runtime', 'node', bundledNodeFileName())]) {
       await mkdir(dirname(path), {recursive: true});
       await writeFile(path, 'inert resolver fixture');
     }

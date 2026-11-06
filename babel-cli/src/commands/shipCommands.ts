@@ -48,9 +48,9 @@ export function registerShipCommand(program: Command): void {
       'after',
       `
 Examples:
-  $ babel ship --check "npm test" --apply
-  $ babel ship --apply --allow-remote --check "npm test"
-  $ babel ship --evidence-run runs/latest --check "npm test"
+  $ babel-harness ship --check "npm test" --apply
+  $ babel-harness ship --apply --allow-remote --check "npm test"
+  $ babel-harness ship --evidence-run runs/latest --check "npm test"
 
 Hard stops include secrets (path + content scan), protected branches, generated artifacts, mixed/unrelated scopes, and failed verification.
 Draft PR body is built from implementor evidence when --body is omitted (W3).

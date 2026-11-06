@@ -4,19 +4,19 @@
   "workspace_root": "/workspace",
   "repos": [
     {
-      "id": "relic_run",
-      "path": "example_game_suite\\relicRun",
-      "display_name": "Relic Run",
-      "slug": "relicRun",
+      "id": "example_browser_game",
+      "path": "example_game_suite\\exampleBrowserGame",
+      "display_name": "Example Browser Game",
+      "slug": "exampleBrowserGame",
       "stack": "vite/react",
       "required": false,
       "anchor_files": ["PROJECT_CONTEXT.md", "package.json", "README.md", "docs/MVP_STATUS.md"]
     },
     {
-      "id": "simlife",
-      "path": "example_game_suite\\SimLife",
-      "display_name": "SimLife",
-      "slug": "SimLife",
+      "id": "example_simulation",
+      "path": "example_game_suite\\ExampleSimulation",
+      "display_name": "ExampleSimulation",
+      "slug": "ExampleSimulation",
       "stack": "godot",
       "required": false,
       "anchor_files": ["PROJECT_CONTEXT.md", "project.godot", "README.md"]
@@ -31,10 +31,10 @@
       "anchor_files": ["PROJECT_CONTEXT.md", "project.godot", "README.md"]
     },
     {
-      "id": "webrpg",
-      "path": "example_game_suite\\WebRPG",
-      "display_name": "WebRPG",
-      "slug": "WebRPG",
+      "id": "example_phaser_game",
+      "path": "example_game_suite\\ExamplePhaserGame",
+      "display_name": "ExamplePhaserGame",
+      "slug": "ExamplePhaserGame",
       "stack": "phaser/ts",
       "required": false,
       "anchor_files": ["PROJECT_CONTEXT.md", "package.json", "README.md"]
@@ -51,7 +51,7 @@
     {
       "id": "example_finance_forecast",
       "path": "example_mobile_suite\\example_finance_forecast",
-      "display_name": "Monte Carlo Ledger",
+      "display_name": "Example Finance Forecast",
       "slug": "example_finance_forecast",
       "stack": "kotlin/room",
       "required": false,

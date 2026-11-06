@@ -398,12 +398,12 @@ const toolsCommand = program
       "after",
       `
 Examples:
-  $ babel tools list
-  $ babel tools list --json
-  $ babel tools list --policy --capabilities
-  $ babel tools list --policy --allowed-tools file_read,directory_list
-  $ babel tools inspect file_read
-  $ babel tools inspect shell_exec --policy --json
+  $ babel-harness tools list
+  $ babel-harness tools list --json
+  $ babel-harness tools list --policy --capabilities
+  $ babel-harness tools list --policy --allowed-tools file_read,directory_list
+  $ babel-harness tools inspect file_read
+  $ babel-harness tools inspect shell_exec --policy --json
 
 Notes:
   - This is an inspection surface for executor capabilities, not a tool execution surface.
@@ -483,10 +483,10 @@ const sessionCommand = program
       "after",
       `
 Examples:
-  $ babel session latest
-  $ babel session latest --project example_saas_backend --json
-  $ babel session list --limit 5
-  $ babel session inspect latest
+  $ babel-harness session latest
+  $ babel-harness session latest --project example_saas_backend --json
+  $ babel-harness session list --limit 5
+  $ babel-harness session inspect latest
 
 Notes:
   - Sessions are evidence-backed run directories, not separate chat logs.
@@ -596,14 +596,14 @@ const inspectCommand = program
       "after",
       `
 Examples:
-  $ babel inspect --last --report
-  $ babel inspect report latest
-  $ babel inspect run latest
-  $ babel inspect summary --run latest
-  $ babel inspect stack --run <run_dir>
-  $ babel inspect validate-run chat-<session-id>
-  $ babel inspect tui latest
-  $ babel inspect tui --view screen
+  $ babel-harness inspect --last --report
+  $ babel-harness inspect report latest
+  $ babel-harness inspect run latest
+  $ babel-harness inspect summary --run latest
+  $ babel-harness inspect stack --run <run_dir>
+  $ babel-harness inspect validate-run chat-<session-id>
+  $ babel-harness inspect tui latest
+  $ babel-harness inspect tui --view screen
 
 Notes:
   - These views are read-only and operate on already-created evidence bundles.

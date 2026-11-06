@@ -251,7 +251,7 @@ Activate only when relevant. Modules can be combined for complex prompts (e.g., 
 - Red-team test requirements in the output prompt
 
 **Jonathan Context Module** (activate when relevant):
-Account for VS Code, Git/GitHub, Supabase, Vercel, TypeScript, Deno, FastAPI, Python, Babel/OLS, Relic Run, deterministic multi-agent systems, state persistence, evidence-first workflows, production-risk reduction, example_saas_backend-style compliance, and Chicago-based practical constraints. Do not force this context into unrelated work.
+Account for VS Code, Git/GitHub, Supabase, Vercel, TypeScript, Deno, FastAPI, Python, Babel/OLS, Example Browser Game, deterministic multi-agent systems, state persistence, evidence-first workflows, production-risk reduction, example_saas_backend-style compliance, and Chicago-based practical constraints. Do not force this context into unrelated work.
 
 ## 11. Model-Specific Nuances for In-Depth Prompt Engineering
 

@@ -26,11 +26,11 @@ export function registerMaintenanceCommands(program: Command): void {
       'after',
       `
 Examples:
-  $ babel simplify
-  $ babel simplify --all
-  $ babel simplify babel-cli/src/pipeline.ts
-  $ babel simplify --all --json
-  $ babel simplify --all --write-report
+  $ babel-harness simplify
+  $ babel-harness simplify --all
+  $ babel-harness simplify babel-cli/src/pipeline.ts
+  $ babel-harness simplify --all --json
+  $ babel-harness simplify --all --write-report
 `,
     )
     .action(

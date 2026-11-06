@@ -110,6 +110,22 @@ ambiguous provenance fails; success-only evidence upload treats missing files
 as an error. Inspect this evidence and archive checksums before authorizing
 distribution. No release was performed by the CI implementation campaign.
 
+The same tag workflow also builds `Babel-Desktop-<version>-linux-x64.AppImage`
+on `ubuntu-latest` (`babel-desktop/scripts/package-linux.mjs`, pinned Node
+24.13.1 linux-x64, Electron 44.5.1 linux-x64, appimagetool 1.9.1, and
+type2-runtime 20251108). The draft release is created only after the Windows
+and Linux jobs both finish. `SHA256SUMS` lists the Windows portable ZIP and
+the Linux AppImage. The Linux
+file inventory is attached as `manifest-linux-x64.json` so it does not replace
+the Windows `manifest.json`. The Setup.exe checksum stays in its `.exe.sha256`
+sidecar. The AppImage is unsigned and has no AppImage update channel. A `.deb`
+is not published. npm publish is unchanged and is still a separate workflow.
+The packager sets `SOURCE_DATE_EPOCH=0` and asks mksquashfs for one
+processor so a rebuild from the same commit and the same pinned archives
+can match. The `SHA256SUMS` file attached to the draft release is still
+the authority for the published bytes. Verify a download against that
+file. A checksum copied from another machine is not a substitute.
+
 ## Additional release automation (Future)
 
 The following will be implemented as part of Option A Phase 4:

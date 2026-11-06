@@ -122,7 +122,7 @@ export async function runPlanLane(context: AgentLaneContext): Promise<PlanLaneRe
   if (context.provider !== 'mock') assertFiniteBudgetSupported('Plan', context.projectRoot);
   if (context.provider !== 'mock' && process.env['BABEL_LITE_OFFLINE'] !== '1' && !context.model) {
     const selected = selectedConnectionModel({}, context.projectRoot);
-    if (!selected) throw new Error('SETUP_REQUIRED: Choose a provider connection and exact model with babel-agent setup.');
+    if (!selected) throw new Error('SETUP_REQUIRED: Choose a provider connection and exact model with babel-harness setup.');
     context = { ...context, model: selected };
   }
   const repoPath = resolveLiteRepoRoot(context.projectRoot);

@@ -106,7 +106,7 @@ async function tui(configured = false) {
     assert.equal(code, 0, transcript)
     assert.ok(sent, 'TUI advertised startup before exit was sent')
     assert.match(transcript, /session ended/i)
-    assert.match(transcript, /Docker server (?:available|unavailable)/)
+    assert.match(transcript, /Docker is (?:running|not available)/)
     assert.doesNotMatch(transcript, /Auto-spawn(?:ing|ed) daemon|\[preamble-budget\]/,
       'Startup diagnostics must not enter the conversation')
     const diagnostics = readFileSync(join(tuiEnv.BABEL_STATE_DIR, 'diagnostics', `interactive-${child.pid}.jsonl`), 'utf8')

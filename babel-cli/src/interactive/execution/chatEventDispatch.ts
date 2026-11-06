@@ -205,6 +205,7 @@ export function dispatchChatEvent(
       usage: globalCostTracker.getSessionSummary(),
       conversation: [],
       reason_code: event.reason_code ?? 'cancelled',
+      ...(event.reason_detail !== undefined ? { reason_detail: event.reason_detail } : {}),
       cause_class: event.cause_class ?? null,
       ...(event.turnTelemetry !== undefined ? { turnTelemetry: event.turnTelemetry } : {}),
       ...(ev.toolCalls !== undefined ? { toolCalls: ev.toolCalls } : {}),
@@ -239,6 +240,7 @@ export function terminalResultFromDoneEvent(
     status?: ChatResult['status'];
     /** D03: structured terminal reason code. */
     reason_code?: ChatResult['reason_code'];
+    reason_detail?: string;
     cause_class?: ChatResult['cause_class'];
     gatePolicy?: ChatResult['gatePolicy'];
     toolCallAggregates?: ChatResult['toolCallAggregates'];
@@ -290,6 +292,7 @@ export function terminalResultFromDoneEvent(
     ...(opts?.runAllowance ? { runAllowance: opts.runAllowance } : {}),
     ...(opts?.policyEvents ? { policyEvents: opts.policyEvents } : {}),
     ...(opts?.reason_code !== undefined ? { reason_code: opts.reason_code } : {}),
+    ...(opts?.reason_detail !== undefined ? { reason_detail: opts.reason_detail } : {}),
     ...(opts?.cause_class !== undefined ? { cause_class: opts.cause_class } : {}),
     ...(opts?.gatePolicy != null ? { gatePolicy: opts.gatePolicy } : {}),
     ...(opts?.toolCallAggregates !== undefined ? { toolCallAggregates: opts.toolCallAggregates } : {}),

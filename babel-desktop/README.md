@@ -1,10 +1,10 @@
 # Babel Desktop
 
-Babel Desktop is the Windows UI for the authoritative Babel CLI harness. It starts connected to the harness and displays real responses, tools, approvals, sessions and verification outcomes. It never supplies simulated conversations, model responses or tool activity.
+Babel Desktop is the desktop UI for the authoritative Babel CLI harness. Published releases are Windows x64. Current source also builds an unsigned Linux x64 AppImage. It starts connected to the harness and displays real responses, tools, approvals, sessions and verification outcomes. It never supplies simulated conversations, model responses or tool activity.
 
 ## Install and configure
 
-> **Version note:** this README describes **current source**. Published Desktop downloads are **Windows x64 only**. [v0.2.0](https://github.com/gthgomez/Babel/releases/tag/v0.2.0) and [v0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3) both attach a Setup.exe and a portable ZIP. Linux and macOS users should use the npm CLI in the [repository README](../README.md). The Windows setup steps for the v0.2.0 tag are in [INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md). OS-protected credential storage described below is current-source behavior and may differ from an installer you download.
+> **Version note:** this README describes **current source**. Published Desktop downloads are **Windows x64 only**. [v0.2.0](https://github.com/gthgomez/Babel/releases/tag/v0.2.0) and [v0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3) both attach a Setup.exe and a portable ZIP. Linux and macOS users should use the npm CLI in the [repository README](../README.md). The release-pinned Windows setup steps are [at the v0.2.0 tag](https://github.com/gthgomez/Babel/blob/v0.2.0/babel-desktop/docs/INSTALL-WINDOWS.md). Current-source instructions are in [INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md). OS-protected credential storage described below is current-source behavior and may differ from an installer you download.
 
 Use the versioned Windows Setup.exe from the release/download page, or extract the complete portable ZIP. The bundle includes pinned Node, Electron, CLI, dependencies and immutable prompt resources. See [Windows setup](docs/INSTALL-WINDOWS.md).
 
@@ -46,3 +46,15 @@ npm run package:windows:setup -- --payload-zip=<portable-zip> --payload-sha256s=
 ```
 
 The builder verifies archive digests, packs the CLI and explicit Desktop allowlist, and emits BUILD.json, manifest and SHA256SUMS. Setup installs per user, creates Start Menu/uninstall entries, and stages upgrades with rollback. CI exercises the installer lifecycle. Packages remain unsigned until a signing process is supplied; do not claim publisher verification from checksums. Automatic Desktop self-updates are not implemented; install a newer verified Setup.exe.
+
+## Build the Linux AppImage
+
+On linux x64, with Node 24.13.1, a clean commit, and the pinned archives:
+
+```sh
+npm ci --ignore-scripts
+npm --prefix ../babel-cli ci
+npm run package:linux -- --node-archive=<official-node-v24.13.1-linux-x64.tar.xz> --electron-archive=<official-electron-v44.5.1-linux-x64.zip> --appimage-tool=<appimagetool-1.9.1-x86_64.AppImage> --runtime-archive=<type2-runtime-20251108-x86_64>
+```
+
+The script checks those three SHA256 values, packs the same CLI production tree the Windows builder packs, and writes `Babel-Desktop-<version>-linux-x64.AppImage`, `manifest.json`, and `SHA256SUMS`. It does not build a `.deb`. Run it with `chmod +x`. See [Linux setup](docs/INSTALL-LINUX.md). A pull request that changes Desktop packaging files also builds this AppImage on `ubuntu-latest`; that job is not part of the Windows installer lane.

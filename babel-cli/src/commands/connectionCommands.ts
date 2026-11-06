@@ -41,7 +41,7 @@ export function registerConnectionCommands(program: Command, host: CommandHost =
     .action((providerId: string, options: { name?: string; model?: string; baseUrl?: string; apiKeyEnv?: string; contextWindow?: number; maxOutputTokens?: number; auth?: boolean }) => {
       const connection = connectProvider(providerId, { ...options, ...(options.auth === false ? { authentication: 'none' as const } : {}), ...(options.apiKeyEnv ? { apiKeyEnvVar: options.apiKeyEnv } : {}) })
       emit({ saved: true, connection: connection.id, provider: connection.provider, model: connection.model ?? null,
-        nextCommand: `babel-agent provider use ${connection.id} --save user`, connectivity: 'unverified' })
+        nextCommand: `babel-harness provider use ${connection.id} --save user`, connectivity: 'unverified' })
     })
   selectionOptions(provider.command('use <connection>').description('Select a configured connection; save scope is explicit'))
     .action((id: string, options: { save?: string }) => {
@@ -88,7 +88,7 @@ export function registerConnectionCommands(program: Command, host: CommandHost =
 
 /** Run shared command definitions inside the current TUI session. */
 export async function handleConnectionCommand(ctx: ReplContext, name: 'provider' | 'model' | 'settings', args: string[]): Promise<void> {
-  const program = new Command().name('babel-agent').exitOverride()
+  const program = new Command().name('babel-harness').exitOverride()
   program.configureOutput({ writeOut: text => console.log(text), writeErr: text => console.error(text) })
   const parts = ctx.state.model?.startsWith('connection/') ? ctx.state.model.split('/') : []
   const session = ctx.state.modelSource && ctx.state.modelSource !== 'session' ? {} : { ...(ctx.state.connectionId ? { connection: ctx.state.connectionId } : {}), ...(parts.length > 2 ? { model: parts.slice(2).join('/') } : {}) }

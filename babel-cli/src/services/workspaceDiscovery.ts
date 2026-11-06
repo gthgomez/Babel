@@ -53,7 +53,6 @@ const FAMILY_DIRECTORIES = ['example_backend_suite', 'example_mobile_suite', 'ex
 
 /** Known project name aliases (directory basename → canonical name) */
 const PROJECT_NAME_ALIASES: Record<string, string> = {
-  simlife: 'SimLife',
   aetherlyn: 'AetherlynGameDraft',
 };
 

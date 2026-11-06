@@ -433,6 +433,8 @@ test('doctor scope all allows documented external repo-map prerequisite to remai
     strict: false,
     verbose: true,
     scope: 'all',
+    // Hermetic: this test covers repo-map prerequisites, not host PowerShell presence.
+    powerShellProbe: () => ({ exitCode: 0, stdout: '7.5.5', stderr: '' }),
     powerShellRunner: (path, args) => {
       if (path.endsWith('export-babel-public.ps1')) {
         const destinationRoot = args[args.indexOf('-DestinationRoot') + 1];
@@ -535,7 +537,7 @@ test('doctor workspace warns when interactive transcript target differs from man
   const runsDir = join(root, 'runs');
   const runDir = join(runsDir, '20260606_145627_bl-plan-a-fix');
   const sessionDir = join(runsDir, 'interactive-sessions', 'interactive_2026-06-06_195508');
-  const transcriptTarget = join(workspace, 'example_game_suite', 'relicRun');
+  const transcriptTarget = join(workspace, 'example_game_suite', 'exampleBrowserGame');
   const manifestTarget = join(workspace, 'example_game_suite');
   mkdirSync(runDir, { recursive: true });
   mkdirSync(sessionDir, { recursive: true });

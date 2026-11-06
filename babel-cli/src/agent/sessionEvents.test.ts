@@ -983,6 +983,37 @@ test('round-trips OpenRouter retry evidence through the durable parser', () => {
   assert.equal((restored.events[1] as any).provider, 'openrouter');
   assert.equal((restored.events[2] as any).model, 'z-ai/glm-5.3-flash');
 });
+test('round-trips retry attempts independently for legacy and distinct request identities', () => {
+  const log = createSessionEventLog('request-scoped-retries');
+  recordUserSubmitted(log, { turn_id: 'turn-retry', task: 'retain distinct request retries' });
+  for (const requestId of [undefined, 'request-a', 'request-b']) {
+    for (const attempt of [2, 3, 4]) {
+      const identity = { turn_id: 'turn-retry', provider: 'openrouter' as const, model: 'model-a', attempt,
+        ...(requestId !== undefined ? { request_id: requestId } : {}) };
+      recordProviderRetryScheduled(log, { ...identity, reason: 'transport', backoff_ms: 0 });
+      recordProviderRetrySettled(log, { ...identity, outcome: 'failed' });
+    }
+  }
+  const restored = parseSessionEventLog(serializeSessionEventLog(log), 'request-scoped-retries');
+  assert.equal(restored.events.filter(event => event.kind === 'provider_retry_scheduled').length, 9);
+  assert.equal(restored.events.filter(event => event.kind === 'provider_retry_settled').length, 9);
+});
+
+test('a retry settlement cannot borrow another request identity or omit its scoped identity', () => {
+  const log = createSessionEventLog('request-scoped-rejection');
+  recordUserSubmitted(log, { turn_id: 'turn-retry', task: 'retain retry identity' });
+  const identity = { turn_id: 'turn-retry', provider: 'openrouter' as const, model: 'model-a', attempt: 2, request_id: 'request-a' };
+  recordProviderRetryScheduled(log, { ...identity, reason: 'transport', backoff_ms: 0 });
+  recordProviderRetrySettled(log, { ...identity, outcome: 'failed' });
+  for (const requestId of [undefined, 'request-b']) {
+    const records = serializeSessionEventLog(log).trim().split('\n').map(line => JSON.parse(line));
+    const settled = records.find(event => event.kind === 'provider_retry_settled');
+    if (requestId === undefined) delete settled.request_id;
+    else settled.request_id = requestId;
+    assert.throws(() => parseSessionEventLog(records.map(record => JSON.stringify(record)).join('\n'), 'request-scoped-rejection'), /unmatched prior schedule/);
+  }
+});
+
 test('rejects orphaned or overlapping provider retry schedules on durable reload', () => {
   const log = createSessionEventLog('retry-causal');
   recordUserSubmitted(log, { turn_id: 'turn-retry', task: 'retry causally' });

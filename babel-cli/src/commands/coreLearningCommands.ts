@@ -426,9 +426,9 @@ const modelsCommand = program
       "after",
       `
 Examples:
-  $ babel models list
-  $ babel models ping
-  $ babel models ping --model deepseek-v4-flash-openrouter --json
+  $ babel-harness models list
+  $ babel-harness models ping
+  $ babel-harness models ping --model deepseek-v4-flash-openrouter --json
 
 Notes:
   - List shows the active model, provider route, context/cost, and fallback chain.
@@ -506,9 +506,9 @@ program
       "after",
       `
 Examples:
-  $ babel prove --last
-  $ babel prove latest
-  $ babel prove <run_dir> --json
+  $ babel-harness prove --last
+  $ babel-harness prove latest
+  $ babel-harness prove <run_dir> --json
 
 Notes:
   - Writes proof_status.json and BABEL_RUN_REPORT.md into the run directory.
@@ -536,13 +536,13 @@ const learnCommand = program
       "after",
       `
 Examples:
-  $ babel learn from-run --last
-  $ babel learn from-run <run_dir> --json
-  $ babel learn propose <failure-id> --json
-  $ babel learn test <lesson-id> --json
-  $ babel learn promote <lesson-id> --shadow --json
-  $ babel learn package <lesson-id> --target project-verifier-contract --json
-  $ babel learn inspect <artifact-id>
+  $ babel-harness learn from-run --last
+  $ babel-harness learn from-run <run_dir> --json
+  $ babel-harness learn propose <failure-id> --json
+  $ babel-harness learn test <lesson-id> --json
+  $ babel-harness learn promote <lesson-id> --shadow --json
+  $ babel-harness learn package <lesson-id> --target project-verifier-contract --json
+  $ babel-harness learn inspect <artifact-id>
 
 Notes:
   - P4-P7 propose, test, shadow-promote, and package review artifacts only.
@@ -683,12 +683,12 @@ const evidenceCommand = program
       "after",
       `
 Examples:
-  $ babel evidence
-  $ babel evidence open
-  $ babel evidence open --run <path>
-  $ babel evidence export --run <path>
-  $ babel evidence --project example_mobile_reference
-  $ babel evidence --json
+  $ babel-harness evidence
+  $ babel-harness evidence open
+  $ babel-harness evidence open --run <path>
+  $ babel-harness evidence export --run <path>
+  $ babel-harness evidence --project example_mobile_reference
+  $ babel-harness evidence --json
 `,
     )
     .action((options: { json?: boolean; project?: string }) => {

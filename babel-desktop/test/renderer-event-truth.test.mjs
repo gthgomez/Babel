@@ -110,6 +110,52 @@ test('Stop flushes pending text and keeps admission closed until exit',async()=>
   assert.equal(result.enabled,true);
 }));
 
+test('a rejected Stop retains the active run, reports the failure and permits retry',async()=>withRun(async(page,emit)=>{
+  await page.evaluate(()=>{
+    window.babelDesktop.cancel=async()=>{throw new Error('Synthetic transport failure detail');};
+  });
+  await page.locator('[data-action="stop"]').click();
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Stop request failed'),null,{timeout:2000});
+  assert.equal(await page.locator('#send-button').isDisabled(),true);
+  assert.equal(await page.locator('[data-action="stop"]').isVisible(),true);
+  assert.doesNotMatch(await page.locator('#status-detail').innerText(),/Stopping/);
+  await page.locator('.thought-note summary').filter({hasText:'Stop request failed'}).click();
+  assert.match(await page.locator('#conversation').innerText(),/still be running/);
+  assert.doesNotMatch(await page.locator('body').innerText(),/Synthetic transport failure detail/);
+  await emit({kind:'event',event:{type:'thought',line:'Progress after the rejected Stop'}});
+  const progress=page.locator('.thought-note').filter({has:page.locator('summary',{hasText:'Thinking'})});
+  assert.equal(await progress.count(),1);
+  assert.match(await progress.textContent(),/Progress after the rejected Stop/);
+  const warning=page.locator('.thought-note').filter({has:page.locator('summary',{hasText:'Stop request failed'})});
+  assert.doesNotMatch(await warning.textContent(),/Progress after the rejected Stop/);
+  await page.locator('#composer-input').fill('Draft retained while cancellation is retried');
+  await page.evaluate(()=>{window.babelDesktop.cancel=async()=>true;});
+  await page.locator('[data-action="stop"]').click();
+  assert.match(await page.locator('#status-detail').innerText(),/Stopping/);
+  await emit({kind:'event',event:{type:'cancelled'}});
+  assert.equal(await page.locator('#send-button').isDisabled(),true);
+  await emit({kind:'exit',code:0});
+  assert.equal(await page.locator('.message-status').innerText(),'Response stopped');
+  assert.equal(await page.locator('#send-button').isEnabled(),true);
+  assert.equal(await page.locator('#composer-input').inputValue(),'Draft retained while cancellation is retried');
+}));
+
+test('a late Stop rejection cannot change a subsequent run',async()=>withRun(async(page,emit)=>{
+  await page.evaluate(()=>{window.babelDesktop.cancel=()=>new Promise((_resolve,reject)=>{window.__rejectStop=()=>reject(new Error('Synthetic late rejection'));});});
+  await page.locator('[data-action="stop"]').click();
+  await emit({kind:'event',event:{type:'cancelled'}});
+  await emit({kind:'exit',code:0});
+  await page.locator('#composer-input').fill('Next authorized task');
+  await page.locator('#composer-form').evaluate(form=>form.requestSubmit());
+  await page.waitForFunction(()=>window.__runs.length===2);
+  await page.evaluate(async()=>{window.__rejectStop();await new Promise(resolve=>setTimeout(resolve,0));});
+  assert.equal(await page.locator('#main-status').innerText(),'Running');
+  assert.equal(await page.locator('#send-button').isDisabled(),true);
+  assert.doesNotMatch(await page.locator('#conversation').innerText(),/Stop request failed/);
+  await page.evaluate(()=>window.__event({runId:window.__runs[1].runId,kind:'exit',code:0}));
+  assert.equal(await page.locator('.message-status').last().innerText(),'Run ended · not verified');
+}));
+
 test('Changed opens an escaped diff with its baseline and does not masquerade as verification',async()=>withRun(async(page,emit)=>{
   await page.evaluate(()=>{window.babelDesktop.readDiff=async path=>({path,baseRevision:'a'.repeat(40),diff:'-before\n+<script>after</script>\n',truncated:false,hasChanges:true});});
   await emit({kind:'event',event:{type:'file.changed',item:{path:'fixture.txt',additions:1,deletions:1}}});

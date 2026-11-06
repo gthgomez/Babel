@@ -5,8 +5,8 @@ const label = invoked === 'babel-lite.js' || invoked === 'babel-lite' ? 'babel-l
 
 process.stderr.write(
   `[babel] ${label} was removed. Use:\n` +
-  '  babel "<task>"\n' +
-  '  babel plan "<task>"\n' +
-  '  babel deep "<task>"\n',
+  '  babel-harness "<task>"\n' +
+  '  babel-harness plan "<task>"\n' +
+  '  babel-harness deep "<task>"\n',
 );
 process.exit(1);

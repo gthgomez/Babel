@@ -3,22 +3,27 @@
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { formatNodeEngineError, nodeEngineSupported, suppressExperimentalWarnings } from './check-node-engine.mjs';
+
+if (!nodeEngineSupported(process.versions.node)) {
+  console.error(formatNodeEngineError(process.versions.node, 'command'));
+  process.exit(1);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const dispatchEntry = resolve(__dirname, '../dist/cliEntryDispatch.js');
-const [major, minor, patch] = process.versions.node.split('.').map(Number);
-if (!((major === 22 && minor >= 19) || (major === 24 && (minor > 13 || (minor === 13 && patch >= 1))))) {
-  console.error('[babel-agent] Node ^22.19.0 or ^24.13.1 is required.');
-  process.exit(1);
-}
 
 if (!existsSync(dispatchEntry)) {
   console.error(
-    `[babel] Missing build output at "${dispatchEntry}". Run "npm --prefix .\\babel-cli run build" from the repo root first.`,
+    `[babel-harness] Missing build output at "${dispatchEntry}". From the repo root, run "npm --prefix .\\babel-cli run build" first.`,
   );
   process.exit(1);
 }
+
+// Filter before the runtime imports node:sqlite and WebAssembly. A second
+// process would change the pid used for interactive diagnostics.
+suppressExperimentalWarnings();
 
 const { routeInteractiveWarnings } = await import(pathToFileURL(resolve(__dirname, '../dist/cli/interactiveWarningRoute.js')).href);
 if (!(await routeInteractiveWarnings())) {

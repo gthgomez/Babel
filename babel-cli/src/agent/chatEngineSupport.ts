@@ -2,6 +2,7 @@
  * Session helpers extracted from ChatEngine (architectural file-size ratchet).
  */
 
+import { resolvePythonInterpreter } from '../services/pythonInterpreter.js';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -294,6 +295,13 @@ export async function runPostEditStaticCheck(
     }
 
     if (ext === 'py') {
+      const { interpreter, tried } = resolvePythonInterpreter();
+      if (!interpreter) {
+        // No interpreter on this host: the edit itself is not known to be
+        // broken, so report the check as unavailable (no exit_code) instead of
+        // a failure that would trigger repair turns.
+        return `static_check_unavailable: python interpreter not found (tried: ${tried.join(', ')}); syntax check skipped, edit not evaluated`;
+      }
       try {
         // Compile source bytes to an in-memory code object. `py_compile`
         // writes `__pycache__` beside the edited project file, which makes a
@@ -301,8 +309,9 @@ export async function runPostEditStaticCheck(
         // bytes preserves Python's BOM/encoding-cookie handling; compile()
         // validates syntax without importing or executing the target module.
         const out = execFileSync(
-          'python',
+          interpreter.bin,
           [
+            ...interpreter.prefixArgs,
             // Do not let project or user Python startup hooks run in the Babel host process.
             '-I',
             '-S',
@@ -312,13 +321,17 @@ export async function runPostEditStaticCheck(
           ],
           {
             cwd: projectRoot,
-            timeout: fastCheckTimeout,
+            // Python launcher startup on busy Windows runners can exceed two seconds.
+            timeout: 10_000,
             encoding: 'utf-8',
             maxBuffer: 1024 * 32,
           },
         );
         return `exit_code: 0\n${out}`;
       } catch (e: unknown) {
+        if ((e as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+          return `static_check_unavailable: python interpreter '${interpreter.label}' could not be spawned; syntax check skipped, edit not evaluated`;
+        }
         const msg = e instanceof Error ? e.message : String(e);
         return `exit_code: 1\n${msg}`;
       }

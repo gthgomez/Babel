@@ -183,6 +183,30 @@ test('stages catalog assets and defaults while removing stale resources and buil
     for (const name of ['audio-capture-worker.mjs', 'vad-worker.mjs']) {
       writeFileSync(join(pkg, 'dist/voice', name), '// worker fixture')
     }
+    const developmentOnly = [
+      'research/v2/fixtures/campaign/papers/arxivPaperExternalCache.js',
+      'research/v2/fixtures/general-dev-brief-corpus/verbatimBriefBytes.js',
+      'research/v2/engine/testSupport/attempt4EvidenceSubset.js',
+      'research/v2/engine/testSupport/attempt4QuestionCoverageDerived.js',
+      'research/v2/engine/testSupport/gL2AuditDerivedRegression.js',
+      'research/v2/engine/testSupport/gL2OriginalDerivedRegression.js',
+      'research/v2/engine/testSupport/gL3Ba45DerivedRegression.js',
+      'research/v2/engine/testSupport/gL3OriginalDerivedRegression.js',
+      'research/v2/engine/testSupport/missionAdmissionBootstrapBarrier.js',
+      'services/traceAuditor/fixtures.js',
+    ].map(file => `dist/${file}`)
+    const runtimeSupport = [
+      'research/v2/engine/testSupport/claimedSourceReviewFieldsFromSemanticInput.js',
+      'research/v2/engine/testSupport/requiredClaimedSourceReviewFields.js',
+      'research/v2/adapters/documents/testAdmittedFixtures.js',
+      'research/v2/fixtures/fakePorts.js',
+      'agent/codingCorpus/fixtures/trajectories.js',
+      'claude-babel-astra-lab/fixtures.js',
+    ].map(file => `dist/${file}`)
+    for (const file of [...developmentOnly, ...runtimeSupport]) {
+      mkdirSync(dirname(join(pkg, file)), { recursive: true })
+      writeFileSync(join(pkg, file), '// fixture module')
+    }
     const staged = spawnSync(process.execPath, [script, root, pkg], { encoding: 'utf8' })
     assert.equal(staged.status, 0, staged.stderr)
     assert.equal(readFileSync(join(pkg, 'resources/layer/prompt.md'), 'utf8'), 'prompt')
@@ -191,9 +215,10 @@ test('stages catalog assets and defaults while removing stale resources and buil
     }
     assert.ok(existsSync(join(pkg, 'LICENSE')))
     assert.ok(existsSync(join(pkg, 'dist/index.js')))
-    for (const file of ['resources/config/private-local.json', 'resources/stale.json', 'dist/unit.test.js', 'dist/index.js.map', 'dist/index.d.ts']) {
+    for (const file of ['resources/config/private-local.json', 'resources/stale.json', 'dist/unit.test.js', 'dist/index.js.map', 'dist/index.d.ts', ...developmentOnly]) {
       assert.equal(existsSync(join(pkg, file)), false, file)
     }
+    for (const file of runtimeSupport) assert.ok(existsSync(join(pkg, file)), file)
     const manifest = JSON.parse(readFileSync(new URL('../../babel-cli/package.json', import.meta.url), 'utf8'))
     writeFileSync(join(pkg, 'package.json'), JSON.stringify({ ...manifest, scripts: {} }))
     mkdirSync(join(pkg, 'bin'))
@@ -212,7 +237,8 @@ test('stages catalog assets and defaults while removing stale resources and buil
     assert.equal(result.name, 'babel-harness')
     assert.deepEqual(manifest.bin, { 'babel-agent': 'bin/babel.js', 'babel-harness': 'bin/babel.js' })
     const paths = result.files.map(file => file.path)
-    for (const file of ['resources/layer/prompt.md', 'LICENSE', 'dist/index.js', 'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs']) assert.ok(paths.includes(file), file)
+    for (const file of ['resources/layer/prompt.md', 'LICENSE', 'dist/index.js', 'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs', ...runtimeSupport]) assert.ok(paths.includes(file), file)
+    for (const file of developmentOnly) assert.ok(!paths.includes(file), file)
     assert.ok(!paths.some(path => /\.env|\.test\.|\.map$|\.d\.ts$/.test(path)))
   } finally {
     rmSync(root, { recursive: true, force: true })

@@ -25,8 +25,8 @@ From repo root, after `npm --prefix .\babel-cli run build`:
 # Offline mock (default; no API keys required)
 npm --prefix .\babel-cli run test:live-lite-discovery -- --provider mock
 
-# Live provider (requires DEEPSEEK_API_KEY or DEEPINFRA_API_KEY in config)
-npm --prefix .\babel-cli run test:live-lite-discovery -- --provider live --relic-run <path-to-project>
+# Live provider (requires configured OpenRouter credentials)
+npm --prefix .\babel-cli run test:live-lite-discovery -- --provider live --project <path-to-project>
 ```
 
 Evidence is written to `runs/live-lite-discovery/<timestamp>/` with per-scenario `stdout.log`, `stderr.log`, and a top-level `report.json`.
@@ -38,8 +38,8 @@ Evidence is written to `runs/live-lite-discovery/<timestamp>/` with per-scenario
 | `ask_concrete` | seeded | `ask --json` | `ANSWER_READY` |
 | `ask_vague` | seeded | `ask --json` | `ANSWER_READY`, `NEEDS_MORE_CONTEXT` |
 | `plan_concrete` | seeded | `plan --json` | `PLAN_READY`, `NEEDS_MORE_CONTEXT` |
-| `plan_vague_relicrun` | external | `plan --json` | `PLAN_READY`, `NEEDS_MORE_CONTEXT` |
-| `do_vague_readonly_relicrun` | external | `do --json --lite-only` | read-only lane statuses |
+| `plan_vague_project` | external | `plan --json` | `PLAN_READY`, `NEEDS_MORE_CONTEXT` |
+| `do_vague_readonly_project` | external | `do --json --lite-only` | read-only lane statuses |
 | `do_vague_fix` | seeded | `do --json --lite-only` | `FIX_COMPLETE`, `SMALL_FIX_COMPLETE`, `DO_COMPLETE` |
 | `fix_scoped` | seeded | `fix --json` | `FIX_COMPLETE`, `SMALL_FIX_COMPLETE` |
 | `propose_scoped` | seeded | `propose --json` | `PROPOSAL_READY`, `PATCH_READY`, `PATCH_COMPLETE` |
@@ -47,7 +47,7 @@ Evidence is written to `runs/live-lite-discovery/<timestamp>/` with per-scenario
 | `review_after_fix` | seeded | `review --json` | `REVIEW_READY`, `REVIEW_COMPLETE`, … |
 | `undo_after_fix` | seeded | `undo --json` | `UNDO_COMPLETE` |
 
-External project scenarios are **skipped** (not failed) when the project path is missing.
+External project scenarios are **skipped** (not failed) when `--project` is omitted or its path is missing.
 
 ## Pass criteria
 

@@ -12,10 +12,11 @@ import {RemoteBridgeChild,releaseBridgeIfCurrent} from './remoteHost.mjs';
 import {listDirectory,readProjectFile} from './workspace.mjs';
 import {readProjectDiff} from './project-diff.mjs';
 import {ProjectAuthority,inspectProjectIdentity} from './project-authority.mjs';
+import {RunAdmissionLedger} from './run-admission.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
-import {resolveOfficialCli,bundledEnvironment} from './runtime.mjs';
+import {resolveOfficialCli,bundledEnvironment,resolveDesktopProfile} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
-import {applySandboxEnvironment,configureSandboxImage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
+import {applySandboxEnvironment,configureSandboxImage,packagedSandboxPrerequisiteMessage,probeDockerInstallation,sandboxIpcFailureMessage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
 import {configureCredentialProtection,hasProviderCredential,saveProviderCredential,providerCredentialStatus,removeProviderCredential,migrateProviderCredential} from './credentials.mjs';
 import {saveDesktopProviderRoute} from './provider-route-save.mjs';
 import {assertCredentialEngineCapability} from './credential-engine.mjs';
@@ -46,6 +47,10 @@ if(profileArgument){
   const profile=profileArgument.slice('--profile-dir='.length);
   if(!isAbsolute(profile))throw new Error('--profile-dir must be an absolute directory');
   app.setPath('userData',profile);
+}else{
+  const resolved=resolveDesktopProfile(process.env,process.platform);
+  if(resolved.action==='failed')console.error(`[babel-desktop] Kept the previous settings folder because profile migration failed: ${resolved.error}`);
+  app.setPath('userData',resolved.profile);
 }
 const officialRuntime=()=>resolveOfficialCli(packageRoot,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath,userData:app.getPath('userData')});
 function bundledBuildRecord(){
@@ -70,6 +75,12 @@ async function ownedCliEnvironment(){
   return runtimeEnvironment({credentials:true});
 }
 let diagnostics=null;
+let dockerInstallationCache;
+async function linuxDockerInstallation(){
+  if(process.platform!=='linux')return null;
+  if(dockerInstallationCache===undefined)dockerInstallationCache=await probeDockerInstallation();
+  return dockerInstallationCache;
+}
 let window=null;
 let tray=null;
 let backgroundStatus='Babel is working';
@@ -82,6 +93,7 @@ let draftCloseReady=false;
 let preferences={cliEntry:null,projectRoot:null,projectCredentialRoot:null};
 let runner=null;
 let projectAuthority=null;
+let runAdmissionLedger=null;
 let runAuthority=null;
 let remoteBridge=null;
 let runAdmission=false;
@@ -161,6 +173,8 @@ async function getInfo(){
     officialCliReady:official.ready,
     runtimeSource:!app.isPackaged&&preferences.cliEntry?'advanced':official.ready?official.source:'missing',
     packaged:app.isPackaged,
+    platform:process.platform,
+    dockerInstallation:process.platform==='linux'?await linuxDockerInstallation():null,
     diagnostics,
     engine,
     sandbox:{image:runtimeEnvironment().BABEL_BENCHMARK_DOCKER_IMAGE??null,reference:preferences.sandboxImageReference??runtimeEnvironment().BABEL_BENCHMARK_DOCKER_IMAGE??null,recommended:RECOMMENDED_IMAGE},
@@ -262,6 +276,7 @@ async function start(){
     if((await stat(preferencePath)).size<16384) preferences=parsePreferences(JSON.parse(await readFile(preferencePath,'utf8')));
   }catch{/* Missing/invalid UI preferences never block startup. */}
   projectAuthority=await ProjectAuthority.open(join(app.getPath('userData'),'project-authority.json'));
+  runAdmissionLedger=new RunAdmissionLedger(join(app.getPath('userData'),'run-admissions'));
   const html=await readFile(join(packageRoot,'dist','index.html'),'utf8');
   protocol.handle('babel',request=>isAppUrl(request.url)?new Response(html,{headers:{'Content-Type':'text/html; charset=utf-8','X-Content-Type-Options':'nosniff'}}):new Response('Not found',{status:404}));
   session.defaultSession.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
@@ -275,14 +290,20 @@ async function start(){
     if(!draftCloseRequest||request?.token!==draftCloseRequest.token)return {accepted:false};
     draftCloseRequest.finish(request.saved===true);return {accepted:true};
   });
-  handle('babel:refresh-diagnostics',async()=>{assertIdle();diagnostics=null;return getInfo();});
+  handle('babel:refresh-diagnostics',async()=>{assertIdle();diagnostics=null;dockerInstallationCache=undefined;return getInfo();});
   handle('babel:configure-sandbox',async options=>withConnectionChange(async()=>{
     if(!options||typeof options!=='object')throw new Error('Invalid sandbox setup request.');
-    const configured=await configureSandboxImage({reference:options.reference,prepareRecommended:options.prepareRecommended??false});
+    let configured;
+    try{configured=await configureSandboxImage({reference:options.reference,prepareRecommended:options.prepareRecommended??false});}
+    catch(error){
+      console.error(`[babel:configure-sandbox] ${error?.stack||error}`);
+      return {sandboxError:sandboxIpcFailureMessage(error)};
+    }
     const previous={sandboxImage:preferences.sandboxImage,sandboxImageReference:preferences.sandboxImageReference};
     Object.assign(preferences,configured);
     try{await savePreferences();}catch(error){Object.assign(preferences,previous);throw error;}
     diagnostics=null;
+    dockerInstallationCache=undefined;
     return getInfo();
   }));
   handle('babel:check-cli-update',async()=>{
@@ -569,13 +590,13 @@ async function start(){
     try{
     if(!request||typeof request!=='object'||typeof request.runId!=='string'||!/^[\w-]{1,100}$/.test(request.runId))throw new Error('Invalid run request');
     const cliEntry=activeCliEntry();
-    if(!cliEntry)throw new Error(app.isPackaged?'Bundled CLI or Node is missing. Extract the complete ZIP again.':'The official Babel CLI is not built. Build babel-cli/dist/index.js, or choose another entry from Advanced.');
+    if(!cliEntry)throw new Error(app.isPackaged?(process.platform==='win32'?'Bundled CLI or Node is missing. Extract the complete ZIP again.':'Bundled CLI or Node is missing. Download the complete AppImage again.'):'The official Babel CLI is not built. Build babel-cli/dist/index.js, or choose another entry from Advanced.');
     const conversationOnly=!preferences.projectRoot;
     if(!conversationOnly)await projectAuthority.admit(preferences.projectRoot);
     if(!(await getInfo()).ready)throw new Error('The selected Babel CLI or project is no longer available');
     if(app.isPackaged&&!conversationOnly){
       diagnostics=await diagnoseRuntime(officialRuntime(),{env:await ownedCliEnvironment(),cwd:app.getPath('userData')});
-      if(!diagnostics.ready)throw new Error('Execution prerequisites are missing or unverified. Open Setup, start Docker Desktop and prepare or validate a sandbox image, then recheck setup.');
+      if(!diagnostics.ready)throw new Error(packagedSandboxPrerequisiteMessage());
     }
     // Validate native-bound scope and route before spawning; no arbitrary flags.
     const route = readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR);
@@ -594,19 +615,30 @@ async function start(){
     const childEnvironment=applySelectedModelEnvironment(await ownedCliEnvironment(),selectedModel);
     runAuthority=conversationOnly?null:await projectAuthority.admit(preferences.projectRoot);
     if(admissionEpoch!==runAdmissionEpoch){runAuthority=null;return {started:false};}
-    const sharedBridge=remoteBridge?.state==='ready'&&remoteBridge.sharedSession&&remoteBridge.port&&remoteBridge.desktopClientId;
+    const bridge=remoteBridge;
+    const remoteEpoch=remoteAdmissionEpoch;
+    const sharedBridge=bridge?.state==='ready'&&bridge.sharedSession&&bridge.port&&bridge.desktopClientId;
     if(sharedBridge&&conversationOnly){
       throw new Error('Shared remote sessions require an open project.');
     }
+    if(!await runAdmissionLedger.claim(request.runId))return {started:false,reason:'run_already_admitted'};
+    if(runAuthority){
+      const admittedIdentity=runAuthority.identity;
+      const current=await projectAuthority.admit(preferences.projectRoot);
+      if(current.identity.id!==admittedIdentity.id)throw new Error('Project identity changed while admitting the run.');
+    }
+    // Claim persistence yields to cancellation/revocation. Fence again before spawn.
+    if(admissionEpoch!==runAdmissionEpoch||(runAuthority&&!projectAuthority.isCurrent(runAuthority))){runAuthority=null;return {started:false};}
+    if(sharedBridge&&(remoteBridge!==bridge||remoteEpoch!==remoteAdmissionEpoch||bridge.state!=='ready')){runAuthority=null;return {started:false};}
     if(sharedBridge){
       if(route?.provider) runRequest.provider=route.provider;
       if(selectedModel?.modelId) runRequest.model=selectedModel.modelId;
       runner=new SharedProtocolRun({
         executable:officialRuntime().executable,
         entry:cliEntry,
-        port:remoteBridge.port,
-        desktopClientId:remoteBridge.desktopClientId,
-        desktopProofKey:remoteBridge.desktopProofKey,
+        port:bridge.port,
+        desktopClientId:bridge.desktopClientId,
+        desktopProofKey:bridge.desktopProofKey,
         projectRoot:runAuthority.identity.root,
         env:childEnvironment,
         inheritEnv:false,
@@ -682,11 +714,16 @@ function updateTray(){
   ]));
 }
 function ensureTray(){
-  if(!tray||tray.isDestroyed()){
-    tray=new Tray(join(packageRoot,'assets','babel-mark.png'));
-    tray.on('click',showWindow);tray.on('balloon-click',showWindow);
+  try{
+    if(!tray||tray.isDestroyed()){
+      tray=new Tray(join(packageRoot,'assets','babel-mark.png'));
+      tray.on('click',showWindow);tray.on('balloon-click',showWindow);
+    }
+    updateTray();
+  }catch(error){
+    if(process.platform==='win32')throw error;
+    tray=null;
   }
-  updateTray();
 }
 function handleBabelPacket(packet){
   if(packet?.runId){
