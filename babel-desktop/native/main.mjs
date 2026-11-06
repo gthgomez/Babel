@@ -12,6 +12,7 @@ import {RemoteBridgeChild,releaseBridgeIfCurrent} from './remoteHost.mjs';
 import {listDirectory,readProjectFile} from './workspace.mjs';
 import {readProjectDiff} from './project-diff.mjs';
 import {ProjectAuthority,inspectProjectIdentity} from './project-authority.mjs';
+import {RunAdmissionLedger} from './run-admission.mjs';
 import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment,resolveDesktopProfile} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
@@ -92,6 +93,7 @@ let draftCloseReady=false;
 let preferences={cliEntry:null,projectRoot:null,projectCredentialRoot:null};
 let runner=null;
 let projectAuthority=null;
+let runAdmissionLedger=null;
 let runAuthority=null;
 let remoteBridge=null;
 let runAdmission=false;
@@ -274,6 +276,7 @@ async function start(){
     if((await stat(preferencePath)).size<16384) preferences=parsePreferences(JSON.parse(await readFile(preferencePath,'utf8')));
   }catch{/* Missing/invalid UI preferences never block startup. */}
   projectAuthority=await ProjectAuthority.open(join(app.getPath('userData'),'project-authority.json'));
+  runAdmissionLedger=new RunAdmissionLedger(join(app.getPath('userData'),'run-admissions'));
   const html=await readFile(join(packageRoot,'dist','index.html'),'utf8');
   protocol.handle('babel',request=>isAppUrl(request.url)?new Response(html,{headers:{'Content-Type':'text/html; charset=utf-8','X-Content-Type-Options':'nosniff'}}):new Response('Not found',{status:404}));
   session.defaultSession.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
@@ -612,19 +615,30 @@ async function start(){
     const childEnvironment=applySelectedModelEnvironment(await ownedCliEnvironment(),selectedModel);
     runAuthority=conversationOnly?null:await projectAuthority.admit(preferences.projectRoot);
     if(admissionEpoch!==runAdmissionEpoch){runAuthority=null;return {started:false};}
-    const sharedBridge=remoteBridge?.state==='ready'&&remoteBridge.sharedSession&&remoteBridge.port&&remoteBridge.desktopClientId;
+    const bridge=remoteBridge;
+    const remoteEpoch=remoteAdmissionEpoch;
+    const sharedBridge=bridge?.state==='ready'&&bridge.sharedSession&&bridge.port&&bridge.desktopClientId;
     if(sharedBridge&&conversationOnly){
       throw new Error('Shared remote sessions require an open project.');
     }
+    if(!await runAdmissionLedger.claim(request.runId))return {started:false,reason:'run_already_admitted'};
+    if(runAuthority){
+      const admittedIdentity=runAuthority.identity;
+      const current=await projectAuthority.admit(preferences.projectRoot);
+      if(current.identity.id!==admittedIdentity.id)throw new Error('Project identity changed while admitting the run.');
+    }
+    // Claim persistence yields to cancellation/revocation. Fence again before spawn.
+    if(admissionEpoch!==runAdmissionEpoch||(runAuthority&&!projectAuthority.isCurrent(runAuthority))){runAuthority=null;return {started:false};}
+    if(sharedBridge&&(remoteBridge!==bridge||remoteEpoch!==remoteAdmissionEpoch||bridge.state!=='ready')){runAuthority=null;return {started:false};}
     if(sharedBridge){
       if(route?.provider) runRequest.provider=route.provider;
       if(selectedModel?.modelId) runRequest.model=selectedModel.modelId;
       runner=new SharedProtocolRun({
         executable:officialRuntime().executable,
         entry:cliEntry,
-        port:remoteBridge.port,
-        desktopClientId:remoteBridge.desktopClientId,
-        desktopProofKey:remoteBridge.desktopProofKey,
+        port:bridge.port,
+        desktopClientId:bridge.desktopClientId,
+        desktopProofKey:bridge.desktopProofKey,
         projectRoot:runAuthority.identity.root,
         env:childEnvironment,
         inheritEnv:false,

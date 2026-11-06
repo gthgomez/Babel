@@ -503,7 +503,7 @@ const SEQUENCED_MUTATION_SOURCE =
 // a complete known object list: unknown objects or trailing qualifications
 // remain global denials. This never supplies positive mutation intent.
 const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your|this|that)\\s+)?(?:' +
-  '(?:regression\\s+)?tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|' +
+  '(?:existing\\s+)?(?:regression\\s+)?tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|' +
   'scripts?(?:\\s+or\\s+data)?|data|(?:third[- ]party\\s+)?dependencies|' +
   'permissions?|verification\\s+gates?|provider\\s+accounting|unrelated\\s+(?:files?|code)|' +
   '[`"\\\']?[\\w./\\\\-]+\\.[A-Za-z0-9_-]{1,12}[`"\\\']?)';
@@ -518,7 +518,7 @@ export function isScopedEditObject(object: string): boolean {
 }
 
 /** Negated object/verb lists cannot supply a later positive mutation verb. */
-function stripScopedEditProhibitions(text: string): string {
+export function stripScopedEditProhibitions(text: string): string {
   let result = text;
   for (const directive of text.matchAll(new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'))) {
     const afterVerb = directive.index + directive[0].length;
@@ -544,24 +544,32 @@ export function hasExplicitEditDenial(taskText: string): boolean {
   return false;
 }
 
+/** Supported owner-request wrappers, shared by action-clause recognizers. */
+export const TASK_REQUEST_PREFIX_SOURCE = String.raw`\s*(?:(?:can|could|would)\s+you\s+|i\s+(?:want|need)\s+you\s+to\s+)?(?:please\s+)?`;
+
+/** Remove conversational wrappers without consuming an action clause. */
+export function stripTaskRequestPrefix(taskText: string): string {
+  return taskText.replace(new RegExp(`^${TASK_REQUEST_PREFIX_SOURCE}`, 'i'), '');
+}
+
 /** An explanation/review topic is not an imperative, even if named add/fix. */
 export function isReadOnlyTaskFrame(taskText: string): boolean {
-  const unfenced = stripFencedCodeBodies(taskText);
+  const unfenced = stripTaskRequestPrefix(stripFencedCodeBodies(taskText));
   const adviceQuestion = /^\s*(?:should\s+(?:i|we)\b|tell\s+me\s+whether\b|if\s+(?:i|we)\b[^.;!?\n]*\?)/i.test(unfenced);
   const prose = stripInformationalFrames(unfenced);
-  if (!adviceQuestion && !/^\s*(?:explain|describe|summarize|review|audit|what|why|how)\b/i.test(prose)) return false;
+  if (!adviceQuestion && !/^\s*(?:explain|describe|summarize|review|audit|what|why|how)\b/i.test(unfenced)) return false;
   // Bare coordinated names ("explain add and remove behavior") are topics.
   // A separate imperative, an immediate "review and fix", or an explicit
   // object after the paired verb is needed to leave the read-only frame.
   const verbs = `(?:${READ_ONLY_VERB_SOURCE}|make|order|sort)`;
   const directive = new RegExp(
-    `(?:\\b(?:then|afterwards)\\s+|[.;!?\\r\\n]\\s*|^\\s*(?:review|audit)\\s+and\\s+)(?:please\\s+)?${verbs}\\b|\\band\\s+${verbs}\\s+(?:it|this|that|the|a|an|any|all)\\b`, 'i');
+    `(?:\\b(?:then|afterwards)\\s+|[.;!?\\r\\n]\\s*|^\\s*(?:review|audit)\\s+and\\s+)${TASK_REQUEST_PREFIX_SOURCE}${verbs}\\b|\\band\\s+${TASK_REQUEST_PREFIX_SOURCE}${verbs}\\s+(?:it|this|that|the|a|an|any|all)\\b`, 'i');
   if (directive.test(prose)) return false;
   // Coordinated API names remain topics. A repair predicate with its own
   // ordinary object ("and fix bugs", "and repair parser.js") is an action.
   const topicName = '[A-Za-z_$][\\w$]*';
   const topicList = new RegExp(`^\\s*(?:explain|describe|summarize|review|audit|what|why|how)\\s+(?:how\\s+)?${topicName}(?:\\s*(?:,|and|or)\\s*${topicName})+\\s+(?:behavior|semantics|work|operations?|functions?|methods?|apis?)\\b`, 'i');
-  const coordinatedEdit = new RegExp(`\\band\\s+(?:please\\s+)?(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|make|order|sort)\\s+\\S+`, 'i');
+  const coordinatedEdit = new RegExp(`\\band\\s+${TASK_REQUEST_PREFIX_SOURCE}(?:${MUTATION_VERB_SOURCE}|${DESTRUCTIVE_VERB_SOURCE}|make|order|sort)\\s+\\S+`, 'i');
   const topic = topicList.exec(prose);
   return !coordinatedEdit.test(topic ? prose.slice(topic[0].length) : prose);
 }
