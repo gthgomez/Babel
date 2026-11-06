@@ -70,6 +70,10 @@ export interface CliFailureCapsule {
 
 export interface CliInvocationResult {
   exitCode: number;
+  /** Raw termination witness; a signal is not an observed numeric process exit. */
+  signal?: string | null;
+  /** Preserve process transport errors even when stdout contains valid JSON. */
+  processError?: boolean;
   stdout: string;
   stderr: string;
   payload: Record<string, unknown> | null;
@@ -652,6 +656,8 @@ export function runBabelCli(
 
   return {
     exitCode,
+    signal,
+    processError: result.error !== undefined,
     stdout,
     stderr,
     payload,

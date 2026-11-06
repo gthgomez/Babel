@@ -39,9 +39,9 @@ export function parseNativeCliPayload(payload: unknown): NativeTaskTerminal | nu
 }
 
 /** A settled CLI exit must agree with its canonical terminal outcome. */
-export function nativeCliProcessSettled(process: { exitCode: number; timedOut?: boolean; failureCapsule?: unknown }, terminal: NativeTaskTerminal | null): boolean {
+export function nativeCliProcessSettled(process: { exitCode: number; signal?: string | null; processError?: boolean; timedOut?: boolean; failureCapsule?: unknown }, terminal: NativeTaskTerminal | null): boolean {
   return terminal !== null && process.exitCode === (terminal.status === 'completed' ? 0 : 1) &&
-    process.timedOut !== true && process.failureCapsule === undefined
+    process.signal == null && process.processError !== true && process.timedOut !== true && process.failureCapsule === undefined
 }
 
 /** No evaluator spend/turn/request overrides and no host execution fallback. */
