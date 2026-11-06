@@ -9,6 +9,7 @@ import { formatPlanHandoffUserMessage } from "./planExecuteMode.js";
 import { recordUserMessage } from "./threadEventLog.js";
 import { ChatTurnTelemetryCollector } from "./chatTurnTelemetry.js";
 import { resetGateRejectedCompletionCapture } from "./preservedUnverifiedTerminal.js";
+import { readOnlyExecutionConflictReport } from './chatToolScopeAdmission.js';
 
 /**
  * Fill a missing repository map for this submission.
@@ -87,6 +88,14 @@ export async function prepareStreamingSubmission(
 
   resetGateRejectedCompletionCapture(host);
   host.conversation.push({ role: "user", content: userInput });
+  const scopeConflict = host.options.executionScope?.kind === 'conversation' ? null : readOnlyExecutionConflictReport({
+    taskText: runtime.taskText, operation: effectiveOperation,
+    executionProfile: host.executionProfile, presentationOnly: runtime.presentationOnly === true,
+  });
+  if (scopeConflict) {
+    host.conversation.push({ role: 'assistant', content: scopeConflict.reason });
+    return { halted: true, haltEvent: host.streamDone(scopeConflict.reason, { blockedReport: scopeConflict }) } as const;
+  }
   // S01/#211: harness-generated repair guidance is only ever injected for an
   // execute-like operation. A READ_ONLY submission never receives the
   // generated edit mandate, and the injected text identifies itself as

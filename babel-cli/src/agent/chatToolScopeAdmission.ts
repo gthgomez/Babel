@@ -1,9 +1,34 @@
 import type {ChatCallbacks,ChatEngineActionExecutorHost} from './chatEngineContracts.js'
 import {chatActionToolName,chatActionTarget,type ChatToolAction} from './chatToolDefinitions.js'
 import type {BlockedReport} from '../schemas/agentContracts.js'
+import {analyzeTaskShape,isReadOnlyTaskFrame,stripFencedCodeBodies,type TaskOperation} from '../config/chatTaskClass.js'
 
 export {requireProjectRoot} from './chatExecutionScope.js'
 export const PROJECT_REQUIRED_MESSAGE='PROJECT_REQUIRED: Select and authorize a project before using tools.'
+
+/** A read-only scope cannot deliver a requested execution-and-artifact workflow.
+ * This is a controller-owned refusal, never permission to bypass a no-edit rule.
+ */
+export function readOnlyExecutionConflictReport(input:{
+  taskText:string
+  operation:TaskOperation
+  executionProfile:string
+  presentationOnly?:boolean
+}):BlockedReport|null {
+  if(input.operation!=='READ_ONLY'||input.executionProfile==='plan'||input.presentationOnly)return null
+  const prose=stripFencedCodeBodies(input.taskText)
+  if(isReadOnlyTaskFrame(prose)||analyzeTaskShape(prose).operation==='READ_ONLY')return null
+  const executionProse=prose.replace(/\b(?:do\s+not|don't|never)\s+(?:(?:actually|really)\s+)?(?:execute|run)\b[^.;!?\n]*/gi,' ')
+  const requiresExecution=/\b(?:actually|really)\s+(?:execute|run)\b|\b(?:execute|run)\b[^.!?\n]*\b(?:actual|observed)\s+(?:output|results?|exits?|exit\s+codes?)\b/i.test(executionProse)
+  if(!requiresExecution)return null
+  return {
+    schema_version:1,status:'BLOCKED',reason_code:'unsupported_operation',cause_class:'harness',
+    reason:'The requested execution and output creation were not performed: this submission was narrowed to read-only authority.',
+    missing:'An accepted task scope that permits the requested execution and output changes',
+    checked:[{action:'task scope admission',target:'READ_ONLY',finding:'The accepted submission permits inspection only; no execution or output creation was dispatched.'}],
+    next_steps:['Clarify the permitted output changes, or request a read-only explanation.'],
+  }
+}
 
 /** Receipt of the controller's actual scope admission check, with no invented tool checks. */
 export function conversationScopeRequiredReport():BlockedReport {

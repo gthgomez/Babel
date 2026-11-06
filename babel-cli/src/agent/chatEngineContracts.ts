@@ -660,6 +660,7 @@ export interface ChatEngineStreamingLoopHost {
   readonly detectAndBuildBlockedReport: (answer: string) => BlockedReport | null
   readonly emitCancelledIfOperatorAbort: (err?: unknown) => ChatEvent | null
   readonly engineRunDir: string
+  readonly executionProfile: ChatExecutionProfile
   readonly evaluateCompletionGate: (
     turnResult: ChatTurn,
     taskIntent: TaskIntent,
