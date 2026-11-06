@@ -18,10 +18,12 @@ export function readOnlyExecutionConflictReport(input:{
   if(input.operation!=='READ_ONLY'||input.executionProfile==='plan'||input.presentationOnly)return null
   const prose=stripFencedCodeBodies(input.taskText)
   if(isReadOnlyTaskFrame(prose)||analyzeTaskShape(prose).operation==='READ_ONLY')return null
-  const executionProse=prose.replace(/\b(?:do\s+not|don't|never)\s+(?:(?:actually|really)\s+)?(?:execute|run)\b[^.;!?\n]*/gi,' ')
-  const executionDirective=new RegExp(`(?:^|[.;!?\\n]\\s*|\\b(?:then|afterwards|and\\s+then)\\s+)${TASK_REQUEST_PREFIX_SOURCE}(?:(?:actually|really)\\s+)?(?:execute|run)\\b`,'i')
-  const requiresExecution=executionDirective.test(executionProse)||/\b(?:actually|really)\s+(?:execute|run)\b|\b(?:execute|run)\b[^.!?\n]*\b(?:actual|observed)\s+(?:output|results?|exits?|exit\s+codes?)\b/i.test(executionProse)
-  if(!requiresExecution)return null
+  const positiveClauseBoundary=String.raw`\b(?:but|however|instead|yet|then|afterwards|and\s+then)\s+`
+  // A negation owns its clause, not a subsequent affirmative instruction.
+  const executionProse=prose.replace(new RegExp(`\\b(?:do\\s+not|don't|never)\\s+(?:(?:actually|really)\\s+)?(?:execute|run)\\b(?:(?!${positiveClauseBoundary})[^.;!?\\n])*`,'gi'),' ')
+  const executionDirective=new RegExp(`(?:^|[.;!?\\n]\\s*|${positiveClauseBoundary})${TASK_REQUEST_PREFIX_SOURCE}(?:(?:actually|really)\\s+)?(?:execute|run)\\b`,'i')
+  // Execution words within a requested guide are topics, not imperatives.
+  if(!executionDirective.test(executionProse))return null
   return {
     schema_version:1,status:'BLOCKED',reason_code:'unsupported_operation',cause_class:'harness',
     reason:'The requested execution and output creation were not performed: this submission was narrowed to read-only authority.',
