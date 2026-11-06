@@ -225,6 +225,9 @@ export function parseStructuredFailures(
 
   if (tsc.length > 0) return { failures: tsc, parserName: 'tsc' }
 
+  const lint = parseStylishLint(text)
+  if (lint.length > 0) return { failures: lint, parserName: 'stylish_lint' }
+
   const generic = parseGenericFileLine(text)
   if (generic.length > 0) return { failures: generic, parserName: 'generic_file_line' }
 
@@ -437,13 +440,35 @@ function parseCargo(text: string): CompiledFailure[] {
   return uniqueFailures(failures)
 }
 
+/** XO and ESLint put a location header above severity-bearing diagnostic rows. */
+function parseStylishLint(text: string): CompiledFailure[] {
+  const failures: CompiledFailure[] = []
+  let file: string | undefined
+  for (const line of text.split(/\r?\n/)) {
+    const header = /^\s*(.+\.[cm]?[jt]sx?)(?::\d+:\d+)?\s*$/i.exec(line)
+    if (header) {
+      file = header[1]!.trim()
+      continue
+    }
+    const row = /^\s*([✖×✗⚠])?[\uFE0E\uFE0F]?\s*(\d+):(\d+)\s+(?:(error|warning)\s+)?(.+?)\s*$/i.exec(line)
+    if (!file || !row || row[1] === '⚠' || row[4]?.toLowerCase() === 'warning') continue
+    if (!row[1] && row[4]?.toLowerCase() !== 'error') continue
+    failures.push({file,line:Number(row[2]),column:Number(row[3]),message:row[5]!,parser:'stylish_lint'})
+    if (failures.length >= 8) break
+  }
+  return uniqueFailures(failures)
+}
+
 function parseGenericFileLine(text: string): CompiledFailure[] {
   const failures: CompiledFailure[] = []
-  const re = /(\S+\.[A-Za-z0-9]+):(\d+)(?::(\d+))?:\s*(.+)/g
+  const re = /(\S+\.[A-Za-z0-9]+):(\d+)(?::(\d+))?:[ \t]*(.+)/g
   let match: RegExpExecArray | null
   while ((match = re.exec(text)) !== null) {
     const file = match[1]!
     if (/node_modules|^\d+$/.test(file)) continue
+    // An optional column can backtrack into the message slot on a bare header.
+    // A location alone is not evidence of a failure.
+    if (/^\d+\s*$/.test(match[4]!)) continue
     failures.push({
       file,
       line: Number(match[2]),

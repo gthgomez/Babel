@@ -413,7 +413,7 @@ export function handleDashboard(ctx: ReplContext, _args: string[]): void {
   console.log(
     primary(`\n  ${bold('CAPABILITIES')} ${muted('─'.repeat(Math.max(0, width - 17)))}\n`),
   );
-  console.log(`    ${muted('✓')} ${dim('Persistence')}  ${muted('enabled (.babel_history)')}`);
+  console.log(`    ${muted('✓')} ${dim('Persistence')}  ${muted('enabled (private profile history)')}`);
   console.log(`    ${muted('✓')} ${dim('Interactive')}  ${muted('enabled (checklist review)')}`);
   console.log(`    ${muted('✓')} ${dim('HUD Waterfall')} ${muted('active (hot-file activity)')}`);
 

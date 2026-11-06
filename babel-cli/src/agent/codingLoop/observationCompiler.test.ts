@@ -325,6 +325,47 @@ describe('observation compiler (shipped formatChatToolObservation path)', () => 
     assert.match(summary, /handles stale cache|structured failure/)
   })
 
+  test('stylish lint errors retain the diagnostic and exclude warning-only locations', () => {
+    const stdout = [
+      '  scripts/example.js:3:1',
+      '  ⚠   3:1   Unexpected todo comment.  no-warning-comments',
+      '',
+      '  src/worker.js:30:28',
+      '  ✖  30:28  Use .size > 0 when checking size is not zero.  unicorn/explicit-length-check',
+      '',
+      '  1 warning',
+      '  1 error',
+    ].join('\n')
+    const compiled = compileObservation({tool:'test_run',target:'npm test',exitCode:1,stdout})
+    assert.deepEqual(compiled.failures.map(({file,line,column,message})=>({file,line,column,message})), [{
+      file:'src/worker.js',line:30,column:28,
+      message:'Use .size > 0 when checking size is not zero.  unicorn/explicit-length-check',
+    }])
+    const summary = formatVerifierReceiptSummary({verifierId:'npm-test',command:'npm test',exitCode:1,stdout})
+    assert.match(summary,/Use \.size > 0/)
+    assert.match(summary,/unicorn\/explicit-length-check/)
+    assert.doesNotMatch(summary,/failures: (?:1; 28|28)(?:\n|$)/)
+    assert.match(formatChatToolObservation({type:'test_run',command:'npm test'},{exitCode:1,stdout}),/src\/worker\.js:30/)
+  })
+
+  test('stylish lint diagnostics support Windows paths and explicit severity', () => {
+    const stdout = 'C:\\work tree\\例\\worker.ts\n  8:4  warning  A warning  warning-rule\n  9:2  error  An actionable error  error-rule\n'
+    const compiled = compileObservation({tool:'test_run',target:'npm test',exitCode:1,stdout})
+    assert.equal(compiled.failures.length,1)
+    assert.equal(compiled.failures[0]?.file,'C:\\work tree\\例\\worker.ts')
+    assert.equal(compiled.failures[0]?.line,9)
+    assert.equal(compiled.failures[0]?.column,2)
+    assert.match(compiled.failures[0]?.message??'',/An actionable error/)
+  })
+
+  test('bare location headers and warning-only lint output are not structured failures', () => {
+    for(const stdout of ['src/worker.js:30:28\n','src/worker.js:30:28\n  ⚠  30:28  A warning  warning-rule\n']){
+      const compiled=compileObservation({tool:'test_run',target:'npm test',exitCode:0,stdout})
+      assert.deepEqual(compiled.failures,[])
+      assert.match(formatCompiledObservation(compiled),/src\/worker\.js:30:28/,'original output remains available')
+    }
+  })
+
   test('pytest and tsc parsers attach structured failures', () => {
     const py = compileObservation({
       tool: 'run_command',

@@ -15,6 +15,7 @@ import { retainedLegacyArchive } from './chatArchiveLegacy.js';
 import { writeCheckpointFileSync } from '../utils/atomicCheckpointFile.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { globalCostTracker, type SessionUsageSummary } from '../services/costTracker.js';
+import { settlementReportedCostUsd } from '../services/settlementReportedCost.js';
 import type { BlockedReport, TerminalOutcome, TerminalReasonCode } from '../schemas/agentContracts.js';
 import type {
   ChatEngineLimits,
@@ -427,6 +428,7 @@ export type RoutingReceiptMetadata = {
   prompt_tokens?: number | null;
   completion_tokens?: number | null;
   estimated_cost_usd?: number | null;
+  provider_reported_total_charge_usd?: number | null;
   prompt_cache_hit_tokens?: number | null;
   prompt_cache_miss_tokens?: number | null;
   cost_precision?: string | null;
@@ -461,8 +463,10 @@ export function pushRoutingReceiptFromMetadata(
     observed,
   });
   const effort_aliased = deriveEffortAliased(requested, sent, normalized);
-  const cost_basis = metadata.estimated_cost_usd === null || metadata.estimated_cost_usd === undefined
-    ? 'unknown' : mapCostPrecisionToBasis(metadata.cost_precision);
+  const reportedCost = settlementReportedCostUsd(metadata);
+  const cost = reportedCost === undefined ? metadata.estimated_cost_usd ?? null : reportedCost;
+  const cost_basis = cost === null ? 'unknown'
+    : reportedCost === undefined ? mapCostPrecisionToBasis(metadata.cost_precision) : 'provider_reported';
 
   const receipt: TurnRoutingReceipt = {
     turn,
@@ -470,7 +474,7 @@ export function pushRoutingReceiptFromMetadata(
     model: metadata.provider_model_id,
     input_tokens: metadata.prompt_tokens ?? null,
     output_tokens: metadata.completion_tokens ?? null,
-    cost_usd: metadata.estimated_cost_usd ?? null,
+    cost_usd: cost,
     cost_basis,
     effective_source,
     effort_aliased,
