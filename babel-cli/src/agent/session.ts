@@ -333,6 +333,7 @@ export class AgentSession {
   private laneContext() {
     return {
       task: this.options.task,
+      ...(this.options.signal !== undefined ? { signal: this.options.signal } : {}),
       ...(this.options.project !== undefined ? { project: this.options.project } : {}),
       ...(this.options.projectRoot !== undefined ? { projectRoot: this.options.projectRoot } : {}),
       ...(this.options.workspaceRoot !== undefined
@@ -528,6 +529,7 @@ export class AgentSession {
       payload: result.payload,
       exitCode: result.exitCode,
       humanText: result.humanText,
+      planText: result.planText,
     };
   }
 

@@ -56,6 +56,8 @@ export interface BabelLiteArtifactLayout {
 export interface AgentSessionOptions {
   task: string;
   verb: LiteSessionVerb;
+  /** Parent cancellation for read-only planning. */
+  signal?: AbortSignal;
   project?: string;
   projectRoot?: string;
   workspaceRoot?: string | null;
@@ -120,6 +122,8 @@ export interface AgentSessionResult {
   payload: LiteResultPayload | Record<string, unknown>;
   exitCode: number;
   humanText?: string;
+  /** Complete canonical Plan handoff, before presentation formatting. */
+  planText?: string;
 }
 
 export interface AgentWorkerLoopStep {
@@ -146,6 +150,8 @@ export interface AgentWorkerLoopPayload {
 
 export interface AgentLaneContext {
   task: string;
+  /** Parent cancellation for read-only planning. */
+  signal?: AbortSignal;
   project?: string;
   projectRoot?: string;
   workspaceRoot?: string | null;

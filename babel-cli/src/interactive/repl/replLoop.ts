@@ -89,7 +89,8 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
   registerInterruptHost(
     {
       cancelTurn: () => {
-        ctx.chatEngine?.abortTurn();
+        if (ctx.cancelActiveRun) ctx.cancelActiveRun();
+        else ctx.chatEngine?.abortTurn();
       },
       clearComposer: () => {
         setAdapterDraft(ctx, '');

@@ -23,6 +23,8 @@ export interface ReplContext {
   // ── Session state ────────────────────────────────────────────────────────
   state: SessionState;
   isRunning: boolean;
+  /** Cancellation owner for an active non-Chat run, such as Plan. */
+  cancelActiveRun?: (() => void) | undefined;
   verboseMode: boolean;
   projectSettingsApplied: boolean;
 

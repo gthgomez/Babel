@@ -8,6 +8,7 @@ import { resolveRuntimeUserStateRoot } from '../config/runtimePaths.js'
 import { readRuntimeMode } from '../config/runtimeMode.js'
 import { isReadOnlyChat } from '../agent/chatReadOnly.js'
 import { assertFiniteBudgetSupported } from '../config/laneBudget.js'
+import { hasExplicitEditDenial } from '../config/chatTaskClass.js'
 
 const planSchema = z.object({ schemaVersion: z.literal(1), id: z.string(), projectRoot: z.string(), task: z.string(), body: z.string().min(1).max(1024 * 1024),
   createdAt: z.string(), fingerprint: z.string(), state: z.enum(['ready', 'applying', 'applied', 'failed']) })
@@ -82,7 +83,7 @@ export function loadSavedPlan(id: string, env: NodeJS.ProcessEnv = process.env):
 }
 
 export function shouldAutoApplyPlan(task: string, preference: boolean, planOnly = false): boolean {
-  return preference && !planOnly && !/\b(?:plan[- ]only|read[- ]only|do not (?:apply|implement|change|edit)|don['’]t (?:apply|implement|change|edit))\b/i.test(task)
+  return preference && !planOnly && !hasExplicitEditDenial(task) && !/\b(?:plan[- ]only|read[- ]only|do not (?:apply|implement|change|edit)|don['’]t (?:apply|implement|change|edit))\b/i.test(task)
 }
 
 /** Serialize application and recheck scope; the existing executor still owns all permissions and budgets. */
