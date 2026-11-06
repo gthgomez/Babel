@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -34,7 +35,9 @@ function fixture(t: test.TestContext): string {
           assert.equal(await waitForProcessExit(pid, 5_000), true, 'owned fixture must exit before directory cleanup')
         }
       }
-      rmSync(root, { recursive: true, force: true })
+      // Windows can retain a directory handle briefly after process exit.
+      // Retry transient filesystem errors; a persistent lock still fails teardown.
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     } finally {
       for (const [name, value] of previous) {
         if (value === undefined) delete process.env[name]
