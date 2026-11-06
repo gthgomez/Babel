@@ -124,6 +124,7 @@ and installed release artifacts are separate qualification work.
 Focused model-free coverage:
 
 ```sh
+npm run build
 node --import tsx --import ./src/testinfra/register-no-ambient-inference.mjs \
   --test src/eval/native-chat-tasks.test.ts
 ```

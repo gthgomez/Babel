@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, readFile, symlink, writeFile, mkdir, chmod } from 'node:fs/promises'
+import { mkdtemp, readFile, symlink, writeFile, mkdir, chmod, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
 import { captureNativeTaskFiles, gradeNativeInspection, nativeChangedPaths, nativeGraderReady, scoreNativeTask } from './native-chat-tasks.js'
-import { nativeCliProcessSucceeded, parseNativeCliPayload, runNativeCliTask } from './native-chat-cli.js'
+import { nativeCliProcessSettled, parseNativeCliPayload, runNativeCliTask } from './native-chat-cli.js'
 import { runBabelCli } from '../services/liteTrustDemo.js'
+import { createSessionEventLog, flushSessionEventLog, recordToolProposed, recordToolStarted, recordToolTerminal, recordTurnEnded, recordUserSubmitted } from '../agent/sessionEvents.js'
 
 test('CLI adapter preserves canonical outcome and unknown telemetry, rejecting missing terminal evidence', () => {
   assert.equal(parseNativeCliPayload({ status: 'ANSWER_READY', answer: 'Done.' }), null)
@@ -26,9 +27,34 @@ test('a real CLI process that prints completion then exits nonzero cannot count 
   const result = runBabelCli([], { projectRoot: root, cliEntry: entry, offlineDemo: false })
   assert.equal(result.exitCode, 1)
   assert.equal(parseNativeCliPayload(result.payload)?.outcome, 'VERIFIED_COMPLETE')
-  assert.equal(nativeCliProcessSucceeded(result), false)
-  assert.equal(nativeCliProcessSucceeded({ exitCode: 0, timedOut: true }), false)
+  assert.equal(nativeCliProcessSettled(result, parseNativeCliPayload(result.payload)), false)
+  assert.equal(nativeCliProcessSettled({ exitCode: 0, timedOut: true }, parseNativeCliPayload(result.payload)), false)
 })
+
+for (const outcome of ['BUDGET_EXHAUSTED', 'BLOCKED_POLICY', 'BLOCKED_EXTERNAL', 'CANCELLED', 'AGENT_FAILURE', 'INFRA_FAILURE', 'INVALID_TASK', 'NEEDS_HUMAN_DECISION'] as const) {
+  test(`a real CLI exit 1 retains the settled ${outcome} terminal for independent grading`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'babel-native-settled-'))
+    try {
+      const entry = join(root, 'fixture.mjs')
+      await writeFile(entry, `console.log(JSON.stringify(${JSON.stringify({ terminal_outcome: outcome, answer: 'The task did not complete.', run_dir: 'run', usage: { totalInputTokens: 13, totalOutputTokens: 7, actualCostUSD: null } })})); process.exitCode=1`)
+      const result = runBabelCli([], { projectRoot: root, cliEntry: entry, offlineDemo: false })
+      const terminal = parseNativeCliPayload(result.payload)
+      assert.equal(result.exitCode, 1)
+      assert.equal(result.failureCapsule, undefined)
+      assert.equal(terminal?.outcome, outcome)
+      assert.equal(terminal?.usage?.totalInputTokens, 13)
+      assert.equal(terminal?.usage?.actualCostUSD, null)
+      assert.equal(nativeCliProcessSettled(result, terminal), true)
+      assert.equal(nativeCliProcessSettled({ ...result, exitCode: 0 }, terminal), false)
+      assert.equal(nativeCliProcessSettled({ ...result, timedOut: true }, terminal), false)
+      assert.equal(nativeCliProcessSettled({ ...result, failureCapsule: {} }, terminal), false)
+      assert.equal(nativeCliProcessSettled(result, null), false)
+      assert.deepEqual(scoreNativeTask(terminal, 'fail', false), { outcome: 'FAIL', acceptedCompletion: false, falseCompletion: false })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+}
 
 test('an ambient alternate CLI cannot bypass source identity or freshness', () => {
   const previous = process.env['BABEL_CLI_ENTRY']
@@ -40,6 +66,61 @@ test('an ambient alternate CLI cannot bypass source identity or freshness', () =
     else process.env['BABEL_CLI_ENTRY'] = previous
   }
 })
+
+test('ambiguous fixture root separators cannot widen child read grants', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'babel-native-ambiguous-scope-'))
+  try {
+    for (const delimiter of [',', ';']) assert.throws(() => runNativeCliTask({ root,
+      projectRoot: join(root, `candidate${delimiter}outside`), runsRoot: join(root, 'runs'), prompt: 'inspect fixture' }), /native_cli_scope_unavailable/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+for (const openclaw of [false, true]) {
+  test(`native CLI fixture scope denies sibling oracle reads with ${openclaw ? 'explicit' : 'fallback'} ambient read grants`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'babel-native-read-scope-'))
+    const previous = { allowed: process.env['BABEL_ALLOWED_ROOTS'], openclaw: process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] }
+    try {
+      const projectRoot = join(root, 'candidate')
+      const runsRoot = join(root, 'runs')
+      const runDir = join(runsRoot, 'fixture-session')
+      await mkdir(projectRoot)
+      await mkdir(join(root, 'protected'))
+      await mkdir(join(root, 'babel-cli/dist'), { recursive: true })
+      await writeFile(join(projectRoot, 'input.txt'), 'candidate input')
+      await writeFile(join(root, 'protected/baseline.json'), 'ORACLE_SENTINEL')
+      await writeFile(join(root, 'babel-cli/package.json'), '{"type":"module"}')
+      const log = createSessionEventLog('scope-fixture')
+      recordUserSubmitted(log, { turn_id: 'turn', task: 'inspect fixture' })
+      recordTurnEnded(log, { turn_id: 'turn', outcome: 'VERIFIED_COMPLETE', status: 'completed' })
+      assert.equal(flushSessionEventLog(runDir, log).error, undefined)
+      const sandbox = pathToFileURL(fileURLToPath(new URL('../../dist/sandbox.js', import.meta.url))).href
+      await writeFile(join(root, 'babel-cli/dist/index.js'), `
+        import { SafeExecutor } from ${JSON.stringify(sandbox)}
+        const executor = new SafeExecutor(process.env.BABEL_PROJECT_ROOT)
+        const inside = executor.fileRead('input.txt')
+        const outside = executor.fileRead('../protected/baseline.json')
+        console.log(JSON.stringify({ terminal_outcome: 'VERIFIED_COMPLETE', run_dir: ${JSON.stringify(runDir)},
+          answer: JSON.stringify({ insideExit: inside.exit_code, outsideExit: outside.exit_code, exposed: outside.stdout.includes('ORACLE_SENTINEL') }) }))
+      `)
+      process.env['BABEL_ALLOWED_ROOTS'] = root
+      if (openclaw) process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] = root
+      else delete process.env['BABEL_OPENCLAW_APPROVED_ROOTS']
+      const result = runNativeCliTask({ root, projectRoot, runsRoot, prompt: 'inspect fixture' })
+      const observed = JSON.parse(result.terminal.answer)
+      assert.equal(observed.insideExit, 0)
+      assert.notEqual(observed.outsideExit, 0)
+      assert.equal(observed.exposed, false)
+    } finally {
+      if (previous.allowed === undefined) delete process.env['BABEL_ALLOWED_ROOTS']
+      else process.env['BABEL_ALLOWED_ROOTS'] = previous.allowed
+      if (previous.openclaw === undefined) delete process.env['BABEL_OPENCLAW_APPROVED_ROOTS']
+      else process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] = previous.openclaw
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+}
 
 test('independent failure vetoes an engine completion and unknown grading cannot pass', () => {
   const terminal = { status: 'completed', outcome: 'VERIFIED_COMPLETE', answer: 'Done.' } as const
@@ -54,10 +135,64 @@ test('independent failure vetoes an engine completion and unknown grading cannot
   assert.equal(scoreNativeTask({ ...terminal, outcome: 'NO_CHANGE_REQUIRED' }, 'fail', false).falseCompletion, true)
 })
 
+test('native CLI operation evidence distinguishes completed, failed, cancelled and unsettled reads', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'babel-native-read-receipts-'))
+  try {
+    const projectRoot = join(root, 'candidate')
+    const runsRoot = join(root, 'runs')
+    const runDir = join(runsRoot, 'fixture-session')
+    await mkdir(projectRoot)
+    await mkdir(join(root, 'babel-cli/dist'), { recursive: true })
+    await writeFile(join(root, 'babel-cli/package.json'), '{"type":"module"}')
+    const log = createSessionEventLog('read-receipt-fixture')
+    recordUserSubmitted(log, { turn_id: 'turn', task: 'inspect fixture' })
+    for (const [id, target, terminal] of [
+      ['complete', 'REPO_MAP.md', { exit_code: 0 }],
+      ['failed', 'apps/web/main.mjs', { exit_code: 1, failed: true }],
+      ['cancelled', 'packages/api/server.mjs', { cancelled: true }],
+      ['unsettled', 'missing.txt', null],
+    ] as const) {
+      const identity = { turn_id: 'turn', tool_call_id: id, tool_name: 'read_file', target_summary: target }
+      recordToolProposed(log, identity)
+      recordToolStarted(log, identity)
+      if (terminal) recordToolTerminal(log, { ...identity, ...terminal })
+    }
+    recordTurnEnded(log, { turn_id: 'turn', outcome: 'VERIFIED_COMPLETE', status: 'completed' })
+    assert.equal(flushSessionEventLog(runDir, log).error, undefined)
+    await writeFile(join(root, 'babel-cli/dist/index.js'), `console.log(JSON.stringify(${JSON.stringify({ terminal_outcome: 'VERIFIED_COMPLETE', answer: 'fixture', run_dir: runDir })}))`)
+    const result = runNativeCliTask({ root, projectRoot, runsRoot, prompt: 'inspect fixture' })
+    assert.deepEqual(result.operations.map(operation => [operation.target, operation.completed, operation.exitCode]), [
+      ['REPO_MAP.md', true, 0], ['apps/web/main.mjs', false, 1], ['packages/api/server.mjs', false, undefined], ['missing.txt', false, undefined],
+    ])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('inspection rejects reversed relations and a false explanation containing all expected tokens', () => {
-  assert.equal(gradeNativeInspection('src/client and src/server exist; apps/web/main.mjs and packages/api/server.mjs do not.'), 'fail')
-  assert.equal(gradeNativeInspection(JSON.stringify({ corrections: [{ stale: 'apps/web/main.mjs', current: 'src/client' }, { stale: 'packages/api/server.mjs', current: 'src/server' }] })), 'fail')
-  assert.equal(gradeNativeInspection(JSON.stringify({ corrections: [{ stale: 'src/client', current: 'apps/web/main.mjs' }, { stale: 'src/server', current: 'packages/api/server.mjs' }] })), 'pass')
+  const evidence = { projectRoot: join(tmpdir(), 'native-inspection-fixture'), operations:
+    ['REPO_MAP.md', 'apps/web/main.mjs', 'packages/api/server.mjs'].map(target => ({ tool: 'read_file', target, completed: true, exitCode: 0 })) }
+  assert.equal(gradeNativeInspection('src/client and src/server exist; apps/web/main.mjs and packages/api/server.mjs do not.', evidence), 'fail')
+  assert.equal(gradeNativeInspection(JSON.stringify({ corrections: [{ stale: 'apps/web/main.mjs', current: 'src/client' }, { stale: 'packages/api/server.mjs', current: 'src/server' }] }), evidence), 'fail')
+  assert.equal(gradeNativeInspection(JSON.stringify({ corrections: [{ stale: 'src/client', current: 'apps/web/main.mjs' }, { stale: 'src/server', current: 'packages/api/server.mjs' }] }), evidence), 'pass')
+})
+
+test('inspection requires successful reads of each exact fixture path', () => {
+  const projectRoot = join(tmpdir(), 'native-inspection-fixture')
+  const answer = JSON.stringify({ corrections: [{ stale: 'src/client', current: 'apps/web/main.mjs' }, { stale: 'src/server', current: 'packages/api/server.mjs' }] })
+  const paths = ['REPO_MAP.md', 'apps/web/main.mjs', 'packages/api/server.mjs']
+  const valid = paths.map(target => ({ tool: 'read_file', target, completed: true, exitCode: 0 }))
+  assert.equal(gradeNativeInspection(answer, { projectRoot, operations: valid }), 'pass')
+  for (const operations of [
+    [],
+    valid.map(operation => ({ ...operation, completed: false, exitCode: 1 })),
+    valid.map(operation => ({ ...operation, target: `x/${operation.target}` })),
+    valid.map(operation => ({ ...operation, target: join(projectRoot, '..', 'other', operation.target) })),
+    valid.slice(0, 2),
+    valid.map(operation => ({ ...operation, completed: true, exitCode: 1 })),
+  ]) assert.equal(gradeNativeInspection(answer, { projectRoot, operations }), 'fail')
+  assert.equal(gradeNativeInspection(answer, { projectRoot, operations: valid.map(operation => ({ ...operation, target: join(projectRoot, operation.target) })) }), 'pass')
+  assert.equal(gradeNativeInspection(answer, { projectRoot, operations: valid.map(operation => ({ ...operation, target: `/project/${operation.target}` })) }), 'pass')
 })
 
 test('capture freezes bytes and rejects symlinks instead of following candidate paths', async () => {
@@ -90,6 +225,33 @@ test('mode-only read-only mutations are visible even with identical captured byt
     assert.deepEqual(nativeChangedPaths(baseline, beforeModes, after, afterModes), ['REPO_MAP.md', 'empty/'])
   } finally {
     await chmod(file, beforeModes.get('REPO_MAP.md')!)
+  }
+})
+
+test('capture detects mode-only Git metadata changes and POSIX special permission bits', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'babel-native-metadata-modes-'))
+  const config = join(root, '.git/config')
+  const ordinary = join(root, 'input.txt')
+  try {
+    await mkdir(join(root, '.git'))
+    await writeFile(config, 'fixture metadata\n', { mode: 0o644 })
+    await writeFile(ordinary, 'candidate input\n', { mode: 0o644 })
+    const beforeModes = new Map<string, number>()
+    const before = await captureNativeTaskFiles(root, beforeModes)
+    const baseline = new Map([...before].map(([path, bytes]) => [path, createHash('sha256').update(bytes).digest('hex')]))
+    await chmod(config, 0o444)
+    if (process.platform !== 'win32') await chmod(ordinary, 0o1644)
+    const afterModes = new Map<string, number>()
+    const after = await captureNativeTaskFiles(root, afterModes)
+    const changed = nativeChangedPaths(baseline, beforeModes, after, afterModes)
+    assert.ok(changed.includes('.git/config'))
+    if (process.platform !== 'win32') assert.ok(changed.includes('input.txt'))
+    assert.equal(before.has('.git/config'), false)
+    assert.equal(after.has('.git/config'), false)
+  } finally {
+    await chmod(config, 0o644)
+    await chmod(ordinary, 0o644)
+    await rm(root, { recursive: true, force: true })
   }
 })
 

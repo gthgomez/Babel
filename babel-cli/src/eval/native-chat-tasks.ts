@@ -11,7 +11,7 @@ import { captureJourneyGitState, prepareJourneyFixture, readJourneyCorpus } from
 import { gradeJourneyCode } from './harness-journey-code-oracle.js'
 import { gradeInCleanRoom } from './cleanRoomGrade.js'
 import { calibrationPolicy, calibrationReferences, createCalibrationRunner } from './native-chat-calibration.js'
-import type { NativeTaskTerminal } from './native-chat-cli.js'
+import type { NativeTaskOperation, NativeTaskTerminal } from './native-chat-cli.js'
 import { runGitCommand } from '../utils/gitExec.js'
 
 const TaskSchema = z.object({
@@ -24,13 +24,21 @@ const successOutcomes = new Set(['VERIFIED_COMPLETE', 'UNVERIFIED_PATCH', 'NO_CH
 const digest = (bytes: string | Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
 /** Relations, rather than token presence, establish the two requested corrections. */
-export function gradeNativeInspection(answer: string): OracleVerdict {
+export function gradeNativeInspection(answer: string, evidence: { projectRoot: string; operations: readonly NativeTaskOperation[] }): OracleVerdict {
   const schema = z.object({ corrections: z.array(z.object({ stale: z.string(), current: z.string() }).strict()).length(2) }).strict()
   try {
     const parsed = schema.parse(JSON.parse(answer))
     const actual = parsed.corrections.map(item => `${item.stale}:${item.current}`).sort()
     const expected = ['src/client:apps/web/main.mjs', 'src/server:packages/api/server.mjs'].sort()
-    return JSON.stringify(actual) === JSON.stringify(expected) ? 'pass' : 'fail'
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) return 'fail'
+    const inspected = ['REPO_MAP.md', 'apps/web/main.mjs', 'packages/api/server.mjs'].every(path => evidence.operations.some(operation => {
+      if (operation.tool !== 'read_file' || !operation.completed || operation.exitCode !== undefined && operation.exitCode !== 0) return false
+      const target = operation.target.replaceAll('\\', '/').replace(/^\/(?:project|app)(?:\/|$)/i, '')
+      const observed = resolve(evidence.projectRoot, target)
+      const required = resolve(evidence.projectRoot, path)
+      return process.platform === 'win32' ? observed.toLowerCase() === required.toLowerCase() : observed === required
+    }))
+    return inspected ? 'pass' : 'fail'
   } catch { return 'fail' }
 }
 
@@ -41,23 +49,28 @@ export async function captureNativeTaskFiles(root: string, modes: Map<string, nu
   let objects = 0
   const rootInfo = await lstat(root)
   if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error('Unsafe candidate root')
-  modes.set('.', rootInfo.mode & 0o777)
+  modes.set('.', rootInfo.mode & 0o7777)
   async function walk(directory: string): Promise<void> {
     for (const item of (await readdir(join(root, directory), { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
       const path = directory ? `${directory}/${item.name}` : item.name
-      // Git metadata has its own protected capture/integrity check.
-      if (path === '.git') continue
+      // Git bytes have a separate integrity check; retain their modes here.
+      const metadata = path === '.git' || path.startsWith('.git/')
       if (++objects > 512) throw new Error('Unsafe candidate object count')
       if (isCredentialTargetPath(path)) throw new Error('Unsafe candidate credential target')
       const stat = await lstat(join(root, path))
       if (stat.isSymbolicLink() || stat.nlink > 1 && stat.isFile()) throw new Error('Unsafe candidate link')
-      if (stat.isDirectory()) { modes.set(`${path}/`, stat.mode & 0o777); await walk(path); continue }
+      if (stat.isDirectory()) { modes.set(`${path}/`, stat.mode & 0o7777); await walk(path); continue }
+      if (metadata) {
+        if (!stat.isFile()) throw new Error('Unsafe candidate metadata object')
+        modes.set(path, stat.mode & 0o7777)
+        continue
+      }
       if (!stat.isFile() || stat.size > 1_048_576 || files.size >= 256 || bytes + stat.size > 4_194_304) throw new Error('Unsafe candidate capture size or object')
       const content = await readFile(join(root, path))
       bytes += content.length
       if (bytes > 4_194_304) throw new Error('Unsafe candidate capture size')
       files.set(path, Buffer.from(content))
-      modes.set(path, stat.mode & 0o777)
+      modes.set(path, stat.mode & 0o7777)
     }
   }
   await walk('')
@@ -168,7 +181,7 @@ export async function runNativeChatTasks(options: {
     const baselineModes = new Map<string, number>()
     await captureNativeTaskFiles(cell.candidateRoot, baselineModes)
     let captured = false
-    const operations: { tool: string; target: string; exitCode?: number }[] = []
+    const operations: NativeTaskOperation[] = []
     const diagnostics: string[] = []
     const changedPaths: string[] = []
     let oracleVerdict: OracleVerdict = 'unavailable'
@@ -189,9 +202,7 @@ export async function runNativeChatTasks(options: {
         oracleVerdict = 'fail'
         diagnostics.push('unauthorized_change_or_git_metadata_change')
       } else if (task.kind === 'read_only') {
-        const readPaths = ['REPO_MAP.md', 'apps/web/main.mjs', 'packages/api/server.mjs']
-        const inspected = readPaths.every(path => operations.some(operation => operation.tool === 'read_file' && operation.target.replaceAll('\\', '/').endsWith(path)))
-        oracleVerdict = inspected ? gradeNativeInspection(answer) : 'fail'
+        oracleVerdict = gradeNativeInspection(answer, { projectRoot: cell.candidateRoot, operations })
       } else if (calibration) {
         // Only fixed reference controls use byte equality. Arbitrary candidate
         // code is never imported or evaluated on the host to avoid Docker.
@@ -242,8 +253,13 @@ export async function runNativeChatTasks(options: {
           })
           terminal = await engine.submitMessage(input.prompt, {
           onAnswerChunk(chunk) { answer += chunk },
-          onToolStart(tool, target) { operations.push({ tool, target }); return operationCount++ },
-          onToolComplete(id, _detail, _error, exitCode) { if (operations[id] && exitCode !== undefined) operations[id]!.exitCode = exitCode },
+          onToolStart(tool, target) { operations.push({ tool, target, completed: false }); return operationCount++ },
+          onToolComplete(id, _detail, error, exitCode) {
+            if (operations[id]) {
+              operations[id]!.completed = error === undefined && (exitCode === undefined || exitCode === 0)
+              if (exitCode !== undefined) operations[id]!.exitCode = exitCode
+            }
+          },
           })
           answer = terminal.answer || answer
         }

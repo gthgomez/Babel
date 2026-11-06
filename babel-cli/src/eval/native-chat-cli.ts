@@ -11,6 +11,7 @@ export type NativeTaskTerminal = Pick<ChatResult, 'status' | 'outcome' | 'answer
   verifierReceipt?: ChatResult['verifierReceipt']
   turnRouting?: unknown[]
 }
+export type NativeTaskOperation = { tool: string; target: string; completed: boolean; exitCode?: number }
 const PayloadSchema = z.object({
   terminal_outcome: z.enum(['VERIFIED_COMPLETE', 'UNVERIFIED_PATCH', 'BLOCKED_EXTERNAL', 'BLOCKED_POLICY', 'BUDGET_EXHAUSTED', 'CANCELLED', 'INFRA_FAILURE', 'AGENT_FAILURE', 'NO_CHANGE_REQUIRED', 'INVALID_TASK', 'NEEDS_HUMAN_DECISION']),
   answer: z.union([z.string(), z.object({ answer: z.string() }).passthrough()]),
@@ -37,27 +38,30 @@ export function parseNativeCliPayload(payload: unknown): NativeTaskTerminal | nu
   }
 }
 
-/** A terminal JSON card cannot override a failed or interrupted CLI process. */
-export function nativeCliProcessSucceeded(process: { exitCode: number; timedOut?: boolean; failureCapsule?: unknown }): boolean {
-  return process.exitCode === 0 && process.timedOut !== true && process.failureCapsule === undefined
+/** A settled CLI exit must agree with its canonical terminal outcome. */
+export function nativeCliProcessSettled(process: { exitCode: number; timedOut?: boolean; failureCapsule?: unknown }, terminal: NativeTaskTerminal | null): boolean {
+  return terminal !== null && process.exitCode === (terminal.status === 'completed' ? 0 : 1) &&
+    process.timedOut !== true && process.failureCapsule === undefined
 }
 
 /** No evaluator spend/turn/request overrides and no host execution fallback. */
 export function runNativeCliTask(input: { root: string; projectRoot: string; runsRoot: string; prompt: string; model?: string }): {
   terminal: NativeTaskTerminal
-  operations: { tool: string; target: string; exitCode?: number }[]
+  operations: NativeTaskOperation[]
   routes: { provider: string | null; model: string | null; requestedModel: string | null; sentModel: string | null }[]
   verifierExitCode: number | null
 } {
   if (process.env['BABEL_CLI_ENTRY']?.trim()) throw new Error('native_cli_override_not_admitted')
+  if (/[;,]/.test(input.projectRoot)) throw new Error('native_cli_scope_unavailable')
   const cli = runBabelCli(['run', '--mode', 'chat-headless', '--json', '--project-root', input.projectRoot,
     ...(input.model ? ['--model', input.model] : []), input.prompt], {
     projectRoot: input.projectRoot, offlineDemo: false, cwd: join(input.root, 'babel-cli'), ensureDist: 'fail',
     cliEntry: join(input.root, 'babel-cli/dist/index.js'),
-    env: { BABEL_ROOT: input.root, BABEL_RUNS_DIR: input.runsRoot },
+    env: { BABEL_ROOT: input.root, BABEL_RUNS_DIR: input.runsRoot,
+      BABEL_ALLOWED_ROOTS: input.projectRoot, BABEL_OPENCLAW_APPROVED_ROOTS: input.projectRoot },
   })
-  if (!nativeCliProcessSucceeded(cli)) throw new Error(`native_cli_process_failed:exit_${cli.exitCode}:timeout_${cli.timedOut === true}`)
   const terminal = parseNativeCliPayload(cli.payload)
+  if (!nativeCliProcessSettled(cli, terminal)) throw new Error(`native_cli_process_failed:exit_${cli.exitCode}:timeout_${cli.timedOut === true}`)
   const parsed = PayloadSchema.safeParse(cli.payload)
   if (!terminal || !parsed.success) throw new Error('native_cli_terminal_unavailable')
   const runRelative = relative(input.runsRoot, parsed.data.run_dir)
@@ -66,7 +70,16 @@ export function runNativeCliTask(input: { root: string; projectRoot: string; run
   if (inspected.kind !== 'valid') throw new Error('native_cli_session_evidence_unavailable')
   const ended = inspected.log.events.filter(event => event.kind === 'turn_ended').at(-1)
   if (!ended || ended.outcome !== terminal.outcome) throw new Error('native_cli_terminal_conflict')
-  const operations = inspected.log.events.filter(event => event.kind === 'tool_started').map(event => ({ tool: event.tool_name, target: event.target_summary ?? '' }))
+  const operations = inspected.log.events.filter(event => event.kind === 'tool_started').map(event => {
+    const settled = inspected.log.events.find(candidate =>
+      (candidate.kind === 'tool_completed' || candidate.kind === 'tool_failed' || candidate.kind === 'tool_cancelled') &&
+      candidate.seq > event.seq && candidate.turn_id === event.turn_id && candidate.tool_call_id === event.tool_call_id &&
+      candidate.idempotency_key === event.idempotency_key && candidate.tool_name === event.tool_name)
+    const exitCode = settled && 'exit_code' in settled ? settled.exit_code : undefined
+    return { tool: event.tool_name, target: event.target_summary ?? '',
+      completed: settled?.kind === 'tool_completed' && (exitCode === undefined || exitCode === 0),
+      ...(exitCode !== undefined ? { exitCode } : {}) }
+  })
   const inputs = inspected.log.events.filter(event => event.kind === 'model_input_receipt')
   const routes = inspected.log.events.filter(event => event.kind === 'model_result_delivery').map(event => {
     const request = inputs.find(input => input.inference_id === event.inference_id)
