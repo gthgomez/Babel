@@ -86,7 +86,7 @@ These are things you can see in this repo and in the published 0.2.0 package. Th
 
 Published Desktop builds are **Windows x64 only** (a Setup `.exe` and a portable `.zip`). [v0.2.0](https://github.com/gthgomez/Babel/releases/tag/v0.2.0) and [v0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3) both include those files. Linux and macOS should use the npm CLI above.
 
-The Windows installer is unsigned, and SmartScreen can warn. Setup steps for the v0.2.0 tag: [babel-desktop/docs/INSTALL-WINDOWS.md](babel-desktop/docs/INSTALL-WINDOWS.md).
+The Windows installer is unsigned, and SmartScreen can warn. Setup steps for the v0.2.0 tag: [babel-desktop/docs/INSTALL-WINDOWS.md](https://github.com/gthgomez/Babel/blob/v0.2.0/babel-desktop/docs/INSTALL-WINDOWS.md).
 
 ## Providers and the sandbox
 

@@ -34,7 +34,7 @@ Babel is a local **agent harness**. Chat-style tasks are the default. `plan` and
 Published downloads are Windows x64 only.
 
 - [babel-desktop/README.md](../babel-desktop/README.md) — current source behavior, which can differ from an installer
-- [babel-desktop/docs/INSTALL-WINDOWS.md](../babel-desktop/docs/INSTALL-WINDOWS.md) — setup guide as shipped on the v0.2.0 tag
+- [babel-desktop/docs/INSTALL-WINDOWS.md](https://github.com/gthgomez/Babel/blob/v0.2.0/babel-desktop/docs/INSTALL-WINDOWS.md) — setup guide as shipped on the v0.2.0 tag
 - [v0.2.0 release](https://github.com/gthgomez/Babel/releases/tag/v0.2.0) — Setup `.exe` and portable ZIP
 
 ## Concepts and architecture
