@@ -7,6 +7,7 @@
 
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { hasExplicitEditDenial, isReadOnlyTaskFrame, resolveTaskShape, stripTaskRequestPrefix } from '../config/chatTaskClass.js';
 
 import type { OrchestratorManifest } from '../schemas/agentContracts.js';
 import {
@@ -32,6 +33,7 @@ export type SemanticExpectation =
     };
 
 export interface BoundedTaskContract {
+  readOnly: boolean;
   bounded: boolean;
   requestedTargets: string[];
   contentTargets: string[];
@@ -413,8 +415,14 @@ export function normalizeRequestedFileTargetsForBoundedContract(userRequest: str
   return writeTargets.length > 0 ? writeTargets : deDuplicatedTargets;
 }
 
+/** Write postconditions from the original owner request, never generated handoff prose. */
 export function getRequestedTargetContract(rawTask: string): BoundedTaskContract {
-  const requestedTargets = normalizeRequestedFileTargetsForBoundedContract(rawTask);
+  // Mentioned input paths remain useful for discovery, but a read-only task
+  // must never turn them into mandatory file_write postconditions.
+  const inspection = /^(?:read|inspect|list|view|scan|check|open|find|locate)\b/i.test(stripTaskRequestPrefix(rawTask)) && resolveTaskShape(rawTask).operation==='READ_ONLY';
+  const readOnly = hasExplicitEditDenial(rawTask) || isReadOnlyTaskFrame(rawTask) || inspection;
+  const requestedTargets = readOnly
+    ? [] : normalizeRequestedFileTargetsForBoundedContract(rawTask);
   const reportTarget = requestedTargets.find((target) => isWriteReportTarget(target)) ?? null;
   const contentTargets = requestedTargets.filter((target) => !isWriteReportTarget(target));
   const exactInvariants = extractExactInvariants(rawTask);
@@ -482,6 +490,7 @@ export function getRequestedTargetContract(rawTask: string): BoundedTaskContract
   }
 
   return {
+    readOnly,
     bounded: requestedTargets.length > 0 && requestedTargets.length <= 4,
     requestedTargets,
     contentTargets,
@@ -496,6 +505,7 @@ export function getRequestedTargetContract(rawTask: string): BoundedTaskContract
 
 export function getBoundedTaskPlanningLines(rawTask: string): string[] {
   const contract = getRequestedTargetContract(rawTask);
+  if(contract.readOnly)return ['--- READ-ONLY TASK CONTRACT ---','Named paths are inspection inputs. Do not propose file_write steps.'];
   const exactInvariantLines = formatExactInvariantPromptLines(contract.exactInvariants, 'planning');
   if (!contract.bounded) {
     return exactInvariantLines;
@@ -555,6 +565,7 @@ export function getBoundedTaskPlanningLines(rawTask: string): string[] {
 
 export function getBoundedTaskQaLines(rawTask: string): string[] {
   const contract = getRequestedTargetContract(rawTask);
+  if(contract.readOnly)return ['--- READ-ONLY TASK CONTRACT REVIEW ---','Named paths are inspection inputs, not required write outputs. Reject all file_write steps.'];
   const exactInvariantLines = formatExactInvariantPromptLines(contract.exactInvariants, 'qa');
   if (!contract.bounded) {
     return exactInvariantLines;

@@ -140,7 +140,7 @@ export function collectBoundedContractViolations(
   // enforcement entirely. Benchmark tasks now receive the same contract checks
   // as all other tasks — the external validation assumption was too permissive.
   const contract = getRequestedTargetContract(rawTask);
-  if (contract.requestedTargets.length === 0) {
+  if (contract.requestedTargets.length === 0 && !contract.readOnly) {
     return null;
   }
 
@@ -178,7 +178,7 @@ export function collectBoundedContractViolations(
         tag: 'SFDIPOT-P',
         condition: `[SCOPE_CREEP] Step ${fileWriteTarget.step} writes a file not mentioned in the task: ${fileWriteTarget.target}. Task targets: ${contract.requestedTargets.join(', ')}`,
         confidence: contract.bounded ? 5 : 3,
-        fix_hint:
+        fix_hint: contract.readOnly ? 'Remove file_write steps: the owner task is read-only.' :
           'Remove file_write steps for files not mentioned in the task, or justify them explicitly in the plan rationale.',
       });
     }
@@ -312,6 +312,7 @@ export function repairExactOutputSchemaArtifacts(
   projectRoot: string | null,
 ): string | null {
   if (
+    getRequestedTargetContract(rawTask).readOnly ||
     !projectRoot ||
     !/\bsummary\.csv\b/i.test(rawTask) ||
     !/period,severity,count/i.test(rawTask)
@@ -492,6 +493,7 @@ export function assertBoundedPlanActivationContract(
   }
 
   const contract = getRequestedTargetContract(rawTask);
+  if(contract.readOnly && approvedPlan.minimal_action_set.some(step=>step.tool==='file_write'))return '[READ_ONLY_TASK] A read-only task cannot activate file_write steps.';
   if (!contract.bounded || contract.requestedTargets.length === 0) {
     return null;
   }

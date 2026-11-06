@@ -1,4 +1,4 @@
-import { isScopedEditObject, stripFencedCodeBodies } from '../config/chatTaskClass.js';
+import { isReadOnlyTaskFrame, isScopedEditObject, stripFencedCodeBodies, TASK_REQUEST_PREFIX_SOURCE } from '../config/chatTaskClass.js';
 
 export type LiteFullSelectedLane =
   | 'lite_ask'
@@ -150,9 +150,9 @@ const EXPLICIT_FILE_PATH_RE =
   /[`'"]?((?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+)[`'"]?/g;
 
 const MUTATION_PATTERN =
-  /\b(fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove|autonomous|verified|lane)\b/i;
+  /\b(fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove|add|insert|extend|refactor|rename|autonomous|verified|lane)\b/i;
 const DIRECT_MUTATION_PATTERN =
-  /^\s*(fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove|autonomous|verified|lane)\b/i;
+  /^\s*(fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove|add|insert|extend|refactor|rename|autonomous|verified|lane)\b/i;
 const NO_WRITE_PATTERN =
   /\b(read[- ]only|do not edit|do not modify|do not write|do not apply|without editing|without applying|without changes|no file changes|no writes?|don't edit|don't modify|don't apply)\b/i;
 const ASK_PATTERN =
@@ -189,7 +189,7 @@ function hasMutationInstructionOutsideProhibition(task: string): boolean {
     ' ',
   );
   // A report mentioning "the fix" also does not authorize implementation.
-  const mutationRequest = /^(?:(?:can|could|would)\s+you\s+|i\s+(?:want|need)\s+you\s+to\s+)?(?:please\s+)?(?:fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove)\b/i;
+  const mutationRequest = new RegExp(`^${TASK_REQUEST_PREFIX_SOURCE}(?:fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove|add|insert|extend|refactor|rename)\\b`, 'i');
   return remainder.split(/\.(?=\s|$)|[;!?\r\n]/).some((clause) => mutationRequest.test(clause.trim()));
 }
 const PLAN_PATTERN = /\b(plan|design|approach|compare|implementation path|migration plan)\b/i;
@@ -232,6 +232,7 @@ export function inferIntentContract(
   const hasMutationWord = MUTATION_PATTERN.test(normalizedTask);
   const recommendationReadOnly =
     RECOMMENDATION_PATTERN.test(normalizedTask) && ASK_PATTERN.test(normalizedTask);
+  const explanationOnly = isReadOnlyTaskFrame(normalizedTask);
 
   let taskKind: BabelTaskKind;
   if (requestedVerb === 'ask') {
@@ -244,7 +245,7 @@ export function inferIntentContract(
     taskKind = 'proposal';
   } else if (
     requestedVerb === 'fix' ||
-    (hasMutationWord && !recommendationReadOnly && !EXPLICIT_PLAN_PATTERN.test(normalizedTask))
+    (hasMutationWord && !recommendationReadOnly && !explanationOnly && !EXPLICIT_PLAN_PATTERN.test(normalizedTask))
   ) {
     taskKind = 'implementation';
   } else if (REPORT_PATTERN.test(normalizedTask) || recommendationReadOnly) {
@@ -253,7 +254,7 @@ export function inferIntentContract(
     taskKind = 'proposal';
   } else if (PLAN_PATTERN.test(normalizedTask) || EXPLICIT_PLAN_PATTERN.test(normalizedTask)) {
     taskKind = 'plan_only';
-  } else if (ASK_PATTERN.test(normalizedTask)) {
+  } else if (ASK_PATTERN.test(normalizedTask) || explanationOnly) {
     taskKind = 'answer';
   } else {
     taskKind = 'plan_only';

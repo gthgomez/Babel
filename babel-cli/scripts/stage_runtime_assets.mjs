@@ -52,4 +52,18 @@ function prune(dir) {
   }
 }
 prune(resolve(packageRoot, 'dist'))
+// These test-only loaders/builders are not runtime or package-qualification support.
+// Keep fixture-named runtime and benchmark modules, including required testSupport helpers.
+for (const file of [
+  'research/v2/fixtures/campaign/papers/arxivPaperExternalCache.js',
+  'research/v2/fixtures/general-dev-brief-corpus/verbatimBriefBytes.js',
+  'research/v2/engine/testSupport/attempt4EvidenceSubset.js',
+  'research/v2/engine/testSupport/attempt4QuestionCoverageDerived.js',
+  'research/v2/engine/testSupport/gL2AuditDerivedRegression.js',
+  'research/v2/engine/testSupport/gL2OriginalDerivedRegression.js',
+  'research/v2/engine/testSupport/gL3Ba45DerivedRegression.js',
+  'research/v2/engine/testSupport/gL3OriginalDerivedRegression.js',
+  'research/v2/engine/testSupport/missionAdmissionBootstrapBarrier.js',
+  'services/traceAuditor/fixtures.js',
+]) rmSync(resolve(packageRoot, 'dist', file), { force: true })
 console.log(`Staged ${assets.size} runtime assets in resources/`)
