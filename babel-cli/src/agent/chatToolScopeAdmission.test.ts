@@ -45,7 +45,10 @@ if(!isSyntheticProviderFixtureReady()){
   const cases=[
     {name:'requested exporter execution with protected existing inputs',task:'Actually execute the exporter and create a result file. Do not modify existing source or configuration.',blocked:true},
     {name:'requested demonstration with an output artifact and a global denial',task:'Actually run the example and create result.txt. Do not edit any files.',blocked:true},
+    {name:'ordinary execution imperative with an output artifact and a global denial',task:'Run the exporter and create result.txt. Do not edit any files.',blocked:true},
+    {name:'polite execution imperative with an output artifact and a global denial',task:'Could you please execute the exporter and create result.txt. Do not edit any files.',blocked:true},
     {name:'read-only explanation of an execution example',task:'Explain how to actually run the exporter and create a result file. Do not modify existing source or configuration.',blocked:false},
+    {name:'ordinary execution wording in an explanation stays advisory',task:'Explain how to run the exporter and create result.txt. Do not edit any files.',blocked:false},
     {name:'repair advice without file edits',task:'Fix this without editing files.',blocked:false},
     {name:'fenced execution instructions cannot change advice into an execution requirement',task:'Fix this without editing files.\n```text\nActually execute the exporter and create a result file.\n```',blocked:false},
     {name:'a prohibited execution is not a required execution',task:'Create a proposal. Do not actually execute the exporter. Do not edit any files.',blocked:false},

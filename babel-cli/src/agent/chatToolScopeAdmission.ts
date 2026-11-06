@@ -1,7 +1,7 @@
 import type {ChatCallbacks,ChatEngineActionExecutorHost} from './chatEngineContracts.js'
 import {chatActionToolName,chatActionTarget,type ChatToolAction} from './chatToolDefinitions.js'
 import type {BlockedReport} from '../schemas/agentContracts.js'
-import {analyzeTaskShape,isReadOnlyTaskFrame,stripFencedCodeBodies,type TaskOperation} from '../config/chatTaskClass.js'
+import {analyzeTaskShape,isReadOnlyTaskFrame,stripFencedCodeBodies,TASK_REQUEST_PREFIX_SOURCE,type TaskOperation} from '../config/chatTaskClass.js'
 
 export {requireProjectRoot} from './chatExecutionScope.js'
 export const PROJECT_REQUIRED_MESSAGE='PROJECT_REQUIRED: Select and authorize a project before using tools.'
@@ -19,7 +19,8 @@ export function readOnlyExecutionConflictReport(input:{
   const prose=stripFencedCodeBodies(input.taskText)
   if(isReadOnlyTaskFrame(prose)||analyzeTaskShape(prose).operation==='READ_ONLY')return null
   const executionProse=prose.replace(/\b(?:do\s+not|don't|never)\s+(?:(?:actually|really)\s+)?(?:execute|run)\b[^.;!?\n]*/gi,' ')
-  const requiresExecution=/\b(?:actually|really)\s+(?:execute|run)\b|\b(?:execute|run)\b[^.!?\n]*\b(?:actual|observed)\s+(?:output|results?|exits?|exit\s+codes?)\b/i.test(executionProse)
+  const executionDirective=new RegExp(`(?:^|[.;!?\\n]\\s*|\\b(?:then|afterwards|and\\s+then)\\s+)${TASK_REQUEST_PREFIX_SOURCE}(?:(?:actually|really)\\s+)?(?:execute|run)\\b`,'i')
+  const requiresExecution=executionDirective.test(executionProse)||/\b(?:actually|really)\s+(?:execute|run)\b|\b(?:execute|run)\b[^.!?\n]*\b(?:actual|observed)\s+(?:output|results?|exits?|exit\s+codes?)\b/i.test(executionProse)
   if(!requiresExecution)return null
   return {
     schema_version:1,status:'BLOCKED',reason_code:'unsupported_operation',cause_class:'harness',
