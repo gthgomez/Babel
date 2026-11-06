@@ -1,10 +1,10 @@
 /**
- * tokenBudgetEnforcer.ts — Proactive token budget enforcement for the pipeline.
+ * Legacy instruction-stack budget status helpers.
  *
  * The budgetPolicy.ts module defines budget thresholds and diagnostics.
- * This module adds proactive enforcement: before each pipeline stage,
- * check the accumulated token count against the effective budget limit
- * and halt the pipeline if the budget would be exceeded.
+ * The resolver/compiler owns production instruction-stack admission. These
+ * compatibility helpers project a compiled instruction count against the same
+ * limit; callers must not pass cumulative model usage or a session cost ledger.
  */
 
 import { getEffectiveBudgetLimit } from '../budgetPolicy.js';
@@ -27,9 +27,9 @@ export interface BudgetEnforcementResult {
 // ── Enforcement ───────────────────────────────────────────────────────────────
 
 /**
- * Check whether the pipeline should proceed given the current token usage.
+ * Check a compiled instruction-stack measurement against its capacity.
  *
- * @param tokensUsed  - Number of tokens consumed so far (from costTracker or compiler).
+ * @param tokensUsed  - Compiled instruction-stack tokens, never cumulative model usage.
  * @param cliOverride - Optional CLI --budget flag override.
  * @returns A BudgetEnforcementResult indicating whether to proceed or halt.
  */

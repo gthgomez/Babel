@@ -35,8 +35,8 @@ import {
   isExternalBenchmarkTask,
   isInvalidGitBundleArchiveCommand,
   normalizeShellCommandForComparison,
-  shouldEnforceBoundedPlanActivationContract,
 } from './benchmarkTasks.js';
+import { collectBoundedContractViolations as collectCanonicalBoundedContractViolations } from './contractEnforcement.js';
 import { inferProjectRoot } from './manifestContext.js';
 import { BABEL_ROOT } from './paths.js';
 
@@ -95,67 +95,13 @@ function extractWindowsAbsolutePaths(value: string): string[] {
   return [...new Set([...quotedMatches, ...bareMatches].filter((match) => match.length > 0))];
 }
 
-function collectBoundedContractViolations(
-  swePlan: SwePlan,
-  rawTask: string,
-): QaVerdictReject | null {
-  if (isExternalBenchmarkTask(rawTask)) {
-    return null;
-  }
-
+function collectBoundedContractViolations(swePlan: SwePlan, rawTask: string): QaVerdictReject | null {
+  // Preserve this caller's existing benchmark and unbounded-task exceptions.
+  // Read-only tasks still reject writes through the canonical guard.
+  if (isExternalBenchmarkTask(rawTask)) return null;
   const contract = getRequestedTargetContract(rawTask);
-  if (!contract.bounded || contract.requestedTargets.length === 0) {
-    return null;
-  }
-
-  const failures: QaVerdictReject['failures'] = [];
-  const fileWriteTargets = swePlan.minimal_action_set
-    .filter((step) => step.tool === 'file_write')
-    .map((step) => ({
-      step: step.step,
-      target: normalizePathForComparison(String(step.target ?? '')),
-    }))
-    .filter((entry) => entry.target.length > 0);
-  const fileWriteSet = new Set(fileWriteTargets.map((entry) => entry.target.toLowerCase()));
-  const requestedTargetSet = new Set(
-    contract.requestedTargets.map((target) => target.toLowerCase()),
-  );
-
-  for (const requestedTarget of contract.requestedTargets) {
-    if (!fileWriteSet.has(requestedTarget.toLowerCase())) {
-      failures.push({
-        tag: 'INCOMPLETE_SUBMISSION',
-        condition: `[BOUNDED_CONTRACT] Plan does not include an exact file_write step for requested output: ${requestedTarget}`,
-        confidence: 5,
-        fix_hint: 'Add an exact file_write step for every requested output path.',
-      });
-    }
-  }
-
-  for (const fileWriteTarget of fileWriteTargets) {
-    if (!requestedTargetSet.has(fileWriteTarget.target.toLowerCase())) {
-      failures.push({
-        tag: 'SFDIPOT-P',
-        condition: `[BOUNDED_CONTRACT] Step ${fileWriteTarget.step} writes an unrequested file for this bounded task: ${fileWriteTarget.target}`,
-        confidence: 5,
-        fix_hint:
-          'Keep file_write targets inside the explicit requested target set for bounded tasks.',
-      });
-    }
-  }
-
-  if (failures.length === 0) {
-    return null;
-  }
-
-  return {
-    verdict: 'REJECT',
-    failure_count: failures.length,
-    failures,
-    overall_confidence: 5,
-    proposed_fix_strategy:
-      'Regenerate the plan so bounded tasks preserve the exact requested output path set with one file_write per requested file.',
-  };
+  if (!contract.bounded && !contract.readOnly) return null;
+  return collectCanonicalBoundedContractViolations(swePlan, rawTask);
 }
 
 /**
@@ -168,42 +114,7 @@ function collectBoundedContractViolations(
  *
  * Returns a human-readable rejection reason, or null if the plan is clean.
  */
-export function assertBoundedPlanActivationContract(
-  approvedPlan: SwePlan,
-  rawTask: string,
-): string | null {
-  if (!shouldEnforceBoundedPlanActivationContract(rawTask)) {
-    return null;
-  }
-
-  const contract = getRequestedTargetContract(rawTask);
-  if (!contract.bounded || contract.requestedTargets.length === 0) {
-    return null;
-  }
-
-  const fileWriteTargets = approvedPlan.minimal_action_set
-    .filter((step) => step.tool === 'file_write')
-    .map((step) => normalizePathForComparison(String(step.target ?? '')))
-    .filter((target) => target.length > 0);
-  const fileWriteSet = new Set(fileWriteTargets.map((t) => t.toLowerCase()));
-  const requestedTargetSet = new Set(contract.requestedTargets.map((t) => t.toLowerCase()));
-
-  const missing = contract.requestedTargets.filter((t) => !fileWriteSet.has(t.toLowerCase()));
-  const extra = fileWriteTargets.filter((t) => !requestedTargetSet.has(t.toLowerCase()));
-
-  if (missing.length === 0 && extra.length === 0) {
-    return null;
-  }
-
-  const parts: string[] = [];
-  if (missing.length > 0) {
-    parts.push(`missing required write targets: ${missing.join(', ')}`);
-  }
-  if (extra.length > 0) {
-    parts.push(`unrequested write targets: ${extra.join(', ')}`);
-  }
-  return `[BOUNDED_CONTRACT_ACTIVATION_GATE] Approved plan failed pre-executor target check — ${parts.join('; ')}. Requested set: ${contract.requestedTargets.join(', ')}.`;
-}
+export { assertBoundedPlanActivationContract } from './contractEnforcement.js';
 
 export function collectExecutorSafetyViolations(
   swePlan: SwePlan,

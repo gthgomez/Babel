@@ -1194,6 +1194,9 @@ export function buildChatRunPayload(
     payload['reason_code'] = result.reason_code;
     if (result.reason_code === 'context_preparation_failed') payload['next'] = terminalReasonGuidance(result.reason_code).nextActions;
   }
+  if (result.reason_detail !== undefined) {
+    payload['reason_detail'] = result.reason_detail;
+  }
   if (result.cause_class !== undefined) {
     payload['cause_class'] = result.cause_class;
   }

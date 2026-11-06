@@ -18,6 +18,9 @@ import { EvidenceBundle } from '../evidence.js';
 import { BABEL_ROOT } from '../cli/constants.js';
 import { writeValidatedExecutionReport } from './executionReports.js';
 import { createRunControl } from '../runtime/run-control.js';
+import { verifyChatCreatedOutputs } from './chatCompletion.js';
+import { getRequestedTargetContract } from '../stages/taskShape.js';
+import { createExecutorKernel } from '../executor/kernel.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -67,6 +70,9 @@ export async function runChatExecutorLoop(
   rawTask: string,
   toolContext: Pick<ToolContext, 'signal' | 'projectRoot'> = {},
 ): Promise<ChatExecutorResult> {
+  const readOnlyTask = getRequestedTargetContract(rawTask).readOnly;
+  // Model-generated plans cannot grant effects denied by the owner's request.
+  const kernel = createExecutorKernel(readOnlyTask ? 'plan' : 'deep');
   const toolCallLog: ToolCallLog[] = [];
   const changedFiles: string[] = [];
   const steps = approvedPlan.minimal_action_set;
@@ -77,7 +83,8 @@ export async function runChatExecutorLoop(
   toolContext.signal?.addEventListener('abort', cancel, { once: true });
   if (toolContext.signal?.aborted) cancel();
 
-  const finish = (haltReason?: string, haltedAtStep = 1): ChatExecutorResult => {
+  const finish = (failureReason?: string, haltedAtStep = 1): ChatExecutorResult => {
+    const haltReason = failureReason ?? verifyChatCreatedOutputs(rawTask, toolContext.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? BABEL_ROOT) ?? undefined;
     const halted = haltReason !== undefined;
     runControl.requestStop({ owner: runControl.owner, kind: halted ? 'failed' : 'completed', reasonCode: halted ? 'chat_halted' : 'tools_complete', source: 'executor' });
     toolContext.signal?.removeEventListener('abort', cancel);
@@ -130,7 +137,7 @@ export async function runChatExecutorLoop(
         ...toolContext,
         runControl,
         signal: runControl.signal,
-      });
+      }, kernel);
     } catch (error) {
       result = {
         exit_code: toolContext.signal?.aborted ? 130 : 1,
