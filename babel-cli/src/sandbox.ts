@@ -1824,6 +1824,16 @@ export class SafeExecutor {
     const useDockerSandbox =
       isolation.kind === 'docker' &&
       shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']);
+    // Report the missing isolation prerequisite before resolving a tool that
+    // belongs inside the container rather than on the host.
+    if (isolation.kind === 'fail_closed') {
+      return policyDeniedResult(
+        'isolation_unavailable',
+        `[sandbox] isolation_unavailable: ${isolation.reason}`,
+        toolName,
+        [command],
+      );
+    }
     let env = childEnvForSandbox();
     const resolvedExecutable = useDockerSandbox ? null : resolveCommandExecutable(rawCmd, {
       cwd: resolvedCwd,
@@ -1842,17 +1852,6 @@ export class SafeExecutor {
     const classified = useDockerSandbox
       ? classifyExecutionRisk(command, { repoRoot: this.projectRoot })
       : classifyResolvedCommand(resolvedExecutable!, argv.slice(1), { repoRoot: this.projectRoot, invokedBase: rawCmd });
-    // H13: isolation-required profiles fail closed unless Docker is active or
-    // the operator explicitly escalates to host (BABEL_ALLOW_HOST_FALLBACK /
-    // BABEL_DOCKER_DISABLE). Profiles with dockerSandbox:false stay on host.
-    if (isolation.kind === 'fail_closed') {
-      return policyDeniedResult(
-        'isolation_unavailable',
-        `[sandbox] isolation_unavailable: ${isolation.reason}`,
-        toolName,
-        [command],
-      );
-    }
     // Project-or-container-only commands stay denied on host profiles even
     // when the governed isolation decision resolved to a host kind — unless
     // the operator explicitly authorized a host fallback for this run. The
@@ -2023,9 +2022,11 @@ export class SafeExecutor {
       sleep(delayMs);
     }
 
+    const processTermination = (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT'
+      ? 'timed_out' : 'terminated';
     if (prepared.ownedContainerName && (result.error || result.status !== 0)) {
       try { removeOwnedContainerSync(prepared.ownedContainerName, prepared.env, Boolean(result.error && result.pid > 0)); }
-      catch (error) { return attachExecutionBackend({ exit_code: 1, stdout: result.stdout ?? '', stderr: String(error), process_started: result.pid > 0, process_termination: 'terminated' }, prepared); }
+      catch (error) { return attachExecutionBackend({ exit_code: 1, stdout: result.stdout ?? '', stderr: String(error), process_started: result.pid > 0, process_termination: processTermination }, prepared); }
     }
     if (result.error) {
       if (isSpawnSyncRuntimeSupervisorError(result.error)) {
@@ -2033,7 +2034,7 @@ export class SafeExecutor {
           result.status,
           result.stdout ?? '',
           result.stderr ?? '',
-        ), process_started: result.pid > 0, process_termination: 'terminated' }, prepared);
+        ), process_started: result.pid > 0, process_termination: processTermination }, prepared);
       }
       const isTransient = transientRetryCount > 0 && isTransientSpawnError(result.error.message);
       const prefix = isTransient
