@@ -48,6 +48,22 @@ test('phase runner accepts the exact GLM ID with an explicit OpenRouter provider
 });
 
 describe('pushRoutingReceiptFromMetadata', () => {
+  test('wire-level withheld cost stays unknown while an absent report retains an explicit estimate', () => {
+    const model = 'deepseek/deepseek-v4.1-flash-1017';
+    const usage = { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 };
+    const absent = buildInvocationMetadata('openrouter', model, 1, usage);
+    assert.ok(absent.estimated_cost_usd! > 0, 'the control must have a real registry estimate');
+    assert.equal(absent.provider_reported_total_charge_usd, undefined);
+    const withheld = buildInvocationMetadata('openrouter', model, 1, {...usage, cost: null});
+    const log = new TurnRoutingReceiptLog();
+    pushRoutingReceiptFromMetadata(log, 0, null, withheld);
+    assert.equal(withheld.provider_reported_total_charge_usd, null);
+    assert.equal(withheld.estimated_cost_usd, null);
+    assert.equal(log.toJSON()[0]!.cost_usd, null);
+    assert.equal(log.toJSON()[0]!.cost_basis, 'unknown');
+    assert.equal(summarizeCellCost(log.toJSON()).estimated_usd, null);
+  });
+
   test('preserves the OpenRouter reported charge and its provenance through routing rollup', () => {
     for (const cost of [0, 0.0031]) {
       const metadata = buildInvocationMetadata('openrouter', 'example/fixed-model', 1, {
