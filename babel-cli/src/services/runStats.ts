@@ -256,7 +256,7 @@ export function formatRunStatsHuman(stats: RunStatsSummary): string {
     `Waterfall calls: ${stats.waterfall.call_count}`,
     `Waterfall latency: ${stats.waterfall.total_latency_ms} ms`,
     `Tool calls: ${stats.tools.tool_call_count} (${stats.tools.successful_tool_calls} ok, ${stats.tools.failed_tool_calls} failed)`,
-    `Verified tools: ${stats.tools.verified_tool_calls}`,
+    `Tool calls marked verified: ${stats.tools.verified_tool_calls} (legacy tool-log flag; not task verification)`,
     `Checkpoints: ${stats.tools.checkpoint_count}`,
     `Web cache: ${stats.cache.web_cache_hits} hit(s), ${stats.cache.web_cache_misses} miss(es)`,
     `File-read cache entries: ${stats.cache.file_read_cache_entries}`,
