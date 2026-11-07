@@ -461,6 +461,12 @@ const PENDING_COMPILED_REQUEST_IDENTITY = "pending-compiled-request-identity";
 const TURN_TIMEOUT_MS = 120_000; // per-turn LLM call deadline
 const MAX_TOOL_CONCURRENCY = 6;
 
+/** Actions with no physical effect; a successor may supersede a batch of these. */
+const CHAT_READ_ONLY_ACTION_TYPES = new Set<ChatToolAction['type']>([
+  'read_file', 'read_range', 'read_artifact', 'list_dir', 'grep', 'glob',
+  'semantic_search', 'git_context', 'todo_write', 'web_search', 'web_fetch', 'lsp', 'finish',
+]);
+
 export class ChatEngine {
   // TODO: once ProviderMessage[] path is stable, remove legacy ChatMessage[]
   // conversation store and Markdown flattening buildChatTurnPrompt.
@@ -648,6 +654,7 @@ export class ChatEngine {
   private activeSubmissionGeneration = 0;
   private runControl: RunControl | null = null;
   private activeSubmissionOwner: symbol | null = null;
+  private activeEffectActionBatches = 0;
   private physicalSettlementUnknown = false;
   private admissionStoreClosed = false;
 
@@ -890,7 +897,7 @@ export class ChatEngine {
       throw new Error('EXTERNAL_HARNESS_INFERENCE_CONFLICT: External adapters cannot configure Babel inference.');
     }
     const scope=normalizeChatExecutionScope(options);
-    if (hasUnsettledBackgroundShells(options.runId, scope.kind === 'project' ? scope.projectRoot : null)) {
+    if (options.runId && options.resumeExisting !== true && hasUnsettledBackgroundShells(options.runId, scope.kind === 'project' ? scope.projectRoot : null)) {
       throw new Error('An owned background command is still running or settling. Wait for it to finish before reopening this session.');
     }
     options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null};
@@ -2212,7 +2219,7 @@ export class ChatEngine {
       yield { type: 'failed', error: 'The session admission store is closed. Reopen the session before continuing.' };
       return;
     }
-    if (this.activeSubmissionOwner) {
+    if (this.activeSubmissionOwner !== null && this.activeEffectActionBatches > 0) {
       yield { type: 'failed', error: 'The previous request is still settling. Wait for it to finish before continuing.' };
       return;
     }
@@ -2243,24 +2250,19 @@ export class ChatEngine {
     const claim = this.admitCurrentSubmission(submissionGeneration, userInput, {
       taskId: objective.taskId, taskClass: objective.submission.runtime.taskClass,
     });
-    let loopFinished = false;
-    let terminalObserved = false;
     try {
-      for await (const event of this.submitMessageStreamLoop(userInput, taskIntent, {
+      yield* this.submitMessageStreamLoop(userInput, taskIntent, {
         ...submitOpts,
         submissionGeneration,
-      }, objective)) {
-        if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') terminalObserved = true;
-        yield event;
-      }
-      loopFinished = true;
+      }, objective);
     } catch (error) {
       if (!this.isSubmissionCurrent(submissionGeneration)) return;
       const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
-      loopFinished = true;
       yield this.streamFailed(captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error)), error instanceof ContextPreparationError ? error.reason : undefined);
     } finally {
-      this.settleClaimOnExit(claim, !loopFinished && !terminalObserved);
+      // A superseded loop that never reached its terminal event still leaves an
+      // unsettled claim; physical settlement unknown is handled by the authority.
+      this.settleClaimOnExit(claim);
     }
     } finally {
       if (this.activeSubmissionOwner === owner) this.activeSubmissionOwner = null;
@@ -3418,6 +3420,27 @@ export class ChatEngine {
   }
 
   private async executeActions(
+    actions: ChatToolAction[],
+    callbacks: ChatCallbacks,
+    ownerGeneration: number = this.activeSubmissionGeneration,
+  ): Promise<{
+    observations: string;
+    observationList: string[];
+    count: number;
+    stopRequest?: StopRequest;
+  }> {
+    // A successor may supersede a provider stream or a read, but not a tool
+    // batch whose physical effect is still unsettled.
+    const effectful = actions.some(action => !CHAT_READ_ONLY_ACTION_TYPES.has(action.type));
+    if (effectful) this.activeEffectActionBatches += 1;
+    try {
+      return await this.executeActionsBody(actions, callbacks, ownerGeneration);
+    } finally {
+      if (effectful) this.activeEffectActionBatches -= 1;
+    }
+  }
+
+  private async executeActionsBody(
     actions: ChatToolAction[],
     callbacks: ChatCallbacks,
     ownerGeneration: number = this.activeSubmissionGeneration,

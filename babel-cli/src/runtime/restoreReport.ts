@@ -331,7 +331,9 @@ export function classifyOperation(evidence: RestoreOperationEvidence): Operation
       reasons: [completed ? 'effect_compensated' : evidence.compensationState === 'failed'
         ? 'effect_compensation_failed' : 'effect_compensation_uncertain'] };
   }
-  const unknownEvidence = unknownReasons.length > 0;
+  // Reconciliation-downgrade markers are classified by the manual_review
+  // branch below; they are not generic unknown evidence.
+  const unknownEvidence = unknownReasons.some((reason) => !reason.startsWith('restore_effect_'));
 
   const admissionSettled = evidence.admissionState === 'settled';
   const outboxCommitted = evidence.outboxState === 'committed';
@@ -428,12 +430,17 @@ export function classifyOperation(evidence: RestoreOperationEvidence): Operation
   }
 
   if (evidence.reconciliation === 'manual_review') {
+    // An applied-but-unreceipted effect is never retried or treated as
+    // complete; a human must reconcile it first.
+    const appliedWithoutReceipt = (evidence.unknownReasons ?? []).includes('restore_effect_applied_without_receipt');
     return {
       recoveryClass,
       state: 'interrupted',
-      action: recoveryClass === 'reconcilable_mutation' ? 'reconcile_workspace_before_retry' : 'operator_reconciliation_required',
+      action: appliedWithoutReceipt
+        ? 'operator_reconciliation_required'
+        : recoveryClass === 'reconcilable_mutation' ? 'reconcile_workspace_before_retry' : 'operator_reconciliation_required',
       automaticRetryAllowed: false,
-      reasons: [RESTORE_REASONS.AMBIGUOUS_NOT_RETRIED],
+      reasons: [...(evidence.unknownReasons ?? []), RESTORE_REASONS.AMBIGUOUS_NOT_RETRIED],
     };
   }
 

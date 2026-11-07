@@ -264,8 +264,8 @@ test('P06: crash after effect before receipt recognizes completion without fabri
     const session = restore(fixture, { currentImageHashes: { 'a.txt': 'after' } });
     try {
       const operation = session.report.operations[0]!;
-      assert.equal(operation.state, 'completed');
-      assert.equal(operation.action, 'none_complete');
+      assert.equal(operation.state, 'interrupted');
+      assert.equal(operation.action, 'operator_reconciliation_required');
       assert.ok(operation.reasons.includes(RESTORE_REASONS.EFFECT_APPLIED_WITHOUT_RECEIPT));
       assert.equal(session.report.terminal, undefined);
       assert.equal(session.report.operatorActionRequired, true);
@@ -296,7 +296,7 @@ test('P06: crash after effect before a verifier receipt does not fabricate verif
     try {
       assert.equal(session.report.terminal, undefined);
       const operation = session.report.operations[0]!;
-      assert.equal(operation.state, 'completed');
+      assert.equal(operation.state, 'interrupted');
       assert.equal(operation.automaticRetryAllowed, false);
       assert.ok(!operation.reasons.includes(RESTORE_REASONS.TERMINAL_COMMITTED));
       assert.equal(session.report.operations.some((op) => op.state === 'completed' && op.automaticRetryAllowed), false);

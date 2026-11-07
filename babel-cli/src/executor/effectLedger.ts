@@ -382,7 +382,11 @@ export interface ReconcilableEffect {
 export function reconcileInterruptedEffect(
   intent: ReconcilableEffect,
   currentImageHashes: Record<string, string>,
+  options?: { readonly trustedPersistedIntent?: boolean },
 ): EffectReconciliationDecision {
+  // A durable admission outbox intent is itself host-persisted evidence that the
+  // original owner committed this intent; reconstructed restore records are not.
+  const settlementProven = intent.physicalSettlement === 'proven' || options?.trustedPersistedIntent === true;
   // An interrupted restoration may already have changed bytes. Never replay it
   // as an ordinary write or declare it settled from the original post-image.
   if (intent.compensatesOperationId) return 'manual_review'
@@ -395,13 +399,13 @@ export function reconcileInterruptedEffect(
 
   const postHashes = intent.postImageHashes
   if (postHashes && Object.keys(postHashes).length > 0 && hashesMatch(postHashes, currentImageHashes)) {
-    if (intent.effectClass !== 'read_only' && intent.physicalSettlement !== 'proven') return 'manual_review'
+    if (intent.effectClass !== 'read_only' && !settlementProven) return 'manual_review'
     return 'recovered_complete'
   }
 
   if (hashesMatch(intent.preImageHashes, currentImageHashes)) {
     if (intent.effectClass !== 'read_only' && Object.keys(intent.preImageHashes).length === 0) return 'manual_review'
-    if (intent.effectClass !== 'read_only' && intent.physicalSettlement !== 'proven') return 'manual_review'
+    if (intent.effectClass !== 'read_only' && !settlementProven) return 'manual_review'
     return intent.effectClass === 'read_only' || intent.effectClass === 'idempotent' || intent.effectClass === 'reconcilable_mutation'
       ? 'retry_reconcilable'
       : 'manual_review'

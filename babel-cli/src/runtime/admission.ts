@@ -1082,6 +1082,7 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
           ...(outbox.postImageHashes !== undefined ? { postImageHashes: outbox.postImageHashes } : {}),
         },
         input.currentImageHashes ?? {},
+        { trustedPersistedIntent: true },
       );
       return { kind: 'recovered', record, outbox, decision };
     },

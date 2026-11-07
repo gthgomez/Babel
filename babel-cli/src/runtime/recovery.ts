@@ -151,6 +151,18 @@ function admissionToEvidence(
       if (recovered.outbox.state === 'indeterminate') {
         unknownReasons.push('outbox_indeterminate');
       }
+      // A reconstructed restore has no physical settlement receipt. Bytes that
+      // match the intended post-image are evidence of an applied effect, not
+      // proof that the original worker is gone, so completion is not asserted.
+      if (recovered.outbox.effectClass !== 'read_only' && recovered.outbox.state !== 'committed') {
+        if (decision === 'recovered_complete') {
+          decision = 'manual_review';
+          unknownReasons.push('restore_effect_applied_without_receipt');
+        } else if (decision === 'retry_reconcilable') {
+          decision = 'manual_review';
+          unknownReasons.push('restore_effect_unsettled_before_retry');
+        }
+      }
     } else {
       unknownReasons.push('outbox_missing');
     }

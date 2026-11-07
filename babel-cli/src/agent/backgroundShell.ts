@@ -166,6 +166,9 @@ export function hasUnsettledBackgroundShells(ownerId?: string, projectRoot?: str
   return [...jobs.values()].some(job => {
     if (job.physicalClosed === true && job.treeTerminationUnknown !== true) return false;
     if (ownerId && job.ownerId === ownerId) return true;
+    // Only detached jobs outlive their owning turn; other sessions in the same
+    // project are not blocked by a job that cancellation will settle.
+    if (job.detached !== true) return false;
     if (!projectRoot) return false;
     if (!projectKey || !job.projectRootKey) return true;
     return overlapsProject(projectKey, job.projectRootKey);
