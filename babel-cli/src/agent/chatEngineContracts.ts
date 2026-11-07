@@ -586,6 +586,7 @@ export interface ChatResult {
 
 export interface ChatEngineStreamingLoopHost {
   readonly runControl?: import('../runtime/run-control.js').RunControl | null
+  markProviderDispatchStarted?: () => void
   readonly captureProviderUsageScope: (ownerGeneration?: number) => ChatUsageScope
   _activeToolBatchId: string | null
   _cancelled: boolean

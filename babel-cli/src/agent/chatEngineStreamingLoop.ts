@@ -630,6 +630,7 @@ export class ChatEngineStreamingLoop {
           systemPrompt,
         );
         const providerStart = performance.now();
+        this.host.markProviderDispatchStarted?.();
         try {
           for await (const event of runner.executeWithToolsStream(
             providerMessages,
@@ -842,6 +843,7 @@ export class ChatEngineStreamingLoop {
             undefined,
           );
           const fbStart = performance.now();
+          this.host.markProviderDispatchStarted?.();
           try {
             for await (const event of fb.executeWithToolsStream(
               providerMessages,

@@ -655,6 +655,7 @@ export class ChatEngine {
   private runControl: RunControl | null = null;
   private activeSubmissionOwner: symbol | null = null;
   private activeEffectActionBatches = 0;
+  private activeProviderDispatchStarted = false;
   private physicalSettlementUnknown = false;
   private admissionStoreClosed = false;
 
@@ -2227,13 +2228,14 @@ export class ChatEngine {
       yield { type: 'failed', error: 'An owned background command is still running or settling. Wait for it to finish before continuing.' };
       return;
     }
-    if (this.physicalSettlementUnknown || this.hasUnsettledDurableAdmission()) {
+    if (this.physicalSettlementUnknown) {
       yield { type: 'failed', error: 'A previous command may still be running. Inspect the workspace and run evidence before continuing.',
         reason_code: 'physical_settlement_unknown' };
       return;
     }
     const owner = Symbol('chat-submission-owner');
     this.activeSubmissionOwner = owner;
+    this.activeProviderDispatchStarted = false;
     try {
     const submissionGeneration =
       submitOpts?.submissionGeneration ?? ++this.generationCounter;
@@ -2250,19 +2252,26 @@ export class ChatEngine {
     const claim = this.admitCurrentSubmission(submissionGeneration, userInput, {
       taskId: objective.taskId, taskClass: objective.submission.runtime.taskClass,
     });
+    let loopFinished = false;
+    let terminalObserved = false;
     try {
-      yield* this.submitMessageStreamLoop(userInput, taskIntent, {
+      for await (const event of this.submitMessageStreamLoop(userInput, taskIntent, {
         ...submitOpts,
         submissionGeneration,
-      }, objective);
+      }, objective)) {
+        if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') terminalObserved = true;
+        yield event;
+      }
+      loopFinished = true;
     } catch (error) {
       if (!this.isSubmissionCurrent(submissionGeneration)) return;
       const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
+      loopFinished = true;
       yield this.streamFailed(captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error)), error instanceof ContextPreparationError ? error.reason : undefined);
     } finally {
-      // A superseded loop that never reached its terminal event still leaves an
-      // unsettled claim; physical settlement unknown is handled by the authority.
-      this.settleClaimOnExit(claim);
+      // An iterator abandoned before its terminal event keeps its claim
+      // indeterminate instead of claiming a settlement it never observed.
+      this.settleClaimOnExit(claim, !loopFinished && !terminalObserved);
     }
     } finally {
       if (this.activeSubmissionOwner === owner) this.activeSubmissionOwner = null;
@@ -3418,6 +3427,8 @@ export class ChatEngine {
   ): void {
     this.p11Authority.captureP11Observation(action, result, meta);
   }
+
+  markProviderDispatchStarted(): void { this.activeProviderDispatchStarted = true; }
 
   private async executeActions(
     actions: ChatToolAction[],
