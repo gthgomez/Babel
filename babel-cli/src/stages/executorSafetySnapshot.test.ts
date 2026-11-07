@@ -126,8 +126,9 @@ test('guarded safety snapshot does not hash an outside swap-and-restore director
       if (!attempted && typeof args[0] === 'string' && (args[0] === source || /^\/(?:proc\/self|dev)\/fd\//.test(args[0]))) {
         attempted = true; const backup = join(project, 'src-before')
         fs.renameSync(source, backup); fs.symlinkSync(outside, source, process.platform === 'win32' ? 'junction' : 'dir')
-        try { return Reflect.apply(original, fs, args) }
-        finally { fs.unlinkSync(source); fs.renameSync(backup, source) }
+        // Keep the swap in place across the subsequent directory read so the
+        // anchored snapshot must observe and reject it as truncated.
+        return Reflect.apply(original, fs, args)
       }
       return Reflect.apply(original, fs, args)
     }) as typeof fs.opendirSync)

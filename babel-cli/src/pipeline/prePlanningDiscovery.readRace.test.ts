@@ -16,7 +16,9 @@ test('discovery preview does not read a replacement after its stat', async t => 
     const original = fs.lstatSync; let swapped = false
     t.mock.method(fs, 'lstatSync', ((...args: unknown[]) => {
       const result = Reflect.apply(original, fs, args)
-      if (!swapped && args[0] === source) { swapped = true; fs.renameSync(source, `${source}.old`); fs.renameSync(replacement, source) }
+      const observedPath = String(args[0])
+      const isSource = observedPath === source || /\/(?:proc\/self|dev)\/fd\/\d+\/source\.txt$/.test(observedPath)
+      if (!swapped && isSource) { swapped = true; fs.renameSync(source, `${source}.old`); fs.renameSync(replacement, source) }
       return result
     }) as typeof fs.lstatSync)
     syncBuiltinESMExports()
