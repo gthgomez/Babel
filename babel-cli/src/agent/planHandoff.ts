@@ -28,11 +28,6 @@ export interface PlanHandoff {
   sourcePlanText?: string | null;
 }
 
-/** Legacy manual resume has no durable source/approval identity. */
-export function assertLegacyManualResumeQualified(): void {
-  throw new Error('UNSUPPORTED_OPERATION: Legacy manual resume is unavailable until Plan identity and approval are qualified; retained artifacts may be inspected.');
-}
-
 export const PLAN_APPLY_UNAVAILABLE_REASON = 'Plan application is temporarily unavailable until mutation and verifier effects are scoped; the Plan is retained.';
 
 /** Temporary admission gate until Plan-bound mutation and verifier effects are scoped. */

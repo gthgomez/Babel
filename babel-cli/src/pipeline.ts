@@ -163,7 +163,6 @@ import {
 import {
   collectPlanHandoffViolations,
   buildPlanHandoffQaReject,
-  assertLegacyManualResumeQualified,
   loadPlanHandoffGuarded,
 } from './agent/planHandoff.js';
 import { splitChainedShellSteps } from './pipeline/executorPlanNormalize.js';
@@ -3074,7 +3073,6 @@ export async function resumeManualBridge(
   runDir: string,
   planInput: string | { planPath?: string; rawPlanText?: string },
 ): Promise<PipelineResult> {
-  assertLegacyManualResumeQualified();
   globalCostTracker.resetSession();
   const manifestPath = join(runDir, '01_manifest.json');
   const manifestRaw = JSON.parse(readFileSync(manifestPath, 'utf-8')) as unknown;

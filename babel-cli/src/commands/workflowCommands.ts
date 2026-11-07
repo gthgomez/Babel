@@ -127,7 +127,7 @@ import { resolveAgentTarget } from '../services/targetResolver.js';
 import { createLiteFixProgress } from '../ui/liteFixProgress.js';
 import { runLiteSessionWithSchemaRecovery } from '../services/liteSessionRunner.js';
 import { registerDogfoodCommands } from './dogfoodCommands.js';
-import { assertLegacyManualResumeQualified, loadPlanHandoff, loadPlanHandoffGuarded, PLAN_APPLY_UNAVAILABLE_REASON } from '../agent/planHandoff.js';
+import { loadPlanHandoff, loadPlanHandoffGuarded, PLAN_APPLY_UNAVAILABLE_REASON } from '../agent/planHandoff.js';
 import { runPlanReviewLane } from '../agent/lanes/planReviewLane.js';
 import { resolveFuzzyWorkspaceDirectory } from '../services/pathScanner.js';
 import { isCommandCodeChatSelection, preflightRequestedModelPolicy } from './workflowModelPolicy.js';
@@ -1453,7 +1453,6 @@ async function handleResumeCommand(options: {
   plan?: string;
   project?: string;
 }): Promise<void> {
-  assertLegacyManualResumeQualified();
   validateRuntimeEnvForCommand({ json: true });
 
   let resolvedRun = options.run;
