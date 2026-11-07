@@ -4,6 +4,8 @@ import {
   buildProviderFailureReceipt,
   isSafeProviderRetry,
   normalizeProviderFailureClass,
+  providerErrorCodeFromBody,
+  providerRequestIdFromResponse,
   validateProviderFailureReceipt,
 } from "./providerFailureReceipt.js";
 import {
@@ -13,6 +15,14 @@ import {
   recordProviderFailureReceipt,
   serializeSessionEventLog,
 } from "../agent/sessionEvents.js";
+
+test("provider failure metadata retains recognized codes and rejects untrusted text", () => {
+  assert.equal(providerErrorCodeFromBody(JSON.stringify({ error: { code: "rate_limit" } })), "rate_limit");
+  assert.equal(providerErrorCodeFromBody(JSON.stringify({ error: { code: "untrusted response content" } })), null);
+  assert.equal(providerErrorCodeFromBody("invalid json"), null);
+  assert.equal(providerRequestIdFromResponse(new Response(null, { headers: { "x-request-id": "req-123" } })), "req-123");
+  assert.equal(providerRequestIdFromResponse(new Response(null, { headers: { "x-request-id": "untrusted free form content" } })), null);
+});
 
 test("provider failure receipts are hashed and secret-safe", () => {
   const receipt = buildProviderFailureReceipt({
