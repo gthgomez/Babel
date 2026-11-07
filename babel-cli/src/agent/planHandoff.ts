@@ -243,8 +243,10 @@ function loadPlanHandoffUnqualified(input: {
   // from legacy or model-written Plan metadata to another provider.
   const policy = loadEnterprisePolicy().policy;
   const safetyPolicy = { ...policy, redaction: { ...policy.redaction, enabled: true } };
-  if (JSON.stringify(redactEvidenceValue(modelPlan, safetyPolicy)) !== JSON.stringify(modelPlan) ||
-      (contractRaw && JSON.stringify(redactEvidenceValue(contractRaw, safetyPolicy)) !== JSON.stringify(contractRaw))) return null;
+  // Model-written text must not carry recognizable credentials. Contract path
+  // identifiers are not secret material; their contents are guarded separately
+  // by scoped reads and the context redaction below.
+  if (JSON.stringify(redactEvidenceValue(modelPlan, safetyPolicy)) !== JSON.stringify(modelPlan)) return null;
   const contract = contractRaw as LiteTaskContract | null;
 
   const allowedPaths = new Set<string>();
