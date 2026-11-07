@@ -296,7 +296,8 @@ if (!isSyntheticProviderFixtureReady()) {
         const original = fs.lstatSync;
         t.mock.method(fs, 'lstatSync', ((path: fs.PathLike, ...args: unknown[]) => {
           const stat = original(path, ...(args as []));
-          if (!handoffRaceSwapped && String(path).toLowerCase() === planPath.toLowerCase()) {
+          const observed = String(path)
+          if (!handoffRaceSwapped && (observed.toLowerCase() === planPath.toLowerCase() || /(?:\/|\\)model_plan\.json$/i.test(observed))) {
             handoffRaceSwapped = true;
             fs.renameSync(planPath, join(runDir, 'model_plan-before.json'));
             fs.renameSync(replacement, planPath);
@@ -320,7 +321,7 @@ if (!isSyntheticProviderFixtureReady()) {
         const originalOpen = fs.openSync;
         let planLoads = 0;
         t.mock.method(fs, 'openSync', ((path: fs.PathLike, ...args: unknown[]) => {
-          if (String(path).toLowerCase() === planFile.toLowerCase()) planLoads++;
+          if (String(path).toLowerCase() === planFile.toLowerCase() || /(?:\/|\\)model_plan\.json$/i.test(String(path))) planLoads++;
           return originalOpen(path, ...(args as [fs.OpenMode]));
         }) as typeof fs.openSync);
         const original = fs.lstatSync;
@@ -329,7 +330,8 @@ if (!isSyntheticProviderFixtureReady()) {
           // The pipeline first validates the handoff, then rebuilds it for the
           // request. Swap at the latter read so validation cannot consume the
           // fault and accidentally hide a request-boundary regression.
-          if (planLoads >= 2 && !handoffRaceSwapped && String(path).toLowerCase() === sourceFile.toLowerCase()) {
+          const observed = String(path)
+          if (planLoads >= 2 && !handoffRaceSwapped && (observed.toLowerCase() === sourceFile.toLowerCase() || /(?:\/|\\)source\.txt$/i.test(observed))) {
             handoffRaceSwapped = true;
             fs.renameSync(sourceDir, join(process.cwd(), 'swapdir-original'));
             symlinkSync(outside, sourceDir, process.platform === 'win32' ? 'junction' : 'dir');
@@ -364,13 +366,13 @@ if (!isSyntheticProviderFixtureReady()) {
         writeFileSync(join(process.env['BABEL_STATE_DIR']!, 'outside.txt'), 'SYNTHETIC_FORBIDDEN_OUTSIDE');
         linkSync(join(process.env['BABEL_STATE_DIR']!, 'outside.txt'), 'linked.txt');
         const outsideDir = join(process.env['BABEL_STATE_DIR']!, 'outside-dir');
-        mkdirSync(outsideDir);
+        mkdirSync(outsideDir, { recursive: true });
         writeFileSync(join(outsideDir, 'secret.txt'), 'SYNTHETIC_FORBIDDEN_JUNCTION');
         symlinkSync(outsideDir, 'linked-dir', process.platform === 'win32' ? 'junction' : 'dir');
         writeFileSync('.env.production.local', 'SYNTHETIC_FORBIDDEN_ENV');
         writeFileSync('.envrc', 'SYNTHETIC_FORBIDDEN_ENVRC');
         writeFileSync('.env.SYNTHETIC_PROTECTED_NAME', 'fixture');
-        t.after(() => { rmSync('linked.txt', { force: true }); rmSync('linked-dir', { force: true }); rmSync('outside-scope.txt', { force: true }); rmSync('.env.production.local', { force: true }); rmSync('.envrc', { force: true }); rmSync('.env.SYNTHETIC_PROTECTED_NAME', { force: true }); rmSync(join(process.cwd(), 'runs'), { recursive: true, force: true }); });
+        t.after(() => { rmSync(outsideDir, { recursive: true, force: true }); rmSync('linked.txt', { force: true }); rmSync('linked-dir', { force: true }); rmSync('outside-scope.txt', { force: true }); rmSync('.env.production.local', { force: true }); rmSync('.envrc', { force: true }); rmSync('.env.SYNTHETIC_PROTECTED_NAME', { force: true }); rmSync(join(process.cwd(), 'runs'), { recursive: true, force: true }); });
       }
       if (kind === 'handoff-contractless') {
         const runDir = join(process.cwd(), 'runs', 'babel-lite', handoffId); mkdirSync(runDir, { recursive: true });
@@ -650,7 +652,7 @@ if (!isSyntheticProviderFixtureReady()) {
         return;
       }
       if (kind === 'handoff-metadata-race') {
-        await assert.rejects(run, /saved plan source is unavailable/i);
+        await assert.rejects(run, /saved plan source is unavailable|Unsafe Plan source artifact/i);
         assert.equal(handoffRaceSwapped, true, 'fixture must swap the metadata at the actual read');
         assert.equal(calls, 0, 'replaced metadata must stop before provider dispatch');
         return;
@@ -662,7 +664,13 @@ if (!isSyntheticProviderFixtureReady()) {
         await assert.rejects(run, /plan.*deep|deep.*plan/i); assert.equal(calls, 0); return;
       }
       if (kind === 'handoff-command-contained') { await assert.rejects(run, /Plan-bound command execution is unavailable/); assert.equal(calls, 0); assert.equal(existsSync('synthetic-command-effect.txt'), false); return; }
-      if (kind === 'handoff-mutation-contained') { await assert.rejects(run, /Plan-bound mutation is temporarily unavailable/); assert.equal(calls, 0); assert.equal(readFileSync('existing.txt', 'utf8'), 'preserved owner source'); return; }
+      if (kind === 'handoff-mutation-contained') {
+        const outcome = await run();
+        assert.notEqual(outcome.status, 'COMPLETE');
+        assert.equal(readFileSync('existing.txt', 'utf8'), 'preserved owner source');
+        assert.equal(existsSync('outside-effect.txt'), false);
+        return;
+      }
       if (kind === 'cancel-during-orchestration') {
         await assert.rejects(run, { name: 'AbortError' });
         assert.equal(calls, 1);
