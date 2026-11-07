@@ -1,3 +1,5 @@
+import { computeCriticRepairCostBudget, computePostWriteRepairBudget } from './chatEngineBudgetPolicy.js';
+import { durableAdmissionState } from './chatEngineAdmissionState.js';
 import type { ChatLlmRunner } from '../runners/base.js'
 import { restoreFailedVerifierHistory, unresolvedFailedVerifierHistory, attestedFailedVerifierExecution } from './codingLoop/failedVerifierExecution.js';
 import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js';
@@ -139,7 +141,6 @@ import {
 import {
   explicitFiniteCostOverride,
   resolveChatEngineLimits, retainTaskWallAllowance,
-  shouldShrinkWallForPostWriteRepair,
   type ChatEngineLimits,
   type ChatRunLimiter,
 } from "../config/chatEngineLimits.js";
@@ -393,10 +394,6 @@ import {
   isDiffCriticEnabled,
   maybeInjectMidLoopHeuristicCritic as injectMidLoopHeuristicCritic,
   runAsymmetricDiffCritic as runAsymmetricDiffCriticImpl,
-  computeCriticRepairCostCap,
-  computePostWriteRepairWallMs,
-  buildPostWriteRepairMessage,
-  shouldEnterRepairBudget,
   type AsymmetricCriticState,
   type CriticRunner,
 } from "./chatEngineCriticBudget.js";
@@ -663,26 +660,7 @@ export class ChatEngine {
     this.physicalSettlementUnknown = true;
   }
 
-  private hasIndeterminateDurableAdmission(): boolean {
-    const store = this.parity.admissionStore;
-    if (!store) return false;
-    try {
-      const listing = store.listAdmissions(this.engineRunId);
-      return listing.skippedCorruptRows > 0 || listing.records.some(record => record.state === 'indeterminate');
-    } catch {
-      return true;
-    }
-  }
 
-  private hasClaimedDurableAdmission(): boolean {
-    const store = this.parity.admissionStore;
-    if (!store) return false;
-    try {
-      return store.listAdmissions(this.engineRunId).records.some(record => record.state === 'claimed');
-    } catch {
-      return true;
-    }
-  }
   /** Pending cancellation survives preparation until its submission latch exists. */
   private _cancelled = false;
   /** LLM-based conversation compaction (from chatCompaction.ts).
@@ -1652,24 +1630,12 @@ export class ChatEngine {
    */
   private applyCriticRepairCostBudget(): void {
     if (this.criticRepairCostCapUsd != null) return;
-    const spent = this.currentTaskCostUsd();
-    const { capUsd, repairWindowUsd } = computeCriticRepairCostCap({
-      spentUsd: spent,
-      sessionMaxCostUsd: this.limits.maxCostUsd,
-      longTaskProfile: this.limits.costBudget?.longTaskProfile === true,
-      explicitCostCeiling: this.limits.costBudget?.explicitCostCeiling === true,
-      criticStrikes: this.criticStrikes,
-      limits: this.limits,
+    const update = computeCriticRepairCostBudget({
+      spentUsd: this.currentTaskCostUsd(), limits: this.limits,
+      criticStrikes: this.criticStrikes, turnIndex: this._turnIndex,
     });
-    this.criticRepairCostCapUsd = capUsd;
-    this.policyEventLog.record({
-      at_turn: this._turnIndex,
-      kind: "progress_policy",
-      detail:
-        `critic_repair_budget spent=${spent.toFixed(3)} ` +
-        `repair_window=${repairWindowUsd.toFixed(3)} cap=${capUsd.toFixed(3)} ` +
-        `session_max=${this.limits.maxCostUsd.toFixed(2)}`,
-    });
+    this.criticRepairCostCapUsd = update.capUsd;
+    this.policyEventLog.record(update.event);
     this.persistTaskAllowance();
   }
 
@@ -1679,84 +1645,30 @@ export class ChatEngine {
    * Idempotent.
    */
   private applyPostWriteRepairBudget(): void {
-    if (this.postWriteRepairWallCapMs != null || this.postWriteRepairRestrict) return;
-    // Only for execute-style classes that must verify (not pure investigate).
-    if (this.taskClass === "investigate") return;
-    // Finding 1: enter the bounded repair window only on evidence of repair or
-    // non-progress. A confirmed write alone is not evidence — a productive
-    // multi-file implementation keeps its granted allowance instead of being
-    // cut to a repair window after the first edit.
-    if (
-      !shouldEnterRepairBudget({
-        hasMutation: this.currentTurnHasMutation(),
-        currentVerifierFailed: this.lastVerifierFailed,
-        criticRejected: this.lastCriticReceipt?.verdict === "reject",
-        intervention: this.progressController.InterventionLevel,
-      })
-    ) {
-      return;
-    }
-
-    const elapsedMs = this.currentTaskActiveWallMs();
-    // An explicitly authorized long-task run keeps its full wall: the
-    // anti-thrash repair window would otherwise kill it minutes after the
-    // first write. Hard wall, stall, turn and cost budgets still apply.
-    const shrinkWall = shouldShrinkWallForPostWriteRepair(
-      this.limits.wallBudget,
-    );
-    const repairWall = shrinkWall
-      ? computePostWriteRepairWallMs({
-          elapsedMs,
-          sessionMaxWallMs: this.limits.maxWallMs,
-        })
-      : {
-          capMs: this.limits.maxWallMs,
-          repairWindowMs: Math.max(0, this.limits.maxWallMs - elapsedMs),
-        };
-    const { capMs, repairWindowMs } = repairWall;
-    this.postWriteRepairWallCapMs = Number.isFinite(capMs) ? capMs : null;
+    const update = computePostWriteRepairBudget({
+      postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
+      postWriteRepairRestrict: this.postWriteRepairRestrict,
+      taskClass: this.taskClass,
+      hasMutation: this.currentTurnHasMutation(),
+      currentVerifierFailed: this.lastVerifierFailed,
+      criticRejected: this.lastCriticReceipt?.verdict === 'reject',
+      intervention: this.progressController.InterventionLevel,
+      elapsedMs: this.currentTaskActiveWallMs(),
+      limits: this.limits,
+      criticRepairCostCapUsd: this.criticRepairCostCapUsd,
+      spentUsd: this.currentTaskCostUsd(),
+      criticStrikes: this.criticStrikes,
+      turnIndex: this._turnIndex,
+    });
+    if (!update) return;
+    this.postWriteRepairWallCapMs = update.postWriteRepairWallCapMs;
     this.postWriteRepairRestrict = true;
-
-    // Also shrink cost if critic repair cap not already tighter.
-    if (this.criticRepairCostCapUsd == null) {
-      const spent = this.currentTaskCostUsd();
-      const { capUsd, repairWindowUsd } = computeCriticRepairCostCap({
-        spentUsd: spent,
-        sessionMaxCostUsd: this.limits.maxCostUsd,
-        longTaskProfile: this.limits.costBudget?.longTaskProfile === true,
-        explicitCostCeiling:
-          this.limits.costBudget?.explicitCostCeiling === true,
-        criticStrikes: this.criticStrikes,
-        limits: this.limits,
-      });
-      this.criticRepairCostCapUsd = capUsd;
-      this.policyEventLog.record({
-        at_turn: this._turnIndex,
-        kind: "progress_policy",
-        detail:
-          `post_write_repair_cost spent=${spent.toFixed(3)} ` +
-          `repair_window=${repairWindowUsd.toFixed(3)} cap=${capUsd.toFixed(3)}`,
-      });
+    if (update.criticRepairCostCapUsd !== null && this.criticRepairCostCapUsd == null) {
+      this.criticRepairCostCapUsd = update.criticRepairCostCapUsd;
+      if (update.costEvent) this.policyEventLog.record(update.costEvent);
     }
-
-    const remainingWallSec = Math.max(
-      0,
-      Math.round((this.limits.maxWallMs - elapsedMs) / 1000),
-    );
-    const repairWindowSec = Math.round(repairWindowMs / 1000);
-    const msg = buildPostWriteRepairMessage({
-      repairWindowSec,
-      remainingWallSec,
-    });
-    this.conversation.push({ role: "user", content: msg });
-    this.policyEventLog.record({
-      at_turn: this._turnIndex,
-      kind: "progress_policy",
-      detail:
-        `post_write_repair_wall elapsed_ms=${elapsedMs} ` +
-        `repair_window_ms=${repairWindowMs} cap_ms=${capMs} ` +
-        `session_max_ms=${this.limits.maxWallMs} tools=act_or_verify`,
-    });
+    this.conversation.push({ role: 'user', content: update.conversationMessage });
+    this.policyEventLog.record(update.wallEvent);
     this.persistTaskAllowance();
   }
 
@@ -2241,7 +2153,8 @@ export class ChatEngine {
     if (!priorReleased) {
       // An indeterminate admission means a prior physical effect was never
       // reconciled; it blocks regardless of whether a wrapper is still live.
-      if (this.physicalSettlementUnknown || this.hasIndeterminateDurableAdmission()) {
+      const admission = durableAdmissionState(this.parity.admissionStore, this.engineRunId);
+      if (this.physicalSettlementUnknown || admission.indeterminate) {
         yield { type: 'failed', error: 'A previous request may still be settling or its physical effect is unknown. Inspect the workspace and evidence before continuing.',
           reason_code: 'physical_settlement_unknown' };
         return;
@@ -2249,7 +2162,7 @@ export class ChatEngine {
       // A claimed admission with no live owner is stale (e.g. a primed or
       // pre-crash record) and may be superseded. With a live owner it is
       // unsettled work and must settle or be cancelled first.
-      if (this.activeSubmissionOwner !== null && (this.hasClaimedDurableAdmission() || this.activeEffectActionBatches > 0)) {
+      if (this.activeSubmissionOwner !== null && (admission.claimed || this.activeEffectActionBatches > 0)) {
         yield { type: 'failed', error: 'The previous request is still settling. Wait for it to finish before continuing.' };
         return;
       }
