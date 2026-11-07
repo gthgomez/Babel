@@ -201,7 +201,7 @@ test('a local supervisor deadline does not return while its owned descendant is 
   }
 });
 
-test('failed Windows tree-kill is not accepted as descendant settlement', { skip: process.platform !== 'win32' }, async t => {
+test('failed Windows tree-kill is not accepted as descendant settlement', { skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'babel-tree-kill-failure-'));
   const owner = 'tree-kill-failure-control';
   const controller = new AbortController();
@@ -231,7 +231,7 @@ test('failed Windows tree-kill is not accepted as descendant settlement', { skip
   }
 });
 
-test('failed Windows tree-kill on a deadline leaves a termination failure for the owner', { skip: process.platform !== 'win32' }, async t => {
+test('failed Windows tree-kill on a deadline leaves a termination failure for the owner', { skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'babel-timeout-tree-failure-'));
   const owner = 'timeout-tree-failure-control';
   let ownedPid: number | undefined;
@@ -258,7 +258,7 @@ test('failed Windows tree-kill on a deadline leaves a termination failure for th
   }
 });
 
-test('a timed-out shell reports failed Windows tree termination to its caller', { skip: process.platform !== 'win32' }, async t => {
+test('a timed-out shell reports failed Windows tree termination to its caller', { skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'babel-timeout-shell-failure-'));
   const owner = 'timeout-shell-failure-control';
   let ownedPid: number | undefined;
