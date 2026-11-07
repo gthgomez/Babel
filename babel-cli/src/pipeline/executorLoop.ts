@@ -1,3 +1,4 @@
+import { evictFileReadCache } from './executorLoopCache.js';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -239,43 +240,6 @@ type ToolFailureResult =
  * then if cache still exceeds maxBytes, evict oldest entries until under budget.
  * Mutates the Maps in place and returns the updated byte counter.
  */
-function evictFileReadCache(
-  turn: number,
-  fileReadCache: Map<string, string>,
-  fileReadCacheUsedTurn: Map<string, number>,
-  fileReadCacheTotalBytes: number,
-  maxBytes: number,
-): { fileReadCacheTotalBytes: number } {
-  // Evict stale entries (stale if turn - lastUsed > 5)
-  const toEvict: string[] = [];
-  for (const [filePath, lastUsed] of fileReadCacheUsedTurn.entries()) {
-    if (turn - lastUsed > 5) {
-      toEvict.push(filePath);
-    }
-  }
-  for (const filePath of toEvict) {
-    const evictedSize = Buffer.byteLength(fileReadCache.get(filePath) ?? '', 'utf8');
-    fileReadCacheTotalBytes -= evictedSize;
-    fileReadCache.delete(filePath);
-    fileReadCacheUsedTurn.delete(filePath);
-  }
-
-  // ── Size-bounded LRU eviction (10 MB ceiling) ────────────────────────
-  // After turn-based eviction, if the cache still exceeds the byte budget,
-  // evict additional entries in ascending lastUsed-turn order (oldest first).
-  if (fileReadCacheTotalBytes > maxBytes) {
-    const sortedByAge = [...fileReadCacheUsedTurn.entries()].sort((a, b) => a[1] - b[1]);
-    for (const [filePath] of sortedByAge) {
-      if (fileReadCacheTotalBytes <= maxBytes) break;
-      const evictedSize = Buffer.byteLength(fileReadCache.get(filePath) ?? '', 'utf8');
-      fileReadCacheTotalBytes -= evictedSize;
-      fileReadCache.delete(filePath);
-      fileReadCacheUsedTurn.delete(filePath);
-    }
-  }
-
-  return { fileReadCacheTotalBytes };
-}
 
 /**
  * Extracted: executes a direct bounded write plan without LLM calls, if one exists.

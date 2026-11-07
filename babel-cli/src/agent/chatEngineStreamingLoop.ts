@@ -1,3 +1,4 @@
+import { streamReadOnlyTerminal } from './chatReadOnlyTerminal.js';
 import type {
   ChatEvent,
   SubmitMessageOptions,
@@ -1799,76 +1800,12 @@ export class ChatEngineStreamingLoop {
               arb.policySource === "progress_terminal") &&
             isReadOnlyInspection
           ) {
-            let synthAnswer = "";
-            let synthError: Error | null = null;
-            try {
-              synthAnswer = await this.host.synthesizeAnswer(
-                allToolObservations,
-                {
-                  onAnswerChunk: (_chunk: string) => {},
-                },
-                userInput,
-              );
-            } catch (err: any) {
-              synthError = err instanceof Error ? err : new Error(String(err));
-            }
-            // R0-8: synthesis is a suspension point; a superseded generator must
-            // not append to the new task's conversation.
-            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-
-            if (synthError || !synthAnswer?.trim()) {
-              if (synthError?.message.startsWith('RESPONSE_EVIDENCE_INVALID:')) {
-                yield this.host.streamFailed(synthError.message);
-                return;
-              }
-              const failMsg = `Answer synthesis failed after inspection completed: ${synthError?.message ?? "no answer generated"}`;
-              this.host.conversation.push({
-                role: "assistant",
-                content: failMsg,
-              });
-              yield { type: "answer_chunk", text: failMsg };
-              if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-              yield this.host.streamDone(failMsg, {
-                blockedReport: attachTerminalReason(
-                  {
-                    schema_version: 1,
-                    status: "BLOCKED",
-                    reason: "Answer synthesis unavailable",
-                    missing: "LLM provider response for answer synthesis",
-                    checked: [
-                      {
-                        action: "synthesize_answer",
-                        target: "provider",
-                        finding:
-                          synthError?.message ?? "Empty synthesis output",
-                      },
-                    ],
-                  },
-                  arb.terminalReason,
-                ),
-                ...(arb.terminalReason !== undefined
-                  ? { reason: arb.terminalReason }
-                  : {}),
-              });
-              return;
-            }
-
-            const finalAnswer = synthAnswer.trim();
-            const synthBlocked =
-              this.host.detectAndBuildBlockedReport(finalAnswer);
-            this.host.conversation.push({
-              role: "assistant",
-              content: finalAnswer,
-            });
-            yield { type: "answer_chunk", text: finalAnswer };
-            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-            yield this.host.streamDone(finalAnswer, {
-              blockedReport: synthBlocked ?? null,
-              // D03: the arbiter reason survives even when the bounded synthesis
-              // produced an informational answer rather than a blocked report.
-              ...(arb.terminalReason !== undefined
-                ? { reason: arb.terminalReason }
-                : {}),
+            yield* streamReadOnlyTerminal({
+              host: this.host,
+              submissionGeneration,
+              allToolObservations,
+              userInput,
+              arb,
             });
             return;
           }
