@@ -148,13 +148,16 @@ test('small fix does not inject an unselected latest Plan from task prose', asyn
   const path = join(root, 'fixture.js'); writeFileSync(path, 'original fixture\n')
   const run = join(root, 'runs', 'babel-lite', '20260610T180000Z-plan-abc123')
   mkdirSync(run, { recursive: true }); writeFileSync(join(run, 'model_plan.json'), JSON.stringify({ summary: 'SYNTHETIC_UNSELECTED_PLAN', likely_files: ['fixture.js'] }))
-  const previousFetch = globalThis.fetch; let requests = 0
+  const previousFetch = globalThis.fetch; const previousKey = process.env['OPENROUTER_API_KEY']; const previousState = process.env['BABEL_STATE_DIR']; let requests = 0
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-fixture-only'
+  process.env['BABEL_STATE_DIR'] = join(root, 'state')
+  updateUserSettings({ connections: { fixture: { id: 'fixture', provider: 'openrouter', model: 'z-ai/glm-5.3-flash', apiKeyEnvVar: 'OPENROUTER_API_KEY' } }, defaults: { connection: 'fixture', budgetUsd: 'unlimited' } })
   globalThis.fetch = async (_url, init) => {
     requests++; assert.equal(String(init?.body).includes('SYNTHETIC_UNSELECTED_PLAN'), false)
     return new Response('{}', { status: 401 })
   }
   try {
-    await runSmallFixPath({ task: 'Fix fixture.js and apply the change', projectRoot: root, provider: 'live' })
+    await runSmallFixPath({ task: 'Fix fixture.js and apply the change', projectRoot: root, provider: 'live', model: 'connection/fixture/z-ai/glm-5.3-flash' })
     assert.equal(requests, 1); assert.equal(readFileSync(path, 'utf8'), 'original fixture\n')
-  } finally { globalThis.fetch = previousFetch; rmSync(root, { recursive: true, force: true }) }
+  } finally { globalThis.fetch = previousFetch; if (previousKey === undefined) delete process.env['OPENROUTER_API_KEY']; else process.env['OPENROUTER_API_KEY'] = previousKey; if (previousState === undefined) delete process.env['BABEL_STATE_DIR']; else process.env['BABEL_STATE_DIR'] = previousState; rmSync(root, { recursive: true, force: true }) }
 })
