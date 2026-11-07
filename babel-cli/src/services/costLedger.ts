@@ -6,6 +6,7 @@ export const COST_LEDGER_FILENAME = 'cost_ledger.json';
 
 export interface CostLedgerEntry {
   entry_id: string;
+  charge_id?: string;
   stage: string;
   tier_name: string | null;
   tier_index: number | null;
@@ -80,6 +81,7 @@ export interface CostLedger {
 }
 
 interface WaterfallAttempt {
+  charge_id?: string;
   tier_name?: string | null;
   tier_index?: number | null;
   attempt?: number | null;
@@ -196,6 +198,7 @@ function toLedgerEntry(stage: string, attempt: WaterfallAttempt, index: number):
 
   return {
     entry_id: `${stage}-${randomUUID().slice(0, 8)}`,
+    ...(attempt.charge_id ? { charge_id: attempt.charge_id } : {}),
     stage,
     tier_name: attempt.tier_name ?? null,
     tier_index: asNumber(attempt.tier_index),
@@ -230,6 +233,8 @@ export function buildCostLedger(options: {
   task: string;
   lane: string;
   waterfallEntries: object[];
+  /** Run-owned receipts also retain dispatches whose waterfall never returned. */
+  chargeReceipts?: readonly ChargeReceipt[];
   createdAt?: Date;
 }): CostLedger {
   const entries: CostLedgerEntry[] = [];
@@ -266,6 +271,30 @@ export function buildCostLedger(options: {
         warnings.add(`${entry.entry_id}: ${entry.warning}`);
       }
     }
+  }
+
+  const recordedCharges = new Set(entries.map(entry => entry.charge_id).filter(Boolean));
+  for (const receipt of options.chargeReceipts ?? []) {
+    const { chargeId, taskOwnerId, parentTaskOwnerId } = receipt.attribution;
+    if (recordedCharges.has(chargeId) || (taskOwnerId !== options.runId && parentTaskOwnerId !== options.runId)) continue;
+    const usageKnown = receipt.usageKnown !== false && receipt.usageComplete !== false;
+    const entry = toLedgerEntry('unknown', {
+      charge_id: chargeId, provider: receipt.provider ?? null, provider_model_id: receipt.modelId,
+      prompt_tokens: usageKnown ? receipt.inputTokens : null,
+      completion_tokens: usageKnown ? receipt.outputTokens : null,
+      prompt_cache_hit_tokens: usageKnown ? receipt.cacheHitTokens : null,
+      prompt_cache_miss_tokens: usageKnown ? receipt.cacheMissTokens : null,
+      estimated_cost_usd: receipt.costEstimate ? receipt.estimatedCostUSD ?? null : receipt.knownCostUSD,
+      ...(receipt.reportedCostBasis === 'provider_reported' && receipt.reportedCostUSD !== undefined
+        ? { provider_reported_total_charge_usd: receipt.reportedCostUSD } : {}),
+      cost_precision: receipt.costEstimate?.precision ?? 'unknown',
+      pricing_source_url: receipt.costEstimate?.pricingSourceUrl ?? null,
+      pricing_verified_at: receipt.costEstimate?.pricingVerifiedAt ?? null,
+    }, entries.length);
+    entry.warning = [entry.warning,'Provider dispatch has no completed waterfall telemetry; stage and outcome are unavailable.'].filter(Boolean).join(' ');
+    entries.push(entry);
+    recordedCharges.add(chargeId);
+    warnings.add(`${entry.entry_id}: ${entry.warning}`);
   }
 
   const totals = {

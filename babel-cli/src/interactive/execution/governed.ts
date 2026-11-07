@@ -43,6 +43,10 @@ export async function executeGovernedTask(
   assertFiniteBudgetSupported('Thorough Work', target.targetRoot);
   ctx.isRunning = true;
   stdinCoordinatorPauseForRun(ctx.rl);
+  const epoch = ctx.shellRuntime?.store.epoch;
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  ctx.cancelActiveRun = cancel;
   process.stdout.write('[?25l'); // hide cursor
 
   const bus = new BabelEventBus();
@@ -153,6 +157,7 @@ export async function executeGovernedTask(
 
   const preRunSummary = globalCostTracker.getSessionSummary();
   const preRunCost = preRunSummary.totalCostUSD;
+  let currentResult: Awaited<ReturnType<typeof runBabelPipeline>> | undefined;
   try {
     waterfall.start();
     const contextInjection = prepareContextInjection(task, { projectRoot });
@@ -169,8 +174,10 @@ export async function executeGovernedTask(
         orchestratorVersion: ctx.state.router,
         ...(ctx.state.model !== undefined ? { modelOverride: ctx.state.model } : {}),
         eventBus: bus,
+        abortSignal: controller.signal,
         ...(planRunId !== undefined ? { planRunId } : {}),
       });
+      currentResult = result;
     } finally {
       if (previousProjectRoot === undefined) {
         delete process.env['BABEL_PROJECT_ROOT'];
@@ -178,6 +185,7 @@ export async function executeGovernedTask(
         process.env['BABEL_PROJECT_ROOT'] = previousProjectRoot;
       }
     }
+    controller.signal.throwIfAborted();
 
     waterfall.stop();
     const snapshot = (waterfall as any).getFinalSnapshot?.() ?? '';
@@ -269,22 +277,24 @@ export async function executeGovernedTask(
       });
     }
   } catch (caughtError: any) {
-    ctx.state.lastRunUserStatus = 'failed';
+    const cancelled = controller.signal.aborted;
+    ctx.state.lastRunUserStatus = cancelled ? 'cancelled' : 'failed';
     waterfall.fail();
     eventStream?.write('babel.run.error', { error: caughtError.message });
     process.stdout.write('[?25h');
-    const runDir = typeof caughtError?.runDir === 'string' ? caughtError.runDir : null;
+    const runDir = typeof caughtError?.runDir === 'string' ? caughtError.runDir : currentResult?.runDir ?? null;
+    const changedFiles = currentResult?.terminalSummary?.changed_files ?? [];
     if (runDir) {
       ctx.lastRunDir = runDir;
     }
     const errorPayload: Record<string, unknown> = {
-      status: 'RUN_FAILED',
-      user_status: 'failed',
+      status: cancelled ? 'CANCELLED' : 'RUN_FAILED',
+      user_status: ctx.state.lastRunUserStatus,
       command: 'run',
       task,
       project: ctx.state.project ?? null,
       run_dir: runDir,
-      changed_files: [],
+      changed_files: changedFiles,
       verification: {
         status: 'skipped',
         commands: [],
@@ -302,10 +312,10 @@ export async function executeGovernedTask(
         artifacts: [],
       },
       checks: [],
-      usage: globalCostTracker.getSessionSummary(),
+      usage: currentResult?.usageSummary ?? globalCostTracker.getSessionSummary(),
       errors: [caughtError.message ?? String(caughtError)],
       next: [
-        'Retry after resolving the failure or inspect the run evidence if a run directory was created.',
+        cancelled ? 'Inspect changes made before cancellation before starting another run.' : 'Retry after resolving the failure or inspect the run evidence if a run directory was created.',
       ],
     };
     const human = formatRunResultHuman(errorPayload);
@@ -330,12 +340,12 @@ export async function executeGovernedTask(
       run_dir: runDir,
       target_root: target.targetRoot,
       workspace_root: target.workspaceRoot,
-      changed_files: [],
-      verification: 'failed',
+      changed_files: changedFiles,
+      verification: cancelled ? 'skipped' : 'failed',
       next: ctx.lastAssistantNext,
-    }, 'failed');
+    }, ctx.state.lastRunUserStatus);
     console.error(`\n${human}\n`);
-    if (process.stdout.isTTY && !process.env['CI']) {
+    if (!cancelled && process.stdout.isTTY && !process.env['CI']) {
       try {
         const showAlert = () =>
           alert({
@@ -350,9 +360,11 @@ export async function executeGovernedTask(
       }
     }
   } finally {
+    if (ctx.cancelActiveRun === cancel) delete ctx.cancelActiveRun;
     await eventStream?.close();
     bus.removeAllListeners();
     ctx.isRunning = false;
     stdinCoordinatorResumeAfterRun(ctx.rl);
+    ctx.settleShellTurn?.(ctx.state.lastRunUserStatus, epoch);
   }
 }

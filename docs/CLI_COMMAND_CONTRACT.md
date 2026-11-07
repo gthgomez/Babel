@@ -160,6 +160,10 @@ valid charge. Session usage separates reported and estimated subtotals and keeps
 the complete actual total unavailable while any charge is estimated or unknown.
 Saved plans optionally retain their source run ID; older saved bodies still load
 and are applied without selecting an unrelated latest handoff.
+Run ledgers also retain owned provider dispatches whose waterfall did not return.
+Their stage and outcome stay unknown when no matching telemetry exists; missing
+token usage and charges remain unavailable. Charge IDs prevent completed
+attempts from being counted twice.
 
 ## Non-Negotiables
 

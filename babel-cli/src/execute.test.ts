@@ -185,6 +185,38 @@ for (const cost of [undefined, null, 0, 0.125, 0.0000000000001] as const) {
     }
   });
 }
+
+test('run-owned receipts preserve failed dispatches and hidden retries without double-counting completed telemetry', async () => {
+  const root=mkdtempSync(join(tmpdir(),'babel-waterfall-failure-'));
+  globalCostTracker.resetSession();
+  try {
+    const evidence=new EvidenceBundle('failed charge fixture',root);
+    const metadata=buildInvocationMetadata('openrouter','fixture/model',1,{prompt_tokens:10,completion_tokens:5,cost:0.125});
+    const complete=makeRunner({
+      async execute<T>(_prompt:string,_schema:unknown,callbacks?:RunnerCallbacks):Promise<T>{
+        callbacks?.onInvocationPhase?.({inference_id:'completed',provider:'openrouter',model:'fixture/model',phase:'request_dispatched'});
+        return {ok:true} as T;
+      },getLastInvocationMetadata:()=>metadata,
+    });
+    const failed=makeRunner({async execute<T>(_prompt:string,_schema:unknown,callbacks?:RunnerCallbacks):Promise<T>{
+      for(const inference_id of ['lost-first','lost-retry']) callbacks?.onInvocationPhase?.({inference_id,provider:'openrouter',model:'fixture/model',phase:'request_dispatched'});
+      throw new Error('Controlled terminal provider failure');
+    }});
+    const options={prompt:'failed charge fixture',schema:z.object({ok:z.literal(true)}),schemaName:'FailedChargeFixture',evidence,maxAttempts:1};
+    await runWaterfallForSchemaFailureTest({...options,stage:'planning',tiers:[{name:'fixture',runner:complete}]});
+    await assert.rejects(()=>runWaterfallForSchemaFailureTest({...options,stage:'qa',tiers:[{name:'fixture',runner:failed}]}),/Controlled terminal provider failure/);
+    const foreign={...globalCostTracker.getTaskChargeObservations(evidence.runId)[0]!,attribution:{taskOwnerId:'another-run',chargeId:'foreign'}};
+    const ledger=buildCostLedger({runId:evidence.runId,task:'failed charge fixture',lane:'governed',waterfallEntries:evidence.getWaterfallLogSnapshot(),
+      chargeReceipts:[...globalCostTracker.getTaskChargeObservations(evidence.runId),foreign]});
+    assert.equal(ledger.entries.length,3);
+    assert.equal(new Set(ledger.entries.map(entry=>entry.charge_id)).size,3);
+    assert.equal(ledger.entries.filter(entry=>entry.stage==='unknown'&&entry.prompt_tokens===null&&entry.succeeded===null).length,2);
+    const summary=usageSummaryFromCostLedger(ledger);
+    assert.equal(summary.reportedCostUSD,0.125);assert.equal(summary.unknownChargeCount,2);
+    assert.equal(summary.actualCostUSD,null);assert.equal(summary.costComplete,false);
+    assert.equal(summary.usageComplete,false);assert.equal(summary.totalTokens,15);
+  }finally{globalCostTracker.resetSession();rmSync(root,{recursive:true,force:true});}
+});
 // This function is NOT exported. It reads BABEL_WATERFALL_TIMEOUT_MS from the
 // environment at call time and returns the parsed positive finite number, or
 // DEFAULT_WATERFALL_TIMEOUT_MS (180000) as the fallback.

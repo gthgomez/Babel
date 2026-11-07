@@ -1064,7 +1064,8 @@ async function runBabelPipelineInternal(
       ...(finalizedResult.terminalOutcome ? { terminal_outcome: finalizedResult.terminalOutcome } : {}) }, null, 2)}\n`);
     finalizeV9LiveSessionForPipeline(v9LiveSession, finalizedResult, verifierContract.summary.verifierCompletionSatisfied);
     evidence.writeWaterfallTelemetry();
-    const costLedger = buildCostLedger({ runId: evidence.runId, task, lane: 'governed', waterfallEntries: evidence.getWaterfallLogSnapshot() });
+    const costLedger = buildCostLedger({ runId: evidence.runId, task, lane: 'governed', waterfallEntries: evidence.getWaterfallLogSnapshot(),
+      chargeReceipts: globalCostTracker.getTaskChargeObservations(evidence.runId) });
     evidence.writeCostLedger(costLedger);
     const usageSummary = costLedger.entries.length > 0 ? usageSummaryFromCostLedger(costLedger) : globalCostTracker.getSessionSummary();
 
@@ -1170,6 +1171,7 @@ async function runBabelPipelineInternal(
         task,
         lane: 'governed',
         waterfallEntries: evidence.getWaterfallLogSnapshot(),
+        chargeReceipts: globalCostTracker.getTaskChargeObservations(evidence.runId),
       });
       evidence.writeCostLedger(costLedger);
       return finalizeEpisodeResult(
@@ -1238,6 +1240,7 @@ async function runBabelPipelineInternal(
         task,
         lane: 'governed',
         waterfallEntries: evidence.getWaterfallLogSnapshot(),
+        chargeReceipts: globalCostTracker.getTaskChargeObservations(evidence.runId),
       }),
     );
     episodeLifecycle.recordFinalization(errorStatus, errorCondition);

@@ -249,7 +249,7 @@ if (!isSyntheticProviderFixtureReady()) {
           assert.equal(body.model, 'z-ai/glm-5.3-flash');
           const turn = turns[calls++];
           if (calls === cancelAt) controller.abort();
-          if (kind === 'cancel-during-orchestration') throw controller.signal.reason;
+          if (controller.signal.aborted && (kind === 'cancel-during-orchestration' || kind === 'cancel-during-qa')) throw controller.signal.reason;
           if (!rejected && kind !== 'wrong-plan-type' && calls >= 4) {
             assert.match(String(init?.body), /preserved owner source/);
             assert.match(String(init?.body), /ORIGINAL OWNER REQUEST/);
@@ -290,6 +290,7 @@ if (!isSyntheticProviderFixtureReady()) {
                   prompt_tokens: 10,
                   completion_tokens: 10,
                   total_tokens: 20,
+                  ...(kind === 'cancel-during-qa' && calls === 1 ? {cost:0.125} : {}),
                 },
               }) +
               '\n\ndata: [DONE]\n\n',
@@ -371,6 +372,25 @@ if (!isSyntheticProviderFixtureReady()) {
         const payload = buildRunResultPayload(result, {task, mode:'deep'});
         assert.equal(payload['terminal_outcome'], 'CANCELLED');
         assert.doesNotMatch(result.finalAnswer ?? '', /preserved owner source/);
+        if (kind === 'cancel-during-qa') {
+          const {buildCostLedger,usageSummaryFromCostLedger}=await import('../services/costLedger.js');
+          const legacySummary=usageSummaryFromCostLedger(buildCostLedger({runId:evidence.runId,task:ownerTask,lane:'governed',waterfallEntries:evidence.getWaterfallLogSnapshot()}));
+          t.diagnostic('DEEP_PLANNING_FIXTURE '+JSON.stringify({kind,reported:result.usageSummary?.reportedCostUSD,
+            unknown:result.usageSummary?.unknownChargeCount,complete:result.usageSummary?.costComplete,
+            ownerUnknown:globalCostTracker.getTaskSummary(evidence.runId).unknownChargeCount,
+            ownerReceipts:globalCostTracker.getTaskChargeObservations(evidence.runId).length,
+            telemetry:evidence.getWaterfallLogSnapshot().length,legacyUnknown:legacySummary.unknownChargeCount,
+            legacyComplete:legacySummary.costComplete}));
+          assert.equal(legacySummary.unknownChargeCount,0,'completed telemetry alone omits the dispatched QA attempt');
+          assert.equal(legacySummary.actualCostUSD,0.125,'the old projection incorrectly treats the planning subtotal as complete');
+          assert.equal(globalCostTracker.getTaskSummary(evidence.runId).unknownChargeCount,1);
+          assert.equal(result.usageSummary?.reportedCostUSD,0.125);
+          assert.equal(result.usageSummary?.unknownChargeCount,1,'dispatched cancellation remains an unknown charge after an earlier reported charge');
+          assert.equal(result.usageSummary?.costComplete,false);
+          assert.equal(result.usageSummary?.actualCostUSD,null);
+          const ledger=JSON.parse(readFileSync(join(evidence.runDir,'cost_ledger.json'),'utf8'));
+          assert.equal(usageSummaryFromCostLedger(ledger).unknownChargeCount,1,'persisted evidence retains the unresolved request');
+        }
       } else if (kind === 'answer-unavailable') {
         assert.equal(result.status, 'EXECUTOR_HALTED');
         assert.match(

@@ -166,6 +166,7 @@ export interface WaterfallOutcome {
 }
 
 export interface WaterfallAttemptOutcome {
+  charge_id?: string;
   tier_name: string;
   tier_index: number;
   attempt: number;
@@ -847,9 +848,11 @@ function buildAttemptOutcome(
   metadata: RunnerInvocationMetadata | null,
   errorSummary: string | null = null,
   schemaFailureEntryId: string | null = null,
+  chargeId?: string | null,
 ): WaterfallAttemptOutcome {
   const canonicalIndex = spec.originalIndex ?? tier;
   return {
+    ...(chargeId ? { charge_id: chargeId } : {}),
     tier_name: spec.name,
     tier_index: canonicalIndex,
     attempt,
@@ -1082,7 +1085,7 @@ async function runWaterfall<T>(
             dispatchedChargeId = `${settlementAttribution.taskOwnerId}:${label}:${++usageAttempt}:${randomUUID()}`;
             const update = globalCostTracker.settleUsage(event.model, 0, 0, null, null, {
               ...settlementAttribution, chargeId: dispatchedChargeId,
-            }, false);
+            }, false, event.provider);
             if (update.kind !== 'inserted') throw new Error('Delegated dispatch blocked by charge conflict');
             try {
               onUsageRecorded?.({
@@ -1168,6 +1171,7 @@ async function runWaterfall<T>(
             invocationMetadata,
             null,
             recoveryEntry?.entry_id ?? null,
+            dispatchedChargeId,
           ),
         );
 
@@ -1279,6 +1283,7 @@ async function runWaterfall<T>(
             invocationMetadata,
             lastError.message.slice(0, 200),
             schemaFailureEntryId,
+            dispatchedChargeId,
           ),
         );
 
