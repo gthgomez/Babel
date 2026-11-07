@@ -25,8 +25,14 @@ export function scopeExecutorKernel(kernel: ExecutorKernel, scope: { projectRoot
           if (!physical || normalize(physical) !== normalize(expected)) return denied();
           if (existsSync(expected)) {
             const stat = lstatSync(expected);
-            if (stat.isSymbolicLink() || stat.nlink !== 1) return denied();
-            if (!stat.isFile() && !(req.tool === 'directory_list' && stat.isDirectory())) return denied();
+            if (stat.isSymbolicLink()) return denied();
+            if (stat.isDirectory()) {
+              // Ordinary POSIX directories have multiple links; directory_list must not
+              // inherit the regular-file single-link requirement (only reads/lists here).
+              if (req.tool !== 'directory_list') return denied();
+            } else if (stat.isFile()) {
+              if (stat.nlink !== 1 || req.tool === 'directory_list') return denied();
+            } else return denied();
           } else if (req.tool !== 'file_write') {
             return denied();
           }
