@@ -240,18 +240,48 @@ function extractVerifierCommand(task: string): string | null {
 }
 
 function readPackageTestCommand(projectRoot: string): string | null {
+  return readPackageScript(projectRoot, 'test') !== null ? 'npm test' : null;
+}
+
+function readPackageScript(projectRoot: string, name: string): string | null {
   const packageJsonPath = safeSmallFixFile(projectRoot, 'package.json');
-  if (!packageJsonPath) {
-    return null;
-  }
+  if (!packageJsonPath) return null;
   try {
     const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as {
       scripts?: Record<string, unknown>;
     };
-    return typeof parsed.scripts?.['test'] === 'string' ? 'npm test' : null;
+    return typeof parsed.scripts?.[name] === 'string' ? parsed.scripts[name] : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Recognized read-only verification runners. A Plan-bound fix may execute
+ * these; arbitrary scripts (which can write outside the selected scope) are
+ * refused before provider dispatch.
+ */
+const PLAN_BOUND_VERIFIER_RE = [
+  /^node\s+--test(?:\s|$)/,
+  /^(?:npx\s+)?(?:vitest|jest)\b/,
+  /^(?:python\d?\s+-m\s+)?pytest\b/,
+  /^cargo\s+test\b/,
+  /^go\s+test\b/,
+  /^dotnet\s+test\b/,
+  /^(?:mvn|gradlew?|gradle)\b.*\btest\b/,
+  /^tsc\b.*--noEmit\b/,
+  /^(?:npx\s+)?(?:eslint|ruff)\b/,
+];
+
+function planBoundVerifierQualified(projectRoot: string, command: string, depth = 0): boolean {
+  if (depth > 4) return false;
+  const trimmed = command.trim();
+  const npm = /^npm\s+(?:run\s+)?([A-Za-z0-9:_-]+)(?:\s+--\s+.*)?$/.exec(trimmed);
+  if (npm) {
+    const script = readPackageScript(projectRoot, npm[1]!);
+    return script !== null && planBoundVerifierQualified(projectRoot, script, depth + 1);
+  }
+  return PLAN_BOUND_VERIFIER_RE.some((pattern) => pattern.test(trimmed));
 }
 
 function collectCandidateFiles(
@@ -638,7 +668,9 @@ export async function runSmallFixPath(
         throw new Error('The Plan target is unsafe; inspect the retained Plan and target before continuing.');
       }
     }
-    throw new Error('Plan-bound small-fix mutation is temporarily unavailable until verifier effects are scoped; the Plan is retained.');
+    if (!planBoundVerifierQualified(root, detected.verifierCommand)) {
+      throw new Error('Plan-bound small-fix mutation is temporarily unavailable until verifier effects are scoped; the Plan is retained.');
+    }
   }
 
   if (!detected && shouldAttemptFixDiscovery(options)) {
