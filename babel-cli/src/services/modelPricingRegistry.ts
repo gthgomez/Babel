@@ -146,6 +146,23 @@ export const MODEL_PRICING_REGISTRY: Record<string, ModelPricingEntry> = {
     cacheInputDiscountAvailable: true,
     conservativeWarning: 'Uses documented peak rates; the billing window and actual charge are unobserved.',
   },
+  'openrouter:z-ai/glm-5.3-flash': {
+    provider: 'openrouter',
+    modelId: 'z-ai/glm-5.3-flash',
+    inputCostPer1M: 0.075,
+    outputCostPer1M: 0.25,
+    sourceUrl: OPENROUTER_PRICING_SOURCE_URL,
+    verifiedAt: '2026-08-26',
+  },
+  'openrouter:deepseek/deepseek-v4-flash-0731': {
+    provider: 'openrouter',
+    modelId: 'deepseek/deepseek-v4-flash-0731',
+    inputCostPer1M: 0.14,
+    outputCostPer1M: 0.28,
+    sourceUrl: OPENROUTER_PRICING_SOURCE_URL,
+    verifiedAt: MODEL_PRICING_VERIFIED_AT,
+    cacheInputDiscountAvailable: true,
+  },
   'openrouter:deepseek/deepseek-v4.1-flash-1017': {
     provider: 'openrouter',
     modelId: 'deepseek/deepseek-v4.1-flash-1017',

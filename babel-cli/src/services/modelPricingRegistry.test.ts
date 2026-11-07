@@ -151,9 +151,9 @@ test('prices output-only usage exactly for known models', () => {
   assert.ok(Math.abs((estimate.estimatedCostUsd ?? 0) - 0.00056) < 1e-12);
 });
 
-test('provider usage accounting does not use an unverified GLM routed price', () => {
+test('provider usage accounting uses the documented GLM routed estimate', () => {
   const result = estimateProviderUsageCost({ provider: 'openrouter', modelId: 'z-ai/glm-5.3-flash', promptTokens: 1000, completionTokens: 1000 })
-  assert.equal(result.precision, 'unknown'); assert.equal(result.estimatedCostUsd, null)
+  assert.equal(result.precision, 'exact'); assert.equal(result.estimatedCostUsd, 0.000325)
 })
 
 test('direct DeepSeek estimates use documented peak rates and are not invoice-exact', () => {
@@ -162,7 +162,7 @@ test('direct DeepSeek estimates use documented peak rates and are not invoice-ex
   assert.ok(Math.abs((result.estimatedCostUsd ?? -1) - 0.0025824) < 1e-12)
 })
 
-test('older OpenRouter snapshot keeps obsolete routed pricing unknown', () => {
+test('older OpenRouter snapshot keeps documented routed pricing', () => {
   const result = estimateProviderUsageCost({ provider: 'openrouter', modelId: 'deepseek/deepseek-v4-flash-0731', promptTokens: 1000, completionTokens: 1000 })
-  assert.equal(result.precision, 'unknown'); assert.equal(result.estimatedCostUsd, null)
+  assert.equal(result.precision, 'conservative'); assert.equal(result.estimatedCostUsd, 0.00042)
 })

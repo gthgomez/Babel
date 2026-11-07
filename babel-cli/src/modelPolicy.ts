@@ -512,6 +512,30 @@ export function loadModelPolicyConfig(babelRoot = resolveRuntimePaths().resource
 }
 
 /** Resolve a backend key from either its configured key or exact model id. */
+/**
+ * Resolve a bare provider model ID to exactly one backend key. Multiple
+ * provider catalogs can expose the same upstream ID; picking the first would
+ * silently bind an explicit model to a different provider and credential.
+ */
+export function resolveBareModelIdBackendKey(
+  configuredModels: Record<string, ModelPolicyModelEntry>,
+  modelId: string,
+): string | undefined {
+  const normalized = modelId.trim().toLowerCase();
+  const matches = Object.entries(configuredModels).filter(
+    ([, entry]) => entry.model_id.trim().toLowerCase() === normalized,
+  );
+  if (matches.length === 0) return undefined;
+  if (matches.length === 1) return matches[0]![0];
+  const openrouter = matches.filter(([, entry]) => entry.provider === 'openrouter');
+  if (normalized.includes('/') && openrouter.length === 1) return openrouter[0]![0];
+  throw new Error(
+    `AMBIGUOUS_MODEL: "${modelId}" is exposed by multiple providers (${matches
+      .map(([key, entry]) => `${entry.provider}:${key}`)
+      .join(', ')}). Select a provider-qualified backend key instead.`,
+  );
+}
+
 export function resolveModelPolicyBackendKey(
   modelOrBackendKey: string,
   babelRoot?: string,
@@ -520,9 +544,7 @@ export function resolveModelPolicyBackendKey(
   const { config } = loadModelPolicyConfig(babelRoot);
   const normalized = modelOrBackendKey.trim().toLowerCase();
   if (config.models?.[normalized]) return normalized;
-  return Object.entries(config.models ?? {}).find(
-    ([, entry]) => entry.model_id.trim().toLowerCase() === normalized,
-  )?.[0];
+  return resolveBareModelIdBackendKey(config.models ?? {}, normalized);
 }
 
 function getCostEstimationDefaults(config: ModelPolicyConfig): {

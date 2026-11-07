@@ -5,6 +5,7 @@ import {
   resolveModelByKey,
   resolveOpenRouterDeepSeekBackendKey,
   getAvailableModels,
+  resolveBareModelIdBackendKey,
   type ResolvedModelPolicy,
 } from '../modelPolicy.js';
 import { getProviderSpec, providerSupportsOperation } from '../runners/providerRegistry.js';
@@ -78,9 +79,7 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
     ? undefined
     : configuredModels[selectedModel]
       ? selectedModel
-      : Object.entries(configuredModels).find(
-          ([, entry]) => entry.model_id === selectedModel,
-        )?.[0];
+      : resolveBareModelIdBackendKey(configuredModels, selectedModel);
   const requestedBackendEntry = requestedBackendKey
     ? configuredModels[requestedBackendKey]
     : undefined;

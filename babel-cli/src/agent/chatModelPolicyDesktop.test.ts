@@ -280,7 +280,7 @@ test('Desktop CommandCode discovery keeps endpoint-incompatible models unavailab
   const config = await mkdtemp(join(tmpdir(), 'babel-commandcode-discovery-'))
   t.after(() => rm(config, { recursive: true, force: true }))
   let observedUrl = ''; let authorization: string | null = null
-  const result = await routing.refreshModelCatalog({ configDirectory: config, provider: 'command-code', credential: 'synthetic-do-not-send', fetchImpl: async (url: string, init: { headers: HeadersInit }) => {
+  const result = await routing.refreshModelCatalog({ configDirectory: config, provider: 'command-code', credential: 'synthetic-do-not-send', fetchImpl: async (url: string, init: { headers: Record<string, string> }) => {
     observedUrl = String(url); authorization = new Headers(init.headers).get('Authorization')
     return { ok: true, text: async () => JSON.stringify({ data: [
       { id: 'z-ai/glm-5.3-flash', supported_endpoints: ['/chat/completions'] },
