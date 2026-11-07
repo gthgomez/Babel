@@ -17,7 +17,7 @@
  *     00_ctx_<stage>.md         ← Compiled context snapshots (debug)
  */
 
-import { closeSync, constants, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import type { BigIntStats } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -208,6 +208,26 @@ export class EvidenceBundle {
     const written = writeEvidenceFile(this.runDir, tempName, content);
     if (!sameEvidenceIdentity(before, evidenceIdentity(target)) || !sameEvidenceIdentity(written, evidenceIdentity(temp)) || evidenceTarget(this.runDir, filename) !== target) throw new Error('Evidence artifact changed before replacement.');
     renameSync(temp, target);
+    // A pathname pre-check cannot bind the staged file object to the bytes later
+    // committed: the staged or destination pathname may be replaced between the
+    // identity check and the rename. Verify the object that actually landed at the
+    // destination and remove it if it is not the validated staging inode with the
+    // exact bytes we wrote.
+    let publishedFd: number | null = null;
+    try {
+      publishedFd = openSync(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      const published = fstatSync(publishedFd, { bigint: true });
+      if (!published.isFile() || published.nlink !== 1n || published.dev !== written.dev || published.ino !== written.ino) {
+        throw new Error('Evidence artifact was replaced during publication.');
+      }
+      if (readFileSync(publishedFd, 'utf8') !== content) throw new Error('Evidence artifact bytes changed during publication.');
+    } catch (error) {
+      if (publishedFd !== null) { try { closeSync(publishedFd); } catch { /* already closed */ } publishedFd = null; }
+      try { unlinkSync(target); } catch { /* best effort: nothing retained */ }
+      throw error;
+    } finally {
+      if (publishedFd !== null) closeSync(publishedFd);
+    }
   }
 
   // ── Public artifact writers ───────────────────────────────────────────────
