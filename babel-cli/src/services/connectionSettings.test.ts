@@ -299,7 +299,9 @@ test('CommandCode catalog exposes the explicit documented qualification candidat
     assert.equal(selected.waterfall[0]?.nativeToolUseUnverified, true)
     assert.ok(selected.stagePolicies.every(stage => stage.orderedBackends.every(backend => backend.nativeToolUseUnverified === true)))
     const known = resolveModelByKey({ key: 'connection/cc/deepseek/deepseek-v4.1-flash' })
-    assert.equal(known.nativeToolUse, undefined); assert.equal(known.nativeToolUseUnverified, true)
+    // The explicit CommandCode deepseek route is admitted with native tools;
+    // catalog listing still reports qualification as unverified.
+    assert.equal(known.nativeToolUse, true); assert.equal(known.nativeToolUseUnverified, undefined)
     const { resolveConnectionModelPolicy } = await import('../config/connectionModelPolicy.js')
     const explicitKnown = resolveConnectionModelPolicy('connection/cc/z-ai/glm-5.3-flash', { models: { fixture: { provider: 'command-code', model_id: 'z-ai/glm-5.3-flash', tier: 'standard', native_tool_use: true } } })
     assert.equal(explicitKnown?.nativeToolUse, true); assert.equal(explicitKnown?.waterfall[0]?.nativeToolUse, true)
