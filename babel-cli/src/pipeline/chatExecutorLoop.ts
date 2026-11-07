@@ -128,8 +128,15 @@ export async function runChatExecutorLoop(
     }
 
     let result: ToolResult;
+    // A tool may block on an operator approval dialog. Cancellation must settle
+    // the loop even while that dialog is still pending; the tool re-checks its
+    // signal before mutating, so a late approval cannot dispatch late bytes.
+    const aborted = new Promise<void>((resolve) => {
+      if (runControl.signal.aborted) resolve();
+      else runControl.signal.addEventListener('abort', () => resolve(), { once: true });
+    });
     try {
-      result = await executeExecutorTool(request, {
+      const execution = executeExecutorTool(request, {
         agentId: 'chat-executor',
         runId: evidence.runId,
         runDir: evidence.runDir,
@@ -137,7 +144,20 @@ export async function runChatExecutorLoop(
         ...toolContext,
         runControl,
         signal: runControl.signal,
-      }, kernel);
+      }, kernel).then(
+        (value) => ({ kind: 'result' as const, value }),
+        (error: unknown) => ({ kind: 'error' as const, error }),
+      );
+      const outcome = await Promise.race([
+        execution,
+        aborted.then(() => ({ kind: 'aborted' as const })),
+      ]);
+      if (outcome.kind === 'aborted') {
+        // Record the interrupted call through the normal path so evidence and
+        // terminal classification agree with a signal-driven tool failure.
+        result = { exit_code: 130, stdout: '', stderr: 'Chat execution cancelled during the tool call.' };
+      } else if (outcome.kind === 'error') throw outcome.error;
+      else result = outcome.value;
     } catch (error) {
       result = {
         exit_code: toolContext.signal?.aborted ? 130 : 1,
