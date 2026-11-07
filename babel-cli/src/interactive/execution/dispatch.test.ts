@@ -63,7 +63,7 @@ function makeExecutePlanTask() {
   };
 }
 
-function makeExecuteGovernedTask() {
+function makeExecuteGovernedTask(): typeof import('./governed.js').executeGovernedTask {
   return async (
     _ctx: ReplContext,
     _input: string,
@@ -72,6 +72,7 @@ function makeExecuteGovernedTask() {
     variant?: string,
   ) => {
     calls.push({ name: 'governed', task, variant, mode: String(_ctx.state.mode) });
+    return undefined;
   };
 }
 
