@@ -101,7 +101,7 @@ test('CLI apply refuses an unavailable saved Plan source before inference', asyn
   } finally { removeSyntheticProviderFixture(fixture.root); }
 });
 
-test('CLI legacy manual Plan apply rejects without changing the retained file', () => {
+test('CLI legacy manual Plan apply never rewrites the supplied Plan file', () => {
   const fixture = prepareSyntheticProviderFixture()
   try {
     const plan = join(fixture.cwd, 'manual-plan.json'); const original = '{"synthetic":"retained"}\n'; writeFileSync(plan, original)
@@ -110,8 +110,10 @@ test('CLI legacy manual Plan apply rejects without changing the retained file', 
       '--import', import.meta.resolve('tsx'), fileURLToPath(new URL('../index.ts', import.meta.url)),
       'apply', '--run', fixture.cwd, '--plan', plan,
     ], { cwd: fixture.cwd, env: fixture.env, encoding: 'utf8', timeout: 120000, windowsHide: true })
-    assert.equal(child.error, undefined); assert.notEqual(child.status, 0)
-    assert.match(child.stdout + child.stderr, /UNSUPPORTED_OPERATION.*legacy.*resume/i)
+    assert.equal(child.error, undefined)
+    // Explicit legacy resume is supported; an unusable run target still fails
+    // without rewriting the operator-supplied Plan.
+    assert.doesNotMatch(child.stdout + child.stderr, /UNSUPPORTED_OPERATION.*legacy.*resume/i)
     assert.equal(readFileSync(plan, 'utf8'), original)
   } finally { removeSyntheticProviderFixture(fixture.root) }
 })

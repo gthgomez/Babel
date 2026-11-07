@@ -2940,10 +2940,12 @@ Notes:
 
         if (legacyProject === undefined) {
           try {
+            // Emit before dispatch: the Lite plan lane may save and return
+            // without a handle, so a post-return notice could be unreachable.
+            if (options.shadow) process.stderr.write('--shadow now keeps planning read-only. Inspect the saved plan before an explicit apply.\n');
             const saved = await runLiteCommand('plan', intent, options);
             if (!saved) return;
             const effective = resolveEffectiveSettings({ projectRoot: saved.projectRoot });
-            if (options.shadow) process.stderr.write('--shadow now keeps planning read-only. Inspect the saved plan before an explicit apply.\n');
             if (!shouldAutoApplyPlan(saved.task, effective.autoApply.value, options.shadow === true || options.planOnly === true || options.json === true || options.finalOnly === true)) {
               if (!options.json) process.stderr.write(`Plan saved as ${saved.id}. No project files were changed. Apply: babel-harness apply --plan ${saved.id}\n`);
               return;
