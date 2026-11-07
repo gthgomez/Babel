@@ -2,6 +2,20 @@
   "schemaVersion": 1,
   "rules": [
     {
+      "id": "windows-process-tree-termination",
+      "platforms": ["linux", "darwin"],
+      "reasons": ["Windows-only process-tree termination contract"],
+      "rationale": "The Windows unit lane executes the native process-tree termination, descendant-settlement and timeout contracts.",
+      "suites": ["unit", "chat-truth"],
+      "files": {
+        "src/sandboxTermination.test.ts": [
+          "failed Windows tree-kill is not accepted as descendant settlement",
+          "failed Windows tree-kill on a deadline leaves a termination failure for the owner",
+          "a timed-out shell reports failed Windows tree termination to its caller"
+        ]
+      }
+    },
+    {
       "id": "windows-linux-container-grader",
       "platforms": ["win32"],
       "reasons": [
