@@ -230,24 +230,10 @@ export function exportEvidenceBundle(input: {
   outputDir?: string;
   now?: Date;
 }): EvidenceExportReport {
-  const now = input.now ?? new Date();
-  const source = resolve(input.runDir);
-  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-  const exportRoot = resolve(input.outputDir ?? join(dirname(source), `evidence-export-${stamp}`));
-  return {
-    schema_version: 1,
-    status: 'failed',
-    source_run_dir: source,
-    export_dir: exportRoot,
-    zip_path: null,
-    files_copied: [],
-    manifest_path: join(exportRoot, 'export-manifest.json'),
-    error: 'Evidence export is temporarily unavailable until source and destination directories can be held stable throughout export. Existing evidence is retained.',
-    generated_at: now.toISOString(),
-  };
+  return exportEvidenceBundleUnqualified(input);
 }
 
-/** Retained repair candidate; not exposed while directory ownership is unqualified. */
+/** Sanitizing exporter: bounded, identity-checked source reads and exclusive destination creates. */
 function exportEvidenceBundleUnqualified(input: {
   runDir: string;
   outputDir?: string;
