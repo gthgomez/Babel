@@ -273,7 +273,7 @@ test('OpenRouter catalog lists requested exact targets with source and unverifie
     }
     assert.equal(models.find(model => model.id === 'xiaomi/mimo-v2.6-flash')?.nativeToolUse, true)
     assert.equal(models.find(model => model.id === 'deepseek/deepseek-v4.1-flash')?.nativeToolUse, true)
-    assert.equal(models.find(model => model.id === 'z-ai/glm-5.3-flash')?.contextWindow, 1048576)
+    assert.equal(models.find(model => model.id === 'z-ai/glm-5.3-flash')?.contextWindow, 1310720)
     assert.equal(models.find(model => model.id === 'xiaomi/mimo-v2.6-flash')?.contextWindow, 1050000)
   } finally { if (previous === undefined) delete process.env['BABEL_STATE_DIR']; else process.env['BABEL_STATE_DIR'] = previous; rmSync(state, { recursive: true, force: true }) }
 })

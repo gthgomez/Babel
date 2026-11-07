@@ -150,7 +150,7 @@
       "provider": "openrouter",
       "model_id": "z-ai/glm-5.3-flash",
       "tier": "standard",
-      "context_window": 1048576,
+      "context_window": 1310720,
       "max_output_tokens": 131072,
       "estimated_cost_per_1m_input": 0.075,
       "estimated_cost_per_1m_output": 0.25,
