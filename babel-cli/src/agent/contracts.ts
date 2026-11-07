@@ -47,6 +47,7 @@ export const BABEL_LITE_ARTIFACT_FILES = [
 export type BabelLiteArtifactFile = (typeof BABEL_LITE_ARTIFACT_FILES)[number];
 
 export interface BabelLiteArtifactLayout {
+  /** Legacy layout identifier; runDir is the authoritative absolute location. */
   root: typeof BABEL_LITE_ARTIFACT_ROOT;
   runId: string;
   runDir: string;

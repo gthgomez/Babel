@@ -8,6 +8,7 @@ import type { ToolCallRequest, ToolContext, ToolResult } from '../localTools.js'
 import type { AgentAction } from './actions.js';
 import { decodeCommand } from '../authority/commandDecoder.js';
 import { decideWithLease } from '../authority/wire.js';
+import { withRunCancellation } from '../runtime/runCancellation.js';
 import {
   createToolExecutor,
   executeActionWithPolicy,
@@ -329,6 +330,37 @@ describe('createToolExecutor', () => {
     assert.equal(result.policyBlocked, false);
     assert.equal(result.policyDecision, 'allow');
   });
+
+  for (const boundary of ['approval', 'dispatch'] as const) {
+    it(`cancellation during ${boundary} prevents physical execution even with a fresh child signal`, async () => {
+      const controller = new AbortController();
+      const projectRoot = mkdtempSync(join(tmpdir(), 'babel-cancel-dispatch-'));
+      let invoked = false;
+      const executor = createToolExecutor({ executeTool: async () => {
+        invoked = true;
+        return { exit_code: 0, stdout: 'ok', stderr: '' };
+      } });
+      try {
+        await assert.rejects(withRunCancellation(controller.signal, () => executeActionWithPolicy(
+          { type: 'write_file', path: 'cancelled.txt', content: 'must not be written' },
+          'ask_before_mutation',
+          { ...context, projectRoot, babelRoot: projectRoot, signal: new AbortController().signal },
+          {
+            executor,
+            onAskApproval: async () => {
+              await Promise.resolve();
+              if (boundary === 'approval') controller.abort();
+              return true;
+            },
+            onBeforeExecutorExecute: () => { if (boundary === 'dispatch') controller.abort(); },
+          },
+        )), { name: 'AbortError' });
+        assert.equal(invoked, false, 'late approval cannot revive the cancelled run');
+      } finally {
+        rmSync(projectRoot, { recursive: true, force: true });
+      }
+    });
+  }
 
   it('executeActionWithPolicy blocks mutation when onAskApproval returns false', async () => {
     let invoked = false;

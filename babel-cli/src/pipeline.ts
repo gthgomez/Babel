@@ -24,6 +24,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { runSwarmPipeline } from './runners/swarmRunner.js';
+import { getRunAbortSignal, throwIfRunAborted, withRunCancellation } from './runtime/runCancellation.js';
 import { runAdversarialQaGate, compileQaReviewContext, reviewDeepPlan } from './pipeline/qaStage.js';
 import { proposeDeepPlan } from './pipeline/deepPlanning.js';
 import { answerDeepEvidence } from './pipeline/deepEvidenceReport.js';
@@ -803,6 +804,7 @@ export async function runBabelPipeline(
   task: string,
   options: PipelineOptions = {},
 ): Promise<PipelineResult> {
+  options.abortSignal?.throwIfAborted();
   const profileModel = process.env['BABEL_DESKTOP_PROVIDER'] ? process.env['BABEL_DESKTOP_MODEL_ROUTE'] : undefined;
   if (!options.modelOverride && profileModel) options = {...options,modelOverride:profileModel};
   if (options.modelOverride) {
@@ -904,6 +906,15 @@ export async function _runBabelPipelineInternal(
   evidence: EvidenceBundle,
   precomputedManifest?: OrchestratorManifest,
 ): Promise<PipelineResult> {
+  return withRunCancellation(options.abortSignal, () => runBabelPipelineInternal(task, options, evidence, precomputedManifest));
+}
+
+async function runBabelPipelineInternal(
+  task: string,
+  options: PipelineOptions,
+  evidence: EvidenceBundle,
+  precomputedManifest?: OrchestratorManifest,
+): Promise<PipelineResult> {
   log(`Run directory: ${evidence.runDir}`);
   const orchestratorVersion = resolveOrchestratorVersion(options.orchestratorVersion);
   const sessionId =
@@ -991,6 +1002,8 @@ export async function _runBabelPipelineInternal(
     return decorateEpisodePersistence(result);
   };
   const finalizeResult = async (result: PipelineResult): Promise<PipelineResult> => {
+    if (getRunAbortSignal()?.aborted) result = { ...result, status: 'EXECUTOR_HALTED', terminalOutcome: 'CANCELLED',
+      errors: ['Run cancelled by the operator.'], finalAnswer: 'Run cancelled; inspect any changes made before cancellation.' };
     const terminalContext = collectTerminalContext(evidence.runDir);
     const verifierContract = buildVerifierContractArtifacts({
       task,
@@ -1023,7 +1036,7 @@ export async function _runBabelPipelineInternal(
       verifierContractSummary: verifierContract.summary,
     };
     finalizeV9LiveSessionForPipeline(v9LiveSession, finalizedResult, verifierContract.summary.verifierCompletionSatisfied);
-    await runPluginHooks('PostRun', {
+    if (!getRunAbortSignal()?.aborted) await runPluginHooks('PostRun', {
       runId: evidence.runId,
       runDir: evidence.runDir,
       babelRoot: BABEL_ROOT,
@@ -1102,11 +1115,15 @@ export async function _runBabelPipelineInternal(
       runDir: evidence.runDir,
       error,
     });
-    const recoverableManifest = hasUsefulEvidence(evidence.runDir)
+    const recoverableManifest = hasUsefulEvidence(evidence.runDir) || getRunAbortSignal()?.aborted
       ? readManifestFromEvidence(evidence.runDir)
       : null;
     if (recoverableManifest) {
       const recoveredPlan = readLatestSwePlanFromEvidence(evidence.runDir);
+      if (getRunAbortSignal()?.aborted) return finalizeResult({
+        runDir: evidence.runDir, manifest: recoverableManifest, plan: recoveredPlan,
+        status: 'EXECUTOR_HALTED', terminalOutcome: 'CANCELLED',
+      });
       const blockedSummary = buildBlockedRunSummaryArtifact({
         task,
         errorMessage: message,
@@ -1138,7 +1155,7 @@ export async function _runBabelPipelineInternal(
           evidenceComplete: true,
         });
       }
-      await runPluginHooks('PostRun', {
+      if (!getRunAbortSignal()?.aborted) await runPluginHooks('PostRun', {
         runId: evidence.runId,
         runDir: evidence.runDir,
         babelRoot: BABEL_ROOT,
@@ -1201,7 +1218,7 @@ export async function _runBabelPipelineInternal(
         evidenceComplete: true,
       });
     }
-    await runPluginHooks('PostRun', {
+    if (!getRunAbortSignal()?.aborted) await runPluginHooks('PostRun', {
       runId: evidence.runId,
       runDir: evidence.runDir,
       babelRoot: BABEL_ROOT,
@@ -1256,6 +1273,7 @@ export async function _runBabelPipelineInternal(
     );
   }
 
+  throwIfRunAborted();
   await runPluginHooks('PreRun', {
     runId: evidence.runId,
     runDir: evidence.runDir,
@@ -1682,6 +1700,7 @@ export async function _runBabelPipelineInternal(
 
     evidence.writeManifest(manifestWithProtocol);
     writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+    throwIfRunAborted();
     await runPluginHooks('PostOrchestrator', {
       runId: evidence.runId,
       runDir: evidence.runDir,
@@ -2137,6 +2156,7 @@ export async function _runBabelPipelineInternal(
         });
         executionReportWarnings.push(...planWarnings);
         evidence.writeSwePlan(swePlan, attempt); episodeLifecycle.recordPhase('swe_planning', 'completed');
+        throwIfRunAborted();
         await runPluginHooks('PostPlan', {
           runId: evidence.runId,
           runDir: evidence.runDir,
@@ -2280,6 +2300,7 @@ export async function _runBabelPipelineInternal(
           verdict = await reviewDeepPlan({ context: qaContext, plan: swePlan, manifest, evidence });
         } catch (error) {
           endSpan(qaSpan, SpanStatusCode.ERROR, {}, error); episodeLifecycle.recordPhase('qa_review', 'failed', { error: error instanceof Error ? error.message : String(error) });
+          throwIfRunAborted();
           log(
             `[pipeline] QA model invocation error on attempt ${attempt}: ${error instanceof Error ? error.message : String(error)}`,
           );
@@ -2632,6 +2653,7 @@ export async function _runBabelPipelineInternal(
         });
       }
 
+      throwIfRunAborted();
       episodeLifecycle.recordPhase('executor', 'started'); const preExecutorResult = await runPreExecutorSafetyGates({
         approvedPlan,
         projectRoot: inferProjectRoot(manifest) ?? runtimeProjectRoot,
@@ -2909,6 +2931,7 @@ type StagedExecutorResult = StagedExecutorHalt | StagedExecutorSuccess;
 async function runStagedExecutor(
   opts: StagedExecutorOptions,
 ): Promise<StagedExecutorResult> {
+  throwIfRunAborted();
   const {
     approvedPlan,
     evidence,

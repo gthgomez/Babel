@@ -160,15 +160,21 @@ if (!isSyntheticProviderFixtureReady()) {
     'wrong-plan-type',
     'evidence-godot',
     'premature-completion',
+    'cancel-during-planning',
+    'cancel-during-qa',
+    'cancel-before-write',
   ] as const)
     test(`Deep planning contract: ${kind}`, async (t) => {
       const rejected = kind === 'qa-reject';
       writeFileSync('existing.txt', 'preserved owner source');
       globalCostTracker.resetSession();
       const controller = new AbortController();
-      const cancelled = kind === 'cancel-before-answer' || kind === 'cancel-during-answer';
+      const cancelAt = kind === 'cancel-during-planning' ? 1 : kind === 'cancel-during-qa' ? 2 : kind === 'cancel-before-write' ? 3 : null;
+      const cancelled = kind === 'cancel-before-answer' || kind === 'cancel-during-answer' || cancelAt !== null;
       const godot = kind === 'evidence-godot' || kind === 'premature-completion';
-      const ownerTask = godot ? `${task} Do not run any commands.` : task;
+      const ownerTask = kind === 'cancel-before-write' ? 'Refactor existing.txt to improve its implementation.' : godot ? `${task} Do not run any commands.` : task;
+      const activePlan = kind === 'cancel-before-write' ? { ...plan, plan_type: 'IMPLEMENTATION_PLAN', task_summary: ownerTask,
+        minimal_action_set: [{...plan.minimal_action_set[0],tool:'file_write',target:'existing.txt',description:'Refactor the existing implementation'}] } : plan;
       let hostVerifications = 0;
       if (godot) {
         const wrapper = join(process.cwd(), 'synthetic-godot.ps1');
@@ -214,13 +220,14 @@ if (!isSyntheticProviderFixtureReady()) {
           : rejected
             ? [plan, reject, plan, reject, plan, reject]
             : [
-                plan,
+                activePlan,
                 pass,
                 {
                   type: 'tool_call',
                   thinking: 'Read the authorized file',
-                  tool: 'file_read',
+                  tool: kind === 'cancel-before-write' ? 'file_write' : 'file_read',
                   path: 'existing.txt',
+                  ...(kind === 'cancel-before-write' ? {content:'Must not be written after cancellation'} : {}),
                 },
                 {
                   answer:
@@ -239,6 +246,7 @@ if (!isSyntheticProviderFixtureReady()) {
           const body = JSON.parse(String(init?.body));
           assert.equal(body.model, 'z-ai/glm-5.3-flash');
           const turn = turns[calls++];
+          if (calls === cancelAt) controller.abort();
           if (!rejected && kind !== 'wrong-plan-type' && calls >= 4) {
             assert.match(String(init?.body), /preserved owner source/);
             assert.match(String(init?.body), /ORIGINAL OWNER REQUEST/);
@@ -294,6 +302,9 @@ if (!isSyntheticProviderFixtureReady()) {
           if (stage === 'evidence_answer') controller.abort();
         });
       }
+      const activeManifest = manifest();
+      activeManifest.analysis.task_summary = ownerTask;
+      activeManifest.handoff_payload.user_request = ownerTask;
       const result = await withPipelineModelRoute('glm-5.3-flash', () =>
         _runBabelPipelineInternal(
           ownerTask,
@@ -305,7 +316,7 @@ if (!isSyntheticProviderFixtureReady()) {
             abortSignal: controller.signal,
           },
           evidence,
-          manifest(),
+          activeManifest,
         ),
       );
       t.diagnostic(
@@ -321,7 +332,7 @@ if (!isSyntheticProviderFixtureReady()) {
         assert.equal(hostVerifications,0,'read-only completion must not execute runtime verification or artifact repair');
       }
       if (kind === 'answer-unavailable') assert.ok(calls >= 4);
-      else assert.equal(calls, kind === 'cancel-before-answer' ? 3 : turns.length);
+      else assert.equal(calls, cancelAt ?? (kind === 'cancel-before-answer' ? 3 : turns.length));
       if (rejected) assert.equal(result.status, 'QA_REJECTED_MAX_LOOPS');
       else if (kind === 'wrong-plan-type')
         assert.equal(result.status, 'EXECUTOR_HALTED');

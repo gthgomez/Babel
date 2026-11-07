@@ -81,6 +81,7 @@ import {
 import { loadModelPolicyConfig } from './modelPolicy.js';
 import { randomUUID } from 'node:crypto';
 import { getExecutionContext } from './agent/executionContext.js';
+import { getRunAbortSignal } from './runtime/runCancellation.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   globalCostTracker,
@@ -1401,6 +1402,9 @@ export async function runWithFallback<T>(
   schema: ZodType<T, unknown>,
   options: RunOptions = {},
 ): Promise<T> {
+  const signal = getRunAbortSignal(options.signal);
+  signal?.throwIfAborted();
+  if (signal) options = { ...options, signal };
   const maxAttempts = options.maxCliAttempts ?? 2;
   // Always have a bundle for schema failure telemetry — when the caller
   // doesn't provide one, use a lightweight in-memory bundle that writes to
