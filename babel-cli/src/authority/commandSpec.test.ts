@@ -749,6 +749,9 @@ const HOST_PROCESS_SURFACE = new Set([
   'processTree.ts',
   // Compensation pins Windows directories with a fixed helper and encoded path data.
   'executor/effectDirectoryAnchors.ts',
+  // Plan publication uses a fixed System32 PowerShell executable, encoded script, minimal
+  // child env, bounded 30s lifetime, output cap, and abort-driven kill; no caller argv.
+  'services/guardedPlanWriter.ts',
   // Fixed Docker removal arguments require a validated Babel-owned UUID name.
   'sandboxContainerLifecycle.ts',
   // Extracted admission ACL helper uses only fixed System32 identity/ACL executables and a fixed PowerShell verifier script.
@@ -822,7 +825,6 @@ const HOST_PROCESS_SURFACE = new Set([
   'services/releaseReadinessBenchmark.ts',
   'services/shadowDiff.ts',
   'services/ship.ts',
-  'services/smallFix.ts',
   'services/swebenchProCampaign.ts',
   'services/swebenchProVerifier.ts',
   'services/swebenchProWorkspace.ts',
