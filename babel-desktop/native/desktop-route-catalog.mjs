@@ -13,7 +13,7 @@ export function defaultModelPolicy() {
 }
 const descriptors={
   openrouter:{label:'OpenRouter',requiresApiKey:true,envName:'OPENROUTER_API_KEY',manualModels:true},
-  'command-code':{label:'Command Code',requiresApiKey:true,envName:'COMMAND_CODE_API_KEY',manualModels:true,catalogRefresh:false},
+  'command-code':{label:'Command Code',requiresApiKey:true,envName:'COMMAND_CODE_API_KEY',manualModels:true},
   deepseek:{label:'DeepSeek',requiresApiKey:true,envName:'DEEPSEEK_API_KEY'},
   deepinfra:{label:'DeepInfra',requiresApiKey:true,envName:'DEEPINFRA_API_KEY'},
   'opencode-go':{label:'OpenCode Go',requiresApiKey:true,envName:'BABEL_OPENCODE_GO_API_KEY'},

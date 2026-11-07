@@ -1,4 +1,7 @@
 import { formatFileReadContent, type ReadDeliveryWindow, type ReadByteCompleteness } from './services/readDelivery.js';
+import { createHash } from 'node:crypto';
+import { checkedFileBytes } from './utils/checkedFileRead.js';
+import { acquireEffectDirectoryAnchors, type EffectDirectoryAnchors } from './executor/effectDirectoryAnchors.js';
 /**
  * sandbox.ts — SafeExecutor: sandboxed tool execution for the CLI Executor stage
  *
@@ -40,6 +43,7 @@ import {
 } from './processTree.js';
 import {
   mkdirSync,
+  opendirSync,
   readFileSync,
   readdirSync,
   statSync,
@@ -48,7 +52,7 @@ import {
   realpathSync,
   renameSync,
 } from 'node:fs';
-import { resolve, sep, dirname, basename, isAbsolute, relative } from 'node:path';
+import { resolve, sep, dirname, basename, isAbsolute, relative, join } from 'node:path';
 import {
   evaluateGovernedIsolation,
   getDockerUnavailableReason,
@@ -157,6 +161,8 @@ export interface ToolResult {
   process_termination?: 'exited' | 'cancelled' | 'timed_out' | 'terminated';
   /** Successful glob data: count is returned paths, not display lines or total matches. */
   glob_result?: { paths: string[]; returned_count: number; truncated: boolean };
+  /** Host-origin directory page identity and continuation, never parsed from display text. */
+  directory_page?: { revision: string; after: string | null; next_after: string | null };
   exit_code: number;
   stdout: string;
   stderr: string;
@@ -459,8 +465,8 @@ function appendCappedChunk(
  * Windows: synchronous taskkill /T /F (async taskkill delayed cancel settlement).
  * POSIX: SIGTERM process group (detached spawn), then SIGKILL fallback.
  */
-export function terminateChildTree(child: ChildProcessWithoutNullStreams): void {
-  terminateChildTreeShared(child);
+export function terminateChildTree(child: ChildProcessWithoutNullStreams): { treeKillAccepted: boolean } {
+  return terminateChildTreeShared(child);
 }
 
 /**
@@ -674,7 +680,10 @@ export function spawnCommandAsync(
               if (!pid) {
                 throw new Error(`Aborted spawn missing child pid for ${executable}`);
               }
-              terminateChildTree(child);
+              const terminationAttempt = terminateChildTree(child);
+              if (process.platform === 'win32' && !terminationAttempt.treeKillAccepted) {
+                throw new Error('Windows process-tree termination was not confirmed by taskkill');
+              }
               const groupExited = await waitForProcessGroupExit(pid, 5_000);
               if (!groupExited) {
                 throw new Error(`Aborted process group ${pid} did not exit after tree termination`);
@@ -705,7 +714,14 @@ export function spawnCommandAsync(
       timeout = setTimeout(() => {
         timedOut = true;
         if (executionId) options.processWitness?.timeout(processInput, executionId);
-        terminateChildTree(child);
+        const terminationAttempt = terminateChildTree(child);
+        if (process.platform === 'win32' && !terminationAttempt.treeKillAccepted) {
+          registerPendingProcessTermination(
+            Promise.reject(new Error('Windows process-tree termination was not confirmed by taskkill')),
+            options.processContext?.sessionId ?? 'unscoped',
+            executionId ?? `${executable}:${child.pid ?? 'unknown'}`,
+          );
+        }
       }, options.timeoutMs);
       timeout.unref?.();
     }
@@ -1567,30 +1583,35 @@ export class SafeExecutor {
               `[sandbox] Credential read denied: "${inputPath}" resolves to credential-class shadow material.`,
             );
           }
+          const exactStats = statSync(effectiveShadowPath, { bigint: true });
           const stats = statSync(effectiveShadowPath);
           if (!stats.isDirectory()) {
             if (stats.size > MAX_FILE_READ_SOURCE_BYTES) {
               throw new Error('File is too large for file_read; use read_range to inspect it.');
             }
-            const content = readFileSync(effectiveShadowPath, 'utf-8');
-            return this.formatFileContent(content, options);
+            const shadowRoot = this.shadowRoot;
+            const content = checkedFileBytes(effectiveShadowPath, MAX_FILE_READ_SOURCE_BYTES, () => {
+              const rel = relative(shadowRoot, realpathSync(shadowPath));
+              return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel) && realpathSync(shadowPath) === effectiveShadowPath;
+            }, stats, exactStats);
+            if (!content) throw new Error('File changed or escaped its approved read boundary.');
+            return this.formatFileContent(content.toString('utf8'), options);
           }
         }
       }
 
+      const exactStats = statSync(safePath, { bigint: true });
       const stats = statSync(safePath);
       if (stats.isDirectory()) {
-        const entries = readdirSync(safePath, { withFileTypes: true })
-          .sort((left, right) => left.name.localeCompare(right.name))
-          .map((entry) => `${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
-        const listing = [`Directory: ${safePath}`, ...entries].join('\n');
-        return { exit_code: 0, stdout: listing, stderr: '' };
+        return { exit_code: 1, stdout: '', stderr: 'file_read requires a regular file; use directory_list for a guarded directory listing.' };
       }
       if (stats.size > MAX_FILE_READ_SOURCE_BYTES) {
         throw new Error('File is too large for file_read; use read_range to inspect it.');
       }
-      const content = readFileSync(safePath, 'utf-8');
-      return this.formatFileContent(content, options);
+      const content = checkedFileBytes(safePath, MAX_FILE_READ_SOURCE_BYTES, () =>
+        this.resolveSafeRead(inputPath) === safePath && realpathSync(safePath) === safePath, stats, exactStats);
+      if (!content) throw new Error('File changed or escaped its approved read boundary.');
+      return this.formatFileContent(content.toString('utf8'), options);
     } catch (err) {
       const denied = maybePolicyDeniedResult(err, 'file_read', [inputPath]);
       if (denied) return denied;
@@ -1610,7 +1631,40 @@ export class SafeExecutor {
     return formatFileReadContent(content, options);
   }
 
+  async listDirectoryGuarded(inputPath: string, signal?: AbortSignal, page?: { after?: string | undefined; revision?: string | undefined }): Promise<ToolResult> {
+    let anchors: EffectDirectoryAnchors | undefined;
+    try {
+      signal?.throwIfAborted();
+      const safePath = this.resolveSafeRead(inputPath);
+      const directories = [safePath];
+      if (this.shadowRoot) {
+        const shadowPath = resolve(this.shadowRoot, relative(this.projectRoot, safePath));
+        if (existsSync(shadowPath)) {
+          const shadow = realpathSync(shadowPath);
+          const rel = relative(this.shadowRoot, shadow);
+          if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('Shadow directory escaped its approved boundary.');
+          if (statSync(shadow).isDirectory()) directories.push(shadow);
+        }
+      }
+      anchors = await acquireEffectDirectoryAnchors(directories);
+      signal?.throwIfAborted();
+      const result = await this.listDirectoryImpl(inputPath, anchors, page, signal);
+      signal?.throwIfAborted();
+      return result;
+    } catch (err) {
+      signal?.throwIfAborted();
+      const denied = maybePolicyDeniedResult(err, 'directory_list', [inputPath]);
+      return denied ?? { exit_code: 1, stdout: '', stderr: String(err) };
+    } finally { await anchors?.release(); }
+  }
+
   listDirectory(inputPath: string): ToolResult {
+    return this.listDirectoryImpl(inputPath);
+  }
+
+  private listDirectoryImpl(inputPath: string): ToolResult;
+  private listDirectoryImpl(inputPath: string, anchors: EffectDirectoryAnchors, page?: { after?: string | undefined; revision?: string | undefined }, signal?: AbortSignal): ToolResult | Promise<ToolResult>;
+  private listDirectoryImpl(inputPath: string, anchors?: EffectDirectoryAnchors, page?: { after?: string | undefined; revision?: string | undefined }, signal?: AbortSignal): ToolResult | Promise<ToolResult> {
     try {
       const safePath = this.resolveSafeRead(inputPath);
 
@@ -1647,14 +1701,69 @@ export class SafeExecutor {
           stderr: `[sandbox] directory_list expected a directory but received: ${effectivePath}`,
         };
       }
-      const entries = readdirSync(effectivePath, { withFileTypes: true })
-        .sort((left, right) => left.name.localeCompare(right.name))
-        .map((entry) => `${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
-      const listing = [
-        `Directory: ${inputPath}${effectivePath === safePath ? '' : ' (shadowed)'}`,
-        ...entries,
-      ].join('\n');
-      return { exit_code: 0, stdout: listing, stderr: '' };
+      if (!anchors) return { exit_code: 1, stdout: '', stderr: 'Directory listing requires a guarded directory handle.' };
+      if ((page?.after === undefined) !== (page?.revision === undefined)) return { exit_code: 1, stdout: '', stderr: 'Directory continuation requires both after and revision from a previous page.' };
+      if (page?.after !== undefined && (!page.after || page.after.length > 4096 || !/^[a-f0-9]{64}$/.test(page.revision ?? ''))) return { exit_code: 1, stdout: '', stderr: 'Invalid directory continuation; start the listing again.' };
+      const validateDirectory = (): boolean => {
+        if (this.resolveSafeRead(inputPath) !== safePath || realpathSync(safePath) !== safePath || realpathSync(effectivePath) !== effectivePath) return false;
+        if (effectivePath === safePath) return true;
+        if (!this.shadowRoot) return false;
+        const shadowPath = resolve(this.shadowRoot, relative(this.projectRoot, safePath));
+        const rel = relative(this.shadowRoot, realpathSync(shadowPath));
+        return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel) && realpathSync(shadowPath) === effectivePath;
+      };
+      if (!validateDirectory()) throw new Error('Directory changed or escaped its approved read boundary.');
+      return (async (): Promise<ToolResult> => {
+      try {
+      const directoryPath = anchors ? dirname(anchors.path(join(effectivePath, '__babel_directory_anchor__'))) : effectivePath;
+      const revisionOf = (): string => {
+        const value = statSync(directoryPath, { bigint: true });
+        return createHash('sha256').update(`babel-directory-v1\0${value.dev}\0${value.ino}\0${value.mtimeNs}\0${value.ctimeNs}`).digest('hex');
+      };
+      const revision = revisionOf();
+      if (page?.revision && page.revision !== revision) return { exit_code: 1, stdout: '', stderr: 'Directory changed since the previous page; start the listing again.' };
+      const entries: Array<{ name: string; kind: string }> = [];
+      let eligible = 0;
+      let scanned = 0;
+      const directory = opendirSync(directoryPath);
+      try {
+        for (let item = directory.readSync(); item; item = directory.readSync()) {
+          if (++scanned % 128 === 0) {
+            await new Promise<void>(resolveYield => setImmediate(resolveYield));
+            anchors.path(join(effectivePath, '__babel_directory_anchor__'));
+          }
+          signal?.throwIfAborted();
+          if (page?.after !== undefined && item.name <= page.after) continue;
+          eligible++;
+          let index = 0;
+          while (index < entries.length && entries[index]!.name < item.name) index++;
+          entries.splice(index, 0, { name: item.name, kind: item.isDirectory() ? 'dir' : 'file' });
+          if (entries.length > 201) entries.pop();
+        }
+      } finally { directory.closeSync(); }
+      const after = statSync(effectivePath);
+      anchors.path(join(effectivePath, '__babel_directory_anchor__'));
+      if (!validateDirectory() || after.dev !== stats.dev || after.ino !== stats.ino || revisionOf() !== revision) throw new Error('Directory changed or escaped its approved read boundary.');
+      const lines = [`Directory: ${inputPath}${effectivePath === safePath ? '' : ' (shadowed)'}`, `Revision: ${revision}`];
+      let delivered = 0;
+      for (const entry of entries.slice(0, 200)) {
+        const name = /[\x00-\x1f\x7f]/.test(entry.name) ? JSON.stringify(entry.name) : entry.name;
+        const line = `${entry.kind} ${name}`;
+        if (Buffer.byteLength(`${lines.join('\n')}\n${line}`, 'utf8') > 96 * 1024) break;
+        lines.push(line); delivered++;
+      }
+      if (eligible > delivered) {
+        if (!delivered) return { exit_code: 1, stdout: '', stderr: 'A directory entry exceeds the observation budget.' };
+        lines.push(`Continuation: ${JSON.stringify({ after: entries[delivered - 1]!.name, revision })}`);
+      }
+      const listing = lines.join('\n');
+      return { exit_code: 0, stdout: listing, stderr: '', directory_page: { revision, after: page?.after ?? null, next_after: eligible > delivered ? entries[delivered - 1]!.name : null } };
+      } catch (err) {
+        const denied = maybePolicyDeniedResult(err, 'directory_list', [inputPath]);
+        if (denied) return denied;
+        return { exit_code: 1, stdout: '', stderr: String(err) };
+      }
+      })();
     } catch (err) {
       const denied = maybePolicyDeniedResult(err, 'directory_list', [inputPath]);
       if (denied) return denied;
@@ -2115,7 +2224,13 @@ export class SafeExecutor {
       })();
       registerPendingProcessTermination(cleanup, sessionId ?? 'unscoped', prepared.ownedContainerName);
       try { await cleanup; }
-      catch (error) { return attachExecutionBackend({ exit_code: 1, stdout: result.stdout, stderr: String(error), process_started: result.processStarted, process_termination: result.aborted ? 'cancelled' : result.timedOut ? 'timed_out' : 'terminated' }, prepared); }
+      catch (error) {
+        await awaitPendingProcessTerminations(sessionId ?? 'unscoped');
+        throw error;
+      }
+    }
+    if (result.timedOut) {
+      await awaitPendingProcessTerminations(sessionId ?? 'unscoped');
     }
     if (result.error) {
       if (result.aborted) {

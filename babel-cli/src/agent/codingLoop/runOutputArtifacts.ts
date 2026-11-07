@@ -44,13 +44,13 @@ function artifactRoot(runDir: string, create = false): string {
 function readOwnedFile(path: string, maxBytes: number): Buffer {
   if (realpathSync(path) !== resolve(path)) throw new Error('ARTIFACT_DENIED')
   const before = lstatSync(path)
-  if (!before.isFile() || before.isSymbolicLink() || before.size > maxBytes) throw new Error('ARTIFACT_DENIED')
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maxBytes) throw new Error('ARTIFACT_DENIED')
   const fd = openSync(path, 'r')
   try {
     const opened = fstatSync(fd)
     const named = lstatSync(path)
-    if (!opened.isFile() || opened.size > maxBytes || opened.ino !== before.ino || opened.dev !== before.dev
-      || named.isSymbolicLink() || named.ino !== opened.ino || named.dev !== opened.dev) throw new Error('ARTIFACT_DENIED')
+    if (!opened.isFile() || opened.nlink !== 1 || opened.size > maxBytes || opened.ino !== before.ino || opened.dev !== before.dev
+      || named.isSymbolicLink() || named.nlink !== 1 || named.ino !== opened.ino || named.dev !== opened.dev) throw new Error('ARTIFACT_DENIED')
     if (realpathSync(path) !== resolve(path)) throw new Error('ARTIFACT_DENIED')
     const bytes = Buffer.alloc(opened.size + 1)
     let count = 0

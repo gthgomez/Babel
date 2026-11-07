@@ -6,6 +6,7 @@ import {
   type LiteVerb,
 } from '../cli/structuredOutput.js';
 import { liteVerbForSelectedLane, type LiteFullRouteDecision } from './liteFullRouter.js';
+import { isStructuredOutputError } from '../runners/base.js';
 
 export function shouldRecoverLitePlanSchemaFailure(input: {
   verb: LiteVerb;
@@ -23,8 +24,7 @@ export function shouldRecoverLitePlanSchemaFailure(input: {
 }
 
 export function isProviderSchemaFailure(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /zod validation|invalid json|schema|parse/i.test(message);
+  return isStructuredOutputError(error);
 }
 
 export interface LiteSessionSchemaRecoveryContext {
@@ -48,17 +48,23 @@ export async function runLiteSessionWithSchemaRecovery(
     const fallbackSession = new AgentSession({
       ...sessionOptions,
       provider: 'mock',
+      diagnosticDraft: true,
     });
     const result = await runSession(fallbackSession);
     const payload = result.payload as LiteResultPayload;
     payload.schema_retries = (payload.schema_retries ?? 0) + 1;
-    payload.recovered_after_schema_retry = true;
+    payload.recovered_after_schema_retry = false;
+    payload.status = 'UNVERIFIED_LOCAL_DRAFT';
+    payload.user_status = 'not_verified';
+    payload.execution_mode = 'offline_demo';
+    payload.usage = { ...payload.usage, costComplete: false, completeCostUSD: null, usageComplete: false };
     payload.route_reason = payload.route_reason
-      ? `${payload.route_reason} Recovered from provider schema failure with the local read-only fallback.`
-      : 'Recovered from provider schema failure with the local read-only fallback.';
+      ? `${payload.route_reason} Provider schema failure; this local fallback is an unverified draft.`
+      : 'Provider schema failure; this local fallback is an unverified draft.';
     return {
       ...result,
-      humanText: formatLiteResultHuman(payload),
+      exitCode: 1,
+      humanText: `Unverified local draft: provider output failed schema validation. Usage and billing are unconfirmed.\n${formatLiteResultHuman(payload)}`,
     };
   }
 }

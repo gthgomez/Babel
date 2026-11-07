@@ -159,3 +159,16 @@ test('run budget help describes instruction-stack admission', () => {
     flags: '--budget <tokens>', description: 'Compiled instruction-stack token ceiling (not cumulative model usage)', mandatory: false,
   });
 });
+
+test('resume help truthfully describes the temporary action quarantine', () => {
+  const program = new Command();
+  registerWorkflowCommands(program);
+  const resume = program.commands.find(command => command.name() === 'resume');
+  assert.ok(resume);
+  const help = resume.helpInformation();
+  assert.match(help, /action-taking resume is temporarily unavailable/i);
+  assert.doesNotMatch(help, /resume latest retries actionable saved runs/i);
+  const continueCommand = program.commands.find(command => command.name() === 'continue');
+  assert.ok(continueCommand);
+  assert.match(continueCommand.helpInformation(), /worker-chain action resume is temporarily unavailable/i);
+});

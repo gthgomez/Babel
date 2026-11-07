@@ -81,6 +81,7 @@ export type RollbackMode =
 
 export interface ProjectSafetySnapshot {
   root: string | null;
+  root_identity?: string;
   files: Record<string, string>;
   file_count: number;
   truncated: boolean;
@@ -114,6 +115,7 @@ export interface AttemptSafetySummary {
     file_hashes: Record<string, RepairProofFileHash>;
   }>;
   final_file_hashes: Record<string, string | null>;
+  snapshot_identity?: { initial: string | null; final: string | null; matched: boolean };
   unrelated_dirty_file_preservation: {
     status: 'preserved' | 'changed' | 'not_evaluated';
     unrelated_changed_files: string[];
@@ -491,15 +493,15 @@ export function buildAttemptSafetySummary(input: {
   const unrelatedChangedFiles = diffSnapshots(input.initialSnapshot, input.finalSnapshot).filter(
     (path) => !touchedFiles.includes(path),
   );
-  const snapshotsEvaluated = Boolean(input.initialSnapshot && input.finalSnapshot);
+  const snapshotsEvaluated = sameSnapshotRoot(input.initialSnapshot, input.finalSnapshot);
   const snapshotTruncated = Boolean(
     input.initialSnapshot?.truncated || input.finalSnapshot?.truncated,
   );
-  const unrelatedStatus = snapshotsEvaluated
-    ? unrelatedChangedFiles.length === 0
-      ? 'preserved'
-      : 'changed'
-    : 'not_evaluated';
+  const snapshotUnreadable = [input.initialSnapshot, input.finalSnapshot]
+    .some(snapshot => snapshot && Object.values(snapshot.files).includes('UNREADABLE'));
+  const snapshotIncomplete = snapshotTruncated || snapshotUnreadable;
+  const unrelatedStatus = unrelatedChangedFiles.length > 0 ? 'changed'
+    : snapshotsEvaluated && !snapshotIncomplete ? 'preserved' : 'not_evaluated';
 
   return {
     schema_version: 1,
@@ -528,17 +530,15 @@ export function buildAttemptSafetySummary(input: {
       file_hashes: attempt.file_hashes,
     })),
     final_file_hashes: finalFileHashes,
+    snapshot_identity: { initial: input.initialSnapshot?.root_identity ?? null, final: input.finalSnapshot?.root_identity ?? null, matched: snapshotsEvaluated },
     unrelated_dirty_file_preservation: {
       status: unrelatedStatus,
       unrelated_changed_files: unrelatedChangedFiles,
       snapshot_truncated: snapshotTruncated,
     },
     final_repository_cleanliness_summary: {
-      status: snapshotsEvaluated
-        ? unrelatedChangedFiles.length === 0
-          ? 'clean_relative_to_touched_files'
-          : 'unrelated_changes_detected'
-        : 'not_evaluated',
+      status: unrelatedChangedFiles.length > 0 ? 'unrelated_changes_detected'
+        : snapshotsEvaluated && !snapshotIncomplete ? 'clean_relative_to_touched_files' : 'not_evaluated',
       touched_file_count: touchedFiles.length,
       unrelated_changed_file_count: unrelatedChangedFiles.length,
       snapshot_file_count: input.finalSnapshot?.file_count ?? 0,
@@ -546,7 +546,11 @@ export function buildAttemptSafetySummary(input: {
     },
     user_change_preservation_summary: {
       status: unrelatedStatus,
-      summary: userChangeSummary(unrelatedStatus, unrelatedChangedFiles),
+      summary: unrelatedStatus === 'not_evaluated' && input.initialSnapshot && input.finalSnapshot && !snapshotsEvaluated
+        ? 'User-change preservation could not be evaluated because project snapshot identity was missing or changed.'
+        : unrelatedStatus === 'not_evaluated' && snapshotUnreadable
+          ? 'User-change preservation could not be evaluated because snapshot files were unreadable.'
+          : userChangeSummary(unrelatedStatus, unrelatedChangedFiles),
     },
   };
 }
@@ -709,11 +713,22 @@ function diffSnapshots(
   before: ProjectSafetySnapshot | null | undefined,
   after: ProjectSafetySnapshot | null | undefined,
 ): string[] {
-  if (!before || !after) {
+  if (!before || !after || !sameSnapshotRoot(before, after)) {
     return [];
   }
   const paths = new Set([...Object.keys(before.files), ...Object.keys(after.files)]);
-  return [...paths].filter((path) => before.files[path] !== after.files[path]).sort();
+  return [...paths].filter((path) => {
+    const previous = before.files[path]; const current = after.files[path];
+    if (previous === 'UNREADABLE' || current === 'UNREADABLE') return false;
+    if (previous === undefined && before.truncated) return false;
+    if (current === undefined && after.truncated) return false;
+    return previous !== current;
+  }).sort();
+}
+
+function sameSnapshotRoot(before: ProjectSafetySnapshot | null | undefined, after: ProjectSafetySnapshot | null | undefined): boolean {
+  if (!before?.root || !after?.root || !before.root_identity || before.root_identity !== after.root_identity) return false;
+  return process.platform === 'win32' ? before.root.toLowerCase() === after.root.toLowerCase() : before.root === after.root;
 }
 
 function firstRecordedBeforeHash(

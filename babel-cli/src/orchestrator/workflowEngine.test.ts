@@ -540,9 +540,39 @@ describe('WorkflowEngine.run()', () => {
     assert.equal(wfComplete.status, 'failed');
   });
 
+  it('timeout retains ownership until settlement and never replays an uncertain attempt', async () => {
+    let attempts = 0; let cancellations = 0; let release!: () => void; let started!: () => void
+    const firstStarted = new Promise<void>(resolve => { started = resolve })
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const factory: ChatEngineFactory = () => ({
+      submitMessage: async (_task: string, callbacks: any) => { attempts++; callbacks.onAnswerChunk('partial'); started(); await pending; callbacks.onAnswerChunk('late'); callbacks.onFileChanged('late.txt', 1, 0); return { status: 'completed', answer: 'late', usage: { totalCostUSD: 0.01, totalTokens: 10, completeCostUSD: null, unknownChargeCount: 1, costComplete: false }, conversation: [] } },
+      cancel: () => { cancellations++ }, getConversation: () => [], clearSystemPromptCache: () => {},
+    } as any)
+    const engine = new WorkflowEngine(def('timeout-settlement', [
+      node('A', undefined, { timeoutMs: 20, maxRetries: 1 }),
+      node('B', undefined, { dependsOn: [{ from: 'A', condition: 'on_failure' }] }),
+    ]), factory)
+    const events: any[] = []; let finished = false
+    const running = (async () => { for await (const event of engine.run()) events.push(event); finished = true })()
+    try {
+      await firstStarted; await new Promise(resolve => setTimeout(resolve, 80))
+      assert.equal(attempts, 1, 'timeout must not start a successor before settlement')
+      assert.equal(cancellations, 1, 'timeout must propagate cancellation')
+      assert.equal(finished, false, 'workflow must retain ownership while work is unsettled')
+    } finally { release(); await running }
+    assert.equal(attempts, 1, 'uncertain timed-out operation must not be replayed')
+    assert.equal(events.some(event => event.type === 'node_start' && event.nodeId === 'B'), false)
+    assert.notEqual(events.find(event => event.type === 'workflow_complete')?.status, 'completed')
+    assert.equal(events.some(event => event.type === 'node_file_changed' && event.path === 'late.txt'), false)
+    const result = events.find(event => event.type === 'workflow_complete')?.nodeResults[0]
+    assert.equal(result?.answer, 'partial'); assert.equal(result?.usage?.totalCostUSD, 0.01)
+    assert.equal(result?.usage?.completeCostUSD, null); assert.equal(result?.usage?.unknownChargeCount, 1); assert.equal(result?.usage?.costComplete, false)
+  })
+
   it('cancel mid-execution skips remaining nodes', async () => {
     // Create a factory where A hangs, giving us time to cancel
     let resolveA: (() => void) | null = null;
+    let settleA: (() => void) | null = null;
     const aStarted = new Promise<void>((resolve) => { resolveA = resolve; });
 
     const factory: ChatEngineFactory = ({ node: n }) => {
@@ -550,12 +580,11 @@ describe('WorkflowEngine.run()', () => {
         return {
           submitMessage: async () => {
             resolveA?.();
-            // Hang until cancelled
-            // Intentionally never-resolving promise — no timer leak
-            await new Promise(() => {});
-            return { status: 'completed', answer: '', usage: undefined, conversation: [] };
+            // Settle only after cancellation, mirroring an interruptible engine.
+            await new Promise<void>((resolve) => { settleA = resolve; });
+            return { status: 'cancelled', answer: '', usage: undefined, conversation: [] };
           },
-          cancel: () => {},
+          cancel: () => { settleA?.(); },
           getConversation: () => [],
           clearSystemPromptCache: () => {},
         } as any;

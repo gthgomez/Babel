@@ -14,6 +14,7 @@ import {
 } from "./chatEngineStreamingPreparation.js";
 import { finalizeStreamingTurnLimit } from "./chatEngineStreamingFinalizer.js";
 import { recoverStreamingRequestAdmission } from './chatEngineRequestRecovery.js';
+import { ProviderHttpError } from '../runners/providerHttpError.js';
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
 import { normalizeChatAnswer, requestedChatJsonKind } from './chatResponseContract.js';
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
@@ -522,6 +523,12 @@ export class ChatEngineStreamingLoop {
             providerEnd,
           );
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          if (err instanceof ProviderHttpError && (err.status === 401 || err.status === 403)) {
+            this.host.trackRunnerUsage(runner, usageScope);
+            endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+            yield this.host.streamFailed(err.message, { code: 'provider_failure', cause_class: 'provider', detail: err.status === 401 ? 'authentication' : 'authorization' });
+            return;
+          }
           const admissionRecovery = yield* recoverStreamingRequestAdmission(
             this.host, err, submissionGeneration, () => {
               endSpan(_turnSpan, SpanStatusCode.ERROR);
@@ -678,6 +685,7 @@ export class ChatEngineStreamingLoop {
                 break;
               }
               case "error":
+                if (event.failure instanceof ProviderHttpError && (event.failure.status === 401 || event.failure.status === 403)) throw event.failure;
                 if (event.malformedToolArguments) {
                   const malformed = event.malformedToolArguments;
                   nativeProtocolInvalid = true;
@@ -692,7 +700,7 @@ export class ChatEngineStreamingLoop {
                   writeFileSync(join(this.host.engineRunDir, 'native-tool-rejection.json'), JSON.stringify(nativeRejectionState.current, null, 2));
                   break;
                 }
-                throw new Error(event.message);
+                throw event.failure ?? new Error(event.message);
               case "done":
                 nativeFinishReason = event.finishReason;
                 break;
@@ -749,6 +757,13 @@ export class ChatEngineStreamingLoop {
             providerEnd,
           );
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          if (err instanceof ProviderHttpError && (err.status === 401 || err.status === 403)) {
+            if (nativeToolCallIds.length > 0) yield* settleUnexecutedNativeCalls();
+            this.host.trackRunnerUsage(runner, usageScope);
+            endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+            yield this.host.streamFailed(err.message, { code: 'provider_failure', cause_class: 'provider', detail: err.status === 401 ? 'authentication' : 'authorization' });
+            return;
+          }
           if (nativeProtocolInvalid || nativeToolCallIds.length > 0) {
             yield* settleUnexecutedNativeCalls();
             endSpan(_turnSpan, SpanStatusCode.ERROR);
@@ -882,7 +897,7 @@ export class ChatEngineStreamingLoop {
                   break;
                 }
                 case "error":
-                  throw new Error(event.message);
+                  throw event.failure ?? new Error(event.message);
                 case "done":
                   nativeFinishReason = event.finishReason;
                   break;
@@ -925,6 +940,12 @@ export class ChatEngineStreamingLoop {
               yield* settleUnexecutedNativeCalls();
               endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
               yield cancelled; return;
+            }
+            if (fbErr instanceof ProviderHttpError && (fbErr.status === 401 || fbErr.status === 403)) {
+              this.host.trackRunnerUsage(fb, usageScope);
+              endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+              yield this.host.streamFailed(fbErr.message, { code: 'provider_failure', cause_class: 'provider', detail: fbErr.status === 401 ? 'authentication' : 'authorization' });
+              return;
             }
             if (nativeProtocolInvalid || nativeToolCallIds.length > 0) {
               yield* settleUnexecutedNativeCalls();
@@ -1066,6 +1087,12 @@ export class ChatEngineStreamingLoop {
             legacyEnd,
           );
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          if (err instanceof ProviderHttpError && (err.status === 401 || err.status === 403)) {
+            this.host.trackRunnerUsage(runner, usageScope);
+            endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+            yield this.host.streamFailed(err.message, { code: 'provider_failure', cause_class: 'provider', detail: err.status === 401 ? 'authentication' : 'authorization' });
+            return;
+          }
           const admissionRecovery = yield* recoverStreamingRequestAdmission(
             this.host, err, submissionGeneration, () => {
               endSpan(_turnSpan, SpanStatusCode.ERROR);

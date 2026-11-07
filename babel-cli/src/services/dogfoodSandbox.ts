@@ -99,6 +99,11 @@ function restoreEnvValue(key: string, previous: string | undefined): void {
 
 export async function runDogfoodApply(options: RunDogfoodOptions): Promise<DogfoodRunResult> {
   const projectRoot = resolve(options.projectRoot);
+  const planHandoff = options.planRunId ? loadPlanHandoff({
+    repoPath: projectRoot, task: options.task, planRunId: options.planRunId,
+  }) : null;
+  if (options.planRunId && !planHandoff) throw new Error('The saved plan source is unavailable or unsafe; inspect the retained plan before applying.');
+  if (planHandoff) throw new Error('UNSUPPORTED_OPERATION: Plan-based dogfood execution is unavailable until shadow-workspace identity is qualified; the Plan is retained.');
   const { runId, runDir } = createDogfoodRunDir(projectRoot);
   const lock = acquireLock(projectRoot, BABEL_ROOT, 'dogfood', runId, 'dogfood apply');
   if (!lock.success) {
@@ -112,12 +117,6 @@ export async function runDogfoodApply(options: RunDogfoodOptions): Promise<Dogfo
   const previousHostFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
 
   try {
-    const planHandoff = loadPlanHandoff({
-      repoPath: projectRoot,
-      task: options.task,
-      ...(options.planRunId !== undefined ? { planRunId: options.planRunId } : {}),
-    });
-
     let workspaceRoot = projectRoot;
     let shadowDiffPath: string | null = null;
 
@@ -146,7 +145,6 @@ export async function runDogfoodApply(options: RunDogfoodOptions): Promise<Dogfo
     const fixResult = await runSmallFixPath({
       task: options.task,
       projectRoot: workspaceRoot,
-      planHandoff,
       ...(options.planRunId !== undefined ? { planRunId: options.planRunId } : {}),
       provider: options.provider ?? 'mock',
     });
@@ -168,7 +166,7 @@ export async function runDogfoodApply(options: RunDogfoodOptions): Promise<Dogfo
       workspace_root: workspaceRoot,
       fix_status: fixResult.status,
       changed_files: changedFiles,
-      plan_run_id: planHandoff?.planRunId ?? options.planRunId ?? null,
+      plan_run_id: options.planRunId ?? null,
       shadow_diff_path: shadowDiffPath,
       next_recommended_operator_action:
         changedFiles.length > 0

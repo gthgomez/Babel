@@ -119,6 +119,10 @@ if (!isSyntheticProviderFixtureReady()) {
         onInvocationCompleted: value => { completed.push(value) },
       })) events.push(event)
       assert.deepEqual(events.map(event => event.type), ['error'])
+      const errorEvent = events[0]
+      assert.equal(errorEvent?.type, 'error')
+      if (errorEvent?.type !== 'error') assert.fail('expected typed transport error')
+      assert.equal(errorEvent.failure?.retryable, status === 429, 'authentication is fatal and rate limiting is retryable')
       assert.equal(requests, 1)
       assert.equal(completed.length, 1)
       assert.equal(completed[0]?.status, 'failed')

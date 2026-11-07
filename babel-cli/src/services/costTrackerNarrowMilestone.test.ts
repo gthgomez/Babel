@@ -34,7 +34,7 @@ test('registry-priced provider keeps measured-zero allowance as estimate', () =>
 
 test('late equal-value provider report against priced estimate is duplicate without provenance promotion', () => {
   const tracker = new CostTracker()
-  const model = 'deepseek/deepseek-v4-flash-0731'
+  const model = 'deepseek/deepseek-v4.1-flash-1017'
   const attribution = { taskOwnerId: 'or', chargeId: 'or-late' }
   tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter')
   const before = tracker.getTaskChargeObservations('or')[0]!
@@ -51,7 +51,7 @@ test('late equal-value provider report against priced estimate is duplicate with
 
 test('late different-value provider report against priced estimate conflicts without mutation', () => {
   const tracker = new CostTracker()
-  const model = 'deepseek/deepseek-v4-flash-0731'
+  const model = 'deepseek/deepseek-v4.1-flash-1017'
   const attribution = { taskOwnerId: 'or', chargeId: 'or-late-diff' }
   tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter')
   const allowance = tracker.getTaskSummary('or').totalCostUSD
@@ -71,4 +71,13 @@ test('confirmed reported zero cannot become a positive actual', () => {
   )
   assert.equal(tracker.getTaskSummary('cc').totalCostUSD, 0)
   assert.equal(tracker.getTaskChargeObservations('cc')[0]?.reportedCostUSD, 0)
+})
+
+test('unpriced older OpenRouter attempt can be refined by a reported charge', () => {
+  const tracker = new CostTracker(); const model = 'deepseek/deepseek-v4-flash-0731'
+  const attribution = { taskOwnerId: 'or-unpriced', chargeId: 'or-unpriced-attempt' }
+  tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter')
+  assert.equal(tracker.getTaskSummary('or-unpriced').completeCostUSD, null)
+  const result = tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter', 0.01)
+  assert.equal(result.kind, 'refined'); assert.equal(tracker.getTaskSummary('or-unpriced').actualCostUSD, 0.01)
 })

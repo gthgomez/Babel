@@ -14,7 +14,8 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { resolve as pathResolve } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve as pathResolve } from 'node:path';
 
 import { terminateChildTree } from '../sandbox.js';
 import type { ShellExecutionBackend } from '../sandbox.js';
@@ -91,7 +92,12 @@ export interface AwaitBackgroundShellResult {
   elapsed_ms: number;
 }
 
-type InternalJob = BackgroundShellJob & { child?: ChildProcessWithoutNullStreams };
+type InternalJob = BackgroundShellJob & {
+  child?: ChildProcessWithoutNullStreams;
+  physicalClosed?: boolean;
+  treeTerminationUnknown?: boolean;
+  projectRootKey?: string;
+};
 
 let nextId = 1;
 const jobs = new Map<string, InternalJob>();
@@ -130,13 +136,40 @@ function activeCount(): number {
   return n;
 }
 
-function killChild(child: ChildProcessWithoutNullStreams | undefined): void {
-  if (!child) return;
+function killChild(child: ChildProcessWithoutNullStreams | undefined): boolean {
+  if (!child) return false;
   try {
-    terminateChildTree(child);
+    return terminateChildTree(child).treeKillAccepted;
   } catch {
-    /* ignore */
+    return false;
   }
+}
+
+function physicalProjectKey(root: string): string | null {
+  try {
+    const resolved = realpathSync(root);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  } catch { return null; }
+}
+
+function overlapsProject(a: string, b: string): boolean {
+  const within = (parent: string, child: string) => {
+    const path = relative(parent, child);
+    return path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`));
+  };
+  return within(a, b) || within(b, a);
+}
+
+/** Killed status alone does not prove closure; overlapping projects share the fence. */
+export function hasUnsettledBackgroundShells(ownerId?: string, projectRoot?: string | null): boolean {
+  const projectKey = projectRoot ? physicalProjectKey(projectRoot) : null;
+  return [...jobs.values()].some(job => {
+    if (job.physicalClosed === true && job.treeTerminationUnknown !== true) return false;
+    if (ownerId && job.ownerId === ownerId) return true;
+    if (!projectRoot) return false;
+    if (!projectKey || !job.projectRootKey) return true;
+    return overlapsProject(projectKey, job.projectRootKey);
+  });
 }
 
 /**
@@ -202,6 +235,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
   });
 
   const detached = input.detached === true;
+  const projectRootKey = input.projectRoot ? physicalProjectKey(input.projectRoot) : null;
 
   const job: InternalJob = {
     id,
@@ -214,6 +248,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
     stderr: '',
     detached,
     ...(input.ownerId !== undefined ? { ownerId: input.ownerId } : {}),
+    ...(projectRootKey ? { projectRootKey } : {}),
     done,
   };
 
@@ -257,6 +292,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
     job.status = 'failed';
     job.error = err instanceof Error ? err.message : String(err);
     job.exitCode = 1;
+    job.physicalClosed = true;
     resolveDone();
     jobs.set(id, job);
     return job;
@@ -267,7 +303,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
 
   const killTimer = setTimeout(() => {
     if (job.status !== 'running') return;
-    killChild(child);
+    if (!killChild(child)) job.treeTerminationUnknown = true;
     job.status = 'killed';
     job.error = `Background shell timed out after ${timeoutMs}ms`;
     job.exitCode = job.exitCode ?? 1;
@@ -310,11 +346,13 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
         error: err.message,
       });
     }
+    if (!processStarted) job.physicalClosed = true;
     resolveDone();
   });
 
   child.on('close', (code) => {
     clearTimeout(killTimer);
+    job.physicalClosed = true;
     if (job.status === 'running') {
       job.status = code === 0 ? 'completed' : 'failed';
       job.exitCode = code ?? 1;
@@ -414,7 +452,7 @@ export function killAllBackgroundShells(options?: {
     job.error = job.error ?? 'Killed by turn cancellation';
     job.exitCode = job.exitCode ?? 1;
     const child = job.child;
-    setImmediate(() => killChild(child));
+    setImmediate(() => { if (!killChild(child)) job.treeTerminationUnknown = true; });
     killed.push(job.id);
   }
   return { killed };
@@ -437,7 +475,7 @@ export function killBackgroundShell(taskId: string): AwaitBackgroundShellResult 
   }
 
   if (job.status === 'running') {
-    killChild(job.child);
+    if (!killChild(job.child)) job.treeTerminationUnknown = true;
     job.status = 'killed';
     job.error = job.error ?? 'Killed by killBackgroundShell';
     job.exitCode = job.exitCode ?? 1;
@@ -458,7 +496,7 @@ export function killBackgroundShell(taskId: string): AwaitBackgroundShellResult 
 export function getBackgroundShellJob(taskId: string): BackgroundShellJob | undefined {
   const job = jobs.get(taskId);
   if (!job) return undefined;
-  const { child: _child, ...publicJob } = job;
+  const { child: _child, physicalClosed: _physicalClosed, treeTerminationUnknown: _treeTerminationUnknown, projectRootKey: _projectRootKey, ...publicJob } = job;
   return publicJob;
 }
 

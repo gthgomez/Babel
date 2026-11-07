@@ -41,7 +41,7 @@ test('valid explicit reported dollars apply without usageKnown (OpenRouter)', ()
 
 test('registry estimate applies only when usageKnown and report undefined', () => {
   const tracker = new CostTracker()
-  const model = 'deepseek/deepseek-v4-flash-0731'
+  const model = 'deepseek/deepseek-v4.1-flash-1017'
   const attribution = { taskOwnerId: 'or', chargeId: 'or-est' }
   tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter')
   assert.ok(tracker.getTaskSummary('or').totalCostUSD > 0)
@@ -143,7 +143,7 @@ test('all-reported task preserves actualCostUSD in summaries, project stats, and
 
 test('registry estimate keeps billing actual unknown until provider report settles', () => {
   const tracker = new CostTracker()
-  const model = 'deepseek/deepseek-v4-flash-0731'
+  const model = 'deepseek/deepseek-v4.1-flash-1017'
   const attribution = { taskOwnerId: 'or', chargeId: 'or-est-only' }
   tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter')
   const summary = tracker.getTaskSummary('or')
@@ -154,7 +154,7 @@ test('registry estimate keeps billing actual unknown until provider report settl
 
 test('registry estimate rejects late provider report replacement', () => {
   const tracker = new CostTracker()
-  const model = 'deepseek/deepseek-v4-flash-0731'
+  const model = 'deepseek/deepseek-v4.1-flash-1017'
   const attribution = { taskOwnerId: 'or', chargeId: 'or-refine' }
   tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter')
   const before = tracker.getTaskSummary('or').totalCostUSD

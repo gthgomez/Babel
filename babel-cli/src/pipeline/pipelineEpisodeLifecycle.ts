@@ -36,6 +36,7 @@ export function createPipelineEpisodeLifecycle(options: {
   sessionId?: string;
   mode: EpisodeStreamLoadMode;
   writeWarning: (warning: string) => void;
+  monotonicNow?: () => number;
   initialPhase?: {
     phase: 'orchestrator' | 'swe_planning' | 'qa_review' | 'executor' | 'finalization';
     status: 'started' | 'completed' | 'failed';
@@ -67,14 +68,20 @@ export function createPipelineEpisodeLifecycle(options: {
 
   let finalized = false;
   const activePhases = new Set<string>();
+  const phaseStarts = new Map<string, number>();
+  const monotonicNow = options.monotonicNow ?? (() => performance.now());
   const recordPhase = (
     phase: 'orchestrator' | 'swe_planning' | 'qa_review' | 'executor' | 'finalization',
     status: 'started' | 'completed' | 'failed',
     details?: Record<string, unknown>,
   ): void => {
-    if (status === 'started') activePhases.add(phase);
-    else activePhases.delete(phase);
-    sink?.recordPhase(phase, status, details);
+    const now = monotonicNow();
+    const start = phaseStarts.get(phase);
+    if (status === 'started') { activePhases.add(phase); if (Number.isFinite(now)) phaseStarts.set(phase, now); else phaseStarts.delete(phase); }
+    else { activePhases.delete(phase); phaseStarts.delete(phase); }
+    const elapsed = status !== 'started' && start !== undefined && Number.isFinite(now) && now >= start ? now - start : undefined;
+    const { duration_ms: _ignored, ...safeDetails } = details ?? {};
+    sink?.recordPhase(phase, status, { ...safeDetails, ...(elapsed !== undefined ? { duration_ms: elapsed } : {}) });
     if (sink?.status === 'degraded') markDegraded(sink.warnings[0] ?? 'Episode persistence degraded.');
   };
   if (options.initialPhase) recordPhase(options.initialPhase.phase, options.initialPhase.status, options.initialPhase.details);

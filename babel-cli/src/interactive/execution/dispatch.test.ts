@@ -232,6 +232,34 @@ describe('executeTask dispatch routing', { concurrency: 1 }, () => {
 
   // ── Chat mode ─────────────────────────────────────────────────────────────
 
+  test('a successor cannot enter while the first task is preparing', async () => {
+    const ctx = makeContext({ mode: 'chat' }); let release!: () => void; let started!: () => void
+    const entered = new Promise<void>(resolve => { started = resolve })
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const deps = { ...testDeps, loadSessionIdentity: async () => { started(); await pending; return 'fixture identity' } }
+    const first = executeTask(ctx, 'first task', deps)
+    await entered
+    const second = executeTask(ctx, 'second task', deps).then(() => null, error => error)
+    release(); await first
+    const error = await second
+    assert.match(String(error?.message), /active.*settle/i)
+    assert.equal(calls.length, 1)
+  });
+
+  test('stopping preparation prevents execution and releases its own owner', async () => {
+    const { handleCancelTurn } = await import('../commands/review.js')
+    const ctx = makeContext({ mode: 'chat' }); let release!: () => void; let started!: () => void
+    const entered = new Promise<void>(resolve => { started = resolve })
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const deps = { ...testDeps, loadSessionIdentity: async () => { started(); await pending; return 'fixture identity' } }
+    const first = executeTask(ctx, 'first task', deps).then(() => null, error => error)
+    await entered; assert.equal(typeof ctx.cancelActiveRun, 'function'); handleCancelTurn(ctx); release()
+    const failure = await first
+    assert.match(String(failure?.message), /preparation was cancelled/i)
+    assert.equal(calls.length, 0); assert.equal(ctx.preparingRun, false); assert.equal(ctx.cancelActiveRun, undefined)
+    await executeTask(ctx, 'next task', testDeps); assert.equal(calls.length, 1)
+  });
+
   test('chat mode routes plain input to executeChatTask', async () => {
     const ctx = makeContext({ mode: 'chat' });
     await executeTask(ctx, 'what is git status?', testDeps);

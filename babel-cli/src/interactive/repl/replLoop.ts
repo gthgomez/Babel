@@ -33,7 +33,7 @@ function hasUnclosedBraces(line: string): boolean {
 }
 
 /** Run a task, then drain Tab-queued follow-ups (C2). */
-async function executeTaskAndDrainQueue(
+export async function executeTaskAndDrainQueue(
   ctx: ReplContext,
   deps: ReplLoopDeps,
   input: string,
@@ -43,7 +43,11 @@ async function executeTaskAndDrainQueue(
   // the pager or external editor; wrapping the whole task would hide the
   // very activity the shell is responsible for presenting.
   await deps.executeTask(input);
-  while (!ctx.isRunning) {
+  await drainQueuedTasks(ctx, deps);
+}
+
+export async function drainQueuedTasks(ctx: ReplContext, deps: ReplLoopDeps): Promise<void> {
+  while (!ctx.isRunning && !ctx.preparingRun) {
     const next = dequeueComposerMessage();
     if (!next) break;
     await deps.executeTask(next);
@@ -55,7 +59,7 @@ async function finishReplTurn(
   coordinator: InputCoordinator,
   release: (() => void) | null,
 ): Promise<(() => void) | null> {
-  if (!ctx.isRunning) {
+  if (!ctx.isRunning && !ctx.preparingRun) {
     renderTurnStatusBar(ctx);
     const nextRelease = await coordinator.acquire('repl');
     ctx.rl.prompt();
@@ -204,7 +208,7 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     }
 
     // Agent busy: queue follow-up instead of parallel execution (C2).
-    if (ctx.isRunning && !input.startsWith('/')) {
+    if ((ctx.isRunning || ctx.preparingRun) && !input.startsWith('/')) {
       enqueueComposerMessage(input);
       ctx.rl.prompt();
       return;
@@ -221,6 +225,7 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
       } else {
         await handleCommand(ctx, input);
       }
+      await drainQueuedTasks(ctx, deps);
       release = await finishReplTurn(ctx, coordinator, release);
     } else {
       await executeTaskAndDrainQueue(ctx, deps, input);

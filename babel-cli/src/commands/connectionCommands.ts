@@ -1,10 +1,13 @@
 /** One command grammar for CLI and slash connection/model/settings operations. */
 import { Command, CommanderError } from 'commander'
 import { resolveEffectiveSettings } from '../config/userSettings.js'
-import { connectProvider, connectionStatus, listConnectionModels, listConnections, savePreferences, selectConnection, selectModel, type SaveScope, type SelectionSession } from '../services/connectionSettings.js'
+import { connectProvider, connectionStatus, listConnectionModels, listConnections, resolveConnectionReference, resolveScopedModelReference, savePreferences, selectConnection, selectModel, type SaveScope, type SelectionSession } from '../services/connectionSettings.js'
 import { inspectDefaults } from '../services/defaultsInspection.js'
 import { connectionModelSelector } from '../config/connectionModelPolicy.js'
 import type { ReplContext } from '../interactive/context.js'
+import { assertInteractiveRunAvailable } from '../interactive/context.js'
+import { CommandPalette } from '../ui/palette.js'
+import { withExclusiveStdin } from '../ui/inputCoordinator.js'
 
 interface CommandHost {
   session?: SelectionSession
@@ -88,10 +91,45 @@ export function registerConnectionCommands(program: Command, host: CommandHost =
 
 /** Run shared command definitions inside the current TUI session. */
 export async function handleConnectionCommand(ctx: ReplContext, name: 'provider' | 'model' | 'settings', args: string[]): Promise<void> {
+  if (name === 'settings' && args.length && args[0] !== 'show') assertInteractiveRunAvailable(ctx)
+  if (name !== 'settings' && (!args.length || !(name === 'provider' ? ['list', 'status'] : ['list', 'show']).includes(args[0]!))) assertInteractiveRunAvailable(ctx)
   const program = new Command().name('babel-harness').exitOverride()
   program.configureOutput({ writeOut: text => console.log(text), writeErr: text => console.error(text) })
   const parts = ctx.state.model?.startsWith('connection/') ? ctx.state.model.split('/') : []
-  const session = ctx.state.modelSource && ctx.state.modelSource !== 'session' ? {} : { ...(ctx.state.connectionId ? { connection: ctx.state.connectionId } : {}), ...(parts.length > 2 ? { model: parts.slice(2).join('/') } : {}) }
+  let session: SelectionSession = ctx.state.modelSource && ctx.state.modelSource !== 'session' ? {} : { ...(ctx.state.connectionId ? { connection: ctx.state.connectionId } : {}), ...(parts.length > 2 ? { model: parts.slice(2).join('/') } : {}), ...(ctx.state.modelsByConnection ? { modelsByConnection: ctx.state.modelsByConnection } : {}) }
+  try {
+    if (name === 'provider' && args.length === 1 && !['list', 'status', 'use', 'connect'].includes(args[0]!)) {
+      args = ['use', resolveConnectionReference(args[0]!)]
+    } else if (name === 'model' && args.length === 1 && !['list', 'show', 'use'].includes(args[0]!)) {
+      let reference = args[0]!
+      const colon = reference.indexOf(':')
+      if (colon > 0 && !reference.slice(0, colon).includes('/')) {
+        const id = resolveConnectionReference(reference.slice(0, colon))
+        session = selectConnection(id, session, { projectRoot: ctx.resolveCurrentTarget().targetRoot ?? process.cwd() })
+        reference = reference.slice(colon + 1)
+      }
+      args = ['use', resolveScopedModelReference(reference, session, ctx.resolveCurrentTarget().targetRoot ?? process.cwd())]
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : 'Selection failed.')
+    return
+  }
+  if (args.length === 0 && name !== 'settings' && process.stdin.isTTY && process.stdout.isTTY) {
+    const root = ctx.resolveCurrentTarget().targetRoot ?? process.cwd()
+    const status = connectionStatus(session, root)
+    const choices = name === 'provider'
+      ? listConnections().connections.map(item => ({ command: item.id, description: item.provider, group: 'Connections' }))
+      : [...new Set([...(status.model ? [status.model] : []), ...listConnectionModels(session, root).models.map(item => item.id)])]
+        .map(id => ({ command: id, description: status.connection ?? '', group: 'Models' }))
+    if (choices.length === 0) {
+      console.log(name === 'provider' ? 'No configured connections. Use /setup to connect a provider.' : 'No known models for this connection. Use /model use <exact-model-id>.')
+      return
+    }
+    const choose = () => CommandPalette.choose(ctx, choices)
+    const selected = ctx.withExclusiveTerminal ? await ctx.withExclusiveTerminal(`${name}-picker`, choose) : await withExclusiveStdin(choose, ctx.rl)
+    if (!selected) return
+    args = ['use', selected]
+  }
   registerConnectionCommands(program, {
     interactive: true, session, projectRoot: ctx.resolveCurrentTarget().targetRoot ?? process.cwd(),
     emit: value => {
@@ -104,6 +142,7 @@ export async function handleConnectionCommand(ctx: ReplContext, name: 'provider'
       ctx.chatEngine?.closeAdmissionStore?.()
       ctx.chatEngine = undefined
       if (selection.connection) ctx.state.connectionId = selection.connection
+      if (selection.modelsByConnection) ctx.state.modelsByConnection = selection.modelsByConnection
       if (selection.connection && selection.model) {
         ctx.state.model = connectionModelSelector(selection.connection, selection.model)
         ctx.state.resolvedModelId = selection.model
@@ -111,7 +150,6 @@ export async function handleConnectionCommand(ctx: ReplContext, name: 'provider'
       ctx.state.modelSource = 'session'
       ctx.state.readinessState = connectionStatus(selection, ctx.resolveCurrentTarget().targetRoot).state as NonNullable<typeof ctx.state.readinessState>
       delete ctx.state.savedPlanId
-      delete ctx.state.pendingPlanBody
       ctx.saveSessionState()
     },
   })

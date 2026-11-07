@@ -73,3 +73,12 @@ test('asynchronous invocation selection outranks environment without leaking int
   await withInvocationSettings({ connection: 'b' }, async () => { await Promise.resolve(); const effective = resolveEffectiveSettings({ settings, env }); assert.equal(effective.connection.value?.id, 'b'); assert.equal(effective.connection.source, 'invocation') })
   assert.equal(resolveEffectiveSettings({ settings, env }).connection.value?.id, 'a')
 })
+
+test('arbitrary exact connection model does not claim unverified native tool capability', async () => {
+  const { resolveConnectionModelPolicy } = await import('./connectionModelPolicy.js')
+  const policy = resolveConnectionModelPolicy('connection/example/vendor/unknown', { settings: {
+    schemaVersion: 1, connections: { example: { id: 'example', provider: 'openrouter', model: 'vendor/unknown' } },
+  } })
+  assert.equal(policy?.providerModelId, 'vendor/unknown')
+  assert.equal(policy?.nativeToolUse, undefined)
+})

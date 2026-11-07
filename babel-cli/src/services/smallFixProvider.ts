@@ -37,6 +37,8 @@ export type SmallFixExecutionMode = 'live' | 'offline_demo';
 
 export interface SmallFixOptions {
   task: string;
+  /** Cancellation from the owning session. */
+  signal?: AbortSignal;
   projectRoot?: string;
   /**
    * VCS: Write anchor path (absolute). Used to resolve relative tool paths
@@ -60,7 +62,7 @@ export interface SmallFixOptions {
   toolStream?: LiteToolStreamSink;
   /** Override bounded verify→repair attempts (default from env or 3). */
   maxRepairAttempts?: number;
-  /** Optional approved plan run id or handoff loaded from task text. */
+  /** Optional explicit approved plan run ID. Supplied handoff objects are quarantined. */
   planRunId?: string;
   planHandoff?: PlanHandoff | null;
   /** Internal: force a single-file scope for dual-file sequential fixes. */
@@ -270,7 +272,7 @@ export async function runSmallFixModel(
       ...(modelPolicy.requestedOutputTokens ? { sampling: { maxTokens: modelPolicy.requestedOutputTokens } } : {}),
     });
     try {
-      const answer = await runner.execute(prompt, SmallFixAnswerSchema);
+      const answer = await runner.execute(prompt, SmallFixAnswerSchema, undefined, undefined, options.signal);
       const metadata = runner.getLastInvocationMetadata?.() ?? null;
       if (
         metadata?.provider_model_id &&
@@ -316,6 +318,7 @@ export async function runSmallFixModel(
       stage: 'executor',
       schemaName: 'SmallFixAnswerSchema',
       maxCliAttempts: 1,
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
     },
   );
   return {

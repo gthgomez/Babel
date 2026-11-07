@@ -3,6 +3,7 @@
 // review → execute, with waterfall or conversational rendering.
 
 import type { ReplContext } from '../context.js';
+import { assertInteractiveRunAvailable } from '../context.js';
 import { assertFiniteBudgetSupported } from '../../config/laneBudget.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { runBabelPipeline, BabelEventBus } from '../../pipeline.js';
@@ -38,7 +39,8 @@ export async function executeGovernedTask(
   target: AgentTargetContext,
   modeOverride?: ValidMode,
   planRunId?: string | null,
-): Promise<void> {
+): Promise<Awaited<ReturnType<typeof runBabelPipeline>> | undefined> {
+  assertInteractiveRunAvailable(ctx);
   if (ctx.state.operatorMode === 'hard_plan' || ctx.state.operatorMode === 'dry_run') throw new Error('Current read-only operator restriction blocks governed execution. Use Plan or explicitly change the permission setting.');
   assertFiniteBudgetSupported('Thorough Work', target.targetRoot);
   ctx.isRunning = true;
@@ -276,6 +278,7 @@ export async function executeGovernedTask(
         transcript: typeof waterfall.getTranscript === 'function' ? waterfall.getTranscript() : '',
       });
     }
+    return result;
   } catch (caughtError: any) {
     const cancelled = controller.signal.aborted;
     ctx.state.lastRunUserStatus = cancelled ? 'cancelled' : 'failed';

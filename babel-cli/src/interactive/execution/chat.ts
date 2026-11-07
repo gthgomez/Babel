@@ -6,6 +6,7 @@ import { chatInspectionCoverage } from '../../agent/chatInspectionCoverage.js';
 
 import * as fs from 'node:fs';
 import type { ReplContext } from '../context.js';
+import { assertInteractiveRunAvailable } from '../context.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { ChatEngine, type ChatEngineOptions } from '../../agent/chatEngine.js';
 import { ConversationalRenderer } from '../../ui/waterfall.js';
@@ -32,10 +33,8 @@ import {
 } from './chatCore.js';
 import { createChatEngineForSession } from './chatTransport.js';
 import {
-  createChatPlanExecuteHandoff,
   normalizeChatOperatorMode,
   operatorModeImpliesDryRun,
-  type ChatPlanExecuteHandoff,
 } from '../../agent/planExecuteMode.js';
 import {
   classifyImplementorTerminal,
@@ -104,6 +103,7 @@ export async function executeChatTask(
   systemContext?: string,
   deps?: ExecuteChatTaskDeps,
 ): Promise<void> {
+  assertInteractiveRunAvailable(ctx);
   ctx.isRunning = true;
   notifyRunStarted();
   // Hosted North Star keeps the composer mounted for queueing, but the
@@ -175,17 +175,6 @@ export async function executeChatTask(
       if (operatorModeImpliesDryRun(operatorMode)) {
         process.env['BABEL_DRY_RUN'] = '1';
       }
-      let planHandoff: ChatPlanExecuteHandoff | undefined;
-      if (ctx.state.pendingPlanBody?.trim()) {
-        planHandoff = createChatPlanExecuteHandoff({
-          planBody: ctx.state.pendingPlanBody,
-          linkedEventId: ctx.interactiveSessionId,
-        });
-        // Consume staged plan once implement engine starts.
-        delete ctx.state.pendingPlanBody;
-        ctx.state.operatorMode = 'default';
-        ctx.saveSessionState();
-      }
       const engineOptions: ChatEngineOptions = {
         task,
         projectRoot: target.targetRoot,
@@ -199,7 +188,6 @@ export async function executeChatTask(
         workspaceRoot: target.workspaceRoot ?? null,
         operatorMode,
         ...(operatorMode === 'hard_plan' ? { hardPlanMode: true } : {}),
-        ...(planHandoff ? { planHandoff } : {}),
         ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
         runtimeMode: useConversational ? 'tui' : 'headless',
       };

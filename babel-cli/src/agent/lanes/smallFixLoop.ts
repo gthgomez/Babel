@@ -10,6 +10,7 @@ import type { AgentAction } from '../actions.js';
 import { decideAction, presetForVerb } from '../policy.js';
 import type { PermissionPreset } from '../policy.js';
 import type { SessionLoopPhase, SessionLoopStepPayload } from '../sessionLoop.js';
+import { isOperatorAbortError } from '../operatorAbort.js';
 
 export type { SessionLoopPhase, SessionLoopStepPayload };
 import {
@@ -41,6 +42,8 @@ export interface SmallFixMutationLoopInput {
   /** Explicit operator-approved host fallback when Docker isolation is unavailable. */
   hostFallbackAllowed?: boolean;
   decide?: typeof decideAction;
+  /** Called when the verifier reaches the local tool dispatch boundary. */
+  onVerifyStart?: () => void;
 }
 
 export interface SmallFixMutationLoopResult {
@@ -50,6 +53,9 @@ export interface SmallFixMutationLoopResult {
   testResult: ToolResult | null;
   policyBlocked: boolean;
   blockedReason: string | null;
+  cancelled?: true;
+  /** Cancellation interrupted the write result; effects require inspection. */
+  writeOutcome?: 'unknown';
 }
 
 export function buildSessionLoopSteps(steps: SmallFixLoopStep[]): SessionLoopStepPayload[] {
@@ -133,17 +139,27 @@ export async function runSmallFixMutationLoop(
     path: input.targetFile,
     content: input.replacementContent,
   };
-  const writeExecution = await executeActionWithPolicy(
-    writeAction,
-    preset,
-    input.toolContext,
-    {
-      ...policyDeps,
-      ...(input.hostFallbackAllowed !== undefined
-        ? { hostFallbackAllowed: input.hostFallbackAllowed }
-        : {}),
-    },
-  );
+  let writeExecution: PolicyGatedExecutionResult;
+  try {
+    writeExecution = await executeActionWithPolicy(
+      writeAction,
+      preset,
+      input.toolContext,
+      {
+        ...policyDeps,
+        ...(input.hostFallbackAllowed !== undefined
+          ? { hostFallbackAllowed: input.hostFallbackAllowed }
+          : {}),
+      },
+    );
+  } catch (error) {
+    if (!input.toolContext.signal?.aborted || (!isOperatorAbortError(error) && error !== input.toolContext.signal.reason)) throw error;
+    appendTerminalStep(steps, true, 'Cancelled during write; its effects require inspection');
+    return {
+      steps, sessionLoopSteps: buildSessionLoopSteps(steps), writeResult: null, testResult: null,
+      policyBlocked: false, blockedReason: null, cancelled: true, writeOutcome: 'unknown',
+    };
+  }
   steps.push(stepFromExecution('act', writeExecution));
 
   if (writeExecution.policyBlocked) {
@@ -173,6 +189,7 @@ export async function runSmallFixMutationLoop(
       testResult: null,
       policyBlocked: false,
       blockedReason: null,
+      writeOutcome: 'unknown',
     };
   }
 
@@ -181,17 +198,33 @@ export async function runSmallFixMutationLoop(
     command: input.verifierCommand,
     cwd: input.projectRoot,
   };
-  const verifyExecution = await executeActionWithPolicy(
-    verifyAction,
-    preset,
-    input.toolContext,
-    {
-      ...policyDeps,
-      ...(input.hostFallbackAllowed !== undefined
-        ? { hostFallbackAllowed: input.hostFallbackAllowed }
-        : {}),
-    },
-  );
+  let verifyExecution: PolicyGatedExecutionResult;
+  try {
+    verifyExecution = await executeActionWithPolicy(
+      verifyAction,
+      preset,
+      input.onVerifyStart ? {
+        ...input.toolContext,
+        onBeforeDispatch: () => {
+          input.toolContext.onBeforeDispatch?.();
+          input.onVerifyStart?.();
+        },
+      } : input.toolContext,
+      {
+        ...policyDeps,
+        ...(input.hostFallbackAllowed !== undefined
+          ? { hostFallbackAllowed: input.hostFallbackAllowed }
+          : {}),
+      },
+    );
+  } catch (error) {
+    if (!input.toolContext.signal?.aborted || (!isOperatorAbortError(error) && error !== input.toolContext.signal.reason)) throw error;
+    appendTerminalStep(steps, true, 'Cancelled before verification completed');
+    return {
+      steps, sessionLoopSteps: buildSessionLoopSteps(steps), writeResult, testResult: null,
+      policyBlocked: false, blockedReason: null, cancelled: true,
+    };
+  }
   steps.push(stepFromExecution('verify', verifyExecution));
 
   if (verifyExecution.policyBlocked) {
@@ -222,5 +255,88 @@ export async function runSmallFixMutationLoop(
     testResult,
     policyBlocked: false,
     blockedReason: null,
+  };
+}
+
+/** Policy-gated coordinated writes; callers must retain partial outcomes on failure. */
+export interface CoordinatedSmallFixMutationInput {
+  projectRoot: string;
+  verifierCommand: string;
+  writes: Array<{ path: string; content: string }>;
+  toolContext: ToolContext;
+  executor?: ToolExecutor;
+  preset?: PermissionPreset;
+  decide?: typeof decideAction;
+  hostFallbackAllowed?: boolean;
+  onVerifyStart?: () => void;
+}
+
+export interface CoordinatedSmallFixMutationResult {
+  completedWrites: Array<{ path: string; result: ToolResult }>;
+  failedWrite?: { path: string; result: ToolResult | null };
+  testResult: ToolResult | null;
+  policyBlocked: boolean;
+  blockedReason: string | null;
+  cancelled?: true;
+  unknownWritePath?: string;
+  failure?: unknown;
+}
+
+export async function runCoordinatedSmallFixMutationLoop(
+  input: CoordinatedSmallFixMutationInput,
+): Promise<CoordinatedSmallFixMutationResult> {
+  const preset = input.preset ?? presetForVerb('fix');
+  const deps = {
+    executor: input.executor ?? defaultToolExecutor,
+    ...(input.decide !== undefined ? { decide: input.decide } : {}),
+    ...(input.hostFallbackAllowed !== undefined ? { hostFallbackAllowed: input.hostFallbackAllowed } : {}),
+  };
+  const completedWrites: CoordinatedSmallFixMutationResult['completedWrites'] = [];
+  for (const write of input.writes) {
+    let execution: PolicyGatedExecutionResult;
+    try {
+      execution = await executeActionWithPolicy(
+        { type: 'write_file', path: write.path, content: write.content }, preset, input.toolContext, deps,
+      );
+    } catch (failure) {
+      const cancelled = input.toolContext.signal?.aborted &&
+        (isOperatorAbortError(failure) || failure === input.toolContext.signal.reason);
+      return {
+        completedWrites, testResult: null, policyBlocked: false, blockedReason: null,
+        unknownWritePath: write.path, failure, ...(cancelled ? { cancelled: true as const } : {}),
+      };
+    }
+    const result = primaryToolResult(execution);
+    if (execution.policyBlocked || !result || result.exit_code !== 0) {
+      return {
+        completedWrites, failedWrite: { path: write.path, result }, testResult: null, policyBlocked: execution.policyBlocked,
+        blockedReason: result?.stderr || 'Coordinated write failed',
+        ...(!execution.policyBlocked ? { unknownWritePath: write.path } : {}),
+      };
+    }
+    completedWrites.push({ path: write.path, result });
+  }
+  let verify: PolicyGatedExecutionResult;
+  try {
+    verify = await executeActionWithPolicy(
+      { type: 'run_command', command: input.verifierCommand, cwd: input.projectRoot }, preset,
+      input.onVerifyStart ? {
+        ...input.toolContext,
+        onBeforeDispatch: () => { input.toolContext.onBeforeDispatch?.(); input.onVerifyStart?.(); },
+      } : input.toolContext,
+      deps,
+    );
+  } catch (failure) {
+    const cancelled = input.toolContext.signal?.aborted &&
+      (isOperatorAbortError(failure) || failure === input.toolContext.signal.reason);
+    return {
+      completedWrites, testResult: null, policyBlocked: false, blockedReason: null,
+      failure, ...(cancelled ? { cancelled: true as const } : {}),
+    };
+  }
+  const testResult = primaryToolResult(verify);
+  return {
+    completedWrites, testResult, policyBlocked: verify.policyBlocked,
+    blockedReason: verify.policyBlocked ? testResult?.stderr ?? 'Policy blocked verifier' : null,
   };
 }

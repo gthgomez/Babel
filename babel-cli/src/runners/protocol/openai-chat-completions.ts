@@ -4,6 +4,7 @@ import { dispatchRunOperation, RunStoppedError, type RunControl } from '../../ru
 import { createHash, randomUUID } from 'node:crypto';
 import type { ZodType } from 'zod';
 import { isRetryableStatus, normalizeFinishReason } from '../providerNormalize.js';
+import { ProviderHttpError } from '../providerHttpError.js';
 import {
   type LlmRunner,
   type ProviderMessage,
@@ -683,9 +684,8 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
       const retryNote = isRetryableStatus(response.status)
         ? ` after ${REQUEST_MAX_RETRIES} attempt(s)`
         : '';
-      throw new Error(
-        `[${this.providerId}] HTTP ${response.status}${retryNote} (${this.model}): ${body}`,
-      );
+      throw new ProviderHttpError(this.providerId, this.model, response.status, 'response', providerRequestIdFromResponse(response),
+        `[${this.providerId}] HTTP ${response.status}${retryNote} (${this.model})`, providerErrorCodeFromBody(body));
     }
 
     settleRetry('succeeded');
@@ -851,9 +851,8 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
               partialModelOutput: streamState.partialModelOutput,
               outputMaterial: streamState.outputReceipt,
             });
-            throw new Error(
-              `[${this.providerId}] HTTP ${response.status} during stream retry (${this.model}): ${body}`,
-            );
+            throw new ProviderHttpError(this.providerId, this.model, response.status, 'stream_retry', providerRequestIdFromResponse(response),
+              `[${this.providerId}] HTTP ${response.status} during stream retry (${this.model})`, providerErrorCodeFromBody(body));
           }
           settleRetry('succeeded');
         }
@@ -1497,7 +1496,9 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         },
         failureStage: 'response',
       });
-      yield { type: 'error', message: `[${this.providerId}] HTTP ${response.status} (${this.model}): ${body}` };
+      const failure = new ProviderHttpError(this.providerId, this.model, response.status, 'response', providerRequestIdFromResponse(response),
+        `[${this.providerId}] HTTP ${response.status} (${this.model})`, providerErrorCodeFromBody(body));
+      yield { type: 'error', message: failure.message, failure };
       return;
     }
 

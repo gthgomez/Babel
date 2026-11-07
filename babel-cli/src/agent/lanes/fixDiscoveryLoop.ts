@@ -61,7 +61,8 @@ export async function runFixDiscoveryPhase(
     verb: 'fix',
     task: options.task,
     projectRoot,
-    toolContext,
+    toolContext: { ...toolContext, ...(options.signal !== undefined ? { signal: options.signal } : {}) },
+    ...(options.signal !== undefined ? { abortSignal: options.signal } : {}),
     ...(evidence !== undefined ? { evidence } : {}),
     ...(options.provider === 'mock' || options.provider === 'live'
       ? { provider: options.provider }

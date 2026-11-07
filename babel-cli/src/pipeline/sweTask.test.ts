@@ -612,3 +612,49 @@ test('buildSweTask: accepts custom executionProfileName', async () => {
   assert.ok(result.length > 0);
   assert.ok(result.includes('Execution profile guidance:'));
 });
+
+test('top-level planning inventory is bounded and indicates omitted entries', async () => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { buildSweTask, guardedPlanningInventory } = await import('./sweTask.js')
+  const root = mkdtempSync(join(tmpdir(), 'babel-inventory-bound-'))
+  try {
+    for (let i = 0; i < 120; i++) writeFileSync(join(root, `${String(i).padStart(3, '0')}-${'x'.repeat(100)}.dat`), '')
+    const manifest = { ...minimalManifest(), target_project_path: root }
+    const output = buildSweTask(manifest, 'Inspect the project', [], undefined, '', '', 'safe_repo', 'deep', false, await guardedPlanningInventory(manifest, false))
+    const line = output.split('\n').find(value => value.startsWith('Current top-level entries:')) ?? ''
+    assert.ok(line.length < 9000); assert.match(line, /omitted|truncated/i)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('Plan-bound planning suppresses broad discovery while ordinary planning retains it', async () => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+  const { buildSweTask, guardedPlanningInventory } = await import('./sweTask.js')
+  const { tmpdir } = await import('node:os'); const { join } = await import('node:path')
+  const root = mkdtempSync(join(tmpdir(), 'babel-plan-discovery-scope-'))
+  try {
+    writeFileSync(join(root, 'ordinary.txt'), 'SYNTHETIC_DISCOVERY_CONTENT')
+    const manifest = { ...minimalManifest(), target_project_path: root }
+    const ordinary = buildSweTask(manifest, 'Inspect the project', [], undefined, '', '', 'safe_repo', 'deep', false, await guardedPlanningInventory(manifest, false))
+    const bound = buildSweTask(manifest, 'Inspect the selected Plan', [], undefined, '', '', 'safe_repo', 'deep', true)
+    assert.equal(ordinary.includes('SYNTHETIC_DISCOVERY_CONTENT'), true)
+    assert.equal(bound.includes('SYNTHETIC_DISCOVERY_CONTENT'), false)
+    assert.equal(bound.includes('ordinary.txt'), false)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('guarded planner inventory redacts credential-shaped source content', async () => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+  const { buildSweTask, guardedPlanningInventory } = await import('./sweTask.js')
+  const { tmpdir } = await import('node:os'); const { join } = await import('node:path')
+  const root = mkdtempSync(join(tmpdir(), 'babel-planner-redaction-'))
+  try {
+    writeFileSync(join(root, 'example.txt'), 'DEEPSEEK_API_KEY=SYNTHETIC_PLANNER_SECRET\nvisible source')
+    const manifest = { ...minimalManifest(), target_project_path: root }
+    const output = buildSweTask(manifest, 'Inspect the project', [], undefined, '', '', 'safe_repo', 'deep', false, await guardedPlanningInventory(manifest, false))
+    assert.match(output, /visible source/)
+    assert.doesNotMatch(output, /SYNTHETIC_PLANNER_SECRET/)
+    assert.match(output, /\[REDACTED\]/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})

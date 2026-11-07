@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { AgentSession } from '../agent/session.js';
@@ -29,7 +29,7 @@ export interface WorkerChainManifest {
 }
 
 export interface LiteContinueAssessment {
-  status: 'CONTINUE_READY' | 'NO_LATEST_RUN' | 'RUN_NOT_FOUND' | 'CHAIN_COMPLETE';
+  status: 'CONTINUE_READY' | 'CONTINUE_BLOCKED' | 'NO_LATEST_RUN' | 'RUN_NOT_FOUND' | 'CHAIN_COMPLETE';
   source: 'worker_chain' | 'babel_run';
   run_dir: string | null;
   session_run_dir: string | null;
@@ -70,18 +70,21 @@ function isLiteSessionVerb(value: string): value is LiteSessionVerb {
 }
 
 export function parseWorkerChainManifest(raw: Record<string, unknown>): WorkerChainManifest | null {
-  if (raw['artifact_type'] !== 'babel_lite_worker_chain') {
+  if (raw['schema_version'] !== 1 || raw['artifact_type'] !== 'babel_lite_worker_chain') {
     return null;
   }
-  const steps = Array.isArray(raw['steps'])
-    ? raw['steps'].filter((step): step is AgentWorkerLoopStep => {
-        if (step === null || typeof step !== 'object' || Array.isArray(step)) {
-          return false;
-        }
-        const record = step as Record<string, unknown>;
-        return typeof record['verb'] === 'string' && typeof record['status'] === 'string';
-      })
-    : [];
+  if (!Array.isArray(raw['steps'])) return null;
+  const steps = raw['steps'];
+  if (!steps.every((step): step is AgentWorkerLoopStep => {
+    if (step === null || typeof step !== 'object' || Array.isArray(step)) return false;
+    const record = step as Record<string, unknown>;
+    return typeof record['verb'] === 'string' && isLiteSessionVerb(record['verb']) &&
+      typeof record['status'] === 'string' && typeof record['exit_code'] === 'number' && Number.isInteger(record['exit_code']) &&
+      (record['execution_mode'] === undefined || typeof record['execution_mode'] === 'string') &&
+      (record['run_dir'] === undefined || record['run_dir'] === null || typeof record['run_dir'] === 'string');
+  })) return null;
+  if (raw['next_verb'] !== null && (typeof raw['next_verb'] !== 'string' || !isLiteSessionVerb(raw['next_verb']))) return null;
+  if (raw['failed_step'] !== undefined && (typeof raw['failed_step'] !== 'string' || !isLiteSessionVerb(raw['failed_step']))) return null;
   const nextVerb =
     typeof raw['next_verb'] === 'string' && isLiteSessionVerb(raw['next_verb'])
       ? raw['next_verb']
@@ -94,6 +97,7 @@ export function parseWorkerChainManifest(raw: Record<string, unknown>): WorkerCh
   if (chainStatus !== 'in_progress' && chainStatus !== 'complete' && chainStatus !== 'failed') {
     return null;
   }
+  if (chainStatus === 'complete' && (nextVerb !== null || failedStep !== undefined)) return null;
   if (
     typeof raw['session_run_id'] !== 'string' ||
     typeof raw['session_run_dir'] !== 'string' ||
@@ -134,30 +138,60 @@ export function writeWorkerChainManifest(
 }
 
 export function readWorkerChainManifest(sessionRunDir: string): WorkerChainManifest | null {
-  const raw = readJson(workerChainManifestPath(sessionRunDir));
-  return raw ? parseWorkerChainManifest(raw) : null;
+  try {
+    const normalize = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path;
+    const source = resolve(sessionRunDir);
+    const physical = realpathSync(source);
+    if (normalize(physical) !== normalize(source)) return null;
+    const path = workerChainManifestPath(physical);
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 1024 * 1024 || normalize(realpathSync(path)) !== normalize(path)) return null;
+    const raw = readJson(path);
+    const manifest = raw ? parseWorkerChainManifest(raw) : null;
+    if (!manifest || normalize(resolve(manifest.session_run_dir)) !== normalize(source) || normalize(realpathSync(manifest.session_run_dir)) !== normalize(physical)) return null;
+    return manifest;
+  } catch { return null; }
 }
 
-function listWorkerChainManifests(projectRoot: string): WorkerChainManifest[] {
+function latestWorkerChainSource(projectRoot: string): string | null {
   const liteRoot = defaultArtifactRoot(projectRoot);
-  if (!existsSync(liteRoot)) {
-    return [];
-  }
-  const manifests: WorkerChainManifest[] = [];
+  if (!existsSync(liteRoot)) return null;
+  const sources: Array<{ path: string; mtime: number }> = [];
   for (const entry of readdirSync(liteRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
+    if (entry.isSymbolicLink()) {
+      const path = join(liteRoot, entry.name);
+      let mtime = Number.POSITIVE_INFINITY;
+      try { mtime = lstatSync(path).mtimeMs; } catch { /* Treat uninspectable entries as unsafe. */ }
+      sources.push({ path, mtime });
       continue;
     }
-    const manifest = readWorkerChainManifest(join(liteRoot, entry.name));
-    if (manifest) {
-      manifests.push(manifest);
+    if (!entry.isDirectory()) continue;
+    const path = join(liteRoot, entry.name);
+    try {
+      lstatSync(workerChainManifestPath(path));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') continue;
     }
+    let mtime = Number.POSITIVE_INFINITY;
+    try { mtime = statSync(path).mtimeMs; } catch { /* Uninspectable candidates fail closed. */ }
+    sources.push({ path, mtime });
   }
-  return manifests.sort((left, right) => {
-    const leftMtime = statSync(left.session_run_dir).mtimeMs;
-    const rightMtime = statSync(right.session_run_dir).mtimeMs;
-    return rightMtime - leftMtime;
-  });
+  return sources.sort((left, right) => right.mtime - left.mtime || left.path.localeCompare(right.path))[0]?.path ?? null;
+}
+
+function hasManifestOrUninspectable(source: string): boolean {
+  try {
+    const stat = lstatSync(source);
+    const normalize = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path;
+    if (stat.isSymbolicLink() || normalize(realpathSync(source)) !== normalize(resolve(source))) return true;
+    lstatSync(workerChainManifestPath(source));
+    return true;
+  }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code !== 'ENOENT' && code !== 'ENOTDIR';
+  }
 }
 
 export function findLatestWorkerChainManifest(
@@ -166,10 +200,11 @@ export function findLatestWorkerChainManifest(
 ): WorkerChainManifest | null {
   if (reference !== 'latest') {
     const direct = resolve(reference);
-    return readWorkerChainManifest(direct) ?? readWorkerChainManifest(join(direct, '..')) ?? null;
+    const source = hasManifestOrUninspectable(direct) ? direct : resolve(direct, '..');
+    return readWorkerChainManifest(source);
   }
-  const manifests = listWorkerChainManifests(projectRoot);
-  return manifests[0] ?? null;
+  const source = latestWorkerChainSource(projectRoot);
+  return source ? readWorkerChainManifest(source) : null;
 }
 
 export function nextWorkerChainVerb(manifest: WorkerChainManifest): LiteSessionVerb | null {
@@ -188,10 +223,28 @@ export function buildLiteContinueAssessment(
   const projectRoot = resolve(
     options.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd(),
   );
-  const manifest = findLatestWorkerChainManifest(projectRoot, options.run ?? 'latest');
+  const reference = options.run ?? 'latest';
+  const latestSource = reference === 'latest' ? latestWorkerChainSource(projectRoot) : null;
+  const manifest = reference === 'latest'
+    ? (latestSource ? readWorkerChainManifest(latestSource) : null)
+    : findLatestWorkerChainManifest(projectRoot, reference);
   if (manifest) {
+    let sameProject = false;
+    try {
+      const normalize = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path;
+      sameProject = normalize(realpathSync(projectRoot)) === normalize(realpathSync(manifest.project_root));
+    } catch { /* Missing or uninspectable project identity fails closed. */ }
+    if (!sameProject) {
+      return {
+        status: 'CONTINUE_BLOCKED', source: 'worker_chain', run_dir: manifest.session_run_dir,
+        session_run_dir: manifest.session_run_dir, chain_status: null, next_verb: null, failed_step: null,
+        reason: 'The retained worker-chain project identity does not match the selected project.',
+        next_action: 'Inspect the retained artifact and select its original project.', next_command: null,
+        manifest: null, recovery: null,
+      };
+    }
     const resumeVerb = nextWorkerChainVerb(manifest);
-    if (manifest.chain_status === 'complete' || resumeVerb === null) {
+    if (manifest.chain_status === 'complete') {
       return {
         status: 'CHAIN_COMPLETE',
         source: 'worker_chain',
@@ -200,31 +253,44 @@ export function buildLiteContinueAssessment(
         chain_status: manifest.chain_status,
         next_verb: null,
         failed_step: manifest.failed_step ?? null,
-        reason: 'The linked worker chain already completed successfully.',
-        next_action: 'No continuation needed.',
+        reason: 'The linked worker-chain manifest reports completion; inspect its retained evidence.',
+        next_action: 'Inspect the retained worker-chain evidence.',
         next_command: null,
         manifest,
         recovery: null,
       };
     }
-    const nextCommand = `bl ${resumeVerb} --project-root "${projectRoot}"`;
     return {
-      status: 'CONTINUE_READY',
+      status: 'CONTINUE_BLOCKED',
       source: 'worker_chain',
       run_dir: manifest.session_run_dir,
       session_run_dir: manifest.session_run_dir,
       chain_status: manifest.chain_status,
       next_verb: resumeVerb,
       failed_step: manifest.failed_step ?? null,
-      reason:
-        manifest.chain_status === 'failed'
-          ? `Worker chain paused at ${manifest.failed_step ?? resumeVerb}; resume will retry ${resumeVerb}.`
-          : `Worker chain ready for ${resumeVerb} (linked session ${manifest.session_run_id}).`,
-      next_action: `Resume ${resumeVerb} from linked worker-chain manifest.`,
-      next_command: nextCommand,
+      reason: resumeVerb === null
+        ? 'Worker chain is incomplete and has no valid next step; inspect the retained evidence.'
+        : `Worker-chain action resume is temporarily unavailable until step identity and settlement are qualified; retained step: ${resumeVerb}.`,
+      next_action: 'Inspect the retained worker-chain evidence.',
+      next_command: null,
       manifest,
       recovery: null,
     };
+  }
+
+  if (latestSource || (options.run && options.run !== 'latest')) {
+    const direct = latestSource ?? resolve(options.run!);
+    const source = latestSource !== null || hasManifestOrUninspectable(direct) ? direct : resolve(direct, '..');
+    const presentOrUninspectable = latestSource !== null || hasManifestOrUninspectable(source);
+    if (presentOrUninspectable) {
+      return {
+        status: 'CONTINUE_BLOCKED', source: 'worker_chain', run_dir: source, session_run_dir: source,
+        chain_status: null, next_verb: null, failed_step: null,
+        reason: 'The retained worker-chain manifest is invalid or unsafe to read.',
+        next_action: 'Inspect the retained artifact before continuing.', next_command: null,
+        manifest: null, recovery: null,
+      };
+    }
   }
 
   const recovery = buildRecoveryAssessment({
@@ -275,13 +341,18 @@ export function formatLiteContinueAssessmentHuman(assessment: LiteContinueAssess
   return lines.join('\n');
 }
 
+/** Temporary admission fence; removal requires qualified worker recovery. */
+function workerChainResumeQualified(): boolean {
+  return false;
+}
+
 export async function resumeLiteWorkerChain(
   options: LiteContinueOptions = {},
 ): Promise<AgentSessionResult | null> {
   const assessment = buildLiteContinueAssessment(options);
   if (
     assessment.source !== 'worker_chain' ||
-    assessment.status !== 'CONTINUE_READY' ||
+    assessment.status !== 'CONTINUE_BLOCKED' ||
     !assessment.next_verb
   ) {
     return null;
@@ -289,6 +360,23 @@ export async function resumeLiteWorkerChain(
   const manifest = assessment.manifest;
   if (!manifest) {
     return null;
+  }
+
+  // The legacy manifest does not prove the previous worker settled or bind a
+  // resumed step to its original authority. Retain it for inspection until
+  // worker-chain recovery has those guarantees.
+  if (!workerChainResumeQualified()) {
+    return {
+      payload: {
+        status: 'CONTINUE_BLOCKED',
+        continue_source: 'worker_chain',
+        run_dir: manifest.session_run_dir,
+        session_run_dir: manifest.session_run_dir,
+        reason: 'Worker-chain action resume is temporarily unavailable until step identity and settlement are qualified.',
+      },
+      exitCode: 1,
+      humanText: 'Worker-chain action resume is temporarily unavailable; inspect the retained chain with continue --inspect-only.',
+    };
   }
 
   const session = new AgentSession({

@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { describe, it, beforeEach, afterEach } from 'node:test';
 
 import {
   awaitBackgroundShell,
   capObservationText,
   clearBackgroundShellRegistry,
+  hasUnsettledBackgroundShells,
   killAllBackgroundShells,
   killBackgroundShell,
   resetBackgroundShellRegistryForTests,
@@ -58,7 +61,7 @@ describe('backgroundShell', () => {
   it('starts a command and returns a task id immediately', async () => {
     // Simple argv (no quotes) — same tokenizer contract as sandbox shellExec.
     const job = startBackgroundShell({
-      command: 'echo hello-bg',
+      command: `node -e "console.log('hello-bg')"`,
       cwd: process.cwd(),
     });
     assert.ok(job.id.startsWith('bg-'));
@@ -351,10 +354,33 @@ describe('backgroundShell', () => {
     clearBackgroundShellRegistry();
     const missing = await awaitBackgroundShell(job.id, 100);
     assert.match(missing.stderr, /Unknown background task_id/);
-    const next = startBackgroundShell({ command: 'echo next', cwd: process.cwd() });
+    const next = startBackgroundShell({ command: `node -e "console.log('next')"`, cwd: process.cwd() });
     assert.equal(next.id, 'bg-1');
   });
 
+  it('retains owner uncertainty when the Windows tree-kill helper fails', { skip: process.platform !== 'win32' }, async t => {
+    const owner = 'synthetic-unsettled-background';
+    const root = mkdtempSync(join(tmpdir(), 'babel-background-uncertain-'));
+    const script = join(root, 'hold.js');
+    writeFileSync(script, 'console.log(process.pid);setTimeout(function(){},8000);\n');
+    const job = startBackgroundShell({
+      command: `node "${script}"`,
+      cwd: root, ownerId: owner, timeoutMs: 15000,
+    });
+    await waitForStdoutPid(job.id);
+    assert.equal(hasUnsettledBackgroundShells(owner), true);
+    assert.equal(hasUnsettledBackgroundShells('other-owner'), false);
+    t.mock.method(childProcess, 'spawnSync', (() => ({ status: 1, error: undefined })) as unknown as typeof childProcess.spawnSync);
+    syncBuiltinESMExports();
+    try {
+      killBackgroundShell(job.id);
+      await job.done;
+      assert.equal(hasUnsettledBackgroundShells(owner), true, 'a parent exit cannot prove the failed tree kill settled descendants');
+    } finally {
+      t.mock.restoreAll(); syncBuiltinESMExports();
+      rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+    }
+  });
   it('capObservationText truncates long output for LLM context', () => {
     const long = 'x'.repeat(40_000);
     const capped = capObservationText(long, 100);

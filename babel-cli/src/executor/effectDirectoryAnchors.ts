@@ -93,7 +93,9 @@ async function pinWindowsDirectories(paths: string[]): Promise<EffectDirectoryAn
     })
     return {
       path: path => {
-        if (exited || !paths.includes(dirname(path))) throw new Error('EFFECT_DIRECTORY_ANCHOR_LOST')
+        if (exited || child.killed || !paths.includes(dirname(path))) throw new Error('EFFECT_DIRECTORY_ANCHOR_LOST')
+        try { if (!child.pid) throw new Error('missing helper pid'); process.kill(child.pid, 0) }
+        catch { throw new Error('EFFECT_DIRECTORY_ANCHOR_LOST') }
         return path
       },
       release: async () => { if (!exited) child.kill(); await exit },

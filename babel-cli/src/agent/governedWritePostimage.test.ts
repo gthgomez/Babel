@@ -12,6 +12,8 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -19,6 +21,7 @@ import { executeActionWithPolicy, resetCircuitBreaker, type ToolExecutor } from 
 import { loadEffectLedger } from '../executor/effectLedger.js';
 import type { ToolContext } from '../localTools.js';
 import type { AgentAction } from './actions.js';
+import { WorkspaceTransactionManager } from '../services/workspaceTransactions.js';
 
 const ORIGINAL = 'export const value = 1;\n';
 const REQUESTED = 'export const value = 2;\n';
@@ -70,6 +73,28 @@ describe('governed write_file verifies the requested post-image', { concurrency:
     writeFileSync(target, ORIGINAL, 'utf8');
   });
 
+  test('empty transaction observations cannot certify a successful write', async () => {
+    const originalCommit = WorkspaceTransactionManager.commitBatch;
+    WorkspaceTransactionManager.commitBatch = async (...args) => {
+      const result = await originalCommit.call(WorkspaceTransactionManager, ...args);
+      result.preBatchHash = {};
+      result.postBatchHash = {};
+      result.verified = true;
+      return result;
+    };
+    try {
+      const action: AgentAction = { type: 'write_file', path: target, content: REQUESTED };
+      const result = await executeActionWithPolicy(action, 'workspace_write', ctx('postimage-empty-observation', root, runDir), {
+        executor: executorThat('silent-no-op'), mutationRoot: root, mode: 'chat',
+      });
+      assert.equal(result.results[0]?.exit_code, 1);
+      assert.match(result.results[0]?.stderr ?? '', /MUTATION_POSTIMAGE_NOT_CONFIRMED/);
+      assert.notEqual(loadEffectLedger(runDir).at(-1)?.status, 'completed');
+    } finally {
+      WorkspaceTransactionManager.commitBatch = originalCommit;
+    }
+  });
+
   test('a silent no-op when the requested content differs is refused (red on pre-fix behavior)', async () => {
     const action: AgentAction = { type: 'write_file', path: target, content: REQUESTED };
     const result = await executeActionWithPolicy(action, 'workspace_write', ctx('postimage-1', root, runDir), {
@@ -113,6 +138,40 @@ describe('governed write_file verifies the requested post-image', { concurrency:
     assert.equal(result.mutationReceipt?.status, 'committed');
     const ledger = loadEffectLedger(runDir);
     assert.equal(ledger.at(-1)?.status, 'completed');
+  });
+
+  test('ledger terminal failure does not bypass governed rollback', async t => {
+    const originalAppend = fs.appendFileSync; let appends = 0;
+    t.mock.method(fs, 'appendFileSync', ((...args: Parameters<typeof fs.appendFileSync>) => {
+      if (++appends >= 2) throw new Error('SYNTHETIC_LEDGER_TERMINAL_FAILURE');
+      return originalAppend(...args);
+    }) as typeof fs.appendFileSync);
+    syncBuiltinESMExports();
+    try {
+      const action: AgentAction = { type: 'write_file', path: target, content: REQUESTED };
+      await assert.rejects(executeActionWithPolicy(action, 'workspace_write', ctx('ledger-failure', root, runDir), {
+        executor: executorThat('write'), mutationRoot: root, mode: 'chat',
+      }), /SYNTHETIC_LEDGER_TERMINAL_FAILURE/);
+      assert.equal(appends >= 2, true);
+      assert.equal(readFileSync(target, 'utf8'), ORIGINAL, 'a failed terminal ledger write must not bypass rollback');
+    } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  });
+
+  test('ledger failure preserves a rollback conflict and does not claim restoration', async t => {
+    const originalAppend = fs.appendFileSync; const originalUndo = WorkspaceTransactionManager.undoLastMutationBatch; let appends = 0;
+    t.mock.method(fs, 'appendFileSync', ((...args: Parameters<typeof fs.appendFileSync>) => {
+      if (++appends >= 2) throw new Error('SYNTHETIC_LEDGER_TERMINAL_FAILURE');
+      return originalAppend(...args);
+    }) as typeof fs.appendFileSync);
+    WorkspaceTransactionManager.undoLastMutationBatch = async () => ({ verification: false, conflicts: ['SYNTHETIC_ROLLBACK_CONFLICT'] }) as Awaited<ReturnType<typeof originalUndo>>;
+    syncBuiltinESMExports();
+    try {
+      const action: AgentAction = { type: 'write_file', path: target, content: REQUESTED };
+      await assert.rejects(executeActionWithPolicy(action, 'workspace_write', ctx('ledger-conflict', root, runDir), {
+        executor: executorThat('write'), mutationRoot: root, mode: 'chat',
+      }), error => /EFFECT_LEDGER_SETTLEMENT_UNCERTAIN/.test(String(error)) && /SYNTHETIC_ROLLBACK_CONFLICT/.test(String(error)));
+      assert.equal(readFileSync(target, 'utf8'), REQUESTED, 'unrestored bytes remain visible for reconciliation');
+    } finally { WorkspaceTransactionManager.undoLastMutationBatch = originalUndo; t.mock.restoreAll(); syncBuiltinESMExports(); }
   });
 
   test('a genuine no-op (file already matches requested content) stays a completed no-change effect', async () => {

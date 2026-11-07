@@ -57,6 +57,8 @@ export interface BabelLiteArtifactLayout {
 export interface AgentSessionOptions {
   task: string;
   verb: LiteSessionVerb;
+  /** Internal diagnostic recovery must never create an executable Plan. */
+  diagnosticDraft?: boolean;
   /** Parent cancellation for read-only planning. */
   signal?: AbortSignal;
   project?: string;
@@ -151,6 +153,7 @@ export interface AgentWorkerLoopPayload {
 
 export interface AgentLaneContext {
   task: string;
+  diagnosticDraft?: boolean;
   /** Parent cancellation for read-only planning. */
   signal?: AbortSignal;
   project?: string;

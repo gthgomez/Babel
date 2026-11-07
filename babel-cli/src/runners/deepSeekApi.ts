@@ -10,6 +10,7 @@ import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js
 import { createHash, randomUUID } from 'node:crypto';
 import type { ZodType } from 'zod';
 import { parseRetryAfterHeader, isRetryableStatus, normalizeFinishReason, classifyProviderError } from './providerNormalize.js';
+import { ProviderHttpError } from './providerHttpError.js';
 import {
   type LlmRunner,
   type ProviderMessage,
@@ -908,7 +909,8 @@ export class DeepSeekApiRunner implements LlmRunner {
       const retryNote = isRetryableStatus(response.status)
         ? ` after ${requestMaxRetries} attempt(s)`
         : '';
-      throw new Error(`[deepSeekApi] HTTP ${response.status}${retryNote} (${this.model}): ${body}`);
+      throw new ProviderHttpError('deepseek', this.model, response.status, 'response', providerRequestIdFromResponse(response),
+        `[deepseek] HTTP ${response.status}${retryNote} (${this.model})`, providerErrorCodeFromBody(body));
     }
 
     settleRetry('succeeded');
@@ -1519,7 +1521,9 @@ export class DeepSeekApiRunner implements LlmRunner {
         },
         failureStage: 'response',
       });
-      yield { type: 'error', message: `[deepSeekApi] HTTP ${response.status} (${this.model}): ${body}` };
+      const failure = new ProviderHttpError('deepseek', this.model, response.status, 'response', providerRequestIdFromResponse(response),
+        `[deepseek] HTTP ${response.status} (${this.model})`, providerErrorCodeFromBody(body));
+      yield { type: 'error', message: failure.message, failure };
       return;
     }
 

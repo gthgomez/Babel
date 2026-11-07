@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -417,8 +417,8 @@ test('DeepSeek live policy accepts Flash/Pro and rejects legacy providers', () =
     key: 'deepseek-v4-flash',
     liveOnly: true,
   });
-  assert.equal(legacyLiveDeepSeek.provider, 'openrouter');
-  assert.equal(legacyLiveDeepSeek.providerModelId, 'deepseek/deepseek-v4-flash-0731');
+  assert.equal(legacyLiveDeepSeek.provider, 'deepseek');
+  assert.equal(legacyLiveDeepSeek.providerModelId, 'deepseek-v4-flash');
   assert.throws(() => assertDeepSeekLiveModelId('Qwen/Qwen3'), /LIVE_MODEL_POLICY/);
 
   const routes = resolveStagePolicyRoutes({ babelRoot: root, liveOnly: true });
@@ -462,6 +462,12 @@ test('OpenRouter DeepSeek defaults select the current Flash snapshot while expli
   );
   assert.equal(resolveOpenRouterDeepSeekModelId('deepseek-v4-pro'), 'deepseek/deepseek-v4-pro');
   assert.equal(resolveOpenRouterDeepSeekModelId('deepseek-v4-flash'), 'deepseek/deepseek-v4-flash-0731');
+});
+
+test('an explicit OpenRouter base model ID is never remapped to a snapshot', () => {
+  assert.equal(resolveOpenRouterDeepSeekBackendKey('deepseek/deepseek-v4.1-flash'), null);
+  assert.equal(resolveOpenRouterDeepSeekModelId('deepseek/deepseek-v4.1-flash'), null);
+  assert.equal(resolveOpenRouterDeepSeekModelId('deepseek-v4.1-flash-openrouter'), 'deepseek/deepseek-v4.1-flash-1017');
 });
 
 test('OpenRouter DeepSeek live environment removes direct credentials and pins auxiliary calls', () => {
@@ -517,6 +523,18 @@ test('canonical model capabilities resolve DeepSeek V4 Flash and Pro 1M context 
   assert.equal(getNormalizedModelCapabilities('completely-unknown-model-xyz'), null);
 });
 
+test('unverified native capability remains unknown even with conflicting stored metadata', () => {
+  const root = createModelPolicyRoot();
+  try {
+    const path = join(root, 'config', 'model-policy.json'); const config = JSON.parse(readFileSync(path, 'utf8'));
+    config.models.qwen3.native_tool_use = true; config.models.qwen3.native_tool_use_unverified = true; writeFileSync(path, JSON.stringify(config));
+    const capabilities = getNormalizedModelCapabilities('qwen3', root);
+    assert.equal(capabilities?.nativeToolUse, undefined); assert.equal(capabilities?.nativeToolUseSource, 'unknown');
+    const policy = resolveModelByKey({ key: 'qwen3', babelRoot: root });
+    assert.equal(policy.nativeToolUse, undefined); assert.equal(policy.nativeToolUseUnverified, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('unknown context models like qwen3 have context budget 0 and do not compact prematurely at 1,024', async () => {
   const { resolveProviderCapabilities, contextBudgetForModel, shouldCompactByTokens } =
     await import('./agent/providerCapabilities.js');
@@ -532,3 +550,15 @@ test('unknown context models like qwen3 have context budget 0 and do not compact
   assert.equal(shouldCompactByTokens(1_024, 'qwen3'), false);
   assert.equal(shouldCompactByTokens(50_000, 'qwen3'), false);
 });
+
+test('direct DeepSeek legacy routes retain IDs and use current documented peak estimates', () => {
+  const entries = getAvailableModels()
+  const flash = entries.find(model => model.key === 'deepseek-v4-flash')?.entry
+  const pro = entries.find(model => model.key === 'deepseek-v4-pro')?.entry
+  assert.equal(flash?.model_id, 'deepseek-v4-flash')
+  assert.equal(pro?.model_id, 'deepseek-v4-pro')
+  assert.equal(flash?.estimated_cost_per_1m_input, 0.3)
+  assert.equal(flash?.estimated_cost_per_1m_output, 1.2)
+  assert.equal(pro?.estimated_cost_per_1m_input, 1.32)
+  assert.equal(pro?.estimated_cost_per_1m_output, 3.96)
+})

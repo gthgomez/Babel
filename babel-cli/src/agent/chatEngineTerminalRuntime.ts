@@ -614,6 +614,11 @@ export function stoppedChatStream(
   inputForTerminal: () => ChatTerminalInput,
   stop: StopRequest,
 ): ChatEvent {
+  if (stop.reasonCode === 'physical_settlement_unknown') {
+    return completeChatStream(inputForTerminal(),
+      'The command may still be running. Inspect the workspace and run evidence before continuing.',
+      { stopRequest: stop });
+  }
   if (stop.kind === 'cancelled' || stop.kind === 'superseded') {
     return cancelChatStream(inputForTerminal())
   }

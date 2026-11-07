@@ -307,3 +307,10 @@ describe('D03 generic policy text does not fabricate permission denial', () => {
     );
   });
 });
+
+test('physical settlement uncertainty gives inspection guidance without an automatic retry', () => {
+  const guidance = terminalReasonGuidance('physical_settlement_unknown');
+  assert.match(guidance.message, /may still be running/i);
+  assert.ok(guidance.nextActions.some(action => /inspect/i.test(action)));
+  assert.ok(guidance.nextActions.every(action => !/retry/i.test(action)));
+});

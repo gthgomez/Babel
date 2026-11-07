@@ -136,6 +136,21 @@ const testDeps = {
 };
 
 describe('executeChatTask integration', { concurrency: 1 }, () => {
+test('ordinary Chat does not consume retained legacy Plan text', async () => {
+  await withStdoutIsTTY(false, async () => {
+    const ctx = makeReplContext(); ctx.state.pendingPlanBody = 'LEGACY_PLAN_CANARY'
+    const observed: unknown[] = []
+    const engine = createMockEngine({ status: 'completed', answer: 'done', usage: EMPTY_USAGE, conversation: [] })
+    engine.submitMessage = async (...args) => { observed.push(args); return { status: 'completed', answer: 'done', usage: EMPTY_USAGE, conversation: [] } }
+    engine.submitMessageStream = async function* (...args) { observed.push(args); yield { type: 'done', answer: 'done', usage: EMPTY_USAGE } as ChatEvent }
+    await executeChatTask(ctx, 'hello', 'hello', makeTarget(), undefined, {
+      ...testDeps, engineFactory: options => { observed.push(options); return engine },
+    })
+    assert.ok(observed.length >= 2)
+    assert.equal(JSON.stringify(observed).includes('LEGACY_PLAN_CANARY'), false)
+    assert.equal(ctx.state.pendingPlanBody, 'LEGACY_PLAN_CANARY')
+  })
+})
 test('executeChatTask sets ctx.isRunning true during run and false after', async () => {
   await withStdoutIsTTY(false, async () => {
     await withEnvUnset('CI', async () => {

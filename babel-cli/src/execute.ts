@@ -1,6 +1,7 @@
 import { createProviderRunner } from './runners/providerEngine.js'
 import { assertFiniteBudgetSupported } from './config/laneBudget.js'
 import { isProviderId, providerSupportsOperation } from './runners/providerRegistry.js'
+import { ProviderHttpError } from './runners/providerHttpError.js'
 /**
  * execute.ts — Per-Stage LLM Waterfall Executor
  *
@@ -59,6 +60,7 @@ import type {
   RunnerCallbacks,
   RunnerProgressEvent,
 } from './runners/base.js';
+import { isStructuredOutputError, StructuredOutputError } from './runners/base.js';
 import { EvidenceBundle } from './evidence.js';
 import type { TargetModel } from './schemas/agentContracts.js';
 import { JitDenialError } from './ui/incrementalToolDetector.js';
@@ -73,6 +75,7 @@ import { BabelEventBus } from './pipeline/logging.js';
 export { clearRoutingCache };
 import {
   assertLiveModelId,
+  isDeepSeekLiveModelId,
   LIVE_OPENROUTER_BACKEND_KEY,
   resolveModelByKey,
   resolveStagePolicyRoutes,
@@ -626,6 +629,8 @@ function isImmediateCascade(err: Error): boolean {
 }
 
 export function isStructuredOutputFailure(err: Error): boolean {
+  if (err instanceof ProviderHttpError) return false;
+  if (isStructuredOutputError(err)) return true;
   const msg = err.message.toLowerCase();
   return STRUCTURED_OUTPUT_FAILURE_SIGNALS.some((s) => msg.includes(s));
 }
@@ -1287,6 +1292,8 @@ async function runWaterfall<T>(
           ),
         );
 
+        if (lastError instanceof ProviderHttpError && (lastError.status === 401 || lastError.status === 403)) throw lastError;
+
         if (isStructuredOutputFailure(lastError) && attempt < maxAttempts) {
           promptForTier =
             schemaRetryPrompt ??
@@ -1385,6 +1392,10 @@ async function runWaterfall<T>(
     });
     schemaFailureEntryIds.push(terminalEntry.entry_id);
   }
+  if (isStructuredOutputError(lastError)) {
+    throw new StructuredOutputError({ failure_kind: lastError.failure_kind, provider: lastError.provider,
+      model: lastError.model, message: finalMessage, cause: lastError });
+  }
   throw new Error(finalMessage);
 }
 
@@ -1436,6 +1447,7 @@ export async function runWithFallback<T>(
     waterfall = waterfall.filter(
       (tier) =>
         (explicitModel?.startsWith('connection/') === true && tier.backendKey === explicitModel) ||
+        (explicitModel !== undefined && isDeepSeekLiveModelId(explicitModel) && tier.provider === 'deepseek' && tier.backendKey === explicitModel) ||
         (tier.provider === 'openrouter' &&
         (tier.backendKey === LIVE_OPENROUTER_BACKEND_KEY ||
           tier.backendKey?.endsWith('-openrouter') === true)),

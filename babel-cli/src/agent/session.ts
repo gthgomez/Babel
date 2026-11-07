@@ -90,8 +90,9 @@ function isSuccessfulRunStatus(status: string): boolean {
 function getSmallFixCheckpointPayload(
   runDir: string | null,
   changedFiles: string[],
+  writeOutcomeUnknown = false,
 ): LiteResultPayload['checkpoint'] {
-  const required = changedFiles.length > 0;
+  const required = changedFiles.length > 0 || writeOutcomeUnknown;
   let checkpointId: string | null = null;
   if (runDir) {
     const smallFixCheckpointPath = join(runDir, 'small_fix_checkpoint.json');
@@ -160,13 +161,14 @@ export function buildSmallFixLitePayload(
       refused_paths: [],
     },
     changed_files: changedFiles,
+    ...(result.writeOutcome === 'unknown' ? { write_outcome: 'unknown' as const } : {}),
     verification: {
       status: verificationStatus,
       commands: result.checks,
       skipped_reason:
         verificationStatus === 'failed' ? 'small-fix verification did not pass' : null,
     },
-    checkpoint: getSmallFixCheckpointPayload(result.runDir, changedFiles),
+    checkpoint: getSmallFixCheckpointPayload(result.runDir, changedFiles, result.writeOutcome === 'unknown'),
     evidence: {
       run_dir: result.runDir,
       support_path: result.runDir,
@@ -206,6 +208,8 @@ export function buildSmallFixLitePayload(
     next:
       result.status === 'SMALL_FIX_COMPLETE'
         ? ['Review the changed file.', 'Rollback: babel undo']
+        : result.cancelled || result.writeOutcome === 'unknown' || result.retryable === false
+          ? ['Inspect the workspace and retained evidence before continuing.']
         : result.checks.some((check) => check === 'rollback_on_fail: restored checkpoint')
           ? [
               'Verifier failed; checkpoint auto-restored.',
@@ -216,10 +220,10 @@ export function buildSmallFixLitePayload(
     scope_path: result.scopePath,
     ...(result.status === 'SMALL_FIX_FAILED'
       ? {
-          retryable: true,
+          retryable: result.cancelled !== true && result.writeOutcome !== 'unknown' && result.retryable !== false,
           failure_capsule_path: join(result.runDir, 'small_fix_failure_capsule.json'),
           execution_report_path: join(result.runDir, '04_execution_report.json'),
-          next_command: 'babel continue latest',
+          ...(result.cancelled || result.writeOutcome === 'unknown' || result.retryable === false ? {} : { next_command: 'babel continue latest' }),
         }
       : {}),
     details: {
@@ -333,6 +337,7 @@ export class AgentSession {
   private laneContext() {
     return {
       task: this.options.task,
+      ...(this.options.diagnosticDraft === true ? { diagnosticDraft: true } : {}),
       ...(this.options.signal !== undefined ? { signal: this.options.signal } : {}),
       ...(this.options.project !== undefined ? { project: this.options.project } : {}),
       ...(this.options.projectRoot !== undefined ? { projectRoot: this.options.projectRoot } : {}),
@@ -557,6 +562,7 @@ export class AgentSession {
     });
     const smallFix = await runSmallFixPath({
       task: this.options.task,
+      ...(this.options.signal !== undefined ? { signal: this.options.signal } : {}),
       ...(this.options.project !== undefined ? { project: this.options.project } : {}),
       ...(this.options.projectRoot !== undefined ? { projectRoot: this.options.projectRoot } : {}),
       ...(this.options.model !== undefined ? { model: this.options.model } : {}),
@@ -629,6 +635,7 @@ export class AgentSession {
       ...(this.options.showModelPolicy === true ? { showModelPolicy: true } : {}),
       mode: resolveLitePipelineMode('fix'),
       executionProfile,
+      ...(this.options.signal !== undefined ? { abortSignal: this.options.signal } : {}),
       deniedFingerprints: this.deniedFingerprints,
     });
     await this.serializeSessionState(result.runDir);
@@ -682,6 +689,11 @@ export class AgentSession {
 
   private workerLoopVerbs(): LiteSessionVerb[] {
     return [...WORKER_CHAIN_VERBS];
+  }
+
+  /** Temporary fence until worker cancellation and effect ownership are qualified. */
+  private workerChainQualified(): boolean {
+    return false;
   }
 
   private beginWorkerChainSession(): { sessionRunDir: string; manifest: WorkerChainManifest } {
@@ -769,6 +781,17 @@ export class AgentSession {
    * Multi-turn worker loop: plan → propose → fix with shared session context.
    */
   async runWorkerLoop(): Promise<AgentSessionResult> {
+    if (!this.workerChainQualified()) {
+      return {
+        payload: {
+          status: 'WORKER_LOOP_BLOCKED', user_status: 'blocked', command: 'do', lite_command: 'do',
+          task: this.options.task,
+          reason: 'Worker-chain execution is temporarily unavailable until cancellation and effect ownership are qualified.',
+        } as unknown as LiteResultPayload,
+        exitCode: 1,
+        humanText: 'Worker-chain execution is temporarily unavailable until cancellation and effect ownership are qualified.',
+      };
+    }
     const steps: AgentWorkerLoopStep[] = [];
     const { sessionRunDir, manifest: initialManifest } = this.beginWorkerChainSession();
     let manifest = initialManifest;

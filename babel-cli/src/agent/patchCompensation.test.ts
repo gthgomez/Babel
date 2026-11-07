@@ -181,7 +181,7 @@ test('process interruption after restoration preserves uncertain cold history an
     await compensatePatchWrites([path],new Map([[path,'before']]),new Set(),new Map([[path,'after']]),new Map([[path,original]]),{runDir:root,runId:'session',agentId:'test',babelRoot:root});
   `
   try {
-    const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source], {
+    const child = spawnSync(process.execPath, ['--import', import.meta.resolve('tsx'), '--input-type=module', '-e', source], {
       cwd: process.cwd(), windowsHide: true, encoding: 'utf8', timeout: 30000,
     })
     assert.equal(child.status, 86, 'child must interrupt at the terminal append boundary')

@@ -6,6 +6,7 @@ import { getSetupStatus } from '../services/providerSetup.js';
 import { accentBright, muted } from '../ui/theme.js';
 import { findClosestCommands } from './utils.js';
 import type { ReplContext } from './context.js';
+import { assertInteractiveRunAvailable } from './context.js';
 
 // Config commands
 import {
@@ -78,6 +79,7 @@ import { showHelp } from './help.js';
 import { handleConnectionCommand } from '../commands/connectionCommands.js';
 import { runProviderSetup } from '../services/providerSetup.js';
 import { withSavedPlanApplication } from '../services/savedPlan.js';
+import { assertPlanMutationQualified } from '../agent/planHandoff.js';
 
 export async function handleCommand(ctx: ReplContext, input: string): Promise<void> {
   const parts = input.slice(1).split(' ');
@@ -86,17 +88,20 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
 
   switch (cmd) {
     case 'apply': {
+      assertInteractiveRunAvailable(ctx);
       const id = args[0] ?? ctx.state.savedPlanId;
       if (!id) throw new Error('Use /apply <plan-id> after producing a plan.');
       const target = ctx.resolveCurrentTarget();
-      await withSavedPlanApplication(id, { projectRoot: target.targetRoot, operatorMode: ctx.state.operatorMode, execute: async plan => {
+      await withSavedPlanApplication(id, { projectRoot: target.targetRoot, operatorMode: ctx.state.operatorMode, preflight: assertPlanMutationQualified, execute: async plan => {
         const { executeGovernedTask } = await import('./execution/governed.js');
-        await executeGovernedTask(ctx, input, `Implement this approved plan within current permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`, target, 'deep', plan.sourceRunId ?? null);
-        if (ctx.state.lastRunUserStatus !== 'complete') throw new Error('Plan implementation stopped; inspect the run evidence.');
+        const result = await executeGovernedTask(ctx, input, `Implement this approved plan within current permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`, target, 'deep', plan.sourceRunId ?? null);
+        if (!result) throw new Error('Plan implementation stopped; inspect the run evidence.');
+        return result;
       } });
       break;
     }
     case 'setup': {
+      assertInteractiveRunAvailable(ctx);
       const setup = () => runProviderSetup();
       if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('provider-setup', setup);
       else await setup();
@@ -111,7 +116,6 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
       ctx.state.modelSource = status.modelSource;
       ctx.state.readinessState = status.state as NonNullable<typeof ctx.state.readinessState>;
       delete ctx.state.savedPlanId;
-      delete ctx.state.pendingPlanBody;
       ctx.chatEngine?.closeAdmissionStore?.();
       ctx.chatEngine = undefined;
       ctx.saveSessionState();
@@ -165,10 +169,12 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
       handleNotifications(ctx, args);
       break;
     case 'settings':
+      if (args.length && args[0] !== 'show') assertInteractiveRunAvailable(ctx);
       if (args.length && !['show', 'set'].includes(args[0]!)) handleSettings(ctx, args);
       else await handleConnectionCommand(ctx, 'settings', args);
       break;
     case 'provider':
+      if (!args.length || !['list', 'status'].includes(args[0]!)) assertInteractiveRunAvailable(ctx);
       await handleConnectionCommand(ctx, 'provider', args);
       break;
     case 'theme':
@@ -213,6 +219,7 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
       await handleDoctor(ctx, []);
       break;
     case 'permissions':
+      if (args.length) assertInteractiveRunAvailable(ctx);
       handlePermissions(ctx, args);
       break;
     case 'mcp':
@@ -278,6 +285,7 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
 
     // ── Mode ─────────────────────────────────────────────────────────
     case 'mode':
+      if (args.length) assertInteractiveRunAvailable(ctx);
       handleMode(ctx, args);
       break;
     case 'execute-plan':
@@ -289,20 +297,27 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
     // ── Project ──────────────────────────────────────────────────────
     case 'project':
     case 'p':
+      assertInteractiveRunAvailable(ctx);
       handleProject(ctx, args);
       break;
     case 'target':
       handleTarget(ctx, []);
       break;
     case 'retarget':
+      assertInteractiveRunAvailable(ctx);
       handleRetarget(ctx, args);
       break;
 
     // ── Model ────────────────────────────────────────────────────────
     case 'model':
     case 'm':
-      if (args.length && !['list', 'use', 'show'].includes(args[0]!)) handleModel(ctx, args);
-      else await handleConnectionCommand(ctx, 'model', args);
+      if (!args.length || !['list', 'show', 'why', 'health'].includes(args[0]!)) assertInteractiveRunAvailable(ctx);
+      if (args.length && ['why', 'health', 'clear'].includes(args[0]!)) handleModel(ctx, args);
+      else if (args.length && !['list', 'use', 'show'].includes(args[0]!) && !ctx.state.connectionId && !ctx.state.model?.startsWith('connection/')) {
+        const { connectionStatus } = await import('../services/connectionSettings.js');
+        if (!connectionStatus({}, ctx.resolveCurrentTarget().targetRoot).connection && !args[0]!.includes(':')) handleModel(ctx, args);
+        else await handleConnectionCommand(ctx, 'model', args);
+      } else await handleConnectionCommand(ctx, 'model', args);
       break;
 
     // ── Thinking ─────────────────────────────────────────────────────

@@ -140,6 +140,29 @@ test('P06: an unsettled process tree blocks continuation of a local subprocess e
   assert.ok(classification.reasons.includes(RESTORE_REASONS.PROCESS_TREE_UNSETTLED));
 });
 
+test('P06: an unsettled worker overrides a matching post-image claim', () => {
+  for (const effectClass of ['reconcilable_mutation', 'idempotent'] as const) {
+    const classification = classifyOperation(operation({ effectClass, effectState: 'intent', reconciliation: 'recovered_complete', processTreeSettled: false, unknownReasons: ['synthetic_uncertainty'] }));
+    assert.equal(classification.action, 'await_process_tree_settle');
+    assert.equal(classification.automaticRetryAllowed, false);
+    assert.notEqual(classification.state, 'completed');
+    assert.ok(classification.reasons.includes('synthetic_uncertainty'));
+    const committed = classifyOperation(operation({ effectClass, admissionState: 'settled', outboxState: 'committed', effectState: 'completed', completeness: completeCompleteness(1), processTreeSettled: false }));
+    assert.equal(committed.action, 'await_process_tree_settle');
+    assert.notEqual(committed.state, 'completed');
+  }
+});
+
+test('P06: corrupt history cannot certify a completed compensation', () => {
+  const built = report({
+    history: { readable: true, truncated: false, corrupt: true, reasons: ['synthetic_corruption'] },
+    operations: [operation({ effectClass: 'reconcilable_mutation', compensationState: 'completed' })],
+  });
+  assert.notEqual(built.operations[0]?.state, 'completed');
+  assert.equal(built.operations[0]?.automaticRetryAllowed, false);
+  assert.equal(built.operatorActionRequired, true);
+});
+
 test('P06: recovered post-image completes without a fabricated receipt', () => {
   const classification = classifyOperation(
     operation({

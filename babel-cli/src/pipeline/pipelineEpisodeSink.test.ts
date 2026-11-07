@@ -138,4 +138,38 @@ describe('PipelineEpisodeSink', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('phase duration uses monotonic elapsed time and leaves unmatched completion unknown', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-pipeline-phase-time-'));
+    try {
+      let now = 100;
+      const lifecycle = createPipelineEpisodeLifecycle({ runDir: dir, sessionId: 'timing-sess', mode: 'new', writeWarning: () => {}, monotonicNow: () => now });
+      lifecycle.recordPhase('swe_planning', 'started'); now = 143;
+      lifecycle.recordPhase('swe_planning', 'completed');
+      lifecycle.recordPhase('qa_review', 'completed');
+      now = 200; lifecycle.recordPhase('executor', 'started'); now = 190; lifecycle.recordPhase('executor', 'failed');
+      const loaded = loadEpisodeEventLogFromDir(dir); assert.ok(loaded);
+      const events = loaded.events.filter(event => event.type === 'PIPELINE_PHASE_COMPLETED');
+      assert.equal(events.find(event => event.payload['phase'] === 'swe_planning')?.payload['duration_ms'], 43);
+      assert.equal(events.find(event => event.payload['phase'] === 'qa_review')?.payload['duration_ms'], undefined);
+      const failed = loaded.events.find(event => event.type === 'PIPELINE_PHASE_FAILED' && event.payload['phase'] === 'executor');
+      assert.equal(failed?.payload['duration_ms'], undefined);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('interrupted phase records measured duration rather than caller-supplied timing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'babel-pipeline-interrupted-time-'));
+    try {
+      let now = 10;
+      const lifecycle = createPipelineEpisodeLifecycle({ runDir: dir, sessionId: 'interrupted-time', mode: 'new', writeWarning: () => {}, monotonicNow: () => now });
+      lifecycle.recordPhase('executor', 'started', { duration_ms: 999 });
+      now = 35;
+      lifecycle.recordFinalization('FAILED', 'interrupted');
+      const loaded = loadEpisodeEventLogFromDir(dir);
+      assert.ok(loaded);
+      const failed = loaded.events.find(event => event.type === 'PIPELINE_PHASE_FAILED' && event.payload['phase'] === 'executor');
+      assert.equal(failed?.payload['interrupted'], true);
+      assert.equal(failed?.payload['duration_ms'], 25);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 });

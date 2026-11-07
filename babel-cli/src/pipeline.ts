@@ -51,6 +51,7 @@ import { resolveFamilyModelPolicy, resolveModelByKey, loadModelPolicyConfig } fr
 import { connect } from 'node:net';
 import { confirmCost, ConfirmDialog } from './ui/dialog.js';
 import { isRunningInDaemon } from './daemon/client.js';
+import { isDaemonPipelineQualified } from './daemon/pipelineQualification.js';
 import { EvidenceBundle } from './evidence.js';
 import {
   createEpisodeLifecycleForEvidence,
@@ -162,7 +163,8 @@ import {
 import {
   collectPlanHandoffViolations,
   buildPlanHandoffQaReject,
-  loadPlanHandoff,
+  assertLegacyManualResumeQualified,
+  loadPlanHandoffGuarded,
 } from './agent/planHandoff.js';
 import { splitChainedShellSteps } from './pipeline/executorPlanNormalize.js';
 import {
@@ -819,10 +821,12 @@ export async function runBabelPipeline(
 
 async function runBabelPipelineLocal(task: string, options: PipelineOptions): Promise<PipelineResult> {
   // Daemon transport does not carry the selected route or private Desktop profile.
-  const daemonEnabled = !options.modelOverride && options.planRunId === undefined && process.env['BABEL_DESKTOP_IPC'] !== '1' && process.env['BABEL_DAEMON_ENABLED'] !== 'false' && process.env['BABEL_DAEMON_ENABLED'] !== '0';
+  const daemonSetting = process.env['BABEL_DAEMON_ENABLED']?.trim();
+  const daemonEnabled = !options.modelOverride && options.planRunId === undefined && process.env['BABEL_DESKTOP_IPC'] !== '1' && Boolean(daemonSetting && !/^(?:false|0)$/i.test(daemonSetting));
   const isDaemonProcess = isRunningInDaemon();
 
   if (daemonEnabled && !isDaemonProcess) {
+    if (!isDaemonPipelineQualified()) throw new Error('UNSUPPORTED_OPERATION: Daemon pipeline execution is quarantined pending settlement and recovery qualification.');
     const DAEMON_BUSY_RETRIES = 3;
     const DAEMON_BUSY_RETRY_DELAY_MS = 1000;
     for (let attempt = 0; attempt <= DAEMON_BUSY_RETRIES; attempt++) {
@@ -1279,6 +1283,21 @@ async function runBabelPipelineInternal(
     );
   }
 
+  let admittedPlanFingerprint: string | null = null;
+  let admittedPlanProjectIdentity: string | null = null;
+  if (options.planRunId) {
+    if (options.mode !== 'deep') return await finalizeError(new Error('Plan-bound execution currently requires explicit deep mode; the Plan is retained.'));
+    let source;
+    try { source = await loadPlanHandoffGuarded({ repoPath: runtimeProjectRoot, task, planRunId: options.planRunId, ...(getRunAbortSignal() ? { signal: getRunAbortSignal()! } : {}) }); }
+    catch (error) { return await finalizeError(error); }
+    if (!source) return await finalizeError(new Error('The saved plan source is unavailable, unsafe, or belongs to another project; inspect the retained plan and create a fresh plan.'));
+    if (!source.contract) return await finalizeError(new Error('The saved plan contract is missing or unavailable; inspect the retained artifact and create a fresh plan.'));
+    if (!source.sourceFingerprint || !source.sourceProjectIdentity) return await finalizeError(new Error('The saved plan source identity is unavailable; inspect the retained plan.'));
+    admittedPlanFingerprint = source.sourceFingerprint;
+    admittedPlanProjectIdentity = source.sourceProjectIdentity;
+    if (!getRequestedTargetContract(task).readOnly) return await finalizeError(new Error('Plan-bound mutation is temporarily unavailable until bootstrap, verifier and repair effects are scoped; the Plan is retained.'));
+  }
+
   throwIfRunAborted();
   await runPluginHooks('PreRun', {
     runId: evidence.runId,
@@ -1357,6 +1376,15 @@ async function runBabelPipelineInternal(
       manifest.instruction_stack &&
       manifest.compilation_state === 'uncompiled'
     ) {
+      const compilationStarted = performance.now();
+      let compilationRecorded = false;
+      const recordCompilation = (status: 'completed' | 'failed') => {
+        if (compilationRecorded) return;
+        compilationRecorded = true;
+        const elapsed = performance.now() - compilationStarted;
+        pipelineEpisodeSink?.recordStageTransition('instruction_compilation', status, Number.isFinite(elapsed) && elapsed >= 0 ? { duration_ms: elapsed } : {});
+      };
+      pipelineEpisodeSink?.recordStageTransition('instruction_compilation', 'started');
       const compilerSpan = pipelineTrace.startChildSpan('babel.compiler', {
         'babel.compilation.state.before': manifest.compilation_state,
         'babel.stack.domain_id': manifest.instruction_stack.domain_id,
@@ -1542,6 +1570,7 @@ async function runBabelPipelineInternal(
               log(`[babel:compiler] ❌ ${condition}`);
               const report = buildHaltReport([], 'AMBIGUOUS_PLAN', 0, condition);
               evidence.writeExecutionLog(report);
+              recordCompilation('failed');
               return await finalizeResult({
                 runDir: evidence.runDir,
                 manifest,
@@ -1580,8 +1609,10 @@ async function runBabelPipelineInternal(
             manifest.compiled_artifacts?.selected_entry_ids.length,
           'babel.stack.prompt_manifest_count': manifest.prompt_manifest.length,
         });
+        recordCompilation('completed');
       } catch (error) {
         endSpan(compilerSpan, SpanStatusCode.ERROR, {}, error);
+        recordCompilation('failed');
         throw error;
       }
     }
@@ -1742,12 +1773,20 @@ async function runBabelPipelineInternal(
     );
     const taskContract = classifyTaskContract(task);
     const taskGrounding = buildTaskGrounding(taskContract, inferProjectRoot(manifest));
-    const planHandoff = options.planRunId === null ? null : loadPlanHandoff({
-      repoPath: runtimeProjectRoot,
-      task: mergedTaskContext,
-      ...(options.planRunId !== undefined ? { planRunId: options.planRunId } : {}),
-    });
-    if (options.planRunId && !planHandoff) throw new Error('The saved plan source is unavailable or belongs to another project; create a fresh plan.');
+    let planHandoff = null;
+    if (options.planRunId) {
+      try {
+        planHandoff = await loadPlanHandoffGuarded({
+          repoPath: runtimeProjectRoot,
+          task: mergedTaskContext,
+          planRunId: options.planRunId,
+          ...(getRunAbortSignal() ? { signal: getRunAbortSignal()! } : {}),
+        });
+      } catch (error) { return await finalizeError(error); }
+    }
+    if (options.planRunId && !planHandoff) throw new Error('The saved plan source is unavailable, unsafe, or belongs to another project; inspect the retained plan and create a fresh plan.');
+    if (options.planRunId && !planHandoff?.contract) throw new Error('The saved plan contract is missing or unavailable; inspect the retained artifact and create a fresh plan.');
+    if (planHandoff && (planHandoff.sourceFingerprint !== admittedPlanFingerprint || planHandoff.sourceProjectIdentity !== admittedPlanProjectIdentity)) return await finalizeError(new Error('The saved plan source or project changed during admission; inspect the retained plan before retrying.'));
     if (planHandoff) {
       evidence.writeDebugFile(
         'plan_handoff.json',
@@ -1755,7 +1794,6 @@ async function runBabelPipelineInternal(
           {
             schema_version: 1,
             plan_run_id: planHandoff.planRunId,
-            plan_run_dir: planHandoff.planRunDir,
             allowed_paths: planHandoff.allowedPaths,
           },
           null,
@@ -2042,6 +2080,7 @@ async function runBabelPipelineInternal(
       );
     }
     if (commandOnlyNoModification && shouldRunCommandOnlyNoModification) {
+      if (planHandoff) throw new Error('Plan-bound command execution is unavailable until its effects are scoped; the Plan is retained.');
       log(
         `Command-only no-modification task detected; running "${commandOnlyNoModification}" through shell_exec.`,
       );
@@ -2160,7 +2199,7 @@ async function runBabelPipelineInternal(
           qaRejections, proposedFixStrategy, additionalEvidenceContext,
           groundingContext, taskGrounding, executionProfile: executionProfile.name,
           attempt, previousRejectionTags, smartPlannerEnabled: SMART_PLANNER_ENABLED,
-          evidence, pruningStubs,
+          evidence, pruningStubs, planBound: Boolean(planHandoff), ...(options.abortSignal ? { signal: options.abortSignal } : {}),
         });
         executionReportWarnings.push(...planWarnings);
         evidence.writeSwePlan(swePlan, attempt); episodeLifecycle.recordPhase('swe_planning', 'completed');
@@ -2210,10 +2249,9 @@ async function runBabelPipelineInternal(
           );
         };
 
-        const planHandoffViolations = collectPlanHandoffViolations(
-          swePlan,
-          planHandoff?.allowedPaths ?? [],
-        );
+        const planHandoffViolations = planHandoff
+          ? collectPlanHandoffViolations(swePlan, planHandoff.allowedPaths)
+          : [];
         if (planHandoffViolations.length > 0) {
           handleQaReject(
             buildPlanHandoffQaReject(planHandoffViolations) as QaVerdictReject,
@@ -2726,6 +2764,7 @@ async function runBabelPipelineInternal(
           reportWarnings: executionReportWarnings,
           initialExecutorLog,
           pruningStubs, episodeSink: pipelineEpisodeSink,
+          ...(planHandoff ? { planScope: { projectRoot: runtimeProjectRoot, allowedPaths: planHandoff.allowedPaths } } : {}),
         });
 
         if (!stagedResult.ok) { episodeLifecycle.recordPhase('executor', 'failed', { halted: true });
@@ -2911,6 +2950,7 @@ interface StagedExecutorOptions {
   reportWarnings: string[];
   initialExecutorLog: ToolCallLog[];
   pruningStubs?: Map<string, string>; episodeSink?: PipelineEpisodeSink | null;
+  planScope?: { projectRoot: string; allowedPaths: string[] };
 }
 
 interface StagedExecutorHalt {
@@ -2950,6 +2990,10 @@ async function runStagedExecutor(
     initialExecutorLog,
     pruningStubs, episodeSink,
   } = opts;
+
+  if (opts.planScope && !getRequestedTargetContract(rawTask).readOnly) {
+    throw new Error('Plan-bound mutation is temporarily unavailable until bootstrap, verifier and repair effects are scoped; the Plan is retained.');
+  }
 
   // Bootstrap helpers can write directly, so they must obey owner intent too.
   if (!getRequestedTargetContract(rawTask).readOnly) {
@@ -3011,7 +3055,7 @@ async function runStagedExecutor(
     initialExecutorLog,
     rawTask,
     pruningStubs,
-    createExecutorKernel('deep').services, episodeSink,
+    createExecutorKernel('deep').services, episodeSink, opts.planScope,
   );
 
   return { ok: true, executorResult };
@@ -3031,6 +3075,7 @@ export async function resumeManualBridge(
   runDir: string,
   planInput: string | { planPath?: string; rawPlanText?: string },
 ): Promise<PipelineResult> {
+  assertLegacyManualResumeQualified();
   globalCostTracker.resetSession();
   const manifestPath = join(runDir, '01_manifest.json');
   const manifestRaw = JSON.parse(readFileSync(manifestPath, 'utf-8')) as unknown;

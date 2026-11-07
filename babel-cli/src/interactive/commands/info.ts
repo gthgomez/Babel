@@ -1,5 +1,6 @@
 import { resolveRuntimePaths } from '../../config/runtimePaths.js';
 import { runInstalledDoctor } from '../../installedDoctor.js';
+import { inspectRunningProduct, runningProduct } from '../../services/runningProduct.js';
 // ─── Info / Status Command Handlers ──────────────────────────────────────────
 // Extracted from interactive.ts — display-oriented commands that show session
 // state, run stats, tools, memory, transcripts, and dashboards.
@@ -57,6 +58,12 @@ export function resolveRunDir(ctx: ReplContext, arg?: string): string {
 export function handleStatus(ctx: ReplContext, _args: string[]): void {
   const permissions = readApprovalProfileStatus();
   console.log(primary('\n  Session State:'));
+  const product = inspectRunningProduct(runningProduct);
+  console.log(`    ${muted(padRight('Babel', 10))} ${product.runningVersion ?? 'unknown'} (revision ${product.revision ?? 'unknown'})`);
+  console.log(`    ${muted(padRight('Package', 10))} ${product.packageRoot}`);
+  console.log(`    ${muted(padRight('Entry', 10))} ${product.entrypoint ?? 'unknown'}`);
+  if (product.restartNeeded) console.log('    Package files changed; restart to use the current installation.');
+  else if (product.restartNeeded === null) console.log('    Installation change detection: unknown.');
   console.log(
     `    ${muted(padRight('Mode', 10))} ${accentBright(describeVisibleMode(ctx.state.mode))}`,
   );

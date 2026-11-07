@@ -282,6 +282,7 @@ import {
 } from "./executionContext.js";
 import {
   clearBackgroundShellRegistry,
+  hasUnsettledBackgroundShells,
   killAllBackgroundShells,
 } from "./backgroundShell.js";
 import {
@@ -646,6 +647,26 @@ export class ChatEngine {
    */
   private activeSubmissionGeneration = 0;
   private runControl: RunControl | null = null;
+  private activeSubmissionOwner: symbol | null = null;
+  private physicalSettlementUnknown = false;
+  private admissionStoreClosed = false;
+
+  markPhysicalSettlementUnknown(): void {
+    this.physicalSettlementUnknown = true;
+  }
+
+  private hasUnsettledDurableAdmission(): boolean {
+    const store = this.parity.admissionStore;
+    if (!store) return false;
+    try {
+      const listing = store.listAdmissions(this.engineRunId);
+      return listing.skippedCorruptRows > 0 || listing.records.some(
+        record => record.state === 'claimed' || record.state === 'indeterminate',
+      );
+    } catch {
+      return true;
+    }
+  }
   /** Pending cancellation survives preparation until its submission latch exists. */
   private _cancelled = false;
   /** LLM-based conversation compaction (from chatCompaction.ts).
@@ -869,6 +890,9 @@ export class ChatEngine {
       throw new Error('EXTERNAL_HARNESS_INFERENCE_CONFLICT: External adapters cannot configure Babel inference.');
     }
     const scope=normalizeChatExecutionScope(options);
+    if (hasUnsettledBackgroundShells(options.runId, scope.kind === 'project' ? scope.projectRoot : null)) {
+      throw new Error('An owned background command is still running or settling. Wait for it to finish before reopening this session.');
+    }
     options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null};
     if(scope.kind==="conversation"&&(options.instructionRoot||options.workspaceRoot||options.compiledChatStack?.project_root))throw new Error("Conflicting project context in conversation scope");
     options = { ...options, compiledChatStack: resolveChatInstructionContext(options) };
@@ -947,7 +971,7 @@ export class ChatEngine {
     );
     // Per-session bg shell isolation — scoped to this run id so sibling
     // engines in the same process keep their jobs (matters for resume).
-    clearBackgroundShellRegistry(this.engineRunId);
+    if (!hasUnsettledBackgroundShells(this.engineRunId)) clearBackgroundShellRegistry(this.engineRunId);
 
     // Initialize LLM-based compaction manager (gated behind BABEL_COMPACTION=off).
     // When disabled or on failure, falls back to the inline compactConversation() heuristic.
@@ -2184,6 +2208,26 @@ export class ChatEngine {
     taskIntent?: TaskIntent,
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
+    if (this.admissionStoreClosed) {
+      yield { type: 'failed', error: 'The session admission store is closed. Reopen the session before continuing.' };
+      return;
+    }
+    if (this.activeSubmissionOwner) {
+      yield { type: 'failed', error: 'The previous request is still settling. Wait for it to finish before continuing.' };
+      return;
+    }
+    if (hasUnsettledBackgroundShells(this.engineRunId, this.options.projectRoot)) {
+      yield { type: 'failed', error: 'An owned background command is still running or settling. Wait for it to finish before continuing.' };
+      return;
+    }
+    if (this.physicalSettlementUnknown || this.hasUnsettledDurableAdmission()) {
+      yield { type: 'failed', error: 'A previous command may still be running. Inspect the workspace and run evidence before continuing.',
+        reason_code: 'physical_settlement_unknown' };
+      return;
+    }
+    const owner = Symbol('chat-submission-owner');
+    this.activeSubmissionOwner = owner;
+    try {
     const submissionGeneration =
       submitOpts?.submissionGeneration ?? ++this.generationCounter;
     this.activateSubmissionGeneration(submissionGeneration);
@@ -2199,17 +2243,27 @@ export class ChatEngine {
     const claim = this.admitCurrentSubmission(submissionGeneration, userInput, {
       taskId: objective.taskId, taskClass: objective.submission.runtime.taskClass,
     });
+    let loopFinished = false;
+    let terminalObserved = false;
     try {
-      yield* this.submitMessageStreamLoop(userInput, taskIntent, {
+      for await (const event of this.submitMessageStreamLoop(userInput, taskIntent, {
         ...submitOpts,
         submissionGeneration,
-      }, objective);
+      }, objective)) {
+        if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') terminalObserved = true;
+        yield event;
+      }
+      loopFinished = true;
     } catch (error) {
       if (!this.isSubmissionCurrent(submissionGeneration)) return;
       const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
+      loopFinished = true;
       yield this.streamFailed(captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error)), error instanceof ContextPreparationError ? error.reason : undefined);
     } finally {
-      this.settleClaimOnExit(claim);
+      this.settleClaimOnExit(claim, !loopFinished && !terminalObserved);
+    }
+    } finally {
+      if (this.activeSubmissionOwner === owner) this.activeSubmissionOwner = null;
     }
   }
 
@@ -2795,6 +2849,7 @@ export class ChatEngine {
     // a re-attach must never orphan the previous refcounted reference.
     if (previous && previous !== store) previous.close();
     this.parity.admissionStore = store;
+    this.admissionStoreClosed = false;
   }
 
   /**
@@ -2807,12 +2862,18 @@ export class ChatEngine {
     retireLiveCertificationForRun(this.engineRunId);
     this.taskMutationOwnership?.retire();
     const claim = this.activeAdmissionClaim;
+    const unsettled = this.physicalSettlementUnknown || this.activeSubmissionOwner !== null;
+    if (this.activeSubmissionOwner && this.runControl) {
+      this.runControl.requestStop({ owner: this.runControl.owner, kind: 'cancelled',
+        reasonCode: 'session_closed', source: 'user' });
+    }
     if (claim && !claim.settled) {
-      this.settleAdmissionClaim(claim, "aborted", {
-        finalOutcome: "SESSION_CLOSED",
+      this.settleAdmissionClaim(claim, unsettled ? "indeterminate" : "aborted", {
+        finalOutcome: unsettled ? "PHYSICAL_SETTLEMENT_UNKNOWN" : "SESSION_CLOSED",
       });
     }
     this.parity.admissionStore?.close();
+    this.admissionStoreClosed = true;
   }
 
   replaceConversation(messages: ChatMessage[]): void {
@@ -3319,8 +3380,8 @@ export class ChatEngine {
     this.p11Authority.settleAdmissionClaim(claim, state, outcome);
   }
 
-  private settleClaimOnExit(claim: ChatEngineAdmissionClaim | null): void {
-    this.p11Authority.settleClaimOnExit(claim);
+  private settleClaimOnExit(claim: ChatEngineAdmissionClaim | null, abandoned = false): void {
+    this.p11Authority.settleClaimOnExit(claim, abandoned);
   }
 
   private settleActiveAdmissionClaim(): void {
@@ -4168,9 +4229,16 @@ export class ChatEngine {
     return runner;
   }
   private shouldUseNativeTools(runner: ChatProviderRunner): boolean {
+    if (this.modelPolicy?.nativeToolUse === false || this.modelPolicy?.nativeToolUseUnverified === true) {
+      if (process.env['BABEL_TOOL_PROFILE'] === 'native') {
+        throw new Error(this.modelPolicy?.nativeToolUseUnverified ? 'UNSUPPORTED_OPERATION: Native tool support for this selected model is unverified; select a supported model or another tool profile.' : 'UNSUPPORTED_OPERATION: The selected model does not support native tools; select a supported model or another tool profile.');
+      }
+      return false;
+    }
     return shouldUseChatNativeTools(runner);
   }
   private shouldUseTextTools(): boolean {
+    if ((this.modelPolicy?.nativeToolUse === false || this.modelPolicy?.nativeToolUseUnverified === true) && process.env['BABEL_TOOL_PROFILE'] !== 'legacy') return true;
     return shouldUseChatTextTools(() => this.resolveDeliberationRunner());
   }
   private async deliberateTurn(

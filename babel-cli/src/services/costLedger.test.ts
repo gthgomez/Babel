@@ -12,7 +12,7 @@ test('buildCostLedger flattens waterfall attempts into costed ledger entries', (
     runId: 'run-001',
     task: 'price the task',
     lane: 'governed',
-    createdAt: new Date('2026-06-04T12:00:00.000Z'),
+    createdAt: new Date('2026-11-07T12:00:00.000Z'),
     waterfallEntries: [
       {
         stage: 'orchestrator',
@@ -52,16 +52,16 @@ test('buildCostLedger flattens waterfall attempts into costed ledger entries', (
   });
 
   assert.equal(ledger.artifact_type, 'babel_cost_ledger');
-  assert.equal(ledger.created_at, '2026-06-04T12:00:00.000Z');
+  assert.equal(ledger.created_at, '2026-11-07T12:00:00.000Z');
   assert.equal(ledger.entries.length, 2);
-  assert.equal(ledger.entries[0]?.cost_precision, 'exact');
+  assert.equal(ledger.entries[0]?.cost_precision, 'conservative');
   assert.equal(ledger.entries[1]?.cost_precision, 'conservative');
   assert.equal(ledger.totals.prompt_tokens, 2000);
   assert.equal(ledger.totals.completion_tokens, 2500);
   assert.equal(ledger.totals.total_tokens, 4500);
-  assert.ok(Math.abs(ledger.totals.estimated_cost_usd - 0.00088512) < 1e-12);
-  assert.ok(Math.abs(ledger.totals.by_precision.exact - 0.00064512) < 1e-12);
-  assert.ok(Math.abs(ledger.totals.by_precision.conservative - 0.00024) < 1e-12);
+  assert.ok(Math.abs(ledger.totals.estimated_cost_usd - 0.0028224) < 1e-12);
+  assert.ok(Math.abs(ledger.totals.by_precision.exact) < 1e-12);
+  assert.ok(Math.abs(ledger.totals.by_precision.conservative - 0.0028224) < 1e-12);
   assert.match(ledger.warnings.join('\n'), /conservative pricing/);
 
   const usage = usageSummaryFromCostLedger(ledger);
@@ -81,13 +81,13 @@ test('buildSingleCallCostLedger records Lite direct provider calls', () => {
     promptTokens: 1000,
     completionTokens: 2000,
     totalTokens: 3000,
-    createdAt: new Date('2026-06-04T12:00:00.000Z'),
+    createdAt: new Date('2026-11-07T12:00:00.000Z'),
   });
 
   assert.equal(ledger.entries.length, 1);
   assert.equal(ledger.entries[0]?.stage, 'ask');
   assert.equal(ledger.entries[0]?.cost_precision, 'conservative');
-  assert.ok(Math.abs(ledger.totals.estimated_cost_usd - 0.002175) < 1e-12);
+  assert.ok(Math.abs(ledger.totals.estimated_cost_usd - 0.00924) < 1e-12);
   assert.match(ledger.warnings.join('\n'), /cache-hit\/cache-miss token counts were not available/);
 });
 

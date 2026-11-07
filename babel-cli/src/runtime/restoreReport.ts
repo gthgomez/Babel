@@ -313,6 +313,16 @@ export interface OperationClassification {
  */
 export function classifyOperation(evidence: RestoreOperationEvidence): OperationClassification {
   const recoveryClass = recoveryClassForEffect(evidence.effectClass);
+  const unknownReasons = evidence.unknownReasons ?? [];
+  if (evidence.effectClass !== 'read_only' && evidence.processTreeSettled === false && evidence.admissionState !== 'aborted') {
+    return {
+      recoveryClass,
+      state: 'interrupted',
+      action: 'await_process_tree_settle',
+      automaticRetryAllowed: false,
+      reasons: [...unknownReasons, RESTORE_REASONS.PROCESS_TREE_UNSETTLED, RESTORE_REASONS.AMBIGUOUS_NOT_RETRIED],
+    };
+  }
   if (evidence.compensationState) {
     const completed = evidence.compensationState === 'completed';
     return { recoveryClass, state: completed ? 'completed' : 'indeterminate',
@@ -321,7 +331,6 @@ export function classifyOperation(evidence: RestoreOperationEvidence): Operation
       reasons: [completed ? 'effect_compensated' : evidence.compensationState === 'failed'
         ? 'effect_compensation_failed' : 'effect_compensation_uncertain'] };
   }
-  const unknownReasons = evidence.unknownReasons ?? [];
   const unknownEvidence = unknownReasons.length > 0;
 
   const admissionSettled = evidence.admissionState === 'settled';
@@ -415,6 +424,16 @@ export function classifyOperation(evidence: RestoreOperationEvidence): Operation
       action: 'operator_reconciliation_required',
       automaticRetryAllowed: false,
       reasons: [RESTORE_REASONS.WORKSPACE_CONFLICT],
+    };
+  }
+
+  if (evidence.reconciliation === 'manual_review') {
+    return {
+      recoveryClass,
+      state: 'interrupted',
+      action: recoveryClass === 'reconcilable_mutation' ? 'reconcile_workspace_before_retry' : 'operator_reconciliation_required',
+      automaticRetryAllowed: false,
+      reasons: [RESTORE_REASONS.AMBIGUOUS_NOT_RETRIED],
     };
   }
 
@@ -659,10 +678,27 @@ export function buildRestoreReport(input: BuildRestoreReportInput): RestoreRepor
         : rawEvidence;
     const classification = classifyOperation(evidence);
     let action = classification.action;
+    let state = classification.state;
     const reasons = [...classification.reasons];
     let automaticRetryAllowed = classification.automaticRetryAllowed;
+    if (historyBlocksExecution && evidence.compensationState === 'completed') {
+      state = 'indeterminate';
+      action = 'history_only';
+      automaticRetryAllowed = false;
+      const completedReason = reasons.indexOf('effect_compensated');
+      if (completedReason >= 0) reasons.splice(completedReason, 1);
+      reasons.push(RESTORE_REASONS.EVIDENCE_INCOMPLETE);
+    }
     if (reasons.includes(RESTORE_REASONS.EVIDENCE_INCOMPLETE)) {
       hasIncompleteEvidence = true;
+    }
+
+    // A requested continuation also needs a budget. Keep the uncertainty reason
+    // so supplying a budget cannot be mistaken for resolving the effect.
+    if (budgetBlocked && action === 'operator_reconciliation_required') {
+      action = 'blocked_missing_budget';
+      reasons.push(RESTORE_REASONS.BUDGET_BLOCKS_CONTINUATION);
+      anyExecutableBlocked = true;
     }
 
     if (isExecutableAction(action)) {
@@ -697,7 +733,7 @@ export function buildRestoreReport(input: BuildRestoreReportInput): RestoreRepor
       ...(evidence.admissionId !== undefined ? { admissionId: evidence.admissionId } : {}),
       effectClass: evidence.effectClass,
       recoveryClass: classification.recoveryClass,
-      state: classification.state,
+      state,
       action,
       automaticRetryAllowed,
       reasons: [...new Set(reasons)].sort(),
@@ -710,11 +746,12 @@ export function buildRestoreReport(input: BuildRestoreReportInput): RestoreRepor
       (operation.action === 'none_complete' &&
         operation.reasons.includes(RESTORE_REASONS.EFFECT_APPLIED_WITHOUT_RECEIPT)) ||
       operation.action === 'operator_reconciliation_required' ||
+      operation.action === 'reconcile_workspace_before_retry' ||
       operation.action === 'await_process_tree_settle' ||
       operation.action === 'blocked_missing_budget' ||
       operation.action === 'blocked_missing_authority' ||
       operation.action === 'history_only',
-    ) || owner.staleRequester;
+    ) || owner.staleRequester || historyBlocksExecution;
   if (hasIncompleteEvidence) degradedReasons.add(RESTORE_REASONS.EVIDENCE_INCOMPLETE);
 
   const continuationBlocked =

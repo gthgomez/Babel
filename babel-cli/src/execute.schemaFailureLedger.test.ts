@@ -8,7 +8,7 @@ import { z } from 'zod';
 
 import { EvidenceBundle } from './evidence.js';
 import { runWaterfallForSchemaFailureTest } from './execute.js';
-import { buildStructuredOutputError, type LlmRunner } from './runners/base.js';
+import { buildStructuredOutputError, isStructuredOutputError, type LlmRunner } from './runners/base.js';
 import { SCHEMA_FAILURE_LEDGER_FILENAME } from './services/schemaFailureLedger.js';
 
 function readJsonl(path: string): Array<Record<string, unknown>> {
@@ -140,7 +140,14 @@ test('waterfall records fatal schema exhaustion when no tier recovers', async ()
           maxAttempts: 1,
           tiers: [{ name: 'test-tier', runner }],
         }),
-      /All 1 runner\(s\) in the waterfall failed/,
+      (error: unknown) => {
+        assert.ok(isStructuredOutputError(error));
+        assert.equal(error.failure_kind, 'invalid_json');
+        assert.equal(error.provider, 'test-provider');
+        assert.equal(error.model, 'test-model');
+        assert.match(error.message, /All 1 runner\(s\) in the waterfall failed/);
+        return true;
+      },
     );
 
     const ledger = readJsonl(join(evidence.runDir, SCHEMA_FAILURE_LEDGER_FILENAME));

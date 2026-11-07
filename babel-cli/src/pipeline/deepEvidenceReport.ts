@@ -3,6 +3,7 @@ import { runWithFallback } from '../execute.js';
 import type { EvidenceBundle } from '../evidence.js';
 import type { ToolCallLog } from '../schemas/agentContracts.js';
 import { formatExecutionResults } from '../stages/executorHelpers.js';
+import { ProviderHttpError } from '../runners/providerHttpError.js';
 
 const EvidenceAnswerSchema = z.object({ answer: z.string().trim().min(1) });
 
@@ -46,7 +47,10 @@ export async function answerDeepEvidence(input: {
     // The runner retains diagnostics. Do not turn unavailable answer generation
     // into successful task completion merely because file inspection succeeded.
     throw new Error(
-      'Read-only evidence was collected, but Babel could not produce the requested answer.',
+      'Read-only evidence was collected, but Babel could not produce the requested answer.' +
+        (cause instanceof ProviderHttpError && (cause.status === 401 || cause.status === 403)
+          ? ` ${cause.provider} rejected the request (HTTP ${cause.status}); check the selected connection. Usage is unconfirmed.`
+          : ''),
       { cause },
     );
   }

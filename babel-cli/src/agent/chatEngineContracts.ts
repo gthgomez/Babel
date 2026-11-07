@@ -881,6 +881,7 @@ export interface ChatEngineActionExecutorHost {
   hashContent: (content: string) => string
   hashFilePath: (filePath: string) => Promise<string>
   isSubmissionCurrent: (ownerGeneration: number) => boolean
+  markPhysicalSettlementUnknown?: () => void
   isolationBrokerFlags: () => IsolationBrokerFlags
   currentVerifierOwner: () => import('../executor/contracts.js').VerifierEvidenceOwner | undefined
   lastVerifierFailed: boolean

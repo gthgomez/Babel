@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtempSync, writeFileSync, linkSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createExecutorKernel } from '../executor/kernel.js';
 
 import type { ToolCallRequest, ToolResult } from '../localTools.js';
 import {
@@ -8,7 +12,31 @@ import {
   buildNonRecoverableToolFailureCondition,
   buildTruncationArtifactConditions,
   getSuccessfulFileReadCacheEntry,
+  scopeExecutorKernel,
 } from './executorToolDispatch.js';
+
+test('Plan dispatch denies unscoped paths, hard links and arbitrary verifier commands', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-plan-dispatch-'));
+  try {
+    writeFileSync(join(root, 'allowed.txt'), 'ok');
+    linkSync(join(root, 'allowed.txt'), join(root, 'linked.txt'));
+    let calls = 0;
+    const base = createExecutorKernel('deep');
+    const kernel = scopeExecutorKernel({ ...base, tools: { async execute() { calls++; return { exit_code: 0, stdout: 'ok', stderr: '' }; } } }, { projectRoot: root, allowedPaths: ['allowed.txt', 'linked.txt'] });
+    const context = { agentId: 'executor', runId: 'fixture', runDir: root, babelRoot: root };
+    assert.equal((await kernel.tools.execute({ tool: 'file_read', path: 'outside.txt' }, context)).exit_code, 126);
+    assert.equal((await kernel.tools.execute({ tool: 'file_read', path: '../allowed.txt' }, context)).exit_code, 126);
+    assert.equal((await kernel.tools.execute({ tool: 'file_read', path: 'linked.txt' }, context)).exit_code, 126);
+    assert.equal((await kernel.tools.execute({ tool: 'test_run', command: 'node malicious.js' }, context)).exit_code, 126);
+    assert.equal(calls, 0);
+    rmSync(join(root, 'linked.txt'));
+    assert.equal((await kernel.tools.execute({ tool: 'file_write', path: 'allowed.txt', content: 'unqualified write' }, context)).exit_code, 126);
+    assert.equal((await kernel.tools.execute({ tool: 'file_read', path: 'allowed.txt' }, context)).exit_code, 0);
+    assert.equal(calls, 1);
+    const empty = scopeExecutorKernel(base, { projectRoot: root, allowedPaths: [] });
+    assert.equal((await empty.tools.execute({ tool: 'file_read', path: 'allowed.txt' }, context)).exit_code, 126);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test('tool dispatch builds canonical log entries from executor tool results', () => {
   const req = { tool: 'file_read', path: 'src/input.ts' } satisfies ToolCallRequest;

@@ -7,10 +7,11 @@ import { resolveProviderCredential } from '../credentialHub.js'
 import { prepareProviderRequest, assertPreparedProviderRequestAdmissible } from '../preparedProviderRequest.js'
 import { CampaignPhysicalFetchSession } from '../providerCampaignPhysicalFetch.js'
 import { buildInvocationMetadata } from '../providerResponseMetadata.js'
-import { buildProviderFailureReceipt } from '../providerFailureReceipt.js'
+import { buildProviderFailureReceipt, providerRequestIdFromResponse } from '../providerFailureReceipt.js'
 import { getRequestTimeoutMs, getRequestMaxRetries, linkExternalAbortSignal, retryDelayMs, sleep } from '../providerResponsePolicy.js'
 import { getStreamIdleTimeoutMs, readStreamWithLimits } from '../providerResponseStream.js'
 import { isRetryableStatus } from '../providerNormalize.js'
+import { ProviderHttpError } from '../providerHttpError.js'
 import { dispatchRunOperation, RunStoppedError } from '../../runtime/run-control.js'
 import { extractJson } from '../../utils/extractJson.js'
 import { validateProviderBaseUrl } from '../providerEndpoint.js'
@@ -81,7 +82,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
   async executeRaw(prompt: string, callbacks?: RunnerCallbacks, systemPrompt?: string, signal?: AbortSignal): Promise<string> {
     let text = ''
     for await (const event of this.executeNative([{ role: 'user', content: prompt }], [], systemPrompt, signal, 'auto', callbacks, Boolean(callbacks?.onChunk))) {
-      if (event.type === 'error') throw new Error(event.message)
+      if (event.type === 'error') throw event.failure ?? new Error(event.message)
       if (event.type === 'text_delta') { text += event.text; await callbacks?.onChunk?.(event.text) }
       if (event.type === 'thought_delta') callbacks?.onThought?.(event.text)
       if (event.type === 'done' && event.finishReason === 'length') throw new Error(`[${this.provider}] Output token limit reached (finish_reason: length).`)
@@ -92,7 +93,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
   async *executeRawStream(prompt: string, systemPrompt?: string, signal?: AbortSignal, callbacks?: RunnerCallbacks): AsyncGenerator<string, void, undefined> {
     for await (const event of this.executeWithToolsStream([{ role: 'user', content: prompt }], [], systemPrompt, signal, 'auto', callbacks)) {
       if (event.type === 'text_delta') yield event.text
-      if (event.type === 'error') throw new Error(event.message)
+      if (event.type === 'error') throw event.failure ?? new Error(event.message)
       if (event.type === 'done' && event.finishReason === 'length') throw new Error(`[${this.provider}] Output token limit reached (finish_reason: length).`)
     }
   }
@@ -180,7 +181,8 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
         await sleep(backoff, controller.signal)
       }
       phase('response_started')
-      if (!response?.ok) throw new Error(`[${this.provider}] HTTP ${response?.status ?? 'unavailable'} (${this.model}).`)
+      if (response && !response.ok) throw new ProviderHttpError(this.provider, this.model, response.status, 'response', providerRequestIdFromResponse(response), `[${this.provider}] HTTP ${response.status} (${this.model}).`)
+      if (!response) throw new Error(`[${this.provider}] HTTP unavailable (${this.model}).`)
       if (!response.body) throw new Error(`[${this.provider}] Streaming response had no body.`)
       reader = response.body.getReader()
       const decoder = new TextDecoder()
@@ -244,7 +246,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
         actual_attempt: receipt.actual_attempt, max_attempts: receipt.max_attempts, stream: receipt.stream, tool_call_count: receipt.tool_call_count,
         usage_metadata: this.metadata, observed_model_id: state.model, http_status: response?.status ?? null }
       if (error instanceof RunStoppedError) throw error
-      yield { type: 'error', message }
+      yield { type: 'error', message, ...(error instanceof ProviderHttpError ? { failure: error } : {}) }
     } finally {
       clearTimeout(timer)
       if (signal && unlink) signal.removeEventListener('abort', unlink)

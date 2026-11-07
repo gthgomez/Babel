@@ -35,3 +35,19 @@ export function isEvidenceRequestPlanSatisfied(
 ): boolean {
   return approvedPlan.plan_type === 'EVIDENCE_REQUEST' && arePlannedActionsSatisfied(approvedPlan, toolCallLog);
 }
+
+/** Auto-completion waits for host-attested directory pages, never display prose. */
+export function areDirectoryPagesComplete(toolCallLog: readonly ToolCallLog[]): boolean {
+  const states = new Map<string, { revision: string; next: string | null } | null>();
+  for (const entry of toolCallLog) {
+    if (entry.tool !== 'directory_list' || !entry.verified) continue;
+    const target = normalizeEvidenceStepTarget(entry.tool, entry.target);
+    const page = entry.directory_page;
+    if (!page) { states.set(target, null); continue; }
+    if (page.after === null) { states.set(target, { revision: page.revision, next: page.next_after }); continue; }
+    const previous = states.get(target);
+    if (!previous || previous.revision !== page.revision || previous.next !== page.after) { states.set(target, null); continue; }
+    states.set(target, { revision: page.revision, next: page.next_after });
+  }
+  return [...states.values()].every(state => state !== null && state.next === null);
+}

@@ -121,6 +121,21 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.throws(() => resolveChatModelPolicy({}), /SETUP_REQUIRED/)
   })
 
+  test('catalog GLM selection dispatches its exact ID through CommandCode', async () => {
+    const expected = 'z-ai/glm-5.3-flash'
+    const { policy } = resolveChatModelPolicy({ model: 'command-code/glm-5.3-flash' })
+    assert.equal(policy.provider, 'command-code')
+    assert.equal(policy.providerModelId, expected)
+    assert.equal(policy.nativeToolUseUnverified, true)
+    let sent = ''
+    let endpoint = ''
+    globalThis.fetch = async (input, init) => { endpoint = String(input); sent = JSON.parse(String(init?.body)).model; return buffered(expected) }
+    const api = new ProviderEngine({ provider: 'command-code', modelId: policy.providerModelId, env: { COMMAND_CODE_API_KEY: credential } })
+    assert.deepEqual(await api.execute('Reply with JSON', z.object({ ok: z.literal(true) })), { ok: true })
+    assert.equal(endpoint, 'https://api.commandcode.ai/provider/v1/chat/completions')
+    assert.equal(sent, expected)
+  })
+
   test('offline selection rejects the remote Command Code API route', () => {
     const previous = process.env['BABEL_OFFLINE']
     process.env['BABEL_OFFLINE'] = '1'
@@ -202,7 +217,11 @@ if (!isSyntheticProviderFixtureReady()) {
   })
 
   test('actual ChatEngine still denies credential reads proposed by Command Code', async () => {
-    const { policy } = resolveChatModelPolicy({ model: backendKey })
+    const { policy: discovered } = resolveChatModelPolicy({ model: backendKey })
+    // This synthetic native-tool attack fixture exercises the guard under an
+    // explicitly simulated capability; it does not qualify the live model.
+    const { nativeToolUseUnverified: _unverified, ...basePolicy } = discovered
+    const policy = { ...basePolicy, nativeToolUse: true }
     let dispatches = 0
     let deniedResultDelivered = false
     let executions = 0

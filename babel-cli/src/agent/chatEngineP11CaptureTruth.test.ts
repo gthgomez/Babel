@@ -305,3 +305,12 @@ test('runtime evidence changes physical capture without blocking conversation ow
   assert.equal(parity.contextCheckpoint?.workspace, null)
   assert.equal(parity.contextCheckpoint?.population.workspace_revision_current, false)
 })
+
+test('a command with unknown physical settlement remains indeterminate in the durable admission store', t => {
+  const { authority, host, parity } = fixture(t)
+  const claim = host.activeAdmissionClaim!
+  ;(host as unknown as { physicalSettlementUnknown: boolean }).physicalSettlementUnknown = true
+  authority.settleClaimOnExit(claim)
+  const admission = parity.admissionStore!.readAdmission(claim.threadId, claim.commandId)
+  assert.equal(admission?.state, 'indeterminate')
+})

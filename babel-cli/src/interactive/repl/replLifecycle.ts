@@ -156,7 +156,7 @@ export async function maybeShowResumePicker(ctx: ReplContext): Promise<void> {
         buf.write(primary(`\n  Resumed ${id} — ${outcome.turnCount} turns loaded\n`));
         buf.write(muted('  Type a message to continue, or /help for commands.\n'));
       } else {
-        buf.write(error(`\n  Failed to resume ${id}: ${outcome.message}\n`));
+        buf.write(error(`\n  ${outcome.reason === 'cancelled' ? outcome.message : `Failed to resume ${id}: ${outcome.message}`}\n`));
       }
     }
     ctx.isRunning = false;
@@ -185,7 +185,7 @@ export async function maybeShowResumePicker(ctx: ReplContext): Promise<void> {
       buf.write(primary(`\n  Resumed ${choice.sessionId} — ${outcome.turnCount} turns loaded\n`));
       buf.write(muted('  Type a message to continue, or /help for commands.\n'));
     } else {
-      buf.write(error(`\n  Failed to resume ${choice.sessionId}: ${outcome.message}\n`));
+      buf.write(error(`\n  ${outcome.reason === 'cancelled' ? outcome.message : `Failed to resume ${choice.sessionId}: ${outcome.message}`}\n`));
     }
   } else if (choice.action === 'new') {
     OutputBuffer.getInstance().write(muted('\n  Starting a new session.\n'));

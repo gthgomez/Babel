@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {spawn} from 'node:child_process';
-import {existsSync,readFileSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdirSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {isSyntheticProviderFixtureReady,prepareSyntheticProviderFixture,removeSyntheticProviderFixture,summarizeSyntheticProviderOutput} from '../testinfra/synthetic-provider-fixture.mjs';
 
@@ -69,4 +70,42 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal(goal.iterations.length,0);
     assert.equal(calls,2,'an exhausted explicit goal budget still prevents another model request');
   });
+
+  test('Deep model continuation reaches the next real directory page', async t => {
+    const dir = join(process.cwd(), 'page-fixture'); mkdirSync(dir)
+    t.after(() => rmSync(dir, { recursive: true, force: true }))
+    for (let index = 0; index < 250; index++) writeFileSync(join(dir, `${String(index).padStart(4, '0')}.txt`), '')
+    const request = 'List all files in page-fixture without changing files.'
+    const listPlan = SwePlanSchema.parse({ plan_version:'1.0', plan_type:'EVIDENCE_REQUEST', task_summary:request,
+      assumptions:[], risks:[], out_of_scope:[], root_cause:'Controlled paged listing', minimal_action_set:[
+        {step:1,tool:'directory_list',target:'page-fixture',description:'Inspect directory entries',rationale:'Owner request',reversible:true,verification:'Read all pages'}] })
+    const evidence = new EvidenceBundle(request, process.env['BABEL_RUNS_DIR']!); evidence.writeQaVerdict({verdict:'PASS',overall_confidence:5},1)
+    let calls = 0; let continuationSent = false
+    t.mock.method(globalThis,'fetch',async(_url:Parameters<typeof fetch>[0],init?:RequestInit)=>{
+      const body = JSON.parse(String(init?.body)); assert.equal(body.model,'z-ai/glm-5.3-flash'); calls++
+      let turn: Record<string, unknown>
+      if (calls === 1) turn = {type:'tool_call',thinking:'List first page',tool:'directory_list',path:'page-fixture'}
+      else if (calls === 2) {
+        const text = (function collect(value: unknown): string[] {
+          if (typeof value === 'string') return [value]
+          if (Array.isArray(value)) return value.flatMap(collect)
+          if (value && typeof value === 'object') return Object.values(value).flatMap(collect)
+          return []
+        })(body).join('\n')
+        const match = text.match(/Continuation: (\{[^\n]+\})/)
+        assert.ok(match, 'second provider request must contain real continuation')
+        const continuation = JSON.parse(match[1]!) as {after:string;revision:string}; continuationSent = true
+        turn = {type:'tool_call',thinking:'Read next page',tool:'directory_list',path:'page-fixture',...continuation}
+      } else { assert.equal(calls,3,'unexpected model request'); turn = {type:'completion',status:'EXECUTION_COMPLETE'} }
+      return new Response('data: '+JSON.stringify({model:body.model,choices:[{index:0,delta:{content:JSON.stringify(turn)},finish_reason:'stop'}],usage:{prompt_tokens:10,completion_tokens:10,total_tokens:20}})+'\n\ndata: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}})
+    })
+    const result = await withPipelineModelRoute('glm-5.3-flash',()=>runExecutorLoop(listPlan,evidence,'deepseek',[],[],request))
+    assert.equal(continuationSent,true); assert.equal(calls,2,'the executor must finish only after receiving the final page')
+    assert.equal(result.terminalStatus,'EXECUTION_COMPLETE')
+    const listings = result.toolCallLog.filter(entry=>entry.tool==='directory_list' && entry.exit_code===0)
+    assert.equal(listings.length,2); assert.match(listings[0]!.stdout,/Continuation:/); assert.doesNotMatch(listings[1]!.stdout,/Continuation:/)
+    assert.ok(listings[0]!.directory_page?.next_after, 'host page evidence must survive the executor kernel')
+    assert.equal(listings[1]!.directory_page?.after, listings[0]!.directory_page?.next_after)
+    assert.equal(listings[1]!.directory_page?.next_after, null)
+  })
 }

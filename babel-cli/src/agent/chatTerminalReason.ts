@@ -106,6 +106,10 @@ const GUIDANCE: Record<TerminalReasonCode, TerminalReasonGuidance> = {
       'Restore the required operational state (or durable install) and retry',
     ],
   },
+  physical_settlement_unknown: {
+    message: 'A command may still be running; its effects are not settled',
+    nextActions: ['Inspect the workspace and retained run evidence before continuing'],
+  },
   unknown: {
     message: 'Cause was not established',
     nextActions: ['Inspect diagnostics — cause was not established'],
@@ -120,6 +124,7 @@ export function terminalReasonGuidance(
   const providerGuidance: Record<string, TerminalReasonGuidance> = {
     credential_missing: { message: 'Provider setup is incomplete', nextActions: ['Run /setup or babel-harness setup', 'Use /provider status to inspect the selected connection'] },
     authentication: { message: 'Provider authentication was rejected', nextActions: ['Update the selected credential environment variable and restart Babel', 'Inspect /provider status before trying again'] },
+    authorization: { message: 'Provider access was forbidden', nextActions: ['Inspect /provider status and the selected account permissions'] },
     quota: { message: 'Provider quota or credit was exhausted', nextActions: ['Review quota with the selected provider', 'Choose another configured connection explicitly if needed'] },
     rate_limit: { message: 'Provider rate limit reached', nextActions: ['Wait for the provider retry window', 'Retry the same selected connection'] },
     model_unavailable: { message: 'Selected model is unavailable', nextActions: ['Use /model list or /model use <exact-id> on this connection'] },

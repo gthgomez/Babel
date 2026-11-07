@@ -13,6 +13,7 @@ const positiveInt = z.number().int().positive()
 const preferences = z.object({
   connection: name.optional(),
   model: z.string().trim().min(1).max(500).optional(),
+  modelsByConnection: z.record(name, z.string().trim().min(1).max(500)).optional(),
   workflow: z.enum(['work', 'plan']).optional(),
   review: z.enum(['standard', 'thorough']).optional(),
   plans: z.object({ autoApply: z.boolean().optional() }).passthrough().optional(),
@@ -140,6 +141,8 @@ export function resolveEffectiveSettings(options: {
     if (typeof layer?.model === 'string' && (index <= connectionLayer || layer.connection === connection.id)) {
       model.value = layer.model; model.source = source; break
     }
+    const remembered = layer?.modelsByConnection?.[connection.id]
+    if (typeof remembered === 'string') { model.value = remembered; model.source = source; break }
   }
   if (model.value === null && connection?.model) { model.value = connection.model; model.source = 'connection' }
   // Only private user/project preferences may grant automatic application.

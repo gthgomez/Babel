@@ -5,6 +5,34 @@ import { isVerifierCommand } from '../services/terminalStatus.js';
 import { canonicalizeExecutorTargetForLog, getTarget } from '../stages/executorHelpers.js';
 import { BABEL_ROOT } from './paths.js';
 import { createExecutorKernel, type ExecutorKernel } from '../executor/kernel.js';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { assertPlannerPathsAllowed, scopedHandoffPath } from '../agent/planHandoff.js';
+
+/** Temporary Plan-bound dispatch fence; arbitrary command effects are not scoped. */
+export function scopeExecutorKernel(kernel: ExecutorKernel, scope: { projectRoot: string; allowedPaths: string[] }): ExecutorKernel {
+  return {
+    ...kernel,
+    tools: {
+      async execute(req, context) {
+        const denied = (): ToolResult => ({ exit_code: 126, stdout: '', stderr: '[PLAN_HANDOFF_GUARD] Tool request is outside the selected Plan scope or is not yet qualified for Plan-bound execution.' });
+        if (req.tool !== 'file_read') return denied();
+        const path = String(req.path ?? '');
+        if (assertPlannerPathsAllowed([path], scope.allowedPaths).length > 0) return denied();
+        try {
+          const root = realpathSync(scope.projectRoot); const physical = scopedHandoffPath(root, path);
+          const expected = resolve(root, path); const normalize = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+          if (!physical || normalize(physical) !== normalize(expected)) return denied();
+          if (existsSync(expected)) {
+            const stat = lstatSync(expected);
+            if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) return denied();
+          }
+        } catch { return denied(); }
+        return kernel.tools.execute(req, context);
+      },
+    },
+  };
+}
 
 export async function executeExecutorTool(
   req: ToolCallRequest,
@@ -40,6 +68,7 @@ export function buildExecutorToolCallEntry(params: {
     ...(params.toolResult.checkpoint_ids
       ? { checkpoint_ids: params.toolResult.checkpoint_ids }
       : {}),
+    ...(params.toolResult.directory_page ? { directory_page: params.toolResult.directory_page } : {}),
     verified: params.toolResult.exit_code === 0,
   };
 }

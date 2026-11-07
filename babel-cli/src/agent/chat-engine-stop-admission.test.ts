@@ -48,6 +48,8 @@ if (!isSyntheticProviderFixtureReady()) {
 } else {
   const { ChatEngine } = await import('./chatEngine.js')
   const { AgentSession } = await import('./session.js')
+  const { ProcessTerminationError } = await import('../sandbox.js')
+  const { openSessionAdmissionStore } = await import('../cli/runsLayout.js')
   const { executeActionWithPolicy, getCircuitBreakerState } = await import('./toolExecutor.js')
   const { chatReadToolExecutor } = await import('./chatReadExecutor.js')
   const { DeepInfraApiRunner } = await import('../runners/deepInfraApi.js')
@@ -79,7 +81,7 @@ if (!isSyntheticProviderFixtureReady()) {
   process.env['BABEL_DIFF_CRITIC'] = '0'
   process.env['BABEL_COMPACTION'] = 'off'
 
-  async function scenario(t: TestContext, caseId: 'serial' | 'parallel' | 'quoted_marker' | 'ordinary' | 'governed_replace' | 'governed_patch' | 'direct_web'): Promise<{ physicalStarts: number; modelStarts: number; executionRows: number }> {
+  async function scenario(t: TestContext, caseId: 'serial' | 'parallel' | 'quoted_marker' | 'ordinary' | 'governed_replace' | 'governed_patch' | 'direct_web' | 'termination_failure' | 'termination_aggregate'): Promise<{ physicalStarts: number; modelStarts: number; executionRows: number }> {
     const root = mkdtempSync(join(process.env['BABEL_PROJECT_ROOT']!, 'stop-engine-'))
     process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify({
       version: 2, leaseId: `synthetic-stop-${caseId}`,
@@ -102,6 +104,8 @@ if (!isSyntheticProviderFixtureReady()) {
       mapAction: () => [],
       async execute(action) {
         physicalStarts++
+        if (caseId === 'termination_failure') throw new ProcessTerminationError('fixture-owner', 'fixture-process', new Error('synthetic failure'))
+        if (caseId === 'termination_aggregate') throw new AggregateError([new ProcessTerminationError('fixture-owner', 'fixture-process', new Error('synthetic failure'))], 'synthetic aggregate')
         const first = physicalStarts === 1
         const stopRequest = first && ['serial', 'parallel'].includes(caseId) ? {
           owner: { runId: `stop-${caseId}`, turnId: engine.getParityRuntime().turnId!, generation: engine['activeSubmissionGeneration'] },
@@ -144,6 +148,14 @@ if (!isSyntheticProviderFixtureReady()) {
       operation: 'CHANGE', model: 'deepseek-v4-flash', providerRunner: runner as never, providerPolicy: policy,
       toolExecutorForTesting: executor, maxTurns: 6, maxWallMs: 20_000,
     })
+    const admission = caseId === 'termination_failure' || caseId === 'termination_aggregate'
+      ? openSessionAdmissionStore(`stop-${caseId}`) : null
+    if (admission) {
+      assert.equal(admission.ok, true)
+      if (!admission.ok) throw new Error('synthetic admission store unavailable')
+      engine.attachAdmissionStore(admission.store)
+      t.after(() => { engine.closeAdmissionStore(); admission.store.close() })
+    }
     if (caseId.startsWith('governed_')) {
       for (let i = 0; i < 6; i++) await executeActionWithPolicy({ type: 'run_command', command: 'node -e "void 0"' }, 'workspace_write',
         { runId: `stop-${caseId}`, agentId: 'fixture', babelRoot: root, projectRoot: root },
@@ -173,12 +185,41 @@ if (!isSyntheticProviderFixtureReady()) {
     const failureHints = ['admission', 'compaction', 'wire', 'token', 'provider', 'tool', 'persistence', 'authority', 'schema', 'timeout', 'budget', 'invariant', 'undefined', 'synthesis', 'turn'].filter(hint => failureText.includes(hint))
     t.diagnostic(`STOP_PROBE ${JSON.stringify({ caseId, physicalStarts, modelStarts, failureHints })}`)
     assert.equal(events.filter(event => ['done', 'failed', 'cancelled'].includes(event.type)).length, 1)
+    if (caseId === 'termination_failure' || caseId === 'termination_aggregate') {
+      const terminal = events.find(event => event.type === 'done')
+      assert.equal(terminal?.reason_code, 'physical_settlement_unknown')
+      assert.match(terminal?.answer ?? '', /may still be running/i)
+      const beforeSuccessor = modelStarts
+      const successorEvents = []
+      for await (const event of engine.submitMessageStream('Continue the fixture.')) successorEvents.push(event)
+      assert.equal(modelStarts, beforeSuccessor, 'unsettled work must prevent a successor model call')
+      assert.equal(successorEvents.length, 1)
+      const refused = successorEvents[0]
+      assert.equal(refused?.type, 'failed')
+      if (refused?.type === 'failed') assert.equal(refused.reason_code, 'physical_settlement_unknown')
+      assert.ok(admission?.ok)
+      if (admission?.ok) {
+        const records = admission.store.listAdmissions(`stop-${caseId}`).records
+        assert.equal(records.length, 1)
+        assert.equal(records[0]?.state, 'indeterminate')
+      }
+    }
     if (caseId === 'direct_web') assert.equal(persistedWebIntent, true)
     return { physicalStarts, modelStarts, executionRows: engine['toolCallLog'].length }
   }
 
   test('C01 typed serial stop prevents the next physical tool and model start', async t => {
     const facts = await scenario(t, 'serial')
+    assert.equal(facts.physicalStarts, 1)
+    assert.equal(facts.modelStarts, 1)
+  })
+  test('termination failure stops subsequent tool and model dispatch', async t => {
+    const facts = await scenario(t, 'termination_failure')
+    assert.equal(facts.physicalStarts, 1)
+    assert.equal(facts.modelStarts, 1)
+  })
+  test('aggregate termination failure stops subsequent tool and model dispatch', async t => {
+    const facts = await scenario(t, 'termination_aggregate')
     assert.equal(facts.physicalStarts, 1)
     assert.equal(facts.modelStarts, 1)
   })
@@ -331,6 +372,7 @@ if (!isSyntheticProviderFixtureReady()) {
         assert.ok((cancelSummary.estimatedCostUSD ?? cancelSummary.totalCostUSD) > 0)
       }
       assert.equal(events.filter(event => ['done', 'failed', 'cancelled'].includes(event.type)).length, 1)
+
     } finally { globalThis.fetch = savedFetch; process.env['BABEL_COMPACTION'] = 'off'; delete process.env['DEEPINFRA_API_KEY'] }
   })
 
@@ -383,7 +425,7 @@ if (!isSyntheticProviderFixtureReady()) {
   }
 
   for (const race of ['approval', 'late_success'] as const) test(
-    race === 'approval' ? 'C06 a superseded engine owner cannot execute an approval released afterward' : 'C04 late successful tool settlement cannot reopen a superseded owner',
+    race === 'approval' ? 'pending approval blocks replacement and cancellation prevents its late dispatch' : 'an in-flight tool blocks replacement until settlement',
     { timeout: 20_000 }, async t => {
     const deferred = () => {
       let resolve!: () => void
@@ -444,26 +486,28 @@ if (!isSyntheticProviderFixtureReady()) {
     const old = (async () => { for await (const event of engine.submitMessageStream('Implement the approval fixture.')) oldEvents.push(event.type) })()
     await entered.promise
     const oldControl = engine['runControl']!
-    let successorControl = oldControl
-    let successorStop = oldControl.stop()
-    let successorModelStarts = 0
+    const modelStartsBeforeSuccessor = modelStarts
     try {
       const successorEvents: string[] = []
-      for await (const event of engine.submitMessageStream('Implement a separate replacement fixture.')) successorEvents.push(event.type)
-      assert.equal(successorEvents.filter(type => ['done', 'failed', 'cancelled'].includes(type)).length, 1)
-      successorControl = engine['runControl']!
-      successorStop = successorControl.stop()
-      successorModelStarts = modelStarts
+      let busyMessage = ''
+      for await (const event of engine.submitMessageStream('Implement a separate replacement fixture.')) {
+        successorEvents.push(event.type)
+        if (event.type === 'failed') busyMessage = event.error
+      }
+      assert.deepEqual(successorEvents, ['failed'])
+      assert.match(busyMessage, /still settling/i)
+      assert.equal(modelStarts, modelStartsBeforeSuccessor, 'successor must not start inference before the prior submission settles')
+      assert.equal(engine['runControl'], oldControl)
+      if (race === 'approval') engine.cancel()
     } finally { release.resolve(); await old }
     assert.equal(hadOwner, true)
     t.diagnostic(`STOP_PROBE ${JSON.stringify({ caseId: 'approval_race', physicalStarts: innerStarts, modelStarts })}`)
     assert.equal(innerStarts, race === 'approval' ? 0 : 1)
-    assert.equal(oldControl.stop()?.kind, 'superseded')
-    assert.notEqual(successorControl, oldControl)
-    assert.equal(engine['runControl'], successorControl)
-    assert.equal(successorControl.stop(), successorStop)
-    assert.equal(modelStarts, successorModelStarts)
-    assert.equal(oldEvents.filter(type => ['done', 'failed', 'cancelled'].includes(type)).length, 0)
+    assert.equal(oldEvents.filter(type => ['done', 'failed', 'cancelled'].includes(type)).length, 1)
+    const nextEvents: string[] = []
+    for await (const event of engine.submitMessageStream('Implement a separate replacement fixture.')) nextEvents.push(event.type)
+    assert.equal(nextEvents.filter(type => ['done', 'failed', 'cancelled'].includes(type)).length, 1)
+    assert.notEqual(engine['runControl'], oldControl)
   })
 
   test('a rejected physical start settles only its matching unsettled admission intent', () => {

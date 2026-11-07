@@ -12,7 +12,7 @@ import { extractJson } from '../utils/extractJson.js';
 /** Canonical agent actions — coordinate changes with provider adapter (Agent C). */
 export type AgentAction =
   | { type: 'read_file'; path: string }
-  | { type: 'list_dir'; path: string }
+  | { type: 'list_dir'; path: string; after?: string | undefined; revision?: string | undefined }
   | { type: 'search'; query: string }
   | { type: 'grep'; pattern: string; path?: string }
   | { type: 'glob'; pattern: string }
@@ -63,6 +63,8 @@ export const BaseReadFileSchema = z.object({
 export const BaseListDirSchema = z.object({
   type: z.literal('list_dir'),
   path: z.string().min(1),
+  after: z.string().min(1).max(4096).optional(),
+  revision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 
 export const BaseGrepSchema = z.object({

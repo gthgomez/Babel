@@ -216,6 +216,7 @@ export interface LiteResultPayload {
   run_dir: string | null;
   scope: UserFacingScopePayload;
   changed_files: string[];
+  write_outcome?: 'unknown';
   verification: UserFacingVerificationPayload;
   checkpoint: UserFacingCheckpointPayload;
   evidence: UserFacingEvidencePayload;
@@ -269,6 +270,7 @@ export interface AskResultPayload {
   run_dir: string | null;
   scope: UserFacingScopePayload;
   changed_files: string[];
+  write_outcome?: 'unknown';
   verification: UserFacingVerificationPayload;
   checkpoint: UserFacingCheckpointPayload;
   evidence: UserFacingEvidencePayload;

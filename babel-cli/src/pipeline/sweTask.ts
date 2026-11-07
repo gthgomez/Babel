@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -19,7 +19,9 @@ import {
 import { getBoundedTaskPlanningLines, mergeTaskContext } from '../stages/taskShape.js';
 import { buildBenchmarkVerificationPromptLines } from '../stages/benchmarkVerification.js';
 import { EXECUTOR_TOOL_NAMES } from '../tools/toolContracts.js';
-import { getDiscoverySummary } from './prePlanningDiscovery.js';
+import { discoverProjectGuarded, formatDiscoveryForPlanner, type DiscoveryInventory } from './prePlanningDiscovery.js';
+import { loadEnterprisePolicy } from '../config/enterprisePolicy.js';
+import { redactSecrets } from '../utils/redaction.js';
 import {
   getBenchmarkRuntimeInventoryLines,
   shouldApplyHostWindowsExecutorNotes,
@@ -60,6 +62,14 @@ function getManyFileAggregationPlanningLines(rawTask: string): string[] {
   ];
 }
 
+/** Fail closed if a stable project inventory cannot be acquired. */
+export async function guardedPlanningInventory(manifest: OrchestratorManifest, planBound: boolean, signal?: AbortSignal): Promise<DiscoveryInventory | null> {
+  const root = inferProjectRoot(manifest);
+  if (!root || planBound) return null;
+  try { return await discoverProjectGuarded(root, signal); }
+  catch { signal?.throwIfAborted(); return null; }
+}
+
 export function buildSweTask(
   manifest: OrchestratorManifest,
   originalTaskContext: string,
@@ -69,6 +79,8 @@ export function buildSweTask(
   groundingContext: string = '',
   executionProfileName: ExecutionProfileName = DEFAULT_EXECUTION_PROFILE,
   mode: 'chat' | 'deep' = 'deep',
+  planBound = false,
+  guardedInventory: DiscoveryInventory | null = null,
 ): string {
   const userRequest = mergeTaskContext(originalTaskContext, manifest.handoff_payload.user_request);
   const allowedShellCommands = getAllowedShellCommands(executionProfileName);
@@ -81,9 +93,15 @@ export function buildSweTask(
   const benchmarkRuntimeInventoryLines = getBenchmarkRuntimeInventoryLines(executionProfileName);
   const toolCapabilityLines = buildToolCapabilityPromptLines(executionProfileName);
   const benchmarkVerificationLines = buildBenchmarkVerificationPromptLines(userRequest);
-  // Pre-planning discovery: scan the project root for files and config so the
-  // planner can use real paths instead of guessing from task text alone.
-  const discoveryContext = projectRoot ? getDiscoverySummary(projectRoot) : null;
+  // Synchronous callers do not perform unpinned enumeration. Inventory must be
+  // supplied by the guarded asynchronous wrapper for this exact project.
+  const normalize = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+  let inventoryMatches = false;
+  try { inventoryMatches = Boolean(projectRoot && guardedInventory && normalize(realpathSync(projectRoot)) === normalize(guardedInventory.projectRoot)); } catch { /* omit unavailable inventory */ }
+  const policy = loadEnterprisePolicy().policy;
+  const safetyPolicy = { ...policy, redaction: { ...policy.redaction, enabled: true } };
+  const discoveryContext = !planBound && guardedInventory && inventoryMatches
+    ? redactSecrets(formatDiscoveryForPlanner(guardedInventory).join('\n'), safetyPolicy) : null;
   const projectRootLines: string[] = [];
   const wrapperBootstrapLines: string[] = [];
   const runtimePreflightLines: string[] = [];
@@ -114,10 +132,7 @@ Your JSON output MUST include a "thinking" field. Use this field to:
   if (projectRoot) {
     projectRootLines.push(`Target project root: ${projectRoot}`);
 
-    if (existsSync(projectRoot)) {
-      const topLevelEntries = readdirSync(projectRoot, { withFileTypes: true })
-        .sort((left, right) => left.name.localeCompare(right.name))
-        .map((entry) => `${entry.isDirectory() ? 'dir' : 'file'} ${entry.name}`);
+    if (!planBound && existsSync(projectRoot)) {
       const affirmativeAndroid =
         existsSync(join(projectRoot, 'settings.gradle')) ||
         existsSync(join(projectRoot, 'settings.gradle.kts')) ||
@@ -131,9 +146,13 @@ Your JSON output MUST include a "thinking" field. Use this field to:
       const hasExistingAndroidProject = affirmativeAndroid;
       const androidSourceOnlyWorkspace = isAndroidSourceOnlyWorkspace(projectRoot);
 
-      projectRootLines.push(
-        `Current top-level entries: ${topLevelEntries.length > 0 ? topLevelEntries.join(', ') : '(empty)'}`,
-      );
+      if (discoveryContext && guardedInventory) {
+        const entries = guardedInventory.fileTree.filter(path => !path.replace(/\/$/, '').includes('/'));
+        const bounded: string[] = []; let bytes = 0;
+        for (const entry of entries) { const size = Buffer.byteLength(entry, 'utf8') + (bounded.length ? 2 : 0); if (bytes + size > 8192) break; bounded.push(entry); bytes += size; }
+        const omitted = entries.length > bounded.length || guardedInventory.truncated === true;
+        projectRootLines.push(redactSecrets(`Current top-level entries: ${bounded.length ? bounded.join(', ') : '(empty)'}${omitted ? ' (additional entries may be omitted; use directory_list for more)' : ''}`, safetyPolicy));
+      } else projectRootLines.push('Automatic project inventory is unavailable; use directory_list to inspect the project.');
       projectRootLines.push(
         hasExistingAndroidProject
           ? 'Existing target state: partial Android project already exists at the target root. Continue in place; do not create a second nested app root.'

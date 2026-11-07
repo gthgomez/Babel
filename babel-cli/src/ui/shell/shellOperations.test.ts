@@ -107,6 +107,24 @@ test('New conversation refuses an active turn without detaching its owner or pla
   assert.deepEqual(changed, [])
 })
 
+test('New conversation retains unqualified legacy Plan text', () => {
+  const ctx = { state: { pendingPlanBody: 'retained legacy plan' }, turns: [] } as unknown as ReplContext
+  const operations = createShellCommandOperations(ctx, { invalidate: () => {}, onSessionChanged: () => {} })
+  operations.newSession()
+  assert.equal(ctx.state.pendingPlanBody, 'retained legacy plan')
+})
+
+test('New conversation refuses while task preparation owns admission', () => {
+  let closed = 0
+  const engine = { closeAdmissionStore: () => { closed++ } }
+  const ctx = { preparingRun: true, isRunning: false, chatEngine: engine, state: { pendingPlanBody: 'retained' }, turns: [] } as unknown as ReplContext
+  const operations = createShellCommandOperations(ctx, { invalidate: () => {}, onSessionChanged: () => {} })
+  assert.equal(operations.newSession().ok, false)
+  assert.equal(ctx.chatEngine, engine)
+  assert.equal(ctx.state.pendingPlanBody, 'retained')
+  assert.equal(closed, 0)
+})
+
 test('resetHostedConversation clears hosted fields idempotently', () => {
   const ctx = {
     turns: [{ turn_id: 1 }],

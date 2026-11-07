@@ -9,6 +9,7 @@ import {
 } from '../modelPolicy.js';
 import { getProviderSpec, providerSupportsOperation } from '../runners/providerRegistry.js';
 import { resolveConnectionModelPolicy } from '../config/connectionModelPolicy.js';
+import { resolveEffectiveSettings } from '../config/userSettings.js';
 import { selectedConnectionModel } from '../services/connectionSettings.js';
 
 /** Exact existing Go routes allowed for explicit Chat selection; native budget gates still apply. */
@@ -50,7 +51,13 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const desktopProvider = process.env['BABEL_DESKTOP_PROVIDER'];
   const desktopModel = process.env['BABEL_DESKTOP_MODEL_ROUTE'];
   const explicitModel = options.model ?? desktopModel;
-  const connectionSelector = explicitModel && !explicitModel.startsWith('connection/') && !desktopProvider
+  // Exact legacy backend keys already identify direct DeepSeek. Do not bind
+  // them to whichever connection happens to be selected now.
+  const directLegacyKey = !desktopProvider && explicitModel && configuredModels[explicitModel]?.provider === 'deepseek'
+    && configuredModels[explicitModel]?.model_id === explicitModel ? explicitModel : undefined;
+  const directConnection = directLegacyKey ? resolveEffectiveSettings({ session: { model: directLegacyKey } }).connection.value : null;
+  const canBindConnection = !directLegacyKey || directConnection?.provider === 'deepseek';
+  const connectionSelector = explicitModel && !explicitModel.startsWith('connection/') && !desktopProvider && canBindConnection
     ? selectedConnectionModel({ model: explicitModel }) ?? explicitModel : explicitModel;
   const connectionPolicy = resolveConnectionModelPolicy(connectionSelector, { models: configuredModels });
   if (connectionPolicy) return { policy: connectionPolicy, offline };
@@ -58,14 +65,14 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
     throw new Error('SETUP_REQUIRED: Select your provider and exact model with babel-harness setup. No cloud provider is selected.');
   }
 
-  const selectedModel = !offline
+  const selectedModel = directLegacyKey ?? (!offline
     ? (desktopProvider === 'deepseek'
         ? (explicitModel ?? 'deepseek-v4-pro')
         : desktopProvider === 'deepinfra'
           ? (explicitModel ?? 'deepseek-v4-flash')
           : (resolveOpenRouterDeepSeekBackendKey(explicitModel ?? '') ??
              (explicitModel === undefined ? LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0] : explicitModel)))
-    : (explicitModel ?? (desktopProvider === 'ollama' ? 'deepseek-v4-flash' : undefined));
+    : (explicitModel ?? (desktopProvider === 'ollama' ? 'deepseek-v4-flash' : undefined)));
 
   const requestedBackendKey = selectedModel === undefined
     ? undefined
@@ -117,6 +124,7 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
         explicitCommandCodeRequest ||
         explicitSavedManualRoute ||
         explicitGoRequest ||
+        directLegacyKey !== undefined ||
         desktopProvider === 'deepseek' ||
         desktopProvider === 'deepinfra' ||
         explicitDesktopRoute

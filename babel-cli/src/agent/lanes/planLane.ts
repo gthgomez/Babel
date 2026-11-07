@@ -130,6 +130,7 @@ export async function runPlanLane(context: AgentLaneContext): Promise<PlanLaneRe
   const repoPath = resolveLiteRepoRoot(context.projectRoot);
   const plan = runLitePlan({ repoPath, task: context.task });
   const { run: artifacts, evidence } = beginLiteEvidenceSession({ command: 'plan', repoPath });
+  writeLiteJsonArtifact(artifacts, 'contract.json', plan.contract);
   const planText = formatLiteContractText(plan.contract);
   const projectContext = await readLiteProjectContext({
     projectRoot: repoPath,
@@ -234,7 +235,7 @@ export async function runPlanLane(context: AgentLaneContext): Promise<PlanLaneRe
   writeLiteManifest(artifacts, {
     schema_version: 1,
     command: 'plan',
-    status: modelPlan.status,
+    status: context.diagnosticDraft ? 'UNVERIFIED_LOCAL_DRAFT' : modelPlan.status,
     run_id: artifacts.runId,
     task: context.task,
     project_root: repoPath,

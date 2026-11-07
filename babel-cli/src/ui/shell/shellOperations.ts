@@ -137,13 +137,12 @@ export function createShellCommandOperations(
       return { ok: false, message: outcome.message }
     },
     newSession(): ShellResumeResult {
-      if (ctx.isRunning) return { ok: false, message: 'Wait for the current task to finish or cancel it before starting a new conversation.' }
+      if (ctx.isRunning || ctx.preparingRun) return { ok: false, message: 'Wait for the current task or preparation to settle before starting a new conversation.' }
       ctx.chatEngine?.closeAdmissionStore()
       ctx.chatEngine = undefined
       ctx.lastRoutingLabel = null
       if (ctx.state) {
         delete ctx.state.savedPlanId
-        delete ctx.state.pendingPlanBody
       }
       handleClear(ctx, [])
       if (!ctx.shellHost) {

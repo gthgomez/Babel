@@ -322,7 +322,7 @@ test('compaction across tool cycles keeps every wire payload protocol-valid', as
       harness.respond.push(() => sseResponse(toolCallDelta(`call-c${i}`, 'read_file', { path: join(harness.source, 'fixture.txt') }), 'tool_calls'));
     }
     const { payload } = await harness.run(
-      'Repeated inspection task. '.repeat(40) + 'Read the fixture until done.',
+      'Repeated inspection task. '.repeat(40) + 'SYNTHETIC_OBJECTIVE: Read the fixture until done. SYNTHETIC_CONSTRAINT: Do not modify files.',
     );
     assert.equal(payload['mode'], 'chat');
     assert.ok(harness.captures.length >= 4, `expected multiple provider rounds, got ${harness.captures.length}`);
@@ -336,6 +336,8 @@ test('compaction across tool cycles keeps every wire payload protocol-valid', as
       );
     }
     const last = harness.captures[harness.captures.length - 1]!.messages;
+    assert.ok(JSON.stringify(last).includes('SYNTHETIC_OBJECTIVE'), 'objective must remain in the post-compaction provider request');
+    assert.ok(JSON.stringify(last).includes('SYNTHETIC_CONSTRAINT'), 'constraint must remain in the post-compaction provider request');
     const calls = callsDeclared(last);
     for (const call of calls) {
       const priorCallInWindow = last.some(

@@ -339,6 +339,8 @@ export const ToolCallRequestSchema = z.discriminatedUnion('tool', [
   z.object({
     tool: z.literal('directory_list'),
     path: z.string().min(1),
+    after: z.string().min(1).max(4096).optional(),
+    revision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   }),
   z.object({
     tool: z.literal('file_read'),
@@ -576,12 +578,16 @@ export const TOOL_CALL_REQUEST_TOOL_NAMES = EXECUTOR_TOOL_NAMES;
 
 // ─── Individual tool handlers ─────────────────────────────────────────────────
 
-function handleDirectoryList(
+async function handleDirectoryList(
   req: Extract<ToolCallRequest, { tool: 'directory_list' }>,
   context: ToolContext,
-): ToolResult {
+): Promise<ToolResult> {
   // directory_list is always live — listing is non-destructive.
-  return getExecutor(context.projectRoot).listDirectory(req.path);
+  const result = await getExecutor(context.projectRoot).listDirectoryGuarded(req.path, context.signal, { after: req.after, revision: req.revision });
+  context.signal?.throwIfAborted();
+  const stopped = context.runControl?.stop();
+  if (stopped) throw new RunStoppedError(stopped);
+  return result;
 }
 
 function handleFileRead(
@@ -959,11 +965,11 @@ const EXECUTOR_TOOL_DEFINITIONS = [
   {
     name: 'directory_list',
     category: 'filesystem',
-    description: 'List files and directories inside the active project root.',
+    description: 'List a bounded directory page. Supply both after and revision from the continuation to read the next page.',
     mutating: false,
     dryRunBehavior: 'live',
     policyTags: ['read', 'filesystem'],
-    input: { required: ['path'], optional: [] },
+    input: { required: ['path'], optional: ['after', 'revision'] },
     handler: (req, context) =>
       handleDirectoryList(req as Extract<ToolCallRequest, { tool: 'directory_list' }>, context),
   },
@@ -1555,6 +1561,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
 ] satisfies readonly ExecutorToolDefinition[];
 
 const EXECUTOR_TOOL_REGISTRY = createExecutorToolRegistry(EXECUTOR_TOOL_DEFINITIONS);
+const LIVE_WORKSPACE_TOOLS = new Set(['file_read', 'directory_list', 'grep', 'glob', 'semantic_search', 'workspace_symbol_search', 'workspace_map', 'git_context', 'get_code_outline', 'find_code_definition', 'find_code_references', 'lsp']);
 
 export function getExecutorToolRegistrySnapshot(): ExecutorToolSnapshot[] {
   return EXECUTOR_TOOL_REGISTRY.list();
@@ -1926,8 +1933,12 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
 
   // Registry metadata owns cache eligibility. Plugin and MCP requests have argument-dependent
   // effects, so treat their observations as unsafe to replay or retain.
-  const cacheable = EXECUTOR_TOOL_REGISTRY.get(req.tool)?.mutating === false
-    && req.tool !== 'plugin_tool' && req.tool !== 'mcp_request';
+  // Workspace observations may change outside Babel between any two reads.
+  // A time-based cache cannot prove freshness for those tools.
+  const toolMetadata = EXECUTOR_TOOL_REGISTRY.get(req.tool);
+  const cacheable = toolMetadata?.mutating === false
+    && req.tool !== 'plugin_tool' && req.tool !== 'mcp_request' && !LIVE_WORKSPACE_TOOLS.has(req.tool);
+  const invalidatesCache = toolMetadata?.mutating !== false || req.tool === 'plugin_tool' || req.tool === 'mcp_request';
 
   // ── Phase 4: Tool result cache (read-only tools only) ────────────────────
   if (cacheable) {
@@ -1965,7 +1976,7 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
     if (context.dispatchObservation) context.dispatchObservation.started = true;
     return EXECUTOR_TOOL_REGISTRY.dispatch(req, context);
   });
-  if (!cacheable) getSessionCache().invalidate();
+  if (invalidatesCache) getSessionCache().invalidate();
   let result: ToolResult;
   try {
     result = approvedMcpRequest
@@ -1973,7 +1984,7 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
       : await dispatch();
   } finally {
     // A throwing or partially failed mutation can still change observations.
-    if (!cacheable) getSessionCache().invalidate();
+    if (invalidatesCache) getSessionCache().invalidate();
   }
 
   // ── Phase 4: Post-dispatch cache/gate updates ────────────────────────────
@@ -1983,7 +1994,7 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
     const cache = getSessionCache();
     const cacheInput = extractCacheInput(req, context);
     cache.set(req.tool, cacheInput, result);
-  } else {
+  } else if (invalidatesCache) {
     // Mutations invalidate the entire cache
     const cache = getSessionCache();
     cache.invalidate();
@@ -2020,5 +2031,6 @@ function extractCacheInput(req: ToolCallRequest, context?: ToolContext): Record<
   // root prevents overlapping Chat/subagent runs from sharing a relative
   // read/search result from another project.
   input['project_root'] = getExecutorProjectRoot(context?.projectRoot);
+  input['run_id'] = context?.runId ?? null;
   return input;
 }

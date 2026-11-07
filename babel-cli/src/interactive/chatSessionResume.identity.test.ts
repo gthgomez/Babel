@@ -32,6 +32,38 @@ import type { ReplContext } from './context.js';
 import { resumeChatSession } from './chatSessionResume.js';
 import type { SessionState } from './types.js';
 
+test('session resume refuses an active or preparing task before replacing its owner', async () => {
+  for (const busy of [{ isRunning: true }, { preparingRun: true }]) {
+    const engine = { closeAdmissionStore() { throw new Error('must not detach active owner') } }
+    const ctx = { ...busy, chatEngine: engine } as unknown as ReplContext
+    const outcome = await resumeChatSession(ctx, 'synthetic-missing-session')
+    assert.equal(outcome.ok, false)
+    if (!outcome.ok) assert.match(outcome.message, /active|wait|settle/i)
+    assert.equal(ctx.chatEngine, engine)
+  }
+})
+
+test('resuming the already active session does not open a competing owner', async () => {
+  let closed = 0
+  const engine = { getEngineRunId: () => 'same-session', closeAdmissionStore() { closed++ } }
+  const ctx = { isRunning: false, chatEngine: engine } as unknown as ReplContext
+  const result = await resumeChatSession(ctx, 'same-session')
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.message, /already active/i)
+  assert.equal(ctx.chatEngine, engine); assert.equal(closed, 0); assert.notEqual(ctx.preparingRun, true)
+})
+
+test('session resume holds admission until its asynchronous completion', async () => {
+  const ctx = { isRunning: false } as unknown as ReplContext
+  const first = resumeChatSession(ctx, 'synthetic-missing-session')
+  assert.equal(ctx.preparingRun, true)
+  const second = await resumeChatSession(ctx, 'another-missing-session')
+  assert.equal(second.ok, false)
+  if (!second.ok) assert.match(second.message, /active|wait|settle/i)
+  await first
+  assert.equal(ctx.preparingRun, false)
+})
+
 function withTempRunsDir() {
   const root = mkdtempSync(join(tmpdir(), 'babel-d04-seam-'));
   const prev = process.env['BABEL_RUNS_DIR'];
@@ -97,6 +129,92 @@ function writeThreadIdentity(sessionDir: string, sessionId: string, projectRoot:
   startTurn(log, { task: 't', model: 'm', provider: 'p', projectRoot, policyPreset: 'workspace_write' });
   persistThreadEventLog(sessionDir, log);
 }
+
+test('delayed transcript restoration retains admission until the engine settles', async () => {
+  const fixture = withTempRunsDir()
+  const targetRoot = mkdtempSync(join(tmpdir(), 'babel-resume-delay-'))
+  const ctx = makeResumeCtx(makeTarget(targetRoot))
+  const original = ChatEngine.restore
+  let release!: () => void
+  let entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const started = new Promise<void>(resolve => { entered = resolve })
+  try {
+    const sessionId = 'delayed-transcript'
+    writeTranscript(fixture.root, sessionId, 'fixture history')
+    ChatEngine.restore = async (...args) => { entered(); await gate; return original.apply(ChatEngine, args) }
+    const first = resumeChatSession(ctx, sessionId, { confirmUnknownIdentity: true })
+    await started
+    assert.equal(ctx.preparingRun, true)
+    const second = await resumeChatSession(ctx, sessionId, { confirmUnknownIdentity: true })
+    assert.equal(second.ok, false)
+    if (!second.ok) assert.match(second.message, /active|wait|settle/i)
+    release()
+    const result = await first
+    assert.equal(result.ok, true)
+    assert.equal(ctx.preparingRun, false)
+  } finally {
+    release()
+    ChatEngine.restore = original
+    ctx.chatEngine?.closeAdmissionStore()
+    fixture.cleanup()
+    rmSync(targetRoot, { recursive: true, force: true })
+  }
+})
+
+test('cancelled transcript restoration settles without replacing the previous engine', async () => {
+  const { handleCancelTurn } = await import('./commands/review.js')
+  const fixture = withTempRunsDir()
+  const targetRoot = mkdtempSync(join(tmpdir(), 'babel-resume-cancel-'))
+  const ctx = makeResumeCtx(makeTarget(targetRoot))
+  let oldClosed = 0
+  const previous = { closeAdmissionStore() { oldClosed++ }, abortTurn() { throw new Error('wrong owner') } } as unknown as ChatEngine
+  ctx.chatEngine = previous
+  const original = ChatEngine.restore
+  let release!: () => void; let entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const started = new Promise<void>(resolve => { entered = resolve })
+  try {
+    writeTranscript(fixture.root, 'cancelled-transcript', 'fixture history')
+    ChatEngine.restore = async (...args) => { entered(); await gate; return original.apply(ChatEngine, args) }
+    const pending = resumeChatSession(ctx, 'cancelled-transcript', { confirmUnknownIdentity: true })
+    await started
+    handleCancelTurn(ctx)
+    assert.equal(ctx.preparingRun, true)
+    assert.equal(ctx.chatEngine, previous)
+    release()
+    const result = await pending
+    assert.equal(result.ok, false)
+    if (!result.ok) { assert.equal(result.reason, 'cancelled'); assert.match(result.message, /cancel/i) }
+    assert.equal(ctx.chatEngine, previous)
+    assert.equal(oldClosed, 0)
+    assert.equal(ctx.preparingRun, false)
+    assert.equal(getOpenAdmissionStoreCount(), 0, 'cancelled restoration releases its admission handle')
+  } finally {
+    release(); ChatEngine.restore = original
+    if (ctx.chatEngine !== previous) ctx.chatEngine?.closeAdmissionStore()
+    fixture.cleanup(); rmSync(targetRoot, { recursive: true, force: true })
+  }
+})
+
+test('a late restore error after cancellation remains a cancelled attempt', async () => {
+  const { handleCancelTurn } = await import('./commands/review.js')
+  const fixture = withTempRunsDir(); const targetRoot = mkdtempSync(join(tmpdir(), 'babel-resume-cancel-error-'))
+  const ctx = makeResumeCtx(makeTarget(targetRoot)); const original = ChatEngine.restore
+  let release!: () => void; let entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }); const started = new Promise<void>(resolve => { entered = resolve })
+  try {
+    writeTranscript(fixture.root, 'cancelled-error', 'fixture history')
+    ChatEngine.restore = async () => { entered(); await gate; throw new Error('late restore failure') }
+    const pending = resumeChatSession(ctx, 'cancelled-error', { confirmUnknownIdentity: true })
+    await started; handleCancelTurn(ctx); release()
+    const result = await pending
+    assert.equal(result.ok, false)
+    if (!result.ok) { assert.equal(result.reason, 'cancelled'); assert.match(result.message, /cancel/i); assert.match(result.message, /late restore failure/i) }
+    assert.equal(ctx.preparingRun, false)
+    assert.equal(getOpenAdmissionStoreCount(), 0)
+  } finally { release(); ChatEngine.restore = original; fixture.cleanup(); rmSync(targetRoot, { recursive: true, force: true }) }
+})
 
 test('canonical display archive cannot enter the REPL transcript-only fallback after log loss',async()=>{
   const fixture=withTempRunsDir(),targetRoot=mkdtempSync(join(tmpdir(),'babel-archive-fallback-'))
