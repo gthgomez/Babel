@@ -74,7 +74,7 @@ test('confirmed reported zero cannot become a positive actual', () => {
 })
 
 test('unpriced older OpenRouter attempt can be refined by a reported charge', () => {
-  const tracker = new CostTracker(); const model = 'deepseek/deepseek-v4-flash-0731'
+  const tracker = new CostTracker(); const model = 'deepseek/deepseek-v4-flash-0501'
   const attribution = { taskOwnerId: 'or-unpriced', chargeId: 'or-unpriced-attempt' }
   tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter')
   assert.equal(tracker.getTaskSummary('or-unpriced').completeCostUSD, null)
