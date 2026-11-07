@@ -137,7 +137,7 @@ export function createShellCommandOperations(
       return { ok: false, message: outcome.message }
     },
     newSession(): ShellResumeResult {
-      if (ctx.isRunning || ctx.preparingRun) return { ok: false, message: 'Wait for the current task or preparation to settle before starting a new conversation.' }
+      if (ctx.isRunning || ctx.preparingRun) return { ok: false, message: 'Wait for the current task or preparation to settle, or cancel it, before starting a new conversation.' }
       ctx.chatEngine?.closeAdmissionStore()
       ctx.chatEngine = undefined
       ctx.lastRoutingLabel = null
