@@ -496,29 +496,31 @@ test('cancellation at verifier dispatch retains the completed write and incomple
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('unqualified coordinated fix does not infer or mutate before governed admission', async () => {
+test('coordinated fix refuses a linked target before inference or mutation', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-small-fix-multi-admission-'));
+  const outside = mkdtempSync(join(tmpdir(), 'babel-small-fix-multi-outside-'));
   let calls = 0;
   globalThis.fetch = (async () => { calls += 1; throw new Error('Unexpected inference'); }) as typeof fetch;
   try {
     mkdirSync(join(root, 'src'));
     writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }));
     writeFileSync(join(root, 'src', 'a.js'), 'original a\n');
-    writeFileSync(join(root, 'src', 'b.js'), 'original b\n');
+    writeFileSync(join(outside, 'b.js'), 'SYNTHETIC_OUTSIDE_TARGET\n');
+    symlinkSync(join(outside, 'b.js'), join(root, 'src', 'b.js'), process.platform === 'win32' ? 'file' : 'file');
     process.env['BABEL_PROJECT_ROOT'] = root;
-    const result = await runSmallFixPath({
+    await assert.rejects(runSmallFixPath({
       projectRoot: root,
       task: 'Only edit src/a.js and src/b.js. Run npm test before completing.',
       provider: 'live',
       model: 'deepseek',
       modelTier: 'standard',
-    });
-    assert.equal(result.status, 'SMALL_FIX_NOT_APPLICABLE');
+    }), /unsafe|unavailable|outside/i);
     assert.equal(calls, 0);
     assert.equal(readFileSync(join(root, 'src', 'a.js'), 'utf-8'), 'original a\n');
-    assert.equal(readFileSync(join(root, 'src', 'b.js'), 'utf-8'), 'original b\n');
+    assert.equal(readFileSync(join(outside, 'b.js'), 'utf-8'), 'SYNTHETIC_OUTSIDE_TARGET\n');
   } finally {
     rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });
 

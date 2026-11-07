@@ -672,18 +672,6 @@ export async function runSmallFixPath(
     throw new Error('Small-fix target is unsafe or unavailable; inspect its physical path before continuing.');
   }
 
-  // Keep coordinated admission quarantined until its guarded implementation
-  // has qualified physical settlement, authority and recovery.
-  const detectedScope = detected;
-  const coordinatedUnavailable = () =>
-    (detectedScope.mode === 'dual' || detectedScope.mode === 'multi') && !options.forcedTargetFile;
-  if (coordinatedUnavailable()) {
-    return {
-      status: 'SMALL_FIX_NOT_APPLICABLE',
-      reason: 'Coordinated small-fix execution is temporarily unavailable until its writes and verifier use governed dispatch and partial effects are recorded. Use the governed full pipeline.',
-    };
-  }
-
   if (
     (detected.mode === 'dual' || detected.mode === 'multi') &&
     !options.forcedTargetFile
