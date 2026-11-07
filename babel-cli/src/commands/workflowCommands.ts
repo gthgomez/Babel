@@ -1,6 +1,6 @@
 import { selectedConnectionModel } from '../services/connectionSettings.js'
 import {runDesktopPlan,type DesktopPlanOptions} from './desktopPlan.js';
-import { shouldAutoApplyPlan, withSavedPlanApplication, type SavedPlan } from '../services/savedPlan.js'
+import { shouldAutoApplyPlan, withSavedPlanApplication, savePlanGuarded, type SavedPlan } from '../services/savedPlan.js'
 import { assertFiniteBudgetSupported } from '../config/laneBudget.js'
 import { resolveEffectiveSettings } from '../config/userSettings.js'
 import { currentInvocationSettings } from '../config/invocationSettings.js'
@@ -127,7 +127,7 @@ import { resolveAgentTarget } from '../services/targetResolver.js';
 import { createLiteFixProgress } from '../ui/liteFixProgress.js';
 import { runLiteSessionWithSchemaRecovery } from '../services/liteSessionRunner.js';
 import { registerDogfoodCommands } from './dogfoodCommands.js';
-import { assertLegacyManualResumeQualified, assertPlanMutationQualified, loadPlanHandoff, loadPlanHandoffGuarded, PLAN_APPLY_UNAVAILABLE_REASON } from '../agent/planHandoff.js';
+import { assertLegacyManualResumeQualified, loadPlanHandoff, loadPlanHandoffGuarded, PLAN_APPLY_UNAVAILABLE_REASON } from '../agent/planHandoff.js';
 import { runPlanReviewLane } from '../agent/lanes/planReviewLane.js';
 import { resolveFuzzyWorkspaceDirectory } from '../services/pathScanner.js';
 import { isCommandCodeChatSelection, preflightRequestedModelPolicy } from './workflowModelPolicy.js';
@@ -1393,12 +1393,22 @@ async function runLiteCommand(
     if (!planBody || !sourceRunId || !/^\d{8}T\d{6}Z-plan-[a-f0-9]+$/i.test(sourceRunId)) throw new Error('The complete plan or its source identity is unavailable; inspect the run before applying.');
     const source = await loadPlanHandoffGuarded({ repoPath: resolvedProjectRoot ?? process.cwd(), task, planRunId: sourceRunId, includePlanText: true });
     if (!source?.contract || !source.sourcePlanText?.trim() || source.sourcePlanText.trim() !== planBody) throw new Error('The complete plan or its source identity is unavailable; inspect the run before applying.');
-    payloadRecord['plan_saved'] = false;
-    payloadRecord['user_status'] = 'blocked';
+    let savedPlanId: string | null = null;
+    try {
+      const saved = await savePlanGuarded({ projectRoot: resolvedProjectRoot ?? process.cwd(), task, body: planBody, sourceRunId });
+      savedPlanId = saved.id;
+    } catch {
+      // The Plan text is still usable; canonical persistence is reported as unavailable below.
+    }
+    payloadRecord['plan_saved'] = savedPlanId !== null;
+    payloadRecord['user_status'] = savedPlanId ? 'complete' : 'blocked';
     payloadRecord['apply_available'] = false;
     payloadRecord['apply_unavailable_reason'] = PLAN_APPLY_UNAVAILABLE_REASON;
-    humanText = [humanText, 'The Plan is retained in its run evidence; canonical saving and application are temporarily unavailable.', PLAN_APPLY_UNAVAILABLE_REASON].filter(Boolean).join('\n');
-    process.exitCode = 1;
+    if (savedPlanId) payloadRecord['plan_id'] = savedPlanId;
+    humanText = [humanText,
+      savedPlanId ? `Plan saved as ${savedPlanId}.` : 'The Plan is retained in its run evidence; canonical saving is unavailable.',
+      PLAN_APPLY_UNAVAILABLE_REASON].filter(Boolean).join('\n');
+    if (!savedPlanId) process.exitCode = 1;
   }
   const progressTranscript =
     fixProgress !== undefined ? fixProgress.getTranscript().join('\n') : '';
@@ -2940,7 +2950,7 @@ Notes:
               return;
             }
             process.stderr.write(`Automatic application enabled by ${effective.autoApply.source} preference. Checking eligibility for ${saved.id}.\n`);
-            await withSavedPlanApplication(saved.id, { projectRoot: saved.projectRoot, preflight: assertPlanMutationQualified,
+            await withSavedPlanApplication(saved.id, { projectRoot: saved.projectRoot,
               execute: async plan => applySavedPlanDeep(plan, options) });
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
@@ -3178,7 +3188,7 @@ Notes:
       if (options.plan?.startsWith('plan_')) {
         const projectRoot = options.project ? resolveProjectRoot(options.project) : process.cwd();
         if (!projectRoot) throw new Error('Unknown target project.');
-        await withSavedPlanApplication(options.plan, { projectRoot, preflight: assertPlanMutationQualified, execute: async plan => applySavedPlanDeep(plan, {}) });
+        await withSavedPlanApplication(options.plan, { projectRoot, execute: async plan => applySavedPlanDeep(plan, {}) });
         return;
       }
       await handleResumeCommand(options);

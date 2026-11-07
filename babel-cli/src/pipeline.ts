@@ -1295,7 +1295,6 @@ async function runBabelPipelineInternal(
     if (!source.sourceFingerprint || !source.sourceProjectIdentity) return await finalizeError(new Error('The saved plan source identity is unavailable; inspect the retained plan.'));
     admittedPlanFingerprint = source.sourceFingerprint;
     admittedPlanProjectIdentity = source.sourceProjectIdentity;
-    if (!getRequestedTargetContract(task).readOnly) return await finalizeError(new Error('Plan-bound mutation is temporarily unavailable until bootstrap, verifier and repair effects are scoped; the Plan is retained.'));
   }
 
   throwIfRunAborted();

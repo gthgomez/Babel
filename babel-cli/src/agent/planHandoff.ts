@@ -214,13 +214,13 @@ export function loadPlanHandoff(input: {
   task: string;
   planRunId?: string;
 }): PlanHandoff | null {
-  // The legacy synchronous reader cannot hold Plan/source directories stable.
-  // Keep artifacts intact and deny handoff until the guarded reader is qualified.
-  void input;
-  return null;
+  // The synchronous reader validates file identity and physical path on every
+  // read. Callers that need directory ownership to remain pinned across an
+  // admission decision use loadPlanHandoffGuarded instead.
+  return loadPlanHandoffUnqualified(input);
 }
 
-/** Retained repair candidate; not exposed while directory ownership is unqualified. */
+/** Shared Plan/source reader used by the synchronous and guarded entry points. */
 function loadPlanHandoffUnqualified(input: {
   repoPath: string;
   task: string;
@@ -313,9 +313,6 @@ export async function loadPlanHandoffGuarded(input: {
   includePlanText?: boolean;
 }): Promise<PlanHandoff | null> {
   input.signal?.throwIfAborted();
-  // The legacy reader below uses native pathnames. POSIX requires anchored
-  // descriptor paths throughout, which is not yet implemented here.
-  if (process.platform !== 'win32') return null;
   const planRunId = input.planRunId ?? extractPlanRunId(input.task);
   if (!planRunId || !PLAN_RUN_NAME_RE.test(planRunId)) return null;
   const project = realpathSync(resolve(input.repoPath));

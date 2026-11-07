@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { existsSync, lstatSync, realpathSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, realpathSync, statSync, unlinkSync, linkSync, writeSync, constants } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { acquireEffectDirectoryAnchors } from '../executor/effectDirectoryAnchors.js'
 
 /** A staged file is retained on uncertain termination; callers must not retry blindly. */
 export type GuardedPlanWriteResult =
@@ -123,11 +124,75 @@ try {
 } finally { foreach ($handle in $handles) { $handle.Dispose() } }
 `
 
+/**
+ * POSIX writer: hold the plans directory open, stage with exclusive create,
+ * fsync, then publish with a no-replace link and remove the staged name.
+ */
+async function writePosixPlanWithDirectoryGuard(input: {
+  stateRoot: string; planId: string; content: string; signal?: AbortSignal
+}): Promise<GuardedPlanWriteResult> {
+  if (!/^plan_[a-f0-9-]{36}$/.test(input.planId) || Buffer.byteLength(input.content, 'utf8') > 2 * 1024 * 1024) {
+    return { status: 'rejected', reason: 'Invalid or oversized Plan artifact.' }
+  }
+  input.signal?.throwIfAborted()
+  const root = resolve(input.stateRoot)
+  const name = `${input.planId}.json`
+  const temp = `${name}.${randomUUID()}.tmp`
+  const plans = join(root, 'plans')
+  const path = join(plans, name); const stagedPath = join(plans, temp)
+  let anchors: Awaited<ReturnType<typeof acquireEffectDirectoryAnchors>> | undefined
+  try {
+    const info = lstatSync(root, { bigint: true })
+    const normalize = (value: string) => value.toLowerCase()
+    if (!info.isDirectory() || info.isSymbolicLink() || info.ino <= 0n || normalize(realpathSync(root)) !== normalize(root)) {
+      return { status: 'rejected', reason: 'Unsafe Plan state directory.' }
+    }
+    mkdirSync(plans, { recursive: true, mode: 0o700 })
+    const plansInfo = lstatSync(plans, { bigint: true })
+    if (!plansInfo.isDirectory() || plansInfo.isSymbolicLink() || normalize(realpathSync(plans)) !== normalize(plans)) {
+      return { status: 'rejected', reason: 'Unsafe Plan state directory.' }
+    }
+    if (existsSync(path)) return { status: 'rejected', reason: 'Plan artifact already exists.' }
+    anchors = await acquireEffectDirectoryAnchors([plans])
+    const staged = anchors.path(stagedPath); const final = anchors.path(path)
+    const fd = openSync(staged, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600)
+    try {
+      writeSync(fd, input.content, null, 'utf8')
+      fsyncSync(fd)
+    } finally { closeSync(fd) }
+    if (input.signal?.aborted) {
+      try { unlinkSync(staged) } catch { /* retained staging is reported by the caller */ }
+      input.signal.throwIfAborted()
+    }
+    anchors.path(join(plans, '__babel_plan_commit_anchor__'))
+    try { linkSync(staged, final) }
+    catch (error) {
+      try { unlinkSync(staged) } catch { /* best effort */ }
+      const code = (error as NodeJS.ErrnoException).code
+      return code === 'EEXIST'
+        ? { status: 'rejected', reason: 'Plan artifact already exists.' }
+        : { status: 'unknown', stagedPath, path }
+    }
+    try { unlinkSync(join(plans, temp)) } catch { /* the published link is authoritative */ }
+    const published = statSync(final)
+    const expectedSize = Buffer.byteLength(input.content, 'utf8')
+    if (!published.isFile() || published.isSymbolicLink() || published.size !== expectedSize) {
+      return { status: 'unknown', stagedPath, path }
+    }
+    return { status: 'committed', path }
+  } catch (error) {
+    try { unlinkSync(join(plans, temp)) } catch { /* no staged artifact */ }
+    if (input.signal?.aborted) input.signal.throwIfAborted()
+    if (error instanceof Error && 'code' in error) return { status: 'rejected', reason: 'Plan state directory or writer is unavailable.' }
+    throw error
+  } finally { await anchors?.release() }
+}
+
 /** Windows-only candidate for creating a new private Plan artifact, not yet wired to product paths. */
 export async function writeNewPlanWithDirectoryGuard(input: {
   stateRoot: string; planId: string; content: string; signal?: AbortSignal
 }): Promise<GuardedPlanWriteResult> {
-  if (process.platform !== 'win32') return { status: 'rejected', reason: 'Windows guarded Plan writer required.' }
+  if (process.platform !== 'win32') return writePosixPlanWithDirectoryGuard(input)
   if (!/^plan_[a-f0-9-]{36}$/.test(input.planId) || Buffer.byteLength(input.content, 'utf8') > 2 * 1024 * 1024) return { status: 'rejected', reason: 'Invalid or oversized Plan artifact.' }
   input.signal?.throwIfAborted()
   const root = resolve(input.stateRoot)

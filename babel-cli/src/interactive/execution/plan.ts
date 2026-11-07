@@ -8,7 +8,7 @@ import { AgentSession } from '../../agent/session.js'
 import type { PlanDecision } from '../../ui/planView.js'
 import { stdinCoordinatorPauseForRun, stdinCoordinatorResumeAfterRun } from '../../ui/inputCoordinator.js'
 import { resolveEffectiveSettings } from '../../config/userSettings.js'
-import { shouldAutoApplyPlan } from '../../services/savedPlan.js'
+import { shouldAutoApplyPlan, savePlanGuarded } from '../../services/savedPlan.js'
 import { withProjectRootEnv } from '../../commands/projectRootEnv.js'
 import { assertFiniteBudgetSupported } from '../../config/laneBudget.js'
 import { loadPlanHandoffGuarded, PLAN_APPLY_UNAVAILABLE_REASON } from '../../agent/planHandoff.js'
@@ -65,12 +65,23 @@ export async function executePlanTask(ctx: ReplContext, input: string, task: str
     if (!source?.contract || !source.sourcePlanText?.trim() || source.sourcePlanText.trim() !== body) throw new Error('The plan source is unavailable or unsafe; inspect the retained run evidence.')
     const previousSavedPlanId = ctx.state.savedPlanId
     delete ctx.state.savedPlanId
+    let saved: Awaited<ReturnType<typeof savePlanGuarded>> | null = null
+    let saveUnavailable = false
+    if (!controller.signal.aborted) {
+      try {
+        saved = await savePlanGuarded({ projectRoot: target.targetRoot, task, body, sourceRunId, signal: controller.signal })
+      } catch {
+        saveUnavailable = true
+      }
+    }
+    if (saved) ctx.state.savedPlanId = saved.id
     ctx.lastAssistantAnswer = body
     ctx.lastAssistantStatus = 'PLAN_READY'
-    ctx.state.lastRunUserStatus = 'blocked'
+    ctx.state.lastRunUserStatus = saved ? 'complete' : 'blocked'
     const previousPlanNote = previousSavedPlanId ? `Previous saved Plan ID: ${previousSavedPlanId}.` : ''
-    console.log(`${body}\nThe Plan is retained in its run evidence; canonical saving is temporarily unavailable.\n${previousPlanNote}${previousPlanNote ? '\n' : ''}${PLAN_APPLY_UNAVAILABLE_REASON}`)
-    ctx.appendTurn({ role: 'assistant', answer: body, summary: ['Plan retained in run evidence; canonical saving unavailable', previousPlanNote].filter(Boolean).join(' '), ...(ctx.lastRunDir ? { run_dir: ctx.lastRunDir } : {}), changed_files: [], verification: 'read-only plan', next: PLAN_APPLY_UNAVAILABLE_REASON }, 'PLAN_READY')
+    const retention = saveUnavailable ? 'The Plan is retained in its run evidence; canonical saving is unavailable.' : `Plan saved as ${saved!.id}.`
+    console.log(`${body}\n${retention} Automatic application is unavailable.\n${previousPlanNote}${previousPlanNote ? '\n' : ''}${PLAN_APPLY_UNAVAILABLE_REASON}`)
+    ctx.appendTurn({ role: 'assistant', answer: body, summary: [`Plan ${saved ? 'saved' : 'retained in run evidence'}; automatic application unavailable`, previousPlanNote].filter(Boolean).join(' '), ...(ctx.lastRunDir ? { run_dir: ctx.lastRunDir } : {}), changed_files: [], verification: 'read-only plan', next: PLAN_APPLY_UNAVAILABLE_REASON }, 'PLAN_READY')
     ctx.saveSessionState()
     ctx.settleShellTurn?.(ctx.state.lastRunUserStatus, epoch)
   } catch (error) {

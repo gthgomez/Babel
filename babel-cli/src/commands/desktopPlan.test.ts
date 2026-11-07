@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {spawnSync} from 'node:child_process';
-import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {mkdirSync,readFileSync,writeFileSync,symlinkSync} from 'node:fs';
 import {basename,join} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {prepareSyntheticProviderFixture,removeSyntheticProviderFixture} from '../testinfra/synthetic-provider-fixture.mjs';
@@ -50,7 +50,7 @@ test('Desktop streaming Plan uses the canonical read-only plan lane even with au
   }finally{removeSyntheticProviderFixture(fixture.root);}
 });
 
-test('CLI Apply preserves a valid Plan when scoped mutation is unavailable', async () => {
+test('CLI Apply refuses a Plan whose source contract is unavailable before inference', async () => {
   const fixture = prepareSyntheticProviderFixture();
   try {
     const { savePlan, loadSavedPlan } = await import('../services/savedPlan.js');
@@ -61,10 +61,12 @@ test('CLI Apply preserves a valid Plan when scoped mutation is unavailable', asy
     writeFileSync(join(source, 'plan.md'), 'Update fixture.js.');
     const env = { ...fixture.env, BABEL_LIVE: '1' };
     const plan = savePlan({ projectRoot: fixture.cwd, task: 'Update fixture.js', body: 'Update fixture.js.', sourceRunId: id }, env);
+    const { unlinkSync } = await import('node:fs'); unlinkSync(join(source, 'contract.json'));
     const marker = join(fixture.root, 'unexpected-dispatch'); const preload = join(fixture.root, 'apply-valid-fixture.mjs');
     writeFileSync(preload, `import { writeFileSync } from 'node:fs'; globalThis.fetch = async () => { writeFileSync(${JSON.stringify(marker)}, 'called'); throw new Error('unexpected dispatch'); };`);
     const child = spawnSync(process.execPath, ['--experimental-wasm-modules', '--import', new URL('../testinfra/synthetic-provider-fixture.mjs', import.meta.url).href, '--import', import.meta.resolve('tsx'), '--import', pathToFileURL(preload).href, fileURLToPath(new URL('../index.ts', import.meta.url)), 'apply', '--plan', plan.id], { cwd: fixture.cwd, env, encoding: 'utf8', timeout: 120000, windowsHide: true });
-    assert.equal(child.error, undefined); assert.notEqual(child.status, 0); assert.match(child.stdout + child.stderr, /Plan application is temporarily unavailable/i);
+    assert.equal(child.error, undefined); assert.notEqual(child.status, 0);
+    assert.match(child.stdout + child.stderr, /contract is missing or unavailable/i);
     assert.equal(loadSavedPlan(plan.id, env).state, 'ready'); assert.equal(readFileSync(join(fixture.cwd, 'fixture.js'), 'utf8'), 'original fixture\n'); assert.throws(() => readFileSync(marker), { code: 'ENOENT' });
   } finally { removeSyntheticProviderFixture(fixture.root); }
 });
@@ -76,7 +78,14 @@ test('CLI apply refuses an unavailable saved Plan source before inference', asyn
     const { updateUserSettings } = await import('../config/userSettings.js');
     const env = { BABEL_STATE_DIR: join(fixture.root, 'state'), BABEL_CONFIG_DIR: join(fixture.root, 'config') };
     updateUserSettings({ connections: { fixture: { id: 'fixture', provider: 'openrouter', model: 'z-ai/glm-5.3-flash' } }, defaults: { connection: 'fixture', budgetUsd: 'unlimited' } }, { env });
-    const plan = savePlan({ projectRoot: fixture.cwd, task: 'Inspect README', body: 'Inspect README', sourceRunId: '20260610T180000Z-plan-abcdef01' }, env);
+    const sourceId = '20260610T180000Z-plan-abcdef01'
+    const source = join(fixture.cwd, 'runs', 'babel-lite', sourceId)
+    mkdirSync(source, { recursive: true })
+    writeFileSync(join(source, 'contract.json'), JSON.stringify({ schema_version: 1, mode: 'babel-lite-plan', likely_files: [], required_reads: [] }))
+    writeFileSync(join(source, 'model_plan.json'), JSON.stringify({ summary: 'Inspect README' }))
+    writeFileSync(join(source, 'plan.md'), 'Inspect README')
+    const plan = savePlan({ projectRoot: fixture.cwd, task: 'Inspect README', body: 'Inspect README', sourceRunId: sourceId }, env);
+    const { rmSync } = await import('node:fs'); rmSync(source, { recursive: true, force: true });
     const marker = join(fixture.root, 'dispatch-marker');
     const preload = join(fixture.root, 'apply-fixture.mjs');
     writeFileSync(preload, `import { writeFileSync } from 'node:fs'; process.env.BABEL_OPENCLAW_APPROVED_ROOTS = ${JSON.stringify(fixture.cwd)}; globalThis.fetch = async () => { writeFileSync(${JSON.stringify(marker)}, 'called'); throw new Error('synthetic dispatch'); };`);
@@ -154,6 +163,9 @@ test('Desktop Plan returns retained useful work when canonical saving is unavail
   const fixture = prepareSyntheticProviderFixture();
   try {
     writeFileSync(join(fixture.cwd, 'calc.js'), 'export const value=1;\n');
+    // A linked plans directory makes canonical saving unavailable without
+    // discarding the useful Plan text.
+    symlinkSync(join(fixture.root, 'tmp'), join(fixture.root, 'state', 'plans'), 'dir');
     const preload = join(fixture.root, 'desktop-plan-partial.mjs');
     writeFileSync(preload, "process.env.BABEL_DESKTOP_IPC='1';process.env.BABEL_LITE_OFFLINE='1';process.env.BABEL_OFFLINE='1';process.env.BABEL_PIPELINE_V9_OFFLINE='1';");
     const child = spawnSync(process.execPath, [

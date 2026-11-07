@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {spawnSync} from 'node:child_process';
-import {readFileSync,writeFileSync} from 'node:fs';
+import {readFileSync,writeFileSync,symlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {prepareSyntheticProviderFixture,removeSyntheticProviderFixture,summarizeSyntheticProviderOutput} from '../../testinfra/synthetic-provider-fixture.mjs';
 
-function runPlanScenario(task: string, cancel: boolean | 'provider' = false, previousPlanId?: string) {
+function runPlanScenario(task: string, cancel: boolean | 'provider' = false, previousPlanId?: string, savingUnavailable = false) {
   const fixture=prepareSyntheticProviderFixture();
   try{
     writeFileSync(join(fixture.cwd,'calc.js'),'export const value=1;\n');
     writeFileSync(join(fixture.root,'state','preferences.json'),JSON.stringify({schemaVersion:1,connections:{},defaults:{plans:{autoApply:true},budgetUsd:'unlimited'}}));
+    if (savingUnavailable) symlinkSync(join(fixture.root,'tmp'), join(fixture.root,'state','plans'), 'dir');
     const driver=join(fixture.root,'interactive-plan.mjs');
     writeFileSync(driver,`
       process.env.BABEL_LITE_OFFLINE='${cancel === 'provider' ? '0' : '1'}';
@@ -196,27 +197,29 @@ test('interactive Apply retains a sensitive Plan body without provider dispatch'
   } finally {removeSyntheticProviderFixture(fixture.root)}
 });
 
-test('interactive Apply preserves a valid Plan when scoped mutation is unavailable',()=>{
+test('interactive Apply admits a valid Plan through the scoped boundary without out-of-scope mutation',()=>{
   const fixture=prepareSyntheticProviderFixture();
   try {
     writeFileSync(join(fixture.cwd,'calc.js'),'original fixture\n');
     const driver=join(fixture.root,'interactive-contained-apply.mjs');
     writeFileSync(driver,`
       const {mkdirSync,writeFileSync,readFileSync}=await import('node:fs');const {join}=await import('node:path');
+      const {PassThrough}=await import('node:stream');const {createInterface}=await import('node:readline');
       const {handleCommand}=await import(${JSON.stringify(new URL('../commands.ts',import.meta.url).href)});
       const {savePlan,loadSavedPlan}=await import(${JSON.stringify(new URL('../../services/savedPlan.ts',import.meta.url).href)});
+      const input=new PassThrough(),rl=createInterface({input,terminal:false});
       const id='20260610T180000Z-plan-abcdef01',source=join(process.cwd(),'runs','babel-lite',id);mkdirSync(source,{recursive:true});
       writeFileSync(join(source,'model_plan.json'),JSON.stringify({summary:'Plan'}));writeFileSync(join(source,'contract.json'),JSON.stringify({schema_version:1,mode:'babel-lite-plan',likely_files:['calc.js'],required_reads:[]}));writeFileSync(join(source,'plan.md'),'Update calc.js.');
       const saved=savePlan({projectRoot:process.cwd(),task:'Update calc.js',body:'Update calc.js.',sourceRunId:id});let calls=0,reason='';
       globalThis.fetch=async()=>{calls++;throw Error('unexpected synthetic dispatch')};
-      const ctx={isRunning:false,state:{operatorMode:'default'},resolveCurrentTarget(){return {targetRoot:process.cwd(),workspaceRoot:null}}};
+      const ctx={isRunning:false,rl,state:{operatorMode:'default'},resolveCurrentTarget(){return {targetRoot:process.cwd(),workspaceRoot:null}}};
       try{await handleCommand(ctx,'/apply '+saved.id)}catch(error){reason=String(error)}
-      writeFileSync(${JSON.stringify(join(fixture.root,'contained-result.json'))},JSON.stringify({reason,calls,state:loadSavedPlan(saved.id).state,unchanged:readFileSync('calc.js','utf8')==='original fixture\\n'}));
+      writeFileSync(${JSON.stringify(join(fixture.root,'contained-result.json'))},JSON.stringify({reason,calls,state:loadSavedPlan(saved.id).state,unchanged:readFileSync('calc.js','utf8')==='original fixture\\n'}));rl.close();input.destroy();
     `);
     const child=spawnSync(process.execPath,['--experimental-wasm-modules','--import',new URL('../../testinfra/synthetic-provider-fixture.mjs',import.meta.url).href,'--import',import.meta.resolve('tsx'),driver],{cwd:fixture.cwd,env:fixture.env,encoding:'utf8',timeout:120000,windowsHide:true});
     assert.equal(child.error,undefined);assert.equal(child.status,0,summarizeSyntheticProviderOutput(child.stdout+child.stderr,child.status));
     const result=JSON.parse(readFileSync(join(fixture.root,'contained-result.json'),'utf8'));
-    assert.match(result.reason,/Plan application is temporarily unavailable/i);assert.equal(result.calls,0);assert.equal(result.state,'ready');assert.equal(result.unchanged,true);
+    assert.doesNotMatch(result.reason,/Plan application is temporarily unavailable/i);assert.ok(result.calls>=1,`apply must reach provider admission: ${result.reason}`);assert.equal(result.unchanged,true);assert.equal(result.state,'unknown');
   } finally {removeSyntheticProviderFixture(fixture.root);}
 });
 
@@ -253,7 +256,7 @@ test('interactive Apply sends selected Plan A after newer Plan B exists',()=>{
 });
 
 test('interactive Plan preserves useful output when canonical saving is unavailable', () => {
-  const result = runPlanScenario('Plan-only: inspect calc.js and propose a regression test. Do not modify any files.', false, 'plan_11111111-1111-1111-1111-111111111111');
+  const result = runPlanScenario('Plan-only: inspect calc.js and propose a regression test. Do not modify any files.', false, 'plan_11111111-1111-1111-1111-111111111111', true);
   assert.equal(result.status, 'PLAN_READY'); assert.equal(result.settlement, 'blocked');
   assert.equal(result.saved, false); assert.equal(result.unchanged, true); assert.equal(result.sourceBound, false);
 });

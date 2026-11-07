@@ -9,14 +9,14 @@ import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { assertPlannerPathsAllowed, scopedHandoffPath } from '../agent/planHandoff.js';
 
-/** Temporary Plan-bound dispatch fence; arbitrary command effects are not scoped. */
+/** Plan-bound dispatch fence: only reads and writes inside the approved scope. */
 export function scopeExecutorKernel(kernel: ExecutorKernel, scope: { projectRoot: string; allowedPaths: string[] }): ExecutorKernel {
   return {
     ...kernel,
     tools: {
       async execute(req, context) {
         const denied = (): ToolResult => ({ exit_code: 126, stdout: '', stderr: '[PLAN_HANDOFF_GUARD] Tool request is outside the selected Plan scope or is not yet qualified for Plan-bound execution.' });
-        if (req.tool !== 'file_read') return denied();
+        if (req.tool !== 'file_read' && req.tool !== 'directory_list' && req.tool !== 'file_write') return denied();
         const path = String(req.path ?? '');
         if (assertPlannerPathsAllowed([path], scope.allowedPaths).length > 0) return denied();
         try {
@@ -25,7 +25,10 @@ export function scopeExecutorKernel(kernel: ExecutorKernel, scope: { projectRoot
           if (!physical || normalize(physical) !== normalize(expected)) return denied();
           if (existsSync(expected)) {
             const stat = lstatSync(expected);
-            if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) return denied();
+            if (stat.isSymbolicLink() || stat.nlink !== 1) return denied();
+            if (!stat.isFile() && !(req.tool === 'directory_list' && stat.isDirectory())) return denied();
+          } else if (req.tool !== 'file_write') {
+            return denied();
           }
         } catch { return denied(); }
         return kernel.tools.execute(req, context);

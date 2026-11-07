@@ -8,21 +8,22 @@ import test from 'node:test'
 import { loadPlanHandoff, loadPlanHandoffGuarded } from './planHandoff.js'
 import { savePlan } from '../services/savedPlan.js'
 
-test('unqualified Plan handoff does not open source or create a misleading saved Plan', () => {
-  const root = fs.mkdtempSync(join(tmpdir(), 'babel-plan-contained-')); const original = fs.openSync
+test('a linked Plan run directory cannot supply handoff content or a saved Plan', () => {
+  const root = fs.mkdtempSync(join(tmpdir(), 'babel-plan-contained-'))
   try {
-    const planRunId = '20260610T180000Z-plan-abc123def456'; const run = join(root, 'runs', 'babel-lite', planRunId)
-    fs.mkdirSync(run, { recursive: true }); fs.writeFileSync(join(run, 'model_plan.json'), JSON.stringify({ summary: 'retained plan' }))
-    let opens = 0
-    fs.openSync = ((...args: Parameters<typeof fs.openSync>) => { opens++; return original(...args) }) as typeof fs.openSync
-    syncBuiltinESMExports()
-    assert.equal(loadPlanHandoff({ repoPath: root, task: 'inspect', planRunId }), null)
-    assert.throws(() => savePlan({ projectRoot: root, task: 'inspect', body: 'retained plan', sourceRunId: planRunId }, { BABEL_STATE_DIR: join(root, 'state') }), /temporarily unavailable or unsafe/)
-    assert.equal(opens, 0)
-    fs.openSync = original; syncBuiltinESMExports()
+    const project = join(root, 'project'); const outside = join(root, 'outside')
+    const planRunId = '20260610T180000Z-plan-abc123def456'
+    fs.mkdirSync(join(project, 'runs', 'babel-lite'), { recursive: true }); fs.mkdirSync(outside)
+    fs.writeFileSync(join(outside, 'model_plan.json'), JSON.stringify({ summary: 'SYNTHETIC_OUTSIDE_PLAN' }))
+    fs.symlinkSync(outside, join(project, 'runs', 'babel-lite', planRunId), process.platform === 'win32' ? 'junction' : 'dir')
+    assert.equal(loadPlanHandoff({ repoPath: project, task: 'inspect', planRunId }), null)
+    assert.throws(
+      () => savePlan({ projectRoot: project, task: 'inspect', body: 'retained plan', sourceRunId: planRunId }, { BABEL_STATE_DIR: join(root, 'state') }),
+      /unavailable or unsafe/,
+    )
     assert.equal(fs.existsSync(join(root, 'state')), false)
-    assert.match(fs.readFileSync(join(run, 'model_plan.json'), 'utf8'), /retained plan/)
-  } finally { fs.openSync = original; syncBuiltinESMExports(); fs.rmSync(root, { recursive: true, force: true }) }
+    assert.match(fs.readFileSync(join(outside, 'model_plan.json'), 'utf8'), /SYNTHETIC_OUTSIDE_PLAN/)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
 test('guarded Plan reader holds its source parent through a real file open', async t => {
@@ -76,14 +77,13 @@ test('guarded Plan reader holds metadata and rejects an owned guard loss', async
   } finally { fs.openSync = originalOpen; childProcess.spawn = originalSpawn; syncBuiltinESMExports(); fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('guarded Plan reader excludes protected and outside source bytes', async t => {
-  if (process.platform !== 'win32') { t.skip('Windows guarded candidate'); return }
+test('guarded Plan reader excludes protected and outside source bytes', async () => {
   const root = fs.mkdtempSync(join(tmpdir(), 'babel-plan-guarded-private-'))
   try {
     const project = join(root, 'project'); const outside = join(root, 'outside'); const planRunId = '20260610T180000Z-plan-abc123def456'
     const run = join(project, 'runs', 'babel-lite', planRunId); fs.mkdirSync(run, { recursive: true }); fs.mkdirSync(outside)
     fs.writeFileSync(join(project, 'safe.txt'), 'SYNTHETIC_SAFE_SNIPPET'); fs.writeFileSync(join(project, '.env.local'), 'SYNTHETIC_ENV_SECRET')
-    fs.writeFileSync(join(outside, 'secret.txt'), 'SYNTHETIC_OUTSIDE_SECRET'); fs.symlinkSync(outside, join(project, 'outside'), 'junction')
+    fs.writeFileSync(join(outside, 'secret.txt'), 'SYNTHETIC_OUTSIDE_SECRET'); fs.symlinkSync(outside, join(project, 'outside'), process.platform === 'win32' ? 'junction' : 'dir')
     fs.writeFileSync(join(run, 'contract.json'), JSON.stringify({ schema_version: 1, mode: 'babel-lite-plan', likely_files: ['safe.txt', '.env.local', 'outside/secret.txt'], required_reads: [] }))
     fs.writeFileSync(join(run, 'model_plan.json'), JSON.stringify({ summary: 'safe plan' }))
     const handoff = await loadPlanHandoffGuarded({ repoPath: project, task: 'inspect', planRunId })
@@ -93,8 +93,7 @@ test('guarded Plan reader excludes protected and outside source bytes', async t 
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('guarded Plan reader rejects source metadata changed during construction', async t => {
-  if (process.platform !== 'win32') { t.skip('Windows guarded candidate'); return }
+test('guarded Plan reader rejects source metadata changed during construction', async () => {
   const root = fs.mkdtempSync(join(tmpdir(), 'babel-plan-guarded-change-')); const originalOpen = fs.openSync
   try {
     const planRunId = '20260610T180000Z-plan-abc123def456'; const run = join(root, 'runs', 'babel-lite', planRunId)
@@ -104,7 +103,7 @@ test('guarded Plan reader rejects source metadata changed during construction', 
     fs.writeFileSync(model, JSON.stringify({ summary: 'safe plan' }))
     let modelOpens = 0; let changed = false
     fs.openSync = ((path: fs.PathLike, ...args: unknown[]) => {
-      if (String(path).toLowerCase() === model.toLowerCase() && ++modelOpens === 1) {
+      if (String(path).toLowerCase().replace(/\\/g, '/').endsWith('model_plan.json') && ++modelOpens === 1) {
         changed = true; fs.writeFileSync(contract, JSON.stringify({ schema_version: 1, mode: 'babel-lite-plan', likely_files: [], required_reads: [] }))
       }
       return originalOpen(path, ...(args as [fs.OpenMode]))
@@ -115,8 +114,7 @@ test('guarded Plan reader rejects source metadata changed during construction', 
   } finally { fs.openSync = originalOpen; syncBuiltinESMExports(); fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('guarded Plan reader keeps an explicitly selected older Plan', async t => {
-  if (process.platform !== 'win32') { t.skip('Windows guarded candidate'); return }
+test('guarded Plan reader keeps an explicitly selected older Plan', async () => {
   const root = fs.mkdtempSync(join(tmpdir(), 'babel-plan-guarded-identity-'))
   try {
     const older = '20260610T180000Z-plan-abc123def456'; const newer = '20260610T180001Z-plan-abc123def457'
@@ -151,8 +149,7 @@ test('guarded Plan admission releases its owned directory guards after cancellat
   } finally { childProcess.spawn = originalSpawn; syncBuiltinESMExports(); fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('guarded Plan reader preserves the existing bounded preview without narrowing allowed scope', async t => {
-  if (process.platform !== 'win32') { t.skip('Windows guarded candidate'); return }
+test('guarded Plan reader preserves the existing bounded preview without narrowing allowed scope', async () => {
   const root = fs.mkdtempSync(join(tmpdir(), 'babel-plan-guarded-preview-limit-'))
   try {
     const planRunId = '20260610T180000Z-plan-abc123def456'; const run = join(root, 'runs', 'babel-lite', planRunId); fs.mkdirSync(run, { recursive: true })

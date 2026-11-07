@@ -15,7 +15,7 @@ import {
   scopeExecutorKernel,
 } from './executorToolDispatch.js';
 
-test('Plan dispatch denies unscoped paths, hard links and arbitrary verifier commands', async () => {
+test('Plan dispatch allows in-scope writes and denies unscoped paths, hard links and arbitrary verifier commands', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-plan-dispatch-'));
   try {
     writeFileSync(join(root, 'allowed.txt'), 'ok');
@@ -30,9 +30,10 @@ test('Plan dispatch denies unscoped paths, hard links and arbitrary verifier com
     assert.equal((await kernel.tools.execute({ tool: 'test_run', command: 'node malicious.js' }, context)).exit_code, 126);
     assert.equal(calls, 0);
     rmSync(join(root, 'linked.txt'));
-    assert.equal((await kernel.tools.execute({ tool: 'file_write', path: 'allowed.txt', content: 'unqualified write' }, context)).exit_code, 126);
+    assert.equal((await kernel.tools.execute({ tool: 'file_write', path: 'outside.txt', content: 'unqualified write' }, context)).exit_code, 126);
+    assert.equal((await kernel.tools.execute({ tool: 'file_write', path: 'allowed.txt', content: 'scoped write' }, context)).exit_code, 0);
     assert.equal((await kernel.tools.execute({ tool: 'file_read', path: 'allowed.txt' }, context)).exit_code, 0);
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
     const empty = scopeExecutorKernel(base, { projectRoot: root, allowedPaths: [] });
     assert.equal((await empty.tools.execute({ tool: 'file_read', path: 'allowed.txt' }, context)).exit_code, 126);
   } finally { rmSync(root, { recursive: true, force: true }); }

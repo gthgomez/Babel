@@ -79,7 +79,6 @@ import { showHelp } from './help.js';
 import { handleConnectionCommand } from '../commands/connectionCommands.js';
 import { runProviderSetup } from '../services/providerSetup.js';
 import { withSavedPlanApplication } from '../services/savedPlan.js';
-import { assertPlanMutationQualified } from '../agent/planHandoff.js';
 
 export async function handleCommand(ctx: ReplContext, input: string): Promise<void> {
   const parts = input.slice(1).split(' ');
@@ -92,7 +91,7 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
       const id = args[0] ?? ctx.state.savedPlanId;
       if (!id) throw new Error('Use /apply <plan-id> after producing a plan.');
       const target = ctx.resolveCurrentTarget();
-      await withSavedPlanApplication(id, { projectRoot: target.targetRoot, operatorMode: ctx.state.operatorMode, preflight: assertPlanMutationQualified, execute: async plan => {
+      await withSavedPlanApplication(id, { projectRoot: target.targetRoot, operatorMode: ctx.state.operatorMode, execute: async plan => {
         const { executeGovernedTask } = await import('./execution/governed.js');
         const result = await executeGovernedTask(ctx, input, `Implement this approved plan within current permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`, target, 'deep', plan.sourceRunId ?? null);
         if (!result) throw new Error('Plan implementation stopped; inspect the run evidence.');
