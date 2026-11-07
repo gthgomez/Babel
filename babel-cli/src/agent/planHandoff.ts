@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 import type { LiteTaskContract } from '../lite/contract.js';
+import { resolvePlanArtifactRoot } from '../lite/artifacts.js';
 import type { QaVerdict, SwePlan } from '../schemas/agentContracts.js';
 
 export interface PlanHandoff {
@@ -14,6 +15,7 @@ export interface PlanHandoff {
 }
 
 const PLAN_RUN_ID_RE = /\b(\d{8}T\d{6}Z-plan-[a-f0-9]+)\b/i;
+const PLAN_RUN_NAME_RE = /^\d{8}T\d{6}Z-plan-[a-f0-9]+$/i;
 const PLAN_RUN_DIR_RE = /runs[/\\]babel-lite[/\\](\d{8}T\d{6}Z-plan-[a-f0-9]+)/i;
 
 function safeReadJson(path: string): Record<string, unknown> | null {
@@ -38,16 +40,28 @@ export function extractPlanRunId(task: string): string | null {
   return task.match(PLAN_RUN_DIR_RE)?.[1] ?? null;
 }
 
-function findLatestPlanRunDir(repoPath: string): string | null {
-  const liteRoot = join(resolve(repoPath), 'runs', 'babel-lite');
-  if (!existsSync(liteRoot)) {
-    return null;
+function planRoots(repoPath: string): string[] {
+  return [...new Set([resolvePlanArtifactRoot(), join(resolve(repoPath), 'runs', 'babel-lite')])];
+}
+
+function belongsToProject(runDir: string, repoPath: string): boolean {
+  const metadata = safeReadJson(join(runDir, 'manifest.json')) ?? safeReadJson(join(runDir, 'request.json'));
+  const owner = metadata?.['project_root'];
+  if (typeof owner === 'string') {
+    const normalized = (path: string) => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
+    return normalized(owner) === normalized(repoPath);
   }
-  const candidates = readdirSync(liteRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && /-plan-/.test(entry.name))
-    .map((entry) => join(liteRoot, entry.name))
-    .sort((left, right) => right.localeCompare(left));
-  return candidates[0] ?? null;
+  // Older repo-local runs lack target metadata. Shared private runs must have it.
+  return resolve(runDir, '..') === join(resolve(repoPath), 'runs', 'babel-lite');
+}
+
+function findLatestPlanRunDir(repoPath: string): string | null {
+  const candidates = planRoots(repoPath).flatMap(root => !existsSync(root) ? [] :
+    readdirSync(root, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() && PLAN_RUN_NAME_RE.test(entry.name))
+      .map(entry => join(root, entry.name))
+      .filter(path => belongsToProject(path, repoPath) && safeReadJson(join(path, 'model_plan.json')) !== null));
+  return candidates.sort((left, right) => basename(right).localeCompare(basename(left)))[0] ?? null;
 }
 
 function trimForPrompt(value: string, maxChars: number): string {
@@ -77,8 +91,9 @@ export function resolvePlanRunDir(
 ): string | null {
   const planRunId = explicitPlanRunId ?? extractPlanRunId(task);
   if (planRunId) {
-    const candidate = join(resolve(repoPath), 'runs', 'babel-lite', planRunId);
-    return existsSync(candidate) ? candidate : null;
+    if (!PLAN_RUN_NAME_RE.test(planRunId)) return null;
+    return planRoots(repoPath).map(root => join(root, planRunId))
+      .find(path => existsSync(path) && belongsToProject(path, repoPath)) ?? null;
   }
   const lowerTask = task.toLowerCase();
   if (

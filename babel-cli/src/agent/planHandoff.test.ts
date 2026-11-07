@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { createLiteArtifactRun, writeLiteJsonArtifact } from '../lite/artifacts.js';
 
 import {
   assertPlannerPathsAllowed,
@@ -104,6 +105,42 @@ test('collectPlanHandoffViolations rejects hallucinated planner paths', () => {
 
   assert.equal(violations.length, 1);
   assert.match(violations[0] ?? '', /run-latest\.js/);
+});
+
+test('private Plan handoffs preserve project scope and legacy lookup compatibility', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-plan-handoff-storage-'));
+  const previousRuns = process.env['BABEL_RUNS_DIR'];
+  try {
+    process.env['BABEL_RUNS_DIR'] = join(root, 'private-runs');
+    const target = join(root, 'target');
+    const other = join(root, 'other');
+    mkdirSync(target);
+    mkdirSync(other);
+    writeFileSync(join(target, 'sample.ts'), 'export const target = true;');
+    const plan = createLiteArtifactRun({ command: 'plan', repoPath: target, now: new Date('2026-06-10T18:00:00Z') });
+    writeLiteJsonArtifact(plan, 'manifest.json', { command: 'plan', project_root: target });
+    writeLiteJsonArtifact(plan, 'model_plan.json', { likely_files: ['sample.ts'], summary: 'Target plan' });
+    const foreign = createLiteArtifactRun({ command: 'plan', repoPath: other, now: new Date('2026-06-10T19:00:00Z') });
+    writeLiteJsonArtifact(foreign, 'manifest.json', { command: 'plan', project_root: other });
+    writeLiteJsonArtifact(foreign, 'model_plan.json', { likely_files: ['foreign.ts'], summary: 'Other project plan' });
+    const legacyId = '20260610T170000Z-plan-abc123';
+    const legacyDir = join(target, 'runs', 'babel-lite', legacyId);
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'model_plan.json'), JSON.stringify({ likely_files: ['legacy.ts'] }));
+    for (const task of [`Apply plan ${plan.runId}`, 'Apply latest plan']) {
+      const handoff = loadPlanHandoff({ repoPath: target, task });
+      assert.equal(handoff?.planRunDir, plan.runDir);
+      assert.deepEqual(handoff?.allowedPaths, ['sample.ts']);
+      assert.match(handoff?.contextText ?? '', /export const target = true/);
+    }
+    assert.equal(loadPlanHandoff({ repoPath: target, task: 'Apply plan', planRunId: foreign.runId }), null);
+    assert.equal(loadPlanHandoff({ repoPath: target, task: 'Apply plan', planRunId: '../' + plan.runId }), null);
+    assert.equal(loadPlanHandoff({ repoPath: target, task: `Apply plan ${legacyId}` })?.planRunDir, legacyDir);
+  } finally {
+    if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
+    else process.env['BABEL_RUNS_DIR'] = previousRuns;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('loadPlanHandoff returns null when no plan run exists', () => {

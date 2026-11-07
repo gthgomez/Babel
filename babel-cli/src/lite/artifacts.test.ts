@@ -6,7 +6,7 @@ import test from 'node:test';
 import { createLiteArtifactRun } from './artifacts.js';
 
 test('Plan honors private state and run overrides without creating target files', () => {
-  const fixture = mkdtempSync(join(tmpdir(), 'babel-private-plan-'));
+  const fixture = mkdtempSync(join(tmpdir(), 'babel-plan-storage-'));
   const previousState = process.env['BABEL_STATE_DIR'];
   const previousRuns = process.env['BABEL_RUNS_DIR'];
   try {
