@@ -26,10 +26,10 @@ This repo should be treated as a **runnable public-safe release surface**.
 
 Canonical public success means a new user can:
 
-1. build `babel-cli` and start the interactive TUI (`node .\babel-cli\dist\index.js interactive`)
-2. send a chat task and watch Babel inspect the repository, edit files with permission, and verify the result
-3. move to `plan` or `deep` when the task needs stronger gates
-4. validate the catalog and preview a resolved stack/manifest without an API key
+1. install `babel-harness@0.2.0`, check `node --version`, and run `--version`, `doctor`, and `setup` (see `README.md`)
+2. add one provider key and send a small task from the repository they want to work in
+3. use `plan` or `deep` when the task needs a separate command
+4. from a source checkout, validate the catalog and preview a resolved stack without an API key
 
 Model-backed sessions depend on local provider setup and credentials; the catalog, resolver, and MCP inspection surfaces are fully usable without them.
 

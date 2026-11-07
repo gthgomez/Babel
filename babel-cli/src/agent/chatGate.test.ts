@@ -1,3 +1,5 @@
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { clearPythonInterpreterCache } from '../services/pythonInterpreter.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
 import { chatVerifierRequirements } from './chatVerifierContext.js';
@@ -900,6 +902,28 @@ describe('extractVerifierCommand', () => {
 // ─── R3a: Post-edit static check tests ──────────────────────────────────────────
 
 describe('post-edit static check', () => {
+  test('allows slow Python startup without reporting valid source as broken', async (t) => {
+    const previous = process.env.BABEL_PYTHON;
+    process.env.BABEL_PYTHON = process.execPath;
+    clearPythonInterpreterCache();
+    t.mock.method(childProcess, 'spawnSync', () => ({ status: 0 }));
+    t.mock.method(childProcess, 'execFileSync', (_bin: string, _args: string[], options: { timeout: number }) => {
+      if (options.timeout < 3_000) throw Object.assign(new Error('spawnSync python ETIMEDOUT'), { code: 'ETIMEDOUT' });
+      return '';
+    });
+    syncBuiltinESMExports();
+    try {
+      const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'fix the bug', projectRoot: process.cwd() });
+      assert.match(await (engine as any).runPostEditStaticCheck(join(process.cwd(), 'valid.py')), /^exit_code: 0/);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+      if (previous === undefined) delete process.env.BABEL_PYTHON;
+      else process.env.BABEL_PYTHON = previous;
+      clearPythonInterpreterCache();
+    }
+  });
+
   test('returns null for unsupported extensions (.md, .json, .css)', async () => {
     const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'fix the bug',

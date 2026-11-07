@@ -1,60 +1,44 @@
 # Public roadmap
 
-**Audience:** developers evaluating Babel and contributors scanning priorities.  
-**Updated:** 2026-09-19 (derived from the public tree, open engineering work, and maintainer decisions still pending — **not** a shipped-promise list).
+**Audience:** developers evaluating Babel, and contributors looking for priorities.  
+**Updated:** 2026-11-03 from the public tree and the `babel-harness@0.2.0` package. This is not a delivery schedule.
 
-Babel is **pre-1.0**. This page states **product priorities** for the public project. Use the same honesty buckets as [STATUS.md](./STATUS.md) when that page is available on the revision you are reading:
+Buckets match [STATUS.md](./STATUS.md):
 
-- **Available** — present in the tree / documented as an entrypoint.
-- **Narrowly verified** — scoped CI, contracts, or validation evidence.
-- **Active qualification** — engineering in progress; **not** a user promise.
+- **Available** — the entrypoint or file exists.
+- **Narrowly checked** — a specific command or script was run, or a release asset was listed.
+- **Not a promise** — work that is not done, including things this docs pass only reported.
 
-**Ordinary coding-loop reliability remains under active qualification.** A mode, route, or CLI command existing is not evidence that everyday repository work is already reliable.
+Ordinary coding reliability is still not something this page claims.
 
----
+## Now
 
-## NOW (product focus)
+| Topic | What is true today |
+| --- | --- |
+| **Install** | `npm install --global babel-harness@0.2.0` is the first path. Node 22.19+ (22.x) or 24.13.1+ (24.x) is required. Node 20 installs the tarball and then the command exits 1. |
+| **First command** | `doctor`, `setup`, and `context preview` run. A model task needs a key you create yourself. `doctor` fails closed without Docker. |
+| **Desktop** | Windows x64 installer and zip on the v0.2.0 and v0.1.3 releases. No Linux or macOS Desktop asset. |
+| **Docs** | README, Start here, and the CLI reference agree on `babel-harness` and the npm path. |
 
-| Priority | Intent | Evidence posture today |
-|---|---|---|
-| **Reliable ordinary coding loop** | Make chat-mode day-to-day repository work trustworthy and terminal-truthful | **Active qualification** (engineering track) |
-| **Honest first-success path** | Clone + build + doctor remains the documented trial path; keep install friction and maturity obvious on the front door | **Available** as clone/build; **no** published npm/npx package yet |
-| **Clear maturity language** | Separate what exists in the tree from what is narrowly verified and what is still being qualified | STATUS / README honesty pass on the public docs track |
-| **Readable public docs** | Product path first; architecture and Prompt OS behind progressive disclosure | Docs index + onboarding pointers |
+## Next
 
-Maintainer choices that unblock product clarity but are not automatic doc edits: a real TUI capture for the landing page, Discussions enablement, About blurb wording, Wiki keep/disable, and timing of any registry publish.
+These are gaps found while writing the docs. They are not scheduled.
 
----
+1. **Command text.** `--help` still says `babel` and `Babel Multi-Agent OS`. `setup` says `babel-agent`. Unknown words are run as tasks.
+2. **Sandbox for CLI users.** Windows Desktop Setup pulls the pinned Node image. The CLI does not. Linux and macOS users have to pull an image themselves. That image does not include Python or Java toolchains.
+3. **Package versus source.** `main` has `provider`, `settings`, and `work`. `babel-harness@0.2.0` does not. The next published package should match the docs, or the docs should keep saying which version they mean.
+4. **A real task recording.** The README has a marked spot for a Desktop demo. None is linked, because no recording was added in this pass.
 
-## NEXT (product follow-through)
+## Later
 
-1. **Better intake for real failures** — issue forms and contributor guidance that make it easy to report bugs, harness/agent failures, and docs gaps without dumping internal process on newcomers.
-2. **Release notes people can use** — Unreleased / release narrative in user outcomes first; keep internal IDs as footnotes.
-3. **Public evidence you can inspect** — index **existing** eval, failure, and demo artifacts; link only when the evidence is real and current (never fabricate results).
-4. **Install path productization** — a published npm/npx (or equivalent) trial path remains an **implementation** decision. **No commit date** is stated here.
+- Desktop builds for systems other than Windows x64, if and when they exist.
+- Moving runtime folders (`00_`–`07_`, `prompt_catalog.yaml`, `LLM_COLLABORATION_SYSTEM/`, root `PROJECT_CONTEXT.md`). They stayed put because the catalog, discovery, or identity checks still use those paths. See [STRUCTURE.md](../STRUCTURE.md).
 
----
-
-## LATER (after evidence and maintainer choices)
-
-- Softened repository About / Discussions / Wiki disposition (maintainer settings).
-- First **real** TUI screenshot or recording on the product front door (capture when ready; do not fabricate).
-- Broader packaging once an implementation track lands and docs can truthfully describe it.
-- Any move or rewrite of runtime-sensitive roots (`00_`–`07_`, catalogs, agent instruction files, `babel-cli` runtime) without reference proof — see [ROOT_SAFETY_INVENTORY.md](./ROOT_SAFETY_INVENTORY.md).
-
-Internal harness sequencing and architecture roadmaps live under [architecture/](./architecture/). They are progressive disclosure for contributors who need depth — not the public product promise list.
-
----
+Internal architecture notes stay under [architecture/](./architecture/). They are not this list.
 
 ## How to read this page
 
-- **Try Babel:** [START_HERE.md](../START_HERE.md), then [CLI_QUICKSTART.md](./CLI_QUICKSTART.md).
-- **Maturity / claims:** [STATUS.md](./STATUS.md) when present on your revision.
-- **Docs map:** [docs index](./README.md).
-- **Campaign provenance** (stewardship checklist, PR sequencing): issue [#231](https://github.com/gthgomez/Babel/issues/231) — that tracker is operational detail; this page stays product-facing.
-
-## Related
-
-- [VISION.md](./VISION.md) — product principles
-- [ROOT_SAFETY_INVENTORY.md](./ROOT_SAFETY_INVENTORY.md) — read-only root classification
-- [CHANGELOG.md](../CHANGELOG.md) — release history
+- Try Babel: [START_HERE.md](../START_HERE.md)
+- What went wrong in a real install: [TROUBLESHOOTING.md](./TROUBLESHOOTING.md)
+- Maturity: [STATUS.md](./STATUS.md)
+- Docs map: [docs index](./README.md)

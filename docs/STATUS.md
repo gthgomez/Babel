@@ -1,66 +1,53 @@
 # Project status
 
-**Audience:** developers evaluating or trying Babel.  
-**Updated:** 2026-09-19 (docs stewardship pass; derived from public README, START_HERE, and release notes — not a marketing scorecard).
+**Audience:** developers deciding whether to try Babel.  
+**Updated:** 2026-11-03, from the published `babel-harness@0.2.0` package, the v0.2.0 GitHub release assets, and this checkout of `main`. This is not a scorecard.
 
-Babel is **pre-1.0**. This page separates **what is present in the public tree** from **narrow, evidence-scoped verification**, and from what we are not claiming.
+Babel is **pre-1.0**. A command existing is not evidence that everyday repository work is already reliable.
 
-**Ordinary coding-loop reliability is still under active qualification.** A route or CLI command existing in the tree is not evidence that everyday repository work is already reliable.
+## Available
 
-## Available in the public tree
+- **npm package `babel-harness@0.2.0`.** `npm view babel-harness versions` on 2026-11-03 listed `0.0.0-stage`, `0.1.3`, and `0.2.0`. The package requires Node `^22.19.0 || ^24.13.1`.
+- **Commands that ran** on that package: `--version`, `--help`, `doctor`, `setup`, `setup --json`, `context preview`, `models --help`, `plan --help`, `deep --help`, `undo --help`, and `advanced`. A quoted task with no key exited 1 and named the missing `OPENROUTER_API_KEY`.
+- **Windows x64 Desktop downloads** on the [v0.2.0](https://github.com/gthgomez/Babel/releases/tag/v0.2.0) and [v0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3) releases (Setup `.exe` and `.zip`). They were not installed in this pass.
+- **Source build** of `babel-cli` (`npm --prefix ./babel-cli ci` and `run build`). The source tree is ahead of the 0.2.0 package: it registers `provider`, `settings`, and a `work` alias that the published package did not accept as commands.
+- **Instruction stack** in this repo: `prompt_catalog.yaml` and the numbered layer folders.
 
-These surfaces are present in a current `main` checkout and documented for trial. **Availability means the entrypoint or artifact exists** — not that end-to-end coding reliability is established.
+Exact commands: [START_HERE.md](../START_HERE.md) and [CLI_QUICKSTART.md](./CLI_QUICKSTART.md).
 
-- **Windows x64 Babel Desktop 0.1.3** — published release bundling Node and the CLI ([v0.1.3 release](https://github.com/gthgomez/Babel/releases/tag/v0.1.3)). Current-source Desktop behavior described in `babel-desktop/README.md` may not be in 0.1.3.
-- **Local CLI build** path via `babel-cli` (`npm --prefix ./babel-cli ci` / `run build`).
-- **Chat, plan, and deep modes** as CLI/TUI entrypoints (see START_HERE / CLI_QUICKSTART).
-- **Doctor / environment checks** via `node ./babel-cli/dist/index.js doctor`.
-- **Catalog and stack/manifest validation tooling**, including model-free preview paths documented in START_HERE / README.
-- **Typed routing and runtime contracts** covered by the public release gate workflows.
-- **Read-only MCP inspection** entrypoint for control-plane style inspection.
-- **Public hygiene gates** — typecheck CI, scrub, and secret-scan tooling described in release docs.
+## Narrowly checked
 
-Exact commands: [START_HERE.md](../START_HERE.md), [CLI_QUICKSTART.md](./CLI_QUICKSTART.md).
+- The 0.2.0 package launches on Node 22.23.4 and refuses Node 20.20.2 after a successful install.
+- `doctor` reports Node, bundled resources, credential presence, Docker, and the sandbox image. It does not call a provider. Without Docker it exits 1.
+- `context preview` can read a file with no provider key.
+- The public release gate workflow is `.github/workflows/typecheck.yml`. Whether it is green depends on the commit you are looking at. This page does not record a CI result.
 
-## Narrowly verified properties
+## Environment-dependent
 
-These items have **scoped** public evidence (CI gates, documented validation scripts, or checked-in contracts). They are **not** a general reliability rating for agent coding sessions.
-
-- The public checkout **builds and typechecks** under the Public Release Gate when that workflow is green on the commit you are evaluating.
-- Catalog / stack validation and related release hygiene checks run as documented in the public tools and CI.
-- The documented install paths are the **Windows x64 Desktop 0.1.3 download** and **clone + build** from current source.
-
-## Environment-dependent / maturing
-
-- **Provider-backed model sessions** — require local credentials and a working provider; quality varies by model. A saved credential or listed model does not confirm account access or successful inference.
-- **Execution profiles** — default `safe_repo` expects Docker isolation and can fail-closed without it; `dev_local` permits supported host inspection without Docker but does not by itself enable repository test/build commands (use only on repos you own / code you reviewed).
-- **Deep mode** — available as a higher-ceremony path intended for riskier work; still maturing. Route availability does **not** mean Deep is more reliable than chat for ordinary tasks.
-- **TUI polish and recovery UX** — interactive TUI surfaces are present in the public tree; some recovery paths (including `undo` / checkpoints) remain CLI-first (see START_HERE).
-
-## Active qualification (engineering; not user promises)
-
-Public issues and draft PRs currently focus on **ordinary coding-loop reliability**, terminal truthfulness, and related harness hardening. Treat that work as **in progress**. Do not read mode or command availability as proof that the daily coding loop is already reliable.
+- **A provider key** has to be written into `~/.babel/config/.env` or the environment. `setup` on 0.2.0 does not collect it for you. The checklist names DeepInfra, DeepSeek, OpenCode Go, OpenRouter, Command Code, and local Ollama.
+- **Docker plus an image** for the default `safe_repo` profile. There is no Babel image in this repo. Desktop Setup on Windows pulls a pinned `node:24-bookworm` image. That image is not a Python or Java toolchain.
+- **`deep`** is a separate, heavier command. Route availability is not a reliability claim.
 
 ## Known limitations
 
-- **No macOS/Linux Desktop binaries** — the 0.1.3 release ships Windows x64 Desktop only; other platforms use clone + build.
-- **No real TUI screenshot/recording in the README yet** — the landing example is labeled illustrative.
-- **Not a zero-config cloud agent** — Babel is local; you bring providers and policy.
-- **Pre-1.0 API/catalog surfaces may change**.
+- No macOS or Linux Desktop build is attached to the v0.2.0 or v0.1.3 releases.
+- Help text says `babel` and `Babel Multi-Agent OS`. The installed names are `babel-harness` and `babel-agent`.
+- Unknown words such as `settings show` are executed as tasks on 0.2.0.
+- Node prints experimental SQLite and WebAssembly warnings during ordinary commands.
+- Tag `v0.1.2` exists. Its GitHub release was still a draft on 2026-11-03, and `0.1.2` was not in the npm version list queried that day.
 
-## Not currently claimed
+## Not claimed
 
-Do not interpret Babel's docs or marketing-adjacent language as claiming:
-
-- parity with any specific commercial coding agent;
-- unrestricted autonomous operation without human-set permissions/policy;
-- verification outcomes that hold for every task and environment without scoped evidence;
-- sandbox behavior identical on every OS/host configuration;
-- a stable 1.0 package API;
-- that everyday coding-loop reliability is already settled.
+- Parity with any other coding agent, or any benchmark score.
+- That a saved key or a listed model means the provider accepted it.
+- That verification covers every task.
+- That `safe_repo` behaves the same on every host. The Docker pull in the docs was not executed in the pass that wrote this page.
+- A stable 1.0 API.
+- That ordinary coding-loop reliability is settled.
 
 ## Related
 
-- [VISION.md](./VISION.md) — product principles and public scope
-- [ARCHITECTURE.md](./architecture/ARCHITECTURE.md) — deeper system shape
-- [CHANGELOG.md](../CHANGELOG.md) — release history
+- [VISION.md](./VISION.md)
+- [ROADMAP.md](./ROADMAP.md)
+- [TROUBLESHOOTING.md](./TROUBLESHOOTING.md)
+- [CHANGELOG.md](../CHANGELOG.md)

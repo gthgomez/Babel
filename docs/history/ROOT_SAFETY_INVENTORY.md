@@ -1,5 +1,7 @@
 # Root safety inventory (read-only)
 
+> Historical snapshot from 2026-09-19. A later docs pass moved the archive-candidates named below into `docs/history/`. This file does not authorize further moves. Current layout: [STRUCTURE.md](../../STRUCTURE.md).
+
 **Audience:** maintainers and stewardship contributors.  
 **Updated:** 2026-09-19  
 **Source tree:** live `main` at inventory time via GitHub git trees API (`GET /repos/gthgomez/Babel/git/trees/main`).  
@@ -85,7 +87,7 @@ When a future PR proposes a purely docs-safe relocation, cite this inventory, th
 
 ## Related
 
-- [STRUCTURE.md](../STRUCTURE.md) — existing human tree overview
-- [docs index](./README.md) — documentation map
-- [public roadmap](./ROADMAP.md) — NOW / NEXT / LATER
+- [STRUCTURE.md](../../STRUCTURE.md) — existing human tree overview
+- [docs index](../README.md) — documentation map
+- [public roadmap](../ROADMAP.md) — NOW / NEXT / LATER
 - Campaign tracker: [#231](https://github.com/gthgomez/Babel/issues/231)

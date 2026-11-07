@@ -228,7 +228,7 @@ temporarily removed from the `protect-main` required checks, with:
 
 - exactly one PR: #138;
 - exactly one candidate head SHA: recorded in the PR merge comment and
-  `docs/reconciliation/BABEL_CANONICAL_RECONCILIATION_FINAL.md`;
+  `docs/history/reconciliation/BABEL_CANONICAL_RECONCILIATION_FINAL.md`;
 - all five other required checks green at that exact head;
 - the ruleset restored immediately after the merge, verified byte-for-byte
   against the pre-exception snapshot, with zero bypass actors throughout;

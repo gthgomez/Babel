@@ -13,9 +13,10 @@ last_verified: 2026-08-04
 
 ## Public naming and first run (2026-10-30)
 
+Install and first commands for `babel-harness@0.2.0` are in [README.md](../README.md). On that published package, `setup` prints a checklist. It does not prompt for a provider. The `work`, `provider`, and `settings` commands described in this page are registered in the current source tree. They were not commands in the `0.2.0` package that was tested on 2026-11-03.
+
 This document describes the internal Chat controller, presented as **Work** in the
-CLI/TUI. Start npm installations with `babel-agent setup`; no cloud provider/model
-is selected for a fresh profile. `/provider use <connection>` and `/model use
+CLI/TUI. `babel-agent` is an alias of `babel-harness`. A fresh profile has no cloud provider selected. `/provider use <connection>` and `/model use
 <exact-id>` change only the session; `--save user|project` makes persistence explicit.
 `/mode plan` produces a read-only saved handoff and stops by default. `/apply <id>`
 rechecks scope/permissions before the existing governed executor. `/mode work

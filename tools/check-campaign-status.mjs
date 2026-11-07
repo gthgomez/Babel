@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Campaign-status consistency guard (static, offline).
 //
-// Validates docs/campaigns/DAILY_DRIVER_CAMPAIGN_STATUS.md against the
+// Validates docs/history/campaigns/DAILY_DRIVER_CAMPAIGN_STATUS.md against the
 // invariants that campaign drift has historically violated:
 //   1. a phase marked COMPLETE must cite its PR (or an explicit baseline
 //      marker) and a merge/commit SHA;
@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const docPath = join(repoRoot, 'docs', 'campaigns', 'DAILY_DRIVER_CAMPAIGN_STATUS.md');
+const docPath = join(repoRoot, 'docs', 'history', 'campaigns', 'DAILY_DRIVER_CAMPAIGN_STATUS.md');
 const text = readFileSync(docPath, 'utf-8');
 const violations = [];
 

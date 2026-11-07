@@ -14,7 +14,7 @@ import { SourceRecordSchema, SourceRevisionSchema } from '../../contracts/source
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../../../..')
 export const attempt4EvidenceSubsetPath = join(
   repoRoot,
-  'review-artifacts/general-g-l1-attempt4-evidence-subset.json',
+  'docs/history/review-artifacts/general-g-l1-attempt4-evidence-subset.json',
 )
 
 export interface Attempt4EvidenceSubset {

@@ -321,7 +321,8 @@ export async function runPostEditStaticCheck(
           ],
           {
             cwd: projectRoot,
-            timeout: fastCheckTimeout,
+            // Python launcher startup on busy Windows runners can exceed two seconds.
+            timeout: 10_000,
             encoding: 'utf-8',
             maxBuffer: 1024 * 32,
           },

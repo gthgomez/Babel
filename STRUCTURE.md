@@ -1,6 +1,6 @@
 # Repository Structure
 
-Babel is a local terminal coding agent and coding-agent harness: chat-first daily work by default, with a review-first plan lane and governed deep execution. It is organized around an inspectable prompt operating system — the underlying instruction architecture — plus a local CLI and public validation lane.
+Babel is a local agent harness: a terminal coding agent with a chat-style default, a `plan` command, and a `deep` command. The numbered folders (`00_` through `07_`) and `prompt_catalog.yaml` are the instruction stack the harness loads. Start with `README.md`, not those folders.
 
 This tree is the canonical public source. A clean clone must contain every file
 required by the startup chain and validation path; external consumer configuration
@@ -46,7 +46,7 @@ is optional and must not become a repository prerequisite.
 ## Governance and community
 
 - `CHANGELOG.md` - release history
-- `REGRESSION_LEDGER.md` - known-regression tracking
+- `docs/history/` - historical campaign notes, old readiness reports, and review receipts. Not the place to start.
 - `SECURITY.md` - security policy
 - `CONTRIBUTING.md` - contribution guide
 - `CODE_OF_CONDUCT.md` - community standards

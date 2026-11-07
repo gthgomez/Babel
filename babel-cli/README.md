@@ -206,6 +206,8 @@ node --env-file=.\babel-cli\.env .\babel-cli\dist\index.js run --project example
 
 ## First run, connections, and defaults
 
+The commands in this section (`provider`, `model`, `settings`, `work`) are implemented in this source tree. They are not part of published `babel-harness@0.2.0`. On that package, `babel-harness setup` only prints a checklist, and a word such as `settings` is run as a chat task. Use the repository [README](../README.md) for the published quickstart.
+
 A fresh profile has **no cloud provider or model selected**. Launching the interactive
 CLI offers setup before indexing or runtime warmup. Setup explains Babel, records
 an explicit provider connection and exact model ID, asks for a per-task budget
