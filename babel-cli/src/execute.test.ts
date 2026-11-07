@@ -18,6 +18,8 @@ import { z } from 'zod';
 import { EvidenceBundle } from './evidence.js';
 import type { LlmRunner, RunnerCallbacks } from './runners/base.js';
 import { globalCostTracker } from './services/costTracker.js';
+import { buildInvocationMetadata } from './runners/providerResponseMetadata.js';
+import { buildCostLedger, usageSummaryFromCostLedger } from './services/costLedger.js';
 import {
   RELIABILITY_REPAIR_PROOF_MARKER,
   buildPipelineV9OfflineFixtureResponse,
@@ -129,6 +131,60 @@ test('delegated dispatch records an unknown parent charge before missing telemet
 });
 
 // ─── resolveAggregateWaterfallTimeoutMs (internal) ──────────────────────────────
+test('a reported charge remains known when provider token usage is unavailable', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-waterfall-usage-'));
+  globalCostTracker.resetSession();
+  try {
+    const evidence = new EvidenceBundle('missing usage fixture', root);
+    const metadata = buildInvocationMetadata('openrouter', 'fixture/model', 1, { cost: 0.125 });
+    const runner = makeRunner({
+      async execute<T>(_prompt: string, _schema: unknown, callbacks?: RunnerCallbacks): Promise<T> {
+        callbacks?.onInvocationPhase?.({ inference_id: 'fixture-inference', provider: 'openrouter', model: 'fixture/model', phase: 'request_dispatched' });
+        return { ok: true } as T;
+      },
+      getLastInvocationMetadata: () => metadata,
+    });
+    await runWaterfallForSchemaFailureTest({ prompt: 'usage fixture', schema: z.object({ ok: z.literal(true) }),
+      stage: 'planning', schemaName: 'UsageFixture', evidence, maxAttempts: 1, tiers: [{ name: 'fixture', runner }] });
+    const ledger = buildCostLedger({ runId: evidence.runId, task: 'usage fixture', lane: 'plan', waterfallEntries: evidence.getWaterfallLogSnapshot() });
+    for (const summary of [globalCostTracker.getSessionSummary(), usageSummaryFromCostLedger(ledger)]) {
+      assert.equal(summary.actualCostUSD, 0.125);
+      assert.equal(summary.unknownChargeCount, 0);
+      assert.equal(summary.usageComplete, false);
+    }
+  } finally { globalCostTracker.resetSession(); rmSync(root, { recursive: true, force: true }); }
+});
+for (const cost of [undefined, null, 0, 0.125, 0.0000000000001] as const) {
+  test(`waterfall settlement and ledger preserve reported charge ${String(cost)}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-waterfall-charge-'));
+    globalCostTracker.resetSession();
+    try {
+      const evidence = new EvidenceBundle('charge provenance fixture', root);
+      const metadata = buildInvocationMetadata('openrouter', 'deepseek/deepseek-v4.1-flash-1017', 1,
+        { prompt_tokens: 1000, completion_tokens: 100, ...(cost === undefined ? {} : { cost }) });
+      const runner = makeRunner({
+        async execute<T>(): Promise<T> { return { ok: true } as T; },
+        getLastInvocationMetadata: () => metadata,
+      });
+      await runWaterfallForSchemaFailureTest({ prompt: 'charge fixture', schema: z.object({ ok: z.literal(true) }),
+        stage: 'planning', schemaName: 'ChargeFixture', evidence, maxAttempts: 1, tiers: [{ name: 'fixture', runner }] });
+      const ledger = buildCostLedger({ runId: evidence.runId, task: 'charge fixture', lane: 'plan',
+        waterfallEntries: evidence.getWaterfallLogSnapshot() });
+      for (const [index, summary] of [globalCostTracker.getSessionSummary(), usageSummaryFromCostLedger(ledger)].entries()) {
+        assert.equal(summary.actualCostUSD, typeof cost === 'number' ? cost : null, `${index === 0 ? 'session' : 'ledger'} actual cost`);
+        assert.equal(summary.costComplete, typeof cost === 'number');
+        assert.equal(summary.unknownChargeCount, cost === null ? 1 : 0);
+        if (cost === undefined) assert.ok((summary.estimatedCostUSD ?? 0) > 0);
+        else assert.equal(summary.estimatedCostUSD, 0);
+        if (typeof cost === 'number') assert.equal(summary.modelBreakdown[metadata.provider_model_id!]?.completeCostUSD, cost);
+      }
+      assert.equal(ledger.entries[0]?.estimated_cost_usd, cost === null ? null : metadata.estimated_cost_usd);
+    } finally {
+      globalCostTracker.resetSession();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 // This function is NOT exported. It reads BABEL_WATERFALL_TIMEOUT_MS from the
 // environment at call time and returns the parsed positive finite number, or
 // DEFAULT_WATERFALL_TIMEOUT_MS (180000) as the fallback.

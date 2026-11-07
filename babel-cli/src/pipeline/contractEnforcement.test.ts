@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { repairExactOutputSchemaArtifacts as repairExecutorArtifacts } from './exactOutputArtifacts.js';
+import { withRunCancellation } from '../runtime/runCancellation.js';
 
 import {
   collectBoundedContractViolations,
@@ -41,6 +42,25 @@ test('read-only task contracts reject writes to mentioned and unrelated paths be
   assert.notEqual(collectBoundedContractViolations(plan,task),null);
   assert.match(assertBoundedPlanActivationContract(plan,task)??'',/READ_ONLY_TASK/);
  }
+});
+
+test('direct recovery cannot rewrite target artifacts after an awaited cancellation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-cancel-recovery-'));
+  try {
+    mkdirSync(join(root, 'logs'));
+    writeFileSync(join(root, 'logs', '2026-11-05_fixture.log'), '[ERROR] fixture\n');
+    writeFileSync(join(root, 'summary.csv'), 'preserved');
+    const task = 'Create summary.csv from logs named YYYY-MM-DD_<source>.log. The current date is 2026-11-05.\nperiod,severity,count\ntoday,ERROR,<count>';
+    const controller = new AbortController();
+    await withRunCancellation(controller.signal, async () => {
+      await Promise.resolve();
+      controller.abort();
+      for (const repair of [repairExactOutputSchemaArtifacts, repairExecutorArtifacts]) {
+        assert.throws(() => repair(task, root), { name: 'AbortError' });
+        assert.equal(readFileSync(join(root, 'summary.csv'), 'utf8'), 'preserved');
+      }
+    });
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 import type { SwePlan, QaVerdictReject } from '../schemas/agentContracts.js';
 

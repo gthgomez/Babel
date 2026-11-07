@@ -179,3 +179,25 @@ test('buildCostLedger normalizes invalid precision values to unknown', () => {
   assert.equal(ledger.totals.by_precision.unknown, 0.001);
   assert.match(ledger.warnings.join('\n'), /Invalid cost precision/);
 });
+
+test('mixed ledger provenance keeps reported subtotals while the full actual total remains unavailable', () => {
+  for (const withheld of [false, true]) {
+    const ledger = buildCostLedger({ runId: 'mixed', task: 'mixed provenance', lane: 'plan', waterfallEntries: [{
+      stage: 'planning', attempts_detail: [
+        { provider: 'openrouter', provider_model_id: 'fixture', prompt_tokens: 10, completion_tokens: 5,
+          estimated_cost_usd: 0.125, provider_reported_total_charge_usd: 0.125 },
+        { provider: 'openrouter', provider_model_id: 'fixture', prompt_tokens: 10, completion_tokens: 5,
+          estimated_cost_usd: withheld ? null : 0.25, cost_precision: withheld ? 'unknown' : 'exact',
+          ...(withheld ? { provider_reported_total_charge_usd: null } : {}) },
+      ],
+    }] });
+    const summary = usageSummaryFromCostLedger(ledger);
+    assert.equal(summary.actualCostUSD, null);
+    assert.equal(summary.knownCostUSD, 0.125);
+    assert.equal(summary.reportedCostUSD, 0.125);
+    assert.equal(summary.estimatedCostUSD, withheld ? 0 : 0.25);
+    assert.equal(summary.unknownChargeCount, withheld ? 1 : 0);
+    assert.equal(summary.costComplete, false);
+    assert.equal(summary.modelBreakdown['fixture']?.completeCostUSD, null);
+  }
+});

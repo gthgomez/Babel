@@ -37,6 +37,7 @@ export async function executeGovernedTask(
   task: string,
   target: AgentTargetContext,
   modeOverride?: ValidMode,
+  planRunId?: string | null,
 ): Promise<void> {
   if (ctx.state.operatorMode === 'hard_plan' || ctx.state.operatorMode === 'dry_run') throw new Error('Current read-only operator restriction blocks governed execution. Use Plan or explicitly change the permission setting.');
   assertFiniteBudgetSupported('Thorough Work', target.targetRoot);
@@ -168,6 +169,7 @@ export async function executeGovernedTask(
         orchestratorVersion: ctx.state.router,
         ...(ctx.state.model !== undefined ? { modelOverride: ctx.state.model } : {}),
         eventBus: bus,
+        ...(planRunId !== undefined ? { planRunId } : {}),
       });
     } finally {
       if (previousProjectRoot === undefined) {

@@ -91,7 +91,7 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
       const target = ctx.resolveCurrentTarget();
       await withSavedPlanApplication(id, { projectRoot: target.targetRoot, operatorMode: ctx.state.operatorMode, execute: async plan => {
         const { executeGovernedTask } = await import('./execution/governed.js');
-        await executeGovernedTask(ctx, input, `Implement this approved plan within current permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`, target, 'deep');
+        await executeGovernedTask(ctx, input, `Implement this approved plan within current permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`, target, 'deep', plan.sourceRunId ?? null);
         if (ctx.state.lastRunUserStatus !== 'complete') throw new Error('Plan implementation stopped; inspect the run evidence.');
       } });
       break;

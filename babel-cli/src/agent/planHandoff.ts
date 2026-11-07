@@ -1,8 +1,9 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 
 import type { LiteTaskContract } from '../lite/contract.js';
 import { resolvePlanArtifactRoot } from '../lite/artifacts.js';
+import { isCredentialTargetPath } from '../authority/protectedPath.js';
 import type { QaVerdict, SwePlan } from '../schemas/agentContracts.js';
 
 export interface PlanHandoff {
@@ -48,8 +49,13 @@ function belongsToProject(runDir: string, repoPath: string): boolean {
   const metadata = safeReadJson(join(runDir, 'manifest.json')) ?? safeReadJson(join(runDir, 'request.json'));
   const owner = metadata?.['project_root'];
   if (typeof owner === 'string') {
-    const normalized = (path: string) => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
-    return normalized(owner) === normalized(repoPath);
+    try {
+      const normalized = (path: string) => {
+        const physical = realpathSync(resolve(path));
+        return process.platform === 'win32' ? physical.toLowerCase() : physical;
+      };
+      return normalized(owner) === normalized(repoPath);
+    } catch { return false; }
   }
   // Older repo-local runs lack target metadata. Shared private runs must have it.
   return resolve(runDir, '..') === join(resolve(repoPath), 'runs', 'babel-lite');
@@ -68,13 +74,33 @@ function trimForPrompt(value: string, maxChars: number): string {
   return value.length <= maxChars ? value : `${value.slice(0, maxChars)}\n...[truncated]`;
 }
 
+/** Model-generated paths never grant permission to read outside the target. */
+function scopedHandoffPath(repoPath: string, path: string): string | null {
+  if (!path.trim() || path.includes(':') || isAbsolute(path) || win32.isAbsolute(path)) return null;
+  const credential = (value: string) => isCredentialTargetPath(value) || /(?:^|[/\\])\.(?:codex|git)(?:[/\\]|$)/i.test(value);
+  const inside = (root: string, target: string) => {
+    const rel = relative(root, target);
+    return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+  };
+  try {
+    const root = realpathSync(repoPath);
+    const absolute = resolve(root, path);
+    if (!inside(root, absolute) || credential(path) || credential(absolute)) return null;
+    let ancestor = absolute;
+    while (!existsSync(ancestor) && ancestor !== dirname(ancestor)) ancestor = dirname(ancestor);
+    const physicalAncestor = realpathSync(ancestor);
+    const physical = resolve(physicalAncestor, relative(ancestor, absolute));
+    return inside(root, physical) && !credential(physical) ? physical : null;
+  } catch { return null; }
+}
+
 function readHandoffFileSnippet(
   repoPath: string,
   relativePath: string,
   maxChars = 6000,
 ): string | null {
-  const absolutePath = resolve(repoPath, relativePath);
-  if (!existsSync(absolutePath)) {
+  const absolutePath = scopedHandoffPath(repoPath, relativePath);
+  if (!absolutePath || !existsSync(absolutePath)) {
     return null;
   }
   try {
@@ -124,18 +150,18 @@ export function loadPlanHandoff(input: {
   const allowedPaths = new Set<string>();
   for (const path of contract?.likely_files ?? []) {
     if (typeof path === 'string' && path.trim()) {
-      allowedPaths.add(path.trim());
+      if (scopedHandoffPath(input.repoPath, path.trim())) allowedPaths.add(path.trim());
     }
   }
   for (const path of contract?.required_reads ?? []) {
     if (typeof path === 'string' && path.trim()) {
-      allowedPaths.add(path.trim());
+      if (scopedHandoffPath(input.repoPath, path.trim())) allowedPaths.add(path.trim());
     }
   }
   if (Array.isArray(modelPlan?.['likely_files'])) {
     for (const path of modelPlan['likely_files']) {
       if (typeof path === 'string' && path.trim()) {
-        allowedPaths.add(path.trim());
+        if (scopedHandoffPath(input.repoPath, path.trim())) allowedPaths.add(path.trim());
       }
     }
   }

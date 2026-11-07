@@ -11,6 +11,7 @@ import { assertFiniteBudgetSupported } from '../config/laneBudget.js'
 import { hasExplicitEditDenial } from '../config/chatTaskClass.js'
 
 const planSchema = z.object({ schemaVersion: z.literal(1), id: z.string(), projectRoot: z.string(), task: z.string(), body: z.string().min(1).max(1024 * 1024),
+  sourceRunId: z.string().regex(/^\d{8}T\d{6}Z-plan-[a-f0-9]+$/i).optional(),
   createdAt: z.string(), fingerprint: z.string(), state: z.enum(['ready', 'applying', 'applied', 'failed']) })
 export type SavedPlan = z.infer<typeof planSchema>
 
@@ -65,7 +66,7 @@ function projectFingerprint(root: string, env: NodeJS.ProcessEnv): string {
   return hash.digest('hex')
 }
 
-export function savePlan(input: { projectRoot: string; task: string; body: string }, env: NodeJS.ProcessEnv = process.env): SavedPlan {
+export function savePlan(input: { projectRoot: string; task: string; body: string; sourceRunId?: string }, env: NodeJS.ProcessEnv = process.env): SavedPlan {
   const projectRoot = realpathSync(resolve(input.projectRoot))
   const plan = planSchema.parse({ ...input, projectRoot, schemaVersion: 1, id: `plan_${randomUUID()}`, createdAt: new Date().toISOString(),
     fingerprint: projectFingerprint(projectRoot, env), state: 'ready' })

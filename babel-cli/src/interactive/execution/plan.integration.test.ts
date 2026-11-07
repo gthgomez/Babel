@@ -19,7 +19,7 @@ function runPlanScenario(task: string, cancel: boolean | 'provider' = false) {
       const {PassThrough}=await import('node:stream');
       const {createInterface}=await import('node:readline');
       const {readFileSync,readdirSync}=await import('node:fs');
-      const {join}=await import('node:path');
+      const {basename,join}=await import('node:path');
       const {executePlanTask}=await import(${JSON.stringify(new URL('./plan.ts',import.meta.url).href)});
       const {loadSavedPlan}=await import(${JSON.stringify(new URL('../../services/savedPlan.ts',import.meta.url).href)});
       const {handleCancelTurn}=await import(${JSON.stringify(new URL('../commands/review.ts',import.meta.url).href)});
@@ -59,6 +59,7 @@ function runPlanScenario(task: string, cancel: boolean | 'provider' = false) {
         unchanged:readFileSync('calc.js','utf8')==='export const value=1;\\n',
         staleChatCancellations,cancelHookCleared:ctx.cancelActiveRun===undefined,
         targetUnchanged:readdirSync(process.cwd()).sort().join('|')==='.git|calc.js',
+        sourceBound:!!saved && saved.sourceRunId===basename(ctx.lastRunDir),
         ...(${cancel === 'provider'}?{providerRequests,providerAborted,liveModelsCorrect,liveScopeCorrect}:{})}));
       rl.close();input.destroy();
     `);
@@ -80,7 +81,7 @@ function runPlanScenario(task: string, cancel: boolean | 'provider' = false) {
 test('interactive Plan saves the complete canonical read-only plan for named files without applying it',()=>{
   assert.deepEqual(runPlanScenario('Plan-only: inspect calc.js and propose a regression test. Do not modify any files.'),{
     status:'PLAN_READY',settlement:'complete',saved:true,ready:true,project:true,body:true,fullBody:true,unchanged:true,
-    staleChatCancellations:0,cancelHookCleared:true,targetUnchanged:true,
+    staleChatCancellations:0,cancelHookCleared:true,targetUnchanged:true,sourceBound:true,
   });
 });
 
@@ -91,14 +92,14 @@ test('an explicit no-modification instruction overrides the auto-apply preferenc
 test('cancelling interactive Plan aborts the active plan without saving or cancelling an old chat engine',()=>{
   assert.deepEqual(runPlanScenario('Plan-only: inspect calc.js and propose a regression test.',true),{
     status:'CANCELLED',settlement:'cancelled',saved:false,ready:false,project:false,body:false,fullBody:false,unchanged:true,
-    staleChatCancellations:0,cancelHookCleared:true,targetUnchanged:true,
+    staleChatCancellations:0,cancelHookCleared:true,targetUnchanged:true,sourceBound:false,
   });
 });
 
 test('Plan forwards the exact model and target scope, and aborts an in-flight synthesis request',()=>{
   assert.deepEqual(runPlanScenario('Plan-only: inspect calc.js and propose a regression test.','provider'),{
     status:'CANCELLED',settlement:'cancelled',saved:false,ready:false,project:false,body:false,fullBody:false,unchanged:true,
-    staleChatCancellations:0,cancelHookCleared:true,targetUnchanged:true,
+    staleChatCancellations:0,cancelHookCleared:true,targetUnchanged:true,sourceBound:false,
     providerRequests:2,providerAborted:true,liveModelsCorrect:true,liveScopeCorrect:true,
   });
 });

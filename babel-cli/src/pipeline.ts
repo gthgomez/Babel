@@ -371,6 +371,8 @@ export interface PipelineOptions {
   deniedFingerprints?: Map<string, { count: number; turn: number }>;
   /** Signal to abort the pipeline mid-execution. */
   abortSignal?: AbortSignal; /** Inject memory persistence for deterministic callers; defaults to the production extractor. */ memoryExtractor?: (runDir: string, projectRoot: string | undefined, evidence: EvidenceBundle) => Promise<void>; /** Disable post-run memory extraction for offline or explicitly read-only runs. */ disableMemoryExtraction?: boolean;
+  /** Exact source of a saved plan; null suppresses legacy implicit-latest lookup. */
+  planRunId?: string | null;
 }
 
 export interface PipelineResult {
@@ -817,7 +819,7 @@ export async function runBabelPipeline(
 
 async function runBabelPipelineLocal(task: string, options: PipelineOptions): Promise<PipelineResult> {
   // Daemon transport does not carry the selected route or private Desktop profile.
-  const daemonEnabled = !options.modelOverride && process.env['BABEL_DESKTOP_IPC'] !== '1' && process.env['BABEL_DAEMON_ENABLED'] !== 'false' && process.env['BABEL_DAEMON_ENABLED'] !== '0';
+  const daemonEnabled = !options.modelOverride && options.planRunId === undefined && process.env['BABEL_DESKTOP_IPC'] !== '1' && process.env['BABEL_DAEMON_ENABLED'] !== 'false' && process.env['BABEL_DAEMON_ENABLED'] !== '0';
   const isDaemonProcess = isRunningInDaemon();
 
   if (daemonEnabled && !isDaemonProcess) {
@@ -1024,18 +1026,13 @@ async function runBabelPipelineInternal(
       terminalContext,
       verifierContractSummary: verifierContract.summary,
     });
-    evidence.writeDebugFile(
-      'terminal_status_summary.json',
-      `${JSON.stringify(terminalState.terminalSummary, null, 2)}\n`,
-    );
-    const finalizedResult: PipelineResult = {
+    let finalizedResult: PipelineResult = {
       ...result,
       status: terminalState.status,
       terminalSummary: terminalState.terminalSummary,
       attemptSafetySummary: terminalContext.attemptSafetySummary,
       verifierContractSummary: verifierContract.summary,
     };
-    finalizeV9LiveSessionForPipeline(v9LiveSession, finalizedResult, verifierContract.summary.verifierCompletionSatisfied);
     if (!getRunAbortSignal()?.aborted) await runPluginHooks('PostRun', {
       runId: evidence.runId,
       runDir: evidence.runDir,
@@ -1048,27 +1045,28 @@ async function runBabelPipelineInternal(
     });
     const traceSummary = await pipelineTrace.finish(finalizedResult.status);
     evidence.writeTraceContext(traceSummary);
-    evidence.writeWaterfallTelemetry();
-    const costLedger = buildCostLedger({
-      runId: evidence.runId,
-      task,
-      lane: 'governed',
-      waterfallEntries: evidence.getWaterfallLogSnapshot(),
-    });
-    evidence.writeCostLedger(costLedger);
-    const usageSummary =
-      costLedger.entries.length > 0
-        ? usageSummaryFromCostLedger(costLedger)
-        : globalCostTracker.getSessionSummary();
-
     // Trigger Project Memory Extraction on success
-    if (finalizedResult.status === 'COMPLETE' && !options.disableMemoryExtraction) {
+    if (!getRunAbortSignal()?.aborted && finalizedResult.status === 'COMPLETE' && !options.disableMemoryExtraction) {
       await (options.memoryExtractor ?? extractAndSaveMemories)(
         finalizedResult.runDir,
         inferProjectRoot(finalizedResult.manifest),
         evidence,
       );
     }
+    // Finalization can suspend; cancellation remains effective until it settles.
+    if (getRunAbortSignal()?.aborted) finalizedResult = { ...finalizedResult,
+      status: 'EXECUTOR_HALTED', terminalOutcome: 'CANCELLED', errors: ['Run cancelled by the operator.'],
+      finalAnswer: 'Run cancelled; inspect any changes made before cancellation.',
+      terminalSummary: { ...terminalState.terminalSummary, status: 'EXECUTOR_HALTED', reason_category: 'executor_halted',
+        condition_summary: '[CANCELLED] Run cancelled by the operator.', next_recommended_operator_action: 'Inspect changes made before cancellation before starting another run.' },
+    };
+    evidence.writeDebugFile('terminal_status_summary.json', `${JSON.stringify({ ...finalizedResult.terminalSummary,
+      ...(finalizedResult.terminalOutcome ? { terminal_outcome: finalizedResult.terminalOutcome } : {}) }, null, 2)}\n`);
+    finalizeV9LiveSessionForPipeline(v9LiveSession, finalizedResult, verifierContract.summary.verifierCompletionSatisfied);
+    evidence.writeWaterfallTelemetry();
+    const costLedger = buildCostLedger({ runId: evidence.runId, task, lane: 'governed', waterfallEntries: evidence.getWaterfallLogSnapshot() });
+    evidence.writeCostLedger(costLedger);
+    const usageSummary = costLedger.entries.length > 0 ? usageSummaryFromCostLedger(costLedger) : globalCostTracker.getSessionSummary();
 
     // Prune old session checkpoints to prevent unbounded storage growth.
     // Uses the manifest's session_id, falling back to a hash of the run dir.
@@ -1191,28 +1189,32 @@ async function runBabelPipelineInternal(
         message,
       );
     }
+    const cancelled = getRunAbortSignal()?.aborted === true;
+    const errorStatus = cancelled ? 'EXECUTOR_HALTED' : 'FATAL_ERROR';
+    const errorCondition = cancelled ? '[CANCELLED] Run cancelled by the operator before manifest completion.' : failureArtifacts.condition;
     writeValidatedExecutionReport(
       evidence,
-      failureArtifacts.executionReport,
+      cancelled ? { ...failureArtifacts.executionReport, pipeline_error: { ...failureArtifacts.executionReport.pipeline_error,
+        condition: errorCondition }, warnings: ['Run cancelled before executor activation.'] } : failureArtifacts.executionReport,
       [],
-      failureArtifacts.executionReport.warnings,
+      cancelled ? ['Run cancelled before executor activation.'] : failureArtifacts.executionReport.warnings,
     );
-    evidence.writeDebugFile(
+    if (!cancelled) evidence.writeDebugFile(
       PRE_EXECUTION_FAILURE_CAPSULE_FILENAME,
       `${JSON.stringify(failureArtifacts.failureCapsule, null, 2)}\n`,
     );
     const terminalSummary = buildTerminalStatusSummary({
-      status: 'FATAL_ERROR',
-      condition: failureArtifacts.condition,
-      failureCapsulePath: failureArtifacts.failureCapsulePath,
+      status: errorStatus,
+      condition: errorCondition,
+      failureCapsulePath: cancelled ? null : failureArtifacts.failureCapsulePath,
     });
     evidence.writeDebugFile(
       'terminal_status_summary.json',
-      `${JSON.stringify(terminalSummary, null, 2)}\n`,
+      `${JSON.stringify({ ...terminalSummary, ...(cancelled ? { terminal_outcome: 'CANCELLED' } : {}) }, null, 2)}\n`,
     );
     if (options.writeLatestPointers !== false) {
       writeLatestRunPointers(evidence.runDir, 'global', {
-        status: 'FATAL_ERROR',
+        status: errorStatus,
         targetRoot: runtimeProjectRoot,
         command: 'run',
         evidenceComplete: true,
@@ -1224,10 +1226,10 @@ async function runBabelPipelineInternal(
       babelRoot: BABEL_ROOT,
       projectRoot: runtimeProjectRoot,
       dryRun: DRY_RUN,
-      status: 'FATAL_ERROR',
+      status: errorStatus,
       error: message,
     });
-    const traceSummary = await pipelineTrace.finish('FATAL_ERROR', error);
+    const traceSummary = await pipelineTrace.finish(errorStatus, error);
     evidence.writeTraceContext(traceSummary);
     evidence.writeWaterfallTelemetry();
     evidence.writeCostLedger(
@@ -1238,7 +1240,8 @@ async function runBabelPipelineInternal(
         waterfallEntries: evidence.getWaterfallLogSnapshot(),
       }),
     );
-    episodeLifecycle.recordFinalization('FATAL_ERROR', message);
+    episodeLifecycle.recordFinalization(errorStatus, errorCondition);
+    if (cancelled) throw getRunAbortSignal()?.reason ?? error;
     throw error;
   };
 
@@ -1736,10 +1739,12 @@ async function runBabelPipelineInternal(
     );
     const taskContract = classifyTaskContract(task);
     const taskGrounding = buildTaskGrounding(taskContract, inferProjectRoot(manifest));
-    const planHandoff = loadPlanHandoff({
+    const planHandoff = options.planRunId === null ? null : loadPlanHandoff({
       repoPath: runtimeProjectRoot,
       task: mergedTaskContext,
+      ...(options.planRunId !== undefined ? { planRunId: options.planRunId } : {}),
     });
+    if (options.planRunId && !planHandoff) throw new Error('The saved plan source is unavailable or belongs to another project; create a fresh plan.');
     if (planHandoff) {
       evidence.writeDebugFile(
         'plan_handoff.json',

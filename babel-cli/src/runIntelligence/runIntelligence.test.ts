@@ -220,6 +220,19 @@ test("ingests evidence idempotently without treating unknown outcome as failure"
   }
 });
 
+test('ledger import preserves reported, estimated and unknown cost provenance', () => {
+  const paths = fixture();
+  try {
+    writeFileSync(join(paths.run, 'cost_ledger.json'), JSON.stringify({ entries: [
+      { entry_id: 'reported', estimated_cost_usd: 0, cost_basis: 'provider_reported', provider_reported_total_charge_usd: 0 },
+      { entry_id: 'legacy', estimated_cost_usd: 0.1 },
+      { entry_id: 'withheld', estimated_cost_usd: null, provider_reported_total_charge_usd: null },
+    ] }));
+    const usage = extractRunDirectory(paths.run).usage.filter(entry => entry.evidenceRef.startsWith('cost_ledger.json#'));
+    assert.deepEqual(usage.map(entry => [entry.costUsd, entry.costBasis]), [[0, 'OBSERVED'], [0.1, 'ESTIMATED'], [null, 'UNKNOWN']]);
+  } finally { cleanup(paths.root); }
+});
+
 test("records terminal execution state without converting it into task success", () => {
   const paths = fixture();
   try {

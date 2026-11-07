@@ -1,5 +1,6 @@
 /** Read-only planning with an explicit saved handoff for application. */
 import type { ReplContext } from '../context.js'
+import { basename } from 'node:path'
 import type { AgentTargetContext } from '../../services/targetResolver.js'
 import { runBabelPipeline } from '../../pipeline.js'
 import { AgentSession } from '../../agent/session.js'
@@ -40,7 +41,8 @@ export async function executePlanTask(ctx: ReplContext, input: string, task: str
     controller.signal.throwIfAborted()
     const body = result.planText?.trim()
     if (result.exitCode !== 0 || result.payload['status'] !== 'PLAN_READY' || !body) throw new Error('The planning run did not produce a usable plan; inspect the run evidence.')
-    const saved = savePlan({ projectRoot: target.targetRoot, task, body })
+    const saved = savePlan({ projectRoot: target.targetRoot, task, body,
+      ...(ctx.lastRunDir ? { sourceRunId: basename(ctx.lastRunDir) } : {}) })
     ctx.state.savedPlanId = saved.id
     ctx.lastAssistantAnswer = body
     ctx.lastAssistantStatus = 'PLAN_READY'
@@ -54,6 +56,7 @@ export async function executePlanTask(ctx: ReplContext, input: string, task: str
             ...(ctx.state.project ? { project: ctx.state.project } : {}), mode: 'deep', orchestratorVersion: ctx.state.router,
             ...(ctx.state.model ? { modelOverride: ctx.state.model } : {}),
             abortSignal: controller.signal,
+            planRunId: plan.sourceRunId ?? null,
           }))
         controller.signal.throwIfAborted()
         ctx.lastRunDir = applied.runDir
