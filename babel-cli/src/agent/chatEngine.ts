@@ -663,14 +663,22 @@ export class ChatEngine {
     this.physicalSettlementUnknown = true;
   }
 
-  private hasUnsettledDurableAdmission(): boolean {
+  private hasIndeterminateDurableAdmission(): boolean {
     const store = this.parity.admissionStore;
     if (!store) return false;
     try {
       const listing = store.listAdmissions(this.engineRunId);
-      return listing.skippedCorruptRows > 0 || listing.records.some(
-        record => record.state === 'claimed' || record.state === 'indeterminate',
-      );
+      return listing.skippedCorruptRows > 0 || listing.records.some(record => record.state === 'indeterminate');
+    } catch {
+      return true;
+    }
+  }
+
+  private hasClaimedDurableAdmission(): boolean {
+    const store = this.parity.admissionStore;
+    if (!store) return false;
+    try {
+      return store.listAdmissions(this.engineRunId).records.some(record => record.state === 'claimed');
     } catch {
       return true;
     }
@@ -2220,18 +2228,31 @@ export class ChatEngine {
       yield { type: 'failed', error: 'The session admission store is closed. Reopen the session before continuing.' };
       return;
     }
-    if (this.activeSubmissionOwner !== null && this.activeEffectActionBatches > 0) {
-      yield { type: 'failed', error: 'The previous request is still settling. Wait for it to finish before continuing.' };
-      return;
-    }
     if (hasUnsettledBackgroundShells(this.engineRunId, this.options.projectRoot)) {
       yield { type: 'failed', error: 'An owned background command is still running or settling. Wait for it to finish before continuing.' };
       return;
     }
-    if (this.physicalSettlementUnknown) {
-      yield { type: 'failed', error: 'A previous command may still be running. Inspect the workspace and run evidence before continuing.',
-        reason_code: 'physical_settlement_unknown' };
-      return;
+    // One replacement contract: a successor may supersede a generation that was
+    // explicitly cancelled/superseded, but must not start while the prior
+    // generation still owns an unsettled durable admission or an in-flight
+    // effect batch. Unknown physical settlement is never silently cleared.
+    const priorStopKind = this.runControl?.stop()?.kind;
+    const priorReleased = priorStopKind === 'cancelled' || priorStopKind === 'superseded';
+    if (!priorReleased) {
+      // An indeterminate admission means a prior physical effect was never
+      // reconciled; it blocks regardless of whether a wrapper is still live.
+      if (this.physicalSettlementUnknown || this.hasIndeterminateDurableAdmission()) {
+        yield { type: 'failed', error: 'A previous request may still be settling or its physical effect is unknown. Inspect the workspace and evidence before continuing.',
+          reason_code: 'physical_settlement_unknown' };
+        return;
+      }
+      // A claimed admission with no live owner is stale (e.g. a primed or
+      // pre-crash record) and may be superseded. With a live owner it is
+      // unsettled work and must settle or be cancelled first.
+      if (this.activeSubmissionOwner !== null && (this.hasClaimedDurableAdmission() || this.activeEffectActionBatches > 0)) {
+        yield { type: 'failed', error: 'The previous request is still settling. Wait for it to finish before continuing.' };
+        return;
+      }
     }
     const owner = Symbol('chat-submission-owner');
     this.activeSubmissionOwner = owner;

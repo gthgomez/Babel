@@ -51,6 +51,9 @@ import {
   existsSync,
   realpathSync,
   renameSync,
+  openSync,
+  closeSync,
+  constants,
 } from 'node:fs';
 import { resolve, sep, dirname, basename, isAbsolute, relative, join } from 'node:path';
 import {
@@ -1610,7 +1613,18 @@ export class SafeExecutor {
       }
       const content = checkedFileBytes(safePath, MAX_FILE_READ_SOURCE_BYTES, () =>
         this.resolveSafeRead(inputPath) === safePath && realpathSync(safePath) === safePath, stats, exactStats);
-      if (!content) throw new Error('File changed or escaped its approved read boundary.');
+      if (!content) {
+        // checkedFileBytes intentionally collapses every failure to null. Distinguish
+        // an OS permission denial from an identity/boundary change so the terminal
+        // classifier can report a typed permission block instead of a generic failure.
+        let probe: number | undefined
+        try { probe = openSync(safePath, constants.O_RDONLY) }
+        catch (err) {
+          const code = (err as NodeJS.ErrnoException).code
+          if (code === 'EACCES' || code === 'EPERM') throw err
+        } finally { if (probe !== undefined) closeSync(probe) }
+        throw new Error('File changed or escaped its approved read boundary.');
+      }
       return this.formatFileContent(content.toString('utf8'), options);
     } catch (err) {
       const denied = maybePolicyDeniedResult(err, 'file_read', [inputPath]);

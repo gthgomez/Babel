@@ -629,6 +629,15 @@ export class ChatEngineStreamingLoop {
           systemPrompt,
           systemPrompt,
         );
+        // R0-8/pr242: a consumer may resume an abandoned or cancelled iterator
+        // after a yield; never dispatch a provider call for a generation that
+        // was cancelled/superseded while the generator was suspended.
+        if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+        if (this.host._cancelled || this.host.abortController.signal.aborted) {
+          finalizeParityCancel(this.host.parity, this.host.engineRunDir);
+          yield this.host.streamCancelled();
+          return;
+        }
         const providerStart = performance.now();
         this.host.markProviderDispatchStarted?.();
         try {
