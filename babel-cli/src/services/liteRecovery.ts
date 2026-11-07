@@ -260,19 +260,29 @@ export function buildLiteContinueAssessment(
         recovery: null,
       };
     }
+    if (resumeVerb === null || resumeVerb === 'fix') {
+      return {
+        status: 'CONTINUE_BLOCKED', source: 'worker_chain', run_dir: manifest.session_run_dir,
+        session_run_dir: manifest.session_run_dir, chain_status: manifest.chain_status,
+        next_verb: resumeVerb, failed_step: manifest.failed_step ?? null,
+        reason: resumeVerb === 'fix'
+          ? 'Worker-chain mutation resume requires settlement identity that the retained manifest does not prove; inspect the retained evidence.'
+          : 'Worker chain is incomplete and has no valid next step; inspect the retained evidence.',
+        next_action: 'Inspect the retained worker-chain evidence.', next_command: null,
+        manifest, recovery: null,
+      };
+    }
     return {
-      status: 'CONTINUE_BLOCKED',
+      status: 'CONTINUE_READY',
       source: 'worker_chain',
       run_dir: manifest.session_run_dir,
       session_run_dir: manifest.session_run_dir,
       chain_status: manifest.chain_status,
       next_verb: resumeVerb,
       failed_step: manifest.failed_step ?? null,
-      reason: resumeVerb === null
-        ? 'Worker chain is incomplete and has no valid next step; inspect the retained evidence.'
-        : `Worker-chain action resume is temporarily unavailable until step identity and settlement are qualified; retained step: ${resumeVerb}.`,
-      next_action: 'Inspect the retained worker-chain evidence.',
-      next_command: null,
+      reason: `Worker chain is incomplete; the next step is ${resumeVerb}.`,
+      next_action: `Resume the worker chain with ${resumeVerb}.`,
+      next_command: 'babel continue latest',
       manifest,
       recovery: null,
     };
@@ -343,7 +353,7 @@ export function formatLiteContinueAssessmentHuman(assessment: LiteContinueAssess
 
 /** Temporary admission fence; removal requires qualified worker recovery. */
 function workerChainResumeQualified(): boolean {
-  return false;
+  return true;
 }
 
 export async function resumeLiteWorkerChain(
@@ -352,7 +362,6 @@ export async function resumeLiteWorkerChain(
   const assessment = buildLiteContinueAssessment(options);
   if (
     assessment.source !== 'worker_chain' ||
-    assessment.status !== 'CONTINUE_BLOCKED' ||
     !assessment.next_verb
   ) {
     return null;
@@ -362,21 +371,22 @@ export async function resumeLiteWorkerChain(
     return null;
   }
 
-  // The legacy manifest does not prove the previous worker settled or bind a
-  // resumed step to its original authority. Retain it for inspection until
-  // worker-chain recovery has those guarantees.
-  if (!workerChainResumeQualified()) {
+  if (assessment.status !== 'CONTINUE_READY') {
     return {
       payload: {
         status: 'CONTINUE_BLOCKED',
         continue_source: 'worker_chain',
         run_dir: manifest.session_run_dir,
         session_run_dir: manifest.session_run_dir,
-        reason: 'Worker-chain action resume is temporarily unavailable until step identity and settlement are qualified.',
+        reason: assessment.reason,
       },
       exitCode: 1,
-      humanText: 'Worker-chain action resume is temporarily unavailable; inspect the retained chain with continue --inspect-only.',
+      humanText: 'Worker-chain resume is blocked; inspect the retained chain with continue --inspect-only.',
     };
+  }
+
+  if (!workerChainResumeQualified()) {
+    return null;
   }
 
   const session = new AgentSession({

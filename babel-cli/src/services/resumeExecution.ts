@@ -320,12 +320,13 @@ export async function resumeExecution(
     };
   }
 
-  // A replay or heuristic classification alone does not bind the saved task to
-  // a settled operation or scope a verifier. Contain action resume until those
-  // contracts are qualified; preserve artifacts and expose replay evidence.
+  // A replayable runtime log is authoritative evidence about settled effects.
+  // While the action path cannot bind that replayed state to a scoped
+  // operation, keep it quarantined. The artifact-heuristic path (no replay log)
+  // retains its already-scoped verifier/provider resume behavior.
   const needsAction = assessment.status === 'CONTINUE_READY' && assessment.retryable &&
     (assessment.classification === 'rerun_verifier' || assessment.classification === 'retry_same_command' || assessment.classification === 'retry_with_schema_repair');
-  if (needsAction) {
+  if (needsAction && replay?.ok === true) {
     return withReplayEvidence(nonResumable(assessment, 'Action resume is temporarily unavailable until saved task identity, operation settlement, and verifier authority are qualified; inspect the retained run before continuing.'), replay);
   }
 

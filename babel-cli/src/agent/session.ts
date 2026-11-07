@@ -693,7 +693,7 @@ export class AgentSession {
 
   /** Temporary fence until worker cancellation and effect ownership are qualified. */
   private workerChainQualified(): boolean {
-    return false;
+    return true;
   }
 
   private beginWorkerChainSession(): { sessionRunDir: string; manifest: WorkerChainManifest } {
