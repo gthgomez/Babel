@@ -27,10 +27,12 @@ import {
 } from '../stages/runtimePreflight.js';
 import { inferProjectRoot } from './manifestContext.js';
 import { BABEL_ROOT, GRADLE_CACHE_DIR } from './paths.js';
+import { getRunAbortSignal, throwIfRunAborted } from '../runtime/runCancellation.js';
 
 export async function runDeterministicAndroidSdkBootstrapLane(
   manifest: OrchestratorManifest,
 ): Promise<{ toolCallLog: ToolCallLog[]; haltedReport?: object }> {
+  throwIfRunAborted();
   const projectRoot = inferProjectRoot(manifest);
   if (!projectRoot) {
     return { toolCallLog: [] };
@@ -110,6 +112,7 @@ export async function runDeterministicGradleBootstrapLane(
   manifest: OrchestratorManifest,
   evidence: EvidenceBundle,
 ): Promise<{ toolCallLog: ToolCallLog[]; haltedReport?: object }> {
+  throwIfRunAborted();
   const projectRoot = inferProjectRoot(manifest);
   if (!projectRoot) {
     return { toolCallLog: [] };
@@ -149,6 +152,7 @@ export async function runDeterministicGradleBootstrapLane(
       runDir: evidence.runDir,
       babelRoot: BABEL_ROOT,
     });
+    throwIfRunAborted();
     const entry: ToolCallLog = {
       step: stepNum,
       tool: req.tool,
@@ -258,7 +262,8 @@ export async function runDeterministicGradleBootstrapLane(
     const extractedRoot = join(GRADLE_CACHE_DIR, archiveName.replace(/\.zip$/i, ''));
 
     if (!existsSync(archivePath)) {
-      const response = await fetch(distributionUrl);
+      const signal = getRunAbortSignal();
+      const response = await fetch(distributionUrl, signal ? { signal } : {});
       if (!response.ok) {
         recordSyntheticStep(
           'file_write',
@@ -279,6 +284,7 @@ export async function runDeterministicGradleBootstrapLane(
       }
 
       const archiveBuffer = Buffer.from(await response.arrayBuffer());
+      throwIfRunAborted();
       writeFileSync(archivePath, archiveBuffer);
       recordSyntheticStep(
         'file_write',

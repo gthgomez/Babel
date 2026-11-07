@@ -4,7 +4,7 @@
  * Extracted from pipeline.ts (Phase 1B pipeline decomposition).
  */
 
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 
@@ -307,33 +307,7 @@ export function verifyExactOutputSchemaArtifacts(
   return null;
 }
 
-export function repairExactOutputSchemaArtifacts(
-  rawTask: string,
-  projectRoot: string | null,
-): string | null {
-  if (
-    getRequestedTargetContract(rawTask).readOnly ||
-    !projectRoot ||
-    !/\bsummary\.csv\b/i.test(rawTask) ||
-    !/period,severity,count/i.test(rawTask)
-  ) {
-    return null;
-  }
-
-  const expectedRows = getExpectedSummaryRowKeys(rawTask);
-  if (expectedRows.length === 0) {
-    return null;
-  }
-
-  const expectedCountRows = computeExpectedLogSummaryRows(rawTask, projectRoot, expectedRows);
-  if (!expectedCountRows) {
-    return null;
-  }
-
-  const summaryPath = join(projectRoot, 'summary.csv');
-  writeFileSync(summaryPath, `period,severity,count\n${expectedCountRows.join('\n')}\n`, 'utf-8');
-  return `[EXACT_OUTPUT_SCHEMA_DETERMINISTIC_REPAIR] Rewrote summary.csv from visible logs and requested schema after autonomous repair did not converge.`;
-}
+export { repairExactOutputSchemaArtifacts } from './exactOutputArtifacts.js';
 
 function getExpectedSummaryRowKeys(rawTask: string): string[] {
   return [...rawTask.matchAll(/^([a-z0-9_]+),(ERROR|WARNING|INFO),<count>$/gim)].map(

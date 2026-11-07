@@ -1,7 +1,9 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 
 import type { LiteTaskContract } from '../lite/contract.js';
+import { resolvePlanArtifactRoot } from '../lite/artifacts.js';
+import { isCredentialTargetPath } from '../authority/protectedPath.js';
 import type { QaVerdict, SwePlan } from '../schemas/agentContracts.js';
 
 export interface PlanHandoff {
@@ -14,6 +16,7 @@ export interface PlanHandoff {
 }
 
 const PLAN_RUN_ID_RE = /\b(\d{8}T\d{6}Z-plan-[a-f0-9]+)\b/i;
+const PLAN_RUN_NAME_RE = /^\d{8}T\d{6}Z-plan-[a-f0-9]+$/i;
 const PLAN_RUN_DIR_RE = /runs[/\\]babel-lite[/\\](\d{8}T\d{6}Z-plan-[a-f0-9]+)/i;
 
 function safeReadJson(path: string): Record<string, unknown> | null {
@@ -38,20 +41,57 @@ export function extractPlanRunId(task: string): string | null {
   return task.match(PLAN_RUN_DIR_RE)?.[1] ?? null;
 }
 
-function findLatestPlanRunDir(repoPath: string): string | null {
-  const liteRoot = join(resolve(repoPath), 'runs', 'babel-lite');
-  if (!existsSync(liteRoot)) {
-    return null;
+function planRoots(repoPath: string): string[] {
+  return [...new Set([resolvePlanArtifactRoot(), join(resolve(repoPath), 'runs', 'babel-lite')])];
+}
+
+function belongsToProject(runDir: string, repoPath: string): boolean {
+  const metadata = safeReadJson(join(runDir, 'manifest.json')) ?? safeReadJson(join(runDir, 'request.json'));
+  const owner = metadata?.['project_root'];
+  if (typeof owner === 'string') {
+    try {
+      const normalized = (path: string) => {
+        const physical = realpathSync(resolve(path));
+        return process.platform === 'win32' ? physical.toLowerCase() : physical;
+      };
+      return normalized(owner) === normalized(repoPath);
+    } catch { return false; }
   }
-  const candidates = readdirSync(liteRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && /-plan-/.test(entry.name))
-    .map((entry) => join(liteRoot, entry.name))
-    .sort((left, right) => right.localeCompare(left));
-  return candidates[0] ?? null;
+  // Older repo-local runs lack target metadata. Shared private runs must have it.
+  return resolve(runDir, '..') === join(resolve(repoPath), 'runs', 'babel-lite');
+}
+
+function findLatestPlanRunDir(repoPath: string): string | null {
+  const candidates = planRoots(repoPath).flatMap(root => !existsSync(root) ? [] :
+    readdirSync(root, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() && PLAN_RUN_NAME_RE.test(entry.name))
+      .map(entry => join(root, entry.name))
+      .filter(path => belongsToProject(path, repoPath) && safeReadJson(join(path, 'model_plan.json')) !== null));
+  return candidates.sort((left, right) => basename(right).localeCompare(basename(left)))[0] ?? null;
 }
 
 function trimForPrompt(value: string, maxChars: number): string {
   return value.length <= maxChars ? value : `${value.slice(0, maxChars)}\n...[truncated]`;
+}
+
+/** Model-generated paths never grant permission to read outside the target. */
+function scopedHandoffPath(repoPath: string, path: string): string | null {
+  if (!path.trim() || path.includes(':') || isAbsolute(path) || win32.isAbsolute(path)) return null;
+  const credential = (value: string) => isCredentialTargetPath(value) || /(?:^|[/\\])\.(?:codex|git)(?:[/\\]|$)/i.test(value);
+  const inside = (root: string, target: string) => {
+    const rel = relative(root, target);
+    return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+  };
+  try {
+    const root = realpathSync(repoPath);
+    const absolute = resolve(root, path);
+    if (!inside(root, absolute) || credential(path) || credential(absolute)) return null;
+    let ancestor = absolute;
+    while (!existsSync(ancestor) && ancestor !== dirname(ancestor)) ancestor = dirname(ancestor);
+    const physicalAncestor = realpathSync(ancestor);
+    const physical = resolve(physicalAncestor, relative(ancestor, absolute));
+    return inside(root, physical) && !credential(physical) ? physical : null;
+  } catch { return null; }
 }
 
 function readHandoffFileSnippet(
@@ -59,8 +99,8 @@ function readHandoffFileSnippet(
   relativePath: string,
   maxChars = 6000,
 ): string | null {
-  const absolutePath = resolve(repoPath, relativePath);
-  if (!existsSync(absolutePath)) {
+  const absolutePath = scopedHandoffPath(repoPath, relativePath);
+  if (!absolutePath || !existsSync(absolutePath)) {
     return null;
   }
   try {
@@ -77,8 +117,9 @@ export function resolvePlanRunDir(
 ): string | null {
   const planRunId = explicitPlanRunId ?? extractPlanRunId(task);
   if (planRunId) {
-    const candidate = join(resolve(repoPath), 'runs', 'babel-lite', planRunId);
-    return existsSync(candidate) ? candidate : null;
+    if (!PLAN_RUN_NAME_RE.test(planRunId)) return null;
+    return planRoots(repoPath).map(root => join(root, planRunId))
+      .find(path => existsSync(path) && belongsToProject(path, repoPath)) ?? null;
   }
   const lowerTask = task.toLowerCase();
   if (
@@ -109,18 +150,18 @@ export function loadPlanHandoff(input: {
   const allowedPaths = new Set<string>();
   for (const path of contract?.likely_files ?? []) {
     if (typeof path === 'string' && path.trim()) {
-      allowedPaths.add(path.trim());
+      if (scopedHandoffPath(input.repoPath, path.trim())) allowedPaths.add(path.trim());
     }
   }
   for (const path of contract?.required_reads ?? []) {
     if (typeof path === 'string' && path.trim()) {
-      allowedPaths.add(path.trim());
+      if (scopedHandoffPath(input.repoPath, path.trim())) allowedPaths.add(path.trim());
     }
   }
   if (Array.isArray(modelPlan?.['likely_files'])) {
     for (const path of modelPlan['likely_files']) {
       if (typeof path === 'string' && path.trim()) {
-        allowedPaths.add(path.trim());
+        if (scopedHandoffPath(input.repoPath, path.trim())) allowedPaths.add(path.trim());
       }
     }
   }

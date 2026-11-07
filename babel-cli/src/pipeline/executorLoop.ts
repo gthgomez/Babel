@@ -166,6 +166,7 @@ import {
   executeExecutorTool,
   getSuccessfulFileReadCacheEntry,
 } from './executorToolDispatch.js';
+import { throwIfRunAborted } from '../runtime/runCancellation.js';
 import {
   getAllowedToolsFromEnv,
   getNpmWrongWorkingDirectoryHint,
@@ -306,6 +307,7 @@ async function runDirectBoundedWritePlan(
   logDetail(warning);
 
   for (const write of directBoundedPlan.writes) {
+    throwIfRunAborted();
     const stepNum = toolCallLog.length + 1;
     const toolResult = await executeExecutorTool(
       {
@@ -1355,6 +1357,7 @@ export async function runExecutorLoop(
   pruningStubs?: Map<string, string>,
   services?: ChatEngineServices, episodeSink?: { recordExecutorToolCall(entry: ToolCallLog): void } | null,
 ): Promise<ExecutorLoopResult> {
+  throwIfRunAborted();
   assertExecutorGate(evidence.runDir);
 
   let totalJitLatencyMs = 0;
@@ -1900,6 +1903,7 @@ export async function runExecutorLoop(
   const turnHistory = new TurnHistory();
 
   for (let turn = 1; turn <= MAX_EXECUTOR_TURNS; turn++) {
+    throwIfRunAborted();
     logDetail(`Executor turn ${turn}/${MAX_EXECUTOR_TURNS}...`);
 
     // Instruction-stack limits are enforced by the resolver/compiler admission
@@ -1954,6 +1958,7 @@ export async function runExecutorLoop(
     await persistExecutorContext('ready_for_next_turn', turnPrompt);
 
     const detector = new IncrementalToolDetector(async (intent) => {
+      throwIfRunAborted();
       const fingerprint = computeFingerprint(intent.tool, intent.target, intent.args);
       const denied = deniedFingerprints.get(fingerprint);
       if (denied) {
@@ -2023,6 +2028,7 @@ export async function runExecutorLoop(
         }
       });
 
+      throwIfRunAborted();
       totalJitLatencyMs += detector.jitLatencyMs;
       peakBufferBytes = Math.max(peakBufferBytes, detector.peakBufferBytes);
 
@@ -2040,6 +2046,7 @@ export async function runExecutorLoop(
         },
       });
     } catch (err) {
+      throwIfRunAborted();
       if (err instanceof JitDenialError) {
         const fingerprint = computeFingerprint(err.tool, err.target, err.args);
         const val = deniedFingerprints.get(fingerprint) || { count: 0, turn };
@@ -2613,6 +2620,7 @@ export async function runExecutorLoop(
       req.tool === 'file_write'
         ? hashProjectFileForEvidence(getExecutorProjectRoot(), String(req.path ?? ''))
         : null;
+    throwIfRunAborted();
     const fastPathToolResult = maybeHandleNewFilePreflightFastPath(req, approvedPlan);
     if (fastPathToolResult) {
       logDetail(`  Executor fast path: ${fastPathToolResult.stdout}`);

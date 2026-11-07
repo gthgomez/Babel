@@ -486,13 +486,16 @@ function costLedger(ledger: Record<string, unknown>): {
         evidenceRef,
         availability: "PRESENT",
       });
+    const cost = finiteNumber(item["estimated_cost_usd"]);
+    const reportedCost = finiteNumber(item["provider_reported_total_charge_usd"]);
     usage.push({
       provider,
       model,
       inputTokens: finiteNumber(item["prompt_tokens"]),
       outputTokens: finiteNumber(item["completion_tokens"]),
-      costUsd: finiteNumber(item["estimated_cost_usd"]),
-      costBasis: "ESTIMATED",
+      costUsd: cost,
+      costBasis: cost === null ? "UNKNOWN" : item["cost_basis"] === "provider_reported" &&
+        reportedCost !== null && reportedCost >= 0 && reportedCost === cost ? "OBSERVED" : "ESTIMATED",
       evidenceRef,
       availability: "PRESENT",
     });

@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 
 import { redactEvidenceValue, redactSecrets } from '../utils/redaction.js';
 import { LiteError } from './config.js';
+import { resolveRuntimeRunsDir, resolveRuntimeUserStateRoot } from '../config/runtimePaths.js';
 
 export interface LiteArtifactRun {
   runId: string;
@@ -41,12 +42,17 @@ function normalizeFsPath(path: string): string {
   return resolve(path).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
-function assertBabelLiteArtifactRoot(root: string, repoPath: string): void {
+export function resolvePlanArtifactRoot(): string {
+  return join(resolveRuntimeRunsDir({ ...process.env, BABEL_STATE_DIR: resolveRuntimeUserStateRoot() }), 'babel-lite');
+}
+
+function assertBabelLiteArtifactRoot(root: string, repoPath: string, command: LiteArtifactCommand): void {
   const expected = normalizeFsPath(join(resolve(repoPath), 'runs', 'babel-lite'));
-  if (normalizeFsPath(root) !== expected) {
+  const actual = normalizeFsPath(root);
+  if (actual !== expected && !(command === 'plan' && actual === normalizeFsPath(resolvePlanArtifactRoot()))) {
     throw new LiteError(
       'ARTIFACT_WRITE_FAILED',
-      `Babel Lite artifacts must be written under the repo-local runs/babel-lite directory: ${root}`,
+      `Babel Lite artifacts must use the repo-local runs/babel-lite directory${command === 'plan' ? ' or configured private Plan run directory' : ''}: ${root}`,
     );
   }
 }
@@ -71,9 +77,9 @@ export function createLiteArtifactRun(options: {
   shortId?: string;
 }): LiteArtifactRun {
   const root = resolve(
-    options.artifactRoot ?? join(resolve(options.repoPath), 'runs', 'babel-lite'),
+    options.artifactRoot ?? (options.command === 'plan' ? resolvePlanArtifactRoot() : join(resolve(options.repoPath), 'runs', 'babel-lite')),
   );
-  assertBabelLiteArtifactRoot(root, options.repoPath);
+  assertBabelLiteArtifactRoot(root, options.repoPath, options.command);
   const runId = `${timestampSlug(options.now ?? new Date())}-${options.command}-${safeSlug(options.shortId ?? shortId())}`;
   const runDir = join(root, runId);
   try {

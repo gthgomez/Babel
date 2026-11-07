@@ -160,15 +160,23 @@ if (!isSyntheticProviderFixtureReady()) {
     'wrong-plan-type',
     'evidence-godot',
     'premature-completion',
+    'cancel-during-planning',
+    'cancel-during-qa',
+    'cancel-before-write',
+    'cancel-during-orchestration',
+    'cancel-during-finalization',
   ] as const)
     test(`Deep planning contract: ${kind}`, async (t) => {
       const rejected = kind === 'qa-reject';
       writeFileSync('existing.txt', 'preserved owner source');
       globalCostTracker.resetSession();
       const controller = new AbortController();
-      const cancelled = kind === 'cancel-before-answer' || kind === 'cancel-during-answer';
+      const cancelAt = kind === 'cancel-during-orchestration' || kind === 'cancel-during-planning' ? 1 : kind === 'cancel-during-qa' ? 2 : kind === 'cancel-before-write' ? 3 : null;
+      const cancelled = kind === 'cancel-before-answer' || kind === 'cancel-during-answer' || kind === 'cancel-during-finalization' || cancelAt !== null;
       const godot = kind === 'evidence-godot' || kind === 'premature-completion';
-      const ownerTask = godot ? `${task} Do not run any commands.` : task;
+      const ownerTask = kind === 'cancel-before-write' ? 'Refactor existing.txt to improve its implementation.' : godot ? `${task} Do not run any commands.` : task;
+      const activePlan = kind === 'cancel-before-write' ? { ...plan, plan_type: 'IMPLEMENTATION_PLAN', task_summary: ownerTask,
+        minimal_action_set: [{...plan.minimal_action_set[0],tool:'file_write',target:'existing.txt',description:'Refactor the existing implementation'}] } : plan;
       let hostVerifications = 0;
       if (godot) {
         const wrapper = join(process.cwd(), 'synthetic-godot.ps1');
@@ -214,13 +222,14 @@ if (!isSyntheticProviderFixtureReady()) {
           : rejected
             ? [plan, reject, plan, reject, plan, reject]
             : [
-                plan,
+                activePlan,
                 pass,
                 {
                   type: 'tool_call',
                   thinking: 'Read the authorized file',
-                  tool: 'file_read',
+                  tool: kind === 'cancel-before-write' ? 'file_write' : 'file_read',
                   path: 'existing.txt',
+                  ...(kind === 'cancel-before-write' ? {content:'Must not be written after cancellation'} : {}),
                 },
                 {
                   answer:
@@ -239,6 +248,8 @@ if (!isSyntheticProviderFixtureReady()) {
           const body = JSON.parse(String(init?.body));
           assert.equal(body.model, 'z-ai/glm-5.3-flash');
           const turn = turns[calls++];
+          if (calls === cancelAt) controller.abort();
+          if (controller.signal.aborted && (kind === 'cancel-during-orchestration' || kind === 'cancel-during-qa')) throw controller.signal.reason;
           if (!rejected && kind !== 'wrong-plan-type' && calls >= 4) {
             assert.match(String(init?.body), /preserved owner source/);
             assert.match(String(init?.body), /ORIGINAL OWNER REQUEST/);
@@ -279,6 +290,7 @@ if (!isSyntheticProviderFixtureReady()) {
                   prompt_tokens: 10,
                   completion_tokens: 10,
                   total_tokens: 20,
+                  ...(kind === 'cancel-during-qa' && calls === 1 ? {cost:0.125} : {}),
                 },
               }) +
               '\n\ndata: [DONE]\n\n',
@@ -294,7 +306,17 @@ if (!isSyntheticProviderFixtureReady()) {
           if (stage === 'evidence_answer') controller.abort();
         });
       }
-      const result = await withPipelineModelRoute('glm-5.3-flash', () =>
+      if (kind === 'cancel-during-finalization') {
+        const writeTrace = evidence.writeTraceContext.bind(evidence);
+        t.mock.method(evidence, 'writeTraceContext', (...args: Parameters<typeof writeTrace>) => {
+          writeTrace(...args);
+          controller.abort();
+        });
+      }
+      const activeManifest = manifest();
+      activeManifest.analysis.task_summary = ownerTask;
+      activeManifest.handoff_payload.user_request = ownerTask;
+      const run = () => withPipelineModelRoute('glm-5.3-flash', () =>
         _runBabelPipelineInternal(
           ownerTask,
           {
@@ -305,9 +327,21 @@ if (!isSyntheticProviderFixtureReady()) {
             abortSignal: controller.signal,
           },
           evidence,
-          manifest(),
+          kind === 'cancel-during-orchestration' ? undefined : activeManifest,
         ),
       );
+      if (kind === 'cancel-during-orchestration') {
+        await assert.rejects(run, { name: 'AbortError' });
+        assert.equal(calls, 1);
+        assert.equal(existsSync(join(evidence.runDir, '01_manifest.json')), false);
+        const summary = JSON.parse(readFileSync(join(evidence.runDir, 'terminal_status_summary.json'), 'utf8'));
+        assert.equal(summary.status, 'EXECUTOR_HALTED');
+        assert.equal(summary.terminal_outcome, 'CANCELLED');
+        assert.match(summary.condition_summary, /CANCELLED/);
+        assert.equal(existsSync(join(evidence.runDir, '12_pre_execution_failure_capsule.json')), false);
+        return;
+      }
+      const result = await run();
       t.diagnostic(
         'DEEP_PLANNING_FIXTURE ' +
           JSON.stringify({ kind, status: result.status, calls }),
@@ -321,7 +355,7 @@ if (!isSyntheticProviderFixtureReady()) {
         assert.equal(hostVerifications,0,'read-only completion must not execute runtime verification or artifact repair');
       }
       if (kind === 'answer-unavailable') assert.ok(calls >= 4);
-      else assert.equal(calls, kind === 'cancel-before-answer' ? 3 : turns.length);
+      else assert.equal(calls, cancelAt ?? (kind === 'cancel-before-answer' ? 3 : turns.length));
       if (rejected) assert.equal(result.status, 'QA_REJECTED_MAX_LOOPS');
       else if (kind === 'wrong-plan-type')
         assert.equal(result.status, 'EXECUTOR_HALTED');
@@ -338,6 +372,25 @@ if (!isSyntheticProviderFixtureReady()) {
         const payload = buildRunResultPayload(result, {task, mode:'deep'});
         assert.equal(payload['terminal_outcome'], 'CANCELLED');
         assert.doesNotMatch(result.finalAnswer ?? '', /preserved owner source/);
+        if (kind === 'cancel-during-qa') {
+          const {buildCostLedger,usageSummaryFromCostLedger}=await import('../services/costLedger.js');
+          const legacySummary=usageSummaryFromCostLedger(buildCostLedger({runId:evidence.runId,task:ownerTask,lane:'governed',waterfallEntries:evidence.getWaterfallLogSnapshot()}));
+          t.diagnostic('DEEP_PLANNING_FIXTURE '+JSON.stringify({kind,reported:result.usageSummary?.reportedCostUSD,
+            unknown:result.usageSummary?.unknownChargeCount,complete:result.usageSummary?.costComplete,
+            ownerUnknown:globalCostTracker.getTaskSummary(evidence.runId).unknownChargeCount,
+            ownerReceipts:globalCostTracker.getTaskChargeObservations(evidence.runId).length,
+            telemetry:evidence.getWaterfallLogSnapshot().length,legacyUnknown:legacySummary.unknownChargeCount,
+            legacyComplete:legacySummary.costComplete}));
+          assert.equal(legacySummary.unknownChargeCount,0,'completed telemetry alone omits the dispatched QA attempt');
+          assert.equal(legacySummary.actualCostUSD,0.125,'the old projection incorrectly treats the planning subtotal as complete');
+          assert.equal(globalCostTracker.getTaskSummary(evidence.runId).unknownChargeCount,1);
+          assert.equal(result.usageSummary?.reportedCostUSD,0.125);
+          assert.equal(result.usageSummary?.unknownChargeCount,1,'dispatched cancellation remains an unknown charge after an earlier reported charge');
+          assert.equal(result.usageSummary?.costComplete,false);
+          assert.equal(result.usageSummary?.actualCostUSD,null);
+          const ledger=JSON.parse(readFileSync(join(evidence.runDir,'cost_ledger.json'),'utf8'));
+          assert.equal(usageSummaryFromCostLedger(ledger).unknownChargeCount,1,'persisted evidence retains the unresolved request');
+        }
       } else if (kind === 'answer-unavailable') {
         assert.equal(result.status, 'EXECUTOR_HALTED');
         assert.match(

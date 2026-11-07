@@ -38,6 +38,7 @@ import { runLaneVerifiers } from '../../stages/verifierContract.js';
 export interface PlanLaneResult {
   payload: LiteResultPayload;
   humanText: string;
+  planText: string;
   exitCode: number;
 }
 
@@ -119,6 +120,7 @@ function buildLocalMockPlanAnswer(
 }
 
 export async function runPlanLane(context: AgentLaneContext): Promise<PlanLaneResult> {
+  context.signal?.throwIfAborted();
   if (context.provider !== 'mock') assertFiniteBudgetSupported('Plan', context.projectRoot);
   if (context.provider !== 'mock' && process.env['BABEL_LITE_OFFLINE'] !== '1' && !context.model) {
     const selected = selectedConnectionModel({}, context.projectRoot);
@@ -151,8 +153,10 @@ export async function runPlanLane(context: AgentLaneContext): Promise<PlanLaneRe
       : {}),
     ...(context.model !== undefined ? { model: context.model } : {}),
     useDeterministicMock: useLocalMockPlan,
+    ...(context.signal !== undefined ? { abortSignal: context.signal } : {}),
     ...(context.toolStream !== undefined ? { toolStream: context.toolStream } : {}),
   });
+  context.signal?.throwIfAborted();
   evidence.writeDebugFile(
     'plan_session_loop.json',
     `${JSON.stringify(
@@ -193,8 +197,10 @@ export async function runPlanLane(context: AgentLaneContext): Promise<PlanLaneRe
         stage: 'planning',
         schemaName: 'LitePlanAnswerSchema',
         maxCliAttempts: 2,
+        ...(context.signal !== undefined ? { signal: context.signal } : {}),
         ...(context.model !== undefined ? { model: context.model } : {}),
       });
+  context.signal?.throwIfAborted();
   const schemaNormalizations = consumeLiteSchemaNormalizations();
   if (schemaNormalizations.length > 0) {
     writeLiteJsonArtifact(artifacts, 'lite_schema_normalization.json', {
@@ -363,9 +369,11 @@ export async function runPlanLane(context: AgentLaneContext): Promise<PlanLaneRe
     ? `${baseHuman}\n${formatPlanReviewHuman(planReview.review)}`
     : baseHuman;
 
+  context.signal?.throwIfAborted();
   return {
     payload,
     humanText,
+    planText: modelPlanText,
     exitCode: modelPlan.status === 'PLAN_READY' ? 0 : 1,
   };
 }

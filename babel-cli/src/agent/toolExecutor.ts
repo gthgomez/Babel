@@ -1,4 +1,5 @@
 import {getExecutionContext} from './executionContext.js';
+import { getRunAbortSignal } from '../runtime/runCancellation.js';
 import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js';
 import { resolveIsolationBrokerFlags } from './chatEngineIsolationFlags.js';
 /**
@@ -800,6 +801,9 @@ export async function executeActionWithPolicy(
     lockContext?: FileLockContext | undefined;
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
+  const signal = getRunAbortSignal(context.signal);
+  signal?.throwIfAborted();
+  if (signal) context = { ...context, signal };
   let executionStarted = false;
   const dispatchId = deps.idempotencyKey ?? context.toolCallId ?? defaultIdempotencyKeyForAction(action) ?? action.type;
   const stoppedBeforeDispatch = (decision: PermissionDecision = 'deny'): PolicyGatedExecutionResult | null => {
@@ -1122,6 +1126,7 @@ export async function executeActionWithPolicy(
 
   // ── Successful execution: reset circuit-breaker ────────────────────
   resetBlocks(context.runId);
+  signal?.throwIfAborted();
   const dispatchAuthorization = deps.onDispatchAuthorized?.();
   if (dispatchAuthorization && !dispatchAuthorization.allowed) {
     incrementBlocks(context.runId);
@@ -1331,6 +1336,7 @@ export async function executeActionWithPolicy(
       ...(idempotencyKey ? { toolCallId: context.toolCallId ?? idempotencyKey } : {}),
     };
     const executeInvocation = () => dispatchRunOperation(context.runControl, 'tool', dispatchId, () => {
+      signal?.throwIfAborted();
       executionStarted = true;
       return executor.execute(action, executionContext, budget);
     });

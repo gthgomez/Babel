@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { createLiteArtifactRun, writeLiteJsonArtifact } from '../lite/artifacts.js';
+import { savePlan, withSavedPlanApplication } from '../services/savedPlan.js';
 
 import {
   assertPlannerPathsAllowed,
@@ -106,12 +108,101 @@ test('collectPlanHandoffViolations rejects hallucinated planner paths', () => {
   assert.match(violations[0] ?? '', /run-latest\.js/);
 });
 
+test('private Plan handoffs preserve project scope and legacy lookup compatibility', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-plan-handoff-storage-'));
+  const previousRuns = process.env['BABEL_RUNS_DIR'];
+  try {
+    process.env['BABEL_RUNS_DIR'] = join(root, 'private-runs');
+    const target = join(root, 'target');
+    const other = join(root, 'other');
+    mkdirSync(target);
+    mkdirSync(other);
+    writeFileSync(join(target, 'sample.ts'), 'export const target = true;');
+    const plan = createLiteArtifactRun({ command: 'plan', repoPath: target, now: new Date('2026-06-10T18:00:00Z') });
+    writeLiteJsonArtifact(plan, 'manifest.json', { command: 'plan', project_root: target });
+    writeLiteJsonArtifact(plan, 'model_plan.json', { likely_files: ['sample.ts'], summary: 'Target plan' });
+    const foreign = createLiteArtifactRun({ command: 'plan', repoPath: other, now: new Date('2026-06-10T19:00:00Z') });
+    writeLiteJsonArtifact(foreign, 'manifest.json', { command: 'plan', project_root: other });
+    writeLiteJsonArtifact(foreign, 'model_plan.json', { likely_files: ['foreign.ts'], summary: 'Other project plan' });
+    const legacyId = '20260610T170000Z-plan-abc123';
+    const legacyDir = join(target, 'runs', 'babel-lite', legacyId);
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'model_plan.json'), JSON.stringify({ likely_files: ['legacy.ts'] }));
+    for (const task of [`Apply plan ${plan.runId}`, 'Apply latest plan']) {
+      const handoff = loadPlanHandoff({ repoPath: target, task });
+      assert.equal(handoff?.planRunDir, plan.runDir);
+      assert.deepEqual(handoff?.allowedPaths, ['sample.ts']);
+      assert.match(handoff?.contextText ?? '', /export const target = true/);
+    }
+    const alias = join(root, 'target-alias');
+    symlinkSync(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    assert.equal(loadPlanHandoff({ repoPath: alias, task: `Apply plan ${plan.runId}` })?.planRunDir, plan.runDir);
+    assert.equal(loadPlanHandoff({ repoPath: target, task: 'Apply plan', planRunId: foreign.runId }), null);
+    assert.equal(loadPlanHandoff({ repoPath: target, task: 'Apply plan', planRunId: '../' + plan.runId }), null);
+    assert.equal(loadPlanHandoff({ repoPath: target, task: `Apply plan ${legacyId}` })?.planRunDir, legacyDir);
+  } finally {
+    if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
+    else process.env['BABEL_RUNS_DIR'] = previousRuns;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('loadPlanHandoff returns null when no plan run exists', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-plan-handoff-missing-'));
   try {
     assert.equal(loadPlanHandoff({ repoPath: root, task: 'apply latest plan' }), null);
     assert.equal(existsSync(join(root, 'runs', 'babel-lite')), false);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('model-generated handoff paths cannot read outside the project or credential-shaped fixtures', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-handoff-scope-'));
+  const target = join(root, 'target');
+  const outside = join(root, 'outside');
+  const runId = '20260610T180000Z-plan-abc123';
+  const runDir = join(target, 'runs', 'babel-lite', runId);
+  try {
+    mkdirSync(runDir, { recursive: true });
+    mkdirSync(outside);
+    writeFileSync(join(outside, 'sample.txt'), 'UNAUTHORIZED_FIXTURE_BYTES');
+    writeFileSync(join(target, '.env'), 'SYNTHETIC_DENIED_FIXTURE_BYTES');
+    writeFileSync(join(target, 'safe.ts'), 'export const safe = true;');
+    symlinkSync(outside, join(target, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+    writeFileSync(join(runDir, 'model_plan.json'), JSON.stringify({ likely_files:
+      ['safe.ts', '../outside/sample.txt', join(outside, 'sample.txt'), 'linked/sample.txt', '.env', '.env::$DATA'] }));
+    const handoff = loadPlanHandoff({ repoPath: target, task: `Apply ${runId}` });
+    assert.ok(handoff);
+    assert.doesNotMatch(handoff.contextText, /UNAUTHORIZED_FIXTURE_BYTES|SYNTHETIC_DENIED_FIXTURE_BYTES/);
+    assert.deepEqual(handoff.allowedPaths, ['safe.ts']);
+    assert.match(handoff.contextText, /export const safe = true/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('applying the first of two saved plans retains its exact source handoff', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-handoff-binding-'));
+  const previousRuns = process.env['BABEL_RUNS_DIR'];
+  const target = join(root, 'target');
+  const env = { BABEL_STATE_DIR: join(root, 'state'), BABEL_CONFIG_DIR: join(root, 'config') };
+  try {
+    mkdirSync(target);
+    process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
+    const first = createLiteArtifactRun({ command: 'plan', repoPath: target, now: new Date('2026-06-10T18:00:00Z') });
+    writeLiteJsonArtifact(first, 'manifest.json', { project_root: target });
+    writeLiteJsonArtifact(first, 'model_plan.json', { likely_files: ['a.ts'] });
+    const saved = savePlan({ projectRoot: target, task: 'Update a.ts', body: 'Update a.ts safely', sourceRunId: first.runId }, env);
+    const second = createLiteArtifactRun({ command: 'plan', repoPath: target, now: new Date('2026-06-10T19:00:00Z') });
+    writeLiteJsonArtifact(second, 'manifest.json', { project_root: target });
+    writeLiteJsonArtifact(second, 'model_plan.json', { likely_files: ['b.ts'] });
+    await withSavedPlanApplication(saved.id, { projectRoot: target, env, execute: async plan => {
+      assert.equal(plan.sourceRunId, first.runId);
+      const handoff = loadPlanHandoff({ repoPath: target, task: 'Implement this approved plan', planRunId: plan.sourceRunId });
+      assert.deepEqual(handoff?.allowedPaths, ['a.ts']);
+    } });
+  } finally {
+    if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
+    else process.env['BABEL_RUNS_DIR'] = previousRuns;
     rmSync(root, { recursive: true, force: true });
   }
 });

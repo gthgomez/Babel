@@ -22,6 +22,8 @@ test('auto-apply requires the saved preference and explicit plan-only intent win
   assert.equal(shouldAutoApplyPlan('Fix it', false), false)
   assert.equal(shouldAutoApplyPlan('Fix it', true), true)
   assert.equal(shouldAutoApplyPlan('Plan only; do not implement', true), false)
+  assert.equal(shouldAutoApplyPlan('Inspect the code. Do not modify any files.', true), false)
+  assert.equal(shouldAutoApplyPlan('Inspect without writing any files.', true), false)
   assert.equal(shouldAutoApplyPlan('Fix it', true, true), false)
 })
 

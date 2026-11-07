@@ -147,10 +147,23 @@ runs/babel-lite/<run-id>/
 
 Not every command writes every file. The important contract is predictability:
 
-- ask writes answer evidence (provider-backed ask may also keep detailed pipeline evidence under repo `runs/`; plan/propose/review/undo use `runs/babel-lite/`)
-- plan writes plan evidence under `runs/babel-lite/`
+- ask writes answer evidence (provider-backed ask may also keep detailed pipeline evidence under repo `runs/`; propose/review/undo use `runs/babel-lite/`)
+- plan writes evidence under the configured private run root (`BABEL_RUNS_DIR`, or user-state `runs/`), in a `babel-lite/<run-id>/` directory. Returned `run_dir` is authoritative. Explicit repo-local artifact roots and legacy handoff lookup remain supported.
 - propose/diff/patch writes proposal evidence under `runs/babel-lite/` and does not mutate source files
 - fix writes change, verifier, checkpoint, `changes.diff`, and failure/recovery evidence as applicable (mutation evidence may remain under repo `runs/` for small-fix compatibility)
+
+Cost ledger schema 1 retains `estimated_cost_usd` as the legacy selected subtotal
+column. New entries include `cost_basis` and, when supplied by the provider,
+`provider_reported_total_charge_usd`. An absent report can use a published-rate
+estimate; an explicitly withheld report remains unknown. Reported zero is a
+valid charge. Session usage separates reported and estimated subtotals and keeps
+the complete actual total unavailable while any charge is estimated or unknown.
+Saved plans optionally retain their source run ID; older saved bodies still load
+and are applied without selecting an unrelated latest handoff.
+Run ledgers also retain owned provider dispatches whose waterfall did not return.
+Their stage and outcome stay unknown when no matching telemetry exists; missing
+token usage and charges remain unavailable. Charge IDs prevent completed
+attempts from being counted twice.
 
 ## Non-Negotiables
 

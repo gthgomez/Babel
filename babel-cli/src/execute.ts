@@ -81,6 +81,7 @@ import {
 import { loadModelPolicyConfig } from './modelPolicy.js';
 import { randomUUID } from 'node:crypto';
 import { getExecutionContext } from './agent/executionContext.js';
+import { getRunAbortSignal } from './runtime/runCancellation.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   globalCostTracker,
@@ -165,6 +166,7 @@ export interface WaterfallOutcome {
 }
 
 export interface WaterfallAttemptOutcome {
+  charge_id?: string;
   tier_name: string;
   tier_index: number;
   attempt: number;
@@ -179,6 +181,7 @@ export interface WaterfallAttemptOutcome {
   completion_tokens?: number | null;
   total_tokens?: number | null;
   estimated_cost_usd?: number | null;
+  provider_reported_total_charge_usd?: number | null;
   prompt_cache_hit_tokens?: number | null;
   prompt_cache_miss_tokens?: number | null;
   cost_precision?: CostPrecision | null;
@@ -816,6 +819,8 @@ function cloneInvocationMetadata(
     prompt_cache_hit_tokens: metadata.prompt_cache_hit_tokens ?? null,
     prompt_cache_miss_tokens: metadata.prompt_cache_miss_tokens ?? null,
     estimated_cost_usd: metadata.estimated_cost_usd,
+    ...(metadata.provider_reported_total_charge_usd !== undefined
+      ? { provider_reported_total_charge_usd: metadata.provider_reported_total_charge_usd } : {}),
     cost_precision: metadata.cost_precision ?? null,
     pricing_source_url: metadata.pricing_source_url ?? null,
     pricing_verified_at: metadata.pricing_verified_at ?? null,
@@ -843,9 +848,11 @@ function buildAttemptOutcome(
   metadata: RunnerInvocationMetadata | null,
   errorSummary: string | null = null,
   schemaFailureEntryId: string | null = null,
+  chargeId?: string | null,
 ): WaterfallAttemptOutcome {
   const canonicalIndex = spec.originalIndex ?? tier;
   return {
+    ...(chargeId ? { charge_id: chargeId } : {}),
     tier_name: spec.name,
     tier_index: canonicalIndex,
     attempt,
@@ -861,6 +868,8 @@ function buildAttemptOutcome(
     prompt_cache_hit_tokens: metadata?.prompt_cache_hit_tokens ?? null,
     prompt_cache_miss_tokens: metadata?.prompt_cache_miss_tokens ?? null,
     estimated_cost_usd: metadata?.estimated_cost_usd ?? null,
+    ...(metadata?.provider_reported_total_charge_usd !== undefined
+      ? { provider_reported_total_charge_usd: metadata.provider_reported_total_charge_usd } : {}),
     cost_precision: metadata?.cost_precision ?? null,
     pricing_source_url: metadata?.pricing_source_url ?? null,
     pricing_verified_at: metadata?.pricing_verified_at ?? null,
@@ -944,6 +953,8 @@ async function runWaterfall<T>(
   const pendingSchemaFailureEntries: SchemaFailureLedgerEntry[] = [];
   let lastFailureMetadata: RunnerInvocationMetadata | null = null;
   let usageAttempt = 0;
+  const settlementAttribution = usageAttribution ?? { taskOwnerId: evidence?.runId ?? `waterfall_${randomUUID()}`,
+    projectRoot: process.env['BABEL_PROJECT_ROOT'] ?? process.cwd() };
 
   // Dynamic deadline: starts at startedAtMs + aggregateTimeoutMs, but can be
   // extended when the runner is actively producing output (onChunk fires).
@@ -986,23 +997,20 @@ async function runWaterfall<T>(
     const metadata = getRunnerInvocationMetadata(runner);
     if (
       metadata?.provider_model_id &&
-      metadata.prompt_tokens !== null &&
-      metadata.completion_tokens !== null
+      ((metadata.prompt_tokens !== null && metadata.completion_tokens !== null) ||
+        metadata.provider_reported_total_charge_usd !== undefined)
     ) {
       const update = globalCostTracker.settleUsage(
         metadata.provider_model_id,
-        metadata.prompt_tokens,
-        metadata.completion_tokens,
+        metadata.prompt_tokens ?? 0,
+        metadata.completion_tokens ?? 0,
         metadata.prompt_cache_hit_tokens,
         metadata.prompt_cache_miss_tokens,
-        usageAttribution
-          ? {
-              ...usageAttribution,
-              chargeId: dispatchedChargeId ?? `${usageAttribution.taskOwnerId}:${label}:${++usageAttempt}:${randomUUID()}`,
-            }
-          : undefined,
-        true,
+        { ...settlementAttribution,
+          chargeId: dispatchedChargeId ?? `${settlementAttribution.taskOwnerId}:${label}:${++usageAttempt}:${randomUUID()}` },
+        metadata.prompt_tokens !== null && metadata.completion_tokens !== null,
         metadata.provider,
+        metadata.provider_reported_total_charge_usd,
       );
       if (update.kind === 'conflict') throw new Error(`Delegated charge conflict: ${update.reason}`);
       if (update.kind === 'inserted' || update.kind === 'refined') onUsageRecorded?.(metadata);
@@ -1061,7 +1069,7 @@ async function runWaterfall<T>(
     let promptForTier = prompt;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      let dispatchedChargeId: string | null = null;
+      let dispatchedChargeId: string | null = `${settlementAttribution.taskOwnerId}:${label}:${++usageAttempt}:${randomUUID()}`;
       let chargePersistenceFailed = false;
       try {
         ensureBudgetAvailable();
@@ -1073,11 +1081,11 @@ async function runWaterfall<T>(
           ...(campaignMeter ? { campaignMeter } : {}),
           ...(campaignMeter && campaignRunControl ? { runControl: campaignRunControl } : {}),
           onInvocationPhase: (event) => {
-            if (event.phase !== 'request_dispatched' || !usageAttribution) return;
-            dispatchedChargeId = `${usageAttribution.taskOwnerId}:${label}:${++usageAttempt}:${randomUUID()}`;
+            if (event.phase !== 'request_dispatched') return;
+            dispatchedChargeId = `${settlementAttribution.taskOwnerId}:${label}:${++usageAttempt}:${randomUUID()}`;
             const update = globalCostTracker.settleUsage(event.model, 0, 0, null, null, {
-              ...usageAttribution, chargeId: dispatchedChargeId,
-            }, false);
+              ...settlementAttribution, chargeId: dispatchedChargeId,
+            }, false, event.provider);
             if (update.kind !== 'inserted') throw new Error('Delegated dispatch blocked by charge conflict');
             try {
               onUsageRecorded?.({
@@ -1163,6 +1171,7 @@ async function runWaterfall<T>(
             invocationMetadata,
             null,
             recoveryEntry?.entry_id ?? null,
+            dispatchedChargeId,
           ),
         );
 
@@ -1274,6 +1283,7 @@ async function runWaterfall<T>(
             invocationMetadata,
             lastError.message.slice(0, 200),
             schemaFailureEntryId,
+            dispatchedChargeId,
           ),
         );
 
@@ -1401,6 +1411,9 @@ export async function runWithFallback<T>(
   schema: ZodType<T, unknown>,
   options: RunOptions = {},
 ): Promise<T> {
+  const signal = getRunAbortSignal(options.signal);
+  signal?.throwIfAborted();
+  if (signal) options = { ...options, signal };
   const maxAttempts = options.maxCliAttempts ?? 2;
   // Always have a bundle for schema failure telemetry — when the caller
   // doesn't provide one, use a lightweight in-memory bundle that writes to

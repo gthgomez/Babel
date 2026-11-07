@@ -25,6 +25,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { getRunAbortSignal } from './runtime/runCancellation.js';
 import path from 'node:path';
 import { z } from 'zod';
 import { preserveTrustedFileCreationEvidence, preserveTrustedShellExecutionBackend, SafeExecutor } from './sandbox.js';
@@ -1760,6 +1761,9 @@ export function renderGitDiff(
  * stdio I/O) can be awaited cleanly alongside the synchronous handlers.
  */
 export async function executeTool(req: ToolCallRequest, context: ToolContext): Promise<ToolResult> {
+  const signal = getRunAbortSignal(context.signal);
+  signal?.throwIfAborted();
+  if (signal) context = { ...context, signal };
   const stopped = context.runControl?.stop();
   if (stopped) throw new RunStoppedError(stopped);
   refreshDryRunState();
@@ -1907,6 +1911,8 @@ export async function executeTool(req: ToolCallRequest, context: ToolContext): P
     }
   }
 
+  // Approval may have suspended while the owning run was cancelled.
+  signal?.throwIfAborted();
   // ── Phase 4: Search-depth gate ──────────────────────────────────────────
   const gate = getSessionGate();
   const gateCheck = gate.checkBeforeCall(req.tool);
