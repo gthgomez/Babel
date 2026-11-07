@@ -691,9 +691,13 @@ export class AgentSession {
     return [...WORKER_CHAIN_VERBS];
   }
 
-  /** Temporary fence until worker cancellation and effect ownership are qualified. */
+  /**
+   * A chain driven by an external abort signal cannot yet prove descendant
+   * cancellation/settlement ownership, so it must not admit successor steps.
+   * Unsignaled offline/live chains own their children and may run.
+   */
   private workerChainQualified(): boolean {
-    return true;
+    return this.options.signal === undefined;
   }
 
   private beginWorkerChainSession(): { sessionRunDir: string; manifest: WorkerChainManifest } {
