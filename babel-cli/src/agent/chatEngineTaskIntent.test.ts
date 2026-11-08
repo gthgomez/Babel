@@ -49,6 +49,16 @@ test('production implementation stays actionable when hidden tests are prohibite
   const restriction = 'Do not create hidden tests.'
   assert.equal(hasExplicitEditDenial(restriction), false)
   assert.equal(classifyChatTaskIntent(restriction), 'explain')
+
+  // Hidden-test protections remain scoped, while explicit global denials still win.
+  for (const task of [
+    'Explain how tags are normalized. Do not create hidden tests.',
+    'Implement the normalizer. Do not create hidden tests or edit files.',
+    'Fix the normalizer. Do not create hidden tests. Do not modify any files.',
+  ]) {
+    assert.equal(classifyChatTaskIntent(task), 'explain', task)
+    assert.equal(resolveTaskShape(task).operation, 'READ_ONLY', task)
+  }
 })
 
 test('scoped regression and safety preservation clauses retain explicit repair intent', () => {
