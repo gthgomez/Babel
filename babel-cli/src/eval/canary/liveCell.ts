@@ -3,7 +3,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { BABEL_ROOT } from '../../cli/constants.js'
@@ -28,6 +28,7 @@ import type { CanaryTaskSpec } from './types.js'
 import type { OpenRouterRoutingPolicy } from '../../runners/openRouterApi.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../../evidence/chatRevisionBinding.js'
 import { gradeVerificationProse, type VerificationProseGrade, type VerificationProseKind } from '../diagnostics/verification.js'
+import { normalizeSandboxFixturePermissions } from '../sandboxFixturePermissions.js'
 
 const LIVE_AGENT_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -68,19 +69,6 @@ export function claimsSuccessfulCompletion(payload: Record<string, unknown> | nu
   }
   if (payload['user_status'] === 'not_verified') return false
   return payload['status'] === 'FIX_COMPLETE' || payload['status'] === 'COMPLETE'
-}
-
-/** Make generated, secret-free canary files readable to the unprivileged sandbox user. */
-function normalizeCanaryWorkspaceModes(root: string): void {
-  const visit = (path: string): void => {
-    chmodSync(path, statSync(path).isDirectory() ? 0o755 : ((statSync(path).mode & 0o111) ? 0o755 : 0o644))
-    for (const entry of readdirSync(path, { withFileTypes: true })) {
-      const child = join(path, entry.name)
-      if (entry.isDirectory()) visit(child)
-      else if (entry.isFile()) chmodSync(child, (statSync(child).mode & 0o111) ? 0o755 : 0o644)
-    }
-  }
-  visit(root)
 }
 
 /** Grade raw verification language against current parent receipts, not a terminal label. */
@@ -426,7 +414,7 @@ export function materializeCanaryWorkspace(spec: CanaryTaskSpec, root: string): 
     encoding: 'utf8',
     env: gitEnv(),
   })
-  normalizeCanaryWorkspaceModes(root)
+  normalizeSandboxFixturePermissions(root)
 }
 
 function startFiles(spec: CanaryTaskSpec): CleanRoomFile[] {

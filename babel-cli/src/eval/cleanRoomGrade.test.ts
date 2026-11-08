@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { statSync } from 'node:fs'
 import test from 'node:test'
 
 import { gradeInCleanRoom } from './cleanRoomGrade.js'
@@ -112,6 +113,27 @@ test('explicit isolated grading dispatches the fresh grader tree only through ex
   assert.equal(argv.includes(grade.grader_root.replace(/\\/g, '/') + ':/app'), true)
   assert.equal(argv.slice(-3).join(' '), 'node --test hidden.test.mjs')
   assert.equal(grade.hidden_ok, true)
+})
+
+test('isolated grader inputs are readable under restrictive umask', t => {
+  let observedModes: number[] = []
+  t.mock.method(childProcess, 'spawnSync', ((_command: string, _args: readonly string[], options: childProcess.SpawnSyncOptions) => {
+    const root = options.cwd!.toString()
+    observedModes = [statSync(root).mode & 0o777, statSync(`${root}/add.js`).mode & 0o777,
+      statSync(`${root}/hidden.test.mjs`).mode & 0o777]
+    return { status: 0, stdout: '', stderr: '', pid: 0, signal: null, output: [] }
+  }))
+  syncBuiltinESMExports()
+  const originalUmask = process.umask(0o077)
+  try {
+    const grade = gradeInCleanRoom(isolatedInput())
+    assert.equal(grade.execution_status, 'completed')
+    assert.deepEqual(observedModes, [0o755, 0o644, 0o644])
+  } finally {
+    process.umask(originalUmask)
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  }
 })
 
 test('isolated grader Docker launch failure never retries candidate code on the host', t => {
