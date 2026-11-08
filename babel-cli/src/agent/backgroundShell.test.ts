@@ -358,7 +358,7 @@ describe('backgroundShell', () => {
     assert.equal(next.id, 'bg-1');
   });
 
-  it('retains owner uncertainty when the Windows tree-kill helper fails', { skip: process.platform !== 'win32' }, async t => {
+  it('retains owner uncertainty when the Windows tree-kill helper fails', { skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false }, async t => {
     const owner = 'synthetic-unsettled-background';
     const root = mkdtempSync(join(tmpdir(), 'babel-background-uncertain-'));
     const script = join(root, 'hold.js');

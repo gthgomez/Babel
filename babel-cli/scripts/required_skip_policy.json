@@ -2,6 +2,20 @@
   "schemaVersion": 1,
   "rules": [
     {
+      "id": "windows-guarded-plan-reader",
+      "platforms": ["linux", "darwin"],
+      "reasons": ["Windows guarded candidate"],
+      "rationale": "The Windows lane exercises the native directory-handle guarded Plan reader and guard-loss contracts.",
+      "suites": ["unit", "chat-truth"],
+      "files": {
+        "src/agent/planHandoff.containment.test.ts": [
+          "guarded Plan reader holds its source parent through a real file open",
+          "guarded Plan reader holds metadata and rejects an owned guard loss",
+          "guarded Plan admission releases its owned directory guards after cancellation"
+        ]
+      }
+    },
+    {
       "id": "windows-process-tree-termination",
       "platforms": ["linux", "darwin"],
       "reasons": ["Windows-only process-tree termination contract"],
@@ -12,6 +26,9 @@
           "failed Windows tree-kill is not accepted as descendant settlement",
           "failed Windows tree-kill on a deadline leaves a termination failure for the owner",
           "a timed-out shell reports failed Windows tree termination to its caller"
+        ],
+        "src/agent/backgroundShell.test.ts": [
+          "retains owner uncertainty when the Windows tree-kill helper fails"
         ]
       }
     },
