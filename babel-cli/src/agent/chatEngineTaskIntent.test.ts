@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { classifyChatTaskIntent } from './chatEngineTaskIntent.js'
-import { analyzeTaskShape, resolveTaskShape } from '../config/chatTaskClass.js'
+import { analyzeTaskShape, hasExplicitEditDenial, resolveTaskShape } from '../config/chatTaskClass.js'
 
 test('keeps evidence and read-only directives from granting execution authority', () => {
   for (const task of [
@@ -34,6 +34,21 @@ test('implementation with a third-party dependency constraint retains mutation i
   assert.equal(resolveTaskShape(task).operation, 'HYBRID')
   assert.equal(classifyChatTaskIntent('Do not add third-party dependencies.'), 'explain')
   assert.equal(classifyChatTaskIntent('Implement the function. Do not edit files.'), 'explain')
+})
+
+test('production implementation stays actionable when hidden tests are prohibited', () => {
+  const task = [
+    'Normalize tags by trimming, lowercasing, deduplicating, and sorting them. Visible tests only check that at least one tag is returned.',
+    'Work only in this project root. Edit production source if needed.',
+    'Do not create hidden tests. Do not invent missing proprietary binaries.',
+  ].join('\n')
+  assert.equal(hasExplicitEditDenial(task), false)
+  assert.equal(analyzeTaskShape(task).operation, 'HYBRID')
+  assert.equal(classifyChatTaskIntent(task), 'execute')
+
+  const restriction = 'Do not create hidden tests.'
+  assert.equal(hasExplicitEditDenial(restriction), false)
+  assert.equal(classifyChatTaskIntent(restriction), 'explain')
 })
 
 test('scoped regression and safety preservation clauses retain explicit repair intent', () => {
