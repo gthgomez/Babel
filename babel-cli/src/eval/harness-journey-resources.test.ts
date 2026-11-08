@@ -1,11 +1,27 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { prepareJourneyFixture, readJourneyCorpus } from './harness-journey-fixtures.js'
 import { journeyScenario, withJourneyResources } from './harness-journey-resources.js'
+
+test('prepared native journey sources and Git metadata are sandbox-readable under restrictive umask', async () => {
+  const corpus = await readJourneyCorpus(fileURLToPath(new URL('../../../benchmarks/harness-journeys/development.json', import.meta.url)))
+  const spec = corpus.journeys.find(row => row.id === 'J03')!
+  const root = await mkdtemp(join(tmpdir(), 'babel-journey-modes-'))
+  const originalUmask = process.umask(0o077)
+  try {
+    const prepared = await prepareJourneyFixture(spec, corpus.fixtures[spec.fixtureId]!, join(root, 'cell'))
+    assert.equal((await stat(prepared.candidateRoot)).mode & 0o777, 0o755)
+    assert.equal((await stat(join(prepared.candidateRoot, 'REPO_MAP.md'))).mode & 0o777, 0o644)
+    assert.equal((await stat(join(prepared.candidateRoot, '.git/index'))).mode & 0o777, 0o644)
+  } finally {
+    process.umask(originalUmask)
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 test('prepared services expose supplied sources and persist receipts outside candidate grants, then close on failure', async () => {
   const corpus = await readJourneyCorpus(fileURLToPath(new URL('../../../benchmarks/harness-journeys/development.json', import.meta.url)))
