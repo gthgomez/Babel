@@ -17,7 +17,8 @@ import { runGitCommand } from '../utils/gitExec.js'
 const TaskSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]*$/), journeyId: z.enum(['J03', 'J04', 'J05', 'J06']),
   kind: z.enum(['read_only', 'bug_fix', 'feature', 'negative_control']),
-  fixtureMode: z.enum(['clean-preserved-content']).optional(), allowedChanges: z.array(z.string()),
+  fixtureMode: z.enum(['clean-preserved-content', 'j06-recovery-tests']).optional(),
+  promptSuffix: z.string().optional(), allowedChanges: z.array(z.string()),
 }).strict()
 const ManifestSchema = z.object({ schemaVersion: z.literal(1), version: z.string().min(1), expansionTarget: z.number().int().min(12).max(20), tasks: z.array(TaskSchema).min(4) }).strict()
 type Terminal = Pick<ChatResult, 'status' | 'outcome' | 'answer'>
@@ -141,8 +142,10 @@ export async function runNativeChatTasks(options: {
   const specs: JourneySpec[] = manifest.tasks.map(task => {
     const source = corpus.journeys.find(spec => spec.id === task.journeyId)
     if (!source) throw new Error('Missing development journey')
-    return { ...source, id: task.id, prompt: source.prompt + (task.kind === 'read_only'
-      ? '\nRead REPO_MAP.md and the two current source files. Return only JSON with a corrections array of objects, each containing stale and current path strings.' : '') }
+    return { ...source, id: task.id, prompt: [source.prompt,
+      ...(task.kind === 'read_only' ? ['Read REPO_MAP.md and the two current source files. Return only JSON with a corrections array of objects, each containing stale and current path strings.'] : []),
+      ...(task.promptSuffix ? [task.promptSuffix] : []),
+    ].join('\n') }
   })
   // Freeze the grading dependency closure and public data before any candidate acts.
   const protectedFiles = [manifestPath, corpusPath, join(root, 'babel-cli/scripts/run_native_chat_tasks.mjs'), join(root, 'babel-cli/package-lock.json'), ...[
@@ -177,7 +180,12 @@ export async function runNativeChatTasks(options: {
     const sourceFixture = corpus.fixtures[spec.fixtureId]!
     const fixture = task.fixtureMode === 'clean-preserved-content'
       ? { ...sourceFixture, files: { ...sourceFixture.files, ...sourceFixture.dirtyFiles, ...sourceFixture.untrackedFiles }, dirtyFiles: {}, untrackedFiles: {} }
-      : sourceFixture
+      : task.fixtureMode === 'j06-recovery-tests'
+        ? { ...sourceFixture, files: { ...sourceFixture.files,
+          'package.json': JSON.stringify({ type: 'module', scripts: { test: 'node --test test/invoice.test.mjs' } }, null, 2) + '\n',
+          'test/invoice.test.mjs': `import test from 'node:test'\nimport assert from 'node:assert/strict'\nimport { invoiceTotal } from '../lib/invoice.mjs'\n\ntest('applies the ten percent discount', () => {\n  assert.equal(invoiceTotal([{ price: 19.99, quantity: 3 }]), 53.97)\n})\n\ntest('rounds the final discounted total to two decimals', () => {\n  assert.equal(invoiceTotal([{ price: 0.05, quantity: 1 }]), 0.05)\n})\n\ntest('returns zero for an empty list', () => {\n  assert.equal(invoiceTotal([]), 0)\n})\n\ntest('rejects negative quantities', () => {\n  assert.throws(() => invoiceTotal([{ price: 1, quantity: -1 }]))\n})\n`,
+        }, dirtyFiles: {}, untrackedFiles: {} }
+        : sourceFixture
     const cell = await prepareJourneyFixture(spec, fixture, join(out, task.id))
     let terminal: NativeTaskTerminal | null = null
     let routes: unknown[] = []
