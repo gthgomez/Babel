@@ -22,12 +22,14 @@ test('bare JSON normalization is confined to the explicit current-user contract 
 
 test('mandatory deferral excludes completed answers, examples and hypothetical requests', () => {
   assert.equal(requestsRequiredUserDecision("Before I can implement this, I need your choice.\nWhich direction should I implement?"), true)
+  assert.equal(requestsRequiredUserDecision("I can't proceed without a decision from you. Should negative quantities be treated as returns or rejected as invalid input?"), true)
   assert.equal(requestsRequiredUserDecision("**Why I'm not editing yet**\nThe product direction is unspecified.\n**What I need from you — one line is enough:**\n\n> Sort by **price / name / popularity**, **ascending / descending**?"), true)
   for (const answer of [
     'I implemented the fix. Would you like more improvements?',
     'The current implementation has two choices. Which do you prefer?',
     '```\nI am not editing yet.\nWhich direction should I implement?\n```',
     'If I need your decision, I will ask.\nWhich direction should I implement?',
+    'If I can proceed without a decision, I will make the documented change and verify it.',
     'The document says "I am not editing yet. Which direction should I implement?"',
   ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
 })
@@ -50,7 +52,7 @@ test('standalone product-choice questions do not require a stock deferral prefac
   ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
 })
 
-for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice'] as const)
+for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'blocking_policy'] as const)
 test(`response contract ${scenario} settles without speculative continuation`, async t => {
   const isChoice = scenario !== 'json_format'
   const root = mkdtempSync(join(tmpdir(), 'chat-response-contract-'))
@@ -89,6 +91,8 @@ test(`response contract ${scenario} settles without speculative continuation`, a
     ? 'Should invalid rows be skipped or fail the export?'
     : scenario === 'alternative_choice'
       ? 'Which date format should the export use?'
+      : scenario === 'blocking_policy'
+        ? "I've inspected the code and project contract, and I can't proceed without a decision from you.\n\nShould negative quantities represent returns or be rejected as invalid input?"
       : "I'm not editing yet because the requested direction is unspecified. What I need from you:\n\n> Which direction should I implement?"
   class Runner extends DeepInfraApiRunner {
     turns = 0
