@@ -39,6 +39,9 @@ export class ShellRuntimeBinding {
   private currentUserRecord: HistoryCellRecord | undefined;
   private readonly toolIds = new Map<string, number>();
   private readonly toolIdQueue: number[] = [];
+  /** Non-tool activity (subagents, file changes) reuses the tool-cell surface. */
+  private readonly activityIds = new Map<string, number>();
+  private nextActivityId = 1_000_000;
   private activity: ShellActivity = 'idle';
   private lastOutcome: string | null = null;
   private readonly onChange: (() => void) | undefined;
@@ -81,6 +84,7 @@ export class ShellRuntimeBinding {
     this.currentUserRecord = undefined;
     this.toolIds.clear();
     this.toolIdQueue.length = 0;
+    this.activityIds.clear();
     this.store.startSession(threadId, records);
     this.syncViewport();
   }
@@ -107,6 +111,7 @@ export class ShellRuntimeBinding {
     this.lastOutcome = null;
     this.toolIds.clear();
     this.toolIdQueue.length = 0;
+    this.activityIds.clear();
     this.syncViewport();
   }
 
@@ -186,6 +191,42 @@ export class ShellRuntimeBinding {
         this.activity = 'running';
         break;
       }
+      case 'sub_agent_start': {
+        this.activity = 'running';
+        const activeId = this.nextActivityId++;
+        this.activityIds.set(event.id, activeId);
+        this.transcript.beginToolCall(activeId, 'sub_agent', event.label);
+        break;
+      }
+      case 'sub_agent_complete': {
+        this.activity = 'running';
+        const activeId = this.activityIds.get(event.id);
+        if (activeId !== undefined) {
+          this.transcript.completeToolCall(activeId, event.summary);
+          this.activityIds.delete(event.id);
+        }
+        break;
+      }
+      case 'sub_agent_failed': {
+        this.activity = 'running';
+        const activeId = this.activityIds.get(event.id);
+        if (activeId !== undefined) {
+          this.transcript.completeToolCall(activeId, event.error, true);
+          this.activityIds.delete(event.id);
+        }
+        break;
+      }
+      case 'file_changed': {
+        this.activity = 'running';
+        const changedId = this.nextActivityId++;
+        this.transcript.beginToolCall(changedId, 'file_changed', event.path);
+        this.transcript.completeToolCall(changedId, `+${event.additions} -${event.deletions}`);
+        break;
+      }
+      case 'progress_recovery':
+        this.activity = 'running';
+        this.transcript.onThought(event.message ?? `Recovery: ${event.source}`);
+        break;
       case 'cancelled':
         this.activity = 'cancelling';
         this.lastOutcome = event.outcome ?? 'CANCELLED';
@@ -246,6 +287,7 @@ export class ShellRuntimeBinding {
     this.currentUserRecord = undefined;
     this.toolIds.clear();
     this.toolIdQueue.length = 0;
+    this.activityIds.clear();
     this.activity = 'idle';
     this.lastOutcome = outcome ?? this.lastOutcome ?? 'completed';
     this.syncViewport();
@@ -257,6 +299,7 @@ export class ShellRuntimeBinding {
     this.currentUserRecord = undefined;
     this.toolIds.clear();
     this.toolIdQueue.length = 0;
+    this.activityIds.clear();
     this.activity = 'idle';
   }
 

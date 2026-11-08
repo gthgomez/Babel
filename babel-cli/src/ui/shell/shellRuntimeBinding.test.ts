@@ -23,6 +23,33 @@ describe('ShellRuntimeBinding', () => {
     assert.equal(binding.getSnapshot().threadId, 'thread-a');
   });
 
+  it('projects file changes and subagent work as visible activity', () => {
+    const binding = new ShellRuntimeBinding({ width: 80 });
+    binding.beginTurn(2, 'fix the test', 'thread-c');
+    binding.onChatEvent({ type: 'sub_agent_start', id: 'child-1', label: 'inspect auth' });
+    binding.onChatEvent({ type: 'sub_agent_complete', id: 'child-1', summary: 'found the bug', tokens: 12 });
+    binding.onChatEvent({ type: 'file_changed', path: 'src/login.ts', additions: 12, deletions: 4 });
+    binding.onChatEvent({ type: 'file_changed', path: 'src/login.ts', additions: 1, deletions: 0 });
+    const rows = binding.getVisibleRows(80, 30).join('\n');
+
+    assert.match(rows, /sub_agent.*inspect auth/);
+    assert.match(rows, /found the bug/);
+    assert.match(rows, /file_changed.*src\/login\.ts/);
+    assert.match(rows, /\+12 -4/);
+    assert.match(rows, /\+1 -0/);
+  });
+
+  it('projects subagent failures as failed activity', () => {
+    const binding = new ShellRuntimeBinding({ width: 80 });
+    binding.beginTurn(3, 'delegate');
+    binding.onChatEvent({ type: 'sub_agent_start', id: 'child-2', label: 'repair' });
+    binding.onChatEvent({ type: 'sub_agent_failed', id: 'child-2', error: 'verifier failed' });
+    const rows = binding.getVisibleRows(80, 20).join('\n');
+
+    assert.match(rows, /repair/);
+    assert.match(rows, /verifier failed/);
+  });
+
   it('settles a streamed turn without duplicating its user cell', () => {
     const binding = new ShellRuntimeBinding({ width: 80 });
     binding.beginTurn(7, 'first question', 'thread-b');

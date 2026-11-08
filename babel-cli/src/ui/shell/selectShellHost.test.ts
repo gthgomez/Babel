@@ -11,9 +11,10 @@ const supported = {
   cursorAddressing: true,
 }
 
-test('keeps the legacy host until UI4 evidence qualifies the default', () => {
-  assert.deepEqual(selectShellHost(supported), { host: 'legacy', reason: 'legacy-default' })
+test('selects North Star as the canonical default on supported TTYs', () => {
+  assert.deepEqual(selectShellHost(supported), { host: 'north_star', reason: 'qualified-default' })
   assert.deepEqual(selectShellHost({ ...supported, ui4Qualified: true }), { host: 'north_star', reason: 'qualified-default' })
+  assert.deepEqual(selectShellHost({ ...supported, optIn: 'legacy' }), { host: 'legacy', reason: 'explicit-opt-out' })
 })
 
 test('developer opt-in selects North Star when safety gates pass', () => {
