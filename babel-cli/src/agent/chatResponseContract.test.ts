@@ -24,6 +24,8 @@ test('mandatory deferral excludes completed answers, examples and hypothetical r
   assert.equal(requestsRequiredUserDecision("Before I can implement this, I need your choice.\nWhich direction should I implement?"), true)
   assert.equal(requestsRequiredUserDecision("I can't proceed without a decision from you. Should negative quantities be treated as returns or rejected as invalid input?"), true)
   assert.equal(requestsRequiredUserDecision('I inspected the implementation; no changes are needed. If I cannot proceed without a decision on a future task, I will ask you. Would you like a summary?'), false)
+  assert.equal(requestsRequiredUserDecision('For example, if I need your decision on a future task, I will ask you. Would you like a summary?'), false)
+  assert.equal(requestsRequiredUserDecision('Should invalid rows be skipped or fail the export? If I cannot proceed without a decision on a future task, I will ask you.'), true)
   assert.equal(requestsRequiredUserDecision("**Why I'm not editing yet**\nThe product direction is unspecified.\n**What I need from you — one line is enough:**\n\n> Sort by **price / name / popularity**, **ascending / descending**?"), true)
   for (const answer of [
     'I implemented the fix. Would you like more improvements?',
@@ -53,9 +55,9 @@ test('standalone product-choice questions do not require a stock deferral prefac
   ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
 })
 
-for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'blocking_policy', 'hypothetical_deferral'] as const)
+for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'blocking_policy', 'hypothetical_deferral', 'inline_hypothetical', 'choice_before_hypothetical'] as const)
 test(`response contract ${scenario} settles without speculative continuation`, async t => {
-  const isChoice = scenario !== 'json_format' && scenario !== 'hypothetical_deferral'
+  const isChoice = !['json_format', 'hypothetical_deferral', 'inline_hypothetical'].includes(scenario)
   const root = mkdtempSync(join(tmpdir(), 'chat-response-contract-'))
   const names = ['BABEL_NATIVE_TOOLS', 'BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE',
     'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const
@@ -88,7 +90,9 @@ test(`response contract ${scenario} settles without speculative continuation`, a
     return { exit_code: 0, stdout: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n', stderr: '' }
   })
   const payload = '{\n  "value": 1\n}\n'
-  const clarification = scenario === 'plain_choice'
+  const clarification = scenario === 'choice_before_hypothetical'
+    ? 'Should invalid rows be skipped or fail the export? If I cannot proceed without a decision on a future task, I will ask you.'
+    : scenario === 'plain_choice'
     ? 'Should invalid rows be skipped or fail the export?'
     : scenario === 'alternative_choice'
       ? 'Which date format should the export use?'
@@ -109,8 +113,10 @@ test(`response contract ${scenario} settles without speculative continuation`, a
       } else {
         if (this.turns > (isChoice ? 3 : 2))
           throw new Error('A valid final answer must not prompt speculative continuation')
-        const hypothetical = 'I inspected the implementation; no changes are needed. If I cannot proceed without a decision on a future task, I will ask you. Would you like a summary?'
-        for (const text of scenario === 'json_format' ? ['```json\n', payload, '```'] : [scenario === 'hypothetical_deferral' ? hypothetical : clarification])
+        const hypothetical = scenario === 'inline_hypothetical'
+          ? 'For example, if I need your decision on a future task, I will ask you. Would you like a summary?'
+          : 'I inspected the implementation; no changes are needed. If I cannot proceed without a decision on a future task, I will ask you. Would you like a summary?'
+        for (const text of scenario === 'json_format' ? ['```json\n', payload, '```'] : [scenario === 'hypothetical_deferral' || scenario === 'inline_hypothetical' ? hypothetical : clarification])
           yield { type: 'text_delta', text }
         yield { type: 'done', finishReason: 'stop' }
       }
@@ -121,7 +127,13 @@ test(`response contract ${scenario} settles without speculative continuation`, a
   const engine = new ChatEngine({ task, projectRoot: root, model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: 5 })
   let streamedAnswer=''
   const result = await engine.submitMessage(task, {onAnswerChunk:chunk=>{streamedAnswer+=chunk}})
-  const expectedAnswer = scenario === 'json_format' ? payload : scenario === 'hypothetical_deferral' ? 'I inspected the implementation; no changes are needed. If I cannot proceed without a decision on a future task, I will ask you. Would you like a summary?' : clarification
+  const expectedAnswer = scenario === 'json_format'
+    ? payload
+    : scenario === 'hypothetical_deferral'
+      ? 'I inspected the implementation; no changes are needed. If I cannot proceed without a decision on a future task, I will ask you. Would you like a summary?'
+      : scenario === 'inline_hypothetical'
+        ? 'For example, if I need your decision on a future task, I will ask you. Would you like a summary?'
+        : clarification
   assert.equal(result.answer, expectedAnswer)
   assert.equal(runner.turns, isChoice ? 3 : 2)
   if (isChoice) {
@@ -129,7 +141,7 @@ test(`response contract ${scenario} settles without speculative continuation`, a
     assert.equal(result.status, 'blocked')
     assert.equal(verifiers, 1, JSON.stringify(result.toolCalls))
     assert.equal(result.toolCalls?.find(call => call.tool === 'test_run')?.effect_status, 'indeterminate', JSON.stringify(result.toolCalls))
-  } else if (scenario === 'hypothetical_deferral') {
+  } else if (scenario === 'hypothetical_deferral' || scenario === 'inline_hypothetical') {
     assert.notEqual(result.outcome, 'NEEDS_HUMAN_DECISION')
     assert.notEqual(result.status, 'blocked')
     assert.equal(verifiers, 0)
