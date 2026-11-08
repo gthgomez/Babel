@@ -31,19 +31,23 @@ export function requestsRequiredUserDecision(answer: string): boolean {
   const deferralPhrase = /\b(?:not editing|before I|I need|what I need|cannot proceed without|can't proceed without)\b/i
   const conditionalMatches = [...prose.matchAll(conditionalClause)]
     .filter(match => deferralPhrase.test(match[0]))
-  const currentProse = conditionalMatches.reduce((text, match) => {
+  let currentProse = prose
+  for (const match of [...conditionalMatches].sort((left, right) => (right.index ?? -1) - (left.index ?? -1))) {
     const start = match.index
-    if (start === undefined) return text
-    return text.slice(0, start) + ' ' + text.slice(start + match[0].length)
-  }, prose)
+    if (start === undefined) continue
+    currentProse = currentProse.slice(0, start) + ' ' + currentProse.slice(start + match[0].length)
+  }
   // A reply consisting entirely of a product-choice question already asks the
   // user to decide. Do not require a second, stock "I need your choice" sentence.
   // This recognizes a deferral only: no authority or completion evidence is minted.
   const question = currentProse.trim().replace(/^>\s*/, '').replace(/^\*\*([\s\S]*)\*\*$/, '$1')
-  const asksChoice = /\b(?:or|versus)\b/i.test(question)
-    || /^(?:which|what)\b[^?\n]*\b(?:should|must)\b/i.test(question)
-  if (asksChoice && /^(?:which|what|should|do you want|would you prefer)\b[^?\n]{1,300}\?/i.test(question)) {
-    const questionStart = prose.indexOf(question)
+  const directQuestion = /^(?:which|what|should|do you want|would you prefer)\b[^?\n]{1,300}\?/i.exec(question)?.[0]
+  const asksChoice = directQuestion !== undefined && (
+    /\b(?:or|versus)\b/i.test(directQuestion)
+    || /^(?:which|what)\b[^?\n]*\b(?:should|must)\b/i.test(directQuestion)
+  )
+  if (asksChoice && directQuestion) {
+    const questionStart = prose.indexOf(directQuestion)
     const followsHypothetical = conditionalMatches.some(match => match.index !== undefined && match.index < questionStart)
     if (!followsHypothetical) return true
   }
