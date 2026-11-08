@@ -15,7 +15,7 @@ import { verifierSemanticProgress } from './verifierSemanticProgress.js';
 
 import assert from 'node:assert/strict';
 import { describe, test, after } from 'node:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -528,8 +528,18 @@ describe('D01/D02 effective-operation policy', () => {
       assert.equal(verifierLog?.verifierExecuted, true,
         'the reset requires a host-observed executed red verifier');
       assert.equal(verifierLog?.exit_code, 1, 'red test command exits nonzero and is not authoritative completion');
-      assert.equal(realpathSync(verifierLog!.working_directory!), realpathSync(join(root, 'nested')),
-        'cwd provenance reaches the actual executor log even when Windows reports an 8.3 alias');
+      const loggedCwdIdentity = statSync(verifierLog!.working_directory!);
+      const expectedCwdIdentity = statSync(join(root, 'nested'));
+      assert.equal(loggedCwdIdentity.isDirectory(), true, 'logged cwd resolves to a directory');
+      assert.equal(loggedCwdIdentity.dev, expectedCwdIdentity.dev,
+        'cwd provenance identifies the expected filesystem device');
+      assert.equal(loggedCwdIdentity.ino, expectedCwdIdentity.ino,
+        'cwd provenance identifies the expected directory even when Windows uses an 8.3 alias');
+      const distinctCwdIdentity = statSync(root);
+      assert.ok(
+        loggedCwdIdentity.dev !== distinctCwdIdentity.dev || loggedCwdIdentity.ino !== distinctCwdIdentity.ino,
+        'cwd provenance continues to distinguish a genuinely different working directory',
+      );
       assert.equal(verifierLog?.processExecuted, true);
       assert.equal(verifierLog?.processCompleted, true, JSON.stringify(verifierLog));
       assert.notEqual(result.outcome, 'VERIFIED_COMPLETE', 'a red verifier cannot certify the task');
