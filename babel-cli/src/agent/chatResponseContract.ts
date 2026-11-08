@@ -24,10 +24,10 @@ export function normalizeChatAnswer(answer: string, userInput: string): string {
 export function requestsRequiredUserDecision(answer: string): boolean {
   const prose = answer.replace(/```[\s\S]*?```/g, '')
     .replace(/\b(?:says?|said|claims?|claimed|wrote)\s*[: ,]*["“][^"”]*["”]/gi, '')
-  // Conditional examples describe a possible future block, not a present one.
-  // Remove only those clauses before evaluating actual deferral language, so a
-  // separate, current request for a decision still remains actionable.
-  const conditionalDeferral = /(?:^|(?<=[.!?]\s))\s*(?:(?:for example|e\.g\.)[, :]+\s*)?(?:if|suppose|imagine)\b[^.!?\n]*\b(?:not editing|before I|I need|what I need|cannot proceed without|can't proceed without)\b[^.!?\n]*(?:[.!?]|$)/gim
+  // A conditional deferral can appear anywhere in its sentence (for example,
+  // after 'For future work,'). Remove that sentence before evaluating current
+  // deferrals, while retaining separate direct decision questions.
+  const conditionalDeferral = /(?:^|(?<=[.!?]\s))\s*[^.!?\n]*?\b(?:if|suppose|imagine)\b[^.!?\n]*?\b(?:not editing|before I|I need|what I need|cannot proceed without|can't proceed without)\b[^.!?\n]*(?:[.!?]|$)/gim
   const conditionalMatches = [...prose.matchAll(conditionalDeferral)]
   const currentProse = prose.replace(conditionalDeferral, ' ')
   // A reply consisting entirely of a product-choice question already asks the

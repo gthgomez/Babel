@@ -25,6 +25,8 @@ test('mandatory deferral excludes completed answers, examples and hypothetical r
   assert.equal(requestsRequiredUserDecision("I can't proceed without a decision from you. Should negative quantities be treated as returns or rejected as invalid input?"), true)
   assert.equal(requestsRequiredUserDecision('I inspected the implementation; no changes are needed. If I cannot proceed without a decision on a future task, I will ask you. Would you like a summary?'), false)
   assert.equal(requestsRequiredUserDecision('For example, if I need your decision on a future task, I will ask you. Would you like a summary?'), false)
+  assert.equal(requestsRequiredUserDecision('For future work, if I need your decision, I will ask you. Would you like a summary?'), false)
+  assert.equal(requestsRequiredUserDecision('On a later task, if I cannot proceed without a decision, I will ask you. Would you like a summary?'), false)
   assert.equal(requestsRequiredUserDecision('Should invalid rows be skipped or fail the export? If I cannot proceed without a decision on a future task, I will ask you.'), true)
   assert.equal(requestsRequiredUserDecision("**Why I'm not editing yet**\nThe product direction is unspecified.\n**What I need from you — one line is enough:**\n\n> Sort by **price / name / popularity**, **ascending / descending**?"), true)
   for (const answer of [
@@ -55,9 +57,9 @@ test('standalone product-choice questions do not require a stock deferral prefac
   ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
 })
 
-for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'blocking_policy', 'hypothetical_deferral', 'inline_hypothetical', 'choice_before_hypothetical'] as const)
+for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'blocking_policy', 'hypothetical_deferral', 'inline_hypothetical', 'future_need_hypothetical', 'future_cannot_hypothetical', 'choice_before_hypothetical'] as const)
 test(`response contract ${scenario} settles without speculative continuation`, async t => {
-  const isChoice = !['json_format', 'hypothetical_deferral', 'inline_hypothetical'].includes(scenario)
+  const isChoice = !['json_format', 'hypothetical_deferral', 'inline_hypothetical', 'future_need_hypothetical', 'future_cannot_hypothetical'].includes(scenario)
   const root = mkdtempSync(join(tmpdir(), 'chat-response-contract-'))
   const names = ['BABEL_NATIVE_TOOLS', 'BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE',
     'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const
@@ -115,8 +117,13 @@ test(`response contract ${scenario} settles without speculative continuation`, a
           throw new Error('A valid final answer must not prompt speculative continuation')
         const hypothetical = scenario === 'inline_hypothetical'
           ? 'For example, if I need your decision on a future task, I will ask you. Would you like a summary?'
-          : 'I inspected the implementation; no changes are needed. If I cannot proceed without a decision on a future task, I will ask you. Would you like a summary?'
-        for (const text of scenario === 'json_format' ? ['```json\n', payload, '```'] : [scenario === 'hypothetical_deferral' || scenario === 'inline_hypothetical' ? hypothetical : clarification])
+          : scenario === 'future_need_hypothetical'
+            ? 'For future work, if I need your decision, I will ask you. Would you like a summary?'
+            : scenario === 'future_cannot_hypothetical'
+              ? 'On a later task, if I cannot proceed without a decision, I will ask you. Would you like a summary?'
+              : 'I inspected the implementation; no changes are needed. If I cannot proceed without a decision on a future task, I will ask you. Would you like a summary?'
+        const isHypothetical = ['hypothetical_deferral', 'inline_hypothetical', 'future_need_hypothetical', 'future_cannot_hypothetical'].includes(scenario)
+        for (const text of scenario === 'json_format' ? ['```json\n', payload, '```'] : [isHypothetical ? hypothetical : clarification])
           yield { type: 'text_delta', text }
         yield { type: 'done', finishReason: 'stop' }
       }
@@ -133,7 +140,11 @@ test(`response contract ${scenario} settles without speculative continuation`, a
       ? 'I inspected the implementation; no changes are needed. If I cannot proceed without a decision on a future task, I will ask you. Would you like a summary?'
       : scenario === 'inline_hypothetical'
         ? 'For example, if I need your decision on a future task, I will ask you. Would you like a summary?'
-        : clarification
+        : scenario === 'future_need_hypothetical'
+          ? 'For future work, if I need your decision, I will ask you. Would you like a summary?'
+          : scenario === 'future_cannot_hypothetical'
+            ? 'On a later task, if I cannot proceed without a decision, I will ask you. Would you like a summary?'
+            : clarification
   assert.equal(result.answer, expectedAnswer)
   assert.equal(runner.turns, isChoice ? 3 : 2)
   if (isChoice) {
@@ -141,7 +152,7 @@ test(`response contract ${scenario} settles without speculative continuation`, a
     assert.equal(result.status, 'blocked')
     assert.equal(verifiers, 1, JSON.stringify(result.toolCalls))
     assert.equal(result.toolCalls?.find(call => call.tool === 'test_run')?.effect_status, 'indeterminate', JSON.stringify(result.toolCalls))
-  } else if (scenario === 'hypothetical_deferral' || scenario === 'inline_hypothetical') {
+  } else if (['hypothetical_deferral', 'inline_hypothetical', 'future_need_hypothetical', 'future_cannot_hypothetical'].includes(scenario)) {
     assert.notEqual(result.outcome, 'NEEDS_HUMAN_DECISION')
     assert.notEqual(result.status, 'blocked')
     assert.equal(verifiers, 0)
