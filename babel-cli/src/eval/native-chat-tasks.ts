@@ -80,7 +80,8 @@ export async function captureNativeTaskFiles(root: string, modes: Map<string, nu
 /** Preserve file permissions as well as bytes, including changes Git ignores. */
 export function nativeChangedPaths(baseline: ReadonlyMap<string, string>, beforeModes: ReadonlyMap<string, number>, snapshot: ReadonlyMap<string, Buffer>, afterModes: ReadonlyMap<string, number>): string[] {
   return [...new Set([...baseline.keys(), ...snapshot.keys(), ...beforeModes.keys(), ...afterModes.keys()])].filter(path =>
-    baseline.get(path) !== (snapshot.has(path) ? digest(snapshot.get(path)!) : undefined) || beforeModes.get(path) !== afterModes.get(path))
+    baseline.get(path) !== (snapshot.has(path) ? digest(snapshot.get(path)!) : undefined) ||
+    beforeModes.get(path) !== afterModes.get(path) && path !== '.git/index')
 }
 
 /** Separate native completion, artifact correctness, missing evidence and calibration. */
