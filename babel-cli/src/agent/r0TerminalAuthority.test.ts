@@ -295,6 +295,19 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
       'even a first delayed await is historical when its job predates the successful retry');
   });
 
+  test('a newer background success clears an older failure collected after its dispatch', () => {
+    const oldStart = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecutionId: 'bg-A', processExecuted: true, processCompleted: false, exit_code: 0 };
+    const newStart = { ...oldStart, processExecutionId: 'bg-B' };
+    const oldFailure = { tool: 'await_command', target: oldStart.target, working_directory: '/repo/app',
+      processExecutionId: 'bg-A', processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const newSuccess = { tool: 'await_command', target: oldStart.target, working_directory: '/repo/app',
+      processExecutionId: 'bg-B', processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'ok' };
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [oldStart, newStart, oldFailure, newSuccess]), null,
+      'success ordering compares host dispatches, not the later await collection event');
+  });
+
   test('a command start without a completed process result cannot clear a typed block', () => {
     const denied = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
       processExecuted: true, processCompleted: true, exit_code: 7,

@@ -1,6 +1,6 @@
 import { spawnSync, type ChildProcess } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 
 import { getSafeEnv } from './utils/safeEnv.js'
 
@@ -43,10 +43,10 @@ function processStatFields(path: string): { state: string; processGroup: number 
   }
 }
 
-function linuxProcessGroupHasLiveMember(groupLeaderPid: number): boolean {
+export function isLinuxProcessGroupAliveInProc(groupLeaderPid: number, procRoot = '/proc'): boolean {
   let processIds: string[];
   try {
-    processIds = readdirSync('/proc').filter(entry => /^\d+$/.test(entry));
+    processIds = readdirSync(procRoot).filter(entry => /^\d+$/.test(entry));
   } catch {
     linuxGroupSnapshots.delete(groupLeaderPid);
     return true;
@@ -55,15 +55,21 @@ function linuxProcessGroupHasLiveMember(groupLeaderPid: number): boolean {
   const members: string[] = [];
   let uncertain = false;
   for (const pid of processIds) {
-    const processStat = processStatFields(`/proc/${pid}/stat`);
+    const processStat = processStatFields(join(procRoot, pid, 'stat'));
     if (!processStat) {
       uncertain = true;
       continue;
     }
-    if (processStat.state === 'gone' || processStat.processGroup !== groupLeaderPid) continue;
+    if (processStat.state === 'gone') {
+      // The pid was present in the directory snapshot but disappeared before
+      // stat was read. Treat the observation as incomplete, not an empty slot.
+      uncertain = true;
+      continue;
+    }
+    if (processStat.processGroup !== groupLeaderPid) continue;
     let threadIds: string[];
     try {
-      threadIds = readdirSync(`/proc/${pid}/task`).filter(entry => /^\d+$/.test(entry));
+      threadIds = readdirSync(join(procRoot, pid, 'task')).filter(entry => /^\d+$/.test(entry));
     } catch (error) {
       // A disappearing task group is a race; rescan before treating it as dead.
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') uncertain = true;
@@ -75,14 +81,14 @@ function linuxProcessGroupHasLiveMember(groupLeaderPid: number): boolean {
       continue;
     }
     for (const tid of threadIds) {
-      const threadStat = processStatFields(`/proc/${pid}/task/${tid}/stat`);
+      const threadStat = processStatFields(join(procRoot, pid, 'task', tid, 'stat'));
       if (!threadStat || threadStat.state === 'gone' || threadStat.processGroup !== groupLeaderPid) {
         // In particular, do not certify exit from a partial snapshot that
         // lost a thread between readdir and stat.
         uncertain = true;
         continue;
       }
-      members.push(`${pid}:${tid}:${threadStat.state}`);
+      members.push(`${pid}:${tid}`);
       if (threadStat.state !== 'Z' && threadStat.state !== 'X' && threadStat.state !== 'x') {
         linuxGroupSnapshots.delete(groupLeaderPid);
         return true;
@@ -106,7 +112,12 @@ function linuxProcessGroupHasLiveMember(groupLeaderPid: number): boolean {
     linuxGroupSnapshots.delete(groupLeaderPid);
     return false;
   }
-  linuxGroupSnapshots.set(groupLeaderPid, { fingerprint, observedAt: now });
+  // Keep the start of this unchanged observation window. Replacing it at each
+  // poll would make a 20ms threshold unreachable when polling every 10ms.
+  linuxGroupSnapshots.set(groupLeaderPid, {
+    fingerprint,
+    observedAt: previous?.fingerprint === fingerprint ? previous.observedAt : now,
+  });
   return true;
 }
 
@@ -122,7 +133,7 @@ export function isProcessGroupAlive(groupLeaderPid: number): boolean {
     return isProcessAlive(groupLeaderPid)
   }
   if (process.platform === 'linux') {
-    return linuxProcessGroupHasLiveMember(groupLeaderPid)
+    return isLinuxProcessGroupAliveInProc(groupLeaderPid)
   }
   try {
     process.kill(-groupLeaderPid, 0)

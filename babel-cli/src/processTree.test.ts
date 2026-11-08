@@ -13,13 +13,14 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { describe, it } from 'node:test';
 
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
   isProcessAlive,
   isProcessGroupAlive,
+  isLinuxProcessGroupAliveInProc,
   terminateChildTree,
   waitForProcessExit,
   waitForProcessGroupExit,
@@ -32,6 +33,14 @@ function isAlive(pid: number): boolean {
   } catch (err) {
     return (err as NodeJS.ErrnoException).code !== 'ESRCH';
   }
+}
+
+function writeSyntheticProcTask(procRoot: string, pid: number, processGroup: number, state: string): void {
+  const taskDir = join(procRoot, String(pid), 'task', String(pid));
+  mkdirSync(taskDir, { recursive: true });
+  const stat = `${pid} (fixture) ${state} 1 ${processGroup} ${processGroup} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0`;
+  writeFileSync(join(procRoot, String(pid), 'stat'), stat);
+  writeFileSync(join(taskDir, 'stat'), stat);
 }
 
 async function waitUntilDead(pid: number, timeoutMs = 5_000): Promise<void> {
@@ -106,6 +115,49 @@ describe('waitForProcessExit', () => {
 });
 
 describe('waitForProcessGroupExit', () => {
+  it('retains stability across polling and resets it for changed or incomplete snapshots', async () => {
+    const procRoot = mkdtempSync(join(tmpdir(), 'babel-proc-snapshot-'));
+    const groupId = 77123;
+    try {
+      assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), true,
+        'first empty snapshot is not enough to certify exit');
+      await new Promise(resolve => setTimeout(resolve, 30));
+      assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), false,
+        'unchanged empty snapshots settle after the stability window');
+
+      writeSyntheticProcTask(procRoot, groupId, groupId, 'Z');
+      assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), true,
+        'first all-dead process snapshot starts a new stability window');
+      await new Promise(resolve => setTimeout(resolve, 30));
+      assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), false,
+        'unchanged all-dead snapshots settle');
+
+      writeSyntheticProcTask(procRoot, groupId, groupId, 'S');
+      assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), true,
+        'a changed live snapshot remains alive and clears the old stability window');
+      writeSyntheticProcTask(procRoot, groupId, groupId, 'Z');
+      assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), true,
+        'a changed all-dead snapshot must begin a fresh window');
+      await new Promise(resolve => setTimeout(resolve, 30));
+      assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), false,
+        'the fresh unchanged snapshot window eventually settles');
+
+      const incompleteRoot = mkdtempSync(join(tmpdir(), 'babel-proc-incomplete-'));
+      try {
+        mkdirSync(join(incompleteRoot, String(groupId)), { recursive: true });
+        assert.equal(isLinuxProcessGroupAliveInProc(groupId, incompleteRoot), true,
+          'a numeric proc entry whose stat disappears is incomplete');
+        await new Promise(resolve => setTimeout(resolve, 30));
+        assert.equal(isLinuxProcessGroupAliveInProc(groupId, incompleteRoot), true,
+          'repeated incomplete scans never certify exit');
+      } finally {
+        rmSync(incompleteRoot, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(procRoot, { recursive: true, force: true });
+    }
+  });
+
   it('returns true immediately for an already-exited leader', async () => {
     const child = spawnSleeper();
     const pid = child.pid;
@@ -141,6 +193,11 @@ describe('waitForProcessGroupExit', () => {
     const child = spawnSleeper();
     const pid = child.pid;
     assert.ok(pid);
+    if (process.platform === 'linux') {
+      assert.equal(isProcessGroupAlive(pid), true, 'initial live snapshot must block settlement');
+      await new Promise(resolve => setTimeout(resolve, 25));
+      assert.equal(isProcessGroupAlive(pid), true, 'unchanged live snapshots remain unsettled');
+    }
     terminateChildTree(child);
     const start = Date.now();
     const exited = await waitForProcessGroupExit(pid, 10_000);

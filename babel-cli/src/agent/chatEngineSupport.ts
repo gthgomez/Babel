@@ -559,7 +559,9 @@ export function detectAndBuildBlockedReport(
       // so the bounded report window reflects the chronology of the latest
       // blocking observations.
       activeBlockingByAction.delete(key);
-      activeBlockingByAction.set(key, { entry, position: index });
+      // For an await receipt, chronology belongs to the execution's dispatch,
+      // not to the later event that collected its result.
+      activeBlockingByAction.set(key, { entry, position: dispatchIndex ?? index });
     } else if (entry.exit_code === 0 && !entry.error &&
       (!cwdSensitiveTools.has(entry.tool) || (entry.processExecuted === true && entry.processCompleted === true))) {
       const blocking = activeBlockingByAction.get(key);
