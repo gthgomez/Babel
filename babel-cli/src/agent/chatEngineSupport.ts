@@ -465,6 +465,9 @@ function failureChannelText(entry: BlockedToolLogEntry): string {
  * output also produces.
  */
 export function classifyBlockingOrigin(entry: BlockedToolLogEntry): BlockingOrigin | null {
+  // A running command can emit diagnostics before it has settled. A timeout
+  // from await_command is not proof that this process can no longer progress.
+  if (entry.processExecuted === true && entry.processCompleted !== true) return null;
   const text = failureChannelText(entry);
   if (text === '') return null;
   // Errno markers are the strongest signal; still require a failure channel.

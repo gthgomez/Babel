@@ -25,7 +25,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ChatEngine, type ChatEvent } from './chatEngine.js';
-import { detectAndBuildBlockedReport } from './chatEngineSupport.js';
+import { classifyBlockingOrigin, detectAndBuildBlockedReport } from './chatEngineSupport.js';
 import { BlockedReportSchema } from '../schemas/agentContracts.js';
 import { runChatEngineOnce } from '../interactive/execution/chatCore.js';
 import { computeTerminalOutcome } from './chatEngineObservability.js';
@@ -330,6 +330,22 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
     const startedOnly = { tool: 'run_command', target: denied.target, working_directory: '/repo/app',
       processExecuted: false, processCompleted: false, exit_code: 0, stdout: 'background started' };
     assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, startedOnly]));
+  });
+
+  test('an unsettled background command cannot establish a terminal block from interim diagnostics', () => {
+    const running = { tool: 'run_command', target: 'node server.mjs', working_directory: '/repo/app',
+      processExecutionId: 'bg-running', processExecuted: true, processCompleted: false,
+      exit_code: 1, stderr: 'EACCES: permission denied while warming cache' };
+    const timedOutAwait = { ...running, tool: 'await_command', detail: 'timed_out (still running)' };
+    assert.equal(classifyBlockingOrigin(running), null);
+    assert.equal(classifyBlockingOrigin(timedOutAwait), null);
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: permission denied.', [running, timedOutAwait]), null,
+      'an active process may still resolve its interim diagnostic');
+
+    const settledFailure = { ...timedOutAwait, processCompleted: true, exit_code: 1 };
+    assert.equal(classifyBlockingOrigin(settledFailure), 'permission_denied',
+      'the same denial is authoritative once the process has completed');
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: permission denied.', [running, settledFailure]));
   });
 
   test('success on a different action does not clear a typed block', () => {
