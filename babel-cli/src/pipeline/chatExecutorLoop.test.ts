@@ -26,6 +26,11 @@ if (!isSyntheticProviderFixtureReady()) {
     })
     t.diagnostic(summarizeSyntheticProviderOutput(output, code))
     for (const line of output.split('\n').filter(line => /^not ok \d+ - /.test(line))) t.diagnostic(line)
+    if (code !== 0) {
+      const lines = output.split('\n')
+      const start = lines.findIndex(line => /^not ok \d+ - /.test(line))
+      t.diagnostic(start >= 0 ? lines.slice(start, start + 60).join('\n') : output.slice(-12000))
+    }
     assert.equal(code, 0, 'isolated Chat execution contracts must pass')
   })
 } else {
@@ -193,8 +198,9 @@ if (!isSyntheticProviderFixtureReady()) {
     const result = await pending
     assert.equal(result.terminalStatus, 'EXECUTOR_HALTED')
     approve(true)
-    await new Promise(resolve => setImmediate(resolve))
-    await new Promise(resolve => setImmediate(resolve))
+    // Give a late dispatch a bounded window to surface; the assertion is about
+    // durable bytes, so waiting longer can only catch a violation.
+    await new Promise(resolve => setTimeout(resolve, 250))
     assert.equal(readFileSync('late-approval.txt', 'utf8'), 'original')
   })
 

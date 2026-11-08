@@ -16,6 +16,20 @@
       }
     },
     {
+      "id": "windows-discovery-guard-contracts",
+      "platforms": ["linux", "darwin"],
+      "reasons": ["Windows directory helper", "Windows directory sharing semantics"],
+      "rationale": "The Windows unit lane exercises the native discovery directory guards and their sharing semantics during inventory and preview.",
+      "suites": ["unit"],
+      "files": {
+        "src/pipeline/prePlanningDiscovery.readRace.test.ts": [
+          "discovery rejects inventory if its owned Windows guard dies during enumeration",
+          "discovery preview holds its parent directory during the real file open",
+          "discovery rejects all previews if its owned Windows preview guard dies"
+        ]
+      }
+    },
+    {
       "id": "windows-plan-preview-parent-hold",
       "platforms": ["linux", "darwin"],
       "reasons": ["Windows directory sharing semantics"],
