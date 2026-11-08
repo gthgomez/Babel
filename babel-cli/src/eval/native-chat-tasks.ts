@@ -27,7 +27,9 @@ const digest = (bytes: string | Buffer): string => createHash('sha256').update(b
 export function gradeNativeInspection(answer: string, evidence: { projectRoot: string; operations: readonly NativeTaskOperation[] }): OracleVerdict {
   const schema = z.object({ corrections: z.array(z.object({ stale: z.string(), current: z.string() }).strict()).length(2) }).strict()
   try {
-    const parsed = schema.parse(JSON.parse(answer))
+    const trimmed = answer.trim()
+    const fenced = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i)
+    const parsed = schema.parse(JSON.parse(fenced?.[1] ?? trimmed))
     const actual = parsed.corrections.map(item => `${item.stale}:${item.current}`).sort()
     const expected = ['src/client:apps/web/main.mjs', 'src/server:packages/api/server.mjs'].sort()
     if (JSON.stringify(actual) !== JSON.stringify(expected)) return 'fail'

@@ -197,6 +197,7 @@ test('inspection rejects reversed relations and a false explanation containing a
   assert.equal(gradeNativeInspection('src/client and src/server exist; apps/web/main.mjs and packages/api/server.mjs do not.', evidence), 'fail')
   assert.equal(gradeNativeInspection(JSON.stringify({ corrections: [{ stale: 'apps/web/main.mjs', current: 'src/client' }, { stale: 'packages/api/server.mjs', current: 'src/server' }] }), evidence), 'fail')
   assert.equal(gradeNativeInspection(JSON.stringify({ corrections: [{ stale: 'src/client', current: 'apps/web/main.mjs' }, { stale: 'src/server', current: 'packages/api/server.mjs' }] }), evidence), 'pass')
+  assert.equal(gradeNativeInspection('```json\n{"corrections":[{"stale":"src/client","current":"apps/web/main.mjs"},{"stale":"src/server","current":"packages/api/server.mjs"}]}\n```', evidence), 'pass')
 })
 
 test('inspection requires successful reads of each exact fixture path', () => {
