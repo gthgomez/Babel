@@ -99,27 +99,6 @@ export function createCriterionCompletionServiceV1(
   })
 }
 
-/**
- * A derived acceptance meaning awaiting confirmation carries no machine-
- * dispatchable verifier, so it can never gain criterion evidence. It must not
- * block the separate verifier honesty gate: an explicit machine criterion still
- * fails closed, while a contract made only of advisory meaning notes has no
- * criterion work the oracle can perform.
- */
-function isAdvisoryMeaningRequirement(
-  requirement: TaskContractV1['acceptance'][number],
-): boolean {
-  return requirement.verification.kind === 'custom'
-    && requirement.verification.verifier_id.startsWith('meaning:')
-    && (requirement.verification_strategy.includes('requires confirmation')
-      || requirement.verification_strategy.includes('unresolved'))
-}
-
-function onlyAdvisoryMeaningCriteria(contract: TaskContractV1): boolean {
-  const required = contract.acceptance.filter(item => item.required)
-  return required.length > 0 && required.every(isAdvisoryMeaningRequirement)
-}
-
 function unknown(code: string, contract?: TaskContractV1): CompletionEvaluationV1 {
   return {
     status: 'UNKNOWN', verified: false, satisfied_requirements: [],
@@ -163,16 +142,6 @@ export function evaluateCriterionCompletionV1(
       authority.graph = new EvidenceGraph()
       authority.supervisor = createTrustedExecutionSupervisorV1()
       delete authority.candidateSha
-    }
-    if (onlyAdvisoryMeaningCriteria(owner.contract)) {
-      return {
-        status: 'VERIFIED',
-        verified: true,
-        satisfied_requirements: owner.contract.acceptance
-          .filter(item => item.required).map(item => item.id),
-        missing_requirements: [],
-        errors: [],
-      }
     }
     const candidateSha = authority.candidateSha ?? 'unobserved'
     return evaluateCompletionGateV1({

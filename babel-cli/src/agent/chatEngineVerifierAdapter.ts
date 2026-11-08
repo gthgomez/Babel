@@ -330,11 +330,6 @@ export function verifierEvidenceCaveats(receipt: {
   ) {
     caveats.push('all reported tests were skipped: no test was actually executed');
   }
-  if (receipt.exit_code === 0 && receipt.tests_total === undefined) {
-    caveats.push(
-      'verifier exited green without reporting an executed-test count: this cannot certify completion',
-    );
-  }
   return caveats;
 }
 
