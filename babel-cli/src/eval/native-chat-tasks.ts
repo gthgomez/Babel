@@ -22,7 +22,7 @@ const TaskSchema = z.object({
 }).strict()
 const ManifestSchema = z.object({ schemaVersion: z.literal(1), version: z.string().min(1), expansionTarget: z.number().int().min(12).max(20), tasks: z.array(TaskSchema).min(4) }).strict()
 type Terminal = Pick<ChatResult, 'status' | 'outcome' | 'answer'>
-const successOutcomes = new Set(['VERIFIED_COMPLETE', 'UNVERIFIED_PATCH', 'NO_CHANGE_REQUIRED'])
+const successOutcomes = new Set(['VERIFIED_COMPLETE', 'NO_CHANGE_REQUIRED'])
 const digest = (bytes: string | Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
 /** Relations, rather than token presence, establish the two requested corrections. */

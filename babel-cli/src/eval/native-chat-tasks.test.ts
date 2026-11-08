@@ -157,6 +157,13 @@ test('independent failure vetoes an engine completion and unknown grading cannot
   assert.equal(scoreNativeTask({ status: 'completed', outcome: 'UNVERIFIED_PATCH', answer: 'Implemented and verified.' }, 'fail', false).falseCompletion, true)
 })
 
+test('an UNVERIFIED_PATCH is never counted as accepted completion even when the artifact oracle passes', () => {
+  const score = scoreNativeTask({ status: 'completed', outcome: 'UNVERIFIED_PATCH', answer: 'Completion status: UNVERIFIED_PATCH. Task completion is not certified.' }, 'pass', false)
+  assert.equal(score.acceptedCompletion, false)
+  assert.equal(score.outcome, 'FAIL')
+  assert.equal(score.falseCompletion, false)
+})
+
 test('native CLI operation evidence distinguishes completed, failed, cancelled and unsettled reads', async () => {
   const root = await mkdtemp(join(tmpdir(), 'babel-native-read-receipts-'))
   try {
