@@ -162,7 +162,23 @@ test('green verifier guidance distinguishes explicit executable checks from infe
   }).taskContract
   const explicitReview = formatWorkingStateBlock(verifierResult, explicit)
   assert.match(explicitReview, /source: explicit/)
-  assert.match(explicitReview, /verifier_binding: "npm test"/)
+  assert.match(explicitReview, /verifier_binding: exact_executable/)
+  assert.match(explicitReview, /executable_id: "npm"/)
+  assert.match(explicitReview, /argv: \["test"\]/)
+  assert.match(explicitReview, /environment_policy: "host-process"/)
+  assert.doesNotMatch(explicitReview, /working_directory:/,
+    'an absent frozen cwd stays absent in the advisory contract projection')
+
+  const spacedCommand = 'node --test "test files/foo.test.mjs"'
+  const spaced = resolveLiveSessionAuthority({
+    mode: 'chat', task: `Requirements:\n- \`${spacedCommand}\` passes.`, projectRoot: null,
+    executionScope: { kind: 'conversation' }, projectTestCommands: [spacedCommand],
+  }).taskContract
+  const spacedReview = formatWorkingStateBlock(verifierResult, spaced)
+  assert.match(spacedReview, /argv: \["--test","test files\/foo\.test\.mjs"\]/,
+    'argument boundaries and paths containing spaces are preserved')
+  assert.match(spacedReview, /command_hash: "[0-9a-f]{64}"/)
+  assert.doesNotMatch(spacedReview, /working_directory:/)
 
   const semanticTask = 'Normalize decimal separators and preserve the original scale.'
   const semantic = resolveLiveSessionAuthority({

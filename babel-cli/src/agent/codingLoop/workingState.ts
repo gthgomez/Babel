@@ -438,13 +438,26 @@ function formatAcceptanceEvidenceReview(contract?: TaskContractV1 | null): strin
     const verification = criterion.verification
     const hasCommandBinding = !verification.verifier_id.startsWith('meaning:') &&
       typeof verification.executable_id === 'string' && Array.isArray(verification.argv) && verification.argv.length > 0
-    const command = hasCommandBinding ? [verification.executable_id, ...verification.argv!].join(' ') : null
     lines.push(
       `    - criterion_id: ${JSON.stringify(criterion.id)}`,
       `      source: ${acceptanceSourceStatus(contract, criterion.id)}`,
       `      requirement: ${JSON.stringify(criterion.description)}`,
-      `      verifier_binding: ${command ? JSON.stringify(command) : 'none'}`,
+      `      verifier_binding: ${hasCommandBinding ? 'exact_executable' : 'none'}`,
+      `      verifier_id: ${JSON.stringify(verification.verifier_id)}`,
     )
+    if (hasCommandBinding) {
+      lines.push(
+        `      executable_id: ${JSON.stringify(verification.executable_id)}`,
+        `      argv: ${JSON.stringify(verification.argv)}`,
+        ...(verification.command_hash ? [`      command_hash: ${JSON.stringify(verification.command_hash)}`] : []),
+        ...(verification.working_directory !== undefined
+          ? [`      working_directory: ${JSON.stringify(verification.working_directory)}`]
+          : []),
+        ...(verification.environment_policy !== undefined
+          ? [`      environment_policy: ${JSON.stringify(verification.environment_policy)}`]
+          : []),
+      )
+    }
   }
   if (contract.acceptance.length > 16) {
     lines.push(`    omitted_requirements: ${contract.acceptance.length - 16}`)
