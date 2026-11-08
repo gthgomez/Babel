@@ -23,6 +23,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
+    "babel": "bin/babel.js",
     "babel-agent": "bin/babel.js",
     "babel-harness": "bin/babel.js"
   },
