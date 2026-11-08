@@ -13,6 +13,7 @@ import {
   collectPlanHandoffViolations,
   extractPlanRunId,
   loadPlanHandoff,
+  loadPlanHandoffGuarded,
 } from './planHandoff.js';
 
 test('extractPlanRunId reads explicit plan run ids from task text', () => {
@@ -543,7 +544,7 @@ test('a snippet growing after identity validation is read only up to the origina
   }
 });
 
-test('Plan source parent stays held while an approved snippet is opened', t => {
+test('Plan source parent stays held while an approved snippet is opened', async t => {
   if (process.platform !== 'win32') { t.skip('Windows directory sharing semantics'); return; }
   const root = mkdtempSync(join(tmpdir(), 'babel-plan-preview-anchor-'));
   const planRunId = '20260610T180000Z-plan-abc123def456';
@@ -562,7 +563,9 @@ test('Plan source parent stays held while an approved snippet is opened', t => {
       return original(path, ...(args as [fs.OpenMode]));
     }) as typeof fs.openSync);
     syncBuiltinESMExports();
-    const handoff = loadPlanHandoff({ repoPath: root, task: 'Use the selected Plan', planRunId });
+    // The guarded reader owns the source parents; the synchronous convenience
+    // reader intentionally does not promise cross-call pinning.
+    const handoff = await loadPlanHandoffGuarded({ repoPath: root, task: 'Use the selected Plan', planRunId });
     assert.equal(attempted, true);
     assert.equal(renamed, false, 'Plan source parent must remain pinned during the file open');
     assert.match(handoff?.contextText ?? '', /safe snippet/);

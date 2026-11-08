@@ -129,6 +129,12 @@ const env = {
   OPENROUTER_API_KEY: 'synthetic-router-credential',
   TERM: 'xterm-256color',
 }
+// This is a real PTY journey. A CI/headless marker inherited from the runner
+// would deliberately select the non-interactive fallback and hide the very
+// renderer, composer queue and tool cells this test exists to qualify.
+for (const name of ['CI', 'GITHUB_ACTIONS', 'CONTINUOUS_INTEGRATION', 'NO_COLOR', 'BABEL_HEADLESS']) {
+  delete env[name]
+}
 const driver = spawnSync('python3', [
   join(here, 'pty_driver.py'),
   '--script', join(root, 'script.json'),

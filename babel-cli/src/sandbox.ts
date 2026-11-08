@@ -613,6 +613,10 @@ export function spawnCommandAsync(
     const abortPhysicalClose = new Promise<void>((resolveAbortPhysicalClose) => {
       releaseAbortPhysicalClose = resolveAbortPhysicalClose;
     });
+    let releasePhysicalClose: (() => void) | undefined;
+    const physicalClose = new Promise<void>((resolvePhysicalClose) => {
+      releasePhysicalClose = resolvePhysicalClose;
+    });
 
     const recordWitnessTerminal = (status: number | null, error?: Error) => {
       if (witnessTerminalRecorded || !executionId) return;
@@ -705,14 +709,55 @@ export function spawnCommandAsync(
       timeout = setTimeout(() => {
         timedOut = true;
         if (executionId) options.processWitness?.timeout(processInput, executionId);
-        const terminationAttempt = terminateChildTree(child);
-        if (process.platform === 'win32' && !terminationAttempt.treeKillAccepted) {
-          registerPendingProcessTermination(
-            Promise.reject(new Error('Windows process-tree termination was not confirmed by taskkill')),
-            options.processContext?.sessionId ?? 'unscoped',
-            executionId ?? `${executable}:${child.pid ?? 'unknown'}`,
-          );
-        }
+        // The parent's `close` event says nothing about its descendants. A
+        // supervisor deadline must not settle until the owned process group is
+        // physically gone, or callers observe a "timed out" tool while an
+        // orphaned test/child process still runs.
+        termination = new Promise<void>((resolveTermination, rejectTermination) => {
+          let complete = false;
+          const closeTimeout = setTimeout(() => {
+            if (complete) return;
+            complete = true;
+            rejectTermination(new Error(`Timed-out process ${executable} did not close after tree termination`));
+          }, 5_000);
+          setImmediate(() => {
+            void (async () => {
+              try {
+                const pid = child.pid;
+                const terminationAttempt = terminateChildTree(child);
+                if (process.platform === 'win32' && pid && !terminationAttempt.treeKillAccepted) {
+                  throw new Error('Windows process-tree termination was not confirmed by taskkill');
+                }
+                // No pid means there is no owned process group to observe, but
+                // the direct child may still emit its physical close.
+                if (pid) {
+                  const groupExited = await waitForProcessGroupExit(pid, 5_000);
+                  if (!groupExited) {
+                    throw new Error(`Timed-out process group ${pid} did not exit after tree termination`);
+                  }
+                }
+                await physicalClose;
+                if (complete) return;
+                complete = true;
+                clearTimeout(closeTimeout);
+                resolveTermination();
+              } catch (error) {
+                if (complete) return;
+                complete = true;
+                clearTimeout(closeTimeout);
+                rejectTermination(error);
+              }
+            })();
+          });
+        });
+        // The close handler attaches the observable rejection; this prevents an
+        // unhandled rejection if the process hangs and close never arrives.
+        void termination.catch(() => {});
+        registerPendingProcessTermination(
+          termination,
+          options.processContext?.sessionId ?? 'unscoped',
+          executionId ?? `${executable}:${child.pid ?? 'unknown'}`,
+        );
       }, options.timeoutMs);
       timeout.unref?.();
     }
@@ -742,14 +787,25 @@ export function spawnCommandAsync(
       finish(1, err);
     });
     child.once('close', (code) => {
+      releasePhysicalClose?.();
       if (aborted) {
         recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} aborted`));
         if (executionId) options.processWitness?.killed(processInput, executionId);
         releaseAbortPhysicalClose?.();
         finish(code ?? 1, new Error(`spawn ${executable} aborted`));
       } else if (timedOut) {
-        recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} ETIMEDOUT`));
-        finish(code ?? 1, new Error(`spawn ${executable} ETIMEDOUT`));
+        const settleTimedOut = (error?: Error) => {
+          recordWitnessTerminal(code ?? 1, error ?? new Error(`spawn ${executable} ETIMEDOUT`));
+          finish(error ? 1 : code ?? 1, error ?? new Error(`spawn ${executable} ETIMEDOUT`));
+        };
+        if (termination) {
+          void termination.then(
+            () => settleTimedOut(),
+            (error: unknown) => settleTimedOut(error instanceof Error ? error : new Error(String(error))),
+          );
+        } else {
+          settleTimedOut();
+        }
       } else {
         recordWitnessTerminal(code);
         finish(code);

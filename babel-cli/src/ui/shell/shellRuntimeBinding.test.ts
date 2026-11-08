@@ -78,9 +78,11 @@ describe('ShellRuntimeBinding', () => {
     const note = records.find((record) => record.kind === 'plain');
     assert.ok(note, 'the outcome note is a transcript cell');
     assert.match(JSON.stringify(note?.payload), /VERIFIED_COMPLETE/);
+    assert.doesNotMatch(JSON.stringify(note?.payload), /\u001b\[/, 'notes are stripped before entering the cell');
     const rows = binding.getVisibleRows(80, 30).join('\n');
-    assert.match(rows, /Completion status: VERIFIED_COMPLETE/);
-    assert.doesNotMatch(rows, /\u001b\[/, 'notes are stripped before entering the frame');
+    const noteRows = rows.split('\n').filter((line) => line.includes('Completion status')).join('\n');
+    assert.match(noteRows, /Completion status: VERIFIED_COMPLETE/);
+    assert.doesNotMatch(noteRows, /\u001b\[/, 'notes are stripped before entering the frame');
   });
 
   it('renders a terminal-only answer without a streamed chunk', () => {

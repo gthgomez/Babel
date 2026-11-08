@@ -131,5 +131,8 @@ export function terminateChildTree(child: ChildProcess): { treeKillAccepted: boo
   } catch {
     // Best effort: the child may already have exited.
   }
-  return { treeKillAccepted: false }
+  // Without a pid there is no helper-confirmed tree to settle. Windows callers
+  // treat the direct-child kill as the whole contract here; synthetic or
+  // failed-to-spawn children must not be reported as an unconfirmed tree kill.
+  return { treeKillAccepted: process.platform === 'win32' }
 }

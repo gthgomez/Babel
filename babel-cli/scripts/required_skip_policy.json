@@ -16,6 +16,30 @@
       }
     },
     {
+      "id": "windows-plan-preview-parent-hold",
+      "platforms": ["linux", "darwin"],
+      "reasons": ["Windows directory sharing semantics"],
+      "rationale": "The Windows lane exercises holding the Plan source parent open while an approved snippet is read; POSIX permits replacing the directory and cannot exercise the same sharing contract.",
+      "suites": ["unit"],
+      "files": {
+        "src/agent/planHandoff.test.ts": [
+          "Plan source parent stays held while an approved snippet is opened"
+        ]
+      }
+    },
+    {
+      "id": "windows-safety-snapshot-guard-exit",
+      "platforms": ["linux", "darwin"],
+      "reasons": ["Windows directory helper"],
+      "rationale": "The Windows unit lane exercises the native safety-snapshot directory guard exiting during enumeration.",
+      "suites": ["unit"],
+      "files": {
+        "src/stages/executorSafetySnapshot.test.ts": [
+          "safety snapshot discards observations when its owned Windows guard dies"
+        ]
+      }
+    },
+    {
       "id": "windows-guarded-plan-writer-store-listing",
       "platforms": ["linux", "darwin"],
       "reasons": [
