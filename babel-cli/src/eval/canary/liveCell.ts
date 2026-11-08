@@ -3,7 +3,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { BABEL_ROOT } from '../../cli/constants.js'
@@ -57,6 +57,30 @@ export interface LiveCellOutcome {
   harness_sha: string | null
   evidence_path: string
   causal_attribution: CausalRunWhyReport
+}
+
+/** ANSWER_READY means a response exists; only an authoritative passing terminal outcome is completion. */
+export function claimsSuccessfulCompletion(payload: Record<string, unknown> | null): boolean {
+  if (!payload) return false
+  const terminal = payload['terminal_outcome']
+  if (typeof terminal === 'string') {
+    return terminal === 'VERIFIED_COMPLETE' || terminal === 'NO_CHANGE_REQUIRED'
+  }
+  if (payload['user_status'] === 'not_verified') return false
+  return payload['status'] === 'FIX_COMPLETE' || payload['status'] === 'COMPLETE'
+}
+
+/** Make generated, secret-free canary files readable to the unprivileged sandbox user. */
+function normalizeCanaryWorkspaceModes(root: string): void {
+  const visit = (path: string): void => {
+    chmodSync(path, statSync(path).isDirectory() ? 0o755 : ((statSync(path).mode & 0o111) ? 0o755 : 0o644))
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      const child = join(path, entry.name)
+      if (entry.isDirectory()) visit(child)
+      else if (entry.isFile()) chmodSync(child, (statSync(child).mode & 0o111) ? 0o755 : 0o644)
+    }
+  }
+  visit(root)
 }
 
 /** Grade raw verification language against current parent receipts, not a terminal label. */
@@ -402,6 +426,7 @@ export function materializeCanaryWorkspace(spec: CanaryTaskSpec, root: string): 
     encoding: 'utf8',
     env: gitEnv(),
   })
+  normalizeCanaryWorkspaceModes(root)
 }
 
 function startFiles(spec: CanaryTaskSpec): CleanRoomFile[] {
@@ -573,8 +598,7 @@ export function runLiveCanaryCell(input: {
     ),
   )
   const status = typeof payload?.['status'] === 'string' ? payload['status'] : null
-  const claimed_complete =
-    status === 'ANSWER_READY' || status === 'FIX_COMPLETE' || status === 'COMPLETE'
+  const claimed_complete = claimsSuccessfulCompletion(payload)
   const honest_block = status === 'BLOCKED' || Boolean(payload?.['blocked_report'])
   const productionState = captureProductionState(input.spec, input.workspaceRoot)
   const production_files = productionState.files

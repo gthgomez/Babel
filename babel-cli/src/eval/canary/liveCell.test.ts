@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
@@ -9,8 +9,7 @@ import {
   createSessionEventLog,
   rewriteSessionEventLog,
 } from '../../agent/sessionEvents.js'
-import { sessionCausalAttribution } from './liveCell.js'
-import { materializeCanaryWorkspace } from './liveCell.js'
+import { claimsSuccessfulCompletion, materializeCanaryWorkspace, sessionCausalAttribution } from './liveCell.js'
 import { getCanaryTask } from './tasks.js'
 
 test('live canary exposes a public authoritative verifier without leaking the oracle', () => {
@@ -28,6 +27,35 @@ test('live canary exposes a public authoritative verifier without leaking the or
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('canary fixture modes remain readable to sandbox users under restrictive umask', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-live-cell-modes-'))
+  const originalUmask = process.umask(0o077)
+  try {
+    const spec = getCanaryTask('C01')
+    materializeCanaryWorkspace(spec, root)
+    assert.equal(statSync(root).mode & 0o777, 0o755)
+    assert.equal(statSync(join(root, 'src')).mode & 0o777, 0o755)
+    assert.equal(statSync(join(root, 'src/add.js')).mode & 0o777, 0o644)
+    assert.equal(statSync(join(root, 'public.test.mjs')).mode & 0o777, 0o644)
+  } finally {
+    process.umask(originalUmask)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('generic ANSWER_READY does not override authoritative unverified terminal outcome', () => {
+  assert.equal(claimsSuccessfulCompletion({
+    status: 'ANSWER_READY', terminal_outcome: 'UNVERIFIED_PATCH', user_status: 'not_verified',
+  }), false)
+  assert.equal(claimsSuccessfulCompletion({
+    status: 'ANSWER_READY', terminal_outcome: 'VERIFIED_COMPLETE', user_status: 'success',
+  }), true)
+  assert.equal(claimsSuccessfulCompletion({
+    status: 'ANSWER_READY', terminal_outcome: 'NO_CHANGE_REQUIRED', user_status: 'success',
+  }), true)
+  assert.equal(claimsSuccessfulCompletion({ status: 'ANSWER_READY' }), false)
 })
 
 test('live cell causal attribution persists valid canonical evidence', () => {
