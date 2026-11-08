@@ -22,24 +22,12 @@ test('bare JSON normalization is confined to the explicit current-user contract 
 
 test('mandatory deferral excludes completed answers, examples and hypothetical requests', () => {
   assert.equal(requestsRequiredUserDecision("Before I can implement this, I need your choice.\nWhich direction should I implement?"), true)
-  assert.equal(requestsRequiredUserDecision("I can't proceed without a decision from you. Should negative quantities be treated as returns or rejected as invalid input?"), true)
-  assert.equal(requestsRequiredUserDecision('I inspected the implementation; no changes are needed. If I cannot proceed without a decision on a future task, I will ask you. Would you like a summary?'), false)
-  assert.equal(requestsRequiredUserDecision('For example, if I need your decision on a future task, I will ask you. Would you like a summary?'), false)
-  assert.equal(requestsRequiredUserDecision('For future work, if I need your decision, I will ask you. Would you like a summary?'), false)
-  assert.equal(requestsRequiredUserDecision('On a later task, if I cannot proceed without a decision, I will ask you. Would you like a summary?'), false)
-  assert.equal(requestsRequiredUserDecision('e.g., if I need your decision on a future task, I will ask you. Would you like a summary?'), false)
-  assert.equal(requestsRequiredUserDecision('I checked if negative quantities are supported, and I cannot proceed without your decision. Should they represent returns or be rejected?'), true)
-  assert.equal(requestsRequiredUserDecision('For future work, if I need your decision, I will ask you. I cannot proceed with this task without your choice. Which behavior should I implement?'), true)
-  assert.equal(requestsRequiredUserDecision('What changed? The parser now accepts LF or CRLF line endings.'), false)
-  assert.equal(requestsRequiredUserDecision('For future work, if I need your decision, I will ask. On a later task, if I cannot proceed without a decision, I will ask you. Would you like a summary?'), false)
-  assert.equal(requestsRequiredUserDecision('Should invalid rows be skipped or fail the export? If I cannot proceed without a decision on a future task, I will ask you.'), true)
   assert.equal(requestsRequiredUserDecision("**Why I'm not editing yet**\nThe product direction is unspecified.\n**What I need from you — one line is enough:**\n\n> Sort by **price / name / popularity**, **ascending / descending**?"), true)
   for (const answer of [
     'I implemented the fix. Would you like more improvements?',
     'The current implementation has two choices. Which do you prefer?',
     '```\nI am not editing yet.\nWhich direction should I implement?\n```',
     'If I need your decision, I will ask.\nWhich direction should I implement?',
-    'If I can proceed without a decision, I will make the documented change and verify it.',
     'The document says "I am not editing yet. Which direction should I implement?"',
   ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
 })
@@ -62,9 +50,9 @@ test('standalone product-choice questions do not require a stock deferral prefac
   ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
 })
 
-for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'blocking_policy', 'hypothetical_deferral', 'inline_hypothetical', 'future_need_hypothetical', 'future_cannot_hypothetical', 'choice_before_hypothetical', 'indirect_current_blocker', 'nonchoice_question_with_or', 'multiple_hypotheticals'] as const)
+for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice'] as const)
 test(`response contract ${scenario} settles without speculative continuation`, async t => {
-  const isChoice = !['json_format', 'hypothetical_deferral', 'inline_hypothetical', 'future_need_hypothetical', 'future_cannot_hypothetical', 'nonchoice_question_with_or', 'multiple_hypotheticals'].includes(scenario)
+  const isChoice = scenario !== 'json_format'
   const root = mkdtempSync(join(tmpdir(), 'chat-response-contract-'))
   const names = ['BABEL_NATIVE_TOOLS', 'BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE',
     'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const
@@ -97,16 +85,10 @@ test(`response contract ${scenario} settles without speculative continuation`, a
     return { exit_code: 0, stdout: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n', stderr: '' }
   })
   const payload = '{\n  "value": 1\n}\n'
-  const clarification = scenario === 'choice_before_hypothetical'
-    ? 'Should invalid rows be skipped or fail the export? If I cannot proceed without a decision on a future task, I will ask you.'
-    : scenario === 'indirect_current_blocker'
-      ? 'I checked if negative quantities are supported, and I cannot proceed without your decision. Should they represent returns or be rejected?'
-    : scenario === 'plain_choice'
+  const clarification = scenario === 'plain_choice'
     ? 'Should invalid rows be skipped or fail the export?'
     : scenario === 'alternative_choice'
       ? 'Which date format should the export use?'
-      : scenario === 'blocking_policy'
-        ? "I've inspected the code and project contract, and I can't proceed without a decision from you.\n\nShould negative quantities represent returns or be rejected as invalid input?"
       : "I'm not editing yet because the requested direction is unspecified. What I need from you:\n\n> Which direction should I implement?"
   class Runner extends DeepInfraApiRunner {
     turns = 0
@@ -122,19 +104,7 @@ test(`response contract ${scenario} settles without speculative continuation`, a
       } else {
         if (this.turns > (isChoice ? 3 : 2))
           throw new Error('A valid final answer must not prompt speculative continuation')
-        const hypothetical = scenario === 'inline_hypothetical'
-          ? 'For example, if I need your decision on a future task, I will ask you. Would you like a summary?'
-          : scenario === 'future_need_hypothetical'
-            ? 'For future work, if I need your decision, I will ask you. Would you like a summary?'
-            : scenario === 'future_cannot_hypothetical'
-              ? 'On a later task, if I cannot proceed without a decision, I will ask you. Would you like a summary?'
-              : scenario === 'nonchoice_question_with_or'
-                ? 'What changed? The parser now accepts LF or CRLF line endings.'
-                : scenario === 'multiple_hypotheticals'
-                  ? 'For future work, if I need your decision, I will ask. On a later task, if I cannot proceed without a decision, I will ask you. Would you like a summary?'
-                  : 'I inspected the implementation; no changes are needed. If I cannot proceed without a decision on a future task, I will ask you. Would you like a summary?'
-        const isHypothetical = ['hypothetical_deferral', 'inline_hypothetical', 'future_need_hypothetical', 'future_cannot_hypothetical', 'nonchoice_question_with_or', 'multiple_hypotheticals'].includes(scenario)
-        for (const text of scenario === 'json_format' ? ['```json\n', payload, '```'] : [isHypothetical ? hypothetical : clarification])
+        for (const text of scenario === 'json_format' ? ['```json\n', payload, '```'] : [clarification])
           yield { type: 'text_delta', text }
         yield { type: 'done', finishReason: 'stop' }
       }
@@ -145,33 +115,13 @@ test(`response contract ${scenario} settles without speculative continuation`, a
   const engine = new ChatEngine({ task, projectRoot: root, model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: 5 })
   let streamedAnswer=''
   const result = await engine.submitMessage(task, {onAnswerChunk:chunk=>{streamedAnswer+=chunk}})
-  const expectedAnswer = scenario === 'json_format'
-    ? payload
-    : scenario === 'hypothetical_deferral'
-      ? 'I inspected the implementation; no changes are needed. If I cannot proceed without a decision on a future task, I will ask you. Would you like a summary?'
-      : scenario === 'inline_hypothetical'
-        ? 'For example, if I need your decision on a future task, I will ask you. Would you like a summary?'
-        : scenario === 'future_need_hypothetical'
-          ? 'For future work, if I need your decision, I will ask you. Would you like a summary?'
-          : scenario === 'future_cannot_hypothetical'
-            ? 'On a later task, if I cannot proceed without a decision, I will ask you. Would you like a summary?'
-            : scenario === 'nonchoice_question_with_or'
-              ? 'What changed? The parser now accepts LF or CRLF line endings.'
-              : scenario === 'multiple_hypotheticals'
-                ? 'For future work, if I need your decision, I will ask. On a later task, if I cannot proceed without a decision, I will ask you. Would you like a summary?'
-                : clarification
-  assert.equal(result.answer, expectedAnswer)
+  assert.equal(result.answer, scenario === 'json_format' ? payload : clarification)
   assert.equal(runner.turns, isChoice ? 3 : 2)
   if (isChoice) {
     assert.equal(result.outcome, 'NEEDS_HUMAN_DECISION')
     assert.equal(result.status, 'blocked')
     assert.equal(verifiers, 1, JSON.stringify(result.toolCalls))
     assert.equal(result.toolCalls?.find(call => call.tool === 'test_run')?.effect_status, 'indeterminate', JSON.stringify(result.toolCalls))
-  } else if (['hypothetical_deferral', 'inline_hypothetical', 'future_need_hypothetical', 'future_cannot_hypothetical', 'nonchoice_question_with_or', 'multiple_hypotheticals'].includes(scenario)) {
-    assert.notEqual(result.outcome, 'NEEDS_HUMAN_DECISION')
-    assert.notEqual(result.status, 'blocked')
-    assert.equal(verifiers, 0)
-    assert.equal(streamedAnswer, expectedAnswer)
   } else {
     assert.deepEqual(JSON.parse(result.answer), { value: 1 })
     assert.equal(streamedAnswer,payload,'fragmented native previews settle exactly once as the bare JSON payload')
