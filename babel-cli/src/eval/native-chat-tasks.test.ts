@@ -297,7 +297,9 @@ test('capture detects mode-only Git metadata changes and POSIX special permissio
   }
 })
 
-test('unsafe Git index mode changes remain visible as candidate mutations', { skip: process.platform === 'win32' }, async () => {
+test('unsafe Git index mode changes remain visible as candidate mutations', {
+  skip: process.platform === 'win32' ? 'POSIX mode bits are not available on Windows' : false,
+}, async () => {
   for (const mode of [0o755, 0o666, 0o000, 0o1644]) {
     const root = await mkdtemp(join(tmpdir(), 'babel-native-index-unsafe-mode-'))
     const index = join(root, '.git/index')

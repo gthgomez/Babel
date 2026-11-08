@@ -88,9 +88,12 @@ export function runGitCommandBytes(
     windowsHide: true,
   });
   return {
-    status: result.status,
+    // A spawn error (including maxBuffer overflow) means the process result is incomplete.
+    status: result.error ? null : result.status,
     stdout: result.stdout ?? Buffer.alloc(0),
-    stderr: result.stderr ?? Buffer.from(result.error?.message ?? ''),
+    stderr: result.stderr?.length ? result.stderr : result.error
+      ? Buffer.from(`Git process error: ${(result.error as NodeJS.ErrnoException).code ?? 'UNKNOWN'}`)
+      : Buffer.alloc(0),
   };
 }
 

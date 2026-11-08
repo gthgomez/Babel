@@ -19,7 +19,7 @@ import {
   type ChatMessage,
   type ChatToolAction,
 } from './chatToolDefinitions.js';
-import { isConfirmedMutation, type MutationEffectStatus } from './mutationTools.js';
+import { isConfirmedMutation, type MutationEffectScope, type MutationEffectStatus } from './mutationTools.js';
 import { normalizeModelToolName } from './canonicalToolMapping.js';
 import { invalidateReadCacheForPath } from './codingLoop/index.js';
 import type { ChatEngineActionExecutorHost } from './chatEngineContracts.js';
@@ -375,6 +375,20 @@ export type BlockedToolLogEntry = {
   error?: string;
   stdout?: string;
   stderr?: string;
+};
+
+/** Host-recorded tool evidence retained by ChatEngine across turns. */
+export type ChatEngineToolCallLogEntry = BlockedToolLogEntry & {
+  toolCallId?: string;
+  detail?: string;
+  index: number;
+  verified?: boolean;
+  verifierExecuted?: boolean;
+  verifierSemanticSignature?: string;
+  preDispatchNoEffect?: true;
+  mutation_paths?: string[];
+  effect_status?: MutationEffectStatus;
+  effect_scope?: MutationEffectScope;
 };
 
 /**

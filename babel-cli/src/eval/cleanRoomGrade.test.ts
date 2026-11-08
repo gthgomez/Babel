@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { statSync } from 'node:fs'
+import { accessSync, constants, readFileSync, statSync } from 'node:fs'
 import test from 'node:test'
 
 import { gradeInCleanRoom } from './cleanRoomGrade.js'
@@ -115,12 +115,18 @@ test('explicit isolated grading dispatches the fresh grader tree only through ex
   assert.equal(grade.hidden_ok, true)
 })
 
-test('isolated grader inputs are readable under restrictive umask', t => {
+test('isolated grader inputs remain readable under restrictive umask or Windows ACLs', t => {
   let observedModes: number[] = []
   t.mock.method(childProcess, 'spawnSync', ((_command: string, _args: readonly string[], options: childProcess.SpawnSyncOptions) => {
     const root = options.cwd!.toString()
     observedModes = [statSync(root).mode & 0o777, statSync(`${root}/add.js`).mode & 0o777,
       statSync(`${root}/hidden.test.mjs`).mode & 0o777]
+    assert.equal(statSync(root).isDirectory(), true)
+    assert.equal(statSync(`${root}/add.js`).isFile(), true)
+    assert.equal(statSync(`${root}/hidden.test.mjs`).isFile(), true)
+    accessSync(root, constants.R_OK)
+    assert.match(readFileSync(`${root}/add.js`, 'utf8'), /export (?:function|const) add/)
+    assert.match(readFileSync(`${root}/hidden.test.mjs`, 'utf8'), /untrusted code must not run on host/)
     return { status: 0, stdout: '', stderr: '', pid: 0, signal: null, output: [] }
   }))
   syncBuiltinESMExports()
@@ -128,7 +134,11 @@ test('isolated grader inputs are readable under restrictive umask', t => {
   try {
     const grade = gradeInCleanRoom(isolatedInput())
     assert.equal(grade.execution_status, 'completed')
-    assert.deepEqual(observedModes, [0o755, 0o644, 0o644])
+    // ACL-backed reads above test actual access on Windows; stat mode bits
+    // there do not represent POSIX execute or umask semantics.
+    if (process.platform !== 'win32') {
+      assert.deepEqual(observedModes, [0o755, 0o644, 0o644])
+    }
   } finally {
     process.umask(originalUmask)
     t.mock.restoreAll()

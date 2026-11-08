@@ -350,10 +350,7 @@ import type { StallState, StallIntervention } from "./stallDetector.js";
 import type { ProgressController } from "./progressController.js";
 
 import { type ChatPhase } from "./chatPhaseNudge.js";
-import {
-  isSuccessfulDirectMutation,
-  type MutationEffectStatus,
-} from "./mutationTools.js";
+import { isSuccessfulDirectMutation } from "./mutationTools.js";
 import {
   ChatTurnTelemetryCollector,
   type ChatTurnTelemetryRecord,
@@ -372,6 +369,7 @@ import {
 } from "./policyShadow.js";
 
 import { BlockedAttemptLedger } from "./blockedAttemptLedger.js";
+import type { ChatEngineToolCallLogEntry } from './chatEngineSupport.js';
 import { TurnRoutingReceiptLog } from "./turnRoutingReceipt.js";
 import { resolvePhaseModelName } from "./phaseModelRouting.js";
 import {
@@ -487,28 +485,7 @@ export class ChatEngine {
   private fallbackRunner:
     ChatLlmRunner
     | null = null;
-  private toolCallLog: Array<{
-    toolCallId?: string;
-    tool: string;
-    target: string;
-    detail?: string;
-    error?: string;
-    index: number;
-    exit_code?: number;
-    stdout?: string;
-    stderr?: string;
-    verified?: boolean;
-    verifierExecuted?: boolean;
-    verifierSemanticSignature?: string;
-    processExecutionId?: string;
-    working_directory?: string;
-    processExecuted?: boolean;
-    processCompleted?: boolean;
-    preDispatchNoEffect?: true;
-    mutation_paths?: string[];
-    effect_status?: MutationEffectStatus;
-    effect_scope?: import('./mutationTools.js').MutationEffectScope;
-  }> = [];
+  private toolCallLog: ChatEngineToolCallLogEntry[] = [];
   private lastVerifierReceipt: BoundChatVerifierReceipt | null = null;
   private executedVerifierLedger: BoundChatVerifierReceipt[] = [];
   /**

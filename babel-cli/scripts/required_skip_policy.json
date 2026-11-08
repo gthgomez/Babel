@@ -126,7 +126,32 @@
           "pinned isolated code grader measures actual values; exit-zero is not a verdict",
           "candidate stdout cannot impersonate captured function values",
           "captured added production helpers remain available to isolated grading",
-          "measurement accepts only primitives without exposing host constructors or thenable callbacks"
+          "measurement accepts only primitives without exposing host constructors or thenable callbacks",
+          "async top-level candidate modules remain unavailable to the synchronous value oracle"
+        ]
+      }
+    },
+    {
+      "id": "windows-posix-mode-oracle",
+      "platforms": ["win32"],
+      "reasons": ["POSIX mode bits are not available on Windows"],
+      "rationale": "The oracle checks POSIX mode mutation semantics; Windows ACLs do not expose the chmod mode distinctions asserted by this case. Effective file readability remains tested on Windows by the portable grader and journey fixture cases.",
+      "suites": ["unit"],
+      "files": {
+        "src/eval/native-chat-tasks.test.ts": [
+          "unsafe Git index mode changes remain visible as candidate mutations"
+        ]
+      }
+    },
+    {
+      "id": "linux-procfs-thread-group",
+      "platforms": ["win32", "darwin"],
+      "reasons": ["Linux procfs zombie-state qualification"],
+      "rationale": "The test validates Linux procfs task-state enumeration for a zombie thread-group leader. Other platforms continue to exercise their native process termination contracts.",
+      "suites": ["unit"],
+      "files": {
+        "src/processTree.test.ts": [
+          "keeps a Linux zombie leader with a live worker thread blocking group settlement"
         ]
       }
     },
