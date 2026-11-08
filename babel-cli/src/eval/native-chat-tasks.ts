@@ -86,7 +86,14 @@ export async function captureNativeTaskFiles(root: string, modes: Map<string, nu
 export function nativeChangedPaths(baseline: ReadonlyMap<string, string>, beforeModes: ReadonlyMap<string, number>, snapshot: ReadonlyMap<string, Buffer>, afterModes: ReadonlyMap<string, number>): string[] {
   return [...new Set([...baseline.keys(), ...snapshot.keys(), ...beforeModes.keys(), ...afterModes.keys()])].filter(path =>
     baseline.get(path) !== (snapshot.has(path) ? digest(snapshot.get(path)!) : undefined) ||
-    beforeModes.get(path) !== afterModes.get(path) && path !== '.git/index')
+    beforeModes.get(path) !== afterModes.get(path) && !isBenignGitIndexUmaskTransition(path, beforeModes.get(path), afterModes.get(path)))
+}
+
+/** Git may recreate its index under umask 077; ignore only ordinary 0600/0644 modes. */
+function isBenignGitIndexUmaskTransition(path: string, before: number | undefined, after: number | undefined): boolean {
+  if (process.platform === 'win32' || path !== '.git/index' || before === undefined || after === undefined) return false
+  const safeModes = new Set([0o600, 0o644])
+  return safeModes.has(before) && safeModes.has(after)
 }
 
 /** Separate native completion, artifact correctness, missing evidence and calibration. */
@@ -150,6 +157,7 @@ export async function runNativeChatTasks(options: {
   const protectedFiles = [manifestPath, corpusPath, join(root, 'babel-cli/scripts/run_native_chat_tasks.mjs'), join(root, 'babel-cli/package-lock.json'), ...[
     'native-chat-tasks.ts', 'native-chat-calibration.ts', 'native-chat-cli.ts', 'harness-journey-contract.ts',
     'harness-journey-fixtures.ts', 'harness-journey-code-oracle.ts', 'harness-journey-checks.ts', 'cleanRoomGrade.ts',
+    'sandboxFixturePermissions.ts',
     '../config/benchmarkContainer.ts', '../config/dockerIsolationArgs.ts', '../config/executionProfiles.ts',
     '../authority/protectedPath.ts', '../authority/commandSpec.ts', '../authority/literalSearch.ts',
     '../authority/unprivilegedChildEnv.ts', '../utils/commandArgv.ts', '../utils/safeEnv.ts', '../utils/gitExec.ts',

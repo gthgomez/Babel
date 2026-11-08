@@ -586,8 +586,7 @@ export function runLiveCanaryCell(input: {
     ),
   )
   const status = typeof payload?.['status'] === 'string' ? payload['status'] : null
-  const claimed_complete =
-    status === 'ANSWER_READY' || status === 'FIX_COMPLETE' || status === 'COMPLETE'
+  const claimed_complete = claimsSuccessfulCompletion(payload)
   const honest_block = status === 'BLOCKED' || Boolean(payload?.['blocked_report'])
   const productionState = captureProductionState(input.spec, input.workspaceRoot)
   const production_files = productionState.files

@@ -297,6 +297,28 @@ test('capture detects mode-only Git metadata changes and POSIX special permissio
   }
 })
 
+test('unsafe Git index mode changes remain visible as candidate mutations', { skip: process.platform === 'win32' }, async () => {
+  for (const mode of [0o755, 0o666, 0o000, 0o1644]) {
+    const root = await mkdtemp(join(tmpdir(), 'babel-native-index-unsafe-mode-'))
+    const index = join(root, '.git/index')
+    try {
+      await mkdir(join(root, '.git'))
+      await writeFile(index, 'unchanged index bytes\n', { mode: 0o644 })
+      await chmod(index, 0o644)
+      const beforeModes = new Map<string, number>()
+      const before = await captureNativeTaskFiles(root, beforeModes)
+      const baseline = new Map([...before].map(([path, bytes]) => [path, createHash('sha256').update(bytes).digest('hex')]))
+      await chmod(index, mode)
+      const afterModes = new Map<string, number>()
+      const after = await captureNativeTaskFiles(root, afterModes)
+      assert.ok(nativeChangedPaths(baseline, beforeModes, after, afterModes).includes('.git/index'), `mode ${mode.toString(8)} must not be exempted`)
+    } finally {
+      await chmod(index, 0o600).catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  }
+})
+
 test('native Chat calibration retains all four scenarios, rejects deception and never qualifies a model', { timeout: 90_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'babel-native-calibration-'))
   const home = join(root, 'home')
@@ -318,4 +340,5 @@ test('native Chat calibration retains all four scenarios, rejects deception and 
   assert.equal(report.summary.calibrationPasses, 3)
   assert.match(report.evaluator.sha, /^[a-f0-9]{40}$/)
   assert.match(report.evaluator.digest, /^[a-f0-9]{64}$/)
+  assert.ok(report.evaluator.files.some((file: { path: string }) => file.path.endsWith('/sandboxFixturePermissions.ts')))
 })
