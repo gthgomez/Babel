@@ -24,24 +24,30 @@ export function normalizeChatAnswer(answer: string, userInput: string): string {
 export function requestsRequiredUserDecision(answer: string): boolean {
   const prose = answer.replace(/```[\s\S]*?```/g, '')
     .replace(/\b(?:says?|said|claims?|claimed|wrote)\s*[: ,]*["“][^"”]*["”]/gi, '')
-  // A conditional deferral can appear anywhere in its sentence (for example,
-  // after 'For future work,'). Remove that sentence before evaluating current
-  // deferrals, while retaining separate direct decision questions.
-  const conditionalDeferral = /(?:^|(?<=[.!?]\s))\s*[^.!?\n]*?\b(?:if|suppose|imagine)\b[^.!?\n]*?\b(?:not editing|before I|I need|what I need|cannot proceed without|can't proceed without)\b[^.!?\n]*(?:[.!?]|$)/gim
-  const conditionalMatches = [...prose.matchAll(conditionalDeferral)]
-  const currentProse = prose.replace(conditionalDeferral, ' ')
+  // Remove only a conditional clause that itself contains deferral language.
+  // Keeping the rest of the sentence avoids erasing a current blocker after an
+  // unrelated 'if' clause, and matching from 'if' avoids abbreviation issues.
+  const conditionalClause = /\b(?:if|suppose|imagine)\b[^,;.!?\n]*(?:[,;.!?]|$)/gim
+  const deferralPhrase = /\b(?:not editing|before I|I need|what I need|cannot proceed without|can't proceed without)\b/i
+  const conditionalMatches = [...prose.matchAll(conditionalClause)]
+    .filter(match => deferralPhrase.test(match[0]))
+  const currentProse = conditionalMatches.reduce((text, match) => {
+    const start = match.index
+    if (start === undefined) return text
+    return text.slice(0, start) + ' ' + text.slice(start + match[0].length)
+  }, prose)
   // A reply consisting entirely of a product-choice question already asks the
   // user to decide. Do not require a second, stock "I need your choice" sentence.
   // This recognizes a deferral only: no authority or completion evidence is minted.
   const question = currentProse.trim().replace(/^>\s*/, '').replace(/^\*\*([\s\S]*)\*\*$/, '$1')
   const asksChoice = /\b(?:or|versus)\b/i.test(question)
     || /^(?:which|what)\b[^?\n]*\b(?:should|must)\b/i.test(question)
-  if (asksChoice && /^(?:which|what|should|do you want|would you prefer)\b[^?\n]{1,300}\?$/i.test(question)) {
+  if (asksChoice && /^(?:which|what|should|do you want|would you prefer)\b[^?\n]{1,300}\?/i.test(question)) {
     const questionStart = prose.indexOf(question)
     const followsHypothetical = conditionalMatches.some(match => match.index !== undefined && match.index < questionStart)
     if (!followsHypothetical) return true
   }
-  const deferral = /\b(?:I(?:'m| am) not (?:editing|implementing|changing)(?: anything)? yet|before I (?:can )?(?:edit|implement|proceed)|I (?:need|require) (?:your|a) (?:decision|choice|clarification)|I (?:cannot|can't) proceed without (?:a|your) (?:decision|choice|clarification)|what I need from you)\b/i.test(currentProse)
+  const deferral = /\b(?:I(?:'m| am) not (?:editing|implementing|changing)(?: anything)? yet|before I (?:can )?(?:edit|implement|proceed)|I (?:need|require) (?:your|a) (?:decision|choice|clarification)|I (?:cannot|can't) proceed(?: with (?:this|the) task)? without (?:a|your) (?:decision|choice|clarification)|what I need from you)\b/i.test(currentProse)
   if (!deferral) return false
   // A blockquoted question can be the assistant's own prominently displayed request.
   return /(?:^|[.!\n])\s*(?:>\s*)?(?:\*\*)?(?:which|what|how|should|do you want|would you like|can you (?:choose|clarify|specify)|sort by|choose|specify|pick)\b[^?\n]{1,300}\?/im.test(currentProse)

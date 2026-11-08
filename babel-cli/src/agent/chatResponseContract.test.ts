@@ -27,6 +27,9 @@ test('mandatory deferral excludes completed answers, examples and hypothetical r
   assert.equal(requestsRequiredUserDecision('For example, if I need your decision on a future task, I will ask you. Would you like a summary?'), false)
   assert.equal(requestsRequiredUserDecision('For future work, if I need your decision, I will ask you. Would you like a summary?'), false)
   assert.equal(requestsRequiredUserDecision('On a later task, if I cannot proceed without a decision, I will ask you. Would you like a summary?'), false)
+  assert.equal(requestsRequiredUserDecision('e.g., if I need your decision on a future task, I will ask you. Would you like a summary?'), false)
+  assert.equal(requestsRequiredUserDecision('I checked if negative quantities are supported, and I cannot proceed without your decision. Should they represent returns or be rejected?'), true)
+  assert.equal(requestsRequiredUserDecision('For future work, if I need your decision, I will ask you. I cannot proceed with this task without your choice. Which behavior should I implement?'), true)
   assert.equal(requestsRequiredUserDecision('Should invalid rows be skipped or fail the export? If I cannot proceed without a decision on a future task, I will ask you.'), true)
   assert.equal(requestsRequiredUserDecision("**Why I'm not editing yet**\nThe product direction is unspecified.\n**What I need from you — one line is enough:**\n\n> Sort by **price / name / popularity**, **ascending / descending**?"), true)
   for (const answer of [
@@ -57,7 +60,7 @@ test('standalone product-choice questions do not require a stock deferral prefac
   ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
 })
 
-for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'blocking_policy', 'hypothetical_deferral', 'inline_hypothetical', 'future_need_hypothetical', 'future_cannot_hypothetical', 'choice_before_hypothetical'] as const)
+for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'blocking_policy', 'hypothetical_deferral', 'inline_hypothetical', 'future_need_hypothetical', 'future_cannot_hypothetical', 'choice_before_hypothetical', 'indirect_current_blocker'] as const)
 test(`response contract ${scenario} settles without speculative continuation`, async t => {
   const isChoice = !['json_format', 'hypothetical_deferral', 'inline_hypothetical', 'future_need_hypothetical', 'future_cannot_hypothetical'].includes(scenario)
   const root = mkdtempSync(join(tmpdir(), 'chat-response-contract-'))
@@ -94,6 +97,8 @@ test(`response contract ${scenario} settles without speculative continuation`, a
   const payload = '{\n  "value": 1\n}\n'
   const clarification = scenario === 'choice_before_hypothetical'
     ? 'Should invalid rows be skipped or fail the export? If I cannot proceed without a decision on a future task, I will ask you.'
+    : scenario === 'indirect_current_blocker'
+      ? 'I checked if negative quantities are supported, and I cannot proceed without your decision. Should they represent returns or be rejected?'
     : scenario === 'plain_choice'
     ? 'Should invalid rows be skipped or fail the export?'
     : scenario === 'alternative_choice'
