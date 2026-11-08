@@ -38,7 +38,9 @@ export interface GitFileStatus {
 // ─── Implementation ───────────────────────────────────────────────────────────
 
 function runGit(args: string[], cwd: string): { stdout: string; stderr: string; exitCode: number } {
-  const result = runGitCommand(args, cwd, { timeoutMs: 10_000 });
+  // `git status` may refresh `.git/index` even though git_context is a read-only
+  // tool. Disable optional index locks/refreshes to avoid mutating its target.
+  const result = runGitCommand(args, cwd, { timeoutMs: 10_000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });
   return {
     stdout: (result.stdout ?? '').trim(),
     stderr: (result.stderr ?? '').trim(),

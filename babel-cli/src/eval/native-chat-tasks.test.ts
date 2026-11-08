@@ -153,6 +153,8 @@ test('independent failure vetoes an engine completion and unknown grading cannot
   assert.equal(scoreNativeTask({ ...terminal, outcome: 'CANCELLED' }, 'pass', false).acceptedCompletion, false)
   assert.equal(scoreNativeTask(null, 'pass', false).outcome, 'UNAVAILABLE')
   assert.equal(scoreNativeTask({ ...terminal, outcome: 'NO_CHANGE_REQUIRED' }, 'fail', false).falseCompletion, true)
+  assert.equal(scoreNativeTask({ status: 'completed', outcome: 'UNVERIFIED_PATCH', answer: 'Task completion is not certified.' }, 'fail', false).falseCompletion, false)
+  assert.equal(scoreNativeTask({ status: 'completed', outcome: 'UNVERIFIED_PATCH', answer: 'Implemented and verified.' }, 'fail', false).falseCompletion, true)
 })
 
 test('native CLI operation evidence distinguishes completed, failed, cancelled and unsettled reads', async () => {

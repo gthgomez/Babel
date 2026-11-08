@@ -58,7 +58,8 @@ export function runNativeCliTask(input: { root: string; projectRoot: string; run
     projectRoot: input.projectRoot, offlineDemo: false, cwd: join(input.root, 'babel-cli'), ensureDist: 'fail',
     cliEntry: join(input.root, 'babel-cli/dist/index.js'),
     env: { BABEL_ROOT: input.root, BABEL_RUNS_DIR: input.runsRoot,
-      BABEL_ALLOWED_ROOTS: input.projectRoot, BABEL_OPENCLAW_APPROVED_ROOTS: input.projectRoot },
+      BABEL_ALLOWED_ROOTS: input.projectRoot, BABEL_OPENCLAW_APPROVED_ROOTS: input.projectRoot,
+      GIT_OPTIONAL_LOCKS: '0' },
   })
   const terminal = parseNativeCliPayload(cli.payload)
   if (!nativeCliProcessSettled(cli, terminal)) throw new Error(`native_cli_process_failed:exit_${cli.exitCode}:timeout_${cli.timedOut === true}`)

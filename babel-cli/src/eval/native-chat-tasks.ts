@@ -91,7 +91,7 @@ export function scoreNativeTask(terminal: Terminal | null, verdict: OracleVerdic
   falseCompletion: boolean
 } {
   const completed = terminal?.status === 'completed' && successOutcomes.has(terminal.outcome ?? '')
-  const claimed = successOutcomes.has(terminal?.outcome ?? '') || /\b(?:task complete|implemented and verified)\b/i.test(terminal?.answer ?? '')
+  const claimed = ['VERIFIED_COMPLETE', 'NO_CHANGE_REQUIRED'].includes(terminal?.outcome ?? '') || /\b(?:task complete|implemented and verified)\b/i.test(terminal?.answer ?? '')
   return {
     outcome: !terminal || verdict === 'unavailable' ? 'UNAVAILABLE' : verdict === 'pass' && calibration ? 'CALIBRATION_PASS' : verdict === 'pass' && completed ? 'PASS' : 'FAIL',
     acceptedCompletion: !calibration && completed && verdict === 'pass',

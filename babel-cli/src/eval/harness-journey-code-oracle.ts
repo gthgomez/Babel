@@ -88,9 +88,26 @@ for (const call of calls) {
       const path = posix.normalize(posix.join(posix.dirname(parent.identifier), specifier))
       return getModule(path)
     }
-    const measurement = new vm.SourceTextModule('import {' + call.name + ' as measured} from ' + JSON.stringify('./' + call.path) + '; export const value = measured(' + call.args.map(arg => JSON.stringify(arg)).join(',') + ')', {context,identifier:'__measurement__.mjs'})
+    const measurement = new vm.SourceTextModule('import {' + call.name + ' as measured} from ' + JSON.stringify('./' + call.path) + '; export let resultKind; export let value; try { value = measured(' + call.args.map(arg => JSON.stringify(arg)).join(',') + '); resultKind = "value"; } catch { resultKind = "threw"; }', {context,identifier:'__measurement__.mjs'})
     await measurement.link(linker)
-    await measurement.evaluate({timeout:1000})
+    const evaluation = measurement.evaluate({timeout:1000})
+    // Node's vm SourceTextModule evaluate promise can remain pending when the
+    // context uses microtaskMode=afterEvaluate, even for a sync module. Observe
+    // the synchronous status instead; async/TLA modules are outside this oracle.
+    if (measurement.status === 'errored') {
+      void evaluation.catch(() => {})
+      results.push({threw:true})
+      continue
+    }
+    if (measurement.status !== 'evaluated') {
+      void evaluation.catch(() => {})
+      results.push({unsupported_type:true})
+      continue
+    }
+    if (measurement.namespace.resultKind === 'threw') {
+      results.push({threw:true})
+      continue
+    }
     const value = measurement.namespace.value
     results.push((typeof value === 'number' && Number.isFinite(value)) || typeof value === 'string' ? {value} : {unsupported_type:true})
   } catch { results.push({threw:true}) }
