@@ -6,7 +6,7 @@ import { ProcessWitness } from './diagnostics/bdns/processWitness.js'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { isProcessAlive, waitForProcessExit } from './processTree.js'
+import { isProcessAlive, isProcessGroupAlive, waitForProcessExit } from './processTree.js'
 import childProcess from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { createToolExecutor, ToolExecutionCancelledError } from './agent/toolExecutor.js'
@@ -185,7 +185,7 @@ test('a local supervisor deadline does not return while its owned descendant is 
   const childFile = join(root, 'child.mjs');
   const parentFile = join(root, 'parent.mjs');
   writeFileSync(childFile, "import fs from 'node:fs'; fs.writeFileSync('child.pid', String(process.pid)); setTimeout(() => process.exit(0), 8000);\n");
-  writeFileSync(parentFile, "import { spawn } from 'node:child_process'; spawn(process.execPath, ['child.mjs'], { stdio: 'ignore' }); setTimeout(() => process.exit(0), 10000);\n");
+  writeFileSync(parentFile, "import { spawn } from 'node:child_process'; import { writeFileSync } from 'node:fs'; writeFileSync('parent.pid', String(process.pid)); spawn(process.execPath, ['child.mjs'], { stdio: 'ignore' }); setTimeout(() => process.exit(0), 10000);\n");
   try {
     const result = await sandbox.spawnCommandAsync(process.execPath, [parentFile], {
       cwd: root, timeoutMs: 2000, env: process.env,
@@ -194,7 +194,18 @@ test('a local supervisor deadline does not return while its owned descendant is 
     assert.equal(result.timedOut, true);
     assert.equal(existsSync(join(root, 'child.pid')), true, 'owned descendant must have started before the deadline');
     const pid = Number(readFileSync(join(root, 'child.pid'), 'utf8'));
-    assert.equal(isProcessAlive(pid), false, 'supervisor returned before its descendant exited');
+    if (process.platform === 'linux') {
+      const groupLeaderPid = Number(readFileSync(join(root, 'parent.pid'), 'utf8'));
+      assert.equal(isProcessGroupAlive(groupLeaderPid), false, 'supervisor returned while a runnable descendant remained');
+      if (isProcessAlive(pid)) {
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+        const state = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[0];
+        assert.ok(state === 'Z' || state === 'X' || state === 'x',
+          `a process still able to run survived its supervisor (state=${state})`);
+      }
+    } else {
+      assert.equal(isProcessAlive(pid), false, 'supervisor returned before its descendant exited');
+    }
   } finally {
     // The owned synthetic descendant also has a bounded self-exit, even if the assertion fails.
     rmSync(root, { recursive: true, force: true });

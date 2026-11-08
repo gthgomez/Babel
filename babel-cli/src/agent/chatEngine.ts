@@ -500,6 +500,10 @@ export class ChatEngine {
     verified?: boolean;
     verifierExecuted?: boolean;
     verifierSemanticSignature?: string;
+    processExecutionId?: string;
+    working_directory?: string;
+    processExecuted?: boolean;
+    processCompleted?: boolean;
     preDispatchNoEffect?: true;
     mutation_paths?: string[];
     effect_status?: MutationEffectStatus;

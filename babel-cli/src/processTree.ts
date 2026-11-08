@@ -1,4 +1,5 @@
 import { spawnSync, type ChildProcess } from 'node:child_process'
+import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { getSafeEnv } from './utils/safeEnv.js'
@@ -25,12 +26,59 @@ export async function waitForProcessExit(pid: number, timeoutMs: number): Promis
 }
 
 /**
- * Whether any process remains in the supervised group. POSIX uses `kill(-pgid, 0)` so
- * a dead group leader with a live same-group descendant still reads as alive.
+ * Whether runnable work remains in the supervised group. POSIX normally uses
+ * `kill(-pgid, 0)` so a dead leader with a live descendant stays visible. On
+ * Linux, zombie-only groups count as settled because zombies cannot execute and
+ * container PID 1 may retain their exit records indefinitely.
  */
 export function isProcessGroupAlive(groupLeaderPid: number): boolean {
   if (process.platform === 'win32') {
     return isProcessAlive(groupLeaderPid)
+  }
+  if (process.platform === 'linux') {
+    // kill(-pgid, 0) also succeeds when the group contains only zombies.
+    // Zombies cannot run code or hold resources beyond their kernel exit
+    // record, and in containers PID 1 may leave that record unreaped. Treat
+    // them as terminated while continuing to fail closed for any runnable
+    // process in the group.
+    try {
+      process.kill(-groupLeaderPid, 0)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code
+      if (code === 'ESRCH') return false
+      return true
+    }
+    try {
+      const pids = readdirSync('/proc')
+      let inspectionUncertain = false
+      for (const entry of pids) {
+        if (!/^\d+$/.test(entry)) continue
+        let stat: string
+        try {
+          stat = readFileSync(`/proc/${entry}/stat`, 'utf8')
+        } catch (error) {
+          // A process may exit between listing /proc and reading its stat.
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') inspectionUncertain = true
+          continue
+        }
+        const closeParen = stat.lastIndexOf(')')
+        if (closeParen < 0) {
+          inspectionUncertain = true
+          continue
+        }
+        const fields = stat.slice(closeParen + 2).trim().split(/\s+/)
+        const state = fields[0]
+        const processGroup = Number(fields[2])
+        if (processGroup !== groupLeaderPid) continue
+        if (state !== 'Z' && state !== 'X' && state !== 'x') return true
+      }
+      if (inspectionUncertain) return true
+      return false
+    } catch {
+      // Procfs may be unavailable or restricted. We already proved that the
+      // kernel still sees the group, so retain the conservative live result.
+      return true
+    }
   }
   try {
     process.kill(-groupLeaderPid, 0)

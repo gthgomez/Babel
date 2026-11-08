@@ -524,13 +524,85 @@ describe('D01/D02 effective-operation policy', () => {
       assert.equal(calls, 2);
       assert.equal(strikesBeforeAnswer, 0, `actual verifier progress resets stale completion-gate strikes; log=${JSON.stringify(engine['toolCallLog'])}`);
       const verifierLog = engine['toolCallLog'].find(row => row.tool === 'test_run') as
-        ({ tool: string; verifierExecuted?: boolean; working_directory?: string; processExecuted?: boolean; processCompleted?: boolean } | undefined);
+        ({ tool: string; verifierExecuted?: boolean; working_directory?: string; processExecuted?: boolean; processCompleted?: boolean; exit_code?: number } | undefined);
       assert.equal(verifierLog?.verifierExecuted, true,
         'the reset requires a host-observed executed red verifier');
+      assert.equal(verifierLog?.exit_code, 1, 'red test command exits nonzero and is not authoritative completion');
       assert.equal(verifierLog?.working_directory, join(root, 'nested'), 'cwd provenance reaches the actual executor log');
       assert.equal(verifierLog?.processExecuted, true);
       assert.equal(verifierLog?.processCompleted, true, JSON.stringify(verifierLog));
       assert.notEqual(result.outcome, 'VERIFIED_COMPLETE', 'a red verifier cannot certify the task');
+    } finally {
+      if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+      else process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousFallback;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('live streaming loop ignores a cached verifier result but resets for a distinct alternating result', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-gate-verifier-repeat-'));
+    const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+    mkdirSync(join(root, 'nested'));
+    writeFileSync(join(root, 'nested', 'green.test.mjs'), "import test from 'node:test'; import assert from 'node:assert/strict'; test('green', () => assert.equal(1, 1));\n");
+    writeFileSync(join(root, 'nested', 'red.test.mjs'), "import test from 'node:test'; import assert from 'node:assert/strict'; test('red', () => assert.equal(1, 2));\n");
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'add', '.'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], { cwd: root });
+    const task = 'Fix red.test.mjs so its test passes. Run the green and red verifier commands to check the fixtures.';
+    const engine = new ChatEngine({ task, projectRoot: root, model: MODEL, maxTurns: 5 });
+    const box = engine as unknown as { gateStrikes: number };
+    (engine as unknown as { hardPlanMode: boolean; requireTodoBeforeMutate: boolean }).hardPlanMode = false;
+    (engine as unknown as { hardPlanMode: boolean; requireTodoBeforeMutate: boolean }).requireTodoBeforeMutate = false;
+    let calls = 0;
+    let strikesAfterCachedReceipt: number | undefined;
+    let strikesAfterStaleCacheRefresh: number | undefined;
+    let strikesAfterAlternatingRed: number | undefined;
+    installMockRunner(engine, {
+      executeWithToolsStream: async function* () {
+        calls += 1;
+        if (calls <= 2) {
+          if (calls === 2) box.gateStrikes = 2;
+          yield { type: 'tool_use', id: `green-verifier-${calls}`, name: 'test_run', input: { command: 'node --test green.test.mjs', cwd: 'nested' } };
+          yield { type: 'done', finishReason: 'tool_calls' };
+          return;
+        }
+        if (calls === 3) {
+          strikesAfterCachedReceipt = box.gateStrikes;
+          box.gateStrikes = 2;
+          // Simulate a workspace change after the successful receipt was cached.
+          // The same command must execute again; the prior receipt is stale.
+          writeFileSync(join(root, 'nested', 'green.test.mjs'), "import test from 'node:test'; import assert from 'node:assert/strict'; test('green changed', () => assert.equal(2, 2));\n");
+          yield { type: 'tool_use', id: 'green-verifier-after-drift', name: 'test_run', input: { command: 'node --test green.test.mjs', cwd: 'nested' } };
+          yield { type: 'done', finishReason: 'tool_calls' };
+          return;
+        }
+        if (calls === 4) {
+          strikesAfterStaleCacheRefresh = box.gateStrikes;
+          box.gateStrikes = 2;
+          yield { type: 'tool_use', id: 'red-verifier-alternating', name: 'test_run', input: { command: 'node --test red.test.mjs', cwd: 'nested' } };
+          yield { type: 'done', finishReason: 'tool_calls' };
+          return;
+        }
+        strikesAfterAlternatingRed = box.gateStrikes;
+        yield { type: 'text_delta', text: 'The alternating verifier is red; I cannot certify completion.' };
+        yield { type: 'done', finishReason: 'stop' };
+      },
+      execute: async () => ({ type: 'completion', answer: 'The alternating verifier is red; I cannot certify completion.' }),
+      getLastInvocationMetadata: () => null,
+    });
+    try {
+      const result = await drain(engine, task, []);
+      assert.equal(calls, 5);
+      assert.equal(strikesAfterCachedReceipt, 2, `a cached receipt must not reset recovery pressure; log=${JSON.stringify(engine['toolCallLog'])}`);
+      assert.equal(strikesAfterStaleCacheRefresh, 0, `a changed workspace invalidates the old receipt and a newly executed result resets pressure; log=${JSON.stringify(engine['toolCallLog'])}`);
+      assert.equal(strikesAfterAlternatingRed, 0, `a distinct red result remains fresh diagnostic progress; log=${JSON.stringify(engine['toolCallLog'])}`);
+      assert.ok(engine['toolCallLog'].some(row => row.detail?.includes('cached receipt')),
+        `second green check must be an actual cache reuse; log=${JSON.stringify(engine['toolCallLog'])}`);
+      assert.ok(engine['toolCallLog'].some(row => row.target.includes('green.test.mjs') && row.processExecuted === true),
+        `changed green fixture must re-execute after the prior receipt becomes stale; log=${JSON.stringify(engine['toolCallLog'])}`);
+      assert.equal(engine['toolCallLog'].find(row => row.target.includes('red.test.mjs'))?.exit_code, 1);
+      assert.notEqual(result.outcome, 'VERIFIED_COMPLETE');
     } finally {
       if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
       else process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousFallback;

@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { describe, it } from 'node:test';
 
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -168,6 +168,57 @@ await new Promise(() => {});
     } catch {
       process.kill(childPid, 'SIGKILL');
     }
-    await waitUntilDead(childPid);
+    if (process.platform === 'linux') {
+      assert.equal(await waitForProcessGroupExit(leaderPid, 2000), true, 'killed descendant must be non-runnable even if PID 1 retains its zombie record');
+      try {
+        const stat = readFileSync(`/proc/${childPid}/stat`, 'utf8');
+        const state = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[0];
+        assert.ok(state === 'Z' || state === 'X' || state === 'x', `killed descendant remains runnable (state=${state})`);
+      } catch (error) {
+        assert.equal((error as NodeJS.ErrnoException).code, 'ENOENT');
+      }
+    } else {
+      await waitUntilDead(childPid);
+    }
+  });
+
+  it('treats a zombie-only Linux process group as settled but keeps running descendants blocking', async (t) => {
+    if (process.platform !== 'linux') {
+      t.skip('Linux procfs zombie-state qualification');
+      return;
+    }
+    const root = mkdtempSync(join(tmpdir(), 'babel-pgid-zombie-'));
+    const statePath = join(root, 'state.json');
+    const childScript = join(root, 'child.mjs');
+    const leaderScript = join(root, 'leader.mjs');
+    writeFileSync(childScript,
+      `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(statePath)}, JSON.stringify({ childPid: process.pid })); setInterval(() => {}, 1000);\n`);
+    writeFileSync(leaderScript,
+      `import { spawn } from 'node:child_process'; spawn(process.execPath, [${JSON.stringify(childScript)}], { stdio: 'ignore' }); setInterval(() => {}, 1000);\n`);
+    const leader = spawn(process.execPath, [leaderScript], { cwd: root, detached: true, stdio: 'ignore' });
+    const leaderPid = leader.pid;
+    assert.ok(leaderPid);
+    try {
+      let childPid = 0;
+      const startDeadline = Date.now() + 3000;
+      while (!existsSync(statePath) && Date.now() < startDeadline) await new Promise(resolve => setTimeout(resolve, 10));
+      if (existsSync(statePath)) childPid = Number((JSON.parse(readFileSync(statePath, 'utf8')) as { childPid?: number }).childPid ?? 0);
+      assert.ok(childPid > 0, 'same-group descendant must start before termination');
+      assert.equal(isProcessGroupAlive(leaderPid), true, 'negative control: a runnable descendant blocks settlement');
+      terminateChildTree(leader);
+      assert.equal(await waitForProcessGroupExit(leaderPid, 2000), true,
+        'a zombie exit record is not runnable work and must not keep termination pending');
+      try {
+        const stat = readFileSync(`/proc/${childPid}/stat`, 'utf8');
+        const state = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[0];
+        assert.ok(state === 'Z' || state === 'X' || state === 'x',
+          `process-group settlement must not accept a runnable descendant (state=${state})`);
+      } catch (error) {
+        assert.equal((error as NodeJS.ErrnoException).code, 'ENOENT', 'descendant must be gone or a non-runnable zombie');
+      }
+    } finally {
+      try { process.kill(-leaderPid, 'SIGKILL'); } catch { /* group already settled */ }
+      rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+    }
   });
 });

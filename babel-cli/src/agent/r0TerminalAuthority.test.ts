@@ -255,11 +255,30 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
       processExecuted: true, processCompleted: true, exit_code: 7,
       stderr: 'curl: (7) connect: ECONNREFUSED' };
     const awaitedSuccess = { tool: 'await_command', target: denied.target, working_directory: '/repo/app',
-      processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'ok' };
-    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, awaitedSuccess]), null);
+      processExecutionId: 'bg-new', processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'ok' };
+    const started = { tool: 'run_command', target: denied.target, working_directory: '/repo/app',
+      processExecutionId: 'bg-new', processExecuted: true, processCompleted: false, exit_code: 0 };
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, started, awaitedSuccess]), null);
     assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, {
       ...awaitedSuccess, working_directory: '/repo/other',
     }]));
+  });
+
+  test('an old completed background job cannot clear a later same-command failure when first awaited afterward', () => {
+    const oldStart = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecutionId: 'bg-old', processExecuted: true, processCompleted: false, exit_code: 0 };
+    const oldCompletion = { tool: 'await_command', target: oldStart.target, working_directory: '/repo/app',
+      processExecutionId: 'bg-old', processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'old success' };
+    const newerFailure = { tool: 'run_command', target: oldStart.target, working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const staleReawait = { ...oldCompletion };
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [oldStart, oldCompletion, newerFailure, staleReawait]));
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [oldStart, newerFailure, oldCompletion]));
+    const newRetry = { ...oldStart, processExecutionId: 'bg-new' };
+    const newRetryCompletion = { ...oldCompletion, processExecutionId: 'bg-new' };
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [oldStart, newerFailure, newRetry, newRetryCompletion]), null,
+      'only a host-identified process dispatched after the failure resolves it');
   });
 
   test('a command start without a completed process result cannot clear a typed block', () => {

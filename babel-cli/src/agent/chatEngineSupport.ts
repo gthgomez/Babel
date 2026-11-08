@@ -369,6 +369,8 @@ export type BlockedToolLogEntry = {
   working_directory?: string;
   processExecuted?: boolean;
   processCompleted?: boolean;
+  /** Host-owned background job identity, repeated on its later await receipt. */
+  processExecutionId?: string;
   exit_code?: number;
   error?: string;
   stdout?: string;
@@ -527,10 +529,14 @@ export function detectAndBuildBlockedReport(
   // A later successful retry of the exact same action resolves an earlier
   // transient block. Keep the last observed state for each tool/target pair;
   // unrelated successes do not erase evidence about a different dependency.
-  const activeBlockingByAction = new Map<string, BlockedToolLogEntry>();
+  const activeBlockingByAction = new Map<string, { entry: BlockedToolLogEntry; position: number }>();
+  const backgroundDispatchPosition = new Map<string, number>();
   const cwdSensitiveTools = new Set(['run_command', 'shell_exec', 'test_run', 'await_command']);
   for (const [index, entry] of toolCallLog.entries()) {
     if (!investigateTools.has(entry.tool) || !entry.target) continue;
+    if (entry.tool === 'run_command' && entry.processExecutionId && entry.processCompleted !== true) {
+      backgroundDispatchPosition.set(entry.processExecutionId, index);
+    }
     // A shell command's display target is not its full identity. If the host
     // did not capture cwd, isolate this event so it cannot clear another
     // command occurrence under an unknown directory.
@@ -544,14 +550,23 @@ export function detectAndBuildBlockedReport(
       // so the bounded report window reflects the chronology of the latest
       // blocking observations.
       activeBlockingByAction.delete(key);
-      activeBlockingByAction.set(key, entry);
+      activeBlockingByAction.set(key, { entry, position: index });
     } else if (entry.exit_code === 0 && !entry.error &&
       (!cwdSensitiveTools.has(entry.tool) || (entry.processExecuted === true && entry.processCompleted === true))) {
-      activeBlockingByAction.delete(key);
+      const blocking = activeBlockingByAction.get(key);
+      const dispatchIndex = entry.tool === 'await_command' && entry.processExecutionId
+        ? backgroundDispatchPosition.get(entry.processExecutionId)
+        : index;
+      // A completed await is only recovery evidence when it belongs to a
+      // process dispatched after the matching failure. Re-awaiting an older
+      // successful job cannot erase a newer failure with the same command.
+      if (blocking && dispatchIndex !== undefined && dispatchIndex > blocking.position) {
+        activeBlockingByAction.delete(key);
+      }
     }
   }
   const classified = [...activeBlockingByAction.values()]
-    .map((tc) => {
+    .map(({ entry: tc }) => {
       try {
         if (!investigateTools.has(tc.tool) || !tc.target) return null;
         const origin = classifyBlockingOrigin(tc);

@@ -817,6 +817,10 @@ export interface ChatEngineStreamingLoopHost {
     verified?: boolean
     verifierExecuted?: boolean
     verifierSemanticSignature?: string
+    processExecutionId?: string
+    working_directory?: string
+    processExecuted?: boolean
+    processCompleted?: boolean
     preDispatchNoEffect?: true
     mutation_paths?: string[]
     effect_status?: MutationEffectStatus
@@ -935,6 +939,10 @@ export interface ChatEngineActionExecutorHost {
     verified?: boolean
     verifierExecuted?: boolean
     verifierSemanticSignature?: string
+    processExecutionId?: string
+    working_directory?: string
+    processExecuted?: boolean
+    processCompleted?: boolean
     preDispatchNoEffect?: true
     mutation_paths?: string[]
     effect_status?: MutationEffectStatus

@@ -43,6 +43,7 @@ export interface BackgroundShellLogEntry {
   working_directory?: string;
   processExecuted?: boolean;
   processCompleted?: boolean;
+  processExecutionId?: string;
   detail?: string;
   error?: string;
   index: number;
@@ -108,6 +109,7 @@ export async function executeAwaitCommandAction(
     ...(job?.cwd ? { working_directory: job.cwd } : {}),
     ...(job?.processStarted === true ? { processExecuted: true } : {}),
     processCompleted: result.status === 'completed' && job?.processStarted === true,
+    ...(job ? { processExecutionId: job.id } : {}),
     detail,
     index: ctx.index,
     exit_code: exitCode ?? 1,
@@ -409,6 +411,7 @@ export function executeBackgroundRunCommandAction(
       working_directory: safeCwd,
       processExecuted: job.processStarted === true,
       processCompleted: false,
+      processExecutionId: job.id,
       detail: `background started ${job.id}`,
       index: ctx.index,
       exit_code: 0,

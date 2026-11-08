@@ -33,7 +33,7 @@ test('background command logs bind cwd and only mark a completed process after a
   const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
-  const logs: Array<{ tool: string; target: string; working_directory?: string; processExecuted?: boolean; processCompleted?: boolean; exit_code?: number }> = [];
+  const logs: Array<{ tool: string; target: string; working_directory?: string; processExecuted?: boolean; processCompleted?: boolean; processExecutionId?: string; exit_code?: number }> = [];
   const projectRoot = process.cwd();
   const context: BackgroundShellActionCtx = {
     projectRoot,
@@ -66,6 +66,8 @@ test('background command logs bind cwd and only mark a completed process after a
     assert.equal(completionLog?.working_directory, projectRoot);
     assert.equal(completionLog?.processExecuted, true);
     assert.equal(completionLog?.processCompleted, true);
+    assert.ok(completionLog?.processExecutionId, 'completion receipt retains the original host dispatch identity');
+    assert.equal(completionLog?.processExecutionId, startLog?.processExecutionId);
     assert.equal(completionLog?.exit_code, 0);
   } finally {
     if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
