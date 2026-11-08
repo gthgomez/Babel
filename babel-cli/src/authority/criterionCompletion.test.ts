@@ -39,6 +39,28 @@ test('an owned context reports required criteria missing without trusted executi
   assert.deepEqual(result.satisfied_requirements, [])
 })
 
+test('an advisory derived meaning does not block the machine verifier gate', t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-criterion-advisory-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const advisory = freezeTaskContract(buildTaskContractV1({
+    mode: 'chat', user_request: 'Fix the failing test and run npm test.',
+    acceptance: [{
+      id: 'acceptance:advisory', description: 'Fix the failing test and run npm test.',
+      type: 'custom', required: true,
+      verification_strategy: 'Proposed meaning requires confirmation and independent evidence.',
+      verification: { kind: 'custom', verifier_id: 'meaning:acceptance:advisory' },
+    }],
+  }))
+  const owner: CriterionCompletionOwnerV1 = { contract: advisory, runId: 'advisory-run', projectRoot: root }
+  const service = createCriterionCompletionServiceV1(() => owner)
+  const result = evaluateCriterionCompletionV1({
+    context: service.context, contract: advisory, run_id: owner.runId, project_root: root,
+  })
+  assert.equal(result.status, 'VERIFIED')
+  assert.equal(result.verified, true)
+  assert.deepEqual(result.missing_requirements, [])
+})
+
 test('a serialized context cannot retain parent-process authority', t => {
   const { request } = fixture(t)
   const result = evaluateCriterionCompletionV1({ ...request, context: JSON.parse(JSON.stringify(request.context)) })

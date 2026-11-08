@@ -591,18 +591,20 @@ function buildChatCallbacks(
   };
 
   /** Track tool metadata so onToolComplete can emit the real tool name and target. */
-  const toolMetadata = new Map<number, { tool: string; target: string }>();
+  const toolMetadata = new Map<number, { tool: string; target: string; toolCallId: string }>();
   let toolIdCounter = 0;
+  let toolCallCounter = 0;
 
   return {
     onAnswerChunk: (chunk: string) => {
       dispatchChatEvent({ type: 'answer_chunk', text: chunk }, sinks);
     },
     onToolStart: (tool: string, label: string) => {
-      onChatEvent?.({ type: 'tool_start', tool, target: label });
+      const toolCallId = `tool-${++toolCallCounter}`;
+      onChatEvent?.({ type: 'tool_start', toolCallId, tool, target: label });
       const id = convRenderer?.onToolCallStart(tool, label) ?? ++toolIdCounter;
-      toolMetadata.set(id, { tool, target: label });
-      protocolSession?.emitChatEvent({ type: 'tool_start', tool, target: label });
+      toolMetadata.set(id, { tool, target: label, toolCallId });
+      protocolSession?.emitChatEvent({ type: 'tool_start', toolCallId, tool, target: label });
       return id;
     },
     onToolComplete: (id: number, detail?: string, error?: string, exitCode?: number) => {
@@ -611,6 +613,7 @@ function buildChatCallbacks(
         type: error !== undefined || (exitCode !== undefined && exitCode !== 0)
           ? 'tool_failed'
           : 'tool_complete',
+        ...(meta?.toolCallId ? { toolCallId: meta.toolCallId } : {}),
         tool: meta?.tool ?? 'tool',
         target: meta?.target ?? String(id),
         ...(detail !== undefined ? { detail } : {}),
@@ -621,6 +624,7 @@ function buildChatCallbacks(
         type: error !== undefined || (exitCode !== undefined && exitCode !== 0)
           ? 'tool_failed'
           : 'tool_complete',
+        ...(meta?.toolCallId ? { toolCallId: meta.toolCallId } : {}),
         tool: meta?.tool ?? 'tool',
         target: meta?.target ?? String(id),
         ...(detail !== undefined ? { detail } : {}),

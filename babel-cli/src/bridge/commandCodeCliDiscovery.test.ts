@@ -38,12 +38,12 @@ describe('commandCodeCliDiscovery', () => {
   });
 });
 
-it('does not treat the Windows command interpreter as Command Code', { skip: process.platform !== 'win32' }, () => {
+it('does not treat the Windows command interpreter as Command Code', { skip: process.platform !== 'win32' ? 'Windows npm/CommandCode shim' : false }, () => {
   const systemDir = join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32')
   assert.equal(resolveCommandCodeExecutable(systemDir), undefined)
 })
 
-it('resolves a Windows npm CommandCode shim to its contained Node entrypoint', { skip: process.platform !== 'win32' }, async () => {
+it('resolves a Windows npm CommandCode shim to its contained Node entrypoint', { skip: process.platform !== 'win32' ? 'Windows npm/CommandCode shim' : false }, async () => {
   const { tmpdir } = await import('node:os')
   const root = mkdtempSync(join(tmpdir(), 'babel-cc-npm-'))
   try {
@@ -59,7 +59,7 @@ it('resolves a Windows npm CommandCode shim to its contained Node entrypoint', {
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-it('rejects an npm declaration that escapes its package root', { skip: process.platform !== 'win32' }, async () => {
+it('rejects an npm declaration that escapes its package root', { skip: process.platform !== 'win32' ? 'Windows npm/CommandCode shim' : false }, async () => {
   const { tmpdir } = await import('node:os')
   const root = mkdtempSync(join(tmpdir(), 'babel-cc-escape-'))
   try {

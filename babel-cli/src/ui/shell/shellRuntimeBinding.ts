@@ -39,6 +39,8 @@ export class ShellRuntimeBinding {
   private currentUserRecord: HistoryCellRecord | undefined;
   private readonly toolIds = new Map<string, number>();
   private readonly toolIdQueue: number[] = [];
+  /** Monotonic per-turn tool ids. Queue position is not an id source. */
+  private nextToolId = 1;
   /** Non-tool activity (subagents, file changes) reuses the tool-cell surface. */
   private readonly activityIds = new Map<string, number>();
   private nextActivityId = 1_000_000;
@@ -84,6 +86,7 @@ export class ShellRuntimeBinding {
     this.currentUserRecord = undefined;
     this.toolIds.clear();
     this.toolIdQueue.length = 0;
+    this.nextToolId = 1;
     this.activityIds.clear();
     this.store.startSession(threadId, records);
     this.syncViewport();
@@ -111,6 +114,7 @@ export class ShellRuntimeBinding {
     this.lastOutcome = null;
     this.toolIds.clear();
     this.toolIdQueue.length = 0;
+    this.nextToolId = 1;
     this.activityIds.clear();
     this.syncViewport();
   }
@@ -167,7 +171,7 @@ export class ShellRuntimeBinding {
         break;
       case 'tool_start': {
         this.activity = 'running';
-        const numericId = this.toolIds.size + 1;
+        const numericId = this.nextToolId++;
         if (event.toolCallId) this.toolIds.set(event.toolCallId, numericId);
         this.toolIdQueue.push(numericId);
         this.transcript.beginToolCall(numericId, event.tool, event.target);

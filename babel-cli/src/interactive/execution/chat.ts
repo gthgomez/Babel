@@ -120,12 +120,13 @@ export async function executeChatTask(
 
   const useConversational =
     process.stdout.isTTY && !process.env['CI'] && !process.env['NO_COLOR'];
-  const convRenderer = useConversational
+  // A hosted North Star shell is the sole presentation owner. Constructing the
+  // legacy renderer here would paint the same turn twice (it writes directly to
+  // stdout even with ownsInput:false). Legacy Chat keeps its own renderer.
+  const convRenderer = useConversational && !ctx.shellHost
     ? new ConversationalRenderer({
         verboseMode: Boolean(ctx.verboseMode),
-        // Hosted North Star owns stdin through its shell root. The legacy
-        // renderer remains self-owned for non-hosted Chat execution.
-        ownsInput: !ctx.shellHost,
+        ownsInput: true,
       })
     : null;
 

@@ -130,6 +130,24 @@ describe('ShellRuntimeBinding', () => {
     assert.doesNotMatch(binding.getVisibleRows(80, 10).join('\n'), /wrong turn/);
   });
 
+  it('keeps concurrent tool cells distinct when events omit toolCallId', () => {
+    const binding = new ShellRuntimeBinding({ width: 80 });
+    binding.beginTurn(9, 'run two tools');
+    binding.onChatEvent({ type: 'tool_start', tool: 'read_file', target: 'alpha.ts' });
+    binding.onChatEvent({ type: 'tool_start', tool: 'read_file', target: 'beta.ts' });
+    binding.onChatEvent({ type: 'sub_agent_start', id: 'child-9', label: 'delegate' });
+    binding.onChatEvent({ type: 'tool_complete', tool: 'read_file', target: 'alpha.ts', detail: 'alpha done' });
+    binding.onChatEvent({ type: 'tool_complete', tool: 'read_file', target: 'beta.ts', detail: 'beta done' });
+    binding.onChatEvent({ type: 'sub_agent_complete', id: 'child-9', summary: 'child done' });
+    const rows = binding.getVisibleRows(80, 40).join('\n');
+
+    assert.match(rows, /alpha\.ts/);
+    assert.match(rows, /beta\.ts/);
+    assert.match(rows, /alpha done/);
+    assert.match(rows, /beta done/);
+    assert.match(rows, /child done/);
+  });
+
   it('rejects a stale assistant record when a later epoch reuses its turn ID', () => {
     const binding = new ShellRuntimeBinding();
     binding.beginTurn(1, 'old task', 'old-thread');

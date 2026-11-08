@@ -219,7 +219,8 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     if (input.startsWith('/')) {
       if (ctx.shellHost) {
         await handleCommand(ctx, input);
-        ctx.shellHost.holdRepaint();
+        // A command such as /exit may tear the hosted shell down while it runs.
+        ctx.shellHost?.holdRepaint();
       } else if (ctx.withExclusiveTerminal) {
         await ctx.withExclusiveTerminal('command', () => handleCommand(ctx, input));
       } else {

@@ -16,6 +16,48 @@
       }
     },
     {
+      "id": "windows-guarded-plan-writer-store-listing",
+      "platforms": ["linux", "darwin"],
+      "reasons": [
+        "Windows guarded writer",
+        "Windows guarded candidate",
+        "Windows directory helper",
+        "Windows npm/CommandCode shim"
+      ],
+      "rationale": "The Windows unit lane executes the guarded Plan writer, guarded Plan store, native directory-guard listing and npm/CommandCode shim contracts. Non-Windows lanes skip only these explicitly Windows-native cases.",
+      "suites": ["unit"],
+      "files": {
+        "src/services/guardedPlanWriter.test.ts": [
+          "guarded Plan writer creates an exact new artifact without emitting its body",
+          "guarded Plan writer never overwrites an existing artifact",
+          "guarded Plan writer refuses a linked plans directory",
+          "guarded Plan writer must not commit a replaced staged file",
+          "guarded Plan writer retains the staged artifact when cancelled before commit",
+          "guarded Plan writer rejects a state-root junction swapped before helper launch",
+          "guarded Plan writer does not pass unrelated synthetic environment secrets to its helper",
+          "guarded Plan writer reports unknown if its acknowledgement is lost after commit",
+          "guarded Plan writer rejects an ordinary state directory replaced before helper launch",
+          "guarded Plan artifact has a protected owner-and-system DACL",
+          "guarded Plan writer handles spaces, quotes and Unicode without changing the body",
+          "guarded Plan writer does not start when already cancelled"
+        ],
+        "src/services/savedPlan.guarded.test.ts": [
+          "guarded Plan store retains the complete explicitly selected older Plan",
+          "guarded Plan store rejects a body that differs from its source before writing",
+          "guarded Plan store retains identity when commit acknowledgement is lost"
+        ],
+        "src/sandbox.readRace.test.ts": [
+          "guarded listing rejects if its owned Windows directory guard exits during enumeration",
+          "guarded listing rejects when its owned guard is killed outside its ChildProcess handle"
+        ],
+        "src/bridge/commandCodeCliDiscovery.test.ts": [
+          "does not treat the Windows command interpreter as Command Code",
+          "resolves a Windows npm CommandCode shim to its contained Node entrypoint",
+          "rejects an npm declaration that escapes its package root"
+        ]
+      }
+    },
+    {
       "id": "windows-process-tree-termination",
       "platforms": ["linux", "darwin"],
       "reasons": ["Windows-only process-tree termination contract"],

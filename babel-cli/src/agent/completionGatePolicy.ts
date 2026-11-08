@@ -1349,6 +1349,23 @@ export function buildGreenVerifierRejectionMessage(
 
   // verifier_missing (includes B2: agent-owned _verify*.py is non-authoritative)
   const parts = [preamble];
+  if (
+    receipt &&
+    isAuthoritativeVerifierCommand(receipt.command) &&
+    verifierExitCode(receipt) === 0 &&
+    !(typeof (receipt as { tests_total?: number }).tests_total === 'number' &&
+      (receipt as { tests_total?: number }).tests_total! > 0)
+  ) {
+    parts.push(
+      `COMPLETION_GATE_REJECTED: verifier_missing`,
+      `The verifier exited 0 but reported no executed-test count, so it is green output rather than test evidence.`,
+      receipt.command ? `Last command: ${receipt.command}` : '',
+      `Use a runner that reports executed counts (node --test, pytest, jest, vitest, mocha), then complete again.`,
+      cmdHint,
+      strikeEscalation,
+    );
+    return parts.filter(Boolean).join(' ');
+  }
   if (isStrike) {
     parts.push(
       'Gate check: file changes exist but no valid verifier attempt was made.',
