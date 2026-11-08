@@ -104,10 +104,10 @@ export async function executeAwaitCommandAction(
   const job = getBackgroundShellJob(action.task_id);
   ctx.pushLog({
     tool: ctx.tool,
-    target: action.task_id,
+    target: job?.command ?? action.task_id,
     ...(job?.cwd ? { working_directory: job.cwd } : {}),
     ...(job?.processStarted === true ? { processExecuted: true } : {}),
-    processCompleted: result.status === 'completed',
+    processCompleted: result.status === 'completed' && job?.processStarted === true,
     detail,
     index: ctx.index,
     exit_code: exitCode ?? 1,

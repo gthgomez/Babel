@@ -15,7 +15,7 @@ import { verifierSemanticProgress } from './verifierSemanticProgress.js';
 
 import assert from 'node:assert/strict';
 import { describe, test, after } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -491,7 +491,8 @@ describe('D01/D02 effective-operation policy', () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-gate-verifier-progress-'));
     const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
     process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
-    writeFileSync(join(root, 'red.test.mjs'), "import test from 'node:test'; import assert from 'node:assert/strict'; test('red', () => assert.equal(1, 2));\n");
+    mkdirSync(join(root, 'nested'));
+    writeFileSync(join(root, 'nested', 'red.test.mjs'), "import test from 'node:test'; import assert from 'node:assert/strict'; test('red', () => assert.equal(1, 2));\n");
     execFileSync('git', ['init', '-q'], { cwd: root });
     execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'add', '.'], { cwd: root });
     execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], { cwd: root });
@@ -507,7 +508,7 @@ describe('D01/D02 effective-operation policy', () => {
         calls += 1;
         if (calls === 1) {
           box.gateStrikes = 2;
-          yield { type: 'tool_use', id: 'red-verifier', name: 'test_run', input: { command: 'node --test red.test.mjs' } };
+          yield { type: 'tool_use', id: 'red-verifier', name: 'test_run', input: { command: 'node --test red.test.mjs', cwd: 'nested' } };
           yield { type: 'done', finishReason: 'tool_calls' };
           return;
         }
@@ -519,11 +520,17 @@ describe('D01/D02 effective-operation policy', () => {
       getLastInvocationMetadata: () => null,
     });
     try {
-      await drain(engine, task, []);
+      const result = await drain(engine, task, []);
       assert.equal(calls, 2);
       assert.equal(strikesBeforeAnswer, 0, `actual verifier progress resets stale completion-gate strikes; log=${JSON.stringify(engine['toolCallLog'])}`);
-      assert.equal(engine['toolCallLog'].some(row => row.tool === 'test_run' && row.verifierExecuted === true && row.exit_code !== 0), true,
+      const verifierLog = engine['toolCallLog'].find(row => row.tool === 'test_run') as
+        ({ tool: string; verifierExecuted?: boolean; working_directory?: string; processExecuted?: boolean; processCompleted?: boolean } | undefined);
+      assert.equal(verifierLog?.verifierExecuted, true,
         'the reset requires a host-observed executed red verifier');
+      assert.equal(verifierLog?.working_directory, join(root, 'nested'), 'cwd provenance reaches the actual executor log');
+      assert.equal(verifierLog?.processExecuted, true);
+      assert.equal(verifierLog?.processCompleted, true, JSON.stringify(verifierLog));
+      assert.notEqual(result.outcome, 'VERIFIED_COMPLETE', 'a red verifier cannot certify the task');
     } finally {
       if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
       else process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousFallback;

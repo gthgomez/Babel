@@ -1619,7 +1619,7 @@ export class ChatEngineActionExecutor {
           processExecuted: lastResult?.process_started === true && lastResult.simulated !== true && lastResult.launch_failure === undefined,
           processCompleted: lastResult?.process_started === true && lastResult.exit_code !== undefined &&
             lastResult.simulated !== true && lastResult.launch_failure === undefined &&
-            lastResult.process_termination === undefined,
+            lastResult.process_termination === 'exited',
         } : {}),
         ...(verifierSemanticSignature ? { verifierSemanticSignature } : {}),
         detail,

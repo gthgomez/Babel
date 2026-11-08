@@ -250,6 +250,18 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
     assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, cwdUnknown]));
   });
 
+  test('a completed background await resolves the matching run_command failure by command and cwd', () => {
+    const denied = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const awaitedSuccess = { tool: 'await_command', target: denied.target, working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'ok' };
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, awaitedSuccess]), null);
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, {
+      ...awaitedSuccess, working_directory: '/repo/other',
+    }]));
+  });
+
   test('a command start without a completed process result cannot clear a typed block', () => {
     const denied = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
       processExecuted: true, processCompleted: true, exit_code: 7,
