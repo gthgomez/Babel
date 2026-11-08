@@ -70,4 +70,13 @@ The grader preflight failure was traced to generated fixture permissions under `
 
 The live run also prompted two evaluator corrections: a single anchored `json` fence is accepted without extracting JSON from surrounding prose, and `UNVERIFIED_PATCH` cannot be scored as accepted completion even if an artifact oracle passes. Negative tests cover both. The preserved run was regraded as `PASS` with no workspace changes; its initial report remains untouched. The pinned Docker grader smoke test now passes, but no further provider request was made after these fixes.
 
-The branch has not been pushed and no draft PR was created: PowerShell is unavailable, so required `tools/check-public-content-policy.ps1` and `tools/run-public-secret-scan.ps1 -Strict -RequireExternalScanner` pre-push checks could not be run. Windows checks are also unavailable. The changes remain local on `codex/uncertainty-acceptance-bridge` for review.
+At the time of this earlier report snapshot, the branch had not been pushed because the required PowerShell scans were unavailable. The current follow-up below supersedes that status.
+
+
+## Decision-classification limitation and current delivery status
+
+The repeated natural-language deferral detector changes introduced after `91853b2` were reverted from `chatResponseContract.ts` and its dependent tests to the reviewed pre-change behavior. Repeated review found that heuristic phrase/conditional parsing continued to misclassify some answered choices and hypothetical wording. This reversion does not affect the other uncertainty, recovery, evaluator, or process-tree work in this branch.
+
+Ambiguous-decision classification remains an open limitation for a principled follow-up. The retained behavior recognizes the previously reviewed patterns, including explicit “I need your choice” and standalone product-choice questions; it does not generalize every phrasing such as “I cannot proceed without a decision.” A future solution should use typed structured decision evidence or a better bounded parser with adversarial evaluation, rather than adding more phrase variants. Do not treat this heuristic as authoritative task-intent evidence.
+
+After the reversion, the focused response-contract and terminal-runtime suites passed 47/47; `npm run typecheck`, `npm run build`, `git diff --check`, the public-content policy scan, and strict Gitleaks scan passed. The branch was pushed normally and the remote head was verified. Final CI and independent review for the reverted head remain pending; Windows-specific checks remain unavailable on this Linux host.
