@@ -9,6 +9,7 @@ import {
   mergeTrustedVerifierCommands,
 } from './taskAcceptanceExecutableBinding.js'
 import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
+import { applyWorkingStateEvent, createWorkingState, formatWorkingStateBlock } from './codingLoop/workingState.js'
 
 test('plain-text npm test passes binds with suffix-anchored grammar', () => {
   assert.equal(criterionExplicitlyNamesTrustedCommand('npm test passes.', 'npm test'), true)
@@ -149,6 +150,31 @@ test('unresolved acceptance is not upgraded by trusted verifiers alone', () => {
     defaultWorkingDirectory: '.',
   })
   assert.equal(bound.criteria[0]!.verification.verifier_id.startsWith('meaning:'), true)
+})
+
+test('green verifier guidance distinguishes explicit executable checks from inferred semantic meaning', () => {
+  const verifierResult = applyWorkingStateEvent(createWorkingState('Normalize decimal separators.'), {
+    type: 'verifier', identity: 'npm test', exitCode: 0, summary: '2/2 tests passed',
+  })
+  const explicit = resolveLiveSessionAuthority({
+    mode: 'chat', task: 'Requirements:\n- `npm test` passes.', projectRoot: null, executionScope: { kind: 'conversation' },
+    projectTestCommands: ['npm test'],
+  }).taskContract
+  const explicitReview = formatWorkingStateBlock(verifierResult, explicit)
+  assert.match(explicitReview, /source: explicit/)
+  assert.match(explicitReview, /verifier_binding: "npm test"/)
+
+  const semanticTask = 'Normalize decimal separators and preserve the original scale.'
+  const semantic = resolveLiveSessionAuthority({
+    mode: 'chat', task: semanticTask, projectRoot: null, executionScope: { kind: 'conversation' },
+    projectTestCommands: ['npm test'],
+  }).taskContract
+  const semanticReview = formatWorkingStateBlock(verifierResult, semantic)
+  assert.match(semanticReview, /source: inferred/)
+  assert.match(semanticReview, /verifier_binding: none/)
+  assert.match(semanticReview, /keep making safe progress/)
+  assert.match(semanticReview, /Do not mark the requirement satisfied/)
+  assert.match(semanticReview, /2\/2 tests passed/)
 })
 
 test('each preservation criterion binds only its own designated command', () => {

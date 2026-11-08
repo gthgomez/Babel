@@ -269,9 +269,11 @@ export class ChatEngineStreamingLoop {
           },
         );
       }
+      const acceptanceContract = this.host.getTaskContract?.() ?? null;
       this.host.conversation = upsertWorkingStateMessage(
         this.host.conversation,
         this.host.workingState,
+        acceptanceContract,
       );
 
       if (
@@ -307,7 +309,7 @@ export class ChatEngineStreamingLoop {
         this.host.services.conversation.recordAssistantMessage(
           this.host.parity.eventLog,
           this.host.parity.turnId,
-          formatWorkingStateBlock(this.host.workingState),
+          formatWorkingStateBlock(this.host.workingState, acceptanceContract),
           {
             name: "working_state",
             provenance: "mixed",

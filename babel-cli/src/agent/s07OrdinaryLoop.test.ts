@@ -948,12 +948,20 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
     const fixture = makeFixture();
     try {
       const task = 'Investigate why parser_test fails and fix it.';
+      let acceptanceReview = '';
       const o = await driveLoop(fixture, task, [
         [{ type: 'tool_use', id: 'w1', name: 'str_replace', input: { file_path: 'parser.ts', old_str: 'return Number(parts[0]) - Number(parts[1]);', new_str: 'return Number(parts[0]) + Number(parts[1]);' } }, { type: 'done', finishReason: 'tool_calls' }],
         [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
         [{ type: 'text_delta', text: 'Fixed parser.ts and npm test passed.' }, { type: 'done', finishReason: 'stop' }],
-      ]);
+      ], {
+        onBeforeCall(call, engine) {
+          if (call === 2) acceptanceReview = conversationText(engine);
+        },
+      });
       assert.equal(o.outcome, 'UNVERIFIED_PATCH', 'unresolved acceptance meaning stays fail-closed despite a green verifier');
+      assert.match(acceptanceReview, /acceptance_evidence_guidance:.*keep making safe progress/);
+      assert.match(acceptanceReview, /source: inferred/);
+      assert.match(acceptanceReview, /verifier_binding: none/);
     } finally {
       fixture.cleanup();
     }

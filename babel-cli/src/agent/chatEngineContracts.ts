@@ -1,5 +1,5 @@
 import type { ChatLlmRunner } from '../runners/base.js'
-import type { FailureCapsuleV1 } from './taskContract.js'
+import type { FailureCapsuleV1, TaskContractV1 } from './taskContract.js'
 
 import type {ChatExecutionScope} from './chatExecutionScope.js'
 import type {
@@ -585,6 +585,7 @@ export interface ChatResult {
 }
 
 export interface ChatEngineStreamingLoopHost {
+  readonly getTaskContract?: () => TaskContractV1 | null
   readonly runControl?: import('../runtime/run-control.js').RunControl | null
   markProviderDispatchStarted?: () => void
   readonly captureProviderUsageScope: (ownerGeneration?: number) => ChatUsageScope
