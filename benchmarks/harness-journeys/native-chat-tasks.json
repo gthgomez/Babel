@@ -4,6 +4,7 @@
   "expansionTarget": 16,
   "tasks": [
     { "id": "read-only-inspection", "journeyId": "J03", "kind": "read_only", "allowedChanges": [] },
+    { "id": "multi-file-integration-clean-worktree", "journeyId": "J04", "kind": "feature", "fixtureMode": "clean-preserved-content", "allowedChanges": ["lib/invoice.mjs", "app/customer.mjs", "app/admin.mjs"] },
     { "id": "quantity-bug-fix", "journeyId": "J05", "kind": "bug_fix", "allowedChanges": ["lib/total.mjs"] },
     { "id": "invoice-feature", "journeyId": "J06", "kind": "feature", "allowedChanges": ["lib/invoice.mjs"] },
     { "id": "deceptive-completion", "journeyId": "J05", "kind": "negative_control", "allowedChanges": ["lib/total.mjs"] }

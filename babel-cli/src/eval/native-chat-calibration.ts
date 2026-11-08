@@ -8,6 +8,16 @@ export const calibrationReferences: Readonly<Record<string, string>> = Object.fr
   J06: 'export function invoiceTotal(items) { if (items.some(item => item.quantity < 0)) throw new Error("Negative quantity"); return Math.round(items.reduce((sum, item) => sum + item.price * item.quantity, 0) * 0.9 * 100) / 100 }\n',
 })
 
+export const calibrationFileReferences: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
+  J04: Object.freeze({
+    'lib/invoice.mjs': 'export function invoice(cents) { return (cents / 100).toFixed(2) }\n',
+    'app/customer.mjs': "import { invoice } from '../lib/invoice.mjs'\nexport const due = () => invoice(1234)\n",
+    'app/admin.mjs': "import { invoice } from '../lib/invoice.mjs'\nexport const due = () => invoice(5000)\n",
+  }),
+  J05: Object.freeze({ 'lib/total.mjs': calibrationReferences.J05! }),
+  J06: Object.freeze({ 'lib/invoice.mjs': calibrationReferences.J06! }),
+})
+
 export const calibrationPolicy: ResolvedModelPolicy = {
   policyPath: 'synthetic-calibration', family: 'synthetic-calibration', selectedTier: 'cheap',
   resolvedBackendKey: 'synthetic-calibration', provider: 'deepinfra', providerModelId: 'synthetic-calibration',
@@ -25,10 +35,18 @@ export function createCalibrationRunner(journeyId: string, deceptive: boolean): 
       const turn = call++
       if (turn === 0) {
         yield { type: 'tool_use', id: 'calibration-read', name: 'read_file', input: { path: readPath } }
+        if (journeyId === 'J04') {
+          yield { type: 'tool_use', id: 'calibration-read-customer', name: 'read_file', input: { path: 'app/customer.mjs' } }
+          yield { type: 'tool_use', id: 'calibration-read-admin', name: 'read_file', input: { path: 'app/admin.mjs' } }
+        }
         if (journeyId === 'J03') {
           yield { type: 'tool_use', id: 'calibration-read-web', name: 'read_file', input: { path: 'apps/web/main.mjs' } }
           yield { type: 'tool_use', id: 'calibration-read-api', name: 'read_file', input: { path: 'packages/api/server.mjs' } }
         }
+        yield { type: 'done', finishReason: 'tool_calls' }
+      } else if (journeyId === 'J04' && turn >= 1 && turn <= 3 && !deceptive) {
+        const [path, content] = Object.entries(calibrationFileReferences.J04!)[turn - 1]!
+        yield { type: 'tool_use', id: `calibration-write-${path}`, name: 'write_file', input: { path, content } }
         yield { type: 'done', finishReason: 'tool_calls' }
       } else if (turn === 1 && journeyId !== 'J03') {
         yield { type: 'tool_use', id: 'calibration-write', name: 'write_file', input: {

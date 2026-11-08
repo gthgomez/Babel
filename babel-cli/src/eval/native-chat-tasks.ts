@@ -10,13 +10,14 @@ import { freezeEvaluator, runJourney, type JourneyGrade, type JourneySpec, type 
 import { captureJourneyGitState, prepareJourneyFixture, readJourneyCorpus } from './harness-journey-fixtures.js'
 import { gradeJourneyCode } from './harness-journey-code-oracle.js'
 import { gradeInCleanRoom } from './cleanRoomGrade.js'
-import { calibrationPolicy, calibrationReferences, createCalibrationRunner } from './native-chat-calibration.js'
+import { calibrationFileReferences, calibrationPolicy, createCalibrationRunner } from './native-chat-calibration.js'
 import type { NativeTaskOperation, NativeTaskTerminal } from './native-chat-cli.js'
 import { runGitCommand } from '../utils/gitExec.js'
 
 const TaskSchema = z.object({
-  id: z.string().regex(/^[a-z][a-z0-9-]*$/), journeyId: z.enum(['J03', 'J05', 'J06']),
-  kind: z.enum(['read_only', 'bug_fix', 'feature', 'negative_control']), allowedChanges: z.array(z.string()),
+  id: z.string().regex(/^[a-z][a-z0-9-]*$/), journeyId: z.enum(['J03', 'J04', 'J05', 'J06']),
+  kind: z.enum(['read_only', 'bug_fix', 'feature', 'negative_control']),
+  fixtureMode: z.enum(['clean-preserved-content']).optional(), allowedChanges: z.array(z.string()),
 }).strict()
 const ManifestSchema = z.object({ schemaVersion: z.literal(1), version: z.string().min(1), expansionTarget: z.number().int().min(12).max(20), tasks: z.array(TaskSchema).min(4) }).strict()
 type Terminal = Pick<ChatResult, 'status' | 'outcome' | 'answer'>
@@ -173,7 +174,11 @@ export async function runNativeChatTasks(options: {
   for (let index = 0; index < specs.length; index++) {
     const spec = specs[index]!
     const task = manifest.tasks[index]!
-    const cell = await prepareJourneyFixture(spec, corpus.fixtures[spec.fixtureId]!, join(out, task.id))
+    const sourceFixture = corpus.fixtures[spec.fixtureId]!
+    const fixture = task.fixtureMode === 'clean-preserved-content'
+      ? { ...sourceFixture, files: { ...sourceFixture.files, ...sourceFixture.dirtyFiles, ...sourceFixture.untrackedFiles }, dirtyFiles: {}, untrackedFiles: {} }
+      : sourceFixture
+    const cell = await prepareJourneyFixture(spec, fixture, join(out, task.id))
     let terminal: NativeTaskTerminal | null = null
     let routes: unknown[] = []
     let verifierExitCode: number | null = null
@@ -209,8 +214,9 @@ export async function runNativeChatTasks(options: {
       } else if (calibration) {
         // Only fixed reference controls use byte equality. Arbitrary candidate
         // code is never imported or evaluated on the host to avoid Docker.
-        const path = task.journeyId === 'J05' ? 'lib/total.mjs' : 'lib/invoice.mjs'
-        oracleVerdict = snapshot.get(path)?.toString('utf8') === calibrationReferences[task.journeyId] ? 'pass' : 'fail'
+        const expected = calibrationFileReferences[task.journeyId]
+        oracleVerdict = expected && Object.entries(expected).every(([path, content]) => snapshot.get(path)?.toString('utf8') === content)
+          ? 'pass' : 'fail'
       } else {
         oracleVerdict = await gradeJourneyCode(task.journeyId, async path => {
           const bytes = snapshot.get(path)
@@ -252,7 +258,7 @@ export async function runNativeChatTasks(options: {
           task: input.prompt, projectRoot: cell.candidateRoot, runId: `native-eval-${randomUUID()}`,
           ...(task.kind === 'read_only' ? { operation: 'READ_ONLY' as const } : {}),
           providerRunner: createCalibrationRunner(task.journeyId, task.kind === 'negative_control'), providerPolicy: calibrationPolicy,
-          model: 'synthetic-calibration', maxTurns: 4,
+          model: 'synthetic-calibration', maxTurns: task.journeyId === 'J04' ? 8 : 4,
           })
           terminal = await engine.submitMessage(input.prompt, {
           onAnswerChunk(chunk) { answer += chunk },

@@ -23,7 +23,7 @@ if (values.mode === 'calibration') {
     'const {runNativeChatTasks}=await import(process.argv[1]); console.log(JSON.stringify(await runNativeChatTasks(JSON.parse(process.argv[2])),null,2))',
     new URL('../src/eval/native-chat-tasks.ts', import.meta.url).href, JSON.stringify(options)], {
     env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP,
-      HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home, XDG_CACHE_HOME: home },
+      HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home, XDG_CACHE_HOME: home, GIT_OPTIONAL_LOCKS: '0' },
     encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
   })
   process.stdout.write(child.stdout ?? '')
