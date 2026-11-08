@@ -86,6 +86,7 @@ import {
 } from "./stallDetector.js";
 import type { ProgressSignal } from "./progressController.js";
 import {
+  hasAdmissibleVerifierProgress,
   progressSignalsFromReceipt,
   type ProgressReceipt,
 } from "./progressReceipt.js";
@@ -1525,6 +1526,12 @@ export class ChatEngineStreamingLoop {
           this.host.midLoopCriticFired = false;
           this.host.applyPostWriteRepairBudget();
         } else {
+          // A new host-admitted verifier result is meaningful recovery even
+          // when it is red. It gives the next completion attempt fresh evidence
+          // to act on. Unchanged reads and model claims do not clear strikes.
+          if (hasAdmissibleVerifierProgress(cycleReceipt)) {
+            this.host.gateStrikes = 0;
+          }
           this.host.turnsWithoutWrite++;
         }
 

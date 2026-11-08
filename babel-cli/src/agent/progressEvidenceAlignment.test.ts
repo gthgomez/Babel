@@ -14,6 +14,7 @@ import { describe, test } from 'node:test';
 import { ProgressController } from './progressController.js';
 import {
   createProgressLedger,
+  hasAdmissibleVerifierProgress,
   progressSignalsFromReceipt,
   recordProgressCycle,
   scoreProgressIntervention,
@@ -24,6 +25,28 @@ import { projectDurableToolBatch } from './toolExecutionIdentity.js';
 const RESTRICTING_LABELS = new Set(['restricted_tools', 'last_chance_repair', 'terminal_blocked']);
 
 describe('D02 progress evidence alignment', () => {
+  test('only a changed host-admitted verifier receipt is gate-strike recovery progress', () => {
+    const ledger = createProgressLedger();
+    const read = recordProgressCycle(ledger, {
+      at_turn: 1,
+      reads: [{ path: 'src/a.ts', contentHash: 'same' }],
+    });
+    assert.equal(hasAdmissibleVerifierProgress(read), false);
+
+    const repeatedRead = recordProgressCycle(ledger, {
+      at_turn: 2,
+      reads: [{ path: 'src/a.ts', contentHash: 'same' }],
+    });
+    assert.equal(hasAdmissibleVerifierProgress(repeatedRead), false);
+
+    const verifier = recordProgressCycle(ledger, {
+      at_turn: 3,
+      verifierChanged: true,
+    });
+    assert.equal(hasAdmissibleVerifierProgress(verifier), true);
+    assert.equal(hasAdmissibleVerifierProgress(undefined), false);
+  });
+
   test('D-T05 twelve distinct hashed reads never emit enforced restriction/terminal labels', () => {
     // Control: the legacy empty-mutation-signal list does escalate (the defect).
     const control = new ProgressController();

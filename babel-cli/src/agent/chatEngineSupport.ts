@@ -519,7 +519,20 @@ export function detectAndBuildBlockedReport(
     'shell_exec',
     'test_run',
   ]);
-  const classified = toolCallLog
+  // A later successful retry of the exact same action resolves an earlier
+  // transient block. Keep the last observed state for each tool/target pair;
+  // unrelated successes do not erase evidence about a different dependency.
+  const activeBlockingByAction = new Map<string, BlockedToolLogEntry>();
+  for (const entry of toolCallLog) {
+    if (!investigateTools.has(entry.tool) || !entry.target) continue;
+    const key = `${entry.tool}\0${entry.target}`;
+    if (classifyBlockingOrigin(entry)) {
+      activeBlockingByAction.set(key, entry);
+    } else if (entry.exit_code === 0 && !entry.error) {
+      activeBlockingByAction.delete(key);
+    }
+  }
+  const classified = [...activeBlockingByAction.values()]
     .map((tc) => {
       try {
         if (!investigateTools.has(tc.tool) || !tc.target) return null;

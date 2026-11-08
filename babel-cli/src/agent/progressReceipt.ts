@@ -283,6 +283,16 @@ export function progressSignalsFromReceipt(
   return [...signals];
 }
 
+/**
+ * A newly executed, host-admitted verifier result is substantive recovery
+ * progress. Reads and model-authored progress claims are deliberately excluded.
+ */
+export function hasAdmissibleVerifierProgress(
+  receipt: ProgressReceipt | null | undefined,
+): boolean {
+  return receipt?.deltas.includes('verifier_change') === true;
+}
+
 /** Intervention preference after no-progress (P1-B: prefer recovery over kill). */
 export type ProgressIntervention =
   | { action: 'continue' }

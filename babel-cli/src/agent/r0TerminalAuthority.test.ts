@@ -225,6 +225,24 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
     assert.equal(report.cause_class, 'environment');
   });
 
+  test('a successful retry of the same blocked action clears stale block evidence', () => {
+    const denied = { tool: 'run_command', target: 'curl https://service.test', exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const recovered = { tool: 'run_command', target: 'curl https://service.test', exit_code: 0,
+      stdout: 'ok' };
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied]));
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, recovered]), null);
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, recovered, denied]),
+      'a later unresolved failure remains authoritative');
+  });
+
+  test('success on a different action does not clear a typed block', () => {
+    const denied = { tool: 'read_file', target: 'secrets/config.json', exit_code: 1,
+      stderr: 'EACCES: permission denied' };
+    const unrelated = { tool: 'read_file', target: 'src/index.ts', exit_code: 0, stdout: 'ok' };
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: access denied.', [denied, unrelated]));
+  });
+
   test('R0-5: generic stderr does not qualify, but an explicit denial does', () => {
     assert.equal(
       detectAndBuildBlockedReport('BLOCKED: grep unavailable.', [
