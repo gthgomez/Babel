@@ -29,6 +29,10 @@ Follow-up review caught a stability-window liveness bug: each 10ms poll replaced
 
 A further adversarial review found that `/proc` entries disappearing between directory enumeration and `stat` were treated as absent. Such snapshots now remain incomplete and cannot certify group exit. Synthetic procfs tests cover missing stat records, stable empty/all-zombie snapshots, and a changed live snapshot resetting the stability window. Background awaits now compare failure and recovery using the host execution's dispatch position: the reproduced sequence `start A; start B; collect A failure; collect B success` resolves correctly. The new regression failed before the reducer fix and passes afterward.
 
+Further sequence tests found out-of-order A/B/C receipts could let stale A replace C's failure and B's success clear it. The reducer now records the latest observed execution dispatch for both failure and success receipts and ignores older outcomes. Settled process-group snapshots are retained, so repeated unchanged probes remain settled; a live, changed, or incomplete snapshot still invalidates that state.
+
+Latest validation after these fixes: focused termination/Chat evidence suites passed 73 tests (70 passed, 3 platform skips); typecheck and build passed; full `test:chat-truth:raw` passed 1,103, skipped 6, failed 0 (1,109 total).
+
 Latest follow-up validation: focused procfs and blocked-report suites passed 41/41; `npm run typecheck` and `npm run build` passed; `npm run test:chat-truth:raw` passed 1,103, skipped 6, failed 0 (1,109 total). `git diff --check` passed. Windows/PowerShell limitations remain unchanged.
 
 Background completion receipts now carry a host-owned `processExecutionId` linking `await_command` to the corresponding start log. The blocked-report reducer compares actual chronological dispatch positions to failures and remembers the latest successful execution even after clearing a block. A delayed first await or re-await for an older failed job cannot resurrect a later same-command/cwd success; an older success cannot clear a newer failure; a distinct job started after a failure can.

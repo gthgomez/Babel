@@ -124,6 +124,8 @@ describe('waitForProcessGroupExit', () => {
       await new Promise(resolve => setTimeout(resolve, 30));
       assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), false,
         'unchanged empty snapshots settle after the stability window');
+      assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), false,
+        'repeated unchanged empty snapshots remain settled');
 
       writeSyntheticProcTask(procRoot, groupId, groupId, 'Z');
       assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), true,
@@ -131,6 +133,8 @@ describe('waitForProcessGroupExit', () => {
       await new Promise(resolve => setTimeout(resolve, 30));
       assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), false,
         'unchanged all-dead snapshots settle');
+      assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), false,
+        'repeated unchanged all-dead snapshots remain settled');
 
       writeSyntheticProcTask(procRoot, groupId, groupId, 'S');
       assert.equal(isLinuxProcessGroupAliveInProc(groupId, procRoot), true,

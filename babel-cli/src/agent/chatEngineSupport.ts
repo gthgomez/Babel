@@ -531,7 +531,7 @@ export function detectAndBuildBlockedReport(
   // unrelated successes do not erase evidence about a different dependency.
   const activeBlockingByAction = new Map<string, { entry: BlockedToolLogEntry; position: number }>();
   const backgroundDispatchPosition = new Map<string, number>();
-  const resolvedDispatchPosition = new Map<string, number>();
+  const latestDispatchPosition = new Map<string, number>();
   const cwdSensitiveTools = new Set(['run_command', 'shell_exec', 'test_run', 'await_command']);
   for (const [index, entry] of toolCallLog.entries()) {
     if (!investigateTools.has(entry.tool) || !entry.target) continue;
@@ -550,11 +550,11 @@ export function detectAndBuildBlockedReport(
       const dispatchIndex = entry.tool === 'await_command' && entry.processExecutionId
         ? backgroundDispatchPosition.get(entry.processExecutionId)
         : index;
-      const resolvedThrough = resolvedDispatchPosition.get(key);
-      // An old background process can report a typed failure only when a later
-      // await collects it. If newer execution already resolved this action,
-      // the delayed receipt is historical evidence and must not resurrect it.
-      if (dispatchIndex !== undefined && resolvedThrough !== undefined && dispatchIndex <= resolvedThrough) continue;
+      const latestDispatch = latestDispatchPosition.get(key);
+      // Await results may arrive out of order. Once a newer execution result
+      // has been observed, older successes and failures are historical.
+      if (dispatchIndex !== undefined && latestDispatch !== undefined && dispatchIndex < latestDispatch) continue;
+      if (dispatchIndex !== undefined) latestDispatchPosition.set(key, dispatchIndex);
       // Map.set on an existing key does not move its insertion order. Reinsert
       // so the bounded report window reflects the chronology of the latest
       // blocking observations.
@@ -568,9 +568,9 @@ export function detectAndBuildBlockedReport(
       const dispatchIndex = entry.tool === 'await_command' && entry.processExecutionId
         ? backgroundDispatchPosition.get(entry.processExecutionId)
         : index;
-      if (dispatchIndex !== undefined) {
-        resolvedDispatchPosition.set(key, Math.max(resolvedDispatchPosition.get(key) ?? -1, dispatchIndex));
-      }
+      const latestDispatch = latestDispatchPosition.get(key);
+      if (dispatchIndex !== undefined && latestDispatch !== undefined && dispatchIndex < latestDispatch) continue;
+      if (dispatchIndex !== undefined) latestDispatchPosition.set(key, dispatchIndex);
       // A completed await is only recovery evidence when it belongs to a
       // process dispatched after the matching failure. Re-awaiting an older
       // successful job cannot erase a newer failure with the same command.

@@ -308,6 +308,21 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
       'success ordering compares host dispatches, not the later await collection event');
   });
 
+  test('stale A cannot replace newer C failure or let intermediate B success clear it', () => {
+    const start = (id: string) => ({ tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecutionId: id, processExecuted: true, processCompleted: false, exit_code: 0 });
+    const finish = (id: string, exitCode: number) => ({ tool: 'await_command', target: 'curl https://service.test',
+      working_directory: '/repo/app', processExecutionId: id, processExecuted: true, processCompleted: true,
+      exit_code: exitCode, ...(exitCode ? { stderr: 'curl: (7) connect: ECONNREFUSED' } : { stdout: 'ok' }) });
+    const a = start('bg-A');
+    const b = start('bg-B');
+    const c = start('bg-C');
+    const report = detectAndBuildBlockedReport('BLOCKED: service unavailable.', [
+      a, b, c, finish('bg-C', 7), finish('bg-A', 7), finish('bg-B', 0),
+    ]);
+    assert.ok(report, 'only a successful execution newer than C can clear the latest failure');
+  });
+
   test('a command start without a completed process result cannot clear a typed block', () => {
     const denied = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
       processExecuted: true, processCompleted: true, exit_code: 7,

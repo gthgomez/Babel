@@ -109,7 +109,8 @@ export function isLinuxProcessGroupAliveInProc(groupLeaderPid: number, procRoot 
   const previous = linuxGroupSnapshots.get(groupLeaderPid);
   const now = Date.now();
   if (previous?.fingerprint === fingerprint && now - previous.observedAt >= 20) {
-    linuxGroupSnapshots.delete(groupLeaderPid);
+    // Retain settled state so repeated probes of the same complete snapshot
+    // remain settled. A live, changed, or incomplete snapshot clears it above.
     return false;
   }
   // Keep the start of this unchanged observation window. Replacing it at each
