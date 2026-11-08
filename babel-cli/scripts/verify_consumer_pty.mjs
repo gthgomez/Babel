@@ -78,7 +78,8 @@ globalThis.fetch = async (url, init) => {
   if (n === 1) { delta = { tool_calls: [tool('read_file', { path: 'math.js' })] }; finish = 'tool_calls' }
   else if (n === 2) { delta = { tool_calls: [tool('str_replace', { file_path: 'math.js', old_str: 'a - b', new_str: 'a + b' })] }; finish = 'tool_calls' }
   else if (n === 3) { delta = { tool_calls: [tool('test_run', { command: 'npm test' })] }; finish = 'tool_calls' }
-  else { delta = { content: 'Fixed math.js and ran npm test.' }; finish = 'stop' }
+  else if (n === 4) { delta = { content: 'Fixed math.js and ran npm test.' }; finish = 'stop' }
+  else { delta = { content: 'Second task acknowledged.' }; finish = 'stop' }
   if (body.stream) return new Response('data: ' + JSON.stringify({ model: body.model, choices: [{ index: 0, delta, finish_reason: finish }] }) + '\\n\\ndata: [DONE]\\n\\n', { headers: { 'content-type': 'text/event-stream' } })
   return Response.json({ model: body.model, choices: [{ message: { role: 'assistant', content: delta.content ?? '' } }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } })
 }
@@ -86,9 +87,14 @@ globalThis.fetch = async (url, init) => {
 
 const steps = [
   { sleep_ms: 2500 },
-  { send: 'Fix the failing test in math.js. Run npm test before completing.' },
+  { send: 'Fix the failing test in math.js. `npm test` must pass.' },
+  { key: 'enter' },
+  // Submitted while the first turn is active: the shell must queue it and run
+  // it exactly once after the first turn settles.
+  { send: 'Summarize the change in one sentence.' },
   { key: 'enter' },
   { wait_for: 'Fixed math.js', timeout_ms: 90000 },
+  { wait_for: 'Second task acknowledged.', timeout_ms: 90000 },
   { sleep_ms: 1500 },
   { resize: [30, 120] },
   { sleep_ms: 800 },
@@ -130,7 +136,6 @@ const driver = spawnSync('python3', [
   '--rows', '24', '--cols', '80',
   '--transcript', join(root, 'transcript.txt'),
   '--', process.execPath, '--import', new URL(`file://${join(root, 'preload.mjs')}`).href, bin,
-  'interactive', '--project', workspace,
 ], { encoding: 'utf8', env, timeout: 180000 })
 
 let result
@@ -144,14 +149,25 @@ if (existsSync(join(root, 'transcript.txt'))) {
   writeFileSync(join(artifactDir, 'chat-journey.txt'), readFileSync(join(root, 'transcript.txt'), 'utf8'))
 }
 
+const firstAnswerAt = transcript.indexOf('Fixed math.js')
+const secondAnswerAt = transcript.indexOf('Second task acknowledged.')
 const checks = {
   driver_ok: result.ok === true,
   clean_exit: result.exit_code === 0,
+  // first_output_ms is now the first rendered byte, not answer arrival.
+  first_byte_measured: Number.isFinite(result.first_byte_ms) && result.first_byte_ms >= 0 && result.first_byte_ms < 8000,
+  first_byte_before_answer: result.answer_ms === null || result.first_byte_ms <= result.answer_ms,
   rendered_read: /read_file\s+math\.js/.test(transcript),
   rendered_edit: /str_replace\s+math\.js/.test(transcript),
   rendered_verifier: /test_run\s+npm test/.test(transcript),
-  rendered_answer: transcript.includes('Fixed math.js'),
-  resize_applied: steps.some(step => step.resize) && /160/.test(JSON.stringify(result.events)),
+  rendered_answer: firstAnswerAt >= 0,
+  completion_status_visible: /(VERIFIED_COMPLETE|UNVERIFIED_PATCH|Complete\s+—\s+(?:verified|unverified)|Unverified model response)/i.test(transcript),
+  queued_followup_admitted: transcript.includes('Queued (Tab)'),
+  // A queued message must run after the active turn settles, not inside it.
+  queued_followup_ran_after_first: firstAnswerAt >= 0 && secondAnswerAt > firstAnswerAt,
+  resize_applied: result.events.some(event => event.resize?.[1] === 160) &&
+    result.events.some(event => event.resize?.[1] === 120),
+  cursor_restored: result.cursor_restored === true,
   no_unhandled_rejection: !transcript.includes('Unhandled Rejection'),
   real_mutation: readFileSync(join(workspace, 'math.js'), 'utf8').includes('a + b'),
   verifier_not_dry_run: !transcript.includes('[DRY RUN] Would run tests'),
@@ -161,6 +177,7 @@ const summary = {
   ok: failed.length === 0,
   bin,
   first_output_ms: result.first_output_ms,
+  answer_ms: result.answer_ms,
   duration_ms: result.duration_ms,
   checks,
   failed,

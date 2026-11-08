@@ -16,6 +16,9 @@ test('isCredentialTargetPath: live credential stores are flagged', () => {
   assert.equal(isCredentialTargetPath('.env.local'), true);
   assert.equal(isCredentialTargetPath('babel-cli/.env'), true);
   assert.equal(isCredentialTargetPath('C:\\proj\\.env.production'), true);
+  assert.equal(isCredentialTargetPath('.env.production.local'), true);
+  assert.equal(isCredentialTargetPath('config/.env.development.local'), true);
+  assert.equal(isCredentialTargetPath('.env.staging.local.test'), true);
   assert.equal(isCredentialTargetPath('.envrc'), true);
   assert.equal(isCredentialTargetPath('project/.envrc.local'), true);
   assert.equal(isCredentialTargetPath('~/.ssh/id_rsa'), true);

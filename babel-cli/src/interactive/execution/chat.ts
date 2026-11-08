@@ -364,12 +364,16 @@ export async function executeChatTask(
         hydrateResumedThreadToScreen(ctx, threadId);
       }
     } else if (result.outcome === 'AGENT_FAILURE' || (!result.outcome && result.status === 'failed')) {
-      console.error(`\n  ${error('✖')} ${result.answer}\n`);
-    } else if (result.answer) {
+      if (ctx.shellRuntime) ctx.shellRuntime.appendNote(`✖ ${result.answer ?? 'Agent failure'}`);
+      else console.error(`\n  ${error('✖')} ${result.answer}\n`);
+    } else if (result.answer && !ctx.shellRuntime) {
+      // A hosted shell already renders the streamed assistant answer in its
+      // transcript; writing it again would duplicate the turn.
       console.log(`\n${result.answer}\n`);
     }
 
-    console.log(`\n${review.body}\n`);
+    if (ctx.shellRuntime) ctx.shellRuntime.appendNote(review.body);
+    else console.log(`\n${review.body}\n`);
     rememberReviewDiff({ files: changedFiles, draft: '', cwd: target.targetRoot });
 
     ctx.lastResolvedTask = null;
@@ -522,7 +526,8 @@ export async function executeChatTask(
       if (convRenderer) {
         convRenderer.cancelRun();
       }
-      console.log(`\n${review.body}\n`);
+      if (ctx.shellRuntime) ctx.shellRuntime.appendNote(review.body);
+      else console.log(`\n${review.body}\n`);
       ctx.state.lastRunUserStatus = 'cancelled';
       ctx.lastAssistantStatus = 'CANCELLED';
       updateConversationMemory(

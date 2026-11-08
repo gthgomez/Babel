@@ -848,7 +848,7 @@ test(`no-change currency is checked before ${surface} normalization: changed=${c
   writeFileSync(join(projectRoot,'source.js'),'export const value = 1;\n')
   const {captureChatVerifierReceipt}=await import('./chatEngineVerifierAdapter.js')
   const receipt=await captureChatVerifierReceipt({projectRoot,command:'npm test',exitCode:0,
-    summary:'fixture green',mutationPaths:['source.js'],stdout:'# tests 1\n# pass 1\n# fail 0\n'})
+    summary:'fixture green',mutationPaths:['source.js'],stdout:'# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n'})
   assert.ok(receipt)
   assert.equal(receipt.stale,false)
   input.snapshot.context.options.projectRoot=projectRoot

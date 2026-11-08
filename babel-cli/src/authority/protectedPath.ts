@@ -20,7 +20,13 @@ export function isCredentialTargetPath(path: string): boolean {
   const basename = segments[segments.length - 1] ?? '';
 
   if (/^\.envrc(?:\.|$)/.test(basename)) return true;
-  if (/^\.env(?:\.[a-z0-9_-]+)?$/.test(basename) && !basename.startsWith('.env.example')) {
+  // Live dotenv files may carry several suffixes (`.env.production.local`).
+  // Documentation templates remain readable: `.env.example` and any variant
+  // whose first suffix is `example` are not credential stores.
+  if (
+    /^\.env(?:\.[a-z0-9_-]+)*$/.test(basename) &&
+    !/^example(?:\.|$)/.test(basename.slice('.env.'.length))
+  ) {
     return true;
   }
   if (/^(id_rsa|id_ed25519|id_dsa|id_ecdsa)$/.test(basename)) return true;

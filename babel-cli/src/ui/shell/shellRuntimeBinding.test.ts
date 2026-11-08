@@ -68,6 +68,34 @@ describe('ShellRuntimeBinding', () => {
     assert.equal(binding.getSnapshot().activity, 'idle');
   });
 
+  it('appends outcome notes inside the hosted turn without raw terminal writes', () => {
+    const binding = new ShellRuntimeBinding({ width: 80 });
+    binding.beginTurn(9, 'fix the bug');
+    binding.onChatEvent({ type: 'answer_chunk', text: 'fixed' });
+    binding.appendNote('\u001b[32mCompletion status: VERIFIED_COMPLETE\u001b[0m\n1 file changed');
+
+    const records = binding.store.getRecords();
+    const note = records.find((record) => record.kind === 'plain');
+    assert.ok(note, 'the outcome note is a transcript cell');
+    assert.match(JSON.stringify(note?.payload), /VERIFIED_COMPLETE/);
+    const rows = binding.getVisibleRows(80, 30).join('\n');
+    assert.match(rows, /Completion status: VERIFIED_COMPLETE/);
+    assert.doesNotMatch(rows, /\u001b\[/, 'notes are stripped before entering the frame');
+  });
+
+  it('renders a terminal-only answer without a streamed chunk', () => {
+    const binding = new ShellRuntimeBinding({ width: 80 });
+    binding.beginTurn(10, 'answer without streaming');
+    binding.onChatEvent({
+      type: 'done',
+      answer: 'Terminal-only answer',
+      usage: {} as never,
+      outcome: 'UNVERIFIED_PATCH',
+    });
+    const rows = binding.getVisibleRows(80, 20).join('\n');
+    assert.match(rows, /Terminal-only answer/);
+  });
+
   it('retains an explicit cancellation outcome when settling a turn', () => {
     const binding = new ShellRuntimeBinding({ width: 80 });
     binding.beginTurn(8, 'cancel this task');

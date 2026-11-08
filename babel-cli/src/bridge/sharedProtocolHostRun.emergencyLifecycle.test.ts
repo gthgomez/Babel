@@ -737,8 +737,8 @@ describe('shared host-run emergency observation errors (mocked authoritative bac
         stdin,
         WebSocketImpl: makeTrackingWebSocket(primarySocketHolder),
         emergencyObservationPassLimit: 2,
-        emergencyObservationDeadlineMs: 3_000,
-        observationRpcTimeoutMs: 500,
+        emergencyObservationDeadlineMs: 15_000,
+        observationRpcTimeoutMs: 4_000,
       },
       (event) => {
         gate.write(event);

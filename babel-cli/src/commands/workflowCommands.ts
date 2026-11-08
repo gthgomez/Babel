@@ -610,7 +610,18 @@ function isExplicitModeArg(): boolean {
   return process.argv.some((arg) => arg === '--mode' || arg.startsWith('--mode='));
 }
 
+/**
+ * Imperative coding/verification intent. A request that asks a question but
+ * also tells Babel to act must not take the read-only answer shortcut: that
+ * path has no mutation or verifier authority. Anchoring to a clause start
+ * ("fix…", "…, run…", "…and update…", "can you fix…") keeps explanatory
+ * questions such as "explain how to run the tests" on the read-only path.
+ */
+const ACTIONABLE_TASK_INTENT =
+  /(?:^|[.,;:!?]\s*|\b(?:and|then|also|please|can|could|would|will)\s+)(?:you\s+)?(?:fix|change|edit|modify|update|add|remove|delete|rename|move|create|implement|refactor|repair|write|patch|apply|commit|migrate|upgrade|install|reproduce|debug|build|run|execute|verify|test)\b/i;
+
 function isSimpleReadOnlyQuestion(task: string): boolean {
+  if (ACTIONABLE_TASK_INTENT.test(task)) return false;
   return (
     /\?/.test(task) ||
     /\b(what is|what's|explain|summarize|describe|where is|why is|how does|list|show me|inspect|audit)\b/i.test(

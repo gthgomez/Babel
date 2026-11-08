@@ -2,7 +2,7 @@
 
 This is the same first path as the [README](README.md): install the published npm package, check that the command runs, then point it at a repository. Babel Desktop for Windows is an alternative. Building from source is for people changing Babel.
 
-The command name in this guide is `babel-harness`. `babel-agent` is the same program. Help text still prints `babel`, and that command is not installed.
+The command name in this guide is `babel-harness`. The published 0.2.0 installer also adds `babel-agent`. The current repository package (0.2.1) installs `babel`, `babel-agent`, and `babel-harness`, all running the same program.
 
 ## 1. Check Node, then install
 
@@ -88,7 +88,14 @@ npm --prefix ./babel-cli run build
 node ./babel-cli/dist/index.js doctor
 ```
 
-PowerShell uses `.\babel-cli` in those npm prefixes. The source tree can be ahead of `babel-harness@0.2.0`. Commands you see in source docs, including `work`, `provider`, and `settings`, were not in the 0.2.0 package.
+PowerShell uses `.\babel-cli` in those npm prefixes. The source tree can be ahead of `babel-harness@0.2.0`. The 0.2.1 source package installs all three command names and includes `work`, `provider`, and `settings`, which were not in the 0.2.0 package. To exercise the exact repository build, pack it and install the archive into a clean directory:
+
+```sh
+npm --prefix ./babel-cli pack --pack-destination ./artifacts
+npm install --prefix /tmp/babel-consumer --omit=dev ./artifacts/babel-harness-0.2.1.tgz
+/tmp/babel-consumer/node_modules/.bin/babel-harness --version
+/tmp/babel-consumer/node_modules/.bin/babel --help
+```
 
 ## Where to go next
 

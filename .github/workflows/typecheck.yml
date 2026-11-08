@@ -1352,6 +1352,12 @@ jobs:
         shell: pwsh
         run: npm run test:consumer-artifact -- --archive "$env:CONSUMER_ARCHIVE" --manifest ../artifacts/consumer-candidate/manifest.json --expected-sha256 "$env:CONSUMER_DIGEST" --expected-source "$env:CONSUMER_SOURCE"
         working-directory: babel-cli
+      - name: Installed TUI PTY journey (bare startup, queue, resize, restore)
+        if: runner.os == 'Linux' && matrix.node == '24.13.1'
+        env:
+          CONSUMER_ARCHIVE: ${{ github.workspace }}/artifacts/consumer-candidate/${{ needs.consumer-candidate.outputs.archive }}
+        run: node scripts/verify_consumer_pty.mjs --archive "$CONSUMER_ARCHIVE"
+        working-directory: babel-cli
       - name: Upload verified preview and provenance
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

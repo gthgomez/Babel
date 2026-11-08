@@ -2,8 +2,10 @@ import type { ChatEvent } from '../../agent/chatEngine.js';
 import type { InteractiveTurn } from '../../interactive/types.js';
 import {
   createAssistantMessageCell,
+  createPlainCell,
   createUserMessageCell,
 } from '../historyCells/cells.js';
+import { stripAnsi } from '../theme.js';
 import { HistoryTranscript } from '../historyCells/transcript.js';
 import { HistoryCellViewport } from '../historyCells/viewport.js';
 import type { HistoryCellRecord } from '../historyCells/types.js';
@@ -44,6 +46,7 @@ export class ShellRuntimeBinding {
   /** Non-tool activity (subagents, file changes) reuses the tool-cell surface. */
   private readonly activityIds = new Map<string, number>();
   private nextActivityId = 1_000_000;
+  private nextNoteId = 1;
   private activity: ShellActivity = 'idle';
   private lastOutcome: string | null = null;
   private readonly onChange: (() => void) | undefined;
@@ -236,6 +239,13 @@ export class ShellRuntimeBinding {
         this.lastOutcome = event.outcome ?? 'CANCELLED';
         break;
       case 'done':
+        // Some providers return the whole answer only in the terminal event.
+        // Preserve it when no answer chunk was streamed, so the hosted shell
+        // never depends on the legacy direct-stdout fallback.
+        if (typeof event.answer === 'string' && event.answer.trim() &&
+            this.transcript.getAnswerText().trim().length === 0) {
+          this.transcript.onAnswerChunk(event.answer);
+        }
         this.activity = 'idle';
         this.lastOutcome = event.outcome ?? event.status ?? 'completed';
         break;
@@ -246,6 +256,32 @@ export class ShellRuntimeBinding {
       default:
         break;
     }
+    this.store.replaceCurrentTurn(
+      [...(this.currentUserRecord ? [this.currentUserRecord] : []), ...this.transcript.getAllRecords()],
+      epoch,
+    );
+    this.syncViewport();
+  }
+
+  /**
+   * Append an outcome note (completion status, diff summary, cancellation
+   * reason) to the active turn instead of writing it directly to stdout.
+   * Direct writes scroll the terminal behind the shell's frame cache and
+   * produce a partial, duplicated repaint.
+   */
+  appendNote(text: string): void {
+    const cleaned = stripAnsi(text).trim();
+    if (!cleaned || this.currentTurnId === undefined) return;
+    if (this.store.epoch !== this.currentTurnEpoch || this.store.turnId !== this.currentTurnId) {
+      this.clearActiveTurn();
+      return;
+    }
+    const epoch = this.store.epoch;
+    this.transcript.appendCommitted(createPlainCell(cleaned.split('\n'), {
+      cell_id: `interactive-note:${this.currentTurnId}:${this.nextNoteId++}`,
+      turn_id: this.currentTurnId,
+      ...(this.store.threadId !== undefined ? { thread_id: this.store.threadId } : {}),
+    }));
     this.store.replaceCurrentTurn(
       [...(this.currentUserRecord ? [this.currentUserRecord] : []), ...this.transcript.getAllRecords()],
       epoch,

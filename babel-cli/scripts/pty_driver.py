@@ -55,8 +55,11 @@ def main():
     raw = bytearray()
     events = []
     pending = bytearray()
+    first_byte_ms = None
+    answer_ms = None
 
     def drain(wait_ms):
+        nonlocal first_byte_ms
         deadline = time.monotonic() + wait_ms / 1000.0
         while True:
             remaining = deadline - time.monotonic()
@@ -75,10 +78,12 @@ def main():
                 return
             raw.extend(chunk)
             pending.extend(chunk)
-            events.append({"at_ms": int((time.monotonic() - started) * 1000), "bytes": len(chunk)})
+            at_ms = int((time.monotonic() - started) * 1000)
+            if first_byte_ms is None:
+                first_byte_ms = at_ms
+            events.append({"at_ms": at_ms, "bytes": len(chunk)})
 
     try:
-        first_output_ms = None
         for step in steps:
             if "wait_for" in step:
                 needle = step["wait_for"]
@@ -97,8 +102,10 @@ def main():
                     print(json.dumps({"ok": False, "error": f"wait_for timeout: {needle}",
                                       "last_output": strip(bytes(raw))[-2000:]}, ensure_ascii=False))
                     return 2
-                if first_output_ms is None:
-                    first_output_ms = found
+                # This is when the scripted answer arrived, not the first
+                # rendered byte. Keep the two metrics distinct.
+                if answer_ms is None:
+                    answer_ms = found
                 events.append({"wait_for": needle, "at_ms": found})
             elif "send" in step:
                 sent_at = time.monotonic()
@@ -137,15 +144,24 @@ def main():
             _, status = os.waitpid(pid, 0)
         exit_code = os.waitstatus_to_exitcode(status)
         text = strip(bytes(raw))
+        # Terminal restoration: the renderer hides the cursor while painting;
+        # a clean exit must leave it visible again. Report the raw evidence.
+        last_hide = raw.rfind(b"\x1b[?25l")
+        last_show = raw.rfind(b"\x1b[?25h")
+        tail = bytes(raw[-400:])
         if args.transcript:
             open(args.transcript, "w", encoding="utf-8").write(text)
         print(json.dumps({
             "ok": True,
             "exit_code": exit_code,
-            "first_output_ms": first_output_ms,
+            "first_output_ms": first_byte_ms,
+            "first_byte_ms": first_byte_ms,
+            "answer_ms": answer_ms,
             "duration_ms": int((time.monotonic() - started) * 1000),
             "events": events,
             "bytes": len(raw),
+            "cursor_restored": last_hide < 0 or last_show > last_hide,
+            "sgr_reset_at_exit": bool(re.search(rb"\x1b\[(?:0)?m", tail)),
             "transcript_tail": text[-4000:],
         }, ensure_ascii=False))
         return 0 if exit_code == 0 else 1
