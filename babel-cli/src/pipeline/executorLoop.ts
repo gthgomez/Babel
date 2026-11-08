@@ -1,3 +1,4 @@
+import { evictFileReadCache } from './executorLoopCache.js';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -89,14 +90,15 @@ import {
   getReliabilityRepairProofMaxFailures,
   hashProjectFileForEvidence,
   readJsonArtifact,
+  snapshotProjectFilesForSafety,
   RELIABILITY_REPAIR_PROOF_MARKER,
   resolveStepTargetPath,
   saveSessionState,
-  snapshotProjectFilesForSafety,
   summarizeVerifierStreamForEvidence,
   shouldForceRecoverableCommandRerun,
   type PendingRecoverableCommandRetry,
 } from '../stages/executorHelpers.js';
+import { guardedSafetySnapshot } from '../stages/guardedSafetySnapshot.js';
 import {
   createRepairState,
   formatFailureFingerprint,
@@ -164,8 +166,10 @@ import {
   buildNonRecoverableToolFailureCondition,
   buildTruncationArtifactConditions,
   executeExecutorTool,
+  scopeExecutorKernel,
   getSuccessfulFileReadCacheEntry,
 } from './executorToolDispatch.js';
+import { getRunAbortSignal, throwIfRunAborted } from '../runtime/runCancellation.js';
 import {
   getAllowedToolsFromEnv,
   getNpmWrongWorkingDirectoryHint,
@@ -177,7 +181,7 @@ import {
   isVerifierNotFoundFailure,
   shouldRecoverCommandFailure,
 } from './executorRecovery.js';
-import { arePlannedActionsSatisfied, isEvidenceRequestPlanSatisfied } from './executorEvidenceRequests.js';
+import { areDirectoryPagesComplete, arePlannedActionsSatisfied, isEvidenceRequestPlanSatisfied } from './executorEvidenceRequests.js';
 import type { ExecutorLoopResult } from './executorLoopTypes.js';
 import {
   isExecutorToolShapePlaceholder,
@@ -236,43 +240,6 @@ type ToolFailureResult =
  * then if cache still exceeds maxBytes, evict oldest entries until under budget.
  * Mutates the Maps in place and returns the updated byte counter.
  */
-function evictFileReadCache(
-  turn: number,
-  fileReadCache: Map<string, string>,
-  fileReadCacheUsedTurn: Map<string, number>,
-  fileReadCacheTotalBytes: number,
-  maxBytes: number,
-): { fileReadCacheTotalBytes: number } {
-  // Evict stale entries (stale if turn - lastUsed > 5)
-  const toEvict: string[] = [];
-  for (const [filePath, lastUsed] of fileReadCacheUsedTurn.entries()) {
-    if (turn - lastUsed > 5) {
-      toEvict.push(filePath);
-    }
-  }
-  for (const filePath of toEvict) {
-    const evictedSize = Buffer.byteLength(fileReadCache.get(filePath) ?? '', 'utf8');
-    fileReadCacheTotalBytes -= evictedSize;
-    fileReadCache.delete(filePath);
-    fileReadCacheUsedTurn.delete(filePath);
-  }
-
-  // ── Size-bounded LRU eviction (10 MB ceiling) ────────────────────────
-  // After turn-based eviction, if the cache still exceeds the byte budget,
-  // evict additional entries in ascending lastUsed-turn order (oldest first).
-  if (fileReadCacheTotalBytes > maxBytes) {
-    const sortedByAge = [...fileReadCacheUsedTurn.entries()].sort((a, b) => a[1] - b[1]);
-    for (const [filePath] of sortedByAge) {
-      if (fileReadCacheTotalBytes <= maxBytes) break;
-      const evictedSize = Buffer.byteLength(fileReadCache.get(filePath) ?? '', 'utf8');
-      fileReadCacheTotalBytes -= evictedSize;
-      fileReadCache.delete(filePath);
-      fileReadCacheUsedTurn.delete(filePath);
-    }
-  }
-
-  return { fileReadCacheTotalBytes };
-}
 
 /**
  * Extracted: executes a direct bounded write plan without LLM calls, if one exists.
@@ -306,6 +273,7 @@ async function runDirectBoundedWritePlan(
   logDetail(warning);
 
   for (const write of directBoundedPlan.writes) {
+    throwIfRunAborted();
     const stepNum = toolCallLog.length + 1;
     const toolResult = await executeExecutorTool(
       {
@@ -450,7 +418,7 @@ async function handleExecutorCompletion(
     nextTurnPrompt: string,
     details?: { terminalStatus?: string; haltTag?: string; condition?: string },
   ) => Promise<void>,
-  writeRepairAttemptTimeline: (finalStatus?: string | null) => void,
+  writeRepairAttemptTimeline: (finalStatus?: string | null) => Promise<void>,
 ): Promise<CompletionHandlerResult> {
   // ── Terminal completion ──────────────────────────────────────────────────
   if (executorTurn.type === 'completion') {
@@ -547,7 +515,7 @@ async function handleExecutorCompletion(
           condition: semanticFailure,
         });
         writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-        writeRepairAttemptTimeline('EXECUTOR_HALTED');
+        await writeRepairAttemptTimeline('EXECUTOR_HALTED');
         log(
           '  Executor: EXECUTION_HALTED [STEP_VERIFICATION_FAIL] after post-write semantic verification',
         );
@@ -616,7 +584,7 @@ async function handleExecutorCompletion(
             condition: repairLoop.reason,
           });
           writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-          writeRepairAttemptTimeline('COMPLETE');
+          await writeRepairAttemptTimeline('COMPLETE');
           log(
             `  Executor: REPAIRED_AND_COMPLETE (${toolCallLog.length} steps, Godot artifact repaired)`,
           );
@@ -667,7 +635,7 @@ async function handleExecutorCompletion(
           condition: haltDecision.condition,
         });
         writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-        writeRepairAttemptTimeline('EXECUTOR_HALTED');
+        await writeRepairAttemptTimeline('EXECUTOR_HALTED');
         log(`  Executor: EXECUTION_HALTED [${haltDecision.haltTag}] after runnable artifact gate`);
         logDetail(haltDecision.condition);
         return {
@@ -703,7 +671,7 @@ async function handleExecutorCompletion(
         : {}),
     });
     writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-    writeRepairAttemptTimeline(
+    await writeRepairAttemptTimeline(
       executorTurn.status === 'EXECUTION_COMPLETE' ? 'COMPLETE' : 'EXECUTOR_HALTED',
     );
 
@@ -795,7 +763,7 @@ async function handleToolFailure(
     nextTurnPrompt: string,
     details?: { terminalStatus?: string; haltTag?: string; condition?: string },
   ) => Promise<void>,
-  writeRepairAttemptTimeline: (finalStatus?: string | null) => void,
+  writeRepairAttemptTimeline: (finalStatus?: string | null) => Promise<void>,
   rollbackTouchedFilesForFailure: (
     underlyingStatus: TerminalStatus,
     reason: string,
@@ -893,7 +861,7 @@ async function handleToolFailure(
       currentRepairAttemptChangedFiles = new Set<string>();
       currentRepairAttemptFileHashes = {};
       currentRepairAttemptInputCapsule = latestFailureCapsuleArtifact;
-      writeRepairAttemptTimeline('IN_PROGRESS');
+      await writeRepairAttemptTimeline('IN_PROGRESS');
       const wrongWorkingDirectoryHint = getNpmWrongWorkingDirectoryHint(
         req.command,
         toolResult.stdout,
@@ -937,7 +905,7 @@ async function handleToolFailure(
           condition,
         });
         writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-        writeRepairAttemptTimeline('ROLLBACK_FAILED');
+        await writeRepairAttemptTimeline('ROLLBACK_FAILED');
         log(`  Executor: EXECUTION_HALTED [ROLLBACK_FAILED] at step ${stepNum}`);
         return {
           kind: 'return',
@@ -969,7 +937,7 @@ async function handleToolFailure(
           condition,
         });
         writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-        writeRepairAttemptTimeline(finalStatus);
+        await writeRepairAttemptTimeline(finalStatus);
         log(`  Executor: EXECUTION_HALTED [${finalStatus}] at step ${stepNum}`);
         return {
           kind: 'return',
@@ -1001,7 +969,7 @@ async function handleToolFailure(
           condition,
         });
         writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-        writeRepairAttemptTimeline(finalStatus);
+        await writeRepairAttemptTimeline(finalStatus);
         log(`  Executor: EXECUTION_HALTED [${finalStatus}] at step ${stepNum}`);
         return {
           kind: 'return',
@@ -1047,7 +1015,7 @@ async function handleToolFailure(
           condition,
         });
         writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-        writeRepairAttemptTimeline(finalStatus);
+        await writeRepairAttemptTimeline(finalStatus);
         log(`  Executor: EXECUTION_HALTED [${finalStatus}] at step ${stepNum}`);
         return {
           kind: 'return',
@@ -1354,7 +1322,9 @@ export async function runExecutorLoop(
   rawTask: string = '',
   pruningStubs?: Map<string, string>,
   services?: ChatEngineServices, episodeSink?: { recordExecutorToolCall(entry: ToolCallLog): void } | null,
+  planScope?: { projectRoot: string; allowedPaths: string[] },
 ): Promise<ExecutorLoopResult> {
+  throwIfRunAborted();
   assertExecutorGate(evidence.runDir);
 
   let totalJitLatencyMs = 0;
@@ -1364,7 +1334,8 @@ export async function runExecutorLoop(
 
   const reliabilityRepairProofEnabled = isReliabilityRepairProofEnabled(rawTask);
   const requestedTargetContract = getRequestedTargetContract(rawTask);
-  const kernel = createExecutorKernel(requestedTargetContract.readOnly ? 'plan' : 'deep', services);
+  const baseKernel = createExecutorKernel(requestedTargetContract.readOnly ? 'plan' : 'deep', services);
+  const kernel = planScope ? scopeExecutorKernel(baseKernel, planScope) : baseKernel;
   const compactFileOnlyExecutor =
     !isExternalBenchmarkTask(rawTask) &&
     requestedTargetContract.bounded &&
@@ -1440,7 +1411,11 @@ export async function runExecutorLoop(
   let currentRepairAttemptChangedFiles = new Set<string>();
   let currentRepairAttemptFileHashes: Record<string, RepairProofFileHash> = {};
   const repairAttemptTimeline: AutonomousRepairProofAttemptEvidence[] = [];
-  const attemptSafetyInitialSnapshot = snapshotProjectFilesForSafety(getExecutorProjectRoot());
+  const snapshotStart = performance.now();
+  const attemptSafetyInitialSnapshot = await guardedSafetySnapshot(getExecutorProjectRoot(), getRunAbortSignal());
+  const snapshotTiming: { initial_ms: number; final_ms: number | null } = { initial_ms: performance.now() - snapshotStart, final_ms: null };
+  const writeSnapshotTiming = (): void => evidence.writeDebugFile('safety_snapshot_timings.json', `${JSON.stringify({ schema_version: 1, ...snapshotTiming })}\n`);
+  writeSnapshotTiming();
   const worktreeSafety = createWorktreeSafetyController({
     projectRoot: getExecutorProjectRoot(),
     runDir: evidence.runDir,
@@ -1565,7 +1540,7 @@ export async function runExecutorLoop(
 
   writeWorktreeSafetySummary();
 
-  const writeRepairAttemptTimeline = (finalStatus: string | null = null): void => {
+  const writeRepairAttemptTimeline = async (finalStatus: string | null = null): Promise<void> => {
     if (repairAttemptTimeline.length === 0 && !reliabilityRepairProofEnabled) {
       return;
     }
@@ -1603,10 +1578,19 @@ export async function runExecutorLoop(
       `${JSON.stringify(timeline, null, 2)}\n`,
     );
     if (finalStatus !== null) {
+      const finalSnapshotStart = performance.now();
+      const finalSnapshot = getRunAbortSignal()?.aborted
+        ? snapshotProjectFilesForSafety(getExecutorProjectRoot())
+        : await guardedSafetySnapshot(getExecutorProjectRoot(), getRunAbortSignal()).catch(error => {
+            if (getRunAbortSignal()?.aborted) return snapshotProjectFilesForSafety(getExecutorProjectRoot());
+            throw error;
+          });
+      snapshotTiming.final_ms = performance.now() - finalSnapshotStart;
+      writeSnapshotTiming();
       const attemptSafetySummary = buildAttemptSafetySummary({
         timeline,
         initialSnapshot: attemptSafetyInitialSnapshot,
-        finalSnapshot: snapshotProjectFilesForSafety(getExecutorProjectRoot()),
+        finalSnapshot,
         rollbackMode: latestRollbackMode,
         rollbackStatus: latestRollbackSummary?.status ?? latestRollbackMode,
         rollbackSummaryPath: latestRollbackSummary
@@ -1825,7 +1809,7 @@ export async function runExecutorLoop(
   };
 
   const maybeCompleteEvidenceRequestPlan = async (nextTurnPrompt: string): Promise<ExecutorLoopResult | null> => {
-    if (!isEvidenceRequestPlanSatisfied(approvedPlan, toolCallLog)) return null;
+    if (!isEvidenceRequestPlanSatisfied(approvedPlan, toolCallLog) || !areDirectoryPagesComplete(toolCallLog)) return null;
     return completeRecordedPlan(nextTurnPrompt);
   };
 
@@ -1900,6 +1884,7 @@ export async function runExecutorLoop(
   const turnHistory = new TurnHistory();
 
   for (let turn = 1; turn <= MAX_EXECUTOR_TURNS; turn++) {
+    throwIfRunAborted();
     logDetail(`Executor turn ${turn}/${MAX_EXECUTOR_TURNS}...`);
 
     // Instruction-stack limits are enforced by the resolver/compiler admission
@@ -1954,6 +1939,7 @@ export async function runExecutorLoop(
     await persistExecutorContext('ready_for_next_turn', turnPrompt);
 
     const detector = new IncrementalToolDetector(async (intent) => {
+      throwIfRunAborted();
       const fingerprint = computeFingerprint(intent.tool, intent.target, intent.args);
       const denied = deniedFingerprints.get(fingerprint);
       if (denied) {
@@ -2023,6 +2009,7 @@ export async function runExecutorLoop(
         }
       });
 
+      throwIfRunAborted();
       totalJitLatencyMs += detector.jitLatencyMs;
       peakBufferBytes = Math.max(peakBufferBytes, detector.peakBufferBytes);
 
@@ -2040,6 +2027,7 @@ export async function runExecutorLoop(
         },
       });
     } catch (err) {
+      throwIfRunAborted();
       if (err instanceof JitDenialError) {
         const fingerprint = computeFingerprint(err.tool, err.target, err.args);
         const val = deniedFingerprints.get(fingerprint) || { count: 0, turn };
@@ -2245,7 +2233,7 @@ export async function runExecutorLoop(
             : exhaustedRollbackStatus === 'rollback_applied'
               ? 'ROLLBACK_APPLIED'
               : 'EXECUTOR_HALTED';
-      writeRepairAttemptTimeline(exhaustedFinalStatus);
+      await writeRepairAttemptTimeline(exhaustedFinalStatus);
       log(`  Executor: EXECUTION_HALTED [${exhaustedHaltTag}]`);
       return {
         toolCallLog,
@@ -2371,6 +2359,12 @@ export async function runExecutorLoop(
 
     let req = parsedReq.data;
     const stepNum = toolCallLog.length + 1;
+
+    // Fence before snapshots, target hashing, fast paths or other pre-dispatch
+    // helpers can observe or act on an unqualified tool request.
+    if (planScope && req.tool !== 'file_read') {
+      return await haltForIncompletePlan(turnPrompt, '[PLAN_HANDOFF_GUARD] This Plan-bound tool is unavailable until its effects are scoped.');
+    }
 
     const canonicalized = canonicalizeRequestTargets(
       req,
@@ -2521,6 +2515,9 @@ export async function runExecutorLoop(
     }
     // kind === 'ok' — req may have been rewritten
     req = hookResult.req;
+    if (planScope && req.tool !== 'file_read') {
+      return await haltForIncompletePlan(turnPrompt, '[PLAN_HANDOFF_GUARD] The rewritten Plan-bound tool is unavailable until its effects are scoped.');
+    }
 
     logDetail(
       `  Step ${stepNum}: ${req.tool} → ${canonicalizeExecutorTargetForLog(getTarget(req), req.tool)}`,
@@ -2613,6 +2610,7 @@ export async function runExecutorLoop(
       req.tool === 'file_write'
         ? hashProjectFileForEvidence(getExecutorProjectRoot(), String(req.path ?? ''))
         : null;
+    throwIfRunAborted();
     const fastPathToolResult = maybeHandleNewFilePreflightFastPath(req, approvedPlan);
     if (fastPathToolResult) {
       logDetail(`  Executor fast path: ${fastPathToolResult.stdout}`);
@@ -2636,6 +2634,7 @@ export async function runExecutorLoop(
       ...(toolResult.denial ? { denial: toolResult.denial } : {}),
       ...(toolResult.mcp_lifecycle ? { mcp_lifecycle: toolResult.mcp_lifecycle } : {}),
       ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
+      ...(toolResult.directory_page ? { directory_page: toolResult.directory_page } : {}),
       verified: toolResult.exit_code === 0,
     };
     appendExecutorToolLog(toolCallLog, entry, episodeSink);
@@ -2710,7 +2709,7 @@ export async function runExecutorLoop(
       currentRepairAttemptFileHashes = {};
       currentRepairAttemptInputCapsule = null;
       pendingRecoverableCommandRetryState.value = null;
-      writeRepairAttemptTimeline('IN_PROGRESS');
+      await writeRepairAttemptTimeline('IN_PROGRESS');
     }
 
     const failureResult = await handleToolFailure(

@@ -287,6 +287,7 @@ test('attempt safety summary records snapshots and unrelated preservation', () =
     timeline,
     initialSnapshot: {
       root: 'fixture',
+      root_identity: '1:2',
       files: {
         'src/math.js': 'old',
         'src/dirty.txt': 'keep',
@@ -297,6 +298,7 @@ test('attempt safety summary records snapshots and unrelated preservation', () =
     },
     finalSnapshot: {
       root: 'fixture',
+      root_identity: '1:2',
       files: {
         'src/math.js': 'bad',
         'src/dirty.txt': 'keep',
@@ -313,4 +315,53 @@ test('attempt safety summary records snapshots and unrelated preservation', () =
   assert.equal(summary.final_file_hashes['src/math.js'], 'bad');
   assert.equal(summary.unrelated_dirty_file_preservation.status, 'preserved');
   assert.equal(summary.user_change_preservation_summary.status, 'preserved');
+  const incomplete = buildAttemptSafetySummary({
+    timeline,
+    initialSnapshot: { root: 'fixture', root_identity: '1:2', files: {}, file_count: 0, truncated: true, ignored_directories: [] },
+    finalSnapshot: { root: 'fixture', root_identity: '1:2', files: {}, file_count: 0, truncated: true, ignored_directories: [] },
+  });
+  assert.equal(incomplete.unrelated_dirty_file_preservation.status, 'not_evaluated');
+  assert.equal(incomplete.final_repository_cleanliness_summary.status, 'not_evaluated');
+  assert.equal(incomplete.user_change_preservation_summary.status, 'not_evaluated');
+  const partial = buildAttemptSafetySummary({
+    timeline,
+    initialSnapshot: { root: 'fixture', root_identity: '1:2', files: { 'dirty.txt': 'old' }, file_count: 1, truncated: true, ignored_directories: [] },
+    finalSnapshot: { root: 'fixture', root_identity: '1:2', files: {}, file_count: 0, truncated: true, ignored_directories: [] },
+  });
+  assert.equal(partial.unrelated_dirty_file_preservation.status, 'not_evaluated');
+  assert.deepEqual(partial.unrelated_dirty_file_preservation.unrelated_changed_files, []);
+  const unreadable = buildAttemptSafetySummary({
+    timeline,
+    initialSnapshot: { root: 'fixture', root_identity: '1:2', files: { 'dirty.txt': 'UNREADABLE' }, file_count: 1, truncated: false, ignored_directories: [] },
+    finalSnapshot: { root: 'fixture', root_identity: '1:2', files: { 'dirty.txt': 'old' }, file_count: 1, truncated: false, ignored_directories: [] },
+  });
+  assert.equal(unreadable.unrelated_dirty_file_preservation.status, 'not_evaluated');
+  assert.match(unreadable.user_change_preservation_summary.summary, /unreadable/i);
+  const confirmed = buildAttemptSafetySummary({
+    timeline,
+    initialSnapshot: { root: 'fixture', root_identity: '1:2', files: { 'dirty.txt': 'old' }, file_count: 1, truncated: true, ignored_directories: [] },
+    finalSnapshot: { root: 'fixture', root_identity: '1:2', files: { 'dirty.txt': 'new' }, file_count: 1, truncated: true, ignored_directories: [] },
+  });
+  assert.equal(confirmed.unrelated_dirty_file_preservation.status, 'changed');
+  const differentRoot = buildAttemptSafetySummary({
+    timeline,
+    initialSnapshot: { root: 'project-a', files: { 'dirty.txt': 'old' }, file_count: 1, truncated: false, ignored_directories: [] },
+    finalSnapshot: { root: 'project-b', files: { 'dirty.txt': 'old' }, file_count: 1, truncated: false, ignored_directories: [] },
+  });
+  assert.equal(differentRoot.unrelated_dirty_file_preservation.status, 'not_evaluated');
+  const replacedRoot = buildAttemptSafetySummary({
+    timeline,
+    initialSnapshot: { root: 'fixture', root_identity: '1:2', files: { 'dirty.txt': 'old' }, file_count: 1, truncated: false, ignored_directories: [] },
+    finalSnapshot: { root: 'fixture', root_identity: '1:3', files: { 'dirty.txt': 'old' }, file_count: 1, truncated: false, ignored_directories: [] },
+  });
+  assert.equal(replacedRoot.unrelated_dirty_file_preservation.status, 'not_evaluated');
+  assert.match(replacedRoot.user_change_preservation_summary.summary, /identity/i);
+  assert.deepEqual(replacedRoot.snapshot_identity, { initial: '1:2', final: '1:3', matched: false });
+  const legacyIdentity = buildAttemptSafetySummary({
+    timeline,
+    initialSnapshot: { root: 'fixture', files: { 'dirty.txt': 'old' }, file_count: 1, truncated: false, ignored_directories: [] },
+    finalSnapshot: { root: 'fixture', files: { 'dirty.txt': 'old' }, file_count: 1, truncated: false, ignored_directories: [] },
+  });
+  assert.equal(legacyIdentity.unrelated_dirty_file_preservation.status, 'not_evaluated');
+  assert.deepEqual(legacyIdentity.snapshot_identity, { initial: null, final: null, matched: false });
 });

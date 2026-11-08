@@ -332,7 +332,7 @@ describe('PR185 residual Chat runtime repairs', () => {
       resumedState.renewAllowance({
         grantId: 'restart-renewal',
         provenance: 'test:explicit-restart-renewal',
-        costCapUsd: 0.02,
+        costCapUsd: 0.05,
         wallCapMs: grant.wallCapMs,
         turnCap: grant.turnCap,
       });

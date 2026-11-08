@@ -71,10 +71,11 @@ test('missing selection requires setup while explicit legacy DeepSeek routes rem
       assert.equal(genericStandard.selectedTier, 'standard');
       assert.equal(genericStandard.providerModelId, 'deepseek/deepseek-v4.1-flash-1017');
 
-      assert.equal(
-        resolveChatModelPolicy({ model: 'deepseek-v4-pro' }).policy.providerModelId,
-        'deepseek/deepseek-v4-pro',
-      );
+      // A bare id configured as a direct DeepSeek legacy key stays on the
+      // DeepSeek provider; it must not be silently rebound to OpenRouter.
+      const directPro = resolveChatModelPolicy({ model: 'deepseek-v4-pro' }).policy;
+      assert.equal(directPro.provider, 'deepseek');
+      assert.equal(directPro.providerModelId, 'deepseek-v4-pro');
       assert.equal(
         resolveChatModelPolicy({ model: 'deepseek/deepseek-v4-flash-0731' }).policy.providerModelId,
         'deepseek/deepseek-v4-flash-0731',

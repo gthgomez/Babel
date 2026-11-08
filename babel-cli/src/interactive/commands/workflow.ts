@@ -26,6 +26,10 @@ export async function handleWorkflow(
   ctx: ReplContext,
   args: string[],
 ): Promise<void> {
+  if (ctx.isRunning || ctx.preparingRun) {
+    console.log(`  ${error('✖')} A run is still active; wait for it to settle before starting a workflow.`);
+    return;
+  }
   if (args.length === 0) {
     console.log(`  ${muted('Usage: /workflow <path-to-workflow.json>')}`);
     return;
@@ -93,6 +97,8 @@ export async function handleWorkflow(
   );
 
   // Pause REPL input while workflow runs
+  const cancel = () => engine.cancel();
+  ctx.cancelActiveRun = cancel;
   ctx.isRunning = true;
   stdinCoordinatorPauseForRun(ctx.rl);
 
@@ -163,6 +169,7 @@ export async function handleWorkflow(
       `\n  ${error('✖')} Workflow error: ${err instanceof Error ? err.message : String(err)}\n`,
     );
   } finally {
+    if (ctx.cancelActiveRun === cancel) delete ctx.cancelActiveRun;
     ctx.isRunning = false;
     stdinCoordinatorResumeAfterRun(ctx.rl);
   }

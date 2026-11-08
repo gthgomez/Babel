@@ -22,6 +22,7 @@ import { runCrashRecovery } from './recovery.js';
 import { DaemonFileWatcher } from './fileWatcher.js';
 import { DaemonScheduler } from './scheduler.js';
 import type { WatchRule } from './fileWatcher.js';
+import { rejectUnqualifiedDaemonPipeline } from './pipelineQualification.js';
 import {
   DAEMON_DIR,
   DAEMON_PID_FILE,
@@ -304,6 +305,7 @@ async function main(): Promise<void> {
   // ── Streaming Pipeline IPC handlers ───────────────────────────────────
 
   ipc.onStreaming('pipeline.run', async (params: any, socket: Socket) => {
+    if (rejectUnqualifiedDaemonPipeline(socket)) return;
     if (activeAbortController) {
       try {
         socket.write(

@@ -1,11 +1,11 @@
 import { selectedConnectionModel } from '../services/connectionSettings.js'
 import {runDesktopPlan,type DesktopPlanOptions} from './desktopPlan.js';
-import { savePlan, shouldAutoApplyPlan, withSavedPlanApplication, type SavedPlan } from '../services/savedPlan.js'
+import { shouldAutoApplyPlan, withSavedPlanApplication, savePlanGuarded, type SavedPlan } from '../services/savedPlan.js'
 import { assertFiniteBudgetSupported } from '../config/laneBudget.js'
 import { resolveEffectiveSettings } from '../config/userSettings.js'
 import { currentInvocationSettings } from '../config/invocationSettings.js'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import * as readline from 'node:readline/promises';
 
 import { Command } from 'commander';
@@ -127,7 +127,7 @@ import { resolveAgentTarget } from '../services/targetResolver.js';
 import { createLiteFixProgress } from '../ui/liteFixProgress.js';
 import { runLiteSessionWithSchemaRecovery } from '../services/liteSessionRunner.js';
 import { registerDogfoodCommands } from './dogfoodCommands.js';
-import { loadPlanHandoff } from '../agent/planHandoff.js';
+import { loadPlanHandoff, loadPlanHandoffGuarded, PLAN_APPLY_UNAVAILABLE_REASON } from '../agent/planHandoff.js';
 import { runPlanReviewLane } from '../agent/lanes/planReviewLane.js';
 import { resolveFuzzyWorkspaceDirectory } from '../services/pathScanner.js';
 import { isCommandCodeChatSelection, preflightRequestedModelPolicy } from './workflowModelPolicy.js';
@@ -154,6 +154,17 @@ interface DeepCommandOptions {
   executionProfile?: string;
   json?: boolean;
   ask?: boolean;
+  planRunId?: string;
+}
+
+async function applySavedPlanDeep(plan: SavedPlan, options: DeepCommandOptions): Promise<NonNullable<Awaited<ReturnType<typeof runDeepCommand>>>> {
+  if (!plan.sourceRunId || !loadPlanHandoff({ repoPath: plan.projectRoot, task: plan.task, planRunId: plan.sourceRunId })) {
+    throw new Error('The saved plan source is unavailable or unsafe; inspect the retained plan and create a fresh plan before applying.');
+  }
+  const result = await runDeepCommand([`Implement this approved plan within the existing permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`],
+    { ...options, projectRoot: plan.projectRoot, planRunId: plan.sourceRunId });
+  if (!result) throw new Error('Plan application did not produce an inspectable run; inspect the attempt before retrying.');
+  return result;
 }
 
 async function promptPlanApproval(task: string, autoApprove = false): Promise<boolean> {
@@ -183,7 +194,7 @@ async function promptPlanApproval(task: string, autoApprove = false): Promise<bo
   }
 }
 
-async function runDeepCommand(taskParts: string[], options: DeepCommandOptions): Promise<void> {
+async function runDeepCommand(taskParts: string[], options: DeepCommandOptions): Promise<Awaited<ReturnType<typeof runBabelPipeline>> | undefined> {
   if (!options.model) {
     const selected = selectedConnectionModel({}, options.projectRoot ?? process.cwd());
     if (selected) options = { ...options, model: selected };
@@ -333,6 +344,7 @@ async function runDeepCommand(taskParts: string[], options: DeepCommandOptions):
             ...(normalizedModelTier !== undefined ? { modelTier: normalizedModelTier } : {}),
             ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
             ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
+            ...(options.planRunId !== undefined ? { planRunId: options.planRunId } : {}),
             mode: 'deep',
             executionProfile,
             eventBus,
@@ -378,6 +390,7 @@ async function runDeepCommand(taskParts: string[], options: DeepCommandOptions):
     if (!isSuccessfulRunStatus(result.status) || completionVerification.status === 'fail') {
       process.exitCode = 1;
     }
+    return completionVerification.status === 'fail' ? { ...result, status: 'VERIFIER_FAILED' } : result;
   } catch (err: unknown) {
     liveRenderer?.fail(err);
     const message = err instanceof Error ? err.message : String(err);
@@ -597,7 +610,18 @@ function isExplicitModeArg(): boolean {
   return process.argv.some((arg) => arg === '--mode' || arg.startsWith('--mode='));
 }
 
+/**
+ * Imperative coding/verification intent. A request that asks a question but
+ * also tells Babel to act must not take the read-only answer shortcut: that
+ * path has no mutation or verifier authority. Anchoring to a clause start
+ * ("fix…", "…, run…", "…and update…", "can you fix…") keeps explanatory
+ * questions such as "explain how to run the tests" on the read-only path.
+ */
+const ACTIONABLE_TASK_INTENT =
+  /(?:^|[.,;:!?]\s*|\b(?:and|then|also|please|can|could|would|will)\s+)(?:you\s+)?(?:fix|change|edit|modify|update|add|remove|delete|rename|move|create|implement|refactor|repair|write|patch|apply|commit|migrate|upgrade|install|reproduce|debug|build|run|execute|verify|test)\b/i;
+
 function isSimpleReadOnlyQuestion(task: string): boolean {
+  if (ACTIONABLE_TASK_INTENT.test(task)) return false;
   return (
     /\?/.test(task) ||
     /\b(what is|what's|explain|summarize|describe|where is|why is|how does|list|show me|inspect|audit)\b/i.test(
@@ -1367,16 +1391,36 @@ async function runLiteCommand(
     restoreLiteOfflineEnv(offlineEnvSnapshot);
   }
 
-  const humanText =
+  let humanText =
     result.humanText ??
     ('status' in result.payload
       ? formatLiteResultHuman(result.payload as LiteResultPayload)
       : null);
   const payloadRecord = result.payload as Record<string, unknown>;
-  const savedPlan = verb === 'plan' && result.exitCode === 0 && humanText
-    ? savePlan({ projectRoot: resolvedProjectRoot ?? process.cwd(), task, body: humanText }) : undefined;
-  if (savedPlan) { payloadRecord['plan_id'] = savedPlan.id; payloadRecord['apply_command'] = `babel-harness apply --plan ${savedPlan.id}`; }
   const runDir = typeof payloadRecord['run_dir'] === 'string' ? payloadRecord['run_dir'] : null;
+  const sourceRunId = runDir ? basename(runDir) : null;
+  const planBody = result.planText?.trim();
+  if (verb === 'plan' && result.exitCode === 0 && payloadRecord['status'] === 'PLAN_READY') {
+    if (!planBody || !sourceRunId || !/^\d{8}T\d{6}Z-plan-[a-f0-9]+$/i.test(sourceRunId)) throw new Error('The complete plan or its source identity is unavailable; inspect the run before applying.');
+    const source = await loadPlanHandoffGuarded({ repoPath: resolvedProjectRoot ?? process.cwd(), task, planRunId: sourceRunId, includePlanText: true });
+    if (!source?.contract || !source.sourcePlanText?.trim() || source.sourcePlanText.trim() !== planBody) throw new Error('The complete plan or its source identity is unavailable; inspect the run before applying.');
+    let savedPlanId: string | null = null;
+    try {
+      const saved = await savePlanGuarded({ projectRoot: resolvedProjectRoot ?? process.cwd(), task, body: planBody, sourceRunId });
+      savedPlanId = saved.id;
+    } catch {
+      // The Plan text is still usable; canonical persistence is reported as unavailable below.
+    }
+    payloadRecord['plan_saved'] = savedPlanId !== null;
+    payloadRecord['user_status'] = savedPlanId ? 'complete' : 'blocked';
+    payloadRecord['apply_available'] = false;
+    payloadRecord['apply_unavailable_reason'] = PLAN_APPLY_UNAVAILABLE_REASON;
+    if (savedPlanId) payloadRecord['plan_id'] = savedPlanId;
+    humanText = [humanText,
+      savedPlanId ? `Plan saved as ${savedPlanId}.` : 'The Plan is retained in its run evidence; canonical saving is unavailable.',
+      PLAN_APPLY_UNAVAILABLE_REASON].filter(Boolean).join('\n');
+    if (!savedPlanId) process.exitCode = 1;
+  }
   const progressTranscript =
     fixProgress !== undefined ? fixProgress.getTranscript().join('\n') : '';
 
@@ -1412,7 +1456,7 @@ async function runLiteCommand(
   if (result.exitCode !== 0) {
     process.exitCode = result.exitCode;
   }
-  return savedPlan;
+  return undefined;
 }
 
 async function handleResumeCommand(options: {
@@ -1868,7 +1912,7 @@ Notes:
   program
     .command('continue')
     .argument('[run]', 'latest or a run directory', 'latest')
-    .description('Resume a linked Lite worker chain or inspect the latest recovery step')
+    .description('Inspect recovery; worker-chain action resume is temporarily unavailable')
     .option('-p, --project <name>', 'Use latest run pointer for this project')
     .option('--project-root <path>', 'Repo root for worker-chain manifest lookup')
     .option(
@@ -1886,8 +1930,8 @@ Examples:
   $ babel-harness continue latest --inspect-only
 
 Notes:
-  - continue resumes linked worker-chain steps when a manifest exists.
-  - Use --inspect-only to classify recovery without executing the next step.
+  - Worker-chain action resume is temporarily unavailable until step identity and settlement are qualified.
+  - Use --inspect-only to classify recovery without executing a step.
 `,
     )
     .action(
@@ -2907,17 +2951,19 @@ Notes:
 
         if (legacyProject === undefined) {
           try {
+            // Emit before dispatch: the Lite plan lane may save and return
+            // without a handle, so a post-return notice could be unreachable.
+            if (options.shadow) process.stderr.write('--shadow now keeps planning read-only. Inspect the saved plan before an explicit apply.\n');
             const saved = await runLiteCommand('plan', intent, options);
             if (!saved) return;
             const effective = resolveEffectiveSettings({ projectRoot: saved.projectRoot });
-            if (options.shadow) process.stderr.write('--shadow now keeps planning read-only. Inspect the saved plan before an explicit apply.\n');
             if (!shouldAutoApplyPlan(saved.task, effective.autoApply.value, options.shadow === true || options.planOnly === true || options.json === true || options.finalOnly === true)) {
               if (!options.json) process.stderr.write(`Plan saved as ${saved.id}. No project files were changed. Apply: babel-harness apply --plan ${saved.id}\n`);
               return;
             }
-            process.stderr.write(`Automatic application enabled by ${effective.autoApply.source} preference. Applying ${saved.id}.\n`);
+            process.stderr.write(`Automatic application enabled by ${effective.autoApply.source} preference. Checking eligibility for ${saved.id}.\n`);
             await withSavedPlanApplication(saved.id, { projectRoot: saved.projectRoot,
-              execute: async plan => { await runDeepCommand([`Implement this approved plan within the existing permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`], { ...options, projectRoot: plan.projectRoot }); if (process.exitCode) throw new Error("Plan application did not complete; inspect the run before retrying."); } });
+              execute: async plan => applySavedPlanDeep(plan, options) });
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             if (options.json === true) {
@@ -3088,13 +3134,13 @@ Notes:
 
   program
     .command('resume')
-    .argument('[run]', 'latest or a run directory for action-taking resume')
-    .description('Resume a retryable run and take the next action')
-    .option('--run <run_dir>', 'Existing Babel run directory path')
+    .argument('[run]', 'latest or a run directory to inspect for resume')
+    .description('Inspect resume evidence; action-taking resume is temporarily unavailable')
+    .option('--run <run_dir>', 'Legacy manual-resume route (currently unavailable)')
     .option('--project <name>', 'Use latest run pointer for this project when --run is omitted')
     .option(
       '--plan <path>',
-      'Path to manual plan.json, "-" for stdin, or "clipboard"; when omitted, resume uses <run_dir>/manual/plan.json',
+      'Legacy manual Plan input (currently unavailable)',
     )
     .option('-m, --model <model>', 'Override the model family for provider retries')
     .option('--model-tier <tier>', `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')}`)
@@ -3106,14 +3152,11 @@ Notes:
 Examples:
   $ babel-harness resume latest
   $ bl resume latest
-  $ babel-harness resume --run C:/path/to/run --plan C:/path/to/plan.json
-  $ babel-harness resume --project example_saas_backend --plan clipboard
-  $ type ./plan.json | babel resume --run C:/path/to/run --plan -
 
 Important:
-  - babel resume latest retries actionable saved runs; babel continue latest only inspects them.
-  - If --run is omitted, Babel may fall back to the latest run pointer for the selected project or the global latest run.
-  - If --plan is omitted, Babel uses <run_dir>/manual/plan.json and may create/open that file for editing first.
+  - Action-taking resume is temporarily unavailable until task identity, settlement, and verifier authority are qualified.
+  - babel continue latest --inspect-only inspects saved runs without taking an action.
+  - Legacy manual Plan resume is unavailable until source identity and approval are qualified; existing artifacts are retained.
 `,
     )
     .action(
@@ -3139,27 +3182,25 @@ Important:
 
   program
     .command('apply')
-    .description('Apply a saved plan ID; legacy manual plan paths retain their resume contract')
-    .option('--run <run_dir>', 'Existing Babel run directory path')
-    .option('--project <name>', 'Use latest run pointer for this project when --run is omitted')
+    .description('Apply a saved plan ID; legacy manual Plan execution is unavailable')
+    .option('--run <run_dir>', 'Legacy manual-resume route (currently unavailable)')
+    .option('--project <name>', 'Target project for the saved Plan')
     .option(
       '--plan <path>',
-      'Path to manual plan.json, "-" for stdin, or "clipboard"; when omitted, apply uses <run_dir>/manual/plan.json',
+      'Saved Plan ID; legacy manual Plan paths are unavailable',
     )
     .addHelpText(
       'after',
       `
 Notes:
-  - apply is kept for compatibility. Prefer resume in new docs and examples.
-  - If --run is omitted, Babel may fall back to the latest run pointer for the selected project or the global latest run.
-  - If --plan is omitted, Babel uses <run_dir>/manual/plan.json and may create/open that file for editing first.
+  - Use --plan <saved-plan-id>. Legacy manual Plan execution is unavailable; retained artifacts remain inspectable.
 `,
     )
     .action(async (options: { run?: string; plan?: string; project?: string }) => {
       if (options.plan?.startsWith('plan_')) {
         const projectRoot = options.project ? resolveProjectRoot(options.project) : process.cwd();
         if (!projectRoot) throw new Error('Unknown target project.');
-        await withSavedPlanApplication(options.plan, { projectRoot, execute: async plan => { await runDeepCommand([`Implement this approved plan within the existing permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`], { projectRoot: plan.projectRoot }); if (process.exitCode) throw new Error("Plan application did not complete; inspect the run before retrying."); } });
+        await withSavedPlanApplication(options.plan, { projectRoot, execute: async plan => applySavedPlanDeep(plan, {}) });
         return;
       }
       await handleResumeCommand(options);

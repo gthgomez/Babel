@@ -203,7 +203,7 @@ export async function handleContinue(ctx: ReplContext, args: string[]): Promise<
       const payload = resumed.payload as Record<string, unknown>;
       const runDir = typeof payload['run_dir'] === 'string' ? payload['run_dir'] : null;
       ctx.lastRunDir = runDir;
-      ctx.state.lastRunUserStatus = resumed.exitCode === 0 ? 'complete' : 'failed';
+      ctx.state.lastRunUserStatus = resumed.exitCode === 0 ? 'complete' : payload['status'] === 'CONTINUE_BLOCKED' ? 'blocked' : 'failed';
       if (resumed.humanText) {
         console.log(`\n${resumed.humanText}\n`);
       }
@@ -212,7 +212,7 @@ export async function handleContinue(ctx: ReplContext, args: string[]): Promise<
       if (routeSummary) {
         console.log(muted(`  ${routeSummary}\n`));
       }
-      if (resumed.exitCode !== 0) {
+      if (resumed.exitCode !== 0 && payload['status'] !== 'CONTINUE_BLOCKED') {
         ctx.state.lastRunUserStatus = 'failed';
       }
       return;
@@ -233,7 +233,7 @@ export function handleChain(ctx: ReplContext, args: string[]): void {
     console.log(muted('\n  No worker chain manifest found for the current target.'));
     console.log(
       muted(
-        '  Start a worker chain with: babel do "describe the task" (BABEL_LITE_WORKER_CHAIN=1)\n',
+        '  Worker-chain execution is temporarily unavailable until cancellation and effect ownership are qualified.\n',
       ),
     );
     return;

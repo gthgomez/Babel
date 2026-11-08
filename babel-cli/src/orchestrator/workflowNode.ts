@@ -69,7 +69,9 @@ export interface WorkflowNodeResult {
   /** The full text answer from the ChatEngine session. */
   answer: string;
   /** Token / cost summary from the ChatEngine session. */
-  usage?: { totalCostUSD: number; totalTokens: number };
+  usage?: { totalCostUSD: number; totalTokens: number; completeCostUSD?: number | null;
+    unknownChargeCount?: number; costComplete?: boolean; usageComplete?: boolean;
+    actualCostUSD?: number | null; estimatedCostUSD?: number };
   /** Error message when status is 'failed'. */
   error?: string;
   /** Reason when status is 'skipped' (upstream condition not met). */

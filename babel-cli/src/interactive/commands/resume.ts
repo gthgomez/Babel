@@ -54,7 +54,7 @@ async function resumeSession(
   const outcome = await resumeChatSession(ctx, sessionId, options);
   const buf = OutputBuffer.getInstance();
   if (!outcome.ok) {
-    if (outcome.reason === 'missing') {
+    if (outcome.reason === 'missing' || outcome.reason === 'cancelled') {
       buf.write(error(`\n  ${outcome.message}\n`));
     } else if (outcome.reason === 'repo_identity_unknown') {
       buf.write(error(`\n  ${outcome.message}\n`));

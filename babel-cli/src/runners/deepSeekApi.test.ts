@@ -62,9 +62,9 @@ test('DeepSeek API runner calls the direct OpenAI-compatible endpoint', async ()
   assert.equal(metadata?.total_tokens, 3000);
   assert.equal(metadata?.prompt_cache_hit_tokens, 400);
   assert.equal(metadata?.prompt_cache_miss_tokens, 600);
-  assert.equal(metadata?.cost_precision, 'exact');
+  assert.equal(metadata?.cost_precision, 'conservative');
   assert.match(metadata?.pricing_source_url ?? '', /deepseek/i);
-  assert.ok(Math.abs((metadata?.estimated_cost_usd ?? 0) - 0.00064512) < 1e-12);
+  assert.ok(Math.abs((metadata?.estimated_cost_usd ?? 0) - 0.0025824) < 1e-12);
 });
 
 test('DeepSeek API runner normalizes a JSON completion when stream callback is present', async () => {
@@ -191,7 +191,7 @@ test('DeepSeek API runner conservatively prices input cache misses when cache sp
 
   const metadata = runner.getLastInvocationMetadata();
   assert.equal(metadata?.cost_precision, 'conservative');
-  assert.ok(Math.abs((metadata?.estimated_cost_usd ?? 0) - 0.002175) < 1e-12);
+  assert.ok(Math.abs((metadata?.estimated_cost_usd ?? 0) - 0.00924) < 1e-12);
 });
 
 // ─── executeWithToolsStream tests ─────────────────────────────────────

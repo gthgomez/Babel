@@ -235,7 +235,7 @@ test('stages catalog assets and defaults while removing stale resources and buil
     const result = JSON.parse(packed.stdout)[0]
     assert.equal(manifest.name, 'babel-harness')
     assert.equal(result.name, 'babel-harness')
-    assert.deepEqual(manifest.bin, { 'babel-agent': 'bin/babel.js', 'babel-harness': 'bin/babel.js' })
+    assert.deepEqual(manifest.bin, { 'babel': 'bin/babel.js', 'babel-agent': 'bin/babel.js', 'babel-harness': 'bin/babel.js' })
     const paths = result.files.map(file => file.path)
     for (const file of ['resources/layer/prompt.md', 'LICENSE', 'dist/index.js', 'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs', ...runtimeSupport]) assert.ok(paths.includes(file), file)
     for (const file of developmentOnly) assert.ok(!paths.includes(file), file)

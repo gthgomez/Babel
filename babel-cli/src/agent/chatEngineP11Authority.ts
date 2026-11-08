@@ -57,6 +57,7 @@ export interface ChatEngineAdmissionClaim {
 
 export interface ChatEngineP11Host {
   readonly _cancelled: boolean;
+  readonly physicalSettlementUnknown?: boolean;
   readonly _turnIndex: number;
   activeAdmissionClaim: ChatEngineAdmissionClaim | null;
   readonly activeSubmissionGeneration: number;
@@ -274,8 +275,20 @@ export class ChatEngineP11Authority {
    * only describes the submission that owns `activeSubmissionGeneration`, so a
    * successor's reset of that flag can never re-label this claim.
    */
-  settleClaimOnExit(claim: ChatEngineAdmissionClaim | null): void {
+  settleClaimOnExit(claim: ChatEngineAdmissionClaim | null, abandoned = false): void {
     if (!claim || claim.settled) return;
+    if (this.host.physicalSettlementUnknown) {
+      this.settleAdmissionClaim(claim, 'indeterminate', {
+        finalOutcome: 'PHYSICAL_SETTLEMENT_UNKNOWN',
+      });
+      return;
+    }
+    if (abandoned) {
+      this.settleAdmissionClaim(claim, 'indeterminate', {
+        finalOutcome: 'SUBMISSION_ABANDONED_UNSETTLED',
+      });
+      return;
+    }
     const isCurrent =
       this.host.activeAdmissionClaim === claim ||
       claim.submissionGeneration === this.host.activeSubmissionGeneration;

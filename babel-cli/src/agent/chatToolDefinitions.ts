@@ -759,11 +759,13 @@ function buildAllChatToolDefinitions(): ToolDefinition[] {
       type: 'function',
       function: {
         name: 'list_dir',
-        description: 'List the contents of a directory.',
+        description: 'List a bounded directory page. For the next page, supply both fields from its continuation.',
         parameters: {
           type: 'object',
           properties: {
             path: { type: 'string', description: 'Path to the directory' },
+            after: { type: 'string', description: 'Last name from a previous continuation' },
+            revision: { type: 'string', description: 'Revision from the same continuation' },
           },
           required: ['path'],
         },

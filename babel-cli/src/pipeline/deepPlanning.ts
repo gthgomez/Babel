@@ -15,9 +15,10 @@ import {
 import { normalizePlanTargetsAgainstRequestedOutputs } from '../stages/verification.js';
 import { splitChainedShellSteps } from './executorPlanNormalize.js';
 import { inferProjectRoot } from './manifestContext.js';
-import { buildSweTask } from './sweTask.js';
+import { buildSweTask, guardedPlanningInventory } from './sweTask.js';
 import { normalizeSwePlan } from './sweUtils.js';
 import { log, logDetail } from './logging.js';
+import { getRunAbortSignal } from '../runtime/runCancellation.js';
 
 export interface DeepPlanningInput {
   manifest: OrchestratorManifest;
@@ -34,6 +35,8 @@ export interface DeepPlanningInput {
   smartPlannerEnabled: boolean;
   evidence: EvidenceBundle;
   pruningStubs: Map<string, string>;
+  planBound?: boolean;
+  signal?: AbortSignal;
 }
 
 /** Propose and normalize one plan. The pipeline owns retries, review and authority. */
@@ -41,6 +44,26 @@ export async function proposeDeepPlan(
   input: DeepPlanningInput,
 ): Promise<{ plan: SwePlan; warnings: string[] }> {
   const { manifest, evidence, attempt } = input;
+  const signal = getRunAbortSignal(input.signal);
+  const started = performance.now();
+  let inventory: Awaited<ReturnType<typeof guardedPlanningInventory>> | undefined;
+  let completed = false;
+  let timingUnavailable = false;
+  try {
+    inventory = await guardedPlanningInventory(manifest, input.planBound ?? false, signal);
+    completed = true;
+  } finally {
+    const outcome = !completed ? signal?.aborted ? 'cancelled' : 'failed'
+      : input.planBound ? 'plan_scope_suppressed' : inventory ? 'available' : 'unavailable';
+    try {
+      evidence.writeDebugFile(`planning_discovery_timing_v${attempt}.json`, `${JSON.stringify({
+        schema_version: 1, phase: 'planning_discovery', outcome,
+        duration_ms: Math.max(0, performance.now() - started),
+        ...(inventory ? { file_count: inventory.totalFiles, truncated: inventory.truncated === true } : {}),
+      }, null, 2)}\n`);
+    } catch { timingUnavailable = true; log('Planning discovery timing could not be recorded.'); }
+  }
+  signal?.throwIfAborted();
   const context = await compileContext(
     manifest.prompt_manifest,
     buildSweTask(
@@ -51,6 +74,9 @@ export async function proposeDeepPlan(
       input.additionalEvidenceContext,
       input.groundingContext,
       input.executionProfile,
+      'deep',
+      input.planBound ?? false,
+      inventory,
     ),
     inferProjectRoot(manifest),
     input.pruningStubs,
@@ -114,6 +140,7 @@ export async function proposeDeepPlan(
         grounded.plan,
       );
   const warnings = [
+    ...(timingUnavailable ? ['Planning discovery timing could not be recorded.'] : []),
     ...normalized.warnings,
     ...grounded.warnings,
     ...requested.warnings,

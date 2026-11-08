@@ -72,9 +72,12 @@ export async function waitForProcessGroupExit(groupLeaderPid: number, timeoutMs:
  *
  * Windows uses the existing synchronous taskkill tree fallback. POSIX callers
  * must spawn the child detached so its PID is also the process-group ID.
+ * treeKillAccepted reports a successful helper/signal attempt; it is not proof
+ * that every process has physically exited.
  */
-export function terminateChildTree(child: ChildProcess): void {
+export function terminateChildTree(child: ChildProcess): { treeKillAccepted: boolean } {
   if (process.platform === 'win32' && child.pid) {
+    let treeKillAccepted = false
     const windowsRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows'
     const taskkillPath = resolve(windowsRoot, 'System32', 'taskkill.exe')
     // A failed helper must not immediately sever the root ancestry: another
@@ -88,7 +91,7 @@ export function terminateChildTree(child: ChildProcess): void {
           env: getSafeEnv(),
           timeout: 1_500,
         })
-        if (result.status === 0 && !result.error) break
+        if (result.status === 0 && !result.error) { treeKillAccepted = true; break }
       } catch {
         // One bounded retry precedes the existing direct-child fallback.
       }
@@ -98,17 +101,20 @@ export function terminateChildTree(child: ChildProcess): void {
     } catch {
       // Best effort: the child may already have exited.
     }
-    return
+    return { treeKillAccepted }
   }
 
   if (process.platform !== 'win32' && child.pid) {
+    let treeKillAccepted = false
     try {
       process.kill(-child.pid, 'SIGTERM')
+      treeKillAccepted = true
     } catch {
       // Fall through when the process group has already exited.
     }
     try {
       process.kill(-child.pid, 'SIGKILL')
+      treeKillAccepted = true
     } catch {
       // Group may already be gone after SIGTERM.
     }
@@ -117,7 +123,7 @@ export function terminateChildTree(child: ChildProcess): void {
     } catch {
       // Best effort.
     }
-    return
+    return { treeKillAccepted }
   }
 
   try {
@@ -125,4 +131,8 @@ export function terminateChildTree(child: ChildProcess): void {
   } catch {
     // Best effort: the child may already have exited.
   }
+  // Without a pid there is no helper-confirmed tree to settle. Windows callers
+  // treat the direct-child kill as the whole contract here; synthetic or
+  // failed-to-spawn children must not be reported as an unconfirmed tree kill.
+  return { treeKillAccepted: process.platform === 'win32' }
 }

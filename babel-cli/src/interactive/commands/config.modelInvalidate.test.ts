@@ -59,6 +59,13 @@ test('handleRetarget invalidates chatEngine so tools use new root next turn', ()
   assert.equal(ctx.chatEngine, undefined);
 });
 
+test('project and target changes retain unqualified legacy Plan text', () => {
+  for (const change of [(ctx: ReplContext) => handleProject(ctx, ['some-project']), (ctx: ReplContext) => handleRetarget(ctx, [process.cwd()])]) {
+    const ctx = makeCtx(); ctx.state.pendingPlanBody = 'retained legacy Plan'; change(ctx)
+    assert.equal(ctx.state.pendingPlanBody, 'retained legacy Plan')
+  }
+});
+
 test('operator /mode hard-plan invalidates chatEngine for next turn', () => {
   const ctx = makeCtx();
   handleMode(ctx, ['hard-plan']);
@@ -112,29 +119,28 @@ test('P0-C: /model clear leaves state ready for route-selected model', () => {
   assert.equal(ctx.state.model, undefined);
 });
 
-test('live /model DeepSeek selectors persist the OpenRouter control route', () => {
+test('live /model direct DeepSeek key retains its direct route', () => {
   const previousOffline = process.env['BABEL_OFFLINE'];
   delete process.env['BABEL_OFFLINE'];
   try {
     const ctx = makeCtx();
     handleModel(ctx, ['deepseek-v4-pro']);
-    assert.equal(ctx.state.model, 'deepseek-v4-pro-openrouter');
-    assert.equal(ctx.state.resolvedModelId, 'deepseek/deepseek-v4-pro');
+    assert.equal(ctx.state.model, 'deepseek-v4-pro');
+    assert.equal(ctx.state.resolvedModelId, 'deepseek-v4-pro');
   } finally {
     if (previousOffline === undefined) delete process.env['BABEL_OFFLINE'];
     else process.env['BABEL_OFFLINE'] = previousOffline;
   }
 });
 
-test('restored live DeepSeek session state is normalized to OpenRouter', () => {
+test('restored direct DeepSeek session state retains its provider route', () => {
   const previousOffline = process.env['BABEL_OFFLINE'];
   delete process.env['BABEL_OFFLINE'];
   try {
     const ctx = makeCtx({ state: { ...makeCtx().state, model: 'deepseek-v4-flash' } });
     resolveSessionModel(ctx);
-    assert.equal(ctx.state.model, 'deepseek-v4-flash-openrouter');
-    // Canonical policy pins the dated OpenRouter revision (config/model-policy.json).
-    assert.equal(ctx.state.resolvedModelId, 'deepseek/deepseek-v4-flash-0731');
+    assert.equal(ctx.state.model, 'deepseek-v4-flash');
+    assert.equal(ctx.state.resolvedModelId, 'deepseek-v4-flash');
   } finally {
     if (previousOffline === undefined) delete process.env['BABEL_OFFLINE'];
     else process.env['BABEL_OFFLINE'] = previousOffline;

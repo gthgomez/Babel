@@ -27,7 +27,7 @@ import { fuzzyScore } from '../utils/fuzzy.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-interface CommandEntry {
+export interface CommandEntry {
   command: string;
   description: string;
   group: string;
@@ -60,6 +60,14 @@ export class CommandPalette extends Component {
     await palette.run();
   }
 
+  /** Reuse the palette's terminal ownership and search for a bounded set of choices. */
+  static async choose(ctx: ReplContext, choices: CommandEntry[]): Promise<string | null> {
+    if (choices.length === 0) return null;
+    const palette = new CommandPalette(ctx, choices);
+    await palette.run();
+    return palette.choice;
+  }
+
   private query = '';
   private selectedIdx = 0;
   private allCommands: CommandEntry[];
@@ -69,14 +77,16 @@ export class CommandPalette extends Component {
   private colCount = 80;
   private cleanupFns: Array<() => void> = [];
   private wasRaw = false;
+  private wasFlowing = false;
+  private choice: string | null = null;
 
   /** Fulfilled when the user selects a command or dismisses the palette. */
   private resolve!: () => void;
 
-  constructor(private ctx: ReplContext) {
+  constructor(private ctx: ReplContext, private choices?: CommandEntry[]) {
     super();
     // Build a flat command list from the grouped constant
-    this.allCommands = INTERACTIVE_COMMAND_GROUPS.flatMap((g) =>
+    this.allCommands = choices ?? INTERACTIVE_COMMAND_GROUPS.flatMap((g) =>
       g.commands.map(([cmd, desc]) => ({
         command: cmd,
         description: desc,
@@ -98,6 +108,7 @@ export class CommandPalette extends Component {
   override onMount(): void {
     const stdin = process.stdin;
     this.wasRaw = stdin.isRaw ?? false;
+    this.wasFlowing = stdin.readableFlowing === true;
 
     const buf = OutputBuffer.getInstance();
     buf.write('\x1b[?1049h\x1b[?25l');
@@ -130,6 +141,7 @@ export class CommandPalette extends Component {
         /* ignore */
       }
     }
+    if (!this.wasFlowing) stdin.pause();
   }
 
   // ── Component overrides ────────────────────────────────────────────────────
@@ -148,15 +160,15 @@ export class CommandPalette extends Component {
     const stdin = process.stdin;
 
     this.mounted = true;
-    this.onMount();
-
     try {
+      this.onMount();
       await new Promise<void>((resolve) => {
         this.resolve = resolve;
         const onData = (data: Buffer): void => {
           this.handleData(data);
         };
         stdin.on('data', onData);
+        stdin.resume();
         this.cleanupFns.push(() => stdin.off('data', onData));
         this.renderToScreen();
       });
@@ -215,10 +227,11 @@ export class CommandPalette extends Component {
     }
 
     const result: GroupedResult[] = [];
-    for (const g of INTERACTIVE_COMMAND_GROUPS) {
-      const cmds = byGroup.get(g.title);
+    const groups = this.choices ? [...new Set(this.choices.map(entry => entry.group))] : INTERACTIVE_COMMAND_GROUPS.map(g => g.title);
+    for (const title of groups) {
+      const cmds = byGroup.get(title);
       if (cmds && cmds.length > 0) {
-        result.push({ group: g.title, commands: cmds });
+        result.push({ group: title, commands: cmds });
       }
     }
     return result;
@@ -322,6 +335,12 @@ export class CommandPalette extends Component {
       return;
     }
 
+    if (this.choices) {
+      this.choice = selected.command;
+      this.resolve();
+      return;
+    }
+
     // Extract the base command (everything before the first space)
     const baseCommand = selected.command.split(' ')[0] ?? selected.command;
 
@@ -352,7 +371,7 @@ export class CommandPalette extends Component {
       // ── Search bar (row 1) ──────────────────────────────────────────────
       const searchContent = this.query
         ? `  › ${this.query}█` // "  › query█"
-        : '  › type to filter commands█';
+        : this.choices ? '  › type to filter choices█' : '  › type to filter commands█';
       const searchLine = this.padLineToCols(searchContent, cols);
       buf.writeLine(1, 1, headerBg(searchLine));
 
@@ -365,6 +384,14 @@ export class CommandPalette extends Component {
         // No results for the current query
         buf.writeLine(row, 1, '  \x1b[2mNo matching commands\x1b[0m');
         row++;
+      } else if (this.choices) {
+        const available = Math.max(1, rows - 3);
+        const start = Math.max(0, Math.min(this.selectedIdx - Math.floor(available / 2), Math.max(0, this.flatFiltered.length - available)));
+        buf.writeLine(row++, 1, this.padLineToCols(`  ${this.choices[0]?.group ?? 'Choices'}`, cols));
+        for (const [offset, choice] of this.flatFiltered.slice(start, start + available).entries()) {
+          const label = `    ${choice.command}  ${choice.description}`.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').slice(0, cols);
+          buf.writeLine(row++, 1, this.padLineToCols(start + offset === this.selectedIdx ? bgPanel(label) : label, cols));
+        }
       } else {
         for (const group of this.filtered) {
           if (row > rows) break;

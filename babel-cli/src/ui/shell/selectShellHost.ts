@@ -60,14 +60,18 @@ export function selectShellHost(input?: ShellHostSelectionInput): ShellHostSelec
   const optIn = facts.optIn
   const cursorAddressing = facts.cursorAddressing ?? false
 
-  if (optIn === '0' || optIn === 'false') return { host: 'legacy', reason: 'explicit-opt-out' }
+  if (optIn === '0' || optIn === 'false' || optIn === 'legacy') return { host: 'legacy', reason: 'explicit-opt-out' }
   if (!isTTY) return { host: 'legacy', reason: 'non-tty' }
   if (isCi) return { host: 'legacy', reason: 'ci' }
   if (isHeadless) return { host: 'legacy', reason: 'headless' }
   if (a11y) return { host: 'legacy', reason: 'a11y' }
   if (term === 'dumb') return { host: 'legacy', reason: 'dumb-terminal' }
   if (!cursorAddressing) return { host: 'legacy', reason: 'unsupported-cursor-addressing' }
-  if (optIn === '1' || optIn === 'true') return { host: 'north_star', reason: 'developer-opt-in' }
-  if (facts.ui4Qualified === true) return { host: 'north_star', reason: 'qualified-default' }
-  return { host: 'legacy', reason: 'legacy-default' }
+  if (optIn === '1' || optIn === 'true' || optIn === 'north_star' || optIn === 'north-star') {
+    return { host: 'north_star', reason: 'developer-opt-in' }
+  }
+  // North Star is the canonical interactive shell. Unsupported environments
+  // (non-TTY, CI, headless, a11y, dumb/unknown cursor addressing) already
+  // returned the accessible legacy adapter above.
+  return { host: 'north_star', reason: 'qualified-default' }
 }

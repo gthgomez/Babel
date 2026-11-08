@@ -20,7 +20,7 @@ if (!isSyntheticProviderFixtureReady()) {
     const diagnostic = summarizeSyntheticProviderOutput(output, code)
     t.diagnostic(diagnostic)
     assert.equal(code, 0, diagnostic)
-    assert.deepEqual(JSON.parse(diagnostic), { exitCode: 0, tests: 5, passed: 5, failed: 0, skipped: 0, isolationRejected: false, networkDispatchBlocked: false })
+    assert.deepEqual(JSON.parse(diagnostic), { exitCode: 0, tests: 8, passed: 8, failed: 0, skipped: 0, isolationRejected: false, networkDispatchBlocked: false })
   })
 } else {
   const { resolveChatDeliberationRunner, resolveChatSynthesisRunner, resolveChatFallbackRunner } = await import('./chatEngineProviderRuntime.js')
@@ -66,5 +66,67 @@ if (!isSyntheticProviderFixtureReady()) {
     const wire = JSON.parse(runner.buildNativeToolsWireBody([{ role: 'user', content: 'fixture' }], []))
     assert.equal(wire.max_tokens, 64)
     assert.equal(runner.getNativeRequestReservedCompletionTokens(), 64)
+  })
+
+  test('requested OpenRouter model IDs remain exact through connection resolution and wire construction', () => {
+    for (const model of ['z-ai/glm-5.3-flash', 'deepseek/deepseek-v4.1-flash', 'xiaomi/mimo-v2.6-flash']) {
+      const policy = resolveConnectionModelPolicy(undefined, { settings: {
+        schemaVersion: 1, connections: { fixture: { id: 'fixture', provider: 'openrouter', model } }, defaults: { connection: 'fixture' },
+      } })
+      assert.ok(policy)
+      const runner = resolveChatDeliberationRunner(null, policy) as InstanceType<typeof ProviderEngine>
+      assert.equal(runner.provider, 'openrouter')
+      assert.equal(JSON.parse(runner.buildNativeToolsWireBody([{ role: 'user', content: 'fixture' }], [])).model, model)
+    }
+  })
+
+  test('requested OpenRouter connection models are sent unchanged at the transport boundary', async () => {
+    const priorFetch = globalThis.fetch
+    try {
+      for (const model of ['z-ai/glm-5.3-flash', 'deepseek/deepseek-v4.1-flash', 'xiaomi/mimo-v2.6-flash']) {
+        const policy = resolveConnectionModelPolicy(undefined, { settings: {
+          schemaVersion: 1, connections: { fixture: { id: 'fixture', provider: 'openrouter', model } }, defaults: { connection: 'fixture' },
+        } })
+        assert.ok(policy)
+        let calls = 0
+        globalThis.fetch = async (url, init) => {
+          calls++
+          assert.equal(String(url), 'https://openrouter.ai/api/v1/chat/completions')
+          assert.equal(JSON.parse(String(init?.body)).model, model)
+          return new Response(`data: ${JSON.stringify({ model, choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+        }
+        const runner = resolveChatDeliberationRunner(null, policy) as InstanceType<typeof ProviderEngine>
+        const events = []
+        for await (const event of runner.executeWithToolsStream([{ role: 'user', content: 'fixture' }], [])) events.push(event.type)
+        assert.equal(calls, 1)
+        assert.ok(events.includes('done'))
+      }
+    } finally { globalThis.fetch = priorFetch }
+  })
+
+  test('Command Code connection dispatches its exact selected model to its own endpoint', async () => {
+    const priorFetch = globalThis.fetch; const priorKey = process.env['COMMAND_CODE_API_KEY']
+    try {
+      process.env['COMMAND_CODE_API_KEY'] = 'synthetic-command-code-credential'
+      const model = 'deepseek/deepseek-v4.1-flash'
+      const policy = resolveConnectionModelPolicy(undefined, { settings: {
+        schemaVersion: 1, connections: { fixture: { id: 'fixture', provider: 'command-code', model } }, defaults: { connection: 'fixture' },
+      } })
+      assert.ok(policy)
+      let calls = 0
+      globalThis.fetch = async (url, init) => {
+        calls++
+        assert.equal(String(url), 'https://api.commandcode.ai/provider/v1/chat/completions')
+        assert.equal(JSON.parse(String(init?.body)).model, model)
+        return new Response(`data: ${JSON.stringify({ model, choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+      }
+      const runner = resolveChatDeliberationRunner(null, policy) as InstanceType<typeof ProviderEngine>
+      const events = []
+      for await (const event of runner.executeWithToolsStream([{ role: 'user', content: 'fixture' }], [])) events.push(event.type)
+      assert.equal(calls, 1); assert.ok(events.includes('done'))
+    } finally {
+      globalThis.fetch = priorFetch
+      if (priorKey === undefined) delete process.env['COMMAND_CODE_API_KEY']; else process.env['COMMAND_CODE_API_KEY'] = priorKey
+    }
   })
 }

@@ -58,10 +58,15 @@ export async function handleDiffReview(ctx: ReplContext): Promise<void> {
 }
 
 export function handleCancelTurn(ctx: ReplContext): void {
-  if (!ctx.isRunning || !ctx.chatEngine) {
+  if (ctx.preparingRun && !ctx.isRunning && !ctx.cancelActiveRun) {
+    OutputBuffer.getInstance().write(warning('\n  This preparation cannot be cancelled; wait for it to finish.\n'));
+    return;
+  }
+  if ((!ctx.isRunning && !ctx.preparingRun) || (!ctx.cancelActiveRun && !ctx.chatEngine)) {
     OutputBuffer.getInstance().write(muted('\n  Nothing to cancel.\n'));
     return;
   }
-  ctx.chatEngine.abortTurn();
+  if (ctx.cancelActiveRun) ctx.cancelActiveRun();
+  else ctx.chatEngine!.abortTurn();
   OutputBuffer.getInstance().write(warning('\n  Cancel requested.\n'));
 }

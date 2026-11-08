@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, statSync, promises as fsPromises } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, promises as fsPromises } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { EvidenceBundle } from '../evidence.js';
@@ -20,6 +20,8 @@ import type { AttemptSafetySummary, ProjectSafetySnapshot } from '../services/te
 import type { WorktreeRollbackSummary, WorktreeSafetySummary } from '../services/worktreeSafety.js';
 import type { AutonomousRepairProofTimeline } from '../services/autonomousRepairProofEvidence.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
+import { scopedHandoffPath } from '../agent/planHandoff.js';
+import { checkedFileBytes } from '../utils/checkedFileRead.js';
 
 export function isWithinProjectRootPath(projectRoot: string, candidatePath: string): boolean {
   const root = resolve(projectRoot);
@@ -311,13 +313,13 @@ function buildDynamicToolShapes(compactFileOnly: boolean): string[] {
     // (preserves backward compatibility during migration)
     return compactFileOnly
       ? [
-          '  directory_list: { "type": "tool_call", "tool": "directory_list", "path": "<project-relative or /project/... path>" }',
+          '  directory_list: { "type": "tool_call", "tool": "directory_list", "path": "<project-relative or /project/... path>", "after": "<continuation name, optional>", "revision": "<continuation revision, optional>" }',
           '  file_read:  { "type": "tool_call", "tool": "file_read",  "path": "<project-relative or /project/... path>" }',
           '  file_write: { "type": "tool_call", "tool": "file_write", "path": "<project-relative or /project/... path>", "content": "<full file content>" }',
           ...completions,
         ]
       : [
-          '  directory_list: { "type": "tool_call", "tool": "directory_list", "path": "<project-relative or /project/... path>" }',
+          '  directory_list: { "type": "tool_call", "tool": "directory_list", "path": "<project-relative or /project/... path>", "after": "<continuation name, optional>", "revision": "<continuation revision, optional>" }',
           '  file_read:  { "type": "tool_call", "tool": "file_read",  "path": "<project-relative or /project/... path>" }',
           '  file_write: { "type": "tool_call", "tool": "file_write", "path": "<project-relative or /project/... path>", "content": "<full file content>" }',
           '  shell_exec: { "type": "tool_call", "tool": "shell_exec", "command": "<cmd-without-cmd-slash-c-or-cd>", "working_directory": "<working_directory>", "timeout_seconds": <int, default varies> }',
@@ -884,18 +886,19 @@ export function hashProjectFileForEvidence(
   if (!projectRoot || relativePath.trim().length === 0) {
     return null;
   }
-  const resolved = resolveStepTargetPath(projectRoot, relativePath);
-  if (!isWithinProjectRootPath(projectRoot, resolved) || !existsSync(resolved)) {
-    return null;
-  }
   try {
-    return createHash('sha256').update(readFileSync(resolved)).digest('hex');
+    const target = resolveStepTargetPath(projectRoot, relativePath);
+    if (!isWithinProjectRootPath(projectRoot, target)) return null;
+    const scopedPath = relative(resolve(projectRoot), target);
+    const resolved = scopedHandoffPath(projectRoot, scopedPath);
+    if (!resolved) return null;
+    const bytes = checkedFileBytes(resolved, 16 * 1024 * 1024, () => scopedHandoffPath(projectRoot, scopedPath) === resolved);
+    return bytes ? createHash('sha256').update(bytes).digest('hex') : null;
   } catch {
     return null;
   }
 }
 
-const SAFETY_SNAPSHOT_MAX_FILES = 2000;
 const SAFETY_SNAPSHOT_IGNORED_DIRECTORIES = [
   '.git',
   'node_modules',
@@ -907,11 +910,8 @@ const SAFETY_SNAPSHOT_IGNORED_DIRECTORIES = [
 ];
 
 export function hashAbsoluteFileForSafety(path: string): string | null {
-  try {
-    return createHash('sha256').update(readFileSync(path)).digest('hex');
-  } catch {
-    return null;
-  }
+  void path;
+  return null; // Absolute paths have no approved project scope.
 }
 
 export function snapshotProjectFilesForSafety(
@@ -922,55 +922,11 @@ export function snapshotProjectFilesForSafety(
     root,
     files: {},
     file_count: 0,
-    truncated: false,
+    truncated: true,
     ignored_directories: SAFETY_SNAPSHOT_IGNORED_DIRECTORIES,
   };
-  if (!root || !existsSync(root)) {
-    return snapshot;
-  }
-
-  const ignored = new Set(SAFETY_SNAPSHOT_IGNORED_DIRECTORIES);
-  const visit = (dir: string): void => {
-    if (snapshot.truncated) {
-      return;
-    }
-    let entries: string[] = [];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (snapshot.truncated) {
-        return;
-      }
-      const absolute = join(dir, entry);
-      let stat;
-      try {
-        stat = statSync(absolute);
-      } catch {
-        continue;
-      }
-      if (stat.isDirectory()) {
-        if (!ignored.has(entry)) {
-          visit(absolute);
-        }
-        continue;
-      }
-      if (!stat.isFile()) {
-        continue;
-      }
-      const relativePath = relative(root, absolute).replace(/\\/g, '/');
-      snapshot.files[relativePath] = hashAbsoluteFileForSafety(absolute) ?? 'UNREADABLE';
-      snapshot.file_count += 1;
-      if (snapshot.file_count >= SAFETY_SNAPSHOT_MAX_FILES) {
-        snapshot.truncated = true;
-        return;
-      }
-    }
-  };
-
-  visit(root);
+  // Synchronous directory walking cannot pin a Windows directory identity.
+  // Preserve uncertainty until a guarded, complete snapshot is available.
   return snapshot;
 }
 

@@ -47,6 +47,7 @@ export const BABEL_LITE_ARTIFACT_FILES = [
 export type BabelLiteArtifactFile = (typeof BABEL_LITE_ARTIFACT_FILES)[number];
 
 export interface BabelLiteArtifactLayout {
+  /** Legacy layout identifier; runDir is the authoritative absolute location. */
   root: typeof BABEL_LITE_ARTIFACT_ROOT;
   runId: string;
   runDir: string;
@@ -56,6 +57,10 @@ export interface BabelLiteArtifactLayout {
 export interface AgentSessionOptions {
   task: string;
   verb: LiteSessionVerb;
+  /** Internal diagnostic recovery must never create an executable Plan. */
+  diagnosticDraft?: boolean;
+  /** Parent cancellation for read-only planning. */
+  signal?: AbortSignal;
   project?: string;
   projectRoot?: string;
   workspaceRoot?: string | null;
@@ -120,6 +125,8 @@ export interface AgentSessionResult {
   payload: LiteResultPayload | Record<string, unknown>;
   exitCode: number;
   humanText?: string;
+  /** Complete canonical Plan handoff, before presentation formatting. */
+  planText?: string;
 }
 
 export interface AgentWorkerLoopStep {
@@ -146,6 +153,9 @@ export interface AgentWorkerLoopPayload {
 
 export interface AgentLaneContext {
   task: string;
+  diagnosticDraft?: boolean;
+  /** Parent cancellation for read-only planning. */
+  signal?: AbortSignal;
   project?: string;
   projectRoot?: string;
   workspaceRoot?: string | null;

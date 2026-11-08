@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   symlinkSync,
   unlinkSync,
@@ -101,7 +102,7 @@ function withApprovalQueue<T>(run: () => T): T {
   }
 }
 
-test('sandbox file operations stay usable for in-root paths', () => {
+test('sandbox file operations stay usable for in-root paths', async () => {
   const fixture = makeFixture();
   try {
     const executor = new SafeExecutor(fixture.projectRoot);
@@ -109,8 +110,8 @@ test('sandbox file operations stay usable for in-root paths', () => {
     assert.match(executor.fileRead('safe.txt').stdout, /safe-root/);
     assert.match(executor.fileRead('/project/safe.txt').stdout, /safe-root/);
     assert.match(executor.fileRead('nested\\inside.txt').stdout, /inside/);
-    assert.match(executor.listDirectory('.').stdout, /safe\.txt/);
-    assert.match(executor.listDirectory('/project/nested').stdout, /inside\.txt/);
+    assert.match((await executor.listDirectoryGuarded('.')).stdout, /safe\.txt/);
+    assert.match((await executor.listDirectoryGuarded('/project/nested')).stdout, /inside\.txt/);
 
     const writeResult = executor.fileWrite('nested/output.txt', 'created\n');
     assert.equal(writeResult.exit_code, 0);
@@ -270,11 +271,11 @@ test('internal symlink writes land on the real in-root target', () => {
   }
 });
 
-test('internal symlink directory listing stays allowed', () => {
+test('internal symlink directory listing stays allowed', async () => {
   const fixture = makeFixture();
   try {
     const executor = new SafeExecutor(fixture.projectRoot);
-    const result = executor.listDirectory('inside-link');
+    const result = await executor.listDirectoryGuarded('inside-link');
     assert.equal(result.exit_code, 0);
     assert.match(result.stdout, /linked\.txt/);
   } finally {
@@ -462,11 +463,13 @@ test('benchmark_container maps /app shell working directory to the project root 
   const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
   try {
     process.env['BABEL_EXECUTION_PROFILE'] = 'benchmark_container';
+    writeFileSync(join(fixture.projectRoot, 'print-cwd.cjs'), 'process.stdout.write(process.cwd())');
     const executor = new SafeExecutor(fixture.projectRoot);
-    const result = executor.shellExec('echo v1.0', '/app', 5_000);
+    const result = executor.shellExec('node print-cwd.cjs', '/app', 5_000);
 
     assert.equal(result.exit_code, 0, result.stderr);
-    assert.match(result.stdout, /v1\.0/);
+    const canonical = (path: string) => process.platform === 'win32' ? realpathSync(path).toLowerCase() : realpathSync(path);
+    assert.equal(canonical(result.stdout.trim()), canonical(fixture.projectRoot));
   } finally {
     if (previousProfile === undefined) {
       delete process.env['BABEL_EXECUTION_PROFILE'];

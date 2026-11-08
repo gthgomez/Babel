@@ -50,7 +50,10 @@ Bundled prompts, defaults, and license are immutable. Installed commands use
 `~/.babel/config` for user configuration, `~/.babel` for state (including `runs/`),
 and `~/.babel/cache` for caches. Override these with `BABEL_CONFIG_DIR`,
 `BABEL_STATE_DIR`, and `BABEL_CACHE_DIR`; `BABEL_RUNS_DIR` independently overrides
-run evidence. An installed package ignores `BABEL_ROOT` for resource discovery.
+run evidence. Plan evidence uses this private run directory in both installed
+commands and source checkouts, keeping read-only planning out of the target
+project. Use the returned `run_dir` to locate it. An installed package ignores
+`BABEL_ROOT` for resource discovery.
 An optional user configuration file is `~/.babel/config/.env`; ordinary provider
 environment variables also work. Set credentials securely outside the checkout;
 Guided setup uses masked credential entry in the private profile. Setup and doctor never print keys or contact inference providers. Configure one

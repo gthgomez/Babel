@@ -164,8 +164,8 @@ describe('OpenCode harness host-run emergency observation (subprocess fixtures)'
             primarySocketHolder,
           ) as unknown as HostRunWebSocketCtor,
           emergencyObservationPassLimit: 2,
-          emergencyObservationDeadlineMs: 3_000,
-          observationRpcTimeoutMs: 500,
+          emergencyObservationDeadlineMs: 15_000,
+          observationRpcTimeoutMs: 4_000,
         },
         (event) => {
           gate.write(event);

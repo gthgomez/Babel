@@ -24,7 +24,7 @@ test('completion refresh checks each receipt object once per invocation and obse
   writeFileSync(file, 'original\n')
   const receipt = await captureChatVerifierReceipt({
     projectRoot: root, command: 'npm test', exitCode: 0, summary: 'green',
-    mutationPaths: ['value.txt'], stdout: '# tests 1\n# skipped 0',
+    mutationPaths: ['value.txt'], stdout: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0',
   })
   assert.ok(receipt)
   const other = structuredClone(receipt)
@@ -151,7 +151,7 @@ for (const repositoryScope of [false, true]) {
     initializeGit(root)
     const receipt = await captureChatVerifierReceipt({
       projectRoot: root, command: 'npm test', exitCode: 0, summary: 'green',
-      mutationPaths: ['changed.txt'], stdout: '# tests 1\n# skipped 0',
+      mutationPaths: ['changed.txt'], stdout: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0',
     })
     assert.ok(receipt)
     assert.equal(receipt.boundRevision?.scope?.kind, repositoryScope ? 'repository' : 'files')
@@ -195,7 +195,7 @@ test('live completion hash refuses missing scope and mutations outside a file re
   writeFileSync(join(root, 'checked.txt'), 'checked\n')
   const receipt = await captureChatVerifierReceipt({
     projectRoot: root, command: 'npm test', exitCode: 0, summary: 'green',
-    mutationPaths: ['checked.txt'], stdout: '# tests 1\n# skipped 0',
+    mutationPaths: ['checked.txt'], stdout: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0',
   })
   assert.ok(receipt?.boundRevision)
   assert.equal(captureCompletionWorkspaceRevisionHash({ projectRoot: root }, ['checked.txt'], null), undefined)
@@ -237,7 +237,7 @@ async function assertNoCredentialContentReads(projectRoot: string, mutation: str
   try {
     assert.equal(await captureChatVerifierReceipt({
         projectRoot, command: 'npm test', exitCode: 0, summary: 'green',
-        mutationPaths: [mutation], stdout: '# tests 1\n# skipped 0',
+        mutationPaths: [mutation], stdout: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0',
     }) === null, true)
     assert.equal(contentReads, 0)
   } finally { mock.restoreAll(); syncBuiltinESMExports() }
@@ -451,7 +451,7 @@ function largeProject(): string {
 
 const freshLargeInput = (root: string) => ({
   projectRoot: root, command: 'npm test', exitCode: 0,
-  summary: '# tests 1\n# skipped 0', stdout: '# tests 1\n# skipped 0', mutationPaths: ['aa00.txt'],
+  summary: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0', stdout: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0', mutationPaths: ['aa00.txt'],
 })
 
 describe('complete fresh proof beyond the cache discovery file limit', { concurrency: false }, () => {

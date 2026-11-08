@@ -1,4 +1,7 @@
 import { formatFileReadContent, type ReadDeliveryWindow, type ReadByteCompleteness } from './services/readDelivery.js';
+import { createHash } from 'node:crypto';
+import { checkedFileBytes } from './utils/checkedFileRead.js';
+import { acquireEffectDirectoryAnchors, type EffectDirectoryAnchors } from './executor/effectDirectoryAnchors.js';
 /**
  * sandbox.ts — SafeExecutor: sandboxed tool execution for the CLI Executor stage
  *
@@ -40,6 +43,7 @@ import {
 } from './processTree.js';
 import {
   mkdirSync,
+  opendirSync,
   readFileSync,
   readdirSync,
   statSync,
@@ -47,8 +51,11 @@ import {
   existsSync,
   realpathSync,
   renameSync,
+  openSync,
+  closeSync,
+  constants,
 } from 'node:fs';
-import { resolve, sep, dirname, basename, isAbsolute, relative } from 'node:path';
+import { resolve, sep, dirname, basename, isAbsolute, relative, join } from 'node:path';
 import {
   evaluateGovernedIsolation,
   getDockerUnavailableReason,
@@ -157,6 +164,8 @@ export interface ToolResult {
   process_termination?: 'exited' | 'cancelled' | 'timed_out' | 'terminated';
   /** Successful glob data: count is returned paths, not display lines or total matches. */
   glob_result?: { paths: string[]; returned_count: number; truncated: boolean };
+  /** Host-origin directory page identity and continuation, never parsed from display text. */
+  directory_page?: { revision: string; after: string | null; next_after: string | null };
   exit_code: number;
   stdout: string;
   stderr: string;
@@ -321,18 +330,6 @@ export function validateHighRiskToolResult(
   return preserveTrustedShellExecutionBackend(result as object, validated);
 }
 
-export interface ShellCommandValidationIssue {
-  reason_code: string;
-  message: string;
-  evidence: string[] | null;
-  command_base: string | null;
-}
-
-export interface ShellCommandValidationOptions {
-  approvalQueue?: boolean;
-  projectRoot?: string | null;
-}
-
 // ─── Configuration ────────────────────────────────────────────────────────────
 
 /**
@@ -459,8 +456,8 @@ function appendCappedChunk(
  * Windows: synchronous taskkill /T /F (async taskkill delayed cancel settlement).
  * POSIX: SIGTERM process group (detached spawn), then SIGKILL fallback.
  */
-export function terminateChildTree(child: ChildProcessWithoutNullStreams): void {
-  terminateChildTreeShared(child);
+export function terminateChildTree(child: ChildProcessWithoutNullStreams): { treeKillAccepted: boolean } {
+  return terminateChildTreeShared(child);
 }
 
 /**
@@ -616,6 +613,10 @@ export function spawnCommandAsync(
     const abortPhysicalClose = new Promise<void>((resolveAbortPhysicalClose) => {
       releaseAbortPhysicalClose = resolveAbortPhysicalClose;
     });
+    let releasePhysicalClose: (() => void) | undefined;
+    const physicalClose = new Promise<void>((resolvePhysicalClose) => {
+      releasePhysicalClose = resolvePhysicalClose;
+    });
 
     const recordWitnessTerminal = (status: number | null, error?: Error) => {
       if (witnessTerminalRecorded || !executionId) return;
@@ -674,7 +675,10 @@ export function spawnCommandAsync(
               if (!pid) {
                 throw new Error(`Aborted spawn missing child pid for ${executable}`);
               }
-              terminateChildTree(child);
+              const terminationAttempt = terminateChildTree(child);
+              if (process.platform === 'win32' && !terminationAttempt.treeKillAccepted) {
+                throw new Error('Windows process-tree termination was not confirmed by taskkill');
+              }
               const groupExited = await waitForProcessGroupExit(pid, 5_000);
               if (!groupExited) {
                 throw new Error(`Aborted process group ${pid} did not exit after tree termination`);
@@ -705,7 +709,55 @@ export function spawnCommandAsync(
       timeout = setTimeout(() => {
         timedOut = true;
         if (executionId) options.processWitness?.timeout(processInput, executionId);
-        terminateChildTree(child);
+        // The parent's `close` event says nothing about its descendants. A
+        // supervisor deadline must not settle until the owned process group is
+        // physically gone, or callers observe a "timed out" tool while an
+        // orphaned test/child process still runs.
+        termination = new Promise<void>((resolveTermination, rejectTermination) => {
+          let complete = false;
+          const closeTimeout = setTimeout(() => {
+            if (complete) return;
+            complete = true;
+            rejectTermination(new Error(`Timed-out process ${executable} did not close after tree termination`));
+          }, 5_000);
+          setImmediate(() => {
+            void (async () => {
+              try {
+                const pid = child.pid;
+                const terminationAttempt = terminateChildTree(child);
+                if (process.platform === 'win32' && pid && !terminationAttempt.treeKillAccepted) {
+                  throw new Error('Windows process-tree termination was not confirmed by taskkill');
+                }
+                // No pid means there is no owned process group to observe, but
+                // the direct child may still emit its physical close.
+                if (pid) {
+                  const groupExited = await waitForProcessGroupExit(pid, 5_000);
+                  if (!groupExited) {
+                    throw new Error(`Timed-out process group ${pid} did not exit after tree termination`);
+                  }
+                }
+                await physicalClose;
+                if (complete) return;
+                complete = true;
+                clearTimeout(closeTimeout);
+                resolveTermination();
+              } catch (error) {
+                if (complete) return;
+                complete = true;
+                clearTimeout(closeTimeout);
+                rejectTermination(error);
+              }
+            })();
+          });
+        });
+        // The close handler attaches the observable rejection; this prevents an
+        // unhandled rejection if the process hangs and close never arrives.
+        void termination.catch(() => {});
+        registerPendingProcessTermination(
+          termination,
+          options.processContext?.sessionId ?? 'unscoped',
+          executionId ?? `${executable}:${child.pid ?? 'unknown'}`,
+        );
       }, options.timeoutMs);
       timeout.unref?.();
     }
@@ -735,14 +787,25 @@ export function spawnCommandAsync(
       finish(1, err);
     });
     child.once('close', (code) => {
+      releasePhysicalClose?.();
       if (aborted) {
         recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} aborted`));
         if (executionId) options.processWitness?.killed(processInput, executionId);
         releaseAbortPhysicalClose?.();
         finish(code ?? 1, new Error(`spawn ${executable} aborted`));
       } else if (timedOut) {
-        recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} ETIMEDOUT`));
-        finish(code ?? 1, new Error(`spawn ${executable} ETIMEDOUT`));
+        const settleTimedOut = (error?: Error) => {
+          recordWitnessTerminal(code ?? 1, error ?? new Error(`spawn ${executable} ETIMEDOUT`));
+          finish(error ? 1 : code ?? 1, error ?? new Error(`spawn ${executable} ETIMEDOUT`));
+        };
+        if (termination) {
+          void termination.then(
+            () => settleTimedOut(),
+            (error: unknown) => settleTimedOut(error instanceof Error ? error : new Error(String(error))),
+          );
+        } else {
+          settleTimedOut();
+        }
       } else {
         recordWitnessTerminal(code);
         finish(code);
@@ -768,346 +831,9 @@ export { isTransientSpawnError, normalizeSupervisorTerminatedShellOutput };
  *
  * For production use, restrict further via BABEL_ALLOWED_TOOLS env var.
  */
-export const ALLOWED_COMMANDS = new Set([
-  'npm',
-  'node',
-  'git',
-  'java',
-  'winget',
-  'gradle',
-  'gradlew',
-  'gradlew.bat',
-  'sdkmanager',
-  'sdkmanager.bat',
-  'adb',
-  'adb.exe',
-  'python',
-  'python3',
-  'py',
-  'pytest',
-  'pip',
-  'pip3',
-  'deno',
-  'rg',
-  // Read-only content inspection commands — safe, no side effects
-  'type',
-  'cat',
-  'echo',
-  'dir',
-  'ls',
-  'findstr',
-  'grep',
-]);
-
-/**
- * Interpreter eval flags blocked by the sandbox.
- *
- * These flags enable arbitrary inline code execution through interpreters
- * that are in the allowlist for legitimate script-file workflows.
- *
- * Blocked flags per interpreter:
- *   node:    -e, --eval, -p, --print  (inline eval/print expressions)
- *   python:  -c                        (inline code string)
- *   deno:    eval                      (inline eval subcommand)
- *
- * What is NOT blocked (by design):
- *   - Script-file execution (node build.js, python test.py, deno test)
- *   - python -m (module execution, needed for pytest/pip/etc.)
- *   - deno run (script execution, needed for deno-based projects)
- *   - pip install (package management, gated by dependency-install approval)
- *
- * This is defense-in-depth — it does not prevent code execution through
- * script files written by the LLM.  An OS-level sandbox (Docker, chroot,
- * WSL namespace) is the only complete mitigation.
- */
-const INTERPRETER_EVAL_FLAGS: Record<string, Set<string>> = {
-  node: new Set(['-e', '--eval', '-p', '--print']),
-  python: new Set(['-c']),
-  python3: new Set(['-c']),
-  py: new Set(['-c']),
-  deno: new Set(['eval']),
-};
-
-/**
- * Characters that indicate a shell injection attempt. If any of these appear
- * anywhere in the command string, shellExec will refuse to execute.
- *
- * On Windows, commands pass through cmd.exe /c, which interprets additional
- * metacharacters (% for variable expansion, ^ for escaping). The command is
- * NFKC-normalized before testing to prevent Unicode homoglyph bypasses
- * (e.g. full-width ＆ → ASCII &).
- */
-// Phase 3c: Platform-aware shell operator pattern.
-// '%' and '^' are only dangerous on Windows (cmd.exe env-var / escape).
-// On POSIX they are valid filename characters and should not be rejected.
-const SHELL_OPERATOR_RE =
-  process.platform === 'win32' ? /[;&|><`$(){}!\\\r\n%^]/ : /[;&|><`$(){}!\\\r\n]/;
-const WINDOWS_ENV_PREFIX_RE = /^[A-Za-z_][A-Za-z0-9_]*=.*/;
-
-function normalizeCommandBase(rawCmd: string, platform: NodeJS.Platform): string {
-  const normalizedRawCmd =
-    platform === 'win32' ? rawCmd.replace(/^\.\//, '.\\').replace(/\//g, '\\') : rawCmd;
-
-  return basename(normalizedRawCmd)
-    .replace(/\.(cmd|exe|bat)$/i, '')
-    .toLowerCase();
-}
-
-function getEffectiveAllowedCommands(executionProfile: string | null | undefined): Set<string> {
-  const allowedCommands = new Set(ALLOWED_COMMANDS);
-  for (const command of getExecutionProfileCommandAdditions(executionProfile)) {
-    allowedCommands.add(command);
-  }
-  return allowedCommands;
-}
-
-function isDependencyInstallCommand(command: string): boolean {
-  const normalized = command.trim().toLowerCase().replace(/\s+/g, ' ');
-  return (
-    /^(?:npm|pnpm|yarn|bun)\s+(?:install|i|add)\b/.test(normalized) ||
-    /^(?:pip|pip3)\s+install\b/.test(normalized) ||
-    /^(?:python|python3|py)\s+-m\s+pip\s+install\b/.test(normalized) ||
-    /^uv\s+(?:sync|pip\s+install)\b/.test(normalized) ||
-    /^poetry\s+(?:install|add)\b/.test(normalized) ||
-    /^composer\s+install\b/.test(normalized) ||
-    /^cargo\s+install\b/.test(normalized) ||
-    /^go\s+install\b/.test(normalized) ||
-    /^dotnet\s+add\s+package\b/.test(normalized) ||
-    /^(?:apt|apt-get|winget|brew|choco)\s+(?:install|upgrade|add)\b/.test(normalized)
-  );
-}
-
-export function getAllowedShellCommands(
-  executionProfile: string | null | undefined = process.env['BABEL_EXECUTION_PROFILE'],
-): string[] {
-  return [...getEffectiveAllowedCommands(executionProfile)].sort((left, right) =>
-    left.localeCompare(right),
-  );
-}
-
-export function validateExecutorShellCommand(
-  command: string,
-  platform: NodeJS.Platform = process.platform,
-  executionProfile: string | null | undefined = process.env['BABEL_EXECUTION_PROFILE'],
-  options: ShellCommandValidationOptions = {},
-): ShellCommandValidationIssue | null {
-  const trimmed = command.trim();
-  if (!trimmed) {
-    return {
-      reason_code: 'empty_command_rejected',
-      message: 'Command rejected — shell_exec/test_run command cannot be empty.',
-      evidence: [command],
-      command_base: null,
-    };
-  }
-
-  const profile = resolveExecutionProfile(executionProfile);
-  const benchmarkContainerShellSyntaxAllowed = shouldUseDockerSandbox(executionProfile);
-
-  if (
-    profile.name === 'workspace_manager' &&
-    isDependencyInstallCommand(trimmed) &&
-    process.env['BABEL_ALLOW_DEPENDENCY_INSTALL'] !== 'true'
-  ) {
-    if (
-      isDependencyInstallApproved({
-        command: trimmed,
-        projectRoot: options.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? null,
-        executionProfile: profile.name,
-      })
-    ) {
-      return null;
-    }
-
-    const decision = getDependencyInstallApprovalDecision({
-      command: trimmed,
-      projectRoot: options.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? null,
-      executionProfile: profile.name,
-    });
-    const queued =
-      options.approvalQueue === true
-        ? requestDependencyInstallApproval({
-            command: trimmed,
-            projectRoot: options.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? null,
-            executionProfile: profile.name,
-          }).record
-        : decision;
-    const approvalHint = queued
-      ? ` Approval request ${queued.id} is ${queued.status}. Approve with: babel approvals approve ${queued.id}`
-      : ' Create an approval with: babel approvals request-install --command "<command>" --project-root "<project>"';
-
-    return {
-      reason_code:
-        queued?.status === 'denied'
-          ? 'dependency_install_approval_denied'
-          : 'dependency_install_requires_approval',
-      message:
-        `Command rejected — dependency installation requires explicit approval under ` +
-        `execution profile "workspace_manager": "${trimmed}".${approvalHint}`,
-      evidence: [command, profile.name, ...(queued ? [queued.id, queued.status] : [])],
-      command_base: null,
-    };
-  }
-
-  // On Windows, backslashes in file-path arguments are path separators, not
-  // shell operators. Normalize them before the operator check to prevent false
-  // rejections on commands like "type src\math.js" or "cat project\file.txt".
-  const operatorCheckCmd =
-    platform === 'win32'
-      ? trimmed.replace(
-          /(?<=\s)([A-Za-z]:)?(?:[A-Za-z0-9_.-]+\\)+[A-Za-z0-9_.-]+\.[A-Za-z0-9_-]{1,12}/g,
-          (match) => match.replace(/\\/g, '/'),
-        )
-      : trimmed;
-
-  if (
-    SHELL_OPERATOR_RE.test(operatorCheckCmd.normalize('NFKC')) &&
-    !benchmarkContainerShellSyntaxAllowed
-  ) {
-    // Second-pass context-aware check for Windows cmd.exe.
-    // The regex pre-check matches all operator characters; the tokenizer
-    // determines if they appear in a safe context (inside quotes, caret-escaped).
-    // Only the 'explicitly_safe' verdict overrides the regex rejection.
-    const contextCheck = contextAwareOperatorCheck(trimmed, platform);
-    if (contextCheck.verdict !== 'explicitly_safe') {
-      return {
-        reason_code: 'shell_operator_rejected',
-        message: `Command rejected — ${contextCheck.verdict === 'confirmed_dangerous' ? contextCheck.reason : 'shell operator detected'}: "${trimmed}"`,
-        evidence: [command],
-        command_base: null,
-      };
-    }
-    // Tokenizer confirmed safe — operator characters are in quoted/escaped context.
-    // Re-check with the normalized path form as well.
-    const contextCheckNorm = contextAwareOperatorCheck(operatorCheckCmd, platform);
-    if (contextCheckNorm.verdict !== 'explicitly_safe') {
-      return {
-        reason_code: 'shell_operator_rejected',
-        message: `Command rejected — ${contextCheckNorm.verdict === 'confirmed_dangerous' ? contextCheckNorm.reason : 'shell operator detected'}: "${trimmed}"`,
-        evidence: [command],
-        command_base: null,
-      };
-    }
-  }
-
-  // `cd|chdir|pushd <path> && <cmd>` is operator-safe on Windows, but the
-  // allowlist still saw command base `cd` and rejected. Validate
-  // the right-hand command only — same policy as the tokenizer prefix strip.
-  const cdPrefixMatch = trimmed.match(/^\s*(cd|chdir|pushd)\s+(.+?)\s*&&\s*(.+)$/is);
-  if (cdPrefixMatch) {
-    const dirPath = (cdPrefixMatch[2] ?? '').trim();
-    const rightCmd = (cdPrefixMatch[3] ?? '').trim();
-    if (dirPath.length > 0 && rightCmd.length > 0) {
-      return validateExecutorShellCommand(rightCmd, platform, executionProfile, options);
-    }
-  }
-
-  let argv: string[];
-  try {
-    argv = parseCommandArgv(trimmed, platform);
-  } catch (err) {
-    const message = err instanceof CommandArgvParseError ? err.message : String(err);
-    return {
-      reason_code: 'command_argv_parse_error',
-      message: `Command rejected — ${message}.`,
-      evidence: [command],
-      command_base: null,
-    };
-  }
-  const rawCmd = argv[0] ?? '';
-
-  if (platform === 'win32' && WINDOWS_ENV_PREFIX_RE.test(rawCmd)) {
-    return {
-      reason_code: 'windows_env_prefix_unsupported',
-      message:
-        `Command rejected — Windows executor does not support POSIX env-prefix syntax ` +
-        `like "${rawCmd}".`,
-      evidence: [command, rawCmd],
-      command_base: null,
-    };
-  }
-
-  const cmdBase = normalizeCommandBase(rawCmd, platform);
-  const benchmarkProjectExecutableAllowed =
-    profile.name === 'benchmark_container' && isBenchmarkProjectExecutableCommand(rawCmd);
-
-  if (platform === 'win32' && cmdBase === 'mkdir') {
-    return {
-      reason_code: 'command_allowlist_rejected',
-      message:
-        'Command rejected — "mkdir" is not in the allowed command list. ' +
-        'Use file_write directly because it creates parent directories automatically.',
-      evidence: [command, cmdBase],
-      command_base: cmdBase,
-    };
-  }
-
-  if (platform === 'win32' && cmdBase === 'chmod' && profile.name !== 'benchmark_container') {
-    return {
-      reason_code: 'command_allowlist_rejected',
-      message:
-        'Command rejected — "chmod" is not supported by the Windows executor. ' +
-        'Do not plan POSIX permission commands on Windows.',
-      evidence: [command, cmdBase],
-      command_base: cmdBase,
-    };
-  }
-
-  const allowedCommands = getEffectiveAllowedCommands(executionProfile);
-  if (!allowedCommands.has(cmdBase) && !benchmarkProjectExecutableAllowed) {
-    return {
-      reason_code: 'command_allowlist_rejected',
-      message: `Command rejected — "${cmdBase}" is not in the allowed command list for execution profile "${profile.name}".`,
-      evidence: [command, cmdBase, profile.name],
-      command_base: cmdBase,
-    };
-  }
-
-  const classificationRoot = options.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? '';
-  const classified = classifyExecutionRisk(
-    trimmed,
-    classificationRoot ? { repoRoot: classificationRoot } : {},
-  );
-  if (classified.executionRisk === 'forbidden') {
-    return {
-      reason_code: 'unclassified_executable',
-      message: `Command rejected — ${classified.reason ?? 'unclassified executable'}: "${trimmed}"`,
-      evidence: [command],
-      command_base: cmdBase,
-    };
-  }
-
-  // Allow interpreter eval flags (-c, -e) when explicitly enabled
-  // (e.g., SWE-bench verification needs python -c for quick test scripts).
-  // This is opt-in: the benchmark harness sets BABEL_ALLOW_INTERPRETER_EVAL=1.
-  const allowInterpreterEval =
-    process.env['BABEL_ALLOW_INTERPRETER_EVAL'] === '1' ||
-    process.env['BABEL_ALLOW_INTERPRETER_EVAL'] === 'true';
-
-  // Block dangerous interpreter flags that enable arbitrary inline code
-  // execution. This is defense-in-depth: the allowlist gates which commands
-  // can run, but allowed interpreters (node, python, deno) provide their own
-  // code-execution surfaces via eval flags.  Blocking those flags here
-  // raises the bar without preventing legitimate script-file execution.
-  const blockedFlags = INTERPRETER_EVAL_FLAGS[cmdBase];
-  if (blockedFlags && !allowInterpreterEval) {
-    for (const arg of argv.slice(1)) {
-      const flagRoot = arg.split('=')[0];
-      if (flagRoot && blockedFlags.has(flagRoot)) {
-        return {
-          reason_code: 'interpreter_eval_rejected',
-          message:
-            `[sandbox] Command rejected — dangerous interpreter flag "${flagRoot}" is blocked for "${cmdBase}". ` +
-            `Use a script file within the project root instead of inline code execution.`,
-          evidence: [command, arg],
-          command_base: cmdBase,
-        };
-      }
-    }
-  }
-
-  return null;
-}
+export { ALLOWED_COMMANDS, getAllowedShellCommands, validateExecutorShellCommand } from './sandboxCommands.js';
+export type { ShellCommandValidationIssue, ShellCommandValidationOptions } from './sandboxCommands.js';
+import { SHELL_OPERATOR_RE, validateExecutorShellCommand } from './sandboxCommands.js';
 
 function buildSandboxPolicyDenial(
   reasonCode: string,
@@ -1567,30 +1293,46 @@ export class SafeExecutor {
               `[sandbox] Credential read denied: "${inputPath}" resolves to credential-class shadow material.`,
             );
           }
+          const exactStats = statSync(effectiveShadowPath, { bigint: true });
           const stats = statSync(effectiveShadowPath);
           if (!stats.isDirectory()) {
             if (stats.size > MAX_FILE_READ_SOURCE_BYTES) {
               throw new Error('File is too large for file_read; use read_range to inspect it.');
             }
-            const content = readFileSync(effectiveShadowPath, 'utf-8');
-            return this.formatFileContent(content, options);
+            const shadowRoot = this.shadowRoot;
+            const content = checkedFileBytes(effectiveShadowPath, MAX_FILE_READ_SOURCE_BYTES, () => {
+              const rel = relative(shadowRoot, realpathSync(shadowPath));
+              return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel) && realpathSync(shadowPath) === effectiveShadowPath;
+            }, stats, exactStats);
+            if (!content) throw new Error('File changed or escaped its approved read boundary.');
+            return this.formatFileContent(content.toString('utf8'), options);
           }
         }
       }
 
+      const exactStats = statSync(safePath, { bigint: true });
       const stats = statSync(safePath);
       if (stats.isDirectory()) {
-        const entries = readdirSync(safePath, { withFileTypes: true })
-          .sort((left, right) => left.name.localeCompare(right.name))
-          .map((entry) => `${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
-        const listing = [`Directory: ${safePath}`, ...entries].join('\n');
-        return { exit_code: 0, stdout: listing, stderr: '' };
+        return { exit_code: 1, stdout: '', stderr: 'file_read requires a regular file; use directory_list for a guarded directory listing.' };
       }
       if (stats.size > MAX_FILE_READ_SOURCE_BYTES) {
         throw new Error('File is too large for file_read; use read_range to inspect it.');
       }
-      const content = readFileSync(safePath, 'utf-8');
-      return this.formatFileContent(content, options);
+      const content = checkedFileBytes(safePath, MAX_FILE_READ_SOURCE_BYTES, () =>
+        this.resolveSafeRead(inputPath) === safePath && realpathSync(safePath) === safePath, stats, exactStats);
+      if (!content) {
+        // checkedFileBytes intentionally collapses every failure to null. Distinguish
+        // an OS permission denial from an identity/boundary change so the terminal
+        // classifier can report a typed permission block instead of a generic failure.
+        let probe: number | undefined
+        try { probe = openSync(safePath, constants.O_RDONLY) }
+        catch (err) {
+          const code = (err as NodeJS.ErrnoException).code
+          if (code === 'EACCES' || code === 'EPERM') throw err
+        } finally { if (probe !== undefined) closeSync(probe) }
+        throw new Error('File changed or escaped its approved read boundary.');
+      }
+      return this.formatFileContent(content.toString('utf8'), options);
     } catch (err) {
       const denied = maybePolicyDeniedResult(err, 'file_read', [inputPath]);
       if (denied) return denied;
@@ -1610,7 +1352,40 @@ export class SafeExecutor {
     return formatFileReadContent(content, options);
   }
 
+  async listDirectoryGuarded(inputPath: string, signal?: AbortSignal, page?: { after?: string | undefined; revision?: string | undefined }): Promise<ToolResult> {
+    let anchors: EffectDirectoryAnchors | undefined;
+    try {
+      signal?.throwIfAborted();
+      const safePath = this.resolveSafeRead(inputPath);
+      const directories = [safePath];
+      if (this.shadowRoot) {
+        const shadowPath = resolve(this.shadowRoot, relative(this.projectRoot, safePath));
+        if (existsSync(shadowPath)) {
+          const shadow = realpathSync(shadowPath);
+          const rel = relative(this.shadowRoot, shadow);
+          if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('Shadow directory escaped its approved boundary.');
+          if (statSync(shadow).isDirectory()) directories.push(shadow);
+        }
+      }
+      anchors = await acquireEffectDirectoryAnchors(directories);
+      signal?.throwIfAborted();
+      const result = await this.listDirectoryImpl(inputPath, anchors, page, signal);
+      signal?.throwIfAborted();
+      return result;
+    } catch (err) {
+      signal?.throwIfAborted();
+      const denied = maybePolicyDeniedResult(err, 'directory_list', [inputPath]);
+      return denied ?? { exit_code: 1, stdout: '', stderr: String(err) };
+    } finally { await anchors?.release(); }
+  }
+
   listDirectory(inputPath: string): ToolResult {
+    return this.listDirectoryImpl(inputPath);
+  }
+
+  private listDirectoryImpl(inputPath: string): ToolResult;
+  private listDirectoryImpl(inputPath: string, anchors: EffectDirectoryAnchors, page?: { after?: string | undefined; revision?: string | undefined }, signal?: AbortSignal): ToolResult | Promise<ToolResult>;
+  private listDirectoryImpl(inputPath: string, anchors?: EffectDirectoryAnchors, page?: { after?: string | undefined; revision?: string | undefined }, signal?: AbortSignal): ToolResult | Promise<ToolResult> {
     try {
       const safePath = this.resolveSafeRead(inputPath);
 
@@ -1647,14 +1422,69 @@ export class SafeExecutor {
           stderr: `[sandbox] directory_list expected a directory but received: ${effectivePath}`,
         };
       }
-      const entries = readdirSync(effectivePath, { withFileTypes: true })
-        .sort((left, right) => left.name.localeCompare(right.name))
-        .map((entry) => `${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
-      const listing = [
-        `Directory: ${inputPath}${effectivePath === safePath ? '' : ' (shadowed)'}`,
-        ...entries,
-      ].join('\n');
-      return { exit_code: 0, stdout: listing, stderr: '' };
+      if (!anchors) return { exit_code: 1, stdout: '', stderr: 'Directory listing requires a guarded directory handle.' };
+      if ((page?.after === undefined) !== (page?.revision === undefined)) return { exit_code: 1, stdout: '', stderr: 'Directory continuation requires both after and revision from a previous page.' };
+      if (page?.after !== undefined && (!page.after || page.after.length > 4096 || !/^[a-f0-9]{64}$/.test(page.revision ?? ''))) return { exit_code: 1, stdout: '', stderr: 'Invalid directory continuation; start the listing again.' };
+      const validateDirectory = (): boolean => {
+        if (this.resolveSafeRead(inputPath) !== safePath || realpathSync(safePath) !== safePath || realpathSync(effectivePath) !== effectivePath) return false;
+        if (effectivePath === safePath) return true;
+        if (!this.shadowRoot) return false;
+        const shadowPath = resolve(this.shadowRoot, relative(this.projectRoot, safePath));
+        const rel = relative(this.shadowRoot, realpathSync(shadowPath));
+        return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel) && realpathSync(shadowPath) === effectivePath;
+      };
+      if (!validateDirectory()) throw new Error('Directory changed or escaped its approved read boundary.');
+      return (async (): Promise<ToolResult> => {
+      try {
+      const directoryPath = anchors ? dirname(anchors.path(join(effectivePath, '__babel_directory_anchor__'))) : effectivePath;
+      const revisionOf = (): string => {
+        const value = statSync(directoryPath, { bigint: true });
+        return createHash('sha256').update(`babel-directory-v1\0${value.dev}\0${value.ino}\0${value.mtimeNs}\0${value.ctimeNs}`).digest('hex');
+      };
+      const revision = revisionOf();
+      if (page?.revision && page.revision !== revision) return { exit_code: 1, stdout: '', stderr: 'Directory changed since the previous page; start the listing again.' };
+      const entries: Array<{ name: string; kind: string }> = [];
+      let eligible = 0;
+      let scanned = 0;
+      const directory = opendirSync(directoryPath);
+      try {
+        for (let item = directory.readSync(); item; item = directory.readSync()) {
+          if (++scanned % 128 === 0) {
+            await new Promise<void>(resolveYield => setImmediate(resolveYield));
+            anchors.path(join(effectivePath, '__babel_directory_anchor__'));
+          }
+          signal?.throwIfAborted();
+          if (page?.after !== undefined && item.name <= page.after) continue;
+          eligible++;
+          let index = 0;
+          while (index < entries.length && entries[index]!.name < item.name) index++;
+          entries.splice(index, 0, { name: item.name, kind: item.isDirectory() ? 'dir' : 'file' });
+          if (entries.length > 201) entries.pop();
+        }
+      } finally { directory.closeSync(); }
+      const after = statSync(effectivePath);
+      anchors.path(join(effectivePath, '__babel_directory_anchor__'));
+      if (!validateDirectory() || after.dev !== stats.dev || after.ino !== stats.ino || revisionOf() !== revision) throw new Error('Directory changed or escaped its approved read boundary.');
+      const lines = [`Directory: ${inputPath}${effectivePath === safePath ? '' : ' (shadowed)'}`, `Revision: ${revision}`];
+      let delivered = 0;
+      for (const entry of entries.slice(0, 200)) {
+        const name = /[\x00-\x1f\x7f]/.test(entry.name) ? JSON.stringify(entry.name) : entry.name;
+        const line = `${entry.kind} ${name}`;
+        if (Buffer.byteLength(`${lines.join('\n')}\n${line}`, 'utf8') > 96 * 1024) break;
+        lines.push(line); delivered++;
+      }
+      if (eligible > delivered) {
+        if (!delivered) return { exit_code: 1, stdout: '', stderr: 'A directory entry exceeds the observation budget.' };
+        lines.push(`Continuation: ${JSON.stringify({ after: entries[delivered - 1]!.name, revision })}`);
+      }
+      const listing = lines.join('\n');
+      return { exit_code: 0, stdout: listing, stderr: '', directory_page: { revision, after: page?.after ?? null, next_after: eligible > delivered ? entries[delivered - 1]!.name : null } };
+      } catch (err) {
+        const denied = maybePolicyDeniedResult(err, 'directory_list', [inputPath]);
+        if (denied) return denied;
+        return { exit_code: 1, stdout: '', stderr: String(err) };
+      }
+      })();
     } catch (err) {
       const denied = maybePolicyDeniedResult(err, 'directory_list', [inputPath]);
       if (denied) return denied;
@@ -2115,7 +1945,13 @@ export class SafeExecutor {
       })();
       registerPendingProcessTermination(cleanup, sessionId ?? 'unscoped', prepared.ownedContainerName);
       try { await cleanup; }
-      catch (error) { return attachExecutionBackend({ exit_code: 1, stdout: result.stdout, stderr: String(error), process_started: result.processStarted, process_termination: result.aborted ? 'cancelled' : result.timedOut ? 'timed_out' : 'terminated' }, prepared); }
+      catch (error) {
+        await awaitPendingProcessTerminations(sessionId ?? 'unscoped');
+        throw error;
+      }
+    }
+    if (result.timedOut) {
+      await awaitPendingProcessTerminations(sessionId ?? 'unscoped');
     }
     if (result.error) {
       if (result.aborted) {

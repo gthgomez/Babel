@@ -451,7 +451,7 @@ test('cancellation settles the admitted claim as aborted and withholds install a
   });
 });
 
-test('task replacement advances the owner generation and aborts the superseded claim', async () => {
+test('replacement waits for the first claim to settle before admitting the next command', async () => {
   await withRunsDir(async () => {
     const runId = 'p11-task-replacement';
     const projectRoot = makeProjectRoot();
@@ -473,33 +473,31 @@ test('task replacement advances the owner generation and aborts the superseded c
       const firstOwner = store.readOwner(runId);
       assert.equal(firstOwner?.generation, 1);
 
-      // A replacement submission arrives while claim 1 is in flight.
-      const replacementEvents = [];
-      for await (const event of engine.submitMessageStream('replacement task')) {
-        replacementEvents.push(event);
-      }
-      assert.equal(replacementEvents.at(-1)?.type, 'done', 'replacement turn completes');
+      // Replacement is refused while the first admitted stream is still active.
+      const busyEvents = [];
+      for await (const event of engine.submitMessageStream('replacement task')) busyEvents.push(event);
+      assert.equal(busyEvents.at(-1)?.type, 'failed');
+      assert.equal(store.listAdmissions(runId).records.length, 1);
+      assert.deepEqual(store.readOwner(runId), firstOwner);
 
-      // Task replacement advanced ownership by exactly one generation with a
-      // fresh lease token...
+      // Cancel and drain the original owner before admitting replacement.
+      engine.cancel();
+      let firstPull = await iterator.next();
+      while (!firstPull.done) firstPull = await iterator.next();
+      const firstClaim = store.listAdmissions(runId).records[0];
+      assert.equal(firstClaim?.state, 'aborted');
+      const replacementEvents = [];
+      for await (const event of engine.submitMessageStream('replacement task')) replacementEvents.push(event);
+      assert.equal(replacementEvents.at(-1)?.type, 'done');
       const secondOwner = store.readOwner(runId);
       assert.ok(secondOwner);
-      assert.equal(secondOwner.generation, 2, 'task replacement advances the owner generation');
-      assert.notEqual(secondOwner.token, firstOwner?.token, 'advancement mints a fresh lease token');
-      // ...the superseded claim is durably aborted, the replacement settled.
+      assert.equal(secondOwner.generation, firstOwner?.generation);
+      assert.equal(secondOwner.token, firstOwner?.token);
       const records = store.listAdmissions(runId).records;
       assert.equal(records.length, 2);
-      const superseded = records.find((record) => record.ownerGeneration === 1);
-      const replacement = records.find((record) => record.ownerGeneration === 2);
-      assert.equal(superseded?.state, 'aborted');
-      assert.equal(
-        (superseded?.outcome as { finalOutcome?: string } | undefined)?.finalOutcome,
-        'SUPERSEDED_BY_SUBMISSION',
-      );
-      assert.equal(replacement?.state, 'settled');
-
-      // Release the abandoned stream; it must not touch the new owner.
-      await iterator.return?.();
+      assert.notEqual(records[0]?.commandId, records[1]?.commandId);
+      assert.equal(records[0]?.state, 'aborted');
+      assert.equal(records[1]?.state, 'settled');
       assert.deepEqual(store.readOwner(runId), secondOwner);
     } finally {
       globalThis.fetch = originalFetch;
@@ -671,7 +669,7 @@ test('fencing negatives: missing/stale/cross-thread/cross-session/wrong-token st
   });
 });
 
-test('task replacement: a superseded stream finalizing mid-successor never settles the successor claim', async () => {
+test('a settled earlier claim cannot settle a later in-flight command', async () => {
   await withRunsDir(async () => {
     const runId = 'p11-replace-interleave';
     const projectRoot = makeProjectRoot();
@@ -683,54 +681,33 @@ test('task replacement: a superseded stream finalizing mid-successor never settl
     try {
       engine = submittingEngine(runId, projectRoot, store);
 
-      // Submission A: admitted, suspended at its pre-provider yield.
       const iteratorA = engine.submitMessageStream('first task')[Symbol.asyncIterator]();
       const stepA = await iteratorA.next();
-      assert.equal(stepA.done, false);
-      assert.equal((stepA.value as { type?: string } | undefined)?.type, 'thinking');
+      assert.equal(stepA.value?.type, 'thinking');
+      const captured = engine as unknown as {
+        activeAdmissionClaim: import('./chatEngineP11Authority.js').ChatEngineAdmissionClaim;
+        p11Authority: import('./chatEngineP11Authority.js').ChatEngineP11Authority;
+      };
+      const claimA = captured.activeAdmissionClaim;
+      engine.cancel();
+      let pullA = await iteratorA.next();
+      while (!pullA.done) pullA = await iteratorA.next();
+      assert.equal(store.readAdmission(claimA.threadId, claimA.commandId)?.state, 'aborted');
 
-      // Submission B: admitted while A is in flight (A aborted, generation 2),
-      // also suspended at its pre-provider yield — B is STILL RUNNING.
       const iteratorB = engine.submitMessageStream('replacement task')[Symbol.asyncIterator]();
       const stepB = await iteratorB.next();
-      assert.equal(stepB.done, false);
-      assert.equal((stepB.value as { type?: string } | undefined)?.type, 'thinking');
-      const during = store.listAdmissions(runId).records;
-      assert.equal(during.length, 2);
+      assert.equal(stepB.value?.type, 'thinking');
+      const claimB = captured.activeAdmissionClaim;
+      assert.notEqual(claimA.commandId, claimB.commandId);
+      captured.p11Authority.settleClaimOnExit(claimA);
+      assert.equal(store.readAdmission(claimB.threadId, claimB.commandId)?.state, 'claimed');
+      assert.ok(internals(engine).currentP11Owner());
+      assert.equal(await internals(engine).installP11ContextCheckpoint(ROUTE), true);
 
-      // THE MASKING INTERLEAVE: A finalizes WHILE B is mid-turn. A's wrapper
-      // must settle its OWN captured claim (already aborted), never B's.
-      await iteratorA.return?.();
-
-      const claimA = store.listAdmissions(runId).records.find((r) => r.ownerGeneration === 1);
-      const claimB = store.listAdmissions(runId).records.find((r) => r.ownerGeneration === 2);
-      assert.equal(claimA?.state, 'aborted', 'A ends in a non-success terminal, never a false settled');
-      assert.equal(
-        (claimA?.outcome as { finalOutcome?: string } | undefined)?.finalOutcome,
-        'SUPERSEDED_BY_SUBMISSION',
-      );
-      assert.equal(claimB?.state, 'claimed', 'B — still executing — must keep its live unsettled claim');
-
-      // B's install authority survives A's finalization.
-      const p11Owner = internals(engine).currentP11Owner();
-      assert.equal(p11Owner?.generation, 2, 'the live command keeps its install authority');
-      assert.equal(
-        await internals(engine).installP11ContextCheckpoint(ROUTE),
-        true,
-        'installs still work inside B\'s turn',
-      );
-
-      // Drain B to its own terminal; its claim settles exactly once, as success.
-      let pull = await iteratorB.next();
-      while (!pull.done) pull = await iteratorB.next();
-      const settledB = store.listAdmissions(runId).records.find((r) => r.ownerGeneration === 2);
-      assert.equal(settledB?.state, 'settled', 'B settles at ITS terminal, not A\'s');
-      assert.equal(
-        (settledB?.outcome as { finalOutcome?: string } | undefined)?.finalOutcome,
-        'CHAT_SUBMISSION_TERMINAL',
-      );
-      assert.equal(store.readOwner(runId)?.generation, 2);
-      assert.equal(internals(engine).currentP11Owner(), null, 'after B settles, authority is released');
+      let pullB = await iteratorB.next();
+      while (!pullB.done) pullB = await iteratorB.next();
+      assert.equal(store.readAdmission(claimB.threadId, claimB.commandId)?.state, 'settled');
+      assert.equal(internals(engine).currentP11Owner(), null);
     } finally {
       globalThis.fetch = originalFetch;
       engine?.closeAdmissionStore();
@@ -881,3 +858,103 @@ function makeResumeCtx(): ReplContext {
     resolveCurrentTarget: () => target,
   } as unknown as ReplContext;
 }
+
+test('closing an engine preserves an unknown physical effect as an indeterminate durable admission', async () => {
+  await withRunsDir(async () => {
+    const runId = 'p11-unknown-physical-close';
+    const projectRoot = makeProjectRoot();
+    const store = requireStore(runId);
+    const engine = staticEngine(runId, projectRoot, store);
+    try {
+      internals(engine).admitCurrentSubmission(1, 'fixture with unsettled process');
+      engine.markPhysicalSettlementUnknown();
+      engine.closeAdmissionStore();
+      const reopened = requireStore(runId);
+      try {
+        assert.equal(reopened.listAdmissions(runId).records[0]?.state, 'indeterminate');
+        let modelStarts = 0;
+        const runner = { async *executeWithToolsStream() { modelStarts++; yield { type: 'done', finishReason: 'stop' }; } };
+        const resumed = new ChatEngine({ task: 'Resume the fixture', projectRoot, runId, resumeExisting: true,
+          admissionStore: reopened, model: 'mimo-v2.5', providerRunner: runner as never, providerPolicy: FIXTURE_POLICY });
+        const events = [];
+        for await (const event of resumed.submitMessageStream('Continue the fixture')) events.push(event);
+        assert.equal(modelStarts, 0);
+        assert.equal(events[0]?.type, 'failed');
+        if (events[0]?.type === 'failed') assert.equal(events[0].reason_code, 'physical_settlement_unknown');
+        resumed.closeAdmissionStore();
+      } finally { reopened.close(); }
+    } finally {
+      store.close();
+      rmSync(projectRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+});
+
+test('abandoning a live submission preserves an indeterminate claim and blocks a replacement', async () => {
+  await withRunsDir(async () => {
+    const runId = 'p11-abandoned-submission';
+    const projectRoot = makeProjectRoot();
+    const store = requireStore(runId);
+    const engine = submittingEngine(runId, projectRoot, store);
+    try {
+      const iterator = engine.submitMessageStream('first task')[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      assert.equal(first.value?.type, 'thinking');
+      await iterator.return?.();
+      assert.equal(store.listAdmissions(runId).records[0]?.state, 'indeterminate');
+      const events = [];
+      for await (const event of engine.submitMessageStream('replacement task')) events.push(event);
+      assert.equal(events[0]?.type, 'failed');
+      if (events[0]?.type === 'failed') assert.equal(events[0].reason_code, 'physical_settlement_unknown');
+      assert.equal(store.listAdmissions(runId).records.length, 1);
+    } finally {
+      engine.closeAdmissionStore(); store.close();
+      rmSync(projectRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+});
+
+test('a closed admission store cannot be mistaken for empty history on engine reuse', async () => {
+  await withRunsDir(async () => {
+    const runId = 'p11-closed-store-reuse';
+    const projectRoot = makeProjectRoot();
+    const store = requireStore(runId);
+    let starts = 0;
+    const runner = { async *executeWithToolsStream() { starts++; yield { type: 'done', finishReason: 'stop' }; } };
+    const engine = new ChatEngine({ task: 'Fixture', projectRoot, runId, admissionStore: store,
+      model: 'mimo-v2.5', providerRunner: runner as never, providerPolicy: FIXTURE_POLICY });
+    try {
+      engine.closeAdmissionStore();
+      const events = [];
+      for await (const event of engine.submitMessageStream('Continue the fixture')) events.push(event);
+      assert.equal(starts, 0);
+      assert.equal(events[0]?.type, 'failed');
+      if (events[0]?.type === 'failed') assert.match(events[0].error, /admission.*closed/i);
+    } finally {
+      store.close();
+      rmSync(projectRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+});
+
+test('closing a live admitted stream retains uncertainty and blocks resumed execution', async () => {
+  await withRunsDir(async () => {
+    const runId = 'p11-close-live-submission';
+    const projectRoot = makeProjectRoot();
+    const store = requireStore(runId);
+    const engine = submittingEngine(runId, projectRoot, store);
+    const iterator = engine.submitMessageStream('first task')[Symbol.asyncIterator]();
+    try {
+      const first = await iterator.next();
+      assert.equal(first.value?.type, 'thinking');
+      engine.closeAdmissionStore();
+      const reopened = requireStore(runId);
+      try { assert.equal(reopened.listAdmissions(runId).records[0]?.state, 'indeterminate'); }
+      finally { reopened.close(); }
+    } finally {
+      await iterator.return?.();
+      store.close();
+      rmSync(projectRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+});

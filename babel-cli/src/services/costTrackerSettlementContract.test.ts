@@ -14,7 +14,7 @@ type ProviderRow = {
 
 const PROVIDERS: ProviderRow[] = [
   { provider: NATIVE_DEEPSEEK, label: 'native DeepSeek', modelId: 'deepseek-v4.1-flash', inputTokens: 1000, outputTokens: 200 },
-  { provider: 'openrouter', label: 'OpenRouter', modelId: 'deepseek/deepseek-v4-flash-0731', inputTokens: 100, outputTokens: 10 },
+  { provider: 'openrouter', label: 'OpenRouter', modelId: 'deepseek/deepseek-v4.1-flash-1017', inputTokens: 100, outputTokens: 10 },
   { provider: 'deepinfra', label: 'DeepInfra', modelId: 'deepseek/deepseek-v4-flash-0731', inputTokens: 100, outputTokens: 10 },
   { provider: 'command-code', label: 'Command Code', modelId: 'deepseek/deepseek-v4.1-flash', inputTokens: 1000, outputTokens: 2000 },
   { provider: 'opencode-go', label: 'Go', modelId: 'deepseek-v4.1-flash', inputTokens: 1000, outputTokens: 200 },
@@ -87,7 +87,7 @@ test('later bill without tokens preserves measured usage on first provider repor
 test('receipt view does not treat deferred estimate-to-reported replacement as coverage', () => {
   const tracker = new CostTracker()
   const attribution = { taskOwnerId: 'or', chargeId: 'or-cover' }
-  const model = 'deepseek/deepseek-v4-flash-0731'
+  const model = 'deepseek/deepseek-v4.1-flash-1017'
   tracker.settleUsage(model, 100, 10, null, null, attribution, true, 'openrouter')
   const prior = tracker.getSessionChargeObservations()
   const allowance = tracker.getTaskSummary('or').totalCostUSD

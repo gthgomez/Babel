@@ -85,6 +85,35 @@
     }
   },
   "models": {
+    "openrouter/deepseek-v4.1-flash-exact": {
+      "provider": "openrouter",
+      "model_id": "deepseek/deepseek-v4.1-flash",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1048576,
+      "capabilities": ["structured_output"],
+      "source_url": "https://openrouter.ai/deepseek/deepseek-v4.1-flash",
+      "verified_at": "2026-11-07",
+      "expires_at": "2027-02-05",
+      "selection_reason": "Exact requested OpenRouter ID; account availability and Babel qualification remain unverified."
+    },
+    "openrouter/mimo-v2.6-flash-exact": {
+      "provider": "openrouter",
+      "model_id": "xiaomi/mimo-v2.6-flash",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "context_window": 1050000,
+      "max_output_tokens": 131072,
+      "capabilities": ["reasoning", "structured_output"],
+      "source_url": "https://openrouter.ai/xiaomi/mimo-v2.6-flash",
+      "verified_at": "2026-11-07",
+      "expires_at": "2027-02-05",
+      "selection_reason": "Exact requested OpenRouter ID; account availability and Babel qualification remain unverified."
+    },
     "command-code/deepseek-v4.1-flash": {
       "provider": "command-code",
       "model_id": "deepseek/deepseek-v4.1-flash",
@@ -94,7 +123,21 @@
       "native_tool_use": true,
       "context_window": 1000000,
       "source_url": "https://api.commandcode.ai/provider/v1/models",
-      "selection_reason": "Explicit experimental Command Code API route; never selected as a default or substituted across providers."
+      "verified_at": "2026-11-07",
+      "expires_at": "2027-02-05",
+      "selection_reason": "Explicit experimental Command Code API route; catalog lists Chat Completions but native tool support and account availability remain unverified."
+    },
+    "command-code/glm-5.3-flash": {
+      "provider": "command-code",
+      "model_id": "z-ai/glm-5.3-flash",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use_unverified": true,
+      "source_url": "https://api.commandcode.ai/provider/v1/models",
+      "verified_at": "2026-11-07",
+      "expires_at": "2027-02-05",
+      "selection_reason": "Public catalog lists Chat Completions; account access, tool capability and Babel qualification remain unverified."
     },
     "qwen3": {
       "provider": "deepinfra",
@@ -111,9 +154,9 @@
       "max_output_tokens": 131072,
       "estimated_cost_per_1m_input": 0.075,
       "estimated_cost_per_1m_output": 0.25,
-      "source_url": "https://openrouter.ai/api/v1/models",
-      "verified_at": "2026-08-30",
-      "expires_at": "2026-11-30",
+      "source_url": "https://openrouter.ai/z-ai/glm-5.3-flash",
+      "verified_at": "2026-11-07",
+      "expires_at": "2027-02-05",
       "enabled": true,
       "experimental": true,
       "native_tool_use": true,
@@ -216,12 +259,12 @@
       "enabled": true,
       "context_window": 1000000,
       "max_output_tokens": 384000,
-      "estimated_cost_per_1m_input": 0.14,
-      "estimated_cost_per_1m_output": 0.28,
+      "estimated_cost_per_1m_input": 0.3,
+      "estimated_cost_per_1m_output": 1.2,
       "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
-      "verified_at": "2026-07-22",
-      "expires_at": "2026-10-22",
-      "selection_reason": "Documented lower-cost API model."
+      "verified_at": "2026-11-07",
+      "expires_at": "2027-02-05",
+      "selection_reason": "Preserved direct legacy model ID; DeepSeek states this ID is served by V4.1 Flash 1017. Estimates use documented peak token rates."
     },
     "deepseek-v4-pro": {
       "provider": "deepseek",
@@ -230,11 +273,11 @@
       "enabled": true,
       "context_window": 1000000,
       "max_output_tokens": 384000,
-      "estimated_cost_per_1m_input": 0.435,
-      "estimated_cost_per_1m_output": 0.87,
+      "estimated_cost_per_1m_input": 1.32,
+      "estimated_cost_per_1m_output": 3.96,
       "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
-      "verified_at": "2026-07-22",
-      "expires_at": "2026-10-22",
+      "verified_at": "2026-11-07",
+      "expires_at": "2027-02-05",
       "selection_reason": "Documented reasoning API model."
     },
     "ox-alpha-free": {

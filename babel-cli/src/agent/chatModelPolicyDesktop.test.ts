@@ -274,3 +274,46 @@ test('Desktop discovery and saves resolve through the actual Chat policy with ex
     assert.equal(result.policy.providerModelId,model)
   }
 })
+
+test('Desktop CommandCode discovery keeps endpoint-incompatible models unavailable and retains cache on failure', async (t) => {
+  const routing = await import(new URL('../../../babel-desktop/native/provider-routing.mjs', import.meta.url).href)
+  const config = await mkdtemp(join(tmpdir(), 'babel-commandcode-discovery-'))
+  t.after(() => rm(config, { recursive: true, force: true }))
+  let observedUrl = ''; let authorization: string | null = null
+  const result = await routing.refreshModelCatalog({ configDirectory: config, provider: 'command-code', credential: 'synthetic-do-not-send', fetchImpl: async (url: string, init: { headers: Record<string, string> }) => {
+    observedUrl = String(url); authorization = new Headers(init.headers).get('Authorization')
+    return { ok: true, text: async () => JSON.stringify({ data: [
+      { id: 'z-ai/glm-5.3-flash', supported_endpoints: ['/chat/completions'] },
+      { id: 'vendor/unknown-capability', supported_endpoints: ['/chat/completions'] },
+      { id: 'vendor/with-tools', supported_endpoints: ['/chat/completions'], supported_parameters: ['tools'] },
+      { id: 'vendor/no-tools', supported_endpoints: ['/chat/completions'], supported_parameters: [] },
+      { id: 'typesafe/jev', supported_endpoints: ['/systemone'] },
+    ] }) }
+  } })
+  assert.equal(observedUrl, 'https://api.commandcode.ai/provider/v1/models')
+  assert.equal(authorization, null)
+  const glm = result.routes.find((row: { modelId: string }) => row.modelId === 'z-ai/glm-5.3-flash')
+  const other = result.routes.find((row: { modelId: string }) => row.modelId === 'typesafe/jev')
+  assert.equal(glm.selectable, true); assert.equal(glm.qualification, 'unverified')
+  assert.equal(other.selectable, false)
+  assert.throws(() => routing.saveProviderRoute({ configDirectory: config, provider: 'command-code', model: other.id }), /compatible Babel adapter|not supported/i)
+  const unknown = result.routes.find((row: { modelId: string }) => row.modelId === 'vendor/unknown-capability')
+  routing.saveProviderRoute({ configDirectory: config, provider: 'command-code', model: unknown.id, enabledModels: [unknown.id] })
+  const policy = JSON.parse(await readFile(join(config, 'model-policy.json'), 'utf8'))
+  assert.equal(Object.hasOwn(policy.models[unknown.id], 'native_tool_use'), false, 'unknown capability must not be recorded as unsupported')
+  assert.equal(policy.models[unknown.id].native_tool_use_unverified, true)
+  assert.equal(policy.models['command-code/vendor/with-tools'].native_tool_use, true)
+  assert.equal(policy.models['command-code/vendor/no-tools'].native_tool_use, false)
+  const previousPolicy = process.env['BABEL_MODEL_POLICY_PATH']
+  try {
+    process.env['BABEL_MODEL_POLICY_PATH'] = join(config, 'model-policy.json')
+    const { resolveModelByKey } = await import('../modelPolicy.js')
+    const resolved = resolveModelByKey({ key: unknown.id })
+    assert.equal(resolved.nativeToolUse, undefined)
+    assert.equal(resolved.nativeToolUseUnverified, true)
+  } finally { if (previousPolicy === undefined) delete process.env['BABEL_MODEL_POLICY_PATH']; else process.env['BABEL_MODEL_POLICY_PATH'] = previousPolicy }
+  await assert.rejects(routing.refreshModelCatalog({ configDirectory: config, provider: 'command-code', fetchImpl: async () => { throw new Error('synthetic failure') } }), /cached choices are retained/i)
+  const retained = routing.qualifiedProviders(config).find((row: { id: string }) => row.id === 'command-code')
+  assert.equal(retained.catalog.status, 'cached')
+  assert.ok(retained.routes.some((row: { modelId: string }) => row.modelId === 'z-ai/glm-5.3-flash'))
+})

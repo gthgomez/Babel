@@ -341,7 +341,7 @@ describe('proven no-op writes keep verifier receipts current', { concurrency: fa
     writeFileSync(join(root, 'verify.mjs'), [
       "import { readFileSync } from 'node:fs';",
       "if (!readFileSync('keyboardShortcuts.ts', 'utf8').includes('toLowerCase')) process.exit(1);",
-      "console.log('# tests 1\\n# pass 1\\n# fail 0\\n# skipped 0\\nfixture green; historical note VERIFIER_DEF_TAMPERED');",
+      "console.log('# tests 1\\n# suites 0\\n# pass 1\\n# fail 0\\n# cancelled 0\\n# skipped 0\\n# todo 0\\nfixture green; historical note VERIFIER_DEF_TAMPERED');",
       '',
     ].join('\n'), 'utf8');
     const restore = installTurns([

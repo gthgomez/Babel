@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { resolveRuntimePaths } from './config/runtimePaths.js'
@@ -7,6 +7,7 @@ import { getProviderSpec, listProviderSpecs } from './runners/providerRegistry.j
 import {probeInstalledSandboxImage} from './config/installedSandbox.js'
 import { CLI_COMMAND } from './cli/commandName.js'
 import { dockerCheckMessage, formatManualProviderEnvExample, sandboxImageCheckMessage } from './cli/firstRunText.js'
+import { inspectRunningProduct, runningProduct, type RunningProduct } from './services/runningProduct.js'
 
 type Check = { id: string; status: 'ok' | 'warn' | 'fail'; message: string }
 
@@ -32,6 +33,7 @@ export function runInstalledDoctor(options: {
   dockerProbe?: () => boolean
   imageProbe?: (image:string) => boolean
   platform?: NodeJS.Platform
+  running?: RunningProduct
 } = {}): { status: 'ok' | 'warn' | 'fail'; kind: string; paths: ReturnType<typeof resolveRuntimePaths>; checks: Check[] } {
   const env = options.env ?? process.env
   const paths = options.paths ?? resolveRuntimePaths(env)
@@ -47,8 +49,7 @@ export function runInstalledDoctor(options: {
   const imageReady=Boolean(dockerReady&&image&&(options.imageProbe?options.imageProbe(image):probeInstalledSandboxImage(image,{
     env,execute:(_binary,args,settings)=>spawnSync('docker',args,settings),
   })))
-  let version = 'unknown';
-  try { version = String((JSON.parse(readFileSync(join(paths.packageRoot, 'package.json'), 'utf8')) as { version?: string }).version ?? 'unknown') } catch { /* Missing fixture metadata stays unknown. */ }
+  const product = inspectRunningProduct(options.running ?? runningProduct)
   const platform = options.platform ?? process.platform
   const envFile = join(paths.userConfigRoot, '.env')
   const checks: Check[] = [
@@ -59,7 +60,7 @@ export function runInstalledDoctor(options: {
     { id: 'provider', status: configured ? 'ok' : 'warn', message: configured ?
       `Selected ${connection!.id}: ${connection!.provider}/${effective.model.value}; source ${effective.connection.source}. Credential presence checked; connectivity and observed model unverified.` :
       `No provider is selected yet. Run ${CLI_COMMAND} setup in a terminal, or save one key in ${envFile}. Read-only commands work; nothing was contacted.` },
-    { id: 'executable', status: 'ok', message: `Babel ${version}; command ${CLI_COMMAND} (alias babel-agent); CLI entry ${process.argv[1] ?? 'unknown'}; Node executable ${process.execPath}; package ${paths.packageRoot}` },
+    { id: 'executable', status: product.restartNeeded ? 'warn' : 'ok', message: `Running Babel ${product.runningVersion ?? 'unknown'}; revision ${product.revision ?? 'unknown'}; command ${CLI_COMMAND} (alias babel-agent); CLI entry ${product.entrypoint ?? 'unknown'}; Node executable ${product.executable}; package ${product.packageRoot}; ${product.restartNeeded === true ? 'package files changed; restart to use the current installation' : product.restartNeeded === null ? 'installation change detection unknown' : 'no change detected in package manifest or entrypoint'}` },
     { id: 'docker', status: dockerReady ? 'ok' : 'fail', message: dockerCheckMessage(dockerReady, platform) },
     { id:'sandbox_image',status:imageReady?'ok':'fail',message:sandboxImageCheckMessage(imageReady, dockerReady, platform) },
   ]

@@ -5,6 +5,7 @@ import type {
 } from './base.js';
 import type { ProviderId } from './providerRegistry.js';
 import { redactSecrets } from '../utils/secretRedaction.js';
+import { safeProviderErrorCode } from './providerHttpError.js';
 
 export interface ProviderFailureDetails {
   status?: number | null;
@@ -123,8 +124,10 @@ export function providerRequestIdFromResponse(response: Response | null | undefi
     'x-upstream-request-id',
     'request-id',
   ]) {
-    const value = bounded(response.headers.get(name));
-    if (value) return value;
+    const value = response.headers.get(name)?.trim();
+    // IDs are opaque but still untrusted header text. Do not persist a
+    // credential-shaped or free-form value as a request identifier.
+    if (value && value.length <= 160 && /^[A-Za-z0-9._:/-]+$/.test(value) && redactSecrets(value) === value) return value;
   }
   return null;
 }
@@ -138,7 +141,7 @@ export function providerErrorCodeFromBody(body: string): string | null {
     const error = record.error;
     if (error && typeof error === 'object' && !Array.isArray(error)) {
       const nested = error as Record<string, unknown>;
-      return bounded(
+      return safeProviderErrorCode(
         typeof nested.code === 'string'
           ? nested.code
           : typeof nested.type === 'string'
@@ -146,7 +149,7 @@ export function providerErrorCodeFromBody(body: string): string | null {
             : null,
       );
     }
-    return bounded(
+    return safeProviderErrorCode(
       typeof record.code === 'string'
         ? record.code
         : typeof record.type === 'string'
@@ -197,7 +200,7 @@ function buildRuntimeProviderFailureReceipt(
     provider_request_id: bounded(details.providerRequestId),
     observed_upstream: bounded(input.observedUpstream),
     http_status: details.status ?? null,
-    api_error_code: bounded(details.apiErrorCode),
+    api_error_code: safeProviderErrorCode(details.apiErrorCode),
     failure_class: failureClass,
     actual_attempt: Math.max(1, Math.floor(input.actualAttempt)),
     max_attempts: Math.max(1, Math.floor(input.maxAttempts)),
@@ -237,7 +240,7 @@ function buildV1ProviderFailureReceipt(
     openrouter_request_id: input.openrouterRequestId ?? null,
     local_request_id: input.localRequestId,
     http_status: input.httpStatus ?? null,
-    api_error_code: input.apiErrorCode ?? null,
+    api_error_code: safeProviderErrorCode(input.apiErrorCode),
     normalized_failure_class: input.normalizedFailureClass,
     message: safeFailureMessage(input.message).slice(0, 500),
     retryable: input.retryable,

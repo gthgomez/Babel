@@ -151,6 +151,18 @@ function admissionToEvidence(
       if (recovered.outbox.state === 'indeterminate') {
         unknownReasons.push('outbox_indeterminate');
       }
+      // A reconstructed restore has no physical settlement receipt. Bytes that
+      // match the intended post-image are evidence of an applied effect, not
+      // proof that the original worker is gone, so completion is not asserted.
+      if (recovered.outbox.effectClass !== 'read_only' && recovered.outbox.state !== 'committed') {
+        if (decision === 'recovered_complete') {
+          decision = 'manual_review';
+          unknownReasons.push('restore_effect_applied_without_receipt');
+        } else if (decision === 'retry_reconcilable') {
+          decision = 'manual_review';
+          unknownReasons.push('restore_effect_unsettled_before_retry');
+        }
+      }
     } else {
       unknownReasons.push('outbox_missing');
     }
@@ -280,20 +292,21 @@ export function restoreFromCommittedState(input: RestoreInput): RestoreSession {
 
   let ledgerCorruptLines = 0;
   let ledgerTornTail = false;
+  let ledgerUnavailable = false;
   try {
     const ledger = loadEffectLedgerWithDiagnostics(input.runDir);
     ledgerCorruptLines = ledger.corruptLines;
     ledgerTornTail = ledger.tornFinalLine;
-    for (const { originalOperationId, compensation, state } of interpretCompensations(ledger.records)) {
+    for (const { originalOperationId, compensation, compensationOperationIds, state } of interpretCompensations(ledger.records)) {
       // Compensation supersedes an admission's completion claim for the
       // original effect, while retaining both immutable ledger identities.
       const priorIndex = operations.findIndex(item => item.operationId === originalOperationId);
       if (priorIndex >= 0) operations.splice(priorIndex, 1);
       operations.push({ operationId: originalOperationId, effectClass: compensation.effectClass,
         compensationState: state,
-        evidenceRefs: [`effect:${originalOperationId}`, `effect:${compensation.operationId}`] });
+        evidenceRefs: [`effect:${originalOperationId}`, ...compensationOperationIds.map(id => `effect:${id}`)] });
       knownOperationIds.add(originalOperationId);
-      knownOperationIds.add(compensation.operationId);
+      for (const id of compensationOperationIds) knownOperationIds.add(id);
     }
     for (const effect of findInterruptedEffects(ledger.records)) {
       if (knownOperationIds.has(effect.operationId)) continue;
@@ -301,6 +314,7 @@ export function restoreFromCommittedState(input: RestoreInput): RestoreSession {
       knownOperationIds.add(effect.operationId);
     }
   } catch (error) {
+    ledgerUnavailable = true;
     diagnostics.push(`effect_ledger_unreadable:${errorText(error)}`);
     knownMissing.add('effect_ledger');
   }
@@ -308,6 +322,7 @@ export function restoreFromCommittedState(input: RestoreInput): RestoreSession {
   // Derive history health from what was actually read. A caller-supplied history
   // is merged most-restrictively, so a healthy default can never mask corruption.
   const detectedReasons: string[] = [];
+  if (ledgerUnavailable) detectedReasons.push('effect_ledger_unreadable');
   if (skippedAdmissionRows > 0) {
     detectedReasons.push(`admission_rows_skipped:${skippedAdmissionRows}`);
     diagnostics.push(`admission_rows_skipped:${skippedAdmissionRows}`);
@@ -325,7 +340,7 @@ export function restoreFromCommittedState(input: RestoreInput): RestoreSession {
     diagnostics.push(`admissions_truncated:${maxOperations}`);
   }
   const detectedHistory: RestoreHistoryEvidence = {
-    readable: true,
+    readable: !ledgerUnavailable,
     truncated: ledgerTornTail || admissionsTruncated,
     corrupt: skippedAdmissionRows > 0 || ledgerCorruptLines > 0,
     reasons: detectedReasons,

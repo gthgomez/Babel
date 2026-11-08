@@ -62,6 +62,7 @@ import { settleChatVerifierResult } from "./chatVerifierSettlement.js";
 import { isAuthoritativeVerifierCommand } from "./completionGatePolicy.js";
 import { acceptToolStop, settlePreventedChatAction } from './chatEngineRunControl.js';
 import { RunStoppedError } from '../runtime/run-control.js';
+import { ProcessTerminationError } from '../sandbox.js';
 import { chatReadToolExecutor } from "./chatReadExecutor.js";
 import { governedStrReplace } from "./governedMutations.js";
 import { executeGovernedApplyPatchAction } from "./codingLoop/applyPatchExecutor.js";
@@ -1893,6 +1894,9 @@ export class ChatEngineActionExecutor {
           result.results.every(r => r.exit_code === 0 && !r.denial) ? { admittedProjectRead: true as const } : {}),
       };
     } catch (err) {
+      const terminationFailed = err instanceof ProcessTerminationError ||
+        (err instanceof AggregateError && err.errors.some(error => error instanceof ProcessTerminationError));
+      if (terminationFailed) this.host.markPhysicalSettlementUnknown?.();
       // R0-7/R0-8: an action that throws after its submission was superseded
       // must not append a failure row to the current task's tool log.
       if (!this.host.isSubmissionCurrent(ownerGeneration)) {
@@ -1902,6 +1906,12 @@ export class ChatEngineActionExecutor {
           meta.index,
           "parent submission superseded before the action settled",
         );
+      }
+      if (terminationFailed && toolContext.runControl) {
+        toolContext.runControl.requestStop({
+          owner: toolContext.runControl.owner, kind: 'blocked', source: 'executor',
+          reasonCode: 'physical_settlement_unknown',
+        });
       }
       if (err instanceof RunStoppedError && (isMcpChatAction(action) || action.type === 'web_search' || action.type === 'web_fetch')) {
         const prevented = settlePreventedChatAction({ host: this.host, control: toolContext.runControl,
@@ -1940,7 +1950,8 @@ export class ChatEngineActionExecutor {
       }
       return {
         index: meta.index,
-        observation: `### ${tool} ${target}\nError: ${err instanceof Error ? err.message : String(err)}`,
+        observation: `### ${tool} ${target}\n${terminationFailed ? 'Process termination could not be confirmed; effect state is unknown.\n' : toolContext.signal?.aborted ? 'Cancelled request; effect state may be unknown.\n' : ''}Error: ${err instanceof Error ? err.message : String(err)}`,
+        ...(terminationFailed && toolContext.runControl?.stop() ? { stopRequest: toolContext.runControl.stop()! } : {}),
       };
     } finally {
       const toolEnd = performance.now();

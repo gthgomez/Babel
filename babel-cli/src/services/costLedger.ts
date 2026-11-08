@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { SessionUsageSummary } from './costTracker.js';
+import { projectGoEstimates, type ChargeReceipt, type CostBasis, type SessionUsageSummary } from './costTracker.js';
 import { estimateProviderUsageCost, type CostPrecision } from './modelPricingRegistry.js';
 
 export const COST_LEDGER_FILENAME = 'cost_ledger.json';
 
 export interface CostLedgerEntry {
   entry_id: string;
+  charge_id?: string;
   stage: string;
   tier_name: string | null;
   tier_index: number | null;
@@ -24,6 +25,9 @@ export interface CostLedgerEntry {
   input_cache_hit_cost_per_1m: number | null;
   input_cache_miss_cost_per_1m: number | null;
   estimated_cost_usd: number | null;
+  /** Legacy cost column above carries the selected subtotal; this field records its basis. */
+  cost_basis?: CostBasis | null;
+  provider_reported_total_charge_usd?: number | null;
   cost_precision: CostPrecision;
   pricing_source_url: string | null;
   pricing_verified_at: string | null;
@@ -77,6 +81,7 @@ export interface CostLedger {
 }
 
 interface WaterfallAttempt {
+  charge_id?: string;
   tier_name?: string | null;
   tier_index?: number | null;
   attempt?: number | null;
@@ -90,6 +95,7 @@ interface WaterfallAttempt {
   prompt_cache_hit_tokens?: number | null;
   prompt_cache_miss_tokens?: number | null;
   estimated_cost_usd?: number | null;
+  provider_reported_total_charge_usd?: number | null;
   cost_precision?: unknown;
   pricing_source_url?: string | null;
   pricing_verified_at?: string | null;
@@ -171,10 +177,14 @@ function toLedgerEntry(stage: string, attempt: WaterfallAttempt, index: number):
   const totalTokens =
     asNumber(attempt.total_tokens) ??
     (promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : null);
-  const cost = asNumber(attempt.estimated_cost_usd) ?? estimate.estimatedCostUsd;
+  const hasReport = attempt.provider_reported_total_charge_usd !== undefined;
+  const rawReport = asNumber(attempt.provider_reported_total_charge_usd);
+  const reportedCost = rawReport !== null && rawReport >= 0 ? rawReport : null;
+  const cost = hasReport ? reportedCost : attempt.estimated_cost_usd === undefined
+    ? estimate.estimatedCostUsd : asNumber(attempt.estimated_cost_usd);
   const rawPrecision = attempt.cost_precision;
   const normalizedPrecision = normalizeCostPrecision(rawPrecision);
-  const precision =
+  const precision = hasReport ? reportedCost === null ? 'unknown' : 'exact' : cost === null ? 'unknown' :
     normalizedPrecision ??
     (rawPrecision === null || rawPrecision === undefined ? estimate.precision : 'unknown');
   const precisionWarning =
@@ -182,12 +192,13 @@ function toLedgerEntry(stage: string, attempt: WaterfallAttempt, index: number):
       ? `Invalid cost precision "${String(rawPrecision)}" was normalized to unknown.`
       : null;
   const warning =
-    [precisionWarning, estimate.warning]
+    [precisionWarning, hasReport ? reportedCost === null ? 'Provider charge unavailable; no estimate was substituted.' : null : estimate.warning]
       .filter((item): item is string => typeof item === 'string')
       .join(' ') || null;
 
   return {
     entry_id: `${stage}-${randomUUID().slice(0, 8)}`,
+    ...(attempt.charge_id ? { charge_id: attempt.charge_id } : {}),
     stage,
     tier_name: attempt.tier_name ?? null,
     tier_index: asNumber(attempt.tier_index),
@@ -207,7 +218,9 @@ function toLedgerEntry(stage: string, attempt: WaterfallAttempt, index: number):
       asNumber(attempt.input_cache_hit_cost_per_1m) ?? estimate.inputCacheHitCostPer1M,
     input_cache_miss_cost_per_1m:
       asNumber(attempt.input_cache_miss_cost_per_1m) ?? estimate.inputCacheMissCostPer1M,
-    estimated_cost_usd: cost !== null ? roundCost(cost) : null,
+    estimated_cost_usd: cost !== null ? hasReport ? cost : roundCost(cost) : null,
+    cost_basis: cost === null ? null : hasReport ? 'provider_reported' : 'published_usage_estimate',
+    ...(hasReport ? { provider_reported_total_charge_usd: reportedCost } : {}),
     cost_precision: precision,
     pricing_source_url: attempt.pricing_source_url ?? estimate.pricingSourceUrl,
     pricing_verified_at: attempt.pricing_verified_at ?? estimate.pricingVerifiedAt,
@@ -220,6 +233,8 @@ export function buildCostLedger(options: {
   task: string;
   lane: string;
   waterfallEntries: object[];
+  /** Run-owned receipts also retain dispatches whose waterfall never returned. */
+  chargeReceipts?: readonly ChargeReceipt[];
   createdAt?: Date;
 }): CostLedger {
   const entries: CostLedgerEntry[] = [];
@@ -256,6 +271,30 @@ export function buildCostLedger(options: {
         warnings.add(`${entry.entry_id}: ${entry.warning}`);
       }
     }
+  }
+
+  const recordedCharges = new Set(entries.map(entry => entry.charge_id).filter(Boolean));
+  for (const receipt of options.chargeReceipts ?? []) {
+    const { chargeId, taskOwnerId, parentTaskOwnerId } = receipt.attribution;
+    if (recordedCharges.has(chargeId) || (taskOwnerId !== options.runId && parentTaskOwnerId !== options.runId)) continue;
+    const usageKnown = receipt.usageKnown !== false && receipt.usageComplete !== false;
+    const entry = toLedgerEntry('unknown', {
+      charge_id: chargeId, provider: receipt.provider ?? null, provider_model_id: receipt.modelId,
+      prompt_tokens: usageKnown ? receipt.inputTokens : null,
+      completion_tokens: usageKnown ? receipt.outputTokens : null,
+      prompt_cache_hit_tokens: usageKnown ? receipt.cacheHitTokens : null,
+      prompt_cache_miss_tokens: usageKnown ? receipt.cacheMissTokens : null,
+      estimated_cost_usd: receipt.costEstimate ? receipt.estimatedCostUSD ?? null : receipt.knownCostUSD,
+      ...(receipt.reportedCostBasis === 'provider_reported' && receipt.reportedCostUSD !== undefined
+        ? { provider_reported_total_charge_usd: receipt.reportedCostUSD } : {}),
+      cost_precision: receipt.costEstimate?.precision ?? 'unknown',
+      pricing_source_url: receipt.costEstimate?.pricingSourceUrl ?? null,
+      pricing_verified_at: receipt.costEstimate?.pricingVerifiedAt ?? null,
+    }, entries.length);
+    entry.warning = [entry.warning,'Provider dispatch has no completed waterfall telemetry; stage and outcome are unavailable.'].filter(Boolean).join(' ');
+    entries.push(entry);
+    recordedCharges.add(chargeId);
+    warnings.add(`${entry.entry_id}: ${entry.warning}`);
   }
 
   const totals = {
@@ -299,22 +338,45 @@ export function buildCostLedger(options: {
 }
 
 export function usageSummaryFromCostLedger(ledger: CostLedger): SessionUsageSummary {
-  return {
-    totalCostUSD: ledger.totals.estimated_cost_usd,
+  const receipts: ChargeReceipt[] = ledger.entries.map(entry => {
+    const reported = entry.cost_basis === 'provider_reported';
+    const cost = entry.estimated_cost_usd;
+    return {
+      attribution: { taskOwnerId: ledger.run_id, chargeId: entry.entry_id }, modelId: entry.model_id ?? 'unknown',
+      provider: entry.provider, inputTokens: entry.prompt_tokens ?? 0, outputTokens: entry.completion_tokens ?? 0,
+      cacheHitTokens: entry.prompt_cache_hit_tokens ?? 0, cacheMissTokens: entry.prompt_cache_miss_tokens ?? 0,
+      knownCostUSD: reported ? cost : null,
+      usageKnown: entry.prompt_tokens !== null && entry.completion_tokens !== null,
+      ...(reported ? { costBasis: 'provider_reported' as const, reportedCostUSD: cost, reportedCostBasis: 'provider_reported' as const }
+        : { costBasis: 'published_usage_estimate' as const, estimatedCostUSD: cost,
+          costEstimate: { basis: 'published_usage_estimate' as const, precision: entry.cost_precision,
+            pricingSourceUrl: entry.pricing_source_url, pricingVerifiedAt: entry.pricing_verified_at } }),
+    };
+  });
+  const unknownChargeCount = ledger.entries.filter(entry => entry.estimated_cost_usd === null).length;
+  const modelSubtotal = (model: string) => ledger.entries.filter(entry => entry.model_id === model)
+    .reduce((sum, entry) => sum + (entry.estimated_cost_usd ?? 0), 0);
+  return projectGoEstimates({
+    totalCostUSD: ledger.entries.reduce((sum, entry) => sum + (entry.estimated_cost_usd ?? 0), 0),
     totalInputTokens: ledger.totals.prompt_tokens,
     totalOutputTokens: ledger.totals.completion_tokens,
     totalTokens: ledger.totals.total_tokens,
+    unknownChargeCount,
+    costComplete: unknownChargeCount === 0,
+    estimateComplete: unknownChargeCount === 0 && ledger.entries.every(entry => entry.cost_precision !== 'unknown'),
     modelBreakdown: Object.fromEntries(
       Object.entries(ledger.totals.by_model).map(([model, usage]) => [
         model,
         {
           inputTokens: usage.prompt_tokens,
           outputTokens: usage.completion_tokens,
-          costUSD: usage.estimated_cost_usd,
+          costUSD: modelSubtotal(model),
+          unknownChargeCount: ledger.entries.filter(entry => entry.model_id === model && entry.estimated_cost_usd === null).length,
+          completeCostUSD: ledger.entries.some(entry => entry.model_id === model && entry.estimated_cost_usd === null) ? null : modelSubtotal(model),
         },
       ]),
     ),
-  };
+  }, receipts);
 }
 
 export function buildSingleCallCostLedger(options: {

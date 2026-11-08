@@ -16,6 +16,14 @@ import type { ChatEngine } from '../agent/chatEngine.js';
 import type { ShellHost } from '../ui/shell/shellHost.js';
 import type { ShellRuntimeBinding } from '../ui/shell/shellRuntimeBinding.js';
 
+/** Do not admit a successor while the current interactive owner is unsettled. */
+export class InteractiveRunBusyError extends Error {
+  constructor() { super('A run is still active; wait for it to settle before starting another task.'); this.name = 'InteractiveRunBusyError'; }
+}
+export function assertInteractiveRunAvailable(ctx: Pick<ReplContext, 'isRunning' | 'preparingRun'>): void {
+  if (ctx.isRunning || ctx.preparingRun) throw new InteractiveRunBusyError();
+}
+
 export interface ReplContext {
   // ── I/O ──────────────────────────────────────────────────────────────────
   rl: readline.Interface;
@@ -23,6 +31,10 @@ export interface ReplContext {
   // ── Session state ────────────────────────────────────────────────────────
   state: SessionState;
   isRunning: boolean;
+  /** An admitted task owns the session during asynchronous preparation too. */
+  preparingRun?: boolean;
+  /** Cancellation owner for an active non-Chat run, such as Plan. */
+  cancelActiveRun?: (() => void) | undefined;
   verboseMode: boolean;
   projectSettingsApplied: boolean;
 

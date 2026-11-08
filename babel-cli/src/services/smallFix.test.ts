@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import { buildRecoveryAssessment } from './recovery.js';
 import { readCheckpoint, restoreCheckpoint } from './checkpoints.js';
+import { usageSummaryFromCostLedger } from './costLedger.js';
 import {
   classifySmallFixProviderFailure,
   detectSmallFix,
@@ -221,9 +222,357 @@ test('small-fix coordinated multi-file scope runs coordinated pass', async () =>
     if (result.status === 'SMALL_FIX_COMPLETE') {
       assert.equal(result.targetFile, 'src/a.js');
       assert.deepEqual(result.changedFiles, ['src/a.js', 'src/b.js']);
+      const report = JSON.parse(readFileSync(join(result.runDir, '04_execution_report.json'), 'utf8'));
+      assert.deepEqual(report.tool_call_log.map((entry: { tool: string }) => entry.tool), ['file_write', 'file_write', 'test_run']);
+      assert.equal(report.tool_call_log[2].exit_code, 0);
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('coordinated model authentication failure retains both original files and stops inference', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-coordinated-auth-failure-'));
+  try {
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }));
+    writeFileSync(join(root, 'src', 'a.js'), 'original a\n');
+    writeFileSync(join(root, 'src', 'b.js'), 'original b\n');
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    mockSmallFixResponse('proposed change\n');
+    const firstResponse = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+      calls += 1;
+      if (calls === 1) return firstResponse(...args);
+      return new Response(JSON.stringify({ error: { message: 'synthetic unauthorized' } }), { status: 401 });
+    }) as typeof fetch;
+    await assert.rejects(runSmallFixPath({
+      projectRoot: root, task: 'Only edit src/a.js and src/b.js. Run npm test before completing.',
+      provider: 'live', model: 'deepseek', modelTier: 'standard',
+    }));
+    assert.equal(calls, 2);
+    assert.equal(readFileSync(join(root, 'src', 'a.js'), 'utf8'), 'original a\n');
+    assert.equal(readFileSync(join(root, 'src', 'b.js'), 'utf8'), 'original b\n');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+test('coordinated cancellation at verifier dispatch retains changes and prevents verifier execution', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-coordinated-cancel-verify-'));
+  const controller = new AbortController();
+  let runDir = '';
+  try {
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "require(\'fs\').writeFileSync(\'verifier-marker\',\'ran\')"' } }));
+    writeFileSync(join(root, 'src', 'a.js'), 'original a\n');
+    writeFileSync(join(root, 'src', 'b.js'), 'original b\n');
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    mockSmallFixResponse('proposed change\n');
+    const result = await runSmallFixPath({
+      projectRoot: root, task: 'Only edit src/a.js and src/b.js. Run npm test before completing.',
+      provider: 'live', model: 'deepseek', modelTier: 'standard', signal: controller.signal,
+      progress: { bindRunDir: dir => { runDir = dir; }, report: (stage, detail) => {
+        if (stage === 'verify' && detail?.startsWith('Dispatching')) controller.abort();
+      }, finish: () => {}, getTranscript: () => [], getProgressSteps: () => [] },
+    });
+    assert.equal(result.status, 'SMALL_FIX_FAILED');
+    if (result.status === 'SMALL_FIX_FAILED') {
+      assert.equal(result.cancelled, true);
+      assert.equal(result.retryable, false);
+      assert.deepEqual(result.changedFiles, ['src/a.js', 'src/b.js']);
+    }
+    assert.equal(existsSync(join(root, 'verifier-marker')), false);
+    const terminal = JSON.parse(readFileSync(join(runDir, 'terminal_status_summary.json'), 'utf8'));
+    assert.equal(terminal.reason_category, 'cancelled');
+    assert.equal(terminal.verifier_contract.verifierCompletionSatisfied, false);
+    const timeline = JSON.parse(readFileSync(join(runDir, 'repair_attempt_timeline.json'), 'utf8'));
+    assert.equal(timeline.attempts[0].verifier_exit_code, null);
+    const capsule = JSON.parse(readFileSync(join(runDir, 'small_fix_failure_capsule.json'), 'utf8'));
+    assert.equal(capsule.retryable, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+test('coordinated fix reports missing required verification instead of success', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-coordinated-verifier-contract-'));
+  let runDir = '';
+  try {
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"', typecheck: 'node -e "process.exit(0)"' } }));
+    writeFileSync(join(root, 'src', 'a.js'), 'original a\n');
+    writeFileSync(join(root, 'src', 'b.js'), 'original b\n');
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    mockSmallFixResponse('proposed change\n');
+    const result = await runSmallFixPath({
+      projectRoot: root, task: 'Only edit src/a.js and src/b.js. Verifier commands: npm run typecheck && npm test.',
+      provider: 'live', model: 'deepseek', modelTier: 'standard',
+      progress: { bindRunDir: dir => { runDir = dir; }, report: () => {}, finish: () => {}, getTranscript: () => [], getProgressSteps: () => [] },
+    });
+    assert.equal(result.status, 'SMALL_FIX_FAILED');
+    const terminal = JSON.parse(readFileSync(join(runDir, 'terminal_status_summary.json'), 'utf8'));
+    assert.equal(terminal.reason_category, 'verifier_contract');
+    assert.equal(terminal.failed_command, null);
+    assert.deepEqual(terminal.verifier_contract.missingRequiredVerifiers, ['npm run typecheck']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+test('coordinated verifier isolation denial retains changes without running the verifier', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-coordinated-verifier-deny-'));
+  let runDir = '';
+  try {
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "require(\'fs\').writeFileSync(\'verifier-marker\',\'ran\')"' } }));
+    writeFileSync(join(root, 'src', 'a.js'), 'original a\n');
+    writeFileSync(join(root, 'src', 'b.js'), 'original b\n');
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    mockSmallFixResponse('proposed change\n');
+    delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    const result = await runSmallFixPath({
+      projectRoot: root, task: 'Only edit src/a.js and src/b.js. Run npm test before completing.',
+      provider: 'live', model: 'deepseek', modelTier: 'standard',
+      progress: { bindRunDir: dir => { runDir = dir; }, report: () => {}, finish: () => {}, getTranscript: () => [], getProgressSteps: () => [] },
+    });
+    assert.equal(result.status, 'SMALL_FIX_FAILED');
+    if (result.status === 'SMALL_FIX_FAILED') {
+      assert.equal(result.retryable, false);
+      assert.deepEqual(result.changedFiles, ['src/a.js', 'src/b.js']);
+    }
+    assert.equal(existsSync(join(root, 'verifier-marker')), false);
+    const terminal = JSON.parse(readFileSync(join(runDir, 'terminal_status_summary.json'), 'utf8'));
+    assert.equal(terminal.verifier_contract.verifierCompletionSatisfied, false);
+    const report = JSON.parse(readFileSync(join(runDir, '04_execution_report.json'), 'utf8'));
+    assert.equal(report.steps_executed, 2);
+    assert.equal(report.tool_call_log.at(-1).policy_blocked, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+test('coordinated repair authentication failure retains the earlier changes without replay', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-coordinated-repair-auth-'));
+  let calls = 0;
+  let runDir = '';
+  try {
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(1)"' } }));
+    writeFileSync(join(root, 'src', 'a.js'), 'original a\n');
+    writeFileSync(join(root, 'src', 'b.js'), 'original b\n');
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    mockSmallFixResponse('proposed change\n');
+    const successfulResponse = globalThis.fetch;
+    globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+      calls += 1;
+      if (calls <= 2) return successfulResponse(...args);
+      return new Response(JSON.stringify({ error: { message: 'synthetic unauthorized' } }), { status: 401 });
+    }) as typeof fetch;
+    const result = await runSmallFixPath({
+      projectRoot: root, task: 'Only edit src/a.js and src/b.js. Run npm test before completing.',
+      provider: 'live', model: 'deepseek', modelTier: 'standard', maxRepairAttempts: 2,
+      progress: { bindRunDir: dir => { runDir = dir; }, report: () => {}, finish: () => {}, getTranscript: () => [], getProgressSteps: () => [] },
+    });
+    assert.equal(calls, 3);
+    assert.equal(result.status, 'SMALL_FIX_FAILED');
+    if (result.status === 'SMALL_FIX_FAILED') {
+      assert.equal(result.retryable, false);
+      assert.deepEqual(result.changedFiles, ['src/a.js', 'src/b.js']);
+    }
+    assert.equal(readFileSync(join(root, 'src', 'a.js'), 'utf8'), 'proposed change\n');
+    assert.equal(readFileSync(join(root, 'src', 'b.js'), 'utf8'), 'proposed change\n');
+    const capsule = JSON.parse(readFileSync(join(runDir, 'small_fix_failure_capsule.json'), 'utf8'));
+    assert.equal(capsule.retryable, false);
+    assert.equal(capsule.failure_code, 'provider_authentication_failed');
+    const timeline = JSON.parse(readFileSync(join(runDir, 'repair_attempt_timeline.json'), 'utf8'));
+    assert.equal(timeline.attempts[1].status, 'failed');
+    assert.equal(timeline.attempts[1].verifier_exit_code, null);
+    const terminal = JSON.parse(readFileSync(join(runDir, 'terminal_status_summary.json'), 'utf8'));
+    assert.deepEqual(terminal.changed_files, ['src/a.js', 'src/b.js']);
+    assert.equal(terminal.verifier_contract.verifierCompletionSatisfied, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+test('fatal model authentication failure is nonretryable in the retained small-fix capsule', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-small-fix-auth-failure-'));
+  let calls = 0;
+  let runDir = '';
+  try {
+    writeNodeFixture(root, 'export const add = () => 0;\n');
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ error: { message: 'synthetic unauthorized' } }), { status: 401 });
+    }) as typeof fetch;
+    await assert.rejects(runSmallFixPath({
+      projectRoot: root, task: 'Only edit src/math.js. Run npm test before completing.',
+      provider: 'live', model: 'deepseek', modelTier: 'standard',
+      progress: { bindRunDir: dir => { runDir = dir; }, report: () => {}, finish: () => {}, getTranscript: () => [], getProgressSteps: () => [] },
+    }));
+    assert.equal(calls, 1);
+    const capsule = JSON.parse(readFileSync(join(runDir, 'small_fix_failure_capsule.json'), 'utf8'));
+    assert.equal(capsule.failure_code, 'provider_authentication_failed');
+    assert.equal(capsule.retryable, false);
+    assert.equal(readFileSync(join(root, 'src', 'math.js'), 'utf8'), 'export const add = () => 0;\n');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+test('a model response arriving after cancellation cannot start a small-fix write', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-small-fix-cancel-model-'));
+  const controller = new AbortController();
+  try {
+    writeNodeFixture(root, 'export const add = () => 0;\n');
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    mockSmallFixResponse('export const add = (a, b) => a + b;\n');
+    const respond = globalThis.fetch;
+    globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+      const response = await respond(...args);
+      const body = await response.json() as Record<string, unknown>;
+      delete body['usage'];
+      controller.abort();
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    let stopped: unknown;
+    try {
+      await runSmallFixPath({
+        projectRoot: root, task: 'Only edit src/math.js. Run npm test before completing.',
+        provider: 'live', model: 'deepseek', modelTier: 'standard', signal: controller.signal,
+      });
+    } catch (error) { stopped = error; }
+    assert.equal(controller.signal.aborted, true, 'synthetic provider response must arrive');
+    assert.ok(stopped instanceof SmallFixRecoverableError);
+    assert.equal(stopped.failureCode, 'cancelled');
+    const summary = JSON.parse(readFileSync(join(stopped.runDir, 'terminal_status_summary.json'), 'utf8'));
+    assert.equal(summary.reason_category, 'cancelled');
+    assert.deepEqual(summary.changed_files, []);
+    const capsule = JSON.parse(readFileSync(join(stopped.runDir, 'small_fix_failure_capsule.json'), 'utf8'));
+    assert.equal(capsule.retryable, false);
+    const ledger = JSON.parse(readFileSync(join(stopped.runDir, 'cost_ledger.json'), 'utf8'));
+    assert.ok(ledger.entries.length > 0, 'dispatched inference must retain a cost entry');
+    const usage = usageSummaryFromCostLedger(ledger);
+    assert.ok((usage.unknownChargeCount ?? 0) > 0);
+    assert.equal(usage.completeCostUSD, null);
+    assert.equal(readFileSync(join(root, 'src', 'math.js'), 'utf8'), 'export const add = () => 0;\n');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a pre-cancelled small fix never starts inference or a write', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-small-fix-pre-cancel-'));
+  const controller = new AbortController(); controller.abort({ kind: 'cancelled' });
+  let calls = 0;
+  try {
+    writeNodeFixture(root, 'export const add = () => 0;\n');
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    globalThis.fetch = (async () => { calls++; throw new Error('Unexpected inference'); }) as typeof fetch;
+    let stopped: unknown;
+    try {
+      await runSmallFixPath({ projectRoot: root, task: 'Only edit src/math.js. Run npm test before completing.', provider: 'live', model: 'deepseek', modelTier: 'standard', signal: controller.signal });
+    } catch (error) { stopped = error; }
+    assert.ok(stopped instanceof Error);
+    assert.equal(stopped.name, 'AbortError');
+    assert.equal(calls, 0);
+    assert.equal(readFileSync(join(root, 'src', 'math.js'), 'utf8'), 'export const add = () => 0;\n');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('cancellation at verifier dispatch retains the completed write and incomplete verification evidence', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-small-fix-cancel-verify-'));
+  const controller = new AbortController();
+  let runDir = '';
+  try {
+    writeNodeFixture(root, 'export const add = () => 0;\n');
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    mockSmallFixResponse('export const add = (a, b) => a + b;\n');
+    const result = await runSmallFixPath({
+      projectRoot: root, task: 'Only edit src/math.js. Run npm test before completing.',
+      provider: 'live', model: 'deepseek', modelTier: 'standard', signal: controller.signal,
+      progress: {
+        bindRunDir: dir => { runDir = dir; },
+        report: (stage, detail) => { if (stage === 'verify' && detail?.startsWith('Dispatching')) controller.abort(); },
+        finish: () => {}, getTranscript: () => [], getProgressSteps: () => [],
+      },
+    });
+    assert.equal(controller.signal.aborted, true);
+    assert.equal(result.status, 'SMALL_FIX_FAILED');
+    assert.deepEqual(result.changedFiles, ['src/math.js']);
+    assert.equal(readFileSync(join(root, 'src', 'math.js'), 'utf8'), 'export const add = (a, b) => a + b;\n');
+    const summary = JSON.parse(readFileSync(join(runDir, 'terminal_status_summary.json'), 'utf8'));
+    assert.equal(summary.reason_category, 'cancelled');
+    assert.deepEqual(summary.changed_files, ['src/math.js']);
+    assert.equal(summary.verifier_contract.verifierCompletionSatisfied, false);
+    const capsule = JSON.parse(readFileSync(join(runDir, 'small_fix_failure_capsule.json'), 'utf8'));
+    assert.equal(capsule.retryable, false);
+    assert.equal(capsule.failure_code, 'cancelled');
+    const timeline = JSON.parse(readFileSync(join(runDir, 'repair_attempt_timeline.json'), 'utf8'));
+    assert.equal(timeline.attempts[0].status, 'cancelled');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('coordinated fix refuses a linked target before inference or mutation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-small-fix-multi-admission-'));
+  const outside = mkdtempSync(join(tmpdir(), 'babel-small-fix-multi-outside-'));
+  let calls = 0;
+  globalThis.fetch = (async () => { calls += 1; throw new Error('Unexpected inference'); }) as typeof fetch;
+  try {
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }));
+    writeFileSync(join(root, 'src', 'a.js'), 'original a\n');
+    writeFileSync(join(outside, 'b.js'), 'SYNTHETIC_OUTSIDE_TARGET\n');
+    symlinkSync(join(outside, 'b.js'), join(root, 'src', 'b.js'), process.platform === 'win32' ? 'file' : 'file');
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    await assert.rejects(runSmallFixPath({
+      projectRoot: root,
+      task: 'Only edit src/a.js and src/b.js. Run npm test before completing.',
+      provider: 'live',
+      model: 'deepseek',
+      modelTier: 'standard',
+    }), /unsafe|unavailable|outside/i);
+    assert.equal(calls, 0);
+    assert.equal(readFileSync(join(root, 'src', 'a.js'), 'utf-8'), 'original a\n');
+    assert.equal(readFileSync(join(outside, 'b.js'), 'utf-8'), 'SYNTHETIC_OUTSIDE_TARGET\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('small-fix does not send a junction target outside the project to the provider', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-small-fix-junction-root-'));
+  const outside = mkdtempSync(join(tmpdir(), 'babel-small-fix-junction-outside-'));
+  const canary = 'SYNTHETIC_OUTSIDE_SMALL_FIX_CANARY';
+  let captured = '';
+  try {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }));
+    writeFileSync(join(outside, 'a.js'), canary);
+    symlinkSync(outside, join(root, 'src'), process.platform === 'win32' ? 'junction' : 'dir');
+    globalThis.fetch = (async (_input, init) => {
+      captured += String(init?.body ?? '');
+      throw new Error('Synthetic provider stopped');
+    }) as typeof fetch;
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    await assert.rejects(
+      runSmallFixPath({ projectRoot: root, task: 'Only edit src/a.js. Run npm test before completing.', provider: 'live', model: 'deepseek', modelTier: 'standard' }),
+      /Small-fix target is unsafe or unavailable/,
+    );
+    assert.equal(captured.includes(canary), false, 'outside-project bytes reached the provider request');
+    assert.equal(captured, '', 'unsafe target must be rejected before inference');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('small-fix omits hard-linked supplemental files from actual provider requests', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-small-fix-links-root-'));
+  const outside = mkdtempSync(join(tmpdir(), 'babel-small-fix-links-outside-'));
+  const canary = 'SYNTHETIC_SUPPLEMENTAL_HARDLINK_CANARY';
+  let captured = '';
+  try {
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'src', 'a.js'), 'export const a = 1;\n');
+    writeFileSync(join(outside, 'test.js'), canary);
+    writeFileSync(join(outside, 'package.json'), JSON.stringify({ canary, scripts: { test: 'node -e "process.exit(0)"' } }));
+    linkSync(join(outside, 'test.js'), join(root, 'src', 'a.test.js'));
+    linkSync(join(outside, 'package.json'), join(root, 'package.json'));
+    globalThis.fetch = (async (_input, init) => {
+      captured += String(init?.body ?? '');
+      throw new Error('Synthetic provider stopped');
+    }) as typeof fetch;
+    process.env['BABEL_PROJECT_ROOT'] = root;
+    await runSmallFixPath({ projectRoot: root, task: 'Only edit src/a.js. Run npm test before completing.', provider: 'live', model: 'deepseek', modelTier: 'standard' }).catch(() => undefined);
+    assert.notEqual(captured, '', 'positive control must reach the provider boundary');
+    assert.equal(captured.includes(canary), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });
 
@@ -727,7 +1076,7 @@ test(
 test(
   'small-fix rollback-on-fail restores pre-mutation file when verifier fails',
   { concurrency: false },
-  async () => {
+  async (t) => {
     const root = mkdtempSync(join(tmpdir(), 'babel-small-fix-rollback-flag-'));
     try {
       writeNodeFixture(root, 'export const add = () => 0;\n');
@@ -746,6 +1095,13 @@ test(
       assert.equal(result.status, 'SMALL_FIX_FAILED');
       assert.deepEqual(result.changedFiles, []);
       assert.ok(result.checks.some((check) => check === 'rollback_on_fail: restored checkpoint'));
+      if (result.checks.some((check) => check.includes('DENY_POLICY_INTEGRITY_DRIFT'))) {
+        t.diagnostic('Observed policy denial after the fixture write.');
+        assert.equal(result.checks.some((check) => check.startsWith('npm test:')), false);
+        const capsule = JSON.parse(readFileSync(join(result.runDir, 'small_fix_failure_capsule.json'), 'utf8')) as { retryable: boolean; next_recommended_operator_action: string };
+        assert.equal(capsule.retryable, false);
+        assert.match(capsule.next_recommended_operator_action, /restored.*policy denial/i);
+      }
       assert.equal(
         readFileSync(join(root, 'src', 'math.js'), 'utf-8'),
         'export const add = () => 0;\n',
@@ -759,7 +1115,7 @@ test(
 test(
   'small-fix checkpoint rollback restores pre-mutation file',
   { concurrency: false },
-  async () => {
+  async (t) => {
     const root = mkdtempSync(join(tmpdir(), 'babel-small-fix-rollback-'));
     try {
       writeNodeFixture(root, 'export const add = () => 0;\n');
@@ -776,6 +1132,14 @@ test(
 
       assert.equal(result.status, 'SMALL_FIX_FAILED');
       assert.equal(readFileSync(join(root, 'src', 'math.js'), 'utf-8'), 'export const add = ;\n');
+      if (result.checks.some((check) => check.includes('DENY_POLICY_INTEGRITY_DRIFT'))) {
+        t.diagnostic('Observed policy denial with a preserved fixture write.');
+        assert.deepEqual(result.changedFiles, ['src/math.js']);
+        assert.equal(result.checks.some((check) => check.startsWith('npm test:')), false);
+        const capsule = JSON.parse(readFileSync(join(result.runDir, 'small_fix_failure_capsule.json'), 'utf8')) as { retryable: boolean; changed_files: string[] };
+        assert.equal(capsule.retryable, false);
+        assert.deepEqual(capsule.changed_files, ['src/math.js']);
+      }
       const checkpointJson = JSON.parse(
         readFileSync(join(result.runDir, 'small_fix_checkpoint.json'), 'utf-8'),
       ) as { checkpoint_id: string | null };

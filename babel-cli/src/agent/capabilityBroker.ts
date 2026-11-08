@@ -36,7 +36,15 @@ export function detectWorkingTreeDirty(
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     if (result.status !== 0) return false;
-    return String(result.stdout ?? '').trim().length > 0;
+    // Babel's own project-local state directory is never user work. Counting it
+    // made every interactive session dirty and denied the first reconcilable
+    // mutation with dirty_tree_fail_closed.
+    const paths = String(result.stdout ?? '')
+      .split('\n')
+      .filter(line => line.trim().length > 0)
+      .map(line => line.slice(3).replace(/^"|"$/g, ''))
+      .filter(path => path !== '.babel' && !path.startsWith('.babel/'));
+    return paths.length > 0;
   } catch {
     return false;
   }

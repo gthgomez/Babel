@@ -227,9 +227,10 @@ function buildDeterministicMockActions(writeScope: string[]): AgentAction[] {
   const actions: AgentAction[] = [];
   // Always start by listing the project root
   actions.push({ type: 'list_dir', path: '.' });
-  // If there's a write scope, try to read existing files and write a result
+  // If there's a write scope, inspect it and write a result. A scope entry is a
+  // directory, so list it rather than asking file_read for a regular file.
   for (const scope of writeScope) {
-    actions.push({ type: 'read_file', path: scope });
+    actions.push({ type: 'list_dir', path: scope });
     actions.push({
       type: 'write_file',
       path: `${scope}/result.txt`,

@@ -31,7 +31,7 @@ export function beginLiteArtifactRun(input: {
   });
 }
 
-/** Repo-local `runs/babel-lite/<run-id>/` session shared by ask and fix lanes. */
+/** Shared lane evidence session; Plan uses private runs, other Lite lanes remain repo-local. */
 export function beginLiteEvidenceSession(input: {
   command: LiteArtifactCommand;
   repoPath: string;

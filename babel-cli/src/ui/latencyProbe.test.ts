@@ -79,7 +79,7 @@ test('detectSsh returns false when no SSH env vars', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 test('getBucket: null RTT on non-SSH → local', () => {
-  withEnv({ SSH_CLIENT: undefined }, () => {
+  withEnv({ SSH_CLIENT: undefined, SSH_TTY: undefined, SSH_CONNECTION: undefined }, () => {
     const detector = SshLatencyDetector.getInstance();
     assert.equal(detector.getBucket(), 'local');
   });

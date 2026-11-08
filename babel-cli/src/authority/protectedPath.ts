@@ -11,7 +11,7 @@ function normalizePathForCredentialMatch(p: string): string {
  * True when a path is a live credential store per rule 09. Synthetic-test
  * friendly: pure path inspection, never reads contents.
  *
- * Covers: .env / .env.* (excluding .env.example), private keys, certificate
+ * Covers: .env / .env.* (excluding .env.example), .envrc variants, private keys, certificate
  * stores, cloud credential stores, SSH keys, credential configs, secrets dirs.
  */
 export function isCredentialTargetPath(path: string): boolean {
@@ -19,7 +19,14 @@ export function isCredentialTargetPath(path: string): boolean {
   const segments = norm.split('/');
   const basename = segments[segments.length - 1] ?? '';
 
-  if (/^\.env(?:\.[a-z0-9_-]+)?$/.test(basename) && !basename.startsWith('.env.example')) {
+  if (/^\.envrc(?:\.|$)/.test(basename)) return true;
+  // Live dotenv files may carry several suffixes (`.env.production.local`).
+  // Documentation templates remain readable: `.env.example` and any variant
+  // whose first suffix is `example` are not credential stores.
+  if (
+    /^\.env(?:\.[a-z0-9_-]+)*$/.test(basename) &&
+    !/^example(?:\.|$)/.test(basename.slice('.env.'.length))
+  ) {
     return true;
   }
   if (/^(id_rsa|id_ed25519|id_dsa|id_ecdsa)$/.test(basename)) return true;

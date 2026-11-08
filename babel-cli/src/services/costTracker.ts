@@ -276,7 +276,8 @@ function uniqueEstimateSources(sources: CostEstimateSource[]): CostEstimateSourc
 }
 
 /** Projection only: budgets still use totalCostUSD and missing-usage counts. */
-function projectGoEstimates(summary: SessionUsageSummary, receipts: readonly ChargeReceipt[]): SessionUsageSummary {
+/** Canonical invoice/estimate projection shared by session accounting and run ledgers. */
+export function projectGoEstimates(summary: SessionUsageSummary, receipts: readonly ChargeReceipt[]): SessionUsageSummary {
   summary = { ...summary };
   delete summary.reportedCostUSD; // Recompute only from positive report evidence.
   const allowanceReceipts = receipts.filter((receipt) => receiptUsesEstimateProjection(receipt));

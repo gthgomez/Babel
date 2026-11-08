@@ -1,14 +1,10 @@
-import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
 
 import type {
   AutonomousRepairProofAttemptEvidence,
   RepairProofFileHash,
 } from '../services/autonomousRepairProofEvidence.js';
 import { maxAttemptsForRepairMode, type FailureCapsule } from '../services/repairGovernance.js';
-import type { ProjectSafetySnapshot } from '../services/terminalStatus.js';
-import { isWithinProjectRootPath, resolveStepTargetPath } from '../stages/executorHelpers.js';
+export { hashProjectFileForEvidence, snapshotProjectFilesForSafety } from '../stages/executorHelpers.js';
 
 export const RELIABILITY_REPAIR_PROOF_MARKER = '[BABEL_RELIABILITY_AUTONOMOUS_LIVE_FAIL_THEN_PASS]';
 
@@ -34,103 +30,6 @@ export function getReliabilityRepairProofMaxFailures(): number {
     return maxAttemptsForRepairMode('deep');
   }
   return Math.min(configured, maxAttemptsForRepairMode('deep'));
-}
-
-export function hashProjectFileForEvidence(
-  projectRoot: string | null | undefined,
-  relativePath: string,
-): string | null {
-  if (!projectRoot || relativePath.trim().length === 0) {
-    return null;
-  }
-  const resolved = resolveStepTargetPath(projectRoot, relativePath);
-  if (!isWithinProjectRootPath(projectRoot, resolved) || !existsSync(resolved)) {
-    return null;
-  }
-  try {
-    return createHash('sha256').update(readFileSync(resolved)).digest('hex');
-  } catch {
-    return null;
-  }
-}
-
-const SAFETY_SNAPSHOT_MAX_FILES = 2000;
-const SAFETY_SNAPSHOT_IGNORED_DIRECTORIES = [
-  '.git',
-  'node_modules',
-  'dist',
-  'build',
-  'coverage',
-  '.next',
-  'runs',
-];
-
-function hashAbsoluteFileForSafety(path: string): string | null {
-  try {
-    return createHash('sha256').update(readFileSync(path)).digest('hex');
-  } catch {
-    return null;
-  }
-}
-
-export function snapshotProjectFilesForSafety(
-  projectRoot: string | null | undefined,
-): ProjectSafetySnapshot {
-  const root = projectRoot ? resolve(projectRoot) : null;
-  const snapshot: ProjectSafetySnapshot = {
-    root,
-    files: {},
-    file_count: 0,
-    truncated: false,
-    ignored_directories: SAFETY_SNAPSHOT_IGNORED_DIRECTORIES,
-  };
-  if (!root || !existsSync(root)) {
-    return snapshot;
-  }
-
-  const ignored = new Set(SAFETY_SNAPSHOT_IGNORED_DIRECTORIES);
-  const visit = (dir: string): void => {
-    if (snapshot.truncated) {
-      return;
-    }
-    let entries: string[] = [];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (snapshot.truncated) {
-        return;
-      }
-      const absolute = join(dir, entry);
-      let stat;
-      try {
-        stat = statSync(absolute);
-      } catch {
-        continue;
-      }
-      if (stat.isDirectory()) {
-        if (!ignored.has(entry)) {
-          visit(absolute);
-        }
-        continue;
-      }
-      if (!stat.isFile()) {
-        continue;
-      }
-      const relativePath = relative(root, absolute).replace(/\\/g, '/');
-      snapshot.files[relativePath] = hashAbsoluteFileForSafety(absolute) ?? 'UNREADABLE';
-      snapshot.file_count += 1;
-      if (snapshot.file_count >= SAFETY_SNAPSHOT_MAX_FILES) {
-        snapshot.truncated = true;
-        return;
-      }
-    }
-  };
-
-  visit(root);
-  return snapshot;
 }
 
 export function summarizeVerifierStreamForEvidence(text: string | null | undefined): string | null {

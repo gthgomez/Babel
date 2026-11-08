@@ -82,3 +82,19 @@ it('does not treat an unrelated ambient provider key as a selected connection', 
   assert.equal(result.checks.find(check => check.id === 'provider')?.status, 'warn')
   assert.match(result.checks.find(check => check.id === 'provider')?.message ?? '', /setup/)
 })
+
+it('doctor reports the running snapshot when package files have changed', async () => {
+  const { captureRunningProduct } = await import('./services/runningProduct.js')
+  const root = mkdtempSync(join(tmpdir(), 'babel-doctor-running-'))
+  try {
+    const entry = join(root, 'entry.js'); const packageFile = join(root, 'package.json')
+    writeFileSync(entry, 'old'); writeFileSync(packageFile, JSON.stringify({ version: '1.0.0' }))
+    const running = captureRunningProduct(root, entry)
+    writeFileSync(entry, 'new'); writeFileSync(packageFile, JSON.stringify({ version: '2.0.0' }))
+    const paths = { packageRoot: root, resourceRoot: root, isInstalled: true, userConfigRoot: root, userStateRoot: root, userCacheRoot: root, targetProjectRoot: root }
+    const report = runInstalledDoctor({ paths, env: {}, settings: { schemaVersion: 1, connections: {} }, dockerProbe: () => false, running })
+    const message = report.checks.find(check => check.id === 'executable')?.message ?? ''
+    assert.match(message, /1\.0\.0/); assert.doesNotMatch(message, /2\.0\.0/)
+    assert.match(message, /restart/i); assert.match(message, /revision.*unknown/i)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})

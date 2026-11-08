@@ -7,22 +7,22 @@ import { resolveIsolationBrokerFlags } from './chatEngineIsolationFlags.js';
 
 const keys = ['BABEL_EXECUTION_PROFILE', 'BABEL_REQUIRE_CLEAN_TREE', 'BABEL_DIRTY_TREE', 'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_BENCHMARK_DOCKER_IMAGE', 'BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const;
 
-function withGitProbe(t: TestContext, overrides: Record<string, string>, run: (probe: { calls: () => number; clean: () => void }) => void): void {
+function withGitProbe(t: TestContext, overrides: Record<string, string>, run: (probe: { calls: () => number; clean: () => void; output: (stdout: string) => void }) => void): void {
   const prior = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   let calls = 0;
-  let dirty = true;
+  let dirtyOutput = ' M tracked.txt\n';
   for (const key of keys) delete process.env[key];
   Object.assign(process.env, { BABEL_EXECUTION_PROFILE: 'dev_local', BABEL_DOCKER_DISABLE: 'true' }, overrides);
   t.mock.method(childProcess, 'spawnSync', (command: string, args: readonly string[]) => {
     assert.equal(command, 'git');
     assert.deepEqual(args, ['status', '--porcelain']);
     calls++;
-    const stdout = dirty ? ' M tracked.txt\n' : '';
+    const stdout = dirtyOutput;
     return { pid: 1, output: ['', stdout, ''], stdout, stderr: '', status: 0, signal: null };
   });
   syncBuiltinESMExports();
   try {
-    run({ calls: () => calls, clean: () => { dirty = false; } });
+    run({ calls: () => calls, clean: () => { dirtyOutput = ''; }, output: (stdout: string) => { dirtyOutput = stdout; } });
   } finally {
     t.mock.restoreAll();
     syncBuiltinESMExports();
@@ -67,6 +67,15 @@ test('a Docker isolation profile still checks the working tree', t => {
     setDockerAvailableForTest(true);
     assert.deepEqual(resolveIsolationBrokerFlags('/fixture'), { isolationRequired: true, isolationAvailable: true, hostFallbackAllowed: false, dirtyTree: true });
     assert.equal(probe.calls(), 1);
+  });
+});
+
+test('Babel project-local state never counts as a dirty user tree', t => {
+  withGitProbe(t, { BABEL_REQUIRE_CLEAN_TREE: '1' }, probe => {
+    probe.output('?? .babel/\n');
+    assert.equal(resolveIsolationBrokerFlags('/fixture').dirtyTree, false);
+    probe.output('?? .babel/\n M src/app.ts\n');
+    assert.equal(resolveIsolationBrokerFlags('/fixture').dirtyTree, true);
   });
 });
 

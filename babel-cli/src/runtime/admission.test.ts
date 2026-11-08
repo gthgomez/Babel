@@ -424,29 +424,30 @@ test('P05: crash after admission commit is recoverable via the outbox intent', (
     crashing.close();
 
     const recovered = openStore(fixture);
-    const record = recovered.readAdmission('thread-1', 'cmd-1');
-    assert.equal(record?.state, 'claimed');
-    const outbox = recovered.readOutbox(record!.admissionId);
-    assert.equal(outbox?.state, 'intent');
+    try {
+      const record = recovered.readAdmission('thread-1', 'cmd-1');
+      assert.equal(record?.state, 'claimed');
+      const outbox = recovered.readOutbox(record!.admissionId);
+      assert.equal(outbox?.state, 'intent');
 
-    const retry = recovered.recoverAdmission({
-      threadId: 'thread-1',
-      commandId: 'cmd-1',
-      currentImageHashes: { 'a.txt': 'before' },
-    });
-    assert.equal(retry.kind, 'recovered');
-    if (retry.kind === 'recovered') {
-      assert.equal(retry.decision, 'retry_reconcilable');
-    }
+      const retry = recovered.recoverAdmission({
+        threadId: 'thread-1',
+        commandId: 'cmd-1',
+        currentImageHashes: { 'a.txt': 'before' },
+      });
+      assert.equal(retry.kind, 'recovered');
+      if (retry.kind === 'recovered') {
+        assert.equal(retry.decision, 'retry_reconcilable');
+      }
 
-    // A non-idempotent external effect is never auto-replayed.
-    const reprocess = recovered.recoverAdmission({
-      threadId: 'thread-1',
-      commandId: 'cmd-1',
-      currentImageHashes: { 'a.txt': 'before' },
-    });
-    assert.equal(reprocess.kind, 'recovered');
-    recovered.close();
+      // A non-idempotent external effect is never auto-replayed.
+      const reprocess = recovered.recoverAdmission({
+        threadId: 'thread-1',
+        commandId: 'cmd-1',
+        currentImageHashes: { 'a.txt': 'before' },
+      });
+      assert.equal(reprocess.kind, 'recovered');
+    } finally { recovered.close(); }
   } finally {
     fixture.cleanup();
   }
@@ -487,14 +488,15 @@ test('P05: crash after the effect but before the terminal commit is recovered_co
     crashing.close();
 
     const recovered = openStore(fixture);
-    const result = recovered.recoverAdmission({
-      threadId: 'thread-1',
-      commandId: 'cmd-1',
-      currentImageHashes: { 'a.txt': 'after' },
-    });
-    assert.equal(result.kind, 'recovered');
-    if (result.kind === 'recovered') assert.equal(result.decision, 'recovered_complete');
-    recovered.close();
+    try {
+      const result = recovered.recoverAdmission({
+        threadId: 'thread-1',
+        commandId: 'cmd-1',
+        currentImageHashes: { 'a.txt': 'after' },
+      });
+      assert.equal(result.kind, 'recovered');
+      if (result.kind === 'recovered') assert.equal(result.decision, 'recovered_complete');
+    } finally { recovered.close(); }
   } finally {
     fixture.cleanup();
   }

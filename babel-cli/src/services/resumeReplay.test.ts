@@ -15,7 +15,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -369,6 +369,80 @@ test('A4: resumeExecution attaches replay-first evidence for a run with a log', 
   } finally {
     rmSync(runsDir, { recursive: true, force: true });
   }
+});
+
+test('A4: an indeterminate replayed effect blocks a saved provider retry before inference', async () => {
+  const root = tmpDir('babel-resume-indeterminate-');
+  const runDir = join(root, 'run-1'); const projectRoot = join(root, 'project');
+  mkdirSync(runDir); mkdirSync(projectRoot);
+  const priorFetch = globalThis.fetch; const priorKey = process.env['DEEPINFRA_API_KEY'];
+  let calls = 0;
+  try {
+    process.env['DEEPINFRA_API_KEY'] = 'synthetic-key';
+    globalThis.fetch = (async () => { calls++; throw new Error('Synthetic provider stopped'); }) as typeof fetch;
+    writeConversationLog(runDir);
+    const capsule = join(runDir, 'ask_failure_capsule.json');
+    writeFileSync(join(runDir, 'terminal_status_summary.json'), JSON.stringify({ status: 'ASK_FAILED', reason_category: 'provider_request_failed', failed_command: 'ask', failure_capsule_path: capsule, condition_summary: 'fetch failed' }));
+    writeFileSync(join(runDir, '04_execution_report.json'), JSON.stringify({ status: 'EXECUTION_HALTED', pipeline_error: { condition: 'fetch failed' } }));
+    writeFileSync(capsule, JSON.stringify({ failure_code: 'provider_request_failed', category: 'provider_request_failed', task: 'summarize the fixture', project_root: projectRoot, retryable: true }));
+    const result = await resumeExecution({ run: runDir, model: 'deepseek', modelTier: 'standard' });
+    assert.equal(calls, 0);
+    assert.equal(result.status, 'RESUME_NOT_RESUMABLE');
+    assert.match(result.reason, /Action resume is temporarily unavailable/);
+    assert.deepEqual(result.replay?.indeterminate_operations, ['op-b']);
+    assert.equal(result.replay?.operator_action_required, true);
+  } finally {
+    globalThis.fetch = priorFetch;
+    if (priorKey === undefined) delete process.env['DEEPINFRA_API_KEY']; else process.env['DEEPINFRA_API_KEY'] = priorKey;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('A4: an apparently clean replay alone cannot authorize a saved provider retry', async () => {
+  const root = tmpDir('babel-resume-unbound-');
+  const runDir = join(root, 'run-1'); const projectRoot = join(root, 'project');
+  mkdirSync(runDir); mkdirSync(projectRoot);
+  const priorFetch = globalThis.fetch; const priorKey = process.env['DEEPINFRA_API_KEY'];
+  let calls = 0;
+  try {
+    process.env['DEEPINFRA_API_KEY'] = 'synthetic-key';
+    globalThis.fetch = (async () => { calls++; throw new Error('Synthetic provider stopped'); }) as typeof fetch;
+    const log = createRuntimeEventLog({ sessionDir: runDir });
+    assert.deepEqual(log.appendFact(fact({ sequence: 1, payload: { type: 'run.started', ownerGeneration: 1 } })), { ok: true });
+    assert.deepEqual(log.flush(), { ok: true }); log.close();
+    const capsule = join(runDir, 'ask_failure_capsule.json');
+    writeFileSync(join(runDir, 'terminal_status_summary.json'), JSON.stringify({ status: 'ASK_FAILED', reason_category: 'provider_request_failed', failed_command: 'ask', failure_capsule_path: capsule, condition_summary: 'fetch failed' }));
+    writeFileSync(join(runDir, '04_execution_report.json'), JSON.stringify({ status: 'EXECUTION_HALTED', pipeline_error: { condition: 'fetch failed' } }));
+    writeFileSync(capsule, JSON.stringify({ failure_code: 'provider_request_failed', category: 'provider_request_failed', task: 'summarize the fixture', project_root: projectRoot, retryable: true }));
+    const result = await resumeExecution({ run: runDir, model: 'deepseek', modelTier: 'standard' });
+    assert.equal(calls, 0);
+    assert.equal(result.status, 'RESUME_NOT_RESUMABLE');
+    assert.match(result.reason, /Action resume is temporarily unavailable/);
+    assert.ok(result.replay);
+    assert.deepEqual(result.replay.indeterminate_operations, []);
+  } finally {
+    globalThis.fetch = priorFetch;
+    if (priorKey === undefined) delete process.env['DEEPINFRA_API_KEY']; else process.env['DEEPINFRA_API_KEY'] = priorKey;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('A4: action-resume quarantine prevents an unscoped verifier effect', async () => {
+  const root = tmpDir('babel-resume-verifier-fence-');
+  const runDir = join(root, 'run-1'); const projectRoot = join(root, 'project');
+  mkdirSync(runDir); mkdirSync(projectRoot);
+  try {
+    writeConversationLog(runDir);
+    writeFileSync(join(projectRoot, 'check.js'), "require('node:fs').writeFileSync('VERIFIER_EFFECT', 'synthetic')\n");
+    const capsule = join(runDir, 'small_fix_failure_capsule.json');
+    writeFileSync(join(runDir, 'terminal_status_summary.json'), JSON.stringify({ status: 'SMALL_FIX_FAILED', reason_category: 'small_fix_failed', failed_command: 'node check.js', changed_files: ['src/a.js'], failure_capsule_path: capsule, condition_summary: 'node check.js failed' }));
+    writeFileSync(join(runDir, '04_execution_report.json'), JSON.stringify({ status: 'EXECUTION_HALTED', small_fix: { target_file: 'src/a.js', verifier_command: 'node check.js', project_root: projectRoot }, tool_call_log: [{ tool: 'test_run', target: 'node check.js', exit_code: 1 }] }));
+    writeFileSync(capsule, JSON.stringify({ failure_code: 'verifier_failed', failed_command: 'node check.js', project_root: projectRoot, retryable: true }));
+    const result = await resumeExecution({ run: runDir });
+    assert.equal(result.status, 'RESUME_NOT_RESUMABLE');
+    assert.match(result.reason, /Action resume is temporarily unavailable/);
+    assert.equal(existsSync(join(projectRoot, 'VERIFIER_EFFECT')), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('A4: fallback disabled + no replayable log fails closed with the flag reason', async () => {

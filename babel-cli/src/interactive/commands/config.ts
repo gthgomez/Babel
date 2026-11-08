@@ -157,7 +157,7 @@ export function handleMode(ctx: ReplContext, args: string[]): void {
       );
       console.log(
         muted(
-          '  (Runtime surface remains chat unless you also /mode plan|deep. hard_plan blocks mutations until /execute-plan.)',
+          '  (Runtime surface remains chat unless you also /mode plan|deep. hard_plan blocks mutations; use a saved Plan and change the restriction explicitly before /apply.)',
         ),
       );
       return;
@@ -178,43 +178,9 @@ export function handleMode(ctx: ReplContext, args: string[]): void {
 
 // ── Execute plan (implementor W1.3) ──────────────────────────────────────────
 
-/**
- * Stage a plan body and switch operator mode to implement (default) so the
- * next chat turn injects a plan→execute handoff with elevated mutate.
- *
- * Usage:
- *   /execute-plan                     — use last assistant answer as plan body
- *   /execute-plan path/to/plan.md     — read plan from file
- */
-export function handleExecutePlan(ctx: ReplContext, args: string[]): void {
-  let body = '';
-  const arg = args.join(' ').trim();
-  if (arg && fs.existsSync(path.resolve(arg))) {
-    body = fs.readFileSync(path.resolve(arg), 'utf8');
-  } else if (arg) {
-    body = arg;
-  } else if (ctx.lastAssistantAnswer?.trim()) {
-    body = ctx.lastAssistantAnswer.trim();
-  }
-  if (!body) {
-    console.log(
-      accentBright(
-        '\n  No plan body. Provide a file path, paste after the command, or run hard-plan first so the last answer is a plan.\n',
-      ),
-    );
-    return;
-  }
-  ctx.state.pendingPlanBody = body;
-  ctx.state.operatorMode = 'default';
-  ctx.chatEngine?.closeAdmissionStore?.();
-  ctx.chatEngine = undefined;
-  ctx.saveSessionState();
-  console.log(
-    primary(
-      `\n  Plan staged (${body.length} chars). Next chat message starts implement with plan→execute handoff.`,
-    ),
-  );
-  console.log(muted('  Mutations allowed; force-mutate threshold elevated. Use /mode hard-plan to plan again.\n'));
+/** Legacy display text does not carry a source identity or approval. */
+export function handleExecutePlan(_ctx: ReplContext, _args: string[]): never {
+  throw new Error('UNSUPPORTED_OPERATION: Legacy Plan text is unsafe to execute; retain it for inspection, create a saved Plan, and use /apply <plan-id>.');
 }
 
 // ── Project ──────────────────────────────────────────────────────────────────
@@ -240,7 +206,6 @@ function refreshProjectDefaults(ctx: ReplContext): void {
 
 export function handleProject(ctx: ReplContext, args: string[]): void {
   delete ctx.state.savedPlanId;
-  delete ctx.state.pendingPlanBody;
   if (args[0]) {
     ctx.state.project = args[0];
     refreshProjectDefaults(ctx);
@@ -262,7 +227,6 @@ export function handleProject(ctx: ReplContext, args: string[]): void {
 
 export function handleRetarget(ctx: ReplContext, args: string[]): void {
   delete ctx.state.savedPlanId;
-  delete ctx.state.pendingPlanBody;
   const requested = args.join(' ').trim();
   ctx.targetOverrideRoot = requested ? path.resolve(requested) : null;
   const target = ctx.resolveCurrentTarget();
@@ -310,7 +274,8 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
       // Check alias shorthand before resolving by key
       const aliasResolution = resolveModelAlias(requested);
       const targetKey = aliasResolution?.resolvedKey ?? requested;
-      const liveTargetKey = !isOfflineChatMode()
+      const explicitDirectDeepSeek = getAvailableModels().some(model => model.key === targetKey && model.entry.provider === 'deepseek' && model.entry.model_id === targetKey);
+      const liveTargetKey = !isOfflineChatMode() && !explicitDirectDeepSeek
         ? resolveOpenRouterDeepSeekBackendKey(targetKey) ?? targetKey
         : targetKey;
 
@@ -398,7 +363,8 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
       .sort()
       .map((a) => {
         const target = resolveModelAlias(a)?.resolvedKey;
-        const effective = target && !isOfflineChatMode() ? resolveOpenRouterDeepSeekBackendKey(target) ?? target : target;
+        const direct = target && getAvailableModels().some(model => model.key === target && model.entry.provider === 'deepseek' && model.entry.model_id === target);
+        const effective = target && !isOfflineChatMode() && !direct ? resolveOpenRouterDeepSeekBackendKey(target) ?? target : target;
         return wrapPrefixedBlock(`${a} → ${effective ?? 'unavailable'}`, { firstPrefix: '    ', continuationPrefix: '      ', width: Math.max(12, getTerminalWidth() - 1) }).join('\n');
       })
       .join('\n');

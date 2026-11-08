@@ -21,7 +21,7 @@ test('Go 4.1 uses its published peak usage rates and keeps the billing estimate 
   assert.equal(getModelPricing('deepseek', 'deepseek-v4.1-flash'), null);
 });
 
-test('prices direct DeepSeek usage exactly when cache split tokens are reported', () => {
+test('prices direct DeepSeek usage conservatively when cache split tokens are reported', () => {
   const estimate = estimateProviderUsageCost({
     provider: 'deepseek',
     modelId: 'deepseek-v4-flash',
@@ -31,11 +31,11 @@ test('prices direct DeepSeek usage exactly when cache split tokens are reported'
     promptCacheMissTokens: 600,
   });
 
-  assert.equal(estimate.precision, 'exact');
+  assert.equal(estimate.precision, 'conservative');
   assert.equal(estimate.pricingSourceUrl, DEEPSEEK_PRICING_SOURCE_URL);
-  assert.equal(estimate.inputCacheHitCostPer1M, 0.0028);
-  assert.equal(estimate.inputCacheMissCostPer1M, 0.14);
-  assert.ok(Math.abs((estimate.estimatedCostUsd ?? 0) - 0.00064512) < 1e-12);
+  assert.equal(estimate.inputCacheHitCostPer1M, 0.006);
+  assert.equal(estimate.inputCacheMissCostPer1M, 0.3);
+  assert.ok(Math.abs((estimate.estimatedCostUsd ?? 0) - 0.0025824) < 1e-12);
 });
 
 test('prices an incomplete cache split at the full prompt rate instead of omitting prompt tokens', () => {
@@ -49,8 +49,8 @@ test('prices an incomplete cache split at the full prompt rate instead of omitti
 
   assert.equal(estimate.precision, 'conservative');
   assert.match(estimate.warning ?? '', /do not cover the total prompt/i);
-  assert.ok(Math.abs((estimate.inputCostUsd ?? -1) - 0.00014) < 1e-12);
-  assert.ok(Math.abs((estimate.estimatedCostUsd ?? -1) - 0.00014) < 1e-12);
+  assert.ok(Math.abs((estimate.inputCostUsd ?? -1) - 0.0003) < 1e-12);
+  assert.ok(Math.abs((estimate.estimatedCostUsd ?? -1) - 0.0003) < 1e-12);
 });
 
 test('keeps total cost unknown when cache counts have no prompt total', () => {
@@ -64,7 +64,7 @@ test('keeps total cost unknown when cache counts have no prompt total', () => {
 
   assert.equal(estimate.precision, 'unknown');
   assert.equal(estimate.inputCostUsd, null);
-  assert.ok(Math.abs((estimate.outputCostUsd ?? -1) - 0.00056) < 1e-12);
+  assert.ok(Math.abs((estimate.outputCostUsd ?? -1) - 0.0024) < 1e-12);
   assert.equal(estimate.estimatedCostUsd, null);
   assert.match(estimate.warning ?? '', /total prompt token count/i);
 });
@@ -150,3 +150,19 @@ test('prices output-only usage exactly for known models', () => {
   assert.ok(Math.abs((estimate.outputCostUsd ?? 0) - 0.00056) < 1e-12);
   assert.ok(Math.abs((estimate.estimatedCostUsd ?? 0) - 0.00056) < 1e-12);
 });
+
+test('provider usage accounting uses the documented GLM routed estimate', () => {
+  const result = estimateProviderUsageCost({ provider: 'openrouter', modelId: 'z-ai/glm-5.3-flash', promptTokens: 1000, completionTokens: 1000 })
+  assert.equal(result.precision, 'exact'); assert.equal(result.estimatedCostUsd, 0.000325)
+})
+
+test('direct DeepSeek estimates use documented peak rates and are not invoice-exact', () => {
+  const result = estimateProviderUsageCost({ provider: 'deepseek', modelId: 'deepseek-v4-flash', promptTokens: 1000, completionTokens: 2000, promptCacheHitTokens: 400, promptCacheMissTokens: 600 })
+  assert.equal(result.precision, 'conservative'); assert.equal(result.inputCacheHitCostPer1M, 0.006); assert.equal(result.inputCacheMissCostPer1M, 0.3)
+  assert.ok(Math.abs((result.estimatedCostUsd ?? -1) - 0.0025824) < 1e-12)
+})
+
+test('older OpenRouter snapshot keeps documented routed pricing', () => {
+  const result = estimateProviderUsageCost({ provider: 'openrouter', modelId: 'deepseek/deepseek-v4-flash-0731', promptTokens: 1000, completionTokens: 1000 })
+  assert.equal(result.precision, 'conservative'); assert.equal(result.estimatedCostUsd, 0.00042)
+})

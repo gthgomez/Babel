@@ -7,7 +7,7 @@
  * fresh store open, exactly what a restarted process sees.
  */
 import assert from 'node:assert/strict';
-import { appendFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -106,6 +106,26 @@ for (const settlement of ['completed', 'failed', 'interrupted'] as const) {
   });
 }
 
+test('corrupt ledger history prevents a completed compensation claim', () => {
+  const fixture = makeFixture();
+  try {
+    const original = recordEffectIntent({ runDir: fixture.runDir, sessionId: 'session-1', mutationBatchId: 'batch-1', effectClass: 'reconcilable_mutation', toolName: 'write_file', targetPaths: ['a.txt'], preImageHashes: { 'a.txt': 'before' } });
+    recordEffectTerminal(fixture.runDir, original, { status: 'completed', postImageHashes: { 'a.txt': 'after' } });
+    const compensation = recordEffectIntent({ runDir: fixture.runDir, sessionId: 'session-1', mutationBatchId: 'batch-1', effectClass: 'reconcilable_mutation', toolName: 'apply_patch_compensation', targetPaths: ['a.txt'], preImageHashes: { 'a.txt': 'after' }, compensatesOperationId: original.operationId, restorationHashes: { 'a.txt': 'before' } });
+    recordEffectTerminal(fixture.runDir, compensation, { status: 'completed', postImageHashes: { 'a.txt': 'before' } });
+    appendFileSync(join(fixture.runDir, 'effect-ledger.jsonl'), `${JSON.stringify({ ...compensation, toolName: 'conflicting_tool', status: 'failed' })}\n`);
+    const restored = restore(fixture, { currentImageHashes: { 'a.txt': 'before' } });
+    try {
+      const operation = restored.report.operations.find(item => item.operationId === original.operationId);
+      assert.ok(operation);
+      assert.notEqual(operation.state, 'completed');
+      assert.equal(operation.automaticRetryAllowed, false);
+      assert.equal(restored.report.operatorActionRequired, true);
+      assert.equal(restored.report.cursor.complete, false);
+    } finally { restored.close(); }
+  } finally { fixture.cleanup(); }
+});
+
 test('P06: crash after admission before effect is recoverable and never completes itself', () => {
   const fixture = makeFixture();
   try {
@@ -200,6 +220,32 @@ test('P06: crash during effect with a partial write is a workspace conflict, not
   }
 });
 
+test('P06: matching bytes without a physical settlement receipt cannot authorize replay or completion', () => {
+  for (const [current, effectClass] of [
+    ['before', 'reconcilable_mutation'], ['after', 'reconcilable_mutation'],
+    ['before', 'idempotent'], ['after', 'idempotent'],
+  ] as const) {
+    const fixture = makeFixture();
+    try {
+      const store = openStore(fixture);
+      try {
+        store.admitCommand({
+          digestInput: commandInput(), ownerGeneration: 1, ownerToken: 'token-1',
+          effectClass, operationId: 'op-unsettled',
+          preImageHashes: { 'a.txt': 'before' }, postImageHashes: { 'a.txt': 'after' },
+        });
+      } finally { store.close(); }
+      const session = restore(fixture, { currentImageHashes: { 'a.txt': current } });
+      try {
+        const operation = session.report.operations[0]!;
+        assert.equal(operation.automaticRetryAllowed, false);
+        assert.notEqual(operation.state, 'completed');
+        assert.equal(session.report.operatorActionRequired, true);
+      } finally { session.close(); }
+    } finally { fixture.cleanup(); }
+  }
+});
+
 test('P06: crash after effect before receipt recognizes completion without fabricating a receipt', () => {
   const fixture = makeFixture();
   try {
@@ -218,8 +264,8 @@ test('P06: crash after effect before receipt recognizes completion without fabri
     const session = restore(fixture, { currentImageHashes: { 'a.txt': 'after' } });
     try {
       const operation = session.report.operations[0]!;
-      assert.equal(operation.state, 'completed');
-      assert.equal(operation.action, 'none_complete');
+      assert.equal(operation.state, 'interrupted');
+      assert.equal(operation.action, 'operator_reconciliation_required');
       assert.ok(operation.reasons.includes(RESTORE_REASONS.EFFECT_APPLIED_WITHOUT_RECEIPT));
       assert.equal(session.report.terminal, undefined);
       assert.equal(session.report.operatorActionRequired, true);
@@ -250,7 +296,7 @@ test('P06: crash after effect before a verifier receipt does not fabricate verif
     try {
       assert.equal(session.report.terminal, undefined);
       const operation = session.report.operations[0]!;
-      assert.equal(operation.state, 'completed');
+      assert.equal(operation.state, 'interrupted');
       assert.equal(operation.automaticRetryAllowed, false);
       assert.ok(!operation.reasons.includes(RESTORE_REASONS.TERMINAL_COMMITTED));
       assert.equal(session.report.operations.some((op) => op.state === 'completed' && op.automaticRetryAllowed), false);
@@ -399,6 +445,8 @@ test('P06: a missing task budget blocks continuation', () => {
       assert.equal(session.report.continuationBlockedReason, RESTORE_REASONS.BUDGET_MISSING);
       assert.ok(session.report.missingAuthorities.includes('task_budget'));
       assert.equal(session.report.operations[0]?.action, 'blocked_missing_budget');
+      assert.ok(session.report.operations[0]?.reasons.includes(RESTORE_REASONS.AMBIGUOUS_NOT_RETRIED));
+      assert.equal(session.report.operations[0]?.automaticRetryAllowed, false);
     } finally {
       session.close();
     }
@@ -692,6 +740,41 @@ test('P06: I1 — a corrupt middle effect-ledger line is detected by the orchest
   }
 });
 
+test('P06: shape-invalid terminal JSON degrades history without hiding the interrupted intent', () => {
+  const fixture = makeFixture();
+  try {
+    const intent = recordEffectIntent({ runDir: fixture.runDir, sessionId: 'session-1', mutationBatchId: 'batch-1', effectClass: 'reconcilable_mutation', toolName: 'write_file', targetPaths: ['a.txt'], preImageHashes: { 'a.txt': 'before' } });
+    appendFileSync(join(fixture.runDir, 'effect-ledger.jsonl'), `${JSON.stringify({ operationId: intent.operationId, status: 'completed' })}\n`);
+    const session = restore(fixture, { currentImageHashes: { 'a.txt': 'before' } });
+    try {
+      assert.equal(session.report.cursor.complete, false);
+      assert.equal(session.report.degraded, true);
+      assert.ok(session.report.missingAuthorities.includes('history'));
+      const operation = session.report.operations.find(item => item.operationId === intent.operationId);
+      assert.ok(operation);
+      assert.equal(operation.automaticRetryAllowed, false);
+      assert.notEqual(operation.state, 'completed');
+    } finally { session.close(); }
+  } finally { fixture.cleanup(); }
+});
+
+test('P06: a conflicting terminal identity cannot erase the interrupted operation', () => {
+  const fixture = makeFixture();
+  try {
+    const intent = recordEffectIntent({ runDir: fixture.runDir, sessionId: 'session-1', mutationBatchId: 'batch-1', effectClass: 'reconcilable_mutation', toolName: 'write_file', targetPaths: ['a.txt'], preImageHashes: { 'a.txt': 'before' } });
+    appendFileSync(join(fixture.runDir, 'effect-ledger.jsonl'), `${JSON.stringify({ ...intent, toolName: 'different_tool', status: 'completed' })}\n`);
+    const session = restore(fixture, { currentImageHashes: { 'a.txt': 'before' } });
+    try {
+      assert.equal(session.report.cursor.complete, false);
+      assert.ok(session.report.missingAuthorities.includes('history'));
+      const operation = session.report.operations.find(item => item.operationId === intent.operationId);
+      assert.ok(operation);
+      assert.equal(operation.automaticRetryAllowed, false);
+      assert.notEqual(operation.state, 'completed');
+    } finally { session.close(); }
+  } finally { fixture.cleanup(); }
+});
+
 test('P06: I2 — a shape-invalid admission row makes the cursor incomplete', () => {
   const fixture = makeFixture();
   try {
@@ -794,4 +877,44 @@ test('P06: detection can derive the interruption class and override the assertio
   } finally {
     fixture.cleanup();
   }
+});
+
+test('cold recovery retains uncertainty from an earlier interrupted compensation', () => {
+  const fixture = makeFixture();
+  try {
+    const original = recordEffectIntent({ runDir: fixture.runDir, sessionId: 'session-1', mutationBatchId: 'batch-1', effectClass: 'reconcilable_mutation', toolName: 'write_file', targetPaths: ['a.txt'], preImageHashes: { 'a.txt': 'before' } });
+    recordEffectTerminal(fixture.runDir, original, { status: 'completed', postImageHashes: { 'a.txt': 'after' } });
+    const input = { runDir: fixture.runDir, sessionId: 'session-1', mutationBatchId: 'batch-1', effectClass: 'reconcilable_mutation' as const, toolName: 'apply_patch_compensation', targetPaths: ['a.txt'], preImageHashes: { 'a.txt': 'after' }, compensatesOperationId: original.operationId, restorationHashes: { 'a.txt': 'before' } };
+    const first = recordEffectIntent(input);
+    const second = recordEffectIntent(input);
+    recordEffectTerminal(fixture.runDir, second, { status: 'completed', postImageHashes: { 'a.txt': 'before' } });
+    const restored = restore(fixture, { currentImageHashes: { 'a.txt': 'before' } });
+    try {
+      const operation = restored.report.operations.find(item => item.operationId === original.operationId);
+      assert.ok(operation);
+      assert.equal(operation.state, 'indeterminate');
+      assert.equal(operation.automaticRetryAllowed, false);
+      assert.ok(operation.reasons.includes('effect_compensation_uncertain'));
+      assert.ok(operation.evidenceRefs.includes(`effect:${first.operationId}`));
+      assert.ok(operation.evidenceRefs.includes(`effect:${second.operationId}`));
+    } finally { restored.close(); }
+  } finally { fixture.cleanup(); }
+});
+
+test('cold recovery treats a linked outside ledger as unavailable without exposing its records', () => {
+  const fixture = makeFixture();
+  try {
+    const outside = join(fixture.root, 'outside'); mkdirSync(outside); mkdirSync(fixture.runDir, { recursive: true });
+    recordEffectIntent({ runDir: outside, sessionId: 'SYNTHETIC_PRIVATE_LEDGER', mutationBatchId: 'batch', effectClass: 'read_only', toolName: 'file_read', targetPaths: ['a'], preImageHashes: {} });
+    linkSync(join(outside, 'effect-ledger.jsonl'), join(fixture.runDir, 'effect-ledger.jsonl'));
+    const restored = restore(fixture);
+    try {
+      assert.equal(restored.report.operatorActionRequired, true, JSON.stringify(restored.report));
+      assert.equal(restored.report.historyReadable, false);
+      assert.equal(restored.report.degraded, true);
+      assert.equal(restored.report.cursor.complete, false);
+      assert.doesNotMatch(JSON.stringify(restored.report), /SYNTHETIC_PRIVATE_LEDGER/);
+      assert.match(JSON.stringify(restored.report), /effect_ledger/i);
+    } finally { restored.close(); }
+  } finally { fixture.cleanup(); }
 });

@@ -3,6 +3,7 @@ import {MODEL_ID_PATTERN} from './desktop-route-catalog.mjs';
 
 export const MODEL_CATALOG_ENDPOINTS=Object.freeze({
   openrouter:'https://openrouter.ai/api/v1/models',
+  'command-code':'https://api.commandcode.ai/provider/v1/models',
   deepseek:'https://api.deepseek.com/models',
   deepinfra:'https://api.deepinfra.com/models/list',
   'opencode-go':'https://opencode.ai/zen/go/v1/models',
@@ -29,7 +30,9 @@ export function parseModelCatalog(provider,data,knownRoutes,fetchedAt) {
     const conversation=provider==='deepinfra'?(entry.type==='text-generation'?true:NON_CONVERSATION_TYPES.has(entry.type)?false:null):output?output.includes('text'):null;
     const tools=Array.isArray(entry.supported_parameters)?entry.supported_parameters.includes('tools'):null;
     const deprecated=Boolean(entry.deprecated);
-    const adapterSupported=provider!=='opencode-go'||Boolean(existing);
+    const adapterSupported=provider==='command-code'
+      ? Array.isArray(entry.supported_endpoints)&&entry.supported_endpoints.includes('/chat/completions')
+      : provider!=='opencode-go'||Boolean(existing);
     const unavailableReason=deprecated?'Provider marks this model deprecated.':conversation===false?'This model does not provide text conversation.':!adapterSupported?'This model needs a compatible Babel adapter.':'';
     const id=existing?.id??`${provider}/${modelId}`;
     // Route IDs must fit the same public CLI argument contract as existing routes.

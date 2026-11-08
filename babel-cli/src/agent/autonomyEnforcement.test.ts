@@ -16,6 +16,11 @@ test('isCredentialTargetPath: live credential stores are flagged', () => {
   assert.equal(isCredentialTargetPath('.env.local'), true);
   assert.equal(isCredentialTargetPath('babel-cli/.env'), true);
   assert.equal(isCredentialTargetPath('C:\\proj\\.env.production'), true);
+  assert.equal(isCredentialTargetPath('.env.production.local'), true);
+  assert.equal(isCredentialTargetPath('config/.env.development.local'), true);
+  assert.equal(isCredentialTargetPath('.env.staging.local.test'), true);
+  assert.equal(isCredentialTargetPath('.envrc'), true);
+  assert.equal(isCredentialTargetPath('project/.envrc.local'), true);
   assert.equal(isCredentialTargetPath('~/.ssh/id_rsa'), true);
   assert.equal(isCredentialTargetPath('secrets/credentials.json'), true);
   assert.equal(isCredentialTargetPath('.aws/credentials'), true);
@@ -25,6 +30,7 @@ test('isCredentialTargetPath: live credential stores are flagged', () => {
 
 test('isCredentialTargetPath: non-credential paths are not flagged', () => {
   assert.equal(isCredentialTargetPath('.env.example'), false);
+  assert.equal(isCredentialTargetPath('.envrc-template'), false);
   assert.equal(isCredentialTargetPath('src/agent/policy.ts'), false);
   assert.equal(isCredentialTargetPath('config/model-policy.json'), false);
   assert.equal(isCredentialTargetPath('docs/architecture/HARNESS_ARCHITECTURE_V1.md'), false);

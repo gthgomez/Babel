@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { lstatSync, realpathSync } from 'node:fs';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 export type CommandCodeInstallState = 'missing' | 'unverified' | 'verified';
 
@@ -50,29 +50,65 @@ function pathDirectoryIsProjectLocal(directory: string): boolean {
   }
 }
 
+function isWindowsCommandInterpreter(path: string): boolean {
+  if (process.platform !== 'win32') return false;
+  try {
+    const actual = realpathSync(path).toLowerCase();
+    const systemRoot = process.env['SystemRoot'] ?? process.env['WINDIR'];
+    const candidates = [process.env['COMSPEC'], ...(systemRoot ? [resolve(systemRoot, 'System32', 'cmd.exe'), resolve(systemRoot, 'SysWOW64', 'cmd.exe')] : [])];
+    return candidates.some(candidate => {
+      if (!candidate) return false;
+      try { return realpathSync(candidate).toLowerCase() === actual; } catch { return false; }
+    });
+  } catch { return false; }
+}
+
+/** Resolve npm's Windows shims to their declared Node entry, without running a shell. */
+function resolveWindowsNpmEntry(directory: string): string | undefined {
+  try {
+    if (!['cmdc.cmd', 'cmdc.ps1', 'command-code.cmd', 'command-code.ps1'].some(name => existsSync(resolve(directory, name)))) return undefined;
+    const base = realpathSync(resolve(directory, 'node_modules', 'command-code'));
+    const expectedBase = resolve(realpathSync(directory), 'node_modules', 'command-code');
+    if (base.toLowerCase() !== expectedBase.toLowerCase()) return undefined;
+    const metadataPath = resolve(base, 'package.json'); const metadataInfo = lstatSync(metadataPath);
+    if (!metadataInfo.isFile() || metadataInfo.isSymbolicLink() || metadataInfo.nlink !== 1 || metadataInfo.size > 128 * 1024) return undefined;
+    const metadata = JSON.parse(readFileSync(metadataPath, 'utf8')) as { name?: unknown; bin?: unknown };
+    if (metadata.name !== 'command-code' || !metadata.bin || typeof metadata.bin !== 'object' || Array.isArray(metadata.bin)) return undefined;
+    const bin = metadata.bin as Record<string, unknown>;
+    const declared = typeof bin['cmdc'] === 'string' ? bin['cmdc'] : bin['command-code'];
+    if (typeof declared !== 'string' || isAbsolute(declared) || !/\.(?:mjs|js)$/i.test(declared)) return undefined;
+    const entry = realpathSync(resolve(base, declared)); const rel = relative(base, entry);
+    if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return undefined;
+    const info = lstatSync(entry);
+    return info.isFile() && info.nlink === 1 ? entry : undefined;
+  } catch { return undefined; }
+}
+
 /** Resolve a Command Code CLI binary on PATH without granting it controller authority. */
 export function resolveCommandCodeExecutable(pathEnv: string | undefined = process.env.PATH): string | undefined {
   const override = process.env['BABEL_COMMAND_CODE_CLI_EXECUTABLE']?.trim();
-  if (override) return override;
+  if (override) return isWindowsCommandInterpreter(override) ? undefined : override;
 
   if (process.platform === 'win32') {
     const pathValue = pathEnv ?? process.env.PATH ?? '';
     for (const directory of pathValue.split(';')) {
       if (!directory || directory === '.' || !isAbsolute(directory)) continue;
       if (pathDirectoryIsProjectLocal(directory)) continue;
+      const npmEntry = resolveWindowsNpmEntry(directory);
+      if (npmEntry) return npmEntry;
       for (const name of WIN32_EXECUTABLE_CANDIDATES) {
         const candidate = resolve(directory, `${name}.exe`);
         try {
           const target = realpathSync(candidate);
           const stat = lstatSync(target);
-          if (!stat.isFile()) continue;
+          if (!stat.isFile() || isWindowsCommandInterpreter(target)) continue;
           return target;
         } catch {
           const candidateNoExt = resolve(directory, name);
           try {
             const target = realpathSync(candidateNoExt);
             const stat = lstatSync(target);
-            if (!stat.isFile()) continue;
+            if (!stat.isFile() || isWindowsCommandInterpreter(target)) continue;
             return target;
           } catch {
             /* try next */

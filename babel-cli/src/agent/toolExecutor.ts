@@ -1,4 +1,5 @@
 import {getExecutionContext} from './executionContext.js';
+import { getRunAbortSignal } from '../runtime/runCancellation.js';
 import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js';
 import { resolveIsolationBrokerFlags } from './chatEngineIsolationFlags.js';
 /**
@@ -46,7 +47,7 @@ import {
   type ToolResult,
 } from '../localTools.js';
 import { resolveExecutorDryRun } from '../config/dryRun.js';
-import { getTrustedFileCreationEvidence, creationOwnershipFromTrustedEvidence } from '../sandbox.js';
+import { awaitPendingProcessTerminations, getTrustedFileCreationEvidence, creationOwnershipFromTrustedEvidence } from '../sandbox.js';
 import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js';
 import { isPathInside } from '../services/targetResolver.js';
 import type { AgentAction } from './actions.js';
@@ -102,6 +103,13 @@ export class ToolExecutionTimeoutError extends Error {
   constructor(tool: string, timeoutMs: number) {
     super(`Tool "${tool}" exceeded timeout of ${timeoutMs}ms`);
     this.name = 'ToolExecutionTimeoutError';
+  }
+}
+
+export class ToolExecutionCancelledError extends Error {
+  constructor(tool: string) {
+    super(`Tool "${tool}" was cancelled`);
+    this.name = 'AbortError';
   }
 }
 
@@ -296,9 +304,8 @@ export function validatePatchContent(patchContent: string, projectRoot: string):
 // ─── Timeout helper ──────────────────────────────────────────────────────
 
 /**
- * Race a tool promise against the outer execution budget. Foreground process
- * tools receive an onAbort callback that propagates this timeout to their
- * SafeExecutor child process instead of abandoning it in the background.
+ * Signal a timed-out or cancelled tool, but keep ownership until its promise
+ * settles. The signal is not proof that a physical effect has stopped.
  */
 export async function withTimeout<T>(
   promise: Promise<T>,
@@ -307,19 +314,28 @@ export async function withTimeout<T>(
   externalSignal?: AbortSignal,
   onAbort?: () => void,
 ): Promise<T> {
-  if (timeoutMs <= 0) return promise;
+  if (timeoutMs <= 0 && !externalSignal) return promise;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let timedOut = false;
+  let interruption: 'timeout' | 'cancelled' | null = null;
+  const interrupt = (reason: 'timeout' | 'cancelled') => {
+    if (interruption !== null) return;
+    interruption = reason;
+    controller.abort();
+  };
+  const timer = timeoutMs > 0 ? setTimeout(() => interrupt('timeout'), timeoutMs) : undefined;
+  const interruptionError = () => interruption === 'cancelled'
+    ? new ToolExecutionCancelledError(toolName)
+    : new ToolExecutionTimeoutError(toolName, timeoutMs);
 
   // Link external signal so external cancellation also aborts the tool.
-  const onExternalAbort = () => controller.abort();
+  const onExternalAbort = () => interrupt('cancelled');
   if (externalSignal) {
     if (externalSignal.aborted) {
       clearTimeout(timer);
       onAbort?.();
-      throw new ToolExecutionTimeoutError(toolName, timeoutMs);
+      await promise.catch(() => undefined);
+      throw new ToolExecutionCancelledError(toolName);
     }
     externalSignal.addEventListener('abort', onExternalAbort, { once: true });
   }
@@ -327,24 +343,24 @@ export async function withTimeout<T>(
   try {
     const result = await Promise.race([
       promise.then((r) => {
-        if (timedOut) throw new ToolExecutionTimeoutError(toolName, timeoutMs);
+        if (interruption !== null) throw interruptionError();
         return r;
       }),
       new Promise<never>((_, reject) => {
         controller.signal.addEventListener(
           'abort',
           () => {
-            timedOut = true;
             onAbort?.();
-            // Suppress unhandled rejection from the abandoned promise
-            promise.catch(() => {});
-            reject(new ToolExecutionTimeoutError(toolName, timeoutMs));
+            reject(interruptionError());
           },
           { once: true },
         );
       }),
     ]);
     return result;
+  } catch (error) {
+    if (interruption !== null) await promise.catch(() => undefined);
+    throw error;
   } finally {
     clearTimeout(timer);
     externalSignal?.removeEventListener('abort', onExternalAbort);
@@ -373,7 +389,7 @@ export function mapAgentActionToToolCalls(action: AgentAction): MappedToolCall[]
     case 'read_file':
       return [{ kind: 'execute', request: { tool: (executorName ?? 'file_read') as 'file_read', path: action.path } }];
     case 'list_dir':
-      return [{ kind: 'execute', request: { tool: (executorName ?? 'directory_list') as 'directory_list', path: action.path } }];
+      return [{ kind: 'execute', request: { tool: (executorName ?? 'directory_list') as 'directory_list', path: action.path, ...(action.after !== undefined ? { after: action.after } : {}), ...(action.revision !== undefined ? { revision: action.revision } : {}) } }];
     case 'search':
       return [{ kind: 'execute', request: { tool: (executorName ?? 'semantic_search') as 'semantic_search', query: action.query } }];
     case 'grep':
@@ -542,9 +558,14 @@ export function createToolExecutor(
               ? await withTimeout(promise, effectiveTimeout, toolName, context.signal, () =>
                   toolController.abort(),
                 )
-              : await promise;
+              : context.signal
+                ? await withTimeout(promise, 0, toolName, context.signal, () => toolController.abort())
+                : await promise;
           results.push(result);
         } catch (error) {
+          if (error instanceof ToolExecutionTimeoutError || error instanceof ToolExecutionCancelledError) {
+            await awaitPendingProcessTerminations(context.sessionId ?? context.runId);
+          }
           if (error instanceof ToolExecutionTimeoutError) {
             emitAgentEvent({
               type: 'tool_timeout',
@@ -800,6 +821,9 @@ export async function executeActionWithPolicy(
     lockContext?: FileLockContext | undefined;
   } = {},
 ): Promise<PolicyGatedExecutionResult> {
+  const signal = getRunAbortSignal(context.signal);
+  signal?.throwIfAborted();
+  if (signal) context = { ...context, signal };
   let executionStarted = false;
   const dispatchId = deps.idempotencyKey ?? context.toolCallId ?? defaultIdempotencyKeyForAction(action) ?? action.type;
   const stoppedBeforeDispatch = (decision: PermissionDecision = 'deny'): PolicyGatedExecutionResult | null => {
@@ -1122,6 +1146,7 @@ export async function executeActionWithPolicy(
 
   // ── Successful execution: reset circuit-breaker ────────────────────
   resetBlocks(context.runId);
+  signal?.throwIfAborted();
   const dispatchAuthorization = deps.onDispatchAuthorized?.();
   if (dispatchAuthorization && !dispatchAuthorization.allowed) {
     incrementBlocks(context.runId);
@@ -1331,6 +1356,7 @@ export async function executeActionWithPolicy(
       ...(idempotencyKey ? { toolCallId: context.toolCallId ?? idempotencyKey } : {}),
     };
     const executeInvocation = () => dispatchRunOperation(context.runControl, 'tool', dispatchId, () => {
+      signal?.throwIfAborted();
       executionStarted = true;
       return executor.execute(action, executionContext, budget);
     });
@@ -1497,8 +1523,9 @@ export async function executeActionWithPolicy(
         txPaths.every((p) => batchTx!.postBatchHash[p] === batchTx!.preBatchHash[p]);
 
       if (
-        batchTx.verified === false &&
-        (writeOutcome === 'effect_missing' || writeOutcome === 'postimage_mismatch' || !writeOutcome)
+        writeOutcome === 'unverified' ||
+        (batchTx.verified === false &&
+          (writeOutcome === 'effect_missing' || writeOutcome === 'postimage_mismatch' || !writeOutcome))
       ) {
         const failureDetail =
           writeOutcome === 'effect_missing'
@@ -1652,12 +1679,16 @@ export async function executeActionWithPolicy(
     let errorToThrow: unknown = error;
     let rollbackConflicts: string[] = [];
     if (effectIntent && context.runDir) {
-      recordEffectTerminal(context.runDir, effectIntent, {
-        status: context.signal?.aborted || error instanceof RunStoppedError ? 'cancelled' : 'failed',
-        error: error instanceof Error ? error.message : String(error),
-      });
+      try {
+        recordEffectTerminal(context.runDir, effectIntent, {
+          status: context.signal?.aborted || error instanceof RunStoppedError ? 'cancelled' : 'failed',
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch (ledgerError) {
+        errorToThrow = new Error(`[EFFECT_LEDGER_SETTLEMENT_UNCERTAIN] Effect evidence could not be persisted; inspect the retained run before retrying. ${ledgerError instanceof Error ? ledgerError.message : String(ledgerError)}`, { cause: error });
+      }
     }
-    if (error instanceof RunStoppedError && (!executionStarted || executor.tracksPhysicalDispatch && !physicalDispatch.started)) {
+    if (errorToThrow === error && error instanceof RunStoppedError && (!executionStarted || executor.tracksPhysicalDispatch && !physicalDispatch.started)) {
       const prevented = stoppedBeforeDispatch(policyDecision);
       if (prevented) return prevented;
     }
@@ -1685,8 +1716,8 @@ export async function executeActionWithPolicy(
     }
     if (rollbackConflicts.length > 0) {
       const conflictDetail = `[ROLLBACK_CONFLICT] ${rollbackConflicts.join('; ')}`;
-      if (error instanceof Error) {
-        error.message = `${error.message}\n${conflictDetail}`;
+      if (errorToThrow instanceof Error) {
+        errorToThrow.message = `${errorToThrow.message}\n${conflictDetail}`;
       } else {
         errorToThrow = new Error(`${String(error)}\n${conflictDetail}`, { cause: error });
       }

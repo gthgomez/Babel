@@ -134,6 +134,39 @@ export function loadImplementorShipEvidenceFromRunDir(runDir: string): Implement
     const raw = tryReadJson(hp);
     if (!raw) continue;
 
+    applyHarnessFields(evidence, raw);
+    break;
+  }
+
+  // policy-events / why-stopped companion
+  const policyPath = join(runDir, 'policy-events.jsonl');
+  if (existsSync(policyPath)) {
+    evidence.notes = evidence.notes ?? [];
+    evidence.notes.push('policy-events.jsonl present');
+  }
+
+  return evidence;
+}
+
+/** Derive export metadata only from already sanitized selected artifact bytes. */
+export function loadImplementorShipEvidenceFromArtifacts(artifacts: ReadonlyMap<string, string>): ImplementorShipEvidence {
+  const evidence: ImplementorShipEvidence = {};
+  const candidates = ['harness.json', ...[...artifacts.keys()].filter(name => name.endsWith('-harness.json') || name === 'cli_payload.json')];
+  for (const name of candidates) {
+    const text = artifacts.get(name);
+    if (text === undefined) continue;
+    try {
+      const raw: unknown = JSON.parse(text);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+      applyHarnessFields(evidence, raw as Record<string, unknown>);
+      break;
+    } catch { continue; }
+  }
+  if (artifacts.has('policy-events.jsonl')) evidence.notes = ['policy-events.jsonl present'];
+  return evidence;
+}
+
+function applyHarnessFields(evidence: ImplementorShipEvidence, raw: Record<string, unknown>): void {
     const cli = (raw['cli_payload'] as Record<string, unknown> | undefined) ?? raw;
     if (typeof raw['status'] === 'string') evidence.status = raw['status'];
     if (typeof cli['status'] === 'string') evidence.status = String(cli['status']);
@@ -171,17 +204,6 @@ export function loadImplementorShipEvidenceFromRunDir(runDir: string): Implement
         },
       ];
     }
-    break;
-  }
-
-  // policy-events / why-stopped companion
-  const policyPath = join(runDir, 'policy-events.jsonl');
-  if (existsSync(policyPath)) {
-    evidence.notes = evidence.notes ?? [];
-    evidence.notes.push('policy-events.jsonl present');
-  }
-
-  return evidence;
 }
 
 function safeList(dir: string): string[] {

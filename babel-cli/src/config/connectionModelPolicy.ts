@@ -37,6 +37,8 @@ export function resolveConnectionModelPolicy(
     backendKey: key, provider: connection.provider, providerModelId: model, tier: 'standard' as const,
     expensive: false, enabled: true, experimental: false,
     ...(contextWindow ? { contextWindow } : {}), ...(maxOutputTokens ? { maxOutputTokens } : {}),
+    ...(metadata?.native_tool_use !== undefined && metadata.native_tool_use_unverified !== true ? { nativeToolUse: metadata.native_tool_use } : {}),
+    ...(metadata?.native_tool_use_unverified === true ? { nativeToolUseUnverified: true } : {}),
   }
   return {
     connectionId: connection.id,
@@ -52,6 +54,7 @@ export function resolveConnectionModelPolicy(
     stagePolicies: MODEL_POLICY_STAGES.map(stage => ({ stage, primaryBackendKey: key,
       primaryProvider: connection.provider, primaryProviderModelId: model, orderedBackends: [entry] })),
     ...(contextWindow ? { contextWindow } : {}), ...(maxOutputTokens ? { maxOutputTokens } : {}),
-    nativeToolUse: true,
+    ...(metadata?.native_tool_use !== undefined && metadata.native_tool_use_unverified !== true ? { nativeToolUse: metadata.native_tool_use } : {}),
+    ...(metadata?.native_tool_use_unverified === true ? { nativeToolUseUnverified: true } : {}),
   }
 }

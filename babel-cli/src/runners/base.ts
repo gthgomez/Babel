@@ -411,7 +411,7 @@ export type ToolStreamEvent =
   | { type: 'thought_delta'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; idWasNormalized?: true; providerMetadata?: ProviderToolCall['providerMetadata'] }
   | { type: 'done'; finishReason: string }
-  | { type: 'error'; message: string; malformedToolArguments?: {
+  | { type: 'error'; message: string; failure?: import('./providerHttpError.js').ProviderHttpError; malformedToolArguments?: {
       callId: string; name: string; finishReason: string; idWasNormalized: boolean;
     } };
 

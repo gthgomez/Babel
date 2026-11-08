@@ -299,6 +299,16 @@ export class WaterfallRenderer extends BaseRenderer {
     this._rawMode.disable();
   }
 
+  /** Transfer raw-input ownership when the host promotes/demotes responsively. */
+  override setInputOwnership(ownsInput: boolean): void {
+    if (!ownsInput) {
+      this.disableRawMode();
+      return;
+    }
+    const renderState = this._store.currentState.renderState;
+    if (renderState !== 'done' && renderState !== 'failed') this.enableRawMode();
+  }
+
   start(): void {
     this.enableRawMode();
     this.render();

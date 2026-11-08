@@ -742,6 +742,18 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
       assert.ok(call, 'the actual owned writer was launched');
       job = getBackgroundShellJob(call.detail.match(/bg-\d+/)[0]);
       assert.equal(job?.status, 'running', 'cancellation alone does not settle an explicitly detached process');
+      const blocked: ChatEvent[] = [];
+      for await (const event of engine.submitMessageStream('Start a replacement task')) blocked.push(event);
+      assert.equal(blocked.length, 1);
+      assert.equal(blocked[0]?.type, 'failed');
+      if (blocked[0]?.type === 'failed') assert.match(blocked[0].error, /background.*running|still settling/i);
+      assert.throws(() => makeEngine(fixture.project, runId, makeRunner(() => [{ type: 'done', finishReason: 'stop' }])), /background.*running|still settling/i);
+      assert.throws(() => makeEngine(fixture.project, 'different-session-same-project', makeRunner(() => [{ type: 'done', finishReason: 'stop' }])), /background.*running|still settling/i);
+      const unrelatedProject = join(fixture.root, 'unrelated-project');
+      mkdirSync(unrelatedProject);
+      assert.doesNotThrow(() => makeEngine(unrelatedProject, 'different-session-unrelated-project', makeRunner(() => [{ type: 'done', finishReason: 'stop' }])));
+
+      assert.equal(getBackgroundShellJob(job!.id)?.status, 'running', 'a second engine must not clear the live owned job');
       assert.equal(readFileSync(target, 'utf8'), 'green');
       writeFileSync(release, 'release');
       await job!.done;

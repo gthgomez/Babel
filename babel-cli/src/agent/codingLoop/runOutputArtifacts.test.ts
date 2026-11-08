@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync, linkSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -7,6 +8,21 @@ import { registerRunOutput, readRunOutput, MAX_RUN_OUTPUT_BYTES, MAX_ARTIFACT_CH
 import { admitProjectContentRead } from '../chatReadOnly.js'
 
 const owner = { sessionId: 'session', taskOwnerId: 'task-owner', acceptedTaskId: 'task' }
+
+test('a hard-linked replacement cannot enroll outside bytes as run output', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-output-hardlink-'))
+  try {
+    const runDir = join(root, 'run'); mkdirSync(runDir)
+    const canary = 'SYNTHETIC_OUTSIDE_ARTIFACT_CANARY'
+    const outside = join(root, 'outside.txt'); writeFileSync(outside, canary)
+    const artifact = registerRunOutput({ runDir, owner, content: 'original', tool: 'test_run', callId: 'call' })
+    const base = join(runDir, 'tool-output-artifacts', artifact.id)
+    rmSync(`${base}.log`); linkSync(outside, `${base}.log`)
+    writeFileSync(`${base}.json`, JSON.stringify({ ...artifact, bytes: Buffer.byteLength(canary), sha256: createHash('sha256').update(canary).digest('hex') }))
+    assert.throws(() => readRunOutput({ runDir, owner, artifactId: artifact.id }), /DENIED/)
+    assert.equal(readFileSync(outside, 'utf8'), canary)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
 
 test('default artifact pages advertise continuation until the final line', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'babel-output-default-page-'))

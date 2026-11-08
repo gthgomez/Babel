@@ -66,6 +66,7 @@ test('lite-plan-apply fixture rejects hallucinated planner paths outside plan co
       join(planRunDir, 'contract.json'),
       JSON.stringify({
         schema_version: 1,
+        mode: 'babel-lite-plan',
         likely_files: [scenario.source_file, scenario.test_file],
         required_reads: [scenario.source_file],
       }),

@@ -22,6 +22,7 @@ import {
   type VerifierScope,
 } from './verifierKernel.js';
 import { isCatOrTypeCommand } from './codingLoop/verificationStages.js';
+import { parseNativeNodeFooter } from './nativeTestResultCounts.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
 import { isNodeTestCommand, isPythonTestCommand } from '../authority/commandDecoder.js';
 
@@ -1131,20 +1132,17 @@ function collectCountWords(phrase: string): Record<string, number> {
 }
 
 function parseNodeTestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
-  const totals = [...text.matchAll(/^(?:ℹ|#)\s+tests\s+(\d+)\s*$/gm)];
-  const lastTotal = totals.at(-1)?.[1];
-  if (lastTotal === undefined) return null;
-  const testsTotal = Number(lastTotal);
-  const skipped = [...text.matchAll(/^(?:ℹ|#)\s+skipped\s+(\d+)\s*$/gm)].at(-1)?.[1];
-  const testsSkipped = skipped === undefined ? 0 : Number(skipped);
-  if (!integerCount(testsTotal) || !integerCount(testsSkipped)) return null;
-  return { tests_total: testsTotal, tests_skipped: testsSkipped };
+  // Require Node's complete native footer. A bare `ℹ tests 5` line can be
+  // printed by any green script and is not evidence that a runner executed.
+  return parseNativeNodeFooter(text);
 }
 
 function parsePytestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
   const token = String.raw`\d+\s+(?:failed|passed|skipped|errors?|xfailed|xpassed|warnings?|deselected|reruns?)`;
+  // Pytest always ends its summary with the elapsed time. Requiring it rejects
+  // a hand-written "3 passed"-shaped line while accepting `-q` output.
   const line = new RegExp(
-    `^(?:=+\\s*)?((?:${token}(?:,\\s*)?)+)(?:\\s+in\\s+[\\d.]+s)?\\s*(?:=+)?\\s*$`,
+    `^(?:=+\\s*)?((?:${token}(?:,\\s*)?)+)\\s+in\\s+[\\d.]+s\\s*(?:=+)?\\s*$`,
     'gim',
   );
   const phrase = [...text.matchAll(line)].at(-1)?.[1];
@@ -1175,6 +1173,9 @@ function parsePytestCounts(text: string): { tests_total: number; tests_skipped: 
 function parseJestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
   const phrase = [...text.matchAll(/^Tests:\s+(.+)$/gim)].at(-1)?.[1];
   if (!phrase) return null;
+  // Jest reports the suite summary alongside the test summary. Both are
+  // native output; a lone "Tests: 3 passed" line is not a Jest report.
+  if (!/^Test Suites:\s+.+$/gim.test(text)) return null;
   const words = collectCountWords(phrase);
   const testsSkipped = (words.skipped ?? 0) + (words.todo ?? 0) + (words.pending ?? 0);
   const testsTotal = words.total
@@ -1187,6 +1188,9 @@ function parseJestCounts(text: string): { tests_total: number; tests_skipped: nu
 function parseVitestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
   const phrase = [...text.matchAll(/^[ \t]*Tests[ \t]+([^:\n].*)$/gim)].at(-1)?.[1];
   if (!phrase) return null;
+  // Vitest prints a Test Files summary beside the Tests summary. Require the
+  // pair so a script that echoes a count-shaped line is not promoted.
+  if (!/^[ \t]*Test Files[ \t]+/gim.test(text)) return null;
   const words = collectCountWords(phrase);
   const testsSkipped = (words.skipped ?? 0) + (words.todo ?? 0);
   const paren = phrase.match(/\((\d+)\)\s*$/);
@@ -1199,8 +1203,10 @@ function parseVitestCounts(text: string): { tests_total: number; tests_skipped: 
 }
 
 function parseUnittestCounts(text: string): { tests_total: number; tests_skipped: number } | null {
-  const ran = [...text.matchAll(/^Ran (\d+) tests?\b/gim)].at(-1)?.[1];
+  const ran = [...text.matchAll(/^Ran (\d+) tests? in [\d.]+s\b/gim)].at(-1)?.[1];
   if (ran === undefined) return null;
+  // unittest closes with an OK/FAILED verdict line. Both parts are required.
+  if (!/^(?:OK|FAILED)\b.*$/m.test(text)) return null;
   const skipped = [...text.matchAll(/\bskipped=(\d+)/gi)].at(-1)?.[1];
   const testsTotal = Number(ran);
   const testsSkipped = skipped === undefined ? 0 : Number(skipped);
@@ -1209,7 +1215,8 @@ function parseUnittestCounts(text: string): { tests_total: number; tests_skipped
 }
 
 function parseMochaCounts(text: string): { tests_total: number; tests_skipped: number } | null {
-  const passing = [...text.matchAll(/^[ \t]*(\d+)\s+passing(?:\s+\([^)\n]*\))?\s*$/gim)].at(-1)?.[1];
+  // Mocha's passing line carries the elapsed time in parentheses; require it.
+  const passing = [...text.matchAll(/^[ \t]*(\d+)\s+passing\s+\([^)\n]*\)\s*$/gim)].at(-1)?.[1];
   if (passing === undefined) return null;
   const pending = [...text.matchAll(/^[ \t]*(\d+)\s+pending\s*$/gim)].at(-1)?.[1];
   const failing = [...text.matchAll(/^[ \t]*(\d+)\s+failing\s*$/gim)].at(-1)?.[1];
@@ -1349,6 +1356,23 @@ export function buildGreenVerifierRejectionMessage(
 
   // verifier_missing (includes B2: agent-owned _verify*.py is non-authoritative)
   const parts = [preamble];
+  if (
+    receipt &&
+    isAuthoritativeVerifierCommand(receipt.command) &&
+    verifierExitCode(receipt) === 0 &&
+    !(typeof (receipt as { tests_total?: number }).tests_total === 'number' &&
+      (receipt as { tests_total?: number }).tests_total! > 0)
+  ) {
+    parts.push(
+      `COMPLETION_GATE_REJECTED: verifier_missing`,
+      `The verifier exited 0 but reported no executed-test count, so it is green output rather than test evidence.`,
+      receipt.command ? `Last command: ${receipt.command}` : '',
+      `Use a runner that reports executed counts (node --test, pytest, jest, vitest, mocha), then complete again.`,
+      cmdHint,
+      strikeEscalation,
+    );
+    return parts.filter(Boolean).join(' ');
+  }
   if (isStrike) {
     parts.push(
       'Gate check: file changes exist but no valid verifier attempt was made.',

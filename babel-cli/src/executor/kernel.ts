@@ -80,7 +80,7 @@ function requestToAgentAction(request: ToolCallRequest): AgentAction {
     case "file_read":
       return { type: "read_file", path: String(request.path ?? "") };
     case "directory_list":
-      return { type: "list_dir", path: String(request.path ?? ".") };
+      return { type: "list_dir", path: String(request.path ?? "."), ...(request.after !== undefined ? { after: request.after } : {}), ...(request.revision !== undefined ? { revision: request.revision } : {}) };
     case "grep":
       return {
         type: "grep",
@@ -270,6 +270,7 @@ export function createExecutorKernel(
             .map((entry) => entry.stderr)
             .filter(Boolean)
             .join("\n"),
+          ...(last?.directory_page ? { directory_page: last.directory_page } : {}),
         };
       },
     },

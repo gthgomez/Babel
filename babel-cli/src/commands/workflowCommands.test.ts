@@ -107,6 +107,37 @@ function writeFixture(
 }
 
 describe('buildSmallFixLitePayload', () => {
+  it('projects an uncertain cancelled write without claiming an empty workspace is clean', () => {
+    const payload = buildSmallFixLitePayload(makeResult({
+      status: 'SMALL_FIX_FAILED', changedFiles: [], cancelled: true, writeOutcome: 'unknown',
+      checks: ['Cancelled during write; the write outcome is unknown and requires inspection.'],
+    }), { verb: 'fix', task: 'repair src/math.js' });
+    assert.equal(payload.write_outcome, 'unknown');
+    assert.equal(payload.user_status, 'failed');
+    assert.equal(payload.retryable, false);
+    assert.equal(payload.next_command, undefined);
+    assert.equal(payload.checkpoint.required, true);
+    assert.match(payload.checks.join(' '), /outcome is unknown/);
+  });
+  it('honors a nonretryable coordinated failure even when all observed file effects are known', () => {
+    const payload = buildSmallFixLitePayload(makeResult({
+      status: 'SMALL_FIX_FAILED', changedFiles: ['src/math.js'], retryable: false,
+      checks: ['Inspect the retained changes and evidence before continuing.'],
+    }), { verb: 'fix', task: 'repair two files' });
+    assert.equal(payload.retryable, false);
+    assert.equal(payload.next_command, undefined);
+    assert.match(payload.next.join(' '), /Inspect/);
+  });
+  it('does not offer automatic retry for an uncertain failed write', () => {
+    const payload = buildSmallFixLitePayload(makeResult({
+      status: 'SMALL_FIX_FAILED', changedFiles: [], writeOutcome: 'unknown',
+      checks: ['The write outcome is unknown; inspect the workspace before continuing.'],
+    }), { verb: 'fix', task: 'repair src/math.js' });
+    assert.equal(payload.retryable, false);
+    assert.equal(payload.next_command, undefined);
+    assert.equal(payload.checkpoint.required, true);
+    assert.match(payload.next.join(' '), /Inspect/);
+  });
   it('renders complete fix output with verification, checkpoints, evidence, and usage ledger path', () => {
     const runDir = mkdtempSync(join(tmpdir(), 'babel-small-fix-complete-'));
     try {

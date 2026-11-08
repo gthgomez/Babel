@@ -586,6 +586,7 @@ export interface ChatResult {
 
 export interface ChatEngineStreamingLoopHost {
   readonly runControl?: import('../runtime/run-control.js').RunControl | null
+  markProviderDispatchStarted?: () => void
   readonly captureProviderUsageScope: (ownerGeneration?: number) => ChatUsageScope
   _activeToolBatchId: string | null
   _cancelled: boolean
@@ -881,6 +882,7 @@ export interface ChatEngineActionExecutorHost {
   hashContent: (content: string) => string
   hashFilePath: (filePath: string) => Promise<string>
   isSubmissionCurrent: (ownerGeneration: number) => boolean
+  markPhysicalSettlementUnknown?: () => void
   isolationBrokerFlags: () => IsolationBrokerFlags
   currentVerifierOwner: () => import('../executor/contracts.js').VerifierEvidenceOwner | undefined
   lastVerifierFailed: boolean

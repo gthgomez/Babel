@@ -2,8 +2,10 @@ import type { ChatEvent } from '../../agent/chatEngine.js';
 import type { InteractiveTurn } from '../../interactive/types.js';
 import {
   createAssistantMessageCell,
+  createPlainCell,
   createUserMessageCell,
 } from '../historyCells/cells.js';
+import { stripAnsi } from '../theme.js';
 import { HistoryTranscript } from '../historyCells/transcript.js';
 import { HistoryCellViewport } from '../historyCells/viewport.js';
 import type { HistoryCellRecord } from '../historyCells/types.js';
@@ -39,6 +41,12 @@ export class ShellRuntimeBinding {
   private currentUserRecord: HistoryCellRecord | undefined;
   private readonly toolIds = new Map<string, number>();
   private readonly toolIdQueue: number[] = [];
+  /** Monotonic per-turn tool ids. Queue position is not an id source. */
+  private nextToolId = 1;
+  /** Non-tool activity (subagents, file changes) reuses the tool-cell surface. */
+  private readonly activityIds = new Map<string, number>();
+  private nextActivityId = 1_000_000;
+  private nextNoteId = 1;
   private activity: ShellActivity = 'idle';
   private lastOutcome: string | null = null;
   private readonly onChange: (() => void) | undefined;
@@ -81,6 +89,8 @@ export class ShellRuntimeBinding {
     this.currentUserRecord = undefined;
     this.toolIds.clear();
     this.toolIdQueue.length = 0;
+    this.nextToolId = 1;
+    this.activityIds.clear();
     this.store.startSession(threadId, records);
     this.syncViewport();
   }
@@ -107,6 +117,8 @@ export class ShellRuntimeBinding {
     this.lastOutcome = null;
     this.toolIds.clear();
     this.toolIdQueue.length = 0;
+    this.nextToolId = 1;
+    this.activityIds.clear();
     this.syncViewport();
   }
 
@@ -162,7 +174,7 @@ export class ShellRuntimeBinding {
         break;
       case 'tool_start': {
         this.activity = 'running';
-        const numericId = this.toolIds.size + 1;
+        const numericId = this.nextToolId++;
         if (event.toolCallId) this.toolIds.set(event.toolCallId, numericId);
         this.toolIdQueue.push(numericId);
         this.transcript.beginToolCall(numericId, event.tool, event.target);
@@ -186,11 +198,54 @@ export class ShellRuntimeBinding {
         this.activity = 'running';
         break;
       }
+      case 'sub_agent_start': {
+        this.activity = 'running';
+        const activeId = this.nextActivityId++;
+        this.activityIds.set(event.id, activeId);
+        this.transcript.beginToolCall(activeId, 'sub_agent', event.label);
+        break;
+      }
+      case 'sub_agent_complete': {
+        this.activity = 'running';
+        const activeId = this.activityIds.get(event.id);
+        if (activeId !== undefined) {
+          this.transcript.completeToolCall(activeId, event.summary);
+          this.activityIds.delete(event.id);
+        }
+        break;
+      }
+      case 'sub_agent_failed': {
+        this.activity = 'running';
+        const activeId = this.activityIds.get(event.id);
+        if (activeId !== undefined) {
+          this.transcript.completeToolCall(activeId, event.error, true);
+          this.activityIds.delete(event.id);
+        }
+        break;
+      }
+      case 'file_changed': {
+        this.activity = 'running';
+        const changedId = this.nextActivityId++;
+        this.transcript.beginToolCall(changedId, 'file_changed', event.path);
+        this.transcript.completeToolCall(changedId, `+${event.additions} -${event.deletions}`);
+        break;
+      }
+      case 'progress_recovery':
+        this.activity = 'running';
+        this.transcript.onThought(event.message ?? `Recovery: ${event.source}`);
+        break;
       case 'cancelled':
         this.activity = 'cancelling';
         this.lastOutcome = event.outcome ?? 'CANCELLED';
         break;
       case 'done':
+        // Some providers return the whole answer only in the terminal event.
+        // Preserve it when no answer chunk was streamed, so the hosted shell
+        // never depends on the legacy direct-stdout fallback.
+        if (typeof event.answer === 'string' && event.answer.trim() &&
+            this.transcript.getAnswerText().trim().length === 0) {
+          this.transcript.onAnswerChunk(event.answer);
+        }
         this.activity = 'idle';
         this.lastOutcome = event.outcome ?? event.status ?? 'completed';
         break;
@@ -201,6 +256,32 @@ export class ShellRuntimeBinding {
       default:
         break;
     }
+    this.store.replaceCurrentTurn(
+      [...(this.currentUserRecord ? [this.currentUserRecord] : []), ...this.transcript.getAllRecords()],
+      epoch,
+    );
+    this.syncViewport();
+  }
+
+  /**
+   * Append an outcome note (completion status, diff summary, cancellation
+   * reason) to the active turn instead of writing it directly to stdout.
+   * Direct writes scroll the terminal behind the shell's frame cache and
+   * produce a partial, duplicated repaint.
+   */
+  appendNote(text: string): void {
+    const cleaned = stripAnsi(text).trim();
+    if (!cleaned || this.currentTurnId === undefined) return;
+    if (this.store.epoch !== this.currentTurnEpoch || this.store.turnId !== this.currentTurnId) {
+      this.clearActiveTurn();
+      return;
+    }
+    const epoch = this.store.epoch;
+    this.transcript.appendCommitted(createPlainCell(cleaned.split('\n'), {
+      cell_id: `interactive-note:${this.currentTurnId}:${this.nextNoteId++}`,
+      turn_id: this.currentTurnId,
+      ...(this.store.threadId !== undefined ? { thread_id: this.store.threadId } : {}),
+    }));
     this.store.replaceCurrentTurn(
       [...(this.currentUserRecord ? [this.currentUserRecord] : []), ...this.transcript.getAllRecords()],
       epoch,
@@ -246,6 +327,7 @@ export class ShellRuntimeBinding {
     this.currentUserRecord = undefined;
     this.toolIds.clear();
     this.toolIdQueue.length = 0;
+    this.activityIds.clear();
     this.activity = 'idle';
     this.lastOutcome = outcome ?? this.lastOutcome ?? 'completed';
     this.syncViewport();
@@ -257,6 +339,7 @@ export class ShellRuntimeBinding {
     this.currentUserRecord = undefined;
     this.toolIds.clear();
     this.toolIdQueue.length = 0;
+    this.activityIds.clear();
     this.activity = 'idle';
   }
 

@@ -7,18 +7,26 @@
  */
 
 import {
+  constants,
   copyFileSync,
   existsSync,
+  lstatSync,
+  mkdtempSync,
   mkdirSync,
   readdirSync,
-  readFileSync,
+  realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { readLatestRunPointer } from '../cli/helpers.js';
-import { loadImplementorShipEvidenceFromRunDir } from './shipEvidencePrBody.js';
+import { loadImplementorShipEvidenceFromArtifacts, loadImplementorShipEvidenceFromRunDir } from './shipEvidencePrBody.js';
+import { loadEnterprisePolicy } from '../config/enterprisePolicy.js';
+import { redactEvidenceValue, redactSecrets } from '../utils/redaction.js';
+import { checkedFileBytes } from '../utils/checkedFileRead.js';
 
 export interface EvidenceOpenReport {
   schema_version: 1;
@@ -222,6 +230,15 @@ export function exportEvidenceBundle(input: {
   outputDir?: string;
   now?: Date;
 }): EvidenceExportReport {
+  return exportEvidenceBundleUnqualified(input);
+}
+
+/** Sanitizing exporter: bounded, identity-checked source reads and exclusive destination creates. */
+function exportEvidenceBundleUnqualified(input: {
+  runDir: string;
+  outputDir?: string;
+  now?: Date;
+}): EvidenceExportReport {
   const now = input.now ?? new Date();
   const source = resolve(input.runDir);
   const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
@@ -246,51 +263,94 @@ export function exportEvidenceBundle(input: {
   }
 
   try {
+    const assertPhysicalDirectoryPath = (path: string): void => {
+      let ancestor = path;
+      while (!existsSync(ancestor) && ancestor !== dirname(ancestor)) ancestor = dirname(ancestor);
+      const stat = lstatSync(ancestor);
+      const normalize = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+      if (!stat.isDirectory() || stat.isSymbolicLink() || normalize(realpathSync(ancestor)) !== normalize(resolve(ancestor))) {
+        throw new Error('Evidence export refused a linked directory path.');
+      }
+    };
+    assertPhysicalDirectoryPath(source);
+    assertPhysicalDirectoryPath(exportRoot);
+    // Reject linked artifacts before reading or copying any source content.
+    for (const name of readdirSync(source)) {
+      const entry = lstatSync(join(source, name));
+      if (entry.isSymbolicLink() || (entry.isFile() && entry.nlink !== 1)) {
+        throw new Error('Evidence export refused a linked source artifact.');
+      }
+    }
+    const policy = loadEnterprisePolicy().policy;
+    const exportPolicy = { ...policy, redaction: { ...policy.redaction, enabled: true } };
+    const omitPromptPayloads = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(omitPromptPayloads);
+      if (!value || typeof value !== 'object') return value;
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
+        /^(?:prompt|systemprompt|messages|compiledcontext|tooloutput)$/.test(key.replace(/[_-]/g, '').toLowerCase()) ? '[OMITTED]' : omitPromptPayloads(item)]));
+    };
+    const archiveContent = new Map<string, string>();
+    let archiveBytes = 0;
+    const copySanitized = (from: string, to: string): string => {
+      const exact = lstatSync(from, { bigint: true });
+      const stat = lstatSync(from);
+      if (!stat.isFile() || stat.nlink !== 1 || stat.size > 2_000_000) throw new Error('Evidence artifact is not a bounded regular file.');
+      const bytes = checkedFileBytes(from, 2_000_000, () => {
+        try { assertPhysicalDirectoryPath(source); return true; } catch { return false; }
+      }, stat, exact);
+      if (!bytes) throw new Error('Evidence artifact changed or could not be safely read.');
+      const text = bytes.toString('utf8');
+      let output: string;
+      if (from.toLowerCase().endsWith('.json')) {
+        output = `${JSON.stringify(redactEvidenceValue(omitPromptPayloads(JSON.parse(text)), exportPolicy), null, 2)}\n`;
+      } else if (from.toLowerCase().endsWith('.jsonl')) {
+        output = text.split(/\r?\n/).filter(line => line.trim()).map(line => JSON.stringify(redactEvidenceValue(omitPromptPayloads(JSON.parse(line)), exportPolicy))).join('\n') + '\n';
+      } else {
+        output = redactSecrets(text, exportPolicy);
+      }
+      writeFileSync(to, output, { encoding: 'utf8', flag: 'wx' });
+      return output;
+    };
     mkdirSync(exportRoot, { recursive: true });
+    assertPhysicalDirectoryPath(exportRoot);
+    if (readdirSync(exportRoot).length !== 0) {
+      throw new Error('Evidence export requires an empty destination directory.');
+    }
     const key = listKeyFiles(source).filter((k) => k.exists);
     for (const k of key) {
       const dest = join(exportRoot, k.name);
-      copyFileSync(k.path, dest);
+      const sanitized = copySanitized(k.path, dest);
+      archiveBytes += Buffer.byteLength(sanitized, 'utf8');
+      if (archiveBytes > 32_000_000) throw new Error('Evidence export exceeds the bounded archive size.');
+      archiveContent.set(k.name, sanitized);
       files_copied.push(k.name);
     }
 
-    // Copy shallow jsonl/json evidence (cap count)
-    let extra = 0;
-    for (const name of readdirSync(source)) {
-      if (extra >= 20) break;
-      if (files_copied.includes(name)) continue;
-      if (!/\.(json|jsonl|md)$/i.test(name)) continue;
-      const src = join(source, name);
-      if (!statSync(src).isFile()) continue;
-      if (statSync(src).size > 2_000_000) continue;
-      copyFileSync(src, join(exportRoot, name));
-      files_copied.push(name);
-      extra += 1;
-    }
+    const omittedUnselectedCount = readdirSync(source).filter(name => /\.(json|jsonl|md)$/i.test(name) && !files_copied.includes(name)).length;
 
-    const implementor = loadImplementorShipEvidenceFromRunDir(source);
+    // Derive metadata from sanitized bytes without reopening mutable paths.
+    const implementor = loadImplementorShipEvidenceFromArtifacts(archiveContent);
     const manifest_path = join(exportRoot, 'export-manifest.json');
-    writeFileSync(
-      manifest_path,
-      `${JSON.stringify(
+    const manifestText = `${JSON.stringify(
         {
           schema_version: 1,
           kind: 'babel_evidence_export',
-          source_run_dir: source,
+          source_run_id: basename(source),
           generated_at,
           files: files_copied,
-          implementor,
+          omitted_unselected_count: omittedUnselectedCount,
+          implementor: redactEvidenceValue(implementor, exportPolicy),
         },
         null,
         2,
-      )}\n`,
-      'utf8',
-    );
+      )}\n`;
+    writeFileSync(manifest_path, manifestText, { encoding: 'utf8', flag: 'wx' });
+    archiveContent.set('export-manifest.json', manifestText);
     if (!files_copied.includes('export-manifest.json')) {
       files_copied.push('export-manifest.json');
     }
 
-    const zip_path = tryCreateZip(exportRoot, join(dirname(exportRoot), `${basename(exportRoot)}.zip`));
+    const zip_path = tryCreateZip(join(dirname(exportRoot), `${basename(exportRoot)}.zip`), archiveContent);
 
     return {
       schema_version: 1,
@@ -324,7 +384,7 @@ export function formatEvidenceExportHuman(report: EvidenceExportReport): string 
     `Status: ${report.status}`,
     `Source: ${report.source_run_dir}`,
     `Export dir: ${report.export_dir}`,
-    report.zip_path ? `Zip: ${report.zip_path}` : 'Zip: (not created — directory export is complete)',
+    report.zip_path ? `Zip: ${report.zip_path}` : report.status === 'ok' ? 'Zip: (not created — directory export is complete)' : 'Zip: (not created)',
     `Files: ${report.files_copied.length}`,
     ...report.files_copied.slice(0, 30).map((f) => `- ${f}`),
   ];
@@ -332,28 +392,38 @@ export function formatEvidenceExportHuman(report: EvidenceExportReport): string 
   return lines.join('\n');
 }
 
-function tryCreateZip(dir: string, zipPath: string): string | null {
+function tryCreateZip(zipPath: string, contents: ReadonlyMap<string, string>): string | null {
+  if (existsSync(zipPath)) return null;
+  const scratch = mkdtempSync(join(tmpdir(), 'babel-evidence-archive-'));
+  const temporaryZip = join(scratch, 'bundle.zip');
+  try {
+  const stagedDir = join(scratch, 'content');
+  mkdirSync(stagedDir);
+  for (const [name, content] of contents) writeFileSync(join(stagedDir, name), content, { encoding: 'utf8', flag: 'wx' });
+  const files = [...contents.keys()];
   // Prefer tar (git bash / unix); fall back to PowerShell Compress-Archive on Windows.
-  const tar = spawnSync('tar', ['-a', '-cf', zipPath, '-C', dirname(dir), basename(dir)], {
+  const tar = spawnSync('tar', ['-a', '-cf', temporaryZip, '-C', scratch, ...files.map(name => `./content/${name}`)], {
     encoding: 'utf8',
     windowsHide: true,
   });
-  if (tar.status === 0 && existsSync(zipPath)) return zipPath;
-
-  if (process.platform === 'win32') {
+  if (tar.status !== 0 && process.platform !== 'win32') return null;
+  if (tar.status !== 0 && process.platform === 'win32') {
+    rmSync(temporaryZip, { force: true });
     const ps = spawnSync(
       'powershell',
       [
         '-NoProfile',
         '-Command',
-        `Compress-Archive -Path '${dir.replace(/'/g, "''")}\\*' -DestinationPath '${zipPath.replace(/'/g, "''")}' -Force`,
+        `Compress-Archive -LiteralPath @(${files.map(name => `'${join(stagedDir, name).replace(/'/g, "''")}'`).join(',')}) -DestinationPath '${temporaryZip.replace(/'/g, "''")}'`,
       ],
       { encoding: 'utf8', windowsHide: true },
     );
-    if (ps.status === 0 && existsSync(zipPath)) return zipPath;
+    if (ps.status !== 0) return null;
   }
-
-  return null;
+  if (!existsSync(temporaryZip)) return null;
+  try { copyFileSync(temporaryZip, zipPath, constants.COPYFILE_EXCL); return zipPath; }
+  catch { return null; }
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
 
 /** Relative path helper for tests. */

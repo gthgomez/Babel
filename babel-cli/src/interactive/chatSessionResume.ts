@@ -49,7 +49,7 @@ export interface ResumeChatSessionResult {
 export interface ResumeChatSessionFailure {
   ok: false;
   sessionId: string;
-  reason: 'missing' | 'error' | 'repo_identity_mismatch' | 'repo_identity_unknown';
+  reason: 'missing' | 'error' | 'cancelled' | 'repo_identity_mismatch' | 'repo_identity_unknown';
   message: string;
 }
 
@@ -76,6 +76,26 @@ export async function resumeChatSession(
   ctx: ReplContext,
   sessionId: string,
   options: ResumeChatSessionOptions = {},
+): Promise<ResumeChatSessionOutcome> {
+  if (ctx.isRunning || ctx.preparingRun) return { ok: false, sessionId, reason: 'error', message: 'A task is active; wait for it to settle before resuming a session.' };
+  if (ctx.chatEngine?.getEngineRunId?.() === sessionId) return { ok: false, sessionId, reason: 'error', message: 'This session is already active.' };
+  ctx.preparingRun = true;
+  let cancelled = false;
+  const cancelPreparation = () => { cancelled = true; };
+  ctx.cancelActiveRun = cancelPreparation;
+  try {
+    return await resumeChatSessionOwned(ctx, sessionId, options, () => cancelled);
+  } finally {
+    ctx.preparingRun = false;
+    if (ctx.cancelActiveRun === cancelPreparation) delete ctx.cancelActiveRun;
+  }
+}
+
+async function resumeChatSessionOwned(
+  ctx: ReplContext,
+  sessionId: string,
+  options: ResumeChatSessionOptions,
+  isCancelled: () => boolean,
 ): Promise<ResumeChatSessionOutcome> {
   const hasThreadStore = threadStoreExists(sessionId);
   const txPath = transcriptPath(sessionId);
@@ -263,9 +283,15 @@ export async function resumeChatSession(
       ) {
         throw err;
       }
+      if (isCancelled()) throw new Error('Session restoration cancelled.');
       const messages = readLegacyTranscriptForContext(txPath);
       engine = createEngineFromThreadCells(sessionId,resumeOptions,[]);
       engine.replaceConversation(messages);
+    }
+    if (isCancelled()) {
+      engine.closeAdmissionStore();
+      resumeAdmissionAdopted = true;
+      return { ok: false, sessionId, reason: 'cancelled', message: 'Session restoration cancelled.' };
     }
     // Attach event log if it lands after transcript restore
     const lateLog = loadThreadEventLogFromDir(chatSessionDir(sessionId));
@@ -305,8 +331,8 @@ export async function resumeChatSession(
     return {
       ok: false,
       sessionId,
-      reason: 'error',
-      message: err instanceof Error ? err.message : String(err),
+      reason: isCancelled() ? 'cancelled' : 'error',
+      message: `${isCancelled() ? 'Session restoration cancelled; ' : ''}${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }

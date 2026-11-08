@@ -37,3 +37,35 @@ describe('commandCodeCliDiscovery', () => {
     assert.equal(resolveCommandCodeExecutable('/empty'), undefined);
   });
 });
+
+it('does not treat the Windows command interpreter as Command Code', { skip: process.platform !== 'win32' ? 'Windows npm/CommandCode shim' : false }, () => {
+  const systemDir = join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32')
+  assert.equal(resolveCommandCodeExecutable(systemDir), undefined)
+})
+
+it('resolves a Windows npm CommandCode shim to its contained Node entrypoint', { skip: process.platform !== 'win32' ? 'Windows npm/CommandCode shim' : false }, async () => {
+  const { tmpdir } = await import('node:os')
+  const root = mkdtempSync(join(tmpdir(), 'babel-cc-npm-'))
+  try {
+    const packageRoot = join(root, 'node_modules', 'command-code'); mkdirSync(join(packageRoot, 'dist'), { recursive: true })
+    writeFileSync(join(root, 'cmdc.ps1'), '# synthetic shim')
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: 'command-code', bin: { cmdc: 'dist/index.mjs' } }))
+    const entry = join(packageRoot, 'dist', 'index.mjs'); writeFileSync(entry, '// synthetic entry')
+    assert.equal(resolveCommandCodeExecutable(root), entry)
+    const probe = await probeCommandCodeInstallation({ pathEnv: root, spawnFn: async (exe, args) => {
+      assert.equal(exe, entry); assert.deepEqual(args, ['--version']); return { exitCode: 0, stdout: '1.88.2', stderr: '' }
+    } })
+    assert.equal(probe.state, 'verified'); assert.equal(probe.version, '1.88.2')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+it('rejects an npm declaration that escapes its package root', { skip: process.platform !== 'win32' ? 'Windows npm/CommandCode shim' : false }, async () => {
+  const { tmpdir } = await import('node:os')
+  const root = mkdtempSync(join(tmpdir(), 'babel-cc-escape-'))
+  try {
+    const packageRoot = join(root, 'node_modules', 'command-code'); mkdirSync(packageRoot, { recursive: true })
+    writeFileSync(join(root, 'cmdc.ps1'), '# synthetic shim'); writeFileSync(join(root, 'outside.mjs'), '// outside')
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: 'command-code', bin: { cmdc: '../../outside.mjs' } }))
+    assert.equal(resolveCommandCodeExecutable(root), undefined)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})

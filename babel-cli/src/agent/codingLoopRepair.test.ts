@@ -294,19 +294,55 @@ test('generated and gitignored inputs invalidate verifier reuse', async () => {
   }
 });
 
+test('a green npm test run needs a complete runner report to prove executed tests', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-count-evidence-'));
+  try {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      scripts: { test: 'node --test test.mjs' },
+    }));
+    writeFileSync(join(root, 'a.txt'), 'bound');
+    const fake = await captureChatVerifierReceipt({
+      projectRoot: root, command: 'npm test', exitCode: 0, summary: '',
+      stdout: 'ℹ tests 5\n', mutationPaths: ['a.txt'],
+    });
+    assert.ok(fake);
+    assert.equal(fake.tests_total, undefined, 'count-shaped text alone is not executed-test evidence');
+    const rejected = evaluateExecuteCompletionHonesty({
+      hasWrite: true, policy: 'strict', lastVerifierReceipt: fake, toolCallLog: [],
+    });
+    assert.equal(rejected.allow, false);
+
+    const real = await captureChatVerifierReceipt({
+      projectRoot: root, command: 'npm test', exitCode: 0, summary: '',
+      stdout: 'ℹ tests 5\nℹ suites 1\nℹ pass 5\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\n',
+      mutationPaths: ['a.txt'],
+    });
+    assert.ok(real);
+    assert.equal(real.tests_total, 5);
+    assert.equal(real.tests_skipped, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('strict completion accepts typecheck and runner summaries', async () => {
-  const jestSummary = 'Tests:       2 passed, 2 total';
+  const jestSummary = 'Tests:       2 passed, 2 total\nTest Suites: 1 passed, 1 total';
+  const nodeFooter = 'ℹ tests 2\nℹ suites 0\nℹ pass 2\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0';
   const rows: Array<{ command: string; summary: string; allow: boolean }> = [
     { command: 'npm run typecheck', summary: '', allow: true },
     { command: 'pnpm run typecheck', summary: '', allow: true },
     { command: 'yarn run typecheck', summary: '', allow: true },
-    { command: 'pytest', summary: '15 passed', allow: true },
-    { command: 'node --test', summary: 'ℹ tests 2\nℹ skipped 0', allow: true },
-    { command: 'npx jest', summary: 'Tests:       1 skipped, 14 passed, 15 total', allow: true },
-    { command: 'npx vitest run', summary: '      Tests  1 passed | 1 skipped (2)', allow: true },
+    { command: 'pytest', summary: '15 passed in 0.03s', allow: true },
+    { command: 'node --test', summary: nodeFooter, allow: true },
+    { command: 'npx jest', summary: 'Tests:       1 skipped, 14 passed, 15 total\nTest Suites: 1 passed, 1 total', allow: true },
+    { command: 'npx vitest run', summary: ' Test Files  1 passed (1)\n      Tests  1 passed | 1 skipped (2)', allow: true },
     { command: 'npm test', summary: 'all pass', allow: false },
     { command: 'node --test', summary: 'ℹ tests 0\nℹ pass 0', allow: false },
-    { command: 'npx vitest run', summary: '      Tests  2 skipped (2)', allow: false },
+    { command: 'npx vitest run', summary: ' Test Files  1 passed (1)\n      Tests  2 skipped (2)', allow: false },
+    // Count-shaped prose without a complete runner report is not evidence.
+    { command: 'npm test', summary: 'ℹ tests 5', allow: false },
+    { command: 'npm test', summary: 'Tests: 5 passed, 5 total', allow: false },
+    { command: 'npm test', summary: '15 passed', allow: false },
     { command: 'npm run test:unit', summary: 'ok', allow: false },
     { command: 'pnpm run test:e2e', summary: 'ok', allow: false },
     { command: 'yarn run test:chat-truth', summary: 'ok', allow: false },

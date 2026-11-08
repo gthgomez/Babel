@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { ProviderHttpError } from './runners/providerHttpError.js';
 
 import {
   RELIABILITY_REPAIR_PROOF_MARKER,
@@ -62,4 +63,10 @@ test('structured output failures get a schema-focused retry prompt', () => {
   assert.match(retryPrompt, /BABEL STRUCTURED OUTPUT RETRY/);
   assert.match(retryPrompt, /Do not omit required arrays/);
   assert.match(retryPrompt, /minimal_action_set expected array/);
+});
+
+test('typed transport failures cannot be classified as schema failures from message text', () => {
+  const error = new ProviderHttpError('openrouter', 'invalid json', 403, 'response', null,
+    '[openrouter] HTTP 403 (invalid json)');
+  assert.equal(isStructuredOutputFailure(error), false);
 });

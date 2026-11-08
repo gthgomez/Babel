@@ -4,15 +4,20 @@ Entries below are taken from git tags and GitHub release notes. They do not add 
 
 ## [Unreleased]
 
-Changes on `main` after the npm `babel-harness@0.2.0` publish. A source build still reports `0.2.0` until the next version bump.
+Changes on `main` after the npm `babel-harness@0.2.0` publish. The source package is version `0.2.1`; `0.2.1` has not been published to npm.
 
 ### Changed
+- The package installs `babel`, `babel-agent`, and `babel-harness` as one executable; all three names run the same CLI.
+- Default Chat completion counts require a complete runner-native report. A green script that only prints count-shaped text no longer certifies executed tests.
+- Credential-path protection now treats multi-suffix dotenv files such as `.env.production.local` as live credential stores while leaving `.env.example*` templates readable.
+- The installed TUI emits outcome and diff summaries through its own transcript instead of writing behind the frame renderer, removing duplicated partial repaints.
 - Default DeepSeek standard Chat routes to the current OpenRouter Flash model (#472).
 - Unified first-run setup, provider routing and CLI workflows (#475).
 - Repair-batch integration and conservative partial-write recovery (#476, #477).
 - README rewritten for users, with reviewed offline CLI captures (#473, #474).
 
 ### Fixed
+- PTY acceptance measures time to the first rendered byte separately from answer arrival, and asserts cursor restoration, bare-command startup, and a queued follow-up running after the active turn.
 - Python post-edit syntax check no longer hardcodes `python`: it resolves `python3`/`python` (POSIX) or `py -3`/`python` (Windows), honours `BABEL_WORKSPACE_PYTHON`/`BABEL_PYTHON`, and reports `static_check_unavailable` instead of a false `exit_code: 1` when no interpreter exists, so correct `.py` edits are not sent into repair loops.
 - `glob` found 0 matches for real files whose name ends in `.` (ripgrep globset quirk); trailing literal dots are now matched exactly.
 - Lint-flagged code defects: unsafe optional call in the repo-map tokenizer loader, a useless re-throw, an expression-statement ternary, a silent cleanup catch, and a never-assigned `context_error` local in chat stack compilation.

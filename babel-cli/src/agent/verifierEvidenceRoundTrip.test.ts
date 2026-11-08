@@ -18,7 +18,7 @@ test('capture publishes durable order and actual environment through adaptation 
     const ledger: BoundChatVerifierReceipt[] = []
     const cache = new Map()
     const receipt = await captureAndRecordVerifierReceipt({
-      projectRoot: root, command: 'node --test', exitCode: 0, summary: 'executed', stdout: '# tests 1\n# skipped 0',
+      projectRoot: root, command: 'node --test', exitCode: 0, summary: 'executed', stdout: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0',
       mutationPaths: ['value.ts'], sessionEvents: log, turnId: 'turn', ledger, cache, writeCount: 1,
       cacheIdentity: { key: 'cache', cwd: realpathSync.native(root), envKey: 'frozen-real-environment' }, verifierOwner: boundOwner,
       executionBackend: 'docker-container',
@@ -64,7 +64,7 @@ test('receipt omits execution environment when no host-owned backend fact is ava
   try {
     writeFileSync(join(root, 'value.ts'), 'export const value = 1\n')
     const receipt = await captureAndRecordVerifierReceipt({
-      projectRoot: root, command: 'node --test', exitCode: 0, summary: 'executed', stdout: '# tests 1\n# skipped 0',
+      projectRoot: root, command: 'node --test', exitCode: 0, summary: 'executed', stdout: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0',
       mutationPaths: ['value.ts'], sessionEvents: createSessionEventLog('session'), turnId: 'turn', ledger: [],
       cache: new Map(), writeCount: 1,
     })
@@ -142,7 +142,7 @@ test('historical integrity prose cannot veto green proof while corrupt adaptatio
     const log = createSessionEventLog('session')
     const ledger: BoundChatVerifierReceipt[] = []
     const boundOwner = { ...owner, workspaceRoot: realpathSync.native(root) }
-    const input = { projectRoot: root, command: 'node --test', exitCode: 0, summary: 'green', stdout: '# tests 1\n# skipped 0', mutationPaths: ['value.ts'], sessionEvents: log, turnId: 'turn', ledger, cache: new Map(), writeCount: 1, verifierOwner: boundOwner }
+    const input = { projectRoot: root, command: 'node --test', exitCode: 0, summary: 'green', stdout: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0', mutationPaths: ['value.ts'], sessionEvents: log, turnId: 'turn', ledger, cache: new Map(), writeCount: 1, verifierOwner: boundOwner }
     const old = await captureAndRecordVerifierReceipt({ ...input, exitCode: 1, summary: 'VERIFIER_DEF_TAMPERED' })
     const current = await captureAndRecordVerifierReceipt(input)
     assert.ok(old && current)

@@ -83,6 +83,12 @@ export class HistoryTranscript {
     }
   }
 
+  /** Append a fully-formed cell as committed history after flushing the active cell. */
+  appendCommitted(cell: BaseHistoryCell): void {
+    this.flushActive();
+    this.committed.push(cell);
+  }
+
   /** Commit the active cell into history (if it has displayable content). */
   flushActive(): void {
     if (!this.active) return;

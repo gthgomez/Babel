@@ -2,6 +2,117 @@
   "schemaVersion": 1,
   "rules": [
     {
+      "id": "windows-guarded-plan-reader",
+      "platforms": ["linux", "darwin"],
+      "reasons": ["Windows guarded candidate"],
+      "rationale": "The Windows lane exercises the native directory-handle guarded Plan reader and guard-loss contracts.",
+      "suites": ["unit", "chat-truth"],
+      "files": {
+        "src/agent/planHandoff.containment.test.ts": [
+          "guarded Plan reader holds its source parent through a real file open",
+          "guarded Plan reader holds metadata and rejects an owned guard loss",
+          "guarded Plan admission releases its owned directory guards after cancellation"
+        ]
+      }
+    },
+    {
+      "id": "windows-discovery-guard-contracts",
+      "platforms": ["linux", "darwin"],
+      "reasons": ["Windows directory helper", "Windows directory sharing semantics"],
+      "rationale": "The Windows unit lane exercises the native discovery directory guards and their sharing semantics during inventory and preview.",
+      "suites": ["unit"],
+      "files": {
+        "src/pipeline/prePlanningDiscovery.readRace.test.ts": [
+          "discovery rejects inventory if its owned Windows guard dies during enumeration",
+          "discovery preview holds its parent directory during the real file open",
+          "discovery rejects all previews if its owned Windows preview guard dies"
+        ]
+      }
+    },
+    {
+      "id": "windows-plan-preview-parent-hold",
+      "platforms": ["linux", "darwin"],
+      "reasons": ["Windows directory sharing semantics"],
+      "rationale": "The Windows lane exercises holding the Plan source parent open while an approved snippet is read; POSIX permits replacing the directory and cannot exercise the same sharing contract.",
+      "suites": ["unit"],
+      "files": {
+        "src/agent/planHandoff.test.ts": [
+          "Plan source parent stays held while an approved snippet is opened"
+        ]
+      }
+    },
+    {
+      "id": "windows-safety-snapshot-guard-exit",
+      "platforms": ["linux", "darwin"],
+      "reasons": ["Windows directory helper"],
+      "rationale": "The Windows unit lane exercises the native safety-snapshot directory guard exiting during enumeration.",
+      "suites": ["unit"],
+      "files": {
+        "src/stages/executorSafetySnapshot.test.ts": [
+          "safety snapshot discards observations when its owned Windows guard dies"
+        ]
+      }
+    },
+    {
+      "id": "windows-guarded-plan-writer-store-listing",
+      "platforms": ["linux", "darwin"],
+      "reasons": [
+        "Windows guarded writer",
+        "Windows guarded candidate",
+        "Windows directory helper",
+        "Windows npm/CommandCode shim"
+      ],
+      "rationale": "The Windows unit lane executes the guarded Plan writer, guarded Plan store, native directory-guard listing and npm/CommandCode shim contracts. Non-Windows lanes skip only these explicitly Windows-native cases.",
+      "suites": ["unit"],
+      "files": {
+        "src/services/guardedPlanWriter.test.ts": [
+          "guarded Plan writer creates an exact new artifact without emitting its body",
+          "guarded Plan writer never overwrites an existing artifact",
+          "guarded Plan writer refuses a linked plans directory",
+          "guarded Plan writer must not commit a replaced staged file",
+          "guarded Plan writer retains the staged artifact when cancelled before commit",
+          "guarded Plan writer rejects a state-root junction swapped before helper launch",
+          "guarded Plan writer does not pass unrelated synthetic environment secrets to its helper",
+          "guarded Plan writer reports unknown if its acknowledgement is lost after commit",
+          "guarded Plan writer rejects an ordinary state directory replaced before helper launch",
+          "guarded Plan artifact has a protected owner-and-system DACL",
+          "guarded Plan writer handles spaces, quotes and Unicode without changing the body",
+          "guarded Plan writer does not start when already cancelled"
+        ],
+        "src/services/savedPlan.guarded.test.ts": [
+          "guarded Plan store retains the complete explicitly selected older Plan",
+          "guarded Plan store rejects a body that differs from its source before writing",
+          "guarded Plan store retains identity when commit acknowledgement is lost"
+        ],
+        "src/sandbox.readRace.test.ts": [
+          "guarded listing rejects if its owned Windows directory guard exits during enumeration",
+          "guarded listing rejects when its owned guard is killed outside its ChildProcess handle"
+        ],
+        "src/bridge/commandCodeCliDiscovery.test.ts": [
+          "does not treat the Windows command interpreter as Command Code",
+          "resolves a Windows npm CommandCode shim to its contained Node entrypoint",
+          "rejects an npm declaration that escapes its package root"
+        ]
+      }
+    },
+    {
+      "id": "windows-process-tree-termination",
+      "platforms": ["linux", "darwin"],
+      "reasons": ["Windows-only process-tree termination contract"],
+      "rationale": "The Windows unit lane executes the native process-tree termination, descendant-settlement and timeout contracts.",
+      "suites": ["unit", "chat-truth"],
+      "files": {
+        "src/sandboxTermination.test.ts": [
+          "failed Windows tree-kill is not accepted as descendant settlement",
+          "failed Windows tree-kill on a deadline leaves a termination failure for the owner",
+          "a timed-out shell reports failed Windows tree termination to its caller"
+        ],
+        "src/agent/backgroundShell.test.ts": [
+          "retains owner uncertainty when the Windows tree-kill helper fails"
+        ]
+      }
+    },
+    {
       "id": "windows-linux-container-grader",
       "platforms": ["win32"],
       "reasons": [

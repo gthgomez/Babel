@@ -1004,6 +1004,7 @@ export const TerminalReasonCodeSchema = z.enum([
   'native_tool_protocol_invalid',
   'response_evidence_invalid',
   'context_preparation_failed',
+  'physical_settlement_unknown',
   'unknown',
 ]);
 export type TerminalReasonCode = z.infer<typeof TerminalReasonCodeSchema>;
@@ -1372,6 +1373,7 @@ export const ToolCallLogSchema = z.object({
   denial: StructuredDenialSchema.optional(),
   mcp_lifecycle: McpLifecycleSchema.optional(),
   checkpoint_ids: z.array(z.string().min(1)).optional(),
+  directory_page: z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/), after: z.string().max(4096).nullable(), next_after: z.string().max(4096).nullable() }).optional(),
   verified: z.boolean(), // Did the step's verification check pass?
   status: z.string().optional(),
   fingerprint: z.string().optional(),
@@ -1522,6 +1524,8 @@ export const ExecutorTurnToolCallSchema = z.object({
   ]),
   // directory_list / file_read / file_write
   path: z.string().max(4096).optional(),
+  after: z.string().min(1).max(4096).optional(),
+  revision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   content: z.string().max(10_485_760).optional(),
   // shell_exec / test_run
   command: z.string().max(10_240).optional(),

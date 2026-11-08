@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { buildRunStats } from './runStats.js';
+import { buildRunStats, formatRunStatsHuman } from './runStats.js';
 
 test('buildRunStats derives waterfall, tool, cache, and session stats', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'babel-run-stats-'));
@@ -72,6 +72,7 @@ test('buildRunStats derives waterfall, tool, cache, and session stats', () => {
   assert.equal(stats.waterfall.total_latency_ms, 200);
   assert.equal(stats.tools.tool_call_count, 2);
   assert.equal(stats.tools.successful_tool_calls, 1);
+  assert.match(formatRunStatsHuman(stats), /legacy tool-log flag; not task verification/i);
   assert.equal(stats.tools.checkpoint_count, 1);
   assert.equal(stats.cache.web_cache_hits, 1);
   assert.equal(stats.cache.file_read_cache_entries, 1);

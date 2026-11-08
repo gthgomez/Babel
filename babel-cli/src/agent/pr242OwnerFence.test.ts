@@ -134,12 +134,20 @@ test('resuming a retired iterator after thinking never dispatches its provider',
     let event = await stale.next()
     while (!event.done && event.value.type !== 'thinking') event = await stale.next()
     assert.equal(event.done, false, 'A must reach the provider boundary')
+    // A live claimed admission must settle or be cancelled before a successor
+    // is admitted; a mere stale iterator may not be bypassed.
+    const refused = []
+    for await (const item of chat.submitMessageStream('Task B marker')) refused.push(item)
+    assert.equal(refused.at(-1)?.type, 'failed')
+    assert.equal(dispatches, 0, 'A must not dispatch its provider before release')
+    // Cancel and drain A. The retired iterator must never dispatch after this.
+    chat.cancel()
+    while (!(await stale.next()).done) { /* drain stale iterator */ }
+    assert.equal(dispatches, 0, 'the retired iterator never dispatches its provider')
     const successor = []
     for await (const item of chat.submitMessageStream('Task B marker')) successor.push(item)
     assert.equal(successor.at(-1)?.type, 'done')
-    const afterB = dispatches
-    while (!(await stale.next()).done) { /* drain stale iterator */ }
-    assert.equal(dispatches, afterB)
+    assert.equal(dispatches, 1, 'only the admitted successor dispatches')
   })
 })
 

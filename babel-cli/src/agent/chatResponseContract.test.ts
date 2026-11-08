@@ -82,7 +82,7 @@ test(`response contract ${scenario} settles without speculative continuation`, a
   t.mock.method(SafeExecutor.prototype, 'shellExecAsync', async () => unexpected())
   t.mock.method(SafeExecutor.prototype, 'testRunAsync', async () => {
     verifiers++
-    return { exit_code: 0, stdout: '# tests 1\n# pass 1\n# fail 0\n# skipped 0\n', stderr: '' }
+    return { exit_code: 0, stdout: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n', stderr: '' }
   })
   const payload = '{\n  "value": 1\n}\n'
   const clarification = scenario === 'plain_choice'

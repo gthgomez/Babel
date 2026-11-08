@@ -2,6 +2,7 @@ import * as readline from 'node:readline/promises';
 import * as rl from 'node:readline';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { InteractiveRunBusyError } from './context.js';
 
 interface ReadlineWithHistory extends readline.Interface {
   history: string[];
@@ -92,6 +93,7 @@ export class BabelRepl {
   rl: readline.Interface;
   state: SessionState;
   isRunning: boolean = false;
+  preparingRun: boolean = false;
   logBuffer: string[] = [];
   currentStageIdx: number = 0;
   verboseMode: boolean = false;
@@ -177,7 +179,7 @@ export class BabelRepl {
         void this.openCommandPalette().catch(() => {});
       },
       onExternalEditor: () => this.handleExternalEditor(),
-      isTaskRunning: () => this.isRunning,
+      isTaskRunning: () => this.isRunning || this.preparingRun,
       onVoiceToggle: () => this.toggleVoice(),
     }) as unknown as readline.Interface;
     registerReadlineInterface(this.rl);
@@ -425,7 +427,7 @@ export class BabelRepl {
           ? { tokens: this.activeContext.tokens, source: this.activeContext.source }
           : null,
       });
-      const activity = runtime?.activity ?? (this.isRunning ? 'running' : 'idle');
+      const activity = runtime?.activity ?? (this.isRunning || this.preparingRun ? 'running' : 'idle');
       const sessionLabels =
         sources.sessionStatus === 'error'
           ? ['Session list unavailable']
@@ -764,7 +766,7 @@ export class BabelRepl {
     try {
       return await executeTask(this, input);
     } catch (err: any) {
-      this.isRunning = false;
+      if (!(err instanceof InteractiveRunBusyError)) this.isRunning = false;
       // Skip if an inner boundary (governed/plan/chat) already showed a dialog
       if (err[Symbol.for('babel.error.alerted')]) return;
       const message = err instanceof Error ? err.message : String(err);

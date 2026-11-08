@@ -32,14 +32,15 @@ if (!isSyntheticProviderFixtureReady()) {
     if (code !== 0) t.diagnostic(output)
     assert.equal(code, 0)
     const inventory = JSON.parse(diagnostic) as { tests: number; passed: number; failed: number; skipped: number }
-    assert.equal(inventory.tests, 2)
-    assert.equal(inventory.passed, 2)
+    assert.equal(inventory.tests, 3)
+    assert.equal(inventory.passed, 3)
     assert.equal(inventory.failed, 0)
     assert.equal(inventory.skipped, 0)
   })
 } else {
   // The verified child environment has no ambient credentials or network path.
-  // No engine, runner, executor, grant, pricing or owner is replaced below.
+  // The real engine and runner are used with fixture-only credentials and an
+  // explicitly simulated native capability; no live capability is inferred.
   process.env['COMMAND_CODE_API_KEY'] = 'synthetic-command-code-credential'
   process.env['BABEL_LIVE'] = '1'
   process.env['BABEL_HEADLESS'] = '1'
@@ -48,6 +49,9 @@ if (!isSyntheticProviderFixtureReady()) {
   const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs')
   const { join } = await import('node:path')
   const { runCliChatTask } = await import('../interactive/execution/chatCore.js')
+  const { ChatEngine } = await import('./chatEngine.js')
+  const { CommandCodeApiRunner } = await import('../runners/commandCodeApi.js')
+  const { resolveChatModelPolicy } = await import('./chatModelPolicy.js')
   const { chatSessionDir } = await import('../cli/runsLayout.js')
   const { initMinimalGitProject } = await import('../testUtils/chatAdmissionFixture.js')
   const { globalCostTracker } = await import('../services/costTracker.js')
@@ -55,6 +59,13 @@ if (!isSyntheticProviderFixtureReady()) {
   const backendKey = 'command-code/deepseek-v4.1-flash'
   const model = 'deepseek/deepseek-v4.1-flash'
   const endpoint = 'https://api.commandcode.ai/provider/v1/chat/completions'
+  const nativeFixtureFactory: import('../interactive/execution/chatCore.js').ChatEngineFactory = (options) => {
+    // Simulate a model with known native-tool support to test the real native
+    // protocol and accounting; this does not qualify the live model.
+    const { policy } = resolveChatModelPolicy({ model: backendKey })
+    const { nativeToolUseUnverified: _unverified, ...base } = policy
+    return new ChatEngine({ ...options, providerRunner: new CommandCodeApiRunner(model, {}, { explicitCredential: 'synthetic-command-code-credential' }), providerPolicy: { ...base, nativeToolUse: true } })
+  }
   const contents = '# Inspection fixture\n\nPurpose: preserve the cobalt-lantern evidence marker.\n'
   const toolCallId = 'read-readme-accounting-proof'
   type WireBody = {
@@ -109,6 +120,20 @@ if (!isSyntheticProviderFixtureReady()) {
     function: { name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }) },
   }] }
 
+  test('rejected authentication retains an unconfirmed charge without a second request', async t => {
+    const root = fixture(t)
+    let requests = 0
+    globalThis.fetch = async (input, init) => { captureRequest(input, init); requests++; return new Response('fixture rejection', { status: 401 }) }
+    const result = await runCliChatTask({ task, projectRoot: root, model: backendKey, outputFormat: 'json', engineFactory: nativeFixtureFactory })
+    assert.equal(requests, 1)
+    assert.notEqual(result.exitCode, 0)
+    const owner = persistedOwner(result.payload)
+    const summary = globalCostTracker.getTaskSummary(owner)
+    assert.equal(summary.costComplete, false)
+    assert.equal(summary.completeCostUSD, null)
+    assert.equal(summary.unknownChargeCount, 1)
+  })
+
   test('ordinary native Command Code continues after priced usage without a reported bill', async t => {
     const root = fixture(t)
     const bodies: WireBody[] = []
@@ -127,7 +152,7 @@ if (!isSyntheticProviderFixtureReady()) {
         prompt_tokens: 30, completion_tokens: 5, total_tokens: 35,
       })
     }
-    const result = await runCliChatTask({ task, projectRoot: root, model: backendKey, outputFormat: 'json' })
+    const result = await runCliChatTask({ task, projectRoot: root, model: backendKey, outputFormat: 'json', engineFactory: nativeFixtureFactory })
     assert.equal(bodies.length, 2)
     assert.equal(result.exitCode, 0)
     assert.equal(result.payload['terminal_outcome'], 'NO_CHANGE_REQUIRED')
@@ -155,7 +180,7 @@ if (!isSyntheticProviderFixtureReady()) {
       assert.equal(fetches, 1, 'unknown accounting must not dispatch the next request')
       return sse(toolDelta, 'tool_calls')
     }
-    const result = await runCliChatTask({ task, projectRoot: root, model: backendKey, outputFormat: 'json' })
+    const result = await runCliChatTask({ task, projectRoot: root, model: backendKey, outputFormat: 'json', engineFactory: nativeFixtureFactory })
     assert.equal(fetches, 1)
     assert.notEqual(result.exitCode, 0)
     assert.equal(result.payload['reason_code'], 'cost_accounting_incomplete')

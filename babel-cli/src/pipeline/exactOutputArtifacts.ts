@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getRequestedTargetContract } from '../stages/taskShape.js';
+import { throwIfRunAborted } from '../runtime/runCancellation.js';
 
 export function verifyExactOutputSchemaArtifacts(
   rawTask: string,
@@ -75,6 +76,7 @@ export function repairExactOutputSchemaArtifacts(
   rawTask: string,
   projectRoot: string | null,
 ): string | null {
+  throwIfRunAborted();
   if (
     getRequestedTargetContract(rawTask).readOnly ||
     !projectRoot ||

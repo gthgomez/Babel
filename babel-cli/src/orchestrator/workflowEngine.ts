@@ -10,7 +10,7 @@
 //     └─ runWithConcurrency()     — parallel dispatch from swarmRunner.ts
 
 import { runWithConcurrency } from '../runners/swarmRunner.js';
-import { withTimeout } from '../agent/toolExecutor.js';
+import { ToolExecutionTimeoutError, withTimeout } from '../agent/toolExecutor.js';
 import type {
   ChatEngineFactory,
   WorkflowDefinition,
@@ -322,7 +322,7 @@ export class WorkflowEngine {
     }
 
     const nodeResults = [...results.values()];
-    const allSucceeded = nodeResults.every(
+    const allSucceeded = !this.abortController.signal.aborted && nodeResults.length === this.definition.nodes.length && nodeResults.every(
       (r) => r.status === 'completed' || r.status === 'skipped',
     );
     const allFailed = nodeResults.every(
@@ -395,21 +395,36 @@ export class WorkflowEngine {
       }
 
       try {
-        const { result: attemptResult, events: attemptEvents } = await withTimeout(
-          this.executeSingleAttempt(node, this.abortController.signal),
-          node.timeoutMs ?? 0,
-          node.id,
-        );
-        events.push(...attemptEvents);
+        const startedAt = new Date();
+        const attemptWork = this.executeSingleAttempt(node, this.abortController.signal);
+        try {
+          const { result: attemptResult, events: attemptEvents } = await withTimeout(
+            attemptWork,
+            node.timeoutMs ?? 0,
+            node.id,
+            undefined,
+            () => this.abortController.abort(),
+          );
+          events.push(...attemptEvents);
 
-        if (attemptResult.status === 'completed') {
-          return {
-            result: { ...attemptResult, retriesConsumed: attempt },
-            events,
-          };
+          if (this.abortController.signal.aborted) {
+            return { result: { ...attemptResult, status: 'failed', error: 'Cancelled; inspect the attempt for effects.', retriesConsumed: attempt }, events };
+          }
+          if (attemptResult.status === 'completed') {
+            return { result: { ...attemptResult, retriesConsumed: attempt }, events };
+          }
+
+          lastError = attemptResult.error;
+        } catch (err) {
+          if (!(err instanceof ToolExecutionTimeoutError)) throw err;
+          // A timeout does not establish that remote or local effects failed.
+          // Retain workflow ownership until physical work settles and do not retry it.
+          const settled = await attemptWork.catch(() => undefined);
+          if (settled) events.push(...settled.events);
+          return { result: { ...settled?.result, nodeId: node.id, status: 'failed', answer: settled?.result.answer ?? '',
+            error: 'Timed out; effects may be unknown. Inspect the attempt before continuing.',
+            startedAt, completedAt: new Date(), retriesConsumed: attempt }, events };
         }
-
-        lastError = attemptResult.error;
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
       }
@@ -464,15 +479,16 @@ export class WorkflowEngine {
     try {
       const result = await engine.submitMessage(node.task, {
         onAnswerChunk: (chunk) => {
-          answer += chunk;
+          if (!signal?.aborted) answer += chunk;
         },
         onToolStart: () => -1,
         onThought: () => {},
         onToolComplete: () => {},
         onFileChanged: (path, additions, deletions) => {
-          events.push({ type: 'node_file_changed', nodeId: node.id, path, additions, deletions });
+          if (!signal?.aborted) events.push({ type: 'node_file_changed', nodeId: node.id, path, additions, deletions });
         },
         onSubAgentStart: (info) => {
+          if (signal?.aborted) return;
           if (!subAgents.find((s) => s.id === info.id)) {
             const entry: NonNullable<WorkflowNodeResult['subAgents']>[number] = { id: info.id, label: info.label };
             if (info.model !== undefined) entry.model = info.model;
@@ -480,6 +496,7 @@ export class WorkflowEngine {
           }
         },
         onSubAgentComplete: (info) => {
+          if (signal?.aborted) return;
           const existing = subAgents.find((s) => s.id === info.id);
           if (existing) {
             if (info.summary !== undefined) existing.summary = info.summary;
@@ -495,7 +512,7 @@ export class WorkflowEngine {
       const baseResult: WorkflowNodeResult = {
         nodeId: node.id,
         status: result.status === 'completed' ? 'completed' : 'failed',
-        answer: result.status === 'failed' ? result.answer : answer,
+        answer: signal?.aborted ? answer : result.status === 'failed' ? result.answer : answer,
         startedAt,
         completedAt,
         retriesConsumed: 0, // set by caller
@@ -505,6 +522,12 @@ export class WorkflowEngine {
         baseResult.usage = {
           totalCostUSD: result.usage.totalCostUSD,
           totalTokens: result.usage.totalTokens,
+          ...(result.usage.completeCostUSD !== undefined ? { completeCostUSD: result.usage.completeCostUSD } : {}),
+          ...(result.usage.unknownChargeCount !== undefined ? { unknownChargeCount: result.usage.unknownChargeCount } : {}),
+          ...(result.usage.costComplete !== undefined ? { costComplete: result.usage.costComplete } : {}),
+          ...(result.usage.usageComplete !== undefined ? { usageComplete: result.usage.usageComplete } : {}),
+          ...(result.usage.actualCostUSD !== undefined ? { actualCostUSD: result.usage.actualCostUSD } : {}),
+          ...(result.usage.estimatedCostUSD !== undefined ? { estimatedCostUSD: result.usage.estimatedCostUSD } : {}),
         };
       }
       if (result.status === 'failed') {

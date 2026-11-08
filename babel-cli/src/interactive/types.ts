@@ -8,6 +8,7 @@ import type { LiteSessionVerb } from '../agent/contracts.js';
 
 export interface SessionState {
   connectionId?: string;
+    modelsByConnection?: Record<string, string>;
   modelSource?: 'session' | 'user' | 'project' | 'environment' | 'invocation' | 'connection' | 'built-in';
   modeExplicit?: boolean;
   readinessState?: 'setup_required' | 'configured_unverified' | 'action_required';
@@ -31,7 +32,7 @@ export interface SessionState {
    * (default | hard_plan | accept_edits | yolo | dry_run).
    */
   operatorMode?: string;
-  /** Staged plan body for /execute-plan handoff (hard-plan → implement). */
+  /** Retained legacy staged Plan text; execution requires a new saved Plan. */
   pendingPlanBody?: string;
   costTotals: {
     totalCostUSD: number;
@@ -153,7 +154,7 @@ export const INTERACTIVE_COMMAND_GROUPS = [
   {
     title: 'Recovery',
     commands: [
-      ['/continue [run]', 'Resume linked worker chain or show continue assessment'],
+      ['/continue [run]', 'Inspect recovery; worker-chain resume is temporarily unavailable'],
       ['/chain [run]', 'Show worker_chain_manifest.json status'],
       ['/checkpoint', 'List, inspect, or restore run checkpoints'],
       ['/restore <id>', 'Restore a checkpoint by id'],

@@ -1,8 +1,7 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { loadPlanHandoff, type PlanHandoff } from '../agent/planHandoff.js';
+import { assertPlannerPathsAllowed, loadPlanHandoff, scopedHandoffPath, type PlanHandoff } from '../agent/planHandoff.js';
 import { extractExplicitFilePaths } from './liteFullRouter.js';
 import { BABEL_ROOT } from '../cli/constants.js';
 import { writeLatestRunPointers } from '../pipeline/runPointers.js';
@@ -18,7 +17,7 @@ import {
   shouldAttemptFixDiscovery,
   type FixDiscoveryBundle,
 } from '../agent/lanes/fixDiscoveryLoop.js';
-import { runSmallFixMutationLoop } from '../agent/lanes/smallFixLoop.js';
+import { runCoordinatedSmallFixMutationLoop, runSmallFixMutationLoop, type CoordinatedSmallFixMutationResult } from '../agent/lanes/smallFixLoop.js';
 import {
   detectMultiFileSmallFix,
   extractOnlyEditFile,
@@ -90,11 +89,12 @@ export function resolveSmallFixMaxRepairAttempts(
 
 export interface SmallFixRepairAttemptRecord {
   attempt: number;
-  status: 'passed' | 'failed' | 'blocked' | 'write_failed';
+  status: 'passed' | 'failed' | 'blocked' | 'write_failed' | 'cancelled';
   verifier_exit_code: number | null;
   verifier_stdout_summary: string | null;
   verifier_stderr_summary: string | null;
   changed_files: string[];
+  write_outcome?: 'unknown';
 }
 
 export interface SmallFixDeclined {
@@ -112,6 +112,9 @@ export interface SmallFixCompleted {
   runDir: string;
   scopePath: string;
   changedFiles: string[];
+  writeOutcome?: 'unknown';
+  cancelled?: true;
+  retryable?: boolean;
   checks: string[];
   summary: string;
   usageSummary: SessionUsageSummary;
@@ -203,6 +206,19 @@ function isInsideRoot(root: string, target: string): boolean {
   return rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
+function safeSmallFixFile(root: string, path: string): string | null {
+  try {
+    const physicalRoot = realpathSync(root);
+    const expected = resolve(physicalRoot, path);
+    const physical = scopedHandoffPath(physicalRoot, path);
+    const normalize = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+    if (!physical || normalize(physical) !== normalize(expected)) return null;
+    const stat = lstatSync(expected);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 1024 * 1024) return null;
+    return expected;
+  } catch { return null; }
+}
+
 function extractVerifierCommand(task: string): string | null {
   const explicit = task.match(
     /\brun\s+([A-Za-z0-9_.\-\\/]+(?:\s+[A-Za-z0-9_.\-\\/]+){0,3})\s+before\s+(?:completing|completion|finishing)/i,
@@ -224,18 +240,48 @@ function extractVerifierCommand(task: string): string | null {
 }
 
 function readPackageTestCommand(projectRoot: string): string | null {
-  const packageJsonPath = join(projectRoot, 'package.json');
-  if (!existsSync(packageJsonPath)) {
-    return null;
-  }
+  return readPackageScript(projectRoot, 'test') !== null ? 'npm test' : null;
+}
+
+function readPackageScript(projectRoot: string, name: string): string | null {
+  const packageJsonPath = safeSmallFixFile(projectRoot, 'package.json');
+  if (!packageJsonPath) return null;
   try {
     const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as {
       scripts?: Record<string, unknown>;
     };
-    return typeof parsed.scripts?.['test'] === 'string' ? 'npm test' : null;
+    return typeof parsed.scripts?.[name] === 'string' ? parsed.scripts[name] : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Recognized read-only verification runners. A Plan-bound fix may execute
+ * these; arbitrary scripts (which can write outside the selected scope) are
+ * refused before provider dispatch.
+ */
+const PLAN_BOUND_VERIFIER_RE = [
+  /^node\s+--test(?:\s|$)/,
+  /^(?:npx\s+)?(?:vitest|jest)\b/,
+  /^(?:python\d?\s+-m\s+)?pytest\b/,
+  /^cargo\s+test\b/,
+  /^go\s+test\b/,
+  /^dotnet\s+test\b/,
+  /^(?:mvn|gradlew?|gradle)\b.*\btest\b/,
+  /^tsc\b.*--noEmit\b/,
+  /^(?:npx\s+)?(?:eslint|ruff)\b/,
+];
+
+function planBoundVerifierQualified(projectRoot: string, command: string, depth = 0): boolean {
+  if (depth > 4) return false;
+  const trimmed = command.trim();
+  const npm = /^npm\s+(?:run\s+)?([A-Za-z0-9:_-]+)(?:\s+--\s+.*)?$/.exec(trimmed);
+  if (npm) {
+    const script = readPackageScript(projectRoot, npm[1]!);
+    return script !== null && planBoundVerifierQualified(projectRoot, script, depth + 1);
+  }
+  return PLAN_BOUND_VERIFIER_RE.some((pattern) => pattern.test(trimmed));
 }
 
 function collectCandidateFiles(
@@ -461,8 +507,10 @@ function readNearbyTests(projectRoot: string, targetFile: string): string {
     }
     const abs = join(dir, entry.name);
     const rel = normalizeRelativePath(relative(projectRoot, abs));
+    const safe = safeSmallFixFile(projectRoot, rel);
+    if (!safe) continue;
     snippets.push(
-      `## ${rel}\n${trimForPrompt(readFileSync(abs, 'utf-8'), 4000)}`,
+      `## ${rel}\n${trimForPrompt(readFileSync(safe, 'utf-8'), 4000)}`,
     );
   }
   return snippets.length > 0
@@ -478,8 +526,9 @@ function buildPrompt(input: {
   planHandoff?: PlanHandoff | null;
   discoveryObservations?: string;
 }): string {
-  const absTarget = resolve(input.projectRoot, input.targetFile);
-  const packageJson = join(input.projectRoot, 'package.json');
+  const absTarget = safeSmallFixFile(input.projectRoot, input.targetFile);
+  if (!absTarget) throw new Error('Small-fix target is unsafe or unavailable.');
+  const packageJson = safeSmallFixFile(input.projectRoot, 'package.json');
   return [
     '# Babel Small Fix',
     '',
@@ -504,10 +553,10 @@ function buildPrompt(input: {
     trimForPrompt(readFileSync(absTarget, 'utf-8'), 7000),
     '',
     '# Nearby tests',
-    readNearbyTests(input.projectRoot, input.targetFile),
+    input.planHandoff ? 'Supplemental reads are limited to the Plan handoff.' : readNearbyTests(input.projectRoot, input.targetFile),
     '',
     '# package.json',
-    existsSync(packageJson)
+    input.planHandoff ? 'Supplemental reads are limited to the Plan handoff.' : packageJson
       ? trimForPrompt(readFileSync(packageJson, 'utf-8'), 2000)
       : 'No package.json found.',
   ].join('\n');
@@ -558,7 +607,7 @@ function buildRepairPrompt(input: {
     trimForPrompt(input.currentFileContent, 7000),
     '',
     '# Nearby tests',
-    readNearbyTests(input.projectRoot, input.targetFile),
+    input.planHandoff ? 'Supplemental reads are limited to the Plan handoff.' : readNearbyTests(input.projectRoot, input.targetFile),
   ].join('\n');
 }
 
@@ -579,6 +628,7 @@ function makeRecoverableRunError(
 export async function runSmallFixPath(
   options: SmallFixOptions,
 ): Promise<SmallFixResult> {
+  if (options.signal?.aborted) throw new DOMException('Small-fix cancelled before start.', 'AbortError');
   if (isAmbiguousBroadRefactor(options.task)) {
     return {
       status: 'SMALL_FIX_NOT_APPLICABLE',
@@ -587,19 +637,41 @@ export async function runSmallFixPath(
     };
   }
 
+  if (options.planHandoff) throw new Error('A supplied plan handoff is unsafe; use an explicit Plan ID resolved for this project.');
   const planHandoff =
-    options.planHandoff ??
-    (options.projectRoot
+    (options.projectRoot && options.planRunId
       ? loadPlanHandoff({
           repoPath: options.projectRoot,
           task: options.task,
-          ...(options.planRunId !== undefined
-            ? { planRunId: options.planRunId }
-            : {}),
+          planRunId: options.planRunId,
         })
       : null);
+  if (options.planRunId && (!planHandoff || planHandoff.planRunId !== options.planRunId)) {
+    throw new Error('The saved plan source is unavailable or unsafe; inspect the retained plan before applying.');
+  }
+  if (options.planRunId && !planHandoff?.contract) throw new Error('The saved plan contract is missing or unavailable; inspect the retained artifact and create a fresh plan.');
+  if (planHandoff && !extractVerifierCommand(options.task)) throw new Error('The Plan-bound fix requires an explicit verifier before resolving its scope.');
   let detected = detectSmallFix(options);
   let discoveryBundle: FixDiscoveryBundle | null = null;
+
+  if (planHandoff && !detected) throw new Error('The target is outside a deterministically resolved Plan scope; inspect the retained Plan and specify an in-scope target and verifier.');
+  if (planHandoff && detected && assertPlannerPathsAllowed(listSequentialFixTargets(detected), planHandoff.allowedPaths).length > 0) {
+    throw new Error('The target is outside the selected Plan scope; inspect the retained Plan before continuing.');
+  }
+  if (planHandoff && detected) {
+    const root = realpathSync(detected.projectRoot);
+    const normalize = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path;
+    for (const target of listSequentialFixTargets(detected)) {
+      const expected = resolve(root, target);
+      const stat = lstatSync(expected);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || normalize(realpathSync(expected)) !== normalize(expected)) {
+        throw new Error('The Plan target is unsafe; inspect the retained Plan and target before continuing.');
+      }
+    }
+    if (!planBoundVerifierQualified(root, detected.verifierCommand)) {
+      throw new Error('Plan-bound small-fix mutation is temporarily unavailable until verifier effects are scoped; the Plan is retained.');
+    }
+  }
 
   if (!detected && shouldAttemptFixDiscovery(options)) {
     options.progress?.report('scoped', 'Discovering fix scope…');
@@ -625,6 +697,11 @@ export async function runSmallFixPath(
         ? 'Fix discovery could not resolve a scoped target file and verifier command.'
         : 'Task is not an explicit one-file or multi-file scoped fix with a local verifier command.',
     };
+  }
+
+  const checkedProjectRoot = detected.projectRoot;
+  if (listSequentialFixTargets(detected).some(target => !safeSmallFixFile(checkedProjectRoot, target))) {
+    throw new Error('Small-fix target is unsafe or unavailable; inspect its physical path before continuing.');
   }
 
   if (
@@ -658,10 +735,9 @@ export async function runSmallFixPath(
 
     globalCostTracker.resetSession();
 
-    // Checkpoint all files before mutation
+    // Capture preimages for comparison; this does not itself create a restorable checkpoint.
     const originalContents = new Map<string, string>();
     const originalHashes = new Map<string, string>();
-    const originalByteLengths = new Map<string, number>();
 
     for (const file of targets) {
       const filePath = resolve(detected.projectRoot, file);
@@ -670,7 +746,6 @@ export async function runSmallFixPath(
         : '';
       originalContents.set(file, content);
       originalHashes.set(file, hashText(content));
-      originalByteLengths.set(file, byteLengthUtf8(content));
     }
 
     const scopePath = join(evidence.runDir, 'small_fix_scope.json');
@@ -702,7 +777,7 @@ export async function runSmallFixPath(
       inferred_scope: 'multi_file_coordinated_scope',
       normalized: true,
       next_step_hint:
-        'run small-fix checkpoint restore after verification if needed',
+        'inspect retained changes and evidence after verification',
     });
 
     // 1. Initial Mutation Loop: edit each file sequentially (without running verifier between edits)
@@ -713,6 +788,7 @@ export async function runSmallFixPath(
 
     try {
       for (const targetFile of targets) {
+        if (options.signal?.aborted) throw new DOMException('Small-fix cancelled.', 'AbortError');
         options.progress?.report('model', `Calling model for ${targetFile}…`);
         const prompt = buildPrompt({
           task: options.task,
@@ -728,6 +804,7 @@ export async function runSmallFixPath(
         const modelResult = await runSmallFixModel(prompt, evidence, options, {
           targetFile,
         });
+        if (options.signal?.aborted) throw new DOMException('Small-fix cancelled.', 'AbortError');
         currentContents.set(targetFile, modelResult.answer.replacement_content);
         if (modelResult.modelPolicy) {
           modelPolicy = modelResult.modelPolicy;
@@ -737,13 +814,7 @@ export async function runSmallFixPath(
         }
         lastSummary = modelResult.answer.summary;
 
-        // Write file locally
-        const filePath = resolve(detected.projectRoot, targetFile);
-        writeFileSync(
-          filePath,
-          modelResult.answer.replacement_content,
-          'utf-8',
-        );
+        // Gather all proposals before admitting any mutation.
       }
     } catch (error: unknown) {
       options.progress?.finish('fail', 'Model call failed');
@@ -765,7 +836,7 @@ export async function runSmallFixPath(
             failure_capsule_id: `small_fix_${evidence.runId}`,
             category: failureCode,
             failure_code: failureCode,
-            retryable: true,
+            retryable: options.signal?.aborted !== true && failureCode !== 'provider_authentication_failed',
             recoverable: true,
             next: classified.next,
             condition: message,
@@ -848,31 +919,44 @@ export async function runSmallFixPath(
         : resolveSmallFixMaxRepairAttempts());
     const repairTimeline: SmallFixRepairAttemptRecord[] = [];
 
-    // Run verifier initially
-    const verifierRun = spawnSync(
-      process.platform === 'win32' ? 'cmd.exe' : 'sh',
-      process.platform === 'win32'
-        ? ['/d', '/s', '/c', verifierCommand]
-        : ['-c', verifierCommand],
-      { cwd: detected.projectRoot, encoding: 'utf-8', timeout: 30_000 },
-    );
-    let verifierExit = verifierRun.status ?? 1;
-    let verifierStdout = verifierRun.stdout ?? '';
-    let verifierStderr = verifierRun.stderr ?? '';
+    const coordinatedContext = {
+      agentId: 'small-fix', runId: evidence.runId, runDir: evidence.runDir, babelRoot: BABEL_ROOT,
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    };
+    const coordinatedRuns: CoordinatedSmallFixMutationResult[] = [];
+    const executeCoordinated = async () => {
+      const batch = await runCoordinatedSmallFixMutationLoop({
+        projectRoot: detected.projectRoot, verifierCommand, toolContext: coordinatedContext,
+        writes: targets.map(path => ({ path, content: currentContents.get(path)! })),
+        hostFallbackAllowed: isHostIsolationEscalationAllowed(),
+        onVerifyStart: () => options.progress?.report('verify', `Dispatching ${verifierCommand}…`),
+      });
+      coordinatedRuns.push(batch);
+      return batch;
+    };
+    let repairModelFailure: unknown;
+    let hasRepairModelFailure = false;
+    let coordinated = await executeCoordinated();
+    let stopped = coordinated.policyBlocked || coordinated.failure !== undefined ||
+      coordinated.unknownWritePath !== undefined || !coordinated.testResult;
+    let verifierExit = coordinated.testResult?.exit_code ?? 1;
+    let verifierStdout = coordinated.testResult?.stdout ?? '';
+    let verifierStderr = coordinated.testResult?.stderr ?? '';
 
     for (let attempt = 1; attempt <= maxRepairAttempts; attempt += 1) {
       const verifyPassed = verifierExit === 0;
-      const attemptStatus = verifyPassed ? 'passed' : 'failed';
+      const attemptStatus: SmallFixRepairAttemptRecord['status'] = coordinated.cancelled ? 'cancelled' : coordinated.policyBlocked ? 'blocked' : verifyPassed ? 'passed' : 'failed';
       repairTimeline.push({
         attempt,
         status: attemptStatus,
-        verifier_exit_code: verifierExit,
-        verifier_stdout_summary: verifierStdout.slice(0, 500),
-        verifier_stderr_summary: verifierStderr.slice(0, 500),
-        changed_files: targets,
+        verifier_exit_code: coordinated.testResult?.exit_code ?? null,
+        verifier_stdout_summary: coordinated.testResult ? verifierStdout.slice(0, 500) : null,
+        verifier_stderr_summary: coordinated.testResult ? verifierStderr.slice(0, 500) : null,
+        changed_files: coordinated.completedWrites.map(write => write.path),
+        ...(coordinated.unknownWritePath ? { write_outcome: 'unknown' as const } : {}),
       });
 
-      if (verifyPassed) {
+      if (verifyPassed || stopped) {
         break;
       }
       if (attempt >= maxRepairAttempts) {
@@ -884,55 +968,41 @@ export async function runSmallFixPath(
         `Verifier failed — coordinated repair attempt ${attempt + 1}/${maxRepairAttempts}`,
       );
 
-      // Repair each file sequentially using the shared verifier feedback!
-      for (const targetFile of targets) {
-        options.progress?.report('model', `Repairing ${targetFile}…`);
-        const repairPrompt = buildRepairPrompt({
-          task: options.task,
-          projectRoot: detected.projectRoot,
-          targetFile,
-          verifierCommand,
-          attempt: attempt + 1,
-          maxAttempts: maxRepairAttempts,
-          verifierExitCode: verifierExit,
-          verifierStdout,
-          verifierStderr,
-          currentFileContent: currentContents.get(targetFile)!,
-          planHandoff,
-          ...(discoveryBundle?.discovery.observations
-            ? { discoveryObservations: discoveryBundle.discovery.observations }
-            : {}),
+      try {
+        // Collect the next proposals before performing any additional writes.
+        for (const targetFile of targets) {
+          if (options.signal?.aborted) throw new DOMException('Small-fix cancelled.', 'AbortError');
+          options.progress?.report('model', `Repairing ${targetFile}…`);
+          const repairPrompt = buildRepairPrompt({
+            task: options.task, projectRoot: detected.projectRoot, targetFile, verifierCommand,
+            attempt: attempt + 1, maxAttempts: maxRepairAttempts,
+            verifierExitCode: verifierExit, verifierStdout, verifierStderr,
+            currentFileContent: currentContents.get(targetFile)!, planHandoff,
+            ...(discoveryBundle?.discovery.observations
+              ? { discoveryObservations: discoveryBundle.discovery.observations } : {}),
+          });
+          const repairModel = await runSmallFixModel(repairPrompt, evidence, options, { targetFile }, attempt + 1);
+          if (options.signal?.aborted) throw new DOMException('Small-fix cancelled.', 'AbortError');
+          currentContents.set(targetFile, repairModel.answer.replacement_content);
+        }
+      } catch (failure) {
+        repairModelFailure = failure;
+        hasRepairModelFailure = true;
+        repairTimeline.push({
+          attempt: attempt + 1, status: options.signal?.aborted ? 'cancelled' : 'failed',
+          verifier_exit_code: null, verifier_stdout_summary: null, verifier_stderr_summary: null,
+          changed_files: coordinated.completedWrites.map(write => write.path),
         });
-
-        const repairModel = await runSmallFixModel(
-          repairPrompt,
-          evidence,
-          options,
-          { targetFile },
-          attempt + 1,
-        );
-        currentContents.set(targetFile, repairModel.answer.replacement_content);
-
-        // Write file locally
-        const filePath = resolve(detected.projectRoot, targetFile);
-        writeFileSync(
-          filePath,
-          repairModel.answer.replacement_content,
-          'utf-8',
-        );
+        coordinated = { ...coordinated, failure, ...(options.signal?.aborted ? { cancelled: true as const } : {}) };
+        stopped = true;
+        break;
       }
-
-      // Rerun verifier after repair
-      const nextRun = spawnSync(
-        process.platform === 'win32' ? 'cmd.exe' : 'sh',
-        process.platform === 'win32'
-          ? ['/d', '/s', '/c', verifierCommand]
-          : ['-c', verifierCommand],
-        { cwd: detected.projectRoot, encoding: 'utf-8', timeout: 30_000 },
-      );
-      verifierExit = nextRun.status ?? 1;
-      verifierStdout = nextRun.stdout ?? '';
-      verifierStderr = nextRun.stderr ?? '';
+      coordinated = await executeCoordinated();
+      stopped = coordinated.policyBlocked || coordinated.failure !== undefined ||
+        coordinated.unknownWritePath !== undefined || !coordinated.testResult;
+      verifierExit = coordinated.testResult?.exit_code ?? 1;
+      verifierStdout = coordinated.testResult?.stdout ?? '';
+      verifierStderr = coordinated.testResult?.stderr ?? '';
     }
 
     const repairTimelinePath = join(
@@ -946,49 +1016,100 @@ export async function runSmallFixPath(
       attempts: repairTimeline,
     });
 
-    const verifierOk = verifierExit === 0;
-
-    // Post-execution: checkpoint rollback if failed
-    if (!verifierOk) {
-      options.progress?.report(
-        'verify',
-        `Verification failed. Rolling back changes…`,
-      );
-      for (const [file, content] of originalContents) {
-        const filePath = resolve(detected.projectRoot, file);
-        writeFileSync(filePath, content, 'utf-8');
+    const changedFiles: string[] = [];
+    const unknownFiles: string[] = coordinated.unknownWritePath ? [coordinated.unknownWritePath] : [];
+    for (const file of targets) {
+      const safePath = safeSmallFixFile(detected.projectRoot, file);
+      if (!safePath) {
+        if (!unknownFiles.includes(file)) unknownFiles.push(file);
+        continue;
+      }
+      try {
+        if (hashText(readFileSync(safePath, 'utf-8')) !== originalHashes.get(file)) changedFiles.push(file);
+      } catch {
+        if (!unknownFiles.includes(file)) unknownFiles.push(file);
       }
     }
-
-    // Write terminal status summary
+    const verifierLog = coordinated.testResult ? [{
+      step: 1, tool: 'test_run', target: verifierCommand,
+      exit_code: coordinated.testResult.exit_code, stdout: coordinated.testResult.stdout,
+      stderr: coordinated.testResult.stderr, verified: coordinated.testResult.exit_code === 0,
+      policy_blocked: coordinated.policyBlocked,
+    }] : [];
+    const verifierContract = buildVerifierContractArtifacts({
+      task: options.task, toolCallLog: verifierLog as ToolCallLog[], runDir: evidence.runDir,
+      additionalRequiredVerifiers: [verifierCommand],
+    });
+    writeJsonArtifact(join(evidence.runDir, 'verifier_plan.json'), verifierContract.plan);
+    writeJsonArtifact(join(evidence.runDir, 'verifier_execution_summary.json'), { ...verifierContract.summary });
+    const verifierOk = !stopped && verifierExit === 0 && unknownFiles.length === 0 &&
+      verifierContract.summary.verifierCompletionSatisfied;
     const status: 'SMALL_FIX_COMPLETE' | 'SMALL_FIX_FAILED' = verifierOk
-      ? 'SMALL_FIX_COMPLETE'
-      : 'SMALL_FIX_FAILED';
-    const changedFiles = verifierOk ? targets : [];
+      ? 'SMALL_FIX_COMPLETE' : 'SMALL_FIX_FAILED';
+    const failureCode = coordinated.cancelled ? 'cancelled'
+      : hasRepairModelFailure ? classifySmallFixProviderFailure(repairModelFailure, resolveSmallFixProvider(options) === 'live' ? 'openrouter' : undefined).failureCode
+      : coordinated.policyBlocked ? 'policy_blocked'
+      : unknownFiles.length ? 'write_outcome_unknown'
+      : coordinated.failure !== undefined ? 'tool_execution_failed'
+      : verifierExit === 0 && !verifierContract.summary.verifierCompletionSatisfied ? 'verifier_contract'
+      : 'verifier_failed';
+    const failureCapsulePath = verifierOk ? null : join(evidence.runDir, 'small_fix_failure_capsule.json');
+    if (failureCapsulePath) {
+      evidence.writeDebugFile('small_fix_failure_capsule.json', `${JSON.stringify({
+        schema_version: 1, failure_capsule_id: `small_fix_${evidence.runId}`,
+        category: failureCode,
+        failure_code: failureCode,
+        retryable: false, changed_files: changedFiles, unknown_write_paths: unknownFiles,
+        ...(coordinated.failure !== undefined ? { physical_settlement: 'unknown' } : {}),
+        verifier_command: verifierCommand,
+        next_recommended_operator_action: 'Inspect the workspace and retained evidence before continuing.',
+      }, null, 2)}\n`);
+    }
 
+    const toolCallLog: Array<Record<string, unknown>> = [];
+    for (const batch of coordinatedRuns) {
+      for (const write of batch.completedWrites) {
+        toolCallLog.push({ step: toolCallLog.length + 1, tool: 'file_write', target: write.path,
+          exit_code: write.result.exit_code, stdout: write.result.stdout, stderr: write.result.stderr,
+          verified: write.result.exit_code === 0 });
+      }
+      if (batch.failedWrite?.result) {
+        const failed = batch.failedWrite;
+        toolCallLog.push({ step: toolCallLog.length + 1, tool: 'file_write', target: failed.path,
+          exit_code: failed.result!.exit_code, stdout: failed.result!.stdout, stderr: failed.result!.stderr,
+          verified: false, policy_blocked: batch.policyBlocked });
+      }      if (batch.testResult) {
+        toolCallLog.push({ step: toolCallLog.length + 1, tool: 'test_run', target: verifierCommand,
+          exit_code: batch.testResult.exit_code, stdout: batch.testResult.stdout, stderr: batch.testResult.stderr,
+          verified: batch.testResult.exit_code === 0 && !batch.policyBlocked, policy_blocked: batch.policyBlocked });
+      }
+    }
+    evidence.writeExecutionLog({
+      status: verifierOk ? 'EXECUTION_COMPLETE' : 'EXECUTION_HALTED', stage_status: status,
+      steps_executed: toolCallLog.filter(entry => entry['policy_blocked'] !== true).length, tool_call_log: toolCallLog,
+      small_fix: { target_files: targets, verifier_command: verifierCommand,
+        unknown_write_paths: unknownFiles, ...(coordinated.failure !== undefined ? { physical_settlement: 'unknown' } : {}) },
+    });
     const summaryPath = join(evidence.runDir, 'terminal_status_summary.json');
     writeJsonArtifact(summaryPath, {
       schema_version: 1,
       artifact_type: 'babel_terminal_status_summary',
       status,
-      reason_category: verifierOk ? 'none' : 'verifier_failed',
-      failed_command: verifierOk ? null : verifierCommand,
+      reason_category: verifierOk ? 'none' : failureCode,
+      failed_command: verifierOk || stopped || failureCode === 'verifier_contract' ? null : verifierCommand,
       changed_files: changedFiles,
-      change_disposition: verifierOk ? 'applied' : 'rolled_back',
-      rollback_mode: verifierOk ? 'none' : 'restore_original',
-      failure_capsule_path: null,
+      unknown_write_paths: unknownFiles,
+      ...(coordinated.failure !== undefined ? { physical_settlement: 'unknown' } : {}),
+      change_disposition: unknownFiles.length ? 'unknown' : changedFiles.length ? 'preserved_for_inspection' : 'none',
+      rollback_mode: 'none',
+      failure_capsule_path: failureCapsulePath,
       next_recommended_operator_action: verifierOk
         ? []
-        : ['inspect verifier output', 'run manually'],
+        : ['inspect the workspace and retained evidence'],
       attempt_safety_summary_path: null,
       repair_attempt_timeline_path: repairTimelinePath,
-      condition_summary: verifierOk ? null : 'Verifier failed.',
-      verifier_contract: {
-        schema_version: 1,
-        verifier_command: verifierCommand,
-        exit_code: verifierExit,
-        passed: verifierOk,
-      },
+      condition_summary: verifierOk ? null : 'Coordinated fix did not complete; inspect the retained evidence.',
+      verifier_contract: verifierContract.summary,
     });
 
     evidence.writeWaterfallTelemetry();
@@ -1007,6 +1128,7 @@ export async function runSmallFixPath(
       task: options.task,
       mutation_policy: 'verified_write',
       changed_files: changedFiles,
+      unknown_write_paths: unknownFiles,
     });
     writeLatestRunPointers(evidence.runDir, options.project ?? 'global');
 
@@ -1030,7 +1152,10 @@ export async function runSmallFixPath(
       runDir: evidence.runDir,
       scopePath,
       changedFiles,
-      checks: verifierOk ? [] : [`verifier failed: ${verifierCommand}`],
+      ...(unknownFiles.length ? { writeOutcome: 'unknown' as const } : {}),
+      ...(coordinated.cancelled ? { cancelled: true as const } : {}),
+      ...(verifierOk ? {} : { retryable: false }),
+      checks: verifierOk ? [`${verifierCommand}: passed`] : ['Coordinated fix did not complete; inspect the workspace and retained evidence.'],
       summary: lastSummary,
       usageSummary,
       ...(modelPolicy !== undefined ? { modelPolicy } : {}),
@@ -1135,20 +1260,22 @@ export async function runSmallFixPath(
   let modelPolicy: ResolvedModelPolicy | undefined;
   let executionMode: SmallFixExecutionMode = 'live';
   try {
+    if (options.signal?.aborted) throw new Error('Small-fix cancelled before model dispatch.');
     options.progress?.report('model', 'Calling model…');
     const modelResult = await runSmallFixModel(prompt, evidence, options, {
       targetFile,
     });
+    if (options.signal?.aborted) throw new Error('Small-fix cancelled before mutation.');
     answer = modelResult.answer;
     modelPolicy = modelResult.modelPolicy;
     executionMode = modelResult.executionMode ?? 'live';
     options.progress?.report('model', 'Model patch ready');
   } catch (error: unknown) {
-    options.progress?.finish('fail', 'Model call failed');
-    const classified = classifySmallFixProviderFailure(
-      error,
-      resolveSmallFixProvider(options) === 'live' ? 'openrouter' : undefined,
-    );
+    const cancelled = options.signal?.aborted === true;
+    options.progress?.finish('fail', cancelled ? 'Fix cancelled' : 'Model call failed');
+    const classified = cancelled
+      ? { failureCode: 'cancelled', message: 'Small-fix cancelled before mutation.', next: ['Inspect the retained run before continuing'] }
+      : classifySmallFixProviderFailure(error, resolveSmallFixProvider(options) === 'live' ? 'openrouter' : undefined);
     const message = classified.message;
     const failureCode = classified.failureCode;
     const failureCapsulePath = join(
@@ -1163,7 +1290,7 @@ export async function runSmallFixPath(
           failure_capsule_id: `small_fix_${evidence.runId}`,
           category: failureCode,
           failure_code: failureCode,
-          retryable: true,
+          retryable: !cancelled && failureCode !== 'provider_authentication_failed',
           recoverable: true,
           next: classified.next,
           condition: message,
@@ -1187,7 +1314,7 @@ export async function runSmallFixPath(
     );
     evidence.writeExecutionLog({
       status: 'EXECUTION_HALTED',
-      stage_status: 'SMALL_FIX_PROVIDER_FAILED',
+      stage_status: cancelled ? 'SMALL_FIX_CANCELLED' : 'SMALL_FIX_PROVIDER_FAILED',
       steps_executed: 0,
       tool_call_log: [],
       pipeline_error: {
@@ -1248,6 +1375,7 @@ export async function runSmallFixPath(
     runId: evidence.runId,
     runDir: evidence.runDir,
     babelRoot: BABEL_ROOT,
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
   };
   const maxRepairAttempts =
     options.maxRepairAttempts ??
@@ -1262,6 +1390,7 @@ export async function runSmallFixPath(
     verifierCommand,
     replacementContent: currentAnswer.replacement_content,
     toolContext,
+    onVerifyStart: () => options.progress?.report('verify', `Dispatching ${verifierCommand}…`),
     hostFallbackAllowed: isHostIsolationEscalationAllowed(),
   });
 
@@ -1276,7 +1405,9 @@ export async function runSmallFixPath(
       writeResultAttempt.exit_code === 0,
     );
     const attemptStatus: SmallFixRepairAttemptRecord['status'] =
-      mutationLoop.policyBlocked
+      mutationLoop.cancelled
+        ? 'cancelled'
+        : mutationLoop.policyBlocked
         ? 'blocked'
         : !writeResultAttempt || writeResultAttempt.exit_code !== 0
           ? 'write_failed'
@@ -1289,6 +1420,7 @@ export async function runSmallFixPath(
       verifier_exit_code: testResultAttempt?.exit_code ?? null,
       verifier_stdout_summary: testResultAttempt?.stdout?.slice(0, 500) ?? null,
       verifier_stderr_summary: testResultAttempt?.stderr?.slice(0, 500) ?? null,
+      ...(mutationLoop.writeOutcome === 'unknown' ? { write_outcome: 'unknown' as const } : {}),
       changed_files:
         writeResultAttempt && writeResultAttempt.exit_code === 0
           ? [targetFile]
@@ -1297,6 +1429,7 @@ export async function runSmallFixPath(
 
     if (
       verifyPassed ||
+      mutationLoop.cancelled ||
       mutationLoop.policyBlocked ||
       !writeResultAttempt ||
       writeResultAttempt.exit_code !== 0
@@ -1346,6 +1479,7 @@ export async function runSmallFixPath(
       verifierCommand,
       replacementContent: currentAnswer.replacement_content,
       toolContext,
+      onVerifyStart: () => options.progress?.report('verify', `Dispatching ${verifierCommand}…`),
       hostFallbackAllowed: isHostIsolationEscalationAllowed(),
     });
   }
@@ -1441,6 +1575,7 @@ export async function runSmallFixPath(
     };
     changed_files: string[];
     changed: boolean;
+    write_outcome?: 'unknown';
     post_mutation?: {
       checksum_sha256: string;
       bytes_after: number;
@@ -1464,19 +1599,39 @@ export async function runSmallFixPath(
   if (mutationLoop.policyBlocked) {
     status = 'SMALL_FIX_FAILED';
     checks.push(mutationLoop.blockedReason ?? 'policy blocked mutation');
-    checkpointRecord.post_mutation = {
-      checksum_sha256: afterHash,
-      bytes_after: afterByteLength,
-    };
-  } else if (!writeResult || writeResult.exit_code !== 0) {
+  }
+  if (mutationLoop.cancelled) {
     status = 'SMALL_FIX_FAILED';
-    checks.push(
-      `file_write failed: ${writeResult?.stderr || writeResult?.stdout || 'unknown error'}`,
-    );
-    checkpointRecord.post_mutation = {
-      checksum_sha256: afterHash,
-      bytes_after: afterByteLength,
-    };
+    checks.push(mutationLoop.writeOutcome === 'unknown'
+      ? 'Cancelled during write; the write outcome is unknown and requires inspection.'
+      : 'Cancelled before verification completed; inspect the retained change.');
+  }
+  if (mutationLoop.writeOutcome === 'unknown' && !mutationLoop.cancelled) {
+    checks.push('The write outcome is unknown; inspect the workspace before continuing.');
+  }
+  if (!writeResult || writeResult.exit_code !== 0) {
+    status = 'SMALL_FIX_FAILED';
+    if (!mutationLoop.policyBlocked) {
+      checks.push(`file_write failed: ${writeResult?.stderr || writeResult?.stdout || 'unknown error'}`);
+    }
+    if (mutationLoop.writeOutcome === 'unknown') {
+      checkpointRecord.write_outcome = 'unknown';
+      const safeTarget = safeSmallFixFile(detected.projectRoot, targetFile);
+      if (safeTarget) {
+        try {
+          afterContent = readFileSync(safeTarget, 'utf-8');
+          afterHash = hashText(afterContent);
+          afterByteLength = byteLengthUtf8(afterContent);
+          if (afterHash !== originalHash) {
+            changedFiles.push(targetFile);
+            checkpointRecord.changed = true;
+          }
+          checkpointRecord.post_mutation = { checksum_sha256: afterHash, bytes_after: afterByteLength };
+        } catch { checks.push('Could not inspect the target after cancellation.'); }
+      } else { checks.push('Target could not be safely inspected after cancellation.'); }
+    } else {
+      checkpointRecord.post_mutation = { checksum_sha256: afterHash, bytes_after: afterByteLength };
+    }
   } else {
     afterContent = readFileSync(targetFilePath, 'utf-8');
     afterHash = hashText(afterContent);
@@ -1500,10 +1655,11 @@ export async function runSmallFixPath(
       bytes_after: afterByteLength,
     };
   }
-  checkpointRecord.post_mutation = checkpointRecord.post_mutation ?? {
-    checksum_sha256: afterHash,
-    bytes_after: afterByteLength,
-  };
+  if (mutationLoop.writeOutcome !== 'unknown') {
+    checkpointRecord.post_mutation = checkpointRecord.post_mutation ?? {
+      checksum_sha256: afterHash, bytes_after: afterByteLength,
+    };
+  }
   writeJsonArtifact(join(evidence.runDir, 'small_fix_checkpoint.json'), {
     ...checkpointRecord,
   });
@@ -1514,19 +1670,15 @@ export async function runSmallFixPath(
   let rollbackMode: 'none' | 'auto_restored' | 'preserved_for_inspection' =
     changedFiles.length > 0 ? 'preserved_for_inspection' : 'none';
   if (testResult) {
-    options.progress?.report('verify', `Running ${verifierCommand}…`);
     evidence.writeDebugFile('small_fix_verifier_stdout.log', testResult.stdout);
     evidence.writeDebugFile('small_fix_verifier_stderr.log', testResult.stderr);
-    checks.push(
-      `${verifierCommand}: ${testResult.exit_code === 0 ? 'passed' : 'failed'}`,
-    );
-    options.progress?.report(
-      'verify',
-      `${verifierCommand}: ${testResult.exit_code === 0 ? 'passed' : 'failed'}`,
-    );
+    if (!mutationLoop.policyBlocked) {
+      checks.push(`${verifierCommand}: ${testResult.exit_code === 0 ? 'passed' : 'failed'}`);
+      options.progress?.report('verify', `${verifierCommand}: ${testResult.exit_code === 0 ? 'passed' : 'failed'}`);
+    }
     if (testResult.exit_code !== 0) {
       status = 'SMALL_FIX_FAILED';
-      if (repairTimeline.length >= maxRepairAttempts) {
+      if (!mutationLoop.policyBlocked && repairTimeline.length >= maxRepairAttempts) {
         checks.push(
           `repair budget exhausted (${maxRepairAttempts} attempt(s))`,
         );
@@ -1559,7 +1711,9 @@ export async function runSmallFixPath(
       ? null
       : join(evidence.runDir, 'small_fix_failure_capsule.json');
   if (failureCapsulePath) {
-    const failureCode = mutationLoop.policyBlocked
+    const failureCode = mutationLoop.cancelled
+      ? 'cancelled'
+      : mutationLoop.policyBlocked
       ? 'policy_blocked'
       : !writeResult || writeResult.exit_code !== 0
         ? 'small_fix_write_failed'
@@ -1572,11 +1726,12 @@ export async function runSmallFixPath(
           failure_capsule_id: `small_fix_${evidence.runId}`,
           category: failureCode,
           failure_code: failureCode,
-          retryable: true,
+          retryable: !mutationLoop.policyBlocked && !mutationLoop.cancelled && mutationLoop.writeOutcome !== 'unknown',
           target_file: targetFile,
           verifier_command: verifierCommand,
           project_root: detected.projectRoot,
           changed_files: changedFiles,
+          ...(mutationLoop.writeOutcome === 'unknown' ? { write_outcome: 'unknown' } : {}),
           checks,
           condition: checks.join('; '),
           verifier_stdout_path: testResult
@@ -1586,9 +1741,15 @@ export async function runSmallFixPath(
             ? join(evidence.runDir, 'small_fix_verifier_stderr.log')
             : null,
           next_recommended_operator_action:
-            options.rollbackOnFail === true && rollbackMode === 'auto_restored'
-              ? 'Verifier failed; checkpoint was auto-restored via --rollback-on-fail.'
-              : 'Inspect verifier output and rerun with the verified pipeline if needed.',
+            mutationLoop.cancelled || mutationLoop.writeOutcome === 'unknown'
+              ? 'Inspect the workspace and retained evidence before continuing.'
+              : mutationLoop.policyBlocked
+              ? rollbackMode === 'auto_restored'
+                ? 'Checkpoint restored. Inspect the policy denial and resolve it before retrying.'
+                : 'Inspect the policy denial and resolve it before retrying.'
+              : options.rollbackOnFail === true && rollbackMode === 'auto_restored'
+                ? 'Verifier failed; checkpoint was auto-restored via --rollback-on-fail.'
+                : 'Inspect verifier output and rerun with the verified pipeline if needed.',
           rollback_on_fail: options.rollbackOnFail === true,
           rollback_mode: rollbackMode,
         },
@@ -1655,6 +1816,7 @@ export async function runSmallFixPath(
       verifier_command: verifierCommand,
       project_root: detected.projectRoot,
       summary: currentAnswer.summary,
+      ...(mutationLoop.writeOutcome === 'unknown' ? { write_outcome: 'unknown' } : {}),
     },
   };
   evidence.writeExecutionLog(executionReport);
@@ -1674,8 +1836,9 @@ export async function runSmallFixPath(
     `${JSON.stringify(verifierContract.summary, null, 2)}\n`,
   );
 
-  let reasonCategory =
-    status === 'SMALL_FIX_COMPLETE' ? 'small_fix_complete' : 'small_fix_failed';
+  let reasonCategory = mutationLoop.cancelled
+    ? 'cancelled'
+    : status === 'SMALL_FIX_COMPLETE' ? 'small_fix_complete' : 'small_fix_failed';
   if (
     status === 'SMALL_FIX_COMPLETE' &&
     !verifierContract.summary.verifierCompletionSatisfied
@@ -1707,13 +1870,17 @@ export async function runSmallFixPath(
     failed_command:
       status === 'SMALL_FIX_COMPLETE'
         ? null
-        : mutationLoop.policyBlocked
+        : mutationLoop.cancelled
+          ? null
+          : mutationLoop.policyBlocked
           ? 'policy_gate'
           : !writeResult || writeResult.exit_code !== 0
             ? 'file_write'
             : verifierCommand,
     changed_files: changedFiles,
+    ...(mutationLoop.writeOutcome === 'unknown' ? { write_outcome: 'unknown' } : {}),
     change_disposition:
+      mutationLoop.writeOutcome === 'unknown' ? 'unknown' :
       rollbackMode === 'auto_restored'
         ? 'auto_restored'
         : changedFiles.length > 0
@@ -1724,9 +1891,15 @@ export async function runSmallFixPath(
     next_recommended_operator_action:
       status === 'SMALL_FIX_COMPLETE'
         ? 'Review the changed file and commit when ready.'
-        : rollbackMode === 'auto_restored'
-          ? 'Verifier failed; workspace was restored. Adjust the fix and retry.'
-          : 'Inspect verifier output and rerun with the verified pipeline if needed.',
+        : mutationLoop.cancelled || mutationLoop.writeOutcome === 'unknown'
+          ? 'Inspect the workspace and retained evidence before continuing.'
+          : mutationLoop.policyBlocked
+          ? rollbackMode === 'auto_restored'
+            ? 'Checkpoint restored. Inspect the policy denial and resolve it before retrying.'
+            : 'Inspect the policy denial and resolve it before retrying.'
+          : rollbackMode === 'auto_restored'
+            ? 'Verifier failed; workspace was restored. Adjust the fix and retry.'
+            : 'Inspect verifier output and rerun with the verified pipeline if needed.',
     parseable_json_stdout_required: true,
     attempt_safety_summary_path: null,
     repair_attempt_timeline_path:
@@ -1755,6 +1928,7 @@ export async function runSmallFixPath(
     task: options.task,
     mutation_policy: 'verified_write',
     changed_files: changedFiles,
+    ...(mutationLoop.writeOutcome === 'unknown' ? { write_outcome: 'unknown' } : {}),
   });
   writeLatestRunPointers(evidence.runDir, options.project ?? 'global');
   const usageSummary =
@@ -1777,6 +1951,8 @@ export async function runSmallFixPath(
     runDir: evidence.runDir,
     scopePath,
     changedFiles,
+    ...(mutationLoop.writeOutcome === 'unknown' ? { writeOutcome: 'unknown' as const } : {}),
+    ...(mutationLoop.cancelled ? { cancelled: true as const } : {}),
     checks,
     summary: currentAnswer.summary,
     usageSummary,

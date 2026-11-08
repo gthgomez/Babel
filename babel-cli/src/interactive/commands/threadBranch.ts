@@ -1,6 +1,6 @@
 // ─── /fork and /rewind — thread-store branching (D4) ────────────────────────
 
-import type { ReplContext } from '../context.js';
+import { assertInteractiveRunAvailable, type ReplContext } from '../context.js';
 import { accentBright, error, muted, primary } from '../../ui/theme.js';
 import {
   createEngineFromThreadCells,
@@ -82,6 +82,7 @@ async function rebindActiveThread(
 }
 
 export async function handleFork(ctx: ReplContext, args: string[]): Promise<void> {
+  if (args[0]) assertInteractiveRunAvailable(ctx);
   const threadId = resolveActiveThreadId(ctx);
   if (!threadId) {
     console.log(error('\n  No active chat session. Start a chat turn first.\n'));
@@ -98,6 +99,7 @@ export async function handleFork(ctx: ReplContext, args: string[]): Promise<void
     return;
   }
 
+  ctx.preparingRun = true;
   try {
     const target = ctx.resolveCurrentTarget();
     const result = await forkThread(threadId, { upToCellId: cellId });
@@ -119,10 +121,13 @@ export async function handleFork(ctx: ReplContext, args: string[]): Promise<void
     console.log(
       error(`\n  Fork failed: ${err instanceof Error ? err.message : String(err)}\n`),
     );
+  } finally {
+    ctx.preparingRun = false;
   }
 }
 
 export async function handleRewind(ctx: ReplContext, args: string[]): Promise<void> {
+  if (args[0]) assertInteractiveRunAvailable(ctx);
   const threadId = resolveActiveThreadId(ctx);
   if (!threadId) {
     console.log(error('\n  No active chat session. Start a chat turn first.\n'));
@@ -139,6 +144,7 @@ export async function handleRewind(ctx: ReplContext, args: string[]): Promise<vo
     return;
   }
 
+  ctx.preparingRun = true;
   try {
     const result = await rewindThread(threadId, cellId);
     const cells = loadThreadCells(threadId);
@@ -161,6 +167,8 @@ export async function handleRewind(ctx: ReplContext, args: string[]): Promise<vo
     console.log(
       error(`\n  Rewind failed: ${err instanceof Error ? err.message : String(err)}\n`),
     );
+  } finally {
+    ctx.preparingRun = false;
   }
 }
 

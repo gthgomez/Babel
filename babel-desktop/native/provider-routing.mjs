@@ -208,7 +208,7 @@ export function saveProviderRoute({configDirectory, provider, model,enabledModel
   for(const descriptor of listDesktopProviderDescriptors(extra))for(const entry of descriptor.routes){
     if(entry.selectable===false)continue;
     if(!policy.models[entry.id])policy.models[entry.id]={provider:entry.provider,model_id:entry.modelId,tier:'standard',enabled:false,
-      ...(entry.source==='manual'?{}:{native_tool_use:entry.capabilities?.tools===true}),
+      ...(entry.source==='manual'?{}:entry.capabilities?.tools==null?{native_tool_use_unverified:true}:{native_tool_use:entry.capabilities.tools}),
       ...(Number.isFinite(entry.contextWindow)?{context_window:entry.contextWindow}:{}),
       ...(Number.isFinite(entry.inputPrice)?{estimated_cost_per_1m_input:entry.inputPrice}:{}),
       ...(Number.isFinite(entry.outputPrice)?{estimated_cost_per_1m_output:entry.outputPrice}:{})};

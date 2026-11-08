@@ -24,6 +24,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { runSwarmPipeline } from './runners/swarmRunner.js';
+import { getRunAbortSignal, throwIfRunAborted, withRunCancellation } from './runtime/runCancellation.js';
 import { runAdversarialQaGate, compileQaReviewContext, reviewDeepPlan } from './pipeline/qaStage.js';
 import { proposeDeepPlan } from './pipeline/deepPlanning.js';
 import { answerDeepEvidence } from './pipeline/deepEvidenceReport.js';
@@ -50,6 +51,7 @@ import { resolveFamilyModelPolicy, resolveModelByKey, loadModelPolicyConfig } fr
 import { connect } from 'node:net';
 import { confirmCost, ConfirmDialog } from './ui/dialog.js';
 import { isRunningInDaemon } from './daemon/client.js';
+import { isDaemonPipelineQualified } from './daemon/pipelineQualification.js';
 import { EvidenceBundle } from './evidence.js';
 import {
   createEpisodeLifecycleForEvidence,
@@ -161,7 +163,7 @@ import {
 import {
   collectPlanHandoffViolations,
   buildPlanHandoffQaReject,
-  loadPlanHandoff,
+  loadPlanHandoffGuarded,
 } from './agent/planHandoff.js';
 import { splitChainedShellSteps } from './pipeline/executorPlanNormalize.js';
 import {
@@ -370,6 +372,8 @@ export interface PipelineOptions {
   deniedFingerprints?: Map<string, { count: number; turn: number }>;
   /** Signal to abort the pipeline mid-execution. */
   abortSignal?: AbortSignal; /** Inject memory persistence for deterministic callers; defaults to the production extractor. */ memoryExtractor?: (runDir: string, projectRoot: string | undefined, evidence: EvidenceBundle) => Promise<void>; /** Disable post-run memory extraction for offline or explicitly read-only runs. */ disableMemoryExtraction?: boolean;
+  /** Exact source of a saved plan; null suppresses legacy implicit-latest lookup. */
+  planRunId?: string | null;
 }
 
 export interface PipelineResult {
@@ -803,6 +807,7 @@ export async function runBabelPipeline(
   task: string,
   options: PipelineOptions = {},
 ): Promise<PipelineResult> {
+  options.abortSignal?.throwIfAborted();
   const profileModel = process.env['BABEL_DESKTOP_PROVIDER'] ? process.env['BABEL_DESKTOP_MODEL_ROUTE'] : undefined;
   if (!options.modelOverride && profileModel) options = {...options,modelOverride:profileModel};
   if (options.modelOverride) {
@@ -815,10 +820,12 @@ export async function runBabelPipeline(
 
 async function runBabelPipelineLocal(task: string, options: PipelineOptions): Promise<PipelineResult> {
   // Daemon transport does not carry the selected route or private Desktop profile.
-  const daemonEnabled = !options.modelOverride && process.env['BABEL_DESKTOP_IPC'] !== '1' && process.env['BABEL_DAEMON_ENABLED'] !== 'false' && process.env['BABEL_DAEMON_ENABLED'] !== '0';
+  const daemonSetting = process.env['BABEL_DAEMON_ENABLED']?.trim();
+  const daemonEnabled = !options.modelOverride && options.planRunId === undefined && process.env['BABEL_DESKTOP_IPC'] !== '1' && Boolean(daemonSetting && !/^(?:false|0)$/i.test(daemonSetting));
   const isDaemonProcess = isRunningInDaemon();
 
   if (daemonEnabled && !isDaemonProcess) {
+    if (!isDaemonPipelineQualified()) throw new Error('UNSUPPORTED_OPERATION: Daemon pipeline execution is quarantined pending settlement and recovery qualification.');
     const DAEMON_BUSY_RETRIES = 3;
     const DAEMON_BUSY_RETRY_DELAY_MS = 1000;
     for (let attempt = 0; attempt <= DAEMON_BUSY_RETRIES; attempt++) {
@@ -899,6 +906,15 @@ async function runBabelPipelineLocal(task: string, options: PipelineOptions): Pr
 }
 
 export async function _runBabelPipelineInternal(
+  task: string,
+  options: PipelineOptions,
+  evidence: EvidenceBundle,
+  precomputedManifest?: OrchestratorManifest,
+): Promise<PipelineResult> {
+  return withRunCancellation(options.abortSignal, () => runBabelPipelineInternal(task, options, evidence, precomputedManifest));
+}
+
+async function runBabelPipelineInternal(
   task: string,
   options: PipelineOptions,
   evidence: EvidenceBundle,
@@ -991,6 +1007,8 @@ export async function _runBabelPipelineInternal(
     return decorateEpisodePersistence(result);
   };
   const finalizeResult = async (result: PipelineResult): Promise<PipelineResult> => {
+    if (getRunAbortSignal()?.aborted) result = { ...result, status: 'EXECUTOR_HALTED', terminalOutcome: 'CANCELLED',
+      errors: ['Run cancelled by the operator.'], finalAnswer: 'Run cancelled; inspect any changes made before cancellation.' };
     const terminalContext = collectTerminalContext(evidence.runDir);
     const verifierContract = buildVerifierContractArtifacts({
       task,
@@ -1011,19 +1029,14 @@ export async function _runBabelPipelineInternal(
       terminalContext,
       verifierContractSummary: verifierContract.summary,
     });
-    evidence.writeDebugFile(
-      'terminal_status_summary.json',
-      `${JSON.stringify(terminalState.terminalSummary, null, 2)}\n`,
-    );
-    const finalizedResult: PipelineResult = {
+    let finalizedResult: PipelineResult = {
       ...result,
       status: terminalState.status,
       terminalSummary: terminalState.terminalSummary,
       attemptSafetySummary: terminalContext.attemptSafetySummary,
       verifierContractSummary: verifierContract.summary,
     };
-    finalizeV9LiveSessionForPipeline(v9LiveSession, finalizedResult, verifierContract.summary.verifierCompletionSatisfied);
-    await runPluginHooks('PostRun', {
+    if (!getRunAbortSignal()?.aborted) await runPluginHooks('PostRun', {
       runId: evidence.runId,
       runDir: evidence.runDir,
       babelRoot: BABEL_ROOT,
@@ -1035,27 +1048,29 @@ export async function _runBabelPipelineInternal(
     });
     const traceSummary = await pipelineTrace.finish(finalizedResult.status);
     evidence.writeTraceContext(traceSummary);
-    evidence.writeWaterfallTelemetry();
-    const costLedger = buildCostLedger({
-      runId: evidence.runId,
-      task,
-      lane: 'governed',
-      waterfallEntries: evidence.getWaterfallLogSnapshot(),
-    });
-    evidence.writeCostLedger(costLedger);
-    const usageSummary =
-      costLedger.entries.length > 0
-        ? usageSummaryFromCostLedger(costLedger)
-        : globalCostTracker.getSessionSummary();
-
     // Trigger Project Memory Extraction on success
-    if (finalizedResult.status === 'COMPLETE' && !options.disableMemoryExtraction) {
+    if (!getRunAbortSignal()?.aborted && finalizedResult.status === 'COMPLETE' && !options.disableMemoryExtraction) {
       await (options.memoryExtractor ?? extractAndSaveMemories)(
         finalizedResult.runDir,
         inferProjectRoot(finalizedResult.manifest),
         evidence,
       );
     }
+    // Finalization can suspend; cancellation remains effective until it settles.
+    if (getRunAbortSignal()?.aborted) finalizedResult = { ...finalizedResult,
+      status: 'EXECUTOR_HALTED', terminalOutcome: 'CANCELLED', errors: ['Run cancelled by the operator.'],
+      finalAnswer: 'Run cancelled; inspect any changes made before cancellation.',
+      terminalSummary: { ...terminalState.terminalSummary, status: 'EXECUTOR_HALTED', reason_category: 'executor_halted',
+        condition_summary: '[CANCELLED] Run cancelled by the operator.', next_recommended_operator_action: 'Inspect changes made before cancellation before starting another run.' },
+    };
+    evidence.writeDebugFile('terminal_status_summary.json', `${JSON.stringify({ ...finalizedResult.terminalSummary,
+      ...(finalizedResult.terminalOutcome ? { terminal_outcome: finalizedResult.terminalOutcome } : {}) }, null, 2)}\n`);
+    finalizeV9LiveSessionForPipeline(v9LiveSession, finalizedResult, verifierContract.summary.verifierCompletionSatisfied);
+    evidence.writeWaterfallTelemetry();
+    const costLedger = buildCostLedger({ runId: evidence.runId, task, lane: 'governed', waterfallEntries: evidence.getWaterfallLogSnapshot(),
+      chargeReceipts: globalCostTracker.getTaskChargeObservations(evidence.runId) });
+    evidence.writeCostLedger(costLedger);
+    const usageSummary = costLedger.entries.length > 0 ? usageSummaryFromCostLedger(costLedger) : globalCostTracker.getSessionSummary();
 
     // Prune old session checkpoints to prevent unbounded storage growth.
     // Uses the manifest's session_id, falling back to a hash of the run dir.
@@ -1102,11 +1117,15 @@ export async function _runBabelPipelineInternal(
       runDir: evidence.runDir,
       error,
     });
-    const recoverableManifest = hasUsefulEvidence(evidence.runDir)
+    const recoverableManifest = hasUsefulEvidence(evidence.runDir) || getRunAbortSignal()?.aborted
       ? readManifestFromEvidence(evidence.runDir)
       : null;
     if (recoverableManifest) {
       const recoveredPlan = readLatestSwePlanFromEvidence(evidence.runDir);
+      if (getRunAbortSignal()?.aborted) return finalizeResult({
+        runDir: evidence.runDir, manifest: recoverableManifest, plan: recoveredPlan,
+        status: 'EXECUTOR_HALTED', terminalOutcome: 'CANCELLED',
+      });
       const blockedSummary = buildBlockedRunSummaryArtifact({
         task,
         errorMessage: message,
@@ -1138,7 +1157,7 @@ export async function _runBabelPipelineInternal(
           evidenceComplete: true,
         });
       }
-      await runPluginHooks('PostRun', {
+      if (!getRunAbortSignal()?.aborted) await runPluginHooks('PostRun', {
         runId: evidence.runId,
         runDir: evidence.runDir,
         babelRoot: BABEL_ROOT,
@@ -1155,6 +1174,7 @@ export async function _runBabelPipelineInternal(
         task,
         lane: 'governed',
         waterfallEntries: evidence.getWaterfallLogSnapshot(),
+        chargeReceipts: globalCostTracker.getTaskChargeObservations(evidence.runId),
       });
       evidence.writeCostLedger(costLedger);
       return finalizeEpisodeResult(
@@ -1174,43 +1194,47 @@ export async function _runBabelPipelineInternal(
         message,
       );
     }
+    const cancelled = getRunAbortSignal()?.aborted === true;
+    const errorStatus = cancelled ? 'EXECUTOR_HALTED' : 'FATAL_ERROR';
+    const errorCondition = cancelled ? '[CANCELLED] Run cancelled by the operator before manifest completion.' : failureArtifacts.condition;
     writeValidatedExecutionReport(
       evidence,
-      failureArtifacts.executionReport,
+      cancelled ? { ...failureArtifacts.executionReport, pipeline_error: { ...failureArtifacts.executionReport.pipeline_error,
+        condition: errorCondition }, warnings: ['Run cancelled before executor activation.'] } : failureArtifacts.executionReport,
       [],
-      failureArtifacts.executionReport.warnings,
+      cancelled ? ['Run cancelled before executor activation.'] : failureArtifacts.executionReport.warnings,
     );
-    evidence.writeDebugFile(
+    if (!cancelled) evidence.writeDebugFile(
       PRE_EXECUTION_FAILURE_CAPSULE_FILENAME,
       `${JSON.stringify(failureArtifacts.failureCapsule, null, 2)}\n`,
     );
     const terminalSummary = buildTerminalStatusSummary({
-      status: 'FATAL_ERROR',
-      condition: failureArtifacts.condition,
-      failureCapsulePath: failureArtifacts.failureCapsulePath,
+      status: errorStatus,
+      condition: errorCondition,
+      failureCapsulePath: cancelled ? null : failureArtifacts.failureCapsulePath,
     });
     evidence.writeDebugFile(
       'terminal_status_summary.json',
-      `${JSON.stringify(terminalSummary, null, 2)}\n`,
+      `${JSON.stringify({ ...terminalSummary, ...(cancelled ? { terminal_outcome: 'CANCELLED' } : {}) }, null, 2)}\n`,
     );
     if (options.writeLatestPointers !== false) {
       writeLatestRunPointers(evidence.runDir, 'global', {
-        status: 'FATAL_ERROR',
+        status: errorStatus,
         targetRoot: runtimeProjectRoot,
         command: 'run',
         evidenceComplete: true,
       });
     }
-    await runPluginHooks('PostRun', {
+    if (!getRunAbortSignal()?.aborted) await runPluginHooks('PostRun', {
       runId: evidence.runId,
       runDir: evidence.runDir,
       babelRoot: BABEL_ROOT,
       projectRoot: runtimeProjectRoot,
       dryRun: DRY_RUN,
-      status: 'FATAL_ERROR',
+      status: errorStatus,
       error: message,
     });
-    const traceSummary = await pipelineTrace.finish('FATAL_ERROR', error);
+    const traceSummary = await pipelineTrace.finish(errorStatus, error);
     evidence.writeTraceContext(traceSummary);
     evidence.writeWaterfallTelemetry();
     evidence.writeCostLedger(
@@ -1219,9 +1243,11 @@ export async function _runBabelPipelineInternal(
         task,
         lane: 'governed',
         waterfallEntries: evidence.getWaterfallLogSnapshot(),
+        chargeReceipts: globalCostTracker.getTaskChargeObservations(evidence.runId),
       }),
     );
-    episodeLifecycle.recordFinalization('FATAL_ERROR', message);
+    episodeLifecycle.recordFinalization(errorStatus, errorCondition);
+    if (cancelled) throw getRunAbortSignal()?.reason ?? error;
     throw error;
   };
 
@@ -1256,6 +1282,21 @@ export async function _runBabelPipelineInternal(
     );
   }
 
+  let admittedPlanFingerprint: string | null = null;
+  let admittedPlanProjectIdentity: string | null = null;
+  if (options.planRunId) {
+    if (options.mode !== 'deep') return await finalizeError(new Error('Plan-bound execution currently requires explicit deep mode; the Plan is retained.'));
+    let source;
+    try { source = await loadPlanHandoffGuarded({ repoPath: runtimeProjectRoot, task, planRunId: options.planRunId, ...(getRunAbortSignal() ? { signal: getRunAbortSignal()! } : {}) }); }
+    catch (error) { return await finalizeError(error); }
+    if (!source) return await finalizeError(new Error('The saved plan source is unavailable, unsafe, or belongs to another project; inspect the retained plan and create a fresh plan.'));
+    if (!source.contract) return await finalizeError(new Error('The saved plan contract is missing or unavailable; inspect the retained artifact and create a fresh plan.'));
+    if (!source.sourceFingerprint || !source.sourceProjectIdentity) return await finalizeError(new Error('The saved plan source identity is unavailable; inspect the retained plan.'));
+    admittedPlanFingerprint = source.sourceFingerprint;
+    admittedPlanProjectIdentity = source.sourceProjectIdentity;
+  }
+
+  throwIfRunAborted();
   await runPluginHooks('PreRun', {
     runId: evidence.runId,
     runDir: evidence.runDir,
@@ -1333,6 +1374,15 @@ export async function _runBabelPipelineInternal(
       manifest.instruction_stack &&
       manifest.compilation_state === 'uncompiled'
     ) {
+      const compilationStarted = performance.now();
+      let compilationRecorded = false;
+      const recordCompilation = (status: 'completed' | 'failed') => {
+        if (compilationRecorded) return;
+        compilationRecorded = true;
+        const elapsed = performance.now() - compilationStarted;
+        pipelineEpisodeSink?.recordStageTransition('instruction_compilation', status, Number.isFinite(elapsed) && elapsed >= 0 ? { duration_ms: elapsed } : {});
+      };
+      pipelineEpisodeSink?.recordStageTransition('instruction_compilation', 'started');
       const compilerSpan = pipelineTrace.startChildSpan('babel.compiler', {
         'babel.compilation.state.before': manifest.compilation_state,
         'babel.stack.domain_id': manifest.instruction_stack.domain_id,
@@ -1518,6 +1568,7 @@ export async function _runBabelPipelineInternal(
               log(`[babel:compiler] ❌ ${condition}`);
               const report = buildHaltReport([], 'AMBIGUOUS_PLAN', 0, condition);
               evidence.writeExecutionLog(report);
+              recordCompilation('failed');
               return await finalizeResult({
                 runDir: evidence.runDir,
                 manifest,
@@ -1556,8 +1607,10 @@ export async function _runBabelPipelineInternal(
             manifest.compiled_artifacts?.selected_entry_ids.length,
           'babel.stack.prompt_manifest_count': manifest.prompt_manifest.length,
         });
+        recordCompilation('completed');
       } catch (error) {
         endSpan(compilerSpan, SpanStatusCode.ERROR, {}, error);
+        recordCompilation('failed');
         throw error;
       }
     }
@@ -1682,6 +1735,7 @@ export async function _runBabelPipelineInternal(
 
     evidence.writeManifest(manifestWithProtocol);
     writeRuntimeTelemetrySnapshot(evidence, v9StackTelemetry);
+    throwIfRunAborted();
     await runPluginHooks('PostOrchestrator', {
       runId: evidence.runId,
       runDir: evidence.runDir,
@@ -1717,10 +1771,20 @@ export async function _runBabelPipelineInternal(
     );
     const taskContract = classifyTaskContract(task);
     const taskGrounding = buildTaskGrounding(taskContract, inferProjectRoot(manifest));
-    const planHandoff = loadPlanHandoff({
-      repoPath: runtimeProjectRoot,
-      task: mergedTaskContext,
-    });
+    let planHandoff = null;
+    if (options.planRunId) {
+      try {
+        planHandoff = await loadPlanHandoffGuarded({
+          repoPath: runtimeProjectRoot,
+          task: mergedTaskContext,
+          planRunId: options.planRunId,
+          ...(getRunAbortSignal() ? { signal: getRunAbortSignal()! } : {}),
+        });
+      } catch (error) { return await finalizeError(error); }
+    }
+    if (options.planRunId && !planHandoff) throw new Error('The saved plan source is unavailable, unsafe, or belongs to another project; inspect the retained plan and create a fresh plan.');
+    if (options.planRunId && !planHandoff?.contract) throw new Error('The saved plan contract is missing or unavailable; inspect the retained artifact and create a fresh plan.');
+    if (planHandoff && (planHandoff.sourceFingerprint !== admittedPlanFingerprint || planHandoff.sourceProjectIdentity !== admittedPlanProjectIdentity)) return await finalizeError(new Error('The saved plan source or project changed during admission; inspect the retained plan before retrying.'));
     if (planHandoff) {
       evidence.writeDebugFile(
         'plan_handoff.json',
@@ -1728,7 +1792,6 @@ export async function _runBabelPipelineInternal(
           {
             schema_version: 1,
             plan_run_id: planHandoff.planRunId,
-            plan_run_dir: planHandoff.planRunDir,
             allowed_paths: planHandoff.allowedPaths,
           },
           null,
@@ -2015,6 +2078,7 @@ export async function _runBabelPipelineInternal(
       );
     }
     if (commandOnlyNoModification && shouldRunCommandOnlyNoModification) {
+      if (planHandoff) throw new Error('Plan-bound command execution is unavailable until its effects are scoped; the Plan is retained.');
       log(
         `Command-only no-modification task detected; running "${commandOnlyNoModification}" through shell_exec.`,
       );
@@ -2133,10 +2197,11 @@ export async function _runBabelPipelineInternal(
           qaRejections, proposedFixStrategy, additionalEvidenceContext,
           groundingContext, taskGrounding, executionProfile: executionProfile.name,
           attempt, previousRejectionTags, smartPlannerEnabled: SMART_PLANNER_ENABLED,
-          evidence, pruningStubs,
+          evidence, pruningStubs, planBound: Boolean(planHandoff), ...(options.abortSignal ? { signal: options.abortSignal } : {}),
         });
         executionReportWarnings.push(...planWarnings);
         evidence.writeSwePlan(swePlan, attempt); episodeLifecycle.recordPhase('swe_planning', 'completed');
+        throwIfRunAborted();
         await runPluginHooks('PostPlan', {
           runId: evidence.runId,
           runDir: evidence.runDir,
@@ -2182,10 +2247,9 @@ export async function _runBabelPipelineInternal(
           );
         };
 
-        const planHandoffViolations = collectPlanHandoffViolations(
-          swePlan,
-          planHandoff?.allowedPaths ?? [],
-        );
+        const planHandoffViolations = planHandoff
+          ? collectPlanHandoffViolations(swePlan, planHandoff.allowedPaths)
+          : [];
         if (planHandoffViolations.length > 0) {
           handleQaReject(
             buildPlanHandoffQaReject(planHandoffViolations) as QaVerdictReject,
@@ -2280,6 +2344,7 @@ export async function _runBabelPipelineInternal(
           verdict = await reviewDeepPlan({ context: qaContext, plan: swePlan, manifest, evidence });
         } catch (error) {
           endSpan(qaSpan, SpanStatusCode.ERROR, {}, error); episodeLifecycle.recordPhase('qa_review', 'failed', { error: error instanceof Error ? error.message : String(error) });
+          throwIfRunAborted();
           log(
             `[pipeline] QA model invocation error on attempt ${attempt}: ${error instanceof Error ? error.message : String(error)}`,
           );
@@ -2632,6 +2697,7 @@ export async function _runBabelPipelineInternal(
         });
       }
 
+      throwIfRunAborted();
       episodeLifecycle.recordPhase('executor', 'started'); const preExecutorResult = await runPreExecutorSafetyGates({
         approvedPlan,
         projectRoot: inferProjectRoot(manifest) ?? runtimeProjectRoot,
@@ -2696,6 +2762,7 @@ export async function _runBabelPipelineInternal(
           reportWarnings: executionReportWarnings,
           initialExecutorLog,
           pruningStubs, episodeSink: pipelineEpisodeSink,
+          ...(planHandoff ? { planScope: { projectRoot: runtimeProjectRoot, allowedPaths: planHandoff.allowedPaths } } : {}),
         });
 
         if (!stagedResult.ok) { episodeLifecycle.recordPhase('executor', 'failed', { halted: true });
@@ -2881,6 +2948,7 @@ interface StagedExecutorOptions {
   reportWarnings: string[];
   initialExecutorLog: ToolCallLog[];
   pruningStubs?: Map<string, string>; episodeSink?: PipelineEpisodeSink | null;
+  planScope?: { projectRoot: string; allowedPaths: string[] };
 }
 
 interface StagedExecutorHalt {
@@ -2909,6 +2977,7 @@ type StagedExecutorResult = StagedExecutorHalt | StagedExecutorSuccess;
 async function runStagedExecutor(
   opts: StagedExecutorOptions,
 ): Promise<StagedExecutorResult> {
+  throwIfRunAborted();
   const {
     approvedPlan,
     evidence,
@@ -2919,6 +2988,10 @@ async function runStagedExecutor(
     initialExecutorLog,
     pruningStubs, episodeSink,
   } = opts;
+
+  if (opts.planScope && !getRequestedTargetContract(rawTask).readOnly) {
+    throw new Error('Plan-bound mutation is temporarily unavailable until bootstrap, verifier and repair effects are scoped; the Plan is retained.');
+  }
 
   // Bootstrap helpers can write directly, so they must obey owner intent too.
   if (!getRequestedTargetContract(rawTask).readOnly) {
@@ -2980,7 +3053,7 @@ async function runStagedExecutor(
     initialExecutorLog,
     rawTask,
     pruningStubs,
-    createExecutorKernel('deep').services, episodeSink,
+    createExecutorKernel('deep').services, episodeSink, opts.planScope,
   );
 
   return { ok: true, executorResult };

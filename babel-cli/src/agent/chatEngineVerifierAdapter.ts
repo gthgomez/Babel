@@ -38,6 +38,7 @@ import {
   parseStructuredVerifierCommand,
   resolveHonestyRequiredVerifiers,
 } from './completionGatePolicy.js';
+import { resolveDeclaredTestCommand } from '../services/declaredTestCommand.js';
 
 export { parseExecutedTestCounts };
 
@@ -209,9 +210,10 @@ export async function captureChatVerifierReceipt(input: {
       ...(input.executionContext ? { executionContext: input.executionContext } : {}),
     });
     receipt.inputClosure = inputClosure;
+    const resolvedCommand = resolveDeclaredTestCommand(input.projectRoot, input.command);
     const counts = parseExecutedTestCounts(
       `${input.stdout ?? ''}\n${input.stderr ?? ''}`,
-      input.command,
+      resolvedCommand ?? input.command,
     );
     if (counts) {
       receipt.tests_total = counts.tests_total;

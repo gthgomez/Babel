@@ -1,3 +1,5 @@
+import { computeCriticRepairCostBudget, computePostWriteRepairBudget } from './chatEngineBudgetPolicy.js';
+import { durableAdmissionState } from './chatEngineAdmissionState.js';
 import type { ChatLlmRunner } from '../runners/base.js'
 import { restoreFailedVerifierHistory, unresolvedFailedVerifierHistory, attestedFailedVerifierExecution } from './codingLoop/failedVerifierExecution.js';
 import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js';
@@ -139,7 +141,6 @@ import {
 import {
   explicitFiniteCostOverride,
   resolveChatEngineLimits, retainTaskWallAllowance,
-  shouldShrinkWallForPostWriteRepair,
   type ChatEngineLimits,
   type ChatRunLimiter,
 } from "../config/chatEngineLimits.js";
@@ -282,6 +283,7 @@ import {
 } from "./executionContext.js";
 import {
   clearBackgroundShellRegistry,
+  hasUnsettledBackgroundShells,
   killAllBackgroundShells,
 } from "./backgroundShell.js";
 import {
@@ -392,10 +394,6 @@ import {
   isDiffCriticEnabled,
   maybeInjectMidLoopHeuristicCritic as injectMidLoopHeuristicCritic,
   runAsymmetricDiffCritic as runAsymmetricDiffCriticImpl,
-  computeCriticRepairCostCap,
-  computePostWriteRepairWallMs,
-  buildPostWriteRepairMessage,
-  shouldEnterRepairBudget,
   type AsymmetricCriticState,
   type CriticRunner,
 } from "./chatEngineCriticBudget.js";
@@ -459,6 +457,12 @@ const PENDING_COMPILED_REQUEST_IDENTITY = "pending-compiled-request-identity";
 
 const TURN_TIMEOUT_MS = 120_000; // per-turn LLM call deadline
 const MAX_TOOL_CONCURRENCY = 6;
+
+/** Actions with no physical effect; a successor may supersede a batch of these. */
+const CHAT_READ_ONLY_ACTION_TYPES = new Set<ChatToolAction['type']>([
+  'read_file', 'read_range', 'read_artifact', 'list_dir', 'grep', 'glob',
+  'semantic_search', 'git_context', 'todo_write', 'web_search', 'web_fetch', 'lsp', 'finish',
+]);
 
 export class ChatEngine {
   // TODO: once ProviderMessage[] path is stable, remove legacy ChatMessage[]
@@ -646,6 +650,17 @@ export class ChatEngine {
    */
   private activeSubmissionGeneration = 0;
   private runControl: RunControl | null = null;
+  private activeSubmissionOwner: symbol | null = null;
+  private activeEffectActionBatches = 0;
+  private activeProviderDispatchStarted = false;
+  private physicalSettlementUnknown = false;
+  private admissionStoreClosed = false;
+
+  markPhysicalSettlementUnknown(): void {
+    this.physicalSettlementUnknown = true;
+  }
+
+
   /** Pending cancellation survives preparation until its submission latch exists. */
   private _cancelled = false;
   /** LLM-based conversation compaction (from chatCompaction.ts).
@@ -869,6 +884,9 @@ export class ChatEngine {
       throw new Error('EXTERNAL_HARNESS_INFERENCE_CONFLICT: External adapters cannot configure Babel inference.');
     }
     const scope=normalizeChatExecutionScope(options);
+    if (options.runId && options.resumeExisting !== true && hasUnsettledBackgroundShells(options.runId, scope.kind === 'project' ? scope.projectRoot : null)) {
+      throw new Error('An owned background command is still running or settling. Wait for it to finish before reopening this session.');
+    }
     options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null};
     if(scope.kind==="conversation"&&(options.instructionRoot||options.workspaceRoot||options.compiledChatStack?.project_root))throw new Error("Conflicting project context in conversation scope");
     options = { ...options, compiledChatStack: resolveChatInstructionContext(options) };
@@ -947,7 +965,7 @@ export class ChatEngine {
     );
     // Per-session bg shell isolation — scoped to this run id so sibling
     // engines in the same process keep their jobs (matters for resume).
-    clearBackgroundShellRegistry(this.engineRunId);
+    if (!hasUnsettledBackgroundShells(this.engineRunId)) clearBackgroundShellRegistry(this.engineRunId);
 
     // Initialize LLM-based compaction manager (gated behind BABEL_COMPACTION=off).
     // When disabled or on failure, falls back to the inline compactConversation() heuristic.
@@ -1612,24 +1630,12 @@ export class ChatEngine {
    */
   private applyCriticRepairCostBudget(): void {
     if (this.criticRepairCostCapUsd != null) return;
-    const spent = this.currentTaskCostUsd();
-    const { capUsd, repairWindowUsd } = computeCriticRepairCostCap({
-      spentUsd: spent,
-      sessionMaxCostUsd: this.limits.maxCostUsd,
-      longTaskProfile: this.limits.costBudget?.longTaskProfile === true,
-      explicitCostCeiling: this.limits.costBudget?.explicitCostCeiling === true,
-      criticStrikes: this.criticStrikes,
-      limits: this.limits,
+    const update = computeCriticRepairCostBudget({
+      spentUsd: this.currentTaskCostUsd(), limits: this.limits,
+      criticStrikes: this.criticStrikes, turnIndex: this._turnIndex,
     });
-    this.criticRepairCostCapUsd = capUsd;
-    this.policyEventLog.record({
-      at_turn: this._turnIndex,
-      kind: "progress_policy",
-      detail:
-        `critic_repair_budget spent=${spent.toFixed(3)} ` +
-        `repair_window=${repairWindowUsd.toFixed(3)} cap=${capUsd.toFixed(3)} ` +
-        `session_max=${this.limits.maxCostUsd.toFixed(2)}`,
-    });
+    this.criticRepairCostCapUsd = update.capUsd;
+    this.policyEventLog.record(update.event);
     this.persistTaskAllowance();
   }
 
@@ -1639,84 +1645,30 @@ export class ChatEngine {
    * Idempotent.
    */
   private applyPostWriteRepairBudget(): void {
-    if (this.postWriteRepairWallCapMs != null || this.postWriteRepairRestrict) return;
-    // Only for execute-style classes that must verify (not pure investigate).
-    if (this.taskClass === "investigate") return;
-    // Finding 1: enter the bounded repair window only on evidence of repair or
-    // non-progress. A confirmed write alone is not evidence — a productive
-    // multi-file implementation keeps its granted allowance instead of being
-    // cut to a repair window after the first edit.
-    if (
-      !shouldEnterRepairBudget({
-        hasMutation: this.currentTurnHasMutation(),
-        currentVerifierFailed: this.lastVerifierFailed,
-        criticRejected: this.lastCriticReceipt?.verdict === "reject",
-        intervention: this.progressController.InterventionLevel,
-      })
-    ) {
-      return;
-    }
-
-    const elapsedMs = this.currentTaskActiveWallMs();
-    // An explicitly authorized long-task run keeps its full wall: the
-    // anti-thrash repair window would otherwise kill it minutes after the
-    // first write. Hard wall, stall, turn and cost budgets still apply.
-    const shrinkWall = shouldShrinkWallForPostWriteRepair(
-      this.limits.wallBudget,
-    );
-    const repairWall = shrinkWall
-      ? computePostWriteRepairWallMs({
-          elapsedMs,
-          sessionMaxWallMs: this.limits.maxWallMs,
-        })
-      : {
-          capMs: this.limits.maxWallMs,
-          repairWindowMs: Math.max(0, this.limits.maxWallMs - elapsedMs),
-        };
-    const { capMs, repairWindowMs } = repairWall;
-    this.postWriteRepairWallCapMs = Number.isFinite(capMs) ? capMs : null;
+    const update = computePostWriteRepairBudget({
+      postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
+      postWriteRepairRestrict: this.postWriteRepairRestrict,
+      taskClass: this.taskClass,
+      hasMutation: this.currentTurnHasMutation(),
+      currentVerifierFailed: this.lastVerifierFailed,
+      criticRejected: this.lastCriticReceipt?.verdict === 'reject',
+      intervention: this.progressController.InterventionLevel,
+      elapsedMs: this.currentTaskActiveWallMs(),
+      limits: this.limits,
+      criticRepairCostCapUsd: this.criticRepairCostCapUsd,
+      spentUsd: this.currentTaskCostUsd(),
+      criticStrikes: this.criticStrikes,
+      turnIndex: this._turnIndex,
+    });
+    if (!update) return;
+    this.postWriteRepairWallCapMs = update.postWriteRepairWallCapMs;
     this.postWriteRepairRestrict = true;
-
-    // Also shrink cost if critic repair cap not already tighter.
-    if (this.criticRepairCostCapUsd == null) {
-      const spent = this.currentTaskCostUsd();
-      const { capUsd, repairWindowUsd } = computeCriticRepairCostCap({
-        spentUsd: spent,
-        sessionMaxCostUsd: this.limits.maxCostUsd,
-        longTaskProfile: this.limits.costBudget?.longTaskProfile === true,
-        explicitCostCeiling:
-          this.limits.costBudget?.explicitCostCeiling === true,
-        criticStrikes: this.criticStrikes,
-        limits: this.limits,
-      });
-      this.criticRepairCostCapUsd = capUsd;
-      this.policyEventLog.record({
-        at_turn: this._turnIndex,
-        kind: "progress_policy",
-        detail:
-          `post_write_repair_cost spent=${spent.toFixed(3)} ` +
-          `repair_window=${repairWindowUsd.toFixed(3)} cap=${capUsd.toFixed(3)}`,
-      });
+    if (update.criticRepairCostCapUsd !== null && this.criticRepairCostCapUsd == null) {
+      this.criticRepairCostCapUsd = update.criticRepairCostCapUsd;
+      if (update.costEvent) this.policyEventLog.record(update.costEvent);
     }
-
-    const remainingWallSec = Math.max(
-      0,
-      Math.round((this.limits.maxWallMs - elapsedMs) / 1000),
-    );
-    const repairWindowSec = Math.round(repairWindowMs / 1000);
-    const msg = buildPostWriteRepairMessage({
-      repairWindowSec,
-      remainingWallSec,
-    });
-    this.conversation.push({ role: "user", content: msg });
-    this.policyEventLog.record({
-      at_turn: this._turnIndex,
-      kind: "progress_policy",
-      detail:
-        `post_write_repair_wall elapsed_ms=${elapsedMs} ` +
-        `repair_window_ms=${repairWindowMs} cap_ms=${capMs} ` +
-        `session_max_ms=${this.limits.maxWallMs} tools=act_or_verify`,
-    });
+    this.conversation.push({ role: 'user', content: update.conversationMessage });
+    this.policyEventLog.record(update.wallEvent);
     this.persistTaskAllowance();
   }
 
@@ -2184,6 +2136,41 @@ export class ChatEngine {
     taskIntent?: TaskIntent,
     submitOpts?: SubmitMessageOptions,
   ): AsyncGenerator<ChatEvent, void, undefined> {
+    if (this.admissionStoreClosed) {
+      yield { type: 'failed', error: 'The session admission store is closed. Reopen the session before continuing.' };
+      return;
+    }
+    if (hasUnsettledBackgroundShells(this.engineRunId, this.options.projectRoot)) {
+      yield { type: 'failed', error: 'An owned background command is still running or settling. Wait for it to finish before continuing.' };
+      return;
+    }
+    // One replacement contract: a successor may supersede a generation that was
+    // explicitly cancelled/superseded, but must not start while the prior
+    // generation still owns an unsettled durable admission or an in-flight
+    // effect batch. Unknown physical settlement is never silently cleared.
+    const priorStopKind = this.runControl?.stop()?.kind;
+    const priorReleased = priorStopKind === 'cancelled' || priorStopKind === 'superseded';
+    if (!priorReleased) {
+      // An indeterminate admission means a prior physical effect was never
+      // reconciled; it blocks regardless of whether a wrapper is still live.
+      const admission = durableAdmissionState(this.parity.admissionStore, this.engineRunId);
+      if (this.physicalSettlementUnknown || admission.indeterminate) {
+        yield { type: 'failed', error: 'A previous request may still be settling or its physical effect is unknown. Inspect the workspace and evidence before continuing.',
+          reason_code: 'physical_settlement_unknown' };
+        return;
+      }
+      // A claimed admission with no live owner is stale (e.g. a primed or
+      // pre-crash record) and may be superseded. With a live owner it is
+      // unsettled work and must settle or be cancelled first.
+      if (this.activeSubmissionOwner !== null && (admission.claimed || this.activeEffectActionBatches > 0)) {
+        yield { type: 'failed', error: 'The previous request is still settling. Wait for it to finish before continuing.' };
+        return;
+      }
+    }
+    const owner = Symbol('chat-submission-owner');
+    this.activeSubmissionOwner = owner;
+    this.activeProviderDispatchStarted = false;
+    try {
     const submissionGeneration =
       submitOpts?.submissionGeneration ?? ++this.generationCounter;
     this.activateSubmissionGeneration(submissionGeneration);
@@ -2199,17 +2186,29 @@ export class ChatEngine {
     const claim = this.admitCurrentSubmission(submissionGeneration, userInput, {
       taskId: objective.taskId, taskClass: objective.submission.runtime.taskClass,
     });
+    let loopFinished = false;
+    let terminalObserved = false;
     try {
-      yield* this.submitMessageStreamLoop(userInput, taskIntent, {
+      for await (const event of this.submitMessageStreamLoop(userInput, taskIntent, {
         ...submitOpts,
         submissionGeneration,
-      }, objective);
+      }, objective)) {
+        if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') terminalObserved = true;
+        yield event;
+      }
+      loopFinished = true;
     } catch (error) {
       if (!this.isSubmissionCurrent(submissionGeneration)) return;
       const captured = captureSessionEventAppendFailure(error, this.engineRunDir);
+      loopFinished = true;
       yield this.streamFailed(captured?.operatorMessage ?? (error instanceof Error ? error.message : String(error)), error instanceof ContextPreparationError ? error.reason : undefined);
     } finally {
-      this.settleClaimOnExit(claim);
+      // An iterator abandoned before its terminal event keeps its claim
+      // indeterminate instead of claiming a settlement it never observed.
+      this.settleClaimOnExit(claim, !loopFinished && !terminalObserved);
+    }
+    } finally {
+      if (this.activeSubmissionOwner === owner) this.activeSubmissionOwner = null;
     }
   }
 
@@ -2795,6 +2794,7 @@ export class ChatEngine {
     // a re-attach must never orphan the previous refcounted reference.
     if (previous && previous !== store) previous.close();
     this.parity.admissionStore = store;
+    this.admissionStoreClosed = false;
   }
 
   /**
@@ -2807,12 +2807,18 @@ export class ChatEngine {
     retireLiveCertificationForRun(this.engineRunId);
     this.taskMutationOwnership?.retire();
     const claim = this.activeAdmissionClaim;
+    const unsettled = this.physicalSettlementUnknown || this.activeSubmissionOwner !== null;
+    if (this.activeSubmissionOwner && this.runControl) {
+      this.runControl.requestStop({ owner: this.runControl.owner, kind: 'cancelled',
+        reasonCode: 'session_closed', source: 'user' });
+    }
     if (claim && !claim.settled) {
-      this.settleAdmissionClaim(claim, "aborted", {
-        finalOutcome: "SESSION_CLOSED",
+      this.settleAdmissionClaim(claim, unsettled ? "indeterminate" : "aborted", {
+        finalOutcome: unsettled ? "PHYSICAL_SETTLEMENT_UNKNOWN" : "SESSION_CLOSED",
       });
     }
     this.parity.admissionStore?.close();
+    this.admissionStoreClosed = true;
   }
 
   replaceConversation(messages: ChatMessage[]): void {
@@ -3319,8 +3325,8 @@ export class ChatEngine {
     this.p11Authority.settleAdmissionClaim(claim, state, outcome);
   }
 
-  private settleClaimOnExit(claim: ChatEngineAdmissionClaim | null): void {
-    this.p11Authority.settleClaimOnExit(claim);
+  private settleClaimOnExit(claim: ChatEngineAdmissionClaim | null, abandoned = false): void {
+    this.p11Authority.settleClaimOnExit(claim, abandoned);
   }
 
   private settleActiveAdmissionClaim(): void {
@@ -3356,7 +3362,30 @@ export class ChatEngine {
     this.p11Authority.captureP11Observation(action, result, meta);
   }
 
+  markProviderDispatchStarted(): void { this.activeProviderDispatchStarted = true; }
+
   private async executeActions(
+    actions: ChatToolAction[],
+    callbacks: ChatCallbacks,
+    ownerGeneration: number = this.activeSubmissionGeneration,
+  ): Promise<{
+    observations: string;
+    observationList: string[];
+    count: number;
+    stopRequest?: StopRequest;
+  }> {
+    // A successor may supersede a provider stream or a read, but not a tool
+    // batch whose physical effect is still unsettled.
+    const effectful = actions.some(action => !CHAT_READ_ONLY_ACTION_TYPES.has(action.type));
+    if (effectful) this.activeEffectActionBatches += 1;
+    try {
+      return await this.executeActionsBody(actions, callbacks, ownerGeneration);
+    } finally {
+      if (effectful) this.activeEffectActionBatches -= 1;
+    }
+  }
+
+  private async executeActionsBody(
     actions: ChatToolAction[],
     callbacks: ChatCallbacks,
     ownerGeneration: number = this.activeSubmissionGeneration,
@@ -4168,9 +4197,16 @@ export class ChatEngine {
     return runner;
   }
   private shouldUseNativeTools(runner: ChatProviderRunner): boolean {
+    if (this.modelPolicy?.nativeToolUse === false || this.modelPolicy?.nativeToolUseUnverified === true) {
+      if (process.env['BABEL_TOOL_PROFILE'] === 'native') {
+        throw new Error(this.modelPolicy?.nativeToolUseUnverified ? 'UNSUPPORTED_OPERATION: Native tool support for this selected model is unverified; select a supported model or another tool profile.' : 'UNSUPPORTED_OPERATION: The selected model does not support native tools; select a supported model or another tool profile.');
+      }
+      return false;
+    }
     return shouldUseChatNativeTools(runner);
   }
   private shouldUseTextTools(): boolean {
+    if ((this.modelPolicy?.nativeToolUse === false || this.modelPolicy?.nativeToolUseUnverified === true) && process.env['BABEL_TOOL_PROFILE'] !== 'legacy') return true;
     return shouldUseChatTextTools(() => this.resolveDeliberationRunner());
   }
   private async deliberateTurn(

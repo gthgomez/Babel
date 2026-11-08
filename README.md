@@ -31,7 +31,7 @@ babel-harness doctor
 babel-harness setup
 ```
 
-The command name to use in these docs is `babel-harness`. The installer also adds `babel-agent`, which is the same program. Help text still says `babel` and `babel-agent`. There is no `babel` command on your PATH.
+The command name to use in these docs is `babel-harness`. The published 0.2.0 installer also adds `babel-agent`, which is the same program. The current repository package (0.2.1) installs all three names — `babel`, `babel-agent`, and `babel-harness` — with identical behavior; use whichever you prefer.
 
 `doctor` exits 1 on a machine without Docker. That means the default sandbox is not ready. The install itself succeeded. `setup` prints a checklist. It does not ask you questions and it does not call a model.
 

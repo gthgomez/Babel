@@ -1,3 +1,4 @@
+import { streamReadOnlyTerminal } from './chatReadOnlyTerminal.js';
 import type {
   ChatEvent,
   SubmitMessageOptions,
@@ -14,6 +15,7 @@ import {
 } from "./chatEngineStreamingPreparation.js";
 import { finalizeStreamingTurnLimit } from "./chatEngineStreamingFinalizer.js";
 import { recoverStreamingRequestAdmission } from './chatEngineRequestRecovery.js';
+import { ProviderHttpError } from '../runners/providerHttpError.js';
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
 import { normalizeChatAnswer, requestedChatJsonKind } from './chatResponseContract.js';
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
@@ -522,6 +524,12 @@ export class ChatEngineStreamingLoop {
             providerEnd,
           );
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          if (err instanceof ProviderHttpError && (err.status === 401 || err.status === 403)) {
+            this.host.trackRunnerUsage(runner, usageScope);
+            endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+            yield this.host.streamFailed(err.message, { code: 'provider_failure', cause_class: 'provider', detail: err.status === 401 ? 'authentication' : 'authorization' });
+            return;
+          }
           const admissionRecovery = yield* recoverStreamingRequestAdmission(
             this.host, err, submissionGeneration, () => {
               endSpan(_turnSpan, SpanStatusCode.ERROR);
@@ -622,7 +630,17 @@ export class ChatEngineStreamingLoop {
           systemPrompt,
           systemPrompt,
         );
+        // R0-8/pr242: a consumer may resume an abandoned or cancelled iterator
+        // after a yield; never dispatch a provider call for a generation that
+        // was cancelled/superseded while the generator was suspended.
+        if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+        if (this.host._cancelled || this.host.abortController.signal.aborted) {
+          finalizeParityCancel(this.host.parity, this.host.engineRunDir);
+          yield this.host.streamCancelled();
+          return;
+        }
         const providerStart = performance.now();
+        this.host.markProviderDispatchStarted?.();
         try {
           for await (const event of runner.executeWithToolsStream(
             providerMessages,
@@ -678,6 +696,7 @@ export class ChatEngineStreamingLoop {
                 break;
               }
               case "error":
+                if (event.failure instanceof ProviderHttpError && (event.failure.status === 401 || event.failure.status === 403)) throw event.failure;
                 if (event.malformedToolArguments) {
                   const malformed = event.malformedToolArguments;
                   nativeProtocolInvalid = true;
@@ -692,7 +711,7 @@ export class ChatEngineStreamingLoop {
                   writeFileSync(join(this.host.engineRunDir, 'native-tool-rejection.json'), JSON.stringify(nativeRejectionState.current, null, 2));
                   break;
                 }
-                throw new Error(event.message);
+                throw event.failure ?? new Error(event.message);
               case "done":
                 nativeFinishReason = event.finishReason;
                 break;
@@ -749,6 +768,13 @@ export class ChatEngineStreamingLoop {
             providerEnd,
           );
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          if (err instanceof ProviderHttpError && (err.status === 401 || err.status === 403)) {
+            if (nativeToolCallIds.length > 0) yield* settleUnexecutedNativeCalls();
+            this.host.trackRunnerUsage(runner, usageScope);
+            endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+            yield this.host.streamFailed(err.message, { code: 'provider_failure', cause_class: 'provider', detail: err.status === 401 ? 'authentication' : 'authorization' });
+            return;
+          }
           if (nativeProtocolInvalid || nativeToolCallIds.length > 0) {
             yield* settleUnexecutedNativeCalls();
             endSpan(_turnSpan, SpanStatusCode.ERROR);
@@ -827,6 +853,7 @@ export class ChatEngineStreamingLoop {
             undefined,
           );
           const fbStart = performance.now();
+          this.host.markProviderDispatchStarted?.();
           try {
             for await (const event of fb.executeWithToolsStream(
               providerMessages,
@@ -882,7 +909,7 @@ export class ChatEngineStreamingLoop {
                   break;
                 }
                 case "error":
-                  throw new Error(event.message);
+                  throw event.failure ?? new Error(event.message);
                 case "done":
                   nativeFinishReason = event.finishReason;
                   break;
@@ -925,6 +952,12 @@ export class ChatEngineStreamingLoop {
               yield* settleUnexecutedNativeCalls();
               endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
               yield cancelled; return;
+            }
+            if (fbErr instanceof ProviderHttpError && (fbErr.status === 401 || fbErr.status === 403)) {
+              this.host.trackRunnerUsage(fb, usageScope);
+              endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+              yield this.host.streamFailed(fbErr.message, { code: 'provider_failure', cause_class: 'provider', detail: fbErr.status === 401 ? 'authentication' : 'authorization' });
+              return;
             }
             if (nativeProtocolInvalid || nativeToolCallIds.length > 0) {
               yield* settleUnexecutedNativeCalls();
@@ -1066,6 +1099,12 @@ export class ChatEngineStreamingLoop {
             legacyEnd,
           );
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          if (err instanceof ProviderHttpError && (err.status === 401 || err.status === 403)) {
+            this.host.trackRunnerUsage(runner, usageScope);
+            endSpan(_turnSpan, SpanStatusCode.ERROR); _turnSpan = null;
+            yield this.host.streamFailed(err.message, { code: 'provider_failure', cause_class: 'provider', detail: err.status === 401 ? 'authentication' : 'authorization' });
+            return;
+          }
           const admissionRecovery = yield* recoverStreamingRequestAdmission(
             this.host, err, submissionGeneration, () => {
               endSpan(_turnSpan, SpanStatusCode.ERROR);
@@ -1761,76 +1800,12 @@ export class ChatEngineStreamingLoop {
               arb.policySource === "progress_terminal") &&
             isReadOnlyInspection
           ) {
-            let synthAnswer = "";
-            let synthError: Error | null = null;
-            try {
-              synthAnswer = await this.host.synthesizeAnswer(
-                allToolObservations,
-                {
-                  onAnswerChunk: (_chunk: string) => {},
-                },
-                userInput,
-              );
-            } catch (err: any) {
-              synthError = err instanceof Error ? err : new Error(String(err));
-            }
-            // R0-8: synthesis is a suspension point; a superseded generator must
-            // not append to the new task's conversation.
-            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-
-            if (synthError || !synthAnswer?.trim()) {
-              if (synthError?.message.startsWith('RESPONSE_EVIDENCE_INVALID:')) {
-                yield this.host.streamFailed(synthError.message);
-                return;
-              }
-              const failMsg = `Answer synthesis failed after inspection completed: ${synthError?.message ?? "no answer generated"}`;
-              this.host.conversation.push({
-                role: "assistant",
-                content: failMsg,
-              });
-              yield { type: "answer_chunk", text: failMsg };
-              if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-              yield this.host.streamDone(failMsg, {
-                blockedReport: attachTerminalReason(
-                  {
-                    schema_version: 1,
-                    status: "BLOCKED",
-                    reason: "Answer synthesis unavailable",
-                    missing: "LLM provider response for answer synthesis",
-                    checked: [
-                      {
-                        action: "synthesize_answer",
-                        target: "provider",
-                        finding:
-                          synthError?.message ?? "Empty synthesis output",
-                      },
-                    ],
-                  },
-                  arb.terminalReason,
-                ),
-                ...(arb.terminalReason !== undefined
-                  ? { reason: arb.terminalReason }
-                  : {}),
-              });
-              return;
-            }
-
-            const finalAnswer = synthAnswer.trim();
-            const synthBlocked =
-              this.host.detectAndBuildBlockedReport(finalAnswer);
-            this.host.conversation.push({
-              role: "assistant",
-              content: finalAnswer,
-            });
-            yield { type: "answer_chunk", text: finalAnswer };
-            if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-            yield this.host.streamDone(finalAnswer, {
-              blockedReport: synthBlocked ?? null,
-              // D03: the arbiter reason survives even when the bounded synthesis
-              // produced an informational answer rather than a blocked report.
-              ...(arb.terminalReason !== undefined
-                ? { reason: arb.terminalReason }
-                : {}),
+            yield* streamReadOnlyTerminal({
+              host: this.host,
+              submissionGeneration,
+              allToolObservations,
+              userInput,
+              arb,
             });
             return;
           }

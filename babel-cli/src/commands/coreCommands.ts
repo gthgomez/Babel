@@ -24,7 +24,7 @@ import { resolveEffectiveSettings } from '../config/userSettings.js';
 import { resolveAgentTarget } from '../services/targetResolver.js';
 import { resolveProjectRoot } from '../cli/helpers.js';
 import { assertFiniteBudgetSupported } from '../config/laneBudget.js';
-import { CLI_COMMAND } from '../cli/commandName.js';
+import { CLI_COMMAND, invokedCliName } from '../cli/commandName.js';
 export { validateRuntimeEnvForCommand } from './coreCommandSupport.js';
 export { buildApprovalProfilePayload } from './coreCommandSupport.js';
 export { resolveBenchmarkProvider } from './coreCommandSupport.js';
@@ -71,7 +71,7 @@ export function applyProgramMetadata(program: Command): void {
     }
   });
   program
-    .name(CLI_COMMAND)
+    .name(invokedCliName())
     .description(
       "Babel coding agent — inspect, plan and change projects using your chosen provider",
     )

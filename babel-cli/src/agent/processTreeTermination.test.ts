@@ -353,8 +353,9 @@ describe('Windows tree termination failure handling', () => {
           return { status: scenario.status, pid: 100, signal: null, output: [null, null, null], stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
         }) as unknown as typeof childProcess.spawnSync;
         syncBuiltinESMExports();
-        terminateChildTree({ pid: 12345, exitCode: scenario.exitCode, signalCode: null,
+        const outcome = terminateChildTree({ pid: 12345, exitCode: scenario.exitCode, signalCode: null,
           kill: () => { directKills++; return true; } } as ChildProcess);
+        assert.equal(outcome.treeKillAccepted, scenario.wantAttempts > 0 && scenario.status === 0);
         assert.equal(attempts, scenario.wantAttempts);
         assert.equal(directKills, 1, 'existing direct-child fallback remains bounded');
       }

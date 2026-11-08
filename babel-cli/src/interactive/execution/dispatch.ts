@@ -3,6 +3,7 @@
 // engine based on lane classification and session mode.
 
 import type { ReplContext } from '../context.js';
+import { assertInteractiveRunAvailable } from '../context.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { parseInteractiveDailyCommand } from '../parsers.js';
 import * as Turn from '../turns.js';
@@ -33,6 +34,11 @@ export async function executeTask(
   input: string,
   deps?: ExecuteTaskDeps,
 ): Promise<void> {
+  assertInteractiveRunAvailable(ctx);
+  ctx.preparingRun = true;
+  let preparationCancelled = false;
+  const cancelPreparation = () => { preparationCancelled = true; };
+  ctx.cancelActiveRun = cancelPreparation;
   const executeChatTask = deps?.executeChatTask ?? _executeChatTask;
   const executePlanTask = deps?.executePlanTask ?? _executePlanTask;
   const executeGovernedTask = deps?.executeGovernedTask ?? _executeGovernedTask;
@@ -74,6 +80,7 @@ export async function executeTask(
     // Session identity no longer pastes instruction files. The chat stack
     // delivers AGENTS.md, ENGINEERING.md, and the user-wide context.md.
     const systemContext = await resolveIdentity(ctx, target.targetRoot);
+    if (preparationCancelled) throw new Error('Task preparation was cancelled before execution.');
 
     const lane = explicitDailyCommand?.verb ?? Turn.classifyInteractiveLane(ctx, input);
     const approvalFollowUp =
@@ -96,6 +103,8 @@ export async function executeTask(
       ctx.state.lastRunUserStatus = 'blocked';
       return;
     }
+    ctx.preparingRun = false;
+    if (ctx.cancelActiveRun === cancelPreparation) delete ctx.cancelActiveRun;
     ctx.beginShellTurn?.(userTurn.turn_id, input);
     const shellTurnEpoch = ctx.shellRuntime?.store.epoch;
     let executionFailed = false;
@@ -131,6 +140,8 @@ export async function executeTask(
       ctx.settleShellTurn?.(executionFailed ? 'failed' : undefined, shellTurnEpoch);
     }
   } finally {
+    ctx.preparingRun = false;
+    if (ctx.cancelActiveRun === cancelPreparation) delete ctx.cancelActiveRun;
     ctx.saveSessionState();
   }
 }

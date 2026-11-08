@@ -49,7 +49,6 @@ export function resolveOpenRouterDeepSeekBackendKey(modelId: string):
   | null {
   switch (modelId.trim()) {
     case 'deepseek':
-    case 'deepseek/deepseek-v4.1-flash':
     case 'deepseek/deepseek-v4.1-flash-1017':
     case 'deepseek-v4.1-flash-openrouter':
       return 'deepseek-v4.1-flash-openrouter';
@@ -174,6 +173,8 @@ export interface ModelPolicyModelEntry {
   context_limit?: number;
   /** Whether the model supports native function calling via tools/tool_choice API. */
   native_tool_use?: boolean;
+  /** Discovered capability is unknown; do not infer native-tool admission. */
+  native_tool_use_unverified?: boolean;
   /** Capability tags for routing decisions (e.g. coding, reasoning, fast). */
   capabilities?: string[];
 }
@@ -220,6 +221,7 @@ export interface ResolvedModelPolicyEntry {
   expiresAt?: string;
   contextLimit?: number;
   nativeToolUse?: boolean;
+  nativeToolUseUnverified?: boolean;
   capabilities?: string[];
 }
 
@@ -299,6 +301,7 @@ export interface ResolvedModelPolicy {
   maxOutputTokens?: number;
   contextLimit?: number;
   nativeToolUse?: boolean;
+  nativeToolUseUnverified?: boolean;
   capabilities?: string[];
 }
 
@@ -509,6 +512,30 @@ export function loadModelPolicyConfig(babelRoot = resolveRuntimePaths().resource
 }
 
 /** Resolve a backend key from either its configured key or exact model id. */
+/**
+ * Resolve a bare provider model ID to exactly one backend key. Multiple
+ * provider catalogs can expose the same upstream ID; picking the first would
+ * silently bind an explicit model to a different provider and credential.
+ */
+export function resolveBareModelIdBackendKey(
+  configuredModels: Record<string, ModelPolicyModelEntry>,
+  modelId: string,
+): string | undefined {
+  const normalized = modelId.trim().toLowerCase();
+  const matches = Object.entries(configuredModels).filter(
+    ([, entry]) => entry.model_id.trim().toLowerCase() === normalized,
+  );
+  if (matches.length === 0) return undefined;
+  if (matches.length === 1) return matches[0]![0];
+  const openrouter = matches.filter(([, entry]) => entry.provider === 'openrouter');
+  if (normalized.includes('/') && openrouter.length === 1) return openrouter[0]![0];
+  throw new Error(
+    `AMBIGUOUS_MODEL: "${modelId}" is exposed by multiple providers (${matches
+      .map(([key, entry]) => `${entry.provider}:${key}`)
+      .join(', ')}). Select a provider-qualified backend key instead.`,
+  );
+}
+
 export function resolveModelPolicyBackendKey(
   modelOrBackendKey: string,
   babelRoot?: string,
@@ -517,9 +544,7 @@ export function resolveModelPolicyBackendKey(
   const { config } = loadModelPolicyConfig(babelRoot);
   const normalized = modelOrBackendKey.trim().toLowerCase();
   if (config.models?.[normalized]) return normalized;
-  return Object.entries(config.models ?? {}).find(
-    ([, entry]) => entry.model_id.trim().toLowerCase() === normalized,
-  )?.[0];
+  return resolveBareModelIdBackendKey(config.models ?? {}, normalized);
 }
 
 function getCostEstimationDefaults(config: ModelPolicyConfig): {
@@ -580,7 +605,8 @@ function getResolvedEntry(
     ...(entry.verified_at !== undefined ? { verifiedAt: entry.verified_at } : {}),
     ...(entry.expires_at !== undefined ? { expiresAt: entry.expires_at } : {}),
     ...(entry.context_limit !== undefined ? { contextLimit: entry.context_limit } : {}),
-    ...(entry.native_tool_use !== undefined ? { nativeToolUse: entry.native_tool_use } : {}),
+    ...(entry.native_tool_use !== undefined && entry.native_tool_use_unverified !== true ? { nativeToolUse: entry.native_tool_use } : {}),
+    ...(entry.native_tool_use_unverified === true ? { nativeToolUseUnverified: true } : {}),
     ...(Array.isArray(entry.capabilities) ? { capabilities: [...entry.capabilities] } : {}),
   };
 }
@@ -816,7 +842,9 @@ export function resolveModelByKey(options: {
 
   const requestedKey = options.key.trim();
   const normalizedRequestedKey = requestedKey.toLowerCase();
-  const liveMappedKey = options.liveOnly === true
+  const requestedEntry = config.models?.[requestedKey] ?? config.models?.[normalizedRequestedKey];
+  const explicitDirectDeepSeek = requestedEntry?.provider === 'deepseek' && requestedEntry.model_id === normalizedRequestedKey;
+  const liveMappedKey = options.liveOnly === true && !explicitDirectDeepSeek
     ? resolveOpenRouterDeepSeekBackendKey(normalizedRequestedKey)
     : null;
   const candidateKey = liveMappedKey && config.models?.[liveMappedKey]
@@ -917,6 +945,7 @@ export function resolveModelByKey(options: {
     ...(resolvedBackend.nativeToolUse !== undefined
       ? { nativeToolUse: resolvedBackend.nativeToolUse }
       : {}),
+    ...(resolvedBackend.nativeToolUseUnverified ? { nativeToolUseUnverified: true } : {}),
     ...(resolvedBackend.capabilities !== undefined
       ? { capabilities: resolvedBackend.capabilities }
       : {}),
@@ -1103,6 +1132,7 @@ export function resolveFamilyModelPolicy(options: {
     ...(resolvedBackend.nativeToolUse !== undefined
       ? { nativeToolUse: resolvedBackend.nativeToolUse }
       : {}),
+    ...(resolvedBackend.nativeToolUseUnverified ? { nativeToolUseUnverified: true } : {}),
     ...(resolvedBackend.capabilities !== undefined
       ? { capabilities: resolvedBackend.capabilities }
       : {}),
@@ -1163,7 +1193,7 @@ export function getNormalizedModelCapabilities(
     const hasContextWindow = entry.context_window !== undefined || entry.context_limit !== undefined;
     const contextWindow = entry.context_window ?? entry.context_limit;
     const hasMaxOutput = entry.max_output_tokens !== undefined;
-    const hasNativeToolUse = entry.native_tool_use !== undefined;
+    const hasNativeToolUse = entry.native_tool_use !== undefined && entry.native_tool_use_unverified !== true;
 
     return {
       backendKey: resolvedKey,
@@ -1173,7 +1203,7 @@ export function getNormalizedModelCapabilities(
       contextWindowSource: hasContextWindow ? 'policy' : 'unknown',
       ...(hasMaxOutput ? { maxOutputTokens: entry.max_output_tokens } : {}),
       maxOutputTokensSource: hasMaxOutput ? 'policy' : 'unknown',
-      ...(hasNativeToolUse ? { nativeToolUse: entry.native_tool_use } : {}),
+      ...(entry.native_tool_use !== undefined && entry.native_tool_use_unverified !== true ? { nativeToolUse: entry.native_tool_use } : {}),
       nativeToolUseSource: hasNativeToolUse ? 'policy' : 'unknown',
       capabilities: Array.isArray(entry.capabilities) ? [...entry.capabilities] : [],
       ...(entry.estimated_cost_per_1m_input !== undefined
