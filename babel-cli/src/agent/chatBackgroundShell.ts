@@ -40,6 +40,9 @@ import { isInvocationLive, refreshDryRunState } from '../localTools.js';
 export interface BackgroundShellLogEntry {
   tool: string;
   target: string;
+  working_directory?: string;
+  processExecuted?: boolean;
+  processCompleted?: boolean;
   detail?: string;
   error?: string;
   index: number;
@@ -98,9 +101,13 @@ export async function executeAwaitCommandAction(
   const detail = settlement.policyRejected ? 'background execution denied after process settlement' : result.timed_out
     ? 'timed_out (still running)'
     : `exit ${result.exit_code ?? -1} (${result.status})`;
+  const job = getBackgroundShellJob(action.task_id);
   ctx.pushLog({
     tool: ctx.tool,
     target: action.task_id,
+    ...(job?.cwd ? { working_directory: job.cwd } : {}),
+    ...(job?.processStarted === true ? { processExecuted: true } : {}),
+    processCompleted: result.status === 'completed',
     detail,
     index: ctx.index,
     exit_code: exitCode ?? 1,
@@ -399,6 +406,9 @@ export function executeBackgroundRunCommandAction(
     ctx.pushLog({
       tool: ctx.tool,
       target: ctx.target,
+      working_directory: safeCwd,
+      processExecuted: job.processStarted === true,
+      processCompleted: false,
       detail: `background started ${job.id}`,
       index: ctx.index,
       exit_code: 0,
@@ -418,6 +428,9 @@ export function executeBackgroundRunCommandAction(
     ctx.pushLog({
       tool: ctx.tool,
       target: ctx.target,
+      working_directory: safeCwd,
+      processExecuted: false,
+      processCompleted: false,
       detail: 'error',
       error: msg,
       index: ctx.index,

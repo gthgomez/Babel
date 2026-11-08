@@ -226,9 +226,11 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
   });
 
   test('a successful retry of the same blocked action clears stale block evidence', () => {
-    const denied = { tool: 'run_command', target: 'curl https://service.test', exit_code: 7,
+    const denied = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 7,
       stderr: 'curl: (7) connect: ECONNREFUSED' };
-    const recovered = { tool: 'run_command', target: 'curl https://service.test', exit_code: 0,
+    const recovered = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 0,
       stdout: 'ok' };
     assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied]));
     assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, recovered]), null);
@@ -236,11 +238,55 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
       'a later unresolved failure remains authoritative');
   });
 
+  test('same shell text in another cwd or without cwd cannot clear a typed block', () => {
+    const denied = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const otherDirectory = { tool: 'run_command', target: denied.target, working_directory: '/repo/tools',
+      processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'ok' };
+    const cwdUnknown = { tool: 'run_command', target: denied.target,
+      processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'ok' };
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, otherDirectory]));
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, cwdUnknown]));
+  });
+
+  test('a command start without a completed process result cannot clear a typed block', () => {
+    const denied = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const startedOnly = { tool: 'run_command', target: denied.target, working_directory: '/repo/app',
+      processExecuted: false, processCompleted: false, exit_code: 0, stdout: 'background started' };
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, startedOnly]));
+  });
+
   test('success on a different action does not clear a typed block', () => {
     const denied = { tool: 'read_file', target: 'secrets/config.json', exit_code: 1,
       stderr: 'EACCES: permission denied' };
     const unrelated = { tool: 'read_file', target: 'src/index.ts', exit_code: 0, stdout: 'ok' };
     assert.ok(detectAndBuildBlockedReport('BLOCKED: access denied.', [denied, unrelated]));
+  });
+
+  test('updated blocking evidence is ordered by its latest observation', () => {
+    const log = [
+      { tool: 'read_file', target: 'src/shared', exit_code: 1, stderr: 'EACCES: permission denied' },
+      { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo',
+        processExecuted: true, processCompleted: true, exit_code: 7,
+        stderr: 'curl: (7) connect: ECONNREFUSED' },
+      { tool: 'read_file', target: 'src/shared', exit_code: 1, stderr: 'ENOTSUP: unsupported operation' },
+    ];
+    const report = detectAndBuildBlockedReport('BLOCKED: cannot continue.', log);
+    assert.equal(report?.reason_code, 'unsupported_operation');
+  });
+
+  test('the report window keeps a recently updated action beyond the 15-entry bound', () => {
+    const log = Array.from({ length: 16 }, (_, index) => ({
+      tool: 'read_file', target: `src/${index}`, exit_code: 1,
+      stderr: 'EACCES: permission denied',
+    }));
+    log.push({ ...log[0]!, stderr: 'ENOTSUP: unsupported operation' });
+    const report = detectAndBuildBlockedReport('BLOCKED: cannot continue.', log);
+    assert.equal(report?.reason_code, 'unsupported_operation');
+    assert.ok(report?.checked.some(entry => entry.target === 'src/0'));
   });
 
   test('R0-5: generic stderr does not qualify, but an explicit denial does', () => {

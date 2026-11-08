@@ -517,7 +517,9 @@ const EDIT_DENIAL_CLAUSE_SEPARATOR = new RegExp(
 );
 
 function editDenialObjectClause(text: string, start: number): string {
-  return text.slice(start).split(EDIT_DENIAL_CLAUSE_SEPARATOR, 1)[0]!.trim();
+  // Preserve source offsets for stripScopedEditProhibitions. Trimming here
+  // shortens the returned text and can leave the tail of a denial in place.
+  return text.slice(start).split(EDIT_DENIAL_CLAUSE_SEPARATOR, 1)[0]!;
 }
 
 /** One object recognizer shared by Chat and Deep prohibition parsing. */
@@ -546,7 +548,7 @@ export function hasExplicitEditDenial(taskText: string): boolean {
   if (new RegExp(SEQUENCED_MUTATION_SOURCE, 'i').test(evidence)) return false;
   for (const directive of evidence.matchAll(new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'))) {
     if (/^(?:read-?only|dry-?run)$/i.test(directive[0])) return true;
-    const objectClause = editDenialObjectClause(evidence, directive.index + directive[0].length);
+    const objectClause = editDenialObjectClause(evidence, directive.index + directive[0].length).trim();
     if (!isScopedEditObject(objectClause)) return true;
   }
   return false;

@@ -365,6 +365,10 @@ export function summarizeDroppedTurns(dropped: ChatMessage[]): string {
 export type BlockedToolLogEntry = {
   tool: string;
   target: string;
+  /** Host-observed working directory for command identity; never model supplied. */
+  working_directory?: string;
+  processExecuted?: boolean;
+  processCompleted?: boolean;
   exit_code?: number;
   error?: string;
   stdout?: string;
@@ -523,12 +527,24 @@ export function detectAndBuildBlockedReport(
   // transient block. Keep the last observed state for each tool/target pair;
   // unrelated successes do not erase evidence about a different dependency.
   const activeBlockingByAction = new Map<string, BlockedToolLogEntry>();
-  for (const entry of toolCallLog) {
+  const cwdSensitiveTools = new Set(['run_command', 'shell_exec', 'test_run']);
+  for (const [index, entry] of toolCallLog.entries()) {
     if (!investigateTools.has(entry.tool) || !entry.target) continue;
-    const key = `${entry.tool}\0${entry.target}`;
+    // A shell command's display target is not its full identity. If the host
+    // did not capture cwd, isolate this event so it cannot clear another
+    // command occurrence under an unknown directory.
+    const cwd = entry.working_directory;
+    const key = cwdSensitiveTools.has(entry.tool) && !cwd
+      ? `${entry.tool}\0${entry.target}\0unknown-cwd\0${index}`
+      : `${entry.tool}\0${entry.target}\0${cwd ?? ''}`;
     if (classifyBlockingOrigin(entry)) {
+      // Map.set on an existing key does not move its insertion order. Reinsert
+      // so the bounded report window reflects the chronology of the latest
+      // blocking observations.
+      activeBlockingByAction.delete(key);
       activeBlockingByAction.set(key, entry);
-    } else if (entry.exit_code === 0 && !entry.error) {
+    } else if (entry.exit_code === 0 && !entry.error &&
+      (!cwdSensitiveTools.has(entry.tool) || (entry.processExecuted === true && entry.processCompleted === true))) {
       activeBlockingByAction.delete(key);
     }
   }

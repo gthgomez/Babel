@@ -9,11 +9,14 @@ This change set is based on `origin/main` at `139547454966aa55aa74d222d201b3ca49
 1. A newly executed, host-admitted verifier result now clears accumulated completion-gate strikes, including a red result that gives Babel fresh diagnostics to work from. The signal comes from the existing durable progress receipt and is only emitted for an executed authoritative verifier with a new semantic signature. Reads, repeated results, and model-authored progress claims do not clear strikes.
 2. A later successful retry of the exact same tool and target clears stale typed blocking evidence. A success on a different action does not clear it, and a later typed failure reestablishes the block. The classifier still requires a model `BLOCKED` declaration and typed host-observed failure evidence.
 3. Edit-intent parsing now recognizes “hidden tests” as a scoped protected artifact and “other files” as a scoped exclusion. It also ends that exclusion clause before a following explicit test command. These clauses do not grant mutation intent by themselves; global no-edit directives and unrelated commands remain read-only.
+4. Command recovery evidence now includes host-observed working directory and completed-process state. A command success in another or unknown directory, a cached or merely started process, cannot clear the earlier block. Repeated typed failures are reordered by their latest observation before applying the 15-entry report limit.
+5. Scoped-denial masking preserves the original source span, including whitespace. Without this, trimming the object clause before calculating its end could leave a later negated verb visible as positive edit intent.
 
 ## Verification
 
-- Focused suites: 53 tests passed across `chatEngineTaskIntent.test.ts`, `progressEvidenceAlignment.test.ts`, and `r0TerminalAuthority.test.ts`.
-- `npm run typecheck`: passed.
+- Focused suites after follow-up review: 73 tests passed across `chatEngineTaskIntent.test.ts`, `progressEvidenceAlignment.test.ts`, `r0TerminalAuthority.test.ts`, and `chatOperationPolicy.test.ts`; the actual streamed `ChatEngine` test passed with a real failing `node --test` process and confirmed strikes reset before the next model turn.
+- `npm run typecheck` and `npm run build`: passed after the follow-up fixes.
+- The streaming-loop regression covers the positive case (a newly executed red verifier resets strikes). Repeated/cached verifier signatures, ordinary reads, and the bounded no-progress behavior are covered at component level; end-to-end strike-state cases for cached/stale/alternating receipts are still a coverage gap.
 - Full `npm run test:unit`: started and exercised the modified suites successfully, but was interrupted after 5 minutes because the suite stalled without output. Before interruption, unrelated environment-sensitive failures were reported in background process-tree termination, offline plan-lane assumptions, and undo-lane fixtures. This is not a passing full-suite result.
 - `pwsh scripts/agent-preflight.ps1` is unavailable because PowerShell is not installed in the execution environment.
 - No provider inference was used.

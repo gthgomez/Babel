@@ -65,6 +65,19 @@ test('scoped exclusion followed by a verification command keeps the denial claus
   assert.equal(resolveTaskShape(task).operation, 'HYBRID')
 })
 
+test('whitespace-only gaps cannot truncate scoped edit denials', () => {
+  for (const task of [
+    `Do not add${' '.repeat(96)}tests or change other files.`,
+    `Explain the normalizer. Do not add${' '.repeat(96)}tests or change other files.`,
+    `Explain the normalizer. Do not change${' '.repeat(96)}other files.`,
+  ]) {
+    assert.equal(classifyChatTaskIntent(task), 'explain', task)
+    assert.equal(resolveTaskShape(task).operation, 'READ_ONLY', task)
+  }
+  assert.equal(classifyChatTaskIntent(`Fix the normalizer. Do not add${' '.repeat(96)}tests or edit files.`), 'explain')
+  assert.equal(classifyChatTaskIntent(`Fix the normalizer. Do not add${' '.repeat(96)}tests or change other files. Do not modify any files.`), 'explain')
+})
+
 test('scoped regression and safety preservation clauses retain explicit repair intent', () => {
   for (const objects of ['regression tests or unrelated code',
     'the regression tests, permissions, verification gates, dependencies, or unrelated code',

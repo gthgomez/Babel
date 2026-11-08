@@ -16,6 +16,7 @@ import { verifierSemanticProgress } from './verifierSemanticProgress.js';
 import assert from 'node:assert/strict';
 import { describe, test, after } from 'node:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -484,6 +485,50 @@ describe('D01/D02 effective-operation policy', () => {
       content: 'v22.0.1', exit_code: 0 }]), false);
     assert.equal(check([failed]), false, 'a probe must not reset the last real verifier signature');
     assert.equal(check([{ ...failed, content: 'PASS 1 test', exit_code: 0, verifierSemanticSignature: 'host-green-semantic-tuple' }]), true);
+  });
+
+  test('live streaming loop clears completion strikes after a newly executed red verifier', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-gate-verifier-progress-'));
+    const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+    writeFileSync(join(root, 'red.test.mjs'), "import test from 'node:test'; import assert from 'node:assert/strict'; test('red', () => assert.equal(1, 2));\n");
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'add', '.'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], { cwd: root });
+    const task = 'Fix the failure in red.test.mjs and run node --test red.test.mjs to verify the repair.';
+    const engine = new ChatEngine({ task, projectRoot: root, model: MODEL, maxTurns: 2 });
+    const box = engine as unknown as { gateStrikes: number };
+    (engine as unknown as { hardPlanMode: boolean; requireTodoBeforeMutate: boolean }).hardPlanMode = false;
+    (engine as unknown as { hardPlanMode: boolean; requireTodoBeforeMutate: boolean }).requireTodoBeforeMutate = false;
+    let calls = 0;
+    let strikesBeforeAnswer: number | undefined;
+    installMockRunner(engine, {
+      executeWithToolsStream: async function* () {
+        calls += 1;
+        if (calls === 1) {
+          box.gateStrikes = 2;
+          yield { type: 'tool_use', id: 'red-verifier', name: 'test_run', input: { command: 'node --test red.test.mjs' } };
+          yield { type: 'done', finishReason: 'tool_calls' };
+          return;
+        }
+        strikesBeforeAnswer = box.gateStrikes;
+        yield { type: 'text_delta', text: 'The executed verifier is red; I cannot certify completion.' };
+        yield { type: 'done', finishReason: 'stop' };
+      },
+      execute: async () => ({ type: 'completion', answer: 'The executed verifier is red; I cannot certify completion.' }),
+      getLastInvocationMetadata: () => null,
+    });
+    try {
+      await drain(engine, task, []);
+      assert.equal(calls, 2);
+      assert.equal(strikesBeforeAnswer, 0, `actual verifier progress resets stale completion-gate strikes; log=${JSON.stringify(engine['toolCallLog'])}`);
+      assert.equal(engine['toolCallLog'].some(row => row.tool === 'test_run' && row.verifierExecuted === true && row.exit_code !== 0), true,
+        'the reset requires a host-observed executed red verifier');
+    } finally {
+      if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+      else process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousFallback;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test('I3 bare continuation gestures carry the prior operation policy', () => {
