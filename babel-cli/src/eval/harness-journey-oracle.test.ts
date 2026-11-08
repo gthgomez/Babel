@@ -177,6 +177,15 @@ test('captured added production helpers remain available to isolated grading', a
   assert.equal(await gradeJourneyCode('J05', input.readOutput, image), 'pass')
 })
 
+test('async top-level candidate modules remain unavailable to the synchronous value oracle', async t => {
+  const image = process.env['BABEL_JOURNEY_ORACLE_TEST_IMAGE']
+  if (!image) { t.skip('Requires the explicitly selected local pinned image'); return }
+  const input = await fixture('J05')
+  await mkdir(join(input.candidateRoot, 'lib'))
+  await writeFile(join(input.candidateRoot, 'lib/total.mjs'), 'await Promise.resolve(); export const total = items => items.reduce((n, i) => n + i.price * i.quantity, 0)\n')
+  assert.equal(await gradeJourneyCode('J05', input.readOutput, image), 'unavailable')
+})
+
 test('measurement accepts only primitives without exposing host constructors or thenable callbacks', async t => {
   const image = process.env['BABEL_JOURNEY_ORACLE_TEST_IMAGE']
   if (!image) { t.skip('Requires the explicitly selected local pinned image'); return }

@@ -944,7 +944,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
     }
   });
 
-  test('Scenario 3b — implicit acceptance without explicit criteria stays unverified despite a green verifier', async () => {
+  test('Scenario 3b — after green verification, continue investigation and report the unbound criterion', async () => {
     const fixture = makeFixture();
     try {
       const task = 'Investigate why parser_test fails and fix it.';
@@ -952,7 +952,8 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       const o = await driveLoop(fixture, task, [
         [{ type: 'tool_use', id: 'w1', name: 'str_replace', input: { file_path: 'parser.ts', old_str: 'return Number(parts[0]) - Number(parts[1]);', new_str: 'return Number(parts[0]) + Number(parts[1]);' } }, { type: 'done', finishReason: 'tool_calls' }],
         [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
-        [{ type: 'text_delta', text: 'Fixed parser.ts and npm test passed.' }, { type: 'done', finishReason: 'stop' }],
+        [{ type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'parser.test.ts' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'text_delta', text: 'I fixed parser.ts, npm test passes, and I inspected parser.test.ts. The visible test documents the 1+2 case, but the inferred acceptance meaning is not bound to an executable verifier, so this repair remains partially verified and I cannot certify the full task.' }, { type: 'done', finishReason: 'stop' }],
       ], {
         onBeforeCall(call, engine) {
           if (call === 2) acceptanceReview = conversationText(engine);
@@ -962,6 +963,30 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.match(acceptanceReview, /acceptance_evidence_guidance:.*keep making safe progress/);
       assert.match(acceptanceReview, /source: inferred/);
       assert.match(acceptanceReview, /verifier_binding: none/);
+      assert.deepEqual(o.toolCalls.map((call) => call.tool), ['str_replace', 'run_command', 'read_file']);
+      assert.equal(o.toolCalls[2]?.target, 'parser.test.ts', 'the permitted post-guidance action inspects the relevant test');
+      assert.equal(o.outcome, 'UNVERIFIED_PATCH', 'additional investigation does not invent missing acceptance proof');
+      assert.notEqual(o.outcome, 'VERIFIED_COMPLETE');
+      assert.match(o.answer, /partially verified|cannot certify/i, 'final report scopes what passed and what remains unknown');
+
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test('Scenario 3c — green tests and unsupported completion prose cannot certify unmet semantic acceptance', async () => {
+    const fixture = makeFixture();
+    try {
+      const task = 'Investigate why parser_test fails and fix it.';
+      const o = await driveLoop(fixture, task, [
+        [{ type: 'tool_use', id: 'w1', name: 'str_replace', input: { file_path: 'parser.ts', old_str: 'return Number(parts[0]) - Number(parts[1]);', new_str: 'return Number(parts[0]) + Number(parts[1]);' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'text_delta', text: 'VERIFIED_COMPLETE: all requirements are satisfied because npm test passed.' }, { type: 'done', finishReason: 'stop' }],
+      ]);
+      assert.equal(o.outcome, 'UNVERIFIED_PATCH', 'an unbound semantic requirement remains unresolved despite green tests and model certification language');
+      assert.notEqual(o.durableCompletionOutcome, 'VERIFIED_COMPLETE');
+      assert.equal(o.writeToolCalls, 1, 'negative control still exercises the scoped repair');
+      assert.equal(o.toolCalls.filter((call) => call.tool === 'run_command').length, 1);
     } finally {
       fixture.cleanup();
     }

@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { normalizeSandboxFixturePermissions } from './sandboxFixturePermissions.js'
 import { buildBenchmarkContainerCommand, isHostIsolationEscalationAllowed } from '../config/benchmarkContainer.js'
 import { validateDockerIsolationArgs } from '../config/dockerIsolationArgs.js'
 
@@ -90,6 +91,7 @@ export function gradeInCleanRoom(input: CleanRoomGradeInput): CleanRoomGradeResu
     for (const rel of deletedPaths) {
       rmSync(join(graderRoot, rel), { force: true, recursive: true })
     }
+    if (input.execution) normalizeSandboxFixturePermissions(graderRoot)
     const [cmd, ...args] = input.verifierCommand
     const container = input.execution ? buildBenchmarkContainerCommand({
       dockerImage: input.execution.image,

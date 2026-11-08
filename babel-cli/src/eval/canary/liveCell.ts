@@ -28,6 +28,7 @@ import type { CanaryTaskSpec } from './types.js'
 import type { OpenRouterRoutingPolicy } from '../../runners/openRouterApi.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../../evidence/chatRevisionBinding.js'
 import { gradeVerificationProse, type VerificationProseGrade, type VerificationProseKind } from '../diagnostics/verification.js'
+import { normalizeSandboxFixturePermissions } from '../sandboxFixturePermissions.js'
 
 const LIVE_AGENT_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -57,6 +58,17 @@ export interface LiveCellOutcome {
   harness_sha: string | null
   evidence_path: string
   causal_attribution: CausalRunWhyReport
+}
+
+/** ANSWER_READY means a response exists; only an authoritative passing terminal outcome is completion. */
+export function claimsSuccessfulCompletion(payload: Record<string, unknown> | null): boolean {
+  if (!payload) return false
+  const terminal = payload['terminal_outcome']
+  if (typeof terminal === 'string') {
+    return terminal === 'VERIFIED_COMPLETE' || terminal === 'NO_CHANGE_REQUIRED'
+  }
+  if (payload['user_status'] === 'not_verified') return false
+  return payload['status'] === 'FIX_COMPLETE' || payload['status'] === 'COMPLETE'
 }
 
 /** Grade raw verification language against current parent receipts, not a terminal label. */
@@ -402,6 +414,7 @@ export function materializeCanaryWorkspace(spec: CanaryTaskSpec, root: string): 
     encoding: 'utf8',
     env: gitEnv(),
   })
+  normalizeSandboxFixturePermissions(root)
 }
 
 function startFiles(spec: CanaryTaskSpec): CleanRoomFile[] {
