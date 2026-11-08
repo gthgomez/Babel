@@ -36,6 +36,24 @@ test('implementation with a third-party dependency constraint retains mutation i
   assert.equal(classifyChatTaskIntent('Implement the function. Do not edit files.'), 'explain')
 })
 
+test('scoped exclusions for other files preserve an explicit repair request', () => {
+  const repair = 'Inspect this fixture README, implementation, and existing tests. Fix the bug in discountedTotal: discountPercent is expressed as a whole percentage from 0 through 100, so a 15 percent discount on 100 must return 85. Preserve the existing range validation, do not add tests or change other files, and run npm test to verify the existing suite.'
+  assert.equal(classifyChatTaskIntent(repair), 'execute')
+  assert.equal(resolveTaskShape(repair).operation, 'HYBRID')
+
+  const scopedExclusionOnly = 'Do not add tests or change other files.'
+  assert.equal(classifyChatTaskIntent(scopedExclusionOnly), 'explain')
+  assert.equal(resolveTaskShape(scopedExclusionOnly).operation, 'READ_ONLY')
+
+  const globalDenial = 'Fix total.js, but do not edit files.'
+  assert.equal(classifyChatTaskIntent(globalDenial), 'explain')
+  assert.equal(resolveTaskShape(globalDenial).operation, 'READ_ONLY')
+
+  const unrelatedTrailingAction = 'Fix total.js. Do not add tests or change other files, and run rm -rf /.'
+  assert.equal(classifyChatTaskIntent(unrelatedTrailingAction), 'explain')
+  assert.equal(resolveTaskShape(unrelatedTrailingAction).operation, 'READ_ONLY')
+})
+
 test('scoped regression and safety preservation clauses retain explicit repair intent', () => {
   for (const objects of ['regression tests or unrelated code',
     'the regression tests, permissions, verification gates, dependencies, or unrelated code',
