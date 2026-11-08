@@ -21,7 +21,10 @@ function isInteractive(
 }
 
 function isMachineOutput(argv: string[]): boolean {
-  return argv.includes('--json') || argv.some(arg => /^--output-format=(?:json|stream-json|jsonl|ndjson)$/.test(arg));
+  return argv.includes('--json') || argv.some((arg, index) =>
+    /^--output-format=(?:json|stream-json|jsonl|ndjson)$/.test(arg) ||
+    arg === '--output-format' && /^(?:json|stream-json|jsonl|ndjson)$/.test(argv[index + 1] ?? ''),
+  );
 }
 
 function safeApiKey(key: string): boolean {

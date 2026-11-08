@@ -18,6 +18,21 @@ test('maybePromptForMissingProviderCredential is a no-op for machine output', as
   rmSync(root, { recursive: true, force: true });
 });
 
+test('machine output detection accepts the split --output-format stream-json form on a PTY', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-interactive-cred-machine-'));
+  const env: NodeJS.ProcessEnv = { BABEL_CONFIG_DIR: join(root, 'config'), OPENROUTER_API_KEY: 'synthetic-openrouter-key' };
+  const term = new VirtualTerminal({ isTTY: true });
+  const prompt = maybePromptForMissingProviderCredential(env, ['node', 'babel', 'run', 'hello', '--output-format', 'stream-json'], {
+    input: term.stdin,
+    output: term.stderr,
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  term.sendLine('');
+  await prompt;
+  assert.equal(term.getRawOutput().includes('Provider env variable to set'), false);
+  rmSync(root, { recursive: true, force: true });
+});
+
 test('interactive credential entry masks API key and restores terminal mode', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-interactive-cred-'));
   const env: NodeJS.ProcessEnv = {
