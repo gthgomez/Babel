@@ -3,7 +3,7 @@ import { setImmediate as nextTurn } from 'node:timers/promises'
 import test from 'node:test'
 import * as sandbox from './sandbox.js'
 import { ProcessWitness } from './diagnostics/bdns/processWitness.js'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isProcessAlive, isProcessGroupAlive, waitForProcessExit } from './processTree.js'
@@ -196,13 +196,18 @@ test('a local supervisor deadline does not return while its owned descendant is 
     const pid = Number(readFileSync(join(root, 'child.pid'), 'utf8'));
     if (process.platform === 'linux') {
       const groupLeaderPid = Number(readFileSync(join(root, 'parent.pid'), 'utf8'));
-      assert.equal(isProcessGroupAlive(groupLeaderPid), false, 'supervisor returned while a runnable descendant remained');
       if (isProcessAlive(pid)) {
-        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-        const state = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[0];
-        assert.ok(state === 'Z' || state === 'X' || state === 'x',
-          `a process still able to run survived its supervisor (state=${state})`);
+        const taskDir = `/proc/${pid}/task`;
+        const taskStates = readdirSync(taskDir).map(tid => {
+          const stat = readFileSync(`${taskDir}/${tid}/stat`, 'utf8');
+          return stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[0];
+        });
+        assert.ok(taskStates.length > 0 && taskStates.every(state => state === 'Z' || state === 'X' || state === 'x'),
+          `a runnable descendant thread survived its supervisor (states=${taskStates.join(',')})`);
       }
+      const groupVisible = isProcessGroupAlive(groupLeaderPid);
+      if (result.error) assert.match(result.error.message, /ETIMEDOUT|did not (?:close|exit)/);
+      else assert.equal(groupVisible, false, 'a successful result requires the kernel to confirm group absence');
     } else {
       assert.equal(isProcessAlive(pid), false, 'supervisor returned before its descendant exited');
     }

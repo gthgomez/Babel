@@ -10,10 +10,10 @@
  */
 
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { describe, it } from 'node:test';
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -48,6 +48,34 @@ function spawnSleeper(): ReturnType<typeof spawn> {
   return process.platform === 'win32'
     ? spawn('cmd.exe', ['/d', '/s', '/c', 'ping -n 30 127.0.0.1 >nul'], { stdio: 'ignore' })
     : spawn('sleep', ['30'], { stdio: 'ignore', detached: true });
+}
+
+type LinuxTaskState = { tid: string; state: string };
+
+async function waitForLinuxTaskGroupToStop(pid: number, onSample?: (states: LinuxTaskState[]) => void): Promise<LinuxTaskState[]> {
+  const deadline = Date.now() + 3_000;
+  let latest: LinuxTaskState[] = [];
+  while (Date.now() < deadline) {
+    try {
+      const taskDir = `/proc/${pid}/task`;
+      latest = readdirSync(taskDir).flatMap(tid => {
+        try {
+          const stat = readFileSync(`${taskDir}/${tid}/stat`, 'utf8');
+          return [{ tid, state: stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[0] ?? '' }];
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+          throw error;
+        }
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    onSample?.(latest);
+    if (latest.length === 0 || latest.every(({ state }) => state === 'Z' || state === 'X' || state === 'x')) return latest;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.fail(`process ${pid} retained runnable threads after group kill (states=${latest.map(({ tid, state }) => `${tid}:${state}`).join(',')})`);
 }
 
 describe('isProcessAlive', () => {
@@ -168,54 +196,67 @@ await new Promise(() => {});
     } catch {
       process.kill(childPid, 'SIGKILL');
     }
-    if (process.platform === 'linux') {
-      assert.equal(await waitForProcessGroupExit(leaderPid, 2000), true, 'killed descendant must be non-runnable even if PID 1 retains its zombie record');
-      try {
-        const stat = readFileSync(`/proc/${childPid}/stat`, 'utf8');
-        const state = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[0];
-        assert.ok(state === 'Z' || state === 'X' || state === 'x', `killed descendant remains runnable (state=${state})`);
-      } catch (error) {
-        assert.equal((error as NodeJS.ErrnoException).code, 'ENOENT');
-      }
+    if (process.platform === 'linux' && isProcessAlive(childPid)) {
+      await waitForLinuxTaskGroupToStop(childPid);
+      assert.equal(await waitForProcessGroupExit(leaderPid, 1000), true,
+        'stable all-thread dead snapshots settle the killed descendant');
     } else {
       await waitUntilDead(childPid);
     }
   });
 
-  it('treats a zombie-only Linux process group as settled but keeps running descendants blocking', async (t) => {
+  it('keeps a Linux zombie leader with a live worker thread blocking group settlement', async (t) => {
     if (process.platform !== 'linux') {
       t.skip('Linux procfs zombie-state qualification');
       return;
     }
     const root = mkdtempSync(join(tmpdir(), 'babel-pgid-zombie-'));
     const statePath = join(root, 'state.json');
-    const childScript = join(root, 'child.mjs');
-    const leaderScript = join(root, 'leader.mjs');
-    writeFileSync(childScript,
-      `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(statePath)}, JSON.stringify({ childPid: process.pid })); setInterval(() => {}, 1000);\n`);
-    writeFileSync(leaderScript,
-      `import { spawn } from 'node:child_process'; spawn(process.execPath, [${JSON.stringify(childScript)}], { stdio: 'ignore' }); setInterval(() => {}, 1000);\n`);
-    const leader = spawn(process.execPath, [leaderScript], { cwd: root, detached: true, stdio: 'ignore' });
+    const sourcePath = join(root, 'leader.c');
+    const binaryPath = join(root, 'leader');
+    const gccAvailable = (() => {
+      try { execFileSync('gcc', ['--version'], { stdio: 'ignore' }); return true; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+    })();
+    if (!gccAvailable) {
+      t.skip('gcc required for the multithreaded zombie-leader fixture');
+      return;
+    }
+    writeFileSync(sourcePath,
+      `#include <pthread.h>\n#include <stdio.h>\n#include <unistd.h>\nvoid *worker(void *unused) { for (;;) sleep(1); return 0; }\nint main(void) { pthread_t thread; if (pthread_create(&thread, 0, worker, 0) != 0) return 2; FILE *state = fopen(${JSON.stringify(statePath)}, "w"); if (!state) return 3; fprintf(state, "%d\\n", getpid()); fclose(state); pthread_exit(0); }\n`);
+    execFileSync('gcc', ['-pthread', sourcePath, '-o', binaryPath]);
+    const leader = spawn(binaryPath, [], { cwd: root, detached: true, stdio: 'ignore' });
     const leaderPid = leader.pid;
     assert.ok(leaderPid);
+    const closed = new Promise<void>(resolve => leader.once('close', () => resolve()));
     try {
-      let childPid = 0;
       const startDeadline = Date.now() + 3000;
       while (!existsSync(statePath) && Date.now() < startDeadline) await new Promise(resolve => setTimeout(resolve, 10));
-      if (existsSync(statePath)) childPid = Number((JSON.parse(readFileSync(statePath, 'utf8')) as { childPid?: number }).childPid ?? 0);
-      assert.ok(childPid > 0, 'same-group descendant must start before termination');
-      assert.equal(isProcessGroupAlive(leaderPid), true, 'negative control: a runnable descendant blocks settlement');
+      assert.ok(existsSync(statePath), 'native multithreaded fixture did not start');
+      const pid = Number(readFileSync(statePath, 'utf8').trim());
+      assert.equal(pid, leaderPid);
+      const taskDir = `/proc/${pid}/task`;
+      const tasks = readdirSync(taskDir).map(tid => {
+        const stat = readFileSync(`${taskDir}/${tid}/stat`, 'utf8');
+        return { tid: Number(tid), state: stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[0] };
+      });
+      assert.equal(tasks.find(task => task.tid === pid)?.state, 'Z', 'main thread should have exited via pthread_exit');
+      assert.ok(tasks.some(task => task.tid !== pid && task.state !== 'Z' && task.state !== 'X' && task.state !== 'x'),
+        `worker must remain live for the negative control: ${JSON.stringify(tasks)}`);
+      let rawGroupProbe = 'present';
+      try { process.kill(-pid, 0); } catch (error) { rawGroupProbe = (error as NodeJS.ErrnoException).code ?? 'unknown'; }
+      assert.equal(isProcessGroupAlive(pid), true,
+        `a zombie leader must not hide its live thread-group worker; tasks=${JSON.stringify(tasks)} raw=${rawGroupProbe}`);
+      assert.equal(await waitForProcessGroupExit(pid, 100), false, 'live worker keeps termination unsettled');
+
       terminateChildTree(leader);
-      assert.equal(await waitForProcessGroupExit(leaderPid, 2000), true,
-        'a zombie exit record is not runnable work and must not keep termination pending');
-      try {
-        const stat = readFileSync(`/proc/${childPid}/stat`, 'utf8');
-        const state = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[0];
-        assert.ok(state === 'Z' || state === 'X' || state === 'x',
-          `process-group settlement must not accept a runnable descendant (state=${state})`);
-      } catch (error) {
-        assert.equal((error as NodeJS.ErrnoException).code, 'ENOENT', 'descendant must be gone or a non-runnable zombie');
-      }
+      const settled = await Promise.race([
+        closed.then(() => true),
+        new Promise<boolean>(resolve => setTimeout(() => resolve(false), 3000)),
+      ]);
+      assert.equal(settled, true, 'SIGKILL must terminate the runnable worker threads');
+      assert.equal(await waitForProcessGroupExit(pid, 2000), true,
+        'stable complete procfs snapshots settle only after every thread is dead');
     } finally {
       try { process.kill(-leaderPid, 'SIGKILL'); } catch { /* group already settled */ }
       rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });

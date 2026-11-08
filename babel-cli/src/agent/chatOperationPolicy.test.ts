@@ -610,6 +610,61 @@ describe('D01/D02 effective-operation policy', () => {
     }
   });
 
+  test('live streaming loop does not reset strikes for a verifier rejected before execution', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-gate-verifier-rejected-'));
+    const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
+    const previousImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+    delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo';
+    delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+    writeFileSync(join(root, 'red.test.mjs'), "import test from 'node:test'; test('fixture', () => {});\n");
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'add', '.'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], { cwd: root });
+    const task = 'Fix the issue in red.test.mjs and run node --test red.test.mjs to verify the repair.';
+    const engine = new ChatEngine({ task, projectRoot: root, model: MODEL, maxTurns: 2 });
+    const box = engine as unknown as { gateStrikes: number };
+    (engine as unknown as { hardPlanMode: boolean; requireTodoBeforeMutate: boolean }).hardPlanMode = false;
+    (engine as unknown as { hardPlanMode: boolean; requireTodoBeforeMutate: boolean }).requireTodoBeforeMutate = false;
+    let calls = 0;
+    let strikesAfterRejection: number | undefined;
+    installMockRunner(engine, {
+      executeWithToolsStream: async function* () {
+        calls += 1;
+        if (calls === 1) {
+          box.gateStrikes = 2;
+          yield { type: 'tool_use', id: 'rejected-verifier', name: 'test_run', input: { command: 'node --test red.test.mjs' } };
+          yield { type: 'done', finishReason: 'tool_calls' };
+          return;
+        }
+        strikesAfterRejection = box.gateStrikes;
+        yield { type: 'text_delta', text: 'The verifier was rejected before execution; I cannot certify completion.' };
+        yield { type: 'done', finishReason: 'stop' };
+      },
+      execute: async () => ({ type: 'completion', answer: 'The verifier was rejected before execution; I cannot certify completion.' }),
+      getLastInvocationMetadata: () => null,
+    });
+    try {
+      const result = await drain(engine, task, []);
+      assert.equal(calls, 2);
+      assert.equal(strikesAfterRejection, 2, `a rejected verifier cannot reset completion pressure; log=${JSON.stringify(engine['toolCallLog'])}`);
+      const verifierLog = engine['toolCallLog'].find(row => row.tool === 'test_run');
+      assert.ok(verifierLog);
+      assert.notEqual(verifierLog.verifierExecuted, true);
+      assert.notEqual(verifierLog.processExecuted, true);
+      assert.notEqual(result.outcome, 'VERIFIED_COMPLETE');
+    } finally {
+      if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+      else process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousFallback;
+      if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
+      else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
+      if (previousImage === undefined) delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+      else process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = previousImage;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('I3 bare continuation gestures carry the prior operation policy', () => {
     const mutating = runtimeFor('fix the rendering bug');
     assert.equal(mutating.effectiveOperation, 'MUTATING');

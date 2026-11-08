@@ -281,6 +281,20 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
       'only a host-identified process dispatched after the failure resolves it');
   });
 
+  test('a delayed failed await cannot resurrect an action already resolved by newer execution', () => {
+    const oldStart = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecutionId: 'bg-old-failed', processExecuted: true, processCompleted: false, exit_code: 0 };
+    const oldFailure = { tool: 'await_command', target: oldStart.target, working_directory: '/repo/app',
+      processExecutionId: 'bg-old-failed', processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const laterSuccess = { tool: 'run_command', target: oldStart.target, working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'recovered' };
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [oldStart, oldFailure, laterSuccess, oldFailure]), null,
+      'a stale re-await cannot restore evidence resolved by newer execution');
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [oldStart, laterSuccess, oldFailure]), null,
+      'even a first delayed await is historical when its job predates the successful retry');
+  });
+
   test('a command start without a completed process result cannot clear a typed block', () => {
     const denied = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
       processExecuted: true, processCompleted: true, exit_code: 7,
