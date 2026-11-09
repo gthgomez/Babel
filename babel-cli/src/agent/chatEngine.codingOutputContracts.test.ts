@@ -51,6 +51,10 @@ import { normalizeReadCacheKey } from './readThrashPolicy.js';
 import { ProgressController } from './progressController.js';
 import { resetSessionGate } from '../services/searchDepthGate.js';
 
+const windowsBackgroundSkip = process.platform === 'win32'
+  ? 'Background chat is disabled when process-tree settlement is unavailable'
+  : false;
+
 function shellArg(value: string): string {
   if (process.platform === 'win32') return `"${value.replaceAll('"', '\\"')}"`;
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -433,7 +437,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     } finally { f.close(); }
   });
 
-  test('background verifier completion supplies the canonical ledger exactly once', async () => {
+  test('background verifier completion supplies the canonical ledger exactly once', { skip: windowsBackgroundSkip }, async () => {
     const f = verifierFixture();
     try {
       const taskId = await f.start();
@@ -543,7 +547,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     }
   });
 
-  test('background child receives the governed unprivileged Git environment', async () => {
+  test('background child receives the governed unprivileged Git environment', { skip: windowsBackgroundSkip }, async () => {
     const f = verifierFixture();
     try {
       writeFileSync(join(f.projectRoot, 'verify.test.mjs'),
@@ -554,7 +558,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     } finally { f.close(); }
   });
 
-  test('background completion waits for governance reconciliation before certifying', async () => {
+  test('background completion waits for governance reconciliation before certifying', { skip: windowsBackgroundSkip }, async () => {
     const prior = process.env['BABEL_AUTONOMY_LEASE'];
     const lease = JSON.parse(prior!);
     lease.leaseId = randomUUID();
@@ -574,7 +578,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     } finally { process.env['BABEL_AUTONOMY_LEASE'] = prior; f.close(); }
   });
 
-  test('failed background verifier enters repair and phase-gated search executes', async () => {
+  test('failed background verifier enters repair and phase-gated search executes', { skip: windowsBackgroundSkip }, async () => {
     const f = verifierFixture('2');
     const previous = process.env['BABEL_PHASE_GATED_TOOLS'];
     try {
@@ -598,7 +602,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     }
   });
 
-  test('background verification uses fresh proof beyond the small reusable-closure limit', async () => {
+  test('background verification uses fresh proof beyond the small reusable-closure limit', { skip: windowsBackgroundSkip }, async () => {
     const f = verifierFixture('1', 0, 45);
     try {
       const taskId = await f.start();
@@ -610,7 +614,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
   });
 
   for (const changed of ['candidate', 'owner', 'generation', 'session', 'environment', 'cancelled'] as const) {
-    test(`background result cannot certify after ${changed} changes`, async () => {
+    test(`background result cannot certify after ${changed} changes`, { skip: windowsBackgroundSkip }, async () => {
       const f = verifierFixture('1', 100);
       const priorNodeEnv = process.env['NODE_ENV'];
       try {
@@ -637,7 +641,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     });
   }
 
-  test('timed-out await stays receipt-free until the process really finishes', async () => {
+  test('timed-out await stays receipt-free until the process really finishes', { skip: windowsBackgroundSkip }, async () => {
     const f = verifierFixture('1', 1500);
     try {
       const taskId = await f.start();
@@ -649,7 +653,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     } finally { f.close(); }
   });
 
-  test('cancellation while awaiting a detached verifier permanently retires certification', async () => {
+  test('cancellation while awaiting a detached verifier permanently retires certification', { skip: windowsBackgroundSkip }, async () => {
     const f = verifierFixture('1', 200);
     const controller = new AbortController();
     try {
@@ -728,7 +732,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     } finally { close(); }
   });
 
-  test('spill-sized await_command enrolls artifact when submission stays current', async () => {
+  test('spill-sized await_command enrolls artifact when submission stays current', { skip: windowsBackgroundSkip }, async () => {
     const storage = mkdtempSync(join(tmpdir(), 'babel-await-spill-control-'));
     cleanup.push(storage);
     const projectRoot = join(storage, 'project');
@@ -768,7 +772,7 @@ describe('Chat coding output contracts (executor dispatch)', { concurrency: fals
     } finally { close(); }
   });
 
-  test('repeated await_command: timed_out preserves null exit status, completion settles truthfully', async () => {
+  test('repeated await_command: timed_out preserves null exit status, completion settles truthfully', { skip: windowsBackgroundSkip }, async () => {
     const storage = mkdtempSync(join(tmpdir(), 'babel-await-repeat-'));
     cleanup.push(storage);
     const projectRoot = join(storage, 'project');

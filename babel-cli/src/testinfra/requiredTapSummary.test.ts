@@ -202,7 +202,7 @@ function reportingCondition(expression: string, outcome: string, os?: string): b
 }
 
 function assertWorkflowReporting(workflow: string): void {
-  type Step = { name?: string; id?: string; if?: string; run?: string; uses?: string }
+  type Step = { name?: string; id?: string; if?: string; run?: string; uses?: string; with?: Record<string, string> }
   type Workflow = { jobs: Record<string, { strategy: { matrix: { os: string[] } }; steps: Step[] }> }
   const { load } = createRequire(import.meta.url)('js-yaml') as { load(text: string): Workflow }
   const jobs = load(workflow).jobs
@@ -216,6 +216,12 @@ function assertWorkflowReporting(workflow: string): void {
     const job = jobs[jobName!]
     assert.ok(job, jobName)
     assert.deepEqual(job.strategy.matrix.os, ['ubuntu-latest', 'windows-latest'])
+    if (jobName === 'chat-truth') {
+      const python = job.steps.find(step => step.uses === 'actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0')
+      assert.ok(python, 'Chat truth provisions Python for host-dependent static checks')
+      assert.equal(python.if, "runner.os == 'Windows'")
+      assert.equal(python.with?.['python-version'], '3.12')
+    }
     const run = job.steps.find(step => step.id === id)
     assert.ok(run)
     assert.equal(run.if, undefined)

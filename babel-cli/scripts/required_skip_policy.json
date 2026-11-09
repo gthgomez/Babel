@@ -108,7 +108,64 @@
           "a timed-out shell reports failed Windows tree termination to its caller"
         ],
         "src/agent/backgroundShell.test.ts": [
-          "retains owner uncertainty when the Windows tree-kill helper fails"
+          "retains owner uncertainty when the Windows tree-kill helper fails",
+          "does not certify Windows parent close as process-tree settlement",
+          "preserves a recorded Windows cancellation while settlement remains unknown"
+        ],
+        "src/agent/chatBackgroundShellPolicy.test.ts": [
+          "Windows declines background execution when process-tree settlement cannot be observed"
+        ]
+      }
+    },
+    {
+      "id": "windows-posix-background-descendant-cleanup",
+      "platforms": [
+        "win32"
+      ],
+      "reasons": [
+        "POSIX process-group cleanup is not available on Windows"
+      ],
+      "rationale": "This case validates POSIX process-group cleanup against a detached descendant; Windows exercises the separate native tree-termination contract.",
+      "suites": [
+        "unit",
+        "chat-truth"
+      ],
+      "files": {
+        "src/agent/backgroundShell.test.ts": [
+          "does not release await_command while an unrefed descendant can still write",
+          "clears stale POSIX tree uncertainty after close confirms the group has settled",
+          "preserves cancellation that arrives while close waits for POSIX tree settlement",
+          "preserves cancellation while automatic tree cleanup is waiting for settlement"
+        ]
+      }
+    },
+    {
+      "id": "windows-background-chat-unavailable",
+      "platforms": ["win32"],
+      "reasons": ["Background chat is disabled when process-tree settlement is unavailable"],
+      "rationale": "These lifecycle journeys require governed background execution. Windows disables that capability when process-tree settlement cannot be independently observed; the Windows capability-denial contract remains exercised separately.",
+      "suites": ["unit", "chat-truth"],
+      "files": {
+        "src/agent/chatEngine.lifecycleQualification.test.ts": [
+          "await_command enrolls large output for owner-bound artifact retrieval",
+          "cancellation with prior real proof preserves a detached late effect and requires fresh resumed verification"
+        ],
+        "src/agent/chatEngine.codingOutputContracts.test.ts": [
+          "background verifier completion supplies the canonical ledger exactly once",
+          "background child receives the governed unprivileged Git environment",
+          "background completion waits for governance reconciliation before certifying",
+          "failed background verifier enters repair and phase-gated search executes",
+          "background verification uses fresh proof beyond the small reusable-closure limit",
+          "background result cannot certify after candidate changes",
+          "background result cannot certify after owner changes",
+          "background result cannot certify after generation changes",
+          "background result cannot certify after session changes",
+          "background result cannot certify after environment changes",
+          "background result cannot certify after cancelled changes",
+          "timed-out await stays receipt-free until the process really finishes",
+          "cancellation while awaiting a detached verifier permanently retires certification",
+          "spill-sized await_command enrolls artifact when submission stays current",
+          "repeated await_command: timed_out preserves null exit status, completion settles truthfully"
         ]
       }
     },
@@ -226,7 +283,7 @@
           "Windows ProviderEngine Go commits a reservation before native network dispatch"
         ],
         "src/agent/windowsProcessQualification.test.ts": [
-          "Windows executes spaced .exe, .cmd, and .bat paths with exact child argv and cwd",
+          "Windows foreground execution preserves spaced .exe, .cmd, and .bat argv and cwd",
           "Windows foreground shell preserves the same command identity for sync and async execution"
         ],
         "src/authority/ownedFileAssertionNative.test.ts": [

@@ -18,6 +18,7 @@ import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve as pathResolve } from 'node:path';
 
 import { terminateChildTree } from '../sandbox.js';
+import { waitForProcessGroupExit } from '../processTree.js';
 import type { ShellExecutionBackend } from '../sandbox.js';
 import { buildWindowsCommandShellArgs, parseCommandArgv } from '../utils/commandArgv.js';
 import { childEnvForSandbox } from '../authority/unprivilegedChildEnv.js';
@@ -39,11 +40,22 @@ export function getTrustedBackgroundExecutionBackend(job: BackgroundShellJob): S
   return trustedBackgroundExecutionBackend.get(job.done);
 }
 
+/** A direct-child close is not a process-tree settlement proof on Windows. */
+export function hasConfirmedBackgroundProcessTreeSettlement(
+  platform: NodeJS.Platform,
+  physicalClosed: boolean,
+  treeTerminationUnknown: boolean,
+): boolean {
+  return platform !== 'win32' && physicalClosed && !treeTerminationUnknown;
+}
+
 export type BackgroundShellStatus = 'running' | 'completed' | 'failed' | 'killed';
 
 export interface BackgroundShellJob {
   /** Set only by the owned child spawn event. */
   processStarted?: boolean;
+  /** Set only when host evidence proves no owned process-tree work can continue. */
+  processCompleted?: boolean;
   id: string;
   command: string;
   cwd: string;
@@ -355,24 +367,79 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
 
   child.on('close', (code) => {
     clearTimeout(killTimer);
-    job.physicalClosed = true;
-    if (job.status === 'running') {
-      job.status = code === 0 ? 'completed' : 'failed';
-      job.exitCode = code ?? 1;
-    } else if (job.exitCode === null) {
-      job.exitCode = code ?? 1;
-    }
-    if (!processExitRecorded) {
-      processExitRecorded = true;
-      processWitness.exited(processInput, processExecutionId, {
-        exitCode: job.exitCode,
-        stdoutBytes: Buffer.byteLength(job.stdout, 'utf8'),
-        stderrBytes: Buffer.byteLength(job.stderr, 'utf8'),
-        stdoutTruncated: job.stdout.includes('[background_shell] stdout truncated'),
-        stderrTruncated: job.stderr.includes('[background_shell] stderr truncated'),
-      });
-    }
-    resolveDone();
+    void (async () => {
+      // Read after asynchronous settlement checks too: a timeout or explicit
+      // cancellation may arrive while this close handler is waiting for the
+      // process group to settle.
+      const cancellationRecorded = () => job.status === 'killed';
+      let descendantsSettled = true;
+      let hadLingeringDescendants = false;
+      // POSIX jobs run in a private process group. The direct child closing
+      // does not prove that an unref'ed grandchild has stopped; allow a brief
+      // natural drain, then terminate any remaining group members and wait for
+      // a complete host observation before releasing await_command.
+      if (process.platform !== 'win32' && child.pid !== undefined) {
+        descendantsSettled = await waitForProcessGroupExit(child.pid, 150);
+        if (!descendantsSettled) {
+          hadLingeringDescendants = true;
+          terminateChildTree(child);
+          descendantsSettled = await waitForProcessGroupExit(child.pid, 5_000);
+        }
+        // A previous timeout/cancellation may have failed to signal a group
+        // that exited before this close handler ran. A complete POSIX group
+        // observation supersedes that stale uncertainty; Windows has no
+        // equivalent process-group proof and deliberately retains its flag.
+        if (descendantsSettled) job.treeTerminationUnknown = false;
+      } else if (process.platform === 'win32') {
+        // Without a Windows job-object/process-tree observer, the direct
+        // child's close event cannot prove that an unref'ed descendant has
+        // stopped. Preserve the owner fence and report incomplete settlement.
+        descendantsSettled = false;
+        job.treeTerminationUnknown = true;
+      }
+      job.physicalClosed = descendantsSettled;
+      if (job.status === 'running') {
+        job.status = code === 0 && descendantsSettled && !hadLingeringDescendants ? 'completed' : 'failed';
+        job.exitCode = code === 0 && descendantsSettled && !hadLingeringDescendants ? 0 : code ?? 1;
+      } else if (job.exitCode === null) {
+        job.exitCode = code ?? 1;
+      }
+      if (hadLingeringDescendants && descendantsSettled) {
+        if (!cancellationRecorded()) {
+          job.status = 'failed';
+          job.exitCode = 1;
+        }
+        const cleanupError = 'Background descendants remained after the direct child exited and were terminated';
+        if (!job.error?.includes(cleanupError)) {
+          job.error = job.error ? `${job.error}; ${cleanupError}` : cleanupError;
+        }
+      }
+      if (!descendantsSettled) {
+        // Keep an already recorded timeout/cancellation cause. `killed` says
+        // the owned command was cancelled; processCompleted and the owner
+        // fence separately remain false until tree settlement is confirmed.
+        // A natural close with unknown descendants is still a failed result.
+        if (!cancellationRecorded()) {
+          job.status = 'failed';
+          job.exitCode = 1;
+        }
+        const settlementError = 'Background process-tree termination could not be confirmed';
+        if (!job.error?.includes(settlementError)) {
+          job.error = job.error ? `${job.error}; ${settlementError}` : settlementError;
+        }
+      }
+      if (!processExitRecorded) {
+        processExitRecorded = true;
+        processWitness.exited(processInput, processExecutionId, {
+          exitCode: job.exitCode,
+          stdoutBytes: Buffer.byteLength(job.stdout, 'utf8'),
+          stderrBytes: Buffer.byteLength(job.stderr, 'utf8'),
+          stdoutTruncated: job.stdout.includes('[background_shell] stdout truncated'),
+          stderrTruncated: job.stderr.includes('[background_shell] stderr truncated'),
+        });
+      }
+      resolveDone();
+    })();
   });
 
   return job;
@@ -499,8 +566,15 @@ export function killBackgroundShell(taskId: string): AwaitBackgroundShellResult 
 export function getBackgroundShellJob(taskId: string): BackgroundShellJob | undefined {
   const job = jobs.get(taskId);
   if (!job) return undefined;
-  const { child: _child, physicalClosed: _physicalClosed, treeTerminationUnknown: _treeTerminationUnknown, projectRootKey: _projectRootKey, ...publicJob } = job;
-  return publicJob;
+  const { child: _child, physicalClosed, treeTerminationUnknown: _treeTerminationUnknown, projectRootKey: _projectRootKey, ...publicJob } = job;
+  return {
+    ...publicJob,
+    processCompleted: hasConfirmedBackgroundProcessTreeSettlement(
+      process.platform,
+      physicalClosed === true,
+      job.treeTerminationUnknown === true,
+    ),
+  };
 }
 
 /**

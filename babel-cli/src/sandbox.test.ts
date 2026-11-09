@@ -29,7 +29,7 @@ import {
   normalizeSupervisorTerminatedShellOutput,
   validateExecutorShellCommand,
 } from './sandbox.js';
-import { isProcessAlive, waitForProcessExit } from './processTree.js';
+import { isProcessAlive, isProcessGroupAlive, waitForProcessExit, waitForProcessGroupExit } from './processTree.js';
 import { ProcessWitness } from './diagnostics/bdns/processWitness.js';
 import {
   setDockerAvailableForTest,
@@ -1413,12 +1413,14 @@ test('process supervisor abort terminates the owned fixture descendant tree', as
   const controller = new AbortController();
   try {
     const childPidFile = join(fixture.projectRoot, 'grandchild.pid').replace(/\\/g, '/');
+    const groupLeaderPidFile = join(fixture.projectRoot, 'group-leader.pid').replace(/\\/g, '/');
     // Embed absolute pid path — sandbox getSafeEnv may not forward arbitrary env.
     writeFileSync(
       join(fixture.projectRoot, 'tree-parent.mjs'),
       `
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(groupLeaderPidFile)}, String(process.pid), 'utf8');
 const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
   stdio: 'ignore',
   windowsHide: true,
@@ -1442,13 +1444,22 @@ await new Promise((resolve) => setTimeout(resolve, 60_000));
     };
     const grandchildPid = await waitPid();
     assert.ok(grandchildPid, 'grandchild pid should be recorded');
+    assert.equal(isProcessAlive(grandchildPid!), true, 'fixture descendant should be live before abort');
+    const groupLeaderPid = Number(readFileSync(groupLeaderPidFile, 'utf8').trim());
+    assert.ok(Number.isFinite(groupLeaderPid) && groupLeaderPid > 0, 'owned process-group leader should be recorded');
+    const ownedTreeWasLive = process.platform === 'win32'
+      ? isProcessAlive(groupLeaderPid)
+      : isProcessGroupAlive(groupLeaderPid);
+    assert.equal(ownedTreeWasLive, true, 'owned process tree should be live before abort');
     controller.abort();
     const result = await pending;
     assert.equal(result.status, 1);
     assert.equal(result.aborted, true);
     await awaitPendingProcessTerminations(fixture.projectRoot);
-    const descendantExited = await waitForProcessExit(grandchildPid!, 5_000);
-    assert.equal(descendantExited, true, 'descendant process should be dead after tree kill');
+    const treeSettled = process.platform === 'win32'
+      ? await waitForProcessExit(grandchildPid!, 5_000)
+      : await waitForProcessGroupExit(groupLeaderPid, 5_000);
+    assert.equal(treeSettled, true, 'owned process tree should have no live members after tree kill');
   } finally {
     controller.abort();
     await awaitPendingProcessTerminations(fixture.projectRoot);

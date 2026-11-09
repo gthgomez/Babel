@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import test from 'node:test';
 import { executeAwaitCommandAction, executeBackgroundRunCommandAction, type BackgroundShellActionCtx } from './chatBackgroundShell.js';
+import { classifyBlockingOrigin } from './chatEngineSupport.js';
+
+function assertWindowsBackgroundDenied(observation: string, detail?: string): void {
+  assert.match(observation, /Background shell cannot confirm process-tree settlement on Windows\. Use foreground run_command\./);
+  assert.equal(detail, 'process_tree_unobservable');
+}
 
 test('background chat dispatch requires the same explicit host fallback for project code', () => {
   const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
@@ -18,9 +26,76 @@ test('background chat dispatch requires the same explicit host fallback for proj
   };
   try {
     const result = executeBackgroundRunCommandAction({ command: 'node --version' }, context);
-    assert.match(result.observation, /isolation_required/);
-    assert.equal(logs.at(-1)?.detail, 'isolation_required');
+    if (process.platform === 'win32') {
+      assertWindowsBackgroundDenied(result.observation, logs.at(-1)?.detail);
+    } else {
+      assert.match(result.observation, /isolation_required/);
+      assert.equal(logs.at(-1)?.detail, 'isolation_required');
+    }
   } finally {
+    if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
+    else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
+    if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    else process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousFallback;
+  }
+});
+
+test('Windows declines background execution when process-tree settlement cannot be observed', {
+  skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false,
+}, () => {
+  const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
+  process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+  const logs: Array<{ detail?: string; error?: string }> = [];
+  try {
+    const result = executeBackgroundRunCommandAction({ command: 'node --version' }, {
+      projectRoot: process.cwd(), tool: 'run_command', target: 'node --version', toolId: 1, index: 0,
+      pushLog: entry => logs.push(entry),
+    });
+    assert.match(result.observation, /Use foreground run_command/);
+    assert.equal(logs.at(-1)?.detail, 'process_tree_unobservable');
+    assert.match(logs.at(-1)?.error ?? '', /cannot confirm process-tree settlement/);
+  } finally {
+    if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
+    else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
+  }
+});
+
+test('settled nonzero background exit retains authoritative failure evidence', async () => {
+  const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
+  const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+  process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+  const logs: Array<{ tool: string; target: string; working_directory?: string; processExecuted?: boolean; processCompleted?: boolean; processExecutionId?: string; detail?: string; exit_code?: number; stderr?: string; error?: string }> = [];
+  const context: BackgroundShellActionCtx = {
+    projectRoot: process.cwd(), tool: 'run_command', target: 'node failure fixture', toolId: 1, index: 0,
+    pushLog: entry => logs.push(entry),
+  };
+  const fixtureDir = mkdtempSync(join(context.projectRoot, '.background-failure-'));
+  try {
+    const fixture = join(fixtureDir, 'failure.mjs');
+    writeFileSync(fixture, "process.stderr.write('EACCES: permission denied\\n');process.exitCode=7;\n");
+    const relativeFixture = relative(context.projectRoot, fixture).split(sep).join('/');
+    const started = executeBackgroundRunCommandAction({
+      command: `node ${relativeFixture}`,
+    }, context);
+    if (process.platform === 'win32') {
+      assertWindowsBackgroundDenied(started.observation, logs.at(-1)?.detail);
+      return;
+    }
+    const taskId = /task_id="([^"]+)"/.exec(started.observation)?.[1];
+    assert.ok(taskId, started.observation);
+    const settled = await executeAwaitCommandAction({ task_id: taskId!, timeout_seconds: 5 }, {
+      ...context, tool: 'await_command', target: taskId!, toolId: 2, index: 1,
+    });
+    assert.match(settled.observation, /status: failed/);
+    const entry = logs.at(-1)!;
+    assert.equal(entry.exit_code, 7);
+    assert.equal(entry.processCompleted, true,
+      'nonzero exit is blocker evidence only when process-tree settlement is observable');
+    assert.equal(classifyBlockingOrigin(entry), 'permission_denied',
+      'stderr is not terminal blocker evidence without process-tree settlement proof');
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true });
     if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
     else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
     if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
@@ -33,7 +108,7 @@ test('background command logs bind cwd and only mark a completed process after a
   const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
-  const logs: Array<{ tool: string; target: string; working_directory?: string; processExecuted?: boolean; processCompleted?: boolean; processExecutionId?: string; exit_code?: number }> = [];
+  const logs: Array<{ tool: string; target: string; working_directory?: string; processExecuted?: boolean; processCompleted?: boolean; processExecutionId?: string; detail?: string; exit_code?: number }> = [];
   const projectRoot = process.cwd();
   const context: BackgroundShellActionCtx = {
     projectRoot,
@@ -45,6 +120,10 @@ test('background command logs bind cwd and only mark a completed process after a
   };
   try {
     const started = executeBackgroundRunCommandAction({ command: 'node --version' }, context);
+    if (process.platform === 'win32') {
+      assertWindowsBackgroundDenied(started.observation, logs.at(-1)?.detail);
+      return;
+    }
     assert.match(started.observation, /task_id="[^"]+"/);
     const taskId = /task_id="([^"]+)"/.exec(started.observation)?.[1];
     assert.ok(taskId);

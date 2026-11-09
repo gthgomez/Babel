@@ -411,7 +411,9 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
     } finally { fixture.cleanup(); }
   });
 
-  test('await_command enrolls large output for owner-bound artifact retrieval', async () => {
+  test('await_command enrolls large output for owner-bound artifact retrieval', {
+    skip: process.platform === 'win32' ? 'Background chat is disabled when process-tree settlement is unavailable' : false,
+  }, async () => {
     const fixture = makeFixture();
     const sentinel = 'BACKGROUND_MIDDLE_ONLY_91ac';
     const script = writeNodeFixture(
@@ -701,7 +703,9 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
       assert.equal(observedDenial, true, 'replacement task cannot retrieve prior evidence');
     } finally { fixture.cleanup(); }
   });
-  test('cancellation with prior real proof preserves a detached late effect and requires fresh resumed verification', async () => {
+  test('cancellation with prior real proof preserves a detached late effect and requires fresh resumed verification', {
+    skip: process.platform === 'win32' ? 'Background chat is disabled when process-tree settlement is unavailable' : false,
+  }, async () => {
     const fixture = makeFixture();
     const runId = 'late-effect-cancel';
     const release = join(fixture.project, 'release.txt');

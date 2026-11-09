@@ -108,7 +108,11 @@ export async function executeAwaitCommandAction(
     target: job?.command ?? action.task_id,
     ...(job?.cwd ? { working_directory: job.cwd } : {}),
     ...(job?.processStarted === true ? { processExecuted: true } : {}),
-    processCompleted: result.status === 'completed' && job?.processStarted === true,
+    // Lifecycle completion is independent of the child exit status: nonzero
+    // exits and host-recorded kills can still carry authoritative stderr.
+    // A direct-child close is insufficient on Windows, where this runner
+    // cannot currently observe descendant settlement after the parent exits.
+    processCompleted: job?.processCompleted === true && job.processStarted === true,
     ...(job ? { processExecutionId: job.id } : {}),
     detail,
     index: ctx.index,
@@ -332,6 +336,16 @@ export function executeBackgroundRunCommandAction(
     return denyBg(
       'Background shell is not available under Docker sandbox profiles. Use foreground run_command.',
       'docker_sandbox_denied',
+    );
+  }
+
+  // The Windows background runner currently lacks a post-close process-tree
+  // observer. Keep commands on the foreground supervisor rather than releasing
+  // the chat execution fence while an unref'ed descendant might still run.
+  if (process.platform === 'win32') {
+    return denyBg(
+      'Background shell cannot confirm process-tree settlement on Windows. Use foreground run_command.',
+      'process_tree_unobservable',
     );
   }
 
