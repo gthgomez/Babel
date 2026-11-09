@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test, { describe } from 'node:test';
 import { tmpdir } from 'node:os';
@@ -167,6 +167,19 @@ test('computeVerifierDependencyHashes skips inline node -e commands', () => {
 
     assert.ok('package.json' in hashes, 'package.json hashed as baseline');
     assert.equal(Object.keys(hashes).length, 1, 'only package.json hashed');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('computeVerifierDependencyHashes tracks direct Node test files with spaced paths', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'r9-test-'));
+  try {
+    mkdirSync(join(dir, 'test files'), { recursive: true });
+    writeFileSync(join(dir, 'test files', 'parser.test.mjs'), 'assert.equal(1, 1);\n');
+    const hashes = computeVerifierDependencyHashes(dir, ['node --test "test files/parser.test.mjs"']);
+    assert.ok('test files/parser.test.mjs' in hashes, 'direct test input is included in the integrity baseline');
+    assert.notEqual(hashes['test files/parser.test.mjs'], undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

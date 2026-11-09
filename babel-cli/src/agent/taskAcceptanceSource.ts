@@ -4,6 +4,7 @@ import {
   requireAcceptanceMeaningVersion,
 } from './taskAcceptanceMeaning.js'
 import { isAcceptanceAddition } from './taskAcceptanceRevision.js'
+import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
 import type { ObjectiveAuthorityRecord, ObjectiveAttempt } from './taskObjectiveLifecycle.js'
 import type { ThreadEventLog, ThreadEvent } from './threadEventLog.js'
 import type { SessionEventLog } from './sessionEvents.js'
@@ -117,7 +118,11 @@ export function assertCanonicalAcceptanceAmendments(
     try {
       if (requireAcceptanceMeaningVersion(current.provenance.records, current) !== predecessorVersion) fail()
     } catch { fail() }
-    const meaning = inferTaskAcceptanceForVersion(started.task, predecessorVersion)
+    const meaning = bindExecutableVerifiersToTaskAcceptance({
+      meaning: inferTaskAcceptanceForVersion(started.task, predecessorVersion),
+      trustedVerifierCommands: current.verifier_requirements,
+      defaultWorkingDirectory: '.',
+    })
     const prior = new Set(descriptor.kind === 'initialize' ? [] : previous.acceptance_criteria)
     const added = meaning.criteria.filter(item => !prior.has(item.description))
     const ids = new Set(added.map(item => item.id))

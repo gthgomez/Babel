@@ -18,7 +18,8 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { designatedWitnessCommands, hasDesignatedRegressionWitnessBinding } from './taskAcceptanceExecutableBinding.js';
+import { designatedWitnessCommands, explicitCriterionVerifierCommands, hasDesignatedRegressionWitnessBinding } from './taskAcceptanceExecutableBinding.js';
+import { parseStructuredVerifierCommand } from './completionGatePolicy.js';
 import type { TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js';
 
 export interface ProtectedInputFs {
@@ -41,26 +42,31 @@ export const defaultProtectedInputFs: ProtectedInputFs = {
 const TEST_FILE_TOKEN_RE = /[\w@./\\-]+\.(?:test|spec)\.[cm]?[jt]sx?\b/g;
 
 /**
- * The protected input paths for a task with a designated regression witness:
- * package.json plus the test files the designated scripts statically name and
- * that exist in the project. No witness → empty set (ordinary tasks unchanged).
+ * Freeze pre-existing verifier inputs for explicitly designated witnesses and
+ * task-authored criterion links. Unknown command forms stay unexpanded.
  */
 export function designatedWitnessProtectedInputs(
   projectRoot: string,
   meaning: TaskAcceptanceMeaning,
   fs: ProtectedInputFs = defaultProtectedInputFs,
 ): string[] {
-  if (!hasDesignatedRegressionWitnessBinding(meaning)) return [];
-  const protectedPaths = new Set<string>(['package.json']);
+  const commands = [...new Set([
+    ...(hasDesignatedRegressionWitnessBinding(meaning) ? designatedWitnessCommands(meaning) : []),
+    ...explicitCriterionVerifierCommands(meaning),
+  ])];
+  if (commands.length === 0) return [];
+  const protectedPaths = new Set<string>();
   const packageJson = fs.readFile(join(projectRoot, 'package.json'));
-  if (packageJson) {
+  if (commands.some(command => /^npm\s+(?:run\s+)?[\w:.-]+\s*$/.test(command))) protectedPaths.add('package.json');
+  if (hasDesignatedRegressionWitnessBinding(meaning) || commands.some(command => /^npm\s+(?:run\s+)?[\w:.-]+\s*$/.test(command))) {
+    if (packageJson) {
     let scripts: Record<string, unknown> | undefined;
     try {
       scripts = (JSON.parse(packageJson) as { scripts?: Record<string, unknown> }).scripts;
     } catch {
       scripts = undefined;
     }
-    for (const command of designatedWitnessCommands(meaning)) {
+    for (const command of commands) {
       // Only npm-script witnesses have a resolvable script surface here.
       const runMatch = command.match(/^npm\s+(?:run\s+)?([\w:.-]+)\s*$/);
       const script = typeof scripts?.[runMatch?.[1] ?? ''] === 'string'
@@ -73,6 +79,19 @@ export function designatedWitnessProtectedInputs(
         if (relative.startsWith('../') || /^[A-Za-z]:|^\//.test(relative) || /(^|\/)\.\.(\/|$)/.test(relative)) continue;
         if (fs.exists(join(projectRoot, relative))) protectedPaths.add(relative);
       }
+    }
+    }
+  }
+  for (const command of commands) {
+    const parsed = parseStructuredVerifierCommand(command, { authoritySource: 'built_in_runner' });
+    if (!parsed || !/^node(?:\.exe)?$/i.test(parsed.executable.replace(/\\/g, '/').split('/').pop() ?? '')) continue;
+    const testFlag = parsed.args.indexOf('--test');
+    if (testFlag < 0) continue;
+    for (const token of parsed.args.slice(testFlag + 1)) {
+      if (token.startsWith('-') || !/(?:^|\/)[^/]+\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(token)) continue;
+      const relative = token.replace(/\\/g, '/');
+      if (relative.startsWith('../') || /^[A-Za-z]:|^\//.test(relative) || /(^|\/)\.\.(\/|$)/.test(relative)) continue;
+      if (fs.exists(join(projectRoot, relative))) protectedPaths.add(relative);
     }
   }
   return [...protectedPaths].sort();

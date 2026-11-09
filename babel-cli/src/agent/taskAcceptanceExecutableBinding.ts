@@ -196,8 +196,22 @@ function explicitCriterionVerifierLink(
   return { behavior, command }
 }
 
+/** Exact commands explicitly designated inside task-authored criteria. */
+export function explicitCriterionVerifierCommands(meaning: TaskAcceptanceMeaning): string[] {
+  return meaning.criteria.flatMap(criterion => {
+    const source = meaning.sources.find(item => item.criterion_id === criterion.id)
+    if (source?.status !== 'explicit') return []
+    const link = explicitCriterionVerifierLink(criterion)
+    return link ? [link.command] : []
+  })
+}
+
 function normalizedCriterionText(value: string): string {
-  return value.trim().replace(/[.!?]+$/, '').replace(/\s+/g, ' ').toLocaleLowerCase('en-US')
+  // This key decides whether a verifier explicitly designated for one
+  // behavioral statement may also prove an inferred opening goal. Preserve
+  // case: code identifiers and string literals are case-sensitive, so
+  // case-folding can bind a lowercase-only test to a distinct uppercase goal.
+  return value.trim().replace(/[.!?]+$/, '').replace(/\s+/g, ' ')
 }
 
 function trustedDesignation(

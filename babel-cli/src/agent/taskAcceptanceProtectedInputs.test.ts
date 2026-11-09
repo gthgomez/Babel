@@ -12,7 +12,7 @@ import {
   designatedWitnessProtectedInputs,
   type ProtectedInputFs,
 } from './taskAcceptanceProtectedInputs.js';
-import { inferTaskAcceptance } from './taskAcceptanceMeaning.js';
+import { inferTaskAcceptance, inferTaskAcceptanceV3 } from './taskAcceptanceMeaning.js';
 import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js';
 
 const WITNESS_TASK = [
@@ -64,6 +64,28 @@ test('protected inputs include test files the designated script statically names
   };
   const inputs = designatedWitnessProtectedInputs('/tmp/project', boundMeaning(WITNESS_TASK), fs);
   assert.deepEqual(inputs, ['package.json', 'test/parser.regression.test.mjs']);
+});
+
+test('protected inputs include directly invoked Node test files, including paths with spaces', () => {
+  const command = 'node --test "test files/parser.regression.test.mjs"';
+  const task = [
+    "Fix parser.js so echo('ABC') returns 'ABC'.",
+    'Acceptance criteria:',
+    `- Fix parser.js so echo('abc') returns 'abc'; verified by: \`${command}\` must pass.`,
+  ].join('\n');
+  const meaning = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptanceV3(task),
+    trustedVerifierCommands: [command],
+    defaultWorkingDirectory: '.',
+  });
+  const fs: ProtectedInputFs = {
+    readFile: () => null,
+    exists: path => path.replaceAll('\\', '/').endsWith('test files/parser.regression.test.mjs'),
+  };
+  assert.deepEqual(
+    designatedWitnessProtectedInputs('/tmp/project', meaning, fs),
+    ['test files/parser.regression.test.mjs'],
+  );
 });
 
 test('unresolvable discovery stays explicit: only the script surface is protected', () => {
@@ -157,6 +179,34 @@ test('admitted execution matrix: witness freeze denies mutating protected script
   );
   assert.equal(governed.policyBlocked, true);
   assert.ok(governed.observation.includes('protected_path'));
+});
+
+test('explicit direct Node verifier freezes its existing test file against task-authored replacement', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-direct-node-verifier-'));
+  mkdirSync(join(root, 'test'), { recursive: true });
+  writeFileSync(join(root, 'test', 'parser.test.mjs'), "assert.equal(parseSum(2, 3), 5)\n");
+  const command = 'node --test test/parser.test.mjs';
+  const task = [
+    'Fix parser.js so parseSum(2, 3) returns 5.',
+    'Requirements:',
+    `- parseSum(2, 3) returns 5; verified by: \`${command}\` must pass.`,
+  ].join('\n');
+  const meaning = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptanceV3(task),
+    trustedVerifierCommands: [command],
+    defaultWorkingDirectory: '.',
+  });
+  const protectedPaths = designatedWitnessProtectedInputs(root, meaning);
+  assert.ok(protectedPaths.includes('test/parser.test.mjs'));
+
+  const result = await executeActionWithPolicy(
+    { type: 'write_file', path: 'test/parser.test.mjs', content: "assert.equal(2 + 2, 4)\n" },
+    'workspace_write',
+    policyCtx('direct-node-verifier-protection', root),
+    { executor: mockExecutor, mode: 'chat', protectedPaths },
+  );
+  assert.equal(result.policyBlocked, true);
+  assert.ok(String(result.results[0]?.stderr).includes('protected_path'));
 });
 
 test('admitted execution matrix: worktree safety refuses protected witness paths before snapshot', () => {

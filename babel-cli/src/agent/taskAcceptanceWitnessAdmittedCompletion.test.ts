@@ -577,6 +577,101 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
   assert.equal(result.satisfied_requirements.length, 2)
 })
 
+test('kernel negative: lowercase-only witness cannot certify uppercase literal goal', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-case-sensitive-goal-proof-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'test files'), { recursive: true })
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'case-sensitive-goal-fixture', type: 'module' }))
+  writeFileSync(join(root, 'src', 'parser.js'), 'export function echo(value) { return value.toUpperCase(); }\n')
+  writeFileSync(join(root, 'test files', 'parser.test.mjs'), [
+    'import assert from "node:assert/strict";',
+    'import test from "node:test";',
+    'import { echo } from "../src/parser.js";',
+    'test("echo returns lowercase input unchanged", () => assert.equal(echo("abc"), "abc"));',
+  ].join('\n') + '\n')
+
+  const command = 'node --test "test files/parser.test.mjs"'
+  const task = [
+    "Fix parser.js so echo('ABC') returns 'ABC'.",
+    'Requirements:',
+    `- Fix parser.js so echo('abc') returns 'abc'; verified by: \`${command}\` must pass.`,
+  ].join('\n')
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat', task, projectRoot: root,
+    projectTestCommands: [command], verifierRequirements: [command],
+  }).taskContract
+  const uppercaseGoal = contract.acceptance.find(item => item.description === "Fix parser.js so echo('ABC') returns 'ABC'.")!
+  const lowercaseRequirement = contract.acceptance.find(item => item.description.includes("echo('abc')"))!
+  assert.ok(uppercaseGoal && lowercaseRequirement)
+  assert.ok(uppercaseGoal.verification.verifier_id.startsWith('meaning:'), 'lowercase verifier must not bind the case-distinct goal')
+  assert.equal(lowercaseRequirement.verification.verifier_id, 'verifier:node')
+
+  const runId = 'case-sensitive-goal-negative'
+  const service = createCriterionCompletionServiceV1(() => ({ contract, runId, projectRoot: root }))
+  const request = service.currentRequest()!
+  const mutationPath = 'src/parser.js'
+  await governedMutateSrcFix(root, runId, mutationPath,
+    'export function echo(value) { return value.toLowerCase(); }\n')
+  const sessionEvents = createSessionEventLog(runId)
+  const verifierOwner = chatVerifierOwner({ projectRoot: root, sessionId: sessionEvents.session_id,
+    taskId: contract.task_id, contractHash: contract.contract_hash })!
+  const env = witnessExecutionEnvironment(root)
+  const policy = await executeActionWithPolicy(
+    { type: 'test_run', command }, 'workspace_write', policyCtx(runId, root), {
+      executor: createToolExecutor({
+        executeTool: async request => {
+          assert.equal(request.tool, 'test_run')
+          const child = spawnSync(process.execPath, ['--test', 'test files/parser.test.mjs'], {
+            cwd: root, encoding: 'utf8', env, timeout: 30_000, windowsHide: true,
+          })
+          assert.ifError(child.error)
+          return { exit_code: child.status ?? 1, stdout: child.stdout ?? '', stderr: child.stderr ?? '' }
+        },
+      }),
+      mode: 'chat', lease: null, hostFallbackAllowed: true, isolationAvailable: true,
+    },
+  )
+  assert.equal(policy.policyBlocked, false, JSON.stringify(policy))
+  const stdout = policy.results[0]?.stdout ?? ''
+  const exitCode = policy.results[0]?.exit_code ?? 1
+  assert.equal(exitCode, 0, stdout)
+  assert.match(stdout, /pass 1/)
+  const envKey = verifierEnvironmentKey(env)
+  const cacheIdentity = resolveVerifierCacheIdentity({ projectRoot: root, command, envKey })
+  const receipt = await captureAndRecordVerifierReceipt({
+    projectRoot: root, command, exitCode, summary: 'lowercase-only witness passed', stdout,
+    stderr: policy.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
+    sessionEvents, turnId: runId, ledger: [], cache: new Map(), writeCount: 1,
+    cacheIdentity, verifierOwner, executionBackend: 'host-process',
+  })
+  assert.ok(receipt)
+  const candidate = candidateShaFromReceipt(root, receipt)
+  service.refreshPrivateEvidence({
+    proof: { compliant: true }, receipts: [receipt], candidate_sha: candidate, has_mutation: true,
+  })
+  assert.equal(evaluateCriterionCompletionV1(request).verified, false)
+
+  const requiredVerifierCommands = [command]
+  const requiredVerifiers = chatVerifierRequirements(verifierOwner, requiredVerifierCommands, task, root).map(requirement => ({
+    ...requirement,
+    executionContext: { ...requirement.executionContext, environmentFingerprint: envKey },
+  }))
+  const currentRevision = captureCompletionWorkspaceRevisionHash({ projectRoot: root }, [mutationPath], receipt)
+  assert.ok(currentRevision && receipt.receiptId)
+  const decision = createExecutorKernel('chat').completion.decide({
+    mode: 'chat', requestedOutcome: 'VERIFIED_COMPLETE', hasWrite: true,
+    verificationPolicy: 'strict', ...prepareKernelVerifierInput(receipt, []),
+    verifierOwner, requiredVerifierCommands, requiredVerifiers,
+    currentReceiptRevisionHashes: { [receipt.receiptId]: currentRevision },
+    currentWorkspaceRevisionHash: currentRevision,
+    toolCallLog: [{ tool: 'write_file', target: mutationPath }, { tool: 'test_run', target: command }],
+    proof: { compliant: true }, acceptance: request,
+  })
+  assert.equal(decision.allowed, false)
+  assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
+})
+
 test('executor → receipt → criterion negative: one governed witness run cannot satisfy sibling criterion', async t => {
   const { root, service, request, runId } = await dualWitnessFixture(t)
   const mutationPath = await governedMutateSrcFix(root, runId)

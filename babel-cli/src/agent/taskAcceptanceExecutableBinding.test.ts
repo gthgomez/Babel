@@ -347,6 +347,24 @@ test('per-criterion binding is order-invariant when both designations are frozen
   }
 })
 
+test('criterion link matching preserves behavior-literal case', () => {
+  const command = 'node --test parser.test.mjs'
+  const task = [
+    "Fix parser.js so echo('ABC') returns 'ABC'.",
+    'Requirements:',
+    `- Fix parser.js so echo('abc') returns 'abc'; verified by: \`${command}\` must pass.`,
+  ].join('\n')
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptanceV3(task),
+    trustedVerifierCommands: [command],
+    defaultWorkingDirectory: '.',
+  })
+  const uppercaseGoal = bound.criteria.find(item => item.description === "Fix parser.js so echo('ABC') returns 'ABC'.")!
+  const lowercaseRequirement = bound.criteria.find(item => item.description.includes("echo('abc')"))!
+  assert.ok(uppercaseGoal.verification.verifier_id.startsWith('meaning:'))
+  assert.ok(lowercaseRequirement.verification.verifier_id.startsWith('verifier:'))
+})
+
 test('multiple designated commands inside one criterion stay fail-closed', () => {
   const task = [
     'Preserve alpha. Tests are already present. Run both tests using: npm run test:alpha. Then run both tests using: npm run test:beta.',

@@ -409,6 +409,8 @@ import {
   hashContent as hashContentFn,
   initializeVerifierDependencyHashes,
 } from "./chatEngineVerifierSession.js";
+import { explicitCriterionVerifierCommands } from "./taskAcceptanceExecutableBinding.js";
+import { inferTaskAcceptanceV3 } from "./taskAcceptanceMeaning.js";
 
 import { RepetitionDetector } from "./repetitionDetector.js";
 import { captureThought } from "./thoughtCapture.js";
@@ -4359,6 +4361,7 @@ export class ChatEngine {
       this.options.task,
       requireProjectRoot(this.options),
       this.verifierDependencyHashes,
+      explicitCriterionVerifierCommands(inferTaskAcceptanceV3(this.options.task)),
     );
   }
 
