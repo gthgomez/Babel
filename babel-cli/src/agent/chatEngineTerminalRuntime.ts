@@ -233,7 +233,7 @@ function formatTerminalAnswerForOutcome(input: {
     else lines.push('', 'Model response (task remains blocked):', '---', input.answer)
     lines.push('', 'Verification status:', describeUnverifiedVerifierStatus(input.toolCallLog))
   }
-  return unverifiedTerminal
+  return unverifiedTerminal || blockedRecovery
     ? appendCriterionEvidenceSummary(lines.join('\n'), input.acceptanceEvidence, input.acceptanceEvidenceOmitted)
     : lines.join('\n')
 }

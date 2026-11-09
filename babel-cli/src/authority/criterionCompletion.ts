@@ -25,6 +25,8 @@ export interface CriterionCompletionRequestV1 {
 }
 export interface CriterionPrivateEvidenceRefreshV1 {
   proof: { compliant: boolean }
+  /** Host-only permission to retain independently validated criterion receipts while aggregate coverage is incomplete. */
+  allowPartialEvidence?: boolean
   receipt?: BoundChatVerifierReceipt | null
   receipts?: readonly BoundChatVerifierReceipt[] | null
   candidate_sha: string | null
@@ -83,7 +85,7 @@ export function createCriterionCompletionServiceV1(
         }
         authority.graph = new EvidenceGraph()
         delete authority.candidateSha
-        if (!input.proof.compliant) return
+        if (!input.proof.compliant && input.allowPartialEvidence !== true) return
         const published = publishCriterionEvidenceFromChatExecution({
           graph: authority.graph,
           supervisor: authority.supervisor,
@@ -92,6 +94,7 @@ export function createCriterionCompletionServiceV1(
           projectRoot: root,
           candidateSha: input.candidate_sha,
           proof: input.proof,
+          allowPartialEvidence: input.allowPartialEvidence === true,
           ...(input.receipt !== undefined ? { receipt: input.receipt } : {}),
           ...(input.receipts !== undefined ? { receipts: input.receipts } : {}),
           hasMutation: input.has_mutation,

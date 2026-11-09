@@ -2645,9 +2645,9 @@ export class ChatEngine {
     const historyErrors = this.workingState.failedVerifierHistoryOverflow || unresolvedHistory.length > 0
       ? ['Settled failed verifier execution requires newer covering current green evidence'] : [];
     proofSelection.evidenceErrors.push(...historyErrors);
-    const selectedIds = new Set(proofSelection.selectedCoveringReceipts.map(receipt => receipt.receiptId));
-    const selectedChatReceipts = this.executedVerifierLedger.filter(receipt => selectedIds.has(receipt.receiptId));
-    return { ...canonical, verifierEvidenceErrors: canonical.verifierEvidenceErrors, requiredVerifierCommands, requiredVerifiers, verifierOwner, currentWorkspaceRevisionHash, currentReceiptRevisionHashes, unplannedAttemptEnvironmentFingerprint, proofSelection, selectedChatReceipts };
+    const selectedChatReceipts = this.executedVerifierLedger.filter(receipt => proofSelection.selectedCoveringReceipts.includes(receipt));
+    const criterionChatReceipts = currentOwnerReceipts.filter(receipt => attemptSelection.currentAttempts.some(attempt => attempt.receiptId === receipt.receiptId));
+    return { ...canonical, verifierEvidenceErrors: canonical.verifierEvidenceErrors, requiredVerifierCommands, requiredVerifiers, verifierOwner, currentWorkspaceRevisionHash, currentReceiptRevisionHashes, unplannedAttemptEnvironmentFingerprint, proofSelection, selectedChatReceipts, criterionChatReceipts };
   }
 
   /**
@@ -2678,8 +2678,8 @@ export class ChatEngine {
     if (this.criterionCompletion && (requestedOutcome === 'VERIFIED_COMPLETE' || hasMutation)) {
       this.criterionCompletion.refreshPrivateEvidence({
         proof: evidenceProof,
-        receipt: verifierInput.selectedChatReceipts.at(-1) ?? null,
-        receipts: verifierInput.selectedChatReceipts,
+        allowPartialEvidence: !this.verifierTampered && !this.verifierInputsUnfrozen,
+        receipts: verifierInput.criterionChatReceipts,
         candidate_sha: this.criterionCandidateRevisionSha(),
         has_mutation: hasMutation,
       })

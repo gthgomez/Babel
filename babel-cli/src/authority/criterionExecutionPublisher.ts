@@ -103,6 +103,7 @@ export function publishCriterionEvidenceFromChatExecution(input: {
   projectRoot: string
   candidateSha: string | null
   proof: { compliant: boolean }
+  allowPartialEvidence?: boolean
   receipt?: BoundChatVerifierReceipt | null
   receipts?: readonly BoundChatVerifierReceipt[] | null
   hasMutation: boolean
@@ -112,7 +113,7 @@ export function publishCriterionEvidenceFromChatExecution(input: {
     ...(input.receipt ? [input.receipt] : []),
   ].filter((entry, index, all) => all.indexOf(entry) === index)
   if (
-    !input.proof.compliant ||
+    (!input.proof.compliant && input.allowPartialEvidence !== true) ||
     !input.hasMutation ||
     !input.candidateSha ||
     ledger.length === 0

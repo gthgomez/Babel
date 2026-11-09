@@ -98,7 +98,7 @@ test('governed chat execution publishes criterion evidence only for dispatched f
   assert.equal(result.status, 'VERIFIED')
 })
 
-test('independently dispatched evidence is retained when another criterion has no verifier', async t => {
+test('independently dispatched evidence remains reportable while aggregate proof lacks another criterion', async t => {
   const behavior = {
     id: 'acceptance:behavior',
     description: 'parseSum(2, 3) returns 5',
@@ -114,7 +114,8 @@ test('independently dispatched evidence is retained when another criterion has n
   const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
   const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
   service.refreshPrivateEvidence({
-    proof: { compliant: true }, receipt, candidate_sha: candidate, has_mutation: true,
+    proof: { compliant: false }, allowPartialEvidence: true,
+    receipt, candidate_sha: candidate, has_mutation: true,
   })
 
   const result = evaluateCriterionCompletionV1(request)
