@@ -290,8 +290,8 @@ test('canonical verifier-input aliases are protected and out-of-root symlinks ar
 });
 
 test('verifier input canonicalization accepts an in-root Windows short-path root alias', () => {
-  const rootAlias = 'C:/Users/RUNNER~1/AppData/Local/Temp/project';
-  const canonicalRoot = 'C:/Users/runneradmin/AppData/Local/Temp/project';
+  const rootAlias = 'C:/short~1/work/project';
+  const canonicalRoot = 'C:/canonical/work/project';
   const fs: ProtectedInputFs = {
     readFile: () => null,
     exists: () => true,
