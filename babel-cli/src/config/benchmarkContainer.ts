@@ -164,6 +164,18 @@ let dockerDaemonModeCache: DockerDaemonMode | null = null;
 export type DockerImageRuntimeUser = 'root' | 'nonroot' | 'unknown';
 let dockerImageRuntimeUserCache = new Map<string, DockerImageRuntimeUser>();
 let dockerImageRuntimeUserTestOverride: DockerImageRuntimeUser | null = null;
+export interface DockerImageRuntimeIdentity { uid: number; gid: number }
+const dockerImageRuntimeIdentityCache = new Map<string, DockerImageRuntimeIdentity | null>();
+let dockerImageRuntimeIdentityTestOverride: DockerImageRuntimeIdentity | null | undefined;
+
+function dockerIdentityProbeEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of ['PATH', 'HOME', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH', 'DOCKER_CONFIG']) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
 
 export function classifyDockerImageRuntimeUser(user: string | null | undefined): DockerImageRuntimeUser {
   const normalized = user?.trim().toLowerCase() ?? '';
@@ -289,6 +301,48 @@ export function getDockerImageRuntimeUser(image: string): DockerImageRuntimeUser
   return runtimeUser;
 }
 
+/**
+ * Probe the effective UID and primary GID used by Docker for this exact local
+ * image. The probe has no project/host mounts, network, writable filesystem,
+ * capabilities, or privilege escalation; it never pulls an image. Unknown
+ * output or any Docker failure remains unknown and must fail closed.
+ */
+export function getDockerImageRuntimeIdentity(image: string): DockerImageRuntimeIdentity | null {
+  if (dockerImageRuntimeIdentityTestOverride !== undefined) return dockerImageRuntimeIdentityTestOverride;
+  const normalizedImage = image.trim();
+  if (!normalizedImage) return null;
+  if (dockerImageRuntimeIdentityCache.has(normalizedImage)) return dockerImageRuntimeIdentityCache.get(normalizedImage) ?? null;
+  let identity: DockerImageRuntimeIdentity | null = null;
+  try {
+    const result = spawnSync('docker', [
+      'run', '--rm', '--pull=never', '--network=none', '--read-only', '--cap-drop=ALL',
+      '--security-opt=no-new-privileges', '--pids-limit=16', '--memory=32m', '--memory-swap=32m',
+      '--cpus=0.25', '--entrypoint=/usr/bin/id', normalizedImage,
+    ], {
+      timeout: 5000,
+      maxBuffer: 4096,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: dockerIdentityProbeEnvironment(),
+    });
+    if (result.status === 0 && !result.error && result.stdout && result.stdout.length <= 4096) {
+      const match = /^uid=(\d+)(?:\([^\r\n)]*\))?\s+gid=(\d+)(?:\([^\r\n)]*\))?(?:\s+groups=.*)?\s*$/.exec(result.stdout);
+      if (match && Number.isSafeInteger(Number(match[1])) && Number.isSafeInteger(Number(match[2]))) {
+        identity = { uid: Number(match[1]), gid: Number(match[2]) };
+      }
+    }
+  } catch {
+    identity = null;
+  }
+  dockerImageRuntimeIdentityCache.set(normalizedImage, identity);
+  return identity;
+}
+
+/** Test-only override for effective container identity. */
+export function setDockerImageRuntimeIdentityForTest(identity: DockerImageRuntimeIdentity | null | undefined): void {
+  dockerImageRuntimeIdentityTestOverride = identity;
+}
+
 /** Test-only image-user override. Null restores image inspection. */
 export function setDockerImageRuntimeUserForTest(user: DockerImageRuntimeUser | null): void {
   dockerImageRuntimeUserTestOverride = user;
@@ -306,6 +360,8 @@ export function resetDockerAvailabilityCache(): void {
   dockerDaemonModeCache = null;
   dockerImageRuntimeUserCache = new Map();
   dockerImageRuntimeUserTestOverride = null;
+  dockerImageRuntimeIdentityCache.clear();
+  dockerImageRuntimeIdentityTestOverride = undefined;
 }
 
 /** Force Docker availability for tests that need it (Phase 4 test fix). */

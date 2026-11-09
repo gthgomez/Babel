@@ -59,7 +59,7 @@ import { resolve, sep, dirname, basename, isAbsolute, relative, join } from 'nod
 import {
   evaluateGovernedIsolation,
   getDockerDaemonMode,
-  getDockerImageRuntimeUser,
+  getDockerImageRuntimeIdentity,
   getDockerUnavailableReason,
   isBenchmarkProjectExecutableCommand,
   shouldUseDockerSandbox,
@@ -240,7 +240,11 @@ export function creationOwnershipFromTrustedEvidence(
  * directory from the project root to its parent. This excludes writable
  * parents where an in-container process could race path validation.
  */
-function rootfulContainerHasStableReadPath(projectRoot: string, targetPath: string): boolean {
+function rootfulContainerHasStableReadPath(
+  projectRoot: string,
+  targetPath: string,
+  identity: { uid: number; gid: number },
+): boolean {
   const parentPath = dirname(targetPath);
   const relativeParent = relative(projectRoot, parentPath);
   if (relativeParent === '..' || relativeParent.startsWith(`..${sep}`) || isAbsolute(relativeParent)) return false;
@@ -257,15 +261,17 @@ function rootfulContainerHasStableReadPath(projectRoot: string, targetPath: stri
       return false;
     }
     const mode = stats.mode & 0o777;
+    // Do not share the project with the same host UID: a container running as
+    // that owner could read existing owner-only files such as .env even when
+    // the directory itself is not writable.
+    if (stats.uid === identity.uid) return false;
     // Any group/other write bit can also act as an ACL mask for a named root
     // entry. Reject it conservatively; this function only broadens file reads.
     if ((mode & 0o022) !== 0) return false;
-    const containerCanTraverse = stats.uid === 0
-      ? (mode & 0o100) !== 0
-      : stats.gid === 0 ? (mode & 0o010) !== 0 : (mode & 0o001) !== 0;
-    const containerCanWrite = stats.uid === 0
-      ? (mode & 0o200) !== 0
-      : stats.gid === 0 ? (mode & 0o020) !== 0 : (mode & 0o002) !== 0;
+    const permissions = stats.gid === identity.gid ? { traverse: 0o010, write: 0o020 }
+      : { traverse: 0o001, write: 0o002 };
+    const containerCanTraverse = (mode & permissions.traverse) !== 0;
+    const containerCanWrite = (mode & permissions.write) !== 0;
     if (!containerCanTraverse || containerCanWrite) return false;
   }
   return true;
@@ -1562,10 +1568,11 @@ export class SafeExecutor {
       );
       const dockerImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? '';
       const immutableDockerImage = /^sha256:[a-f0-9]{64}$/i.test(dockerImage) || /@sha256:[a-f0-9]{64}$/i.test(dockerImage);
+      const runtimeIdentity = immutableDockerImage ? getDockerImageRuntimeIdentity(dockerImage) : null;
       const sandboxReadableTest = process.platform === 'linux' && !this.shadowRoot && targetPath === safePath &&
         shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']) && getDockerDaemonMode() === 'rootful' &&
-        immutableDockerImage && getDockerImageRuntimeUser(dockerImage) === 'root' &&
-        rootfulContainerHasStableReadPath(this.projectRoot, targetPath) &&
+        immutableDockerImage && runtimeIdentity?.uid === 0 &&
+        rootfulContainerHasStableReadPath(this.projectRoot, targetPath, runtimeIdentity) &&
         !explicitContainerIdentity &&
         isSandboxReadableTestPath(relative(this.projectRoot, safePath));
       this.writeUtf8FileSafely(inputPath, targetPath, content, targetPath === safePath, {

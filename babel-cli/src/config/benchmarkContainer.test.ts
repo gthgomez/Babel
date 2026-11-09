@@ -22,6 +22,7 @@ import {
   shouldUseBenchmarkContainerExecution,
   shouldUseDockerSandbox,
   getDockerUnavailableReason,
+  getDockerImageRuntimeIdentity,
 } from './benchmarkContainer.js';
 
 test('Docker daemon mode classification fails closed when security options are incomplete', () => {
@@ -47,6 +48,74 @@ test('Docker image runtime user classification fails closed for non-root and amb
   assert.equal(classifyDockerImageRuntimeUser('node'), 'nonroot');
   assert.equal(classifyDockerImageRuntimeUser('1000:1000'), 'nonroot');
   assert.equal(classifyDockerImageRuntimeUser('root:group:extra'), 'unknown');
+});
+
+test('effective image uid and primary gid are measured inside a no-network, no-mount probe', (t) => {
+  resetDockerAvailabilityCache();
+  const priorProviderKey = process.env['OPENROUTER_API_KEY'];
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-test-only';
+  let observedArgs: readonly string[] = [];
+  t.mock.method(childProcess, 'spawnSync', (command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+    assert.equal(command, 'docker');
+    observedArgs = args;
+    assert.equal(options.env?.['OPENROUTER_API_KEY'], undefined, 'provider credentials are not inherited by the Docker client probe');
+    return {
+      pid: 1, output: ['', 'uid=0(root) gid=1000(app) groups=1000(app)\n', ''],
+      stdout: 'uid=0(root) gid=1000(app) groups=1000(app)\n', stderr: '', status: 0, signal: null,
+    };
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.deepEqual(getDockerImageRuntimeIdentity('sha256:fixture'), { uid: 0, gid: 1000 });
+    assert.deepEqual(observedArgs.slice(0, 2), ['run', '--rm']);
+    assert.ok(observedArgs.includes('--pull=never'));
+    assert.ok(observedArgs.includes('--network=none'));
+    assert.ok(observedArgs.includes('--read-only'));
+    assert.ok(observedArgs.includes('--cap-drop=ALL'));
+    assert.ok(observedArgs.includes('--security-opt=no-new-privileges'));
+    assert.ok(observedArgs.includes('--entrypoint=/usr/bin/id'));
+    assert.ok(observedArgs.includes('sha256:fixture'));
+    assert.equal(observedArgs.some(arg => arg === '-v' || arg === '--volume' || arg.startsWith('--mount')), false,
+      'identity discovery receives no project or host mount');
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    if (priorProviderKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+    else process.env['OPENROUTER_API_KEY'] = priorProviderKey;
+    resetDockerAvailabilityCache();
+  }
+});
+
+test('unavailable or malformed identity probe fails closed', (t) => {
+  resetDockerAvailabilityCache();
+  t.mock.method(childProcess, 'spawnSync', () => ({
+    pid: 1, output: ['', 'uid=0(root) gid=0(root)\n', ''],
+    stdout: 'uid=0(root) gid=0(root)\n', stderr: 'probe denied', status: 125, signal: null,
+  }));
+  syncBuiltinESMExports();
+  try {
+    assert.equal(getDockerImageRuntimeIdentity('sha256:unavailable'), null);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    resetDockerAvailabilityCache();
+  }
+});
+
+test('successful but malformed identity output fails closed', (t) => {
+  resetDockerAvailabilityCache();
+  t.mock.method(childProcess, 'spawnSync', () => ({
+    pid: 1, output: ['', 'uid=0(root)\nnot gid output\n', ''],
+    stdout: 'uid=0(root)\nnot gid output\n', stderr: '', status: 0, signal: null,
+  }));
+  syncBuiltinESMExports();
+  try {
+    assert.equal(getDockerImageRuntimeIdentity('sha256:malformed'), null);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    resetDockerAvailabilityCache();
+  }
 });
 
 test('an omitted Docker image USER does not prove the default account primary GID', () => {

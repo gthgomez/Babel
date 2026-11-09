@@ -35,7 +35,7 @@ import { ProcessWitness } from './diagnostics/bdns/processWitness.js';
 import {
   setDockerAvailableForTest,
   setDockerDaemonModeForTest,
-  setDockerImageRuntimeUserForTest,
+  setDockerImageRuntimeIdentityForTest,
   resetDockerAvailabilityCache,
 } from './config/benchmarkContainer.js';
 import { approveApproval, requestDependencyInstallApproval } from './services/approvalQueue.js';
@@ -133,6 +133,7 @@ test('only new test source is shared with the capability-dropped sandbox under r
     return;
   }
   const fixture = makeFixture();
+  const hostUid = typeof process.getuid === 'function' ? process.getuid() : null;
   const testDirectory = join(fixture.projectRoot, 'test');
   chmodSync(fixture.projectRoot, 0o755);
   mkdirSync(testDirectory);
@@ -151,7 +152,7 @@ test('only new test source is shared with the capability-dropped sandbox under r
   delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
   setDockerAvailableForTest(true);
   setDockerDaemonModeForTest('rootful');
-  setDockerImageRuntimeUserForTest('root');
+  setDockerImageRuntimeIdentityForTest({ uid: 0, gid: 0 });
   const previousUmask = process.umask(0o077);
   try {
     const privateSource = join(fixture.projectRoot, 'private-source.js');
@@ -163,8 +164,23 @@ test('only new test source is shared with the capability-dropped sandbox under r
 
     assert.equal(result.exit_code, 0);
     assert.equal(statSync(testDirectory).mode & 0o777, 0o755, 'existing test directory mode is unchanged');
-    const expectedGeneratedTestMode = process.platform === 'linux' ? 0o644 : 0o600;
+    const expectedGeneratedTestMode = process.platform === 'linux' && hostUid !== 0 ? 0o644 : 0o600;
     assert.equal(statSync(join(testDirectory, 'generated.test.js')).mode & 0o777, expectedGeneratedTestMode, 'mode broadening is limited to supported rootful Linux Docker');
+
+    const groupReadable = join(fixture.projectRoot, 'group-readable-test');
+    mkdirSync(groupReadable);
+    chmodSync(groupReadable, 0o750);
+    const groupIdentity = { uid: 0, gid: statSync(groupReadable).gid };
+    setDockerImageRuntimeIdentityForTest(groupIdentity);
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('group-readable-test/group.test.js', 'test\n').exit_code, 0);
+    assert.equal(statSync(join(groupReadable, 'group.test.js')).mode & 0o777,
+      process.platform === 'linux' && hostUid !== 0 ? 0o644 : 0o600,
+      'a measured primary GID may use group read/traverse without assuming GID 0');
+    setDockerImageRuntimeIdentityForTest({ uid: 0, gid: groupIdentity.gid + 1 });
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('group-readable-test/wrong-group.test.js', 'test\n').exit_code, 0);
+    assert.equal(statSync(join(groupReadable, 'wrong-group.test.js')).mode & 0o777, 0o600,
+      'an identity that cannot traverse by owner, primary group, or other remains private');
+    setDockerImageRuntimeIdentityForTest({ uid: 0, gid: 0 });
 
     assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('src/generated.js', 'export const value = 1;\n').exit_code, 0);
     assert.equal(statSync(join(fixture.projectRoot, 'src/generated.js')).mode & 0o777, 0o600, 'ordinary source files keep the restrictive umask');
@@ -218,13 +234,13 @@ test('only new test source is shared with the capability-dropped sandbox under r
     assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/userns.test.js', 'custom namespace\n').exit_code, 0);
     assert.equal(statSync(join(testDirectory, 'userns.test.js')).mode & 0o777, 0o600, 'explicit user namespace does not trigger mode broadening');
     delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'];
-    setDockerImageRuntimeUserForTest('nonroot');
+    setDockerImageRuntimeIdentityForTest({ uid: 1000, gid: 1000 });
     assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/nonroot-image.test.js', 'nonroot image\n').exit_code, 0);
     assert.equal(statSync(join(testDirectory, 'nonroot-image.test.js')).mode & 0o777, 0o600, 'non-root image USER does not trigger mode broadening');
-    setDockerImageRuntimeUserForTest('unknown');
+    setDockerImageRuntimeIdentityForTest(null);
     assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/unknown-image.test.js', 'unknown image\n').exit_code, 0);
     assert.equal(statSync(join(testDirectory, 'unknown-image.test.js')).mode & 0o777, 0o600, 'unknown image USER fails closed');
-    setDockerImageRuntimeUserForTest('root');
+    setDockerImageRuntimeIdentityForTest({ uid: 0, gid: 0 });
     setDockerDaemonModeForTest('rootless');
     assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/rootless.test.js', 'rootless daemon\n').exit_code, 0);
     assert.equal(statSync(join(testDirectory, 'rootless.test.js')).mode & 0o777, 0o600, 'rootless Docker does not broaden host-readable permissions');
