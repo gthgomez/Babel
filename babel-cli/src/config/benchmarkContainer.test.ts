@@ -22,6 +22,7 @@ import {
   shouldUseBenchmarkContainerExecution,
   shouldUseDockerSandbox,
   getDockerUnavailableReason,
+  getDockerDaemonMode,
   getDockerImageRuntimeIdentity,
 } from './benchmarkContainer.js';
 
@@ -94,6 +95,43 @@ test('effective image uid and primary gid are measured inside a no-network, no-m
     else process.env['DOCKER_HOST'] = priorDockerHost;
     if (priorDockerContext === undefined) delete process.env['DOCKER_CONTEXT'];
     else process.env['DOCKER_CONTEXT'] = priorDockerContext;
+    resetDockerAvailabilityCache();
+  }
+});
+
+test('daemon security detection rechecks the sanitized sandbox Docker endpoint on every call', (t) => {
+  resetDockerAvailabilityCache();
+  const prior = Object.fromEntries(['DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'HOME'].map(key => [key, process.env[key]]));
+  process.env['DOCKER_HOST'] = 'tcp://untrusted-override.example:2376';
+  process.env['DOCKER_CONTEXT'] = 'untrusted-context';
+  process.env['DOCKER_CONFIG'] = '/tmp/untrusted-docker-config';
+  const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
+  let securityQuery = 0;
+  t.mock.method(childProcess, 'spawnSync', (command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+    assert.equal(command, 'docker');
+    calls.push({ args, ...(options.env ? { env: options.env } : {}) });
+    assert.equal(options.env?.['DOCKER_HOST'], undefined);
+    assert.equal(options.env?.['DOCKER_CONTEXT'], undefined);
+    assert.equal(options.env?.['DOCKER_CONFIG'], undefined);
+    if (args[1] === '--format' && args[2] === '{{.ServerVersion}}')
+      return { pid: 1, output: ['', '27.0.0\n', ''], stdout: '27.0.0\n', stderr: '', status: 0, signal: null };
+    const rootless = ++securityQuery > 1;
+    const stdout = rootless ? '["name=seccomp","name=rootless"]' : '["name=seccomp"]';
+    return { pid: 1, output: ['', stdout, ''], stdout, stderr: '', status: 0, signal: null };
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.equal(getDockerDaemonMode(), 'rootful');
+    assert.equal(getDockerDaemonMode(), 'rootless', 'a changed Docker context cannot reuse a prior security classification');
+    assert.ok(calls.length >= 3);
+    assert.ok(calls.every(call => call.env?.['DOCKER_HOST'] === undefined), 'availability and security probes use the runtime-safe environment');
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     resetDockerAvailabilityCache();
   }
 });
