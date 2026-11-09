@@ -1,4 +1,4 @@
-/** Real Windows execution qualification for the background/await command path. */
+/** Real Windows foreground shell qualification for argv, quoting and cwd. */
 
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -22,8 +22,16 @@ test('Windows foreground execution preserves spaced .exe, .cmd, and .bat argv an
     'utf8',
   )
 
-  const cmdWrapper = join(root, 'wrapper with spaces.cmd')
-  const batWrapper = join(root, 'wrapper with spaces.bat')
+  // The command policy admits the `node` command family, not arbitrary
+  // project-local command names. Keep the basename allowlisted and put spaces
+  // in the executable paths so this still qualifies Windows quoting without
+  // changing production admission policy.
+  const cmdWrapperDir = join(root, 'cmd wrapper path')
+  const batWrapperDir = join(root, 'bat wrapper path')
+  mkdirSync(cmdWrapperDir)
+  mkdirSync(batWrapperDir)
+  const cmdWrapper = join(cmdWrapperDir, 'node.cmd')
+  const batWrapper = join(batWrapperDir, 'node.bat')
   for (const wrapper of [cmdWrapper, batWrapper]) {
     writeFileSync(wrapper, `@echo off\r\n"${process.execPath}" "${echoScript}" %*\r\n`, 'utf8')
   }
