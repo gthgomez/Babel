@@ -40,12 +40,21 @@ export function getTrustedBackgroundExecutionBackend(job: BackgroundShellJob): S
   return trustedBackgroundExecutionBackend.get(job.done);
 }
 
+/** A direct-child close is not a process-tree settlement proof on Windows. */
+export function hasConfirmedBackgroundProcessTreeSettlement(
+  platform: NodeJS.Platform,
+  physicalClosed: boolean,
+  treeTerminationUnknown: boolean,
+): boolean {
+  return platform !== 'win32' && physicalClosed && !treeTerminationUnknown;
+}
+
 export type BackgroundShellStatus = 'running' | 'completed' | 'failed' | 'killed';
 
 export interface BackgroundShellJob {
   /** Set only by the owned child spawn event. */
   processStarted?: boolean;
-  /** Set only after the owned child's close event (or confirmed pre-spawn failure). */
+  /** Set only when host evidence proves no owned process-tree work can continue. */
   processCompleted?: boolean;
   id: string;
   command: string;
@@ -534,7 +543,14 @@ export function getBackgroundShellJob(taskId: string): BackgroundShellJob | unde
   const job = jobs.get(taskId);
   if (!job) return undefined;
   const { child: _child, physicalClosed, treeTerminationUnknown: _treeTerminationUnknown, projectRootKey: _projectRootKey, ...publicJob } = job;
-  return { ...publicJob, processCompleted: physicalClosed === true && job.treeTerminationUnknown !== true };
+  return {
+    ...publicJob,
+    processCompleted: hasConfirmedBackgroundProcessTreeSettlement(
+      process.platform,
+      physicalClosed === true,
+      job.treeTerminationUnknown === true,
+    ),
+  };
 }
 
 /**

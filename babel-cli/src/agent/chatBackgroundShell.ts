@@ -110,7 +110,8 @@ export async function executeAwaitCommandAction(
     ...(job?.processStarted === true ? { processExecuted: true } : {}),
     // Lifecycle completion is independent of the child exit status: nonzero
     // exits and host-recorded kills can still carry authoritative stderr.
-    // Only the host's close event proves the process itself has settled.
+    // A direct-child close is insufficient on Windows, where this runner
+    // cannot currently observe descendant settlement after the parent exits.
     processCompleted: job?.processCompleted === true && job.processStarted === true,
     ...(job ? { processExecutionId: job.id } : {}),
     detail,

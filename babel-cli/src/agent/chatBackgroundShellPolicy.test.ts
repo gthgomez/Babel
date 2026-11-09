@@ -57,8 +57,11 @@ test('settled nonzero background exit retains authoritative failure evidence', a
     assert.match(settled.observation, /status: failed/);
     const entry = logs.at(-1)!;
     assert.equal(entry.exit_code, 7);
-    assert.equal(entry.processCompleted, true, 'nonzero exit still has a settled child lifecycle');
-    assert.equal(classifyBlockingOrigin(entry), 'permission_denied', 'settled stderr remains eligible blocker evidence');
+    const treeSettlementProven = process.platform !== 'win32';
+    assert.equal(entry.processCompleted, treeSettlementProven,
+      'nonzero exit is blocker evidence only when process-tree settlement is observable');
+    assert.equal(classifyBlockingOrigin(entry), treeSettlementProven ? 'permission_denied' : null,
+      'stderr is not terminal blocker evidence without process-tree settlement proof');
   } finally {
     rmSync(fixtureDir, { recursive: true, force: true });
     if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
@@ -105,7 +108,7 @@ test('background command logs bind cwd and only mark a completed process after a
     assert.equal(completionLog?.target, 'node --version');
     assert.equal(completionLog?.working_directory, projectRoot);
     assert.equal(completionLog?.processExecuted, true);
-    assert.equal(completionLog?.processCompleted, true);
+    assert.equal(completionLog?.processCompleted, process.platform !== 'win32');
     assert.ok(completionLog?.processExecutionId, 'completion receipt retains the original host dispatch identity');
     assert.equal(completionLog?.processExecutionId, startLog?.processExecutionId);
     assert.equal(completionLog?.exit_code, 0);

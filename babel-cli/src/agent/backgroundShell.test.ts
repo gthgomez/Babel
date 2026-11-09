@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, writeFileSync, mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import childProcess from 'node:child_process';
@@ -11,6 +11,7 @@ import {
   capObservationText,
   clearBackgroundShellRegistry,
   getBackgroundShellJob,
+  hasConfirmedBackgroundProcessTreeSettlement,
   hasUnsettledBackgroundShells,
   killAllBackgroundShells,
   killBackgroundShell,
@@ -73,6 +74,14 @@ async function waitForStdoutPid(jobId: string, timeoutMs = 5_000): Promise<numbe
 }
 
 describe('backgroundShell', () => {
+  it('requires process-tree evidence before reporting a completed background process', () => {
+    assert.equal(hasConfirmedBackgroundProcessTreeSettlement('linux', true, false), true);
+    assert.equal(hasConfirmedBackgroundProcessTreeSettlement('win32', true, false), false,
+      'Windows direct-child close is not a process-tree settlement proof');
+    assert.equal(hasConfirmedBackgroundProcessTreeSettlement('linux', true, true), false,
+      'uncertain tree termination remains incomplete');
+    assert.equal(hasConfirmedBackgroundProcessTreeSettlement('linux', false, false), false);
+  });
   beforeEach(() => {
     resetBackgroundShellRegistryForTests();
   });
@@ -306,6 +315,52 @@ describe('backgroundShell', () => {
     await new Promise(resolve => setTimeout(resolve, 900));
     const { existsSync } = await import('node:fs');
     assert.equal(existsSync(marker), false, 'the child cannot perform delayed work after await_command returns');
+  });
+
+  it('does not certify Windows parent close as process-tree settlement', {
+    skip: process.platform !== 'win32' ? 'Windows-only descendant lifecycle contract' : false,
+  }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bg-shell-windows-descendant-'));
+    const marker = join(dir, 'late-write');
+    const pidFile = join(dir, 'descendant.pid');
+    const grandchildScript = join(dir, 'grandchild.js');
+    const parentScript = join(dir, 'parent.js');
+    writeFileSync(grandchildScript, [
+      "require('fs').writeFileSync(process.argv[2], String(process.pid));",
+      `setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'late'),1200);`,
+    ].join(''));
+    writeFileSync(parentScript, [
+      "const cp=require('child_process');",
+      'const child=cp.spawn(process.execPath,[process.argv[2],process.argv[3]],{stdio:"ignore"});',
+      'child.unref();',
+      'child.once("spawn",()=>setTimeout(()=>{process.exitCode=7},100));',
+      'process.stderr.write("EACCES: access denied\\n");',
+    ].join(''));
+    let descendantPid: number | undefined;
+    try {
+      const job = startBackgroundShell({
+        command: `node "${parentScript}" "${grandchildScript}" "${pidFile}"`,
+        cwd: dir,
+        timeoutMs: 10_000,
+      });
+      const result = await awaitBackgroundShell(job.id, 5_000);
+      assert.equal(result.status, 'failed');
+      assert.ok(existsSync(pidFile), 'unrefed descendant started');
+      descendantPid = Number(readFileSync(pidFile, 'utf8'));
+      assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
+      assert.equal(getBackgroundShellJob(job.id)?.processCompleted, false,
+        'Windows direct-child close cannot certify descendant settlement');
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      assert.equal(existsSync(marker), true,
+        'the fixture demonstrates that a descendant can continue after the parent closes');
+    } finally {
+      if (descendantPid) {
+        const windowsRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows';
+        childProcess.spawnSync(join(windowsRoot, 'System32', 'taskkill.exe'),
+          ['/F', '/T', '/PID', String(descendantPid)], { stdio: 'ignore', windowsHide: true, timeout: 5000 });
+      }
+      rmSync(dir, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+    }
   });
 
   it('killAllBackgroundShells kills non-detached jobs and preserves detached', async () => {
