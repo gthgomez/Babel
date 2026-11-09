@@ -167,7 +167,11 @@ let dockerImageRuntimeUserTestOverride: DockerImageRuntimeUser | null = null;
 
 export function classifyDockerImageRuntimeUser(user: string | null | undefined): DockerImageRuntimeUser {
   const normalized = user?.trim().toLowerCase() ?? '';
-  if (!normalized || /^0:0$/.test(normalized)) return 'root';
+  // An omitted image USER proves UID 0 only by convention; Docker may resolve
+  // the default account's primary GID from the image. Mode-sharing checks
+  // below assume both UID and GID 0, so omission is not enough evidence.
+  if (!normalized) return 'unknown';
+  if (/^0:0$/.test(normalized)) return 'root';
   if (normalized === '0' || normalized.startsWith('0:')) return 'unknown';
   if (/^[0-9]+(?::[0-9]+)?$/.test(normalized) || /^[a-z_][a-z0-9_-]*(?::[a-z_][a-z0-9_-]*)?$/i.test(normalized)) return 'nonroot';
   return 'unknown';
