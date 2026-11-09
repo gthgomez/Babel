@@ -49,6 +49,12 @@ test('Docker image runtime user classification fails closed for non-root and amb
   assert.equal(classifyDockerImageRuntimeUser('root:group:extra'), 'unknown');
 });
 
+test('an omitted Docker image USER does not prove the default account primary GID', () => {
+  // Docker starts UID 0, but the image's root passwd entry can select GID
+  // 1000. The directory access predicate assumes GID 0, so omission is unknown.
+  assert.equal(classifyDockerImageRuntimeUser(''), 'unknown');
+});
+
 test('Docker mode-sharing eligibility requires UID 0 with the proven primary GID 0', () => {
   // rootfulContainerHasStableReadPath evaluates directories as UID/GID 0.
   // An image configured as USER 0:1000 cannot be assumed to have that group:
