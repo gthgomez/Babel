@@ -108,7 +108,10 @@ export async function executeAwaitCommandAction(
     target: job?.command ?? action.task_id,
     ...(job?.cwd ? { working_directory: job.cwd } : {}),
     ...(job?.processStarted === true ? { processExecuted: true } : {}),
-    processCompleted: result.status === 'completed' && job?.processStarted === true,
+    // Lifecycle completion is independent of the child exit status: nonzero
+    // exits and host-recorded kills can still carry authoritative stderr.
+    // Only the host's close event proves the process itself has settled.
+    processCompleted: job?.processCompleted === true && job.processStarted === true,
     ...(job ? { processExecutionId: job.id } : {}),
     detail,
     index: ctx.index,

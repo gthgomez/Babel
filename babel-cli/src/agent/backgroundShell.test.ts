@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import childProcess from 'node:child_process';
@@ -10,6 +10,7 @@ import {
   awaitBackgroundShell,
   capObservationText,
   clearBackgroundShellRegistry,
+  getBackgroundShellJob,
   hasUnsettledBackgroundShells,
   killAllBackgroundShells,
   killBackgroundShell,
@@ -23,6 +24,28 @@ import type { ProcessWitness } from '../diagnostics/bdns/processWitness.js';
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
+    if (process.platform === 'linux') {
+      // A killed process can remain as a zombie when the container's PID 1
+      // does not reap it. Zombies cannot execute; check every remaining task
+      // so a zombie leader with a live worker is still considered alive.
+      const state = (path: string): string | null => {
+        try {
+          const stat = readFileSync(path, 'utf8');
+          const closeParen = stat.lastIndexOf(')');
+          return closeParen < 0 ? null : stat.slice(closeParen + 2).trim().split(/\s+/)[0] ?? null;
+        } catch { return null; }
+      };
+      const rootState = state(`/proc/${pid}/stat`);
+      if (rootState === 'Z' || rootState === 'X' || rootState === 'x') {
+        try {
+          const tasks = readdirSync(`/proc/${pid}/task`).filter(value => /^\d+$/.test(value));
+          if (tasks.length > 0 && tasks.every(tid => {
+            const taskState = state(`/proc/${pid}/task/${tid}/stat`);
+            return taskState === 'Z' || taskState === 'X' || taskState === 'x';
+          })) return false;
+        } catch { /* inaccessible or changing proc data fails closed */ }
+      }
+    }
     return true;
   } catch (err) {
     return (err as NodeJS.ErrnoException).code !== 'ESRCH';
@@ -229,6 +252,35 @@ describe('backgroundShell', () => {
         }
       }
     }
+  });
+
+  it('does not release await_command while an unrefed descendant can still write', {
+    skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
+  }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bg-shell-close-descendant-'));
+    const marker = join(dir, 'late-write');
+    const grandchildScript = join(dir, 'grandchild.js');
+    const parentScript = join(dir, 'parent.js');
+    writeFileSync(grandchildScript, `setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'late'),700);\n`);
+    writeFileSync(parentScript, [
+      "const cp=require('child_process');",
+      'const child=cp.spawn(process.execPath,[process.argv[2]],{stdio:"ignore"});',
+      'child.unref();',
+      'process.exit(0);',
+    ].join(''));
+    const job = startBackgroundShell({
+      command: `node ${parentScript} ${grandchildScript}`,
+      cwd: process.cwd(),
+      timeoutMs: 5_000,
+    });
+    const result = await awaitBackgroundShell(job.id, 5_000);
+    assert.equal(result.status, 'failed', 'remaining descendants are reported instead of a false successful completion');
+    assert.equal(result.exit_code, 1);
+    assert.match(result.stderr, /descendants remained .* terminated/i);
+    assert.equal(getBackgroundShellJob(job.id)?.processCompleted, true, 'process-tree cleanup is confirmed before the await settles');
+    await new Promise(resolve => setTimeout(resolve, 900));
+    const { existsSync } = await import('node:fs');
+    assert.equal(existsSync(marker), false, 'the child cannot perform delayed work after await_command returns');
   });
 
   it('killAllBackgroundShells kills non-detached jobs and preserves detached', async () => {

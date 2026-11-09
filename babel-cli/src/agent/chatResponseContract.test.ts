@@ -50,7 +50,19 @@ test('standalone product-choice questions do not require a stock deferral prefac
   ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
 })
 
-for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice'] as const)
+test('contextual unresolved choices defer while optional follow-up questions do not', () => {
+  assert.equal(requestsRequiredUserDecision(`I read the project before touching anything, and the repo's own contract blocks me from picking a direction for you.\n\nThe README says that choice is deliberately unmade.\n\nWhich direction do you want?\n1. Speed\n2. Typo tolerance\n3. Personalization\n4. Ranking quality`), true)
+  assert.equal(requestsRequiredUserDecision('I cannot proceed without a decision.\nShould invalid rows be skipped or fail the export?'), true)
+  assert.equal(requestsRequiredUserDecision('Please choose: invalid rows should be skipped or reject the whole export.'), true)
+  for (const answer of [
+    'Would you prefer I summarize the completed fix or show the diff?',
+    'Should I rerun the test or summarize the result?',
+    'If I need a decision on a future task, I will ask. Which direction should that task take?',
+    'The README lists speed or typo tolerance as possible directions, but says nothing about a current decision.',
+  ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
+})
+
+for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'contextual_choice'] as const)
 test(`response contract ${scenario} settles without speculative continuation`, async t => {
   const isChoice = scenario !== 'json_format'
   const root = mkdtempSync(join(tmpdir(), 'chat-response-contract-'))
@@ -89,6 +101,8 @@ test(`response contract ${scenario} settles without speculative continuation`, a
     ? 'Should invalid rows be skipped or fail the export?'
     : scenario === 'alternative_choice'
       ? 'Which date format should the export use?'
+      : scenario === 'contextual_choice'
+        ? "I cannot proceed without your decision.\nShould invalid rows be skipped or fail the export?"
       : "I'm not editing yet because the requested direction is unspecified. What I need from you:\n\n> Which direction should I implement?"
   class Runner extends DeepInfraApiRunner {
     turns = 0
