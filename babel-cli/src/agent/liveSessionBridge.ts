@@ -17,7 +17,7 @@ import {
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import {normalizeChatExecutionScope} from './chatExecutionScope.js';
-import {inferTaskAcceptanceV2} from './taskAcceptanceMeaning.js';
+import {inferTaskAcceptanceV3} from './taskAcceptanceMeaning.js';
 import {
   bindExecutableVerifiersToTaskAcceptance,
   mergeTrustedVerifierCommands,
@@ -333,7 +333,7 @@ export function resolveLiveSessionAuthority(input: {
   });
 
   const meaning = bindExecutableVerifiersToTaskAcceptance({
-    meaning: inferTaskAcceptanceV2(input.task),
+    meaning: inferTaskAcceptanceV3(input.task),
     trustedVerifierCommands: mergeTrustedVerifierCommands({
       requiredVerifierCommands: input.verifierRequirements ?? [],
       projectTestCommands: input.projectTestCommands ?? [],

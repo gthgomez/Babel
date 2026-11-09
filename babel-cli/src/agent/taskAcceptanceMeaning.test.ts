@@ -8,6 +8,7 @@ import {
   inferTaskAcceptance,
   inferTaskAcceptanceV1,
   inferTaskAcceptanceV2,
+  inferTaskAcceptanceV3,
   isLegacyAcceptancePlaceholderContract,
   requireAcceptanceMeaningVersion,
   resolveAcceptanceMeaningVersion,
@@ -53,7 +54,7 @@ test('initial acceptance captures explicit user criteria before publishing the f
   assert.ok(contract.acceptance.every(criterion => criterion.required))
   assert.equal(new Set(contract.acceptance.map(criterion => criterion.verification.verifier_id)).size, 2,
     'Different behavioral requirements cannot inherit one generic verification identity')
-  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v2:explicit:')))
+  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:explicit:')))
 })
 
 test('fenced, quoted and introduced example requirements cannot become acceptance authority', () => {
@@ -76,15 +77,15 @@ test('fenced, quoted and introduced example requirements cannot become acceptanc
 test('inferred requirements stay distinguishable from explicit acceptance', () => {
   const contract = acceptance('The startup must succeed without Docker.')
   assert.deepEqual(contract.acceptance_criteria, ['The startup must succeed without Docker.'])
-  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v2:inferred:')))
-  assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v2:explicit:')), false)
+  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:inferred:')))
+  assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:explicit:')), false)
 })
 
 test('fresh admission captures short vague prose as provisional inferred requirements', () => {
   const contract = acceptance('Fix it')
   assert.deepEqual(contract.acceptance_criteria, ['Fix it'])
-  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v2:inferred:')))
-  assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v2:unresolved:')), false)
+  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:inferred:')))
+  assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:unresolved:')), false)
   assert.equal(contract.acceptance[0]!.required, true)
 })
 
@@ -130,8 +131,8 @@ test('v2 precedence retains v1 projection when explicit criteria exist (S07 posi
   assert.equal(meaning.unresolved, false)
 })
 
-test('v2 preserves an explicit behavioral goal separately from a named green-test requirement', () => {
-  const meaning = inferTaskAcceptanceV2(GOAL_WITH_UNRELATED_GREEN_TEST)
+test('v3 preserves an explicit behavioral goal separately from a named green-test requirement', () => {
+  const meaning = inferTaskAcceptanceV3(GOAL_WITH_UNRELATED_GREEN_TEST)
   assert.deepEqual(meaning.criteria.map(item => item.description), [
     'Fix parser.js so parseSum(2, 3) returns 5.',
     '`npm test` must pass.',
@@ -143,16 +144,16 @@ test('v2 preserves an explicit behavioral goal separately from a named green-tes
     'binding to a trusted test command is performed by the admission binding stage')
 
   const changedBehavior = GOAL_WITH_UNRELATED_GREEN_TEST.replace('parseSum(2, 3) returns 5', 'parseSum(4, 1) returns 5')
-  const changed = inferTaskAcceptanceV2(changedBehavior)
+  const changed = inferTaskAcceptanceV3(changedBehavior)
   assert.equal(changed.criteria[0]!.description, 'Fix parser.js so parseSum(4, 1) returns 5.',
     'metamorphic request changes must change the preserved obligation')
   assert.notEqual(changed.criteria[0]!.id, meaning.criteria[0]!.id)
 
-  const oneLine = inferTaskAcceptanceV2('Fix parser.js so parseSum(2, 3) returns 5.')
+  const oneLine = inferTaskAcceptanceV3('Fix parser.js so parseSum(2, 3) returns 5.')
   assert.equal(oneLine.criteria.some(item => /parseSum\(2, 3\) returns 5/.test(item.description)), true,
     'the one-line control retains the same behavioral goal')
 
-  const quotedOnly = inferTaskAcceptanceV2([
+  const quotedOnly = inferTaskAcceptanceV3([
     'Check the documented example.',
     'Requirements:',
     '- `npm test` must pass.',
@@ -165,9 +166,9 @@ test('v2 preserves an explicit behavioral goal separately from a named green-tes
     'quoted or fenced examples do not become goal authority')
 })
 
-test('v2 uses exact CRLF source offsets for the preserved opening goal', () => {
+test('v3 uses exact CRLF source offsets for the preserved opening goal', () => {
   const request = 'Context first.\r\nFix parser.js so parseSum(2, 3) returns 5.\r\nRequirements:\r\n- `npm test` must pass.'
-  const meaning = inferTaskAcceptanceV2(request)
+  const meaning = inferTaskAcceptanceV3(request)
   const goal = meaning.criteria.find(item => item.description === 'Fix parser.js so parseSum(2, 3) returns 5.')
   assert.ok(goal)
   const source = meaning.sources.find(item => item.criterion_id === goal.id)
@@ -175,13 +176,47 @@ test('v2 uses exact CRLF source offsets for the preserved opening goal', () => {
   assert.equal(request.slice(source.start, source.end), goal.description)
 })
 
-test('v2 marks a max-cap goal admission unresolved instead of exceeding the criterion limit', () => {
+test('v3 does not promote behavioral-looking text from exclusions, examples, or fenced content', () => {
+  const goal = 'Fix parser.js so parseSum(2, 3) returns 5.'
+  const cases = [
+    `Non-goals:\n${goal}\nRequirements:\n- \`npm test\` must pass.`,
+    `Non-goals: unrelated changes\n${goal}\nRequirements:\n- \`npm test\` must pass.`,
+    `Sample:\n${goal}\nRequirements:\n- \`npm test\` must pass.`,
+    `Logs:\n${goal}\nRequirements:\n- \`npm test\` must pass.`,
+    `**Examples:**\n${goal}\nRequirements:\n- \`npm test\` must pass.`,
+    `\`\`\`\`text\n\`\`\`\n${goal}\n\`\`\`\`\nRequirements:\n- \`npm test\` must pass.`,
+  ]
+  for (const request of cases) {
+    const meaning = inferTaskAcceptanceV3(request)
+    assert.equal(meaning.criteria.some(item => item.description === goal), false, request)
+  }
+})
+
+test('v2 replay semantics remain frozen while v3 applies behavioral-goal boundaries', () => {
+  const request = [
+    'Also preserve current behavior.',
+    'Sample:',
+    'Fix parser.js so parseSum(2, 3) returns 5.',
+    'Requirements:',
+    '- npm test must pass.',
+  ].join('\n')
+  const archived = inferTaskAcceptanceV2(request)
+  const fresh = inferTaskAcceptanceV3(request)
+  assert.equal(archived.interpretation_version, 2)
+  assert.equal(archived.criteria.some(item => item.description.includes('parseSum(2, 3)')), false)
+  assert.ok(archived.provenance.every(record => record.ref.startsWith('task-acceptance-meaning:v2:')))
+  assert.equal(fresh.interpretation_version, 3)
+  assert.equal(fresh.criteria.some(item => item.description.includes('parseSum(2, 3)')), false)
+  assert.ok(fresh.provenance.every(record => record.ref.startsWith('task-acceptance-meaning:v3:')))
+})
+
+test('v3 marks a max-cap goal admission unresolved instead of exceeding the criterion limit', () => {
   const request = [
     'Fix parser.js so parseSum(2, 3) returns 5.',
     'Requirements:',
     ...Array.from({ length: 128 }, (_, index) => `- Requirement ${index} must hold.`),
   ].join('\n')
-  const meaning = inferTaskAcceptanceV2(request)
+  const meaning = inferTaskAcceptanceV3(request)
   assert.equal(meaning.criteria.length, 128)
   assert.equal(meaning.unresolved, true)
   assert.equal(meaning.structurallyComplete, false)
@@ -191,6 +226,24 @@ test('v2 marks a max-cap goal admission unresolved instead of exceeding the crit
   assert.match(combined.description, /Requirement 127 must hold\./)
   assert.match(combined.verification.verifier_id, /^meaning:/,
     'the combined obligation remains unbound to the command-only requirement')
+})
+
+test('v3 keeps the criterion character cap when the max-cap fallback would overflow', () => {
+  const request = [
+    'Fix parser.js so parseSum(2, 3) returns 5.',
+    'Requirements:',
+    ...Array.from({ length: 127 }, (_, index) => `- Requirement ${index} must hold.`),
+    `- ${'x'.repeat(4090)}`,
+  ].join('\n')
+  const meaning = inferTaskAcceptanceV3(request)
+  assert.equal(meaning.criteria.length, 128)
+  assert.equal(meaning.unresolved, true)
+  assert.equal(meaning.structurallyComplete, false)
+  const last = meaning.criteria.at(-1)!
+  assert.ok(last.description.includes('opening behavioral objective'))
+  assert.ok(last.description.includes('remain unresolved'))
+  assert.ok(last.description.length <= 4096)
+  assert.match(last.verification.verifier_id, /^meaning:/)
 })
 
 test('v2 precedence retains v1 projection for objective checkpoint (Preserve API only)', () => {
@@ -344,13 +397,18 @@ test('v1 replay keeps unresolved placeholder for short vague prose', () => {
   assert.notEqual(meaning.criteria[0]!.description, 'Fix it')
 })
 
-test('mixed v1 and v2 meaning provenance rejects instead of picking a version', () => {
+test('mixed v1/v2/v3 meaning provenance rejects instead of picking a version', () => {
   const contract = acceptance('Fix it')
   const records = [
     ...contract.provenance.records,
     { kind: 'derived_acceptance' as const, ref: 'task-acceptance-meaning:v1:unresolved:0:0:0:acceptance:deadbeef' },
   ]
   assert.throws(() => resolveAcceptanceMeaningVersion(records, contract), /TASK_ACCEPTANCE_MEANING_VERSION_MIXED/)
+  const mixedV2V3 = [
+    ...contract.provenance.records,
+    { kind: 'derived_acceptance' as const, ref: 'task-acceptance-meaning:v2:inferred:0:0:0:acceptance:deadbeef' },
+  ]
+  assert.throws(() => resolveAcceptanceMeaningVersion(mixedV2V3, contract), /TASK_ACCEPTANCE_MEANING_VERSION_MIXED/)
 })
 
 test('unknown acceptance-meaning provenance rejects absent-ref contracts that are not legacy placeholder', () => {
@@ -383,10 +441,10 @@ test('legacy absent-ref provenance resolves to v1 only for the historical placeh
   assert.deepEqual(resolveAcceptanceMeaningVersion(contract.provenance.records, contract), { kind: 'legacy_absent_ref', version: 1 })
 })
 
-test('v2 replay amendment path uses recorded v2 version from provenance', () => {
+test('v3 replay amendment path uses recorded v3 version from provenance', () => {
   const contract = acceptance(J03_PROMPT)
-  assert.equal(requireAcceptanceMeaningVersion(contract.provenance.records, contract), 2)
-  const replay = inferTaskAcceptanceV2(J03_PROMPT)
+  assert.equal(requireAcceptanceMeaningVersion(contract.provenance.records, contract), 3)
+  const replay = inferTaskAcceptanceV3(J03_PROMPT)
   assert.deepEqual(
     contract.acceptance_criteria,
     replay.criteria.map(item => item.description),
@@ -404,12 +462,12 @@ test('v2 compatibility: frozen harness J03 J08 J13 admit ordinary prose unproven
   }
 })
 
-test('v2 fresh admission matches direct v2 interpretation for journey prompts', () => {
+test('v3 fresh admission matches direct v3 interpretation for journey prompts', () => {
   for (const task of [J03_PROMPT, J08_PROMPT, J13_PROMPT]) {
     const contract = acceptance(task)
-    const meaning = inferTaskAcceptanceV2(task)
+    const meaning = inferTaskAcceptanceV3(task)
     assert.deepEqual(contract.acceptance_criteria, meaning.criteria.map(item => item.description))
-    assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v2:')), true)
+    assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:')), true)
   }
 })
 

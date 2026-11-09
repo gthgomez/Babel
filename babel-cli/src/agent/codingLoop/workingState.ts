@@ -418,7 +418,7 @@ function acceptanceSourceStatus(contract: TaskContractV1, criterionId: string): 
   const suffix = `:${criterionId}`
   const statuses = new Set(contract.provenance.records.flatMap(record => {
     if (record.kind !== 'derived_acceptance' || !record.ref.endsWith(suffix)) return []
-    const match = record.ref.match(/^task-acceptance-meaning:v[12]:(explicit|inferred|unresolved):/)
+    const match = record.ref.match(/^task-acceptance-meaning:v[123]:(explicit|inferred|unresolved):/)
     return match ? [match[1] as 'explicit' | 'inferred' | 'unresolved'] : []
   }))
   if (statuses.size === 1) return [...statuses][0]!
