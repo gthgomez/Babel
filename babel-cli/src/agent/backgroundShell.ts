@@ -406,9 +406,18 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
         job.error = 'Background descendants remained after the direct child exited and were terminated';
       }
       if (!descendantsSettled) {
-        job.status = 'failed';
-        job.exitCode = 1;
-        job.error = 'Background process-tree termination could not be confirmed';
+        // Keep an already recorded timeout/cancellation cause. `killed` says
+        // the owned command was cancelled; processCompleted and the owner
+        // fence separately remain false until tree settlement is confirmed.
+        // A natural close with unknown descendants is still a failed result.
+        if (job.status === 'running') {
+          job.status = 'failed';
+          job.exitCode = 1;
+        }
+        const settlementError = 'Background process-tree termination could not be confirmed';
+        if (!job.error?.includes(settlementError)) {
+          job.error = job.error ? `${job.error}; ${settlementError}` : settlementError;
+        }
       }
       if (!processExitRecorded) {
         processExitRecorded = true;

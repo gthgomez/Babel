@@ -109,7 +109,8 @@
         ],
         "src/agent/backgroundShell.test.ts": [
           "retains owner uncertainty when the Windows tree-kill helper fails",
-          "does not certify Windows parent close as process-tree settlement"
+          "does not certify Windows parent close as process-tree settlement",
+          "preserves a recorded Windows cancellation while settlement remains unknown"
         ],
         "src/agent/chatBackgroundShellPolicy.test.ts": [
           "Windows declines background execution when process-tree settlement cannot be observed"

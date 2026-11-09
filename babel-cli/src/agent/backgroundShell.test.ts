@@ -366,6 +366,31 @@ describe('backgroundShell', () => {
     }
   });
 
+  it('preserves a recorded Windows cancellation while settlement remains unknown', {
+    skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false,
+  }, async () => {
+    const ownerId = 'windows-cancel-unsettled-test';
+    const job = startBackgroundShell({
+      command: 'node -e "console.log(process.pid);setInterval(()=>{},1000)"',
+      cwd: process.cwd(),
+      ownerId,
+      timeoutMs: 30_000,
+    });
+    try {
+      await waitForStdoutPid(job.id);
+      assert.equal(killBackgroundShell(job.id).status, 'killed');
+      const result = await awaitBackgroundShell(job.id, 5_000);
+      assert.equal(result.status, 'killed', 'the recorded cancellation cause remains visible');
+      assert.match(result.stderr, /process-tree termination could not be confirmed/i);
+      assert.equal(getBackgroundShellJob(job.id)?.processCompleted, false,
+        'a killed status does not certify process-tree settlement');
+      assert.equal(hasUnsettledBackgroundShells(ownerId), true,
+        'the owner fence remains closed while settlement is unknown');
+    } finally {
+      clearBackgroundShellRegistry(ownerId);
+    }
+  });
+
   it('killAllBackgroundShells kills non-detached jobs and preserves detached', async () => {
     const sleeper =
       process.platform === 'win32' ? 'ping -n 10 127.0.0.1' : 'sleep 8';
