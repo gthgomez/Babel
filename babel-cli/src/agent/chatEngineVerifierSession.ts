@@ -6,7 +6,7 @@ import { mandatoryVerifierProse } from '../config/verifierIntent.js';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path, { join } from 'node:path';
-import { computeVerifierDependencyHashes, hashVerifierTrackedContent, verifierAbsolutePathsEqual } from './verifierIntegrity.js';
+import { computeVerifierDependencyHashes, hashVerifierTrackedContent, unfrozenNodeTestVerifierCommands, verifierAbsolutePathsEqual } from './verifierIntegrity.js';
 import type { StallState } from './stallDetector.js';
 
 /** R3b: Extract a verifier command pattern from the task string. */
@@ -44,15 +44,16 @@ export function initializeVerifierDependencyHashes(
   projectRoot: string,
   hashes: Map<string, string>,
   additionalVerifierCommands: readonly string[] = [],
-): void {
+): string[] {
   const commands = [...new Set([
     ...(task ? [extractVerifierCommand(task)].filter((value): value is string => Boolean(value)) : []),
     ...additionalVerifierCommands,
   ])];
-  if (commands.length === 0) return;
+  if (commands.length === 0) return [];
   for (const [file, hash] of Object.entries(computeVerifierDependencyHashes(projectRoot, commands))) {
     hashes.set(file, hash);
   }
+  return unfrozenNodeTestVerifierCommands(projectRoot, commands);
 }
 
 export interface VerifierTamperState {

@@ -83,7 +83,17 @@ export function extractRequiredVerifierCommandsFromTask(task: string): string[] 
   task = mandatoryVerifierProse(task);
   const commands: string[] = [];
   let inAcceptanceSection = false;
+  let activeFence: { marker: '`' | '~'; length: number } | null = null;
   for (const rawLine of task.split(/\r?\n/)) {
+    const fence = /^\s*(`{3,}|~{3,})/.exec(rawLine)?.[1];
+    if (activeFence) {
+      if (fence && fence[0] === activeFence.marker && fence.length >= activeFence.length) activeFence = null;
+      continue;
+    }
+    if (fence) {
+      activeFence = { marker: fence[0] as '`' | '~', length: fence.length };
+      continue;
+    }
     let line = rawLine;
     const heading = rawLine.match(/^\s*(?:#{1,6}\s*)?([A-Za-z][\w -]*?)\s*:\s*(.*)$/);
     if (heading) {

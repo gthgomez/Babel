@@ -688,6 +688,7 @@ export class ChatEngine {
    *  Keyed by relative file path (e.g. "package.json", "verify.mjs"). */
   private verifierDependencyHashes: Map<string, string> = new Map();
   private verifierTampered = false;
+  private verifierInputsUnfrozen = false;
   private tamperCount = 0;
   private tamperedThisTurn = false;
   private todos: Map<string, { content: string; status: string }> = new Map();
@@ -1132,7 +1133,12 @@ export class ChatEngine {
         ...(verifierInput.unplannedAttemptEnvironmentFingerprint ? {unplannedAttemptEnvironmentFingerprint:verifierInput.unplannedAttemptEnvironmentFingerprint} : {}),
         ...(verifierInput.verifierOwner ? { verifierOwner: verifierInput.verifierOwner } : {}),
         ...(verifierInput.currentWorkspaceRevisionHash ? { currentWorkspaceRevisionHash: verifierInput.currentWorkspaceRevisionHash } : {}),
-        ...(this.verifierTampered ? { adversarial: { verifier_def_tampered: true } } : {}),
+        ...(this.verifierTampered || this.verifierInputsUnfrozen
+          ? { adversarial: {
+              ...(this.verifierTampered ? { verifier_def_tampered: true } : {}),
+              ...(this.verifierInputsUnfrozen ? { verifier_inputs_unfrozen: true } : {}),
+            } }
+          : {}),
         projectTestCommands,
 
       });
@@ -2955,6 +2961,9 @@ export class ChatEngine {
     const previousClass = this.taskClass;
     this.options = { ...this.options, task: runtime.taskText,...(accepted?.compiledChatStack?{compiledChatStack:accepted.compiledChatStack}:{}) };
     this.taskClass = runtime.taskClass;
+    if (previousTask !== runtime.taskText || accepted?.acceptanceChanged) {
+      this.initializeVerifierGuard();
+    }
     if (previousTask !== runtime.taskText || previousClass !== runtime.taskClass
       || this.lastTurnRuntime?.effectiveOperation !== runtime.effectiveOperation) {
       this.clearSystemPromptCache();
@@ -4358,7 +4367,7 @@ export class ChatEngine {
   }
 
   private initializeVerifierGuard(): void {
-    initializeVerifierDependencyHashes(
+    this.verifierInputsUnfrozen = initializeVerifierDependencyHashes(
       this.options.task,
       requireProjectRoot(this.options),
       this.verifierDependencyHashes,
@@ -4366,7 +4375,7 @@ export class ChatEngine {
         ...this.getResolvedRequiredVerifiers(),
         ...explicitCriterionVerifierCommands(inferTaskAcceptanceV3(this.options.task)),
       ],
-    );
+    ).length > 0;
   }
 
   private checkVerifierTamper(filePath: string): string | null {

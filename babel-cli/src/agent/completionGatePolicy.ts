@@ -1659,6 +1659,7 @@ export function evaluateCompletionGateForEngine(opts: {
     flaky_green?: boolean;
     baseline_failing?: boolean;
     verifier_def_tampered?: boolean;
+    verifier_inputs_unfrozen?: boolean;
   };
 }): 'allow' | 'reject' {
   if (opts.taskIntent !== 'execute') return 'allow';
@@ -1788,8 +1789,8 @@ export function evaluateCompletionGateForEngine(opts: {
       return entry;
     });
     const derivedAdversarial = deriveAdversarialSignals({ toolCallLog: log, receipts: adversarialReceipts, hasWrite });
-    const adversarial = { ...derivedAdversarial };
-    for (const key of ['tests_deleted', 'shortcut_noop', 'hardcoded_fixture', 'flaky_green', 'baseline_failing', 'verifier_def_tampered'] as const) {
+    const adversarial: NonNullable<Parameters<typeof evaluateVerifierPromotion>[0]['adversarial']> = { ...derivedAdversarial };
+    for (const key of ['tests_deleted', 'shortcut_noop', 'hardcoded_fixture', 'flaky_green', 'baseline_failing', 'verifier_def_tampered', 'verifier_inputs_unfrozen'] as const) {
       if (opts.adversarial?.[key] === true) adversarial[key] = true;
     }
     const promo = evaluateVerifierPromotion({

@@ -222,10 +222,35 @@ export function explicitCriterionVerifierCommands(meaning: TaskAcceptanceMeaning
 
 function normalizedCriterionText(value: string): string {
   // This key decides whether a verifier explicitly designated for one
-  // behavioral statement may also prove an inferred opening goal. Preserve
-  // case: code identifiers and string literals are case-sensitive, so
-  // case-folding can bind a lowercase-only test to a distinct uppercase goal.
-  return value.trim().replace(/[.!?]+$/, '').replace(/\s+/g, ' ')
+  // behavioral statement may also prove an inferred opening goal. Normalize
+  // prose whitespace, but preserve quoted literals byte-for-byte: spaces
+  // inside strings are observable just like case-sensitive identifiers.
+  let output = ''
+  let quote = ''
+  let escaped = false
+  let pendingSpace = false
+  for (const char of value.trim().replace(/[.!?]+$/, '')) {
+    if (quote) {
+      output += char
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === quote) quote = ''
+      continue
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      if (pendingSpace && output) output += ' '
+      pendingSpace = false
+      quote = char
+      output += char
+    } else if (/\s/.test(char)) {
+      pendingSpace = true
+    } else {
+      if (pendingSpace && output) output += ' '
+      pendingSpace = false
+      output += char
+    }
+  }
+  return output.trim()
 }
 
 function trustedDesignation(

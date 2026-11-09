@@ -169,3 +169,30 @@ export function computeVerifierDependencyHashes(
 
   return hashes;
 }
+
+/**
+ * Find direct Node test commands whose verifier input set cannot be frozen at
+ * admission. These commands may still be useful to run, but cannot be accepted
+ * as proof because discovery/glob/unsupported operands can change what executes.
+ */
+export function unfrozenNodeTestVerifierCommands(
+  projectRoot: string,
+  allowedVerifierCommands: readonly string[],
+): string[] {
+  const unfrozen: string[] = [];
+  for (const command of new Set(allowedVerifierCommands)) {
+    const operands = explicitNodeTestFileArgs(command);
+    if (operands === null) continue;
+    if (operands.length === 0) {
+      unfrozen.push(command);
+      continue;
+    }
+    const resolved = new Set(
+      resolveExistingVerifierInputPaths(projectRoot, operands).map(normalizeIntegrityPath),
+    );
+    if (operands.some(operand => !resolved.has(normalizeIntegrityPath(operand)))) {
+      unfrozen.push(command);
+    }
+  }
+  return unfrozen;
+}

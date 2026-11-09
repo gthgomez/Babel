@@ -61,6 +61,18 @@ test('extractRequiredVerifierCommandsFromTask parses run-before-completing wordi
   assert.deepEqual(commands, ['npm test']);
 });
 
+test('verifier commands shown inside a fenced example are not task requirements', () => {
+  const task = [
+    'Fix parser behavior.',
+    'Requirements:',
+    '```text',
+    '- node --test test/example.test.cjs must pass.',
+    '```',
+    '- node --test test/required.test.cjs must pass.',
+  ].join('\n');
+  assert.deepEqual(extractRequiredVerifierCommandsFromTask(task), ['node --test test/required.test.cjs']);
+});
+
 test('injectVerificationStepsIntoPlan inserts verifier steps before file writes', () => {
   const result = injectVerificationStepsIntoPlan(
     basePlan(),

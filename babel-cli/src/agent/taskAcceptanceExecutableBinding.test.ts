@@ -168,6 +168,25 @@ test('a verifier named in a separate requirement cannot bind the behavioral goal
   assert.deepEqual(genericTest!.verification.argv, ['test'])
 })
 
+test('verifier binding preserves exact whitespace inside string literals', () => {
+  const task = [
+    "Fix parser.js so echo('A  B') returns 'A  B'.",
+    'Requirements:',
+    "- Fix parser.js so echo('A B') returns 'A B'; verified by: `node --test test/parser.test.mjs` must pass.",
+  ].join('\n')
+  const meaning = inferTaskAcceptanceV3(task)
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning,
+    trustedVerifierCommands: ['node --test test/parser.test.mjs'],
+    defaultWorkingDirectory: '.',
+  })
+  const exactLiteralGoal = bound.criteria.find(item => item.description.includes("echo('A  B')"))
+  const singleSpaceRequirement = bound.criteria.find(item => item.description.includes("echo('A B')"))
+  assert.ok(exactLiteralGoal && singleSpaceRequirement)
+  assert.ok(exactLiteralGoal.verification.verifier_id.startsWith('meaning:'), 'single-space verifier cannot certify a two-space literal')
+  assert.equal(singleSpaceRequirement.verification.verifier_id, 'verifier:node')
+})
+
 test('criterion verifier-link syntax does not change archived v2 meaning', () => {
   const task = [
     'Requirements:',
