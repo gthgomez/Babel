@@ -159,6 +159,34 @@ let dockerAvailableCache: { available: boolean; checked: boolean } = {
 };
 
 let dockerUnavailableReason = '';
+export type DockerDaemonMode = 'rootful' | 'rootless' | 'unknown';
+let dockerDaemonModeCache: DockerDaemonMode | null = null;
+export type DockerImageRuntimeUser = 'root' | 'nonroot' | 'unknown';
+let dockerImageRuntimeUserCache = new Map<string, DockerImageRuntimeUser>();
+let dockerImageRuntimeUserTestOverride: DockerImageRuntimeUser | null = null;
+
+export function classifyDockerImageRuntimeUser(user: string | null | undefined): DockerImageRuntimeUser {
+  const normalized = user?.trim().toLowerCase() ?? '';
+  // An omitted image USER proves UID 0 only by convention; Docker may resolve
+  // the default account's primary GID from the image. Mode-sharing checks
+  // below assume both UID and GID 0, so omission is not enough evidence.
+  if (!normalized) return 'unknown';
+  if (/^0:0$/.test(normalized)) return 'root';
+  if (normalized === '0' || normalized.startsWith('0:')) return 'unknown';
+  if (/^[0-9]+(?::[0-9]+)?$/.test(normalized) || /^[a-z_][a-z0-9_-]*(?::[a-z_][a-z0-9_-]*)?$/i.test(normalized)) return 'nonroot';
+  return 'unknown';
+}
+
+export function classifyDockerDaemonSecurityOptions(options: unknown): DockerDaemonMode {
+  if (
+    !Array.isArray(options) ||
+    options.length === 0 ||
+    options.some((entry) => typeof entry !== 'string')
+  ) return 'unknown';
+  const values = options as string[];
+  if (values.some((entry) => /(?:^|[,=])userns(?:$|[,=])/i.test(entry))) return 'unknown';
+  return values.some((entry) => /(?:^|[,=])rootless(?:$|[,=])/i.test(entry)) ? 'rootless' : 'rootful';
+}
 
 function checkWindowsDockerDesktop(): boolean {
   const programFiles = process.env['ProgramFiles'] ?? 'C:\\Program Files';
@@ -213,10 +241,71 @@ export function getDockerUnavailableReason(): string {
   return dockerUnavailableReason;
 }
 
+/** Determine whether container root maps to host root; unknown fails closed. */
+export function getDockerDaemonMode(): DockerDaemonMode {
+  if (dockerDaemonModeCache) return dockerDaemonModeCache;
+  if (!isDockerAvailable()) {
+    dockerDaemonModeCache = 'unknown';
+    return dockerDaemonModeCache;
+  }
+  try {
+    const result = spawnSync('docker', ['info', '--format', '{{json .SecurityOptions}}'], {
+      timeout: 5000,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (result.status !== 0 || !result.stdout?.trim()) {
+      dockerDaemonModeCache = 'unknown';
+      return dockerDaemonModeCache;
+    }
+    const options: unknown = JSON.parse(result.stdout.trim());
+    dockerDaemonModeCache = classifyDockerDaemonSecurityOptions(options);
+    return dockerDaemonModeCache;
+  } catch {
+    dockerDaemonModeCache = 'unknown';
+    return dockerDaemonModeCache;
+  }
+}
+
+/** Inspect only local image metadata; never pulls or executes the image. */
+export function getDockerImageRuntimeUser(image: string): DockerImageRuntimeUser {
+  if (dockerImageRuntimeUserTestOverride) return dockerImageRuntimeUserTestOverride;
+  const normalizedImage = image.trim();
+  if (!normalizedImage) return 'unknown';
+  const cached = dockerImageRuntimeUserCache.get(normalizedImage);
+  if (cached) return cached;
+  let runtimeUser: DockerImageRuntimeUser = 'unknown';
+  try {
+    const result = spawnSync('docker', ['image', 'inspect', '--format', '{{.Config.User}}', normalizedImage], {
+      timeout: 5000,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (result.status === 0) runtimeUser = classifyDockerImageRuntimeUser(result.stdout);
+  } catch {
+    runtimeUser = 'unknown';
+  }
+  dockerImageRuntimeUserCache.set(normalizedImage, runtimeUser);
+  return runtimeUser;
+}
+
+/** Test-only image-user override. Null restores image inspection. */
+export function setDockerImageRuntimeUserForTest(user: DockerImageRuntimeUser | null): void {
+  dockerImageRuntimeUserTestOverride = user;
+}
+
+/** Test-only daemon-mode override. Null restores real detection. */
+export function setDockerDaemonModeForTest(mode: DockerDaemonMode | null): void {
+  dockerDaemonModeCache = mode;
+}
+
 /** Reset Docker availability cache (for tests). */
 export function resetDockerAvailabilityCache(): void {
   dockerAvailableCache = { available: false, checked: false };
   dockerUnavailableReason = '';
+  dockerDaemonModeCache = null;
+  dockerImageRuntimeUserCache = new Map();
+  dockerImageRuntimeUserTestOverride = null;
 }
 
 /** Force Docker availability for tests that need it (Phase 4 test fix). */

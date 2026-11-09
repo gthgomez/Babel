@@ -165,6 +165,8 @@ Default profile is **`safe_repo`**. After H13, profiles with `dockerSandbox: tru
 | **`BABEL_ALLOW_HOST_FALLBACK=1`** | Preferred explicit host escalation when keeping an isolation profile. |
 | **`BABEL_DOCKER_DISABLE=true`** | Legacy isolation opt-out; also treated as host escalation under H13. |
 
+On Linux, a confirmed rootful Docker daemon and immutable image digest configured with a numeric UID/GID 0 runtime identity may make a newly created conventional test source file (`*.test.*` or `*.spec.*`) mode `0644` so the capability-dropped container can run it under a restrictive umask. This applies only when every existing parent directory is traversable but not writable by container root. Rootless or unknown daemon/image identity, user-namespace configuration, mutable image tags, other platforms, explicit `--user`, host execution, writable/missing parent paths, and shadow writes keep the restrictive mode. Existing files, non-test files, sensitive-named test files, and directory modes are unchanged. Because `0644` is world-readable, do not put secrets in generated test source.
+
 Select a profile:
 
 ```powershell

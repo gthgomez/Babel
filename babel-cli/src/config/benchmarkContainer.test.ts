@@ -5,6 +5,8 @@ import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 
 import {
+  classifyDockerImageRuntimeUser,
+  classifyDockerDaemonSecurityOptions,
   BENCHMARK_RUNTIME_INVENTORY_COMMANDS,
   inspectBenchmarkContainerRuntime,
   buildBenchmarkContainerCommand,
@@ -21,6 +23,46 @@ import {
   shouldUseDockerSandbox,
   getDockerUnavailableReason,
 } from './benchmarkContainer.js';
+
+test('Docker daemon mode classification fails closed when security options are incomplete', () => {
+  assert.equal(
+    classifyDockerDaemonSecurityOptions(['name=seccomp,profile=builtin', 'name=cgroupns']),
+    'rootful',
+  );
+  assert.equal(classifyDockerDaemonSecurityOptions(['name=seccomp', 'name=rootless']), 'rootless');
+  assert.equal(classifyDockerDaemonSecurityOptions(['name=seccomp', 'name=userns']), 'unknown');
+  assert.equal(classifyDockerDaemonSecurityOptions([]), 'unknown');
+  assert.equal(classifyDockerDaemonSecurityOptions(['unexpected', null]), 'unknown');
+});
+
+test('Docker image runtime user classification fails closed for non-root and ambiguous users', () => {
+  assert.equal(classifyDockerImageRuntimeUser(''), 'unknown');
+  assert.equal(classifyDockerImageRuntimeUser(undefined), 'unknown');
+  assert.equal(classifyDockerImageRuntimeUser('0:0'), 'root');
+  assert.equal(classifyDockerImageRuntimeUser('0'), 'unknown');
+  assert.equal(classifyDockerImageRuntimeUser('0:1000'), 'unknown');
+  assert.equal(classifyDockerImageRuntimeUser('0:app'), 'unknown');
+  assert.equal(classifyDockerImageRuntimeUser('root'), 'nonroot');
+  assert.equal(classifyDockerImageRuntimeUser('root:0'), 'unknown');
+  assert.equal(classifyDockerImageRuntimeUser('node'), 'nonroot');
+  assert.equal(classifyDockerImageRuntimeUser('1000:1000'), 'nonroot');
+  assert.equal(classifyDockerImageRuntimeUser('root:group:extra'), 'unknown');
+});
+
+test('an omitted Docker image USER does not prove the default account primary GID', () => {
+  // Docker starts UID 0, but the image's root passwd entry can select GID
+  // 1000. The directory access predicate assumes GID 0, so omission is unknown.
+  assert.equal(classifyDockerImageRuntimeUser(''), 'unknown');
+});
+
+test('Docker mode-sharing eligibility requires UID 0 with the proven primary GID 0', () => {
+  // rootfulContainerHasStableReadPath evaluates directories as UID/GID 0.
+  // An image configured as USER 0:1000 cannot be assumed to have that group:
+  // it would not traverse a 0750 directory owned by UID 1000, GID 0.
+  assert.equal(classifyDockerImageRuntimeUser('0:0'), 'root');
+  assert.equal(classifyDockerImageRuntimeUser('0:1000'), 'unknown');
+  assert.equal(classifyDockerImageRuntimeUser('0:app'), 'unknown');
+});
 
 test('default runtime inventory accepts its own C++ command and probes Docker', (t) => {
   let calls = 0;

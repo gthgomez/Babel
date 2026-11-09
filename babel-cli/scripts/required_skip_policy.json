@@ -357,6 +357,18 @@
       }
     },
     {
+      "id": "posix-sandbox-generated-test-mode",
+      "platforms": ["win32"],
+      "reasons": ["POSIX mode and umask semantics are not available on Windows"],
+      "rationale": "The generated-test permission test asserts POSIX umask and mode bits; Windows uses ACL semantics and does not exercise the Linux-only rootful-container read-mode allowance.",
+      "suites": ["unit"],
+      "files": {
+        "src/sandbox.test.ts": [
+          "only new test source is shared with the capability-dropped sandbox under restrictive umask"
+        ]
+      }
+    },
+    {
       "id": "posix-durability",
       "platforms": [
         "win32"
