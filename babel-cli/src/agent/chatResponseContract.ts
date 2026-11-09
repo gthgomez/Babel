@@ -30,7 +30,7 @@ export function requestsRequiredUserDecision(answer: string): boolean {
   const question = prose.trim().replace(/^>\s*/, '').replace(/^\*\*([\s\S]*)\*\*$/, '$1')
   const asksChoice = /\b(?:or|versus)\b/i.test(question)
     || /^(?:which|what)\b[^?\n]*\b(?:should|must)\b/i.test(question)
-  const optionalFollowUp = /^(?:would you prefer|would you like) I (?:summari[sz]e|show|explain|describe|list|walk you through)\b/i.test(question)
+  const optionalFollowUp = /^would you prefer I (?:summari[sz]e|show|explain|describe|list|walk you through)\b[^?\n]{0,120}\bor\s+(?:I\s+)?(?:summari[sz]e|show|explain|describe|list|walk you through)\b[^?\n]{0,120}\?$/i.test(question)
     || /^should I (?:rerun (?:the )?(?:test|tests|check|checks) or (?:summari[sz]e|show|explain|describe|list) (?:the )?(?:result|results|output|diff|changes)|(?:summari[sz]e|show|explain|describe|list) (?:the )?(?:result|results|output|diff|changes) or rerun (?:the )?(?:test|tests|check|checks))\?$/i.test(question)
   if (asksChoice && !optionalFollowUp && /^(?:which|what|should|do you want|would you prefer)\b[^?\n]{1,300}\?$/i.test(question)) return true
   const explicitChoiceRequest = /^(?:please\s+(?:choose|pick|decide|select)|choose|pick|select)\s*:?[^.!?\n]{1,200}\b(?:or|\/)\b[^.!?\n]*[.!?]?$/i.test(question)
