@@ -1568,13 +1568,13 @@ export class SafeExecutor {
       );
       const dockerImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? '';
       const immutableDockerImage = /^sha256:[a-f0-9]{64}$/i.test(dockerImage) || /@sha256:[a-f0-9]{64}$/i.test(dockerImage);
-      const runtimeIdentity = immutableDockerImage ? getDockerImageRuntimeIdentity(dockerImage) : null;
-      const sandboxReadableTest = process.platform === 'linux' && !this.shadowRoot && targetPath === safePath &&
+      const sandboxReadableTestEligible = process.platform === 'linux' && !this.shadowRoot && targetPath === safePath &&
         shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']) && getDockerDaemonMode() === 'rootful' &&
-        immutableDockerImage && runtimeIdentity?.uid === 0 &&
-        rootfulContainerHasStableReadPath(this.projectRoot, targetPath, runtimeIdentity) &&
-        !explicitContainerIdentity &&
+        immutableDockerImage && dockerExtraArgs.ok && !explicitContainerIdentity &&
         isSandboxReadableTestPath(relative(this.projectRoot, safePath));
+      const runtimeIdentity = sandboxReadableTestEligible ? getDockerImageRuntimeIdentity(dockerImage) : null;
+      const sandboxReadableTest = sandboxReadableTestEligible && runtimeIdentity?.uid === 0 &&
+        rootfulContainerHasStableReadPath(this.projectRoot, targetPath, runtimeIdentity);
       this.writeUtf8FileSafely(inputPath, targetPath, content, targetPath === safePath, {
         ...(options?.createOnly ? { createOnly: true as const } : {}),
         ...(sandboxReadableTest ? { sandboxReadableTest: true as const } : {}),

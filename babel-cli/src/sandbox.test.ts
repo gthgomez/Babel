@@ -273,6 +273,50 @@ test('only new test source is shared with the capability-dropped sandbox under r
   }
 });
 
+test('non-Docker execution does not launch an image identity probe while writing a test', (t) => {
+  const fixture = makeFixture();
+  const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
+  const previousImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+  const previousExtraArgs = process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'];
+  const previousDockerDisabled = process.env['BABEL_DOCKER_DISABLE'];
+  process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+  process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = `sha256:${'a'.repeat(64)}`;
+  delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'];
+  delete process.env['BABEL_DOCKER_DISABLE'];
+  resetDockerAvailabilityCache();
+  setDockerAvailableForTest(true);
+  setDockerImageRuntimeIdentityForTest(undefined);
+  let dockerCalls = 0;
+  t.mock.method(childProcess, 'spawnSync', (command: string) => {
+    if (command === 'docker') dockerCalls += 1;
+    return { pid: 1, output: ['', '', ''], stdout: '', stderr: '', status: 0, signal: null };
+  });
+  syncBuiltinESMExports();
+  try {
+    mkdirSync(join(fixture.projectRoot, 'test'));
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/no-probe.test.js', 'test\n').exit_code, 0);
+    assert.equal(dockerCalls, 0, 'host execution never starts a Docker identity probe');
+    process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo';
+    process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] = '--privileged';
+    setDockerDaemonModeForTest('rootful');
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/invalid-isolation.test.js', 'test\n').exit_code, 0);
+    assert.equal(dockerCalls, 0, 'invalid Docker isolation arguments never start an identity probe');
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
+    else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
+    if (previousImage === undefined) delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+    else process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = previousImage;
+    if (previousExtraArgs === undefined) delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'];
+    else process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] = previousExtraArgs;
+    if (previousDockerDisabled === undefined) delete process.env['BABEL_DOCKER_DISABLE'];
+    else process.env['BABEL_DOCKER_DISABLE'] = previousDockerDisabled;
+    resetDockerAvailabilityCache();
+    fixture.cleanup();
+  }
+});
+
 test('create-only file writes refuse existing empty files and preserve contents', () => {
   const fixture = makeFixture();
   try {
