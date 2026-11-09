@@ -41,12 +41,12 @@ const GOVERNED_EXECUTION = {
   environment_policy: 'host-process',
 } as const
 
-async function npmTestReceipt(root: string, mutationPaths: string[]) {
+async function npmTestReceipt(root: string, mutationPaths: string[], exitCode = 0) {
   return bindChatVerifierReceipt({
     projectRoot: root,
     command: 'npm test',
-    exit_code: 0,
-    summary: 'ok',
+    exit_code: exitCode,
+    summary: exitCode === 0 ? 'ok' : 'failed',
     mutationPaths,
     structured: {
       verifierId: NPM_VERIFIER_ID,
@@ -129,6 +129,30 @@ test('independently dispatched evidence remains reportable while aggregate proof
   ])
   assert.equal(result.criterion_results?.[0]?.proof_plan, 'propose_focused_check')
   assert.equal(result.criterion_results?.[1]?.proof_plan, 'none')
+})
+
+test('a later red attempt prevents an earlier green receipt from reporting the criterion satisfied', async t => {
+  const { root, service, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+  ])
+  const green = await npmTestReceipt(root, ['parser.ts'], 0)
+  const red = await npmTestReceipt(root, ['parser.ts'], 1)
+  assert.ok(green && red)
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({
+    proof: { compliant: false }, allowPartialEvidence: true,
+    receipts: [
+      { ...green, order: { sessionId: 'publish-run', seq: 10 } },
+      { ...red, order: { sessionId: 'publish-run', seq: 11 } },
+    ],
+    candidate_sha: candidate, has_mutation: true,
+  })
+
+  const result = evaluateCriterionCompletionV1(request)
+  assert.equal(result.verified, false)
+  assert.equal(result.criterion_results?.[0]?.status, 'missing', JSON.stringify(result))
+  assert.deepEqual(result.criterion_results?.[0]?.evidence_refs, [])
 })
 
 test('argv matching preserves quoted verifier arguments containing spaces', async t => {

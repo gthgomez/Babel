@@ -13,7 +13,7 @@ import {
 import type { TrustedExecutionAuthorityV1 } from './trustedExecutionSupervisor.js'
 import {
   buildCriterionReceiptEvidenceData,
-  chatReceiptDispatchesToRequirement,
+  chatReceiptMatchesRequirement,
 } from './criterionVerifierDispatch.js'
 
 export const CHAT_CRITERION_VERIFIER_ENDPOINT_ID = 'verifier:chat-governed'
@@ -128,15 +128,27 @@ export function publishCriterionEvidenceFromChatExecution(input: {
     requirement: TaskContractV1['acceptance'][number]
     receipt: BoundChatVerifierReceipt
   }> = []
+  const latestAttemptFor = (
+    requirement: TaskContractV1['acceptance'][number],
+  ): BoundChatVerifierReceipt | undefined => {
+    const matching = ledger.filter(receipt => chatReceiptMatchesRequirement(receipt, requirement))
+    if (matching.length < 2) return matching[0]
+    if (matching.some(receipt => !receipt.order || !Number.isSafeInteger(receipt.order.seq) || receipt.order.seq < 0)) return undefined
+    const ordered = [...matching].sort((left, right) => left.order!.seq - right.order!.seq)
+    for (let index = 1; index < ordered.length; index++) {
+      if (ordered[index - 1]!.order!.seq === ordered[index]!.order!.seq &&
+        JSON.stringify(ordered[index - 1]) !== JSON.stringify(ordered[index])) return undefined
+    }
+    return ordered.at(-1)
+  }
   // Evidence is criterion-scoped: a missing verifier for one requirement must
   // not erase an independently dispatched receipt for another requirement.
-  // The completion evaluator still requires every required criterion before it
+  // A later red attempt supersedes an earlier green receipt for that criterion;
+  // the completion evaluator still requires every required criterion before it
   // can return VERIFIED.
   for (const requirement of required) {
-    const receipt = ledger.find((entry) =>
-      chatReceiptDispatchesToRequirement(entry, requirement),
-    )
-    if (receipt) dispatches.push({ requirement, receipt })
+    const receipt = latestAttemptFor(requirement)
+    if (receipt?.exit_code === 0) dispatches.push({ requirement, receipt })
   }
 
   const nodes: EvidenceNode[] = []
