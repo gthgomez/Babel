@@ -11,12 +11,18 @@ import {
   type EvidenceNode,
 } from '../evidence/evidenceGraph.js'
 import type { TrustedExecutionAuthorityV1 } from './trustedExecutionSupervisor.js'
+import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
 import {
   buildCriterionReceiptEvidenceData,
   chatReceiptMatchesRequirement,
 } from './criterionVerifierDispatch.js'
 
 export const CHAT_CRITERION_VERIFIER_ENDPOINT_ID = 'verifier:chat-governed'
+const TEST_VERIFIER_FAMILIES = new Set([
+  'npm-test', 'node-test', 'pytest', 'unittest', 'doctest', 'jest', 'vitest', 'mocha',
+  'go-test', 'cargo-test', 'gradle-test', 'deno-test', 'dotnet-test',
+  'npx-pytest', 'npx-ava', 'npx-tap', 'npx-uvu',
+])
 
 function chatCriterionVerifierEndpoint() {
   return buildAgentEndpointV1({
@@ -94,6 +100,33 @@ function buildCriterionReceiptNode(input: {
   }
 }
 
+function hasAdmissibleCriterionResult(
+  requirement: TaskContractV1['acceptance'][number],
+  receipt: BoundChatVerifierReceipt,
+): boolean {
+  if (receipt.exit_code !== 0 || (receipt.tests_failed ?? 0) > 0
+    || (receipt.tests_failed !== undefined && !Number.isSafeInteger(receipt.tests_failed))) return false
+  const isTestCriterion = requirement.type === 'unit_test'
+    || requirement.type === 'integration_test'
+    || requirement.type === 'e2e'
+  const family = analyzeVerifierIdentity(receipt.command)?.family.toLowerCase() ?? ''
+  const isTestCommand = TEST_VERIFIER_FAMILIES.has(family) || family.startsWith('npm-run-test:')
+  if (typeof receipt.tests_total === 'number' || typeof receipt.tests_skipped === 'number') {
+    const total = receipt.tests_total
+    const skipped = receipt.tests_skipped ?? 0
+    if (total === undefined || !Number.isSafeInteger(total) || total < 0
+      || !Number.isSafeInteger(skipped) || skipped < 0 || skipped > total) return false
+    if (total > 0 && skipped >= total) return false
+  }
+  if (!isTestCriterion && !isTestCommand) {
+    return true
+  }
+  const total = receipt.tests_total
+  const skipped = receipt.tests_skipped ?? 0
+  return typeof total === 'number' && Number.isFinite(total) && total > 0
+    && Number.isFinite(skipped) && skipped >= 0 && skipped < total
+}
+
 /** Publish governed Chat execution into the private criterion evidence graph. */
 export function publishCriterionEvidenceFromChatExecution(input: {
   graph: EvidenceGraph
@@ -148,7 +181,7 @@ export function publishCriterionEvidenceFromChatExecution(input: {
   // can return VERIFIED.
   for (const requirement of required) {
     const receipt = latestAttemptFor(requirement)
-    if (receipt?.exit_code === 0) dispatches.push({ requirement, receipt })
+    if (receipt && hasAdmissibleCriterionResult(requirement, receipt)) dispatches.push({ requirement, receipt })
   }
 
   const nodes: EvidenceNode[] = []

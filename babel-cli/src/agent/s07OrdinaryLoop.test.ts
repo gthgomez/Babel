@@ -1064,6 +1064,45 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
     }
   });
 
+  test('Scenario 3e — a green all-skipped verifier is not reported as criterion evidence', async () => {
+    const fixture = makeFixture();
+    try {
+      const packagePath = join(fixture.root, 'package.json');
+      const packageJson = JSON.parse(readFileSync(packagePath, 'utf8')) as {
+        scripts: Record<string, string>;
+      };
+      packageJson.scripts.test = 'node --test --test-reporter=tap skipped.test.mjs';
+      writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`, 'utf8');
+      writeFileSync(join(fixture.root, 'skipped.test.mjs'), [
+        "import test from 'node:test';",
+        "test('the intended behavior check', { skip: true }, () => {});",
+        '',
+      ].join('\n'), 'utf8');
+
+      const task = [
+        "Fix parser.ts so parseExpression('2+3') returns 5.",
+        'Requirements:',
+        '- `npm test` must pass.',
+        '- `npm run verify` must pass.',
+      ].join('\n');
+      const o = await driveLoop(fixture, task, [
+        [{ type: 'tool_use', id: 'w1', name: 'str_replace', input: { file_path: 'parser.ts', old_str: 'return Number(parts[0]) - Number(parts[1]);', new_str: 'return Number(parts[0]) + Number(parts[1]);' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'text_delta', text: 'npm test exited zero, but its only test was skipped. I have not run npm run verify; neither requirement has authoritative passing evidence.' }, { type: 'done', finishReason: 'stop' }],
+      ]);
+
+      assert.ok(o.outcome === 'UNVERIFIED_PATCH' || o.outcome === 'BLOCKED_POLICY');
+      assert.notEqual(o.durableCompletionOutcome, 'VERIFIED_COMPLETE');
+      assert.match(o.answer, /npm test.*no current criterion-bound evidence is available/);
+      const completionDecision = [...o.sessionEvents].reverse().find(
+        (event): event is Extract<SessionEvent, { kind: 'completion_decision' }> => event.kind === 'completion_decision',
+      );
+      assert.deepEqual(completionDecision?.acceptance_evidence?.map(item => item.status), ['missing', 'missing', 'missing']);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   test('Scenario 4 — explicit no-edit: zero writes and zero mutation mandate', async () => {
     const fixture = makeFixture();
     try {

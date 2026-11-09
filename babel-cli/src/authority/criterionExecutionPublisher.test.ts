@@ -19,11 +19,11 @@ import {
 const NPM_VERIFIER_ID = 'verifier:npm'
 const NPM_ARGV = ['test']
 
-function npmTestRequirement(id: string, description: string) {
+function npmTestRequirement(id: string, description: string, type: 'unit_test' | 'custom' = 'unit_test') {
   return {
     id,
     description,
-    type: 'unit_test' as const,
+    type,
     required: true,
     verification_strategy: 'Run npm test on the fixture.',
     verification: {
@@ -42,7 +42,7 @@ const GOVERNED_EXECUTION = {
 } as const
 
 async function npmTestReceipt(root: string, mutationPaths: string[], exitCode = 0) {
-  return bindChatVerifierReceipt({
+  const boundReceipt = await bindChatVerifierReceipt({
     projectRoot: root,
     command: 'npm test',
     exit_code: exitCode,
@@ -56,7 +56,107 @@ async function npmTestReceipt(root: string, mutationPaths: string[], exitCode = 
     },
     execution: GOVERNED_EXECUTION,
   })
+  return {
+    ...boundReceipt,
+    tests_total: 1,
+    tests_passed: exitCode === 0 ? 1 : 0,
+    tests_failed: exitCode === 0 ? 0 : 1,
+    tests_skipped: 0,
+  }
 }
+
+test('a zero-exit all-skipped test receipt is not criterion evidence', async t => {
+  const { root, service, receipt, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+    {
+      id: 'acceptance:verify', description: 'npm run verify passes', type: 'unit_test', required: true,
+      verification_strategy: 'Run npm run verify.',
+      verification: {
+        kind: 'unit_test', verifier_id: NPM_VERIFIER_ID, executable_id: 'npm', argv: ['run', 'verify'],
+        command_hash: sha256Canonical({ executable_id: 'npm', argv: ['run', 'verify'] }),
+      },
+    },
+  ])
+  const skipped = { ...receipt, tests_total: 1, tests_passed: 0, tests_failed: 0, tests_skipped: 1 }
+  const beta = await bindChatVerifierReceipt({
+    projectRoot: root, command: 'npm run verify', exit_code: 0, summary: '1/1 passed', mutationPaths: ['parser.ts'],
+    structured: {
+      verifierId: NPM_VERIFIER_ID, authoritySource: 'built_in_runner', executable: 'npm', args: ['run', 'verify'],
+    }, execution: GOVERNED_EXECUTION,
+  })
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({
+    proof: { compliant: false }, allowPartialEvidence: true,
+    receipts: [skipped, { ...beta, tests_total: 1, tests_passed: 1, tests_failed: 0, tests_skipped: 0 }],
+    candidate_sha: candidate, has_mutation: true,
+  })
+  const result = evaluateCriterionCompletionV1(request)
+  assert.equal(result.status, 'PARTIAL')
+  assert.equal(result.verified, false)
+  assert.deepEqual(result.satisfied_requirements, ['acceptance:verify'])
+  assert.deepEqual(result.missing_requirements, ['acceptance:npm'])
+})
+
+test('a custom criterion bound to a test command requires executed-test counts', async t => {
+  const { root, service, receipt, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:custom-test', 'the focused behavior test passes', 'custom'),
+  ])
+  const { tests_total, tests_passed, tests_failed, tests_skipped, ...uncounted } = receipt
+  void tests_total; void tests_passed; void tests_failed; void tests_skipped
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({
+    proof: { compliant: false }, allowPartialEvidence: true,
+    receipt: uncounted, candidate_sha: candidate, has_mutation: true,
+  })
+  const result = evaluateCriterionCompletionV1(request)
+  assert.equal(result.verified, false)
+  assert.deepEqual(result.satisfied_requirements, [])
+  assert.deepEqual(result.missing_requirements, ['acceptance:custom-test'])
+})
+
+test('custom criteria bound to doctest or npx pytest require executed-test counts', async t => {
+  const requirement = {
+    id: 'acceptance:doctest', description: 'the doctest examples pass', type: 'custom' as const, required: true,
+    verification_strategy: 'Run python -m doctest.',
+    verification: {
+      kind: 'custom', verifier_id: 'verifier:doctest', executable_id: 'python', argv: ['-m', 'doctest'],
+      command_hash: sha256Canonical({ executable_id: 'python', argv: ['-m', 'doctest'] }),
+    },
+  }
+  const npxRequirement = {
+    id: 'acceptance:npx-pytest', description: 'the pytest suite passes', type: 'custom' as const, required: true,
+    verification_strategy: 'Run npx pytest.',
+    verification: {
+      kind: 'custom', verifier_id: 'verifier:npx-pytest', executable_id: 'npx', argv: ['pytest'],
+      command_hash: sha256Canonical({ executable_id: 'npx', argv: ['pytest'] }),
+    },
+  }
+  const { root, service, request } = await fixtureWithAcceptance(t, [requirement, npxRequirement])
+  const receipt = await bindChatVerifierReceipt({
+    projectRoot: root, command: 'python -m doctest', exit_code: 0, summary: 'ok', mutationPaths: ['parser.ts'],
+    structured: {
+      verifierId: 'verifier:doctest', authoritySource: 'built_in_runner', executable: 'python', args: ['-m', 'doctest'],
+    }, execution: GOVERNED_EXECUTION,
+  })
+  const npxReceipt = await bindChatVerifierReceipt({
+    projectRoot: root, command: 'npx pytest', exit_code: 0, summary: 'ok', mutationPaths: ['parser.ts'],
+    structured: {
+      verifierId: 'verifier:npx-pytest', authoritySource: 'built_in_runner', executable: 'npx', args: ['pytest'],
+    }, execution: GOVERNED_EXECUTION,
+  })
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({
+    proof: { compliant: false }, allowPartialEvidence: true,
+    receipts: [receipt, npxReceipt], candidate_sha: candidate, has_mutation: true,
+  })
+  const result = evaluateCriterionCompletionV1(request)
+  assert.equal(result.verified, false)
+  assert.deepEqual(result.satisfied_requirements, [])
+  assert.deepEqual(result.missing_requirements, ['acceptance:doctest', 'acceptance:npx-pytest'])
+})
 
 async function fixtureWithAcceptance(
   t: TestContext,
@@ -183,13 +283,14 @@ test('argv matching preserves quoted verifier arguments containing spaces', asyn
     mode: 'chat', user_request: 'Fix parser behavior.', acceptance: [requirement],
   }))
   const service = createCriterionCompletionServiceV1(() => ({ contract, runId: 'spaced-argv', projectRoot: root }))
-  const receipt = await bindChatVerifierReceipt({
+  const boundReceipt = await bindChatVerifierReceipt({
     projectRoot: root, command, exit_code: 0, summary: '1/1 passed', mutationPaths: ['parser.ts'],
     structured: {
       verifierId: 'verifier:node', authoritySource: 'built_in_runner', executable: 'node', args: argv,
     },
     execution: GOVERNED_EXECUTION,
   })
+  const receipt = { ...boundReceipt, tests_total: 1, tests_passed: 1, tests_failed: 0, tests_skipped: 0 }
   assert.ok(receipt)
   const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
   const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
@@ -440,7 +541,7 @@ test('publisher binds receipt revision when candidate matches verifier closure s
   writeFileSync(join(root, 'extra.mjs'), 'export const x = 1;\n')
   const mutationOnly = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
   const closureRevision = RevisionManager.computeRevisionSync(root, ['extra.mjs', 'parser.ts']).compositeTreeHash
-  const receipt = await bindChatVerifierReceipt({
+  const boundReceipt = await bindChatVerifierReceipt({
     projectRoot: root,
     command: 'npm test',
     exit_code: 0,
@@ -453,6 +554,7 @@ test('publisher binds receipt revision when candidate matches verifier closure s
       args: ['test'],
     },
   })
+  const receipt = { ...boundReceipt, tests_total: 1, tests_passed: 1, tests_failed: 0, tests_skipped: 0 }
   assert.ok(receipt)
   service.refreshPrivateEvidence({
     proof: { compliant: true },
