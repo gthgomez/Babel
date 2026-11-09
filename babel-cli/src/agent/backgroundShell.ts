@@ -368,6 +368,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
   child.on('close', (code) => {
     clearTimeout(killTimer);
     void (async () => {
+      const cancellationRecordedAtClose = job.status === 'killed';
       let descendantsSettled = true;
       let hadLingeringDescendants = false;
       // POSIX jobs run in a private process group. The direct child closing
@@ -410,7 +411,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
         // the owned command was cancelled; processCompleted and the owner
         // fence separately remain false until tree settlement is confirmed.
         // A natural close with unknown descendants is still a failed result.
-        if (job.status === 'running') {
+        if (!cancellationRecordedAtClose) {
           job.status = 'failed';
           job.exitCode = 1;
         }
