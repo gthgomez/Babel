@@ -1025,12 +1025,24 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
         '- `npm test` must pass.',
         '- `npm run verify` must pass.',
       ].join('\n');
+      const aggregateProofs: boolean[] = [];
       const o = await driveLoop(fixture, task, [
         [{ type: 'tool_use', id: 'w1', name: 'str_replace', input: { file_path: 'parser.ts', old_str: 'return Number(parts[0]) - Number(parts[1]);', new_str: 'return Number(parts[0]) + Number(parts[1]);' } }, { type: 'done', finishReason: 'tool_calls' }],
         [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
         [{ type: 'text_delta', text: 'The parser change is in place and `npm test` passed. I have not run `npm run verify`, so the task remains partially verified.' }, { type: 'done', finishReason: 'stop' }],
-      ]);
+      ], {
+        configureEngine(engine) {
+          const host = engine as unknown as { buildCompletionProof: (mutation: boolean) => { compliant: boolean } };
+          const original = host.buildCompletionProof.bind(engine);
+          host.buildCompletionProof = (mutation) => {
+            const proof = original(mutation);
+            aggregateProofs.push(proof.compliant);
+            return proof;
+          };
+        },
+      });
 
+      assert.deepEqual(aggregateProofs, [false], 'the host aggregate proof correctly remains incomplete because beta has not run');
       assert.ok(o.outcome === 'UNVERIFIED_PATCH' || o.outcome === 'BLOCKED_POLICY',
         `a green sibling verifier cannot certify aggregate completion: ${JSON.stringify({ answer: o.answer, toolCalls: o.toolCalls, events: o.events.slice(-5) })}`);
       assert.notEqual(o.durableCompletionOutcome, 'VERIFIED_COMPLETE');
