@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { basename, join, relative, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { resolveExecutionProfile } from './executionProfiles.js';
@@ -170,7 +171,10 @@ let dockerImageRuntimeIdentityTestOverride: DockerImageRuntimeIdentity | null | 
 
 function dockerIdentityProbeEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const key of ['PATH', 'HOME', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH', 'DOCKER_CONFIG']) {
+  // Match the Docker client endpoint available to the actual sandbox runner.
+  // DOCKER_* overrides are deliberately absent from SafeExecutor children, so
+  // the probe must not inspect a different daemon/context from execution.
+  for (const key of ['PATH', 'HOME']) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
@@ -313,25 +317,60 @@ export function getDockerImageRuntimeIdentity(image: string): DockerImageRuntime
   if (!normalizedImage) return null;
   if (dockerImageRuntimeIdentityCache.has(normalizedImage)) return dockerImageRuntimeIdentityCache.get(normalizedImage) ?? null;
   let identity: DockerImageRuntimeIdentity | null = null;
-  try {
-    const result = spawnSync('docker', [
-      'run', '--rm', '--pull=never', '--network=none', '--read-only', '--cap-drop=ALL',
-      '--security-opt=no-new-privileges', '--pids-limit=16', '--memory=32m', '--memory-swap=32m',
-      '--cpus=0.25', '--entrypoint=/usr/bin/id', normalizedImage,
-    ], {
-      timeout: 5000,
-      maxBuffer: 4096,
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: dockerIdentityProbeEnvironment(),
-    });
-    if (result.status === 0 && !result.error && result.stdout && result.stdout.length <= 4096) {
-      const match = /^uid=(\d+)(?:\([^\r\n)]*\))?\s+gid=(\d+)(?:\([^\r\n)]*\))?(?:\s+groups=.*)?\s*$/.exec(result.stdout);
-      if (match && Number.isSafeInteger(Number(match[1])) && Number.isSafeInteger(Number(match[2]))) {
-        identity = { uid: Number(match[1]), gid: Number(match[2]) };
+  const probeName = `babel-identity-probe-${randomUUID()}`;
+  const env = dockerIdentityProbeEnvironment();
+  const dockerCall = (args: string[], timeout: number) => spawnSync('docker', args, {
+    timeout,
+    killSignal: 'SIGKILL',
+    maxBuffer: 4096,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env,
+  });
+  const cleanup = (idOrName: string): boolean => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const result = dockerCall(['rm', '--force', idOrName], 3000);
+        if (result.status === 0 && !result.error) return true;
+        if (/no such (?:container|object)/i.test(result.stderr ?? '')) return true;
+        const state = dockerCall(['inspect', idOrName], 2000);
+        if (state.status !== 0 && /no such (?:container|object)/i.test(state.stderr ?? '')) return true;
+      } catch {
+        // Retry once; an unavailable daemon remains an unknown identity.
       }
     }
+    return false;
+  };
+  try {
+    const created = dockerCall([
+      'create', '--pull=never', '--name', probeName, '--network=none', '--read-only', '--cap-drop=ALL',
+      '--security-opt=no-new-privileges', '--pids-limit=16', '--memory=32m', '--memory-swap=32m',
+      '--cpus=0.25', '--entrypoint=/usr/bin/id', normalizedImage, '--',
+    ], 5000);
+    const id = created.status === 0 && !created.error ? (created.stdout ?? '').trim() : '';
+    if (!/^[a-f0-9]{12,64}$/i.test(id)) {
+      cleanup(probeName);
+      dockerImageRuntimeIdentityCache.set(normalizedImage, null);
+      return null;
+    }
+
+    // The daemon owns this named container. If the attached client times out,
+    // explicitly remove that exact container before failing closed.
+    const started = dockerCall(['start', '--attach', id], 5000);
+    if (started.status !== 0 || started.error || !started.stdout || started.stdout.length > 4096) {
+      cleanup(id);
+      dockerImageRuntimeIdentityCache.set(normalizedImage, null);
+      return null;
+    }
+    const state = dockerCall(['inspect', '--format', '{{.State.Running}} {{.State.ExitCode}}', id], 3000);
+    const exitedSuccessfully = state.status === 0 && !state.error && /^false 0\s*$/.test(state.stdout ?? '');
+    const match = /^uid=(\d+)(?:\([^\r\n)]*\))?\s+gid=(\d+)(?:\([^\r\n)]*\))?(?:\s+groups=.*)?\s*$/.exec(started.stdout);
+    const removeSucceeded = cleanup(id);
+    if (exitedSuccessfully && removeSucceeded && match && Number.isSafeInteger(Number(match[1])) && Number.isSafeInteger(Number(match[2]))) {
+      identity = { uid: Number(match[1]), gid: Number(match[2]) };
+    }
   } catch {
+    cleanup(probeName);
     identity = null;
   }
   dockerImageRuntimeIdentityCache.set(normalizedImage, identity);
