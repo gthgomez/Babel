@@ -5,6 +5,8 @@ import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 
 import {
+  classifyDockerImageRuntimeUser,
+  classifyDockerDaemonSecurityOptions,
   BENCHMARK_RUNTIME_INVENTORY_COMMANDS,
   inspectBenchmarkContainerRuntime,
   buildBenchmarkContainerCommand,
@@ -21,6 +23,28 @@ import {
   shouldUseDockerSandbox,
   getDockerUnavailableReason,
 } from './benchmarkContainer.js';
+
+test('Docker daemon mode classification fails closed when security options are incomplete', () => {
+  assert.equal(
+    classifyDockerDaemonSecurityOptions(['name=seccomp,profile=builtin', 'name=cgroupns']),
+    'rootful',
+  );
+  assert.equal(classifyDockerDaemonSecurityOptions(['name=seccomp', 'name=rootless']), 'rootless');
+  assert.equal(classifyDockerDaemonSecurityOptions(['name=seccomp', 'name=userns']), 'unknown');
+  assert.equal(classifyDockerDaemonSecurityOptions([]), 'unknown');
+  assert.equal(classifyDockerDaemonSecurityOptions(['unexpected', null]), 'unknown');
+});
+
+test('Docker image runtime user classification fails closed for non-root and ambiguous users', () => {
+  assert.equal(classifyDockerImageRuntimeUser(''), 'root');
+  assert.equal(classifyDockerImageRuntimeUser('0:0'), 'root');
+  assert.equal(classifyDockerImageRuntimeUser('0:root'), 'root');
+  assert.equal(classifyDockerImageRuntimeUser('root'), 'nonroot');
+  assert.equal(classifyDockerImageRuntimeUser('root:0'), 'unknown');
+  assert.equal(classifyDockerImageRuntimeUser('node'), 'nonroot');
+  assert.equal(classifyDockerImageRuntimeUser('1000:1000'), 'nonroot');
+  assert.equal(classifyDockerImageRuntimeUser('root:group:extra'), 'unknown');
+});
 
 test('default runtime inventory accepts its own C++ command and probes Docker', (t) => {
   let calls = 0;

@@ -58,10 +58,13 @@ import {
 import { resolve, sep, dirname, basename, isAbsolute, relative, join } from 'node:path';
 import {
   evaluateGovernedIsolation,
+  getDockerDaemonMode,
+  getDockerImageRuntimeUser,
   getDockerUnavailableReason,
   isBenchmarkProjectExecutableCommand,
   shouldUseDockerSandbox,
 } from './config/benchmarkContainer.js';
+import { validateDockerIsolationArgs } from './config/dockerIsolationArgs.js';
 import { prepareOwnedContainerInvocation, removeOwnedContainer, removeOwnedContainerSync, type PreparedShellInvocation } from './sandboxContainerLifecycle.js';
 import {
   getExecutionProfileCommandAdditions,
@@ -86,7 +89,7 @@ import { classifyResolvedCommand, commandControlledRoots, hostWindowsSystem32Dir
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
-import { writeUtf8FileSafely, type TrustedFileCreationEvidence } from './sandboxFileWrites.js';
+import { isSandboxReadableTestPath, writeUtf8FileSafely, type TrustedFileCreationEvidence } from './sandboxFileWrites.js';
 export type { TrustedFileCreationEvidence } from './sandboxFileWrites.js';
 import type { ProcessWitness, ProcessWitnessInput } from './diagnostics/bdns/processWitness.js';
 import { MAX_SHELL_OUTPUT_BYTES, normalizeShellOutput } from './shellOutputNormalize.js';
@@ -229,6 +232,43 @@ export function creationOwnershipFromTrustedEvidence(
     inode: evidence.inode,
     expectedContent: intendedContent,
   };
+}
+
+/**
+ * A rootful capability-dropped container runs as uid/gid 0. Only share a new
+ * test file when that identity can traverse, but cannot mutate, every mounted
+ * directory from the project root to its parent. This excludes writable
+ * parents where an in-container process could race path validation.
+ */
+function rootfulContainerHasStableReadPath(projectRoot: string, targetPath: string): boolean {
+  const parentPath = dirname(targetPath);
+  const relativeParent = relative(projectRoot, parentPath);
+  if (relativeParent === '..' || relativeParent.startsWith(`..${sep}`) || isAbsolute(relativeParent)) return false;
+  const directories = [projectRoot, ...relativeParent.split(sep).filter(Boolean).map((_, index, segments) => {
+    let current = projectRoot;
+    for (let part = 0; part <= index; part += 1) current = resolve(current, segments[part]!);
+    return current;
+  })];
+  for (const directory of directories) {
+    let stats;
+    try {
+      stats = statSync(directory);
+    } catch {
+      return false;
+    }
+    const mode = stats.mode & 0o777;
+    // Any group/other write bit can also act as an ACL mask for a named root
+    // entry. Reject it conservatively; this function only broadens file reads.
+    if ((mode & 0o022) !== 0) return false;
+    const containerCanTraverse = stats.uid === 0
+      ? (mode & 0o100) !== 0
+      : stats.gid === 0 ? (mode & 0o010) !== 0 : (mode & 0o001) !== 0;
+    const containerCanWrite = stats.uid === 0
+      ? (mode & 0o200) !== 0
+      : stats.gid === 0 ? (mode & 0o020) !== 0 : (mode & 0o002) !== 0;
+    if (!containerCanTraverse || containerCanWrite) return false;
+  }
+  return true;
 }
 
 function attachTrustedFileCreationEvidence<T extends object>(
@@ -1156,7 +1196,7 @@ export class SafeExecutor {
     targetPath: string,
     content: string,
     enforceProjectRoot: boolean,
-    options?: { createOnly?: true; onCreated?: (evidence: TrustedFileCreationEvidence) => void },
+    options?: { createOnly?: true; sandboxReadableTest?: true; onCreated?: (evidence: TrustedFileCreationEvidence) => void },
   ): void {
     writeUtf8FileSafely(inputPath, targetPath, content, enforceProjectRoot,
       (input, target, enforceRoot) => this.assertSafeWritableTarget(input, target, enforceRoot), options);
@@ -1513,8 +1553,24 @@ export class SafeExecutor {
       }
 
       mkdirSync(dirname(targetPath), { recursive: true });
+      const dockerExtraArgs = validateDockerIsolationArgs();
+      const explicitContainerIdentity = dockerExtraArgs.ok && dockerExtraArgs.args.some((arg) => {
+        const normalized = arg.toLowerCase();
+        return normalized === '--user' || normalized.startsWith('--user=') ||
+          normalized === '--userns' || normalized.startsWith('--userns=');
+      },
+      );
+      const dockerImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? '';
+      const immutableDockerImage = /^sha256:[a-f0-9]{64}$/i.test(dockerImage) || /@sha256:[a-f0-9]{64}$/i.test(dockerImage);
+      const sandboxReadableTest = process.platform === 'linux' && !this.shadowRoot && targetPath === safePath &&
+        shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']) && getDockerDaemonMode() === 'rootful' &&
+        immutableDockerImage && getDockerImageRuntimeUser(dockerImage) === 'root' &&
+        rootfulContainerHasStableReadPath(this.projectRoot, targetPath) &&
+        !explicitContainerIdentity &&
+        isSandboxReadableTestPath(inputPath);
       this.writeUtf8FileSafely(inputPath, targetPath, content, targetPath === safePath, {
         ...(options?.createOnly ? { createOnly: true as const } : {}),
+        ...(sandboxReadableTest ? { sandboxReadableTest: true as const } : {}),
         onCreated: evidence => { creationEvidence = evidence; },
       });
       return attachTrustedFileCreationEvidence({

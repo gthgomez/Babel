@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   existsSync,
+  chmodSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -33,6 +34,8 @@ import { isProcessAlive, isProcessGroupAlive, waitForProcessExit, waitForProcess
 import { ProcessWitness } from './diagnostics/bdns/processWitness.js';
 import {
   setDockerAvailableForTest,
+  setDockerDaemonModeForTest,
+  setDockerImageRuntimeUserForTest,
   resetDockerAvailabilityCache,
 } from './config/benchmarkContainer.js';
 import { approveApproval, requestDependencyInstallApproval } from './services/approvalQueue.js';
@@ -120,6 +123,125 @@ test('sandbox file operations stay usable for in-root paths', async () => {
       'created\n',
     );
   } finally {
+    fixture.cleanup();
+  }
+});
+
+test('only new test source is shared with the capability-dropped sandbox under restrictive umask', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX mode and umask semantics are not available on Windows');
+    return;
+  }
+  const fixture = makeFixture();
+  const testDirectory = join(fixture.projectRoot, 'test');
+  chmodSync(fixture.projectRoot, 0o755);
+  mkdirSync(testDirectory);
+  chmodSync(testDirectory, 0o755);
+  const previousEnv = {
+    profile: process.env['BABEL_EXECUTION_PROFILE'],
+    image: process.env['BABEL_BENCHMARK_DOCKER_IMAGE'],
+    dockerDisabled: process.env['BABEL_DOCKER_DISABLE'],
+    extraArgs: process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'],
+    hostFallback: process.env['BABEL_ALLOW_HOST_FALLBACK'],
+  };
+  process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo';
+  process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = `sha256:${'a'.repeat(64)}`;
+  delete process.env['BABEL_DOCKER_DISABLE'];
+  delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'];
+  delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+  setDockerAvailableForTest(true);
+  setDockerDaemonModeForTest('rootful');
+  setDockerImageRuntimeUserForTest('root');
+  const previousUmask = process.umask(0o077);
+  try {
+    const privateSource = join(fixture.projectRoot, 'private-source.js');
+    const privateData = join(fixture.projectRoot, 'private-data.txt');
+    writeFileSync(privateSource, 'export const secret = true;\n', { mode: 0o600 });
+    writeFileSync(privateData, 'private\n', { mode: 0o600 });
+
+    const result = new SafeExecutor(fixture.projectRoot).fileWrite('test/generated.test.js', 'export const value = 1;\n');
+
+    assert.equal(result.exit_code, 0);
+    assert.equal(statSync(testDirectory).mode & 0o777, 0o755, 'existing test directory mode is unchanged');
+    const expectedGeneratedTestMode = process.platform === 'linux' ? 0o644 : 0o600;
+    assert.equal(statSync(join(testDirectory, 'generated.test.js')).mode & 0o777, expectedGeneratedTestMode, 'mode broadening is limited to supported rootful Linux Docker');
+
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('src/generated.js', 'export const value = 1;\n').exit_code, 0);
+    assert.equal(statSync(join(fixture.projectRoot, 'src/generated.js')).mode & 0o777, 0o600, 'ordinary source files keep the restrictive umask');
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/newdir/nested.test.js', 'nested test\n').exit_code, 0);
+    assert.equal(statSync(join(testDirectory, 'newdir')).mode & 0o777, 0o700, 'new parent directories are not broadened');
+    assert.equal(statSync(join(testDirectory, 'newdir/nested.test.js')).mode & 0o777, 0o600, 'test source under a new private parent remains private');
+
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('private-source.js', 'export const secret = false;\n').exit_code, 0);
+    assert.equal(statSync(privateSource).mode & 0o777, 0o600, 'overwriting a private existing source file preserves its mode');
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('private-data.txt', 'still private\n').exit_code, 0);
+    assert.equal(statSync(privateData).mode & 0o777, 0o600, 'overwriting a private non-source file preserves its mode');
+    writeFileSync(join(testDirectory, 'existing.test.js'), 'private test\n', { mode: 0o600 });
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/existing.test.js', 'updated\n').exit_code, 0);
+    assert.equal(statSync(join(testDirectory, 'existing.test.js')).mode & 0o777, 0o600, 'overwriting existing private test source preserves its mode');
+
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('private/new-data.txt', 'private\n').exit_code, 0);
+    assert.equal(statSync(join(fixture.projectRoot, 'private/new-data.txt')).mode & 0o777, 0o600, 'new non-source data keeps the restrictive umask');
+
+    for (const privatePath of [
+      '.hidden/source.test.ts',
+      'secrets/token.test.ts',
+      'test/secrets-fixtures/generated.test.js',
+      'test/private-data/generated.test.js',
+      'test/password.test.js',
+      'test/api-key.test.js',
+      'test/credentials.test.js',
+    ]) {
+      assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite(privatePath, 'sensitive\n').exit_code, 0);
+      assert.equal(statSync(join(fixture.projectRoot, privatePath)).mode & 0o777, 0o600, `${privatePath} retains restrictive mode`);
+    }
+
+    for (const [index, args] of ['--user 1000:1000', '--user=1000:1000'].entries()) {
+      process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] = args;
+      const path = `test/explicit-user-${index}.test.js`;
+      assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite(path, 'explicit user\n').exit_code, 0);
+      assert.equal(statSync(join(fixture.projectRoot, path)).mode & 0o777, 0o600, `${args} does not trigger mode broadening`);
+    }
+    delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'];
+    process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] = '--userns=private';
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/userns.test.js', 'custom namespace\n').exit_code, 0);
+    assert.equal(statSync(join(testDirectory, 'userns.test.js')).mode & 0o777, 0o600, 'explicit user namespace does not trigger mode broadening');
+    delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'];
+    setDockerImageRuntimeUserForTest('nonroot');
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/nonroot-image.test.js', 'nonroot image\n').exit_code, 0);
+    assert.equal(statSync(join(testDirectory, 'nonroot-image.test.js')).mode & 0o777, 0o600, 'non-root image USER does not trigger mode broadening');
+    setDockerImageRuntimeUserForTest('unknown');
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/unknown-image.test.js', 'unknown image\n').exit_code, 0);
+    assert.equal(statSync(join(testDirectory, 'unknown-image.test.js')).mode & 0o777, 0o600, 'unknown image USER fails closed');
+    setDockerImageRuntimeUserForTest('root');
+    setDockerDaemonModeForTest('rootless');
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/rootless.test.js', 'rootless daemon\n').exit_code, 0);
+    assert.equal(statSync(join(testDirectory, 'rootless.test.js')).mode & 0o777, 0o600, 'rootless Docker does not broaden host-readable permissions');
+    setDockerDaemonModeForTest('unknown');
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/unknown-daemon.test.js', 'unknown daemon\n').exit_code, 0);
+    assert.equal(statSync(join(testDirectory, 'unknown-daemon.test.js')).mode & 0o777, 0o600, 'unknown Docker daemon mode fails closed');
+    setDockerDaemonModeForTest('rootful');
+    const writableParent = join(fixture.projectRoot, 'writable-test');
+    mkdirSync(writableParent);
+    chmodSync(writableParent, 0o775);
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('writable-test/racy.test.js', 'writable parent\n').exit_code, 0);
+    assert.equal(statSync(join(writableParent, 'racy.test.js')).mode & 0o777, 0o600, 'writable parent prevents permission broadening');
+    process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/dev-local.test.js', 'host execution\n').exit_code, 0);
+    assert.equal(statSync(join(testDirectory, 'dev-local.test.js')).mode & 0o777, 0o600, 'host execution profile keeps restrictive umask');
+  } finally {
+    process.umask(previousUmask);
+    for (const [key, value] of [
+      ['BABEL_EXECUTION_PROFILE', previousEnv.profile],
+      ['BABEL_BENCHMARK_DOCKER_IMAGE', previousEnv.image],
+      ['BABEL_DOCKER_DISABLE', previousEnv.dockerDisabled],
+      ['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS', previousEnv.extraArgs],
+      ['BABEL_ALLOW_HOST_FALLBACK', previousEnv.hostFallback],
+    ] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetDockerAvailabilityCache();
     fixture.cleanup();
   }
 });

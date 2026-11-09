@@ -1,7 +1,9 @@
 import {
   closeSync,
   constants as fsConstants,
+  fchmodSync,
   fstatSync,
+  lstatSync,
   openSync,
   writeFileSync,
 } from 'node:fs';
@@ -20,6 +22,31 @@ export interface TrustedFileCreationEvidence {
 }
 
 type WriteUtf8ToFd = (fd: number, content: string) => void;
+
+const TEST_SOURCE_EXTENSIONS = new Set([
+  '.cjs', '.cts', '.js', '.jsx', '.mjs', '.mts', '.py', '.rb', '.rs', '.tsx', '.ts',
+]);
+const PRIVATE_TEST_PATH_SEGMENTS = new Set([
+  'artifacts', 'build', 'certs', 'coverage', 'credentials', 'keys', 'node_modules',
+  'private', 'runs', 'secret', 'secrets', 'vendor',
+]);
+const PRIVATE_TEST_BASENAME = /(?:^|[._-])(?:api[_-]?keys?|credentials?|id_rsa|id_ed25519|passwords?|private|secrets?|tokens?)(?:[._-]|$)/i;
+
+/**
+ * Only fresh, conventionally named test source is shared with the test runner.
+ * Parent directory permissions are never changed; they must already permit
+ * container traversal or the test runner fails closed.
+ */
+export function isSandboxReadableTestPath(inputPath: string): boolean {
+  const segments = inputPath.replace(/\\/g, '/').split('/').filter((segment) => segment.length > 0 && segment !== '.');
+  if (segments.length === 0 || segments.some((segment) =>
+    segment === '..' || segment.startsWith('.') || PRIVATE_TEST_PATH_SEGMENTS.has(segment.toLowerCase()) ||
+    PRIVATE_TEST_BASENAME.test(segment)
+  )) return false;
+  const basename = segments.at(-1)!;
+  const extension = basename.slice(basename.lastIndexOf('.')).toLowerCase();
+  return TEST_SOURCE_EXTENSIONS.has(extension) && /(?:^|[._-])(?:test|spec)(?:[._-]|$)/i.test(basename) && !PRIVATE_TEST_BASENAME.test(basename);
+}
 
 let writeUtf8ToFd: WriteUtf8ToFd = (fd, content) => {
   writeFileSync(fd, content, 'utf-8');
@@ -68,23 +95,33 @@ export function writeUtf8FileSafely(
   content: string,
   enforceProjectRoot: boolean,
   assertSafeTarget: (inputPath: string, targetPath: string, enforceProjectRoot: boolean) => void,
-  options?: { createOnly?: true; onCreated?: (evidence: TrustedFileCreationEvidence) => void },
+  options?: { createOnly?: true; sandboxReadableTest?: true; onCreated?: (evidence: TrustedFileCreationEvidence) => void },
 ): void {
   assertSafeTarget(inputPath, targetPath, enforceProjectRoot);
 
   const noFollowFlag = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
-  const baseFlags = fsConstants.O_WRONLY | fsConstants.O_CREAT |
-    (options?.createOnly ? fsConstants.O_EXCL : fsConstants.O_TRUNC);
-
+  const createFlags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL;
+  const truncateFlags = fsConstants.O_WRONLY | fsConstants.O_TRUNC;
   let fd: number;
+  let created = false;
   try {
-    fd = openSync(targetPath, baseFlags | noFollowFlag, 0o666);
+    fd = openSync(targetPath, createFlags | noFollowFlag, 0o666);
+    created = true;
   } catch (error: unknown) {
     const code = (error as NodeJS.ErrnoException | undefined)?.code;
     if (noFollowFlag !== 0 && (code === 'EINVAL' || code === 'UNKNOWN' || code === 'ENOSYS')) {
-      fd = openSync(targetPath, baseFlags, 0o666);
+      try {
+        fd = openSync(targetPath, createFlags, 0o666);
+        created = true;
+      } catch (createError: unknown) {
+        if (options?.createOnly || (createError as NodeJS.ErrnoException | undefined)?.code !== 'EEXIST') throw createError;
+        fd = openSync(targetPath, truncateFlags, 0o666);
+      }
     } else {
-      throw error;
+      if (options?.createOnly || code !== 'EEXIST') throw error;
+      // Existing modes are user-controlled. Reopen without O_CREAT so a race
+      // that removes the target fails instead of creating it under a new mode.
+      fd = openSync(targetPath, truncateFlags | noFollowFlag, 0o666);
     }
   }
 
@@ -92,6 +129,18 @@ export function writeUtf8FileSafely(
     assertSafeTarget(inputPath, targetPath, enforceProjectRoot);
     try {
       writeUtf8ToFd(fd, content);
+      if (created && options?.sandboxReadableTest && process.platform !== 'win32') {
+        // Recheck containment and bind the chmod to the newly-created inode.
+        // Existing files retain their original mode.
+        assertSafeTarget(inputPath, targetPath, enforceProjectRoot);
+        const descriptorStat = fstatSync(fd, { bigint: true });
+        const pathStat = lstatSync(targetPath, { bigint: true });
+        if (!pathStat.isFile() || descriptorStat.dev !== pathStat.dev || descriptorStat.ino !== pathStat.ino) {
+          throw new Error('[sandbox] New test source changed during permission setup.');
+        }
+        // Apply before publishing create-only ownership evidence.
+        fchmodSync(fd, 0o644);
+      }
     } catch (writeError) {
       if (options?.createOnly) {
         attestIncompleteCreate(fd, targetPath, options.onCreated);
