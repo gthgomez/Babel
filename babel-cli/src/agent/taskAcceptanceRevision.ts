@@ -19,7 +19,8 @@ import { isAmendmentPrompt, isStatusPrompt } from './turnRuntime.js'
 
 export const ACCEPTANCE_AMENDMENT_REF = `user:task-${'acceptance-amendment:v1'}` as const
 export interface TaskAcceptanceDescriptorV1 {
-  schema_version: 1
+  /** v1 preserves the historical unbound amendment replay; v2 binds verifiers. */
+  schema_version: 1 | 2
   kind: 'add' | 'initialize' | 'migrate_addition'
   amendment_id: string
   task_id: string
@@ -79,6 +80,7 @@ export function createTaskAcceptanceRevision(
     meaning: inferTaskAcceptanceForVersion(source.userInput, interpretationVersion),
     trustedVerifierCommands: current.verifier_requirements,
     defaultWorkingDirectory: '.',
+    existingVerifierInputFiles: current.protected_paths,
   })
   if (meaning.unresolved)
     throw new Error('TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED: State the additional observable requirement explicitly')
@@ -89,7 +91,7 @@ export function createTaskAcceptanceRevision(
     throw new Error('TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED: An additive amendment cannot remove required obligations')
   const ids = new Set(added.map(item => item.id))
   const descriptor: TaskAcceptanceDescriptorV1 = deepFreeze({
-    schema_version: 1, kind, amendment_id: randomUUID(),
+    schema_version: 2, kind, amendment_id: randomUUID(),
     task_id: current.task_id, previous_contract_id: current.contract_id,
     previous_contract_hash: current.contract_hash, source_attempt_id: source.attemptId,
     input_digest: source.inputDigest, text_digest: sha256Canonical(source.userInput),
@@ -132,7 +134,7 @@ export function isTaskAcceptanceDescriptor(value:unknown):value is TaskAcceptanc
   const fields = ['schema_version', 'kind', 'amendment_id', 'task_id', 'previous_contract_id',
     'previous_contract_hash', 'source_attempt_id', 'input_digest', 'text_digest', 'added_acceptance', 'meaning_sources']
   return Object.keys(descriptor).length===fields.length&&fields.every(field=>Object.hasOwn(descriptor,field))&&
-    descriptor.schema_version===1&&['add','initialize','migrate_addition'].includes(descriptor.kind)&&
+    (descriptor.schema_version===1||descriptor.schema_version===2)&&['add','initialize','migrate_addition'].includes(descriptor.kind)&&
     [descriptor.amendment_id,descriptor.task_id,descriptor.previous_contract_id,descriptor.source_attempt_id].every(field=>typeof field==='string'&&field.length>0&&field.length<=512)&&
     /^[0-9a-f]{32,64}$/.test(descriptor.previous_contract_hash)&&/^[0-9a-f]{64}$/.test(descriptor.input_digest)&&/^[0-9a-f]{64}$/.test(descriptor.text_digest)&&
     Array.isArray(descriptor.added_acceptance)&&descriptor.added_acceptance.length>0&&descriptor.added_acceptance.length<=128&&

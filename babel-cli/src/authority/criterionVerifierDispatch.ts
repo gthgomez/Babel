@@ -2,7 +2,7 @@ import { canonicalJson, sha256Canonical } from '../acceptance/canonical.js'
 import type { AcceptanceRequirementV1, VerificationSpecV1 } from '../agent/taskContract.js'
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js'
 import type { RevisionBoundReceipt } from '../evidence/revisionBoundReceipt.js'
-import { satisfiesVerifierRequirement } from '../services/verifierIdentity.js'
+import { parseCommandArgv } from '../utils/commandArgv.js'
 
 /** Meaning capture marked unresolved — no command can satisfy it. */
 export function isUnresolvedAcceptanceRequirement(
@@ -37,6 +37,15 @@ function frozenExecutableArgv(required: VerificationSpecV1): string[] | null {
     : [...required.argv]
 }
 
+function receiptCommandMatchesStructuredArgv(receipt: BoundChatVerifierReceipt): boolean {
+  if (!receipt.command || !receipt.argv?.length) return false
+  try {
+    return canonicalJson(parseCommandArgv(receipt.command)) === canonicalJson(receipt.argv)
+  } catch {
+    return false
+  }
+}
+
 /**
  * Whether governed chat execution actually ran the frozen check for this criterion.
  * Fail-closed: inferred/unresolved meaning IDs never bind; argv and verifier_id must match.
@@ -58,6 +67,7 @@ export function chatReceiptDispatchesToRequirement(
     if (!receipt.argv || canonicalJson(receipt.argv) !== canonicalJson(expectedArgv)) {
       return false
     }
+    if (!receiptCommandMatchesStructuredArgv(receipt)) return false
     if (required.command_hash) {
       const bound = sha256Canonical({
         executable_id: required.executable_id,
@@ -66,7 +76,7 @@ export function chatReceiptDispatchesToRequirement(
       if (required.command_hash !== bound) return false
     }
     if (!governedExecutionMetadataMatches(receipt, required)) return false
-    return satisfiesVerifierRequirement(expectedArgv.join(' '), receipt.command)
+    return true
   }
 
   return false

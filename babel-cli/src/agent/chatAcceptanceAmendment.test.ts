@@ -43,12 +43,15 @@ function appendLegacySubmission(engine: ChatEngine, runDir: string, text: string
   assert.equal(checkpointParityEventLogStrictSync(parity,runDir,{taskAllowance:engine.getTaskAllowanceSnapshot()!}).status,'committed')
 }
 
-async function fixture(body: (engine: ChatEngine, runDir: string, root: string) => void | Promise<void>, mode: 'chat' | 'plan' = 'chat', legacy = false) {
+async function fixture(body: (engine: ChatEngine, runDir: string, root: string) => void | Promise<void>, mode: 'chat' | 'plan' = 'chat', legacy = false, initialTask = request, requiredVerifierCommands: readonly string[] = []) {
   const root = mkdtempSync(join(tmpdir(), 'babel-acceptance-amendment-'))
   const previous = process.env['BABEL_RUNS_DIR']
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
   try {
-    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: request, projectRoot: root, executionProfile: mode })
+    if (initialTask.includes('`npm test`')) {
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: 'node --test' } }))
+    }
+    const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: initialTask, projectRoot: root, executionProfile: mode, requiredVerifierCommands })
     if(legacy){
       const authority=engine.getParityRuntime().liveAuthority!
       const {acceptance:_acceptance,acceptance_criteria:_criteria,provenance:_provenance,...body}=authority.taskContract
@@ -62,7 +65,7 @@ async function fixture(body: (engine: ChatEngine, runDir: string, root: string) 
       }))
       persistLiveSessionAuthority(chatSessionDir(engine.getEngineRunId()),authority)
     }
-    engine.admitUserSubmission({ userInput: request }, route)
+    engine.admitUserSubmission({ userInput: initialTask }, route)
     await body(engine, chatSessionDir(engine.getEngineRunId()), root)
   } finally {
     if (previous === undefined) delete process.env['BABEL_RUNS_DIR']
@@ -97,6 +100,25 @@ test('an explicit additive amendment creates a frozen same-task revision and can
     assert.equal(restored.taskContract.contract_hash, current.contract_hash)
     assert.ok(readFileSync(join(runDir, 'task-mode-history.json'), 'utf8').includes(before.contract_hash))
   }))
+
+test('executable-bound amendment survives authenticated canonical cold replay', () =>
+  fixture((engine, runDir) => {
+    const initialTask = engine.getTaskContract()!.user_request
+    assert.ok(initialTask.includes('npm test'))
+    const amendment = 'Also require:\n- parseSum(2, 3) returns 5; verified by: `npm test` must pass.'
+    engine.admitUserSubmission({ userInput: amendment }, route)
+    const current = engine.getTaskContract()!
+    const amended = current.acceptance.find(item => item.description.includes('parseSum(2, 3)'))!
+    assert.ok(amended)
+    assert.equal(amended.verification.verifier_id, 'verifier:npm', JSON.stringify(current.verifier_requirements))
+    const restored = loadLiveSessionAuthorityStrict(runDir)
+    assert.equal(restored.taskContract.contract_hash, current.contract_hash)
+    assert.deepEqual(restored.taskContract.acceptance, current.acceptance)
+  }, 'chat', false, [
+    'Requirements:',
+    '- `npm test` must pass.',
+    '- Preserve the parser API.',
+  ].join('\n'), ['npm test']))
 
 test('status and continuation preserve amended requirements through mode changes and cold restore', () =>
   fixture(async (engine, runDir, root) => {

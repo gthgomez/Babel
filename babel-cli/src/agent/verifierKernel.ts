@@ -188,6 +188,7 @@ export type VerifierGateDenial =
   | 'missing_revision'
   | 'wrong_revision'
   | 'tampered_verifier_def'
+  | 'unfrozen_verifier_inputs'
   | 'tests_deleted_or_skipped'
   | 'shortcut_noop'
   | 'hardcoded_fixture'
@@ -215,6 +216,7 @@ export interface VerifierPromotionInput {
     flaky_green?: boolean;
     baseline_failing?: boolean;
     verifier_def_tampered?: boolean;
+    verifier_inputs_unfrozen?: boolean;
   };
 }
 
@@ -298,6 +300,7 @@ export function evaluateVerifierPromotion(
   if (adv.flaky_green) denials.push('flaky_green');
   if (adv.baseline_failing) denials.push('baseline_already_failing');
   if (adv.verifier_def_tampered) denials.push('tampered_verifier_def');
+  if (adv.verifier_inputs_unfrozen) denials.push('unfrozen_verifier_inputs');
 
   // All required commands must have a green authoritative receipt
   for (const cmd of input.required_verifier_commands) {

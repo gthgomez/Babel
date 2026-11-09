@@ -5,8 +5,8 @@ import { mandatoryVerifierProse } from '../config/verifierIntent.js';
 
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { hashVerifierTrackedContent } from './verifierIntegrity.js';
+import path, { join } from 'node:path';
+import { computeVerifierDependencyHashes, hashVerifierTrackedContent, unfrozenNodeTestVerifierCommands, verifierAbsolutePathsEqual } from './verifierIntegrity.js';
 import type { StallState } from './stallDetector.js';
 
 /** R3b: Extract a verifier command pattern from the task string. */
@@ -43,62 +43,17 @@ export function initializeVerifierDependencyHashes(
   task: string | undefined,
   projectRoot: string,
   hashes: Map<string, string>,
-): void {
-  if (!task) return;
-  const verifierCmd = extractVerifierCommand(task);
-  if (!verifierCmd) return;
-
-  const filesToHash = new Set<string>();
-  let packageJson: Record<string, unknown> | null = null;
-
-  const pkgPath = join(projectRoot, 'package.json');
-  if (existsSync(pkgPath)) {
-    try {
-      packageJson = JSON.parse(readFileSync(pkgPath, 'utf8'));
-    } catch {
-      /* skip */
-    }
+  additionalVerifierCommands: readonly string[] = [],
+): string[] {
+  const commands = [...new Set([
+    ...(task ? [extractVerifierCommand(task)].filter((value): value is string => Boolean(value)) : []),
+    ...additionalVerifierCommands,
+  ])];
+  if (commands.length === 0) return [];
+  for (const [file, hash] of Object.entries(computeVerifierDependencyHashes(projectRoot, commands))) {
+    hashes.set(file, hash);
   }
-
-  const npmRunMatch = verifierCmd.match(/^npm\s+(?:run\s+)?(\S+)/);
-  if (npmRunMatch && packageJson) {
-    filesToHash.add('package.json');
-    const scriptName = npmRunMatch[1]!;
-    const scripts = packageJson['scripts'] as Record<string, string> | undefined;
-    const scriptCmd = scripts?.[scriptName];
-    if (scriptCmd) {
-      const scriptFileRefs = scriptCmd.match(/([^\s"'`]+\.(?:mjs|js|cjs|ts))\b/g);
-      if (scriptFileRefs) {
-        for (const f of scriptFileRefs) filesToHash.add(f);
-      }
-    }
-  }
-
-  const nodeFileMatch = verifierCmd.match(
-    /^node\s+(?!(?:-e|--test|--check)\b)(\S+)/,
-  );
-  if (nodeFileMatch?.[1]) filesToHash.add(nodeFileMatch[1]);
-
-  const fileRefs = verifierCmd.match(/([^\s"'`]+\.(?:mjs|js|sh|bat|cmd))\b/g);
-  if (fileRefs) {
-    for (const f of fileRefs) {
-      if (!f.startsWith('-')) filesToHash.add(f);
-    }
-  }
-
-  filesToHash.add('package.json');
-
-  for (const file of filesToHash) {
-    const absPath = join(projectRoot, file);
-    if (existsSync(absPath)) {
-      try {
-        const content = readFileSync(absPath);
-        hashes.set(file, hashVerifierTrackedContent(file, content));
-      } catch {
-        /* permission error — skip */
-      }
-    }
-  }
+  return unfrozenNodeTestVerifierCommands(projectRoot, commands);
 }
 
 export interface VerifierTamperState {
@@ -116,13 +71,11 @@ export function checkVerifierTamper(
 ): string | null {
   if (state.verifierDependencyHashes.size === 0) return null;
 
-  const absPath = filePath.startsWith(projectRoot)
-    ? filePath
-    : join(projectRoot, filePath);
+  const absPath = path.resolve(projectRoot, filePath);
 
   for (const [relPath, originalHash] of state.verifierDependencyHashes) {
-    const depAbsPath = join(projectRoot, relPath);
-    if (absPath !== depAbsPath) continue;
+    const depAbsPath = path.resolve(projectRoot, relPath);
+    if (!verifierAbsolutePathsEqual(absPath, depAbsPath)) continue;
 
     try {
       const currentContent = readFileSync(absPath);

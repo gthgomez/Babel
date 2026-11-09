@@ -82,8 +82,35 @@ function uniqueCommands(commands: readonly string[]): string[] {
 export function extractRequiredVerifierCommandsFromTask(task: string): string[] {
   task = mandatoryVerifierProse(task);
   const commands: string[] = [];
-  for (const line of task.split(/\r?\n/)) {
-    const match = line.match(/\bVerifier commands?\s*:\s*(.+)$/i);
+  let inAcceptanceSection = false;
+  let activeFence: { marker: '`' | '~'; length: number } | null = null;
+  for (const rawLine of task.split(/\r?\n/)) {
+    const fence = /^\s*(`{3,}|~{3,})/.exec(rawLine)?.[1];
+    if (activeFence) {
+      if (fence && fence[0] === activeFence.marker && fence.length >= activeFence.length) activeFence = null;
+      continue;
+    }
+    if (fence) {
+      activeFence = { marker: fence[0] as '`' | '~', length: fence.length };
+      continue;
+    }
+    let line = rawLine;
+    const heading = rawLine.match(/^\s*(?:#{1,6}\s*)?([A-Za-z][\w -]*?)\s*:\s*(.*)$/);
+    if (heading) {
+      inAcceptanceSection = /^(?:requirements?|acceptance(?: criteria)?)$/i.test(heading[1]!.trim());
+      line = heading[2] ?? '';
+    }
+    // An explicit Node test command may be written as a requirement rather
+    // than "Run ... before completing". Preserve the command as a verifier
+    // obligation so its exact test inputs can be frozen at session admission.
+    if (inAcceptanceSection) {
+      const directNodeTest = line.match(
+        /^\s*(?:[-*]\s*)?(node(?:\.exe)?\s+--test(?:(?!\s+(?:must|should|has\s+to|before|after)\b)\s+(?:"[^"]*"|'[^']*'|[^\s;])+)*)(?=\s+(?:must|should|has\s+to|before|after)\b|[.!?]?\s*$)/i,
+      );
+      if (directNodeTest?.[1]) commands.push(cleanCommand(directNodeTest[1]));
+    }
+
+    const match = rawLine.match(/\bVerifier commands?\s*:\s*(.+)$/i);
     if (match?.[1]) {
       commands.push(...splitCommandList(trimTrailingTaskLabels(match[1])));
     }

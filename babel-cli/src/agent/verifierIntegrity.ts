@@ -8,13 +8,29 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import path, { join } from 'node:path';
+import { explicitNodeTestFileArgs } from './completionGatePolicy.js';
+import { resolveExistingVerifierInputPaths } from './verifierInputPaths.js';
 
 /**
  * Normalize a relative path for integrity key matching (posix-style).
  */
 export function normalizeIntegrityPath(relativePath: string): string {
   return relativePath.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+/** Compare resolved paths with the host filesystem's case rules. */
+export function verifierAbsolutePathsEqual(
+  left: string,
+  right: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const normalize = (value: string) => {
+    const resolved = pathApi.normalize(value.replace(/\\/g, '/'));
+    return platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(left) === normalize(right);
 }
 
 /**
@@ -85,6 +101,7 @@ export function hasVerifierDependencyTamper(
 export function computeVerifierDependencyHashes(
   projectRoot: string,
   allowedVerifierCommands: string[],
+  resolveInputPaths: typeof resolveExistingVerifierInputPaths = resolveExistingVerifierInputPaths,
 ): Record<string, string> {
   const hashes: Record<string, string> = {};
   const filesToHash = new Set<string>();
@@ -100,6 +117,14 @@ export function computeVerifierDependencyHashes(
   }
 
   for (const command of allowedVerifierCommands) {
+    const nodeTestFiles = explicitNodeTestFileArgs(command);
+    if (nodeTestFiles !== null) {
+      for (const token of nodeTestFiles) {
+        for (const path of resolveInputPaths(projectRoot, [token])) filesToHash.add(path);
+      }
+      continue;
+    }
+
     const npmRunMatch = command.match(/^npm\s+(?:run\s+)?(\S+)/);
     if (npmRunMatch && packageJson) {
       filesToHash.add('package.json');
@@ -143,4 +168,31 @@ export function computeVerifierDependencyHashes(
   }
 
   return hashes;
+}
+
+/**
+ * Find direct Node test commands whose verifier input set cannot be frozen at
+ * admission. These commands may still be useful to run, but cannot be accepted
+ * as proof because discovery/glob/unsupported operands can change what executes.
+ */
+export function unfrozenNodeTestVerifierCommands(
+  projectRoot: string,
+  allowedVerifierCommands: readonly string[],
+): string[] {
+  const unfrozen: string[] = [];
+  for (const command of new Set(allowedVerifierCommands)) {
+    const operands = explicitNodeTestFileArgs(command);
+    if (operands === null) continue;
+    if (operands.length === 0) {
+      unfrozen.push(command);
+      continue;
+    }
+    const resolved = new Set(
+      resolveExistingVerifierInputPaths(projectRoot, operands).map(normalizeIntegrityPath),
+    );
+    if (operands.some(operand => !resolved.has(normalizeIntegrityPath(operand)))) {
+      unfrozen.push(command);
+    }
+  }
+  return unfrozen;
 }

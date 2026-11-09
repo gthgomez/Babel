@@ -61,6 +61,18 @@ test('extractRequiredVerifierCommandsFromTask parses run-before-completing wordi
   assert.deepEqual(commands, ['npm test']);
 });
 
+test('verifier commands shown inside a fenced example are not task requirements', () => {
+  const task = [
+    'Fix parser behavior.',
+    'Requirements:',
+    '```text',
+    '- node --test test/example.test.cjs must pass.',
+    '```',
+    '- node --test test/required.test.cjs must pass.',
+  ].join('\n');
+  assert.deepEqual(extractRequiredVerifierCommandsFromTask(task), ['node --test test/required.test.cjs']);
+});
+
 test('injectVerificationStepsIntoPlan inserts verifier steps before file writes', () => {
   const result = injectVerificationStepsIntoPlan(
     basePlan(),
@@ -259,6 +271,15 @@ test('task verifier extraction preserves dotted selectors and literal quoted arg
   assert.deepEqual(extractRequiredVerifierCommandsFromTask('Run npm test. Read a file before completing.'), [])
   assert.deepEqual(extractRequiredVerifierCommandsFromTask('Do not run node --test tests/math.test.ts before completing.'), [])
   assert.deepEqual(extractRequiredVerifierCommandsFromTask('README says "Run node --test tests/math.test.ts before completing".'), [])
+  assert.deepEqual(
+    extractRequiredVerifierCommandsFromTask('Fix parser.js.\nRequirements:\n- node --test test/parser.test.cjs must pass.'),
+    ['node --test test/parser.test.cjs'],
+  )
+  assert.deepEqual(
+    extractRequiredVerifierCommandsFromTask('Sample:\n- node --test test/parser.test.cjs must pass.'),
+    [],
+    'commands in examples are not promoted into required verification',
+  )
 })
 
 test('prose delimiters inside quoted selectors never terminate the required command', () => {

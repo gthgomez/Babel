@@ -3,6 +3,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { clearPythonInterpreterCache } from '../services/pythonInterpreter.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
 import { chatVerifierRequirements } from './chatVerifierContext.js';
+import { unfrozenNodeTestVerifierCommands } from './verifierIntegrity.js';
 /**
  * Tests for TaskIntent classification and completion gate logic.
  */
@@ -424,6 +425,131 @@ describe('Completion gate — positive paths', () => {
     pushToolLog(engine, { tool: 'test_run', target: 'npm test', exit_code: 0 });
     const turn: ChatTurn = { type: 'completion', answer: 'Fixed the test.' };
     assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'allow');
+  });
+
+  test('gate integrity veto rejects otherwise valid green verifier evidence', () => {
+    pushToolLog(engine, {
+      tool: 'write_file',
+      target: '/tmp/test-project/src/math.js',
+      effect_status: 'confirmed_change',
+    });
+    pushToolLog(engine, { tool: 'test_run', target: 'npm test', exit_code: 0 });
+    (engine as any).verifierTampered = true;
+    const turn: ChatTurn = { type: 'completion', answer: 'Fixed and tested.' };
+    assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'reject');
+  });
+
+  test('frozen direct Node verifier can support completion when its admitted input remains unchanged', (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-direct-node-verifier-positive-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    mkdirSync(join(root, 'test'), { recursive: true });
+    mkdirSync(join(root, 'src'), { recursive: true });
+    const command = 'node --test test/parser.test.cjs';
+    writeFileSync(join(root, 'src', 'parser.cjs'), 'exports.parseSum = (a, b) => a + b\n');
+    writeFileSync(join(root, 'test', 'parser.test.cjs'), [
+      'const assert = require("node:assert/strict")',
+      'const { test } = require("node:test")',
+      'const { parseSum } = require("../src/parser.cjs")',
+      'test("parseSum adds", () => assert.equal(parseSum(2, 3), 5))',
+    ].join('\n') + '\n');
+    engine = new ChatEngine({
+      model: 'deepseek-v4-flash-openrouter',
+      task: `Requirements:\n- parseSum(2, 3) returns 5; verified by: \`${command}\` must pass.`,
+      projectRoot: root,
+    });
+    assert.equal((engine as any).verifierInputsUnfrozen, false);
+    assert.ok((engine as any).verifierDependencyHashes.has('test/parser.test.cjs'));
+    pushToolLog(engine, {
+      tool: 'write_file', target: join(root, 'src', 'parser.cjs'), effect_status: 'confirmed_change',
+    });
+    const result = childProcess.spawnSync(process.execPath, ['--test', 'test/parser.test.cjs'], {
+      cwd: root, encoding: 'utf8', timeout: 15_000, windowsHide: true,
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    pushToolLog(engine, { tool: 'test_run', target: command, exit_code: 0 });
+    setTestVerifierReceipt(engine, command, 0);
+    assert.equal((engine as any).evaluateCompletionGate({ type: 'completion', answer: 'Implemented and verified.' }, 'execute'), 'allow');
+  });
+
+  test('direct Node verifier test replacement cannot certify a task', (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-direct-node-verifier-tamper-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    mkdirSync(join(root, 'test'), { recursive: true });
+    mkdirSync(join(root, 'src'), { recursive: true });
+    const testFile = join(root, 'test', 'parser.test.cjs');
+    writeFileSync(join(root, 'src', 'parser.cjs'), 'exports.parseSum = (a, b) => a - b\n');
+    writeFileSync(testFile, [
+      'const assert = require("node:assert/strict")',
+      'const { parseSum } = require("../src/parser.cjs")',
+      'assert.equal(parseSum(2, 3), 5)',
+    ].join('\n') + '\n');
+    const command = 'node --test test/parser.test.cjs';
+    engine = new ChatEngine({
+      model: 'deepseek-v4-flash-openrouter',
+      task: `Fix parser.js so parseSum(2, 3) returns 5.\nRequirements:\n- ${command} must pass.`,
+      projectRoot: root,
+    })
+
+    assert.ok((engine as any).getResolvedRequiredVerifiers().includes(command));
+    assert.ok((engine as any).verifierDependencyHashes.has('test/parser.test.cjs'));
+    writeFileSync(testFile, 'const assert = require("node:assert/strict"); assert.equal(2 + 2, 4)\n');
+    const misleadingGreen = childProcess.spawnSync(process.execPath, ['--test', 'test/parser.test.cjs'], {
+      cwd: root, encoding: 'utf8', timeout: 15_000, windowsHide: true,
+    })
+    assert.equal(misleadingGreen.status, 0, misleadingGreen.stdout + misleadingGreen.stderr);
+    assert.match((engine as any).checkVerifierTamper('test/parser.test.cjs'), /dependency of the verifier command/i);
+    pushToolLog(engine, {
+      tool: 'write_file',
+      target: join(root, 'src', 'parser.js'),
+      effect_status: 'confirmed_change',
+    });
+    pushToolLog(engine, { tool: 'test_run', target: command, exit_code: 0 });
+    setTestVerifierReceipt(engine, command, 0);
+    const turn: ChatTurn = { type: 'completion', answer: 'Fixed and tested.' };
+    assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'reject');
+  });
+
+  test('globbed direct Node verifier cannot certify when its input set is not freezeable', (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-node-glob-verifier-tamper-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    mkdirSync(join(root, 'test'), { recursive: true });
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'parser.cjs'), 'exports.parseSum = (a, b) => a - b\n');
+    writeFileSync(join(root, 'test', 'parser.test.cjs'), 'const assert = require("node:assert/strict"); assert.equal(2 + 2, 4)\n');
+    const command = 'node --test test/*.test.cjs';
+    engine = new ChatEngine({
+      model: 'deepseek-v4-flash-openrouter',
+      task: `Fix parser.js so parseSum(2, 3) returns 5.\nRequirements:\n- ${command} must pass.`,
+      projectRoot: root,
+    });
+
+    assert.ok((engine as any).getResolvedRequiredVerifiers().includes(command));
+    assert.equal((engine as any).verifierInputsUnfrozen, true);
+    const misleadingGreen = childProcess.spawnSync(process.execPath, ['--test', 'test/*.test.cjs'], {
+      cwd: root, encoding: 'utf8', timeout: 15_000, windowsHide: true,
+    });
+    assert.equal(misleadingGreen.status, 0, misleadingGreen.stdout + misleadingGreen.stderr);
+    pushToolLog(engine, {
+      tool: 'write_file',
+      target: join(root, 'src', 'parser.cjs'),
+      effect_status: 'confirmed_change',
+    });
+    pushToolLog(engine, { tool: 'test_run', target: command, exit_code: 0 });
+    setTestVerifierReceipt(engine, command, 0);
+    const turn: ChatTurn = { type: 'completion', answer: 'Fixed and tested.' };
+    assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'reject');
+  });
+
+  test('direct Node verifier with unsupported flags or missing inputs is not frozen at admission', (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-node-unsupported-verifier-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    mkdirSync(join(root, 'test'), { recursive: true });
+    const unsupported = 'node --test --experimental-test-isolation test/*.test.cjs';
+    const missing = 'node --test test/not-created-yet.test.cjs';
+    assert.deepEqual(unfrozenNodeTestVerifierCommands(root, [unsupported, missing]), [unsupported, missing]);
+    const frozen = 'node --test test/existing.test.cjs';
+    writeFileSync(join(root, 'test', 'existing.test.cjs'), 'require("node:test");\n');
+    assert.deepEqual(unfrozenNodeTestVerifierCommands(root, [frozen]), []);
   });
 
   test('gate accepts legacy file_write string (backward-compat) with verifier', () => {

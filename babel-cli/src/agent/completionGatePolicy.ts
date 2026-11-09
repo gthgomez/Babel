@@ -381,6 +381,52 @@ export function parseStructuredVerifierCommand(
 }
 
 /**
+ * Return the explicit file operands for a simple `node --test` invocation.
+ * An empty list means the runner uses Node's implicit discovery set (or a
+ * glob/option changes that set), so the verifier inputs cannot be frozen
+ * precisely at admission and must not bind an acceptance criterion.
+ * `null` means this is not a direct Node test invocation.
+ */
+export function explicitNodeTestFileArgs(command: string): string[] | null {
+  const parsed = parseStructuredVerifierCommand(command);
+  const executable = parsed?.executable.replace(/\\/g, '/').split('/').pop() ?? '';
+  if (!parsed || !/^node(?:\.exe)?$/i.test(executable)) return null;
+  const testFlag = parsed.args.indexOf('--test');
+  if (testFlag < 0) return null;
+  const args = parsed.args.slice(testFlag + 1);
+  const operands: string[] = [];
+  const valueFlags = new Set([
+    '--test-name-pattern', '--test-reporter', '--test-reporter-destination',
+    '--test-shard', '--test-timeout', '--test-concurrency',
+  ]);
+  const booleanFlags = new Set(['--test-only', '--test-force-exit', '--experimental-test-coverage']);
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (arg === '--') {
+      operands.push(...args.slice(index + 1));
+      break;
+    }
+    if (arg.startsWith('-')) {
+      const equal = arg.indexOf('=');
+      const name = equal >= 0 ? arg.slice(0, equal) : arg;
+      if (valueFlags.has(name)) {
+        if (equal < 0) {
+          const value = args[index + 1];
+          if (!value || value.startsWith('-')) return [];
+          index++;
+        }
+        continue;
+      }
+      if (booleanFlags.has(name) && equal < 0) continue;
+      return [];
+    }
+    operands.push(arg);
+  }
+  if (operands.length === 0 || operands.some(arg => /[*?\[\]]/.test(arg))) return [];
+  return operands;
+}
+
+/**
  * B2 / W1 honesty: command is an allowlisted project/dataset test runner
  * (or session-bound authoritative command), and not agent-owned ad-hoc,
  * inline probe, package install, or shell junk.
@@ -1613,6 +1659,7 @@ export function evaluateCompletionGateForEngine(opts: {
     flaky_green?: boolean;
     baseline_failing?: boolean;
     verifier_def_tampered?: boolean;
+    verifier_inputs_unfrozen?: boolean;
   };
 }): 'allow' | 'reject' {
   if (opts.taskIntent !== 'execute') return 'allow';
@@ -1742,8 +1789,8 @@ export function evaluateCompletionGateForEngine(opts: {
       return entry;
     });
     const derivedAdversarial = deriveAdversarialSignals({ toolCallLog: log, receipts: adversarialReceipts, hasWrite });
-    const adversarial = { ...derivedAdversarial };
-    for (const key of ['tests_deleted', 'shortcut_noop', 'hardcoded_fixture', 'flaky_green', 'baseline_failing', 'verifier_def_tampered'] as const) {
+    const adversarial: NonNullable<Parameters<typeof evaluateVerifierPromotion>[0]['adversarial']> = { ...derivedAdversarial };
+    for (const key of ['tests_deleted', 'shortcut_noop', 'hardcoded_fixture', 'flaky_green', 'baseline_failing', 'verifier_def_tampered', 'verifier_inputs_unfrozen'] as const) {
       if (opts.adversarial?.[key] === true) adversarial[key] = true;
     }
     const promo = evaluateVerifierPromotion({

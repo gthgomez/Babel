@@ -493,6 +493,341 @@ test('exact behavioral goal plus unrelated green npm test cannot certify a wrong
   assert.notEqual(decision.finalOutcome, 'VERIFIED_COMPLETE', decision.reason)
 })
 
+test('a task-authored exact verifier link admits only the matching behavioral evidence', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-linked-criterion-proof-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'test files'), { recursive: true })
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'linked-criterion-fixture', type: 'module' }))
+  writeFileSync(join(root, 'src', 'parser.js'), 'export function parseSum(a, b) { return 0; }\n')
+  writeFileSync(join(root, 'test files', 'parser.test.mjs'), [
+    'import assert from "node:assert/strict";',
+    'import test from "node:test";',
+    'import { parseSum } from "../src/parser.js";',
+    'test("parseSum returns the required value", () => assert.equal(parseSum(2, 3), 5));',
+  ].join('\n') + '\n')
+
+  const command = 'node --test "test files/parser.test.mjs"'
+  const behavior = 'Fix parser.js so parseSum(2, 3) returns 5'
+  const task = [
+    `${behavior}.`,
+    'Requirements:',
+    `- ${behavior}; verified by: \`${command}\` must pass.`,
+  ].join('\n')
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat', task, projectRoot: root,
+    projectTestCommands: [command], verifierRequirements: [command],
+  }).taskContract
+  const linked = contract.acceptance.filter(item =>
+    item.description.startsWith(behavior),
+  )
+  assert.equal(linked.length, 2)
+  assert.ok(linked.every(item => item.verification.verifier_id === 'verifier:node'))
+  assert.ok(linked.every(item => JSON.stringify(item.verification.argv) === JSON.stringify(['--test', 'test files/parser.test.mjs'])))
+  assert.ok(linked.every(item => item.verification.command_hash))
+
+  const runId = 'criterion-explicit-verifier-link'
+  const service = createCriterionCompletionServiceV1(() => ({ contract, runId, projectRoot: root }))
+  const request = service.currentRequest()!
+  const mutationPath = 'src/parser.js'
+  await governedMutateSrcFix(root, runId, mutationPath,
+    'export function parseSum(a, b) { return a + b; }\n')
+  const sessionEvents = createSessionEventLog(runId)
+  const verifierOwner = chatVerifierOwner({ projectRoot: root, sessionId: sessionEvents.session_id,
+    taskId: contract.task_id, contractHash: contract.contract_hash })!
+  const env = witnessExecutionEnvironment(root)
+  const policy = await executeActionWithPolicy(
+    { type: 'test_run', command }, 'workspace_write', policyCtx(runId, root), {
+      executor: createToolExecutor({
+        executeTool: async request => {
+          assert.equal(request.tool, 'test_run')
+          const child = spawnSync(process.execPath, ['--test', 'test files/parser.test.mjs'], {
+            cwd: root, encoding: 'utf8', env, timeout: 30_000, windowsHide: true,
+          })
+          assert.ifError(child.error)
+          return { exit_code: child.status ?? 1, stdout: child.stdout ?? '', stderr: child.stderr ?? '' }
+        },
+      }),
+      mode: 'chat', lease: null, hostFallbackAllowed: true, isolationAvailable: true,
+    },
+  )
+  assert.equal(policy.policyBlocked, false, JSON.stringify(policy))
+  const stdout = policy.results[0]?.stdout ?? ''
+  const exitCode = policy.results[0]?.exit_code ?? 1
+  assert.equal(exitCode, 0, stdout)
+  assert.match(stdout, /pass 1/)
+  const cacheIdentity = resolveVerifierCacheIdentity({
+    projectRoot: root, command, envKey: verifierEnvironmentKey(env),
+  })
+  const receipt = await captureAndRecordVerifierReceipt({
+    projectRoot: root, command, exitCode, summary: '1/1 parser behavior test passed', stdout,
+    stderr: policy.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
+    sessionEvents, turnId: runId, ledger: [], cache: new Map(), writeCount: 1,
+    cacheIdentity, verifierOwner, executionBackend: 'host-process',
+  })
+  assert.ok(receipt)
+  assert.equal(receipt.tests_total, 1)
+  const candidate = candidateShaFromReceipt(root, receipt)
+  service.refreshPrivateEvidence({
+    proof: { compliant: true }, receipts: [receipt], candidate_sha: candidate, has_mutation: true,
+  })
+  const result = evaluateCriterionCompletionV1(request)
+  assert.equal(result.verified, true, JSON.stringify(result))
+  assert.deepEqual(result.missing_requirements, [])
+  assert.equal(result.satisfied_requirements.length, 2)
+})
+
+test('kernel negative: lowercase-only witness cannot certify uppercase literal goal', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-case-sensitive-goal-proof-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'test files'), { recursive: true })
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'case-sensitive-goal-fixture', type: 'module' }))
+  writeFileSync(join(root, 'src', 'parser.js'), 'export function echo(value) { return value.toUpperCase(); }\n')
+  writeFileSync(join(root, 'test files', 'parser.test.mjs'), [
+    'import assert from "node:assert/strict";',
+    'import test from "node:test";',
+    'import { echo } from "../src/parser.js";',
+    'test("echo returns lowercase input unchanged", () => assert.equal(echo("abc"), "abc"));',
+  ].join('\n') + '\n')
+
+  const command = 'node --test "test files/parser.test.mjs"'
+  const task = [
+    "Fix parser.js so echo('ABC') returns 'ABC'.",
+    'Requirements:',
+    `- Fix parser.js so echo('abc') returns 'abc'; verified by: \`${command}\` must pass.`,
+  ].join('\n')
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat', task, projectRoot: root,
+    projectTestCommands: [command], verifierRequirements: [command],
+  }).taskContract
+  const uppercaseGoal = contract.acceptance.find(item => item.description === "Fix parser.js so echo('ABC') returns 'ABC'.")!
+  const lowercaseRequirement = contract.acceptance.find(item => item.description.includes("echo('abc')"))!
+  assert.ok(uppercaseGoal && lowercaseRequirement)
+  assert.ok(uppercaseGoal.verification.verifier_id.startsWith('meaning:'), 'lowercase verifier must not bind the case-distinct goal')
+  assert.equal(lowercaseRequirement.verification.verifier_id, 'verifier:node')
+
+  const runId = 'case-sensitive-goal-negative'
+  const service = createCriterionCompletionServiceV1(() => ({ contract, runId, projectRoot: root }))
+  const request = service.currentRequest()!
+  const mutationPath = 'src/parser.js'
+  await governedMutateSrcFix(root, runId, mutationPath,
+    'export function echo(value) { return value.toLowerCase(); }\n')
+  const sessionEvents = createSessionEventLog(runId)
+  const verifierOwner = chatVerifierOwner({ projectRoot: root, sessionId: sessionEvents.session_id,
+    taskId: contract.task_id, contractHash: contract.contract_hash })!
+  const env = witnessExecutionEnvironment(root)
+  const policy = await executeActionWithPolicy(
+    { type: 'test_run', command }, 'workspace_write', policyCtx(runId, root), {
+      executor: createToolExecutor({
+        executeTool: async request => {
+          assert.equal(request.tool, 'test_run')
+          const child = spawnSync(process.execPath, ['--test', 'test files/parser.test.mjs'], {
+            cwd: root, encoding: 'utf8', env, timeout: 30_000, windowsHide: true,
+          })
+          assert.ifError(child.error)
+          return { exit_code: child.status ?? 1, stdout: child.stdout ?? '', stderr: child.stderr ?? '' }
+        },
+      }),
+      mode: 'chat', lease: null, hostFallbackAllowed: true, isolationAvailable: true,
+    },
+  )
+  assert.equal(policy.policyBlocked, false, JSON.stringify(policy))
+  const stdout = policy.results[0]?.stdout ?? ''
+  const exitCode = policy.results[0]?.exit_code ?? 1
+  assert.equal(exitCode, 0, stdout)
+  assert.match(stdout, /pass 1/)
+  const envKey = verifierEnvironmentKey(env)
+  const cacheIdentity = resolveVerifierCacheIdentity({ projectRoot: root, command, envKey })
+  const receipt = await captureAndRecordVerifierReceipt({
+    projectRoot: root, command, exitCode, summary: 'lowercase-only witness passed', stdout,
+    stderr: policy.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
+    sessionEvents, turnId: runId, ledger: [], cache: new Map(), writeCount: 1,
+    cacheIdentity, verifierOwner, executionBackend: 'host-process',
+  })
+  assert.ok(receipt)
+  const candidate = candidateShaFromReceipt(root, receipt)
+  service.refreshPrivateEvidence({
+    proof: { compliant: true }, receipts: [receipt], candidate_sha: candidate, has_mutation: true,
+  })
+  assert.equal(evaluateCriterionCompletionV1(request).verified, false)
+
+  const requiredVerifierCommands = [command]
+  const requiredVerifiers = chatVerifierRequirements(verifierOwner, requiredVerifierCommands, task, root).map(requirement => ({
+    ...requirement,
+    executionContext: { ...requirement.executionContext, environmentFingerprint: envKey },
+  }))
+  const currentRevision = captureCompletionWorkspaceRevisionHash({ projectRoot: root }, [mutationPath], receipt)
+  assert.ok(currentRevision && receipt.receiptId)
+  const decision = createExecutorKernel('chat').completion.decide({
+    mode: 'chat', requestedOutcome: 'VERIFIED_COMPLETE', hasWrite: true,
+    verificationPolicy: 'strict', ...prepareKernelVerifierInput(receipt, []),
+    verifierOwner, requiredVerifierCommands, requiredVerifiers,
+    currentReceiptRevisionHashes: { [receipt.receiptId]: currentRevision },
+    currentWorkspaceRevisionHash: currentRevision,
+    toolCallLog: [{ tool: 'write_file', target: mutationPath }, { tool: 'test_run', target: command }],
+    proof: { compliant: true }, acceptance: request,
+  })
+  assert.equal(decision.allowed, false)
+  assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
+})
+
+for (const scenario of [
+  {
+    name: 'single-space witness cannot certify a distinct double-space string literal goal',
+    goal: "Fix parser.js so echo('A  B') returns 'A  B'.",
+    requirement: "Fix parser.js so echo('A B') returns 'A B'",
+    goalSnippet: "echo('A  B')",
+    requirementSnippet: "echo('A B')",
+    initialSource: 'export function echo(value) { return value; }\n',
+    wrongSource: 'export function echo(value) { return value.replace(/\\s+/g, " "); }\n',
+    oracle: "import { echo } from './src/parser.js'; if (echo('A  B') !== 'A  B') process.exit(1)",
+    testSource: [
+      'import assert from "node:assert/strict";', 'import test from "node:test";',
+      'import { echo } from "../src/parser.js";',
+      'test("echo returns single-space input unchanged", () => assert.equal(echo("A B"), "A B"));',
+    ].join('\n') + '\n',
+  },
+  {
+    name: 'single-space regex witness cannot certify a distinct double-space regex goal',
+    goal: "Fix parser.js so accepts(/A  B/) returns true.",
+    requirement: "Fix parser.js so accepts(/A B/) returns true",
+    goalSnippet: 'accepts(/A  B/)',
+    requirementSnippet: 'accepts(/A B/)',
+    initialSource: 'export function accepts(value) { return /^A  B$/.test(value); }\n',
+    wrongSource: 'export function accepts(value) { return /^A B$/.test(value); }\n',
+    oracle: "import { accepts } from './src/parser.js'; if (accepts('A  B') !== true) process.exit(1)",
+    testSource: [
+      'import assert from "node:assert/strict";', 'import test from "node:test";',
+      'import { accepts } from "../src/parser.js";',
+      'test("accepts single-space input", () => assert.equal(accepts("A B"), true));',
+    ].join('\n') + '\n',
+  },
+  {
+    name: 'regex literal with leading and trailing spaces preserves its exact pattern',
+    goal: 'Fix parser.js so matches(/ A  B /) returns true.',
+    requirement: 'Fix parser.js so matches(/ A B /) returns true',
+    goalSnippet: 'matches(/ A  B /)',
+    requirementSnippet: 'matches(/ A B /)',
+    initialSource: 'export function matches(value) { return / A  B /.test(value); }\n',
+    wrongSource: 'export function matches(value) { return / A B /.test(value); }\n',
+    oracle: "import { matches } from './src/parser.js'; if (matches(' A  B ') !== true) process.exit(1)",
+    testSource: [
+      'import assert from "node:assert/strict";', 'import test from "node:test";',
+      'import { matches } from "../src/parser.js";',
+      'test("matches single-space input", () => assert.equal(matches(" A B "), true));',
+    ].join('\n') + '\n',
+  },
+  {
+    name: 'HTML preformatted content with repeated spaces cannot inherit a single-space witness',
+    goal: 'Fix parser.js so output is <pre>A  B</pre>.',
+    requirement: 'Fix parser.js so output is <pre>A B</pre>',
+    goalSnippet: '<pre>A  B</pre>',
+    requirementSnippet: '<pre>A B</pre>',
+    initialSource: 'export function render(value) { return `<pre>${value}</pre>`; }\n',
+    wrongSource: 'export function render(value) { return `<pre>${value.replace(/\\s+/g, " ")}</pre>`; }\n',
+    oracle: "import { render } from './src/parser.js'; if (render('A  B') !== '<pre>A  B</pre>') process.exit(1)",
+    testSource: [
+      'import assert from "node:assert/strict";', 'import test from "node:test";',
+      'import { render } from "../src/parser.js";',
+      'test("render preserves single-space pre content", () => assert.equal(render("A B"), "<pre>A B</pre>"));',
+    ].join('\n') + '\n',
+  },
+] as const) {
+test(`kernel negative: ${scenario.name}`, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-whitespace-sensitive-goal-proof-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'test'), { recursive: true })
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'whitespace-sensitive-goal-fixture', type: 'module' }))
+  writeFileSync(join(root, 'src', 'parser.js'), scenario.initialSource)
+  writeFileSync(join(root, 'test', 'parser.test.mjs'), scenario.testSource)
+
+  const command = 'node --test test/parser.test.mjs'
+  const task = [
+    scenario.goal,
+    'Requirements:',
+    `- ${scenario.requirement}; verified by: \`${command}\` must pass.`,
+  ].join('\n')
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat', task, projectRoot: root,
+    projectTestCommands: [command], verifierRequirements: [command],
+  }).taskContract
+  const behavioralGoal = contract.acceptance.find(item => item.description.includes(scenario.goalSnippet))!
+  const specificRequirement = contract.acceptance.find(item => item.description.includes(scenario.requirementSnippet))!
+  assert.ok(behavioralGoal && specificRequirement)
+  assert.ok(behavioralGoal.verification.verifier_id.startsWith('meaning:'))
+  assert.equal(specificRequirement.verification.verifier_id, 'verifier:node')
+
+  const runId = `literal-whitespace-negative-${scenario.name.replace(/[^a-z]+/gi, '-').toLowerCase()}`
+  const service = createCriterionCompletionServiceV1(() => ({ contract, runId, projectRoot: root }))
+  const request = service.currentRequest()!
+  const mutationPath = 'src/parser.js'
+  await governedMutateSrcFix(root, runId, mutationPath, scenario.wrongSource)
+  const independentOracle = spawnSync(process.execPath, ['--input-type=module', '-e', scenario.oracle], {
+    cwd: root, encoding: 'utf8', timeout: 15_000, windowsHide: true,
+  })
+  assert.equal(independentOracle.status, 1, 'the candidate patch must fail the independent behavioral oracle')
+  const sessionEvents = createSessionEventLog(runId)
+  const verifierOwner = chatVerifierOwner({ projectRoot: root, sessionId: sessionEvents.session_id,
+    taskId: contract.task_id, contractHash: contract.contract_hash })!
+  const env = witnessExecutionEnvironment(root)
+  const policy = await executeActionWithPolicy(
+    { type: 'test_run', command }, 'workspace_write', policyCtx(runId, root), {
+      executor: createToolExecutor({
+        executeTool: async request => {
+          assert.equal(request.tool, 'test_run')
+          const child = spawnSync(process.execPath, ['--test', 'test/parser.test.mjs'], {
+            cwd: root, encoding: 'utf8', env, timeout: 30_000, windowsHide: true,
+          })
+          assert.ifError(child.error)
+          return { exit_code: child.status ?? 1, stdout: child.stdout ?? '', stderr: child.stderr ?? '' }
+        },
+      }),
+      mode: 'chat', lease: null, hostFallbackAllowed: true, isolationAvailable: true,
+    },
+  )
+  assert.equal(policy.policyBlocked, false, JSON.stringify(policy))
+  const stdout = policy.results[0]?.stdout ?? ''
+  const exitCode = policy.results[0]?.exit_code ?? 1
+  assert.equal(exitCode, 0, stdout)
+  assert.match(stdout, /pass 1/)
+  const envKey = verifierEnvironmentKey(env)
+  const cacheIdentity = resolveVerifierCacheIdentity({ projectRoot: root, command, envKey })
+  const receipt = await captureAndRecordVerifierReceipt({
+    projectRoot: root, command, exitCode, summary: 'related literal witness passed', stdout,
+    stderr: policy.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
+    sessionEvents, turnId: runId, ledger: [], cache: new Map(), writeCount: 1,
+    cacheIdentity, verifierOwner, executionBackend: 'host-process',
+  })
+  assert.ok(receipt)
+  const candidate = candidateShaFromReceipt(root, receipt)
+  service.refreshPrivateEvidence({
+    proof: { compliant: true }, receipts: [receipt], candidate_sha: candidate, has_mutation: true,
+  })
+  assert.equal(evaluateCriterionCompletionV1(request).verified, false)
+
+  const requiredVerifierCommands = [command]
+  const requiredVerifiers = chatVerifierRequirements(verifierOwner, requiredVerifierCommands, task, root).map(requirement => ({
+    ...requirement,
+    executionContext: { ...requirement.executionContext, environmentFingerprint: envKey },
+  }))
+  const currentRevision = captureCompletionWorkspaceRevisionHash({ projectRoot: root }, [mutationPath], receipt)
+  assert.ok(currentRevision && receipt.receiptId)
+  const decision = createExecutorKernel('chat').completion.decide({
+    mode: 'chat', requestedOutcome: 'VERIFIED_COMPLETE', hasWrite: true,
+    verificationPolicy: 'strict', ...prepareKernelVerifierInput(receipt, []),
+    verifierOwner, requiredVerifierCommands, requiredVerifiers,
+    currentReceiptRevisionHashes: { [receipt.receiptId]: currentRevision },
+    currentWorkspaceRevisionHash: currentRevision,
+    toolCallLog: [{ tool: 'write_file', target: mutationPath }, { tool: 'test_run', target: command }],
+    proof: { compliant: true }, acceptance: request,
+  })
+  assert.equal(decision.allowed, false)
+  assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
+})
+}
+
 test('executor → receipt → criterion negative: one governed witness run cannot satisfy sibling criterion', async t => {
   const { root, service, request, runId } = await dualWitnessFixture(t)
   const mutationPath = await governedMutateSrcFix(root, runId)

@@ -4,6 +4,7 @@ import {
   requireAcceptanceMeaningVersion,
 } from './taskAcceptanceMeaning.js'
 import { isAcceptanceAddition } from './taskAcceptanceRevision.js'
+import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
 import type { ObjectiveAuthorityRecord, ObjectiveAttempt } from './taskObjectiveLifecycle.js'
 import type { ThreadEventLog, ThreadEvent } from './threadEventLog.js'
 import type { SessionEventLog } from './sessionEvents.js'
@@ -117,7 +118,18 @@ export function assertCanonicalAcceptanceAmendments(
     try {
       if (requireAcceptanceMeaningVersion(current.provenance.records, current) !== predecessorVersion) fail()
     } catch { fail() }
-    const meaning = inferTaskAcceptanceForVersion(started.task, predecessorVersion)
+    const replayedMeaning = inferTaskAcceptanceForVersion(started.task, predecessorVersion)
+    // V1 descriptors predate executable binding. Rebinding those records here
+    // changes the canonical historical authority on cold load. V2 records are
+    // created with binding and replay that exact interpretation.
+    const meaning = descriptor.schema_version === 1
+      ? replayedMeaning
+      : bindExecutableVerifiersToTaskAcceptance({
+          meaning: replayedMeaning,
+          trustedVerifierCommands: current.verifier_requirements,
+          defaultWorkingDirectory: '.',
+          existingVerifierInputFiles: current.protected_paths,
+        })
     const prior = new Set(descriptor.kind === 'initialize' ? [] : previous.acceptance_criteria)
     const added = meaning.criteria.filter(item => !prior.has(item.description))
     const ids = new Set(added.map(item => item.id))
