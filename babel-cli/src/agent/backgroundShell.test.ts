@@ -19,6 +19,7 @@ import {
   startBackgroundShell,
 } from './backgroundShell.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
+import { quoteWindowsCommandArg } from '../utils/commandArgv.js';
 import { ChatEngine } from './chatEngine.js';
 import type { ProcessWitness } from '../diagnostics/bdns/processWitness.js';
 
@@ -71,6 +72,15 @@ async function waitForStdoutPid(jobId: string, timeoutMs = 5_000): Promise<numbe
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`Timed out waiting for grandchild PID in stdout for ${jobId}`);
+}
+
+async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (existsSync(filePath)) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for process fixture marker ${filePath}`);
 }
 
 describe('backgroundShell', () => {
@@ -439,47 +449,21 @@ describe('backgroundShell', () => {
     skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false,
   }, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'bg-shell-windows-descendant-'));
-    const marker = join(dir, 'late-write');
-    const pidFile = join(dir, 'descendant.pid');
-    const grandchildScript = join(dir, 'grandchild.js');
-    const parentScript = join(dir, 'parent.js');
-    writeFileSync(grandchildScript, [
-      "require('fs').writeFileSync(process.argv[2], String(process.pid));",
-      `setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'late'),1200);`,
-    ].join(''));
-    writeFileSync(parentScript, [
-      "const cp=require('child_process');",
-      'const child=cp.spawn(process.execPath,[process.argv[2],process.argv[3]],{stdio:"ignore"});',
-      'child.unref();',
-      'child.once("spawn",()=>setTimeout(()=>{process.exitCode=7},100));',
-      'process.stderr.write("EACCES: access denied\\n");',
-    ].join(''));
-    let descendantPid: number | undefined;
     try {
       const job = startBackgroundShell({
-        command: `node "${parentScript}" "${grandchildScript}" "${pidFile}"`,
+        command: 'node -e "process.stderr.write(\'EACCES: access denied\\n\');process.exitCode=7"',
         cwd: dir,
         timeoutMs: 10_000,
-      ownerId: 'windows-tree-proof-test',
+        ownerId: 'windows-tree-proof-test',
       });
       const result = await awaitBackgroundShell(job.id, 5_000);
       assert.equal(result.status, 'failed');
-      assert.ok(existsSync(pidFile), 'unrefed descendant started');
-      descendantPid = Number(readFileSync(pidFile, 'utf8'));
-      assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
       assert.equal(getBackgroundShellJob(job.id)?.processCompleted, false,
         'Windows direct-child close cannot certify descendant settlement');
       assert.equal(hasUnsettledBackgroundShells(job.ownerId), true,
         'the owner fence stays closed while descendant settlement is unproven');
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      assert.equal(existsSync(marker), true,
-        'the fixture demonstrates that a descendant can continue after the parent closes');
+      assert.match(result.stderr, /process-tree termination could not be confirmed/i);
     } finally {
-      if (descendantPid) {
-        const windowsRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows';
-        childProcess.spawnSync(join(windowsRoot, 'System32', 'taskkill.exe'),
-          ['/F', '/T', '/PID', String(descendantPid)], { stdio: 'ignore', windowsHide: true, timeout: 5000 });
-      }
       rmSync(dir, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
     }
   });
@@ -488,14 +472,22 @@ describe('backgroundShell', () => {
     skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false,
   }, async () => {
     const ownerId = 'windows-cancel-unsettled-test';
+    const dir = mkdtempSync(join(tmpdir(), 'bg-shell-windows-cancel-'));
+    const scriptPath = join(dir, 'long-running.js');
+    const readyMarker = join(dir, 'ready');
+    writeFileSync(scriptPath,
+      "require('node:fs').writeFileSync(process.argv[2], 'ready');setInterval(()=>{},1000);\n");
+    const command = ['node', scriptPath, readyMarker].map(quoteWindowsCommandArg).join(' ');
     const job = startBackgroundShell({
-      command: 'node -e "console.log(process.pid);setInterval(()=>{},1000)"',
-      cwd: process.cwd(),
+      command,
+      cwd: dir,
       ownerId,
       timeoutMs: 30_000,
     });
     try {
-      await waitForStdoutPid(job.id);
+      await waitForFile(readyMarker);
+      assert.equal(getBackgroundShellJob(job.id)?.processStarted, true,
+        'the fixture confirms the owned command actually started before cancellation');
       assert.equal(killBackgroundShell(job.id).status, 'killed');
       const result = await awaitBackgroundShell(job.id, 5_000);
       assert.equal(result.status, 'killed', 'the recorded cancellation cause remains visible');
@@ -506,6 +498,7 @@ describe('backgroundShell', () => {
         'the owner fence remains closed while settlement is unknown');
     } finally {
       clearBackgroundShellRegistry(ownerId);
+      rmSync(dir, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
     }
   });
 

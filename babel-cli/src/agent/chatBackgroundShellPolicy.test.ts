@@ -5,6 +5,11 @@ import test from 'node:test';
 import { executeAwaitCommandAction, executeBackgroundRunCommandAction, type BackgroundShellActionCtx } from './chatBackgroundShell.js';
 import { classifyBlockingOrigin } from './chatEngineSupport.js';
 
+function assertWindowsBackgroundDenied(observation: string, detail?: string): void {
+  assert.match(observation, /Background shell cannot confirm process-tree settlement on Windows\. Use foreground run_command\./);
+  assert.equal(detail, 'process_tree_unobservable');
+}
+
 test('background chat dispatch requires the same explicit host fallback for project code', () => {
   const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
   const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
@@ -21,9 +26,12 @@ test('background chat dispatch requires the same explicit host fallback for proj
   };
   try {
     const result = executeBackgroundRunCommandAction({ command: 'node --version' }, context);
-    const expectedReason = process.platform === 'win32' ? 'process_tree_unobservable' : 'isolation_required';
-    assert.match(result.observation, new RegExp(expectedReason));
-    assert.equal(logs.at(-1)?.detail, expectedReason);
+    if (process.platform === 'win32') {
+      assertWindowsBackgroundDenied(result.observation, logs.at(-1)?.detail);
+    } else {
+      assert.match(result.observation, /isolation_required/);
+      assert.equal(logs.at(-1)?.detail, 'isolation_required');
+    }
   } finally {
     if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
     else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
@@ -71,8 +79,7 @@ test('settled nonzero background exit retains authoritative failure evidence', a
       command: `node ${relativeFixture}`,
     }, context);
     if (process.platform === 'win32') {
-      assert.match(started.observation, /process_tree_unobservable/);
-      assert.equal(logs.at(-1)?.detail, 'process_tree_unobservable');
+      assertWindowsBackgroundDenied(started.observation, logs.at(-1)?.detail);
       return;
     }
     const taskId = /task_id="([^"]+)"/.exec(started.observation)?.[1];
@@ -114,8 +121,7 @@ test('background command logs bind cwd and only mark a completed process after a
   try {
     const started = executeBackgroundRunCommandAction({ command: 'node --version' }, context);
     if (process.platform === 'win32') {
-      assert.match(started.observation, /process_tree_unobservable/);
-      assert.equal(logs.at(-1)?.detail, 'process_tree_unobservable');
+      assertWindowsBackgroundDenied(started.observation, logs.at(-1)?.detail);
       return;
     }
     assert.match(started.observation, /task_id="[^"]+"/);
