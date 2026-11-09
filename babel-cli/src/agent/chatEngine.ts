@@ -421,7 +421,7 @@ import {
   resolveVerifierCacheIdentity,
   resolveEngineRequiredVerifiers,
   restorePersistedVerifierEvidence,
-  refreshChatCompletionVerifierCurrency,
+  refreshChatCompletionVerifierCurrency, selectLedgerReceiptsById,
 } from "./chatEngineVerifierAdapter.js";
 import {
   beginUserSubmission,
@@ -2645,7 +2645,7 @@ export class ChatEngine {
     const historyErrors = this.workingState.failedVerifierHistoryOverflow || unresolvedHistory.length > 0
       ? ['Settled failed verifier execution requires newer covering current green evidence'] : [];
     proofSelection.evidenceErrors.push(...historyErrors);
-    const selectedChatReceipts = this.executedVerifierLedger.filter(receipt => proofSelection.selectedCoveringReceipts.includes(receipt));
+    const selectedChatReceipts = selectLedgerReceiptsById(this.executedVerifierLedger, proofSelection.selectedCoveringReceipts);
     const criterionChatReceipts = currentOwnerReceipts.filter(receipt => attemptSelection.currentAttempts.some(attempt => attempt.receiptId === receipt.receiptId));
     return { ...canonical, verifierEvidenceErrors: canonical.verifierEvidenceErrors, requiredVerifierCommands, requiredVerifiers, verifierOwner, currentWorkspaceRevisionHash, currentReceiptRevisionHashes, unplannedAttemptEnvironmentFingerprint, proofSelection, selectedChatReceipts, criterionChatReceipts };
   }
