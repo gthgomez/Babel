@@ -30,6 +30,13 @@ export function resolveExistingVerifierInputPaths(
   fs: VerifierInputPathFs = defaultFs,
 ): string[] {
   const files = new Set<string>()
+  // Resolve the boundary itself once. On Windows, callers can receive an
+  // 8.3 short-path alias for projectRoot while realpath returns its long
+  // spelling. Comparing a canonical input against the uncanonicalized root
+  // makes an in-root file look like a parent traversal and silently drops
+  // verifier integrity coverage.
+  const canonicalRoot = fs.realpath ? fs.realpath(projectRoot) : projectRoot
+  if (!canonicalRoot) return []
   for (const token of inputs) {
     const lexical = token.replace(/\\/g, '/')
     if (lexical.startsWith('../') || /^[A-Za-z]:|^\//.test(lexical) || /(^|\/)\.\.(\/|$)/.test(lexical)) continue
@@ -37,7 +44,7 @@ export function resolveExistingVerifierInputPaths(
     if (!fs.exists(absolute) || (fs.isFile && !fs.isFile(absolute))) continue
     const canonicalAbsolute = fs.realpath ? fs.realpath(absolute) : absolute
     if (!canonicalAbsolute) continue
-    const canonical = safeProjectRelativePath(projectRoot, canonicalAbsolute)
+    const canonical = safeProjectRelativePath(canonicalRoot, canonicalAbsolute)
     // An out-of-root symlink is never admitted as an independently verifiable input.
     if (!canonical) continue
     files.add(lexical)

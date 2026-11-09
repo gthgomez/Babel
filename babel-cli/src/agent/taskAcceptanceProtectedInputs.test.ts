@@ -265,7 +265,7 @@ test('canonical verifier-input aliases are protected and out-of-root symlinks ar
   const fs: ProtectedInputFs = {
     readFile: () => null,
     exists: () => true,
-    realpath: () => join(root, canonical),
+    realpath: path => path === root ? root : join(root, canonical),
   };
   const paths = resolveExistingVerifierInputPaths(root, [alias], fs);
   assert.deepEqual(paths, [canonical, alias]);
@@ -279,7 +279,7 @@ test('canonical verifier-input aliases are protected and out-of-root symlinks ar
 
   const outside = resolveExistingVerifierInputPaths(root, [alias], {
     ...fs,
-    realpath: () => '/tmp/outside/parser.test.mjs',
+    realpath: path => path === root ? root : '/tmp/outside/parser.test.mjs',
   });
   assert.deepEqual(outside, []);
   const directory = resolveExistingVerifierInputPaths(root, [alias], {
@@ -287,6 +287,25 @@ test('canonical verifier-input aliases are protected and out-of-root symlinks ar
     isFile: () => false,
   });
   assert.deepEqual(directory, []);
+});
+
+test('verifier input canonicalization accepts an in-root Windows short-path root alias', () => {
+  const rootAlias = 'C:/Users/RUNNER~1/AppData/Local/Temp/project';
+  const canonicalRoot = 'C:/Users/runneradmin/AppData/Local/Temp/project';
+  const fs: ProtectedInputFs = {
+    readFile: () => null,
+    exists: () => true,
+    isFile: () => true,
+    realpath: path => path === rootAlias
+      ? canonicalRoot
+      : path.startsWith(rootAlias)
+        ? `${canonicalRoot}${path.slice(rootAlias.length)}`
+        : null,
+  };
+  assert.deepEqual(
+    resolveExistingVerifierInputPaths(rootAlias, ['test/parser.test.cjs'], fs),
+    ['test/parser.test.cjs'],
+  );
 });
 
 test('admitted execution matrix: worktree safety refuses protected witness paths before snapshot', () => {
