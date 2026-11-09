@@ -18,6 +18,17 @@ import {
 const root = path.resolve(import.meta.dirname, '..')
 const workspaceOwner = `${process.getuid?.() ?? 65534}:${process.getgid?.() ?? process.getuid?.() ?? 65534}`
 
+function isSameOrNestedPath(parent, candidate) {
+  const relativePath = path.relative(path.resolve(parent), path.resolve(candidate))
+  return relativePath === '' || (
+    relativePath !== '..' && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath)
+  )
+}
+
+function pathsOverlap(left, right) {
+  return isSameOrNestedPath(left, right) || isSameOrNestedPath(right, left)
+}
+
 test('core catalog is small, varied, and explicitly sourced', async () => {
   const catalog = await loadCatalog(root)
   assert.equal(catalog.tasks.length, 2)
@@ -77,8 +88,16 @@ test('Docker args keep solver and grader isolated and resource bounded', async (
     .filter((source) => typeof source === 'string')
   const repositoryRoot = path.resolve(root, '../..')
   const runnerDirectory = path.dirname(path.join(root, 'grader-runner.mjs'))
-  assert.ok(!mountedSources.some((source) => path.resolve(source) === repositoryRoot), 'the repository root is never mounted into the grader')
-  assert.ok(mountedSources.some((source) => path.resolve(source) === path.resolve(runnerDirectory)), 'only the dedicated grader helper directory is mounted from the repository')
+  const allowedRunnerDirectory = path.resolve(runnerDirectory)
+  assert.equal(pathsOverlap(repositoryRoot, repositoryRoot), true, 'overlap detects the repository root itself')
+  assert.equal(pathsOverlap(repositoryRoot, path.dirname(repositoryRoot)), true, 'overlap detects ancestors that expose the repository')
+  assert.equal(pathsOverlap(repositoryRoot, path.join(repositoryRoot, 'private')), true, 'overlap detects repository subdirectories')
+  assert.equal(pathsOverlap(repositoryRoot, '/tmp/task-oracle'), false, 'isolated task data stays outside the repository')
+  assert.ok(
+    mountedSources.every(source => !pathsOverlap(source, repositoryRoot) || path.resolve(source) === allowedRunnerDirectory),
+    'the grader may mount only the dedicated helper directory from or around the repository',
+  )
+  assert.ok(mountedSources.some((source) => path.resolve(source) === allowedRunnerDirectory), 'the dedicated grader helper directory is mounted read-only')
 
   const solverArgs = buildIsolatedDockerArgs(task, { role: 'solver', workspace: '/tmp/solver-workspace', command: ['node', 'agent.mjs'] })
   assert.equal(solverArgs[solverArgs.indexOf('--user') + 1], workspaceOwner)
