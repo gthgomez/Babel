@@ -184,6 +184,31 @@ describe('backgroundShell', () => {
     assert.equal(result.status, 'killed');
   });
 
+  it('clears stale POSIX tree uncertainty after close confirms the group has settled', {
+    skip: process.platform === 'win32' ? 'POSIX process-group settlement is not available on Windows' : false,
+  }, async (t) => {
+    const originalKill = process.kill.bind(process);
+    t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid < 0) {
+        const error = Object.assign(new Error('process group already exited'), { code: 'ESRCH' });
+        throw error;
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill);
+
+    const job = startBackgroundShell({ command: 'sleep 8', cwd: process.cwd(), timeoutMs: 60_000 });
+    const killed = killBackgroundShell(job.id);
+    assert.equal(killed.status, 'killed');
+    assert.equal(getBackgroundShellJob(job.id)?.processCompleted, false,
+      'a failed group signal is uncertain until the close handler confirms settlement');
+
+    const result = await awaitBackgroundShell(job.id, 5_000);
+    assert.equal(result.status, 'killed');
+    assert.equal(getBackgroundShellJob(job.id)?.processCompleted, true,
+      'a complete POSIX group observation clears stale uncertainty');
+    assert.equal(hasUnsettledBackgroundShells(job.ownerId), false);
+  });
+
   it('hard timeout terminates the full process tree (grandchild)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'bg-shell-timeout-tree-'));
     const grandchildScript = join(dir, 'grandchild.js');

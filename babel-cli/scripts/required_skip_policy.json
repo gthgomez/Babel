@@ -127,7 +127,8 @@
       ],
       "files": {
         "src/agent/backgroundShell.test.ts": [
-          "does not release await_command while an unrefed descendant can still write"
+          "does not release await_command while an unrefed descendant can still write",
+          "clears stale POSIX tree uncertainty after close confirms the group has settled"
         ]
       }
     },

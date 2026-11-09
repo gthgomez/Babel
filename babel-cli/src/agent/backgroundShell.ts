@@ -372,6 +372,11 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
           terminateChildTree(child);
           descendantsSettled = await waitForProcessGroupExit(child.pid, 5_000);
         }
+        // A previous timeout/cancellation may have failed to signal a group
+        // that exited before this close handler ran. A complete POSIX group
+        // observation supersedes that stale uncertainty; Windows has no
+        // equivalent process-group proof and deliberately retains its flag.
+        if (descendantsSettled) job.treeTerminationUnknown = false;
       }
       job.physicalClosed = descendantsSettled;
       if (job.status === 'running') {
