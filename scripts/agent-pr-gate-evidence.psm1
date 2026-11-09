@@ -73,7 +73,18 @@ function Get-AgentCISnapshot {
           $jobKey = $Repository + ':' + $jobId
           if ($null -ne $JobMetadataCache -and $JobMetadataCache.ContainsKey($jobKey)) {
             $jobResult = [pscustomobject]@{ available = $true; value = $JobMetadataCache[$jobKey] }
-          } else { $apiCalls++; $jobResult = & $ReadJson "repos/$Repository/actions/jobs/$jobId" }
+          } else {
+            $jobEndpoint = "repos/$Repository/actions/jobs/$jobId"
+            for ($jobReadAttempt = 0; $jobReadAttempt -lt 2; $jobReadAttempt++) {
+              if ([DateTimeOffset]::UtcNow -ge $Deadline) { throw 'github_snapshot_deadline_exceeded' }
+              $apiCalls++
+              $jobResult = & $ReadJson $jobEndpoint
+              if ($jobResult.available) { break }
+              $jobReadError = [string](Get-CIProperty $jobResult 'error')
+              $retryableReadError = $jobReadError -in @('github_api_timeout', 'github_api_server_error', 'github_api_unavailable')
+              if (-not $retryableReadError -or $jobReadAttempt -eq 1) { break }
+            }
+          }
           if (-not $jobResult.available) { throw 'workflow_check_attempt_unavailable' }
           $job = $jobResult.value
           $jobAttempt = [string](Get-CIProperty $job 'run_attempt')
