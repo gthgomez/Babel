@@ -19,12 +19,37 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { designatedWitnessCommands, explicitCriterionVerifierCommands, hasDesignatedRegressionWitnessBinding } from './taskAcceptanceExecutableBinding.js';
-import { parseStructuredVerifierCommand } from './completionGatePolicy.js';
+import { explicitNodeTestFileArgs } from './completionGatePolicy.js';
 import type { TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js';
 
 export interface ProtectedInputFs {
   readFile: (path: string) => string | null;
   exists: (path: string) => boolean;
+}
+
+/** Existing exact Node test files that can be frozen at task admission. */
+export function existingNodeVerifierInputFiles(
+  projectRoot: string,
+  meaning: TaskAcceptanceMeaning,
+  fs: ProtectedInputFs = defaultProtectedInputFs,
+  trustedVerifierCommands: readonly string[] = [],
+): string[] {
+  const commands = [...new Set([
+    ...(hasDesignatedRegressionWitnessBinding(meaning) ? designatedWitnessCommands(meaning) : []),
+    ...explicitCriterionVerifierCommands(meaning),
+    ...trustedVerifierCommands,
+  ])];
+  const files = new Set<string>();
+  for (const command of commands) {
+    const inputs = explicitNodeTestFileArgs(command);
+    if (!inputs?.length) continue;
+    for (const token of inputs) {
+      const relative = token.replace(/\\/g, '/');
+      if (relative.startsWith('../') || /^[A-Za-z]:|^\//.test(relative) || /(^|\/)\.\.(\/|$)/.test(relative)) continue;
+      if (fs.exists(join(projectRoot, relative))) files.add(relative);
+    }
+  }
+  return [...files].sort();
 }
 
 export const defaultProtectedInputFs: ProtectedInputFs = {
@@ -82,17 +107,6 @@ export function designatedWitnessProtectedInputs(
     }
     }
   }
-  for (const command of commands) {
-    const parsed = parseStructuredVerifierCommand(command, { authoritySource: 'built_in_runner' });
-    if (!parsed || !/^node(?:\.exe)?$/i.test(parsed.executable.replace(/\\/g, '/').split('/').pop() ?? '')) continue;
-    const testFlag = parsed.args.indexOf('--test');
-    if (testFlag < 0) continue;
-    for (const token of parsed.args.slice(testFlag + 1)) {
-      if (token.startsWith('-') || !/(?:^|\/)[^/]+\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(token)) continue;
-      const relative = token.replace(/\\/g, '/');
-      if (relative.startsWith('../') || /^[A-Za-z]:|^\//.test(relative) || /(^|\/)\.\.(\/|$)/.test(relative)) continue;
-      if (fs.exists(join(projectRoot, relative))) protectedPaths.add(relative);
-    }
-  }
+  for (const path of existingNodeVerifierInputFiles(projectRoot, meaning, fs)) protectedPaths.add(path);
   return [...protectedPaths].sort();
 }

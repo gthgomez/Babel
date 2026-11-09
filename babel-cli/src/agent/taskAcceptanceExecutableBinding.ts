@@ -1,5 +1,6 @@
 import { sha256Canonical } from '../acceptance/canonical.js'
 import {
+  explicitNodeTestFileArgs,
   isAuthoritativeVerifierCommand,
   parseStructuredVerifierCommand,
 } from './completionGatePolicy.js'
@@ -120,8 +121,15 @@ function requirementTypeForCommand(command: string): AcceptanceRequirementType {
 function materializeExecutableVerification(
   command: string,
   defaultWorkingDirectory?: string,
+  existingVerifierInputFiles?: readonly string[],
 ): AcceptanceRequirementV1['verification'] | null {
   if (!isAuthoritativeVerifierCommand(command)) return null
+  const nodeTestFiles = explicitNodeTestFileArgs(command)
+  if (nodeTestFiles !== null && nodeTestFiles.length === 0) return null
+  if (nodeTestFiles && existingVerifierInputFiles !== undefined) {
+    const frozen = new Set(existingVerifierInputFiles.map(path => path.replace(/\\/g, '/').replace(/^\.\//, '')))
+    if (nodeTestFiles.some(path => !frozen.has(path.replace(/\\/g, '/').replace(/^\.\//, '')))) return null
+  }
   const parsed = parseStructuredVerifierCommand(command, {
     authoritySource: 'built_in_runner',
   })
@@ -144,8 +152,9 @@ function bindCriterion(
   criterion: AcceptanceRequirementV1,
   command: string,
   defaultWorkingDirectory?: string,
+  existingVerifierInputFiles?: readonly string[],
 ): AcceptanceRequirementV1 {
-  const verification = materializeExecutableVerification(command, defaultWorkingDirectory)
+  const verification = materializeExecutableVerification(command, defaultWorkingDirectory, existingVerifierInputFiles)
   if (!verification) return criterion
   return {
     ...criterion,
@@ -193,6 +202,8 @@ function explicitCriterionVerifierLink(
   const commandClause = criterion.description.slice(marker.index + marker[0].length).trim()
   const command = extractPositiveCommandSuccessCriterion(commandClause)
   if (!behavior || !command || !isAuthoritativeVerifierCommand(command)) return null
+  const nodeTestFiles = explicitNodeTestFileArgs(command)
+  if (nodeTestFiles !== null && nodeTestFiles.length === 0) return null
   return { behavior, command }
 }
 
@@ -202,7 +213,10 @@ export function explicitCriterionVerifierCommands(meaning: TaskAcceptanceMeaning
     const source = meaning.sources.find(item => item.criterion_id === criterion.id)
     if (source?.status !== 'explicit') return []
     const link = explicitCriterionVerifierLink(criterion)
-    return link ? [link.command] : []
+    const command = link?.command ?? extractPositiveCommandSuccessCriterion(criterion.description)
+    if (!command) return []
+    const nodeTestFiles = explicitNodeTestFileArgs(command)
+    return nodeTestFiles !== null && nodeTestFiles.length === 0 ? [] : [command]
   })
 }
 
@@ -229,8 +243,9 @@ function bindExplicitCriterionLink(
   command: string,
   behavior: string,
   defaultWorkingDirectory?: string,
+  existingVerifierInputFiles?: readonly string[],
 ): AcceptanceRequirementV1 {
-  const verification = materializeExecutableVerification(command, defaultWorkingDirectory)
+  const verification = materializeExecutableVerification(command, defaultWorkingDirectory, existingVerifierInputFiles)
   if (!verification) return criterion
   return {
     ...criterion,
@@ -343,6 +358,8 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   meaning: TaskAcceptanceMeaning
   trustedVerifierCommands: readonly string[]
   defaultWorkingDirectory?: string
+  /** Existing test input paths frozen at session admission; new tests cannot self-certify. */
+  existingVerifierInputFiles?: readonly string[]
 }): TaskAcceptanceMeaning {
   const trusted = [
     ...new Set(
@@ -357,7 +374,7 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   const explicitBound = input.meaning.criteria.map((criterion) => {
     const command = pickTrustedCommand(criterion, trusted, input.meaning.sources)
     if (!command) return criterion
-    const bound = bindCriterion(criterion, command, input.defaultWorkingDirectory)
+    const bound = bindCriterion(criterion, command, input.defaultWorkingDirectory, input.existingVerifierInputFiles)
     if (bound.verification.verifier_id === criterion.verification.verifier_id) return criterion
     bindingProvenance.push({
       kind: 'derived_acceptance',
@@ -406,6 +423,7 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
           command,
           designated.behavior,
           input.defaultWorkingDirectory,
+          input.existingVerifierInputFiles,
         )
         if (bound.verification.verifier_id === criterion.verification.verifier_id) continue
         const existingIndex = explicitBound.findIndex(item => item.id === criterion.id)

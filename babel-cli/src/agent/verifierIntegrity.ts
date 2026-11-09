@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseCommandArgv } from '../utils/commandArgv.js';
+import { explicitNodeTestFileArgs } from './completionGatePolicy.js';
 
 /**
  * Normalize a relative path for integrity key matching (posix-style).
@@ -101,16 +101,9 @@ export function computeVerifierDependencyHashes(
   }
 
   for (const command of allowedVerifierCommands) {
-    let argv: string[] = [];
-    try { argv = parseCommandArgv(command); } catch { argv = []; }
-    const nodeExecutable = argv[0]?.replace(/\\/g, '/').split('/').pop() ?? '';
-    const nodeTestIndex = /^node(?:\.exe)?$/i.test(nodeExecutable)
-      ? argv.slice(1).indexOf('--test')
-      : -1;
-    if (nodeTestIndex >= 0) {
-      const testArgs = argv.slice(1 + nodeTestIndex + 1);
-      for (const token of testArgs) {
-        if (token.startsWith('-') || !/(?:^|\/)[^/]+\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(token)) continue;
+    const nodeTestFiles = explicitNodeTestFileArgs(command);
+    if (nodeTestFiles !== null) {
+      for (const token of nodeTestFiles) {
         const relative = token.replace(/\\/g, '/');
         if (relative.startsWith('../') || /^[A-Za-z]:|^\//.test(relative) || /(^|\/)\.\.(\/|$)/.test(relative)) continue;
         filesToHash.add(relative);

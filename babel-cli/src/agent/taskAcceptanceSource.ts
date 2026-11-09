@@ -122,6 +122,7 @@ export function assertCanonicalAcceptanceAmendments(
       meaning: inferTaskAcceptanceForVersion(started.task, predecessorVersion),
       trustedVerifierCommands: current.verifier_requirements,
       defaultWorkingDirectory: '.',
+      existingVerifierInputFiles: current.protected_paths,
     })
     const prior = new Set(descriptor.kind === 'initialize' ? [] : previous.acceptance_criteria)
     const added = meaning.criteria.filter(item => !prior.has(item.description))

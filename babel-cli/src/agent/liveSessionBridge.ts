@@ -22,7 +22,7 @@ import {
   bindExecutableVerifiersToTaskAcceptance,
   mergeTrustedVerifierCommands,
 } from './taskAcceptanceExecutableBinding.js';
-import { designatedWitnessProtectedInputs } from './taskAcceptanceProtectedInputs.js';
+import { designatedWitnessProtectedInputs, existingNodeVerifierInputFiles } from './taskAcceptanceProtectedInputs.js';
 import { join } from 'node:path';
 import {
   buildInstructionManifestV1,
@@ -332,12 +332,18 @@ export function resolveLiveSessionAuthority(input: {
     ],
   });
 
+  const inferredMeaning = inferTaskAcceptanceV3(input.task)
+  const trustedVerifierCommands = mergeTrustedVerifierCommands({
+    requiredVerifierCommands: input.verifierRequirements ?? [],
+    projectTestCommands: input.projectTestCommands ?? [],
+  })
+  const existingVerifierInputFiles = input.projectRoot
+    ? existingNodeVerifierInputFiles(input.projectRoot, inferredMeaning, undefined, trustedVerifierCommands)
+    : []
   const meaning = bindExecutableVerifiersToTaskAcceptance({
-    meaning: inferTaskAcceptanceV3(input.task),
-    trustedVerifierCommands: mergeTrustedVerifierCommands({
-      requiredVerifierCommands: input.verifierRequirements ?? [],
-      projectTestCommands: input.projectTestCommands ?? [],
-    }),
+    meaning: inferredMeaning,
+    trustedVerifierCommands,
+    existingVerifierInputFiles,
     ...(input.projectRoot ? { defaultWorkingDirectory: '.' } : {}),
   });
   // A designated regression witness makes the already-present tests and their
@@ -345,7 +351,7 @@ export function resolveLiveSessionAuthority(input: {
   // admission through completion. Ordinary tasks keep the default set.
   const protectedPaths = new Set(input.protectedPaths ?? ['.env', '.git']);
   if (input.projectRoot) {
-    for (const path of designatedWitnessProtectedInputs(input.projectRoot, meaning)) {
+    for (const path of [...designatedWitnessProtectedInputs(input.projectRoot, meaning), ...existingVerifierInputFiles]) {
       protectedPaths.add(path);
     }
   }

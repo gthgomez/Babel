@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import {
   bindExecutableVerifiersToTaskAcceptance,
   commandsMatchForExecutableBinding,
   criterionExplicitlyNamesTrustedCommand,
+  explicitCriterionVerifierCommands,
   extractPositiveCommandSuccessCriterion,
   mergeTrustedVerifierCommands,
 } from './taskAcceptanceExecutableBinding.js'
@@ -259,7 +263,7 @@ test('unresolved acceptance is not upgraded by trusted verifiers alone', () => {
   assert.equal(bound.criteria[0]!.verification.verifier_id.startsWith('meaning:'), true)
 })
 
-test('green verifier guidance distinguishes explicit executable checks from inferred semantic meaning', () => {
+test('green verifier guidance distinguishes explicit executable checks from inferred semantic meaning', t => {
   const verifierResult = applyWorkingStateEvent(createWorkingState('Normalize decimal separators.'), {
     type: 'verifier', identity: 'npm test', exitCode: 0, summary: '2/2 tests passed',
   })
@@ -277,15 +281,19 @@ test('green verifier guidance distinguishes explicit executable checks from infe
     'an absent frozen cwd stays absent in the advisory contract projection')
 
   const spacedCommand = 'node --test "test files/foo.test.mjs"'
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-explicit-node-check-'))
+  t.after(() => rmSync(projectRoot, { recursive: true, force: true }))
+  mkdirSync(join(projectRoot, 'test files'), { recursive: true })
+  writeFileSync(join(projectRoot, 'test files', 'foo.test.mjs'), 'assert.ok(true)\n')
   const spaced = resolveLiveSessionAuthority({
-    mode: 'chat', task: `Requirements:\n- \`${spacedCommand}\` passes.`, projectRoot: null,
-    executionScope: { kind: 'conversation' }, projectTestCommands: [spacedCommand],
+    mode: 'chat', task: `Requirements:\n- \`${spacedCommand}\` passes.`, projectRoot,
+    projectTestCommands: [spacedCommand],
   }).taskContract
   const spacedReview = formatWorkingStateBlock(verifierResult, spaced)
   assert.match(spacedReview, /argv: \["--test","test files\/foo\.test\.mjs"\]/,
     'argument boundaries and paths containing spaces are preserved')
   assert.match(spacedReview, /command_hash: "[0-9a-f]{64}"/)
-  assert.doesNotMatch(spacedReview, /working_directory:/)
+  assert.match(spacedReview, /working_directory: "\."/)
 
   const semanticTask = 'Normalize decimal separators and preserve the original scale.'
   const semantic = resolveLiveSessionAuthority({
@@ -363,6 +371,22 @@ test('criterion link matching preserves behavior-literal case', () => {
   const lowercaseRequirement = bound.criteria.find(item => item.description.includes("echo('abc')"))!
   assert.ok(uppercaseGoal.verification.verifier_id.startsWith('meaning:'))
   assert.ok(lowercaseRequirement.verification.verifier_id.startsWith('verifier:'))
+})
+
+test('bare node --test cannot bind an acceptance criterion without a frozen input set', () => {
+  const task = [
+    'Fix parser.js so parseSum(2, 3) returns 5.',
+    'Requirements:',
+    '- parseSum(2, 3) returns 5; verified by: `node --test` must pass.',
+  ].join('\n')
+  const meaning = inferTaskAcceptanceV3(task)
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning,
+    trustedVerifierCommands: ['node --test'],
+    defaultWorkingDirectory: '.',
+  })
+  assert.equal(bound.criteria.some(item => !item.verification.verifier_id.startsWith('meaning:')), false)
+  assert.deepEqual(explicitCriterionVerifierCommands(meaning), [])
 })
 
 test('multiple designated commands inside one criterion stay fail-closed', () => {

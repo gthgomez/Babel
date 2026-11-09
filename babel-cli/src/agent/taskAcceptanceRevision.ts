@@ -79,6 +79,7 @@ export function createTaskAcceptanceRevision(
     meaning: inferTaskAcceptanceForVersion(source.userInput, interpretationVersion),
     trustedVerifierCommands: current.verifier_requirements,
     defaultWorkingDirectory: '.',
+    existingVerifierInputFiles: current.protected_paths,
   })
   if (meaning.unresolved)
     throw new Error('TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED: State the additional observable requirement explicitly')
