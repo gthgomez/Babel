@@ -86,6 +86,7 @@ import {
 } from "./stallDetector.js";
 import type { ProgressSignal } from "./progressController.js";
 import {
+  hasAdmissibleVerifierProgress,
   progressSignalsFromReceipt,
   type ProgressReceipt,
 } from "./progressReceipt.js";
@@ -268,9 +269,11 @@ export class ChatEngineStreamingLoop {
           },
         );
       }
+      const acceptanceContract = this.host.getTaskContract?.() ?? null;
       this.host.conversation = upsertWorkingStateMessage(
         this.host.conversation,
         this.host.workingState,
+        acceptanceContract,
       );
 
       if (
@@ -306,7 +309,7 @@ export class ChatEngineStreamingLoop {
         this.host.services.conversation.recordAssistantMessage(
           this.host.parity.eventLog,
           this.host.parity.turnId,
-          formatWorkingStateBlock(this.host.workingState),
+          formatWorkingStateBlock(this.host.workingState, acceptanceContract),
           {
             name: "working_state",
             provenance: "mixed",
@@ -1525,6 +1528,12 @@ export class ChatEngineStreamingLoop {
           this.host.midLoopCriticFired = false;
           this.host.applyPostWriteRepairBudget();
         } else {
+          // A new host-admitted verifier result is meaningful recovery even
+          // when it is red. It gives the next completion attempt fresh evidence
+          // to act on. Unchanged reads and model claims do not clear strikes.
+          if (hasAdmissibleVerifierProgress(cycleReceipt)) {
+            this.host.gateStrikes = 0;
+          }
           this.host.turnsWithoutWrite++;
         }
 

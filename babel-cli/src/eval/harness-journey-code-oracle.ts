@@ -51,12 +51,14 @@ export async function gradeJourneyCode(id: string, read: JourneyOutputReader, im
     if (totalBytes > 4_194_304) return 'unavailable'
     files.push({ relativePath: path, contents: output.text })
     let dynamicImport = false
+    let asyncSyntax = false
     function inspect(node: ts.Node): void {
       if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) dynamicImport = true
+      if (ts.isAwaitExpression(node) || (ts.isForOfStatement(node) && Boolean(node.awaitModifier))) asyncSyntax = true
       ts.forEachChild(node, inspect)
     }
     try { inspect(ts.createSourceFile(path, output.text, ts.ScriptTarget.Latest, false, ts.ScriptKind.JS)) } catch { return 'unavailable' }
-    if (dynamicImport) return 'unavailable'
+    if (dynamicImport || asyncSyntax) return 'unavailable'
     for (const dependency of ts.preProcessFile(output.text, true, true).importedFiles) {
       if (!dependency.fileName.startsWith('./') && !dependency.fileName.startsWith('../')) return 'unavailable'
       const resolved = posix.normalize(posix.join(posix.dirname(path), dependency.fileName))
@@ -88,9 +90,27 @@ for (const call of calls) {
       const path = posix.normalize(posix.join(posix.dirname(parent.identifier), specifier))
       return getModule(path)
     }
-    const measurement = new vm.SourceTextModule('import {' + call.name + ' as measured} from ' + JSON.stringify('./' + call.path) + '; export const value = measured(' + call.args.map(arg => JSON.stringify(arg)).join(',') + ')', {context,identifier:'__measurement__.mjs'})
+    const measurement = new vm.SourceTextModule('import {' + call.name + ' as measured} from ' + JSON.stringify('./' + call.path) + '; let measurementThrew = false; const measuredValue = (() => { try { return measured(' + call.args.map(arg => JSON.stringify(arg)).join(',') + ') } catch { measurementThrew = true; return undefined } })(); export { measurementThrew as threw, measuredValue as value }', {context,identifier:'__measurement__.mjs'})
     await measurement.link(linker)
-    await measurement.evaluate({timeout:1000})
+    // In the pinned Node 22 runtime, awaiting SourceTextModule.evaluate() with
+    // microtaskMode:'afterEvaluate' can leave even a synchronous module's
+    // evaluation promise unsettled (Node exits with code 13). The module's
+    // synchronous evaluation has already run when evaluate() returns; inspect
+    // its host-owned status instead of awaiting that cross-context promise.
+    // Async/TLA modules are outside this synchronous value oracle and must
+    // remain unavailable rather than being misreported as a value mismatch.
+    const evaluation = measurement.evaluate({timeout:1000})
+    if (measurement.status === 'errored') await evaluation
+    if (measurement.status !== 'evaluated') {
+      void evaluation.catch(() => {})
+      results.push({unsupported_type:true})
+      continue
+    }
+    void evaluation.catch(() => {})
+    if (measurement.namespace.threw === true) {
+      results.push({threw:true})
+      continue
+    }
     const value = measurement.namespace.value
     results.push((typeof value === 'number' && Number.isFinite(value)) || typeof value === 'string' ? {value} : {unsupported_type:true})
   } catch { results.push({threw:true}) }

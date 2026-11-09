@@ -19,7 +19,7 @@ import {
   type ChatMessage,
   type ChatToolAction,
 } from './chatToolDefinitions.js';
-import { isConfirmedMutation, type MutationEffectStatus } from './mutationTools.js';
+import { isConfirmedMutation, type MutationEffectScope, type MutationEffectStatus } from './mutationTools.js';
 import { normalizeModelToolName } from './canonicalToolMapping.js';
 import { invalidateReadCacheForPath } from './codingLoop/index.js';
 import type { ChatEngineActionExecutorHost } from './chatEngineContracts.js';
@@ -365,10 +365,30 @@ export function summarizeDroppedTurns(dropped: ChatMessage[]): string {
 export type BlockedToolLogEntry = {
   tool: string;
   target: string;
+  /** Host-observed working directory for command identity; never model supplied. */
+  working_directory?: string;
+  processExecuted?: boolean;
+  processCompleted?: boolean;
+  /** Host-owned background job identity, repeated on its later await receipt. */
+  processExecutionId?: string;
   exit_code?: number;
   error?: string;
   stdout?: string;
   stderr?: string;
+};
+
+/** Host-recorded tool evidence retained by ChatEngine across turns. */
+export type ChatEngineToolCallLogEntry = BlockedToolLogEntry & {
+  toolCallId?: string;
+  detail?: string;
+  index: number;
+  verified?: boolean;
+  verifierExecuted?: boolean;
+  verifierSemanticSignature?: string;
+  preDispatchNoEffect?: true;
+  mutation_paths?: string[];
+  effect_status?: MutationEffectStatus;
+  effect_scope?: MutationEffectScope;
 };
 
 /**
@@ -445,6 +465,9 @@ function failureChannelText(entry: BlockedToolLogEntry): string {
  * output also produces.
  */
 export function classifyBlockingOrigin(entry: BlockedToolLogEntry): BlockingOrigin | null {
+  // A running command can emit diagnostics before it has settled. A timeout
+  // from await_command is not proof that this process can no longer progress.
+  if (entry.processExecuted === true && entry.processCompleted !== true) return null;
   const text = failureChannelText(entry);
   if (text === '') return null;
   // Errno markers are the strongest signal; still require a failure channel.
@@ -518,9 +541,63 @@ export function detectAndBuildBlockedReport(
     'run_command',
     'shell_exec',
     'test_run',
+    'await_command',
   ]);
-  const classified = toolCallLog
-    .map((tc) => {
+  // A later successful retry of the exact same action resolves an earlier
+  // transient block. Keep the last observed state for each tool/target pair;
+  // unrelated successes do not erase evidence about a different dependency.
+  const activeBlockingByAction = new Map<string, { entry: BlockedToolLogEntry; position: number }>();
+  const backgroundDispatchPosition = new Map<string, number>();
+  const latestDispatchPosition = new Map<string, number>();
+  const cwdSensitiveTools = new Set(['run_command', 'shell_exec', 'test_run', 'await_command']);
+  for (const [index, entry] of toolCallLog.entries()) {
+    if (!investigateTools.has(entry.tool) || !entry.target) continue;
+    if (entry.tool === 'run_command' && entry.processExecutionId && entry.processCompleted !== true) {
+      backgroundDispatchPosition.set(entry.processExecutionId, index);
+    }
+    // A shell command's display target is not its full identity. If the host
+    // did not capture cwd, isolate this event so it cannot clear another
+    // command occurrence under an unknown directory.
+    const cwd = entry.working_directory;
+    const identityTool = entry.tool === 'await_command' ? 'run_command' : entry.tool;
+    const key = cwdSensitiveTools.has(entry.tool) && !cwd
+      ? `${identityTool}\0${entry.target}\0unknown-cwd\0${index}`
+      : `${identityTool}\0${entry.target}\0${cwd ?? ''}`;
+    if (classifyBlockingOrigin(entry)) {
+      const dispatchIndex = entry.tool === 'await_command' && entry.processExecutionId
+        ? backgroundDispatchPosition.get(entry.processExecutionId)
+        : index;
+      const latestDispatch = latestDispatchPosition.get(key);
+      // Await results may arrive out of order. Once a newer execution result
+      // has been observed, older successes and failures are historical.
+      if (dispatchIndex !== undefined && latestDispatch !== undefined && dispatchIndex < latestDispatch) continue;
+      if (dispatchIndex !== undefined) latestDispatchPosition.set(key, dispatchIndex);
+      // Map.set on an existing key does not move its insertion order. Reinsert
+      // so the bounded report window reflects the chronology of the latest
+      // blocking observations.
+      activeBlockingByAction.delete(key);
+      // For an await receipt, chronology belongs to the execution's dispatch,
+      // not to the later event that collected its result.
+      activeBlockingByAction.set(key, { entry, position: dispatchIndex ?? index });
+    } else if (entry.exit_code === 0 && !entry.error &&
+      (!cwdSensitiveTools.has(entry.tool) || (entry.processExecuted === true && entry.processCompleted === true))) {
+      const blocking = activeBlockingByAction.get(key);
+      const dispatchIndex = entry.tool === 'await_command' && entry.processExecutionId
+        ? backgroundDispatchPosition.get(entry.processExecutionId)
+        : index;
+      const latestDispatch = latestDispatchPosition.get(key);
+      if (dispatchIndex !== undefined && latestDispatch !== undefined && dispatchIndex < latestDispatch) continue;
+      if (dispatchIndex !== undefined) latestDispatchPosition.set(key, dispatchIndex);
+      // A completed await is only recovery evidence when it belongs to a
+      // process dispatched after the matching failure. Re-awaiting an older
+      // successful job cannot erase a newer failure with the same command.
+      if (blocking && dispatchIndex !== undefined && dispatchIndex > blocking.position) {
+        activeBlockingByAction.delete(key);
+      }
+    }
+  }
+  const classified = [...activeBlockingByAction.values()]
+    .map(({ entry: tc }) => {
       try {
         if (!investigateTools.has(tc.tool) || !tc.target) return null;
         const origin = classifyBlockingOrigin(tc);

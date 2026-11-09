@@ -302,6 +302,85 @@ test('executor → receipt → criterion: paired policy witness runs satisfy bot
   assert.equal(result.status, 'VERIFIED')
 })
 
+test('executor → receipt → inferred semantic criterion: two green npm cases remain supporting evidence, not a binding', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-semantic-acceptance-evidence-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'test'), { recursive: true })
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name: 'semantic-acceptance-fixture',
+    type: 'module',
+    scripts: { test: 'node --test test/normalize.test.mjs' },
+  }))
+  writeFileSync(join(root, 'src', 'normalize.js'),
+    'export function normalize(value) { return value.replaceAll(",", ""); }\n')
+  writeFileSync(join(root, 'test', 'normalize.test.mjs'), [
+    'import assert from "node:assert/strict";',
+    'import test from "node:test";',
+    'import { normalize } from "../src/normalize.js";',
+    'test("normalizes decimal grouping", () => assert.equal(normalize("1,234.50"), "1234.50"));',
+    'test("preserves fractional scale", () => assert.equal(normalize("12,000.00"), "12000.00"));',
+  ].join('\n') + '\n')
+
+  const task = 'Normalize decimal separators and preserve the original scale.'
+  const meaning = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptance(task), trustedVerifierCommands: ['npm test'], defaultWorkingDirectory: '.',
+  })
+  assert.equal(meaning.sources[0]?.status, 'inferred')
+  assert.ok(meaning.criteria[0]?.verification.verifier_id.startsWith('meaning:'))
+  const contract = freezeTaskContract(buildTaskContractV1({
+    mode: 'chat', user_request: task, acceptance: meaning.criteria,
+    verifier_requirements: ['npm test'],
+  }))
+  const runId = 'semantic-two-green-cases'
+  const service = createCriterionCompletionServiceV1(() => ({ contract, runId, projectRoot: root }))
+  const request = service.currentRequest()!
+  const mutationPath = await governedMutateSrcFix(root, runId)
+  const npmExecPath = process.env.npm_execpath
+  const bundledNpmCli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  const executable = npmExecPath && existsSync(npmExecPath) ? process.execPath
+    : existsSync(bundledNpmCli) ? process.execPath : 'npm'
+  const args = npmExecPath && existsSync(npmExecPath) ? [npmExecPath, 'test']
+    : existsSync(bundledNpmCli) ? [bundledNpmCli, 'test'] : ['test']
+  const execution = await executeActionWithPolicy(
+    { type: 'test_run', command: 'npm test' }, 'workspace_write', policyCtx(runId, root), {
+      executor: createToolExecutor({
+        executeTool: async request => {
+          assert.equal(request.tool, 'test_run')
+          const child = spawnSync(executable, args, {
+            cwd: root, encoding: 'utf8', env: witnessExecutionEnvironment(root),
+            timeout: 30_000, windowsHide: true,
+          })
+          assert.ifError(child.error)
+          return { exit_code: child.status ?? 1, stdout: child.stdout ?? '', stderr: child.stderr ?? '' }
+        },
+      }),
+      mode: 'chat', lease: null, hostFallbackAllowed: true, isolationAvailable: true,
+    },
+  )
+  assert.equal(execution.policyBlocked, false, JSON.stringify(execution))
+  const stdout = execution.results[0]?.stdout ?? ''
+  const exitCode = execution.results[0]?.exit_code ?? 1
+  assert.equal(exitCode, 0, stdout)
+  assert.match(stdout, /pass 2/)
+  const receipt = await captureChatVerifierReceipt({
+    projectRoot: root, command: 'npm test', exitCode, summary: '2/2 tests passed', stdout,
+    stderr: execution.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
+    execution: { working_directory: '.', environment_policy: 'host-process' },
+  })
+  assert.ok(receipt)
+  assert.equal(receipt.tests_total, 2)
+  const candidate = candidateShaFromReceipt(root, receipt)
+  service.refreshPrivateEvidence({
+    proof: { compliant: true }, receipts: [receipt], candidate_sha: candidate, has_mutation: true,
+  })
+  const result = evaluateCriterionCompletionV1(request)
+  assert.equal(result.verified, false)
+  assert.equal(result.status, 'UNVERIFIED')
+  assert.deepEqual(result.missing_requirements, [meaning.criteria[0]!.id])
+  assert.equal(result.satisfied_requirements.length, 0)
+})
+
 test('executor → receipt → criterion negative: one governed witness run cannot satisfy sibling criterion', async t => {
   const { root, service, request, runId } = await dualWitnessFixture(t)
   const mutationPath = await governedMutateSrcFix(root, runId)

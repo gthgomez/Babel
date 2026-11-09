@@ -25,5 +25,6 @@ test('raw Git transport preserves process failure and bounded output admission',
     process.cwd(),
     { ...options, maxBuffer: 1024 },
   );
-  assert.notEqual(oversized.status, 0);
+  assert.equal(oversized.status, null, 'overflow is an incomplete process result, not success');
+  assert.match(oversized.stderr.toString('utf8'), /ENOBUFS|maxBuffer|buffer/i);
 });

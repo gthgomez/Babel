@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import type { FailureSurface, RepairDiagnosis, RepairDiagnosisKind } from './failureSurface.js'
 import type { AdmittedRecoveryPlanV2 } from './recoveryPlan.js'
 import type { FailureLocalization } from './failureLocalization.js'
+import type { TaskContractV1 } from '../taskContract.js'
 
 export const WORKING_STATE_NAME = 'working_state'
 export const WORKING_STATE_MARKER = '<!-- BABEL_WORKING_STATE -->'
@@ -413,7 +414,58 @@ export function recordControllerRecoveryStrategy(
 /**
  * Compact YAML-like block for model injection.
  */
-export function formatWorkingStateBlock(state: WorkingState): string {
+function acceptanceSourceStatus(contract: TaskContractV1, criterionId: string): 'explicit' | 'inferred' | 'unresolved' | 'mixed' | 'unknown' {
+  const suffix = `:${criterionId}`
+  const statuses = new Set(contract.provenance.records.flatMap(record => {
+    if (record.kind !== 'derived_acceptance' || !record.ref.endsWith(suffix)) return []
+    const match = record.ref.match(/^task-acceptance-meaning:v[12]:(explicit|inferred|unresolved):/)
+    return match ? [match[1] as 'explicit' | 'inferred' | 'unresolved'] : []
+  }))
+  if (statuses.size === 1) return [...statuses][0]!
+  return statuses.size > 1 ? 'mixed' : 'unknown'
+}
+
+function formatAcceptanceEvidenceReview(contract?: TaskContractV1 | null): string[] {
+  if (!contract?.acceptance.length) {
+    return ['  acceptance_review: A green verifier covers its executed cases, not every requirement. Compare the implemented behavior with the user request; check uncovered requirements with permitted tools, and report unverified requirements as partial.']
+  }
+  const lines = [
+    '  acceptance_evidence_review: advisory_only; frozen requirements and completion authority are unchanged',
+    '  acceptance_evidence_guidance: A green command proves only its executed cases, and stale receipts do not prove the current candidate. For unbound semantic requirements, keep making safe progress: inspect the implementation and relevant tests, run or add a focused check when authorized, and report exactly what it supports. Do not mark the requirement satisfied or treat a test count as proof of arbitrary meaning; bind only an exact explicit executable criterion or an explicit user-authorized contract amendment.',
+    '  acceptance_requirements:',
+  ]
+  for (const criterion of contract.acceptance.slice(0, 16)) {
+    const verification = criterion.verification
+    const hasCommandBinding = !verification.verifier_id.startsWith('meaning:') &&
+      typeof verification.executable_id === 'string' && Array.isArray(verification.argv) && verification.argv.length > 0
+    lines.push(
+      `    - criterion_id: ${JSON.stringify(criterion.id)}`,
+      `      source: ${acceptanceSourceStatus(contract, criterion.id)}`,
+      `      requirement: ${JSON.stringify(criterion.description)}`,
+      `      verifier_binding: ${hasCommandBinding ? 'exact_executable' : 'none'}`,
+      `      verifier_id: ${JSON.stringify(verification.verifier_id)}`,
+    )
+    if (hasCommandBinding) {
+      lines.push(
+        `      executable_id: ${JSON.stringify(verification.executable_id)}`,
+        `      argv: ${JSON.stringify(verification.argv)}`,
+        ...(verification.command_hash ? [`      command_hash: ${JSON.stringify(verification.command_hash)}`] : []),
+        ...(verification.working_directory !== undefined
+          ? [`      working_directory: ${JSON.stringify(verification.working_directory)}`]
+          : []),
+        ...(verification.environment_policy !== undefined
+          ? [`      environment_policy: ${JSON.stringify(verification.environment_policy)}`]
+          : []),
+      )
+    }
+  }
+  if (contract.acceptance.length > 16) {
+    lines.push(`    omitted_requirements: ${contract.acceptance.length - 16}`)
+  }
+  return lines
+}
+
+export function formatWorkingStateBlock(state: WorkingState, contract?: TaskContractV1 | null): string {
   const lines = [
     WORKING_STATE_MARKER,
     'working_state:',
@@ -426,7 +478,7 @@ export function formatWorkingStateBlock(state: WorkingState): string {
       `${state.lastVerifier.identity} exit=${state.lastVerifier.exitCode} fresh=${state.lastVerifier.fresh} ${state.lastVerifier.summary}`,
     ) : 'none'}`,
     ...(state.lastVerifier ? [`  last_verifier_identity: ${yamlIdentity(state.lastVerifier.identity)}`] : []),
-    ...(state.lastVerifier?.exitCode === 0 ? ['  acceptance_review: A green verifier covers its executed cases, not every requirement. Compare the implemented behavior with the user request and available project contract; check uncovered requirements with permitted tools, and report unverified requirements as partial. Do not substitute passing incidental tests for the requested outcome.'] : []),
+    ...(state.lastVerifier?.exitCode === 0 ? formatAcceptanceEvidenceReview(contract) : []),
     `  failure_surface: ${state.failureSurface ? state.failureSurface.kind : 'none'}`,
     `  failure_causality: ${state.failureSurface?.causality ?? 'unknown'}`,
     `  baseline_failure_signature: ${state.baselineFailureSignature ? yamlIdentity(state.baselineFailureSignature) : 'none'}`,
@@ -475,8 +527,9 @@ export function formatWorkingStateBlock(state: WorkingState): string {
 export function upsertWorkingStateMessage(
   messages: ChatMessage[],
   state: WorkingState,
+  contract?: TaskContractV1 | null,
 ): ChatMessage[] {
-  const content = formatWorkingStateBlock(state)
+  const content = formatWorkingStateBlock(state, contract)
   const existing = messages.findIndex(
     (m) => m.name === WORKING_STATE_NAME || (typeof m.content === 'string' && m.content.includes(WORKING_STATE_MARKER)),
   )

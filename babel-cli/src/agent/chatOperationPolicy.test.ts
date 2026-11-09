@@ -15,7 +15,8 @@ import { verifierSemanticProgress } from './verifierSemanticProgress.js';
 
 import assert from 'node:assert/strict';
 import { describe, test, after } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -484,6 +485,195 @@ describe('D01/D02 effective-operation policy', () => {
       content: 'v22.0.1', exit_code: 0 }]), false);
     assert.equal(check([failed]), false, 'a probe must not reset the last real verifier signature');
     assert.equal(check([{ ...failed, content: 'PASS 1 test', exit_code: 0, verifierSemanticSignature: 'host-green-semantic-tuple' }]), true);
+  });
+
+  test('live streaming loop clears completion strikes after a newly executed red verifier', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-gate-verifier-progress-'));
+    const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+    mkdirSync(join(root, 'nested'));
+    writeFileSync(join(root, 'nested', 'red.test.mjs'), "import test from 'node:test'; import assert from 'node:assert/strict'; test('red', () => assert.equal(1, 2));\n");
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'add', '.'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], { cwd: root });
+    const task = 'Fix the failure in red.test.mjs and run node --test red.test.mjs to verify the repair.';
+    const engine = new ChatEngine({ task, projectRoot: root, model: MODEL, maxTurns: 2 });
+    const box = engine as unknown as { gateStrikes: number };
+    (engine as unknown as { hardPlanMode: boolean; requireTodoBeforeMutate: boolean }).hardPlanMode = false;
+    (engine as unknown as { hardPlanMode: boolean; requireTodoBeforeMutate: boolean }).requireTodoBeforeMutate = false;
+    let calls = 0;
+    let strikesBeforeAnswer: number | undefined;
+    installMockRunner(engine, {
+      executeWithToolsStream: async function* () {
+        calls += 1;
+        if (calls === 1) {
+          box.gateStrikes = 2;
+          yield { type: 'tool_use', id: 'red-verifier', name: 'test_run', input: { command: 'node --test red.test.mjs', cwd: 'nested' } };
+          yield { type: 'done', finishReason: 'tool_calls' };
+          return;
+        }
+        strikesBeforeAnswer = box.gateStrikes;
+        yield { type: 'text_delta', text: 'The executed verifier is red; I cannot certify completion.' };
+        yield { type: 'done', finishReason: 'stop' };
+      },
+      execute: async () => ({ type: 'completion', answer: 'The executed verifier is red; I cannot certify completion.' }),
+      getLastInvocationMetadata: () => null,
+    });
+    try {
+      const result = await drain(engine, task, []);
+      assert.equal(calls, 2);
+      assert.equal(strikesBeforeAnswer, 0, `actual verifier progress resets stale completion-gate strikes; log=${JSON.stringify(engine['toolCallLog'])}`);
+      const verifierLog = engine['toolCallLog'].find(row => row.tool === 'test_run') as
+        ({ tool: string; verifierExecuted?: boolean; working_directory?: string; processExecuted?: boolean; processCompleted?: boolean; exit_code?: number } | undefined);
+      assert.equal(verifierLog?.verifierExecuted, true,
+        'the reset requires a host-observed executed red verifier');
+      assert.equal(verifierLog?.exit_code, 1, 'red test command exits nonzero and is not authoritative completion');
+      const loggedCwdIdentity = statSync(verifierLog!.working_directory!);
+      const expectedCwdIdentity = statSync(join(root, 'nested'));
+      assert.equal(loggedCwdIdentity.isDirectory(), true, 'logged cwd resolves to a directory');
+      assert.equal(loggedCwdIdentity.dev, expectedCwdIdentity.dev,
+        'cwd provenance identifies the expected filesystem device');
+      assert.equal(loggedCwdIdentity.ino, expectedCwdIdentity.ino,
+        'cwd provenance identifies the expected directory even when Windows uses an 8.3 alias');
+      const distinctCwdIdentity = statSync(root);
+      assert.ok(
+        loggedCwdIdentity.dev !== distinctCwdIdentity.dev || loggedCwdIdentity.ino !== distinctCwdIdentity.ino,
+        'cwd provenance continues to distinguish a genuinely different working directory',
+      );
+      assert.equal(verifierLog?.processExecuted, true);
+      assert.equal(verifierLog?.processCompleted, true, JSON.stringify(verifierLog));
+      assert.notEqual(result.outcome, 'VERIFIED_COMPLETE', 'a red verifier cannot certify the task');
+    } finally {
+      if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+      else process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousFallback;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('live streaming loop ignores a cached verifier result but resets for a distinct alternating result', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-gate-verifier-repeat-'));
+    const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
+    mkdirSync(join(root, 'nested'));
+    writeFileSync(join(root, 'nested', 'green.test.mjs'), "import test from 'node:test'; import assert from 'node:assert/strict'; test('green', () => assert.equal(1, 1));\n");
+    writeFileSync(join(root, 'nested', 'red.test.mjs'), "import test from 'node:test'; import assert from 'node:assert/strict'; test('red', () => assert.equal(1, 2));\n");
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'add', '.'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], { cwd: root });
+    const task = 'Fix red.test.mjs so its test passes. Run the green and red verifier commands to check the fixtures.';
+    const engine = new ChatEngine({ task, projectRoot: root, model: MODEL, maxTurns: 5 });
+    const box = engine as unknown as { gateStrikes: number };
+    (engine as unknown as { hardPlanMode: boolean; requireTodoBeforeMutate: boolean }).hardPlanMode = false;
+    (engine as unknown as { hardPlanMode: boolean; requireTodoBeforeMutate: boolean }).requireTodoBeforeMutate = false;
+    let calls = 0;
+    let strikesAfterCachedReceipt: number | undefined;
+    let strikesAfterStaleCacheRefresh: number | undefined;
+    let strikesAfterAlternatingRed: number | undefined;
+    installMockRunner(engine, {
+      executeWithToolsStream: async function* () {
+        calls += 1;
+        if (calls <= 2) {
+          if (calls === 2) box.gateStrikes = 2;
+          yield { type: 'tool_use', id: `green-verifier-${calls}`, name: 'test_run', input: { command: 'node --test green.test.mjs', cwd: 'nested' } };
+          yield { type: 'done', finishReason: 'tool_calls' };
+          return;
+        }
+        if (calls === 3) {
+          strikesAfterCachedReceipt = box.gateStrikes;
+          box.gateStrikes = 2;
+          // Simulate a workspace change after the successful receipt was cached.
+          // The same command must execute again; the prior receipt is stale.
+          writeFileSync(join(root, 'nested', 'green.test.mjs'), "import test from 'node:test'; import assert from 'node:assert/strict'; test('green changed', () => assert.equal(2, 2));\n");
+          yield { type: 'tool_use', id: 'green-verifier-after-drift', name: 'test_run', input: { command: 'node --test green.test.mjs', cwd: 'nested' } };
+          yield { type: 'done', finishReason: 'tool_calls' };
+          return;
+        }
+        if (calls === 4) {
+          strikesAfterStaleCacheRefresh = box.gateStrikes;
+          box.gateStrikes = 2;
+          yield { type: 'tool_use', id: 'red-verifier-alternating', name: 'test_run', input: { command: 'node --test red.test.mjs', cwd: 'nested' } };
+          yield { type: 'done', finishReason: 'tool_calls' };
+          return;
+        }
+        strikesAfterAlternatingRed = box.gateStrikes;
+        yield { type: 'text_delta', text: 'The alternating verifier is red; I cannot certify completion.' };
+        yield { type: 'done', finishReason: 'stop' };
+      },
+      execute: async () => ({ type: 'completion', answer: 'The alternating verifier is red; I cannot certify completion.' }),
+      getLastInvocationMetadata: () => null,
+    });
+    try {
+      const result = await drain(engine, task, []);
+      assert.equal(calls, 5);
+      assert.equal(strikesAfterCachedReceipt, 2, `a cached receipt must not reset recovery pressure; log=${JSON.stringify(engine['toolCallLog'])}`);
+      assert.equal(strikesAfterStaleCacheRefresh, 0, `a changed workspace invalidates the old receipt and a newly executed result resets pressure; log=${JSON.stringify(engine['toolCallLog'])}`);
+      assert.equal(strikesAfterAlternatingRed, 0, `a distinct red result remains fresh diagnostic progress; log=${JSON.stringify(engine['toolCallLog'])}`);
+      assert.ok(engine['toolCallLog'].some(row => row.detail?.includes('cached receipt')),
+        `second green check must be an actual cache reuse; log=${JSON.stringify(engine['toolCallLog'])}`);
+      assert.ok(engine['toolCallLog'].some(row => row.target.includes('green.test.mjs') && row.processExecuted === true),
+        `changed green fixture must re-execute after the prior receipt becomes stale; log=${JSON.stringify(engine['toolCallLog'])}`);
+      assert.equal(engine['toolCallLog'].find(row => row.target.includes('red.test.mjs'))?.exit_code, 1);
+      assert.notEqual(result.outcome, 'VERIFIED_COMPLETE');
+    } finally {
+      if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+      else process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousFallback;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('live streaming loop does not reset strikes for a verifier rejected before execution', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-gate-verifier-rejected-'));
+    const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
+    const previousImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+    delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+    process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo';
+    delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+    writeFileSync(join(root, 'red.test.mjs'), "import test from 'node:test'; test('fixture', () => {});\n");
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'add', '.'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], { cwd: root });
+    const task = 'Fix the issue in red.test.mjs and run node --test red.test.mjs to verify the repair.';
+    const engine = new ChatEngine({ task, projectRoot: root, model: MODEL, maxTurns: 2 });
+    const box = engine as unknown as { gateStrikes: number };
+    (engine as unknown as { hardPlanMode: boolean; requireTodoBeforeMutate: boolean }).hardPlanMode = false;
+    (engine as unknown as { hardPlanMode: boolean; requireTodoBeforeMutate: boolean }).requireTodoBeforeMutate = false;
+    let calls = 0;
+    let strikesAfterRejection: number | undefined;
+    installMockRunner(engine, {
+      executeWithToolsStream: async function* () {
+        calls += 1;
+        if (calls === 1) {
+          box.gateStrikes = 2;
+          yield { type: 'tool_use', id: 'rejected-verifier', name: 'test_run', input: { command: 'node --test red.test.mjs' } };
+          yield { type: 'done', finishReason: 'tool_calls' };
+          return;
+        }
+        strikesAfterRejection = box.gateStrikes;
+        yield { type: 'text_delta', text: 'The verifier was rejected before execution; I cannot certify completion.' };
+        yield { type: 'done', finishReason: 'stop' };
+      },
+      execute: async () => ({ type: 'completion', answer: 'The verifier was rejected before execution; I cannot certify completion.' }),
+      getLastInvocationMetadata: () => null,
+    });
+    try {
+      const result = await drain(engine, task, []);
+      assert.equal(calls, 2);
+      assert.equal(strikesAfterRejection, 2, `a rejected verifier cannot reset completion pressure; log=${JSON.stringify(engine['toolCallLog'])}`);
+      const verifierLog = engine['toolCallLog'].find(row => row.tool === 'test_run');
+      assert.ok(verifierLog);
+      assert.notEqual(verifierLog.verifierExecuted, true);
+      assert.notEqual(verifierLog.processExecuted, true);
+      assert.notEqual(result.outcome, 'VERIFIED_COMPLETE');
+    } finally {
+      if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];
+      else process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousFallback;
+      if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
+      else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
+      if (previousImage === undefined) delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];
+      else process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = previousImage;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test('I3 bare continuation gestures carry the prior operation policy', () => {

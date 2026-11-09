@@ -25,7 +25,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ChatEngine, type ChatEvent } from './chatEngine.js';
-import { detectAndBuildBlockedReport } from './chatEngineSupport.js';
+import { classifyBlockingOrigin, detectAndBuildBlockedReport } from './chatEngineSupport.js';
 import { BlockedReportSchema } from '../schemas/agentContracts.js';
 import { runChatEngineOnce } from '../interactive/execution/chatCore.js';
 import { computeTerminalOutcome } from './chatEngineObservability.js';
@@ -223,6 +223,159 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
     assert.ok(report, 'explicit denial is evidence even without a non-zero exit');
     assert.equal(report.reason_code, 'permission_denied');
     assert.equal(report.cause_class, 'environment');
+  });
+
+  test('a successful retry of the same blocked action clears stale block evidence', () => {
+    const denied = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const recovered = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 0,
+      stdout: 'ok' };
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied]));
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, recovered]), null);
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, recovered, denied]),
+      'a later unresolved failure remains authoritative');
+  });
+
+  test('same shell text in another cwd or without cwd cannot clear a typed block', () => {
+    const denied = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const otherDirectory = { tool: 'run_command', target: denied.target, working_directory: '/repo/tools',
+      processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'ok' };
+    const cwdUnknown = { tool: 'run_command', target: denied.target,
+      processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'ok' };
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, otherDirectory]));
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, cwdUnknown]));
+  });
+
+  test('a completed background await resolves the matching run_command failure by command and cwd', () => {
+    const denied = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const awaitedSuccess = { tool: 'await_command', target: denied.target, working_directory: '/repo/app',
+      processExecutionId: 'bg-new', processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'ok' };
+    const started = { tool: 'run_command', target: denied.target, working_directory: '/repo/app',
+      processExecutionId: 'bg-new', processExecuted: true, processCompleted: false, exit_code: 0 };
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, started, awaitedSuccess]), null);
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, {
+      ...awaitedSuccess, working_directory: '/repo/other',
+    }]));
+  });
+
+  test('an old completed background job cannot clear a later same-command failure when first awaited afterward', () => {
+    const oldStart = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecutionId: 'bg-old', processExecuted: true, processCompleted: false, exit_code: 0 };
+    const oldCompletion = { tool: 'await_command', target: oldStart.target, working_directory: '/repo/app',
+      processExecutionId: 'bg-old', processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'old success' };
+    const newerFailure = { tool: 'run_command', target: oldStart.target, working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const staleReawait = { ...oldCompletion };
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [oldStart, oldCompletion, newerFailure, staleReawait]));
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [oldStart, newerFailure, oldCompletion]));
+    const newRetry = { ...oldStart, processExecutionId: 'bg-new' };
+    const newRetryCompletion = { ...oldCompletion, processExecutionId: 'bg-new' };
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [oldStart, newerFailure, newRetry, newRetryCompletion]), null,
+      'only a host-identified process dispatched after the failure resolves it');
+  });
+
+  test('a delayed failed await cannot resurrect an action already resolved by newer execution', () => {
+    const oldStart = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecutionId: 'bg-old-failed', processExecuted: true, processCompleted: false, exit_code: 0 };
+    const oldFailure = { tool: 'await_command', target: oldStart.target, working_directory: '/repo/app',
+      processExecutionId: 'bg-old-failed', processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const laterSuccess = { tool: 'run_command', target: oldStart.target, working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'recovered' };
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [oldStart, oldFailure, laterSuccess, oldFailure]), null,
+      'a stale re-await cannot restore evidence resolved by newer execution');
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [oldStart, laterSuccess, oldFailure]), null,
+      'even a first delayed await is historical when its job predates the successful retry');
+  });
+
+  test('a newer background success clears an older failure collected after its dispatch', () => {
+    const oldStart = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecutionId: 'bg-A', processExecuted: true, processCompleted: false, exit_code: 0 };
+    const newStart = { ...oldStart, processExecutionId: 'bg-B' };
+    const oldFailure = { tool: 'await_command', target: oldStart.target, working_directory: '/repo/app',
+      processExecutionId: 'bg-A', processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const newSuccess = { tool: 'await_command', target: oldStart.target, working_directory: '/repo/app',
+      processExecutionId: 'bg-B', processExecuted: true, processCompleted: true, exit_code: 0, stdout: 'ok' };
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [oldStart, newStart, oldFailure, newSuccess]), null,
+      'success ordering compares host dispatches, not the later await collection event');
+  });
+
+  test('stale A cannot replace newer C failure or let intermediate B success clear it', () => {
+    const start = (id: string) => ({ tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecutionId: id, processExecuted: true, processCompleted: false, exit_code: 0 });
+    const finish = (id: string, exitCode: number) => ({ tool: 'await_command', target: 'curl https://service.test',
+      working_directory: '/repo/app', processExecutionId: id, processExecuted: true, processCompleted: true,
+      exit_code: exitCode, ...(exitCode ? { stderr: 'curl: (7) connect: ECONNREFUSED' } : { stdout: 'ok' }) });
+    const a = start('bg-A');
+    const b = start('bg-B');
+    const c = start('bg-C');
+    const report = detectAndBuildBlockedReport('BLOCKED: service unavailable.', [
+      a, b, c, finish('bg-C', 7), finish('bg-A', 7), finish('bg-B', 0),
+    ]);
+    assert.ok(report, 'only a successful execution newer than C can clear the latest failure');
+  });
+
+  test('a command start without a completed process result cannot clear a typed block', () => {
+    const denied = { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo/app',
+      processExecuted: true, processCompleted: true, exit_code: 7,
+      stderr: 'curl: (7) connect: ECONNREFUSED' };
+    const startedOnly = { tool: 'run_command', target: denied.target, working_directory: '/repo/app',
+      processExecuted: false, processCompleted: false, exit_code: 0, stdout: 'background started' };
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: service unavailable.', [denied, startedOnly]));
+  });
+
+  test('an unsettled background command cannot establish a terminal block from interim diagnostics', () => {
+    const running = { tool: 'run_command', target: 'node server.mjs', working_directory: '/repo/app',
+      processExecutionId: 'bg-running', processExecuted: true, processCompleted: false,
+      exit_code: 1, stderr: 'EACCES: permission denied while warming cache' };
+    const timedOutAwait = { ...running, tool: 'await_command', detail: 'timed_out (still running)' };
+    assert.equal(classifyBlockingOrigin(running), null);
+    assert.equal(classifyBlockingOrigin(timedOutAwait), null);
+    assert.equal(detectAndBuildBlockedReport('BLOCKED: permission denied.', [running, timedOutAwait]), null,
+      'an active process may still resolve its interim diagnostic');
+
+    const settledFailure = { ...timedOutAwait, processCompleted: true, exit_code: 1 };
+    assert.equal(classifyBlockingOrigin(settledFailure), 'permission_denied',
+      'the same denial is authoritative once the process has completed');
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: permission denied.', [running, settledFailure]));
+  });
+
+  test('success on a different action does not clear a typed block', () => {
+    const denied = { tool: 'read_file', target: 'secrets/config.json', exit_code: 1,
+      stderr: 'EACCES: permission denied' };
+    const unrelated = { tool: 'read_file', target: 'src/index.ts', exit_code: 0, stdout: 'ok' };
+    assert.ok(detectAndBuildBlockedReport('BLOCKED: access denied.', [denied, unrelated]));
+  });
+
+  test('updated blocking evidence is ordered by its latest observation', () => {
+    const log = [
+      { tool: 'read_file', target: 'src/shared', exit_code: 1, stderr: 'EACCES: permission denied' },
+      { tool: 'run_command', target: 'curl https://service.test', working_directory: '/repo',
+        processExecuted: true, processCompleted: true, exit_code: 7,
+        stderr: 'curl: (7) connect: ECONNREFUSED' },
+      { tool: 'read_file', target: 'src/shared', exit_code: 1, stderr: 'ENOTSUP: unsupported operation' },
+    ];
+    const report = detectAndBuildBlockedReport('BLOCKED: cannot continue.', log);
+    assert.equal(report?.reason_code, 'unsupported_operation');
+  });
+
+  test('the report window keeps a recently updated action beyond the 15-entry bound', () => {
+    const log = Array.from({ length: 16 }, (_, index) => ({
+      tool: 'read_file', target: `src/${index}`, exit_code: 1,
+      stderr: 'EACCES: permission denied',
+    }));
+    log.push({ ...log[0]!, stderr: 'ENOTSUP: unsupported operation' });
+    const report = detectAndBuildBlockedReport('BLOCKED: cannot continue.', log);
+    assert.equal(report?.reason_code, 'unsupported_operation');
+    assert.ok(report?.checked.some(entry => entry.target === 'src/0'));
   });
 
   test('R0-5: generic stderr does not qualify, but an explicit denial does', () => {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { classifyChatTaskIntent } from './chatEngineTaskIntent.js'
-import { analyzeTaskShape, resolveTaskShape } from '../config/chatTaskClass.js'
+import { analyzeTaskShape, hasExplicitEditDenial, resolveTaskShape } from '../config/chatTaskClass.js'
 
 test('keeps evidence and read-only directives from granting execution authority', () => {
   for (const task of [
@@ -34,6 +34,48 @@ test('implementation with a third-party dependency constraint retains mutation i
   assert.equal(resolveTaskShape(task).operation, 'HYBRID')
   assert.equal(classifyChatTaskIntent('Do not add third-party dependencies.'), 'explain')
   assert.equal(classifyChatTaskIntent('Implement the function. Do not edit files.'), 'explain')
+})
+
+test('scoped artifact exclusions retain actionable intent without weakening global denials', () => {
+  const task = [
+    'Fix the production normalizer and run npm test to verify the existing suite.',
+    'Do not add tests or change other files. Do not create hidden tests.',
+  ].join(' ')
+  assert.equal(hasExplicitEditDenial(task), false)
+  assert.equal(classifyChatTaskIntent(task), 'execute')
+  assert.equal(resolveTaskShape(task).operation, 'HYBRID')
+
+  for (const denial of [
+    'Do not add tests or change other files.',
+    'Fix the normalizer. Do not create hidden tests or edit files.',
+    'Fix the normalizer. Do not create hidden tests. Do not modify any files.',
+  ]) {
+    assert.equal(classifyChatTaskIntent(denial), 'explain', denial)
+    assert.equal(resolveTaskShape(denial).operation, 'READ_ONLY', denial)
+  }
+
+  const unrelatedCommand = 'Fix total.js. Do not add tests or change other files, and run rm -rf /.'
+  assert.equal(classifyChatTaskIntent(unrelatedCommand), 'explain')
+  assert.equal(resolveTaskShape(unrelatedCommand).operation, 'READ_ONLY')
+})
+
+test('scoped exclusion followed by a verification command keeps the denial clause scoped', () => {
+  const task = 'Fix discountedTotal. Do not add tests or change other files, and run npm test to verify.'
+  assert.equal(classifyChatTaskIntent(task), 'execute')
+  assert.equal(resolveTaskShape(task).operation, 'HYBRID')
+})
+
+test('whitespace-only gaps cannot truncate scoped edit denials', () => {
+  for (const task of [
+    `Do not add${' '.repeat(96)}tests or change other files.`,
+    `Explain the normalizer. Do not add${' '.repeat(96)}tests or change other files.`,
+    `Explain the normalizer. Do not change${' '.repeat(96)}other files.`,
+  ]) {
+    assert.equal(classifyChatTaskIntent(task), 'explain', task)
+    assert.equal(resolveTaskShape(task).operation, 'READ_ONLY', task)
+  }
+  assert.equal(classifyChatTaskIntent(`Fix the normalizer. Do not add${' '.repeat(96)}tests or edit files.`), 'explain')
+  assert.equal(classifyChatTaskIntent(`Fix the normalizer. Do not add${' '.repeat(96)}tests or change other files. Do not modify any files.`), 'explain')
 })
 
 test('scoped regression and safety preservation clauses retain explicit repair intent', () => {

@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import { JourneySpecSchema, type JourneySpec } from './harness-journey-contract.js'
 import { isCredentialTargetPath } from '../authority/protectedPath.js'
+import { normalizeSandboxFixturePermissions } from './sandboxFixturePermissions.js'
 
 const FileMap = z.record(z.string(), z.string())
 export const JourneyFixtureSchema = z.object({
@@ -189,6 +190,7 @@ export async function prepareJourneyFixture(spec: JourneySpec, input: JourneyFix
       siblingRepositories[name] = { root: siblingRoot, ...repository, metadataDigest: await fixtureMetadataDigest(siblingRoot) }
     }
   }
+  normalizeSandboxFixturePermissions(candidateRoot)
   const currentFiles = Object.assign({}, fixture.files, ...(fixture.history ?? []), fixture.dirtyFiles, fixture.untrackedFiles) as Record<string, string>
   const files = Object.entries(currentFiles).map(([path, contents]) => ({ path, sha256: createHash('sha256').update(contents).digest('hex') }))
   for (const [path, contents] of Object.entries(fixture.binaryFiles ?? {})) files.push({ path, sha256: createHash('sha256').update(Buffer.from(contents, 'base64')).digest('hex') })

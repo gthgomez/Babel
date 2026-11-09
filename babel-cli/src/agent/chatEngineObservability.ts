@@ -123,6 +123,11 @@ export type ToolCallLogEntry = {
   toolCallId?: string;
   tool: string;
   target: string;
+  /** Host-observed cwd for cwd-sensitive action identity. */
+  working_directory?: string;
+  /** Host-observed process lifecycle for cwd-sensitive action recovery. */
+  processExecuted?: boolean;
+  processCompleted?: boolean;
   detail?: string;
   error?: string;
   index: number;

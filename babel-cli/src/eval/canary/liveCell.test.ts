@@ -9,9 +9,38 @@ import {
   createSessionEventLog,
   rewriteSessionEventLog,
 } from '../../agent/sessionEvents.js'
-import { sessionCausalAttribution } from './liveCell.js'
-import { materializeCanaryWorkspace } from './liveCell.js'
+import { claimsSuccessfulCompletion, materializeCanaryWorkspace, runLiveCanaryCell, sessionCausalAttribution } from './liveCell.js'
 import { getCanaryTask } from './tasks.js'
+
+test('canary completion accepts only authoritative terminal success, not generic answer-ready status', () => {
+  assert.equal(claimsSuccessfulCompletion({ terminal_outcome: 'VERIFIED_COMPLETE', status: 'ANSWER_READY' }), true)
+  assert.equal(claimsSuccessfulCompletion({ terminal_outcome: 'NO_CHANGE_REQUIRED', status: 'ANSWER_READY' }), true)
+  assert.equal(claimsSuccessfulCompletion({ terminal_outcome: 'UNVERIFIED_PATCH', status: 'COMPLETE' }), false)
+  assert.equal(claimsSuccessfulCompletion({ status: 'ANSWER_READY' }), false)
+  assert.equal(claimsSuccessfulCompletion({ user_status: 'not_verified', status: 'COMPLETE' }), false)
+})
+
+test('live canary does not count ANSWER_READY with UNVERIFIED_PATCH as claimed completion', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-live-cell-unverified-'))
+  const workspace = join(root, 'workspace')
+  const cli = join(root, 'fixture-cli.mjs')
+  const evidence = join(root, 'evidence.json')
+  const previousEntry = process.env['BABEL_CLI_ENTRY']
+  try {
+    const spec = getCanaryTask('C01')
+    materializeCanaryWorkspace(spec, workspace)
+    writeFileSync(cli, "console.log(JSON.stringify({status:'ANSWER_READY',terminal_outcome:'UNVERIFIED_PATCH',user_status:'not_verified',answer:'Patch not verified.'}))\n", 'utf8')
+    process.env['BABEL_CLI_ENTRY'] = cli
+    const outcome = runLiveCanaryCell({ spec, workspaceRoot: workspace, model: 'fixture-model', evidencePath: evidence })
+    assert.equal(outcome.status, 'ANSWER_READY')
+    assert.equal(outcome.claimed_complete, false)
+    assert.equal(outcome.hidden_ok, false)
+  } finally {
+    if (previousEntry === undefined) delete process.env['BABEL_CLI_ENTRY']
+    else process.env['BABEL_CLI_ENTRY'] = previousEntry
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test('live canary exposes a public authoritative verifier without leaking the oracle', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-live-cell-public-test-'))

@@ -503,13 +503,24 @@ const SEQUENCED_MUTATION_SOURCE =
 // a complete known object list: unknown objects or trailing qualifications
 // remain global denials. This never supplies positive mutation intent.
 const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your|this|that)\\s+)?(?:' +
-  '(?:existing\\s+)?(?:regression\\s+)?tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|' +
+  '(?:existing\\s+)?(?:(?:regression|hidden)\\s+)?tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|' +
   'scripts?(?:\\s+or\\s+data)?|data|(?:third[- ]party\\s+)?dependencies|' +
-  'permissions?|verification\\s+gates?|provider\\s+accounting|unrelated\\s+(?:files?|code)|' +
+  'permissions?|verification\\s+gates?|provider\\s+accounting|(?:unrelated|other)\\s+(?:files?|code)|' +
   '[`"\\\']?[\\w./\\\\-]+\\.[A-Za-z0-9_-]{1,12}[`"\\\']?)';
 const PROTECTED_EDIT_OBJECT_LIST = new RegExp(
   `^${PROTECTED_EDIT_OBJECT}(?:${COORD_SEPARATOR}(?:${READ_ONLY_VERB_SOURCE}\\s+)?${PROTECTED_EDIT_OBJECT})*$`, 'i',
 );
+const TEST_COMMAND_SOURCE = String.raw`(?:tests?\b|npm\s+test\b|pytest\b|node\s+--test\b|cargo\s+test\b|go\s+test\b)`;
+const EDIT_DENIAL_CLAUSE_SEPARATOR = new RegExp(
+  String.raw`\.(?=\s|$)|[;!?\r\n]|,\s+(?=(?:and\s+)?(?:then\s+)?(?:run|execute)\s+(?:the\s+)?${TEST_COMMAND_SOURCE})`,
+  'i',
+);
+
+function editDenialObjectClause(text: string, start: number): string {
+  // Preserve source offsets for stripScopedEditProhibitions. Trimming here
+  // shortens the returned text and can leave the tail of a denial in place.
+  return text.slice(start).split(EDIT_DENIAL_CLAUSE_SEPARATOR, 1)[0]!;
+}
 
 /** One object recognizer shared by Chat and Deep prohibition parsing. */
 export function isScopedEditObject(object: string): boolean {
@@ -522,7 +533,7 @@ export function stripScopedEditProhibitions(text: string): string {
   let result = text;
   for (const directive of text.matchAll(new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'))) {
     const afterVerb = directive.index + directive[0].length;
-    const clause = text.slice(afterVerb).split(/\.(?=\s|$)|[;!?\r\n]/, 1)[0]!;
+    const clause = editDenialObjectClause(text, afterVerb);
     if (!isScopedEditObject(clause.trim())) continue;
     const end = afterVerb + clause.length;
     // Preserve offsets while consuming every prohibited verb in this clause.
@@ -537,8 +548,7 @@ export function hasExplicitEditDenial(taskText: string): boolean {
   if (new RegExp(SEQUENCED_MUTATION_SOURCE, 'i').test(evidence)) return false;
   for (const directive of evidence.matchAll(new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'))) {
     if (/^(?:read-?only|dry-?run)$/i.test(directive[0])) return true;
-    const objectClause = evidence.slice(directive.index + directive[0].length)
-      .split(/\.(?=\s|$)|[;!?\r\n]/, 1)[0]!.trim();
+    const objectClause = editDenialObjectClause(evidence, directive.index + directive[0].length).trim();
     if (!isScopedEditObject(objectClause)) return true;
   }
   return false;

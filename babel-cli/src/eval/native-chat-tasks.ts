@@ -20,14 +20,19 @@ const TaskSchema = z.object({
 }).strict()
 const ManifestSchema = z.object({ schemaVersion: z.literal(1), version: z.string().min(1), expansionTarget: z.number().int().min(12).max(20), tasks: z.array(TaskSchema).min(4) }).strict()
 type Terminal = Pick<ChatResult, 'status' | 'outcome' | 'answer'>
-const successOutcomes = new Set(['VERIFIED_COMPLETE', 'UNVERIFIED_PATCH', 'NO_CHANGE_REQUIRED'])
+const successOutcomes = new Set(['VERIFIED_COMPLETE', 'NO_CHANGE_REQUIRED'])
 const digest = (bytes: string | Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
 /** Relations, rather than token presence, establish the two requested corrections. */
 export function gradeNativeInspection(answer: string, evidence: { projectRoot: string; operations: readonly NativeTaskOperation[] }): OracleVerdict {
   const schema = z.object({ corrections: z.array(z.object({ stale: z.string(), current: z.string() }).strict()).length(2) }).strict()
   try {
-    const parsed = schema.parse(JSON.parse(answer))
+    const trimmed = answer.trim()
+    // Models commonly render a requested JSON-only response in one JSON code
+    // fence. Accept that exact wrapper, but do not extract JSON from arbitrary
+    // prose or accept additional claims before/after the structured answer.
+    const fencedJson = trimmed.match(/^```json\s*\n([\s\S]*?)\n```$/i)?.[1]
+    const parsed = schema.parse(JSON.parse(fencedJson ?? trimmed))
     const actual = parsed.corrections.map(item => `${item.stale}:${item.current}`).sort()
     const expected = ['src/client:apps/web/main.mjs', 'src/server:packages/api/server.mjs'].sort()
     if (JSON.stringify(actual) !== JSON.stringify(expected)) return 'fail'
@@ -80,7 +85,15 @@ export async function captureNativeTaskFiles(root: string, modes: Map<string, nu
 /** Preserve file permissions as well as bytes, including changes Git ignores. */
 export function nativeChangedPaths(baseline: ReadonlyMap<string, string>, beforeModes: ReadonlyMap<string, number>, snapshot: ReadonlyMap<string, Buffer>, afterModes: ReadonlyMap<string, number>): string[] {
   return [...new Set([...baseline.keys(), ...snapshot.keys(), ...beforeModes.keys(), ...afterModes.keys()])].filter(path =>
-    baseline.get(path) !== (snapshot.has(path) ? digest(snapshot.get(path)!) : undefined) || beforeModes.get(path) !== afterModes.get(path))
+    baseline.get(path) !== (snapshot.has(path) ? digest(snapshot.get(path)!) : undefined) ||
+    beforeModes.get(path) !== afterModes.get(path) && !isBenignGitIndexUmaskTransition(path, beforeModes.get(path), afterModes.get(path)))
+}
+
+/** Git may recreate its index under umask 077; ignore only ordinary 0600/0644 modes. */
+function isBenignGitIndexUmaskTransition(path: string, before: number | undefined, after: number | undefined): boolean {
+  if (process.platform === 'win32' || path !== '.git/index' || before === undefined || after === undefined) return false
+  const safeModes = new Set([0o600, 0o644])
+  return safeModes.has(before) && safeModes.has(after)
 }
 
 /** Separate native completion, artifact correctness, missing evidence and calibration. */
@@ -144,6 +157,7 @@ export async function runNativeChatTasks(options: {
   const protectedFiles = [manifestPath, corpusPath, join(root, 'babel-cli/scripts/run_native_chat_tasks.mjs'), join(root, 'babel-cli/package-lock.json'), ...[
     'native-chat-tasks.ts', 'native-chat-calibration.ts', 'native-chat-cli.ts', 'harness-journey-contract.ts',
     'harness-journey-fixtures.ts', 'harness-journey-code-oracle.ts', 'harness-journey-checks.ts', 'cleanRoomGrade.ts',
+    'sandboxFixturePermissions.ts',
     '../config/benchmarkContainer.ts', '../config/dockerIsolationArgs.ts', '../config/executionProfiles.ts',
     '../authority/protectedPath.ts', '../authority/commandSpec.ts', '../authority/literalSearch.ts',
     '../authority/unprivilegedChildEnv.ts', '../utils/commandArgv.ts', '../utils/safeEnv.ts', '../utils/gitExec.ts',

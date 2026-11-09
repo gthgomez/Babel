@@ -1,5 +1,6 @@
 import { spawnSync, type ChildProcess } from 'node:child_process'
-import { resolve } from 'node:path'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 
 import { getSafeEnv } from './utils/safeEnv.js'
 
@@ -24,13 +25,116 @@ export async function waitForProcessExit(pid: number, timeoutMs: number): Promis
   return !isProcessAlive(pid)
 }
 
+type LinuxGroupSnapshot = { fingerprint: string; observedAt: number };
+const linuxGroupSnapshots = new Map<number, LinuxGroupSnapshot>();
+
+function processStatFields(path: string): { state: string; processGroup: number } | null {
+  try {
+    const stat = readFileSync(path, 'utf8');
+    const closeParen = stat.lastIndexOf(')');
+    if (closeParen < 0) return null;
+    const fields = stat.slice(closeParen + 2).trim().split(/\s+/);
+    const processGroup = Number(fields[2]);
+    if (!fields[0] || !Number.isSafeInteger(processGroup)) return null;
+    return { state: fields[0], processGroup };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'gone', processGroup: -1 };
+    return null;
+  }
+}
+
+export function isLinuxProcessGroupAliveInProc(groupLeaderPid: number, procRoot = '/proc'): boolean {
+  let processIds: string[];
+  try {
+    processIds = readdirSync(procRoot).filter(entry => /^\d+$/.test(entry));
+  } catch {
+    linuxGroupSnapshots.delete(groupLeaderPid);
+    return true;
+  }
+
+  const members: string[] = [];
+  let uncertain = false;
+  for (const pid of processIds) {
+    const processStat = processStatFields(join(procRoot, pid, 'stat'));
+    if (!processStat) {
+      uncertain = true;
+      continue;
+    }
+    if (processStat.state === 'gone') {
+      // The pid was present in the directory snapshot but disappeared before
+      // stat was read. Treat the observation as incomplete, not an empty slot.
+      uncertain = true;
+      continue;
+    }
+    if (processStat.processGroup !== groupLeaderPid) continue;
+    let threadIds: string[];
+    try {
+      threadIds = readdirSync(join(procRoot, pid, 'task')).filter(entry => /^\d+$/.test(entry));
+    } catch (error) {
+      // A disappearing task group is a race; rescan before treating it as dead.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') uncertain = true;
+      else uncertain = true;
+      continue;
+    }
+    if (threadIds.length === 0) {
+      uncertain = true;
+      continue;
+    }
+    for (const tid of threadIds) {
+      const threadStat = processStatFields(join(procRoot, pid, 'task', tid, 'stat'));
+      if (!threadStat || threadStat.state === 'gone' || threadStat.processGroup !== groupLeaderPid) {
+        // In particular, do not certify exit from a partial snapshot that
+        // lost a thread between readdir and stat.
+        uncertain = true;
+        continue;
+      }
+      members.push(`${pid}:${tid}`);
+      if (threadStat.state !== 'Z' && threadStat.state !== 'X' && threadStat.state !== 'x') {
+        linuxGroupSnapshots.delete(groupLeaderPid);
+        return true;
+      }
+    }
+  }
+
+  if (uncertain) {
+    linuxGroupSnapshots.delete(groupLeaderPid);
+    return true;
+  }
+
+  const fingerprint = members.sort().join('|');
+  // A single /proc enumeration is not an atomic process-group snapshot. Require
+  // the exact same all-dead thread set on a later poll before settling. The
+  // wait loop polls at 10ms; a small stability window catches a fork racing the
+  // previous directory enumeration. Any live/unreadable thread stays fail-closed.
+  const previous = linuxGroupSnapshots.get(groupLeaderPid);
+  const now = Date.now();
+  if (previous?.fingerprint === fingerprint && now - previous.observedAt >= 20) {
+    // Retain settled state so repeated probes of the same complete snapshot
+    // remain settled. A live, changed, or incomplete snapshot clears it above.
+    return false;
+  }
+  // Keep the start of this unchanged observation window. Replacing it at each
+  // poll would make a 20ms threshold unreachable when polling every 10ms.
+  linuxGroupSnapshots.set(groupLeaderPid, {
+    fingerprint,
+    observedAt: previous?.fingerprint === fingerprint ? previous.observedAt : now,
+  });
+  return true;
+}
+
 /**
- * Whether any process remains in the supervised group. POSIX uses `kill(-pgid, 0)` so
- * a dead group leader with a live same-group descendant still reads as alive.
+ * Whether runnable work remains in the supervised group. POSIX normally uses
+ * `kill(-pgid, 0)` so a dead leader with a live descendant stays visible. Linux
+ * additionally inspects every thread because a thread-group leader can be a
+ * zombie while workers remain runnable; settlement requires stable complete
+ * procfs observations and fails closed when the snapshot is incomplete.
  */
 export function isProcessGroupAlive(groupLeaderPid: number): boolean {
   if (process.platform === 'win32') {
     return isProcessAlive(groupLeaderPid)
+  }
+  if (process.platform === 'linux') {
+    return isLinuxProcessGroupAliveInProc(groupLeaderPid)
   }
   try {
     process.kill(-groupLeaderPid, 0)
@@ -54,6 +158,14 @@ export async function waitForProcessGroupExit(groupLeaderPid: number, timeoutMs:
       await new Promise<void>((resolveDelay) => { setTimeout(resolveDelay, 10) })
     }
     return !isProcessAlive(groupLeaderPid)
+  }
+  if (process.platform === 'linux') {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (!isProcessGroupAlive(groupLeaderPid)) return true
+      await new Promise<void>((resolveDelay) => { setTimeout(resolveDelay, 10) })
+    }
+    return !isProcessGroupAlive(groupLeaderPid)
   }
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
