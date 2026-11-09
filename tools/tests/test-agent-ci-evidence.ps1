@@ -60,7 +60,7 @@ Assert-CI ($snapshot.available -and $snapshot.observations.Count -eq 140) 'All p
 Assert-CI ($counts.pages -eq 2 -and $counts.metadata -eq 1) 'Pagination and per-snapshot metadata cache must be bounded'
 Assert-CI ((Get-AgentCIState -Snapshot $snapshot -Policies $policy -TargetSha $head).state -eq 'complete') 'Page-two required check must pass'
 # Exercise real enrichment: REST check rows omit their workflow attempt.
-$rerunFixture = @{ status = 'queued'; checkAttempt = 1; jobRun = 8 }
+$rerunFixture = @{ status = 'queued'; checkAttempt = 1; jobRun = 8; jobTimeouts = 0; jobReads = 0 }
 $rerun = [pscustomobject]@{ id = 8; workflow_id = 7; name = 'Public Release Gate'; event = 'pull_request';
   head_sha = $head; run_attempt = 2; created_at = '2026-10-07T12:00:00Z'; status = 'queued' }
 $rerunRead = {
@@ -68,7 +68,11 @@ $rerunRead = {
   if ($Endpoint -like '*check-runs*') { return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = 1; check_runs = @($raw[139]) }; error = '' } }
   if ($Endpoint -like '*/actions/runs`?*') { $rerun.status = $rerunFixture.status; return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = 1; workflow_runs = @($rerun) }; error = '' } }
   if ($Endpoint -like '*/actions/runs/8') { return [pscustomobject]@{ available = $true; value = $rerun; error = '' } }
-  if ($Endpoint -like '*/actions/jobs/1') { return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ run_id = $rerunFixture.jobRun; run_attempt = $rerunFixture.checkAttempt; check_run_url = 'https://api.github.com/repos/test/repo/check-runs/140' }; error = '' } }
+  if ($Endpoint -like '*/actions/jobs/1') {
+    $rerunFixture.jobReads++
+    if ($rerunFixture.jobTimeouts -gt 0) { $rerunFixture.jobTimeouts--; return [pscustomobject]@{ available = $false; value = $null; error = 'github_api_timeout' } }
+    return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ run_id = $rerunFixture.jobRun; run_attempt = $rerunFixture.checkAttempt; check_run_url = 'https://api.github.com/repos/test/repo/check-runs/140' }; error = '' }
+  }
   throw 'Unexpected rerun fixture endpoint'
 }
 $rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
@@ -80,7 +84,16 @@ Assert-CI ((Get-AgentCIState -Snapshot $rerunSnapshot -Policies $policy -TargetS
 $rerunFixture.checkAttempt = 2
 $rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
 Assert-CI ((Get-AgentCIState -Snapshot $rerunSnapshot -Policies $policy -TargetSha $head).ready) 'A successful check bound to the latest completed attempt must pass'
+$readsBeforeRetry = $rerunFixture.jobReads
+$rerunFixture.jobTimeouts = 1
+$rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
+Assert-CI ($rerunSnapshot.available -and (Get-AgentCIState -Snapshot $rerunSnapshot -Policies $policy -TargetSha $head).ready) 'A single transient job metadata timeout may be recovered by the bounded retry'
+Assert-CI ($rerunFixture.jobReads -eq $readsBeforeRetry + 2) 'Job metadata retry count must remain bounded to one retry'
+$rerunFixture.jobTimeouts = 2
+$rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
+Assert-CI (-not $rerunSnapshot.available -and $rerunSnapshot.error -eq 'workflow_check_attempt_unavailable') 'Repeated job metadata timeouts must remain fail-closed'
 $rerunFixture.jobRun = 99
+$rerunFixture.jobTimeouts = 0
 $rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
 Assert-CI (-not $rerunSnapshot.available -and $rerunSnapshot.error -eq 'workflow_check_attempt_unavailable') 'Mismatched job lineage must fail closed with a safe diagnostic'
 $foreign = $raw[139].PSObject.Copy()
