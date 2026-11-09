@@ -31,6 +31,9 @@ export function requestsRequiredUserDecision(answer: string): boolean {
   const asksChoice = /\b(?:or|versus)\b/i.test(question)
     || /^(?:which|what)\b[^?\n]*\b(?:should|must)\b/i.test(question)
   const optionalFollowUp = /^(?:would you prefer|would you like) I (?:summari[sz]e|show|explain|describe|list|walk you through)\b/i.test(question)
+    || (/^should I\b[^?\n]{1,250}\?$/i.test(question)
+      && /\b(?:summari[sz]e|show|explain|describe|list|walk you through)\b/i.test(question)
+      && !/\b(?:change|fix|implement|edit|alter|modify|update|repair)\b/i.test(question))
   if (asksChoice && !optionalFollowUp && /^(?:which|what|should|do you want|would you prefer)\b[^?\n]{1,300}\?$/i.test(question)) return true
   const explicitChoiceRequest = /^(?:please\s+(?:choose|pick|decide|select)|choose|pick|select)\s*:?[^.!?\n]{1,200}\b(?:or|\/)\b[^.!?\n]*[.!?]?$/i.test(question)
   if (explicitChoiceRequest) return true

@@ -57,6 +57,7 @@ test('contextual unresolved choices defer while optional follow-up questions do 
   assert.equal(requestsRequiredUserDecision('Should I rerun the failing test or change the implementation?'), true)
   for (const answer of [
     'Would you prefer I summarize the completed fix or show the diff?',
+    'Should I rerun the test or summarize the result?',
     'I cannot proceed without a decision on a future task. Would you like me to summarize the completed fix?',
     'If I need a decision on a future task, I will ask. Which direction should that task take?',
     'I implemented and verified the requested fix. For your next task, please choose sorting or filtering.',
