@@ -672,42 +672,87 @@ test('kernel negative: lowercase-only witness cannot certify uppercase literal g
   assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
 })
 
-test('kernel negative: single-space witness cannot certify a distinct double-space literal goal', async t => {
+for (const scenario of [
+  {
+    name: 'single-space witness cannot certify a distinct double-space string literal goal',
+    goal: "Fix parser.js so echo('A  B') returns 'A  B'.",
+    requirement: "Fix parser.js so echo('A B') returns 'A B'",
+    goalSnippet: "echo('A  B')",
+    requirementSnippet: "echo('A B')",
+    initialSource: 'export function echo(value) { return value; }\n',
+    wrongSource: 'export function echo(value) { return value.replace(/\\s+/g, " "); }\n',
+    oracle: "import { echo } from './src/parser.js'; if (echo('A  B') !== 'A  B') process.exit(1)",
+    testSource: [
+      'import assert from "node:assert/strict";', 'import test from "node:test";',
+      'import { echo } from "../src/parser.js";',
+      'test("echo returns single-space input unchanged", () => assert.equal(echo("A B"), "A B"));',
+    ].join('\n') + '\n',
+  },
+  {
+    name: 'single-space regex witness cannot certify a distinct double-space regex goal',
+    goal: "Fix parser.js so accepts(/A  B/) returns true.",
+    requirement: "Fix parser.js so accepts(/A B/) returns true",
+    goalSnippet: 'accepts(/A  B/)',
+    requirementSnippet: 'accepts(/A B/)',
+    initialSource: 'export function accepts(value) { return /^A  B$/.test(value); }\n',
+    wrongSource: 'export function accepts(value) { return /^A B$/.test(value); }\n',
+    oracle: "import { accepts } from './src/parser.js'; if (accepts('A  B') !== true) process.exit(1)",
+    testSource: [
+      'import assert from "node:assert/strict";', 'import test from "node:test";',
+      'import { accepts } from "../src/parser.js";',
+      'test("accepts single-space input", () => assert.equal(accepts("A B"), true));',
+    ].join('\n') + '\n',
+  },
+  {
+    name: 'regex literal with leading and trailing spaces preserves its exact pattern',
+    goal: 'Fix parser.js so matches(/ A  B /) returns true.',
+    requirement: 'Fix parser.js so matches(/ A B /) returns true',
+    goalSnippet: 'matches(/ A  B /)',
+    requirementSnippet: 'matches(/ A B /)',
+    initialSource: 'export function matches(value) { return / A  B /.test(value); }\n',
+    wrongSource: 'export function matches(value) { return / A B /.test(value); }\n',
+    oracle: "import { matches } from './src/parser.js'; if (matches(' A  B ') !== true) process.exit(1)",
+    testSource: [
+      'import assert from "node:assert/strict";', 'import test from "node:test";',
+      'import { matches } from "../src/parser.js";',
+      'test("matches single-space input", () => assert.equal(matches(" A B "), true));',
+    ].join('\n') + '\n',
+  },
+] as const) {
+test(`kernel negative: ${scenario.name}`, async t => {
   const root = mkdtempSync(join(tmpdir(), 'babel-whitespace-sensitive-goal-proof-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(join(root, 'test'), { recursive: true })
   mkdirSync(join(root, 'src'), { recursive: true })
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'whitespace-sensitive-goal-fixture', type: 'module' }))
-  writeFileSync(join(root, 'src', 'parser.js'), 'export function echo(value) { return value.replace(/\\s+/g, " "); }\n')
-  writeFileSync(join(root, 'test', 'parser.test.mjs'), [
-    'import assert from "node:assert/strict";',
-    'import test from "node:test";',
-    'import { echo } from "../src/parser.js";',
-    'test("echo returns single-space input unchanged", () => assert.equal(echo("A B"), "A B"));',
-  ].join('\n') + '\n')
+  writeFileSync(join(root, 'src', 'parser.js'), scenario.initialSource)
+  writeFileSync(join(root, 'test', 'parser.test.mjs'), scenario.testSource)
 
   const command = 'node --test test/parser.test.mjs'
   const task = [
-    "Fix parser.js so echo('A  B') returns 'A  B'.",
+    scenario.goal,
     'Requirements:',
-    "- Fix parser.js so echo('A B') returns 'A B'; verified by: `" + command + '` must pass.',
+    `- ${scenario.requirement}; verified by: \`${command}\` must pass.`,
   ].join('\n')
   const contract = resolveLiveSessionAuthority({
     mode: 'chat', task, projectRoot: root,
     projectTestCommands: [command], verifierRequirements: [command],
   }).taskContract
-  const doubleSpaceGoal = contract.acceptance.find(item => item.description.includes("echo('A  B')"))!
-  const singleSpaceRequirement = contract.acceptance.find(item => item.description.includes("echo('A B')"))!
-  assert.ok(doubleSpaceGoal && singleSpaceRequirement)
-  assert.ok(doubleSpaceGoal.verification.verifier_id.startsWith('meaning:'))
-  assert.equal(singleSpaceRequirement.verification.verifier_id, 'verifier:node')
+  const behavioralGoal = contract.acceptance.find(item => item.description.includes(scenario.goalSnippet))!
+  const specificRequirement = contract.acceptance.find(item => item.description.includes(scenario.requirementSnippet))!
+  assert.ok(behavioralGoal && specificRequirement)
+  assert.ok(behavioralGoal.verification.verifier_id.startsWith('meaning:'))
+  assert.equal(specificRequirement.verification.verifier_id, 'verifier:node')
 
-  const runId = 'whitespace-sensitive-goal-negative'
+  const runId = `literal-whitespace-negative-${scenario.name.replace(/[^a-z]+/gi, '-').toLowerCase()}`
   const service = createCriterionCompletionServiceV1(() => ({ contract, runId, projectRoot: root }))
   const request = service.currentRequest()!
   const mutationPath = 'src/parser.js'
-  await governedMutateSrcFix(root, runId, mutationPath,
-    'export function echo(value) { return value.replace(/\\s+/g, " "); }\n')
+  await governedMutateSrcFix(root, runId, mutationPath, scenario.wrongSource)
+  const independentOracle = spawnSync(process.execPath, ['--input-type=module', '-e', scenario.oracle], {
+    cwd: root, encoding: 'utf8', timeout: 15_000, windowsHide: true,
+  })
+  assert.equal(independentOracle.status, 1, 'the candidate patch must fail the independent behavioral oracle')
   const sessionEvents = createSessionEventLog(runId)
   const verifierOwner = chatVerifierOwner({ projectRoot: root, sessionId: sessionEvents.session_id,
     taskId: contract.task_id, contractHash: contract.contract_hash })!
@@ -735,7 +780,7 @@ test('kernel negative: single-space witness cannot certify a distinct double-spa
   const envKey = verifierEnvironmentKey(env)
   const cacheIdentity = resolveVerifierCacheIdentity({ projectRoot: root, command, envKey })
   const receipt = await captureAndRecordVerifierReceipt({
-    projectRoot: root, command, exitCode, summary: 'single-space witness passed', stdout,
+    projectRoot: root, command, exitCode, summary: 'related literal witness passed', stdout,
     stderr: policy.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
     sessionEvents, turnId: runId, ledger: [], cache: new Map(), writeCount: 1,
     cacheIdentity, verifierOwner, executionBackend: 'host-process',
@@ -766,6 +811,7 @@ test('kernel negative: single-space witness cannot certify a distinct double-spa
   assert.equal(decision.allowed, false)
   assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
 })
+}
 
 test('executor → receipt → criterion negative: one governed witness run cannot satisfy sibling criterion', async t => {
   const { root, service, request, runId } = await dualWitnessFixture(t)

@@ -187,6 +187,24 @@ test('verifier binding preserves exact whitespace inside string literals', () =>
   assert.equal(singleSpaceRequirement.verification.verifier_id, 'verifier:node')
 })
 
+test('verifier binding preserves exact whitespace inside regex literals', () => {
+  const task = [
+    'Fix parser.js so accepts(/A  B/) returns true.',
+    'Requirements:',
+    '- Fix parser.js so accepts(/A B/) returns true; verified by: `node --test test/parser.test.mjs` must pass.',
+  ].join('\n')
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptanceV3(task),
+    trustedVerifierCommands: ['node --test test/parser.test.mjs'],
+    defaultWorkingDirectory: '.',
+  })
+  const exactLiteralGoal = bound.criteria.find(item => item.description.includes('accepts(/A  B/)'))
+  const singleSpaceRequirement = bound.criteria.find(item => item.description.includes('accepts(/A B/)'))
+  assert.ok(exactLiteralGoal && singleSpaceRequirement)
+  assert.ok(exactLiteralGoal.verification.verifier_id.startsWith('meaning:'), 'single-space regex verifier cannot certify a two-space regex goal')
+  assert.equal(singleSpaceRequirement.verification.verifier_id, 'verifier:node')
+})
+
 test('criterion verifier-link syntax does not change archived v2 meaning', () => {
   const task = [
     'Requirements:',
