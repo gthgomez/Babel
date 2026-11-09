@@ -15,6 +15,9 @@ const MAX_CRITERIA = 128
 const MAX_CRITERION_CHARS = 4096
 const RAW_PYTHON_FUNCTION_DEFINITION = /^\s{0,3}(?:async\s+)?def\s+[A-Za-z_]\w*\s*\(/
 const RAW_PYTHON_TOP_LEVEL_CODE = /^\s{0,3}(?:async\s+)?(?:def|class)\s+[A-Za-z_]\w*\b|^\s{0,3}@\w/
+// A concrete behavioral objective in the user's opening request must not be
+// displaced by a later, narrower command-only Requirements list.
+const BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:please\s+)?(?:fix|change|update|implement|make|ensure|support)\b.{1,240}\bso\b.{1,240}\b(?:returns?|return|equals?|equal|produces?|outputs?|becomes?|is)\b.{1,160}[.!]?\s*$/i
 export type AcceptanceMeaningStatus = 'explicit' | 'inferred' | 'unresolved'
 export interface AcceptanceMeaningSource {
   criterion_id: string
@@ -48,6 +51,108 @@ function sortCriteriaBySourceSpan(
 
 function hasRawPythonFunctionDefinition(request: string): boolean {
   return request.split(/\r?\n/).some(line => RAW_PYTHON_FUNCTION_DEFINITION.test(line))
+}
+
+function preserveBehavioralGoal(
+  meaning: TaskAcceptanceMeaning,
+  request: string,
+): TaskAcceptanceMeaning {
+  // Limit this bridge to a directly stated, observable opening goal. Do not
+  // reinterpret examples, quoted text, fenced content, or arbitrary prose.
+  // Keep carriage returns in each raw line so offset increments include the
+  // full original CRLF separator. The semantic line text is normalized below.
+  const lines = request.split('\n')
+  let offset = 0
+  let inFence = false
+  let found: { text: string; start: number; end: number } | undefined
+  for (const raw of lines) {
+    const line = raw.replace(/\r$/, '')
+    const fence = line.match(/^\s{0,3}(`{3,}|~{3,})/)
+    if (fence) { inFence = !inFence; offset += raw.length + 1; continue }
+    if (!inFence && /^\s{0,3}(?:#{1,6}\s+)?(?:requirements?|acceptance criteria|examples?)\s*:?\s*$/i.test(line)) break
+    if (!inFence && /^\s{0,3}(?:[-*+•]|\d+[.)])\s+/.test(line)) break
+    if (!inFence && /^\s*>/.test(line)) { offset += raw.length + 1; continue }
+    if (!inFence && line.trim() && !/^\s{0,3}#{1,6}\s+/.test(line) && BEHAVIORAL_GOAL_LINE.test(line)) {
+      found = { text: line.trim(), start: offset, end: offset + line.length }
+      break
+    }
+    offset += raw.length + 1
+  }
+  if (!found || meaning.criteria.some(item => item.description === found!.text)) return meaning
+
+  // The parser already enforces this cap. If there is no room for the
+  // additional obligation, combine it with the final criterion as one
+  // unresolved requirement. The admitted contract therefore retains both
+  // obligations and cannot certify either from unrelated command evidence.
+  if (meaning.criteria.length >= MAX_CRITERIA) {
+    const lastCriterion = meaning.criteria[MAX_CRITERIA - 1]!
+    const lastSource = meaning.sources.find(source => source.criterion_id === lastCriterion.id)
+    const description = `${found.text} Also, ${lastCriterion.description}`
+    const id = `acceptance:${sha256Canonical({ description, status: 'unresolved' }).slice(0, 32)}`
+    const inputDigest = sha256Canonical(request)
+    const combined: AcceptanceRequirementV1 = {
+      id,
+      description,
+      type: 'custom',
+      required: true,
+      verification: { kind: 'custom', verifier_id: `meaning:${id}:${inputDigest.slice(0, 16)}` },
+      verification_strategy: 'Acceptance requirements exceeded the capture limit; both combined obligations require independent evidence before completion can be certified.',
+    }
+    const criteria = [...meaning.criteria]
+    criteria[MAX_CRITERIA - 1] = combined
+    const sources = meaning.sources.filter(source => source.criterion_id !== lastCriterion.id)
+    sources.push({
+      criterion_id: id,
+      status: 'unresolved',
+      input_digest: inputDigest,
+      start: found.start,
+      end: lastSource?.end ?? found.end,
+    })
+    return {
+      ...meaning,
+      criteria,
+      sources,
+      unresolved: true,
+      structurallyComplete: false,
+      provenance: [
+        {
+          kind: 'derived_acceptance',
+          ref: `${ACCEPTANCE_MEANING_REF_V2}:unresolved:${inputDigest}:${found.start}:${lastSource?.end ?? found.end}:${id}`,
+        },
+        ...meaning.provenance,
+      ],
+    }
+  }
+
+  const inputDigest = sha256Canonical(request)
+  const id = `acceptance:${sha256Canonical({ description: found.text, status: 'inferred' }).slice(0, 32)}`
+  const goal: AcceptanceRequirementV1 = {
+    id,
+    description: found.text,
+    type: 'custom',
+    required: true,
+    verification: { kind: 'custom', verifier_id: `meaning:${id}:${inputDigest.slice(0, 16)}` },
+    verification_strategy: 'The explicit behavioral goal remains a separate requirement; a command-only success does not prove it unless that exact behavior is covered by an authorized verifier.',
+  }
+  const source: AcceptanceMeaningSource = {
+    criterion_id: id,
+    status: 'inferred',
+    input_digest: inputDigest,
+    start: found.start,
+    end: found.end,
+  }
+  return {
+    ...meaning,
+    criteria: [goal, ...meaning.criteria],
+    sources: [source, ...meaning.sources],
+    provenance: [
+      {
+        kind: 'derived_acceptance',
+        ref: `${ACCEPTANCE_MEANING_REF_V2}:inferred:${inputDigest}:${found.start}:${found.end}:${id}`,
+      },
+      ...meaning.provenance,
+    ],
+  }
 }
 
 type InterpretOptions = {
@@ -270,7 +375,7 @@ export function inferTaskAcceptanceV2(request: string): TaskAcceptanceMeaning {
   }
   const hasRealCriterion = legacy.sources.some((source) => source.status !== 'unresolved')
   if (hasRealCriterion || !legacy.structurallyComplete) {
-    return promoteV1ProjectionToV2Admission(legacy)
+    return preserveBehavioralGoal(promoteV1ProjectionToV2Admission(legacy), request)
   }
   return interpretTaskAcceptance(request, {
     version: 2,

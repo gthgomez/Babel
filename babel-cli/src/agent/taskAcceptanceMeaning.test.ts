@@ -112,6 +112,11 @@ const S07_EXPLICIT_ACCEPTANCE = [
   'Requirements:',
   '- `npm test` passes.',
 ].join('\n')
+const GOAL_WITH_UNRELATED_GREEN_TEST = [
+  'Fix parser.js so parseSum(2, 3) returns 5.',
+  'Requirements:',
+  '- `npm test` must pass.',
+].join('\n')
 const OBJECTIVE_CRASH_INITIAL = 'Explain fixture A.\nRequirements:\n- Preserve its public API.'
 
 test('v2 precedence retains v1 projection when explicit criteria exist (S07 positive)', () => {
@@ -123,6 +128,69 @@ test('v2 precedence retains v1 projection when explicit criteria exist (S07 posi
   assert.deepEqual(meaning.criteria.map(item => item.description), legacy.criteria.map(item => item.description))
   assert.ok(meaning.provenance.every(record => record.ref.startsWith('task-acceptance-meaning:v2:')))
   assert.equal(meaning.unresolved, false)
+})
+
+test('v2 preserves an explicit behavioral goal separately from a named green-test requirement', () => {
+  const meaning = inferTaskAcceptanceV2(GOAL_WITH_UNRELATED_GREEN_TEST)
+  assert.deepEqual(meaning.criteria.map(item => item.description), [
+    'Fix parser.js so parseSum(2, 3) returns 5.',
+    '`npm test` must pass.',
+  ])
+  assert.deepEqual(meaning.sources.map(source => source.status), ['inferred', 'explicit'])
+  assert.equal(meaning.criteria[0]!.verification.verifier_id.startsWith('meaning:'), true,
+    'the task goal must not inherit npm test as proof unless explicitly bound')
+  assert.equal(meaning.criteria[1]!.verification.verifier_id.startsWith('meaning:'), true,
+    'binding to a trusted test command is performed by the admission binding stage')
+
+  const changedBehavior = GOAL_WITH_UNRELATED_GREEN_TEST.replace('parseSum(2, 3) returns 5', 'parseSum(4, 1) returns 5')
+  const changed = inferTaskAcceptanceV2(changedBehavior)
+  assert.equal(changed.criteria[0]!.description, 'Fix parser.js so parseSum(4, 1) returns 5.',
+    'metamorphic request changes must change the preserved obligation')
+  assert.notEqual(changed.criteria[0]!.id, meaning.criteria[0]!.id)
+
+  const oneLine = inferTaskAcceptanceV2('Fix parser.js so parseSum(2, 3) returns 5.')
+  assert.equal(oneLine.criteria.some(item => /parseSum\(2, 3\) returns 5/.test(item.description)), true,
+    'the one-line control retains the same behavioral goal')
+
+  const quotedOnly = inferTaskAcceptanceV2([
+    'Check the documented example.',
+    'Requirements:',
+    '- `npm test` must pass.',
+    'Example:',
+    '```text',
+    'Fix parser.js so parseSum(2, 3) returns 5.',
+    '```',
+  ].join('\n'))
+  assert.equal(quotedOnly.criteria.some(item => item.description.includes('parseSum(2, 3)')), false,
+    'quoted or fenced examples do not become goal authority')
+})
+
+test('v2 uses exact CRLF source offsets for the preserved opening goal', () => {
+  const request = 'Context first.\r\nFix parser.js so parseSum(2, 3) returns 5.\r\nRequirements:\r\n- `npm test` must pass.'
+  const meaning = inferTaskAcceptanceV2(request)
+  const goal = meaning.criteria.find(item => item.description === 'Fix parser.js so parseSum(2, 3) returns 5.')
+  assert.ok(goal)
+  const source = meaning.sources.find(item => item.criterion_id === goal.id)
+  assert.ok(source)
+  assert.equal(request.slice(source.start, source.end), goal.description)
+})
+
+test('v2 marks a max-cap goal admission unresolved instead of exceeding the criterion limit', () => {
+  const request = [
+    'Fix parser.js so parseSum(2, 3) returns 5.',
+    'Requirements:',
+    ...Array.from({ length: 128 }, (_, index) => `- Requirement ${index} must hold.`),
+  ].join('\n')
+  const meaning = inferTaskAcceptanceV2(request)
+  assert.equal(meaning.criteria.length, 128)
+  assert.equal(meaning.unresolved, true)
+  assert.equal(meaning.structurallyComplete, false)
+  const admitted = acceptance(request)
+  const combined = admitted.acceptance.find(item => item.description.includes('Fix parser.js so parseSum(2, 3) returns 5.'))
+  assert.ok(combined, 'the frozen contract retains the behavioral goal at the cap')
+  assert.match(combined.description, /Requirement 127 must hold\./)
+  assert.match(combined.verification.verifier_id, /^meaning:/,
+    'the combined obligation remains unbound to the command-only requirement')
 })
 
 test('v2 precedence retains v1 projection for objective checkpoint (Preserve API only)', () => {
