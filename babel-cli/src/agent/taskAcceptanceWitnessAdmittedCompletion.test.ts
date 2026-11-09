@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import test, { type TestContext } from 'node:test'
 import {
   createCriterionCompletionServiceV1,
@@ -27,6 +28,7 @@ import {
 import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
 import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
 import { buildTaskContractV1, freezeTaskContract } from './taskContract.js'
+import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import { buildVerifierReceiptV2, evaluateVerifierPromotion } from './verifierKernel.js'
 import { createToolExecutor, executeActionWithPolicy } from './toolExecutor.js'
 
@@ -143,9 +145,7 @@ function createRealNpmRunExecutor(root: string) {
   })
 }
 
-async function governedMutateSrcFix(root: string, runId: string) {
-  const mutationPath = 'src/fix.ts'
-  const content = 'export const v = 2;\n'
+async function governedMutateSrcFix(root: string, runId: string, mutationPath = 'src/fix.ts', content = 'export const v = 2;\n') {
   const executor = createToolExecutor({
     executeTool: async (request) => {
       assert.equal(request.tool, 'file_write')
@@ -379,6 +379,118 @@ test('executor → receipt → inferred semantic criterion: two green npm cases 
   assert.equal(result.status, 'UNVERIFIED')
   assert.deepEqual(result.missing_requirements, [meaning.criteria[0]!.id])
   assert.equal(result.satisfied_requirements.length, 0)
+})
+
+test('exact behavioral goal plus unrelated green npm test cannot certify a wrong parser patch', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-goal-preservation-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'test'), { recursive: true })
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name: 'goal-preservation-fixture', type: 'module',
+    scripts: { test: 'node --test test/unrelated.test.mjs' },
+  }))
+  writeFileSync(join(root, 'src', 'parser.js'), 'export function parseSum(a, b) { return 0; }\n')
+  writeFileSync(join(root, 'test', 'unrelated.test.mjs'), [
+    'import assert from "node:assert/strict";',
+    'import test from "node:test";',
+    'test("unrelated fixture still works", () => assert.equal(2 + 2, 4));',
+  ].join('\n') + '\n')
+
+  const task = 'Fix parser.js so parseSum(2, 3) returns 5.\nRequirements:\n- `npm test` must pass.'
+  const authority = resolveLiveSessionAuthority({
+    mode: 'chat', task, projectRoot: root,
+    projectTestCommands: ['npm test'], verifierRequirements: ['npm test'],
+  })
+  const contract = authority.taskContract
+  const goal = contract.acceptance.find(item => item.description === 'Fix parser.js so parseSum(2, 3) returns 5.')
+  const testCriterion = contract.acceptance.find(item => item.description === '`npm test` must pass.')
+  assert.ok(goal, 'admission keeps the requested behavior as a required criterion')
+  assert.ok(testCriterion, 'admission keeps the test requirement as its own criterion')
+  assert.ok(goal.verification.verifier_id.startsWith('meaning:'), 'unrelated test success is not pre-bound as proof of behavior')
+  assert.deepEqual(testCriterion.verification.argv, ['test'], 'the exact positive npm test criterion remains executable-bound')
+
+  const runId = 'goal-preservation-wrong-patch'
+  const service = createCriterionCompletionServiceV1(() => ({ contract, runId, projectRoot: root }))
+  const request = service.currentRequest()!
+  const sessionEvents = createSessionEventLog(runId)
+  const verifierOwner = chatVerifierOwner({ projectRoot: root, sessionId: sessionEvents.session_id,
+    taskId: contract.task_id, contractHash: contract.contract_hash })!
+  const recording = { sessionEvents, ledger: [] as NonNullable<Parameters<typeof captureAndRecordVerifierReceipt>[0]['ledger']>,
+    cache: new Map(), verifierOwner }
+  const mutationPath = 'src/parser.js'
+  await governedMutateSrcFix(root, runId, mutationPath,
+    'export function parseSum(a, b) { return a - b; }\n')
+  const observed = await import(`${pathToFileURL(join(root, mutationPath)).href}?trial=${Date.now()}`) as { parseSum(a: number, b: number): number }
+  assert.equal(observed.parseSum(2, 3), -1, 'the intentionally wrong subtraction patch misses the user goal')
+
+  const npmExecPath = process.env.npm_execpath
+  const bundledNpmCli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  const executable = npmExecPath && existsSync(npmExecPath) ? process.execPath
+    : existsSync(bundledNpmCli) ? process.execPath : 'npm'
+  const args = npmExecPath && existsSync(npmExecPath) ? [npmExecPath, 'test']
+    : existsSync(bundledNpmCli) ? [bundledNpmCli, 'test'] : ['test']
+  const execution = await executeActionWithPolicy(
+    { type: 'test_run', command: 'npm test' }, 'workspace_write', policyCtx(runId, root), {
+      executor: createToolExecutor({
+        executeTool: async request => {
+          assert.equal(request.tool, 'test_run')
+          const child = spawnSync(executable, args, {
+            cwd: root, encoding: 'utf8', env: witnessExecutionEnvironment(root),
+            timeout: 30_000, windowsHide: true,
+          })
+          assert.ifError(child.error)
+          return { exit_code: child.status ?? 1, stdout: child.stdout ?? '', stderr: child.stderr ?? '' }
+        },
+      }),
+      mode: 'chat', lease: null, hostFallbackAllowed: true, isolationAvailable: true,
+    },
+  )
+  assert.equal(execution.policyBlocked, false, JSON.stringify(execution))
+  const stdout = execution.results[0]?.stdout ?? ''
+  const exitCode = execution.results[0]?.exit_code ?? 1
+  assert.equal(exitCode, 0, stdout)
+  assert.match(stdout, /pass 1/, 'the unrelated npm test is genuinely green')
+  const capture = {
+    projectRoot: root, command: 'npm test', exitCode, summary: '1/1 unrelated test passed', stdout,
+    stderr: execution.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
+    execution: { working_directory: '.', environment_policy: 'host-process' },
+  }
+  const cacheIdentity = resolveVerifierCacheIdentity({ projectRoot: root, command: 'npm test',
+    envKey: verifierEnvironmentKey(witnessExecutionEnvironment(root)) })
+  const receipt = await captureAndRecordVerifierReceipt({
+    ...capture, ...recording, cacheIdentity, turnId: runId, writeCount: 1, executionBackend: 'host-process',
+  })
+  assert.ok(receipt)
+  const candidate = candidateShaFromReceipt(root, receipt)
+  service.refreshPrivateEvidence({ proof: { compliant: true }, receipts: [receipt], candidate_sha: candidate, has_mutation: true })
+
+  const result = evaluateCriterionCompletionV1(request)
+  assert.equal(result.verified, false)
+  assert.equal(result.status, 'UNVERIFIED')
+  assert.ok(result.missing_requirements.includes(goal.id), 'green npm evidence cannot satisfy the behavioral goal')
+
+  const requiredVerifierCommands = ['npm test']
+  const requiredVerifiers = chatVerifierRequirements(verifierOwner, requiredVerifierCommands, task, root).map(requirement => ({
+    ...requirement,
+    executionContext: { ...requirement.executionContext,
+      environmentFingerprint: verifierEnvironmentKey(witnessExecutionEnvironment(root)) },
+  }))
+  const currentRevision = captureCompletionWorkspaceRevisionHash({ projectRoot: root }, [mutationPath], receipt)
+  assert.ok(currentRevision && receipt.receiptId)
+  const kernel = createExecutorKernel('chat')
+  const decision = kernel.completion.decide({
+    mode: 'chat', requestedOutcome: 'VERIFIED_COMPLETE', hasWrite: true,
+    verificationPolicy: 'strict', ...prepareKernelVerifierInput(receipt, recording.ledger),
+    verifierOwner, requiredVerifierCommands, requiredVerifiers,
+    currentReceiptRevisionHashes: { [receipt.receiptId]: currentRevision },
+    currentWorkspaceRevisionHash: currentRevision,
+    toolCallLog: [{ tool: 'write_file', target: mutationPath }, { tool: 'test_run', target: 'npm test' }],
+    proof: { compliant: true }, acceptance: request,
+  })
+  assert.equal(decision.allowed, false)
+  assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
+  assert.notEqual(decision.finalOutcome, 'VERIFIED_COMPLETE', decision.reason)
 })
 
 test('executor → receipt → criterion negative: one governed witness run cannot satisfy sibling criterion', async t => {
