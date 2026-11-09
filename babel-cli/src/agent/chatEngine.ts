@@ -2671,24 +2671,20 @@ export class ChatEngine {
     requestedOutcome: TerminalOutcome | "PLAN_COMPLETE",
     hasMutation: boolean,
   ) {
-    refreshChatCompletionVerifierCurrency(this.options, hasMutation,
-      this.lastVerifierReceipt, this.executedVerifierLedger);
+    refreshChatCompletionVerifierCurrency(this.options, hasMutation, this.lastVerifierReceipt, this.executedVerifierLedger);
     const verifierInput = this.buildVerifierInput();
-    const proof =
-      requestedOutcome === "VERIFIED_COMPLETE"
-        ? this.buildCompletionProof(hasMutation)
-        : { compliant: false, errors: ["requested outcome was not verified"] };
-    if (requestedOutcome === 'VERIFIED_COMPLETE') {
-      this.criterionCompletion?.refreshPrivateEvidence({
-        proof,
+    const evidenceProof = requestedOutcome === "VERIFIED_COMPLETE" || hasMutation
+      ? this.buildCompletionProof(hasMutation) : { compliant: false, errors: ["no mutation-bound verifier evidence is available"] };
+    if (this.criterionCompletion && (requestedOutcome === 'VERIFIED_COMPLETE' || hasMutation)) {
+      this.criterionCompletion.refreshPrivateEvidence({
+        proof: evidenceProof,
         receipt: verifierInput.selectedChatReceipts.at(-1) ?? null,
         receipts: verifierInput.selectedChatReceipts,
         candidate_sha: this.criterionCandidateRevisionSha(),
         has_mutation: hasMutation,
       })
     }
-
-    return this.executorKernel.completion.decide({
+    const decision = this.executorKernel.completion.decide({
       mode: this.executionProfile,
       requestedOutcome,
       hasWrite: hasMutation,
@@ -2706,8 +2702,15 @@ export class ChatEngine {
       ...(this.lastVerifierReceipt?.boundRevision
         ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
         : {}),
-      proof,
+      proof: requestedOutcome === 'VERIFIED_COMPLETE'
+        ? evidenceProof
+        : { compliant: false, errors: ["requested outcome was not verified"] },
     });
+    const criterionEvidence = this.criterionCompletion?.reportAdvisoryEvidence() ?? []
+    return criterionEvidence.length > 0 ? {
+      ...decision, acceptanceEvidence: criterionEvidence.slice(0, 16),
+      ...(criterionEvidence.length > 16 ? { acceptanceEvidenceOmitted: criterionEvidence.length - 16 } : {}),
+    } : decision
   }
   private streamDone(answer: string, extra?: ChatStreamDoneExtra): ChatEvent {
     const prior = this.runControl?.stop();

@@ -444,6 +444,14 @@ function formatAcceptanceEvidenceReview(contract?: TaskContractV1 | null): strin
       `      requirement: ${JSON.stringify(criterion.description)}`,
       `      verifier_binding: ${hasCommandBinding ? 'exact_executable' : 'none'}`,
       `      verifier_id: ${JSON.stringify(verification.verifier_id)}`,
+      '      criterion_evidence_status: awaiting_host_evaluation',
+      `      proof_plan: ${hasCommandBinding
+        ? 'run_or_review_the_exact_frozen_verifier'
+        : 'propose_a_focused_check_for_this_requirement'}`,
+      '      proof_plan_authority: advisory_only; do_not_change_the_frozen_contract_or_claim_criterion_completion',
+      ...(hasCommandBinding
+        ? [`      proof_plan_basis: ${JSON.stringify({ requirement: criterion.description, strategy: criterion.verification_strategy, executable_id: verification.executable_id, argv: verification.argv })}`]
+        : [`      proof_plan_basis: ${JSON.stringify({ requirement: criterion.description, strategy: criterion.verification_strategy, verifier_id: verification.verifier_id })}`]),
     )
     if (hasCommandBinding) {
       lines.push(

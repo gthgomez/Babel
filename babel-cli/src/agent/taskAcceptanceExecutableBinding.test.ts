@@ -314,6 +314,9 @@ test('green verifier guidance distinguishes explicit executable checks from infe
   assert.match(explicitReview, /executable_id: "npm"/)
   assert.match(explicitReview, /argv: \["test"\]/)
   assert.match(explicitReview, /environment_policy: "host-process"/)
+  assert.match(explicitReview, /criterion_evidence_status: awaiting_host_evaluation/)
+  assert.match(explicitReview, /proof_plan: run_or_review_the_exact_frozen_verifier/)
+  assert.match(explicitReview, /proof_plan_authority: advisory_only/)
   assert.doesNotMatch(explicitReview, /working_directory:/,
     'an absent frozen cwd stays absent in the advisory contract projection')
 
@@ -342,6 +345,9 @@ test('green verifier guidance distinguishes explicit executable checks from infe
   assert.match(semanticReview, /verifier_binding: none/)
   assert.match(semanticReview, /keep making safe progress/)
   assert.match(semanticReview, /Do not mark the requirement satisfied/)
+  assert.match(semanticReview, /proof_plan: propose_a_focused_check_for_this_requirement/)
+  assert.match(semanticReview, /proof_plan_basis: \{"requirement":"Normalize decimal separators and preserve the original scale\.","strategy":.*"verifier_id":"meaning:/)
+  assert.match(semanticReview, /proof_plan_authority: advisory_only/)
   assert.match(semanticReview, /2\/2 tests passed/)
 })
 

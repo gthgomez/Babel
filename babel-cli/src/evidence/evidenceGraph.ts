@@ -116,6 +116,61 @@ export interface CompletionEvaluationV1 {
   satisfied_requirements: string[];
   missing_requirements: string[];
   errors: string[];
+  /** Host-evaluated per-criterion evidence; proof plans are advisory only. */
+  criterion_results?: CriterionEvidenceResultV1[];
+}
+
+export interface CriterionEvidenceResultV1 {
+  requirement_id: string;
+  description: string;
+  required: boolean;
+  status: "satisfied" | "missing" | "unknown" | "failed" | "not_required";
+  evidence_refs: string[];
+  proof_plan:
+    | "none"
+    | "run_frozen_verifier"
+    | "propose_focused_check"
+    | "repair_failing_verifier"
+    | "resolve_evidence_integrity";
+}
+
+function criterionProofPlan(
+  requirement: AcceptanceRequirementV1,
+  status: CriterionEvidenceResultV1["status"],
+): CriterionEvidenceResultV1["proof_plan"] {
+  if (status === "not_required" || status === "satisfied") return "none";
+  if (status === "failed") return "repair_failing_verifier";
+  if (status === "unknown") return "resolve_evidence_integrity";
+  const verification = requirement.verification;
+  return !verification.verifier_id.startsWith("meaning:") &&
+    typeof verification.executable_id === "string" &&
+    Array.isArray(verification.argv) && verification.argv.length > 0
+    ? "run_frozen_verifier"
+    : "propose_focused_check";
+}
+
+function criterionResults(
+  contract: TaskContractV1,
+  statuses: ReadonlyMap<string, CriterionEvidenceResultV1["status"]>,
+  refs: ReadonlyMap<string, readonly string[]> = new Map(),
+): CriterionEvidenceResultV1[] {
+  return contract.acceptance.map((requirement) => {
+    const status = requirement.required
+      ? statuses.get(requirement.id) ?? "unknown"
+      : "not_required";
+    return {
+      requirement_id: requirement.id,
+      description: requirement.description,
+      required: requirement.required,
+      status,
+      evidence_refs: [...(refs.get(requirement.id) ?? [])],
+      proof_plan: criterionProofPlan(requirement, status),
+    };
+  });
+}
+
+function unknownCriterionResults(contract: TaskContractV1): CriterionEvidenceResultV1[] {
+  return criterionResults(contract, new Map());
 }
 
 export interface EvidenceGraphDocumentV1 {
@@ -503,6 +558,7 @@ export function evaluateCompletionGateV1(input: {
         .filter((requirement) => requirement.required)
         .map((requirement) => requirement.id),
       errors: ["trusted_execution: unbranded or caller-fabricated read port"],
+      criterion_results: unknownCriterionResults(input.contract),
     };
   }
   const contractErrors = validateTaskContractV1ForCompletion(input.contract);
@@ -513,6 +569,7 @@ export function evaluateCompletionGateV1(input: {
       satisfied_requirements: [],
       missing_requirements: [],
       errors: contractErrors.map((error) => `contract:${error}`),
+      criterion_results: unknownCriterionResults(input.contract),
     };
   }
   const bundleErrors = input.acceptance_bundle
@@ -530,6 +587,7 @@ export function evaluateCompletionGateV1(input: {
         .filter((requirement) => requirement.required)
         .map((requirement) => requirement.id),
       errors: bundleErrors.map((error) => `acceptance_bundle:${error}`),
+      criterion_results: unknownCriterionResults(input.contract),
     };
   }
   const graphValidation = input.graph.validate();
@@ -539,6 +597,8 @@ export function evaluateCompletionGateV1(input: {
   );
   const satisfied: string[] = [];
   const missing: string[] = [];
+  const criterionStatuses = new Map<string, CriterionEvidenceResultV1["status"]>();
+  const criterionEvidenceRefs = new Map<string, string[]>();
   let hasUnknown = false;
   let hasContradiction = false;
 
@@ -580,6 +640,7 @@ export function evaluateCompletionGateV1(input: {
       errors: currentBreakerBlockers.map(
         (node) => `${node.id}: unresolved high-severity Breaker finding`,
       ),
+      criterion_results: unknownCriterionResults(input.contract),
     };
   }
 
@@ -589,9 +650,12 @@ export function evaluateCompletionGateV1(input: {
     );
     if (candidates.length === 0) {
       missing.push(requirement.id);
+      criterionStatuses.set(requirement.id, "missing");
       continue;
     }
     let supported = false;
+    let criterionFailed = false;
+    let criterionUnknown = false;
     for (const node of candidates) {
       const mismatch = bindingError(node.binding, {
         taskId: input.contract.task_id,
@@ -603,6 +667,7 @@ export function evaluateCompletionGateV1(input: {
       });
       if (mismatch) {
         hasUnknown = true;
+        criterionUnknown = true;
         errors.push(`${node.id}: ${mismatch}`);
         continue;
       }
@@ -670,17 +735,37 @@ export function evaluateCompletionGateV1(input: {
             ).toLowerCase() === "failed")
         ) {
           hasContradiction = true;
+          criterionFailed = true;
         } else {
           hasUnknown = true;
+          criterionUnknown = true;
         }
         errors.push(`${node.id}: ${effectiveCertificationError}`);
         continue;
       }
       supported = true;
+      const refs = criterionEvidenceRefs.get(requirement.id) ?? [];
+      refs.push(node.id);
+      criterionEvidenceRefs.set(requirement.id, refs);
     }
-    if (supported) satisfied.push(requirement.id);
-    else if (!missing.includes(requirement.id)) missing.push(requirement.id);
+    if (supported && !criterionFailed && !criterionUnknown) {
+      satisfied.push(requirement.id);
+    }
+    if (criterionFailed) {
+      criterionStatuses.set(requirement.id, "failed");
+      if (!missing.includes(requirement.id)) missing.push(requirement.id);
+    } else if (criterionUnknown) {
+      criterionStatuses.set(requirement.id, "unknown");
+      if (!missing.includes(requirement.id)) missing.push(requirement.id);
+    } else if (supported) {
+      criterionStatuses.set(requirement.id, "satisfied");
+    } else {
+      criterionStatuses.set(requirement.id, "missing");
+      if (!missing.includes(requirement.id)) missing.push(requirement.id);
+    }
   }
+
+  const perCriterion = criterionResults(input.contract, criterionStatuses, criterionEvidenceRefs);
 
   if (hasContradiction)
     return {
@@ -689,6 +774,7 @@ export function evaluateCompletionGateV1(input: {
       satisfied_requirements: satisfied,
       missing_requirements: missing,
       errors,
+      criterion_results: perCriterion,
     };
   if (
     required.length > 0 &&
@@ -702,6 +788,7 @@ export function evaluateCompletionGateV1(input: {
       satisfied_requirements: satisfied,
       missing_requirements: [],
       errors: [],
+      criterion_results: perCriterion,
     };
   }
   if (hasUnknown && satisfied.length === 0)
@@ -711,6 +798,7 @@ export function evaluateCompletionGateV1(input: {
       satisfied_requirements: satisfied,
       missing_requirements: missing,
       errors,
+      criterion_results: perCriterion,
     };
   if (satisfied.length > 0)
     return {
@@ -719,6 +807,7 @@ export function evaluateCompletionGateV1(input: {
       satisfied_requirements: satisfied,
       missing_requirements: missing,
       errors,
+      criterion_results: perCriterion,
     };
   return {
     status: "UNVERIFIED",
@@ -726,5 +815,6 @@ export function evaluateCompletionGateV1(input: {
     satisfied_requirements: satisfied,
     missing_requirements: missing,
     errors,
+    criterion_results: perCriterion,
   };
 }

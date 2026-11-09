@@ -157,6 +157,8 @@ export type ParityCompletionDecisionPayload = {
   reason: string;
   evidenceRefs: string[];
   policyVersion: string;
+  acceptanceEvidence?: import('../evidence/evidenceGraph.js').CriterionEvidenceResultV1[];
+  acceptanceEvidenceOmitted?: number;
   reasonCode?: import('../schemas/agentContracts.js').TerminalReasonCode;
   causeClass?:
     | 'model'

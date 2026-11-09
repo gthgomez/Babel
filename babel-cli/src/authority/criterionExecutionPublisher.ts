@@ -127,14 +127,15 @@ export function publishCriterionEvidenceFromChatExecution(input: {
     requirement: TaskContractV1['acceptance'][number]
     receipt: BoundChatVerifierReceipt
   }> = []
-  // Missing dispatch coverage cannot publish evidence. Check it before reading
-  // revision contents for earlier requirements that would be discarded.
+  // Evidence is criterion-scoped: a missing verifier for one requirement must
+  // not erase an independently dispatched receipt for another requirement.
+  // The completion evaluator still requires every required criterion before it
+  // can return VERIFIED.
   for (const requirement of required) {
     const receipt = ledger.find((entry) =>
       chatReceiptDispatchesToRequirement(entry, requirement),
     )
-    if (!receipt) return null
-    dispatches.push({ requirement, receipt })
+    if (receipt) dispatches.push({ requirement, receipt })
   }
 
   const nodes: EvidenceNode[] = []
@@ -144,9 +145,9 @@ export function publishCriterionEvidenceFromChatExecution(input: {
       repository,
       receipt,
     )
-    if (!candidateRevision || input.candidateSha !== candidateRevision) return null
+    if (!candidateRevision || input.candidateSha !== candidateRevision) continue
     const bound = toRevisionBoundReceipt(receipt)
-    if (!bound || bound.exitCode !== 0 || bound.stale === true) return null
+    if (!bound || bound.exitCode !== 0 || bound.stale === true) continue
     revisionSha = candidateRevision
     const node = buildCriterionReceiptNode({
       requirement,
@@ -157,10 +158,10 @@ export function publishCriterionEvidenceFromChatExecution(input: {
       contract: input.contract,
       candidateSha: candidateRevision,
     })
-    if (!node) return null
+    if (!node) continue
     nodes.push(node)
   }
-  if (!revisionSha) return null
+  if (!revisionSha || nodes.length === 0) return null
 
   ensureGovernedVerifierAssignment({
     supervisor: input.supervisor,

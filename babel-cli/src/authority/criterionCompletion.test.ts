@@ -37,6 +37,14 @@ test('an owned context reports required criteria missing without trusted executi
   assert.equal(result.verified, false)
   assert.deepEqual(result.missing_requirements, ['output'])
   assert.deepEqual(result.satisfied_requirements, [])
+  assert.deepEqual(result.criterion_results, [{
+    requirement_id: 'output',
+    description: 'The output matches the required value.',
+    required: true,
+    status: 'missing',
+    evidence_refs: [],
+    proof_plan: 'propose_focused_check',
+  }])
 })
 
 test('a serialized context cannot retain parent-process authority', t => {

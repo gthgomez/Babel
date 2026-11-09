@@ -98,6 +98,38 @@ test('governed chat execution publishes criterion evidence only for dispatched f
   assert.equal(result.status, 'VERIFIED')
 })
 
+test('independently dispatched evidence is retained when another criterion has no verifier', async t => {
+  const behavior = {
+    id: 'acceptance:behavior',
+    description: 'parseSum(2, 3) returns 5',
+    type: 'custom' as const,
+    required: true,
+    verification_strategy: 'No exact executable verifier was frozen for this behavior.',
+    verification: { kind: 'custom' as const, verifier_id: 'meaning:behavior' },
+  }
+  const { root, service, receipt, request } = await fixtureWithAcceptance(t, [
+    behavior,
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+  ])
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({
+    proof: { compliant: true }, receipt, candidate_sha: candidate, has_mutation: true,
+  })
+
+  const result = evaluateCriterionCompletionV1(request)
+  assert.equal(result.status, 'PARTIAL')
+  assert.equal(result.verified, false)
+  assert.deepEqual(result.satisfied_requirements, ['acceptance:npm'])
+  assert.deepEqual(result.missing_requirements, ['acceptance:behavior'])
+  assert.deepEqual(result.criterion_results?.map(item => [item.requirement_id, item.status]), [
+    ['acceptance:behavior', 'missing'],
+    ['acceptance:npm', 'satisfied'],
+  ])
+  assert.equal(result.criterion_results?.[0]?.proof_plan, 'propose_focused_check')
+  assert.equal(result.criterion_results?.[1]?.proof_plan, 'none')
+})
+
 test('argv matching preserves quoted verifier arguments containing spaces', async t => {
   const root = mkdtempSync(join(tmpdir(), 'babel-criterion-spaced-argv-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -273,7 +305,7 @@ test('multiple required criteria require every frozen check to have executed', a
   assert.equal(evaluateCriterionCompletionV1(request).verified, false)
 })
 
-test('an unmatched later criterion rejects before reading revision contents', async t => {
+test('a matched criterion remains reportable when a later criterion has no dispatch', async t => {
   const { root, service, receipt, request } = await fixtureWithAcceptance(t, [
     npmTestRequirement('acceptance:npm', 'npm test passes'),
     {
@@ -299,8 +331,12 @@ test('an unmatched later criterion rejects before reading revision contents', as
     candidate_sha: candidate, has_mutation: true,
   })
   spy.mock.restore()
-  assert.equal(evaluateCriterionCompletionV1(request).verified, false)
-  assert.equal(contentOpens, 0)
+  const result = evaluateCriterionCompletionV1(request)
+  assert.equal(result.verified, false)
+  assert.equal(result.status, 'PARTIAL')
+  assert.deepEqual(result.satisfied_requirements, ['acceptance:npm'])
+  assert.deepEqual(result.missing_requirements, ['acceptance:missing'])
+  assert.ok(contentOpens > 0, 'the publisher checks the independently matched receipt revision')
 })
 
 test('non-compliant proof refresh does not publish criterion evidence', async t => {
@@ -316,6 +352,27 @@ test('non-compliant proof refresh does not publish criterion evidence', async t 
     has_mutation: true,
   })
   assert.equal(evaluateCriterionCompletionV1(request).verified, false)
+})
+
+test('a later non-compliant attempt clears an earlier advisory evidence snapshot', async t => {
+  const { root, service, receipt, request } = await fixtureWithAcceptance(t, [
+    npmTestRequirement('acceptance:npm', 'npm test passes'),
+  ])
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({
+    proof: { compliant: true }, receipt, candidate_sha: candidate, has_mutation: true,
+  })
+  assert.equal(service.reportAdvisoryEvidence()[0]?.status, 'satisfied')
+
+  writeFileSync(join(root, 'parser.ts'), 'export const v = 2;\n')
+  const changedCandidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({
+    proof: { compliant: false }, receipt, candidate_sha: changedCandidate, has_mutation: true,
+  })
+  assert.equal(service.reportAdvisoryEvidence()[0]?.status, 'missing')
+  assert.deepEqual(service.reportAdvisoryEvidence()[0]?.evidence_refs, [])
+  assert.notEqual(evaluateCriterionCompletionV1(request).verified, true)
 })
 
 test('missing governed refresh leaves criterion evidence unverified', async t => {

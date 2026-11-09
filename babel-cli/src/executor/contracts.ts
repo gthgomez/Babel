@@ -1,5 +1,6 @@
 import type { TerminalOutcome } from '../schemas/agentContracts.js'
 import type { CriterionCompletionRequestV1 } from '../authority/criterionCompletion.js'
+import type { CriterionEvidenceResultV1 } from '../evidence/evidenceGraph.js'
 
 /** Version of the shared executor contracts persisted in session metadata. */
 export const EXECUTOR_CONTRACT_VERSION = 'executor-contract-v1' as const
@@ -212,6 +213,9 @@ export interface CompletionDecision {
   workspaceRevision?: WorkspaceRevisionIdentity
   evidenceRefs: string[]
   policyVersion: string
+  /** Non-authoritative per-criterion report, separate from the terminal decision. */
+  acceptanceEvidence?: CriterionEvidenceResultV1[]
+  acceptanceEvidenceOmitted?: number
 }
 
 /** Canonical event categories shared by controllers and transports. */

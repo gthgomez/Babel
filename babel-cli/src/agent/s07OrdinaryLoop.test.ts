@@ -947,7 +947,11 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
   test('Scenario 3b — after green verification, continue investigation and report the unbound criterion', async () => {
     const fixture = makeFixture();
     try {
-      const task = 'Investigate why parser_test fails and fix it.';
+      const task = [
+        "Fix parser.ts so parseExpression('2+3') returns 5.",
+        'Requirements:',
+        '- `npm test` must pass.',
+      ].join('\n');
       let acceptanceReview = '';
       const o = await driveLoop(fixture, task, [
         [{ type: 'tool_use', id: 'w1', name: 'str_replace', input: { file_path: 'parser.ts', old_str: 'return Number(parts[0]) - Number(parts[1]);', new_str: 'return Number(parts[0]) + Number(parts[1]);' } }, { type: 'done', finishReason: 'tool_calls' }],
@@ -968,6 +972,20 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.equal(o.outcome, 'UNVERIFIED_PATCH', 'additional investigation does not invent missing acceptance proof');
       assert.notEqual(o.outcome, 'VERIFIED_COMPLETE');
       assert.match(o.answer, /partially verified|cannot certify/i, 'final report scopes what passed and what remains unknown');
+      assert.match(o.answer, /Host criterion evidence \(per-criterion report; overall completion status is unchanged\)/,
+        'terminal delivery includes the host-owned criterion evidence report');
+      assert.match(o.answer, /propose a focused check; keep it diagnostic until the contract is explicitly amended/,
+        'the missing semantic criterion receives a grounded, non-authoritative next proof step');
+      assert.match(o.answer, /npm test.*current host-accepted evidence matches the frozen verifier/,
+        'the exact npm test criterion can be reported as partial evidence');
+      assert.match(o.answer, /parseExpression\('2\+3'\) returns 5.*no current criterion-bound evidence is available/,
+        'the independent inferred behavior criterion stays explicitly missing');
+      const completionDecision = [...o.sessionEvents].reverse().find(
+        (event): event is Extract<SessionEvent, { kind: 'completion_decision' }> => event.kind === 'completion_decision',
+      );
+      const completionEvidence = completionDecision?.acceptance_evidence;
+      assert.ok(completionEvidence, 'the host criterion report is durably recorded');
+      assert.deepEqual(completionEvidence?.map(item => item.status), ['missing', 'satisfied']);
 
     } finally {
       fixture.cleanup();

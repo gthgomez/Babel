@@ -70,6 +70,7 @@ import type {
 import type { ChatExecutionProfile } from './chatEngineServices.js'
 import type { ExecutorKernel } from '../executor/kernel.js'
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js'
+import type { CriterionEvidenceResultV1 } from '../evidence/evidenceGraph.js'
 import {
   CHILD_READ_DEFAULT_ROUNDS,
   CHILD_MUTATION_DEFAULT_ROUNDS,
@@ -118,6 +119,39 @@ function satisfiesRequestedBareJsonAnswer(answer: string, task: string): boolean
   }
 }
 
+function proofPlanLabel(plan: CriterionEvidenceResultV1['proof_plan']): string {
+  switch (plan) {
+    case 'none': return 'no additional proof step'
+    case 'run_frozen_verifier': return 'run the verifier frozen in the task contract'
+    case 'propose_focused_check': return 'propose a focused check; keep it diagnostic until the contract is explicitly amended'
+    case 'repair_failing_verifier': return 'investigate the failing verifier and rerun it after repair'
+    case 'resolve_evidence_integrity': return 'resolve the current evidence integrity or freshness issue'
+  }
+}
+
+function appendCriterionEvidenceSummary(
+  answer: string,
+  evidence?: readonly CriterionEvidenceResultV1[],
+  omitted = 0,
+): string {
+  if (!evidence?.length) return answer
+  const statusText: Record<CriterionEvidenceResultV1['status'], string> = {
+    satisfied: 'current host-accepted evidence matches the frozen verifier',
+    missing: 'no current criterion-bound evidence is available',
+    unknown: 'evidence could not be validated',
+    failed: 'the criterion verifier failed',
+    not_required: 'optional criterion; not required for completion',
+  }
+  const lines = [
+    'Host criterion evidence (per-criterion report; overall completion status is unchanged):',
+    ...evidence.map((item) =>
+      `- ${singleLineEvidence(item.description, 180)} [${singleLineEvidence(item.requirement_id, 80)}]: ${statusText[item.status]}; next: ${proofPlanLabel(item.proof_plan)}.`,
+    ),
+  ]
+  if (omitted > 0) lines.push(`- ${omitted} additional criterion result(s) omitted.`)
+  return `${answer}\n\n${lines.join('\n')}`
+}
+
 /** Make the terminal answer agree with the host completion decision without changing that decision. */
 function formatTerminalAnswerForOutcome(input: {
   answer: string
@@ -130,6 +164,8 @@ function formatTerminalAnswerForOutcome(input: {
     candidate: string
     artifactRefs: readonly string[]
   }
+  acceptanceEvidence?: readonly CriterionEvidenceResultV1[]
+  acceptanceEvidenceOmitted?: number
 }): string {
   const unverifiedTerminal = input.status === 'completed' && input.outcome === 'UNVERIFIED_PATCH'
   const blockedRecovery = input.status === 'blocked' && input.outcome === 'BLOCKED_POLICY'
@@ -168,14 +204,14 @@ function formatTerminalAnswerForOutcome(input: {
         describeUnverifiedVerifierStatus(input.toolCallLog),
       ].join('\n')
     }
-    return [
+    return appendCriterionEvidenceSummary([
       UNVERIFIED_COMPLETION_MARKER,
       'The required task-acceptance evidence was not established. The model response below is retained as an unverified report and does not certify completion.',
       '',
       'Unverified model response:',
       '---',
       input.answer,
-    ].join('\n')
+    ].join('\n'), input.acceptanceEvidence, input.acceptanceEvidenceOmitted)
   }
   const recoveryOnly = isRecoveryOnlyPlaceholder(input.answer)
   const lines = [
@@ -197,7 +233,9 @@ function formatTerminalAnswerForOutcome(input: {
     else lines.push('', 'Model response (task remains blocked):', '---', input.answer)
     lines.push('', 'Verification status:', describeUnverifiedVerifierStatus(input.toolCallLog))
   }
-  return lines.join('\n')
+  return unverifiedTerminal
+    ? appendCriterionEvidenceSummary(lines.join('\n'), input.acceptanceEvidence, input.acceptanceEvidenceOmitted)
+    : lines.join('\n')
 }
 
 function replaceLastMatchingAssistantAnswer(
@@ -396,6 +434,10 @@ export function completeChatStream(
     reason: decision.reason,
     evidenceRefs: decision.evidenceRefs,
     policyVersion: decision.policyVersion,
+    ...(decision.acceptanceEvidence ? { acceptanceEvidence: decision.acceptanceEvidence } : {}),
+    ...(decision.acceptanceEvidenceOmitted !== undefined
+      ? { acceptanceEvidenceOmitted: decision.acceptanceEvidenceOmitted }
+      : {}),
     ...(terminalReason !== undefined
       ? {
           reasonCode: terminalReason.code,
@@ -443,6 +485,10 @@ export function completeChatStream(
     toolCallLog: snapshot.evidence.observability.toolCallLog,
     ...(preservedUnverifiedCandidate !== undefined
       ? { preservedUnverifiedCandidate }
+      : {}),
+    ...(decision.acceptanceEvidence ? { acceptanceEvidence: decision.acceptanceEvidence } : {}),
+    ...(decision.acceptanceEvidenceOmitted !== undefined
+      ? { acceptanceEvidenceOmitted: decision.acceptanceEvidenceOmitted }
       : {}),
   })
   replaceLastMatchingAssistantAnswer(
@@ -913,6 +959,12 @@ export function assembleChatResult(
           reason: kernelDecision.reason,
           evidenceRefs: kernelDecision.evidenceRefs,
           policyVersion: kernelDecision.policyVersion,
+          ...(kernelDecision.acceptanceEvidence
+            ? { acceptanceEvidence: kernelDecision.acceptanceEvidence }
+            : {}),
+          ...(kernelDecision.acceptanceEvidenceOmitted !== undefined
+            ? { acceptanceEvidenceOmitted: kernelDecision.acceptanceEvidenceOmitted }
+            : {}),
           ...(terminalReason !== undefined
             ? {
                 reasonCode: terminalReason.code,
@@ -959,6 +1011,12 @@ export function assembleChatResult(
         hasMutation,
         task: snapshot.context.options.task,
         toolCallLog: snapshot.evidence.observability.toolCallLog,
+        ...(kernelDecision?.acceptanceEvidence
+          ? { acceptanceEvidence: kernelDecision.acceptanceEvidence }
+          : {}),
+        ...(kernelDecision?.acceptanceEvidenceOmitted !== undefined
+          ? { acceptanceEvidenceOmitted: kernelDecision.acceptanceEvidenceOmitted }
+          : {}),
       })
   if (!superseded && answer !== undefined && deliveredAnswer !== undefined) {
     replaceLastMatchingAssistantAnswer(
