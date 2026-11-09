@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
 import { checkVerifierTamper, initializeVerifierDependencyHashes } from './chatEngineVerifierSession.js'
+import { computeVerifierDependencyHashes } from './verifierIntegrity.js'
 
 test('task-authored direct Node test verifier files are integrity tracked with spaced paths', t => {
   const root = mkdtempSync(join(tmpdir(), 'babel-verifier-input-integrity-'))
@@ -30,4 +31,27 @@ test('direct Node test verifier inputs without conventional suffixes are integri
   const hashes = new Map<string, string>()
   initializeVerifierDependencyHashes(undefined, root, hashes, ['node --test scripts/parser-regression'])
   assert.ok(hashes.has('scripts/parser-regression'))
+})
+
+test('canonical test target paths are hashed and target-path edits invalidate verifier trust', t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-verifier-canonical-input-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'test'), { recursive: true })
+  writeFileSync(join(root, 'test', 'parser.test.mjs'), 'assert.equal(parseSum(2, 3), 5)\n')
+  writeFileSync(join(root, 'test', 'parser-current.mjs'), 'assert.equal(parseSum(2, 3), 5)\n')
+  const hashes = computeVerifierDependencyHashes(root, ['node --test test/parser.test.mjs'], (_root, inputs) =>
+    inputs.flatMap(input => input === 'test/parser.test.mjs'
+      ? ['test/parser.test.mjs', 'test/parser-current.mjs']
+      : [input]),
+  )
+  const state = {
+    verifierDependencyHashes: new Map(Object.entries(hashes)),
+    verifierTampered: false,
+    tamperCount: 0,
+    tamperedThisTurn: false,
+  }
+  assert.ok(state.verifierDependencyHashes.has('test/parser-current.mjs'))
+  writeFileSync(join(root, 'test', 'parser-current.mjs'), 'assert.equal(2 + 2, 4)\n')
+  assert.match(checkVerifierTamper(join(root, 'test', 'parser-current.mjs'), root, state) ?? '', /dependency of the verifier command/i)
+  assert.equal(state.verifierTampered, true)
 })

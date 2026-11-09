@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { explicitNodeTestFileArgs } from './completionGatePolicy.js';
+import { resolveExistingVerifierInputPaths } from './verifierInputPaths.js';
 
 /**
  * Normalize a relative path for integrity key matching (posix-style).
@@ -86,6 +87,7 @@ export function hasVerifierDependencyTamper(
 export function computeVerifierDependencyHashes(
   projectRoot: string,
   allowedVerifierCommands: string[],
+  resolveInputPaths: typeof resolveExistingVerifierInputPaths = resolveExistingVerifierInputPaths,
 ): Record<string, string> {
   const hashes: Record<string, string> = {};
   const filesToHash = new Set<string>();
@@ -104,9 +106,7 @@ export function computeVerifierDependencyHashes(
     const nodeTestFiles = explicitNodeTestFileArgs(command);
     if (nodeTestFiles !== null) {
       for (const token of nodeTestFiles) {
-        const relative = token.replace(/\\/g, '/');
-        if (relative.startsWith('../') || /^[A-Za-z]:|^\//.test(relative) || /(^|\/)\.\.(\/|$)/.test(relative)) continue;
-        filesToHash.add(relative);
+        for (const path of resolveInputPaths(projectRoot, [token])) filesToHash.add(path);
       }
       continue;
     }

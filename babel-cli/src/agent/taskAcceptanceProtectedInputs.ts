@@ -16,15 +16,18 @@
  * Ordinary tasks without a designated witness are unchanged.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { designatedWitnessCommands, explicitCriterionVerifierCommands, hasDesignatedRegressionWitnessBinding } from './taskAcceptanceExecutableBinding.js';
 import { explicitNodeTestFileArgs } from './completionGatePolicy.js';
+import { resolveExistingVerifierInputPaths } from './verifierInputPaths.js';
 import type { TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js';
 
 export interface ProtectedInputFs {
   readFile: (path: string) => string | null;
   exists: (path: string) => boolean;
+  isFile?: (path: string) => boolean;
+  realpath?: (path: string) => string | null;
 }
 
 /** Existing exact Node test files that can be frozen at task admission. */
@@ -44,9 +47,7 @@ export function existingNodeVerifierInputFiles(
     const inputs = explicitNodeTestFileArgs(command);
     if (!inputs?.length) continue;
     for (const token of inputs) {
-      const relative = token.replace(/\\/g, '/');
-      if (relative.startsWith('../') || /^[A-Za-z]:|^\//.test(relative) || /(^|\/)\.\.(\/|$)/.test(relative)) continue;
-      if (fs.exists(join(projectRoot, relative))) files.add(relative);
+      for (const path of resolveExistingVerifierInputPaths(projectRoot, [token], fs)) files.add(path);
     }
   }
   return [...files].sort();
@@ -61,6 +62,12 @@ export const defaultProtectedInputFs: ProtectedInputFs = {
     }
   },
   exists: (path) => existsSync(path),
+  isFile: (path) => {
+    try { return statSync(path).isFile(); } catch { return false; }
+  },
+  realpath: (path) => {
+    try { return realpathSync.native(path); } catch { return null; }
+  },
 };
 
 /** Path-shaped tokens in a script string that look like test/spec files. */

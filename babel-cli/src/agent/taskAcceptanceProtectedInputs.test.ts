@@ -12,6 +12,7 @@ import {
   designatedWitnessProtectedInputs,
   type ProtectedInputFs,
 } from './taskAcceptanceProtectedInputs.js';
+import { resolveExistingVerifierInputPaths } from './verifierInputPaths.js';
 import { inferTaskAcceptance, inferTaskAcceptanceV3 } from './taskAcceptanceMeaning.js';
 import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js';
 
@@ -255,6 +256,37 @@ test('live admission binds only a pre-existing exact Node test file, never a tas
   const missingCriterion = missing.acceptance.find(item => item.description.includes('verified by'));
   assert.ok(missingCriterion?.verification.verifier_id.startsWith('meaning:'));
   assert.equal(missing.protected_paths.includes('test/parser.test.mjs'), false);
+});
+
+test('canonical verifier-input aliases are protected and out-of-root symlinks are excluded', async () => {
+  const root = '/tmp/verifier-alias-project';
+  const alias = 'test/parser.test.mjs';
+  const canonical = 'test/parser-current.mjs';
+  const fs: ProtectedInputFs = {
+    readFile: () => null,
+    exists: () => true,
+    realpath: () => join(root, canonical),
+  };
+  const paths = resolveExistingVerifierInputPaths(root, [alias], fs);
+  assert.deepEqual(paths, [canonical, alias]);
+  const denied = await executeActionWithPolicy(
+    { type: 'write_file', path: canonical, content: 'replace test with unrelated success\n' },
+    'workspace_write',
+    policyCtx('verifier-alias-target', root),
+    { executor: mockExecutor, mode: 'chat', protectedPaths: paths },
+  );
+  assert.equal(denied.policyBlocked, true);
+
+  const outside = resolveExistingVerifierInputPaths(root, [alias], {
+    ...fs,
+    realpath: () => '/tmp/outside/parser.test.mjs',
+  });
+  assert.deepEqual(outside, []);
+  const directory = resolveExistingVerifierInputPaths(root, [alias], {
+    ...fs,
+    isFile: () => false,
+  });
+  assert.deepEqual(directory, []);
 });
 
 test('admitted execution matrix: worktree safety refuses protected witness paths before snapshot', () => {
