@@ -339,6 +339,16 @@ export function executeBackgroundRunCommandAction(
     );
   }
 
+  // The Windows background runner currently lacks a post-close process-tree
+  // observer. Keep commands on the foreground supervisor rather than releasing
+  // the chat execution fence while an unref'ed descendant might still run.
+  if (process.platform === 'win32') {
+    return denyBg(
+      'Background shell cannot confirm process-tree settlement on Windows. Use foreground run_command.',
+      'process_tree_unobservable',
+    );
+  }
+
   const validation = validateExecutorShellCommand(
     action.command,
     process.platform,

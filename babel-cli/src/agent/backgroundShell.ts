@@ -386,6 +386,12 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
         // observation supersedes that stale uncertainty; Windows has no
         // equivalent process-group proof and deliberately retains its flag.
         if (descendantsSettled) job.treeTerminationUnknown = false;
+      } else if (process.platform === 'win32') {
+        // Without a Windows job-object/process-tree observer, the direct
+        // child's close event cannot prove that an unref'ed descendant has
+        // stopped. Preserve the owner fence and report incomplete settlement.
+        descendantsSettled = false;
+        job.treeTerminationUnknown = true;
       }
       job.physicalClosed = descendantsSettled;
       if (job.status === 'running') {
@@ -402,7 +408,7 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
       if (!descendantsSettled) {
         job.status = 'failed';
         job.exitCode = 1;
-        job.error = 'Background process group termination could not be confirmed';
+        job.error = 'Background process-tree termination could not be confirmed';
       }
       if (!processExitRecorded) {
         processExitRecorded = true;

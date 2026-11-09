@@ -101,9 +101,9 @@ describe('backgroundShell', () => {
 
     const result = await awaitBackgroundShell(job.id, 15_000);
     assert.equal(result.timed_out, false);
-    assert.equal(result.exit_code, 0, result.stderr);
+    assert.equal(result.exit_code, process.platform === 'win32' ? 1 : 0, result.stderr);
     assert.match(result.stdout, /hello-bg/);
-    assert.equal(result.status, 'completed');
+    assert.equal(result.status, process.platform === 'win32' ? 'failed' : 'completed');
   });
 
   it('pins a trusted bare command to the resolved executable path', async () => {
@@ -129,7 +129,7 @@ describe('backgroundShell', () => {
       assert.ok(witnessedExecutable.startsWith('/'), witnessedExecutable);
     }
     const result = await awaitBackgroundShell(job.id, 15_000);
-    assert.equal(result.exit_code, 0, result.stderr);
+    assert.equal(result.exit_code, process.platform === 'win32' ? 1 : 0, result.stderr);
     assert.equal(result.stdout, 'pinned');
   });
 
@@ -141,7 +141,7 @@ describe('backgroundShell', () => {
       cwd: process.cwd(),
     });
     const result = await awaitBackgroundShell(job.id, 15_000);
-    assert.equal(result.exit_code, 0, result.stderr);
+    assert.equal(result.exit_code, process.platform === 'win32' ? 1 : 0, result.stderr);
     assert.equal(result.stdout, 'value with spaces');
   });
 
@@ -342,6 +342,7 @@ describe('backgroundShell', () => {
         command: `node "${parentScript}" "${grandchildScript}" "${pidFile}"`,
         cwd: dir,
         timeoutMs: 10_000,
+      ownerId: 'windows-tree-proof-test',
       });
       const result = await awaitBackgroundShell(job.id, 5_000);
       assert.equal(result.status, 'failed');
@@ -350,6 +351,8 @@ describe('backgroundShell', () => {
       assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
       assert.equal(getBackgroundShellJob(job.id)?.processCompleted, false,
         'Windows direct-child close cannot certify descendant settlement');
+      assert.equal(hasUnsettledBackgroundShells(job.ownerId), true,
+        'the owner fence stays closed while descendant settlement is unproven');
       await new Promise(resolve => setTimeout(resolve, 1500));
       assert.equal(existsSync(marker), true,
         'the fixture demonstrates that a descendant can continue after the parent closes');
