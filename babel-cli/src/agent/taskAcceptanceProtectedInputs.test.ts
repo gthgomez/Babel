@@ -296,11 +296,14 @@ test('verifier input canonicalization accepts an in-root Windows short-path root
     readFile: () => null,
     exists: () => true,
     isFile: () => true,
-    realpath: path => path === rootAlias
-      ? canonicalRoot
-      : path.startsWith(rootAlias)
-        ? `${canonicalRoot}${path.slice(rootAlias.length)}`
-        : null,
+    realpath: path => {
+      const normalized = path.replace(/\\/g, '/');
+      return normalized === rootAlias
+        ? canonicalRoot
+        : normalized.startsWith(rootAlias)
+          ? `${canonicalRoot}${normalized.slice(rootAlias.length)}`
+          : null;
+    },
   };
   assert.deepEqual(
     resolveExistingVerifierInputPaths(rootAlias, ['test/parser.test.cjs'], fs),
