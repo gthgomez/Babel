@@ -98,6 +98,56 @@ test('governed chat execution publishes criterion evidence only for dispatched f
   assert.equal(result.status, 'VERIFIED')
 })
 
+test('argv matching preserves quoted verifier arguments containing spaces', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-criterion-spaced-argv-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  writeFileSync(join(root, 'parser.ts'), 'export const v = 1;\n')
+  mkdirSync(join(root, 'test files'), { recursive: true })
+  writeFileSync(join(root, 'test files', 'parser.test.mjs'), 'export {};\n')
+  const command = 'node --test "test files/parser.test.mjs"'
+  const argv = ['--test', 'test files/parser.test.mjs']
+  const requirement = {
+    id: 'acceptance:spaced-node-test',
+    description: 'the parser behavior passes its targeted test',
+    type: 'unit_test' as const,
+    required: true,
+    verification_strategy: 'Run the exact targeted Node test.',
+    verification: {
+      kind: 'unit_test' as const,
+      verifier_id: 'verifier:node',
+      executable_id: 'node',
+      argv,
+      command_hash: sha256Canonical({ executable_id: 'node', argv }),
+      working_directory: '.',
+      environment_policy: 'host-process',
+    },
+  }
+  const contract = freezeTaskContract(buildTaskContractV1({
+    mode: 'chat', user_request: 'Fix parser behavior.', acceptance: [requirement],
+  }))
+  const service = createCriterionCompletionServiceV1(() => ({ contract, runId: 'spaced-argv', projectRoot: root }))
+  const receipt = await bindChatVerifierReceipt({
+    projectRoot: root, command, exit_code: 0, summary: '1/1 passed', mutationPaths: ['parser.ts'],
+    structured: {
+      verifierId: 'verifier:node', authoritySource: 'built_in_runner', executable: 'node', args: argv,
+    },
+    execution: GOVERNED_EXECUTION,
+  })
+  assert.ok(receipt)
+  const { RevisionManager } = await import('../evidence/revisionBoundReceipt.js')
+  const candidate = RevisionManager.computeRevisionSync(root, ['parser.ts']).compositeTreeHash
+  service.refreshPrivateEvidence({ proof: { compliant: true }, receipt, candidate_sha: candidate, has_mutation: true })
+  assert.equal(evaluateCriterionCompletionV1(service.currentRequest()).verified, true)
+  service.refreshPrivateEvidence({
+    proof: { compliant: true },
+    receipt: { ...receipt, command: 'node --test other.mjs' },
+    candidate_sha: candidate,
+    has_mutation: true,
+  })
+  assert.equal(evaluateCriterionCompletionV1(service.currentRequest()).verified, false,
+    'a passing receipt with argv inconsistent with its recorded command is rejected')
+})
+
 test('unresolved inferred acceptance stays fail-closed despite a green npm test receipt', async t => {
   const task = 'Investigate why parser_test fails and fix it.'
   const meaning = inferTaskAcceptance(task)

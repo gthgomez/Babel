@@ -8,7 +8,7 @@ import {
   extractPositiveCommandSuccessCriterion,
   mergeTrustedVerifierCommands,
 } from './taskAcceptanceExecutableBinding.js'
-import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
+import { inferTaskAcceptance, inferTaskAcceptanceV2, inferTaskAcceptanceV3 } from './taskAcceptanceMeaning.js'
 import { applyWorkingStateEvent, createWorkingState, formatWorkingStateBlock } from './codingLoop/workingState.js'
 
 test('plain-text npm test passes binds with suffix-anchored grammar', () => {
@@ -129,6 +129,113 @@ test('vague acceptance prose does not bind to a discovered project test command'
     defaultWorkingDirectory: '.',
   })
   assert.ok(bound.criteria[0]!.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('a criterion binds only to its own explicit exact verifier designation', () => {
+  const command = 'node --test test/parser.test.mjs'
+  const linkedCriterion = `Fix parser.js so parseSum(2, 3) returns 5; verified by: \`${command}\` must pass.`
+  const meaning = inferTaskAcceptanceV3(`Requirements:\n- ${linkedCriterion}`)
+  assert.equal(meaning.unresolved, false)
+  assert.equal(meaning.sources[0]?.status, 'explicit')
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning,
+    trustedVerifierCommands: [command],
+    defaultWorkingDirectory: '.',
+  })
+  assert.deepEqual(bound.criteria[0]?.verification.argv, ['--test', 'test/parser.test.mjs'])
+  assert.equal(bound.criteria[0]?.verification.verifier_id, 'verifier:node')
+  assert.equal(bound.provenance.some(item => item.ref.startsWith('babel:criterion-verifier-link:v1:')), true)
+})
+
+test('a verifier named in a separate requirement cannot bind the behavioral goal', () => {
+  const task = [
+    'Fix parser.js so parseSum(2, 3) returns 5.',
+    'Requirements:',
+    '- `npm test` must pass.',
+  ].join('\n')
+  const bound = resolveLiveSessionAuthority({
+    mode: 'chat', task, projectRoot: '/tmp/project', projectTestCommands: ['npm test'],
+  }).taskContract
+  const goal = bound.acceptance.find(item => item.description === 'Fix parser.js so parseSum(2, 3) returns 5.')
+  const genericTest = bound.acceptance.find(item => item.description === '`npm test` must pass.')
+  assert.ok(goal)
+  assert.ok(genericTest)
+  assert.ok(goal!.verification.verifier_id.startsWith('meaning:'), 'unrelated test remains unable to prove the goal')
+  assert.deepEqual(genericTest!.verification.argv, ['test'])
+})
+
+test('criterion verifier-link syntax does not change archived v2 meaning', () => {
+  const task = [
+    'Requirements:',
+    '- parseSum(2, 3) returns 5; verified by: `node --test test/parser.test.mjs` must pass.',
+  ].join('\n')
+  const meaning = inferTaskAcceptanceV2(task)
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning,
+    trustedVerifierCommands: ['node --test test/parser.test.mjs'],
+  })
+  assert.ok(bound.criteria[0]!.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('a verifier designation outside the trusted command set stays unbound', () => {
+  const meaning = inferTaskAcceptance([
+    'Requirements:',
+    '- parseSum(2, 3) returns 5; verified by: `node --test test/parser.test.mjs` must pass.',
+  ].join('\n'))
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning,
+    trustedVerifierCommands: ['npm test'],
+  })
+  assert.ok(bound.criteria[0]!.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('conflicting verifier links for the same behavior do not bind the goal', () => {
+  const behavior = 'Fix parser.js so parseSum(2, 3) returns 5'
+  const task = [
+    `${behavior}.`,
+    'Requirements:',
+    `- ${behavior}; verified by: \`npm test\` must pass.`,
+    `- ${behavior}; verified by: \`node --test test/parser.test.mjs\` must pass.`,
+  ].join('\n')
+  const commands = ['npm test', 'node --test test/parser.test.mjs']
+  const bound = resolveLiveSessionAuthority({
+    mode: 'chat', task, projectRoot: '/tmp/project', projectTestCommands: commands,
+  }).taskContract
+  const behaviorCriteria = bound.acceptance.filter(item => item.description.startsWith(behavior))
+  assert.ok(behaviorCriteria.length >= 2)
+  assert.ok(behaviorCriteria.every(item => item.verification.verifier_id.startsWith('meaning:')))
+})
+
+test('an untrusted conflicting verifier declaration also keeps the behavior unbound', () => {
+  const behavior = 'Fix parser.js so parseSum(2, 3) returns 5'
+  const task = [
+    `${behavior}.`,
+    'Requirements:',
+    `- ${behavior}; verified by: \`npm test\` must pass.`,
+    `- ${behavior}; verified by: \`node --test test/parser.test.mjs\` must pass.`,
+  ].join('\n')
+  const bound = resolveLiveSessionAuthority({
+    mode: 'chat', task, projectRoot: '/tmp/project', projectTestCommands: ['npm test'],
+  }).taskContract
+  const behaviorCriteria = bound.acceptance.filter(item => item.description.startsWith(behavior))
+  assert.ok(behaviorCriteria.length >= 2)
+  assert.ok(behaviorCriteria.every(item => item.verification.verifier_id.startsWith('meaning:')))
+})
+
+test('ambiguous, negated, or trailing verifier clauses stay unbound', () => {
+  const cases = [
+    'parseSum(2, 3) returns 5; verified by: `npm test` must pass or `node --test test/parser.test.mjs` must pass.',
+    'parseSum(2, 3) returns 5; verified by: `npm test` must fail.',
+    'parseSum(2, 3) returns 5; verified by: `npm test` must pass and the UI must change.',
+  ]
+  for (const statement of cases) {
+    const meaning = inferTaskAcceptance(`Requirements:\n- ${statement}`)
+    const bound = bindExecutableVerifiersToTaskAcceptance({
+      meaning,
+      trustedVerifierCommands: ['npm test', 'node --test test/parser.test.mjs'],
+    })
+    assert.ok(bound.criteria[0]!.verification.verifier_id.startsWith('meaning:'), statement)
+  }
 })
 
 test('inferred-only acceptance stays meaning-bound without trusted executable commands', () => {

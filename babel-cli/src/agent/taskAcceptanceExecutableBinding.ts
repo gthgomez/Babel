@@ -15,6 +15,7 @@ function isUnresolvedCriterion(criterion: AcceptanceRequirementV1): boolean {
 }
 
 export const ACCEPTANCE_EXECUTABLE_BINDING_REF = 'babel:acceptance-exec-bind:v1'
+const CRITERION_VERIFIER_LINK_REF = 'babel:criterion-verifier-link:v1'
 
 /** Positive success tail matched as the entire remainder (no leading obligations). */
 const POSITIVE_SUCCESS_SUFFIX =
@@ -171,6 +172,60 @@ function pickTrustedCommand(
   return matches[0]!
 }
 
+interface ExplicitCriterionVerifierLink {
+  behavior: string
+  command: string
+}
+
+/**
+ * Parse a task-authored verifier link from one criterion only. The command is
+ * intentionally required to follow the exact `verified by:` marker and to be
+ * the entire remaining positive-success clause. A neighboring green command
+ * or a phrase that merely mentions a test never creates this link.
+ */
+function explicitCriterionVerifierLink(
+  criterion: AcceptanceRequirementV1,
+): ExplicitCriterionVerifierLink | null {
+  const markers = [...criterion.description.matchAll(/[.;]\s+verified by:\s*/gi)]
+  if (markers.length !== 1) return null
+  const marker = markers[0]!
+  const behavior = criterion.description.slice(0, marker.index).trim().replace(/[.;]+$/, '').trim()
+  const commandClause = criterion.description.slice(marker.index + marker[0].length).trim()
+  const command = extractPositiveCommandSuccessCriterion(commandClause)
+  if (!behavior || !command || !isAuthoritativeVerifierCommand(command)) return null
+  return { behavior, command }
+}
+
+function normalizedCriterionText(value: string): string {
+  return value.trim().replace(/[.!?]+$/, '').replace(/\s+/g, ' ').toLocaleLowerCase('en-US')
+}
+
+function trustedDesignation(
+  link: ExplicitCriterionVerifierLink,
+  trustedCommands: readonly string[],
+): string | null {
+  const matches = trustedCommands.filter(command =>
+    commandsMatchForExecutableBinding(link.command, command),
+  )
+  return matches.length === 1 ? matches[0]! : null
+}
+
+function bindExplicitCriterionLink(
+  criterion: AcceptanceRequirementV1,
+  command: string,
+  behavior: string,
+  defaultWorkingDirectory?: string,
+): AcceptanceRequirementV1 {
+  const verification = materializeExecutableVerification(command, defaultWorkingDirectory)
+  if (!verification) return criterion
+  return {
+    ...criterion,
+    type: requirementTypeForCommand(command),
+    verification_strategy: `The task explicitly designates the exact frozen command as evidence for this criterion: ${behavior}`,
+    verification,
+  }
+}
+
 /**
  * A preservation obligation whose regression witness the task's own text designates.
  * The task states the regression tests already exist and names the exact command
@@ -299,6 +354,60 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     })
     return bound
   })
+
+  // V3 is the current admission format. V1/V2 replay semantics stay frozen:
+  // their archived criteria cannot gain a new task-authored link on reload.
+  if (input.meaning.interpretation_version >= 3) {
+    const linked = input.meaning.criteria.flatMap((criterion) => {
+      const source = input.meaning.sources.find(item => item.criterion_id === criterion.id)
+      if (source?.status !== 'explicit') return []
+      const link = explicitCriterionVerifierLink(criterion)
+      if (!link) return []
+      return [{ criterionId: criterion.id, ...link }]
+    })
+    const linksByBehavior = new Map<string, typeof linked>()
+    for (const link of linked) {
+      const key = normalizedCriterionText(link.behavior)
+      linksByBehavior.set(key, [...(linksByBehavior.get(key) ?? []), link])
+    }
+    for (const [behaviorKey, candidates] of linksByBehavior) {
+      const commands = new Set(candidates.map(candidate =>
+        structuredCommandIdentity(candidate.command) ?? `raw:${candidate.command.trim().replace(/\s+/g, ' ')}`,
+      ))
+      // Conflicting or duplicate link declarations are ambiguous and do not
+      // authorize either executable for the behavior.
+      if (commands.size !== 1) continue
+      const designated = candidates[0]!
+      const command = trustedDesignation(designated, trusted)
+      if (!command) continue
+      const matchingCriteria = input.meaning.criteria.filter((criterion) => {
+        if (criterion.id === designated.criterionId) return true
+        const source = input.meaning.sources.find(item => item.criterion_id === criterion.id)
+        return source?.status === 'inferred' &&
+          normalizedCriterionText(criterion.description) === behaviorKey
+      })
+      for (const criterion of matchingCriteria) {
+        const bound = bindExplicitCriterionLink(
+          criterion,
+          command,
+          designated.behavior,
+          input.defaultWorkingDirectory,
+        )
+        if (bound.verification.verifier_id === criterion.verification.verifier_id) continue
+        const existingIndex = explicitBound.findIndex(item => item.id === criterion.id)
+        if (existingIndex >= 0) explicitBound[existingIndex] = bound
+        bindingProvenance.push({
+          kind: 'derived_acceptance',
+          ref: `${CRITERION_VERIFIER_LINK_REF}:${sha256Canonical({
+            source_criterion_id: designated.criterionId,
+            criterion_id: criterion.id,
+            behavior: designated.behavior,
+            command,
+          }).slice(0, 32)}`,
+        })
+      }
+    }
+  }
 
   // Second pass sees the frozen explicit commands, so a witness can only
   // re-freeze what the first pass already froze — never a new command. Each

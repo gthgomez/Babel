@@ -493,6 +493,90 @@ test('exact behavioral goal plus unrelated green npm test cannot certify a wrong
   assert.notEqual(decision.finalOutcome, 'VERIFIED_COMPLETE', decision.reason)
 })
 
+test('a task-authored exact verifier link admits only the matching behavioral evidence', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-linked-criterion-proof-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'test files'), { recursive: true })
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'linked-criterion-fixture', type: 'module' }))
+  writeFileSync(join(root, 'src', 'parser.js'), 'export function parseSum(a, b) { return 0; }\n')
+  writeFileSync(join(root, 'test files', 'parser.test.mjs'), [
+    'import assert from "node:assert/strict";',
+    'import test from "node:test";',
+    'import { parseSum } from "../src/parser.js";',
+    'test("parseSum returns the required value", () => assert.equal(parseSum(2, 3), 5));',
+  ].join('\n') + '\n')
+
+  const command = 'node --test "test files/parser.test.mjs"'
+  const behavior = 'Fix parser.js so parseSum(2, 3) returns 5'
+  const task = [
+    `${behavior}.`,
+    'Requirements:',
+    `- ${behavior}; verified by: \`${command}\` must pass.`,
+  ].join('\n')
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat', task, projectRoot: root,
+    projectTestCommands: [command], verifierRequirements: [command],
+  }).taskContract
+  const linked = contract.acceptance.filter(item =>
+    item.description.startsWith(behavior),
+  )
+  assert.equal(linked.length, 2)
+  assert.ok(linked.every(item => item.verification.verifier_id === 'verifier:node'))
+  assert.ok(linked.every(item => JSON.stringify(item.verification.argv) === JSON.stringify(['--test', 'test files/parser.test.mjs'])))
+  assert.ok(linked.every(item => item.verification.command_hash))
+
+  const runId = 'criterion-explicit-verifier-link'
+  const service = createCriterionCompletionServiceV1(() => ({ contract, runId, projectRoot: root }))
+  const request = service.currentRequest()!
+  const mutationPath = 'src/parser.js'
+  await governedMutateSrcFix(root, runId, mutationPath,
+    'export function parseSum(a, b) { return a + b; }\n')
+  const sessionEvents = createSessionEventLog(runId)
+  const verifierOwner = chatVerifierOwner({ projectRoot: root, sessionId: sessionEvents.session_id,
+    taskId: contract.task_id, contractHash: contract.contract_hash })!
+  const env = witnessExecutionEnvironment(root)
+  const policy = await executeActionWithPolicy(
+    { type: 'test_run', command }, 'workspace_write', policyCtx(runId, root), {
+      executor: createToolExecutor({
+        executeTool: async request => {
+          assert.equal(request.tool, 'test_run')
+          const child = spawnSync(process.execPath, ['--test', 'test files/parser.test.mjs'], {
+            cwd: root, encoding: 'utf8', env, timeout: 30_000, windowsHide: true,
+          })
+          assert.ifError(child.error)
+          return { exit_code: child.status ?? 1, stdout: child.stdout ?? '', stderr: child.stderr ?? '' }
+        },
+      }),
+      mode: 'chat', lease: null, hostFallbackAllowed: true, isolationAvailable: true,
+    },
+  )
+  assert.equal(policy.policyBlocked, false, JSON.stringify(policy))
+  const stdout = policy.results[0]?.stdout ?? ''
+  const exitCode = policy.results[0]?.exit_code ?? 1
+  assert.equal(exitCode, 0, stdout)
+  assert.match(stdout, /pass 1/)
+  const cacheIdentity = resolveVerifierCacheIdentity({
+    projectRoot: root, command, envKey: verifierEnvironmentKey(env),
+  })
+  const receipt = await captureAndRecordVerifierReceipt({
+    projectRoot: root, command, exitCode, summary: '1/1 parser behavior test passed', stdout,
+    stderr: policy.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
+    sessionEvents, turnId: runId, ledger: [], cache: new Map(), writeCount: 1,
+    cacheIdentity, verifierOwner, executionBackend: 'host-process',
+  })
+  assert.ok(receipt)
+  assert.equal(receipt.tests_total, 1)
+  const candidate = candidateShaFromReceipt(root, receipt)
+  service.refreshPrivateEvidence({
+    proof: { compliant: true }, receipts: [receipt], candidate_sha: candidate, has_mutation: true,
+  })
+  const result = evaluateCriterionCompletionV1(request)
+  assert.equal(result.verified, true, JSON.stringify(result))
+  assert.deepEqual(result.missing_requirements, [])
+  assert.equal(result.satisfied_requirements.length, 2)
+})
+
 test('executor → receipt → criterion negative: one governed witness run cannot satisfy sibling criterion', async t => {
   const { root, service, request, runId } = await dualWitnessFixture(t)
   const mutationPath = await governedMutateSrcFix(root, runId)
