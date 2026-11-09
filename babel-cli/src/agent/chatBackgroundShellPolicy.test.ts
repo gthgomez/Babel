@@ -33,7 +33,7 @@ test('background chat dispatch requires the same explicit host fallback for proj
 });
 
 test('Windows declines background execution when process-tree settlement cannot be observed', {
-  skip: process.platform !== 'win32' ? 'Windows-only background capability contract' : false,
+  skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false,
 }, () => {
   const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';

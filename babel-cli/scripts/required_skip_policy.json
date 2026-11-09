@@ -108,7 +108,11 @@
           "a timed-out shell reports failed Windows tree termination to its caller"
         ],
         "src/agent/backgroundShell.test.ts": [
-          "retains owner uncertainty when the Windows tree-kill helper fails"
+          "retains owner uncertainty when the Windows tree-kill helper fails",
+          "does not certify Windows parent close as process-tree settlement"
+        ],
+        "src/agent/chatBackgroundShellPolicy.test.ts": [
+          "Windows declines background execution when process-tree settlement cannot be observed"
         ]
       }
     },

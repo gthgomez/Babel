@@ -318,7 +318,7 @@ describe('backgroundShell', () => {
   });
 
   it('does not certify Windows parent close as process-tree settlement', {
-    skip: process.platform !== 'win32' ? 'Windows-only descendant lifecycle contract' : false,
+    skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false,
   }, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'bg-shell-windows-descendant-'));
     const marker = join(dir, 'late-write');
