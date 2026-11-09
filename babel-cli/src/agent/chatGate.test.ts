@@ -426,6 +426,56 @@ describe('Completion gate — positive paths', () => {
     assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'allow');
   });
 
+  test('gate integrity veto rejects otherwise valid green verifier evidence', () => {
+    pushToolLog(engine, {
+      tool: 'write_file',
+      target: '/tmp/test-project/src/math.js',
+      effect_status: 'confirmed_change',
+    });
+    pushToolLog(engine, { tool: 'test_run', target: 'npm test', exit_code: 0 });
+    (engine as any).verifierTampered = true;
+    const turn: ChatTurn = { type: 'completion', answer: 'Fixed and tested.' };
+    assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'reject');
+  });
+
+  test('direct Node verifier test replacement cannot certify a task', (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-direct-node-verifier-tamper-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    mkdirSync(join(root, 'test'), { recursive: true });
+    mkdirSync(join(root, 'src'), { recursive: true });
+    const testFile = join(root, 'test', 'parser.test.cjs');
+    writeFileSync(join(root, 'src', 'parser.cjs'), 'exports.parseSum = (a, b) => a - b\n');
+    writeFileSync(testFile, [
+      'const assert = require("node:assert/strict")',
+      'const { parseSum } = require("../src/parser.cjs")',
+      'assert.equal(parseSum(2, 3), 5)',
+    ].join('\n') + '\n');
+    const command = 'node --test test/parser.test.cjs';
+    engine = new ChatEngine({
+      model: 'deepseek-v4-flash-openrouter',
+      task: `Fix parser.js so parseSum(2, 3) returns 5.\nRequirements:\n- ${command} must pass.`,
+      projectRoot: root,
+    })
+
+    assert.ok((engine as any).getResolvedRequiredVerifiers().includes(command));
+    assert.ok((engine as any).verifierDependencyHashes.has('test/parser.test.cjs'));
+    writeFileSync(testFile, 'const assert = require("node:assert/strict"); assert.equal(2 + 2, 4)\n');
+    const misleadingGreen = childProcess.spawnSync(process.execPath, ['--test', 'test/parser.test.cjs'], {
+      cwd: root, encoding: 'utf8', timeout: 15_000, windowsHide: true,
+    })
+    assert.equal(misleadingGreen.status, 0, misleadingGreen.stdout + misleadingGreen.stderr);
+    assert.match((engine as any).checkVerifierTamper('test/parser.test.cjs'), /dependency of the verifier command/i);
+    pushToolLog(engine, {
+      tool: 'write_file',
+      target: join(root, 'src', 'parser.js'),
+      effect_status: 'confirmed_change',
+    });
+    pushToolLog(engine, { tool: 'test_run', target: command, exit_code: 0 });
+    setTestVerifierReceipt(engine, command, 0);
+    const turn: ChatTurn = { type: 'completion', answer: 'Fixed and tested.' };
+    assert.equal((engine as any).evaluateCompletionGate(turn, 'execute'), 'reject');
+  });
+
   test('gate accepts legacy file_write string (backward-compat) with verifier', () => {
     pushToolLog(engine, {
       tool: 'file_write',

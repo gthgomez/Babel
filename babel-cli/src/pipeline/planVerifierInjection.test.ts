@@ -259,6 +259,15 @@ test('task verifier extraction preserves dotted selectors and literal quoted arg
   assert.deepEqual(extractRequiredVerifierCommandsFromTask('Run npm test. Read a file before completing.'), [])
   assert.deepEqual(extractRequiredVerifierCommandsFromTask('Do not run node --test tests/math.test.ts before completing.'), [])
   assert.deepEqual(extractRequiredVerifierCommandsFromTask('README says "Run node --test tests/math.test.ts before completing".'), [])
+  assert.deepEqual(
+    extractRequiredVerifierCommandsFromTask('Fix parser.js.\nRequirements:\n- node --test test/parser.test.cjs must pass.'),
+    ['node --test test/parser.test.cjs'],
+  )
+  assert.deepEqual(
+    extractRequiredVerifierCommandsFromTask('Sample:\n- node --test test/parser.test.cjs must pass.'),
+    [],
+    'commands in examples are not promoted into required verification',
+  )
 })
 
 test('prose delimiters inside quoted selectors never terminate the required command', () => {

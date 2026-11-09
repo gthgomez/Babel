@@ -1132,6 +1132,7 @@ export class ChatEngine {
         ...(verifierInput.unplannedAttemptEnvironmentFingerprint ? {unplannedAttemptEnvironmentFingerprint:verifierInput.unplannedAttemptEnvironmentFingerprint} : {}),
         ...(verifierInput.verifierOwner ? { verifierOwner: verifierInput.verifierOwner } : {}),
         ...(verifierInput.currentWorkspaceRevisionHash ? { currentWorkspaceRevisionHash: verifierInput.currentWorkspaceRevisionHash } : {}),
+        ...(this.verifierTampered ? { adversarial: { verifier_def_tampered: true } } : {}),
         projectTestCommands,
 
       });
@@ -4361,7 +4362,10 @@ export class ChatEngine {
       this.options.task,
       requireProjectRoot(this.options),
       this.verifierDependencyHashes,
-      explicitCriterionVerifierCommands(inferTaskAcceptanceV3(this.options.task)),
+      [
+        ...this.getResolvedRequiredVerifiers(),
+        ...explicitCriterionVerifierCommands(inferTaskAcceptanceV3(this.options.task)),
+      ],
     );
   }
 
