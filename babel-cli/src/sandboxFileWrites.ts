@@ -102,26 +102,42 @@ export function writeUtf8FileSafely(
   const noFollowFlag = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
   const createFlags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL;
   const truncateFlags = fsConstants.O_WRONLY | fsConstants.O_TRUNC;
+  const originalFlags = fsConstants.O_WRONLY | fsConstants.O_CREAT |
+    (options?.createOnly ? fsConstants.O_EXCL : fsConstants.O_TRUNC);
   let fd: number;
   let created = false;
-  try {
-    fd = openSync(targetPath, createFlags | noFollowFlag, 0o666);
-    created = true;
-  } catch (error: unknown) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    if (noFollowFlag !== 0 && (code === 'EINVAL' || code === 'UNKNOWN' || code === 'ENOSYS')) {
-      try {
-        fd = openSync(targetPath, createFlags, 0o666);
-        created = true;
-      } catch (createError: unknown) {
-        if (options?.createOnly || (createError as NodeJS.ErrnoException | undefined)?.code !== 'EEXIST') throw createError;
-        fd = openSync(targetPath, truncateFlags, 0o666);
+  if (options?.sandboxReadableTest) {
+    try {
+      fd = openSync(targetPath, createFlags | noFollowFlag, 0o666);
+      created = true;
+    } catch (error: unknown) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (noFollowFlag !== 0 && (code === 'EINVAL' || code === 'UNKNOWN' || code === 'ENOSYS')) {
+        try {
+          fd = openSync(targetPath, createFlags, 0o666);
+          created = true;
+        } catch (createError: unknown) {
+          if (options?.createOnly || (createError as NodeJS.ErrnoException | undefined)?.code !== 'EEXIST') throw createError;
+          fd = openSync(targetPath, truncateFlags, 0o666);
+        }
+      } else {
+        if (options?.createOnly || code !== 'EEXIST') throw error;
+        // Existing modes are user-controlled. Reopen without O_CREAT so a race
+        // that removes the target fails instead of creating it under a new mode.
+        fd = openSync(targetPath, truncateFlags | noFollowFlag, 0o666);
       }
-    } else {
-      if (options?.createOnly || code !== 'EEXIST') throw error;
-      // Existing modes are user-controlled. Reopen without O_CREAT so a race
-      // that removes the target fails instead of creating it under a new mode.
-      fd = openSync(targetPath, truncateFlags | noFollowFlag, 0o666);
+    }
+  } else {
+    // Keep the established writer behavior for all ordinary writes and platforms.
+    try {
+      fd = openSync(targetPath, originalFlags | noFollowFlag, 0o666);
+    } catch (error: unknown) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (noFollowFlag !== 0 && (code === 'EINVAL' || code === 'UNKNOWN' || code === 'ENOSYS')) {
+        fd = openSync(targetPath, originalFlags, 0o666);
+      } else {
+        throw error;
+      }
     }
   }
 
