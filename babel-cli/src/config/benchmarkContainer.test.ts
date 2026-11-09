@@ -48,6 +48,15 @@ test('Docker image runtime user classification fails closed for non-root and amb
   assert.equal(classifyDockerImageRuntimeUser('root:group:extra'), 'unknown');
 });
 
+test('Docker mode-sharing eligibility requires UID 0 with the proven primary GID 0', () => {
+  // rootfulContainerHasStableReadPath evaluates directories as UID/GID 0.
+  // An image configured as USER 0:1000 cannot be assumed to have that group:
+  // it would not traverse a 0750 directory owned by UID 1000, GID 0.
+  assert.equal(classifyDockerImageRuntimeUser('0:0'), 'root');
+  assert.equal(classifyDockerImageRuntimeUser('0:1000'), 'unknown');
+  assert.equal(classifyDockerImageRuntimeUser('0:app'), 'unknown');
+});
+
 test('default runtime inventory accepts its own C++ command and probes Docker', (t) => {
   let calls = 0;
   t.mock.method(childProcess, 'spawnSync', (_command: string, args: readonly string[]) => {
