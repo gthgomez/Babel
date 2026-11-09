@@ -1567,7 +1567,7 @@ export class SafeExecutor {
         immutableDockerImage && getDockerImageRuntimeUser(dockerImage) === 'root' &&
         rootfulContainerHasStableReadPath(this.projectRoot, targetPath) &&
         !explicitContainerIdentity &&
-        isSandboxReadableTestPath(inputPath);
+        isSandboxReadableTestPath(relative(this.projectRoot, safePath));
       this.writeUtf8FileSafely(inputPath, targetPath, content, targetPath === safePath, {
         ...(options?.createOnly ? { createOnly: true as const } : {}),
         ...(sandboxReadableTest ? { sandboxReadableTest: true as const } : {}),

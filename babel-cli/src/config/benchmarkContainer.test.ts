@@ -38,7 +38,9 @@ test('Docker daemon mode classification fails closed when security options are i
 test('Docker image runtime user classification fails closed for non-root and ambiguous users', () => {
   assert.equal(classifyDockerImageRuntimeUser(''), 'root');
   assert.equal(classifyDockerImageRuntimeUser('0:0'), 'root');
-  assert.equal(classifyDockerImageRuntimeUser('0:root'), 'root');
+  assert.equal(classifyDockerImageRuntimeUser('0'), 'unknown');
+  assert.equal(classifyDockerImageRuntimeUser('0:1000'), 'unknown');
+  assert.equal(classifyDockerImageRuntimeUser('0:app'), 'unknown');
   assert.equal(classifyDockerImageRuntimeUser('root'), 'nonroot');
   assert.equal(classifyDockerImageRuntimeUser('root:0'), 'unknown');
   assert.equal(classifyDockerImageRuntimeUser('node'), 'nonroot');

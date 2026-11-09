@@ -167,7 +167,8 @@ let dockerImageRuntimeUserTestOverride: DockerImageRuntimeUser | null = null;
 
 export function classifyDockerImageRuntimeUser(user: string | null | undefined): DockerImageRuntimeUser {
   const normalized = user?.trim().toLowerCase() ?? '';
-  if (!normalized || /^(?:0)(?::(?:[0-9]+|[a-z_][a-z0-9_-]*))?$/i.test(normalized)) return 'root';
+  if (!normalized || /^0:0$/.test(normalized)) return 'root';
+  if (normalized === '0' || normalized.startsWith('0:')) return 'unknown';
   if (/^[0-9]+(?::[0-9]+)?$/.test(normalized) || /^[a-z_][a-z0-9_-]*(?::[a-z_][a-z0-9_-]*)?$/i.test(normalized)) return 'nonroot';
   return 'unknown';
 }

@@ -196,6 +196,17 @@ test('only new test source is shared with the capability-dropped sandbox under r
       assert.equal(statSync(join(fixture.projectRoot, privatePath)).mode & 0o777, 0o600, `${privatePath} retains restrictive mode`);
     }
 
+    const privateFixtures = join(fixture.projectRoot, 'private-fixtures');
+    mkdirSync(privateFixtures);
+    chmodSync(privateFixtures, 0o755);
+    symlinkSync('../private-fixtures', join(testDirectory, 'fixtures'));
+    assert.equal(new SafeExecutor(fixture.projectRoot).fileWrite('test/fixtures/generated.test.js', 'private target\n').exit_code, 0);
+    assert.equal(
+      statSync(join(privateFixtures, 'generated.test.js')).mode & 0o777,
+      0o600,
+      'sensitive canonical parent reached through a benign symlink remains private',
+    );
+
     for (const [index, args] of ['--user 1000:1000', '--user=1000:1000'].entries()) {
       process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] = args;
       const path = `test/explicit-user-${index}.test.js`;
