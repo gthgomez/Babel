@@ -185,7 +185,7 @@ describe('backgroundShell', () => {
   });
 
   it('clears stale POSIX tree uncertainty after close confirms the group has settled', {
-    skip: process.platform === 'win32' ? 'POSIX process-group settlement is not available on Windows' : false,
+    skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
   }, async (t) => {
     const originalKill = process.kill.bind(process);
     t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
