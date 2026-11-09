@@ -246,6 +246,124 @@ describe('backgroundShell', () => {
       }
     }
   });
+
+  it('preserves cancellation that arrives while close waits for POSIX tree settlement', {
+    skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
+  }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bg-shell-cancel-during-settlement-'));
+    const grandchildScript = join(dir, 'grandchild.js');
+    const parentScript = join(dir, 'parent.js');
+    writeFileSync(grandchildScript, 'setTimeout(()=>{},60000);\n');
+    writeFileSync(parentScript, [
+      "const cp=require('child_process');",
+      'const child=cp.spawn(process.execPath,[process.argv[2]],{stdio:"ignore"});',
+      'child.unref();',
+      'console.log(String(child.pid));',
+      'process.exit(0);',
+    ].join(''));
+    const ownerId = 'cancel-during-initial-settlement';
+    let grandchildPid: number | undefined;
+    try {
+      const job = startBackgroundShell({
+        command: `node ${parentScript} ${grandchildScript}`,
+        cwd: dir,
+        ownerId,
+        timeoutMs: 10_000,
+      });
+      const directChild = (job as unknown as { child?: import('node:child_process').ChildProcess }).child;
+      assert.ok(directChild, 'the fixture has an owned direct child');
+      const directClose = new Promise<void>(resolveClose => directChild.once('close', () => resolveClose()));
+      grandchildPid = await waitForStdoutPid(job.id);
+      await directClose;
+      assert.equal(job.status, 'running', 'the close handler is still waiting on the live descendant');
+      assert.equal(hasUnsettledBackgroundShells(ownerId), true);
+      assert.equal(killBackgroundShell(job.id).status, 'killed');
+      await job.done;
+      const result = await awaitBackgroundShell(job.id, 1_000);
+      assert.equal(result.status, 'killed', 'the later cancellation cause survives the earlier close snapshot');
+      assert.equal(getBackgroundShellJob(job.id)?.processCompleted, true,
+        'the cancellation cause does not prevent independently confirmed tree settlement');
+      assert.ok(grandchildPid !== undefined && await waitUntilDead(grandchildPid),
+        'the descendant is stopped before the owner fence is released');
+      assert.equal(hasUnsettledBackgroundShells(ownerId), false);
+    } finally {
+      if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) {
+        try { process.kill(grandchildPid); } catch { /* already gone */ }
+      }
+      rmSync(dir, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+    }
+  });
+
+  it('preserves cancellation while automatic tree cleanup is waiting for settlement', {
+    skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
+  }, async t => {
+    const dir = mkdtempSync(join(tmpdir(), 'bg-shell-cancel-during-cleanup-'));
+    const readyMarker = join(dir, 'handler-ready');
+    const signalMarker = join(dir, 'term-received');
+    const grandchildScript = join(dir, 'grandchild.js');
+    const parentScript = join(dir, 'parent.js');
+    writeFileSync(grandchildScript, [
+      "require('fs').writeFileSync(process.argv[2],'ready');",
+      "process.on('SIGTERM',()=>{require('fs').writeFileSync(process.argv[3],'yes');setTimeout(()=>process.exit(0),250)});",
+      'setTimeout(()=>{},60000);',
+    ].join(''));
+    writeFileSync(parentScript, [
+      "const cp=require('child_process');",
+      "const fs=require('fs');",
+      'const child=cp.spawn(process.execPath,[process.argv[2],process.argv[3],process.argv[4]],{stdio:"ignore"});',
+      'child.unref();',
+      'console.log(String(child.pid));',
+      'const wait=()=>fs.existsSync(process.argv[3])?process.exit(0):setTimeout(wait,10);wait();',
+    ].join(''));
+    const ownerId = 'cancel-during-auto-settlement';
+    const originalKill = process.kill.bind(process);
+    t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid < 0 && signal === 'SIGKILL') {
+        // Keep the fixture alive briefly after automatic cleanup starts so the
+        // test can record cancellation during the second settlement wait.
+        return originalKill(pid, 'SIGTERM');
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill);
+    let grandchildPid: number | undefined;
+    try {
+      const job = startBackgroundShell({
+        command: `node ${parentScript} ${grandchildScript} ${readyMarker} ${signalMarker}`,
+        cwd: dir,
+        ownerId,
+        timeoutMs: 10_000,
+      });
+      const directChild = (job as unknown as { child?: import('node:child_process').ChildProcess }).child;
+      assert.ok(directChild);
+      const directClose = new Promise<void>(resolveClose => directChild.once('close', () => resolveClose()));
+      grandchildPid = await waitForStdoutPid(job.id);
+      await directClose;
+      const signalDeadline = Date.now() + 3_000;
+      while (!existsSync(signalMarker) && Date.now() < signalDeadline) {
+        await new Promise(resolveDelay => setTimeout(resolveDelay, 10));
+      }
+      assert.equal(existsSync(signalMarker), true,
+        `automatic cleanup has entered its settlement wait: ${JSON.stringify(getBackgroundShellJob(job.id))}`);
+      assert.equal(job.status, 'running');
+      assert.equal(hasUnsettledBackgroundShells(ownerId), true);
+      assert.equal(killBackgroundShell(job.id).status, 'killed');
+      await job.done;
+      const result = await awaitBackgroundShell(job.id, 1_000);
+      assert.equal(result.status, 'killed', 'cancellation survives confirmed automatic cleanup');
+      assert.match(result.stderr, /descendants remained .* terminated/i,
+        'the cleanup outcome remains visible alongside cancellation');
+      assert.equal(getBackgroundShellJob(job.id)?.processCompleted, true);
+      assert.equal(hasUnsettledBackgroundShells(ownerId), false,
+        'the owner fence opens only after the cleanup wait confirms settlement');
+      assert.ok(grandchildPid !== undefined && await waitUntilDead(grandchildPid));
+    } finally {
+      if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) {
+        try { process.kill(grandchildPid); } catch { /* already gone */ }
+      }
+      rmSync(dir, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+    }
+  });
+
   it('killBackgroundShell terminates the full process tree (grandchild)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'bg-shell-tree-'));
     const grandchildScript = join(dir, 'grandchild.js');

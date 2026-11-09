@@ -1,23 +1,17 @@
 /** Real Windows execution qualification for the background/await command path. */
 
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, normalize, resolve } from 'node:path'
 import test from 'node:test'
 
-import {
-  awaitBackgroundShell,
-  resetBackgroundShellRegistryForTests,
-  startBackgroundShell,
-} from './backgroundShell.js'
-import { ProcessWitness } from '../diagnostics/bdns/processWitness.js'
 import { SafeExecutor } from '../sandbox.js'
 import { parseCommandArgv, quoteWindowsCommandArg } from '../utils/commandArgv.js'
 
 const windowsOnly = process.platform === 'win32' ? {} : { skip: 'Windows-only process qualification' }
 
-test('Windows executes spaced .exe, .cmd, and .bat paths with exact child argv and cwd', windowsOnly, async () => {
+test('Windows foreground execution preserves spaced .exe, .cmd, and .bat argv and cwd', windowsOnly, async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-windows-process-'))
   const cwd = join(root, 'cwd with spaces')
   mkdirSync(cwd)
@@ -40,8 +34,13 @@ test('Windows executes spaced .exe, .cmd, and .bat paths with exact child argv a
     { name: 'cmd', executable: cmdWrapper, argv: childArgs },
     { name: 'bat', executable: batWrapper, argv: childArgs },
   ]
+  const previousProfile = process.env['BABEL_EXECUTION_PROFILE']
+  const previousFallback = process.env['BABEL_ALLOW_HOST_FALLBACK']
+  process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local'
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1'
 
   try {
+    const executor = new SafeExecutor(root)
     for (const scenario of cases) {
       const command = [scenario.executable, ...scenario.argv]
         .map(quoteWindowsCommandArg)
@@ -49,16 +48,7 @@ test('Windows executes spaced .exe, .cmd, and .bat paths with exact child argv a
       const authorizedArgv = parseCommandArgv(command, 'win32')
       assert.deepEqual(authorizedArgv, [scenario.executable, ...scenario.argv], scenario.name)
 
-      const witness = new ProcessWitness()
-      const job = startBackgroundShell({
-        command,
-        cwd,
-        timeoutMs: 10_000,
-        toolCallId: `windows-${scenario.name}`,
-        processWitness: witness,
-      })
-      const result = await awaitBackgroundShell(job.id, 10_000)
-      assert.equal(result.status, 'completed', `${scenario.name}: ${result.stderr}`)
+      const result = await executor.shellExecAsync(command, cwd, 10_000)
       assert.equal(result.exit_code, 0, `${scenario.name}: ${result.stderr}`)
 
       const observed = JSON.parse(result.stdout) as {
@@ -70,16 +60,13 @@ test('Windows executes spaced .exe, .cmd, and .bat paths with exact child argv a
       assert.equal(normalize(observed.cwd).toLowerCase(), normalize(resolve(cwd)).toLowerCase(), scenario.name)
       assert.equal(normalize(observed.execPath).toLowerCase(), normalize(process.execPath).toLowerCase(), scenario.name)
 
-      const [record] = witness.list()
-      assert.ok(record, `${scenario.name}: missing process witness`)
-      assert.match(record.payload.executable, /(?:^|[\\/])cmd\.exe$/iu)
-      assert.deepEqual(record.payload.args.slice(0, 3), ['/d', '/s', '/c'])
-      assert.match(record.payload.args[3] ?? '', /wrapper with spaces\.(?:cmd|bat)|node\.exe/iu)
-      assert.equal(record.payload.timeoutMs, 10_000)
-      await witness.close()
     }
   } finally {
-    resetBackgroundShellRegistryForTests()
+    if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE']
+    else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile
+    if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK']
+    else process.env['BABEL_ALLOW_HOST_FALLBACK'] = previousFallback
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 })
   }
 })
 

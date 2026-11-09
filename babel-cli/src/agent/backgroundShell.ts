@@ -368,7 +368,10 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
   child.on('close', (code) => {
     clearTimeout(killTimer);
     void (async () => {
-      const cancellationRecordedAtClose = job.status === 'killed';
+      // Read after asynchronous settlement checks too: a timeout or explicit
+      // cancellation may arrive while this close handler is waiting for the
+      // process group to settle.
+      const cancellationRecorded = () => job.status === 'killed';
       let descendantsSettled = true;
       let hadLingeringDescendants = false;
       // POSIX jobs run in a private process group. The direct child closing
@@ -402,16 +405,21 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
         job.exitCode = code ?? 1;
       }
       if (hadLingeringDescendants && descendantsSettled) {
-        job.status = 'failed';
-        job.exitCode = 1;
-        job.error = 'Background descendants remained after the direct child exited and were terminated';
+        if (!cancellationRecorded()) {
+          job.status = 'failed';
+          job.exitCode = 1;
+        }
+        const cleanupError = 'Background descendants remained after the direct child exited and were terminated';
+        if (!job.error?.includes(cleanupError)) {
+          job.error = job.error ? `${job.error}; ${cleanupError}` : cleanupError;
+        }
       }
       if (!descendantsSettled) {
         // Keep an already recorded timeout/cancellation cause. `killed` says
         // the owned command was cancelled; processCompleted and the owner
         // fence separately remain false until tree settlement is confirmed.
         // A natural close with unknown descendants is still a failed result.
-        if (!cancellationRecordedAtClose) {
+        if (!cancellationRecorded()) {
           job.status = 'failed';
           job.exitCode = 1;
         }
