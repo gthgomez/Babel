@@ -30,13 +30,9 @@ export function requestsRequiredUserDecision(answer: string): boolean {
   const question = prose.trim().replace(/^>\s*/, '').replace(/^\*\*([\s\S]*)\*\*$/, '$1')
   const asksChoice = /\b(?:or|versus)\b/i.test(question)
     || /^(?:which|what)\b[^?\n]*\b(?:should|must)\b/i.test(question)
-  const optionalFollowUp = /^would you prefer I (?:summari[sz]e|show|explain|describe|list|walk you through)\b[^?\n]{0,120}\bor\s+(?:I\s+)?(?:summari[sz]e|show|explain|describe|list|walk you through)\b[^?\n]{0,120}\?$/i.test(question)
-    || /^should I (?:rerun (?:the )?(?:test|tests|check|checks) or (?:summari[sz]e|show|explain|describe|list) (?:the )?(?:result|results|output|diff|changes)|(?:summari[sz]e|show|explain|describe|list) (?:the )?(?:result|results|output|diff|changes) or rerun (?:the )?(?:test|tests|check|checks))\?$/i.test(question)
-  if (asksChoice && !optionalFollowUp && /^(?:which|what|should|do you want|would you prefer)\b[^?\n]{1,300}\?$/i.test(question)) return true
-  const explicitChoiceRequest = /^(?:please\s+(?:choose|pick|decide|select)|choose|pick|select)\s*:?[^.!?\n]{1,200}\b(?:or|\/)\b[^.!?\n]*[.!?]?$/i.test(question)
-  if (explicitChoiceRequest) return true
-  const deferral = /\b(?:I(?:'m| am) not (?:editing|implementing|changing)(?: anything)? yet|before I (?:can )?(?:edit|implement|proceed)|I (?:need|require) (?:your|a) (?:decision|choice|clarification)|what I need from you|(?:the )?(?:repo|README|contract)\b[^.!?\n]{0,120}\bblocks? me from (?:picking|choosing|selecting)|no choice has been made|a choice has not been made|choice is (?:deliberately )?unmade|cannot proceed without (?:your|a) decision|ask before (?:I )?(?:selecting|choosing|picking))\b/i.test(prose)
+  if (asksChoice && /^(?:which|what|should|do you want|would you prefer)\b[^?\n]{1,300}\?$/i.test(question)) return true
+  const deferral = /\b(?:I(?:'m| am) not (?:editing|implementing|changing)(?: anything)? yet|before I (?:can )?(?:edit|implement|proceed)|I (?:need|require) (?:your|a) (?:decision|choice|clarification)|what I need from you)\b/i.test(prose)
   if (!deferral || /\b(?:if|suppose|imagine)\b[^.!?\n]*\b(?:not editing|before I|I need|what I need)\b/i.test(prose)) return false
   // A blockquoted question can be the assistant's own prominently displayed request.
-  return /(?:^|[.!\n])\s*(?:>\s*)?(?:\*\*)?(?:which|what|how|should|do you want|can you (?:choose|clarify|specify)|sort by|choose|specify|pick)\b[^?\n]{1,300}\?/im.test(prose)
+  return /(?:^|[.!\n])\s*(?:>\s*)?(?:\*\*)?(?:which|what|how|should|do you want|would you like|can you (?:choose|clarify|specify)|sort by|choose|specify|pick)\b[^?\n]{1,300}\?/im.test(prose)
 }
