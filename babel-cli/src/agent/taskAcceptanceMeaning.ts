@@ -5,16 +5,21 @@ import type { AcceptanceRequirementV1, TaskContractProvenanceRecord, TaskContrac
 export const ACCEPTANCE_MEANING_REF_V1 = 'task-acceptance-meaning:v1'
 /** Fresh admissions: provisional inferred capture from authenticated active prose. */
 export const ACCEPTANCE_MEANING_REF_V2 = 'task-acceptance-meaning:v2'
+/** Fresh admission with explicit behavioral-goal preservation and bounded evidence sections. */
+export const ACCEPTANCE_MEANING_REF_V3 = 'task-acceptance-meaning:v3'
 /** @deprecated Use ACCEPTANCE_MEANING_REF_V1; default export alias preserves v1 replay. */
 export const ACCEPTANCE_MEANING_REF = ACCEPTANCE_MEANING_REF_V1
 
-export type TaskAcceptanceMeaningVersion = 1 | 2
+export type TaskAcceptanceMeaningVersion = 1 | 2 | 3
 
 const MAX_INPUT_CHARS = 65_536
 const MAX_CRITERIA = 128
 const MAX_CRITERION_CHARS = 4096
 const RAW_PYTHON_FUNCTION_DEFINITION = /^\s{0,3}(?:async\s+)?def\s+[A-Za-z_]\w*\s*\(/
 const RAW_PYTHON_TOP_LEVEL_CODE = /^\s{0,3}(?:async\s+)?(?:def|class)\s+[A-Za-z_]\w*\b|^\s{0,3}@\w/
+// A concrete behavioral objective in the user's opening request must not be
+// displaced by a later, narrower command-only Requirements list.
+const BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:please\s+)?(?:fix|change|update|implement|make|ensure|support)\b.{1,240}\bso\b.{1,240}\b(?:returns?|return|equals?|equal|produces?|outputs?|becomes?|is)\b.{1,160}[.!]?\s*$/i
 export type AcceptanceMeaningStatus = 'explicit' | 'inferred' | 'unresolved'
 export interface AcceptanceMeaningSource {
   criterion_id: string
@@ -48,6 +53,162 @@ function sortCriteriaBySourceSpan(
 
 function hasRawPythonFunctionDefinition(request: string): boolean {
   return request.split(/\r?\n/).some(line => RAW_PYTHON_FUNCTION_DEFINITION.test(line))
+}
+
+function preserveBehavioralGoal(
+  meaning: TaskAcceptanceMeaning,
+  request: string,
+  meaningRef = ACCEPTANCE_MEANING_REF_V3,
+): TaskAcceptanceMeaning {
+  // Limit this bridge to a directly stated, observable opening goal. Do not
+  // reinterpret examples, quoted text, fenced content, or arbitrary prose.
+  // Keep carriage returns in each raw line so offset increments include the
+  // full original CRLF separator. The semantic line text is normalized below.
+  const lines = request.split('\n')
+  let offset = 0
+  let fence = ''
+  let fenceLength = 0
+  let sectionDepth = 1
+  let exclusionDepth: number | undefined
+  let exampleDepth: number | undefined
+  let plainExclusion = false
+  let plainExample = false
+  let found: { text: string; start: number; end: number } | undefined
+  for (const raw of lines) {
+    const line = raw.replace(/\r$/, '')
+    // Markdown indented code may use four spaces or a tab. Keep it outside
+    // active task prose just like fenced code, including tab-plus-space forms.
+    if (/^(?: {4,}| {0,3}\t)/.test(line)) { offset += raw.length + 1; continue }
+    const delimiter = line.match(/^\s{0,3}(`{3,}|~{3,})/)
+    if (delimiter) {
+      const token = delimiter[1]!
+      if (!fence) { fence = token[0]!; fenceLength = token.length }
+      else if (token[0] === fence && token.length >= fenceLength && line.slice(delimiter[0].length).trim() === '') {
+        fence = ''
+        fenceLength = 0
+      }
+      offset += raw.length + 1
+      continue
+    }
+    if (fence || /^\s*>/.test(line)) { offset += raw.length + 1; continue }
+
+    const headingDepth = line.match(/^\s{0,3}(#{1,6})\s+/)?.[1]?.length
+    const heading = line.replace(/^\s{0,3}#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').trim()
+      .replace(/^(\*\*|__)(.+?)\1(?=\s*:|\s*$)/, '$2')
+    const plainRequirements = /^ {0,3}\S/.test(line) && /^(?:acceptance criteria|requirements?)\s*:?\s*$/i.test(heading)
+    if (exclusionDepth !== undefined) {
+      if (headingDepth === undefined ? !(plainExclusion && plainRequirements) : headingDepth > exclusionDepth) {
+        offset += raw.length + 1
+        continue
+      }
+      exclusionDepth = undefined
+    }
+    if (exampleDepth !== undefined) {
+      if (headingDepth === undefined ? !(plainExample && plainRequirements) : headingDepth > exampleDepth) {
+        offset += raw.length + 1
+        continue
+      }
+      exampleDepth = undefined
+    }
+    if (headingDepth !== undefined) sectionDepth = headingDepth
+    if (/^(?:acceptance criteria|requirements?)\s*:?\s*$/i.test(heading)) break
+    if (/^(?:non[-\s]*goals?|out[-\s]+of[-\s]+scope|exclusions?|not required)(?:\s*:|\s*$)/i.test(heading)) {
+      exclusionDepth = sectionDepth
+      plainExclusion = headingDepth === undefined
+      offset += raw.length + 1
+      continue
+    }
+    if (/^(?:(?:for )?examples?(?: (?:input|output|text|code)| of [^:]{1,100})?|sample(?: (?:input|output|text|code))?|logs?|quoted (?:text|content))(?:\s*:|\s*$)/i.test(heading)) {
+      exampleDepth = sectionDepth
+      plainExample = headingDepth === undefined
+      offset += raw.length + 1
+      continue
+    }
+    if (/^\s{0,3}(?:[-*+•]|\d+[.)])\s+/.test(line)) break
+    if (line.trim() && !/^\s{0,3}#{1,6}\s+/.test(line) && BEHAVIORAL_GOAL_LINE.test(line)) {
+      found = { text: line.trim(), start: offset, end: offset + line.length }
+      break
+    }
+    offset += raw.length + 1
+  }
+  if (!found || meaning.criteria.some(item => item.description === found!.text)) return meaning
+
+  // The parser already enforces this cap. If there is no room for the
+  // additional obligation, combine it with the final criterion as one
+  // unresolved requirement. The admitted contract therefore retains both
+  // obligations and cannot certify either from unrelated command evidence.
+  if (meaning.criteria.length >= MAX_CRITERIA) {
+    const lastCriterion = meaning.criteria[MAX_CRITERIA - 1]!
+    const lastSource = meaning.sources.find(source => source.criterion_id === lastCriterion.id)
+    const combinedDescription = `${found.text} Also, ${lastCriterion.description}`
+    const description = combinedDescription.length <= MAX_CRITERION_CHARS
+      ? combinedDescription
+      : 'Acceptance capture limit exceeded; the opening behavioral objective and displaced acceptance requirement remain unresolved and cannot be certified.'
+    const id = `acceptance:${sha256Canonical({ description, status: 'unresolved' }).slice(0, 32)}`
+    const inputDigest = sha256Canonical(request)
+    const combined: AcceptanceRequirementV1 = {
+      id,
+      description,
+      type: 'custom',
+      required: true,
+      verification: { kind: 'custom', verifier_id: `meaning:${id}:${inputDigest.slice(0, 16)}` },
+      verification_strategy: 'Acceptance requirements exceeded the capture limit; both combined obligations require independent evidence before completion can be certified.',
+    }
+    const criteria = [...meaning.criteria]
+    criteria[MAX_CRITERIA - 1] = combined
+    const sources = meaning.sources.filter(source => source.criterion_id !== lastCriterion.id)
+    sources.push({
+      criterion_id: id,
+      status: 'unresolved',
+      input_digest: inputDigest,
+      start: found.start,
+      end: lastSource?.end ?? found.end,
+    })
+    return {
+      ...meaning,
+      criteria,
+      sources,
+      unresolved: true,
+      structurallyComplete: false,
+      provenance: [
+        {
+          kind: 'derived_acceptance',
+          ref: `${meaningRef}:unresolved:${inputDigest}:${found.start}:${lastSource?.end ?? found.end}:${id}`,
+        },
+        ...meaning.provenance,
+      ],
+    }
+  }
+
+  const inputDigest = sha256Canonical(request)
+  const id = `acceptance:${sha256Canonical({ description: found.text, status: 'inferred' }).slice(0, 32)}`
+  const goal: AcceptanceRequirementV1 = {
+    id,
+    description: found.text,
+    type: 'custom',
+    required: true,
+    verification: { kind: 'custom', verifier_id: `meaning:${id}:${inputDigest.slice(0, 16)}` },
+    verification_strategy: 'The explicit behavioral goal remains a separate requirement; a command-only success does not prove it unless that exact behavior is covered by an authorized verifier.',
+  }
+  const source: AcceptanceMeaningSource = {
+    criterion_id: id,
+    status: 'inferred',
+    input_digest: inputDigest,
+    start: found.start,
+    end: found.end,
+  }
+  return {
+    ...meaning,
+    criteria: [goal, ...meaning.criteria],
+    sources: [source, ...meaning.sources],
+    provenance: [
+      {
+        kind: 'derived_acceptance',
+        ref: `${meaningRef}:inferred:${inputDigest}:${found.start}:${found.end}:${id}`,
+      },
+      ...meaning.provenance,
+    ],
+  }
 }
 
 type InterpretOptions = {
@@ -280,6 +441,22 @@ export function inferTaskAcceptanceV2(request: string): TaskAcceptanceMeaning {
   })
 }
 
+/** Fresh admission v3 adds the behavioral-goal obligation while v1/v2 remain stable for archived replay. */
+export function inferTaskAcceptanceV3(request: string): TaskAcceptanceMeaning {
+  const previous = inferTaskAcceptanceV2(request)
+  const v2Prefix = `${ACCEPTANCE_MEANING_REF_V2}:`
+  const v3Prefix = `${ACCEPTANCE_MEANING_REF_V3}:`
+  const versioned: TaskAcceptanceMeaning = {
+    ...previous,
+    interpretation_version: 3,
+    provenance: previous.provenance.map(record => ({
+      ...record,
+      ref: record.ref.startsWith(v2Prefix) ? record.ref.replace(v2Prefix, v3Prefix) : record.ref,
+    })),
+  }
+  return preserveBehavioralGoal(versioned, request)
+}
+
 /** Default export path preserves v1 outputs for existing callers and replay tests. */
 export function inferTaskAcceptance(request: string): TaskAcceptanceMeaning {
   return inferTaskAcceptanceV1(request)
@@ -289,15 +466,16 @@ export function inferTaskAcceptanceForVersion(
   request: string,
   version: TaskAcceptanceMeaningVersion,
 ): TaskAcceptanceMeaning {
+  if (version === 3) return inferTaskAcceptanceV3(request)
   return version === 2 ? inferTaskAcceptanceV2(request) : inferTaskAcceptanceV1(request)
 }
 
 export function acceptanceMeaningRefForVersion(version: TaskAcceptanceMeaningVersion): string {
-  return version === 2 ? ACCEPTANCE_MEANING_REF_V2 : ACCEPTANCE_MEANING_REF_V1
+  return version === 3 ? ACCEPTANCE_MEANING_REF_V3 : version === 2 ? ACCEPTANCE_MEANING_REF_V2 : ACCEPTANCE_MEANING_REF_V1
 }
 
 export function isAcceptanceMeaningDerivedRef(ref: string): boolean {
-  return ref.startsWith(`${ACCEPTANCE_MEANING_REF_V1}:`) || ref.startsWith(`${ACCEPTANCE_MEANING_REF_V2}:`)
+  return ref.startsWith(`${ACCEPTANCE_MEANING_REF_V1}:`) || ref.startsWith(`${ACCEPTANCE_MEANING_REF_V2}:`) || ref.startsWith(`${ACCEPTANCE_MEANING_REF_V3}:`)
 }
 
 export type AcceptanceMeaningVersionResolution =
@@ -306,12 +484,17 @@ export type AcceptanceMeaningVersionResolution =
 
 const ACCEPTANCE_MEANING_NAMESPACE_PREFIX = 'task-acceptance-meaning:'
 
-function recordedMeaningVersionFlags(records: readonly TaskContractProvenanceRecord[]): { v1: boolean; v2: boolean } {
+function recordedMeaningVersionFlags(records: readonly TaskContractProvenanceRecord[]): { v1: boolean; v2: boolean; v3: boolean } {
   let v1 = false
   let v2 = false
+  let v3 = false
   for (const record of records) {
     if (record.kind !== 'derived_acceptance') continue
     const ref = record.ref
+    if (ref.startsWith(`${ACCEPTANCE_MEANING_REF_V3}:`)) {
+      v3 = true
+      continue
+    }
     if (ref.startsWith(`${ACCEPTANCE_MEANING_REF_V2}:`)) {
       v2 = true
       continue
@@ -324,21 +507,22 @@ function recordedMeaningVersionFlags(records: readonly TaskContractProvenanceRec
       throw new Error('TASK_ACCEPTANCE_MEANING_VERSION_UNSUPPORTED: Malformed or unknown acceptance-meaning provenance ref')
     }
   }
-  return { v1, v2 }
+  return { v1, v2, v3 }
 }
 
 /**
- * Resolve interpretation version from recorded provenance. Mixed v1/v2 refs reject.
+ * Resolve interpretation version from recorded provenance. Mixed-version refs reject.
  * Absent per-criterion meaning refs fall back to v1 only for the explicit legacy placeholder shape.
  */
 export function resolveAcceptanceMeaningVersion(
   records: readonly TaskContractProvenanceRecord[],
   contract?: TaskContractV1,
 ): AcceptanceMeaningVersionResolution {
-  const { v1, v2 } = recordedMeaningVersionFlags(records)
-  if (v1 && v2) {
-    throw new Error('TASK_ACCEPTANCE_MEANING_VERSION_MIXED: Contract provenance records both v1 and v2 acceptance-meaning refs')
+  const { v1, v2, v3 } = recordedMeaningVersionFlags(records)
+  if (Number(v1) + Number(v2) + Number(v3) > 1) {
+    throw new Error('TASK_ACCEPTANCE_MEANING_VERSION_MIXED: Contract provenance records multiple acceptance-meaning versions')
   }
+  if (v3) return { kind: 'version', version: 3 }
   if (v2) return { kind: 'version', version: 2 }
   if (v1) return { kind: 'version', version: 1 }
   if (contract && isLegacyAcceptancePlaceholderContract(contract)) {
