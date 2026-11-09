@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { basename, join, relative, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { resolveExecutionProfile } from './executionProfiles.js';
@@ -153,17 +154,35 @@ export function shouldUseBenchmarkContainerExecution(
 
 // ── H4: Docker as default execution environment ──────────────────────────────
 
-let dockerAvailableCache: { available: boolean; checked: boolean } = {
+let dockerAvailableCache: { available: boolean; checked: boolean; environmentKey: string } = {
   available: false,
   checked: false,
+  environmentKey: '',
 };
 
 let dockerUnavailableReason = '';
 export type DockerDaemonMode = 'rootful' | 'rootless' | 'unknown';
-let dockerDaemonModeCache: DockerDaemonMode | null = null;
+let dockerDaemonModeTestOverride: DockerDaemonMode | null = null;
 export type DockerImageRuntimeUser = 'root' | 'nonroot' | 'unknown';
-let dockerImageRuntimeUserCache = new Map<string, DockerImageRuntimeUser>();
 let dockerImageRuntimeUserTestOverride: DockerImageRuntimeUser | null = null;
+export interface DockerImageRuntimeIdentity { uid: number; gid: number }
+let dockerImageRuntimeIdentityTestOverride: DockerImageRuntimeIdentity | null | undefined;
+
+function dockerIdentityProbeEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  // Match the Docker client endpoint available to the actual sandbox runner.
+  // DOCKER_* overrides are deliberately absent from SafeExecutor children, so
+  // the probe must not inspect a different daemon/context from execution.
+  for (const key of ['PATH', 'HOME']) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
+function dockerEnvironmentKey(env: NodeJS.ProcessEnv): string {
+  return JSON.stringify([env['PATH'] ?? '', env['HOME'] ?? '']);
+}
 
 export function classifyDockerImageRuntimeUser(user: string | null | undefined): DockerImageRuntimeUser {
   const normalized = user?.trim().toLowerCase() ?? '';
@@ -195,6 +214,7 @@ function checkWindowsDockerDesktop(): boolean {
   try {
     const result = spawnSync(dockerExe, ['info', '--format', '{{.ServerVersion}}'], {
       timeout: 5000, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'],
+      env: dockerIdentityProbeEnvironment(),
     });
     return result.status === 0 && result.stdout!.trim().length > 0;
   } catch { return false; }
@@ -202,13 +222,16 @@ function checkWindowsDockerDesktop(): boolean {
 
 /** One-time Docker availability preflight (cached after first call). */
 export function isDockerAvailable(): boolean {
-  if (dockerAvailableCache.checked) return dockerAvailableCache.available;
+  const env = dockerIdentityProbeEnvironment();
+  const environmentKey = dockerEnvironmentKey(env);
+  if (dockerAvailableCache.checked && dockerAvailableCache.environmentKey === environmentKey) return dockerAvailableCache.available;
 
   try {
     const result = spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], {
       timeout: 5000,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      env,
     });
     dockerAvailableCache.available = result.status === 0 && result.stdout!.trim().length > 0;
     if (dockerAvailableCache.available) {
@@ -233,6 +256,7 @@ export function isDockerAvailable(): boolean {
   }
 
   dockerAvailableCache.checked = true;
+  dockerAvailableCache.environmentKey = environmentKey;
   return dockerAvailableCache.available;
 }
 
@@ -243,27 +267,23 @@ export function getDockerUnavailableReason(): string {
 
 /** Determine whether container root maps to host root; unknown fails closed. */
 export function getDockerDaemonMode(): DockerDaemonMode {
-  if (dockerDaemonModeCache) return dockerDaemonModeCache;
-  if (!isDockerAvailable()) {
-    dockerDaemonModeCache = 'unknown';
-    return dockerDaemonModeCache;
-  }
+  if (dockerDaemonModeTestOverride !== null) return dockerDaemonModeTestOverride;
+  const env = dockerIdentityProbeEnvironment();
+  if (!isDockerAvailable()) return 'unknown';
   try {
     const result = spawnSync('docker', ['info', '--format', '{{json .SecurityOptions}}'], {
       timeout: 5000,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      env,
     });
     if (result.status !== 0 || !result.stdout?.trim()) {
-      dockerDaemonModeCache = 'unknown';
-      return dockerDaemonModeCache;
+      return 'unknown';
     }
     const options: unknown = JSON.parse(result.stdout.trim());
-    dockerDaemonModeCache = classifyDockerDaemonSecurityOptions(options);
-    return dockerDaemonModeCache;
+    return classifyDockerDaemonSecurityOptions(options);
   } catch {
-    dockerDaemonModeCache = 'unknown';
-    return dockerDaemonModeCache;
+    return 'unknown';
   }
 }
 
@@ -272,21 +292,93 @@ export function getDockerImageRuntimeUser(image: string): DockerImageRuntimeUser
   if (dockerImageRuntimeUserTestOverride) return dockerImageRuntimeUserTestOverride;
   const normalizedImage = image.trim();
   if (!normalizedImage) return 'unknown';
-  const cached = dockerImageRuntimeUserCache.get(normalizedImage);
-  if (cached) return cached;
+  const env = dockerIdentityProbeEnvironment();
   let runtimeUser: DockerImageRuntimeUser = 'unknown';
   try {
     const result = spawnSync('docker', ['image', 'inspect', '--format', '{{.Config.User}}', normalizedImage], {
       timeout: 5000,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      env,
     });
     if (result.status === 0) runtimeUser = classifyDockerImageRuntimeUser(result.stdout);
   } catch {
     runtimeUser = 'unknown';
   }
-  dockerImageRuntimeUserCache.set(normalizedImage, runtimeUser);
   return runtimeUser;
+}
+
+/**
+ * Probe the effective UID and primary GID used by Docker for this exact local
+ * image. The probe has no project/host mounts, network, writable filesystem,
+ * capabilities, or privilege escalation; it never pulls an image. Unknown
+ * output or any Docker failure remains unknown and must fail closed.
+ */
+export function getDockerImageRuntimeIdentity(image: string): DockerImageRuntimeIdentity | null {
+  if (dockerImageRuntimeIdentityTestOverride !== undefined) return dockerImageRuntimeIdentityTestOverride;
+  const normalizedImage = image.trim();
+  if (!normalizedImage) return null;
+  const env = dockerIdentityProbeEnvironment();
+  let identity: DockerImageRuntimeIdentity | null = null;
+  const probeName = `babel-identity-probe-${randomUUID()}`;
+  const dockerCall = (args: string[], timeout: number) => spawnSync('docker', args, {
+    timeout,
+    killSignal: 'SIGKILL',
+    maxBuffer: 4096,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env,
+  });
+  const cleanup = (idOrName: string): boolean => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const result = dockerCall(['rm', '--force', idOrName], 3000);
+        if (result.status === 0 && !result.error) return true;
+        if (/no such (?:container|object)/i.test(result.stderr ?? '')) return true;
+        const state = dockerCall(['inspect', idOrName], 2000);
+        if (state.status !== 0 && /no such (?:container|object)/i.test(state.stderr ?? '')) return true;
+      } catch {
+        // Retry once; an unavailable daemon remains an unknown identity.
+      }
+    }
+    return false;
+  };
+  try {
+    const created = dockerCall([
+      'create', '--pull=never', '--name', probeName, '--network=none', '--read-only', '--cap-drop=ALL',
+      '--security-opt=no-new-privileges', '--pids-limit=16', '--memory=32m', '--memory-swap=32m',
+      '--cpus=0.25', '--entrypoint=/usr/bin/id', normalizedImage, '--',
+    ], 5000);
+    const id = created.status === 0 && !created.error ? (created.stdout ?? '').trim() : '';
+    if (!/^[a-f0-9]{12,64}$/i.test(id)) {
+      cleanup(probeName);
+      return null;
+    }
+
+    // The daemon owns this named container. If the attached client times out,
+    // explicitly remove that exact container before failing closed.
+    const started = dockerCall(['start', '--attach', id], 5000);
+    if (started.status !== 0 || started.error || !started.stdout || started.stdout.length > 4096) {
+      cleanup(id);
+      return null;
+    }
+    const state = dockerCall(['inspect', '--format', '{{.State.Running}} {{.State.ExitCode}}', id], 3000);
+    const exitedSuccessfully = state.status === 0 && !state.error && /^false 0\s*$/.test(state.stdout ?? '');
+    const match = /^uid=(\d+)(?:\([^\r\n)]*\))?\s+gid=(\d+)(?:\([^\r\n)]*\))?(?:\s+groups=.*)?\s*$/.exec(started.stdout);
+    const removeSucceeded = cleanup(id);
+    if (exitedSuccessfully && removeSucceeded && match && Number.isSafeInteger(Number(match[1])) && Number.isSafeInteger(Number(match[2]))) {
+      identity = { uid: Number(match[1]), gid: Number(match[2]) };
+    }
+  } catch {
+    cleanup(probeName);
+    identity = null;
+  }
+  return identity;
+}
+
+/** Test-only override for effective container identity. */
+export function setDockerImageRuntimeIdentityForTest(identity: DockerImageRuntimeIdentity | null | undefined): void {
+  dockerImageRuntimeIdentityTestOverride = identity;
 }
 
 /** Test-only image-user override. Null restores image inspection. */
@@ -296,21 +388,22 @@ export function setDockerImageRuntimeUserForTest(user: DockerImageRuntimeUser | 
 
 /** Test-only daemon-mode override. Null restores real detection. */
 export function setDockerDaemonModeForTest(mode: DockerDaemonMode | null): void {
-  dockerDaemonModeCache = mode;
+  dockerDaemonModeTestOverride = mode;
 }
 
 /** Reset Docker availability cache (for tests). */
 export function resetDockerAvailabilityCache(): void {
-  dockerAvailableCache = { available: false, checked: false };
+  dockerAvailableCache = { available: false, checked: false, environmentKey: '' };
   dockerUnavailableReason = '';
-  dockerDaemonModeCache = null;
-  dockerImageRuntimeUserCache = new Map();
+  dockerDaemonModeTestOverride = null;
   dockerImageRuntimeUserTestOverride = null;
+  dockerImageRuntimeIdentityTestOverride = undefined;
 }
 
 /** Force Docker availability for tests that need it (Phase 4 test fix). */
 export function setDockerAvailableForTest(available: boolean): void {
-  dockerAvailableCache = { available, checked: true };
+  const env = dockerIdentityProbeEnvironment();
+  dockerAvailableCache = { available, checked: true, environmentKey: dockerEnvironmentKey(env) };
   dockerUnavailableReason = '';
 }
 

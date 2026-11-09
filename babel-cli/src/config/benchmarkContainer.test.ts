@@ -22,6 +22,8 @@ import {
   shouldUseBenchmarkContainerExecution,
   shouldUseDockerSandbox,
   getDockerUnavailableReason,
+  getDockerDaemonMode,
+  getDockerImageRuntimeIdentity,
 } from './benchmarkContainer.js';
 
 test('Docker daemon mode classification fails closed when security options are incomplete', () => {
@@ -47,6 +49,146 @@ test('Docker image runtime user classification fails closed for non-root and amb
   assert.equal(classifyDockerImageRuntimeUser('node'), 'nonroot');
   assert.equal(classifyDockerImageRuntimeUser('1000:1000'), 'nonroot');
   assert.equal(classifyDockerImageRuntimeUser('root:group:extra'), 'unknown');
+});
+
+test('effective image uid and primary gid are measured inside a no-network, no-mount probe', (t) => {
+  resetDockerAvailabilityCache();
+  const priorProviderKey = process.env['OPENROUTER_API_KEY'];
+  const priorDockerHost = process.env['DOCKER_HOST'];
+  const priorDockerContext = process.env['DOCKER_CONTEXT'];
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-test-only';
+  process.env['DOCKER_HOST'] = 'tcp://different-daemon.example:2376';
+  process.env['DOCKER_CONTEXT'] = 'different-context';
+  const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
+  t.mock.method(childProcess, 'spawnSync', (command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+    assert.equal(command, 'docker');
+    calls.push({ args, ...(options.env ? { env: options.env } : {}) });
+    assert.equal(options.env?.['OPENROUTER_API_KEY'], undefined, 'provider credentials are not inherited by the Docker client probe');
+    assert.equal(options.env?.['DOCKER_HOST'], undefined, 'probe uses the same Docker endpoint as SafeExecutor');
+    assert.equal(options.env?.['DOCKER_CONTEXT'], undefined, 'probe uses the same Docker context as SafeExecutor');
+    if (args[0] === 'create') return { pid: 1, output: ['', '0123456789abcdef0123456789abcdef\n', ''], stdout: '0123456789abcdef0123456789abcdef\n', stderr: '', status: 0, signal: null };
+    if (args[0] === 'start') return { pid: 1, output: ['', 'uid=0(root) gid=1000(app) groups=1000(app)\n', ''], stdout: 'uid=0(root) gid=1000(app) groups=1000(app)\n', stderr: '', status: 0, signal: null };
+    if (args[0] === 'inspect') return { pid: 1, output: ['', 'false 0\n', ''], stdout: 'false 0\n', stderr: '', status: 0, signal: null };
+    return { pid: 1, output: ['', '0123456789abcdef0123456789abcdef\n', ''], stdout: '0123456789abcdef0123456789abcdef\n', stderr: '', status: 0, signal: null };
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.deepEqual(getDockerImageRuntimeIdentity('sha256:fixture'), { uid: 0, gid: 1000 });
+    const createArgs = calls.find(call => call.args[0] === 'create')!.args;
+    assert.ok(createArgs.includes('--pull=never'));
+    assert.ok(createArgs.includes('--network=none'));
+    assert.ok(createArgs.includes('--read-only'));
+    assert.ok(createArgs.includes('--cap-drop=ALL'));
+    assert.ok(createArgs.includes('--security-opt=no-new-privileges'));
+    assert.ok(createArgs.includes('--entrypoint=/usr/bin/id'));
+    assert.ok(createArgs.includes('sha256:fixture'));
+    assert.ok(createArgs.includes('--'), 'override image CMD and measure the effective identity');
+    assert.equal(createArgs.some(arg => arg === '-v' || arg === '--volume' || arg.startsWith('--mount')), false,
+      'identity discovery receives no project or host mount');
+    assert.deepEqual(calls.map(call => call.args[0]), ['create', 'start', 'inspect', 'rm']);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    if (priorProviderKey === undefined) delete process.env['OPENROUTER_API_KEY'];
+    else process.env['OPENROUTER_API_KEY'] = priorProviderKey;
+    if (priorDockerHost === undefined) delete process.env['DOCKER_HOST'];
+    else process.env['DOCKER_HOST'] = priorDockerHost;
+    if (priorDockerContext === undefined) delete process.env['DOCKER_CONTEXT'];
+    else process.env['DOCKER_CONTEXT'] = priorDockerContext;
+    resetDockerAvailabilityCache();
+  }
+});
+
+test('daemon security detection rechecks the sanitized sandbox Docker endpoint on every call', (t) => {
+  resetDockerAvailabilityCache();
+  const prior = Object.fromEntries(['DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'HOME'].map(key => [key, process.env[key]]));
+  process.env['DOCKER_HOST'] = 'tcp://untrusted-override.example:2376';
+  process.env['DOCKER_CONTEXT'] = 'untrusted-context';
+  process.env['DOCKER_CONFIG'] = '/tmp/untrusted-docker-config';
+  const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
+  let securityQuery = 0;
+  t.mock.method(childProcess, 'spawnSync', (command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+    assert.equal(command, 'docker');
+    calls.push({ args, ...(options.env ? { env: options.env } : {}) });
+    assert.equal(options.env?.['DOCKER_HOST'], undefined);
+    assert.equal(options.env?.['DOCKER_CONTEXT'], undefined);
+    assert.equal(options.env?.['DOCKER_CONFIG'], undefined);
+    if (args[1] === '--format' && args[2] === '{{.ServerVersion}}')
+      return { pid: 1, output: ['', '27.0.0\n', ''], stdout: '27.0.0\n', stderr: '', status: 0, signal: null };
+    const rootless = ++securityQuery > 1;
+    const stdout = rootless ? '["name=seccomp","name=rootless"]' : '["name=seccomp"]';
+    return { pid: 1, output: ['', stdout, ''], stdout, stderr: '', status: 0, signal: null };
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.equal(getDockerDaemonMode(), 'rootful');
+    assert.equal(getDockerDaemonMode(), 'rootless', 'a changed Docker context cannot reuse a prior security classification');
+    assert.ok(calls.length >= 3);
+    assert.ok(calls.every(call => call.env?.['DOCKER_HOST'] === undefined), 'availability and security probes use the runtime-safe environment');
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetDockerAvailabilityCache();
+  }
+});
+
+test('unavailable or malformed identity probe fails closed', (t) => {
+  resetDockerAvailabilityCache();
+  t.mock.method(childProcess, 'spawnSync', () => ({
+    pid: 1, output: ['', 'uid=0(root) gid=0(root)\n', ''],
+    stdout: 'uid=0(root) gid=0(root)\n', stderr: 'probe denied', status: 125, signal: null,
+  }));
+  syncBuiltinESMExports();
+  try {
+    assert.equal(getDockerImageRuntimeIdentity('sha256:unavailable'), null);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    resetDockerAvailabilityCache();
+  }
+});
+
+test('successful but malformed identity output fails closed', (t) => {
+  resetDockerAvailabilityCache();
+  t.mock.method(childProcess, 'spawnSync', (_command: string, args: readonly string[]) => {
+    if (args[0] === 'create') return { pid: 1, output: ['', '0123456789abcdef\n', ''], stdout: '0123456789abcdef\n', stderr: '', status: 0, signal: null };
+    if (args[0] === 'start') return { pid: 1, output: ['', 'uid=0(root)\nnot gid output\n', ''], stdout: 'uid=0(root)\nnot gid output\n', stderr: '', status: 0, signal: null };
+    return { pid: 1, output: ['', '0123456789abcdef\n', ''], stdout: '0123456789abcdef\n', stderr: '', status: 0, signal: null };
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.equal(getDockerImageRuntimeIdentity('sha256:malformed'), null);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    resetDockerAvailabilityCache();
+  }
+});
+
+test('timed-out identity start removes the owned container and fails closed', (t) => {
+  resetDockerAvailabilityCache();
+  const calls: string[][] = [];
+  t.mock.method(childProcess, 'spawnSync', (_command: string, args: readonly string[]) => {
+    calls.push([...args]);
+    if (args[0] === 'create') return { pid: 1, output: ['', '0123456789abcdef\n', ''], stdout: '0123456789abcdef\n', stderr: '', status: 0, signal: null };
+    if (args[0] === 'start') return { pid: 1, output: ['', '', ''], stdout: '', stderr: '', status: null, signal: 'SIGKILL', error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) };
+    return { pid: 1, output: ['', '0123456789abcdef\n', ''], stdout: '0123456789abcdef\n', stderr: '', status: 0, signal: null };
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.equal(getDockerImageRuntimeIdentity('sha256:timeout'), null);
+    assert.deepEqual(calls.map(args => args[0]), ['create', 'start', 'rm']);
+    assert.ok(calls[0]!.includes('--name'));
+    assert.ok(calls[2]!.includes('0123456789abcdef'), 'cleanup is scoped to the exact container ID');
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    resetDockerAvailabilityCache();
+  }
 });
 
 test('an omitted Docker image USER does not prove the default account primary GID', () => {
