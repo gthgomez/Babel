@@ -8,7 +8,7 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import path, { join } from 'node:path';
 import { explicitNodeTestFileArgs } from './completionGatePolicy.js';
 import { resolveExistingVerifierInputPaths } from './verifierInputPaths.js';
 
@@ -17,6 +17,20 @@ import { resolveExistingVerifierInputPaths } from './verifierInputPaths.js';
  */
 export function normalizeIntegrityPath(relativePath: string): string {
   return relativePath.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+/** Compare resolved paths with the host filesystem's case rules. */
+export function verifierAbsolutePathsEqual(
+  left: string,
+  right: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const normalize = (value: string) => {
+    const resolved = pathApi.normalize(value.replace(/\\/g, '/'));
+    return platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(left) === normalize(right);
 }
 
 /**

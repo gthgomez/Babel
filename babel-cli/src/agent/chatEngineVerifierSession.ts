@@ -5,8 +5,8 @@ import { mandatoryVerifierProse } from '../config/verifierIntent.js';
 
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { computeVerifierDependencyHashes, hashVerifierTrackedContent } from './verifierIntegrity.js';
+import path, { join } from 'node:path';
+import { computeVerifierDependencyHashes, hashVerifierTrackedContent, verifierAbsolutePathsEqual } from './verifierIntegrity.js';
 import type { StallState } from './stallDetector.js';
 
 /** R3b: Extract a verifier command pattern from the task string. */
@@ -70,13 +70,11 @@ export function checkVerifierTamper(
 ): string | null {
   if (state.verifierDependencyHashes.size === 0) return null;
 
-  const absPath = filePath.startsWith(projectRoot)
-    ? filePath
-    : join(projectRoot, filePath);
+  const absPath = path.resolve(projectRoot, filePath);
 
   for (const [relPath, originalHash] of state.verifierDependencyHashes) {
-    const depAbsPath = join(projectRoot, relPath);
-    if (absPath !== depAbsPath) continue;
+    const depAbsPath = path.resolve(projectRoot, relPath);
+    if (!verifierAbsolutePathsEqual(absPath, depAbsPath)) continue;
 
     try {
       const currentContent = readFileSync(absPath);

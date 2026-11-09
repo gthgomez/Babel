@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
 import { checkVerifierTamper, initializeVerifierDependencyHashes } from './chatEngineVerifierSession.js'
-import { computeVerifierDependencyHashes } from './verifierIntegrity.js'
+import { computeVerifierDependencyHashes, verifierAbsolutePathsEqual } from './verifierIntegrity.js'
 
 test('task-authored direct Node test verifier files are integrity tracked with spaced paths', t => {
   const root = mkdtempSync(join(tmpdir(), 'babel-verifier-input-integrity-'))
@@ -54,4 +54,9 @@ test('canonical test target paths are hashed and target-path edits invalidate ve
   writeFileSync(join(root, 'test', 'parser-current.mjs'), 'assert.equal(2 + 2, 4)\n')
   assert.match(checkVerifierTamper(join(root, 'test', 'parser-current.mjs'), root, state) ?? '', /dependency of the verifier command/i)
   assert.equal(state.verifierTampered, true)
+})
+
+test('verifier absolute-path identity follows Windows case-insensitive semantics only on Windows', () => {
+  assert.equal(verifierAbsolutePathsEqual('C:\\Repo\\Test\\parser.mjs', 'c:\\repo\\test\\PARSER.mjs', 'win32'), true)
+  assert.equal(verifierAbsolutePathsEqual('/repo/Test/parser.mjs', '/repo/test/parser.mjs', 'linux'), false)
 })

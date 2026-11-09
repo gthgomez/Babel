@@ -9,13 +9,30 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, realpathSync, statSync, type Dirent } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, posix, relative } from 'node:path';
 import {
   classifyToolEffect,
   type ToolEffectClass,
   type WorkspaceRevisionIdentity,
 } from '../executor/contracts.js';
 import { isCredentialReadPath } from '../sandbox.js';
+
+/** Match a target against a frozen protected path using host path case rules. */
+export function matchesProtectedPath(
+  targetPath: string,
+  protectedPath: string,
+  caseSensitive = process.platform !== 'win32',
+): boolean {
+  const normalize = (value: string) => {
+    const path = posix.normalize(value.replace(/\\/g, '/').replace(/\/{2,}/g, '/'));
+    return caseSensitive ? path : path.toLowerCase();
+  };
+  const target = normalize(targetPath);
+  const protectedTarget = normalize(protectedPath);
+  const base = protectedTarget.endsWith('/**') ? protectedTarget.slice(0, -2) : protectedTarget;
+  return target === protectedTarget || target === base.replace(/\/$/, '') ||
+    target.startsWith(base.endsWith('/') ? base : `${base}/`);
+}
 
 /**
  * Detect a dirty git working tree from workspace evidence (not env-only).
@@ -233,9 +250,7 @@ export function checkToolCapability(input: CapabilityCheckInput): CapabilityChec
   }
 
   if (input.targetPath && input.protectedPaths?.length) {
-    const hit = input.protectedPaths.some(
-      (p) => input.targetPath === p || input.targetPath!.startsWith(p.replace(/\*\*$/, '')),
-    );
+    const hit = input.protectedPaths.some(path => matchesProtectedPath(input.targetPath!, path));
     if (hit && effectClass !== 'read_only') {
       return {
         allowed: false,
