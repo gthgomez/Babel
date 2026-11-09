@@ -184,6 +184,10 @@ test('v3 does not promote behavioral-looking text from exclusions, examples, or 
     `Sample:\n${goal}\nRequirements:\n- \`npm test\` must pass.`,
     `Logs:\n${goal}\nRequirements:\n- \`npm test\` must pass.`,
     `**Examples:**\n${goal}\nRequirements:\n- \`npm test\` must pass.`,
+    `    ${goal}\nRequirements:\n- \`npm test\` must pass.`,
+    `\t${goal}\nRequirements:\n- \`npm test\` must pass.`,
+    ` \t${goal}\nRequirements:\n- \`npm test\` must pass.`,
+    `\t\t${goal}\nRequirements:\n- \`npm test\` must pass.`,
     `\`\`\`\`text\n\`\`\`\n${goal}\n\`\`\`\`\nRequirements:\n- \`npm test\` must pass.`,
   ]
   for (const request of cases) {

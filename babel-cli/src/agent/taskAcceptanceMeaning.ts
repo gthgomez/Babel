@@ -76,6 +76,9 @@ function preserveBehavioralGoal(
   let found: { text: string; start: number; end: number } | undefined
   for (const raw of lines) {
     const line = raw.replace(/\r$/, '')
+    // Markdown indented code may use four spaces or a tab. Keep it outside
+    // active task prose just like fenced code, including tab-plus-space forms.
+    if (/^(?: {4,}| {0,3}\t)/.test(line)) { offset += raw.length + 1; continue }
     const delimiter = line.match(/^\s{0,3}(`{3,}|~{3,})/)
     if (delimiter) {
       const token = delimiter[1]!
