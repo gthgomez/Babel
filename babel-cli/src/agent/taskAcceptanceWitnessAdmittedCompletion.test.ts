@@ -718,6 +718,21 @@ for (const scenario of [
       'test("matches single-space input", () => assert.equal(matches(" A B "), true));',
     ].join('\n') + '\n',
   },
+  {
+    name: 'HTML preformatted content with repeated spaces cannot inherit a single-space witness',
+    goal: 'Fix parser.js so output is <pre>A  B</pre>.',
+    requirement: 'Fix parser.js so output is <pre>A B</pre>',
+    goalSnippet: '<pre>A  B</pre>',
+    requirementSnippet: '<pre>A B</pre>',
+    initialSource: 'export function render(value) { return `<pre>${value}</pre>`; }\n',
+    wrongSource: 'export function render(value) { return `<pre>${value.replace(/\\s+/g, " ")}</pre>`; }\n',
+    oracle: "import { render } from './src/parser.js'; if (render('A  B') !== '<pre>A  B</pre>') process.exit(1)",
+    testSource: [
+      'import assert from "node:assert/strict";', 'import test from "node:test";',
+      'import { render } from "../src/parser.js";',
+      'test("render preserves single-space pre content", () => assert.equal(render("A B"), "<pre>A B</pre>"));',
+    ].join('\n') + '\n',
+  },
 ] as const) {
 test(`kernel negative: ${scenario.name}`, async t => {
   const root = mkdtempSync(join(tmpdir(), 'babel-whitespace-sensitive-goal-proof-'))

@@ -221,62 +221,14 @@ export function explicitCriterionVerifierCommands(meaning: TaskAcceptanceMeaning
 }
 
 function normalizedCriterionText(value: string): string {
-  // This key decides whether a verifier explicitly designated for one
-  // behavioral statement may also prove an inferred opening goal. Normalize
-  // prose whitespace, but preserve quoted literals byte-for-byte: spaces
-  // inside strings are observable just like case-sensitive identifiers.
-  const text = value.trim().replace(/[.!?]+$/, '')
-  let output = ''
-  let quote = ''
-  let escaped = false
-  let pendingSpace = false
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index]!
-    if (quote) {
-      output += char
-      if (escaped) escaped = false
-      else if (char === '\\') escaped = true
-      else if (char === quote) quote = ''
-      continue
-    }
-    // Regex literals are executable behavior too. Preserve their exact bytes,
-    // including repeated spaces; slash-delimited prose/path fragments are
-    // conservatively preserved when they have a valid closing delimiter.
-    if (char === '/' && text[index + 1] !== '/') {
-      let end = index + 1
-      let inCharacterClass = false
-      let regexEscape = false
-      for (; end < text.length; end++) {
-        const candidate = text[end]!
-        if (regexEscape) { regexEscape = false; continue }
-        if (candidate === '\\') { regexEscape = true; continue }
-        if (candidate === '[') { inCharacterClass = true; continue }
-        if (candidate === ']') { inCharacterClass = false; continue }
-        if (candidate === '/' && !inCharacterClass) break
-      }
-      if (end < text.length) {
-        if (pendingSpace && output) output += ' '
-        pendingSpace = false
-        output += text.slice(index, end + 1)
-        index = end
-        while (/[a-z]/i.test(text[index + 1] ?? '')) output += text[++index]
-        continue
-      }
-    }
-    if (char === '"' || char === "'" || char === '`') {
-      if (pendingSpace && output) output += ' '
-      pendingSpace = false
-      quote = char
-      output += char
-    } else if (/\s/.test(char)) {
-      pendingSpace = true
-    } else {
-      if (pendingSpace && output) output += ' '
-      pendingSpace = false
-      output += char
-    }
-  }
-  return output.trim()
+  // This identity decides whether a verifier explicitly designated for one
+  // behavioral statement may also prove an inferred opening goal. Treat the
+  // statement as exact text (apart from framing whitespace and terminal prose
+  // punctuation). Normalizing internal whitespace is unsafe: it can change
+  // string, regex, HTML <pre>, and other literal content in ways that make two
+  // distinct user requirements share verifier authority. Conservative misses
+  // simply leave the inferred criterion unbound and therefore unverified.
+  return value.trim().replace(/[.!?]+$/, '')
 }
 
 function trustedDesignation(
