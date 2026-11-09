@@ -113,6 +113,25 @@
       }
     },
     {
+      "id": "windows-posix-background-descendant-cleanup",
+      "platforms": [
+        "win32"
+      ],
+      "reasons": [
+        "POSIX process-group cleanup is not available on Windows"
+      ],
+      "rationale": "This case validates POSIX process-group cleanup against a detached descendant; Windows exercises the separate native tree-termination contract.",
+      "suites": [
+        "unit",
+        "chat-truth"
+      ],
+      "files": {
+        "src/agent/backgroundShell.test.ts": [
+          "does not release await_command while an unrefed descendant can still write"
+        ]
+      }
+    },
+    {
       "id": "windows-linux-container-grader",
       "platforms": ["win32"],
       "reasons": [

@@ -428,6 +428,7 @@ describe('backgroundShell', () => {
       killBackgroundShell(job.id);
       await job.done;
       assert.equal(hasUnsettledBackgroundShells(owner), true, 'a parent exit cannot prove the failed tree kill settled descendants');
+      assert.equal(getBackgroundShellJob(job.id)?.processCompleted, false, 'direct-child close does not certify completion while tree termination is unknown');
     } finally {
       t.mock.restoreAll(); syncBuiltinESMExports();
       rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });

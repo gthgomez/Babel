@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import test from 'node:test';
 import { executeAwaitCommandAction, executeBackgroundRunCommandAction, type BackgroundShellActionCtx } from './chatBackgroundShell.js';
 import { classifyBlockingOrigin } from './chatEngineSupport.js';
@@ -39,9 +41,13 @@ test('settled nonzero background exit retains authoritative failure evidence', a
     projectRoot: process.cwd(), tool: 'run_command', target: 'node failure fixture', toolId: 1, index: 0,
     pushLog: entry => logs.push(entry),
   };
+  const fixtureDir = mkdtempSync(join(context.projectRoot, '.background-failure-'));
   try {
+    const fixture = join(fixtureDir, 'failure.mjs');
+    writeFileSync(fixture, "process.stderr.write('EACCES: permission denied\\n');process.exitCode=7;\n");
+    const relativeFixture = relative(context.projectRoot, fixture).split(sep).join('/');
     const started = executeBackgroundRunCommandAction({
-      command: 'cat /proc/1/mem',
+      command: `node ${relativeFixture}`,
     }, context);
     const taskId = /task_id="([^"]+)"/.exec(started.observation)?.[1];
     assert.ok(taskId, started.observation);
@@ -50,10 +56,11 @@ test('settled nonzero background exit retains authoritative failure evidence', a
     });
     assert.match(settled.observation, /status: failed/);
     const entry = logs.at(-1)!;
-    assert.equal(entry.exit_code, 1);
+    assert.equal(entry.exit_code, 7);
     assert.equal(entry.processCompleted, true, 'nonzero exit still has a settled child lifecycle');
     assert.equal(classifyBlockingOrigin(entry), 'permission_denied', 'settled stderr remains eligible blocker evidence');
   } finally {
+    rmSync(fixtureDir, { recursive: true, force: true });
     if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
     else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
     if (previousFallback === undefined) delete process.env['BABEL_ALLOW_HOST_FALLBACK'];

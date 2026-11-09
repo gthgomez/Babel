@@ -54,10 +54,13 @@ test('contextual unresolved choices defer while optional follow-up questions do 
   assert.equal(requestsRequiredUserDecision(`I read the project before touching anything, and the repo's own contract blocks me from picking a direction for you.\n\nThe README says that choice is deliberately unmade.\n\nWhich direction do you want?\n1. Speed\n2. Typo tolerance\n3. Personalization\n4. Ranking quality`), true)
   assert.equal(requestsRequiredUserDecision('I cannot proceed without a decision.\nShould invalid rows be skipped or fail the export?'), true)
   assert.equal(requestsRequiredUserDecision('Please choose: invalid rows should be skipped or reject the whole export.'), true)
+  assert.equal(requestsRequiredUserDecision('Should I rerun the failing test or change the implementation?'), true)
   for (const answer of [
     'Would you prefer I summarize the completed fix or show the diff?',
-    'Should I rerun the test or summarize the result?',
+    'I cannot proceed without a decision on a future task. Would you like me to summarize the completed fix?',
     'If I need a decision on a future task, I will ask. Which direction should that task take?',
+    'I implemented and verified the requested fix. For your next task, please choose sorting or filtering.',
+    'If I ask you to please choose speed or accuracy on a future task, you can answer then. The current fix is complete.',
     'The README lists speed or typo tolerance as possible directions, but says nothing about a current decision.',
   ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
 })

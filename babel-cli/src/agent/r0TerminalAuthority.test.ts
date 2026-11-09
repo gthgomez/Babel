@@ -339,6 +339,9 @@ describe('R0-A: detectAndBuildBlockedReport requires a genuine blocking conditio
     const timedOutAwait = { ...running, tool: 'await_command', detail: 'timed_out (still running)' };
     assert.equal(classifyBlockingOrigin(running), null);
     assert.equal(classifyBlockingOrigin(timedOutAwait), null);
+    const uncertainTreeAfterDirectClose = { ...timedOutAwait, detail: 'tree termination could not be confirmed after direct child closed' };
+    assert.equal(classifyBlockingOrigin(uncertainTreeAfterDirectClose), null,
+      'a closed direct child is not authoritative while descendant settlement is unknown');
     assert.equal(detectAndBuildBlockedReport('BLOCKED: permission denied.', [running, timedOutAwait]), null,
       'an active process may still resolve its interim diagnostic');
 

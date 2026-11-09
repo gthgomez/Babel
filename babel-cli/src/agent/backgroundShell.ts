@@ -529,7 +529,7 @@ export function getBackgroundShellJob(taskId: string): BackgroundShellJob | unde
   const job = jobs.get(taskId);
   if (!job) return undefined;
   const { child: _child, physicalClosed, treeTerminationUnknown: _treeTerminationUnknown, projectRootKey: _projectRootKey, ...publicJob } = job;
-  return { ...publicJob, processCompleted: physicalClosed === true };
+  return { ...publicJob, processCompleted: physicalClosed === true && job.treeTerminationUnknown !== true };
 }
 
 /**
