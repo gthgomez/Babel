@@ -55,6 +55,7 @@ test('contextual unresolved choices defer while optional follow-up questions do 
   assert.equal(requestsRequiredUserDecision('I cannot proceed without a decision.\nShould invalid rows be skipped or fail the export?'), true)
   assert.equal(requestsRequiredUserDecision('Please choose: invalid rows should be skipped or reject the whole export.'), true)
   assert.equal(requestsRequiredUserDecision('Should I rerun the failing test or change the implementation?'), true)
+  assert.equal(requestsRequiredUserDecision('Should I show validation failures or reject the export?'), true)
   for (const answer of [
     'Would you prefer I summarize the completed fix or show the diff?',
     'Should I rerun the test or summarize the result?',
