@@ -231,6 +231,46 @@ test('independentVerifierProofErrors env OFF disables even high-assurance profil
   }
 });
 
+test('independentVerifierProofErrors accepts absolute session mutation paths like primary receipt binding', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-iv-abs-'));
+  try {
+    await fs.mkdir(path.join(tempDir, 'src'), { recursive: true });
+    const rel = 'src/keep.ts';
+    const absolute = path.join(tempDir, rel);
+    await fs.writeFile(absolute, 'export const value = 1\n');
+    const errors = independentVerifierProofErrors({
+      projectRoot: tempDir,
+      command: 'node -e "process.exit(0)"',
+      exitCode: 0,
+      mutationPaths: [absolute],
+      env: { [INDEPENDENT_VERIFIER_ENV]: '1' },
+    });
+    assert.deepEqual(errors, [], `absolute mutation paths must not block clean-room verification: ${errors.join('; ')}`);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('independentVerifierProofErrors fails closed when an absolute mutation path escapes the project root', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-iv-escape-'));
+  const external = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-iv-outside-'));
+  try {
+    await fs.writeFile(path.join(external, 'outside.ts'), 'leak\n');
+    const errors = independentVerifierProofErrors({
+      projectRoot: tempDir,
+      command: 'node -e "process.exit(0)"',
+      exitCode: 0,
+      mutationPaths: [path.join(external, 'outside.ts')],
+      env: { [INDEPENDENT_VERIFIER_ENV]: '1' },
+    });
+    assert.ok(errors.length >= 1);
+    assert.match(errors[0] ?? '', /escapes project root/);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(external, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test('runIsolatedVerificationSync leaves primary workspace un-mutated', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-iv-sync-'));
   try {

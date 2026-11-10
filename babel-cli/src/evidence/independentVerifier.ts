@@ -24,6 +24,7 @@ import {
   type ExecutionProfile,
   type ExecutionProfileName,
 } from '../config/executionProfiles.js';
+import { repositoryRelativeMutationPaths } from '../agent/chatEngineVerifierAdapter.js';
 import { RevisionManager, type RevisionBoundReceipt } from './revisionBoundReceipt.js';
 
 /** Env flag for Chat/finalize clean-room verification (default off unless profile opts in). */
@@ -230,11 +231,18 @@ export function independentVerifierProofErrors(input: {
   if (input.exitCode !== 0) {
     return ['independent clean-room verifier skipped: primary receipt not green'];
   }
+  const mutationPaths = repositoryRelativeMutationPaths(
+    input.projectRoot,
+    input.mutationPaths,
+  );
+  if (mutationPaths === null && input.mutationPaths.length > 0) {
+    return ['independent clean-room verifier unavailable: mutation path escapes project root'];
+  }
   try {
     const independent = IndependentVerifier.runIsolatedVerificationSync(
       input.projectRoot,
       input.command,
-      [...input.mutationPaths],
+      mutationPaths ?? [],
     );
     if (independent.exitCode !== 0) {
       return [

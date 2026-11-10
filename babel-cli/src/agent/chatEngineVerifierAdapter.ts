@@ -233,6 +233,13 @@ export async function captureChatVerifierReceipt(input: {
  * paths pass through. Returns null when any path escapes the project root, so
  * the caller fails closed (no receipt) rather than minting a misleading scope.
  */
+export function repositoryRelativeMutationPaths(
+  projectRoot: string,
+  values: readonly string[],
+): string[] | null {
+  return toRepositoryRelativePaths(projectRoot, values);
+}
+
 function toRepositoryRelativePaths(
   projectRoot: string,
   values: readonly string[],
