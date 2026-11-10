@@ -655,6 +655,7 @@ export function spawnCommandAsync(
     let timeout: NodeJS.Timeout | null = null;
     let abortSettle: NodeJS.Timeout | null = null;
     let termination: Promise<void> | undefined;
+    let physicalChildClosed = false;
     let releaseAbortPhysicalClose: (() => void) | undefined;
     const abortPhysicalClose = new Promise<void>((resolveAbortPhysicalClose) => {
       releaseAbortPhysicalClose = resolveAbortPhysicalClose;
@@ -703,6 +704,14 @@ export function spawnCommandAsync(
     const onAbort = () => {
       aborted = true;
       if (executionId) options.processWitness?.cancelRequested(processInput, executionId);
+      // A close that already chose the natural-settlement path can still be
+      // settling when cancel arrives. Reuse that deferred tree work and release
+      // the abort latch when the direct child has physically closed.
+      if (physicalChildClosed) releaseAbortPhysicalClose?.();
+      if (termination) {
+        if (!settled) finish(1, new Error(`spawn ${executable} aborted`));
+        return;
+      }
       // Unblock the tool awaiter first (cancel p95). Defer tree-kill to the next
       // event-loop turn so spawnSync(taskkill) cannot hold the promise microtask
       // queue — otherwise Windows cancel latency is dominated by taskkill, not
@@ -833,6 +842,7 @@ export function spawnCommandAsync(
       finish(1, err);
     });
     child.once('close', (code) => {
+      physicalChildClosed = true;
       releasePhysicalClose?.();
       if (aborted) {
         recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} aborted`));
@@ -853,26 +863,60 @@ export function spawnCommandAsync(
           settleTimedOut();
         }
       } else if (process.platform !== 'win32' && child.pid) {
-        void (async () => {
-          let descendantsSettled = await waitForProcessGroupExit(child.pid!, 150);
-          let hadLingeringDescendants = false;
-          if (!descendantsSettled) {
-            hadLingeringDescendants = true;
-            terminateChildTree(child);
-            descendantsSettled = await waitForProcessGroupExit(child.pid!, 5_000);
-          }
-          let finalCode = code;
-          let error: Error | undefined;
-          if (!descendantsSettled) {
-            error = new Error(`spawn ${executable} process-tree termination could not be confirmed`);
-            finalCode = 1;
-          } else if (hadLingeringDescendants) {
-            error = new Error(`Owned descendants remained after ${executable} direct exit and were terminated`);
-            finalCode = 1;
-          }
-          recordWitnessTerminal(finalCode ?? 1, error);
-          finish(finalCode, error);
-        })();
+        const pid = child.pid;
+        let settlementError: Error | undefined;
+        termination = new Promise<void>((resolveTermination, rejectTermination) => {
+          void (async () => {
+            try {
+              let descendantsSettled = await waitForProcessGroupExit(pid, 150);
+              let hadLingeringDescendants = false;
+              if (!descendantsSettled) {
+                hadLingeringDescendants = true;
+                terminateChildTree(child);
+                descendantsSettled = await waitForProcessGroupExit(pid, 5_000);
+              }
+              if (!descendantsSettled) {
+                rejectTermination(new Error(`spawn ${executable} process-tree termination could not be confirmed`));
+                return;
+              }
+              if (hadLingeringDescendants) {
+                settlementError = new Error(`Owned descendants remained after ${executable} direct exit and were terminated`);
+              }
+              resolveTermination();
+            } catch (error) {
+              rejectTermination(error instanceof Error ? error : new Error(String(error)));
+            }
+          })();
+        });
+        void termination.catch(() => {});
+        registerPendingProcessTermination(
+          termination,
+          options.processContext?.sessionId ?? 'unscoped',
+          executionId ?? `${executable}:${child.pid ?? 'unknown'}`,
+        );
+        void termination.then(
+          () => {
+            if (settled) return;
+            if (aborted) {
+              recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} aborted`));
+              finish(code ?? 1, new Error(`spawn ${executable} aborted`));
+              return;
+            }
+            if (settlementError) {
+              recordWitnessTerminal(1, settlementError);
+              finish(1, settlementError);
+              return;
+            }
+            recordWitnessTerminal(code);
+            finish(code);
+          },
+          (error: unknown) => {
+            if (settled) return;
+            const err = error instanceof Error ? error : new Error(String(error));
+            recordWitnessTerminal(1, err);
+            finish(1, err);
+          },
+        );
       } else {
         recordWitnessTerminal(code);
         finish(code);

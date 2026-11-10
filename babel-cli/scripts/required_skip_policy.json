@@ -136,6 +136,11 @@
           "clears stale POSIX tree uncertainty after close confirms the group has settled",
           "preserves cancellation that arrives while close waits for POSIX tree settlement",
           "preserves cancellation while automatic tree cleanup is waiting for settlement"
+        ],
+        "src/sandboxTermination.test.ts": [
+          "a natural foreground close does not return success while owned group descendants remain",
+          "abort during natural-close settlement preserves owner drain without latch timeout",
+          "owner drain waits for natural-close descendant cleanup"
         ]
       }
     },

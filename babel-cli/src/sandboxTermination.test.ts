@@ -212,6 +212,89 @@ process.exit(0);
   }
 })
 
+test('abort during natural-close settlement preserves owner drain without latch timeout', {
+  skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-fg-abort-close-'))
+  const childPidFile = join(root, 'child.pid')
+  const parentFile = join(root, 'parent.mjs')
+  const owner = 'synthetic-fg-abort-during-settlement'
+  const controller = new AbortController()
+  writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
+  writeFileSync(parentFile, `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
+child.unref();
+writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
+process.exit(0);
+`)
+  try {
+    const pending = sandbox.spawnCommandAsync(process.execPath, [parentFile], {
+      cwd: root,
+      timeoutMs: 15_000,
+      env: process.env,
+      signal: controller.signal,
+      processContext: { sessionId: owner },
+    })
+    const deadline = Date.now() + 5_000
+    while (!existsSync(childPidFile)) {
+      if (Date.now() > deadline) throw new Error('owned descendant never published its pid')
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    const childPid = Number(readFileSync(childPidFile, 'utf8'))
+    await new Promise(resolve => setImmediate(resolve))
+    controller.abort()
+    const drain = sandbox.awaitPendingProcessTerminations(owner)
+    const result = await pending
+    await drain
+    assert.equal(result.aborted, true)
+    assert.equal(isProcessAlive(childPid), false)
+  } finally {
+    try { await sandbox.awaitPendingProcessTerminations(owner) } catch { /* asserted above */ }
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('owner drain waits for natural-close descendant cleanup', {
+  skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-fg-drain-'))
+  const childPidFile = join(root, 'child.pid')
+  const parentFile = join(root, 'parent.mjs')
+  const owner = 'synthetic-fg-linger-drain'
+  writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
+  writeFileSync(parentFile, `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
+child.unref();
+writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
+process.exit(0);
+`)
+  try {
+    const pending = sandbox.spawnCommandAsync(process.execPath, [parentFile], {
+      cwd: root,
+      timeoutMs: 15_000,
+      env: process.env,
+      processContext: { sessionId: owner },
+    })
+    const deadline = Date.now() + 5_000
+    while (!existsSync(childPidFile)) {
+      if (Date.now() > deadline) throw new Error('owned descendant never published its pid')
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    const childPid = Number(readFileSync(childPidFile, 'utf8'))
+    const drain = sandbox.awaitPendingProcessTerminations(owner)
+    const result = await pending
+    await drain
+    assert.equal(result.status, 1)
+    assert.ok(result.error)
+    assert.equal(isProcessAlive(childPid), false, 'owner drain must observe natural-close tree cleanup')
+  } finally {
+    try { await sandbox.awaitPendingProcessTerminations(owner) } catch { /* asserted above */ }
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('a local supervisor deadline does not return while its owned descendant is alive', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-timeout-descendant-'));
   const childFile = join(root, 'child.mjs');
