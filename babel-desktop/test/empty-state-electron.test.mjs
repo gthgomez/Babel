@@ -8,6 +8,7 @@ import {tmpdir} from 'node:os';
 import {_electron} from 'playwright';
 import electronExecutable from 'electron';
 import {saveProviderRoute} from '../native/provider-routing.mjs';
+import {waitForDesktopRendererReady} from './lib/electron-renderer-readiness.mjs';
 
 for(const [width,height] of [[1200,680],[960,700]])test(`Electron empty guidance follows project trust and selection without reload or inference (${width}x${height})`,{timeout:60000},async()=>{
   const root=await mkdtemp(join(tmpdir(),'babel-empty-state-'));
@@ -30,13 +31,24 @@ for(const [width,height] of [[1200,680],[960,700]])test(`Electron empty guidance
     env.BABEL_RUNS_DIR=runs;
     application=await _electron.launch({executablePath:process.env.BABEL_TEST_ELECTRON_EXECUTABLE??electronExecutable,args:[bootstrap,`--profile-dir=${profile}`],env,timeout:20000});
     const page=await application.firstWindow();
+    // Settle renderer navigation/handshake before evaluate or viewport sizing (Windows 960×700 CI race).
+    await waitForDesktopRendererReady(page);
     await application.evaluate(({BrowserWindow},{width,height})=>{const window=BrowserWindow.getAllWindows()[0];window.setContentSize(width,height);window.setPosition(0,0);},{width,height});
-    // Fractional Windows display scaling can round the client size by one CSS pixel.
-    try{await page.waitForFunction(({width,height})=>Math.abs(innerWidth-width)<=1&&Math.abs(innerHeight-height)<=1,{width,height});}
-    catch(error){console.error('Native size diagnostic',JSON.stringify({requested:{width,height},renderer:await page.evaluate(()=>({width:innerWidth,height:innerHeight,scale:devicePixelRatio})),native:await application.evaluate(({BrowserWindow})=>({bounds:BrowserWindow.getAllWindows()[0].getBounds(),content:BrowserWindow.getAllWindows()[0].getContentSize()}))}));throw error;}
-    // Detail text can render before the asynchronous live handshake settles.
-    // The public Ready status also requires connecting=false and a loaded route.
-    await page.waitForFunction(()=>document.querySelector('#main-status')?.textContent==='Ready');
+    // Fractional display scaling (Windows DPI, Linux CI/Xvfb) can round client size by a few CSS pixels.
+    // Slack formula is unit-tested in electron-content-size-slop.test.mjs (in-page polling only; no separate DPR evaluate).
+    try{await page.waitForFunction(({width,height})=>{
+      const slack=Math.abs(devicePixelRatio-1)<0.001?1:Math.max(2,Math.ceil(3/devicePixelRatio));
+      return Math.abs(innerWidth-width)<=slack&&Math.abs(innerHeight-height)<=slack;
+    },{width,height});}
+    catch(error){
+      await page.waitForLoadState('domcontentloaded');
+      console.error('Native size diagnostic',JSON.stringify({
+        requested:{width,height},
+        renderer:await page.evaluate(()=>({width:innerWidth,height:innerHeight,scale:devicePixelRatio})),
+        native:await application.evaluate(({BrowserWindow})=>({bounds:BrowserWindow.getAllWindows()[0].getBounds(),content:BrowserWindow.getAllWindows()[0].getContentSize()})),
+      }));
+      throw error;
+    }
     await application.evaluate(({dialog})=>{dialog.showMessageBox=async()=>({response:1,checkboxChecked:false});dialog.showOpenDialog=async()=>({canceled:false,filePaths:[globalThis.__selectedProject]});});
     const dismiss=async()=>{if(await page.locator('#dialog[open]').count())await page.keyboard.press('Escape');await page.locator('#dialog').waitFor({state:'hidden'});};
     const screenshot=async name=>{

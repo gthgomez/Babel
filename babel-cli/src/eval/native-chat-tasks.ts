@@ -7,7 +7,7 @@ import { z } from 'zod'
 import type { ChatResult } from '../agent/chatEngine.js'
 import { isCredentialTargetPath } from '../authority/protectedPath.js'
 import { freezeEvaluator, runJourney, type JourneyGrade, type JourneySpec, type OracleVerdict } from './harness-journey-contract.js'
-import { captureJourneyGitState, prepareJourneyFixture, readJourneyCorpus } from './harness-journey-fixtures.js'
+import { captureJourneyGitState, diffFixtureMetadataEntries, fixtureMetadataEntries, prepareJourneyFixture, readJourneyCorpus } from './harness-journey-fixtures.js'
 import { gradeJourneyCode } from './harness-journey-code-oracle.js'
 import { gradeInCleanRoom } from './cleanRoomGrade.js'
 import { calibrationPolicy, calibrationReferences, createCalibrationRunner } from './native-chat-calibration.js'
@@ -185,6 +185,19 @@ export async function runNativeChatTasks(options: {
     const spec = specs[index]!
     const task = manifest.tasks[index]!
     const cell = await prepareJourneyFixture(spec, corpus.fixtures[spec.fixtureId]!, join(out, task.id))
+    type MetadataPhase = { label: string; digest: string; changesFromPrior: ReturnType<typeof diffFixtureMetadataEntries> }
+    const metadataPhases: MetadataPhase[] = cell.gitMetadataDigest
+      ? [{ label: 'fixture_prepared', digest: cell.gitMetadataDigest, changesFromPrior: [] }]
+      : []
+    let priorMetadataEntries: [string, string][] | null = null
+    const recordMetadataPhase = async (label: string): Promise<void> => {
+      if (!cell.gitMetadataDigest) return
+      const entries = await fixtureMetadataEntries(cell.candidateRoot)
+      const phaseDigest = digest(JSON.stringify(entries))
+      const changesFromPrior = priorMetadataEntries ? diffFixtureMetadataEntries(priorMetadataEntries, entries) : []
+      priorMetadataEntries = entries
+      metadataPhases.push({ label, digest: phaseDigest, changesFromPrior: changesFromPrior.slice(0, 48) })
+    }
     let terminal: NativeTaskTerminal | null = null
     let routes: unknown[] = []
     let verifierExitCode: number | null = null
@@ -194,6 +207,7 @@ export async function runNativeChatTasks(options: {
     const snapshotModes = new Map<string, number>()
     const baselineModes = new Map<string, number>()
     await captureNativeTaskFiles(cell.candidateRoot, baselineModes)
+    await recordMetadataPhase('workspace_baseline_capture')
     let captured = false
     const operations: NativeTaskOperation[] = []
     const diagnostics: string[] = []
@@ -210,11 +224,14 @@ export async function runNativeChatTasks(options: {
       }
       changedPaths.push(...nativeChangedPaths(baseline, baselineModes, snapshot, snapshotModes))
       const unauthorized = changedPaths.filter(path => !task.allowedChanges.includes(path))
+      await recordMetadataPhase('grading')
       const metadata = cell.gitMetadataDigest ? await captureJourneyGitState(cell.candidateRoot, cell.gitMetadataDigest) : null
       if (unauthorized.length || metadata && metadata.metadataDigest !== cell.gitMetadataDigest) {
         regression = true
         oracleVerdict = 'fail'
         diagnostics.push('unauthorized_change_or_git_metadata_change')
+        const driftPhases = metadataPhases.filter(phase => phase.changesFromPrior.length > 0).map(phase => phase.label)
+        if (driftPhases.length) diagnostics.push(`git_metadata_phase_drift:${driftPhases.join(',')}`)
       } else if (task.kind === 'read_only') {
         oracleVerdict = gradeNativeInspection(answer, { projectRoot: cell.candidateRoot, operations })
       } else if (calibration) {
@@ -280,9 +297,13 @@ export async function runNativeChatTasks(options: {
         // Snapshot only after native task settlement; never re-run an ambiguous request.
         snapshot = await captureNativeTaskFiles(cell.candidateRoot, snapshotModes)
         captured = true
+        await recordMetadataPhase('post_execution_snapshot')
         await writeFile(join(cell.protectedRoot, 'snapshot.json'), JSON.stringify({ modes: Object.fromEntries(snapshotModes), files: [...snapshot].map(([path, bytes]) => ({ path, sha256: digest(bytes), base64: bytes.toString('base64') })) }), { flag: 'wx' })
       },
-      observe() { return { routeReceipt: null, interventions: [], usage: null, evidenceRefs: [`${task.id}/protected/observation.json`] } },
+      async observe() {
+        await recordMetadataPhase('host_observation')
+        return { routeReceipt: null, interventions: [], usage: null, evidenceRefs: [`${task.id}/protected/observation.json`] }
+      },
     }, evaluator)
     // An execution exception may hide partial delivery or effects. Preserve the
     // attempted row and stop admitting later live requests, without replay.
@@ -310,6 +331,11 @@ export async function runNativeChatTasks(options: {
         inputTokens: calibration || usage?.usageComplete === false ? null : usage?.totalInputTokens ?? null,
         outputTokens: calibration || usage?.usageComplete === false ? null : usage?.totalOutputTokens ?? null, unknownCost: !calibration && !costKnown },
       diagnostics: [...diagnostics, ...result.diagnostics],
+    }
+    if (metadataPhases.length) {
+      await writeFile(join(cell.protectedRoot, 'git-metadata-phases.json'), JSON.stringify({
+        expectedDigest: cell.gitMetadataDigest, phases: metadataPhases,
+      }, null, 2), { flag: 'wx' })
     }
     await writeFile(join(cell.protectedRoot, 'observation.json'), JSON.stringify(row, null, 2), { flag: 'wx' })
     tasks.push(row)
