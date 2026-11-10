@@ -10,7 +10,7 @@ import {
   readdirSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join, resolve as resolvePath } from 'node:path';
+import { join, resolve as resolveAbsolute } from 'node:path';
 
 import { MEMORY_INDEX_NAME } from './memoryTypes.js';
 import {
@@ -19,13 +19,13 @@ import {
   type MemoryMigrationRecord,
   type MemoryProvenance,
   pathsForProject,
-  sanitizeGitRoot,
 } from './memoryStoreLayout.js';
 
 export type MemoryRootBlockerCode =
   | 'ambiguous_legacy_collision'
   | 'legacy_owner_mismatch'
-  | 'shared_empty_legacy_bucket';
+  | 'shared_empty_legacy_bucket'
+  | 'unproven_legacy_attribution';
 
 export interface MemoryRootResolution {
   memoryRoot: string | null;
@@ -76,6 +76,18 @@ export function readMemoryMigration(projectDir: string): MemoryMigrationRecord |
   return raw;
 }
 
+/** Validated when stored projectRoot resolves to the same absolute path (portable identity). */
+export function provenanceMatchesProjectRoot(
+  provenance: MemoryProvenance,
+  absoluteProjectRoot: string,
+): boolean {
+  try {
+    return resolveAbsolute(provenance.projectRoot) === resolveAbsolute(absoluteProjectRoot);
+  } catch {
+    return false;
+  }
+}
+
 function listMemoryFileNames(memoryRoot: string): string[] {
   try {
     if (!existsSync(memoryRoot)) return [];
@@ -92,38 +104,28 @@ function memoryRootHasContent(memoryRoot: string): boolean {
 }
 
 /**
- * True when two distinct absolute paths would share the same legacy slug (case fold).
- */
-export function legacySlugCaseCollides(paths: readonly string[]): boolean {
-  if (paths.length < 2) return false;
-  const folded = paths.map((p) => sanitizeGitRoot(p));
-  const uniqueAbs = new Set(paths.map((p) => p));
-  if (uniqueAbs.size < 2) return false;
-  return new Set(folded).size < paths.length;
-}
-
-/**
  * Legacy v0 used join(state, 'projects', '', 'memory') which ignores empty segments → projects/memory.
  */
 export function isDegenerateLegacySharedBucket(legacySlug: string): boolean {
   return legacySlug.length === 0;
 }
 
-/** Detect a case-distinct sibling directory that shares the legacy slug fold. */
-export function detectOnDiskCaseCollision(absolute: string): boolean {
-  const parent = dirname(absolute);
-  const base = basename(absolute);
-  const folded = base.toLowerCase();
-  try {
-    const siblings = readdirSync(parent);
-    return siblings.some((entry) => {
-      if (entry === base || entry.toLowerCase() !== folded) return false;
-      const other = resolvePath(parent, entry);
-      return other !== absolute && sanitizeGitRoot(other) === sanitizeGitRoot(absolute);
-    });
-  } catch {
-    return false;
-  }
+function unprovenBlocker(
+  layout: ReturnType<typeof pathsForProject>,
+): MemoryRootResolution {
+  return {
+    memoryRoot: null,
+    blocker: {
+      code: 'unproven_legacy_attribution',
+      message:
+        'Legacy memory exists but owner was not validated. Historical slug collisions (case, ' +
+        'punctuation, moved/deleted roots) cannot be inferred from the filesystem layout.',
+      legacyMemoryRoot: layout.legacyMemoryRoot,
+      manualReconciliation:
+        `Add ${MEMORY_PROVENANCE_FILE} under ${layout.legacyProjectDir} with the exact ` +
+        `"projectRoot" (absolute path), or copy .md files into ${layout.canonicalProjectDir}/memory manually.`,
+    },
+  };
 }
 
 function copyMemoryFileIfAbsent(sourceRoot: string, destRoot: string, name: string): boolean {
@@ -167,7 +169,7 @@ function runMigrationCopy(
 
   const complete =
     legacyNames.length === 0 ||
-  legacyNames.every((n) => existsSync(join(layout.canonicalMemoryRoot, n)));
+    legacyNames.every((n) => existsSync(join(layout.canonicalMemoryRoot, n)));
 
   return {
     schemaVersion: 1,
@@ -181,14 +183,28 @@ function runMigrationCopy(
   };
 }
 
+function migrateFromValidatedLegacy(layout: ReturnType<typeof pathsForProject>): MemoryRootResolution {
+  const migration = readMemoryMigration(layout.canonicalProjectDir);
+  const record = runMigrationCopy(layout, migration);
+  writeJsonAtomic(join(layout.canonicalProjectDir, MEMORY_MIGRATION_FILE), record);
+  writeMemoryProvenance(layout.canonicalProjectDir, {
+    slugFormat: 'digest-v1',
+    projectRoot: layout.absolute,
+  });
+  if (record.status === 'partial') {
+    const resume = runMigrationCopy(layout, record);
+    writeJsonAtomic(join(layout.canonicalProjectDir, MEMORY_MIGRATION_FILE), resume);
+  }
+  return { memoryRoot: layout.canonicalMemoryRoot };
+}
+
 /**
- * Resolve canonical memory root, migrating legacy content when attribution is safe.
+ * Resolve canonical memory root, migrating legacy content only with validated provenance.
  * Legacy directories are always preserved on disk.
  */
 export function resolveMemoryRootWithMigration(
   projectRoot: string,
   env: NodeJS.ProcessEnv = process.env,
-  options?: { caseCollisionRoots?: readonly string[] },
 ): MemoryRootResolution {
   const layout = pathsForProject(projectRoot, env);
   const legacyProvenance = readMemoryProvenance(layout.legacyProjectDir);
@@ -201,7 +217,7 @@ export function resolveMemoryRootWithMigration(
   try {
     mkdirSync(layout.canonicalMemoryRoot, { recursive: true });
 
-    if (migration?.status === 'complete') {
+    if (migration?.status === 'complete' && migration.projectRoot === layout.absolute) {
       writeMemoryProvenance(layout.canonicalProjectDir, {
         slugFormat: 'digest-v1',
         projectRoot: layout.absolute,
@@ -209,21 +225,24 @@ export function resolveMemoryRootWithMigration(
       return { memoryRoot: layout.canonicalMemoryRoot };
     }
 
-    if (migration?.status === 'partial' && legacyHasContent) {
-      const record = runMigrationCopy(layout, migration);
-      writeJsonAtomic(join(layout.canonicalProjectDir, MEMORY_MIGRATION_FILE), record);
-      writeMemoryProvenance(layout.canonicalProjectDir, {
-        slugFormat: 'digest-v1',
-        projectRoot: layout.absolute,
-      });
-      return { memoryRoot: layout.canonicalMemoryRoot };
-    }
-
-    if (canonicalHasContent && canonicalProvenance && !legacyHasContent) {
-      return { memoryRoot: layout.canonicalMemoryRoot };
+    if (migration?.status === 'partial' && migration.projectRoot === layout.absolute) {
+      if (!legacyProvenance || !provenanceMatchesProjectRoot(legacyProvenance, layout.absolute)) {
+        return unprovenBlocker(layout);
+      }
+      return migrateFromValidatedLegacy(layout);
     }
 
     if (canonicalHasContent && !legacyHasContent) {
+      if (canonicalProvenance && !provenanceMatchesProjectRoot(canonicalProvenance, layout.absolute)) {
+        return {
+          memoryRoot: null,
+          blocker: {
+            code: 'legacy_owner_mismatch',
+            message: 'Canonical memory provenance does not match this project root.',
+            manualReconciliation: 'Fix canonical provenance or open the owning project root.',
+          },
+        };
+      }
       writeMemoryProvenance(layout.canonicalProjectDir, {
         slugFormat: 'digest-v1',
         projectRoot: layout.absolute,
@@ -253,80 +272,24 @@ export function resolveMemoryRootWithMigration(
       };
     }
 
-    const collisionRoots = options?.caseCollisionRoots ?? [];
-    const caseCollides =
-      (collisionRoots.length > 0 && legacySlugCaseCollides([layout.absolute, ...collisionRoots])) ||
-      detectOnDiskCaseCollision(layout.absolute);
-
-    if (caseCollides && !legacyProvenance) {
-      return {
-        memoryRoot: null,
-        blocker: {
-          code: 'ambiguous_legacy_collision',
-          message:
-            'Legacy memory store may have served multiple case-distinct project roots; auto-migration refused.',
-          legacyMemoryRoot: layout.legacyMemoryRoot,
-          manualReconciliation:
-            `Inspect ${layout.legacyProjectDir}, split memories per project, write ` +
-            `${MEMORY_PROVENANCE_FILE} with the correct projectRoot, or copy files into ` +
-            `${layout.canonicalProjectDir} manually.`,
-        },
-      };
-    }
-
-    if (caseCollides && legacyProvenance && legacyProvenance.projectRoot !== layout.absolute) {
-      return {
-        memoryRoot: null,
-        blocker: {
-          code: 'legacy_owner_mismatch',
-          message: 'Case-colliding roots: legacy provenance does not match this projectRoot.',
-          legacyMemoryRoot: layout.legacyMemoryRoot,
-          manualReconciliation:
-            `Legacy store is owned by ${legacyProvenance.projectRoot}. Open that root or fix provenance.`,
-        },
-      };
-    } else if (legacyProvenance && legacyProvenance.projectRoot !== layout.absolute) {
-      return {
-        memoryRoot: null,
-        blocker: {
-          code: 'legacy_owner_mismatch',
-          message: 'Legacy memory provenance names a different projectRoot than requested.',
-          legacyMemoryRoot: layout.legacyMemoryRoot,
-          manualReconciliation:
-            `Legacy store is owned by ${legacyProvenance.projectRoot}. ` +
-            'Use that project root or relocate memories with explicit provenance before retry.',
-        },
-      };
-    }
-
-    if (legacyProvenance?.projectRoot === layout.absolute || !legacyProvenance) {
-      if (!legacyProvenance) {
-        writeMemoryProvenance(layout.legacyProjectDir, {
-          slugFormat: 'legacy-v0',
-          projectRoot: layout.absolute,
-        });
+    if (!legacyProvenance || !provenanceMatchesProjectRoot(legacyProvenance, layout.absolute)) {
+      if (legacyProvenance && !provenanceMatchesProjectRoot(legacyProvenance, layout.absolute)) {
+        return {
+          memoryRoot: null,
+          blocker: {
+            code: 'legacy_owner_mismatch',
+            message: 'Legacy memory provenance names a different projectRoot than requested.',
+            legacyMemoryRoot: layout.legacyMemoryRoot,
+            manualReconciliation:
+              `Legacy store is owned by ${legacyProvenance.projectRoot}. ` +
+              'Use that project root or relocate memories with explicit provenance before retry.',
+          },
+        };
       }
-
-      const record = runMigrationCopy(layout, migration);
-      writeJsonAtomic(join(layout.canonicalProjectDir, MEMORY_MIGRATION_FILE), record);
-      writeMemoryProvenance(layout.canonicalProjectDir, {
-        slugFormat: 'digest-v1',
-        projectRoot: layout.absolute,
-      });
-
-      if (record.status === 'partial') {
-        const resume = runMigrationCopy(layout, record);
-        writeJsonAtomic(join(layout.canonicalProjectDir, MEMORY_MIGRATION_FILE), resume);
-      }
-
-      return { memoryRoot: layout.canonicalMemoryRoot };
+      return unprovenBlocker(layout);
     }
 
-    writeMemoryProvenance(layout.canonicalProjectDir, {
-      slugFormat: 'digest-v1',
-      projectRoot: layout.absolute,
-    });
-    return { memoryRoot: layout.canonicalMemoryRoot };
+    return migrateFromValidatedLegacy(layout);
   } catch (err) {
     console.warn(
       `Babel memory: resolve failed for "${projectRoot}": ${err instanceof Error ? err.message : String(err)}`,
@@ -334,7 +297,7 @@ export function resolveMemoryRootWithMigration(
     return {
       memoryRoot: null,
       blocker: {
-        code: 'ambiguous_legacy_collision',
+        code: 'unproven_legacy_attribution',
         message: err instanceof Error ? err.message : String(err),
         manualReconciliation: 'Inspect ~/.babel/projects and memory logs.',
       },
