@@ -117,11 +117,14 @@ if (!distReport.distExists || distReport.isStale) {
   throw new Error(`dist gate fail: ${distReport.reason}`)
 }
 
-const trialLabel = argValue('--trial') ?? (cancellationOnly ? 'post-501-cancellation-corrected' : 'post-501')
+const trialLabel =
+  argValue('--trial') ??
+  (cancellationOnly ? 'post-502-cancellation-main' : 'post-502-main')
 const defaultOutput = cancellationOnly
-  ? join(laneRoot, 'evidence', 'post-501-trial', 'cancellation-probe-corrected.json')
-  : join(laneRoot, 'evidence', 'post-501-trial', 'chat-scenarios-post-501.json')
+  ? join(laneRoot, 'evidence', 'post-502-trial', 'cancellation-probe-post-502.json')
+  : join(laneRoot, 'evidence', 'post-502-trial', 'chat-scenarios-post-502-main.json')
 const outputPath = argValue('--output') ?? defaultOutput
+const mainMergeSha = argValue('--main-merge-sha') ?? '9e34af80bfd93b55d98bc0a52da458660349a366'
 
 const { executeOpenRouterLaneLiveQualification } = await import(
   './openrouterLaneLiveQualification.mjs'
@@ -131,6 +134,7 @@ const liveReport = await executeOpenRouterLaneLiveQualification({
   trialLabel,
   outputPath,
   cancellationOnly,
+  mainMergeSha,
   pre501EvidenceNote:
     'fixtures/openrouter-lane-647e/evidence/pre-501-trial/chat-scenarios-redacted.json (frozen at base 1dc598e2)',
 })

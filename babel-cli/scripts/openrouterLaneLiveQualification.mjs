@@ -242,11 +242,16 @@ export async function executeOpenRouterLaneLiveQualification(options) {
   report.provider_errors_observed = countAggregateProviderErrors(report)
   report.verdict = report.stopped_billable ? 'provider_stop' : 'provider_calls_completed'
 
+  const evidenceTrialDir = outputPath.includes('post-502-trial')
+    ? 'post-502-trial'
+    : outputPath.includes('post-501-trial')
+      ? 'post-501-trial'
+      : 'post-502-trial'
   const recordsPath =
     options.redactedRunRecordsPath ??
     join(
       packageRoot,
-      'fixtures/openrouter-lane-647e/evidence/post-501-trial/redacted-run-records',
+      `fixtures/openrouter-lane-647e/evidence/${evidenceTrialDir}/redacted-run-records`,
       `${trialLabel}.json`,
     )
   mkdirSync(dirname(recordsPath), { recursive: true })
@@ -266,7 +271,7 @@ export async function executeOpenRouterLaneLiveQualification(options) {
   )
   report.redacted_run_records_path =
     options.redactedRunRecordsPath ??
-    `fixtures/openrouter-lane-647e/evidence/post-501-trial/redacted-run-records/${trialLabel}.json`
+    `fixtures/openrouter-lane-647e/evidence/${evidenceTrialDir}/redacted-run-records/${trialLabel}.json`
 
   mkdirSync(dirname(outputPath), { recursive: true })
   writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n')
