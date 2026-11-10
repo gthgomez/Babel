@@ -19,6 +19,7 @@ const originalFetch = globalThis.fetch
 const originalOpenRouterKey = process.env['OPENROUTER_API_KEY']
 const originalCommandCodeKey = process.env['COMMAND_CODE_API_KEY']
 const originalIdle = process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS']
+const originalRequestRetries = process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES']
 
 beforeEach(() => {
   process.env['OPENROUTER_API_KEY'] = 'test-openrouter-key'
@@ -34,6 +35,8 @@ afterEach(() => {
   else process.env['COMMAND_CODE_API_KEY'] = originalCommandCodeKey
   if (originalIdle === undefined) delete process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS']
   else process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = originalIdle
+  if (originalRequestRetries === undefined) delete process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES']
+  else process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = originalRequestRetries
 })
 
 const USER: ProviderMessage[] = [{ role: 'user', content: 'status' }]
@@ -262,6 +265,32 @@ for (const adapter of ADAPTERS) {
       assert.equal(completed[0]?.failure_receipt?.partial_model_output, true)
       assert.equal(completed[0]?.failure_receipt?.retryable, false)
       assert.equal(completed[0]?.failure_receipt?.tool_call_count, 1)
+    })
+
+    it('HTTP 429 retry backoff cancellation emits one terminal receipt', async () => {
+      process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = '3'
+      let calls = 0
+      const abort = new AbortController()
+      globalThis.fetch = async () => {
+        calls += 1
+        return new Response('rate limited', {
+          status: 429,
+          headers: { 'retry-after': '30' },
+        })
+      }
+      const completed: ProviderInvocationCompleted[] = []
+      const events: ToolStreamEvent[] = []
+      for await (const event of adapter.runner().executeWithToolsStream(USER, [], undefined, abort.signal, 'auto', {
+        onRetry: () => { abort.abort() },
+        onInvocationCompleted: (value) => { completed.push(value) },
+      })) {
+        events.push(event)
+      }
+      assert.equal(calls, 1)
+      assert.deepEqual(events.map((event) => event.type), ['error'])
+      assert.equal(completed.length, 1)
+      assert.equal(completed[0]?.status, 'failed')
+      assert.match(completed[0]?.failure_receipt?.failure_stage ?? '', /request/)
     })
 
     it('substituted model identity blocks tool delivery when exact route is required', async () => {

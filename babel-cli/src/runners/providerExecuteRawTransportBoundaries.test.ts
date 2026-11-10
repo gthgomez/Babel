@@ -195,6 +195,96 @@ describe('executeRaw transport boundaries (mocked)', () => {
         assert.equal(completed[0]?.status, 'delivered')
       })
 
+      it('raw-stream-held-open-after-done-length: rejects and cancels reader (not delivered)', async () => {
+        const { response, onCancel } = heldOpenStreamAfterDone(
+          `${wrapSsePayload(adapter, { choices: [{ delta: { content: 'partial' }, finish_reason: 'length' }] })}\n\ndata: [DONE]\n\n`,
+        )
+        globalThis.fetch = async () => response
+        const completed: Array<{ status: string; partial_model_output?: boolean }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onChunk: () => {},
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /finish_reason: length|output budget/i,
+        )
+        assert.equal(onCancel(), true)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.partial_model_output, true)
+      })
+
+      it('raw-stream-held-open-after-done-provider-error: rejects and cancels reader', async () => {
+        const { response, onCancel } = heldOpenStreamAfterDone(
+          `${wrapSsePayload(adapter, { choices: [{ delta: { content: 'partial' } }] })}\n${wrapSsePayload(adapter, { error: { message: 'upstream overloaded' } })}\ndata: [DONE]\n\n`,
+        )
+        globalThis.fetch = async () => response
+        const completed: Array<{ status: string }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onChunk: () => {},
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /Provider stream error|upstream overloaded/i,
+        )
+        assert.equal(onCancel(), true)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed.some((entry) => entry.status === 'delivered'), false)
+      })
+
+      it('raw-nonstream-body-read-timeout-is-not-json-parse-error', async () => {
+        process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '40'
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '500'
+        globalThis.fetch = async () => new Response(
+          new ReadableStream({ start() { /* stall after headers */ } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+        const completed: Array<{ status: string; failure_stage?: string | null }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          (error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error)
+            assert.match(message, /timeout/i)
+            assert.doesNotMatch(message, /Failed to parse API response as JSON/i)
+            return true
+          },
+        )
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.failure_stage, 'stream')
+      })
+
+      it('raw-nonstream-invocation-deadline-not-reset-after-headers', async () => {
+        const totalBudgetMs = 120
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = String(totalBudgetMs)
+        process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = String(totalBudgetMs)
+        const started = Date.now()
+        globalThis.fetch = async () => {
+          await new Promise<void>((resolve) => { setTimeout(resolve, 90) })
+          return new Response(
+            new ReadableStream({ start() { /* consume only remaining budget */ } }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        const completed: Array<{ status: string }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /timeout/i,
+        )
+        const elapsed = Date.now() - started
+        assert.ok(
+          elapsed < totalBudgetMs + 80,
+          `expected invocation deadline ~${totalBudgetMs}ms, observed ${elapsed}ms (deadline must not reset after headers)`,
+        )
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+      })
+
       it('raw-stream-truncation-without-done: executeRawStream surfaces failure without delivered receipt', async () => {
         globalThis.fetch = async () => new Response(
           `${wrapSsePayload(adapter, { choices: [{ delta: { content: 'partial' } }] })}\n\n`,

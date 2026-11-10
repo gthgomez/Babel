@@ -32,8 +32,8 @@ afterEach(() => {
   globalThis.fetch = originalFetch
   if (originalEnv.deepinfraKey === undefined) delete process.env['DEEPINFRA_API_KEY']
   else process.env['DEEPINFRA_API_KEY'] = originalEnv.deepinfraKey
-  if (originalEnv.retries === undefined) delete process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES']
-  else process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES'] = originalEnv.retries
+  if (originalEnv.retries === undefined) delete process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES']
+  else process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = originalEnv.retries
   if (originalEnv.providerRetries === undefined) delete process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES']
   else process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = originalEnv.providerRetries
   if (originalEnv.idle === undefined) delete process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS']

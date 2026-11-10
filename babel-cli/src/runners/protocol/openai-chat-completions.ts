@@ -50,8 +50,10 @@ import {
 import {
   getStreamIdleTimeoutMs,
   getStreamMaxRetries,
+  isProviderRequestDeadlineError,
   isStreamIdleTimeoutError,
   mapProviderMessages,
+  releaseStreamReader,
   parseSseLine,
   readErrorBody,
   readStreamWithLimits,
@@ -262,6 +264,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
     const isStreaming = !!callbacks?.onChunk;
     const requestMaxRetries = Math.max(1, this.getRequestMaxRetries());
     const requestTimeoutMs = this.getRequestTimeoutMs();
+    const invocationDeadlineAt = startedAt + requestTimeoutMs;
     const streamMaxRetries = isStreaming ? this.getStreamMaxRetries() : 0;
     const maxAttempts = requestMaxRetries + streamMaxRetries;
 
@@ -555,10 +558,25 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
     };
     for (let attempt = 1; attempt <= requestMaxRetries; attempt += 1) {
       lastAttempt = attempt;
+      const attemptBudgetMs = Math.max(0, invocationDeadlineAt - Date.now());
+      if (attemptBudgetMs === 0) {
+        const timeoutError = new Error(
+          `[${this.providerId}] request timeout after ${requestTimeoutMs}ms (${this.model})`,
+        );
+        lastError = timeoutError;
+        settleRetry('failed');
+        notifyPhase('provider_error', undefined, 'timeout');
+        notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+          actualAttempt: attempt,
+          details: { message: timeoutError.message },
+          failureStage: 'request',
+        });
+        throw timeoutError;
+      }
       const controller = new AbortController();
       // Link external abort signal so Esc/Ctrl+C cancels in-flight HTTP requests
       const onExternalAbort = linkExternalAbortSignal(controller, signal);
-      const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+      const timeout = setTimeout(() => controller.abort(), attemptBudgetMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
         response = await this.campaignPhysicalFetch(
@@ -770,6 +788,8 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
               }
             },
             signal,
+            invocationDeadlineAt,
+            requestTimeoutMs,
           );
           vcrRecorder?.close();
           break;
@@ -830,7 +850,8 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
           }
           const controller = new AbortController();
           const onStreamRetryAbort = linkExternalAbortSignal(controller, signal);
-          const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+          const streamRetryBudgetMs = Math.max(0, invocationDeadlineAt - Date.now());
+          const timeout = setTimeout(() => controller.abort(), streamRetryBudgetMs);
           lastAttempt += 1;
           try {
             notifyPhase('request_dispatched', undefined, `stream retry ${lastAttempt}`);
@@ -919,6 +940,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
       try {
         rawDataText = await readResponseBodyText(response, {
           idleTimeoutMs: getStreamIdleTimeoutMs(),
+          deadlineAt: invocationDeadlineAt,
           requestTimeoutMs,
           ...(signal ? { signal } : {}),
           onFirstByte: () => { notifyPhase('first_byte'); },
@@ -955,6 +977,17 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
             outputMaterial: rawDataText,
           });
           throw err;
+        }
+        if (isStreamIdleTimeoutError(err) || isProviderRequestDeadlineError(err)) {
+          notifyPhase('provider_error', undefined, 'timeout');
+          notifyCompleted('failed', null, rawDataText, null, null, null, this.maxTokens, {
+            actualAttempt: lastAttempt,
+            details: { message: err instanceof Error ? err.message : String(err) },
+            failureStage: 'stream',
+            partialModelOutput: rawDataText.length > 0,
+            outputMaterial: rawDataText,
+          });
+          throw err instanceof Error ? err : new Error(String(err));
         }
         notifyPhase('provider_error', undefined, 'response_parse');
         notifyPhase('response_normalization_failed', undefined, 'response_parse');
@@ -1409,7 +1442,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
     let retryAttempt: number | null = null;
     let retryAttemptId: string | null = null;
     let physicalAttemptId = preparedRequest.attempt_id;
-    let attemptDeadlineAt = Date.now() + requestTimeoutMs;
+    const invocationDeadlineAt = startedAt + requestTimeoutMs;
     const settleRetry = (outcome: 'succeeded' | 'failed' | 'cancelled'): void => {
       if (retryAttempt === null) return;
       callbacks?.onRetrySettled?.({
@@ -1424,10 +1457,25 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
 
     for (let attempt = 1; attempt <= requestMaxRetries; attempt += 1) {
       lastAttempt = attempt;
-      attemptDeadlineAt = Date.now() + requestTimeoutMs;
+      const attemptBudgetMs = Math.max(0, invocationDeadlineAt - Date.now());
+      if (attemptBudgetMs === 0) {
+        const timeoutError = new Error(
+          `[${this.providerId}] request timeout after ${requestTimeoutMs}ms (${this.model})`,
+        );
+        lastError = timeoutError;
+        settleRetry('failed');
+        notifyPhase('provider_error', undefined, 'timeout');
+        notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+          actualAttempt: attempt,
+          details: { message: timeoutError.message },
+          failureStage: 'request',
+        });
+        yield { type: 'error', message: timeoutError.message };
+        return;
+      }
       const controller = new AbortController();
       const onExternalAbort = linkExternalAbortSignal(controller, signal);
-      const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+      const timeout = setTimeout(() => controller.abort(), attemptBudgetMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
         response = await this.campaignPhysicalFetch(
@@ -1644,7 +1692,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         try {
           const result = await readStreamWithLimits(reader, {
             idleTimeoutMs: streamIdleTimeoutMs,
-            deadlineAt: attemptDeadlineAt,
+            deadlineAt: invocationDeadlineAt,
             requestTimeoutMs,
             ...(signal ? { signal } : {}),
             idleMessage: `[${this.providerId}] stream idle timeout after ${streamIdleTimeoutMs}ms`,
@@ -2068,6 +2116,8 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
       });
       yield { type: 'error', message: err instanceof Error ? err.message : String(err) };
       return;
+    } finally {
+      await releaseStreamReader(reader);
     }
 
     this.lastInvocationMetadata = buildStreamingInvocationMetadata(

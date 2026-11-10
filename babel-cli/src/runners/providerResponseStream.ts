@@ -102,6 +102,24 @@ export function isStreamIdleTimeoutError(error: unknown): boolean {
   return error instanceof Error && /stream idle timeout/i.test(error.message);
 }
 
+export function isProviderRequestDeadlineError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /request timeout after|response body (read )?timeout|response body idle timeout/i.test(error.message)
+  );
+}
+
+export async function releaseStreamReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<void> {
+  await reader.cancel().catch(() => {});
+  try {
+    reader.releaseLock();
+  } catch {
+    // Lock may already be released by the platform after cancel/close.
+  }
+}
+
 
 export async function readErrorBody(response: Response): Promise<string> {
   return (await response.text().catch(() => '')).slice(0, 200);
@@ -224,15 +242,6 @@ function assertExecuteRawStreamTerminal(state: StreamingState): void {
   }
 }
 
-async function releaseStreamReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
-  await reader.cancel().catch(() => {});
-  try {
-    reader.releaseLock();
-  } catch {
-    // Lock may already be released by the platform after cancel/close.
-  }
-}
-
 export async function readStreamingResponse(
   response: Response,
   callbacks: RunnerCallbacks | undefined,
@@ -243,6 +252,8 @@ export async function readStreamingResponse(
   onFirstByte?: () => void,
   onStreamProgress?: (bytes: number) => void,
   signal?: AbortSignal,
+  invocationDeadlineAt?: number,
+  requestTimeoutMs?: number,
 ): Promise<string> {
   if (!response.body) {
     throw new Error('[provider stream] Streaming response had no body.');
@@ -254,9 +265,11 @@ export async function readStreamingResponse(
   let buffer = '';
   let firstChunkReceived = false;
   let totalBytes = 0;
+  const deadlineAt = invocationDeadlineAt ?? startedAt + (requestTimeoutMs ?? 60_000);
+  const deadlineBudgetMs = requestTimeoutMs ?? Math.max(0, deadlineAt - startedAt);
+
   const completeStreamingRead = async (): Promise<string> => {
     assertExecuteRawStreamTerminal(state);
-    await releaseStreamReader(reader);
     return text;
   };
 
@@ -307,40 +320,19 @@ export async function readStreamingResponse(
 
   try {
   while (true) {
-    if (signal?.aborted) {
-      await releaseStreamReader(reader);
-      throw new DOMException('Request cancelled', 'AbortError');
-    }
-    let onAbort: (() => void) | undefined;
-    const cancelled = new Promise<never>((_, reject) => {
-      onAbort = () => {
-        reject(new DOMException('Request cancelled', 'AbortError'));
-        reader.cancel().catch(() => {});
-      };
-      signal?.addEventListener('abort', onAbort, { once: true });
-    });
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-    const read = reader.read();
-    const idle = new Promise<never>((_, reject) => {
-      timeout = setTimeout(() => {
-        // Reject before cancelling. Some ReadableStream implementations
-        // resolve the pending read as `done` synchronously during cancel;
-        // that must not turn an idle timeout into a misleading clean EOF.
-        reject(new Error(`[provider stream] stream idle timeout after ${idleTimeoutMs}ms`));
-        reader.cancel().catch(() => {});
-      }, idleTimeoutMs);
-    });
-    const { done, value } = await Promise.race([read, idle, cancelled]).finally(() => {
-      if (onAbort) signal?.removeEventListener('abort', onAbort);
-      if (timeout) {
-        clearTimeout(timeout);
-      }
+    const { done, value } = await readStreamWithLimits(reader, {
+      idleTimeoutMs,
+      deadlineAt,
+      requestTimeoutMs: deadlineBudgetMs,
+      ...(signal ? { signal } : {}),
+      idleMessage: `[provider stream] stream idle timeout after ${idleTimeoutMs}ms`,
+      deadlineMessage: `[provider stream] request timeout after ${deadlineBudgetMs}ms`,
     });
     if (done) {
       const flushed = decoder.decode();
       raw += flushed;
       buffer += flushed;
-      if (buffer.length > 0 && await processLine(buffer)) return completeStreamingRead();
+      if (buffer.length > 0 && await processLine(buffer)) return await completeStreamingRead();
       break;
     }
 
@@ -363,9 +355,9 @@ export async function readStreamingResponse(
     buffer = lines.pop() ?? '';
     for (const line of lines) {
       if (state.sawDone) break;
-      if (await processLine(line)) return completeStreamingRead();
+      if (await processLine(line)) return await completeStreamingRead();
     }
-    if (state.sawDone) return completeStreamingRead();
+    if (state.sawDone) return await completeStreamingRead();
   }
 
   // A few OpenAI-compatible gateways return one ordinary JSON response even
@@ -393,7 +385,7 @@ export async function readStreamingResponse(
       state.usage = json.usage ?? state.usage;
       state.sawDone = true;
       state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
-      return completeStreamingRead();
+      return await completeStreamingRead();
     } catch {
       // Fall through to the truncated-stream error below.
     }
@@ -402,13 +394,11 @@ export async function readStreamingResponse(
     state.generationMs = Date.now() - startedAt - state.ttftMs;
   }
   if (!state.sawDone) {
-    await releaseStreamReader(reader);
     throw new Error('[provider stream] stream closed before terminal [DONE] marker');
   }
-  return completeStreamingRead();
-  } catch (error) {
+  return await completeStreamingRead();
+  } finally {
     await releaseStreamReader(reader);
-    throw error;
   }
 }
 
@@ -417,6 +407,8 @@ export async function readResponseBodyText(
   response: Response,
   opts: {
     idleTimeoutMs: number;
+    /** Absolute wall-clock deadline for the whole invocation (not reset after headers). */
+    deadlineAt: number;
     requestTimeoutMs: number;
     signal?: AbortSignal;
     onFirstByte?: () => void;
@@ -427,8 +419,7 @@ export async function readResponseBodyText(
   const decoder = new TextDecoder();
   let text = '';
   let firstByte = false;
-  const startedAt = Date.now();
-  const deadlineAt = startedAt + opts.requestTimeoutMs;
+  const deadlineAt = opts.deadlineAt;
   try {
   while (true) {
     const { done, value } = await readStreamWithLimits(reader, {
