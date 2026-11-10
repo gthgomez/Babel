@@ -475,6 +475,37 @@ test('consequential ambiguity without a changed artifact cannot use a preserved 
   assert.doesNotMatch(event.answer, /I chose to delete|records\.csv|VERIFIED_COMPLETE/)
 })
 
+test('a structured decision deferral can disclose partial criterion evidence without certifying completion', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.effects.decideCompletion = requested => ({
+    requestedOutcome: requested,
+    finalOutcome: requested,
+    allowed: false,
+    reason: 'non_verified_terminal_preserved',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+    acceptanceEvidence: [{
+      requirement_id: 'alpha',
+      description: 'Alpha witness must pass.',
+      required: true,
+      status: 'satisfied',
+      evidence_refs: ['receipt:alpha'],
+      proof_plan: 'none',
+    }],
+  })
+  const event = completeChatStream(input, 'I need your decision before proceeding: keep or revert the export change?', {
+    needsHumanDecision: true,
+  })
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'NEEDS_HUMAN_DECISION')
+  assert.match(event.answer, /Host criterion evidence/)
+  assert.match(event.answer, /Alpha witness must pass\./)
+  assert.doesNotMatch(event.answer, /VERIFIED_COMPLETE|task is complete/i)
+})
+
 test('a structured decision request after a prior edit stays blocked and cannot certify that edit', t => {
   const input = terminalInput(t)
   input.snapshot.context.options.task = 'Update the export, but ask me about invalid-row behavior before choosing.'

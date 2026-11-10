@@ -4,6 +4,7 @@ import test from 'node:test'
 import * as sandbox from './sandbox.js'
 import { ProcessWitness } from './diagnostics/bdns/processWitness.js'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isProcessAlive, isProcessGroupAlive, waitForProcessExit } from './processTree.js'
@@ -17,6 +18,30 @@ function readPublishedDescendantPid(childPidFile: string): number | undefined {
   if (!/^\d+$/.test(raw)) return undefined
   const pid = Number(raw)
   return Number.isFinite(pid) && pid > 0 ? pid : undefined
+}
+
+/** Owned hold.mjs fixtures self-exit after 8s; mocked tree-kill failures leave Windows cwd busy until then. */
+const OWNED_HOLD_FIXTURE_EXIT_MS = 8000
+
+async function removeOwnedFixtureRoot(root: string, ownedPid?: number): Promise<void> {
+  if (ownedPid !== undefined) {
+    await waitForProcessExit(ownedPid, OWNED_HOLD_FIXTURE_EXIT_MS + 2000)
+  }
+  const attempts = process.platform === 'win32' ? 12 : 3
+  const baseDelayMs = process.platform === 'win32' ? 200 : 50
+  let lastError: unknown
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: baseDelayMs })
+      return
+    } catch (error) {
+      lastError = error
+      const code = (error as NodeJS.ErrnoException | undefined)?.code
+      if (code !== 'EBUSY' && code !== 'ENOTEMPTY' && code !== 'EPERM') throw error
+      await new Promise<void>(resolve => { setTimeout(resolve, baseDelayMs * (attempt + 1)) })
+    }
+  }
+  throw lastError
 }
 
 function parentSpawnsGrandchildFixture(root: string, childPidFile: string): string {
@@ -453,8 +478,7 @@ test('failed Windows tree-kill is not accepted as descendant settlement', { skip
   } finally {
     controller.abort();
     try { await sandbox.awaitPendingProcessTerminations(owner); } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
-    if (ownedPid !== undefined) await waitForProcessExit(ownedPid, 5000);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+    await removeOwnedFixtureRoot(root, ownedPid);
   }
 });
 
@@ -480,8 +504,7 @@ test('failed Windows tree-kill on a deadline leaves a termination failure for th
     await assert.rejects(sandbox.awaitPendingProcessTerminations(owner), /did not terminate cleanly/);
   } finally {
     try { await sandbox.awaitPendingProcessTerminations(owner); } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
-    if (ownedPid !== undefined) await waitForProcessExit(ownedPid, 5000);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+    await removeOwnedFixtureRoot(root, ownedPid);
   }
 });
 
@@ -508,8 +531,7 @@ test('a timed-out shell reports failed Windows tree termination to its caller', 
   } finally {
     try { await sandbox.awaitPendingProcessTerminations(owner); } catch { /* the assertion observes the same owned failure */ }
     t.mock.restoreAll(); syncBuiltinESMExports();
-    if (ownedPid !== undefined) await waitForProcessExit(ownedPid, 5000);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+    await removeOwnedFixtureRoot(root, ownedPid);
   }
 });
 

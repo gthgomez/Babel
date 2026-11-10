@@ -158,8 +158,17 @@ test(`response contract ${scenario} settles without speculative continuation`, a
         : scenario === 'historical_choice' ? 'The old documentation asked whether to skip invalid rows. That choice is resolved: current behavior keeps valid rows.'
           : scenario === 'hypothetical_choice' ? 'For a future task, if I need a decision, I will ask. This function copies each item.'
             : 'The request is clear enough to answer.'
-  if (scenario === 'partial_then_decision') assert.match(result.answer, /I need your decision before proceeding: How should invalid rows be handled\?/)
-  else assert.equal(result.answer, expectedAnswer)
+  if (scenario === 'partial_then_decision' || isChoice) {
+    assert.ok(
+      result.answer.startsWith(structuredDecisionAnswer),
+      `decision deferral answer prefix mismatch:\n${result.answer}`,
+    )
+    assert.match(
+      result.answer,
+      /Host criterion evidence \(per-criterion report; overall completion status is unchanged\):/,
+      'partial criterion evidence should accompany structured decision deferrals',
+    )
+  } else assert.equal(result.answer, expectedAnswer)
   assert.equal(runner.turns, 2)
   if (isChoice) {
     assert.equal(result.outcome, 'NEEDS_HUMAN_DECISION')
