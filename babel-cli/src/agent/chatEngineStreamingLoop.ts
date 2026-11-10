@@ -41,6 +41,7 @@ import {
 } from "./implementorPolicy.js";
 
 import { nativeTurnFromStream } from "./chatNativeTurn.js";
+import { buildDecisionRequestDeferral, findDecisionRequest } from './chatDecisionRequest.js';
 
 import {
   applyWorkingStateEvent,
@@ -1178,51 +1179,23 @@ export class ChatEngineStreamingLoop {
       if (yield* settleStreamingTokenExplosion(this.host, effectiveIntent, submissionGeneration, _turnSpan)) return;
 
       if (turnResult.type === "tool_calls" && turnResult.actions.length > 0) {
-        const decisionRequest = turnResult.actions.find(
-          (action): action is Extract<ChatToolAction, { type: 'request_user_decision' }> =>
-            action.type === 'request_user_decision',
-        );
+        const decisionRequest = findDecisionRequest(turnResult.actions);
         if (decisionRequest) {
           // A decision request is a control signal, never an executable tool.
           // Reject the whole co-emitted batch before any sibling action can
           // run; prior-turn edits remain visible but cannot be certified here.
-          const answer = [
-            `I need your decision before proceeding: ${decisionRequest.question}`,
-            '',
-            'Options:',
-            ...decisionRequest.options.map(option => `- ${option}`),
-            '',
-            `Why it matters: ${decisionRequest.impact}`,
-            'No actions in this turn were started. Earlier changes, if any, remain unverified.',
-          ].join('\n');
-          const deferredEvents: ChatEvent[] = [];
-          for (const [index, action] of turnResult.actions.entries()) {
-            const toolCallId = this.host._streamNativeToolCallIds[index] ?? `decision_${turn}_${index}`;
-            const tool = chatActionToolName(action);
-            const target = chatActionTarget(action);
-            const isDecision = action.type === 'request_user_decision';
-            this.host.toolCallLog.push({
-              toolCallId, tool, target, index,
-              error: isDecision ? 'decision_requested' : 'decision_required',
-              exit_code: isDecision ? 0 : 1,
-              effect_status: 'not_applicable',
-              detail: isDecision
-                ? 'Controller paused for the requested user decision.'
-                : 'Co-emitted action was not dispatched because a user decision is required.',
-            });
-            deferredEvents.push(isDecision
-              ? { type: 'tool_complete', toolCallId, tool, target,
-                  detail: 'Waiting for the user decision; no action was dispatched.', effect_status: 'not_applicable' }
-              : { type: 'tool_failed', toolCallId, tool, target,
-                  error: 'decision_required', detail: 'Not dispatched; the turn is paused for a user decision.',
-                  exitCode: 1, effect_status: 'not_applicable' });
-          }
-          for (const event of deferredEvents) yield event;
-          this.host.conversation.push({ role: 'assistant', content: answer });
-          endSpan(_turnSpan, SpanStatusCode.OK);
-          _turnSpan = null;
+          const deferral = buildDecisionRequestDeferral({
+            request: decisionRequest,
+            actions: turnResult.actions,
+            callIds: this.host._streamNativeToolCallIds,
+            turn,
+            recordCall: entry => this.host.toolCallLog.push(entry),
+          });
+          for (const event of deferral.events) yield event;
+          this.host.conversation.push({ role: 'assistant', content: deferral.answer });
+          endSpan(_turnSpan, SpanStatusCode.OK); _turnSpan = null;
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
-          yield this.host.streamDone(answer, { needsHumanDecision: true });
+          yield this.host.streamDone(deferral.answer, { needsHumanDecision: true });
           return;
         }
         if (turnResult.thinking) {
