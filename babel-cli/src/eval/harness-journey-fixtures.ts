@@ -102,8 +102,8 @@ function git(root: string, args: string[]): string {
   return result.stdout
 }
 
-/** Bound Git metadata fingerprint for fixture regression checks (exported for native Chat calibration). */
-export async function fixtureMetadataDigest(root: string): Promise<string> {
+/** Ordered .git entry fingerprints for same-fixture phased drift diagnostics. */
+export async function fixtureMetadataEntries(root: string): Promise<[string, string][]> {
   const metadataRoot = join(root, '.git')
   const directory = await lstat(metadataRoot)
   if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error('Expected owned fixture Git directory')
@@ -125,7 +125,26 @@ export async function fixtureMetadataDigest(root: string): Promise<string> {
     }
   }
   await collect('')
-  return createHash('sha256').update(JSON.stringify(entries)).digest('hex')
+  return entries
+}
+
+/** Same-fixture per-path deltas between two metadata entry snapshots. */
+export function diffFixtureMetadataEntries(
+  before: readonly [string, string][],
+  after: readonly [string, string][],
+): { path: string; before: string | null; after: string | null }[] {
+  const left = new Map(before)
+  const right = new Map(after)
+  return [...new Set([...left.keys(), ...right.keys()])].sort().flatMap(path => {
+    const bv = left.get(path) ?? null
+    const av = right.get(path) ?? null
+    return bv === av ? [] : [{ path, before: bv, after: av }]
+  })
+}
+
+/** Bound Git metadata fingerprint for fixture regression checks (exported for native Chat calibration). */
+export async function fixtureMetadataDigest(root: string): Promise<string> {
+  return createHash('sha256').update(JSON.stringify(await fixtureMetadataEntries(root))).digest('hex')
 }
 
 /** Stop all writers first. Protected digest must come from fresh fixture preparation. */
