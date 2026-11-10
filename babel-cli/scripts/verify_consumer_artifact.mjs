@@ -14,18 +14,22 @@ import {
   installPathClass,
   npmInstallProbe,
   runtimeProjectPathClass,
+  validateAsciiInstallControlPrefix,
 } from './consumer_install_path_qualification.mjs'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const output = resolve(packageRoot, '../artifacts/consumer-package')
 const isWin = process.platform === 'win32'
 const scratch = mkdtempSync(join(tmpdir(), 'babel consumer é-'))
+/** Windows-only: separate ASCII scratch so control full path has no Unicode/space ancestor. */
+const scratchAsciiControl = isWin ? mkdtempSync(join(tmpdir(), 'babel-consumer-')) : null
 const project = join(scratch, 'project 空 space')
 /** Primary qualification: npm production install must succeed at this Unicode path on every platform. */
 const prefixUnicode = join(scratch, 'install prefix é')
 const prefix = prefixUnicode
 /** Windows-only diagnostic control; not a substitute for unicode install-path qualification. */
-const prefixAsciiControl = isWin ? join(scratch, 'install-prefix-control') : null
+const prefixAsciiControl = isWin && scratchAsciiControl ? join(scratchAsciiControl, 'install-prefix') : null
+if (prefixAsciiControl) validateAsciiInstallControlPrefix(prefixAsciiControl)
 const user = join(scratch, 'user space')
 for (const dir of [output, project, user]) mkdirSync(dir, { recursive: true })
 const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
@@ -405,4 +409,5 @@ try {
 } finally {
   if (existsSync(installed)) readonly(installed, false)
   rmSync(scratch, { recursive: true, force: true })
+  if (scratchAsciiControl) rmSync(scratchAsciiControl, { recursive: true, force: true })
 }

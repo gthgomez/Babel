@@ -10,12 +10,25 @@ import {
   installPathClass,
   npmInstallProbe,
   runtimeProjectPathClass,
+  validateAsciiInstallControlPrefix,
 } from './consumer_install_path_qualification.mjs'
 
 test('installPathClass and runtimeProjectPathClass distinguish unicode install vs control paths', () => {
   assert.equal(installPathClass('/tmp/install prefix é'), 'unicode_install_prefix')
   assert.equal(installPathClass('/tmp/install-prefix-control'), 'ascii_install_prefix_control')
+  assert.equal(
+    installPathClass('/tmp/babel consumer é-abc/install-prefix-control'),
+    'unicode_install_prefix',
+    'full install prefix path must be classified, not leaf dirname alone',
+  )
   assert.equal(runtimeProjectPathClass('/tmp/project 空 space'), 'unicode_project_with_space')
+})
+
+test('validateAsciiInstallControlPrefix rejects Unicode scratch ancestors', () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'babel consumer é-'))
+  assert.throws(() => validateAsciiInstallControlPrefix(join(scratch, 'install-prefix')), {
+    code: 'INVALID_ASCII_INSTALL_CONTROL_PATH',
+  })
 })
 
 test('npmInstallProbe returns structured failure without throwing on missing artifact', () => {

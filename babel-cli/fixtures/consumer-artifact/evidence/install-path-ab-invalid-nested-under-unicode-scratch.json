@@ -1,0 +1,22 @@
+{
+  "schema": "consumer-artifact/install-path-comparison-invalidation/v1",
+  "verdict": "INVALID_AB_CONTROL_PATH",
+  "note": "Prior win32 comparison placed install-prefix-control under babel consumer é-* scratch; full absolute path contained Unicode/space, classifying both arms as unicode_install_prefix. Not relabeled as valid A/B.",
+  "invalid_pattern": {
+    "scratch": "babel consumer é-*",
+    "ascii_control_segment": "install-prefix-control",
+    "install_path_class_observed": "unicode_install_prefix"
+  },
+  "corrected_pattern": {
+    "scratch_ascii_control": "babel-consumer-*",
+    "install_prefix": "install-prefix",
+    "install_path_class_required": "ascii_install_prefix_control",
+    "validation": "validateAsciiInstallControlPrefix(full_absolute_path)"
+  },
+  "primary_qualification_unchanged": {
+    "scratch": "babel consumer é-*",
+    "install_prefix": "install prefix é",
+    "project": "project 空 space"
+  },
+  "supersedes_interpretation_in_commits_through": "b4ba574ed6d07de833b40f915a1cff2a0ed263a0"
+}
