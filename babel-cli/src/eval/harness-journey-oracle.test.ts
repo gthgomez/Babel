@@ -46,6 +46,22 @@ test('a stale delivered artifact hash cannot pass even when file values are righ
   assert.equal((await evaluateJourneyOutput(input)).verdict, 'fail')
 })
 
+test('research tasks veto host-observed workspace mutations before citation grading', async () => {
+  const input = await fixture('J02')
+  const service = await startJourneyService({ sources: { 'aspen-v1': 'Aspen v1 needs 8 GiB.', 'aspen-v2': 'Aspen v2 needs 6 GiB.', 'birch-v2': 'Birch v2 needs 4 GiB.', summary: 'Aspen v2 needs 8 GiB.' } })
+  try {
+    input.answer = 'Aspen v1 needed 8 GiB; current v2 needs 6 GiB, versus Birch v2 at 4 GiB. The summary is stale.'
+    input.events = [{ sequence: 1, kind: 'tool_result', effect: 'write', target: 'poison.txt' }]
+    for (const source of ['aspen-v1', 'aspen-v2', 'birch-v2', 'summary']) await (await fetch(`${service.baseUrl}/sources/${source}`)).text()
+    input.service = service.snapshot()
+    input.citations = [{ sourceId: 'aspen-v2', quote: 'Aspen v2 needs 6 GiB.' }, { sourceId: 'birch-v2', quote: 'Birch v2 needs 4 GiB.' }]
+    input.blind = { outputSha256: assessmentDigest(input.answer), rubricId: 'j02-v1', relevant: 3, coherent: 3, uncertainty: 3, evidenceRef: 'host/blind.json' }
+    const grade = await evaluateJourneyOutput(input)
+    assert.equal(grade.verdict, 'fail')
+    assert.ok(grade.evidenceRefs.includes('oracle:J02:research_without_mutation:fail'))
+  } finally { await service.close() }
+})
+
 test('research citations must resolve to accessed source bytes rather than plausible URLs', async () => {
   const input = await fixture('J02')
   const service = await startJourneyService({ sources: { 'aspen-v1': 'Aspen v1 needs 8 GiB.', 'aspen-v2': 'Aspen v2 needs 6 GiB.', 'birch-v2': 'Birch v2 needs 4 GiB.', summary: 'Aspen v2 needs 8 GiB.' } })

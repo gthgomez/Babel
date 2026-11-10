@@ -39,8 +39,17 @@ export function scoreCanaryTrials(
   const passHat3 = tasks.filter((t) => t.all_trials_reliable).length / n
   const allTrials = validTrials
   const taskSuccesses = trials.filter(t => !t.invalid_task && t.grading_status === 'complete' && t.contract_success && t.hidden_ok && !t.false_complete).length
-  const costComplete = trials.every(t => t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0)
-  const knownCost = trials.reduce((sum, t) => sum + (t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0 ? t.cost_usd : 0), 0)
+  const accountableTrials = validTrials
+  const attemptedTrials = accountableTrials.filter(
+    (t) => t.launch_status === 'launched' || t.launch_status === undefined || t.launch_status === 'unknown',
+  )
+  const costComplete =
+    accountableTrials.length > 0 &&
+    accountableTrials.every(t => t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0)
+  const knownCost = accountableTrials.reduce(
+    (sum, t) => sum + (t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0 ? t.cost_usd : 0),
+    0,
+  )
   return {
     schema_version: 1,
     evidence_scope,
@@ -83,9 +92,11 @@ export function scoreCanaryTrials(
       not_launched: trials.filter(t => t.launch_status === 'not_launched').length,
       launch_unknown: trials.filter(t => t.launch_status === undefined || t.launch_status === 'unknown').length,
       task_successes: taskSuccesses,
-      task_success_rate: trials.length === 0 ? null : taskSuccesses / trials.length,
+      task_success_rate: attemptedTrials.length === 0 ? null : taskSuccesses / attemptedTrials.length,
       cost_complete: costComplete,
-      known_cost_usd: trials.some(t => t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0) ? knownCost : null,
+      known_cost_usd: accountableTrials.some(t => t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0)
+        ? knownCost
+        : null,
       cost_per_success_usd: costComplete && taskSuccesses > 0 ? knownCost / taskSuccesses : null,
     },
   }

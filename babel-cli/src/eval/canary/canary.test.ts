@@ -479,4 +479,7 @@ test("valid tasks aggregate while invalid siblings stay excluded from rates", ()
     1,
     "invalid sibling appears only as a sentinel row",
   );
+  assert.equal(report.attempt_accounting?.cost_complete, true);
+  assert.equal(report.attempt_accounting?.task_success_rate, 1);
+  assert.equal(report.attempt_accounting?.task_successes, 1);
 });
