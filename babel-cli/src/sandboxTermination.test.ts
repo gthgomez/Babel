@@ -11,6 +11,26 @@ import childProcess from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { createToolExecutor, ToolExecutionCancelledError } from './agent/toolExecutor.js'
 
+function readPublishedDescendantPid(childPidFile: string): number | undefined {
+  if (!existsSync(childPidFile)) return undefined
+  const raw = readFileSync(childPidFile, 'utf8').trim()
+  if (!/^\d+$/.test(raw)) return undefined
+  const pid = Number(raw)
+  return Number.isFinite(pid) && pid > 0 ? pid : undefined
+}
+
+function parentSpawnsGrandchildFixture(root: string, childPidFile: string): string {
+  return `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
+child.unref();
+child.once('spawn', () => {
+  writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
+  process.exit(0);
+});
+`
+}
+
 test('container removal waits for the cancelled launch client physical closure', async t => {
   const executor = new sandbox.SafeExecutor(process.cwd())
   const controller = new AbortController()
@@ -187,13 +207,7 @@ test('a natural foreground close does not return success while owned group desce
   const childPidFile = join(root, 'child.pid')
   const parentFile = join(root, 'parent.mjs')
   writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
-  writeFileSync(parentFile, `import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
-child.unref();
-writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
-process.exit(0);
-`)
+  writeFileSync(parentFile, parentSpawnsGrandchildFixture(root, childPidFile))
   try {
     const result = await sandbox.spawnCommandAsync(process.execPath, [parentFile], {
       cwd: root,
@@ -249,13 +263,7 @@ test('abort during natural-close settlement records terminal witness after physi
   })
   syncBuiltinESMExports()
   writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
-  writeFileSync(parentFile, `import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
-child.unref();
-writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
-process.exit(0);
-`)
+  writeFileSync(parentFile, parentSpawnsGrandchildFixture(root, childPidFile))
   const waitFor = async (predicate: () => boolean, label: string): Promise<void> => {
     const deadline = Date.now() + 5_000
     while (!predicate()) {
@@ -278,9 +286,11 @@ process.exit(0);
     })
     let spawnSettled = false
     void pending.finally(() => { spawnSettled = true })
-    await waitFor(() => existsSync(childPidFile), 'descendant pid must be published before the controlled boundary')
-    const childPid = Number(readFileSync(childPidFile, 'utf8'))
-    assert.ok(Number.isFinite(childPid) && childPid > 0)
+    await waitFor(
+      () => readPublishedDescendantPid(childPidFile) !== undefined,
+      'descendant pid must be published before the controlled boundary',
+    )
+    const childPid = readPublishedDescendantPid(childPidFile)!
     await waitFor(
       () => hostChildCloseDelivered && naturalSettlementEntered,
       'host child close and natural-settlement entry must precede cancel',
@@ -319,13 +329,7 @@ test('abort during natural-close settlement preserves owner drain without latch 
   const owner = 'synthetic-fg-abort-during-settlement'
   const controller = new AbortController()
   writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
-  writeFileSync(parentFile, `import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
-child.unref();
-writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
-process.exit(0);
-`)
+  writeFileSync(parentFile, parentSpawnsGrandchildFixture(root, childPidFile))
   try {
     const pending = sandbox.spawnCommandAsync(process.execPath, [parentFile], {
       cwd: root,
@@ -335,12 +339,12 @@ process.exit(0);
       processContext: { sessionId: owner },
     })
     const deadline = Date.now() + 5_000
-    while (!existsSync(childPidFile)) {
+    let childPid: number | undefined
+    while ((childPid = readPublishedDescendantPid(childPidFile)) === undefined) {
       if (Date.now() > deadline) throw new Error('owned descendant never published its pid')
-      await new Promise(resolve => setTimeout(resolve, 10))
+      await nextTurn()
     }
-    const childPid = Number(readFileSync(childPidFile, 'utf8'))
-    await new Promise(resolve => setImmediate(resolve))
+    await nextTurn()
     controller.abort()
     const drain = sandbox.awaitPendingProcessTerminations(owner)
     const result = await pending
@@ -361,13 +365,7 @@ test('owner drain waits for natural-close descendant cleanup', {
   const parentFile = join(root, 'parent.mjs')
   const owner = 'synthetic-fg-linger-drain'
   writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
-  writeFileSync(parentFile, `import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
-child.unref();
-writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
-process.exit(0);
-`)
+  writeFileSync(parentFile, parentSpawnsGrandchildFixture(root, childPidFile))
   try {
     const pending = sandbox.spawnCommandAsync(process.execPath, [parentFile], {
       cwd: root,
@@ -376,11 +374,11 @@ process.exit(0);
       processContext: { sessionId: owner },
     })
     const deadline = Date.now() + 5_000
-    while (!existsSync(childPidFile)) {
+    let childPid: number | undefined
+    while ((childPid = readPublishedDescendantPid(childPidFile)) === undefined) {
       if (Date.now() > deadline) throw new Error('owned descendant never published its pid')
-      await new Promise(resolve => setTimeout(resolve, 10))
+      await nextTurn()
     }
-    const childPid = Number(readFileSync(childPidFile, 'utf8'))
     const drain = sandbox.awaitPendingProcessTerminations(owner)
     const result = await pending
     await drain
