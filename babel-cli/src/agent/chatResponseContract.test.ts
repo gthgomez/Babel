@@ -8,7 +8,35 @@ import { DeepInfraApiRunner } from '../runners/deepInfraApi.js'
 import type { ToolStreamEvent } from '../runners/base.js'
 import { SafeExecutor } from '../sandbox.js'
 import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../config/benchmarkContainer.js'
-import { normalizeChatAnswer, requestsRequiredUserDecision } from './chatResponseContract.js'
+import { normalizeChatAnswer } from './chatResponseContract.js'
+import { buildChatToolDefinitions } from './chatToolDefinitions.js'
+import { parseTextToolTurn } from './textToolParser.js'
+
+test('native tools expose a bounded decision request that does not carry action authority', () => {
+  const tool = buildChatToolDefinitions().find(item => item.function.name === 'request_user_decision')
+  assert.ok(tool)
+  assert.deepEqual(tool.function.parameters.required, ['question', 'options', 'impact'])
+  assert.equal(tool.function.parameters.additionalProperties, false)
+})
+
+test('text-tool requests preserve a structured blocking choice', () => {
+  assert.deepEqual(parseTextToolTurn([
+    '[TOOL:request_user_decision]',
+    'question: How should invalid rows be handled?',
+    'options:',
+    '  - Skip invalid rows',
+    '  - Fail the export',
+    'impact: This changes the exported result.',
+  ].join('\n')), {
+    type: 'tool_calls',
+    actions: [{
+      type: 'request_user_decision',
+      question: 'How should invalid rows be handled?',
+      options: ['Skip invalid rows', 'Fail the export'],
+      impact: 'This changes the exported result.',
+    }],
+  })
+})
 
 test('bare JSON normalization is confined to the explicit current-user contract and whole valid fence', () => {
   const fence = '```json\n{"value":1}\n```'
@@ -20,39 +48,9 @@ test('bare JSON normalization is confined to the explicit current-user contract 
     assert.equal(normalizeChatAnswer(answer, 'Return only a JSON object.'), answer)
 })
 
-test('mandatory deferral excludes completed answers, examples and hypothetical requests', () => {
-  assert.equal(requestsRequiredUserDecision("Before I can implement this, I need your choice.\nWhich direction should I implement?"), true)
-  assert.equal(requestsRequiredUserDecision("**Why I'm not editing yet**\nThe product direction is unspecified.\n**What I need from you — one line is enough:**\n\n> Sort by **price / name / popularity**, **ascending / descending**?"), true)
-  for (const answer of [
-    'I implemented the fix. Would you like more improvements?',
-    'The current implementation has two choices. Which do you prefer?',
-    '```\nI am not editing yet.\nWhich direction should I implement?\n```',
-    'If I need your decision, I will ask.\nWhich direction should I implement?',
-    'The document says "I am not editing yet. Which direction should I implement?"',
-  ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
-})
-
-test('standalone product-choice questions do not require a stock deferral preface', () => {
-  for (const answer of [
-    'Should invalid rows be skipped or fail the export?',
-    'Which date format should the export use?',
-    '> **Do you want invalid rows skipped or treated as an error?**',
-  ]) assert.equal(requestsRequiredUserDecision(answer), true, answer)
-  for (const answer of [
-    'I implemented the fix. Should invalid rows be skipped or fail the export?',
-    'Would you like more improvements?',
-    'What is 2 + 2?',
-    'Which files changed?',
-    'What is the current status?',
-    'Should I summarize the findings?',
-    '> The document asks: Should invalid rows be skipped or fail the export?',
-    '```\nShould invalid rows be skipped or fail the export?\n```',
-  ]) assert.equal(requestsRequiredUserDecision(answer), false, answer)
-})
-
-for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice'] as const)
+for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'optional_question', 'historical_choice', 'hypothetical_choice'] as const)
 test(`response contract ${scenario} settles without speculative continuation`, async t => {
-  const isChoice = scenario !== 'json_format'
+  const isChoice = scenario === 'deferred_choice' || scenario === 'plain_choice' || scenario === 'alternative_choice'
   const root = mkdtempSync(join(tmpdir(), 'chat-response-contract-'))
   const names = ['BABEL_NATIVE_TOOLS', 'BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE',
     'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const
@@ -85,11 +83,6 @@ test(`response contract ${scenario} settles without speculative continuation`, a
     return { exit_code: 0, stdout: '# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n', stderr: '' }
   })
   const payload = '{\n  "value": 1\n}\n'
-  const clarification = scenario === 'plain_choice'
-    ? 'Should invalid rows be skipped or fail the export?'
-    : scenario === 'alternative_choice'
-      ? 'Which date format should the export use?'
-      : "I'm not editing yet because the requested direction is unspecified. What I need from you:\n\n> Which direction should I implement?"
   class Runner extends DeepInfraApiRunner {
     turns = 0
     constructor() { super('fixture-model', 'UNUSED_FIXTURE_KEY', {}, { explicitCredential: '', env: {} }) }
@@ -99,32 +92,67 @@ test(`response contract ${scenario} settles without speculative continuation`, a
         yield { type: 'tool_use', id: 'inspect-example', name: 'read_file', input: { path: 'example.js' } }
         yield { type: 'done', finishReason: 'tool_calls' }
       } else if (isChoice && this.turns === 2) {
-        yield { type: 'tool_use', id: 'baseline-verifier', name: 'test_run', input: { command: 'npm test' } }
+        yield { type: 'tool_use', id: 'decision-request', name: 'request_user_decision', input: {
+          question: 'How should invalid rows be handled?',
+          options: ['Skip invalid rows', 'Fail the export'],
+          impact: 'This changes the exported result and error behavior.',
+        } }
+        yield { type: 'tool_use', id: 'must-not-run', name: 'test_run', input: { command: 'npm test' } }
+        yield { type: 'tool_use', id: 'must-not-write', name: 'write_file', input: { path: 'example.js', content: 'export const copy = () => []\n' } }
         yield { type: 'done', finishReason: 'tool_calls' }
       } else {
         if (this.turns > (isChoice ? 3 : 2))
           throw new Error('A valid final answer must not prompt speculative continuation')
-        for (const text of scenario === 'json_format' ? ['```json\n', payload, '```'] : [clarification])
+        const answer = scenario === 'json_format'
+          ? ['```json\n', payload, '```']
+          : scenario === 'optional_question'
+            ? ['The function copies each item. Would you like a summary of the diff?']
+            : scenario === 'historical_choice'
+              ? ['The old documentation asked whether to skip invalid rows. That choice is resolved: current behavior keeps valid rows.']
+              : scenario === 'hypothetical_choice'
+                ? ['For a future task, if I need a decision, I will ask. This function copies each item.']
+                : ['The request is clear enough to answer.']
+        for (const text of answer)
           yield { type: 'text_delta', text }
         yield { type: 'done', finishReason: 'stop' }
       }
     }
   }
-  const task = scenario === 'json_format' ? 'Read example.js. Return only a JSON object with exactly the value key.' : 'Make this better.'
+  const task = scenario === 'json_format' ? 'Read example.js. Return only a JSON object with exactly the value key.'
+    : scenario === 'optional_question' || scenario === 'historical_choice' || scenario === 'hypothetical_choice'
+      ? 'Read example.js and explain how it works without modifying it.'
+      : 'Make this better.'
   const runner = new Runner()
   const engine = new ChatEngine({ task, projectRoot: root, model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: 5 })
   let streamedAnswer=''
   const result = await engine.submitMessage(task, {onAnswerChunk:chunk=>{streamedAnswer+=chunk}})
-  assert.equal(result.answer, scenario === 'json_format' ? payload : clarification)
-  assert.equal(runner.turns, isChoice ? 3 : 2)
+  const structuredDecisionAnswer = [
+    'I need your decision before proceeding: How should invalid rows be handled?',
+    '', 'Options:', '- Skip invalid rows', '- Fail the export', '',
+    'Why it matters: This changes the exported result and error behavior.',
+    'No actions in this turn were started. Earlier changes, if any, remain unverified.',
+  ].join('\n')
+  const expectedAnswer = scenario === 'json_format' ? payload
+    : isChoice ? structuredDecisionAnswer
+      : scenario === 'optional_question' ? 'The function copies each item. Would you like a summary of the diff?'
+        : scenario === 'historical_choice' ? 'The old documentation asked whether to skip invalid rows. That choice is resolved: current behavior keeps valid rows.'
+          : scenario === 'hypothetical_choice' ? 'For a future task, if I need a decision, I will ask. This function copies each item.'
+            : 'The request is clear enough to answer.'
+  assert.equal(result.answer, expectedAnswer)
+  assert.equal(runner.turns, 2)
   if (isChoice) {
     assert.equal(result.outcome, 'NEEDS_HUMAN_DECISION')
     assert.equal(result.status, 'blocked')
-    assert.equal(verifiers, 1, JSON.stringify(result.toolCalls))
-    assert.equal(result.toolCalls?.find(call => call.tool === 'test_run')?.effect_status, 'indeterminate', JSON.stringify(result.toolCalls))
+    assert.equal(verifiers, 0, JSON.stringify(result.toolCalls))
+    assert.ok(result.toolCalls?.some(call => call.tool === 'request_user_decision'))
+    assert.ok(result.toolCalls?.some(call => call.tool === 'test_run' && call.error === 'decision_required'))
+    assert.ok(result.toolCalls?.some(call => call.tool === 'write_file' && call.error === 'decision_required'))
   } else {
-    assert.deepEqual(JSON.parse(result.answer), { value: 1 })
-    assert.equal(streamedAnswer,payload,'fragmented native previews settle exactly once as the bare JSON payload')
+    assert.notEqual(result.outcome, 'NEEDS_HUMAN_DECISION')
+    if (scenario === 'json_format') {
+      assert.deepEqual(JSON.parse(result.answer), { value: 1 })
+      assert.equal(streamedAnswer,payload,'fragmented native previews settle exactly once as the bare JSON payload')
+    }
   }
   assert.equal(mutations, 0)
   assert.equal(readFileSync(join(root, 'example.js'), 'utf8'), source)

@@ -24,7 +24,7 @@ import { ReadArtifactActionSchema } from './codingLoop/runOutputArtifacts.js';
 
 /** The executable tools exposed to text-tool models. */
 export const TEXT_TOOL_NAMES = new Set([
-  'read_file', 'read_artifact', 'write_file', 'str_replace', 'grep', 'glob', 'run_command', 'finish',
+  'read_file', 'read_artifact', 'write_file', 'str_replace', 'grep', 'glob', 'run_command', 'request_user_decision', 'finish',
 ]);
 
 /** Canonical fields accepted by the text parser's action builders. */
@@ -37,6 +37,7 @@ export const TEXT_TOOL_ARGUMENT_SHAPES: Readonly<Record<string, string>> = {
   glob: 'pattern',
   run_command: 'command',
   finish: '(no fields; compatibility only)',
+  request_user_decision: 'question, options (2–6 indented lines, each beginning with -), impact',
 };
 
 /** Behavioral guidance shared by native, legacy JSON, and text-tool turns. */
@@ -46,7 +47,7 @@ export const CHAT_BEHAVIORAL_CONTRACT = [
   '- Answer directly when the available evidence is enough; make edits only when the request needs a change.',
   '- For changes, make focused edits, verify with relevant evidence when available, and report results honestly.',
   '- Before a repair, inspect the relevant README/project contract as well as source and tests. Derive acceptance cases from documented behavior, not just the currently failing test. Verify those cases with permitted tools; report unverified requirements as partial.',
-  '- Before editing, identify the requested outcome. If available project requirements leave an outcome-changing product choice unresolved by the request or prior conversation, ask the necessary question before making changes. Do not substitute documentation, tests, or other maintenance for the unresolved task, or declare it complete because that maintenance passes tests. Explicit maintenance requests and objectively specified repairs can proceed.',
+    '- Before editing, identify the requested outcome. If available project requirements leave an outcome-changing product choice unresolved by the request or prior conversation, ask the necessary question before making changes using the structured `request_user_decision` action. Do not substitute documentation, tests, or other maintenance for the unresolved task, or declare it complete because that maintenance passes tests. Explicit maintenance requests and objectively specified repairs can proceed.',
   '- Distinguish required invariants from current or incidental behavior. Do not lock an intentionally unspecified extension point into regression tests before its intended behavior is chosen.',
   '- Controller working-state blocks are reference context. Do not copy them into an answer or serialize native tool calls as text; use the advertised tool protocol and answer the current user request.',
   '- Ground each material behavioral claim in the actual source or an observed probe. Optional edge-case or bug claims need the same evidence; omit unsupported extras rather than inventing failures. Honor requested output formats.',
@@ -283,6 +284,18 @@ function buildAction(toolName: string, params: Record<string, string>): ChatTool
       const command = params['command'];
       if (!command) return null;
       return { type: 'run_command', command } as ChatToolAction;
+    }
+    case 'request_user_decision': {
+      const question = params['question']?.trim();
+      const impact = params['impact']?.trim();
+      const options = (params['options'] ?? '').split('\n')
+        .map(line => line.trim().replace(/^[-*]\s*/, ''))
+        .filter(Boolean);
+      if (!question || !impact || options.length < 2 || options.length > 6) return null;
+      return {
+        type: 'request_user_decision', question, impact, options,
+        ...(params['safe_progress']?.trim() ? { safe_progress: params['safe_progress'].trim() } : {}),
+      } as ChatToolAction;
     }
     case 'finish':
       return { type: 'finish' } as ChatToolAction;

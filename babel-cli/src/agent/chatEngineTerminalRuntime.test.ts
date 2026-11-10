@@ -475,6 +475,25 @@ test('consequential ambiguity without a changed artifact cannot use a preserved 
   assert.doesNotMatch(event.answer, /I chose to delete|records\.csv|VERIFIED_COMPLETE/)
 })
 
+test('a structured decision request after a prior edit stays blocked and cannot certify that edit', t => {
+  const input = terminalInput(t)
+  input.snapshot.context.options.task = 'Update the export, but ask me about invalid-row behavior before choosing.'
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.evidence.observability.toolCallLog.push({
+    index: 1, tool: 'write_file', target: 'src/export.js', mutation_paths: ['src/export.js'],
+    effect_status: 'confirmed_change', exit_code: 0,
+  })
+  const event = completeChatStream(input, 'I need your decision before proceeding: skip invalid rows or fail the export?', {
+    needsHumanDecision: true,
+  })
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'NEEDS_HUMAN_DECISION')
+  assert.equal(event.status, 'blocked')
+  assert.doesNotMatch(event.answer, /VERIFIED_COMPLETE|task is complete/i)
+})
+
 test('blocked recovery with an unenumerated mutation cannot leave an unsupported success claim unqualified', t => {
   const input = terminalInput(t)
   input.snapshot.outcome.hasMutation = true
