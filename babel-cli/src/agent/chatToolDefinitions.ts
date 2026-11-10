@@ -173,6 +173,7 @@ export const ChatTurnSchema = z.discriminatedUnion('type', [
     answer: z.string().min(1),
     summary: z.string().optional(),
     status: z.enum(['completed', 'blocked']).optional(),
+    protocolError: z.literal('malformed_decision_request').optional(),
   }),
 ]);
 
@@ -1209,7 +1210,12 @@ export function buildRestrictedChatToolDefinitions(
     'await_command',
     'test_run',
   ] as const;
-  const names = new Set<string>(mode === 'act_or_verify' ? actOrVerify : mutateOnly);
+  const names = new Set<string>([
+    ...(mode === 'act_or_verify' ? actOrVerify : mutateOnly),
+    // A decision request is a non-executable control action and remains useful
+    // when ordinary tools are restricted.
+    'request_user_decision',
+  ]);
   // Restricted native requests must use the canonical native inventory too;
   // the all-tools builder retains `finish` solely for legacy parser compatibility.
   return buildChatToolDefinitions().filter((def) => names.has(def.function.name));

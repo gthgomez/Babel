@@ -142,11 +142,12 @@ export function isUnresolvedTextToolAttempt(rawText: string): boolean {
 export function buildTextToolProtocolRejectMessage(
   availableToolNames?: readonly string[],
   verifierCommands?: readonly string[],
+  rejection = 'It contained a `[TOOL:...]` marker but no recognized tool, so nothing was executed.',
 ): string {
   return [
     '## Your last reply was not a valid tool call',
     '',
-    'It contained a `[TOOL:...]` marker but no recognized tool, so nothing was executed.',
+    rejection,
     buildTextToolProtocolSection(availableToolNames, verifierCommands),
   ].join('\n');
 }
@@ -162,9 +163,20 @@ export function parseTextToolTurn(rawText: string): ChatTurn {
     } as ChatTurn;
   }
 
-  const actions = extractToolActions(trimmed);
-  if (actions.length > 0) {
-    return { type: 'tool_calls', actions } as ChatTurn;
+  const extracted = extractToolActions(trimmed);
+  if (extracted.malformedDecisionRequest) {
+    // An invalid control request cannot disappear while sibling actions remain
+    // executable. The stream gets one bounded chance to repair the protocol;
+    // the host fails closed if the malformed control repeats.
+    return {
+      type: 'completion',
+      answer: 'Malformed request_user_decision; no action from that response was dispatched.',
+      status: 'blocked',
+      protocolError: 'malformed_decision_request',
+    } as ChatTurn;
+  }
+  if (extracted.actions.length > 0) {
+    return { type: 'tool_calls', actions: extracted.actions } as ChatTurn;
   }
 
   const answerMatch = trimmed.match(/\[ANSWER\]\s*\n?([\s\S]*)$/i);
@@ -177,7 +189,7 @@ export function parseTextToolTurn(rawText: string): ChatTurn {
 
 // ─── Tool extraction ──────────────────────────────────────────────────────────
 
-function extractToolActions(text: string): ChatToolAction[] {
+function extractToolActions(text: string): { actions: ChatToolAction[]; malformedDecisionRequest: boolean } {
   const actions: ChatToolAction[] = [];
   const blocks = text.split(/\[TOOL:([a-z_]+)\]/i);
 
@@ -189,12 +201,20 @@ function extractToolActions(text: string): ChatToolAction[] {
     const params = parseKeyValuePairs(body);
     try {
       const action = buildAction(toolName, params);
+      if (toolName === 'request_user_decision' && !action) {
+        return { actions: [], malformedDecisionRequest: true };
+      }
       if (action) actions.push(action);
     } catch {
-      // Skip malformed actions
+      // A malformed decision control invalidates the whole response: otherwise
+      // a valid sibling edit could survive after the blocking signal is lost.
+      if (toolName === 'request_user_decision') {
+        return { actions: [], malformedDecisionRequest: true };
+      }
+      // Skip other malformed actions for compatibility.
     }
   }
-  return actions;
+  return { actions, malformedDecisionRequest: false };
 }
 
 // ─── Key-value parsing ────────────────────────────────────────────────────────

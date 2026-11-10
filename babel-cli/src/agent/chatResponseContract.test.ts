@@ -246,3 +246,64 @@ test('a superseded structured decision request cannot emit or persist the old an
     'superseded sibling action is not recorded after its outcome was suppressed')
   assert.equal(writes, 0, 'co-emitted write remains undispatched')
 })
+
+test('malformed text decision requests fail closed before sibling actions', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'chat-invalid-decision-'))
+  const names = ['BABEL_NATIVE_TOOLS', 'BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE',
+    'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_BENCHMARK_DOCKER_EXTRA_ARGS',
+    'BABEL_TOOL_PROFILE', 'BABEL_RUNS_DIR', 'BABEL_STATE_DIR'] as const
+  const previous = names.map(name => [name, process.env[name]] as const)
+  t.after(() => {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value
+    }
+    resetDockerAvailabilityCache()
+    rmSync(root, { recursive: true, force: true })
+  })
+  process.env['BABEL_NATIVE_TOOLS'] = 'disabled'
+  process.env['BABEL_TOOL_PROFILE'] = 'text'
+  process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
+  process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'synthetic/invalid-decision:unit'
+  process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
+  process.env['BABEL_STATE_DIR'] = join(root, 'state')
+  delete process.env['BABEL_DOCKER_DISABLE']
+  delete process.env['BABEL_ALLOW_HOST_FALLBACK']
+  delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']
+  setDockerAvailableForTest(true)
+  writeFileSync(join(root, 'example.js'), 'export const value = 1\n')
+  let writes = 0
+  t.mock.method(SafeExecutor.prototype, 'fileWrite', (path: string, content: string) => {
+    writes++
+    writeFileSync(join(root, path), content)
+    return { exit_code: 0, stdout: `Wrote ${path}`, stderr: '' }
+  })
+  class TextRunner extends DeepInfraApiRunner {
+    turns = 0
+    constructor() { super('fixture-model', 'UNUSED_FIXTURE_KEY', {}, { explicitCredential: '', env: {} }) }
+    override async *executeRawStream(): AsyncGenerator<string, void, undefined> {
+      this.turns++
+      yield [
+        '[TOOL:request_user_decision]',
+        'question: Which output format should the report use?',
+        'options:',
+        '  - JSON',
+        'impact: This determines the generated file format.',
+        '[TOOL:write_file]',
+        'path: example.js',
+        'content:',
+        '  export const value = 2',
+      ].join('\n')
+    }
+  }
+  const runner = new TextRunner()
+  const engine = new ChatEngine({ task: 'Make a report and save it.', projectRoot: root, model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: 3 })
+  const events = []
+  for await (const event of engine.submitMessageStream('Make a report and save it.')) events.push(event)
+  assert.equal(writes, 0, 'malformed decision request invalidates the whole co-emitted action batch')
+  assert.equal(runner.turns, 2, 'one bounded protocol correction is offered before failing closed')
+  assert.equal(readFileSync(join(root, 'example.js'), 'utf8'), 'export const value = 1\n')
+  const terminal = events.at(-1)
+  assert.ok(terminal?.type === 'failed', 'repeated malformed control is not reported as completion')
+  assert.equal(terminal.reason_code, 'native_tool_protocol_invalid')
+  engine.closeAdmissionStore()
+})

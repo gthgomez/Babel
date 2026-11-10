@@ -15,6 +15,9 @@ export function isReadOnlyChat(env: NodeJS.ProcessEnv = process.env): boolean {
 
 export function deniesReadOnlyChatAction(action: string, env: NodeJS.ProcessEnv = process.env): boolean {
   if (!isReadOnlyChat(env)) return false;
+  // This control request is intercepted by ChatEngine before tool dispatch; it
+  // has no filesystem, network, verifier, or delegated-action authority.
+  if (action === 'request_user_decision') return false;
   // No shared memory or delegation outside this fresh read-only capability set.
   return !['read_file', 'read_range', 'read_artifact', 'list_dir', 'grep', 'glob'].includes(action)
     || classifyToolEffect(action === 'search' ? 'semantic_search' : action) !== 'read_only';
@@ -26,6 +29,8 @@ export function filterReadOnlyChatTools(tools: ToolDefinition[], env: NodeJS.Pro
 }
 
 function allowsReadOnlyTaskTool(tool: string, requiredVerifiers: readonly string[]): boolean {
+  // A decision request only pauses the turn and cannot broaden its scope.
+  if (tool === 'request_user_decision') return true;
   // External reads are not repository writes. Offline mode and unknown MCP
   // effects stay denied. A read-only child cannot widen this set.
   if (tool === 'web_search' || tool === 'web_fetch') return !isOfflineChatMode();
