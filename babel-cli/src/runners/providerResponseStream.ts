@@ -166,10 +166,11 @@ export function recordStreamingOutput(state: StreamingState, kind: string, value
 
 
 export function parseSseLine(line: string): SseLineResult {
-  if (!line.startsWith('data: ')) {
+  const normalized = line.replace(/\r$/, '').trim();
+  if (!normalized.startsWith('data:')) {
     return { delta: '', reasoning: '', usage: null, observedModelId: null, upstreamProvider: null, routerMetadata: null, finishReason: null, isDone: false };
   }
-  const data = line.slice(6).trim();
+  const data = normalized.slice(5).trimStart();
   if (data === '[DONE]') {
     return { delta: '', reasoning: '', usage: null, observedModelId: null, upstreamProvider: null, routerMetadata: null, finishReason: null, isDone: true };
   }

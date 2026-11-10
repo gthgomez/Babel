@@ -47,7 +47,8 @@ export function getRequestTimeoutMs(): number {
 
 export function getRequestMaxRetries(): number {
   const raw = process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] ?? process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES'];
-  const value = raw === undefined ? REQUEST_MAX_RETRIES : Number(raw);
+  if (raw === undefined || raw === '') return REQUEST_MAX_RETRIES;
+  const value = Number(raw);
   return Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), 10) : REQUEST_MAX_RETRIES;
 }
 

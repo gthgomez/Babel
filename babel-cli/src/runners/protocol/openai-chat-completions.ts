@@ -71,6 +71,13 @@ import {
   CampaignBudgetDeniedError,
   CampaignRouteUnsupportedError,
 } from '../campaignDispatchGate.js';
+
+/** Accept SSE `data:` lines with or without a space after the colon. */
+function ssePayloadFromTrimmedLine(trimmed: string): string | null {
+  const normalized = trimmed.replace(/\r$/, '').trim();
+  if (!normalized.startsWith('data:')) return null;
+  return normalized.slice(5).trimStart();
+}
 import type { PreparedProviderRequest } from '../preparedProviderRequest.js';
 import { CampaignPhysicalFetchSession } from '../providerCampaignPhysicalFetch.js';
 import type { ProviderInvocationCompleted } from '../base.js';
@@ -469,8 +476,9 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
       };
       let firstChunkReceived = false;
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const parsed = parseSseLine(line);
+        const payload = ssePayloadFromTrimmedLine(line);
+        if (payload !== null) {
+          const parsed = parseSseLine(`data: ${payload}`);
           if (parsed.malformed) throw new Error(parsed.malformed);
           if (parsed.observedModelId) {
             streamState.observedModelId = parsed.observedModelId;
@@ -607,10 +615,21 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
             settleRetry, notifyPhase, notifyCompleted, actualAttempt: attempt, outputBudget: this.maxTokens,
             failure: { kind: 'transport', transportErrorMessage: lastError.message, transportPhase: isAbortError(err) ? 'timeout' : 'transport' },
           });
-          await sleep(retryDelay, signal).catch((error: unknown) => {
-            if (isAbortError(error)) settleRetry('cancelled');
-            throw error;
-          });
+          try {
+            await sleep(retryDelay, signal);
+          } catch (sleepErr) {
+            if (isAbortError(sleepErr) || isCallerCancelError(sleepErr, signal)) {
+              settleRetry('cancelled');
+              notifyPhase('provider_error', undefined, 'cancelled');
+              notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+                actualAttempt: attempt,
+                details: { message: `[${this.providerId}] Request cancelled` },
+                failureStage: 'request',
+              });
+              throw sleepErr;
+            }
+            throw sleepErr;
+          }
           continue;
         }
         settleRetry('failed');
@@ -647,10 +666,21 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         settleRetry, notifyPhase, notifyCompleted, actualAttempt: attempt, outputBudget: this.maxTokens,
         failure: { kind: 'http', response: response! },
       });
-      await sleep(retryDelay, signal).catch((error: unknown) => {
-            if (isAbortError(error)) settleRetry('cancelled');
-            throw error;
+      try {
+        await sleep(retryDelay, signal);
+      } catch (sleepErr) {
+        if (isAbortError(sleepErr) || isCallerCancelError(sleepErr, signal)) {
+          settleRetry('cancelled');
+          notifyPhase('provider_error', undefined, 'cancelled');
+          notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+            actualAttempt: attempt,
+            details: { message: `[${this.providerId}] Request cancelled` },
+            failureStage: 'request',
           });
+          throw sleepErr;
+        }
+        throw sleepErr;
+      }
     }
 
     if (!response) {
@@ -782,10 +812,21 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
           retryAttemptId = randomUUID();
           physicalAttemptId = retryAttemptId;
           callbacks?.onRetry?.({ provider: this.providerId, model: this.model, attempt: retryAttempt!, reason: 'stream_idle', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId!, body_digest: preparedRequest.body_digest });
-          await sleep(retryDelay, signal).catch((error: unknown) => {
-            if (isAbortError(error)) settleRetry('cancelled');
-            throw error;
-          });
+          try {
+            await sleep(retryDelay, signal);
+          } catch (sleepErr) {
+            if (isAbortError(sleepErr) || isCallerCancelError(sleepErr, signal)) {
+              settleRetry('cancelled');
+              notifyPhase('provider_error', undefined, 'cancelled');
+              notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+                actualAttempt: lastAttempt,
+                details: { message: `[${this.providerId}] Request cancelled` },
+                failureStage: 'request',
+              });
+              throw sleepErr;
+            }
+            throw sleepErr;
+          }
           const controller = new AbortController();
           const onStreamRetryAbort = linkExternalAbortSignal(controller, signal);
           const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
@@ -1427,10 +1468,23 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
             settleRetry, notifyPhase, notifyCompleted, actualAttempt: attempt, outputBudget: this.maxTokens,
             failure: { kind: 'transport', transportErrorMessage: lastError.message, transportPhase: isAbortError(err) ? 'timeout' : 'transport' },
           });
-          await sleep(retryDelay, signal).catch((error: unknown) => {
-            if (isAbortError(error)) settleRetry('cancelled');
-            throw error;
-          });
+          try {
+            await sleep(retryDelay, signal);
+          } catch (sleepErr) {
+            if (isAbortError(sleepErr) || isCallerCancelError(sleepErr, signal)) {
+              settleRetry('cancelled');
+              const errMessage = `[${this.providerId}] Request cancelled`;
+              notifyPhase('provider_error', undefined, 'cancelled');
+              notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+                actualAttempt: lastAttempt,
+                details: { message: errMessage },
+                failureStage: 'request',
+              });
+              yield { type: 'error', message: errMessage };
+              return;
+            }
+            throw sleepErr;
+          }
           continue;
         }
         settleRetry('failed');
@@ -1464,10 +1518,23 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         settleRetry, notifyPhase, notifyCompleted, actualAttempt: attempt, outputBudget: this.maxTokens,
         failure: { kind: 'http', response: response! },
       });
-      await sleep(retryDelay, signal).catch((error: unknown) => {
-            if (isAbortError(error)) settleRetry('cancelled');
-            throw error;
+      try {
+        await sleep(retryDelay, signal);
+      } catch (sleepErr) {
+        if (isAbortError(sleepErr) || isCallerCancelError(sleepErr, signal)) {
+          settleRetry('cancelled');
+          const errMessage = `[${this.providerId}] Request cancelled`;
+          notifyPhase('provider_error', undefined, 'cancelled');
+          notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+            actualAttempt: lastAttempt,
+            details: { message: errMessage },
+            failureStage: 'request',
           });
+          yield { type: 'error', message: errMessage };
+          return;
+        }
+        throw sleepErr;
+      }
     }
 
     if (!response) {
@@ -1609,15 +1676,15 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         buffer = lines.pop() || '';
 
         for (const line of lines) {
+          if (sawDone) break;
           const trimmed = line.trim();
           if (!trimmed) continue;
-          if (!trimmed.startsWith('data: ')) continue;
-
-          const data = trimmed.slice(6).trim();
+          const data = ssePayloadFromTrimmedLine(trimmed);
+          if (data === null) continue;
           if (data === '[DONE]') {
             sawDone = true;
             streamState.sawDone = true;
-            continue;
+            break;
           }
 
           let json: {
@@ -1751,20 +1818,18 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
             streamState.finishReason = finishReason;
           }
         }
+        if (sawDone) break;
       }
 
       // Process remaining buffered SSE line
       buffer += decoder.decode();
-      if (buffer.trim().startsWith('data:')) {
-        const trimmed = buffer.trim().replace(/\r$/, '');
-        if (trimmed === 'data: [DONE]') {
+      if (!sawDone) {
+        const tailPayload = buffer.trim() ? ssePayloadFromTrimmedLine(buffer.trim()) : null;
+        if (tailPayload === '[DONE]') {
           sawDone = true;
           streamState.sawDone = true;
-        }
-      }
-      if (buffer.startsWith('data: ')) {
-        const data = buffer.slice(6).trim();
-        if (data !== '[DONE]') {
+        } else if (tailPayload !== null && tailPayload !== '[DONE]') {
+          const data = tailPayload;
           try {
             const json = JSON.parse(data) as {
               model?: string;
@@ -1976,6 +2041,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         outputMaterial: outputReceipt,
       });
       yield { type: 'error', message: err instanceof Error ? err.message : String(err) };
+      return;
     }
 
     this.lastInvocationMetadata = buildStreamingInvocationMetadata(
