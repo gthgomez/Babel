@@ -41,9 +41,17 @@ Ephemeral session trees under `runs/` remain gitignored and are deleted after re
 
 `detectBillableProviderStop` includes `[openrouter] Network error`, HTTP 402, 401/403/429/5xx, and **`[openrouter] stream closed before terminal [DONE] marker`**. Probe stops inspect `event_tally.error_events` via `collectProbeProviderStopScan`, not `probe.message` alone. `runChat` appends redacted rows + usage **before** throwing on stop; `provider_errors_observed` dedupes by logical call `id` and ignores `provider_stop:` throws. Offline orchestrator e2e: `openrouterLaneLiveQualification.test.ts`.
 
+## Exact-head Release Gate (@ `f3e302f6`)
+
+- **Head:** `f3e302f63283287f72c81a79386c930435703343`
+- **Public Release Gate on this SHA:** not observed (only `pull_request_target` metadata/control-plane succeeded).
+- **Nearest green full matrix:** run `42887153879` @ `49f2de8d` — **not** exact-head proof for `f3e302f6` (policy: do not reuse).
+- **Docs-only fast lane:** **not applicable** — PR diff touches `babel-cli/` and `babel-desktop/` (`tools/ci-merge-lane.mjs` trusted prefixes force `full=true`).
+- **Machine record:** `evidence/qualification-ci-status-f3e302f6.json`
+
 ## Scans
 
-Local `pwsh` / strict Gitleaks / supplemental policy: **not run** on this host. Hosted `public-content-policy` + `security` on #505 are public signal only.
+Local `pwsh` / strict Gitleaks / supplemental policy: **not run** on this host. Hosted `public-content-policy` + `security` on #505 require exact-head Public Release Gate when dispatched.
 
 ## Commands
 
