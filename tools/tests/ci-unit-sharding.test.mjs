@@ -105,6 +105,7 @@ function runnableFixture(t, fails = false) {
   // module location so Windows uses the existing native containment owner.
   const capture = new URL('../../babel-cli/scripts/run_logged_tap_child.mjs', import.meta.url).href;
   writeFileSync(join(root, 'scripts/run_ci_unit_shard.mjs'), readFileSync(implementation, 'utf8').replace("'./run_logged_tap_child.mjs'", JSON.stringify(capture)));
+  writeFileSync(join(root, 'scripts/ci_unit_host_python_probe.mjs'), readFileSync(new URL('../../babel-cli/scripts/ci_unit_host_python_probe.mjs', import.meta.url)));
   writeFileSync(join(root, 'scripts/required_tap_reporter.mjs'), readFileSync(new URL('../../babel-cli/scripts/required_tap_reporter.mjs', import.meta.url)));
   writeFileSync(join(root, 'src/testinfra/register-no-ambient-inference.mjs'), '');
   writeFileSync(join(root, 'src/actual.test.ts'), `import test from 'node:test'; import { existsSync } from 'node:fs'; test('positive control', () => {}); test('actual disposable test', () => { if (existsSync('artifacts/ci-unit/full.tap')) throw Error('growing TAP must stay outside source capture'); ${fails ? "throw Error('intentional fixture failure')" : ''} });\n`);
