@@ -78,6 +78,7 @@ try {
     '--test',
     'src/runners/openrouterLaneRouteQualification.test.ts',
     'src/runners/openrouterLaneQualificationLib.test.ts',
+    'src/runners/openrouterLaneLiveQualification.test.ts',
   ])
   fixtureChecks.status = 'ok'
   fixtureChecks.pre_501_frozen_evidence = evidencePath
