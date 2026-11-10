@@ -41,6 +41,24 @@ test('documented text-tool shapes produce the corresponding supported actions', 
   }
 });
 
+test('malformed decision control invalidates every sibling action in the text-tool batch', () => {
+  const raw = [
+    '[TOOL:request_user_decision]',
+    'question: Which output format should the report use?',
+    'options:',
+    '  - JSON',
+    'impact: This determines the generated file format.',
+    '[TOOL:write_file]',
+    'path: export.js',
+    'content:',
+    '  export const format = "json"',
+  ].join('\n');
+  const parsed = parseTextToolTurn(raw);
+  assert.equal(parsed.type, 'completion');
+  assert.equal(parsed.type === 'completion' && parsed.protocolError, 'malformed_decision_request');
+  assert.equal(isUnresolvedTextToolAttempt(raw), true, 'invalid control cannot degrade to an executable sibling');
+});
+
 test('retired tools are no longer advertised or parsed into actions', () => {
   for (const name of ['think', 'ask', 'remember', 'recall', 'check', 'plan']) {
     assert.equal(TEXT_TOOL_NAMES.has(name), false, `${name} must not be advertised`);

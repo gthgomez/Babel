@@ -42,7 +42,8 @@ test('actual chat dispatch denies adversarial tools and out-of-snapshot reads', 
     const request = JSON.parse(String(init?.body)) as { tools: Array<{ function: { name: string } }>; tool_choice?: string };
     const advertised = request.tools.map(tool => tool.function.name);
     assert.ok(advertised.length > 0);
-    assert.ok(advertised.every(name => ['read_file', 'read_range', 'read_artifact', 'list_dir', 'grep', 'glob'].includes(name)), JSON.stringify(advertised));
+    assert.ok(advertised.every(name => ['read_file', 'read_range', 'read_artifact', 'list_dir', 'grep', 'glob', 'request_user_decision'].includes(name)), JSON.stringify(advertised));
+    assert.ok(advertised.includes('request_user_decision'), 'read-only chat advertises the non-mutating decision control');
     assert.ok(advertised.includes('read_range'));
     assert.ok(advertised.includes('read_artifact'));
     assert.equal(request.tool_choice, 'auto');

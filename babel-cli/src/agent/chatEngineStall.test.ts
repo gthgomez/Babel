@@ -446,6 +446,7 @@ describe('buildRestrictedChatToolDefinitions', () => {
     assert.ok(!names.has('await_command'), 'mutate_only must NOT include await_command');
     assert.ok(!names.has('test_run'), 'mutate_only must NOT include test_run');
     assert.ok(!names.has('finish'), 'mutate_only must not re-advertise the legacy finish tool');
+    assert.ok(names.has('request_user_decision'), 'safe decision control remains available in a restricted inventory');
   });
 
   test('act_or_verify includes verifier/execution tools', () => {
@@ -455,6 +456,7 @@ describe('buildRestrictedChatToolDefinitions', () => {
     assert.ok(names.includes('await_command'), 'should include await_command (T2.2)');
     assert.ok(names.includes('test_run'), 'should include test_run');
     assert.ok(!names.includes('finish'), 'act_or_verify must not re-advertise the legacy finish tool');
+    assert.ok(names.includes('request_user_decision'), 'safe decision control remains available in a restricted inventory');
   });
 
   test('includes planning tool but omits legacy completion tool', () => {
@@ -481,15 +483,15 @@ describe('buildRestrictedChatToolDefinitions', () => {
     assert.ok(!names.has('mcp_request'), 'should NOT include mcp_request');
   });
 
-  test('mutate_only set contains exactly 4 native tools', () => {
-    // write_file, str_replace, apply_patch, todo_write
+  test('mutate_only set contains the four mutation tools and decision control', () => {
+    // write_file, str_replace, apply_patch, todo_write, request_user_decision
     const restricted = buildRestrictedChatToolDefinitions('mutate_only');
-    assert.equal(restricted.length, 4);
+    assert.equal(restricted.length, 5);
   });
 
-  test('act_or_verify set contains exactly 7 native tools', () => {
+  test('act_or_verify set contains the mutation tools, decision control, and three verification tools', () => {
     // + run_command, await_command, test_run
     const restricted = buildRestrictedChatToolDefinitions('act_or_verify');
-    assert.equal(restricted.length, 7);
+    assert.equal(restricted.length, 8);
   });
 });
