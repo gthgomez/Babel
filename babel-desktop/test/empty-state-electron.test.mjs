@@ -8,6 +8,7 @@ import {tmpdir} from 'node:os';
 import {_electron} from 'playwright';
 import electronExecutable from 'electron';
 import {saveProviderRoute} from '../native/provider-routing.mjs';
+import {electronContentSizeSlack} from './lib/electron-content-size-slop.mjs';
 
 for(const [width,height] of [[1200,680],[960,700]])test(`Electron empty guidance follows project trust and selection without reload or inference (${width}x${height})`,{timeout:60000},async()=>{
   const root=await mkdtemp(join(tmpdir(),'babel-empty-state-'));
@@ -31,8 +32,9 @@ for(const [width,height] of [[1200,680],[960,700]])test(`Electron empty guidance
     application=await _electron.launch({executablePath:process.env.BABEL_TEST_ELECTRON_EXECUTABLE??electronExecutable,args:[bootstrap,`--profile-dir=${profile}`],env,timeout:20000});
     const page=await application.firstWindow();
     await application.evaluate(({BrowserWindow},{width,height})=>{const window=BrowserWindow.getAllWindows()[0];window.setContentSize(width,height);window.setPosition(0,0);},{width,height});
-    // Fractional Windows display scaling can round the client size by one CSS pixel.
-    try{await page.waitForFunction(({width,height})=>Math.abs(innerWidth-width)<=1&&Math.abs(innerHeight-height)<=1,{width,height});}
+    // Fractional display scaling (Windows DPI, Linux CI/Xvfb) can round client size by a few CSS pixels.
+    const slack=electronContentSizeSlack(await page.evaluate(()=>devicePixelRatio));
+    try{await page.waitForFunction(({width,height,slack})=>Math.abs(innerWidth-width)<=slack&&Math.abs(innerHeight-height)<=slack,{width,height,slack});}
     catch(error){console.error('Native size diagnostic',JSON.stringify({requested:{width,height},renderer:await page.evaluate(()=>({width:innerWidth,height:innerHeight,scale:devicePixelRatio})),native:await application.evaluate(({BrowserWindow})=>({bounds:BrowserWindow.getAllWindows()[0].getBounds(),content:BrowserWindow.getAllWindows()[0].getContentSize()}))}));throw error;}
     // Detail text can render before the asynchronous live handshake settles.
     // The public Ready status also requires connecting=false and a loaded route.
