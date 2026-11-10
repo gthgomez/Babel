@@ -20,7 +20,6 @@ import { reconcileStreamedAnswer } from "./chatEngineStreamingProtocol.js";
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 import { captureGateRejectedCompletionAttempt, formatPreservedUnverifiedTerminalAnswer } from "./preservedUnverifiedTerminal.js";
 import { PROJECT_REQUIRED_MESSAGE, conversationScopeRequiredReport } from './chatToolScopeAdmission.js';
-import { requestsRequiredUserDecision } from './chatResponseContract.js';
 import { describeUnverifiedVerifierStatus, unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js';
 import { shellBlockedByIsolation } from './capabilityRecoveryScope.js';
 
@@ -62,18 +61,6 @@ export async function* settleStreamingCompletion(input: {
       host.conversation.push({ role: 'assistant', content: answer });
       yield host.streamDone(answer);
     }
-    return 'done';
-  }
-  if (!host.hasAnyWrites() && !host.verifierTampered && requestsRequiredUserDecision(answer)) {
-    const delta = reconcileStreamedAnswer(streamedAnswerForTurn, answer);
-    if (delta !== null) {
-      yield { type: 'answer_chunk', text: delta };
-      if (!host.isSubmissionCurrent(submissionGeneration)) return 'done';
-    }
-    host.conversation.push({ role: 'assistant', content: answer });
-    endSpan(turnSpan, SpanStatusCode.OK);
-    if (!host.isSubmissionCurrent(submissionGeneration)) return 'done';
-    yield host.streamDone(answer, { needsHumanDecision: true });
     return 'done';
   }
   // Execution gate: buffer streaming answer until gate check passes

@@ -108,6 +108,15 @@ export const ChatToolActionSchema = z.discriminatedUnion('type', [
       )
       .min(1),
   }),
+  // A decision request is a terminal control signal. The streaming loop
+  // intercepts it before dispatching any sibling action, so it can never
+  // grant tool authority or certify completion.
+  z.object({
+    type: z.literal('request_user_decision'),
+    question: z.string().trim().min(1).max(1000),
+    options: z.array(z.string().trim().min(1).max(300)).min(2).max(6),
+    impact: z.string().trim().min(1).max(1000),
+  }),
   z.object({ type: z.literal('web_search'), query: z.string().min(1) }),
   z.object({ type: z.literal('web_fetch'), url: z.string().min(1) }),
   z.object({ type: z.literal('finish') }),
@@ -164,6 +173,7 @@ export const ChatTurnSchema = z.discriminatedUnion('type', [
     answer: z.string().min(1),
     summary: z.string().optional(),
     status: z.enum(['completed', 'blocked']).optional(),
+    protocolError: z.literal('malformed_decision_request').optional(),
   }),
 ]);
 
@@ -230,6 +240,8 @@ export function chatActionTarget(action: ChatToolAction): string {
       return action.file_path;
     case 'todo_write':
       return 'todos';
+    case 'request_user_decision':
+      return action.question;
     case 'finish':
       return '';
     default: {
@@ -274,6 +286,7 @@ export function mapChatActionToAgentAction(action: ChatToolAction): AgentAction 
     case 'web_fetch':
     case 'sub_agent':
     case 'lsp':
+    case 'request_user_decision':
       // These action types must be handled by the caller before calling
       // mapChatActionToAgentAction — AgentAction has no equivalent variant.
       // The chat engine's executeOneAction catches them first (sub_agent,
@@ -321,6 +334,7 @@ export function buildChatSystemPrompt(options: ChatSystemPromptOptions): string 
   } else if (options.nativeTools) {
     sections.push(
       'Use the available function tools when useful. You may answer the user directly in natural language when ready; no completion tool call is required.',
+      'For an outcome-changing choice that genuinely blocks the requested result, call `request_user_decision` with the concrete options and impact. Do not call it for optional presentation preferences, resolved choices, hypotheticals, or examples. Once you request a decision, do not silently choose an option or continue the blocked operation; safe independent investigation may be completed first.',
     );
   } else {
     sections.push(
@@ -328,6 +342,7 @@ export function buildChatSystemPrompt(options: ChatSystemPromptOptions): string 
         '## Response format',
         'Return one JSON object matching either `tool_calls` with an `actions` array, or `completion` with an `answer` string.',
         'The completion envelope is the legacy response format; include the complete user-facing answer there.',
+        'For a current outcome-changing choice that genuinely blocks the task, use a `request_user_decision` action with options and impact; do not infer a choice from examples, hypotheticals, or optional presentation questions.',
       ].join('\n'),
       formatLegacyToolManual(options.availableToolDefinitions ?? buildChatToolDefinitions(), options.availableToolNames),
     );
@@ -1129,6 +1144,23 @@ function buildAllChatToolDefinitions(): ToolDefinition[] {
     {
       type: 'function',
       function: {
+        name: 'request_user_decision',
+        description: 'Pause the current task for a necessary, outcome-changing user choice. Use only when the request and available project context do not resolve the choice. This does not authorize any action. Do not use for optional presentation preferences, hypotheticals, examples, or already-resolved choices.',
+        parameters: {
+          type: 'object',
+          properties: {
+            question: { type: 'string', minLength: 1, maxLength: 1000, description: 'One concise question about the unresolved outcome-changing choice.' },
+            options: { type: 'array', minItems: 2, maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 300 }, description: 'Concrete options the user can choose from.' },
+            impact: { type: 'string', minLength: 1, maxLength: 1000, description: 'Why this choice changes the requested result.' },
+          },
+          required: ['question', 'options', 'impact'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'finish',
         description: 'Signal that no more tools are needed and the model is ready to synthesize the answer.',
         parameters: {
@@ -1178,7 +1210,12 @@ export function buildRestrictedChatToolDefinitions(
     'await_command',
     'test_run',
   ] as const;
-  const names = new Set<string>(mode === 'act_or_verify' ? actOrVerify : mutateOnly);
+  const names = new Set<string>([
+    ...(mode === 'act_or_verify' ? actOrVerify : mutateOnly),
+    // A decision request is a non-executable control action and remains useful
+    // when ordinary tools are restricted.
+    'request_user_decision',
+  ]);
   // Restricted native requests must use the canonical native inventory too;
   // the all-tools builder retains `finish` solely for legacy parser compatibility.
   return buildChatToolDefinitions().filter((def) => names.has(def.function.name));

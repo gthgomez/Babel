@@ -15,6 +15,8 @@ import {
 test("canonical tool mapping normalizes model aliases to executor names", () => {
   assert.equal(normalizeModelToolName("file-read"), "read_file");
   assert.equal(normalizeModelToolName("shell_exec"), "run_command");
+  assert.equal(normalizeModelToolName("ask_user"), "request_user_decision");
+  assert.equal(modelToolNameToExecutor("request_user_decision"), undefined);
   assert.equal(modelToolNameToExecutor("read_file"), "file_read");
   assert.equal(modelToolNameToExecutor("run_command"), "shell_exec");
   assert.equal(normalizeExecutorToolName("directory-list"), "directory_list");

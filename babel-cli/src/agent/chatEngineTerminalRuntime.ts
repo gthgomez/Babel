@@ -361,7 +361,7 @@ export function completeChatStream(
   const { snapshot, effects } = input
   effects.settleActiveExecution()
   const hasMutation = snapshot.outcome.hasMutation
-  const needsHumanDecision = extra?.needsHumanDecision === true && !hasMutation &&
+  const needsHumanDecision = extra?.needsHumanDecision === true &&
     !snapshot.outcome.budgetExceeded && !snapshot.outcome.verifierTampered && !extra?.blockedReport && !extra?.verifierTampered
   const {
     needsHumanDecision: _privateDecision,

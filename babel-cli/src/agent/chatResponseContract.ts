@@ -5,7 +5,6 @@ export function requestedChatJsonKind(userInput: string): 'object' | 'array' | n
   const kind = /\b(?:return|respond|reply|output)\s+(?:with\s+)?only\s+(?:a\s+)?(?:valid\s+)?JSON\s+(object|array)\b/i.exec(request)?.[1]?.toLowerCase()
   return kind === 'object' || kind === 'array' ? kind : null
 }
-
 /** Apply only an explicit current-user output contract; never extract or invent data. */
 export function normalizeChatAnswer(answer: string, userInput: string): string {
   const kind = requestedChatJsonKind(userInput)
@@ -18,21 +17,4 @@ export function normalizeChatAnswer(answer: string, userInput: string): string {
     // Keep the payload's original bytes, including its newline before the fence.
     return fence[1] + (answer.includes('\r\n') ? '\r\n' : '\n')
   } catch { return answer }
-}
-
-/** An assistant's blocking choice question is a deferral, not proof of task completion. */
-export function requestsRequiredUserDecision(answer: string): boolean {
-  const prose = answer.replace(/```[\s\S]*?```/g, '')
-    .replace(/\b(?:says?|said|claims?|claimed|wrote)\s*[: ,]*["“][^"”]*["”]/gi, '')
-  // A reply consisting entirely of a product-choice question already asks the
-  // user to decide. Do not require a second, stock "I need your choice" sentence.
-  // This recognizes a deferral only: no authority or completion evidence is minted.
-  const question = prose.trim().replace(/^>\s*/, '').replace(/^\*\*([\s\S]*)\*\*$/, '$1')
-  const asksChoice = /\b(?:or|versus)\b/i.test(question)
-    || /^(?:which|what)\b[^?\n]*\b(?:should|must)\b/i.test(question)
-  if (asksChoice && /^(?:which|what|should|do you want|would you prefer)\b[^?\n]{1,300}\?$/i.test(question)) return true
-  const deferral = /\b(?:I(?:'m| am) not (?:editing|implementing|changing)(?: anything)? yet|before I (?:can )?(?:edit|implement|proceed)|I (?:need|require) (?:your|a) (?:decision|choice|clarification)|what I need from you)\b/i.test(prose)
-  if (!deferral || /\b(?:if|suppose|imagine)\b[^.!?\n]*\b(?:not editing|before I|I need|what I need)\b/i.test(prose)) return false
-  // A blockquoted question can be the assistant's own prominently displayed request.
-  return /(?:^|[.!\n])\s*(?:>\s*)?(?:\*\*)?(?:which|what|how|should|do you want|would you like|can you (?:choose|clarify|specify)|sort by|choose|specify|pick)\b[^?\n]{1,300}\?/im.test(prose)
 }
