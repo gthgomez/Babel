@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-import { resolveRuntimeUserStateRoot } from '../../config/runtimePaths.js';
 /**
  * memoryStore.ts — CRUD operations on the Babel memory directory.
  *
@@ -27,53 +25,32 @@ import {
   readIndex,
   rewriteIndex,
 } from './memoryIndex.js';
+import {
+  deriveMemoryProjectSlug,
+  legacyMemoryProjectSlug,
+  sanitizeGitRoot,
+} from './memoryStoreLayout.js';
+import { resolveMemoryRootWithMigration } from './memoryStoreMigration.js';
 
-// ─── Git Root Sanitization ─────────────────────────────────────────────────
-
-/**
- * Sanitize a git root path to a filesystem-safe slug.
- * Replaces characters that are invalid in folder names (especially on Windows).
- */
-export function sanitizeGitRoot(gitRoot: string): string {
-  return gitRoot
-    .replace(/^[A-Za-z]:(?=\/|\\)/, '') // Strip Windows drive letter (e.g., "C:" → "")
-    .replace(/[/\\:<>"|?*]+/g, '-') // Replace invalid/special chars with hyphens
-    .replace(/^[-.]+|[-.]+$/g, '') // Strip leading/trailing hyphens and dots
-    .replace(/-+/g, '-') // Collapse consecutive hyphens
-    .toLowerCase();
-}
-
-/**
- * Unique directory slug for a project under ~/.babel/projects/.
- * Lowercasing in {@link sanitizeGitRoot} can alias distinct absolute paths (case-only
- * differences on Linux; empty slugs for degenerate inputs). Append a stable digest of
- * the case-sensitive resolved path so memory never shares a store across projects.
- */
-export function deriveMemoryProjectSlug(projectRoot: string): string {
-  const absolute = resolve(projectRoot);
-  const sanitized = sanitizeGitRoot(absolute);
-  const digest = createHash('sha256').update(absolute, 'utf8').digest('hex').slice(0, 16);
-  const base = sanitized.length > 0 ? sanitized : 'root';
-  return `${base}--${digest}`;
-}
+export {
+  deriveMemoryProjectSlug,
+  legacyMemoryProjectSlug,
+  sanitizeGitRoot,
+} from './memoryStoreLayout.js';
+export type { MemoryRootResolution } from './memoryStoreMigration.js';
+export { resolveMemoryRootWithMigration } from './memoryStoreMigration.js';
 
 /**
  * Resolve the memory root directory for a given project root.
- * Creates the directory if it does not exist (idempotent).
- * Returns null on filesystem errors.
+ * Migrates legacy v0 stores when ownership is attributable; returns null when ambiguous.
  */
 export function resolveMemoryRoot(projectRoot: string): string | null {
-  try {
-    const slug = deriveMemoryProjectSlug(projectRoot);
-    const memoryRoot = join(resolveRuntimeUserStateRoot(), 'projects', slug, 'memory');
-    mkdirSync(memoryRoot, { recursive: true });
-    return memoryRoot;
-  } catch (err) {
-    console.warn(
-      `Babel memory: failed to resolve memory root for "${projectRoot}": ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return null;
+  const resolution = resolveMemoryRootWithMigration(projectRoot);
+  if (resolution.memoryRoot) return resolution.memoryRoot;
+  if (resolution.blocker) {
+    console.warn(`Babel memory: ${resolution.blocker.code}: ${resolution.blocker.message}`);
   }
+  return null;
 }
 
 // ─── Frontmatter Parsing ───────────────────────────────────────────────────
