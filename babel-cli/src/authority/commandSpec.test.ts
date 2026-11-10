@@ -754,6 +754,9 @@ const HOST_PROCESS_SURFACE = new Set([
   'services/guardedPlanWriter.ts',
   // Fixed Docker removal arguments require a validated Babel-owned UUID name.
   'sandboxContainerLifecycle.ts',
+  // SafeExecutor shellExecAsync supervisor: resolved executable/argv, bounded output,
+  // AbortSignal cancel, and POSIX detached process-group tree settlement (split from sandbox.ts).
+  'sandboxSpawnCommandAsync.ts',
   // Extracted admission ACL helper uses only fixed System32 identity/ACL executables and a fixed PowerShell verifier script.
   'runtime/windowsOwnerAcl.ts',
   // Review workers are contained by the watchdog / Windows Job Object helper.
