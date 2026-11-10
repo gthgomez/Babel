@@ -16,6 +16,7 @@ import { RemoteBridgeChild, buildRemoteServeArgs } from '../native/remoteHost.mj
 import { productionNodeCliArgv } from '../native/cli-launch.mjs';
 import {
   documentedNodeChildSpawnOptions,
+  isolatedCredentialHomeEnvironment,
   nodeChildSpawnEnvironment,
 } from '../native/spawn-env-floor.mjs';
 import {
@@ -40,11 +41,13 @@ async function writeStackShimFixture(root) {
   const project = join(root, 'project');
   const config = join(root, 'config');
   const runsDir = join(root, 'runs');
+  const credentialHome = join(root, 'credential-home');
   const entry = join(root, 'shim.mjs');
   const receipt = join(root, 'receipt.jsonl');
   await mkdir(project);
   await mkdir(config, { recursive: true });
   await mkdir(runsDir, { recursive: true });
+  await mkdir(credentialHome, { recursive: true });
   await writeFile(join(project, 'README.md'), '# launcher');
   await writeFile(join(config, 'bridge.json'), JSON.stringify({ authToken: TOKEN }), 'utf8');
   await writeFile(
@@ -54,7 +57,7 @@ async function writeStackShimFixture(root) {
       receiptPath: receipt,
     }),
   );
-  return { project, config, runsDir, entry };
+  return { project, config, runsDir, credentialHome, entry };
 }
 
 test('RemoteBridgeChild uses non-shell spawn with platform detached policy', () => {
@@ -79,14 +82,14 @@ test('shared bridge startup with spawn env floor reaches ready', {
   timeout: 45_000,
 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'babel-bridge-launcher-'));
-  const { project, config, runsDir, entry } = await writeStackShimFixture(root);
+  const { project, config, runsDir, credentialHome, entry } = await writeStackShimFixture(root);
   const diagnostics = [];
   const spawnLog = [];
   const bridge = new RemoteBridgeChild({
     executable: process.execPath,
     entry,
     projectRoot: project,
-    env: nodeChildSpawnEnvironment({
+    env: isolatedCredentialHomeEnvironment(credentialHome, {
       BABEL_CONFIG_DIR: config,
       BABEL_RUNS_DIR: runsDir,
       ELECTRON_RUN_AS_NODE: '1',

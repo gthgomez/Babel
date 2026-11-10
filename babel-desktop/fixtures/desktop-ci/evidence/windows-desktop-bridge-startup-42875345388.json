@@ -1,0 +1,24 @@
+{
+  "schema": "desktop-ci/bridge-startup-failure/v1",
+  "github_actions_run_id": 42875345388,
+  "job_id": 130038859106,
+  "matrix": "desktop-tests (windows-latest)",
+  "qualification_head_sha": "c4bbfc742d9302b1832c112a46a0b62dec55fe97",
+  "test": "shared bridge startup with spawn env floor reaches ready",
+  "path": "babel-desktop/test/shared-protocol-bridge-launcher.test.mjs",
+  "observed_error": "Remote bridge exited before ready (code=1, signal=null)",
+  "root_cause_classification": "windows_bridge_child_used_runner_homedir_under_inheritEnv_false",
+  "mechanism": {
+    "file": "babel-cli/src/bridge/auth.ts",
+    "functions": ["loadBridgeConfig", "persistBridgeConfig"],
+    "windows_only": "enforceOwnerOnlyWindowsAcl on homedir()/.babel",
+    "harness_gap": "nodeChildSpawnEnvironment did not override HOME/USERPROFILE; child homedir() pointed at GHA runner profile where .babel may exist"
+  },
+  "repair": {
+    "helper": "isolatedCredentialHomeEnvironment(homeDir, overrides)",
+    "module": "babel-desktop/native/spawn-env-floor.mjs",
+    "note": "Fixture-owned credential home; security controls unchanged"
+  },
+  "linux_pass_rationale": "POSIX bridge paths skip Windows DACL enforcement in aclEnforcer",
+  "reproduction_on_linux": "not reproduced; Windows-only ACL path"
+}

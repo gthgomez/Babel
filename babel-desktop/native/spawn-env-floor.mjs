@@ -3,6 +3,8 @@
  * Mirrors Electron lifecycle / remoteHost diagnostic tests — not a credential surface.
  */
 
+import { join } from 'node:path';
+
 const SPAWN_ENV_FLOOR_NAMES = Object.freeze([
   'PATH',
   'SystemRoot',
@@ -30,6 +32,21 @@ export function nodeChildSpawnEnvironment(overrides = {}) {
     if (typeof value === 'string' && value.length > 0) env[name] = value;
   }
   return { ...env, ...overrides };
+}
+
+/**
+ * Fixture-owned credential home for bridge children (Windows ACL on ~/.babel requires isolation).
+ * @param {string} homeDir Writable empty home directory owned by the test fixture
+ * @param {Record<string, string>} [overrides]
+ */
+export function isolatedCredentialHomeEnvironment(homeDir, overrides = {}) {
+  return nodeChildSpawnEnvironment({
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+    APPDATA: homeDir,
+    LOCALAPPDATA: join(homeDir, 'Local AppData'),
+    ...overrides,
+  });
 }
 
 /** Spawn option contract shared by RemoteBridgeChild and SharedProtocolRun. */
