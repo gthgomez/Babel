@@ -31,6 +31,7 @@ function argValue(flag) {
 }
 
 const live = process.argv.includes('--live')
+const cancellationOnly = process.argv.includes('--cancellation-only')
 const help = process.argv.includes('--help') || process.argv.includes('-h')
 
 if (help) {
@@ -43,9 +44,10 @@ if (help) {
       '  2. fixture_checks (always, offline): frozen pre-501 redacted evidence + lane unit tests',
       '  3. paid_provider_execution (--live only): dispatches Chat cells; stop on provider error',
       '',
-      '  --live              execute billable live matrix (OPENROUTER_API_KEY + dist required)',
-      '  --trial <label>     trial label in output JSON (default: post-501)',
-      '  --output <path>     redacted evidence path (default: post-501-trial artifact)',
+      '  --live                execute billable live matrix (OPENROUTER_API_KEY + dist required)',
+      '  --cancellation-only   with --live: only stream cancellation probe (billable)',
+      '  --trial <label>       trial label in output JSON (default: post-501)',
+      '  --output <path>       redacted evidence path (default: post-501-trial artifact)',
     ].join('\n') + '\n',
   )
   process.exit(0)
@@ -75,6 +77,7 @@ try {
     './src/testinfra/register-no-ambient-inference.mjs',
     '--test',
     'src/runners/openrouterLaneRouteQualification.test.ts',
+    'src/runners/openrouterLaneQualificationLib.test.ts',
   ])
   fixtureChecks.status = 'ok'
   fixtureChecks.pre_501_frozen_evidence = evidencePath
@@ -104,14 +107,20 @@ if (!live) {
 if (!process.env.OPENROUTER_API_KEY?.trim()) {
   throw new Error('OPENROUTER_API_KEY missing; refusing --live')
 }
-if (!existsSync(join(packageRoot, 'dist', 'index.js'))) {
-  throw new Error('dist/index.js missing; run npm run build before --live')
+
+const { ensureBabelCliDistReady } = await import(
+  pathToFileURL(join(packageRoot, 'src/services/liteTrustDemo.ts')).href
+)
+const distReport = ensureBabelCliDistReady({ mode: 'fail', packageRoot })
+if (!distReport.distExists || distReport.isStale) {
+  throw new Error(`dist gate fail: ${distReport.reason}`)
 }
 
-const trialLabel = argValue('--trial') ?? 'post-501'
-const outputPath =
-  argValue('--output') ??
-  join(laneRoot, 'evidence', 'post-501-trial', 'chat-scenarios-post-501.json')
+const trialLabel = argValue('--trial') ?? (cancellationOnly ? 'post-501-cancellation-corrected' : 'post-501')
+const defaultOutput = cancellationOnly
+  ? join(laneRoot, 'evidence', 'post-501-trial', 'cancellation-probe-corrected.json')
+  : join(laneRoot, 'evidence', 'post-501-trial', 'chat-scenarios-post-501.json')
+const outputPath = argValue('--output') ?? defaultOutput
 
 const { executeOpenRouterLaneLiveQualification } = await import(
   './openrouterLaneLiveQualification.mjs'
@@ -120,6 +129,7 @@ const { executeOpenRouterLaneLiveQualification } = await import(
 const liveReport = await executeOpenRouterLaneLiveQualification({
   trialLabel,
   outputPath,
+  cancellationOnly,
   pre501EvidenceNote:
     'fixtures/openrouter-lane-647e/evidence/pre-501-trial/chat-scenarios-redacted.json (frozen at base 1dc598e2)',
 })

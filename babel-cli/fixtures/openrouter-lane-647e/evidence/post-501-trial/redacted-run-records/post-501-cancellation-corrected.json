@@ -1,0 +1,27 @@
+{
+  "schema": "openrouter-lane-647e/redacted-run-records/v1",
+  "trial_label": "post-501-cancellation-corrected",
+  "qualification_head_sha": "9f7820b92c315842c5f1d765b4c1f0b59288db59",
+  "main_merge_sha": "ed0c44451a493b70a3a4361cc3236ebb07b453e4",
+  "records": [
+    {
+      "id": "cancellation_stream_abort",
+      "exit_code": null,
+      "terminal_outcome": null,
+      "status": null,
+      "answer_excerpt": null,
+      "stdout_tail_redacted": "",
+      "stderr_tail_redacted": "",
+      "cancellation_probe": {
+        "status": "unexpected_complete",
+        "deltas": 1,
+        "latency_ms": 123,
+        "usage": {
+          "actual_cost_usd": null,
+          "total_tokens": null,
+          "cost_precision": "unknown"
+        }
+      }
+    }
+  ]
+}

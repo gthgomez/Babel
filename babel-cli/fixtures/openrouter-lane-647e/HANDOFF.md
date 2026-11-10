@@ -1,69 +1,50 @@
 # OpenRouter provider lane handoff (647e)
 
-**Status:** `READY_FOR_INDEPENDENT_REVIEW` (evidence + honest live runner; **no provider transport patch**)
+**Status:** `READY_FOR_INDEPENDENT_REVIEW` (qualification harness corrections; **no provider transport patch**)
 
 ## Qualification phases
 
 | Phase | Command | Billable |
 |-------|---------|----------|
 | **1. preflight** | `npm run test:research-v2-openrouter-route-smoke` | no |
-| **2. fixture_checks** | `npm run test:openrouter-lane-647e-preflight` (default) | no |
-| **3. paid_provider_execution** | `npm run test:openrouter-lane-647e-preflight -- --live` | **yes** |
+| **2. fixture_checks** | `npm run test:openrouter-lane-647e-preflight` | no |
+| **3. paid_provider_execution** | `...preflight -- --live` or `--live --cancellation-only` | yes |
 
-`scripts/run_openrouter_lane_qualification.mjs` always runs phases 1–2. **`--live` dispatches the full Chat matrix** via `scripts/openrouterLaneLiveQualification.mjs` (fresh fixtures, host oracles, stop on provider HTTP errors). Session run trees stay **ephemeral** (gitignored); only redacted JSON is committed.
+Build provenance: `ensureBabelCliDistReady` (`fail` before live, `ensure` inside matrix). Stale/missing `dist` **blocks** exact-head qualification.
 
-## SHAs
-
-| Ref | SHA |
-|-----|-----|
-| Pre-501 live trial base | `1dc598e2a2f1de914591570349708a6f01d66479` |
-| #501 merged on `main` | `ed0c44451a493b70a3a4361cc3236ebb07b453e4` |
-| Post-501 qualification merge head | `5b16e7e1ff165e6b032c6485c44125e713743fc7` (branch merges `main` + lane artifacts) |
-
-## Evidence layout (do not conflate)
+## Evidence layout (frozen vs corrected)
 
 | Path | Label |
 |------|-------|
-| `evidence/pre-501-trial/chat-scenarios-redacted.json` | **Frozen** pre-#501 live receipts |
-| `evidence/pre-501-trial/preflight-transport-redacted.json` | Pre-#501 streaming ping |
-| `evidence/post-501-trial/chat-scenarios-post-501.json` | Post-#501 live trial (redacted) |
+| `evidence/pre-501-trial/*` | Frozen **pre-#501** receipts (do not edit) |
+| `evidence/post-501-trial/chat-scenarios-post-501.json` | Post-#501 full matrix (prior head) |
+| `evidence/post-501-trial/invalid-trials/cancellation-invalid-signal-argument.json` | **INVALID_TEST** — wrong `executeWithToolsStream` arity; **not** product failure |
+| `evidence/post-501-trial/cancellation-probe-corrected.json` | Corrected cancellation probe (`signal` 4th arg + `AbortController.abort()`) |
+| `evidence/post-501-trial/redacted-run-records/<trial>.json` | Redacted CLI tails, terminal fields, workspace diffs **before** ephemeral run cleanup |
 
-## Route / adapter
+Ephemeral session trees under `runs/` remain gitignored and are deleted after redacted records are written.
 
-- Chat live route key: `deepseek-v4.1-flash-openrouter`
-- Provider model: `deepseek/deepseek-v4.1-flash-1017`
-- Adapter: `OpenRouterApiRunner`
-- CLI shape: `babel run --mode chat-headless --json --yes --project-root <ws> --model deepseek-v4.1-flash-openrouter <prompt>`
+## Cancellation probe conclusions (do not conflate)
 
-## Post-501 live trial (paid cells)
+1. **Invalid (preserved):** `{ signal }` passed as **3rd** argument → signal never forwarded → `unexpected_complete` is **INVALID_TEST** only.
+2. **Corrected @ `9f7820b9+`:** `undefined, ac.signal` + `ac.abort()` at 120ms → `signal_forwarded: true`, observed `unexpected_complete`, 1 delta / 123ms, usage **unknown** (no runner metadata on abbreviated stream). This is **insufficient to certify cancellation**; it is **not** relabeled as pass.
 
-Dispatched via `npm run test:openrouter-lane-647e-preflight -- --live` @ `5b16e7e1`. Receipt: `evidence/post-501-trial/chat-scenarios-post-501.json`.
+## Export feature semantics (host-owned)
 
-| Cell | Provider errors | Terminal | Host check |
-|------|-----------------|----------|------------|
-| readonly_explain | 0 | `NO_CHANGE_REQUIRED` | tests still fail (unchanged) |
-| vague_repair | 0 | `BLOCKED_POLICY` | oracle pass after edit |
-| vague_feature_export | 0 | `UNVERIFIED_PATCH` | npm test pass |
-| multiturn_resume | 0 (no dispatch) | `EXECUTOR_HALTED` | oracle still pass |
-| cancellation_stream_abort | 0 | stream completed | n/a |
+`vague_feature_export` is graded with `oracle/multi-file/score.mjs` (`invoke-greeting` + immutable-path hashes), not npm test alone. `export_semantic_pass` may be false while Babel terminal is `UNVERIFIED_PATCH`.
 
-**Aggregate known cost:** ~$0.01212. Provider errors: **0**.
+## Stop-on-provider-error
 
-## Runtime handoff (not provider lane)
-
-- `multiturn_resume`: `EXECUTOR_HALTED` on `--resume-chat` (no provider dispatch)
-- `vague_feature_export`: `AGENT_FAILURE` / `BLOCKED` after successful OpenRouter turns
-- Acceptance / `VERIFIED_COMPLETE`: core + evaluator lanes (#499–#501 on `main`)
+`detectBillableProviderStop` includes `[openrouter] Network error`, HTTP 402, 401/403/429/5xx, `stream closed before [DONE]`. `provider_errors_observed` counts exceptions **and** per-cell `provider_stop_matches`.
 
 ## Scans
 
-- Host: **no `pwsh`** → local `check-public-content-policy` / strict Gitleaks / supplemental **not run** here.
-- PR #505: use **hosted** `public-content-policy` + `security` as public evidence only; maintainer private scan still required before merge.
+Local `pwsh` / strict Gitleaks / supplemental policy: **not run** on this host. Hosted `public-content-policy` + `security` on #505 are public signal only.
 
-## Reproduce
+## Commands
 
 ```bash
 cd babel-cli && npm ci && npm run build
-npm run test:openrouter-lane-647e-preflight              # offline
-npm run test:openrouter-lane-647e-preflight -- --live    # billable matrix
+npm run test:openrouter-lane-647e-preflight
+npm run test:openrouter-lane-647e-preflight -- --live --cancellation-only
 ```

@@ -29,7 +29,7 @@ test('post-501 trial evidence when present reports provider error count', () => 
       provider_errors_observed?: number
       provider_errors?: unknown[]
     }
-  if (typeof evidence.provider_errors_observed === 'number') {
+    if (typeof evidence.provider_errors_observed === 'number') {
       assert.equal(evidence.provider_errors_observed, 0)
       return
     }

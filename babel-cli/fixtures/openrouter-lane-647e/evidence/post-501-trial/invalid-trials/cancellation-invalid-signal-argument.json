@@ -1,0 +1,15 @@
+{
+  "schema": "openrouter-lane-647e/invalid-trial/v1",
+  "verdict": "INVALID_TEST",
+  "invalid_reason": "executeWithToolsStream called with { signal } as third argument instead of fourth; AbortSignal never forwarded",
+  "source_commit": "9f7820b9",
+  "preserved_from": "chat-scenarios-post-501.json (trial post-501, 2026-11-10)",
+  "must_not_count_as_product_failure": true,
+  "observed_result": {
+    "id": "cancellation_stream_abort",
+    "status": "unexpected_complete",
+    "deltas": 162,
+    "latency_ms": 9536,
+    "note": "Stream completed because cancellation was not wired; does not prove provider ignores abort"
+  }
+}

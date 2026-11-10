@@ -7,6 +7,14 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { execFileSync, spawnSync, execSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import {
+  captureRedactedCliRecord,
+  captureWorkspaceDiff,
+  countAggregateProviderErrors,
+  detectBillableProviderStop,
+  gradeMultiFileExportSemantics,
+  runStreamCancellationProbe,
+} from './openrouterLaneQualificationLib.mjs'
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -17,6 +25,7 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
  *   mainMergeSha?: string
  *   pre501EvidenceNote?: string
  *   runsDir?: string
+ *   cancellationOnly?: boolean
  * }} options
  */
 export async function executeOpenRouterLaneLiveQualification(options) {
@@ -31,7 +40,10 @@ export async function executeOpenRouterLaneLiveQualification(options) {
     options.runsDir ?? mkdtempSync(join(tmpdir(), 'or647e-runs-'))
   mkdirSync(ephemeralRunsRoot, { recursive: true })
 
-  const { runBabelCli } = await import(pathToFileURL(join(packageRoot, 'src/services/liteTrustDemo.ts')).href)
+  const { runBabelCli, ensureBabelCliDistReady } = await import(
+    pathToFileURL(join(packageRoot, 'src/services/liteTrustDemo.ts')).href,
+  )
+  const distReport = ensureBabelCliDistReady({ mode: 'ensure' })
   const { buildOpenRouterDeepSeekLiveEnv, resolveModelByKey } = await import(
     pathToFileURL(join(packageRoot, 'src/modelPolicy.ts')).href,
   )
@@ -75,13 +87,15 @@ export async function executeOpenRouterLaneLiveQualification(options) {
       checks.math_js = readFileSync(join(ws, 'src/math.js'), 'utf8').trim()
       const test = spawnSync('npm', ['test'], { cwd: ws, encoding: 'utf8', shell: true })
       checks.npm_test_exit = test.status
-    } else {
-      const test = spawnSync('npm', ['test'], { cwd: ws, encoding: 'utf8', shell: true })
-      checks.npm_test_exit = test.status
-      checks.has_index_ts = existsSync(join(ws, 'src/index.ts'))
     }
-    return checks
+    const test = spawnSync('npm', ['test'], { cwd: ws, encoding: 'utf8', shell: true })
+    return {
+      npm_test_exit: test.status,
+      ...gradeMultiFileExportSemantics(ws, packageRoot),
+    }
   }
+
+  const redactedRunRecords = []
 
   function summarizeUsage(usage) {
     if (!usage || typeof usage !== 'object') return null
@@ -128,13 +142,14 @@ export async function executeOpenRouterLaneLiveQualification(options) {
         cliEntry: join(packageRoot, 'dist/index.js'),
         env: baseEnv(ws),
         timeoutMs: 240000,
+        ensureDist: 'ensure',
       },
     )
     const blob = redactSecret(`${cli.stderr}\n${cli.stdout}`)
-    const providerError = blob.match(/\[(openrouter|OpenRouter)\][^\n]{0,240}/i)?.[0] ?? null
-    if (providerError && /\b(401|403|429|5\d\d|ProviderError|provider error)\b/i.test(providerError)) {
-      const err = new Error(`provider_stop:${providerError}`)
-      err.providerError = providerError
+    const stopScan = detectBillableProviderStop(blob)
+    if (stopScan.stop) {
+      const err = new Error(`provider_stop:${stopScan.matches[0]}`)
+      err.providerError = stopScan.matches[0]
       throw err
     }
     const sessionId =
@@ -143,7 +158,7 @@ export async function executeOpenRouterLaneLiveQualification(options) {
         : typeof cli.payload?.run_dir === 'string'
           ? cli.payload.run_dir.split('/').pop()
           : null
-    return {
+    const row = {
       phase: 'paid_provider_execution',
       id,
       latency_ms: Date.now() - t0,
@@ -157,8 +172,16 @@ export async function executeOpenRouterLaneLiveQualification(options) {
       failure_capsule: cli.failureCapsule
         ? { kind: cli.failureCapsule.kind, failure_class_hint: cli.failureCapsule.failure_class_hint }
         : null,
-      provider_error_observed: providerError,
+      provider_error_observed: stopScan.matches[0] ?? null,
+      provider_stop_matches: stopScan.matches,
     }
+    redactedRunRecords.push({
+      id,
+      session_id: sessionId,
+      ...captureRedactedCliRecord(cli, redactSecret),
+      workspace_diff: captureWorkspaceDiff(ws),
+    })
+    return row
   }
 
   const report = {
@@ -168,6 +191,12 @@ export async function executeOpenRouterLaneLiveQualification(options) {
     pre_501_evidence_preserved: pre501EvidenceNote,
     main_merge_sha: mainMergeSha,
     qualification_head_sha: execSync(`git -C ${repoRoot} rev-parse HEAD`, { encoding: 'utf8' }).trim(),
+    build_provenance: {
+      dist_gate: 'ensure',
+      dist_exists: distReport.distExists,
+      dist_stale: distReport.isStale,
+      dist_reason: distReport.reason,
+    },
     route_key: routeKey,
     provider: resolved.provider,
     provider_model_id: model,
@@ -180,86 +209,75 @@ export async function executeOpenRouterLaneLiveQualification(options) {
   let repairWs = ''
   let repairSession = null
 
-  try {
-    const ws1 = freshWs('ordinary-bug')
-    const r1 = runChat('readonly_explain', ws1, 'Explain what this project does. Do not edit any files.')
-    r1.host_checks = hostChecks(ws1, 'ordinary-bug')
-    report.results.push(r1)
+  if (!options.cancellationOnly) {
+    try {
+      const ws1 = freshWs('ordinary-bug')
+      const r1 = runChat('readonly_explain', ws1, 'Explain what this project does. Do not edit any files.')
+      r1.host_checks = hostChecks(ws1, 'ordinary-bug')
+      report.results.push(r1)
 
-    repairWs = freshWs('ordinary-bug')
-    const r2 = runChat('vague_repair', repairWs, 'fix this')
-    r2.host_checks = hostChecks(repairWs, 'ordinary-bug')
-    repairSession = r2.session_id
-    report.results.push(r2)
+      repairWs = freshWs('ordinary-bug')
+      const r2 = runChat('vague_repair', repairWs, 'fix this')
+      r2.host_checks = hostChecks(repairWs, 'ordinary-bug')
+      repairSession = r2.session_id
+      report.results.push(r2)
 
-    const ws3 = freshWs('multi-file')
-    const r3 = runChat('vague_feature_export', ws3, 'make export work')
-    r3.host_checks = hostChecks(ws3, 'multi-file')
-    report.results.push(r3)
+      const ws3 = freshWs('multi-file')
+      const r3 = runChat('vague_feature_export', ws3, 'make export work')
+      r3.host_checks = hostChecks(ws3, 'multi-file')
+      report.results.push(r3)
 
-    if (repairSession) {
-      const r4 = runChat('multiturn_resume', repairWs, 'Run npm test and tell me if everything passes now.', [
-        '--execution-scope',
-        'conversation',
-        '--resume-chat',
-        repairSession,
-      ])
-      r4.host_checks = hostChecks(repairWs, 'ordinary-bug')
-      r4.resume_target_session = repairSession
-      report.results.push(r4)
-    } else {
-      report.results.push({
-        phase: 'paid_provider_execution',
-        id: 'multiturn_resume',
-        status: 'skipped',
-        reason: 'no_session_id_from_vague_repair',
-      })
+      if (repairSession) {
+        const r4 = runChat('multiturn_resume', repairWs, 'Run npm test and tell me if everything passes now.', [
+          '--execution-scope',
+          'conversation',
+          '--resume-chat',
+          repairSession,
+        ])
+        r4.host_checks = hostChecks(repairWs, 'ordinary-bug')
+        r4.resume_target_session = repairSession
+        report.results.push(r4)
+      } else {
+        report.results.push({
+          phase: 'paid_provider_execution',
+          id: 'multiturn_resume',
+          status: 'skipped',
+          reason: 'no_session_id_from_vague_repair',
+        })
+      }
+    } catch (e) {
+      report.provider_errors.push(redactSecret(String(e)))
+      report.stopped_billable = true
     }
-  } catch (e) {
-    report.provider_errors.push(redactSecret(String(e)))
-    report.stopped_billable = true
+  } else {
+    report.phases_executed = ['paid_provider_execution_cancellation_only']
+    report.matrix_skipped = true
   }
 
   if (!report.stopped_billable) {
-    const t0 = Date.now()
     const runner = new OpenRouterApiRunner(model, { maxTokens: 800 }, { env: process.env })
     const ac = new AbortController()
-    let deltas = 0
-    const timer = setTimeout(() => ac.abort(), 120)
-    try {
-      for await (const _ev of runner.executeWithToolsStream(
-        [{ role: 'user', content: 'Write 20 paragraphs about graph algorithms.' }],
-        [],
-        { signal: ac.signal },
-      )) {
-        deltas++
-      }
-      report.results.push({
-        phase: 'paid_provider_execution',
-        id: 'cancellation_stream_abort',
-        status: 'unexpected_complete',
-        deltas,
-        latency_ms: Date.now() - t0,
-      })
-    } catch (e) {
-      const meta = runner.getLastInvocationMetadata()
-      report.results.push({
-        phase: 'paid_provider_execution',
-        id: 'cancellation_stream_abort',
-        status: 'aborted_or_error',
-        message: redactSecret(String(e)).slice(0, 300),
-        deltas,
-        latency_ms: Date.now() - t0,
-        usage: meta
-          ? {
-              total_tokens: meta.total_tokens,
-              estimated_cost_usd: meta.estimated_cost_usd,
-              cost_precision: meta.cost_precision,
-            }
-          : null,
-      })
-    } finally {
-      clearTimeout(timer)
+    const probe = await runStreamCancellationProbe(runner, {
+      signal: ac.signal,
+      abort: () => ac.abort(),
+      abortAfterMs: 120,
+    })
+    probe.message = probe.message ? redactSecret(probe.message) : undefined
+    report.results.push(probe)
+    redactedRunRecords.push({
+      id: probe.id,
+      ...captureRedactedCliRecord({ stdout: '', stderr: probe.message ?? '', exitCode: null, payload: null }, redactSecret),
+      cancellation_probe: {
+        status: probe.status,
+        deltas: probe.deltas,
+        latency_ms: probe.latency_ms,
+        usage: probe.usage ?? { actual_cost_usd: null, cost_precision: 'unknown' },
+      },
+    })
+    const probeStop = probe.message ? detectBillableProviderStop(probe.message) : { stop: false, matches: [] }
+    if (probeStop.stop) {
+      report.provider_errors.push(...probeStop.matches)
+      report.stopped_billable = true
     }
   }
 
@@ -270,8 +288,30 @@ export async function executeOpenRouterLaneLiveQualification(options) {
     else if (typeof r.usage?.estimated_cost_usd === 'number') cost += r.usage.estimated_cost_usd
   }
   report.aggregate_known_cost_usd = cost
-  report.provider_errors_observed = report.provider_errors.length
+  report.provider_errors_observed = countAggregateProviderErrors(report)
   report.verdict = report.stopped_billable ? 'provider_stop' : 'provider_calls_completed'
+
+  const recordsPath = join(
+    packageRoot,
+    'fixtures/openrouter-lane-647e/evidence/post-501-trial/redacted-run-records',
+    `${trialLabel}.json`,
+  )
+  mkdirSync(dirname(recordsPath), { recursive: true })
+  writeFileSync(
+    recordsPath,
+    JSON.stringify(
+      {
+        schema: 'openrouter-lane-647e/redacted-run-records/v1',
+        trial_label: trialLabel,
+        qualification_head_sha: report.qualification_head_sha,
+        main_merge_sha: mainMergeSha,
+        records: redactedRunRecords,
+      },
+      null,
+      2,
+    ) + '\n',
+  )
+  report.redacted_run_records_path = `fixtures/openrouter-lane-647e/evidence/post-501-trial/redacted-run-records/${trialLabel}.json`
 
   mkdirSync(dirname(outputPath), { recursive: true })
   writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n')
