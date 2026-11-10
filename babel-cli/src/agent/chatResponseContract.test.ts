@@ -55,9 +55,9 @@ test('bare JSON normalization is confined to the explicit current-user contract 
     assert.equal(normalizeChatAnswer(answer, 'Return only a JSON object.'), answer)
 })
 
-for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'optional_question', 'historical_choice', 'hypothetical_choice'] as const)
+for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'partial_then_decision', 'optional_question', 'historical_choice', 'hypothetical_choice'] as const)
 test(`response contract ${scenario} settles without speculative continuation`, async t => {
-  const isChoice = scenario === 'deferred_choice' || scenario === 'plain_choice' || scenario === 'alternative_choice'
+  const isChoice = scenario === 'deferred_choice' || scenario === 'plain_choice' || scenario === 'alternative_choice' || scenario === 'partial_then_decision'
   const root = mkdtempSync(join(tmpdir(), 'chat-response-contract-'))
   const names = ['BABEL_NATIVE_TOOLS', 'BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE',
     'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const
@@ -77,12 +77,20 @@ test(`response contract ${scenario} settles without speculative continuation`, a
   delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']
   setDockerAvailableForTest(true)
   const source = 'export const copy = items => [...items]\n'
+  const partialSource = 'export const copy = items => Array.from(items)\n'
   writeFileSync(join(root, 'example.js'), source)
   writeFileSync(join(root, 'package.json'), '{"type":"module","scripts":{"test":"node --test"}}\n')
   let mutations = 0
   let verifiers = 0
   const unexpected = () => { mutations++; throw new Error('No mutation or shell is needed') }
-  t.mock.method(SafeExecutor.prototype, 'fileWrite', unexpected)
+  t.mock.method(SafeExecutor.prototype, 'fileWrite', (path: string, content: string) => {
+    if (scenario === 'partial_then_decision' && path === 'example.js' && content === partialSource) {
+      mutations++
+      writeFileSync(join(root, path), content)
+      return { exit_code: 0, stdout: 'Wrote example.js', stderr: '' }
+    }
+    return unexpected()
+  })
   t.mock.method(SafeExecutor.prototype, 'shellExec', unexpected)
   t.mock.method(SafeExecutor.prototype, 'shellExecAsync', async () => unexpected())
   t.mock.method(SafeExecutor.prototype, 'testRunAsync', async () => {
@@ -96,7 +104,10 @@ test(`response contract ${scenario} settles without speculative continuation`, a
     override async *executeWithToolsStream(): AsyncGenerator<ToolStreamEvent, void, undefined> {
       this.turns++
       if (this.turns === 1) {
-        yield { type: 'tool_use', id: 'inspect-example', name: 'read_file', input: { path: 'example.js' } }
+        if (scenario === 'partial_then_decision')
+          yield { type: 'tool_use', id: 'partial-edit', name: 'write_file', input: { path: 'example.js', content: partialSource } }
+        else
+          yield { type: 'tool_use', id: 'inspect-example', name: 'read_file', input: { path: 'example.js' } }
         yield { type: 'done', finishReason: 'tool_calls' }
       } else if (isChoice && this.turns === 2) {
         yield { type: 'tool_use', id: 'decision-request', name: 'request_user_decision', input: {
@@ -126,8 +137,10 @@ test(`response contract ${scenario} settles without speculative continuation`, a
     }
   }
   const task = scenario === 'json_format' ? 'Read example.js. Return only a JSON object with exactly the value key.'
-    : scenario === 'optional_question' || scenario === 'historical_choice' || scenario === 'hypothetical_choice'
+      : scenario === 'optional_question' || scenario === 'historical_choice' || scenario === 'hypothetical_choice'
       ? 'Read example.js and explain how it works without modifying it.'
+      : scenario === 'partial_then_decision'
+        ? 'Improve example.js, but ask before choosing how invalid export rows are handled.'
       : 'Make this better.'
   const runner = new Runner()
   const engine = new ChatEngine({ task, projectRoot: root, model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: 5 })
@@ -145,7 +158,8 @@ test(`response contract ${scenario} settles without speculative continuation`, a
         : scenario === 'historical_choice' ? 'The old documentation asked whether to skip invalid rows. That choice is resolved: current behavior keeps valid rows.'
           : scenario === 'hypothetical_choice' ? 'For a future task, if I need a decision, I will ask. This function copies each item.'
             : 'The request is clear enough to answer.'
-  assert.equal(result.answer, expectedAnswer)
+  if (scenario === 'partial_then_decision') assert.match(result.answer, /I need your decision before proceeding: How should invalid rows be handled\?/)
+  else assert.equal(result.answer, expectedAnswer)
   assert.equal(runner.turns, 2)
   if (isChoice) {
     assert.equal(result.outcome, 'NEEDS_HUMAN_DECISION')
@@ -161,6 +175,6 @@ test(`response contract ${scenario} settles without speculative continuation`, a
       assert.equal(streamedAnswer,payload,'fragmented native previews settle exactly once as the bare JSON payload')
     }
   }
-  assert.equal(mutations, 0)
-  assert.equal(readFileSync(join(root, 'example.js'), 'utf8'), source)
+  assert.equal(mutations, scenario === 'partial_then_decision' ? 1 : 0)
+  assert.equal(readFileSync(join(root, 'example.js'), 'utf8'), scenario === 'partial_then_decision' ? partialSource : source)
 })
