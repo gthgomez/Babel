@@ -48,6 +48,8 @@ test('cancellation-only qualification retains output and redacted records withou
     assert.equal(records.records.length, 1)
     assert.equal(records.records[0]!.id, 'cancellation_stream_abort')
     assert.equal(records.records[0]!.cancellation_probe?.status, 'inconclusive')
+    assert.equal(written.results.find((r) => r.id === 'cancellation_stream_abort')?.status, 'inconclusive')
+    assert.equal(written.results.find((r) => r.id === 'cancellation_stream_abort')?.status, records.records[0]!.cancellation_probe?.status)
     assert.ok('exit_code' in records.records[0]!)
     assert.equal(report.redacted_run_records_path, redactedRunRecordsPath)
   } finally {
@@ -76,6 +78,16 @@ test('orchestrator stops on yielded HTTP 402 typed stream error', async () => {
     const probe = report.results.find((r: { id?: string }) => r.id === 'cancellation_stream_abort')
     assert.ok(probe)
     assert.ok(Array.isArray(probe.provider_stop_matches) && probe.provider_stop_matches.length > 0)
+    assert.equal(probe.status, 'provider_stop')
+    const written = JSON.parse(readFileSync(outputPath, 'utf8')) as {
+      results: Array<{ id: string; status: string }>
+    }
+    const records = JSON.parse(readFileSync(redactedRunRecordsPath, 'utf8')) as {
+      records: Array<{ cancellation_probe?: { status: string } }>
+    }
+    assert.equal(written.results.find((r) => r.id === 'cancellation_stream_abort')?.status, 'provider_stop')
+    assert.equal(records.records[0]!.cancellation_probe?.status, 'provider_stop')
+    assert.equal(written.results.find((r) => r.id === 'cancellation_stream_abort')?.status, records.records[0]!.cancellation_probe?.status)
     assert.ok(existsSync(outputPath) && existsSync(redactedRunRecordsPath))
   } finally {
     rmSync(scratch, { recursive: true, force: true })
@@ -126,6 +138,40 @@ test('orchestrator retains reported usage on cancellation probe record', async (
     assert.equal(records.records[0]!.cancellation_probe?.usage?.cost_precision, 'reported')
     assert.equal(report.aggregate_known_cost_usd, 0.004)
   } finally {
+    rmSync(scratch, { recursive: true, force: true })
+    rmSync(runsDir, { recursive: true, force: true })
+  }
+})
+
+test('redacts synthetic API secrets from nested error_events in all artifacts', async () => {
+  const secret = 'sk-or-synthetic-offline-leak-test-647e'
+  const prev = process.env.OPENROUTER_API_KEY
+  process.env.OPENROUTER_API_KEY = secret
+  const { scratch, outputPath, redactedRunRecordsPath, runsDir } = scratchPaths('or647e-live-redact-')
+  const { executeOpenRouterLaneLiveQualification } = await import(liveQualUrl)
+  try {
+    await executeOpenRouterLaneLiveQualification({
+      trialLabel: 'offline-cancellation-secret-redact-e2e',
+      outputPath,
+      cancellationOnly: true,
+      runsDir,
+      redactedRunRecordsPath,
+      createCancellationRunner: () => ({
+        getLastInvocationMetadata: () => null,
+        async *executeWithToolsStream() {
+          yield { type: 'error', message: `[openrouter] token=${secret} HTTP 402` }
+        },
+      }),
+    })
+    const outputBlob = readFileSync(outputPath, 'utf8')
+    const recordsBlob = readFileSync(redactedRunRecordsPath, 'utf8')
+    assert.equal(outputBlob.includes(secret), false)
+    assert.equal(recordsBlob.includes(secret), false)
+    assert.ok(outputBlob.includes('[REDACTED]'))
+    assert.ok(recordsBlob.includes('[REDACTED]'))
+  } finally {
+    if (prev === undefined) delete process.env.OPENROUTER_API_KEY
+    else process.env.OPENROUTER_API_KEY = prev
     rmSync(scratch, { recursive: true, force: true })
     rmSync(runsDir, { recursive: true, force: true })
   }

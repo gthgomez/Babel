@@ -23,6 +23,23 @@ test('detectBillableProviderStop catches Network error and HTTP 402', async () =
   assert.equal(detectBillableProviderStop('normal assistant chunk').stop, false)
 })
 
+test('finalizeCancellationProbeForArtifacts redacts nested errors before provider_stop', async () => {
+  const { finalizeCancellationProbeForArtifacts } = await import(libUrl)
+  const secret = 'sk-or-lib-redact-test'
+  const redact = (t: string) => t.replaceAll(secret, '[REDACTED]')
+  const { probe, probeStop } = finalizeCancellationProbeForArtifacts(
+    {
+      id: 'cancellation_stream_abort',
+      status: 'inconclusive',
+      event_tally: { error_events: [`[openrouter] token=${secret} HTTP 402`], text_deltas: 0, done_events: 0, other_events: 0 },
+    },
+    redact,
+  )
+  assert.equal(probeStop.stop, true)
+  assert.equal(probe.status, 'provider_stop')
+  assert.equal(String(probe.event_tally?.error_events?.[0]).includes(secret), false)
+})
+
 test('countAggregateProviderErrors dedupes logical call ids and ignores provider_stop throws', async () => {
   const { countAggregateProviderErrors, collectProbeProviderStopScan } = await import(libUrl)
   const n = countAggregateProviderErrors({

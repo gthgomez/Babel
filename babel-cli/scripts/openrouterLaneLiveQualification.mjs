@@ -8,10 +8,9 @@ import { join, dirname } from 'node:path'
 import { execFileSync, spawnSync, execSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
-  attachProviderStopToResult,
+  buildCancellationProbeRedactedRecord,
   buildChatQualificationArtifacts,
-  captureRedactedCliRecord,
-  collectProbeProviderStopScan,
+  finalizeCancellationProbeForArtifacts,
   countAggregateProviderErrors,
   detectBillableProviderStop,
   gradeMultiFileHostChecks,
@@ -220,28 +219,14 @@ export async function executeOpenRouterLaneLiveQualification(options) {
       ? options.createCancellationRunner()
       : new OpenRouterApiRunner(model, { maxTokens: 800 }, { env: process.env })
     const ac = new AbortController()
-    const probe = await runStreamCancellationProbe(runner, {
+    const rawProbe = await runStreamCancellationProbe(runner, {
       signal: ac.signal,
       abort: () => ac.abort(),
       abortAfterMs: 120,
     })
-    probe.message = probe.message ? redactSecret(probe.message) : undefined
+    const { probe, probeStop } = finalizeCancellationProbeForArtifacts(rawProbe, redactSecret)
     report.results.push(probe)
-    redactedRunRecords.push({
-      id: probe.id,
-      ...captureRedactedCliRecord({ stdout: '', stderr: probe.message ?? '', exitCode: null, payload: null }, redactSecret),
-      cancellation_probe: {
-        status: probe.status,
-        interpretation: probe.interpretation ?? null,
-        content_deltas: probe.content_deltas ?? null,
-        event_tally: probe.event_tally ?? null,
-        latency_ms: probe.latency_ms,
-        usage: probe.usage ?? { actual_cost_usd: null, cost_precision: 'unknown' },
-        prior_status_reclassified_from: probe.prior_status_reclassified_from ?? null,
-      },
-    })
-    const probeStop = collectProbeProviderStopScan(probe)
-    attachProviderStopToResult(probe, probeStop)
+    redactedRunRecords.push(buildCancellationProbeRedactedRecord(probe, redactSecret))
     if (probeStop.stop) {
       report.stopped_billable = true
     }

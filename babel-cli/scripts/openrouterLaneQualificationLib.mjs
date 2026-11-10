@@ -68,6 +68,73 @@ export function attachProviderStopToResult(resultRow, stopScan) {
 }
 
 /**
+ * @param {{ text_deltas?: number, error_events?: string[], done_events?: number, other_events?: number } | null | undefined} tally
+ * @param {(t: string) => string} redact
+ */
+export function redactCancellationProbeEventTally(tally, redact) {
+  if (!tally || typeof tally !== 'object') return tally
+  return {
+    ...tally,
+    error_events: Array.isArray(tally.error_events) ? tally.error_events.map((m) => redact(String(m))) : [],
+  }
+}
+
+/**
+ * Redact nested probe fields, then apply provider-stop classification before persistence.
+ *
+ * @param {Record<string, unknown>} probe
+ * @param {(t: string) => string} redact
+ */
+export function finalizeCancellationProbeForArtifacts(probe, redact) {
+  /** @type {Record<string, unknown>} */
+  const finalized = { ...probe }
+  if (typeof finalized.message === 'string') {
+    finalized.message = redact(finalized.message)
+  }
+  if (finalized.event_tally) {
+    finalized.event_tally = redactCancellationProbeEventTally(
+      /** @type {{ error_events?: string[] }} */ (finalized.event_tally),
+      redact,
+    )
+  }
+  const probeStop = collectProbeProviderStopScan(
+    /** @type {{ message?: string, event_tally?: { error_events?: string[] } }} */ (finalized),
+  )
+  attachProviderStopToResult(
+    /** @type {{ id?: string, provider_stop_matches?: string[], provider_error_observed?: string | null, status?: string }} */ (
+      finalized
+    ),
+    probeStop,
+  )
+  return { probe: finalized, probeStop }
+}
+
+/**
+ * @param {Record<string, unknown>} probe finalized probe row
+ * @param {(t: string) => string} redact
+ */
+export function buildCancellationProbeRedactedRecord(probe, redact) {
+  return {
+    id: probe.id,
+    ...captureRedactedCliRecord(
+      { stdout: '', stderr: typeof probe.message === 'string' ? probe.message : '', exitCode: null, payload: null },
+      redact,
+    ),
+    cancellation_probe: {
+      status: probe.status ?? null,
+      interpretation: probe.interpretation ?? null,
+      content_deltas: probe.content_deltas ?? null,
+      event_tally: probe.event_tally ?? null,
+      provider_stop_matches: probe.provider_stop_matches ?? null,
+      provider_error_observed: probe.provider_error_observed ?? null,
+      latency_ms: probe.latency_ms ?? null,
+      usage: probe.usage ?? { actual_cost_usd: null, cost_precision: 'unknown' },
+      prior_status_reclassified_from: probe.prior_status_reclassified_from ?? null,
+    },
+  }
+}
+
+/**
  * @param {import('../src/runners/base.ts').RunnerInvocationMetadata | null | undefined} meta
  */
 export function summarizeRunnerUsage(meta) {
