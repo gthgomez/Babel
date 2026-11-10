@@ -1,0 +1,17 @@
+{
+  "schema": "desktop-ci/bridge-startup-mitigation-outcome/v1",
+  "qualification_head_sha": "49f2de8d",
+  "interpretation": "POST_MITIGATION_CI_OUTCOME_NOT_CAUSAL_PROOF",
+  "mitigation": {
+    "commit_sha": "49f2de8d",
+    "change": "isolatedCredentialHomeEnvironment(homeDir) in spawn-env-floor; shared-protocol bridge/stack tests set fixture credential-home",
+    "security_controls": "unchanged; negative startup harness unchanged"
+  },
+  "ci_outcome_reported_by_independent_review": "desktop-tests matrix green at 49f2de8d",
+  "does_not_establish": [
+    "That runner-home ACL was the sole failure mode on 42875345388",
+    "Controlled reproduction with redacted child stderr matching BridgeAclError"
+  ],
+  "linked_failure_record": "fixtures/desktop-ci/evidence/windows-desktop-bridge-startup-42875345388.json",
+  "next_proof_bar": "Optional: BABEL_TEST_SHARED_PROTOCOL_STARTUP_ARTIFACT harness or hosted artifact with allowlisted stderr codes only; still no raw credential-bearing stderr in CI"
+}

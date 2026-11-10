@@ -35,7 +35,9 @@ export function nodeChildSpawnEnvironment(overrides = {}) {
 }
 
 /**
- * Fixture-owned credential home for bridge children (Windows ACL on ~/.babel requires isolation).
+ * Fixture-owned credential home for spawn-floor bridge tests (isolates USERPROFILE/HOME).
+ * Mitigates risk that child homedir() resolves to a shared runner profile on Windows;
+ * does not assert a specific hosted failure mode — see fixtures/desktop-ci/evidence/.
  * @param {string} homeDir Writable empty home directory owned by the test fixture
  * @param {Record<string, string>} [overrides]
  */
