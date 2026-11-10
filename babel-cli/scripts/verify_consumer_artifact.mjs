@@ -12,9 +12,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const output = resolve(packageRoot, '../artifacts/consumer-package')
-const scratch = mkdtempSync(join(tmpdir(), 'babel consumer é-'))
-const project = join(scratch, 'project 空 space')
-const prefix = join(scratch, 'install prefix é')
+const isWin = process.platform === 'win32'
+// npm --prefix on Windows mishandles spaces and non-ASCII paths (CI ETIMEDOUT/hang). Unicode
+// qualification still uses consumer_environment config/state paths on every platform.
+const scratch = mkdtempSync(join(tmpdir(), isWin ? 'babel-consumer-' : 'babel consumer é-'))
+const project = join(scratch, isWin ? 'project-space' : 'project 空 space')
+const prefix = join(scratch, isWin ? 'install-prefix' : 'install prefix é')
 const user = join(scratch, 'user space')
 for (const dir of [output, project, user]) mkdirSync(dir, { recursive: true })
 const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
@@ -28,16 +31,64 @@ writeFileSync(env.npm_config_globalconfig, '')
 const guardedEnv = { ...env, NODE_OPTIONS: `--import=${pathToFileURL(guard).href}` }
 const configuredTuiEnv = { ...guardedEnv, BABEL_STATE_DIR: join(scratch, 'configured TUI state'), OPENAI_API_KEY: 'fixture-only' }
 const records = []
+function writeCommandFailureDiagnostics(diag) {
+  try {
+    mkdirSync(output, { recursive: true })
+    writeFileSync(join(output, 'command-failure-diagnostics.json'), JSON.stringify(diag, null, 2) + '\n')
+  } catch {
+    process.stderr.write(`${JSON.stringify(diag)}\n`)
+  }
+}
 function command(binary, args, options = {}) {
-  const result = spawnSync(binary, args, { cwd: project, env, encoding: 'utf8',
-    timeout: 120000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, ...options })
-  assert.ifError(result.error)
-  assert.ok((options.codes ?? [0]).includes(result.status), `${args.join(' ')}\n${result.stdout}\n${result.stderr}`)
+  const started = Date.now()
+  const { timeout: timeoutMs, codes, diagPhase, cwd: optCwd, env: optEnv, ...spawnRest } = options
+  const timeout = timeoutMs ?? 120000
+  const result = spawnSync(binary, args, {
+    cwd: optCwd ?? project,
+    env: optEnv ?? env,
+    encoding: 'utf8',
+    timeout,
+    maxBuffer: 16 * 1024 * 1024,
+    windowsHide: true,
+    ...spawnRest,
+  })
+  if (result.error || !(codes ?? [0]).includes(result.status)) {
+    const diag = {
+      schema: 'consumer-artifact/command-failure/v1',
+      phase: diagPhase ?? 'command',
+      platform: process.platform,
+      arch: process.arch,
+      node: process.version,
+      elapsed_ms: Date.now() - started,
+      timeout_ms: timeout,
+      cwd: optCwd ?? project,
+      install_prefix: prefix,
+      scratch_root: scratch,
+      prefix_encoding_policy: isWin ? 'ascii_install_prefix' : 'unicode_install_prefix',
+      argv: [binary, ...args].slice(0, 16),
+      error: result.error ? { message: result.error.message, code: result.error.code, errno: result.error.errno } : null,
+      status: result.status,
+      signal: result.signal,
+      stdout_tail: String(result.stdout ?? '').slice(-8000),
+      stderr_tail: String(result.stderr ?? '').slice(-8000),
+    }
+    writeCommandFailureDiagnostics(diag)
+    assert.fail(
+      result.error
+        ? `Consumer command error: ${result.error.code ?? result.error.message}\n${JSON.stringify(diag, null, 2)}`
+        : `Consumer command exit ${result.status}: ${args.join(' ')}\n${JSON.stringify(diag, null, 2)}`,
+    )
+  }
   return result
 }
-function npm(args, options = {}) { return command(process.execPath, [npmCli, ...args], { timeout: 300000, ...options }) }
+function npm(args, options = {}) {
+  return command(process.execPath, [npmCli, ...args], { timeout: 300000, diagPhase: 'npm', ...options })
+}
 function installArtifact(artifact) {
-  const result = npm(['install', '--prefix', prefix, '--omit=dev', '--no-audit', '--no-fund', artifact])
+  const result = npm(
+    ['install', '--prefix', prefix, '--omit=dev', '--no-audit', '--no-fund', artifact],
+    { diagPhase: 'npm_install_production' },
+  )
   assert.doesNotMatch(result.stdout + '\n' + result.stderr,
     /deprecated node-domexception|install-scripts[^\n]*protobufjs/i,
     'Production installation emitted a retired dependency warning')

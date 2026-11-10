@@ -24,6 +24,7 @@ Build provenance: `ensureBabelCliDistReady` (`fail` before live, `ensure` inside
 | `evidence/post-501-trial/redacted-run-records/<trial>.json` | Redacted CLI tails, terminal fields, workspace diffs **before** ephemeral run cleanup |
 | `evidence/post-502-trial/chat-scenarios-post-502-main.json` | Post-**#502** live matrix (`main_merge_sha` 9e34af80); does not overwrite post-501 |
 | `evidence/post-502-trial/redacted-run-records/post-502-main.json` | Redacted receipts for post-502 matrix |
+| `evidence/post-502-trial/diagnostics/multiturn-resume-executor-halted.json` | **EXECUTOR_HALTED** binding conflict (`conversation` scope + project resume), not harness/sandbox |
 
 Ephemeral session trees under `runs/` remain gitignored and are deleted after redacted records are written.
 
