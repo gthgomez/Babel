@@ -153,6 +153,22 @@ test('v3 preserves an explicit behavioral goal separately from a named green-tes
   assert.equal(oneLine.criteria.some(item => /parseSum\(2, 3\) returns 5/.test(item.description)), true,
     'the one-line control retains the same behavioral goal')
 
+  const repairEquivalent = inferTaskAcceptanceV3([
+    'Repair parser.js so parseSum(2, 3) returns 5.',
+    'Requirements:',
+    '- `npm test` must pass.',
+  ].join('\n'))
+  assert.deepEqual(
+    repairEquivalent.criteria.map(item => item.description),
+    [
+      'Repair parser.js so parseSum(2, 3) returns 5.',
+      '`npm test` must pass.',
+    ],
+    'independent probe: Repair opening goal is not displaced by npm-only requirements',
+  )
+  assert.equal(repairEquivalent.criteria.length, meaning.criteria.length,
+    'Repair must preserve the same criterion count as Fix for metamorphic admission')
+
   const quotedOnly = inferTaskAcceptanceV3([
     'Check the documented example.',
     'Requirements:',
