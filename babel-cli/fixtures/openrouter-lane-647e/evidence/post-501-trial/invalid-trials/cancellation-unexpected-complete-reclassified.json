@@ -1,0 +1,12 @@
+{
+  "schema": "openrouter-lane-647e/invalid-interpretation/v1",
+  "verdict": "INCONCLUSIVE",
+  "preserved_from": "cancellation-probe-corrected.json",
+  "prior_status": "unexpected_complete",
+  "prior_deltas": 1,
+  "prior_latency_ms": 123,
+  "reclassification_reason": "Production adapter yields typed { type: 'error', message: '[openrouter] Request cancelled' } then returns; counting every stream event as a content delta misread cancellation as successful completion.",
+  "must_not_count_as_cancellation_pass": true,
+  "must_not_count_as_cancellation_fail": true,
+  "harness_fix_commit_note": "runStreamCancellationProbe inspects event types; status inconclusive when only cancellation error events are observed."
+}

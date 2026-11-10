@@ -2,6 +2,7 @@
  * Pure helpers for OpenRouter lane 647e qualification (offline-testable).
  */
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Patterns that must stop further billable provider calls. */
@@ -15,7 +16,7 @@ const PROVIDER_STOP_PATTERNS = [
   /\bHTTP_402\b/,
   /\bProviderError\b/,
   /\bprovider error\b/i,
-  /stream closed before \[DONE\]/i,
+  /stream closed before (?:terminal )?\[DONE\](?: marker)?/i,
   /provider_stop:/i,
 ]
 
@@ -91,6 +92,153 @@ export function captureWorkspaceDiff(ws) {
  * @param {string} ws
  * @param {string} packageRoot babel-cli root
  */
+/**
+ * @param {unknown} usage engine usage payload from chat-headless JSON
+ */
+export function summarizeChatHeadlessUsage(usage) {
+  if (!usage || typeof usage !== 'object') {
+    return {
+      actual_cost_usd: null,
+      total_input_tokens: null,
+      total_output_tokens: null,
+      total_tokens: null,
+      cost_complete: null,
+      cost_precision: 'unknown',
+    }
+  }
+  const u = /** @type {Record<string, unknown>} */ (usage)
+  const costKnown = u.costComplete === true && Number.isFinite(u.completeCostUSD)
+  return {
+    actual_cost_usd: costKnown
+      ? /** @type {number} */ (u.completeCostUSD)
+      : (typeof u.actualCostUSD === 'number'
+          ? u.actualCostUSD
+          : typeof u.reportedCostUSD === 'number'
+            ? u.reportedCostUSD
+            : null),
+    total_input_tokens: typeof u.totalInputTokens === 'number' ? u.totalInputTokens : null,
+    total_output_tokens: typeof u.totalOutputTokens === 'number' ? u.totalOutputTokens : null,
+    total_tokens: typeof u.totalTokens === 'number' ? u.totalTokens : null,
+    cost_complete: u.costComplete === true,
+    cost_precision: costKnown ? 'complete' : u.usageComplete === false ? 'partial' : 'unknown',
+  }
+}
+
+/** Ordinary-bug fixture: host oracle score plus workspace npm test. */
+export function gradeOrdinaryBugHostChecks(ws, packageRoot) {
+  const score = spawnSync(
+    process.execPath,
+    [join(packageRoot, 'fixtures/coding-output-acceptance/oracle/ordinary-bug/score.mjs'), ws],
+    { encoding: 'utf8' },
+  )
+  const test = spawnSync('npm', ['test'], { cwd: ws, encoding: 'utf8', shell: true })
+  return {
+    kind: 'ordinary-bug',
+    oracle_score_exit: score.status,
+    oracle_stdout: score.stdout.trim().slice(0, 200),
+    math_js: readFileSync(join(ws, 'src/math.js'), 'utf8').trim(),
+    npm_test_exit: test.status,
+  }
+}
+
+export function gradeMultiFileHostChecks(ws, packageRoot) {
+  const test = spawnSync('npm', ['test'], { cwd: ws, encoding: 'utf8', shell: true })
+  return {
+    kind: 'multi-file',
+    npm_test_exit: test.status,
+    ...gradeMultiFileExportSemantics(ws, packageRoot),
+  }
+}
+
+/**
+ * Build report row + redacted record before stop-on-provider-error discard.
+ *
+ * @param {string} id
+ * @param {string} ws
+ * @param {{ stdout?: string, stderr?: string, exitCode?: number, payload?: Record<string, unknown> | null, timedOut?: boolean, failureCapsule?: { kind?: string, failure_class_hint?: string } | null }} cli
+ * @param {(t: string) => string} redact
+ * @param {string} packageRoot
+ * @param {number} t0
+ */
+export function buildChatQualificationArtifacts(id, ws, cli, redact, packageRoot, t0) {
+  const blob = redact(`${cli.stderr ?? ''}\n${cli.stdout ?? ''}`)
+  const stopScan = detectBillableProviderStop(blob)
+  const payload = cli.payload && typeof cli.payload === 'object' ? cli.payload : {}
+  const sessionId =
+    typeof payload.session_id === 'string'
+      ? payload.session_id
+      : typeof payload.run_dir === 'string'
+        ? payload.run_dir.split('/').pop()
+        : null
+  const row = {
+    phase: 'paid_provider_execution',
+    id,
+    latency_ms: Date.now() - t0,
+    exit_code: cli.exitCode ?? null,
+    terminal_outcome: payload.terminal_outcome ?? null,
+    status: payload.status ?? null,
+    session_id: sessionId,
+    run_dir_basename: sessionId,
+    usage: summarizeChatHeadlessUsage(payload.usage ?? null),
+    timed_out: cli.timedOut === true,
+    failure_capsule: cli.failureCapsule
+      ? { kind: cli.failureCapsule.kind, failure_class_hint: cli.failureCapsule.failure_class_hint }
+      : null,
+    provider_error_observed: stopScan.matches[0] ?? null,
+    provider_stop_matches: stopScan.matches,
+    stopped_billable_after_cell: stopScan.stop,
+  }
+  const redactedRecord = {
+    id,
+    session_id: sessionId,
+    ...captureRedactedCliRecord(cli, redact),
+    workspace_diff: captureWorkspaceDiff(ws),
+    usage: row.usage,
+    provider_stop_matches: stopScan.matches,
+  }
+  return { row, redactedRecord, stopScan, blob }
+}
+
+export function isCancellationStreamErrorMessage(message) {
+  return /\[([^\]]+)\]\s*Request cancelled/i.test(message) || /\bRequest cancelled\b/i.test(message)
+}
+
+export function isProviderStreamTerminationFailure(message) {
+  return /stream closed before (?:terminal )?\[DONE\] marker/i.test(message)
+}
+
+/**
+ * @param {{ text_deltas: number, error_events: string[], done_events: number, other_events: number }} tally
+ */
+export function classifyCancellationProbeStatus(tally) {
+  const cancellationOnly =
+    tally.error_events.length > 0 &&
+    tally.error_events.every((m) => isCancellationStreamErrorMessage(m)) &&
+    tally.text_deltas === 0 &&
+    tally.done_events === 0
+  if (cancellationOnly) {
+    return {
+      status: 'inconclusive',
+      interpretation:
+        'Adapter emitted typed error event for caller cancellation; single event does not certify truncated billing or usage.',
+      prior_status_reclassified_from: 'unexpected_complete',
+    }
+  }
+  if (tally.error_events.some((m) => isProviderStreamTerminationFailure(m))) {
+    return { status: 'provider_stream_failure', interpretation: 'Stream termination before [DONE] is not successful cancellation.' }
+  }
+  if (tally.done_events > 0 && tally.text_deltas > 0) {
+    return { status: 'unexpected_complete', interpretation: 'Stream delivered content and terminal done after abort timing.' }
+  }
+  if (tally.error_events.some((m) => isCancellationStreamErrorMessage(m)) && tally.text_deltas > 0) {
+    return {
+      status: 'inconclusive',
+      interpretation: 'Partial content before cancellation error; billing outcome unknown without usage reconciliation.',
+    }
+  }
+  return { status: 'inconclusive', interpretation: 'No typed cancellation or terminal done evidence.' }
+}
+
 export function gradeMultiFileExportSemantics(ws, packageRoot) {
   const score = spawnSync(
     process.execPath,
@@ -136,7 +284,7 @@ export function countAggregateProviderErrors(report) {
  */
 export async function runStreamCancellationProbe(runner, options) {
   const t0 = Date.now()
-  let deltas = 0
+  const tally = { text_deltas: 0, error_events: [], done_events: 0, other_events: 0 }
   const prompt = options.prompt ?? 'Write 20 paragraphs about graph algorithms.'
   const timer =
     options.abortAfterMs != null
@@ -145,32 +293,49 @@ export async function runStreamCancellationProbe(runner, options) {
         }, options.abortAfterMs)
       : undefined
   try {
-    for await (const _ev of runner.executeWithToolsStream(
+    for await (const ev of runner.executeWithToolsStream(
       [{ role: 'user', content: prompt }],
       [],
       undefined,
       options.signal,
     )) {
-      deltas++
+      const type = ev && typeof ev === 'object' ? ev.type : undefined
+      if (type === 'text_delta' || type === 'thought_delta') tally.text_deltas += 1
+      else if (type === 'error') tally.error_events.push(String(ev.message ?? ''))
+      else if (type === 'done') tally.done_events += 1
+      else tally.other_events += 1
     }
     const meta = runner.getLastInvocationMetadata?.() ?? null
+    const classified = classifyCancellationProbeStatus(tally)
     return {
       id: 'cancellation_stream_abort',
       phase: 'paid_provider_execution',
-      status: 'unexpected_complete',
-      deltas,
+      status: classified.status,
+      interpretation: classified.interpretation,
+      ...(classified.prior_status_reclassified_from
+        ? { prior_status_reclassified_from: classified.prior_status_reclassified_from }
+        : {}),
+      event_tally: tally,
+      content_deltas: tally.text_deltas,
+      cancellation_error_observed: tally.error_events.some((m) => isCancellationStreamErrorMessage(m)),
       latency_ms: Date.now() - t0,
       signal_forwarded: true,
       usage: summarizeRunnerUsage(meta),
     }
   } catch (e) {
     const meta = runner.getLastInvocationMetadata?.() ?? null
+    const message = e instanceof Error ? e.message : String(e)
     return {
       id: 'cancellation_stream_abort',
       phase: 'paid_provider_execution',
-      status: 'aborted_or_error',
-      message: String(e).slice(0, 300),
-      deltas,
+      status: isCancellationStreamErrorMessage(message) ? 'inconclusive' : 'aborted_or_error',
+      message: message.slice(0, 300),
+      interpretation: isCancellationStreamErrorMessage(message)
+        ? 'Thrown cancellation does not alone prove billing truncation.'
+        : undefined,
+      event_tally: tally,
+      content_deltas: tally.text_deltas,
+      cancellation_error_observed: isCancellationStreamErrorMessage(message),
       latency_ms: Date.now() - t0,
       signal_forwarded: true,
       usage: summarizeRunnerUsage(meta),

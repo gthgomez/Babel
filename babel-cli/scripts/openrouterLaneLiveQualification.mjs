@@ -8,11 +8,11 @@ import { join, dirname } from 'node:path'
 import { execFileSync, spawnSync, execSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
-  captureRedactedCliRecord,
-  captureWorkspaceDiff,
+  buildChatQualificationArtifacts,
   countAggregateProviderErrors,
   detectBillableProviderStop,
-  gradeMultiFileExportSemantics,
+  gradeMultiFileHostChecks,
+  gradeOrdinaryBugHostChecks,
   runStreamCancellationProbe,
 } from './openrouterLaneQualificationLib.mjs'
 
@@ -75,39 +75,12 @@ export async function executeOpenRouterLaneLiveQualification(options) {
   }
 
   function hostChecks(ws, kind) {
-    const checks = {}
-    if (kind === 'ordinary-bug') {
-      const score = spawnSync(
-        process.execPath,
-        [join(packageRoot, 'fixtures/coding-output-acceptance/oracle/ordinary-bug/score.mjs'), ws],
-        { encoding: 'utf8' },
-      )
-      checks.oracle_score_exit = score.status
-      checks.oracle_stdout = score.stdout.trim().slice(0, 200)
-      checks.math_js = readFileSync(join(ws, 'src/math.js'), 'utf8').trim()
-      const test = spawnSync('npm', ['test'], { cwd: ws, encoding: 'utf8', shell: true })
-      checks.npm_test_exit = test.status
-    }
-    const test = spawnSync('npm', ['test'], { cwd: ws, encoding: 'utf8', shell: true })
-    return {
-      npm_test_exit: test.status,
-      ...gradeMultiFileExportSemantics(ws, packageRoot),
-    }
+    if (kind === 'ordinary-bug') return gradeOrdinaryBugHostChecks(ws, packageRoot)
+    if (kind === 'multi-file') return gradeMultiFileHostChecks(ws, packageRoot)
+    throw new Error(`unsupported host check kind: ${kind}`)
   }
 
   const redactedRunRecords = []
-
-  function summarizeUsage(usage) {
-    if (!usage || typeof usage !== 'object') return null
-    return {
-      actual_cost_usd: usage.actualCostUSD ?? usage.reportedCostUSD ?? null,
-      total_input_tokens: usage.totalInputTokens ?? null,
-      total_output_tokens: usage.totalOutputTokens ?? null,
-      total_tokens: usage.totalTokens ?? null,
-      cost_complete: usage.costComplete ?? null,
-      model_breakdown_keys: usage.modelBreakdown ? Object.keys(usage.modelBreakdown) : [],
-    }
-  }
 
   function baseEnv(ws) {
     return {
@@ -145,42 +118,21 @@ export async function executeOpenRouterLaneLiveQualification(options) {
         ensureDist: 'ensure',
       },
     )
-    const blob = redactSecret(`${cli.stderr}\n${cli.stdout}`)
-    const stopScan = detectBillableProviderStop(blob)
+    const { row, redactedRecord, stopScan } = buildChatQualificationArtifacts(
+      id,
+      ws,
+      cli,
+      redactSecret,
+      packageRoot,
+      t0,
+    )
+    redactedRunRecords.push(redactedRecord)
+    report.results.push(row)
     if (stopScan.stop) {
       const err = new Error(`provider_stop:${stopScan.matches[0]}`)
       err.providerError = stopScan.matches[0]
       throw err
     }
-    const sessionId =
-      typeof cli.payload?.session_id === 'string'
-        ? cli.payload.session_id
-        : typeof cli.payload?.run_dir === 'string'
-          ? cli.payload.run_dir.split('/').pop()
-          : null
-    const row = {
-      phase: 'paid_provider_execution',
-      id,
-      latency_ms: Date.now() - t0,
-      exit_code: cli.exitCode,
-      terminal_outcome: cli.payload?.terminal_outcome ?? null,
-      status: cli.payload?.status ?? null,
-      session_id: sessionId,
-      run_dir_basename: sessionId,
-      usage: summarizeUsage(cli.payload?.usage ?? null),
-      timed_out: cli.timedOut === true,
-      failure_capsule: cli.failureCapsule
-        ? { kind: cli.failureCapsule.kind, failure_class_hint: cli.failureCapsule.failure_class_hint }
-        : null,
-      provider_error_observed: stopScan.matches[0] ?? null,
-      provider_stop_matches: stopScan.matches,
-    }
-    redactedRunRecords.push({
-      id,
-      session_id: sessionId,
-      ...captureRedactedCliRecord(cli, redactSecret),
-      workspace_diff: captureWorkspaceDiff(ws),
-    })
     return row
   }
 
@@ -214,18 +166,15 @@ export async function executeOpenRouterLaneLiveQualification(options) {
       const ws1 = freshWs('ordinary-bug')
       const r1 = runChat('readonly_explain', ws1, 'Explain what this project does. Do not edit any files.')
       r1.host_checks = hostChecks(ws1, 'ordinary-bug')
-      report.results.push(r1)
 
       repairWs = freshWs('ordinary-bug')
       const r2 = runChat('vague_repair', repairWs, 'fix this')
       r2.host_checks = hostChecks(repairWs, 'ordinary-bug')
       repairSession = r2.session_id
-      report.results.push(r2)
 
       const ws3 = freshWs('multi-file')
       const r3 = runChat('vague_feature_export', ws3, 'make export work')
       r3.host_checks = hostChecks(ws3, 'multi-file')
-      report.results.push(r3)
 
       if (repairSession) {
         const r4 = runChat('multiturn_resume', repairWs, 'Run npm test and tell me if everything passes now.', [
@@ -236,7 +185,6 @@ export async function executeOpenRouterLaneLiveQualification(options) {
         ])
         r4.host_checks = hostChecks(repairWs, 'ordinary-bug')
         r4.resume_target_session = repairSession
-        report.results.push(r4)
       } else {
         report.results.push({
           phase: 'paid_provider_execution',
@@ -269,9 +217,12 @@ export async function executeOpenRouterLaneLiveQualification(options) {
       ...captureRedactedCliRecord({ stdout: '', stderr: probe.message ?? '', exitCode: null, payload: null }, redactSecret),
       cancellation_probe: {
         status: probe.status,
-        deltas: probe.deltas,
+        interpretation: probe.interpretation ?? null,
+        content_deltas: probe.content_deltas ?? null,
+        event_tally: probe.event_tally ?? null,
         latency_ms: probe.latency_ms,
         usage: probe.usage ?? { actual_cost_usd: null, cost_precision: 'unknown' },
+        prior_status_reclassified_from: probe.prior_status_reclassified_from ?? null,
       },
     })
     const probeStop = probe.message ? detectBillableProviderStop(probe.message) : { stop: false, matches: [] }
