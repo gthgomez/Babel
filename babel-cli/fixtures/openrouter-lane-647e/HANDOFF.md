@@ -36,7 +36,7 @@ Ephemeral session trees under `runs/` remain gitignored and are deleted after re
 
 ## Stop-on-provider-error
 
-`detectBillableProviderStop` includes `[openrouter] Network error`, HTTP 402, 401/403/429/5xx, and **`[openrouter] stream closed before terminal [DONE] marker`**. `runChat` appends redacted rows + usage **before** throwing on stop. `hostChecks` routes ordinary-bug vs multi-file oracles separately.
+`detectBillableProviderStop` includes `[openrouter] Network error`, HTTP 402, 401/403/429/5xx, and **`[openrouter] stream closed before terminal [DONE] marker`**. Probe stops inspect `event_tally.error_events` via `collectProbeProviderStopScan`, not `probe.message` alone. `runChat` appends redacted rows + usage **before** throwing on stop; `provider_errors_observed` dedupes by logical call `id` and ignores `provider_stop:` throws. Offline orchestrator e2e: `openrouterLaneLiveQualification.test.ts`.
 
 ## Scans
 
