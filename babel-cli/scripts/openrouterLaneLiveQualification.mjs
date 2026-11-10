@@ -8,7 +8,10 @@ import { join, dirname } from 'node:path'
 import { execFileSync, spawnSync, execSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
+  attachProviderStopToResult,
   buildChatQualificationArtifacts,
+  captureRedactedCliRecord,
+  collectProbeProviderStopScan,
   countAggregateProviderErrors,
   detectBillableProviderStop,
   gradeMultiFileHostChecks,
@@ -26,6 +29,11 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
  *   pre501EvidenceNote?: string
  *   runsDir?: string
  *   cancellationOnly?: boolean
+ *   createCancellationRunner?: () => { executeWithToolsStream: Function, getLastInvocationMetadata?: () => unknown }
+ *   redactedRunRecordsPath?: string
+ *   runChatCliFixture?: (args: { id: string, ws: string, prompt: string, extra: string[] }) => {
+ *     exitCode?: number, stderr?: string, stdout?: string, payload?: Record<string, unknown> | null, timedOut?: boolean
+ *   } | null | undefined
  * }} options
  */
 export async function executeOpenRouterLaneLiveQualification(options) {
@@ -94,7 +102,9 @@ export async function executeOpenRouterLaneLiveQualification(options) {
 
   function runChat(id, ws, prompt, extra = []) {
     const t0 = Date.now()
-    const cli = runBabelCli(
+    const fixtureCli = options.runChatCliFixture?.({ id, ws, prompt, extra })
+    const cli = fixtureCli ??
+      runBabelCli(
       [
         'run',
         '--mode',
@@ -117,7 +127,7 @@ export async function executeOpenRouterLaneLiveQualification(options) {
         timeoutMs: 240000,
         ensureDist: 'ensure',
       },
-    )
+      )
     const { row, redactedRecord, stopScan } = buildChatQualificationArtifacts(
       id,
       ws,
@@ -194,7 +204,10 @@ export async function executeOpenRouterLaneLiveQualification(options) {
         })
       }
     } catch (e) {
-      report.provider_errors.push(redactSecret(String(e)))
+      const message = redactSecret(String(e))
+      if (!/provider_stop:/.test(message)) {
+        report.provider_errors.push(message)
+      }
       report.stopped_billable = true
     }
   } else {
@@ -203,7 +216,9 @@ export async function executeOpenRouterLaneLiveQualification(options) {
   }
 
   if (!report.stopped_billable) {
-    const runner = new OpenRouterApiRunner(model, { maxTokens: 800 }, { env: process.env })
+    const runner = options.createCancellationRunner
+      ? options.createCancellationRunner()
+      : new OpenRouterApiRunner(model, { maxTokens: 800 }, { env: process.env })
     const ac = new AbortController()
     const probe = await runStreamCancellationProbe(runner, {
       signal: ac.signal,
@@ -225,9 +240,9 @@ export async function executeOpenRouterLaneLiveQualification(options) {
         prior_status_reclassified_from: probe.prior_status_reclassified_from ?? null,
       },
     })
-    const probeStop = probe.message ? detectBillableProviderStop(probe.message) : { stop: false, matches: [] }
+    const probeStop = collectProbeProviderStopScan(probe)
+    attachProviderStopToResult(probe, probeStop)
     if (probeStop.stop) {
-      report.provider_errors.push(...probeStop.matches)
       report.stopped_billable = true
     }
   }
@@ -242,11 +257,13 @@ export async function executeOpenRouterLaneLiveQualification(options) {
   report.provider_errors_observed = countAggregateProviderErrors(report)
   report.verdict = report.stopped_billable ? 'provider_stop' : 'provider_calls_completed'
 
-  const recordsPath = join(
-    packageRoot,
-    'fixtures/openrouter-lane-647e/evidence/post-501-trial/redacted-run-records',
-    `${trialLabel}.json`,
-  )
+  const recordsPath =
+    options.redactedRunRecordsPath ??
+    join(
+      packageRoot,
+      'fixtures/openrouter-lane-647e/evidence/post-501-trial/redacted-run-records',
+      `${trialLabel}.json`,
+    )
   mkdirSync(dirname(recordsPath), { recursive: true })
   writeFileSync(
     recordsPath,
@@ -262,7 +279,9 @@ export async function executeOpenRouterLaneLiveQualification(options) {
       2,
     ) + '\n',
   )
-  report.redacted_run_records_path = `fixtures/openrouter-lane-647e/evidence/post-501-trial/redacted-run-records/${trialLabel}.json`
+  report.redacted_run_records_path =
+    options.redactedRunRecordsPath ??
+    `fixtures/openrouter-lane-647e/evidence/post-501-trial/redacted-run-records/${trialLabel}.json`
 
   mkdirSync(dirname(outputPath), { recursive: true })
   writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n')

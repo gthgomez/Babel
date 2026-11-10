@@ -23,17 +23,21 @@ test('detectBillableProviderStop catches Network error and HTTP 402', async () =
   assert.equal(detectBillableProviderStop('normal assistant chunk').stop, false)
 })
 
-test('countAggregateProviderErrors includes exception list and per-cell flags', async () => {
-  const { countAggregateProviderErrors } = await import(libUrl)
+test('countAggregateProviderErrors dedupes logical call ids and ignores provider_stop throws', async () => {
+  const { countAggregateProviderErrors, collectProbeProviderStopScan } = await import(libUrl)
   const n = countAggregateProviderErrors({
-    provider_errors: ['one'],
+    provider_errors: ['transport glitch', 'provider_stop:402'],
     results: [
-      { provider_error_observed: '[openrouter] Network error' },
-      { provider_error_observed: null },
-      { provider_stop_matches: ['402'] },
+      { id: 'vague_repair', provider_error_observed: '[openrouter] Network error' },
+      { id: 'multiturn_resume', provider_error_observed: null },
+      { id: 'cancellation_stream_abort', provider_stop_matches: ['402'] },
     ],
   })
   assert.equal(n, 3)
+  const probeScan = collectProbeProviderStopScan({
+    event_tally: { error_events: ['[openrouter] stream closed before terminal [DONE] marker'] },
+  })
+  assert.equal(probeScan.stop, true)
 })
 
 test('gradeMultiFileExportSemantics fails on unmodified broken export fixture', async () => {

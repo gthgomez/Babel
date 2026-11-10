@@ -34,6 +34,40 @@ export function detectBillableProviderStop(blob) {
 }
 
 /**
+ * @param {string[]} texts
+ */
+export function detectProviderStopFromTexts(texts) {
+  const blob = texts.filter((t) => typeof t === 'string' && t.length > 0).join('\n')
+  return detectBillableProviderStop(blob)
+}
+
+/**
+ * Cancellation probe may surface provider failures only as typed stream error events.
+ *
+ * @param {{ message?: string, event_tally?: { error_events?: string[] } }} probe
+ */
+export function collectProbeProviderStopScan(probe) {
+  const texts = []
+  if (typeof probe.message === 'string') texts.push(probe.message)
+  const errors = probe.event_tally?.error_events
+  if (Array.isArray(errors)) texts.push(...errors)
+  return detectProviderStopFromTexts(texts)
+}
+
+/**
+ * @param {{ id?: string, provider_stop_matches?: string[], provider_error_observed?: string | null, status?: string }} resultRow
+ * @param {{ stop: boolean, matches: string[] }} stopScan
+ */
+export function attachProviderStopToResult(resultRow, stopScan) {
+  if (!stopScan.stop) return
+  resultRow.provider_stop_matches = stopScan.matches
+  resultRow.provider_error_observed = stopScan.matches[0] ?? null
+  if (resultRow.id === 'cancellation_stream_abort') {
+    resultRow.status = 'provider_stop'
+  }
+}
+
+/**
  * @param {import('../src/runners/base.ts').RunnerInvocationMetadata | null | undefined} meta
  */
 export function summarizeRunnerUsage(meta) {
@@ -199,6 +233,52 @@ export function buildChatQualificationArtifacts(id, ws, cli, redact, packageRoot
   return { row, redactedRecord, stopScan, blob }
 }
 
+/** Non-billable runner that mirrors OpenRouter caller-cancel typed error events (offline qualification only). */
+export function createOfflineOpenRouterCancellationFixtureRunner() {
+  return {
+    getLastInvocationMetadata: () => null,
+    async *executeWithToolsStream(
+      _messages,
+      _tools,
+      _systemPrompt,
+      _signal,
+    ) {
+      yield { type: 'error', message: '[openrouter] Request cancelled' }
+    },
+  }
+}
+
+export function createOfflineOpenRouterHttp402FixtureRunner() {
+  return {
+    getLastInvocationMetadata: () => null,
+    async *executeWithToolsStream() {
+      yield { type: 'error', message: '[openrouter] HTTP 402 Payment Required' }
+    },
+  }
+}
+
+export function createOfflineOpenRouterTruncatedStreamFixtureRunner() {
+  return {
+    getLastInvocationMetadata: () => null,
+    async *executeWithToolsStream() {
+      yield { type: 'error', message: '[openrouter] stream closed before terminal [DONE] marker' }
+    },
+  }
+}
+
+export function createOfflineOpenRouterCancellationWithUsageFixtureRunner() {
+  return {
+    getLastInvocationMetadata: () => ({
+      estimated_cost_usd: 0.004,
+      total_tokens: 120,
+      cost_precision: 'reported',
+    }),
+    async *executeWithToolsStream() {
+      yield { type: 'error', message: '[openrouter] Request cancelled' }
+    },
+  }
+}
+
 export function isCancellationStreamErrorMessage(message) {
   return /\[([^\]]+)\]\s*Request cancelled/i.test(message) || /\bRequest cancelled\b/i.test(message)
 }
@@ -262,18 +342,28 @@ export function gradeMultiFileExportSemantics(ws, packageRoot) {
 }
 
 /**
- * @param {{ provider_errors?: string[], results?: Array<{ provider_error_observed?: string | null, provider_stop_matches?: string[] }> }} report
+ * Count provider stops once per logical call id (result row id); exclude duplicate provider_stop throws.
+ *
+ * @param {{ provider_errors?: string[], results?: Array<{ id?: string, provider_error_observed?: string | null, provider_stop_matches?: string[] }> }} report
  */
 export function countAggregateProviderErrors(report) {
-  const fromExceptions = Array.isArray(report.provider_errors) ? report.provider_errors.length : 0
-  const fromCells = Array.isArray(report.results)
-    ? report.results.filter(
-        (r) =>
-          (typeof r.provider_error_observed === 'string' && r.provider_error_observed.length > 0) ||
-          (Array.isArray(r.provider_stop_matches) && r.provider_stop_matches.length > 0),
-      ).length
-    : 0
-  return fromExceptions + fromCells
+  const seenCallIds = new Set()
+  let count = 0
+  for (const row of report.results ?? []) {
+    const callId = typeof row.id === 'string' ? row.id : null
+    const stopped =
+      (typeof row.provider_error_observed === 'string' && row.provider_error_observed.length > 0) ||
+      (Array.isArray(row.provider_stop_matches) && row.provider_stop_matches.length > 0)
+    if (!stopped || !callId || seenCallIds.has(callId)) continue
+    seenCallIds.add(callId)
+    count += 1
+  }
+  for (const err of report.provider_errors ?? []) {
+    const text = String(err)
+    if (/provider_stop:/.test(text)) continue
+    count += 1
+  }
+  return count
 }
 
 /**
