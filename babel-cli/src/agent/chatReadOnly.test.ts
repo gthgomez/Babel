@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deniesReadOnlyChatAction, deniesReadOnlyTaskAction, filterReadOnlyChatTools, filterReadOnlyTaskTools } from './chatReadOnly.js';
+import { deniesReadOnlyChatAction, deniesReadOnlyTaskAction, filterChatToolNamesForTask, filterReadOnlyChatTools, filterReadOnlyTaskTools } from './chatReadOnly.js';
 import type { ToolDefinition } from '../runners/base.js';
 import { computeTerminalOutcome } from './chatEngineObservability.js';
 import { detectAndBuildBlockedReport } from './chatEngineSupport.js';
@@ -117,7 +117,7 @@ test('read-only chat denies mutation and delegation before special-case dispatch
     for (const action of ['write_file', 'str_replace', 'apply_patch', 'run_command', 'test_run', 'sub_agent', 'mcp_request', 'memory_query', 'search', 'semantic_search', 'future_tool']) {
       assert.equal(deniesReadOnlyChatAction(action, env), true, action);
     }
-    for (const action of ['read_file', 'read_range', 'read_artifact', 'list_dir', 'grep', 'glob']) {
+    for (const action of ['read_file', 'read_range', 'read_artifact', 'list_dir', 'grep', 'glob', 'request_user_decision']) {
       assert.equal(deniesReadOnlyChatAction(action, env), false, action);
     }
   }
@@ -125,9 +125,9 @@ test('read-only chat denies mutation and delegation before special-case dispatch
 });
 
 test('read-only tool advertisement matches enforcement without changing normal chat', () => {
-  const definitions = ['read_file', 'read_range', 'read_artifact', 'grep', 'glob', 'list_dir', 'run_command', 'sub_agent', 'write_file', 'search', 'future_tool'].map(name => ({ type: 'function', function: { name, description: name, parameters: { type: 'object', properties: {} } } })) as ToolDefinition[];
+  const definitions = ['read_file', 'read_range', 'read_artifact', 'grep', 'glob', 'list_dir', 'request_user_decision', 'run_command', 'sub_agent', 'write_file', 'search', 'future_tool'].map(name => ({ type: 'function', function: { name, description: name, parameters: { type: 'object', properties: {} } } })) as ToolDefinition[];
   for (const env of [{ BABEL_READ_ONLY: 'true' }, { BABEL_EXECUTION_PROFILE: 'read_only_audit' }]) {
-    assert.deepEqual(filterReadOnlyChatTools(definitions, env).map(tool => tool.function.name), ['read_file', 'read_range', 'read_artifact', 'grep', 'glob', 'list_dir']);
+    assert.deepEqual(filterReadOnlyChatTools(definitions, env).map(tool => tool.function.name), ['read_file', 'read_range', 'read_artifact', 'grep', 'glob', 'list_dir', 'request_user_decision']);
   }
   assert.equal(filterReadOnlyChatTools(definitions, {}), definitions);
 });
@@ -143,6 +143,10 @@ test('accepted no-change scope denies mutation and shell expansion while child d
   assert.equal(deniesReadOnlyTaskAction({ type: 'sub_agent', task: 'inspect', mutation: true }, 'READ_ONLY', []), false);
   assert.equal(deniesReadOnlyChatAction('sub_agent', { BABEL_EXECUTION_PROFILE: 'read_only_audit' }), true);
   assert.equal(deniesReadOnlyTaskAction({ type: 'read_file', path: 'fixture.txt' }, 'READ_ONLY', []), false);
+  assert.equal(deniesReadOnlyTaskAction({
+    type: 'request_user_decision', question: 'Which output?', options: ['A', 'B'], impact: 'Changes the result.',
+  }, 'READ_ONLY', []), false, 'the control request pauses without granting action authority');
+  assert.ok(filterChatToolNamesForTask(['request_user_decision'], 'READ_ONLY', [], { BABEL_READ_ONLY: 'true' }).includes('request_user_decision'));
   assert.equal(deniesReadOnlyTaskAction({ type: 'write_file', path: 'fixture.txt', content: 'allowed' }, 'MUTATING', []), false);
 });
 
@@ -152,10 +156,10 @@ test('accepted no-change scope preserves exactly declared foreground verificatio
     assert.equal(deniesReadOnlyTaskAction({ type, command: 'npm test' }, 'READ_ONLY', []), true);
     assert.equal(deniesReadOnlyChatAction(type, { BABEL_EXECUTION_PROFILE: 'read_only_audit' }), true);
   }
-  const tools = ['read_file', 'semantic_search', 'write_file', 'run_command', 'test_run', 'sub_agent', 'finish'].map(name => ({
+  const tools = ['read_file', 'semantic_search', 'write_file', 'run_command', 'test_run', 'sub_agent', 'request_user_decision', 'finish'].map(name => ({
     type: 'function', function: { name, description: name, parameters: { type: 'object', properties: {} } },
   })) as ToolDefinition[];
-  assert.deepEqual(filterReadOnlyTaskTools(tools, 'READ_ONLY', []).map(tool => tool.function.name), ['read_file', 'semantic_search', 'sub_agent', 'finish']);
-  assert.deepEqual(filterReadOnlyTaskTools(tools, 'READ_ONLY', ['npm test']).map(tool => tool.function.name), ['read_file', 'semantic_search', 'run_command', 'test_run', 'sub_agent', 'finish']);
+  assert.deepEqual(filterReadOnlyTaskTools(tools, 'READ_ONLY', []).map(tool => tool.function.name), ['read_file', 'semantic_search', 'sub_agent', 'request_user_decision', 'finish']);
+  assert.deepEqual(filterReadOnlyTaskTools(tools, 'READ_ONLY', ['npm test']).map(tool => tool.function.name), ['read_file', 'semantic_search', 'run_command', 'test_run', 'sub_agent', 'request_user_decision', 'finish']);
   assert.equal(filterReadOnlyTaskTools(tools, 'MUTATING', []), tools);
 });

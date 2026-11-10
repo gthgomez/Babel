@@ -41,6 +41,8 @@ import {
 } from "./implementorPolicy.js";
 
 import { nativeTurnFromStream } from "./chatNativeTurn.js";
+import { buildDecisionRequestDeferral, findDecisionRequest, streamDecisionRequestOutcomes } from './chatDecisionRequest.js';
+import { buildScopedTextProtocolRejectMessage, handleMalformedDecisionProtocol } from './chatMalformedDecisionProtocol.js';
 
 import {
   applyWorkingStateEvent,
@@ -51,8 +53,6 @@ import {
 import {
   parseTextToolTurn,
   isUnresolvedTextToolAttempt,
-  buildTextToolProtocolRejectMessage,
-  TEXT_TOOL_NAMES,
 } from "./textToolParser.js";
 import {
   chatActionToolName,
@@ -108,7 +108,7 @@ import {
 } from "./chatEngineObservability.js";
 import { nativeToolUseToChatAction } from "./chatEngineSupport.js";
 import { isReadOnlyChat } from "./chatReadOnly.js";
-import { availableChatTools, availableChatToolNames } from "./chatToolAvailability.js";
+import { availableChatTools } from "./chatToolAvailability.js";
 import {PROJECT_REQUIRED_MESSAGE,conversationProjectRequiredReport} from './chatToolScopeAdmission.js';
 
 import type { ChatEngineStreamingLoopHost } from "./chatEngineContracts.js";
@@ -1178,6 +1178,28 @@ export class ChatEngineStreamingLoop {
       if (yield* settleStreamingTokenExplosion(this.host, effectiveIntent, submissionGeneration, _turnSpan)) return;
 
       if (turnResult.type === "tool_calls" && turnResult.actions.length > 0) {
+        const decisionRequest = findDecisionRequest(turnResult.actions);
+        if (decisionRequest) {
+          // A decision request is a control signal, never an executable tool.
+          // Reject the whole co-emitted batch before any sibling action can
+          // run; prior-turn edits remain visible but cannot be certified here.
+          const deferral = buildDecisionRequestDeferral({
+            request: decisionRequest,
+            actions: turnResult.actions,
+            callIds: this.host._streamNativeToolCallIds,
+            turn,
+          });
+          endSpan(_turnSpan, SpanStatusCode.OK); _turnSpan = null;
+          yield* streamDecisionRequestOutcomes({
+            outcomes: deferral.outcomes,
+            isSubmissionCurrent: () => this.host.isSubmissionCurrent(submissionGeneration),
+            recordCall: entry => this.host.toolCallLog.push(entry),
+          });
+          if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          this.host.conversation.push({ role: 'assistant', content: deferral.answer });
+          yield this.host.streamDone(deferral.answer, { needsHumanDecision: true });
+          return;
+        }
         if (turnResult.thinking) {
           yield { type: "thought", text: turnResult.thinking };
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
@@ -1887,6 +1909,15 @@ export class ChatEngineStreamingLoop {
       }
 
       if (turnResult.type === "completion") {
+        if (useTextTools && turnResult.protocolError === 'malformed_decision_request') {
+          const disposition = yield* handleMalformedDecisionProtocol({
+            host: this.host, generation: submissionGeneration, turnSpan: _turnSpan,
+            alreadyRetried: textToolProtocolRepairUsed, operation: effectiveOperation, isReadOnlyInspection,
+          })
+          _turnSpan = null
+          if (disposition === 'retry') { textToolProtocolRepairUsed = true; continue }
+          return
+        }
         const answer = normalizeChatAnswer(turnResult.answer, userInput);
 
         if (this.host.parity.turnId) {
@@ -1983,15 +2014,7 @@ export class ChatEngineStreamingLoop {
           this.host.conversation.push({ role: "assistant", content: answer });
           recordChatHarnessFeedback(
             this.host,
-            buildTextToolProtocolRejectMessage(
-              availableChatToolNames([...TEXT_TOOL_NAMES], {
-                executionScope: this.host.options.executionScope,
-                operation: effectiveOperation,
-                requiredVerifiers: isReadOnlyInspection ? this.host.getResolvedRequiredVerifiers() : [],
-                hostFallbackAllowed: this.host.isolationBrokerFlags().hostFallbackAllowed,
-              }),
-              isReadOnlyInspection ? this.host.getResolvedRequiredVerifiers() : [],
-            ),
+            buildScopedTextProtocolRejectMessage(this.host, effectiveOperation, isReadOnlyInspection),
           );
           _turnSpan?.setAttribute("babel.chat.text_tool_protocol_repair", true);
           endSpan(_turnSpan, SpanStatusCode.OK);

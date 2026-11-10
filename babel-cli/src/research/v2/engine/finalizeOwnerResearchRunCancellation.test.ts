@@ -274,7 +274,17 @@ describe('finalizeOwnerResearchRunCancellation', () => {
 
   it('B regression 1693fb0d: watcher cancel → resume → planning cancel → second resume opens third owner', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'babel-research-v2-b1693fb0d-'))
-    const model = new BlockingUntilAbortModel()
+    let planQuestionsCalls = 0
+    let resolveFirstPlanQuestions!: () => void
+    let resolveSecondPlanQuestions!: () => void
+    const firstPlanQuestionsEntered = new Promise<void>((resolve) => { resolveFirstPlanQuestions = resolve })
+    const secondPlanQuestionsEntered = new Promise<void>((resolve) => { resolveSecondPlanQuestions = resolve })
+    const model = new BlockingUntilAbortModel(undefined, (kind) => {
+      if (kind !== 'plan_questions') return
+      planQuestionsCalls += 1
+      if (planQuestionsCalls === 1) resolveFirstPlanQuestions()
+      if (planQuestionsCalls === 2) resolveSecondPlanQuestions()
+    })
     const planBase = 'plan-b1693fb0d-cancel-resume-twice'
     try {
       const firstRun = runResearchV2MissionWithOwnerSession({
@@ -285,6 +295,9 @@ describe('finalizeOwnerResearchRunCancellation', () => {
         planRevisionId: planBase,
         model,
       })
+      await Promise.race([firstPlanQuestionsEntered, firstRun.then(() => {
+        throw new Error('first research run completed before plan_questions model entry')
+      })])
       let sessionId = ''
       for (let i = 0; i < 50; i += 1) {
         await new Promise((r) => setTimeout(r, 20))
@@ -329,7 +342,7 @@ describe('finalizeOwnerResearchRunCancellation', () => {
         signal: cancel2.signal,
         model,
       })
-      await new Promise((r) => setTimeout(r, 40))
+      await secondPlanQuestionsEntered
       cancel2.abort()
       watcher2.stop()
       await assert.rejects(() => secondRun)
