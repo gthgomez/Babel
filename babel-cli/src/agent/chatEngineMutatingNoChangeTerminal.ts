@@ -4,7 +4,6 @@
  */
 import {
   evaluateCriterionCompletionV1,
-  type CriterionCompletionRequestV1,
   type CriterionCompletionServiceV1,
   type CriterionPrivateEvidenceRefreshV1,
 } from '../authority/criterionCompletion.js';
@@ -32,9 +31,6 @@ export function resolveAcceptedReadOnlyTerminal(input: {
     && hasInspectedNoChangeEvidence(input.toolCallLog)
     && (input.effectiveOperation === 'HYBRID' || input.effectiveOperation === 'MUTATING')
   ) {
-    if (input.effectiveOperation === 'HYBRID') {
-      return true;
-    }
     return !mutatingInspectionLeavesRequiredCriteriaUnmet({
       criterionCompletion: input.criterionCompletion,
       toolCallLog: input.toolCallLog,
@@ -66,59 +62,32 @@ export function mutatingInspectionLeavesRequiredCriteriaUnmet(input: {
       has_mutation: false,
     });
     const evaluation = evaluateCriterionCompletionV1(request);
+    const receipts = refresh.criterionChatReceipts ?? [];
+    const hasGreenReceipt = receipts.length > 0 && receipts.every((r) => (r.exit_code ?? 1) === 0);
     if (evaluation.verified) return false;
-    if (inspectionContradictsFrozenBehavioralGoals(request, input.toolCallLog)) {
+
+    const requiredIds = new Set(
+      request.contract.acceptance.filter((item) => item.required).map((item) => item.id),
+    );
+    const advisory = input.criterionCompletion.reportAdvisoryEvidence();
+    const unsatisfiedRequired = advisory.filter(
+      (row) => requiredIds.has(row.requirement_id) && row.status !== 'satisfied',
+    );
+    if (unsatisfiedRequired.length > 0 && (!hasGreenReceipt || refresh.has_mutation)) return true;
+
+    const missing = evaluation.missing_requirements ?? [];
+    if (missing.length === 0) {
+      if (evaluation.status === 'VERIFIED') return false;
+      if (!refresh.has_mutation && hasGreenReceipt) return false;
       return true;
     }
-    const missing = evaluation.missing_requirements ?? [];
-    if (missing.length === 0) return evaluation.status !== 'VERIFIED';
     const missingItems = missing
       .map((id) => request.contract.acceptance.find((entry) => entry.id === id))
       .filter((item): item is NonNullable<typeof item> => Boolean(item?.required));
     if (missingItems.length === 0) return false;
-    const meaningOnly = missingItems.every(
-      (item) => item.verification.verifier_id.startsWith('meaning:'),
-    );
-    const hasExecutableFrozenChecks = request.contract.acceptance.some(
-      (item) => item.required && !item.verification.verifier_id.startsWith('meaning:'),
-    );
-    const allowsInspectionOnlyMeaningSatisfaction =
-      meaningOnly
-      && !hasExecutableFrozenChecks
-      && hasInspectedNoChangeEvidence(input.toolCallLog)
-      && !missingItems.some((item) => /\bvalue\s*(?:is|=)\s*\d+\b/i.test(item.description));
-    if (allowsInspectionOnlyMeaningSatisfaction) {
-      return false;
-    }
+    if (hasGreenReceipt && !refresh.has_mutation) return false;
     return true;
   } catch {
     return true;
   }
-}
-
-function inspectionContradictsFrozenBehavioralGoals(
-  request: CriterionCompletionRequestV1,
-  log: GateToolLogEntry[],
-): boolean {
-  const readDetails = log
-    .filter((entry) => entry.tool === 'read_file' && !entry.error && (entry.exit_code === undefined || entry.exit_code === 0))
-    .map((entry) => entry.detail ?? '')
-    .filter((detail) => detail.trim().length > 0);
-  if (readDetails.length === 0) return false;
-  const corpus = readDetails.join('\n');
-  for (const item of request.contract.acceptance) {
-    if (!item.required || !item.verification.verifier_id.startsWith('meaning:')) continue;
-    const goalNumber = item.description.match(/\bvalue\s*(?:is|=)\s*(\d+)\b/i)?.[1];
-    if (!goalNumber) continue;
-    const observed = corpus.match(/\bvalue\s*=\s*(\d+)\b/gi) ?? [];
-    if (
-      observed.some((match) => {
-        const actual = match.match(/(\d+)/)?.[1];
-        return actual !== undefined && actual !== goalNumber;
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
 }

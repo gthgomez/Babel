@@ -63,6 +63,7 @@ function makeHost(projectRoot: string): ChatEngineActionExecutorHost {
     patchRecoveryPath: null,
     beginRecoveryLocalizationInspection: () => false,
     checkVerifierTamper: () => null,
+    recordVerifierCustodyViolation: () => {},
     consumeFailureBudget: () => true,
     currentRecoveryBinding: () => null,
     finishRecoveryLocalizationInspection: () => {},

@@ -250,7 +250,8 @@ describe('ordinary coding-loop behaviors', () => {
     const events = await run(engine, task);
     assert.equal(runner.calls(), 2, JSON.stringify(events.map((event) => event.type === 'thought' ? event.text : event.type)));
     assert.equal(events.some((event) => event.type === 'failed'), false);
-    assert.equal(terminal(events).outcome, 'NO_CHANGE_REQUIRED');
+    assert.equal(terminal(events).outcome, 'UNVERIFIED_PATCH',
+      'inspection-only mutating completion requires grounded evidence, not inspection alone');
     assert.equal(engine.getTurnRuntimeSnapshot()?.effectiveOperation, 'MUTATING');
     assert.equal(readFileSync(join(root, 'parser.ts'), 'utf8'),
       'export const add = (a: number, b: number) => a + b;\n');

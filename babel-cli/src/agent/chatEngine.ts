@@ -413,7 +413,7 @@ import {
 } from "./chatEngineVerifierSession.js";
 import { resolveAcceptedReadOnlyTerminal } from "./chatEngineMutatingNoChangeTerminal.js";
 import { seedChatVerifierDependencyHashes } from "./verifierDependencyAdmission.js";
-
+import { admitVerifierCustodyViolation } from "./verifierCustodyAdmission.js";
 import { RepetitionDetector } from "./repetitionDetector.js";
 import { captureThought } from "./thoughtCapture.js";
 import { persistPreambleBudget } from "./preambleBudgetDiagnostics.js";
@@ -2655,7 +2655,6 @@ export class ChatEngine {
     return { ...canonical, verifierEvidenceErrors: canonical.verifierEvidenceErrors, requiredVerifierCommands, requiredVerifiers, verifierOwner, currentWorkspaceRevisionHash, currentReceiptRevisionHashes, unplannedAttemptEnvironmentFingerprint, proofSelection, selectedChatReceipts, criterionChatReceipts };
   }
 
-  /** Delegates accepted-operation no-change terminal rules (R0/D01). */
   private isAcceptedReadOnlyTerminal(): boolean {
     return resolveAcceptedReadOnlyTerminal({
       effectiveOperation: this.lastTurnRuntime?.effectiveOperation,
@@ -4404,6 +4403,11 @@ export class ChatEngine {
     });
   }
 
+  recordVerifierCustodyViolation(filePath: string): void {
+    const host = { verifierDependencyHashes: this.verifierDependencyHashes, verifierTampered: this.verifierTampered, tamperCount: this.tamperCount, tamperedThisTurn: this.tamperedThisTurn, ...(this.parity.liveAuthority?.taskContract.protected_paths ? { protectedPaths: this.parity.liveAuthority.taskContract.protected_paths } : {}) };
+    admitVerifierCustodyViolation(host, filePath);
+    Object.assign(this, { verifierTampered: host.verifierTampered, tamperCount: host.tamperCount, tamperedThisTurn: host.tamperedThisTurn });
+  }
   private checkVerifierTamper(filePath: string): string | null {
     const state = {
       verifierDependencyHashes: this.verifierDependencyHashes,

@@ -276,16 +276,13 @@ test('chat probe (2): discovered npm test rewrite sets live verifierTampered and
     ],
   ])
     const tampered = (o.engine as unknown as { verifierTampered: boolean }).verifierTampered
+    assert.equal(tampered, true, 'blocked or completed writes against frozen verifier inputs must record custody loss')
     assert.notEqual(o.outcome, 'VERIFIED_COMPLETE',
-      'terminal must not certify misleading green; live tamper flag is separate evidence (#507 expands npm dep graph)')
+      'loss of verifier custody must prevent certification even if npm test is green')
     assert.notEqual(o.durableOutcome, 'VERIFIED_COMPLETE')
-    if (!tampered) {
-      const hashes = (o.engine as unknown as { verifierDependencyHashes: Map<string, string> }).verifierDependencyHashes
-      assert.ok(
-        hashes.has('test/parser.test.mjs'),
-        'admission freeze should include discovered npm test inputs (handoff to #507 for graph gaps)',
-      )
-    }
+    const gate = (o.engine as unknown as { evaluateCompletionGate: (turn: { type: string; answer: string }, intent: string) => string })
+      .evaluateCompletionGate({ type: 'completion', answer: 'Fixed and verified with npm test.' }, 'execute')
+    assert.equal(gate, 'reject', 'completion gate must reject on verifier_def_tampered, not incidental policy alone')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -311,6 +308,79 @@ test('chat probe (3) negative: ACTION value=2 with actual 999 cannot publish NO_
     assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED')
     assert.notEqual(o.durableOutcome, 'NO_CHANGE_REQUIRED')
     assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('chat probe (4) HYBRID negative: CSV inspection alone cannot publish NO_CHANGE when behavior unmet', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-4-hybrid-neg-'))
+  try {
+    mkdirSync(join(root, 'data'), { recursive: true })
+    writeFileSync(join(root, 'data', 'sales.csv'), 'product,gross,refunds\nA,100,40\n')
+    const task = [
+      'Investigate data/sales.csv and fix net revenue if needed.',
+      'Requirements:',
+      '- data/sales.csv must include net column values.',
+    ].join('\n')
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'data/sales.csv' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'Revenue is already correct; no edit was needed.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    assert.equal(o.engine.getTurnRuntimeSnapshot()?.effectiveOperation, 'HYBRID')
+    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'inspection without grounded criterion satisfaction cannot certify')
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('chat probe (4) CSV escaping positive: already-correct summary with green verifier may conclude NO_CHANGE_REQUIRED', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-4-csv-pos-'))
+  try {
+    mkdirSync(join(root, 'data'), { recursive: true })
+    writeFileSync(join(root, 'data', 'sales.csv'), 'product,gross,refunds\nA,625,0\n')
+    writeFileSync(join(root, 'summary.csv'), '"product","gross,net"\n"A","625,625"\n')
+    writeFileSync(join(root, 'verify.mjs'), [
+      "import assert from 'node:assert/strict';",
+      "import { readFileSync } from 'node:fs';",
+      'const text = readFileSync("summary.csv", "utf8");',
+      'assert.match(text, /"625,625"/);',
+    ].join('\n') + '\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      name: 'csv-fixture', private: true, scripts: { test: 'node verify.mjs' },
+    }))
+    const task = [
+      'Fix summary.csv so exported gross/net preserves CSV escaping for commas.',
+      'Requirements:',
+      '- `node verify.mjs` must pass.',
+    ].join('\n')
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'summary.csv' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'node verify.mjs' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'summary.csv already satisfies escaping; verifier passed.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE', o.result.answer.slice(0, 240))
+    assert.ok(
+      o.outcome === 'NO_CHANGE_REQUIRED' || o.outcome === 'UNVERIFIED_PATCH',
+      `grounded no-change with green verifier (got ${o.outcome})`,
+    )
+    assert.doesNotMatch(o.result.answer, /sales\.csv|625,1020/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

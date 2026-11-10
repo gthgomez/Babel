@@ -176,6 +176,7 @@ function makeHost(
     },
     beginRecoveryLocalizationInspection: () => true,
     checkVerifierTamper: () => null,
+    recordVerifierCustodyViolation: () => {},
     consumeFailureBudget: () => true,
     currentVerifierOwner: () => chatVerifierOwner({ projectRoot, sessionId: parity.sessionEvents.session_id,
       taskId: parity.liveAuthority!.taskContract.task_id, contractHash: parity.liveAuthority!.taskContract.contract_hash }),
