@@ -36,6 +36,13 @@ test('text-tool requests preserve a structured blocking choice', () => {
       impact: 'This changes the exported result.',
     }],
   })
+  const oversized = parseTextToolTurn([
+    '[TOOL:request_user_decision]',
+    `question: ${'x'.repeat(1001)}`,
+    'options:', '  - First', '  - Second',
+    'impact: Changes the outcome.',
+  ].join('\n'))
+  assert.equal(oversized.type, 'completion', 'text-tool control requests must pass the shared schema limits')
 })
 
 test('bare JSON normalization is confined to the explicit current-user contract and whole valid fence', () => {

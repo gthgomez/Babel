@@ -18,7 +18,7 @@
  * - Parser never throws — always degrades to completion on failure
  */
 
-import type { ChatToolAction, ChatTurn } from './chatToolDefinitions.js';
+import { ChatToolActionSchema, type ChatToolAction, type ChatTurn } from './chatToolDefinitions.js';
 import { RecoveryPlanProposalSchema } from './codingLoop/recoveryPlan.js';
 import { ReadArtifactActionSchema } from './codingLoop/runOutputArtifacts.js';
 
@@ -292,10 +292,10 @@ function buildAction(toolName: string, params: Record<string, string>): ChatTool
         .map(line => line.trim().replace(/^[-*]\s*/, ''))
         .filter(Boolean);
       if (!question || !impact || options.length < 2 || options.length > 6) return null;
-      return {
+      const parsed = ChatToolActionSchema.safeParse({
         type: 'request_user_decision', question, impact, options,
-        ...(params['safe_progress']?.trim() ? { safe_progress: params['safe_progress'].trim() } : {}),
-      } as ChatToolAction;
+      });
+      return parsed.success ? parsed.data : null;
     }
     case 'finish':
       return { type: 'finish' } as ChatToolAction;
