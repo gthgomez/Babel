@@ -1,0 +1,14 @@
+{
+  "schema": "consumer-artifact/hosted-failure-baseline/v1",
+  "verdict": "INCONCLUSIVE_ROOT_CAUSE",
+  "note": "Hosted ETIMEDOUT alone does not establish Unicode encoding as root cause; retained for exact-head review.",
+  "pr": 505,
+  "qualification_head_sha": "03c3f3911139075d5cfad5ae53d99a7ff403600f",
+  "github_actions_run_id": 42843069423,
+  "job_id": 129934600033,
+  "matrix": "consumer-artifact (windows-latest, Node 22.19.0)",
+  "observed_error": "spawnSync node.exe npm-cli.js install --prefix <unicode temp> ETIMEDOUT",
+  "observed_prefix_pattern": "babel consumer é-*\\install prefix é",
+  "retained_in_repo_commit": "d4e6811b",
+  "superseded_by": "unicode-primary install-path qualification with optional win32 ascii control comparison in verify_consumer_artifact.mjs"
+}
