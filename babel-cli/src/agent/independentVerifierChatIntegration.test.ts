@@ -303,7 +303,7 @@ describe('Chat finalization with IndependentVerifier and absolute mutation_batch
     }
   });
 
-  test('npm test freeze tracks two verifier dependencies; subject file edits are outside today’s guard (core #506 handoff)', () => {
+  test('npm test oracle freeze is package.json + verify.mjs only (#506 core-owned Chat custody)', () => {
     const root = makeFixture();
     try {
       const hashes = new Map<string, string>();
@@ -321,7 +321,7 @@ describe('Chat finalization with IndependentVerifier and absolute mutation_batch
       assert.equal(
         checkVerifierTamper('parser.ts', root, state),
         null,
-        'parser.ts is not in the npm test dependency freeze set; behavioral oracle gap is core-owned',
+        'parser.ts is authorized task subject, not protected verifier oracle (behavioral repair is not tamper)',
       );
       writeFileSync(join(root, 'verify.mjs'), 'export {}\n');
       assert.ok(checkVerifierTamper('verify.mjs', root, state));
