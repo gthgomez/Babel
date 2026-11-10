@@ -947,7 +947,11 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
   test('Scenario 3b — after green verification, continue investigation and report the unbound criterion', async () => {
     const fixture = makeFixture();
     try {
-      const task = 'Investigate why parser_test fails and fix it.';
+      const task = [
+        "Fix parser.ts so parseExpression('2+3') returns 5.",
+        'Requirements:',
+        '- `npm test` must pass.',
+      ].join('\n');
       let acceptanceReview = '';
       const o = await driveLoop(fixture, task, [
         [{ type: 'tool_use', id: 'w1', name: 'str_replace', input: { file_path: 'parser.ts', old_str: 'return Number(parts[0]) - Number(parts[1]);', new_str: 'return Number(parts[0]) + Number(parts[1]);' } }, { type: 'done', finishReason: 'tool_calls' }],
@@ -968,6 +972,20 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.equal(o.outcome, 'UNVERIFIED_PATCH', 'additional investigation does not invent missing acceptance proof');
       assert.notEqual(o.outcome, 'VERIFIED_COMPLETE');
       assert.match(o.answer, /partially verified|cannot certify/i, 'final report scopes what passed and what remains unknown');
+      assert.match(o.answer, /Host criterion evidence \(per-criterion report; overall completion status is unchanged\)/,
+        'terminal delivery includes the host-owned criterion evidence report');
+      assert.match(o.answer, /propose a focused check; keep it diagnostic until the contract is explicitly amended/,
+        'the missing semantic criterion receives a grounded, non-authoritative next proof step');
+      assert.match(o.answer, /npm test.*current host-accepted evidence matches the frozen verifier/,
+        'the exact npm test criterion can be reported as partial evidence');
+      assert.match(o.answer, /parseExpression\('2\+3'\) returns 5.*no current criterion-bound evidence is available/,
+        'the independent inferred behavior criterion stays explicitly missing');
+      const completionDecision = [...o.sessionEvents].reverse().find(
+        (event): event is Extract<SessionEvent, { kind: 'completion_decision' }> => event.kind === 'completion_decision',
+      );
+      const completionEvidence = completionDecision?.acceptance_evidence;
+      assert.ok(completionEvidence, 'the host criterion report is durably recorded');
+      assert.deepEqual(completionEvidence?.map(item => item.status), ['missing', 'satisfied']);
 
     } finally {
       fixture.cleanup();
@@ -987,6 +1005,99 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
       assert.notEqual(o.durableCompletionOutcome, 'VERIFIED_COMPLETE');
       assert.equal(o.writeToolCalls, 1, 'negative control still exercises the scoped repair');
       assert.equal(o.toolCalls.filter((call) => call.tool === 'run_command').length, 1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test('Scenario 3d — Chat retains one current verifier result while a sibling criterion is still pending', async () => {
+    const fixture = makeFixture();
+    try {
+      const packagePath = join(fixture.root, 'package.json');
+      const packageJson = JSON.parse(readFileSync(packagePath, 'utf8')) as {
+        scripts: Record<string, string>;
+      };
+      packageJson.scripts['verify'] = 'node --experimental-strip-types --test --test-reporter=tap verify.mjs';
+      writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`, 'utf8');
+      const task = [
+        "Fix parser.ts so parseExpression('2+3') returns 5.",
+        'Requirements:',
+        '- `npm test` must pass.',
+        '- `npm run verify` must pass.',
+      ].join('\n');
+      const aggregateProofs: boolean[] = [];
+      const o = await driveLoop(fixture, task, [
+        [{ type: 'tool_use', id: 'w1', name: 'str_replace', input: { file_path: 'parser.ts', old_str: 'return Number(parts[0]) - Number(parts[1]);', new_str: 'return Number(parts[0]) + Number(parts[1]);' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'text_delta', text: 'The parser change is in place and `npm test` passed. I have not run `npm run verify`, so the task remains partially verified.' }, { type: 'done', finishReason: 'stop' }],
+      ], {
+        configureEngine(engine) {
+          const host = engine as unknown as { buildCompletionProof: (mutation: boolean) => { compliant: boolean } };
+          const original = host.buildCompletionProof.bind(engine);
+          host.buildCompletionProof = (mutation) => {
+            const proof = original(mutation);
+            aggregateProofs.push(proof.compliant);
+            return proof;
+          };
+        },
+      });
+
+      assert.deepEqual(aggregateProofs, [false], 'the host aggregate proof correctly remains incomplete because beta has not run');
+      assert.ok(o.outcome === 'UNVERIFIED_PATCH' || o.outcome === 'BLOCKED_POLICY',
+        `a green sibling verifier cannot certify aggregate completion: ${JSON.stringify({ answer: o.answer, toolCalls: o.toolCalls, events: o.events.slice(-5) })}`);
+      assert.notEqual(o.durableCompletionOutcome, 'VERIFIED_COMPLETE');
+      assert.doesNotMatch(o.answer, /VERIFIED_COMPLETE/);
+      assert.deepEqual(o.toolCalls.map((call) => call.tool), ['str_replace', 'run_command']);
+      assert.match(o.answer, /npm test.*current host-accepted evidence matches the frozen verifier/,
+        'the completed alpha verifier remains reportable through the real ChatEngine path');
+      assert.match(o.answer, /npm run verify.*no current criterion-bound evidence is available/,
+        'the unrun beta verifier is explicitly missing');
+      assert.match(o.answer, /overall completion status is unchanged/,
+        'partial evidence remains non-certifying even on a blocked terminal');
+      const completionDecision = [...o.sessionEvents].reverse().find(
+        (event): event is Extract<SessionEvent, { kind: 'completion_decision' }> => event.kind === 'completion_decision',
+      );
+      assert.ok(completionDecision?.acceptance_evidence?.some(item => item.description.includes('npm test') && item.status === 'satisfied'));
+      assert.ok(completionDecision?.acceptance_evidence?.some(item => item.description.includes('npm run verify') && item.status === 'missing'));
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  test('Scenario 3e — a green all-skipped verifier is not reported as criterion evidence', async () => {
+    const fixture = makeFixture();
+    try {
+      const packagePath = join(fixture.root, 'package.json');
+      const packageJson = JSON.parse(readFileSync(packagePath, 'utf8')) as {
+        scripts: Record<string, string>;
+      };
+      packageJson.scripts.test = 'node --test --test-reporter=tap skipped.test.mjs';
+      writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`, 'utf8');
+      writeFileSync(join(fixture.root, 'skipped.test.mjs'), [
+        "import test from 'node:test';",
+        "test('the intended behavior check', { skip: true }, () => {});",
+        '',
+      ].join('\n'), 'utf8');
+
+      const task = [
+        "Fix parser.ts so parseExpression('2+3') returns 5.",
+        'Requirements:',
+        '- `npm test` must pass.',
+        '- `npm run verify` must pass.',
+      ].join('\n');
+      const o = await driveLoop(fixture, task, [
+        [{ type: 'tool_use', id: 'w1', name: 'str_replace', input: { file_path: 'parser.ts', old_str: 'return Number(parts[0]) - Number(parts[1]);', new_str: 'return Number(parts[0]) + Number(parts[1]);' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } }, { type: 'done', finishReason: 'tool_calls' }],
+        [{ type: 'text_delta', text: 'npm test exited zero, but its only test was skipped. I have not run npm run verify; neither requirement has authoritative passing evidence.' }, { type: 'done', finishReason: 'stop' }],
+      ]);
+
+      assert.ok(o.outcome === 'UNVERIFIED_PATCH' || o.outcome === 'BLOCKED_POLICY');
+      assert.notEqual(o.durableCompletionOutcome, 'VERIFIED_COMPLETE');
+      assert.match(o.answer, /npm test.*no current criterion-bound evidence is available/);
+      const completionDecision = [...o.sessionEvents].reverse().find(
+        (event): event is Extract<SessionEvent, { kind: 'completion_decision' }> => event.kind === 'completion_decision',
+      );
+      assert.deepEqual(completionDecision?.acceptance_evidence?.map(item => item.status), ['missing', 'missing', 'missing']);
     } finally {
       fixture.cleanup();
     }

@@ -421,7 +421,7 @@ import {
   resolveVerifierCacheIdentity,
   resolveEngineRequiredVerifiers,
   restorePersistedVerifierEvidence,
-  refreshChatCompletionVerifierCurrency,
+  refreshChatCompletionVerifierCurrency, selectLedgerReceiptsById,
 } from "./chatEngineVerifierAdapter.js";
 import {
   beginUserSubmission,
@@ -2645,9 +2645,9 @@ export class ChatEngine {
     const historyErrors = this.workingState.failedVerifierHistoryOverflow || unresolvedHistory.length > 0
       ? ['Settled failed verifier execution requires newer covering current green evidence'] : [];
     proofSelection.evidenceErrors.push(...historyErrors);
-    const selectedIds = new Set(proofSelection.selectedCoveringReceipts.map(receipt => receipt.receiptId));
-    const selectedChatReceipts = this.executedVerifierLedger.filter(receipt => selectedIds.has(receipt.receiptId));
-    return { ...canonical, verifierEvidenceErrors: canonical.verifierEvidenceErrors, requiredVerifierCommands, requiredVerifiers, verifierOwner, currentWorkspaceRevisionHash, currentReceiptRevisionHashes, unplannedAttemptEnvironmentFingerprint, proofSelection, selectedChatReceipts };
+    const selectedChatReceipts = selectLedgerReceiptsById(this.executedVerifierLedger, proofSelection.selectedCoveringReceipts);
+    const criterionChatReceipts = currentOwnerReceipts.filter(receipt => attemptSelection.currentAttempts.some(attempt => attempt.receiptId === receipt.receiptId));
+    return { ...canonical, verifierEvidenceErrors: canonical.verifierEvidenceErrors, requiredVerifierCommands, requiredVerifiers, verifierOwner, currentWorkspaceRevisionHash, currentReceiptRevisionHashes, unplannedAttemptEnvironmentFingerprint, proofSelection, selectedChatReceipts, criterionChatReceipts };
   }
 
   /**
@@ -2671,24 +2671,20 @@ export class ChatEngine {
     requestedOutcome: TerminalOutcome | "PLAN_COMPLETE",
     hasMutation: boolean,
   ) {
-    refreshChatCompletionVerifierCurrency(this.options, hasMutation,
-      this.lastVerifierReceipt, this.executedVerifierLedger);
+    refreshChatCompletionVerifierCurrency(this.options, hasMutation, this.lastVerifierReceipt, this.executedVerifierLedger);
     const verifierInput = this.buildVerifierInput();
-    const proof =
-      requestedOutcome === "VERIFIED_COMPLETE"
-        ? this.buildCompletionProof(hasMutation)
-        : { compliant: false, errors: ["requested outcome was not verified"] };
-    if (requestedOutcome === 'VERIFIED_COMPLETE') {
-      this.criterionCompletion?.refreshPrivateEvidence({
-        proof,
-        receipt: verifierInput.selectedChatReceipts.at(-1) ?? null,
-        receipts: verifierInput.selectedChatReceipts,
+    const evidenceProof = requestedOutcome === "VERIFIED_COMPLETE" || hasMutation
+      ? this.buildCompletionProof(hasMutation) : { compliant: false, errors: ["no mutation-bound verifier evidence is available"] };
+    if (this.criterionCompletion && (requestedOutcome === 'VERIFIED_COMPLETE' || hasMutation)) {
+      this.criterionCompletion.refreshPrivateEvidence({
+        proof: evidenceProof,
+        allowPartialEvidence: !this.verifierTampered && !this.verifierInputsUnfrozen,
+        receipts: verifierInput.criterionChatReceipts,
         candidate_sha: this.criterionCandidateRevisionSha(),
         has_mutation: hasMutation,
       })
     }
-
-    return this.executorKernel.completion.decide({
+    const decision = this.executorKernel.completion.decide({
       mode: this.executionProfile,
       requestedOutcome,
       hasWrite: hasMutation,
@@ -2706,8 +2702,15 @@ export class ChatEngine {
       ...(this.lastVerifierReceipt?.boundRevision
         ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
         : {}),
-      proof,
+      proof: requestedOutcome === 'VERIFIED_COMPLETE'
+        ? evidenceProof
+        : { compliant: false, errors: ["requested outcome was not verified"] },
     });
+    const criterionEvidence = this.criterionCompletion?.reportAdvisoryEvidence() ?? []
+    return criterionEvidence.length > 0 ? {
+      ...decision, acceptanceEvidence: criterionEvidence.slice(0, 16),
+      ...(criterionEvidence.length > 16 ? { acceptanceEvidenceOmitted: criterionEvidence.length - 16 } : {}),
+    } : decision
   }
   private streamDone(answer: string, extra?: ChatStreamDoneExtra): ChatEvent {
     const prior = this.runControl?.stop();

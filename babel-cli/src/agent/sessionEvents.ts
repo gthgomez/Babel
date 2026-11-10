@@ -14,6 +14,7 @@ import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import type { TerminalReason, TerminalReasonCode } from './chatTerminalReason.js';
 import { classifyToolEffect, type ToolEffectClass } from '../executor/contracts.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
+import type { CriterionEvidenceResultV1 } from '../evidence/evidenceGraph.js';
 import type { WorkingState } from './codingLoop/workingState.js';
 import { createBdnsObservationBus } from '../diagnostics/bdns/observationBus.js';
 import type { BdnsObservation } from '../diagnostics/bdns/types.js';
@@ -900,6 +901,8 @@ export function recordCompletionDecision(
     reason: string;
     evidenceRefs: string[];
     policyVersion: string;
+    acceptanceEvidence?: CriterionEvidenceResultV1[];
+    acceptanceEvidenceOmitted?: number;
     reasonCode?: TerminalReasonCode;
     causeClass?: 'model' | 'provider' | 'environment' | 'harness' | 'verification' | null;
   },
@@ -913,6 +916,12 @@ export function recordCompletionDecision(
     reason: input.reason,
     evidence_refs: [...input.evidenceRefs],
     policy_version: input.policyVersion,
+    ...(input.acceptanceEvidence !== undefined
+      ? { acceptance_evidence: structuredClone(input.acceptanceEvidence) }
+      : {}),
+    ...(input.acceptanceEvidenceOmitted !== undefined
+      ? { acceptance_evidence_omitted: input.acceptanceEvidenceOmitted }
+      : {}),
     ...(input.reasonCode !== undefined ? { reason_code: input.reasonCode } : {}),
     ...(input.causeClass !== undefined ? { cause_class: input.causeClass } : {}),
   });

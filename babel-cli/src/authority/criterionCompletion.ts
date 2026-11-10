@@ -2,7 +2,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
 import { validateTaskContractV1ForCompletion, type TaskContractV1 } from '../agent/taskContract.js'
-import { EvidenceGraph, evaluateCompletionGateV1, type CompletionEvaluationV1 } from '../evidence/evidenceGraph.js'
+import { EvidenceGraph, evaluateCompletionGateV1, type CompletionEvaluationV1, type CriterionEvidenceResultV1 } from '../evidence/evidenceGraph.js'
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js'
 import { publishCriterionEvidenceFromChatExecution } from './criterionExecutionPublisher.js'
 import { createTrustedExecutionSupervisorV1, type TrustedExecutionAuthorityV1 } from './trustedExecutionSupervisor.js'
@@ -25,6 +25,8 @@ export interface CriterionCompletionRequestV1 {
 }
 export interface CriterionPrivateEvidenceRefreshV1 {
   proof: { compliant: boolean }
+  /** Host-only permission to retain independently validated criterion receipts while aggregate coverage is incomplete. */
+  allowPartialEvidence?: boolean
   receipt?: BoundChatVerifierReceipt | null
   receipts?: readonly BoundChatVerifierReceipt[] | null
   candidate_sha: string | null
@@ -36,6 +38,8 @@ export interface CriterionCompletionServiceV1 {
   currentRequest(): CriterionCompletionRequestV1 | undefined
   /** Chat-only: populate the private graph from governed execution before kernel evaluate. */
   refreshPrivateEvidence(input: CriterionPrivateEvidenceRefreshV1): void
+  /** Host-owned, non-certifying criterion report for truthful partial delivery. */
+  reportAdvisoryEvidence(): readonly CriterionEvidenceResultV1[]
 }
 interface CompletionAuthority {
   readOwner: () => CriterionCompletionOwnerV1
@@ -52,18 +56,18 @@ export function createCriterionCompletionServiceV1(
 ): CriterionCompletionServiceV1 {
   const context: CriterionCompletionContextV1 = Object.freeze({ schema_version: 1, kind: 'criterion-completion:v1' })
   contexts.set(context, { readOwner, graph: new EvidenceGraph(), supervisor: createTrustedExecutionSupervisorV1() })
+  const currentRequest = (): CriterionCompletionRequestV1 | undefined => {
+    try {
+      const owner = readOwner()
+      return owner.contract && owner.projectRoot
+        ? Object.freeze({ context, contract: owner.contract, run_id: owner.runId, project_root: owner.projectRoot })
+        : undefined
+    } catch { return undefined }
+  }
   return Object.freeze({
     context,
-    currentRequest(): CriterionCompletionRequestV1 | undefined {
-      try {
-        const owner = readOwner()
-        return owner.contract && owner.projectRoot
-          ? Object.freeze({ context, contract: owner.contract, run_id: owner.runId, project_root: owner.projectRoot })
-          : undefined
-      } catch { return undefined }
-    },
+    currentRequest,
     refreshPrivateEvidence(input: CriterionPrivateEvidenceRefreshV1): void {
-      if (!input.proof.compliant) return
       const authority = contexts.get(context)
       if (!authority) return
       try {
@@ -81,6 +85,7 @@ export function createCriterionCompletionServiceV1(
         }
         authority.graph = new EvidenceGraph()
         delete authority.candidateSha
+        if (!input.proof.compliant && input.allowPartialEvidence !== true) return
         const published = publishCriterionEvidenceFromChatExecution({
           graph: authority.graph,
           supervisor: authority.supervisor,
@@ -89,12 +94,20 @@ export function createCriterionCompletionServiceV1(
           projectRoot: root,
           candidateSha: input.candidate_sha,
           proof: input.proof,
+          allowPartialEvidence: input.allowPartialEvidence === true,
           ...(input.receipt !== undefined ? { receipt: input.receipt } : {}),
           ...(input.receipts !== undefined ? { receipts: input.receipts } : {}),
           hasMutation: input.has_mutation,
         })
         if (published) authority.candidateSha = published
       } catch { /* fail closed: leave graph empty */ }
+    },
+    reportAdvisoryEvidence(): readonly CriterionEvidenceResultV1[] {
+      try {
+        const request = currentRequest()
+        if (!request) return []
+        return evaluateCriterionCompletionV1(request).criterion_results ?? []
+      } catch { return [] }
     },
   })
 }

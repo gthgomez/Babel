@@ -2,6 +2,7 @@ import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import type { TerminalReasonCode } from './chatTerminalReason.js';
 import { type ToolEffectClass } from '../executor/contracts.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
+import type { CriterionEvidenceResultV1 } from '../evidence/evidenceGraph.js';
 import type { WorkingState } from './codingLoop/workingState.js';
 import { type BdnsObservationBus } from '../diagnostics/bdns/observationBus.js';
 import { type ProviderId } from '../runners/providerRegistry.js';
@@ -350,6 +351,8 @@ export type SessionEvent =
       reason: string;
       evidence_refs: string[];
       policy_version: string;
+      acceptance_evidence?: CriterionEvidenceResultV1[];
+      acceptance_evidence_omitted?: number;
       /** D03: structured reason code — `reason` stays free-text/diagnostic. */
       reason_code?: TerminalReasonCode;
       reason_detail?: string;

@@ -11,12 +11,18 @@ import {
   type EvidenceNode,
 } from '../evidence/evidenceGraph.js'
 import type { TrustedExecutionAuthorityV1 } from './trustedExecutionSupervisor.js'
+import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
 import {
   buildCriterionReceiptEvidenceData,
-  chatReceiptDispatchesToRequirement,
+  chatReceiptMatchesRequirement,
 } from './criterionVerifierDispatch.js'
 
 export const CHAT_CRITERION_VERIFIER_ENDPOINT_ID = 'verifier:chat-governed'
+const TEST_VERIFIER_FAMILIES = new Set([
+  'npm-test', 'node-test', 'pytest', 'unittest', 'doctest', 'jest', 'vitest', 'mocha',
+  'go-test', 'cargo-test', 'gradle-test', 'deno-test', 'dotnet-test',
+  'npx-pytest', 'npx-ava', 'npx-tap', 'npx-uvu',
+])
 
 function chatCriterionVerifierEndpoint() {
   return buildAgentEndpointV1({
@@ -94,6 +100,33 @@ function buildCriterionReceiptNode(input: {
   }
 }
 
+function hasAdmissibleCriterionResult(
+  requirement: TaskContractV1['acceptance'][number],
+  receipt: BoundChatVerifierReceipt,
+): boolean {
+  if (receipt.exit_code !== 0 || (receipt.tests_failed ?? 0) > 0
+    || (receipt.tests_failed !== undefined && !Number.isSafeInteger(receipt.tests_failed))) return false
+  const isTestCriterion = requirement.type === 'unit_test'
+    || requirement.type === 'integration_test'
+    || requirement.type === 'e2e'
+  const family = analyzeVerifierIdentity(receipt.command)?.family.toLowerCase() ?? ''
+  const isTestCommand = TEST_VERIFIER_FAMILIES.has(family) || family.startsWith('npm-run-test:')
+  if (typeof receipt.tests_total === 'number' || typeof receipt.tests_skipped === 'number') {
+    const total = receipt.tests_total
+    const skipped = receipt.tests_skipped ?? 0
+    if (total === undefined || !Number.isSafeInteger(total) || total < 0
+      || !Number.isSafeInteger(skipped) || skipped < 0 || skipped > total) return false
+    if (total > 0 && skipped >= total) return false
+  }
+  if (!isTestCriterion && !isTestCommand) {
+    return true
+  }
+  const total = receipt.tests_total
+  const skipped = receipt.tests_skipped ?? 0
+  return typeof total === 'number' && Number.isFinite(total) && total > 0
+    && Number.isFinite(skipped) && skipped >= 0 && skipped < total
+}
+
 /** Publish governed Chat execution into the private criterion evidence graph. */
 export function publishCriterionEvidenceFromChatExecution(input: {
   graph: EvidenceGraph
@@ -103,6 +136,7 @@ export function publishCriterionEvidenceFromChatExecution(input: {
   projectRoot: string
   candidateSha: string | null
   proof: { compliant: boolean }
+  allowPartialEvidence?: boolean
   receipt?: BoundChatVerifierReceipt | null
   receipts?: readonly BoundChatVerifierReceipt[] | null
   hasMutation: boolean
@@ -112,7 +146,7 @@ export function publishCriterionEvidenceFromChatExecution(input: {
     ...(input.receipt ? [input.receipt] : []),
   ].filter((entry, index, all) => all.indexOf(entry) === index)
   if (
-    !input.proof.compliant ||
+    (!input.proof.compliant && input.allowPartialEvidence !== true) ||
     !input.hasMutation ||
     !input.candidateSha ||
     ledger.length === 0
@@ -127,14 +161,27 @@ export function publishCriterionEvidenceFromChatExecution(input: {
     requirement: TaskContractV1['acceptance'][number]
     receipt: BoundChatVerifierReceipt
   }> = []
-  // Missing dispatch coverage cannot publish evidence. Check it before reading
-  // revision contents for earlier requirements that would be discarded.
+  const latestAttemptFor = (
+    requirement: TaskContractV1['acceptance'][number],
+  ): BoundChatVerifierReceipt | undefined => {
+    const matching = ledger.filter(receipt => chatReceiptMatchesRequirement(receipt, requirement))
+    if (matching.length < 2) return matching[0]
+    if (matching.some(receipt => !receipt.order || !Number.isSafeInteger(receipt.order.seq) || receipt.order.seq < 0)) return undefined
+    const ordered = [...matching].sort((left, right) => left.order!.seq - right.order!.seq)
+    for (let index = 1; index < ordered.length; index++) {
+      if (ordered[index - 1]!.order!.seq === ordered[index]!.order!.seq &&
+        JSON.stringify(ordered[index - 1]) !== JSON.stringify(ordered[index])) return undefined
+    }
+    return ordered.at(-1)
+  }
+  // Evidence is criterion-scoped: a missing verifier for one requirement must
+  // not erase an independently dispatched receipt for another requirement.
+  // A later red attempt supersedes an earlier green receipt for that criterion;
+  // the completion evaluator still requires every required criterion before it
+  // can return VERIFIED.
   for (const requirement of required) {
-    const receipt = ledger.find((entry) =>
-      chatReceiptDispatchesToRequirement(entry, requirement),
-    )
-    if (!receipt) return null
-    dispatches.push({ requirement, receipt })
+    const receipt = latestAttemptFor(requirement)
+    if (receipt && hasAdmissibleCriterionResult(requirement, receipt)) dispatches.push({ requirement, receipt })
   }
 
   const nodes: EvidenceNode[] = []
@@ -144,9 +191,9 @@ export function publishCriterionEvidenceFromChatExecution(input: {
       repository,
       receipt,
     )
-    if (!candidateRevision || input.candidateSha !== candidateRevision) return null
+    if (!candidateRevision || input.candidateSha !== candidateRevision) continue
     const bound = toRevisionBoundReceipt(receipt)
-    if (!bound || bound.exitCode !== 0 || bound.stale === true) return null
+    if (!bound || bound.exitCode !== 0 || bound.stale === true) continue
     revisionSha = candidateRevision
     const node = buildCriterionReceiptNode({
       requirement,
@@ -157,10 +204,10 @@ export function publishCriterionEvidenceFromChatExecution(input: {
       contract: input.contract,
       candidateSha: candidateRevision,
     })
-    if (!node) return null
+    if (!node) continue
     nodes.push(node)
   }
-  if (!revisionSha) return null
+  if (!revisionSha || nodes.length === 0) return null
 
   ensureGovernedVerifierAssignment({
     supervisor: input.supervisor,

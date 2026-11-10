@@ -467,8 +467,9 @@ test('exact behavioral goal plus unrelated green npm test cannot certify a wrong
 
   const result = evaluateCriterionCompletionV1(request)
   assert.equal(result.verified, false)
-  assert.equal(result.status, 'UNVERIFIED')
+  assert.equal(result.status, 'PARTIAL', 'the unrelated passing npm check is retained as scoped evidence')
   assert.ok(result.missing_requirements.includes(goal.id), 'green npm evidence cannot satisfy the behavioral goal')
+  assert.equal(result.criterion_results?.find(item => item.requirement_id === goal.id)?.status, 'missing')
 
   const requiredVerifierCommands = ['npm test']
   const requiredVerifiers = chatVerifierRequirements(verifierOwner, requiredVerifierCommands, task, root).map(requirement => ({
@@ -840,7 +841,11 @@ test('executor → receipt → criterion negative: one governed witness run cann
   })
   const result = evaluateCriterionCompletionV1(request)
   assert.equal(result.verified, false)
-  assert.equal(result.status, 'UNVERIFIED')
+  assert.equal(result.status, 'PARTIAL', 'one valid witness is reported without satisfying its sibling criterion')
+  const alphaId = request.contract.acceptance.find(item => item.description.includes('alpha'))!.id
+  const betaId = request.contract.acceptance.find(item => item.description.includes('beta'))!.id
+  assert.deepEqual(result.satisfied_requirements, [alphaId])
+  assert.deepEqual(result.missing_requirements, [betaId])
 })
 
 test('executor → receipt → criterion negative: failing witness exit stays unverified', async t => {

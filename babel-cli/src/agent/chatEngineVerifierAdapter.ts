@@ -545,4 +545,14 @@ export function prepareKernelVerifierInput(
   };
 }
 
+/** Rejoin canonical selector projections to the host's original receipts safely. */
+export function selectLedgerReceiptsById<T extends { receiptId?: string }>(
+  ledger: readonly T[],
+  selected: readonly { receiptId?: string }[],
+): T[] {
+  const ids = new Set(selected.map(receipt => receipt.receiptId)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0));
+  return ledger.filter(receipt => typeof receipt.receiptId === 'string' && ids.has(receipt.receiptId));
+}
+
 export { toExecutorVerifierReceipt } from '../evidence/chatRevisionBinding.js';

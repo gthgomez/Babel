@@ -55,6 +55,14 @@ export function chatReceiptDispatchesToRequirement(
   requirement: AcceptanceRequirementV1,
 ): boolean {
   if (receipt.exit_code !== 0) return false
+  return chatReceiptMatchesRequirement(receipt, requirement)
+}
+
+/** Same frozen verifier identity check for a dispatched attempt, including red attempts. */
+export function chatReceiptMatchesRequirement(
+  receipt: BoundChatVerifierReceipt,
+  requirement: AcceptanceRequirementV1,
+): boolean {
   if (isUnresolvedAcceptanceRequirement(requirement)) return false
   if (requirement.verification.verifier_id.startsWith('meaning:')) return false
 
