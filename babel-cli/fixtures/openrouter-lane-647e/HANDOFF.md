@@ -1,58 +1,69 @@
 # OpenRouter provider lane handoff (647e)
 
-**Status:** `READY_FOR_INDEPENDENT_REVIEW` (provider lane: **no transport patch**; qualification evidence only)
+**Status:** `READY_FOR_INDEPENDENT_REVIEW` (evidence + honest live runner; **no provider transport patch**)
+
+## Qualification phases
+
+| Phase | Command | Billable |
+|-------|---------|----------|
+| **1. preflight** | `npm run test:research-v2-openrouter-route-smoke` | no |
+| **2. fixture_checks** | `npm run test:openrouter-lane-647e-preflight` (default) | no |
+| **3. paid_provider_execution** | `npm run test:openrouter-lane-647e-preflight -- --live` | **yes** |
+
+`scripts/run_openrouter_lane_qualification.mjs` always runs phases 1–2. **`--live` dispatches the full Chat matrix** via `scripts/openrouterLaneLiveQualification.mjs` (fresh fixtures, host oracles, stop on provider HTTP errors). Session run trees stay **ephemeral** (gitignored); only redacted JSON is committed.
 
 ## SHAs
 
 | Ref | SHA |
 |-----|-----|
-| Base / candidate (`main` at qualification) | `1dc598e2a2f1de914591570349708a6f01d66479` |
-| Open PR #501 (do not edit) | `c741ec62e806fa4232b2781d8002a24228770078` @ `fix/structured-task-decision-state` |
+| Pre-501 live trial base | `1dc598e2a2f1de914591570349708a6f01d66479` |
+| #501 merged on `main` | `ed0c44451a493b70a3a4361cc3236ebb07b453e4` |
+| Post-501 qualification merge head | `5b16e7e1ff165e6b032c6485c44125e713743fc7` (branch merges `main` + lane artifacts) |
 
-## Configuration (no secrets)
+## Evidence layout (do not conflate)
 
-- `OPENROUTER_API_KEY`: present in host env (length 73); not printed.
-- Default **live Chat** command shape: `babel run --mode chat-headless --json --yes --project-root <ws> --model deepseek-v4.1-flash-openrouter <prompt>`
-- Resolved route: `openrouter` / `deepseek/deepseek-v4.1-flash-1017` via `OpenRouterApiRunner`
-- Research v2 policy smoke (distinct route): `deepseek-v4-flash-openrouter` → `deepseek/deepseek-v4-flash-0731` (`npm run test:research-v2-openrouter-route-smoke`)
+| Path | Label |
+|------|-------|
+| `evidence/pre-501-trial/chat-scenarios-redacted.json` | **Frozen** pre-#501 live receipts |
+| `evidence/pre-501-trial/preflight-transport-redacted.json` | Pre-#501 streaming ping |
+| `evidence/post-501-trial/chat-scenarios-post-501.json` | Post-#501 live trial (redacted) |
 
-## Baseline reproduction (model-free)
+## Route / adapter
+
+- Chat live route key: `deepseek-v4.1-flash-openrouter`
+- Provider model: `deepseek/deepseek-v4.1-flash-1017`
+- Adapter: `OpenRouterApiRunner`
+- CLI shape: `babel run --mode chat-headless --json --yes --project-root <ws> --model deepseek-v4.1-flash-openrouter <prompt>`
+
+## Post-501 live trial (paid cells)
+
+Dispatched via `npm run test:openrouter-lane-647e-preflight -- --live` @ `5b16e7e1`. Receipt: `evidence/post-501-trial/chat-scenarios-post-501.json`.
+
+| Cell | Provider errors | Terminal | Host check |
+|------|-----------------|----------|------------|
+| readonly_explain | 0 | `NO_CHANGE_REQUIRED` | tests still fail (unchanged) |
+| vague_repair | 0 | `BLOCKED_POLICY` | oracle pass after edit |
+| vague_feature_export | 0 | `UNVERIFIED_PATCH` | npm test pass |
+| multiturn_resume | 0 (no dispatch) | `EXECUTOR_HALTED` | oracle still pass |
+| cancellation_stream_abort | 0 | stream completed | n/a |
+
+**Aggregate known cost:** ~$0.01212. Provider errors: **0**.
+
+## Runtime handoff (not provider lane)
+
+- `multiturn_resume`: `EXECUTOR_HALTED` on `--resume-chat` (no provider dispatch)
+- `vague_feature_export`: `AGENT_FAILURE` / `BLOCKED` after successful OpenRouter turns
+- Acceptance / `VERIFIED_COMPLETE`: core + evaluator lanes (#499–#501 on `main`)
+
+## Scans
+
+- Host: **no `pwsh`** → local `check-public-content-policy` / strict Gitleaks / supplemental **not run** here.
+- PR #505: use **hosted** `public-content-policy` + `security` as public evidence only; maintainer private scan still required before merge.
+
+## Reproduce
 
 ```bash
 cd babel-cli && npm ci && npm run build
-npm run test:research-v2-openrouter-route-smoke
-npx tsx --import ./src/testinfra/register-no-ambient-inference.mjs --test src/runners/openRouterApi.test.ts
-npm run test:openrouter-lane-647e-preflight
+npm run test:openrouter-lane-647e-preflight              # offline
+npm run test:openrouter-lane-647e-preflight -- --live    # billable matrix
 ```
-
-## Live qualification (executed on candidate SHA)
-
-Isolated disposable workspaces copied from `fixtures/coding-output-acceptance/workspaces/*`. Evidence: `fixtures/openrouter-lane-647e/evidence/*` (redacted; no tokens).
-
-| Scenario | Provider errors | Outcome | Cost (reported) |
-|----------|-----------------|---------|-----------------|
-| Read-only explain | 0 | `NO_CHANGE_REQUIRED` | $0.0014713 |
-| Vague repair `fix this` | 0 | `UNVERIFIED_PATCH` (tests pass after edit) | $0.004879626 |
-| Vague feature `make export work` | 0 | `BLOCKED_POLICY` | $0.004459416 |
-| Multi-turn `--resume-chat` follow-up | 0 (no dispatch) | `FAILED_RETRYABLE` | unknown |
-
-**Aggregate known Chat spend (three dispatched cells):** ~$0.010810342. Streaming preflight add ~$0.000022.
-
-**Provider verdict:** OpenRouter transport, streaming, metadata, and billing fields behaved correctly on all dispatched model calls. Terminal outcomes reflect runtime acceptance/policy (#501 area untouched), not provider failure.
-
-**Cancellation:** AbortSignal exercise inconclusive (stream settled quickly); no provider error.
-
-## Scope / excluded
-
-- No edits to ChatEngine runtime, evaluators, CI, AGENTS.md, or #501.
-- #499 / #500 contracts: exercised via honest outcomes; no reimplementation.
-
-## Risks / next steps
-
-1. Independent re-run live matrix with `scripts/run_openrouter_lane_qualification.mjs --live` (billable).
-2. Core lane: `--resume-chat` `FAILED_RETRYABLE` on conversation follow-up.
-3. Full `VERIFIED_COMPLETE` qualification still blocked on acceptance/evaluator dependencies and #501.
-
-## CI
-
-Draft PR CI not yet polled at handoff; local `openRouterApi.test.ts` 9/9 pass; route smoke pass.

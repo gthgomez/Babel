@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 /**
- * Bounded OpenRouter lane qualification helper.
- * Default: model-free route smoke + fixture evidence sanity checks.
- * --live: billable Chat cells (requires OPENROUTER_API_KEY and built dist).
+ * OpenRouter lane 647e qualification orchestrator.
+ *
+ * Default (offline): route smoke + frozen evidence fixture checks only — no provider calls.
+ * --live: runs scripts/openrouterLaneLiveQualification.mjs (billable Chat matrix + stream abort).
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const laneRoot = join(packageRoot, 'fixtures', 'openrouter-lane-647e')
@@ -22,36 +24,80 @@ function run(cmd, args, opts = {}) {
   return result.stdout
 }
 
+function argValue(flag) {
+  const index = process.argv.indexOf(flag)
+  if (index === -1) return undefined
+  return process.argv[index + 1]
+}
+
 const live = process.argv.includes('--live')
 const help = process.argv.includes('--help') || process.argv.includes('-h')
 
 if (help) {
   process.stdout.write(
     [
-      'Usage: npm run test:openrouter-lane-647e-preflight [-- --live]',
+      'Usage: npm run test:openrouter-lane-647e-preflight [-- [--live] [--trial <label>] [--output <path>]]',
       '',
-      '  (default) route smoke + lane evidence checks',
-      '  --live    run billable Chat qualification (see HANDOFF.md)',
+      'Phases:',
+      '  1. preflight (always, offline): research-v2 OpenRouter route smoke',
+      '  2. fixture_checks (always, offline): frozen pre-501 redacted evidence + lane unit tests',
+      '  3. paid_provider_execution (--live only): dispatches Chat cells; stop on provider error',
+      '',
+      '  --live              execute billable live matrix (OPENROUTER_API_KEY + dist required)',
+      '  --trial <label>     trial label in output JSON (default: post-501)',
+      '  --output <path>     redacted evidence path (default: post-501-trial artifact)',
     ].join('\n') + '\n',
   )
   process.exit(0)
 }
 
-run('npm', ['run', 'test:research-v2-openrouter-route-smoke'])
-const evidence = JSON.parse(readFileSync(join(laneRoot, 'evidence', 'chat-scenarios-redacted.json'), 'utf8'))
-if (typeof evidence.provider_errors_observed !== 'number') {
-  throw new Error('chat-scenarios-redacted.json missing provider_errors_observed')
+const preflight = { phase: 'preflight', status: 'started' }
+try {
+  run('npm', ['run', 'test:research-v2-openrouter-route-smoke'])
+  preflight.status = 'ok'
+} catch (e) {
+  preflight.status = 'fail'
+  preflight.error = String(e)
+  console.error(JSON.stringify({ preflight, fixture_checks: { status: 'skipped' } }, null, 2))
+  process.exit(1)
 }
-run('npx', [
-  'tsx',
-  '--import',
-  './src/testinfra/register-no-ambient-inference.mjs',
-  '--test',
-  'src/runners/openrouterLaneRouteQualification.test.ts',
-])
+
+const fixtureChecks = { phase: 'fixture_checks', status: 'started' }
+try {
+  const evidencePath = join(laneRoot, 'evidence', 'pre-501-trial', 'chat-scenarios-redacted.json')
+  const evidence = JSON.parse(readFileSync(evidencePath, 'utf8'))
+  if (typeof evidence.provider_errors_observed !== 'number') {
+    throw new Error('pre-501 chat-scenarios-redacted.json missing provider_errors_observed')
+  }
+  run('npx', [
+    'tsx',
+    '--import',
+    './src/testinfra/register-no-ambient-inference.mjs',
+    '--test',
+    'src/runners/openrouterLaneRouteQualification.test.ts',
+  ])
+  fixtureChecks.status = 'ok'
+  fixtureChecks.pre_501_frozen_evidence = evidencePath
+} catch (e) {
+  fixtureChecks.status = 'fail'
+  fixtureChecks.error = String(e)
+  console.error(JSON.stringify({ preflight, fixture_checks: fixtureChecks }, null, 2))
+  process.exit(1)
+}
 
 if (!live) {
-  console.log('openrouter-lane-647e-preflight: ok (offline)')
+  console.log(
+    JSON.stringify(
+      {
+        verdict: 'preflight_and_fixture_checks_only',
+        preflight,
+        fixture_checks: fixtureChecks,
+        paid_provider_execution: { status: 'skipped', reason: 'pass --live to dispatch billable cells' },
+      },
+      null,
+      2,
+    ),
+  )
   process.exit(0)
 }
 
@@ -62,7 +108,42 @@ if (!existsSync(join(packageRoot, 'dist', 'index.js'))) {
   throw new Error('dist/index.js missing; run npm run build before --live')
 }
 
-process.stdout.write(
-  'openrouter-lane-647e: --live requires manual disposable workspaces; see fixtures/openrouter-lane-647e/HANDOFF.md\n',
+const trialLabel = argValue('--trial') ?? 'post-501'
+const outputPath =
+  argValue('--output') ??
+  join(laneRoot, 'evidence', 'post-501-trial', 'chat-scenarios-post-501.json')
+
+const { executeOpenRouterLaneLiveQualification } = await import(
+  './openrouterLaneLiveQualification.mjs'
 )
-console.log('openrouter-lane-647e-preflight: ok (live flag acknowledged; cells not auto-dispatched)')
+
+const liveReport = await executeOpenRouterLaneLiveQualification({
+  trialLabel,
+  outputPath,
+  pre501EvidenceNote:
+    'fixtures/openrouter-lane-647e/evidence/pre-501-trial/chat-scenarios-redacted.json (frozen at base 1dc598e2)',
+})
+
+console.log(
+  JSON.stringify(
+    {
+      verdict: liveReport.verdict,
+      preflight,
+      fixture_checks: fixtureChecks,
+      paid_provider_execution: {
+        status: liveReport.stopped_billable ? 'stopped_on_provider_error' : 'completed',
+        output: outputPath,
+        aggregate_known_cost_usd: liveReport.aggregate_known_cost_usd,
+        results: liveReport.results.map((r) => ({
+          id: r.id,
+          terminal_outcome: r.terminal_outcome,
+          status: r.status,
+        })),
+      },
+    },
+    null,
+    2,
+  ),
+)
+
+if (liveReport.stopped_billable) process.exit(2)
