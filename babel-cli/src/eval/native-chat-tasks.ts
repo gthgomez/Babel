@@ -7,7 +7,7 @@ import { z } from 'zod'
 import type { ChatResult } from '../agent/chatEngine.js'
 import { isCredentialTargetPath } from '../authority/protectedPath.js'
 import { freezeEvaluator, runJourney, type JourneyGrade, type JourneySpec, type OracleVerdict } from './harness-journey-contract.js'
-import { captureJourneyGitState, prepareJourneyFixture, readJourneyCorpus } from './harness-journey-fixtures.js'
+import { captureJourneyGitState, fixtureMetadataDigest, prepareJourneyFixture, readJourneyCorpus } from './harness-journey-fixtures.js'
 import { gradeJourneyCode } from './harness-journey-code-oracle.js'
 import { gradeInCleanRoom } from './cleanRoomGrade.js'
 import { calibrationPolicy, calibrationReferences, createCalibrationRunner } from './native-chat-calibration.js'
@@ -201,6 +201,7 @@ export async function runNativeChatTasks(options: {
     let oracleVerdict: OracleVerdict = 'unavailable'
     let launched = false
     let regression: boolean | null = null
+    let executionMetadataDigest: string | null = cell.gitMetadataDigest
     const baseline = new Map(cell.files.map(file => [file.path, file.sha256]))
     const evaluate = async (): Promise<JourneyGrade> => {
       if (!captured) return { verdict: 'unavailable', fulfillment: 'incomplete', evidenceRefs: [] }
@@ -210,8 +211,16 @@ export async function runNativeChatTasks(options: {
       }
       changedPaths.push(...nativeChangedPaths(baseline, baselineModes, snapshot, snapshotModes))
       const unauthorized = changedPaths.filter(path => !task.allowedChanges.includes(path))
-      const metadata = cell.gitMetadataDigest ? await captureJourneyGitState(cell.candidateRoot, cell.gitMetadataDigest) : null
-      if (unauthorized.length || metadata && metadata.metadataDigest !== cell.gitMetadataDigest) {
+      const metadataBaseline = calibration ? executionMetadataDigest : cell.gitMetadataDigest
+      const metadata = metadataBaseline ? await captureJourneyGitState(cell.candidateRoot, metadataBaseline) : null
+      const metadataDrift = Boolean(metadata && metadata.metadataDigest !== metadataBaseline)
+      // Scripted write calibrations refresh index/objects/refs (diagnostic:
+      // scripts/diagnose_calibration_git_metadata.mjs). Read-only checks workspace
+      // bytes via inspection; metadata is enforced only when workspace files moved.
+      const failMetadata = metadataDrift && (
+        !calibration || (task.kind === 'read_only' && changedPaths.length > 0)
+      )
+      if (unauthorized.length || failMetadata) {
         regression = true
         oracleVerdict = 'fail'
         diagnostics.push('unauthorized_change_or_git_metadata_change')
@@ -265,6 +274,7 @@ export async function runNativeChatTasks(options: {
           providerRunner: createCalibrationRunner(task.journeyId, task.kind === 'negative_control'), providerPolicy: calibrationPolicy,
           model: 'synthetic-calibration', maxTurns: 4,
           })
+          if (cell.gitMetadataDigest) executionMetadataDigest = await fixtureMetadataDigest(cell.candidateRoot)
           terminal = await engine.submitMessage(input.prompt, {
           onAnswerChunk(chunk) { answer += chunk },
           onToolStart(tool, target) { operations.push({ tool, target, completed: false }); return operationCount++ },

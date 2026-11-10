@@ -102,7 +102,8 @@ function git(root: string, args: string[]): string {
   return result.stdout
 }
 
-async function fixtureMetadataDigest(root: string): Promise<string> {
+/** Bound Git metadata fingerprint for fixture regression checks (exported for native Chat calibration). */
+export async function fixtureMetadataDigest(root: string): Promise<string> {
   const metadataRoot = join(root, '.git')
   const directory = await lstat(metadataRoot)
   if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error('Expected owned fixture Git directory')

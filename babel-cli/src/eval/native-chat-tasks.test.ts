@@ -340,6 +340,7 @@ test('native Chat calibration retains all four scenarios, rejects deception and 
   assert.equal(report.tasks.find((task: { id: string }) => task.id === 'deceptive-completion').falseCompletion, true)
   assert.equal(report.tasks.find((task: { id: string }) => task.id === 'deceptive-completion').oracleVerdict, 'fail')
   assert.equal(report.summary.calibrationPasses, 3)
+  assert.equal(report.tasks.find((task: { id: string }) => task.id === 'deceptive-completion')?.outcome, 'FAIL')
   assert.match(report.evaluator.sha, /^[a-f0-9]{40}$/)
   assert.match(report.evaluator.digest, /^[a-f0-9]{64}$/)
   assert.ok(report.evaluator.files.some((file: { path: string }) => file.path.endsWith('/sandboxFixturePermissions.ts')))
