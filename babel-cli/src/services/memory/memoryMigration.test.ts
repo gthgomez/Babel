@@ -8,6 +8,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -35,6 +36,11 @@ import {
   resolveMemoryRootWithMigration,
   writeMemoryProvenance,
 } from './memoryStoreMigration.js';
+import {
+  buildMemoryReconciliationFromCanonical,
+  writeMemoryReconciliation,
+} from './memoryStoreReconciliation.js';
+import { copyMemoryFileExclusive } from './memoryStoreCopy.js';
 
 describe('memory legacy migration', () => {
   let stateDir: string;
@@ -290,6 +296,97 @@ describe('memory legacy migration', () => {
       assert.equal(res.blocker?.code, 'unproven_legacy_attribution');
     } finally {
       rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks migration when same-name canonical bytes differ', () => {
+    const project = mkdtempSync(join(tmpdir(), 'babel-mem-migrate-conflict-'));
+    try {
+      const layout = pathsForProject(project);
+      mkdirSync(layout.legacyMemoryRoot, { recursive: true });
+      writeMemoryProvenance(layout.legacyProjectDir, {
+        slugFormat: 'legacy-v0',
+        projectRoot: layout.absolute,
+      });
+      writeMemory(layout.legacyMemoryRoot, {
+        name: 'fact',
+        description: 'legacy',
+        metadata: { type: 'reference' },
+      }, 'legacy version');
+      mkdirSync(layout.canonicalMemoryRoot, { recursive: true });
+      writeFileSync(join(layout.canonicalMemoryRoot, 'fact.md'), `---
+name: fact
+description: canon
+metadata:
+  type: reference
+---
+
+canonical version
+`, 'utf-8');
+
+      const res = resolveMemoryRootWithMigration(project);
+      assert.equal(res.memoryRoot, null);
+      assert.equal(res.blocker?.code, 'migration_content_conflict');
+      assert.match(
+        readFileSync(join(layout.canonicalMemoryRoot, 'fact.md'), 'utf-8'),
+        /canonical version/,
+      );
+      const migration = readMemoryMigration(layout.canonicalProjectDir);
+      assert.equal(migration?.status, 'blocked_conflict');
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it('explicit reconciliation opens canonical store without legacy provenance', () => {
+    const project = mkdtempSync(join(tmpdir(), 'babel-mem-migrate-recon-'));
+    try {
+      const layout = pathsForProject(project);
+      mkdirSync(layout.legacyMemoryRoot, { recursive: true });
+      writeMemory(layout.legacyMemoryRoot, {
+        name: 'unproven',
+        description: 'legacy',
+        metadata: { type: 'reference' },
+      }, 'legacy-only');
+      mkdirSync(layout.canonicalMemoryRoot, { recursive: true });
+      writeFileSync(
+        join(layout.canonicalMemoryRoot, 'operator.md'),
+        `---
+name: operator
+description: op
+metadata:
+  type: reference
+---
+
+operator canonical
+`,
+        'utf-8',
+      );
+      const record = buildMemoryReconciliationFromCanonical(project);
+      assert.ok(record);
+      writeMemoryReconciliation(layout.canonicalProjectDir, record!);
+
+      const res = resolveMemoryRootWithMigration(project);
+      assert.ok(res.memoryRoot);
+      assert.ok(findByName(res.memoryRoot!, 'operator'));
+      assert.equal(resolveMemoryRootWithMigration(project).blocker, undefined);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it('does not treat differing same-name files as migrated (copy helper regression)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-mem-migrate-helper-'));
+    const src = join(root, 'src');
+    const dest = join(root, 'dest');
+    try {
+      mkdirSync(src);
+      mkdirSync(dest);
+      writeFileSync(join(src, 'x.md'), 'one', 'utf-8');
+      writeFileSync(join(dest, 'x.md'), 'two', 'utf-8');
+      assert.equal(copyMemoryFileExclusive(src, dest, 'x.md').status, 'conflict');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

@@ -9,6 +9,7 @@ import { resolveRuntimeUserStateRoot } from '../../config/runtimePaths.js';
 
 export const MEMORY_PROVENANCE_FILE = '.babel-memory-provenance.json';
 export const MEMORY_MIGRATION_FILE = '.babel-memory-migration.json';
+export const MEMORY_RECONCILIATION_FILE = '.babel-memory-reconciliation.json';
 
 export type MemorySlugFormat = 'legacy-v0' | 'digest-v1';
 
@@ -20,15 +21,32 @@ export interface MemoryProvenance {
   establishedAt: string;
 }
 
+export interface MemoryMigrationConflict {
+  file: string;
+  contentSha256Legacy: string;
+  contentSha256Canonical: string;
+}
+
 export interface MemoryMigrationRecord {
   schemaVersion: 1;
-  status: 'partial' | 'complete';
+  status: 'partial' | 'complete' | 'blocked_conflict';
   sourceLegacySlug: string;
   sourceLegacyMemoryRoot: string;
   projectRoot: string;
   migratedFiles: string[];
+  conflicts?: MemoryMigrationConflict[];
   preservedOriginal: true;
   updatedAt: string;
+}
+
+/** Operator-attested manual canonical store (does not infer legacy ownership). */
+export interface MemoryReconciliation {
+  schemaVersion: 1;
+  projectRoot: string;
+  kind: 'explicit_operator';
+  establishedAt: string;
+  memoryFiles: Array<{ name: string; contentSha256: string }>;
+  note?: string;
 }
 
 /**

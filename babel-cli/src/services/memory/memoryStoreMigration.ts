@@ -2,30 +2,34 @@
  * Non-destructive legacy → canonical memory store migration with provenance checks.
  */
 
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-} from 'node:fs';
-import { join, resolve as resolveAbsolute } from 'node:path';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { MEMORY_INDEX_NAME } from './memoryTypes.js';
+import { copyMemoryFileExclusive } from './memoryStoreCopy.js';
+import { projectRootMatches, provenanceMatchesProjectRoot } from './memoryStoreIdentity.js';
 import {
   MEMORY_MIGRATION_FILE,
   MEMORY_PROVENANCE_FILE,
+  MEMORY_RECONCILIATION_FILE,
+  type MemoryMigrationConflict,
   type MemoryMigrationRecord,
   type MemoryProvenance,
   pathsForProject,
 } from './memoryStoreLayout.js';
+import { readJsonFile, writeJsonAtomic } from './memoryStoreMigrationIO.js';
+import {
+  readMemoryReconciliation,
+  validateMemoryReconciliation,
+} from './memoryStoreReconciliation.js';
 
 export type MemoryRootBlockerCode =
   | 'ambiguous_legacy_collision'
   | 'legacy_owner_mismatch'
   | 'shared_empty_legacy_bucket'
-  | 'unproven_legacy_attribution';
+  | 'unproven_legacy_attribution'
+  | 'migration_content_conflict'
+  | 'reconciliation_invalid';
 
 export interface MemoryRootResolution {
   memoryRoot: string | null;
@@ -37,19 +41,7 @@ export interface MemoryRootResolution {
   };
 }
 
-function readJsonFile<T>(path: string): T | null {
-  try {
-    if (!existsSync(path)) return null;
-    return JSON.parse(readFileSync(path, 'utf-8')) as T;
-  } catch {
-    return null;
-  }
-}
-
-function writeJsonAtomic(path: string, data: unknown): void {
-  mkdirSync(join(path, '..'), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, 'utf-8');
-}
+export { provenanceMatchesProjectRoot } from './memoryStoreIdentity.js';
 
 export function readMemoryProvenance(projectDir: string): MemoryProvenance | null {
   const raw = readJsonFile<MemoryProvenance>(join(projectDir, MEMORY_PROVENANCE_FILE));
@@ -76,18 +68,6 @@ export function readMemoryMigration(projectDir: string): MemoryMigrationRecord |
   return raw;
 }
 
-/** Validated when stored projectRoot resolves to the same absolute path (portable identity). */
-export function provenanceMatchesProjectRoot(
-  provenance: MemoryProvenance,
-  absoluteProjectRoot: string,
-): boolean {
-  try {
-    return resolveAbsolute(provenance.projectRoot) === resolveAbsolute(absoluteProjectRoot);
-  } catch {
-    return false;
-  }
-}
-
 function listMemoryFileNames(memoryRoot: string): string[] {
   try {
     if (!existsSync(memoryRoot)) return [];
@@ -103,42 +83,43 @@ function memoryRootHasContent(memoryRoot: string): boolean {
   return listMemoryFileNames(memoryRoot).length > 0;
 }
 
-/**
- * Legacy v0 used join(state, 'projects', '', 'memory') which ignores empty segments → projects/memory.
- */
 export function isDegenerateLegacySharedBucket(legacySlug: string): boolean {
   return legacySlug.length === 0;
 }
 
-function unprovenBlocker(
-  layout: ReturnType<typeof pathsForProject>,
-): MemoryRootResolution {
+function unprovenBlocker(layout: ReturnType<typeof pathsForProject>): MemoryRootResolution {
   return {
     memoryRoot: null,
     blocker: {
       code: 'unproven_legacy_attribution',
       message:
-        'Legacy memory exists but owner was not validated. Historical slug collisions (case, ' +
-        'punctuation, moved/deleted roots) cannot be inferred from the filesystem layout.',
+        'Legacy memory exists but owner was not validated. Historical slug collisions cannot be inferred.',
       legacyMemoryRoot: layout.legacyMemoryRoot,
       manualReconciliation:
-        `Add ${MEMORY_PROVENANCE_FILE} under ${layout.legacyProjectDir} with the exact ` +
-        `"projectRoot" (absolute path), or copy .md files into ${layout.canonicalProjectDir}/memory manually.`,
+        `Option A: add ${MEMORY_PROVENANCE_FILE} on the legacy project dir with exact ` +
+        `"projectRoot" and retry automated copy. Option B: place memories under ` +
+        `${layout.canonicalMemoryRoot}, write ${MEMORY_RECONCILIATION_FILE} attesting ` +
+        'every canonical .md fingerprint (see buildMemoryReconciliationFromCanonical).',
     },
   };
 }
 
-function copyMemoryFileIfAbsent(sourceRoot: string, destRoot: string, name: string): boolean {
-  const src = join(sourceRoot, name);
-  const dest = join(destRoot, name);
-  if (existsSync(dest)) return false;
-  try {
-    mkdirSync(destRoot, { recursive: true });
-    copyFileSync(src, dest);
-    return true;
-  } catch {
-    return false;
-  }
+function conflictBlocker(
+  layout: ReturnType<typeof pathsForProject>,
+  conflicts: MemoryMigrationConflict[],
+): MemoryRootResolution {
+  return {
+    memoryRoot: null,
+    blocker: {
+      code: 'migration_content_conflict',
+      message:
+        `Canonical destination differs from legacy for ${conflicts.length} file(s); destination bytes preserved.`,
+      legacyMemoryRoot: layout.legacyMemoryRoot,
+      manualReconciliation:
+        'Rename or merge conflicting memories manually, align content and re-run migration, ' +
+        `or use ${MEMORY_RECONCILIATION_FILE} if canonical bytes are authoritative.`,
+    },
+  };
 }
 
 function runMigrationCopy(
@@ -146,62 +127,87 @@ function runMigrationCopy(
   existing: MemoryMigrationRecord | null,
 ): MemoryMigrationRecord {
   const migrated = new Set(existing?.migratedFiles ?? []);
+  const conflicts: MemoryMigrationConflict[] = [];
   const legacyNames = listMemoryFileNames(layout.legacyMemoryRoot);
   mkdirSync(layout.canonicalMemoryRoot, { recursive: true });
 
   for (const name of legacyNames) {
-    if (copyMemoryFileIfAbsent(layout.legacyMemoryRoot, layout.canonicalMemoryRoot, name)) {
+    const outcome = copyMemoryFileExclusive(
+      layout.legacyMemoryRoot,
+      layout.canonicalMemoryRoot,
+      name,
+    );
+    if (outcome.status === 'created' || outcome.status === 'identical') {
       migrated.add(name);
-    } else if (existsSync(join(layout.canonicalMemoryRoot, name))) {
-      migrated.add(name);
+    } else if (outcome.status === 'conflict') {
+      conflicts.push({
+        file: name,
+        contentSha256Legacy: outcome.contentSha256Legacy,
+        contentSha256Canonical: outcome.contentSha256Canonical,
+      });
     }
   }
 
-  const legacyIndex = join(layout.legacyMemoryRoot, MEMORY_INDEX_NAME);
-  const canonicalIndex = join(layout.canonicalMemoryRoot, MEMORY_INDEX_NAME);
-  if (existsSync(legacyIndex) && !existsSync(canonicalIndex)) {
-    try {
-      copyFileSync(legacyIndex, canonicalIndex);
-    } catch {
-      // Index is auxiliary; memory .md files are authoritative.
-    }
-  }
-
-  const complete =
+  const allPresent =
     legacyNames.length === 0 ||
-    legacyNames.every((n) => existsSync(join(layout.canonicalMemoryRoot, n)));
+    legacyNames.every((n) => migrated.has(n) && existsSync(join(layout.canonicalMemoryRoot, n)));
+
+  const status = conflicts.length > 0 ? 'blocked_conflict' : allPresent ? 'complete' : 'partial';
 
   return {
     schemaVersion: 1,
-    status: complete ? 'complete' : 'partial',
+    status,
     sourceLegacySlug: layout.legacySlug,
     sourceLegacyMemoryRoot: layout.legacyMemoryRoot,
     projectRoot: layout.absolute,
     migratedFiles: [...migrated],
+    ...(conflicts.length > 0 ? { conflicts } : {}),
     preservedOriginal: true,
     updatedAt: new Date().toISOString(),
   };
 }
 
-function migrateFromValidatedLegacy(layout: ReturnType<typeof pathsForProject>): MemoryRootResolution {
-  const migration = readMemoryMigration(layout.canonicalProjectDir);
-  const record = runMigrationCopy(layout, migration);
-  writeJsonAtomic(join(layout.canonicalProjectDir, MEMORY_MIGRATION_FILE), record);
+function tryExplicitReconciliation(
+  layout: ReturnType<typeof pathsForProject>,
+): MemoryRootResolution | null {
+  const record = readMemoryReconciliation(layout.canonicalProjectDir);
+  if (!record || !memoryRootHasContent(layout.canonicalMemoryRoot)) return null;
+  if (!validateMemoryReconciliation(layout.absolute, layout.canonicalMemoryRoot, record)) {
+    return {
+      memoryRoot: null,
+      blocker: {
+        code: 'reconciliation_invalid',
+        message: 'Reconciliation file present but does not attest all canonical memory fingerprints.',
+        manualReconciliation:
+          `Regenerate ${MEMORY_RECONCILIATION_FILE} from current canonical bytes or fix fingerprints.`,
+      },
+    };
+  }
   writeMemoryProvenance(layout.canonicalProjectDir, {
     slugFormat: 'digest-v1',
     projectRoot: layout.absolute,
   });
-  if (record.status === 'partial') {
-    const resume = runMigrationCopy(layout, record);
-    writeJsonAtomic(join(layout.canonicalProjectDir, MEMORY_MIGRATION_FILE), resume);
-  }
   return { memoryRoot: layout.canonicalMemoryRoot };
 }
 
-/**
- * Resolve canonical memory root, migrating legacy content only with validated provenance.
- * Legacy directories are always preserved on disk.
- */
+function migrateFromValidatedLegacy(layout: ReturnType<typeof pathsForProject>): MemoryRootResolution {
+  const migration = readMemoryMigration(layout.canonicalProjectDir);
+  let record = runMigrationCopy(layout, migration);
+  writeJsonAtomic(join(layout.canonicalProjectDir, MEMORY_MIGRATION_FILE), record);
+  if (record.status === 'partial') {
+    record = runMigrationCopy(layout, record);
+    writeJsonAtomic(join(layout.canonicalProjectDir, MEMORY_MIGRATION_FILE), record);
+  }
+  if (record.status === 'blocked_conflict' && record.conflicts?.length) {
+    return conflictBlocker(layout, record.conflicts);
+  }
+  writeMemoryProvenance(layout.canonicalProjectDir, {
+    slugFormat: 'digest-v1',
+    projectRoot: layout.absolute,
+  });
+  return { memoryRoot: layout.canonicalMemoryRoot };
+}
+
 export function resolveMemoryRootWithMigration(
   projectRoot: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -217,7 +223,15 @@ export function resolveMemoryRootWithMigration(
   try {
     mkdirSync(layout.canonicalMemoryRoot, { recursive: true });
 
-    if (migration?.status === 'complete' && migration.projectRoot === layout.absolute) {
+    const reconciled = tryExplicitReconciliation(layout);
+    if (reconciled?.memoryRoot) {
+      return reconciled;
+    }
+    if (reconciled?.blocker) {
+      return reconciled;
+    }
+
+    if (migration?.status === 'complete' && projectRootMatches(migration.projectRoot, layout.absolute)) {
       writeMemoryProvenance(layout.canonicalProjectDir, {
         slugFormat: 'digest-v1',
         projectRoot: layout.absolute,
@@ -225,7 +239,13 @@ export function resolveMemoryRootWithMigration(
       return { memoryRoot: layout.canonicalMemoryRoot };
     }
 
-    if (migration?.status === 'partial' && migration.projectRoot === layout.absolute) {
+    if (migration?.status === 'blocked_conflict' && projectRootMatches(migration.projectRoot, layout.absolute)) {
+      if (migration.conflicts?.length) {
+        return conflictBlocker(layout, migration.conflicts);
+      }
+    }
+
+    if (migration?.status === 'partial' && projectRootMatches(migration.projectRoot, layout.absolute)) {
       if (!legacyProvenance || !provenanceMatchesProjectRoot(legacyProvenance, layout.absolute)) {
         return unprovenBlocker(layout);
       }
@@ -266,8 +286,7 @@ export function resolveMemoryRootWithMigration(
           message: 'Legacy shared memory bucket (empty slug) cannot be attributed to a single project.',
           legacyMemoryRoot: layout.legacyMemoryRoot,
           manualReconciliation:
-            'Copy needed .md files from the legacy store into a new per-project directory manually, ' +
-            `or add ${MEMORY_PROVENANCE_FILE} under the legacy project dir with the exact projectRoot, then retry.`,
+            'Copy needed .md files into canonical memory and add reconciliation, or fix provenance on legacy.',
         },
       };
     }
@@ -305,7 +324,6 @@ export function resolveMemoryRootWithMigration(
   }
 }
 
-/** @returns true when legacy memory files still exist (non-destructive migration). */
 export function legacyMemoryPreserved(
   projectRoot: string,
   env: NodeJS.ProcessEnv = process.env,
