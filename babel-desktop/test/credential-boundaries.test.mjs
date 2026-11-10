@@ -7,6 +7,7 @@ import {tmpdir} from 'node:os';
 import {runInNewContext} from 'node:vm';
 import * as credentials from '../native/credentials.mjs';
 import {fixtureProtection} from './credential-fixture.mjs';
+import {rmTempDirWithOwnedChildDrain} from './temp-dir-cleanup.mjs';
 credentials.configureCredentialProtection(fixtureProtection);
 const source=readFileSync(new URL('../native/main.mjs',import.meta.url),'utf8');
 function contextBinding(preferences,authority){
@@ -36,7 +37,7 @@ test('project replacement/removal preserve unrelated variables and never affect 
   credentials.removeProviderCredential({provider:'deepseek',scope:'project',projectRoot:project});
   const text=readFileSync(join(project,'.env'),'utf8');assert.match(text,/# keep\nUNRELATED=value\nOPENROUTER_API_KEY=/);assert.equal(text.includes('DEEPSEEK_API_KEY'),false);
   assert.equal(existsSync(join(config,'desktop-credentials.json')),false);
- }finally{rmSync(root,{recursive:true,force:true});}
+ }finally{await rmTempDirWithOwnedChildDrain(root);}
 });
 test('encrypted legacy migration can retry after interruption before commit and returns no secret',()=>{
  const config=mkdtempSync(join(tmpdir(),'babel-interrupted-migration-'));
@@ -66,7 +67,7 @@ test('owned CLI selects only the explicitly opted matching project and standalon
   credentials.removeProviderCredential({provider:'deepseek',scope:'private',configDirectory});
   credentials.removeProviderCredential({provider:'deepseek',scope:'project',projectRoot:project});
   assert.throws(()=>applyCliCredentialScope({BABEL_DESKTOP_PROVIDER:'deepseek'},{configDirectory,args:['run','--project-root',project],cwd:project,preferences:{projectRoot:project,projectCredentialRoot:project}}),/standalone|Desktop/);
- }finally{rmSync(root,{recursive:true,force:true});}
+ }finally{await rmTempDirWithOwnedChildDrain(root);}
 });
 
 test('standalone model overrides cannot resurrect any protected-store-owned provider',async()=>{
@@ -97,7 +98,7 @@ test('multiline dotenv data cannot be imported or edited as a top-level provider
   assert.equal(readFileSync(join(project,'.env'),'utf8'),original);assert.equal(readFileSync(join(config,'.env'),'utf8'),original);
   assert.equal(existsSync(join(config,'desktop-credentials.json')),false);
   }
- }finally{rmSync(root,{recursive:true,force:true});}
+ }finally{await rmTempDirWithOwnedChildDrain(root);}
 });
 
 test('an empty protected store cannot restore retained legacy keys or permit standalone fallback',async()=>{
