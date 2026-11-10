@@ -18,8 +18,10 @@ import type { ResolvedModelPolicy } from '../modelPolicy.js';
 import { chatSessionDir } from '../cli/runsLayout.js';
 import { inspectSessionEventLogFromDir, type SessionEvent } from './sessionEvents.js';
 import {
+  bindChatVerifierReceipt,
   evaluateChatCompletionProof,
   mutationPathsFromSessionEvents,
+  type BoundChatVerifierReceipt,
 } from '../evidence/chatRevisionBinding.js';
 import {
   IndependentVerifier,
@@ -27,6 +29,7 @@ import {
   isIndependentVerifierOptIn,
 } from '../evidence/independentVerifier.js';
 import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js';
+import { checkVerifierTamper, initializeVerifierDependencyHashes } from './chatEngineVerifierSession.js';
 
 const MANAGED_ENV = [
   'BABEL_RUNS_DIR',
@@ -121,6 +124,24 @@ function makeFixture(): string {
 function readSessionEvents(runId: string): SessionEvent[] {
   const loaded = inspectSessionEventLogFromDir(chatSessionDir(runId), runId);
   return loaded.kind === 'valid' ? loaded.log.events : [];
+}
+
+/** Durable session receipt used by completion proof (not a widened engine cast). */
+function latestAuthoritativeVerifierReceipt(events: SessionEvent[]): BoundChatVerifierReceipt {
+  const attempts = events.filter(
+    (event): event is Extract<SessionEvent, { kind: 'verifier_attempt' }> =>
+      event.kind === 'verifier_attempt' && event.authoritative === true,
+  );
+  assert.ok(attempts.length >= 1, 'expected authoritative verifier_attempt in session log');
+  for (let index = attempts.length - 1; index >= 0; index--) {
+    const receipt = attempts[index]?.receipt;
+    if (receipt === undefined) continue;
+    assert.equal(typeof receipt.command, 'string');
+    assert.equal(typeof receipt.exit_code, 'number');
+    assert.equal(typeof receipt.summary, 'string');
+    return receipt;
+  }
+  throw new Error('no durable verifier receipt on authoritative attempts');
 }
 
 before(() => {
@@ -225,19 +246,12 @@ describe('Chat finalization with IndependentVerifier and absolute mutation_batch
 
       assert.equal(readFileSync(join(root, 'parser.ts'), 'utf8').includes('+ Number(parts[1])'), true);
 
-      const receipt = (engine as unknown as { lastVerifierReceipt: {
-        command: string; exit_code: number; summary: string; stale: boolean;
-        tests_total?: number; tests_failed?: number; verifier_id?: string; argv?: string[];
-        receiptId?: string; capturedAt?: number; authority?: boolean;
-        authority_source?: string; scope?: string;
-      } | null }).lastVerifierReceipt;
-      assert.ok(receipt, 'authoritative verifier receipt recorded');
+      const sessionEvents = readSessionEvents(runId);
+      const receipt = latestAuthoritativeVerifierReceipt(sessionEvents);
       assert.equal(receipt.stale, false);
       assert.equal(receipt.exit_code, 0);
       assert.ok((receipt.tests_total ?? 0) >= 1, 'receipt carries structured runner counts, not exit code alone');
       assert.equal(receipt.tests_failed ?? 0, 0);
-
-      const sessionEvents = readSessionEvents(runId);
       const batches = sessionEvents.filter((event) => event.kind === 'mutation_batch');
       assert.ok(batches.length >= 1, 'durable mutation_batch evidence exists');
       const mutationPaths = mutationPathsFromSessionEvents(sessionEvents);
@@ -289,6 +303,34 @@ describe('Chat finalization with IndependentVerifier and absolute mutation_batch
     }
   });
 
+  test('npm test freeze tracks two verifier dependencies; subject file edits are outside today’s guard (core #506 handoff)', () => {
+    const root = makeFixture();
+    try {
+      const hashes = new Map<string, string>();
+      initializeVerifierDependencyHashes(TASK, root, hashes, ['npm test']);
+      assert.equal(hashes.size, 2);
+      assert.ok(hashes.has('package.json'));
+      assert.ok(hashes.has('verify.mjs'));
+      assert.equal(hashes.has('parser.ts'), false);
+      const state = {
+        verifierDependencyHashes: hashes,
+        verifierTampered: false,
+        tamperCount: 0,
+        tamperedThisTurn: false,
+      };
+      assert.equal(
+        checkVerifierTamper('parser.ts', root, state),
+        null,
+        'parser.ts is not in the npm test dependency freeze set; behavioral oracle gap is core-owned',
+      );
+      writeFileSync(join(root, 'verify.mjs'), 'export {}\n');
+      assert.ok(checkVerifierTamper('verify.mjs', root, state));
+      assert.equal(state.verifierTampered, true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('escape absolute mutation path fails closed under IndependentVerifier (negative control)', async () => {
     const root = makeFixture();
     const outside = mkdtempSync(join(tmpdir(), 'babel-iv-outside-'));
@@ -305,27 +347,24 @@ describe('Chat finalization with IndependentVerifier and absolute mutation_batch
           exit_code: 0,
         } as SessionEvent,
       ];
+      const receipt = await bindChatVerifierReceipt({
+        projectRoot: root,
+        command: 'node --test --test-reporter=tap verify.mjs',
+        exit_code: 0,
+        summary: '1 test passed',
+        mutationPaths: ['parser.ts'],
+        structured: {
+          verifierId: 'node-test',
+          authoritySource: 'built_in_runner',
+          executable: 'node',
+          args: ['--test', '--test-reporter=tap', 'verify.mjs'],
+        },
+      });
       const proof = evaluateChatCompletionProof({
         projectRoot: root,
         hasMutation: true,
         verifierTampered: false,
-        receipt: {
-          command: 'node --test --test-reporter=tap verify.mjs',
-          exit_code: 0,
-          exitCode: 0,
-          summary: '1 test passed',
-          stale: false,
-          receiptId: 'escape-fixture',
-          capturedAt: Date.now(),
-          authority: true,
-          verifier_id: 'node-test',
-          verifierId: 'node-test',
-          argv: ['node', '--test', '--test-reporter=tap', 'verify.mjs'],
-          authority_source: 'built_in_runner',
-          authoritySource: 'built_in_runner',
-          tests_total: 1,
-          tests_failed: 0,
-        },
+        receipt,
         events: sessionEvents,
         isAuthoritativeCommand: isAuthoritativeVerifierCommand,
         env: { ...process.env, [INDEPENDENT_VERIFIER_ENV]: '1' },
