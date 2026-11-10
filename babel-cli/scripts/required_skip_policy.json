@@ -139,6 +139,7 @@
         ],
         "src/sandboxTermination.test.ts": [
           "a natural foreground close does not return success while owned group descendants remain",
+          "abort during natural-close settlement records terminal witness after physical close",
           "abort during natural-close settlement preserves owner drain without latch timeout",
           "owner drain waits for natural-close descendant cleanup"
         ]

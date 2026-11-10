@@ -894,26 +894,36 @@ export function spawnCommandAsync(
           options.processContext?.sessionId ?? 'unscoped',
           executionId ?? `${executable}:${child.pid ?? 'unknown'}`,
         );
+        const recordNaturalCloseWitness = () => {
+          if (aborted) {
+            recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} aborted`));
+            if (executionId) options.processWitness?.killed(processInput, executionId);
+            return;
+          }
+          if (settlementError) {
+            recordWitnessTerminal(1, settlementError);
+            return;
+          }
+          recordWitnessTerminal(code);
+        };
         void termination.then(
           () => {
+            recordNaturalCloseWitness();
             if (settled) return;
             if (aborted) {
-              recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} aborted`));
               finish(code ?? 1, new Error(`spawn ${executable} aborted`));
               return;
             }
             if (settlementError) {
-              recordWitnessTerminal(1, settlementError);
               finish(1, settlementError);
               return;
             }
-            recordWitnessTerminal(code);
             finish(code);
           },
           (error: unknown) => {
-            if (settled) return;
             const err = error instanceof Error ? error : new Error(String(error));
             recordWitnessTerminal(1, err);
+            if (settled) return;
             finish(1, err);
           },
         );

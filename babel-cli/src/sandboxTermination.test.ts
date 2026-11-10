@@ -212,6 +212,74 @@ process.exit(0);
   }
 })
 
+test('abort during natural-close settlement records terminal witness after physical close', {
+  skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-fg-witness-close-'))
+  const childPidFile = join(root, 'child.pid')
+  const closeLatchFile = join(root, 'close-latch.txt')
+  const parentFile = join(root, 'parent.mjs')
+  const owner = 'synthetic-fg-natural-close-witness'
+  const controller = new AbortController()
+  const witness = new ProcessWitness()
+  const events: string[] = []
+  const recordCancel = witness.cancelRequested.bind(witness)
+  const recordExit = witness.exited.bind(witness)
+  const recordKilled = witness.killed.bind(witness)
+  witness.cancelRequested = (...args) => {
+    events.push('cancel_requested')
+    recordCancel(...args)
+  }
+  witness.exited = (...args) => {
+    events.push('exited')
+    recordExit(...args)
+  }
+  witness.killed = (...args) => {
+    events.push('killed')
+    recordKilled(...args)
+  }
+  writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
+  writeFileSync(parentFile, `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
+child.unref();
+writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
+writeFileSync(${JSON.stringify(closeLatchFile)}, 'closed');
+process.exit(0);
+`)
+  try {
+    const pending = sandbox.spawnCommandAsync(process.execPath, [parentFile], {
+      cwd: root,
+      timeoutMs: 15_000,
+      env: process.env,
+      signal: controller.signal,
+      processWitness: witness,
+      processContext: { sessionId: owner },
+    })
+    const deadline = Date.now() + 5_000
+    while (!existsSync(childPidFile) || !existsSync(closeLatchFile)) {
+      if (Date.now() > deadline) throw new Error('fixture did not publish close ordering latches')
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    const childPid = Number(readFileSync(childPidFile, 'utf8'))
+    assert.ok(existsSync(closeLatchFile), 'physical close latch must be set before cancel during settlement')
+    await new Promise(resolve => setImmediate(resolve))
+    controller.abort()
+    assert.deepEqual(events, ['cancel_requested'],
+      'cancel must not precede physical close; terminal witness waits for settlement')
+    const drain = sandbox.awaitPendingProcessTerminations(owner)
+    const result = await pending
+    await drain
+    assert.equal(result.aborted, true)
+    assert.equal(isProcessAlive(childPid), false)
+    assert.deepEqual(events, ['cancel_requested', 'exited', 'killed'],
+      'confirmed tree settlement must publish terminal witness after cancel settled the spawn')
+  } finally {
+    try { await sandbox.awaitPendingProcessTerminations(owner) } catch { /* asserted above */ }
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('abort during natural-close settlement preserves owner drain without latch timeout', {
   skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
 }, async () => {
