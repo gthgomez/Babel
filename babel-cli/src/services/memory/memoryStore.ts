@@ -1,8 +1,9 @@
+import { createHash } from 'node:crypto';
 import { resolveRuntimeUserStateRoot } from '../../config/runtimePaths.js';
 /**
  * memoryStore.ts — CRUD operations on the Babel memory directory.
  *
- * Manages a per-project memory directory at ~/.babel/projects/{sanitized-git-root}/memory/.
+ * Manages a per-project memory directory at ~/.babel/projects/{project-slug}/memory/.
  * Each memory is a .md file with YAML-style frontmatter parsed as structured metadata.
  * The MEMORY.md index is maintained as a quick-scan table of contents.
  */
@@ -43,14 +44,28 @@ export function sanitizeGitRoot(gitRoot: string): string {
 }
 
 /**
+ * Unique directory slug for a project under ~/.babel/projects/.
+ * Lowercasing in {@link sanitizeGitRoot} can alias distinct absolute paths (case-only
+ * differences on Linux; empty slugs for degenerate inputs). Append a stable digest of
+ * the case-sensitive resolved path so memory never shares a store across projects.
+ */
+export function deriveMemoryProjectSlug(projectRoot: string): string {
+  const absolute = resolve(projectRoot);
+  const sanitized = sanitizeGitRoot(absolute);
+  const digest = createHash('sha256').update(absolute, 'utf8').digest('hex').slice(0, 16);
+  const base = sanitized.length > 0 ? sanitized : 'root';
+  return `${base}--${digest}`;
+}
+
+/**
  * Resolve the memory root directory for a given project root.
  * Creates the directory if it does not exist (idempotent).
  * Returns null on filesystem errors.
  */
 export function resolveMemoryRoot(projectRoot: string): string | null {
   try {
-    const sanitized = sanitizeGitRoot(resolve(projectRoot));
-    const memoryRoot = join(resolveRuntimeUserStateRoot(), 'projects', sanitized, 'memory');
+    const slug = deriveMemoryProjectSlug(projectRoot);
+    const memoryRoot = join(resolveRuntimeUserStateRoot(), 'projects', slug, 'memory');
     mkdirSync(memoryRoot, { recursive: true });
     return memoryRoot;
   } catch (err) {

@@ -8,7 +8,7 @@
 // After successful runs with writes, propose candidate learnings in
 // BABEL.md.proposed (user-reviewable — never auto-merge into BABEL.md).
 //
-// Gap 2: structured memory directory (~/.babel/projects/{sanitized-git-root}/memory/)
+// Gap 2: structured memory directory (~/.babel/projects/{slug}/memory/)
 // with typed memories and relevance search. New sessions prefer the memory
 // directory; fall back to BABEL.md when the directory is empty.
 
