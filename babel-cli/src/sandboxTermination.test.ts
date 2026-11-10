@@ -217,15 +217,20 @@ test('abort during natural-close settlement records terminal witness after physi
 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-fg-witness-close-'))
   const childPidFile = join(root, 'child.pid')
-  const closeLatchFile = join(root, 'close-latch.txt')
   const parentFile = join(root, 'parent.mjs')
   const owner = 'synthetic-fg-natural-close-witness'
   const controller = new AbortController()
   const witness = new ProcessWitness()
   const events: string[] = []
+  let supervisorPid: number | undefined
+  const recordStarted = witness.started.bind(witness)
   const recordCancel = witness.cancelRequested.bind(witness)
   const recordExit = witness.exited.bind(witness)
   const recordKilled = witness.killed.bind(witness)
+  witness.started = (input, executionId, pid) => {
+    if (typeof pid === 'number' && pid > 0) supervisorPid = pid
+    recordStarted(input, executionId, pid)
+  }
   witness.cancelRequested = (...args) => {
     events.push('cancel_requested')
     recordCancel(...args)
@@ -244,7 +249,6 @@ import { writeFileSync } from 'node:fs';
 const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
 child.unref();
 writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
-writeFileSync(${JSON.stringify(closeLatchFile)}, 'closed');
 process.exit(0);
 `)
   try {
@@ -256,17 +260,29 @@ process.exit(0);
       processWitness: witness,
       processContext: { sessionId: owner },
     })
-    const deadline = Date.now() + 5_000
-    while (!existsSync(childPidFile) || !existsSync(closeLatchFile)) {
-      if (Date.now() > deadline) throw new Error('fixture did not publish close ordering latches')
+    let spawnSettled = false
+    void pending.finally(() => { spawnSettled = true })
+    const fixtureDeadline = Date.now() + 5_000
+    while (!existsSync(childPidFile) || supervisorPid === undefined) {
+      if (Date.now() > fixtureDeadline) throw new Error('fixture did not publish descendant and supervisor ids')
       await new Promise(resolve => setTimeout(resolve, 10))
     }
     const childPid = Number(readFileSync(childPidFile, 'utf8'))
-    assert.ok(existsSync(closeLatchFile), 'physical close latch must be set before cancel during settlement')
-    await new Promise(resolve => setImmediate(resolve))
+    assert.ok(Number.isFinite(childPid) && childPid > 0)
+    const closeDeadline = Date.now() + 5_000
+    while (isProcessAlive(supervisorPid!)) {
+      if (Date.now() > closeDeadline) throw new Error('host did not observe supervisor physical exit')
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.equal(spawnSettled, false,
+      'spawn must remain unsettled after host-observed close while natural-close settlement runs')
+    assert.equal(isProcessAlive(childPid), true,
+      'owned descendant must remain live before cancel during natural-close settlement')
+    assert.deepEqual(events, [],
+      'terminal witness must not publish before cancel at the post-close settlement boundary')
     controller.abort()
     assert.deepEqual(events, ['cancel_requested'],
-      'cancel must not precede physical close; terminal witness waits for settlement')
+      'cancel must arrive only after host-observed physical close and before terminal witness')
     const drain = sandbox.awaitPendingProcessTerminations(owner)
     const result = await pending
     await drain
