@@ -13,3 +13,12 @@ export function contentSizeMatches({ width, height, innerWidth, innerHeight, dev
   const slack = electronContentSizeSlack(devicePixelRatio);
   return Math.abs(innerWidth - width) <= slack && Math.abs(innerHeight - height) <= slack;
 }
+
+/**
+ * Renderer-side slack (must match electronContentSizeSlack). Duplicated in empty-state Electron
+ * waitForFunction to avoid page.evaluate during first navigation on Windows CI.
+ */
+export function electronContentSizeSlackInPage(devicePixelRatio) {
+  if (Math.abs(devicePixelRatio - 1) < 0.001) return 1;
+  return Math.max(2, Math.ceil(3 / devicePixelRatio));
+}
