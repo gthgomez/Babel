@@ -178,3 +178,71 @@ test(`response contract ${scenario} settles without speculative continuation`, a
   assert.equal(mutations, scenario === 'partial_then_decision' ? 1 : 0)
   assert.equal(readFileSync(join(root, 'example.js'), 'utf8'), scenario === 'partial_then_decision' ? partialSource : source)
 })
+
+test('a superseded structured decision request cannot emit or persist the old answer', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'chat-stale-decision-'))
+  const names = ['BABEL_NATIVE_TOOLS', 'BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE',
+    'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const
+  const previous = names.map(name => [name, process.env[name]] as const)
+  t.after(() => {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value
+    }
+    resetDockerAvailabilityCache()
+    rmSync(root, { recursive: true, force: true })
+  })
+  process.env['BABEL_NATIVE_TOOLS'] = 'enabled'
+  process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
+  process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] = 'synthetic/stale-decision:unit'
+  delete process.env['BABEL_DOCKER_DISABLE']
+  delete process.env['BABEL_ALLOW_HOST_FALLBACK']
+  delete process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']
+  setDockerAvailableForTest(true)
+  writeFileSync(join(root, 'example.js'), 'export const value = 1\n')
+  let writes = 0
+  t.mock.method(SafeExecutor.prototype, 'fileWrite', () => { writes++; throw new Error('Decision batch writes must not dispatch') })
+  class Runner extends DeepInfraApiRunner {
+    turns = 0
+    constructor() { super('fixture-model', 'UNUSED_FIXTURE_KEY', {}, { explicitCredential: '', env: {} }) }
+    override async *executeWithToolsStream(): AsyncGenerator<ToolStreamEvent, void, undefined> {
+      this.turns++
+      if (this.turns === 1) {
+        yield { type: 'tool_use', id: 'old-read', name: 'read_file', input: { path: 'example.js' } }
+        yield { type: 'done', finishReason: 'tool_calls' }
+      } else if (this.turns === 2) {
+        yield { type: 'tool_use', id: 'old-decision', name: 'request_user_decision', input: {
+          question: 'Which output format should the report use?',
+          options: ['CSV', 'JSON'], impact: 'This determines the generated file format.',
+        } }
+        yield { type: 'tool_use', id: 'old-write', name: 'write_file', input: { path: 'example.js', content: 'export const value = 2\n' } }
+        yield { type: 'done', finishReason: 'tool_calls' }
+      } else {
+        yield { type: 'text_delta', text: 'The current source exports value 1.' }
+        yield { type: 'done', finishReason: 'stop' }
+      }
+    }
+  }
+  const runner = new Runner()
+  const engine = new ChatEngine({ task: 'Make a report', projectRoot: root, model: 'deepseek-v4-flash', providerRunner: runner, maxTurns: 5 })
+  const oldStream = engine.submitMessageStream('Make a report and save it.')
+  const oldEvents: Array<{ type: string; tool?: string }> = []
+  let firstDecisionEvent = false
+  while (!firstDecisionEvent) {
+    const next = await oldStream.next()
+    assert.equal(next.done, false)
+    oldEvents.push(next.value as { type: string; tool?: string })
+    firstDecisionEvent = next.value?.type === 'tool_complete' && next.value.tool === 'request_user_decision'
+  }
+  const successorEvents = []
+  for await (const event of engine.submitMessageStream('Explain the current source without editing.')) successorEvents.push(event)
+  assert.ok(successorEvents.some(event => event.type === 'done'), 'successor submission completes')
+
+  const staleEvents = []
+  for await (const event of oldStream) staleEvents.push(event)
+  assert.deepEqual(staleEvents, [], 'a superseded stream emits no remaining decision or terminal content')
+  assert.equal(engine.getConversation().some(message => message.role === 'assistant' && message.content.includes('Which output format should the report use?')), false,
+    'superseded decision answer is not persisted into the successor conversation')
+  assert.equal(engine['toolCallLog'].some(call => call.toolCallId === 'old-write'), false,
+    'superseded sibling action is not recorded after its outcome was suppressed')
+  assert.equal(writes, 0, 'co-emitted write remains undispatched')
+})

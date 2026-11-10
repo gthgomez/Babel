@@ -41,7 +41,7 @@ import {
 } from "./implementorPolicy.js";
 
 import { nativeTurnFromStream } from "./chatNativeTurn.js";
-import { buildDecisionRequestDeferral, findDecisionRequest } from './chatDecisionRequest.js';
+import { buildDecisionRequestDeferral, findDecisionRequest, streamDecisionRequestOutcomes } from './chatDecisionRequest.js';
 
 import {
   applyWorkingStateEvent,
@@ -1189,12 +1189,15 @@ export class ChatEngineStreamingLoop {
             actions: turnResult.actions,
             callIds: this.host._streamNativeToolCallIds,
             turn,
+          });
+          endSpan(_turnSpan, SpanStatusCode.OK); _turnSpan = null;
+          yield* streamDecisionRequestOutcomes({
+            outcomes: deferral.outcomes,
+            isSubmissionCurrent: () => this.host.isSubmissionCurrent(submissionGeneration),
             recordCall: entry => this.host.toolCallLog.push(entry),
           });
-          for (const event of deferral.events) yield event;
-          this.host.conversation.push({ role: 'assistant', content: deferral.answer });
-          endSpan(_turnSpan, SpanStatusCode.OK); _turnSpan = null;
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          this.host.conversation.push({ role: 'assistant', content: deferral.answer });
           yield this.host.streamDone(deferral.answer, { needsHumanDecision: true });
           return;
         }

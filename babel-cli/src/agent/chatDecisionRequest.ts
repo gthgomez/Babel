@@ -13,9 +13,8 @@ export function buildDecisionRequestDeferral(input: {
   actions: readonly ChatToolAction[]
   callIds: readonly string[]
   turn: number
-  recordCall: (entry: ChatEngineStreamingLoopHost['toolCallLog'][number]) => void
-}): { answer: string; events: ChatEvent[] } {
-  const { request, actions, callIds, turn, recordCall } = input
+}): { answer: string; outcomes: Array<{ entry: ChatEngineStreamingLoopHost['toolCallLog'][number]; event: ChatEvent }> } {
+  const { request, actions, callIds, turn } = input
   const answer = [
     `I need your decision before proceeding: ${request.question}`,
     '',
@@ -25,12 +24,12 @@ export function buildDecisionRequestDeferral(input: {
     `Why it matters: ${request.impact}`,
     'No actions in this turn were started. Earlier changes, if any, remain unverified.',
   ].join('\n')
-  const events = actions.map((action, index): ChatEvent => {
+  const outcomes = actions.map((action, index) => {
     const toolCallId = callIds[index] ?? `decision_${turn}_${index}`
     const tool = chatActionToolName(action)
     const target = chatActionTarget(action)
     const isDecision = action.type === 'request_user_decision'
-    recordCall({
+    const entry: ChatEngineStreamingLoopHost['toolCallLog'][number] = {
       toolCallId, tool, target, index,
       error: isDecision ? 'decision_requested' : 'decision_required',
       exit_code: isDecision ? 0 : 1,
@@ -38,13 +37,28 @@ export function buildDecisionRequestDeferral(input: {
       detail: isDecision
         ? 'Controller paused for the requested user decision.'
         : 'Co-emitted action was not dispatched because a user decision is required.',
-    })
-    return isDecision
+    }
+    const event: ChatEvent = isDecision
       ? { type: 'tool_complete', toolCallId, tool, target,
           detail: 'Waiting for the user decision; no action was dispatched.', effect_status: 'not_applicable' }
       : { type: 'tool_failed', toolCallId, tool, target,
           error: 'decision_required', detail: 'Not dispatched; the turn is paused for a user decision.',
           exitCode: 1, effect_status: 'not_applicable' }
+    return { entry, event }
   })
-  return { answer, events }
+  return { answer, outcomes }
+}
+
+/** Emit only outcomes owned by the current submission, checking after every yield. */
+export function* streamDecisionRequestOutcomes(input: {
+  outcomes: ReturnType<typeof buildDecisionRequestDeferral>['outcomes']
+  isSubmissionCurrent: () => boolean
+  recordCall: (entry: ChatEngineStreamingLoopHost['toolCallLog'][number]) => void
+}): Generator<ChatEvent> {
+  for (const outcome of input.outcomes) {
+    if (!input.isSubmissionCurrent()) return
+    input.recordCall(outcome.entry)
+    yield outcome.event
+    if (!input.isSubmissionCurrent()) return
+  }
 }
