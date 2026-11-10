@@ -180,6 +180,38 @@ test('cancel records process_exited before process_killed on the witness bus', a
   assert.deepEqual(events, ['exited', 'killed'], 'exited must precede killed')
 })
 
+test('a natural foreground close does not return success while owned group descendants remain', {
+  skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-fg-linger-'))
+  const childPidFile = join(root, 'child.pid')
+  const parentFile = join(root, 'parent.mjs')
+  writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
+  writeFileSync(parentFile, `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
+child.unref();
+writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
+process.exit(0);
+`)
+  try {
+    const result = await sandbox.spawnCommandAsync(process.execPath, [parentFile], {
+      cwd: root,
+      timeoutMs: 15_000,
+      env: process.env,
+      processContext: { sessionId: 'synthetic-fg-linger' },
+    })
+    assert.equal(result.timedOut, false)
+    assert.equal(result.status, 1)
+    assert.ok(result.error)
+    assert.match(result.error.message, /descendants remained|could not be confirmed/i)
+    const childPid = Number(readFileSync(childPidFile, 'utf8'))
+    assert.equal(isProcessAlive(childPid), false, 'owned descendants must be terminated before settle')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('a local supervisor deadline does not return while its owned descendant is alive', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-timeout-descendant-'));
   const childFile = join(root, 'child.mjs');

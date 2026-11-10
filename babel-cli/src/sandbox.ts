@@ -852,6 +852,27 @@ export function spawnCommandAsync(
         } else {
           settleTimedOut();
         }
+      } else if (process.platform !== 'win32' && child.pid) {
+        void (async () => {
+          let descendantsSettled = await waitForProcessGroupExit(child.pid!, 150);
+          let hadLingeringDescendants = false;
+          if (!descendantsSettled) {
+            hadLingeringDescendants = true;
+            terminateChildTree(child);
+            descendantsSettled = await waitForProcessGroupExit(child.pid!, 5_000);
+          }
+          let finalCode = code;
+          let error: Error | undefined;
+          if (!descendantsSettled) {
+            error = new Error(`spawn ${executable} process-tree termination could not be confirmed`);
+            finalCode = 1;
+          } else if (hadLingeringDescendants) {
+            error = new Error(`Owned descendants remained after ${executable} direct exit and were terminated`);
+            finalCode = 1;
+          }
+          recordWitnessTerminal(finalCode ?? 1, error);
+          finish(finalCode, error);
+        })();
       } else {
         recordWitnessTerminal(code);
         finish(code);
