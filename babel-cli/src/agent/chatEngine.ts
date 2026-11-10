@@ -410,10 +410,9 @@ import {
   checkVerifierTamper as checkVerifierTamperFn,
   extractVerifierCommand as extractVerifierCommandFn,
   hashContent as hashContentFn,
-  initializeVerifierDependencyHashes,
 } from "./chatEngineVerifierSession.js";
-import { explicitCriterionVerifierCommands } from "./taskAcceptanceExecutableBinding.js";
-import { inferTaskAcceptanceV3 } from "./taskAcceptanceMeaning.js";
+import { resolveAcceptedReadOnlyTerminal } from "./chatEngineMutatingNoChangeTerminal.js";
+import { seedChatVerifierDependencyHashes } from "./verifierDependencyAdmission.js";
 
 import { RepetitionDetector } from "./repetitionDetector.js";
 import { captureThought } from "./thoughtCapture.js";
@@ -433,11 +432,7 @@ import {
 } from "./turnRuntime.js";
 import {restoreTurnRuntime} from './restoreTurnRuntime.js';
 import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjectiveSubmission,type ObjectiveAdmissionHost,type ObjectiveAdmissionResult} from './chatEngineObjectiveAdmission.js';
-import {
-  evaluateCriterionCompletionV1,
-  type CriterionCompletionRequestV1,
-  type CriterionCompletionServiceV1,
-} from '../authority/criterionCompletion.js';
+import type { CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
 import {requiresObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog} from './taskObjectiveLifecycle.js';
 
 import { admitProjectContentRead, isReadOnlyChat } from "./chatReadOnly.js";
@@ -2660,133 +2655,23 @@ export class ChatEngine {
     return { ...canonical, verifierEvidenceErrors: canonical.verifierEvidenceErrors, requiredVerifierCommands, requiredVerifiers, verifierOwner, currentWorkspaceRevisionHash, currentReceiptRevisionHashes, unplannedAttemptEnvironmentFingerprint, proofSelection, selectedChatReceipts, criterionChatReceipts };
   }
 
-  /**
-   * R0/D01: terminal read-only input must be the *accepted* operation for this
-   * submission, not an ambient mode inference. `effectiveOperation` is resolved
-   * once from TaskShape in `beginUserSubmission`; `isReadOnlyChat()` remains a
-   * sufficient explicit read-only signal (BABEL_READ_ONLY / read_only_audit).
-   *
-   * A concluded change request with successful inspection and no mutations
-   * projects a non-certified no-change result. Bare empty completions still
-   * fail the completion gate; neither path can certify a patch.
-   */
+  /** Delegates accepted-operation no-change terminal rules (R0/D01). */
   private isAcceptedReadOnlyTerminal(): boolean {
-    if (this.lastTurnRuntime?.effectiveOperation === "READ_ONLY" || isReadOnlyChat()) {
-      return true;
-    }
-    if (
-      this.lastTurnRuntime?.effectiveOperation === "MUTATING" &&
-      this.lastTurnRuntime !== null &&
-      !this.hasAnyWrites() &&
-      hasInspectedNoChangeEvidence(this.toolCallLog)
-    ) {
-      return !this.mutatingInspectionLeavesRequiredCriteriaUnmet();
-    }
-    return false;
-  }
-
-  /**
-   * Mutating tasks may conclude without writes only when frozen acceptance no
-   * longer lists required criteria as missing after honest inspection evidence.
-   */
-  private mutatingInspectionLeavesRequiredCriteriaUnmet(): boolean {
-    if (!this.criterionCompletion) return true;
-    try {
-      const request = this.criterionCompletion.currentRequest();
-      if (!request) return true;
-      const verifierInput = this.buildVerifierInput();
-      this.criterionCompletion.refreshPrivateEvidence({
-        proof: { compliant: true },
-        allowPartialEvidence: true,
-        receipts: verifierInput.criterionChatReceipts,
-        candidate_sha: this.criterionCandidateRevisionSha(),
-        has_mutation: false,
-      });
-      const evaluation = evaluateCriterionCompletionV1(request);
-      if (evaluation.verified) return false;
-      if (this.inspectionSatisfiesNumericValueGoals(request, this.toolCallLog)) {
-        return false;
-      }
-      if (this.inspectionContradictsFrozenBehavioralGoals(request, this.toolCallLog)) {
-        return true;
-      }
-      const missing = evaluation.missing_requirements ?? [];
-      if (missing.length === 0) return evaluation.status !== "VERIFIED";
-      const missingItems = missing
-        .map((id) => request.contract.acceptance.find((entry) => entry.id === id))
-        .filter((item): item is NonNullable<typeof item> => Boolean(item?.required));
-      if (missingItems.length === 0) return false;
-      const meaningOnly = missingItems.every(
-        (item) => item.verification.verifier_id.startsWith("meaning:"),
-      );
-      const hasExecutableFrozenChecks = request.contract.acceptance.some(
-        (item) => item.required && !item.verification.verifier_id.startsWith("meaning:"),
-      );
-      const allowsInspectionOnlyMeaningSatisfaction =
-        meaningOnly
-        && !hasExecutableFrozenChecks
-        && hasInspectedNoChangeEvidence(this.toolCallLog)
-        && !missingItems.some((item) => /\bvalue\s*(?:is|=)\s*\d+\b/i.test(item.description));
-      if (allowsInspectionOnlyMeaningSatisfaction) {
-        return false;
-      }
-      return true;
-    } catch {
-      return true;
-    }
-  }
-
-  private inspectionSatisfiesNumericValueGoals(
-    request: CriterionCompletionRequestV1,
-    log: typeof this.toolCallLog,
-  ): boolean {
-    const readDetails = log
-      .filter((entry) => entry.tool === "read_file" && !entry.error && (entry.exit_code === undefined || entry.exit_code === 0))
-      .map((entry) => entry.detail ?? "")
-      .filter((detail) => detail.trim().length > 0);
-    if (readDetails.length === 0) return false;
-    const corpus = readDetails.join("\n");
-  const valueGoals = request.contract.acceptance.filter(
-    (item) => item.required
-      && item.verification.verifier_id.startsWith("meaning:")
-      && /\bvalue\s*(?:is|=)\s*(\d+)\b/i.test(item.description),
-  );
-  if (valueGoals.length === 0) return false;
-  return valueGoals.every((item) => {
-    const goalNumber = item.description.match(/\bvalue\s*(?:is|=)\s*(\d+)\b/i)?.[1];
-    if (!goalNumber) return false;
-    return corpus.split(/\r?\n/).some((line) => {
-      const match = line.match(/\bvalue\s*=\s*(\d+)\b/i);
-      return match?.[1] === goalNumber;
+    return resolveAcceptedReadOnlyTerminal({
+      effectiveOperation: this.lastTurnRuntime?.effectiveOperation,
+      ambientReadOnly: isReadOnlyChat(),
+      hasAnyWrites: this.hasAnyWrites(),
+      toolCallLog: toGateToolLog(this.toolCallLog),
+      criterionCompletion: this.criterionCompletion,
+      buildCriterionRefresh: () => {
+        const verifierInput = this.buildVerifierInput();
+        return {
+          criterionChatReceipts: verifierInput.criterionChatReceipts,
+          candidate_sha: this.criterionCandidateRevisionSha(),
+          has_mutation: false,
+        };
+      },
     });
-  });
-  }
-
-  private inspectionContradictsFrozenBehavioralGoals(
-    request: CriterionCompletionRequestV1,
-    log: typeof this.toolCallLog,
-  ): boolean {
-    const readDetails = log
-      .filter((entry) => entry.tool === "read_file" && !entry.error && (entry.exit_code === undefined || entry.exit_code === 0))
-      .map((entry) => entry.detail ?? "")
-      .filter((detail) => detail.trim().length > 0);
-    if (readDetails.length === 0) return false;
-    const corpus = readDetails.join("\n");
-    for (const item of request.contract.acceptance) {
-      if (!item.required || !item.verification.verifier_id.startsWith("meaning:")) continue;
-      const goalNumber = item.description.match(/\bvalue\s*(?:is|=)\s*(\d+)\b/i)?.[1];
-      if (!goalNumber) continue;
-      const observed = corpus.match(/\bvalue\s*=\s*(\d+)\b/gi) ?? [];
-      if (
-        observed.some((match) => {
-          const actual = match.match(/(\d+)/)?.[1];
-          return actual !== undefined && actual !== goalNumber;
-        })
-      ) {
-        return true;
-      }
-    }
-    return false;
   }
 
   private decideCompletion(
@@ -3107,7 +2992,12 @@ export class ChatEngine {
     const previousClass = this.taskClass;
     this.options = { ...this.options, task: runtime.taskText,...(accepted?.compiledChatStack?{compiledChatStack:accepted.compiledChatStack}:{}) };
     this.taskClass = runtime.taskClass;
-    if (previousTask !== runtime.taskText || accepted?.acceptanceChanged) {
+    const continuationScopeUnavailable =
+      input.continueTask === true &&
+      !runtime.continuedTask &&
+      this.taskCostScopeUnavailable;
+    const isolateFresh = !runtime.continuedTask && !continuationScopeUnavailable;
+    if ((previousTask !== runtime.taskText || accepted?.acceptanceChanged) && !isolateFresh) {
       this.initializeVerifierGuard();
     }
     if (previousTask !== runtime.taskText || previousClass !== runtime.taskClass
@@ -3134,17 +3024,7 @@ export class ChatEngine {
       this.terminalLimiterReason = null;
     }
 
-    const continuationScopeUnavailable =
-      input.continueTask === true &&
-      !runtime.continuedTask &&
-      this.taskCostScopeUnavailable;
-    if (!runtime.continuedTask && !continuationScopeUnavailable) {
-      isolateEngineForFreshUserSubmission(
-        this as unknown as import('./chatEngineFreshTaskIsolation.js').FreshTaskIsolationHost,
-        runtime,
-        accepted,
-      );
-    }
+    if (isolateFresh) isolateEngineForFreshUserSubmission(this as unknown as import('./chatEngineFreshTaskIsolation.js').FreshTaskIsolationHost, runtime, accepted);
 
     if (continuationScopeUnavailable) {
       this.budgetExceeded = true;
@@ -4512,16 +4392,16 @@ export class ChatEngine {
     return systemContent;
   }
 
+  reseedVerifierGuardAfterFreshIsolation(): void { if (this.options.projectRoot) this.initializeVerifierGuard(); }
+
   private initializeVerifierGuard(): void {
-    this.verifierInputsUnfrozen = initializeVerifierDependencyHashes(
-      this.options.task,
-      requireProjectRoot(this.options),
-      this.verifierDependencyHashes,
-      [
-        ...this.getResolvedRequiredVerifiers(),
-        ...explicitCriterionVerifierCommands(inferTaskAcceptanceV3(this.options.task)),
-      ],
-    ).length > 0;
+    this.verifierInputsUnfrozen = seedChatVerifierDependencyHashes({
+      task: this.options.task,
+      projectRoot: requireProjectRoot(this.options),
+      hashes: this.verifierDependencyHashes,
+      resolvedVerifierCommands: this.getResolvedRequiredVerifiers(),
+      discoveredTestCommands: this.discoveredTestCommands.map((entry) => entry.command),
+    });
   }
 
   private checkVerifierTamper(filePath: string): string | null {

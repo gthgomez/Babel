@@ -277,13 +277,13 @@ test('chat probe (2): discovered npm test rewrite sets live verifierTampered and
   ])
     const tampered = (o.engine as unknown as { verifierTampered: boolean }).verifierTampered
     assert.notEqual(o.outcome, 'VERIFIED_COMPLETE',
-      'misleading green must not certify even when discovered npm deps omit test-file hashes')
+      'terminal must not certify misleading green; live tamper flag is separate evidence (#507 expands npm dep graph)')
     assert.notEqual(o.durableOutcome, 'VERIFIED_COMPLETE')
     if (!tampered) {
-      assert.match(
-        JSON.stringify(o.sessionEvents.slice(-6)),
-        /completion_decision|verifier|UNVERIFIED|BLOCKED|tamper|reject/i,
-        'reproduction note: verifierTampered stayed false — npm-discovered test inputs may be outside freeze set (#507 lane)',
+      const hashes = (o.engine as unknown as { verifierDependencyHashes: Map<string, string> }).verifierDependencyHashes
+      assert.ok(
+        hashes.has('test/parser.test.mjs'),
+        'admission freeze should include discovered npm test inputs (handoff to #507 for graph gaps)',
       )
     }
   } finally {
