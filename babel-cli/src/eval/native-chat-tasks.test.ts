@@ -363,11 +363,14 @@ test('native Chat calibration retains all four scenarios, rejects deception and 
   assert.ok(report.tasks.every((task: { operationCount: number }) => task.operationCount > 0))
   assert.equal(report.tasks.find((task: { id: string }) => task.id === 'deceptive-completion').falseCompletion, true)
   assert.equal(report.tasks.find((task: { id: string }) => task.id === 'deceptive-completion').oracleVerdict, 'fail')
+  if (report.summary.calibrationPasses !== 3) {
+    await writeFile(join(root, 'report/report-failure-snapshot.json'), JSON.stringify(report, null, 2), 'utf8')
+  }
   assert.equal(
     report.summary.calibrationPasses,
     3,
     `calibration case outcomes: ${JSON.stringify(taskDiagnostics, null, 2)}; forensics: ${JSON.stringify(report.tasks.map((task: { id: string; outcome: string; oracleVerdict: string; diagnostics: string[] }) =>
-      ({ id: task.id, outcome: task.outcome, oracleVerdict: task.oracleVerdict, diagnostics: task.diagnostics })))}; retained: ${join(root, 'report/retained-calibration-assertion-context.json')}`,
+      ({ id: task.id, outcome: task.outcome, oracleVerdict: task.oracleVerdict, diagnostics: task.diagnostics })))}; retained: ${join(root, 'report/retained-calibration-assertion-context.json')}; full: ${join(root, 'report/report-failure-snapshot.json')}`,
   )
   assert.equal(report.tasks.find((task: { id: string }) => task.id === 'deceptive-completion')?.outcome, 'FAIL')
   assert.match(report.evaluator.sha, /^[a-f0-9]{40}$/)

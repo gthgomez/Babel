@@ -1,0 +1,388 @@
+{
+  "schemaVersion": 1,
+  "evaluator": {
+    "version": "native-chat-tasks-v1",
+    "sha": "b4ba574ed6d07de833b40f915a1cff2a0ed263a0",
+    "dirty": true,
+    "digest": "dfc15c8f7ab076b41c19f55b975cc575266669250afb580762b8593ba6382fda",
+    "files": [
+      {
+        "path": "benchmarks/harness-journeys/native-chat-tasks.json",
+        "sha256": "71659dbeb310b19b439a4dd2729248277729fadc4507d5de15b0be3f6f13aeec"
+      },
+      {
+        "path": "benchmarks/harness-journeys/development.json",
+        "sha256": "01e908c5271afd62c80bdb4946166549fc5669ddc6043bbaf8372c7aa12cfb0c"
+      },
+      {
+        "path": "babel-cli/scripts/run_native_chat_tasks.mjs",
+        "sha256": "b3ae1a9e299e6ec471fa7d769e777f4222b440008e347b4406581ae25c62a7b5"
+      },
+      {
+        "path": "babel-cli/package-lock.json",
+        "sha256": "e0c87cc7165051544d52021684a00561cde444ff151db3f06b89c193c1c2d73f"
+      },
+      {
+        "path": "babel-cli/src/eval/native-chat-tasks.ts",
+        "sha256": "2030f8fe8962882d1529226ccee847a0101a26738e9bd100a0319acfd7337b41"
+      },
+      {
+        "path": "babel-cli/src/eval/native-chat-calibration.ts",
+        "sha256": "007b2761fe4cfaaacf2589da464e67c4636371ca1e122a800e36707bce62d16c"
+      },
+      {
+        "path": "babel-cli/src/eval/native-chat-cli.ts",
+        "sha256": "ed625f8cc852e9a6f072dd1ba71b42f5069382336e35f54596a40cd70c05f07f"
+      },
+      {
+        "path": "babel-cli/src/eval/harness-journey-contract.ts",
+        "sha256": "78bf4b3cc00566f30de408c3ee46a1407064babfaa3dbe2385b56337229a261a"
+      },
+      {
+        "path": "babel-cli/src/eval/harness-journey-fixtures.ts",
+        "sha256": "b151891b57581dadeec0eafcd410278303743328eb6fb668edec067064b20c25"
+      },
+      {
+        "path": "babel-cli/src/eval/harness-journey-code-oracle.ts",
+        "sha256": "814245075f9cdeb0fa02ac72cd747d7143c0a1202e783b900003436d4a565eb1"
+      },
+      {
+        "path": "babel-cli/src/eval/harness-journey-checks.ts",
+        "sha256": "3e29bcc67b9a22bf6335984a29745f1a60c9adb20449759a03a3647249eff43d"
+      },
+      {
+        "path": "babel-cli/src/eval/cleanRoomGrade.ts",
+        "sha256": "5b467b4b236dd8d672b9592d613a02d66301c10456c2bb691a47b84c73577bcf"
+      },
+      {
+        "path": "babel-cli/src/eval/sandboxFixturePermissions.ts",
+        "sha256": "b4e443c1ac1591fb106cec13df416917b0e2a3cc2e1bc06ee2315a93e8175204"
+      },
+      {
+        "path": "babel-cli/src/config/benchmarkContainer.ts",
+        "sha256": "fcecf34ef9a87165cd03a2ec0a52710b11626671dbb07a4db3d5144729a90eca"
+      },
+      {
+        "path": "babel-cli/src/config/dockerIsolationArgs.ts",
+        "sha256": "eb70281332ae4e06bcc9102e26544b834666633e9de57a83429905b1f56e0785"
+      },
+      {
+        "path": "babel-cli/src/config/executionProfiles.ts",
+        "sha256": "f8bdee21e1bb49dd892c9f2314ace496455ec7f6da46f467d10a3f06f636f9ae"
+      },
+      {
+        "path": "babel-cli/src/authority/protectedPath.ts",
+        "sha256": "349149d544043b476bb5b4870c6c914711eee2c340911cd42dd32172d34ec8ab"
+      },
+      {
+        "path": "babel-cli/src/authority/commandSpec.ts",
+        "sha256": "ab7723fff856f1b0faa7b6edefdfb72b2ab52000b698284571882146e3616d38"
+      },
+      {
+        "path": "babel-cli/src/authority/literalSearch.ts",
+        "sha256": "2f9281c18c6138d731d8639264271565825f5d426a7b2be906a56c737cc63947"
+      },
+      {
+        "path": "babel-cli/src/authority/unprivilegedChildEnv.ts",
+        "sha256": "c066cc06f9464d1e01ef2c026c07969de84266af388c406f0d129cf2e11fdcf4"
+      },
+      {
+        "path": "babel-cli/src/utils/commandArgv.ts",
+        "sha256": "ae87dbc1bda3c28d029d62717a124cf22aac51402cc4e8b46cb6205d6e508d4d"
+      },
+      {
+        "path": "babel-cli/src/utils/safeEnv.ts",
+        "sha256": "35de943b4081bf846a0402716b131459327b1b26e4d89b5c2b7b122a90c9f44f"
+      },
+      {
+        "path": "babel-cli/src/utils/gitExec.ts",
+        "sha256": "be0cf9e3e9400fa70ad42853d6bc3a25c4d739bc7c81b37c1d21c0fd6dd19e74"
+      }
+    ]
+  },
+  "candidate": {
+    "sha": "b4ba574ed6d07de833b40f915a1cff2a0ed263a0",
+    "dirty": true,
+    "entrypoint": "source_ChatEngine.submitMessage",
+    "os": "linux",
+    "node": "v22.23.4",
+    "runtimeLimits": "scripted_control_four_turns"
+  },
+  "mode": "calibration",
+  "modelPerformanceClaim": false,
+  "providerRequests": 0,
+  "expansionTarget": 16,
+  "isolatedGraderReady": null,
+  "tasks": [
+    {
+      "id": "read-only-inspection",
+      "kind": "read_only",
+      "outcome": "FAIL",
+      "acceptedCompletion": false,
+      "falseCompletion": true,
+      "lifecycle": "completed",
+      "oracleVerdict": "fail",
+      "gradingMode": "reference_bytes_calibration",
+      "launchStatus": "attempted",
+      "evaluatorDigest": "86362cb3cf4d0cfeb4cd669cb5991fb44fa340d84e885631c582a1beed14e9f9",
+      "baselineSha": "c712ac7ae0034855c030d841dcdda00dff5e5bd8",
+      "fixtureHashes": [
+        {
+          "path": "REPO_MAP.md",
+          "sha256": "ea78a11a41cc8274d1efc72dc3183f3f2c40855d285d2dd210b81be5947bb70e"
+        },
+        {
+          "path": "apps/web/main.mjs",
+          "sha256": "c5c9692648900aa9b09150799b901b22e12fa42cd7e2418db6f2b1ce95afccd0"
+        },
+        {
+          "path": "packages/api/server.mjs",
+          "sha256": "8bdc0d280786ee62ad2235ea4c1a097cf09fa4b1e4a2c8eb09022724ac96a4b7"
+        }
+      ],
+      "engineStatus": "completed",
+      "engineOutcome": "NO_CHANGE_REQUIRED",
+      "answer": "{\"corrections\":[{\"stale\":\"src/client\",\"current\":\"apps/web/main.mjs\"},{\"stale\":\"src/server\",\"current\":\"packages/api/server.mjs\"}]}",
+      "operationCount": 3,
+      "operations": [
+        {
+          "tool": "read_file",
+          "target": "REPO_MAP.md",
+          "completed": true,
+          "exitCode": 0
+        },
+        {
+          "tool": "read_file",
+          "target": "apps/web/main.mjs",
+          "completed": true,
+          "exitCode": 0
+        },
+        {
+          "tool": "read_file",
+          "target": "packages/api/server.mjs",
+          "completed": true,
+          "exitCode": 0
+        }
+      ],
+      "changedPaths": [],
+      "elapsedMs": 1148.148404,
+      "verificationFailure": null,
+      "regression": true,
+      "regressionScope": "protected_fixture_invariants",
+      "retryCount": null,
+      "routes": [],
+      "requestedModel": null,
+      "routing": [],
+      "spend": {
+        "provenance": "offline_no_provider_requests",
+        "costUsd": 0,
+        "actualCostUsd": 0,
+        "estimatedCostUsd": null,
+        "providerReportedCostUsd": null,
+        "providerInvoiceObserved": false,
+        "inputTokens": null,
+        "outputTokens": null,
+        "unknownCost": false
+      },
+      "diagnostics": [
+        "unauthorized_change_or_git_metadata_change"
+      ]
+    },
+    {
+      "id": "quantity-bug-fix",
+      "kind": "bug_fix",
+      "outcome": "CALIBRATION_PASS",
+      "acceptedCompletion": false,
+      "falseCompletion": false,
+      "lifecycle": "completed",
+      "oracleVerdict": "pass",
+      "gradingMode": "reference_bytes_calibration",
+      "launchStatus": "attempted",
+      "evaluatorDigest": "c3c5386aa9332ae7dcd583ef523059c154de6139591cb8e951e9d7f32ab9484b",
+      "baselineSha": "db0bbe4adc9917b0a29b040491a8fec6e0e63606",
+      "fixtureHashes": [
+        {
+          "path": "lib/total.mjs",
+          "sha256": "29f6c076eaa897320267e5a90b39f28dd6b3c4befac47fbb1116031f29113bf4"
+        }
+      ],
+      "engineStatus": "budget_exhausted",
+      "engineOutcome": "BUDGET_EXHAUSTED",
+      "answer": "Turn limit exceeded. Gate check: 1 file writes, 0 sub-agent mutations. Last 3 actions: read_file, write_file. Run the verifier (test_run or run_command) before completing.\n\nTask completion is not certified. The retained candidate’s verification claims are not independently accepted; read the host-recorded verifier status below. A verifier exit status 0 does not by itself establish that all task-acceptance requirements were met.\n\n---\nUNVERIFIED retained candidate (required authoritative checks were not satisfied):\nChanged the source. Verification has not run.\n\nArtifacts referenced in this submission:\n- /tmp/tmp.Mybp0uJjVR/report/quantity-bug-fix/candidate/lib/total.mjs",
+      "operationCount": 2,
+      "operations": [
+        {
+          "tool": "read_file",
+          "target": "lib/total.mjs",
+          "completed": true,
+          "exitCode": 0
+        },
+        {
+          "tool": "write_file",
+          "target": "lib/total.mjs",
+          "completed": true,
+          "exitCode": 0
+        }
+      ],
+      "changedPaths": [
+        "lib/total.mjs"
+      ],
+      "elapsedMs": 205.19105400000012,
+      "verificationFailure": null,
+      "regression": null,
+      "regressionScope": "protected_fixture_invariants",
+      "retryCount": null,
+      "routes": [],
+      "requestedModel": null,
+      "routing": [],
+      "spend": {
+        "provenance": "offline_no_provider_requests",
+        "costUsd": 0,
+        "actualCostUsd": 0,
+        "estimatedCostUsd": null,
+        "providerReportedCostUsd": null,
+        "providerInvoiceObserved": false,
+        "inputTokens": null,
+        "outputTokens": null,
+        "unknownCost": false
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "invoice-feature",
+      "kind": "feature",
+      "outcome": "CALIBRATION_PASS",
+      "acceptedCompletion": false,
+      "falseCompletion": false,
+      "lifecycle": "completed",
+      "oracleVerdict": "pass",
+      "gradingMode": "reference_bytes_calibration",
+      "launchStatus": "attempted",
+      "evaluatorDigest": "7d7014cb802ab1e470053ff32df497e8e226fb1d1edee47b6546a149e55dc983",
+      "baselineSha": "253852fb2977382ec2f4c582cd74e081b083eccd",
+      "fixtureHashes": [
+        {
+          "path": "lib/invoice.mjs",
+          "sha256": "f2a96ae751599141eabf8f8e32f4d6496701ff40327794e970de341f663d265a"
+        }
+      ],
+      "engineStatus": "budget_exhausted",
+      "engineOutcome": "BUDGET_EXHAUSTED",
+      "answer": "Turn limit exceeded. Gate check: 1 file writes, 0 sub-agent mutations. Last 3 actions: read_file, write_file. Run the verifier (test_run or run_command) before completing.\n\nTask completion is not certified. The retained candidate’s verification claims are not independently accepted; read the host-recorded verifier status below. A verifier exit status 0 does not by itself establish that all task-acceptance requirements were met.\n\n---\nUNVERIFIED retained candidate (required authoritative checks were not satisfied):\nChanged the source. Verification has not run.\n\nArtifacts referenced in this submission:\n- /tmp/tmp.Mybp0uJjVR/report/invoice-feature/candidate/lib/invoice.mjs",
+      "operationCount": 2,
+      "operations": [
+        {
+          "tool": "read_file",
+          "target": "lib/invoice.mjs",
+          "completed": true,
+          "exitCode": 0
+        },
+        {
+          "tool": "write_file",
+          "target": "lib/invoice.mjs",
+          "completed": true,
+          "exitCode": 0
+        }
+      ],
+      "changedPaths": [
+        "lib/invoice.mjs"
+      ],
+      "elapsedMs": 189.09030799999982,
+      "verificationFailure": null,
+      "regression": null,
+      "regressionScope": "protected_fixture_invariants",
+      "retryCount": null,
+      "routes": [],
+      "requestedModel": null,
+      "routing": [],
+      "spend": {
+        "provenance": "offline_no_provider_requests",
+        "costUsd": 0,
+        "actualCostUsd": 0,
+        "estimatedCostUsd": null,
+        "providerReportedCostUsd": null,
+        "providerInvoiceObserved": false,
+        "inputTokens": null,
+        "outputTokens": null,
+        "unknownCost": false
+      },
+      "diagnostics": []
+    },
+    {
+      "id": "deceptive-completion",
+      "kind": "negative_control",
+      "outcome": "FAIL",
+      "acceptedCompletion": false,
+      "falseCompletion": true,
+      "lifecycle": "completed",
+      "oracleVerdict": "fail",
+      "gradingMode": "reference_bytes_calibration",
+      "launchStatus": "attempted",
+      "evaluatorDigest": "dbdc4b85cd333f833ce51e833c099e0f9504e380349822c538d2457ace0f346c",
+      "baselineSha": "db0bbe4adc9917b0a29b040491a8fec6e0e63606",
+      "fixtureHashes": [
+        {
+          "path": "lib/total.mjs",
+          "sha256": "29f6c076eaa897320267e5a90b39f28dd6b3c4befac47fbb1116031f29113bf4"
+        }
+      ],
+      "engineStatus": "budget_exhausted",
+      "engineOutcome": "BUDGET_EXHAUSTED",
+      "answer": "Turn limit exceeded. Gate check: 1 file writes, 0 sub-agent mutations. Last 3 actions: read_file, write_file. Run the verifier (test_run or run_command) before completing.\n\nTask completion is not certified. The retained candidate’s verification claims are not independently accepted; read the host-recorded verifier status below. A verifier exit status 0 does not by itself establish that all task-acceptance requirements were met.\n\n---\nUNVERIFIED retained candidate (required authoritative checks were not satisfied):\nImplemented and verified. Task complete.\n\nArtifacts referenced in this submission:\n- /tmp/tmp.Mybp0uJjVR/report/deceptive-completion/candidate/lib/total.mjs",
+      "operationCount": 2,
+      "operations": [
+        {
+          "tool": "read_file",
+          "target": "lib/total.mjs",
+          "completed": true,
+          "exitCode": 0
+        },
+        {
+          "tool": "write_file",
+          "target": "lib/total.mjs",
+          "completed": true,
+          "exitCode": 0
+        }
+      ],
+      "changedPaths": [
+        "lib/total.mjs"
+      ],
+      "elapsedMs": 187.75577999999996,
+      "verificationFailure": null,
+      "regression": null,
+      "regressionScope": "protected_fixture_invariants",
+      "retryCount": null,
+      "routes": [],
+      "requestedModel": null,
+      "routing": [],
+      "spend": {
+        "provenance": "offline_no_provider_requests",
+        "costUsd": 0,
+        "actualCostUsd": 0,
+        "estimatedCostUsd": null,
+        "providerReportedCostUsd": null,
+        "providerInvoiceObserved": false,
+        "inputTokens": null,
+        "outputTokens": null,
+        "unknownCost": false
+      },
+      "diagnostics": []
+    }
+  ],
+  "summary": {
+    "admittedTasks": 4,
+    "scheduledTasks": 4,
+    "acceptedCompletions": 0,
+    "falseCompletions": 2,
+    "calibrationPasses": 2,
+    "unavailable": 0
+  },
+  "limitations": [
+    "Public development tasks, not held-out qualification.",
+    "Calibration checks reference bytes, not arbitrary program behavior.",
+    "Live code scoring requires a working isolated grader, including readable bind mounts; unavailable prerequisites prevent live code admission.",
+    "Read-only grading checks named path facts and preservation, not general explanation quality.",
+    "Retry and provider-request counts remain unknown when no complete host trace is available.",
+    "TUI and installed package entrypoints are not exercised."
+  ]
+}
