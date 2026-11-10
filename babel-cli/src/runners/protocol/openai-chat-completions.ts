@@ -55,6 +55,7 @@ import {
   parseSseLine,
   readErrorBody,
   readStreamWithLimits,
+  readResponseBodyText,
   readStreamingResponse,
   recordStreamingOutput,
   buildStreamingInvocationMetadata,
@@ -916,8 +917,12 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
       let data: ChatResponse;
       let rawDataText = '';
       try {
-        rawDataText = await response.text();
-        if (rawDataText.length > 0) notifyPhase('first_byte');
+        rawDataText = await readResponseBodyText(response, {
+          idleTimeoutMs: getStreamIdleTimeoutMs(),
+          requestTimeoutMs,
+          ...(signal ? { signal } : {}),
+          onFirstByte: () => { notifyPhase('first_byte'); },
+        });
         data = JSON.parse(rawDataText) as ChatResponse;
         streamState.usage = data.usage ?? null;
         this.lastInvocationMetadata = buildInvocationMetadata(
@@ -940,6 +945,17 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         streamState.finishReason = data.choices?.[0]?.finish_reason ?? null;
       } catch (err) {
         this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
+        if (isCallerCancelError(err, signal) || isAbortError(err)) {
+          notifyPhase('provider_error', undefined, signal?.aborted ? 'cancelled' : 'timeout');
+          notifyCompleted('failed', null, rawDataText, null, null, null, this.maxTokens, {
+            actualAttempt: lastAttempt,
+            details: { message: err instanceof Error ? err.message : String(err) },
+            failureStage: 'stream',
+            partialModelOutput: rawDataText.length > 0,
+            outputMaterial: rawDataText,
+          });
+          throw err;
+        }
         notifyPhase('provider_error', undefined, 'response_parse');
         notifyPhase('response_normalization_failed', undefined, 'response_parse');
         notifyCompleted('failed', null, rawDataText, null, null, null, this.maxTokens, {
@@ -1108,7 +1124,10 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
     let pending: (() => void) | null = null;
     let finished = false;
     let error: Error | null = null;
+    const lane = new AbortController();
+    const detachLane = signal ? linkExternalAbortSignal(lane, signal) : undefined;
 
+  try {
     const execPromise = this._executeRequest(
       prompt,
       {
@@ -1119,7 +1138,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         },
       },
       systemPrompt ?? CHAT_SYSTEM_PROMPT,
-      signal,
+      lane.signal,
     );
 
     execPromise
@@ -1155,6 +1174,10 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
     if (error) throw error;
     // Track usage from the completed request
     await execPromise; // ensure metadata is populated
+  } finally {
+    if (!finished) lane.abort();
+    if (detachLane && signal) signal.removeEventListener('abort', detachLane);
+  }
   }
 
   /**
@@ -1818,7 +1841,10 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
             streamState.finishReason = finishReason;
           }
         }
-        if (sawDone) break;
+        if (sawDone) {
+          await reader.cancel().catch(() => {});
+          break;
+        }
       }
 
       // Process remaining buffered SSE line

@@ -172,6 +172,41 @@ for (const adapter of ADAPTERS) {
       assert.equal(completed[0]?.status, 'failed')
     })
 
+    it('held-open body after [DONE] releases the SSE reader', async () => {
+      const { model } = adapter
+      let bodyCancelled = false
+      let pullGate: () => void
+      const pullBlocked = new Promise<void>((resolve) => { pullGate = resolve })
+      globalThis.fetch = async () => new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode([
+              withModel(model, { choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }] }),
+              'data: [DONE]',
+            ].join('\n') + '\n'))
+          },
+          async pull() {
+            await pullBlocked
+          },
+          cancel() {
+            bodyCancelled = true
+            pullGate()
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+      )
+      const completed: ProviderInvocationCompleted[] = []
+      const events = await collect(
+        adapter.runner().executeWithToolsStream(USER, [], undefined, undefined, 'auto', {
+          onInvocationCompleted: (value) => { completed.push(value) },
+        }),
+        completed,
+      )
+      assert.equal(bodyCancelled, true)
+      assert.deepEqual(events.map((event) => event.type), ['text_delta', 'done'])
+      assert.equal(completed[0]?.status, 'delivered')
+    })
+
     it('caller cancellation during streaming stays cancellation without tool delivery', async () => {
       const { model } = adapter
       const abort = new AbortController()

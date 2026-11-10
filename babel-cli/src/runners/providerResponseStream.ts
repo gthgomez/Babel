@@ -2,6 +2,7 @@ import { type ProviderMessage, type RunnerCallbacks, type RunnerInvocationMetada
 import { mapProviderMessagesToWire } from './providerMessages.js';
 import { type VcrRecorder } from '../services/streamingVcr.js';
 import { readPositiveIntEnv } from './providerResponsePolicy.js';
+import { normalizeFinishReason } from './providerNormalize.js';
 import type { ProviderId } from './providerRegistry.js';
 import {
   type ChatResponse,
@@ -12,7 +13,7 @@ import {
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60_000;
 
-const DEFAULT_STREAM_MAX_RETRIES = 1;
+export const DEFAULT_STREAM_MAX_RETRIES = 1;
 
 
 export function getStreamIdleTimeoutMs(): number {
@@ -24,7 +25,9 @@ export function getStreamIdleTimeoutMs(): number {
 
 
 export function getStreamMaxRetries(): number {
-  const parsed = Number(process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'] ?? process.env['BABEL_DEEPINFRA_STREAM_MAX_RETRIES'] ?? '');
+  const raw = process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'] ?? process.env['BABEL_DEEPINFRA_STREAM_MAX_RETRIES'];
+  if (raw === undefined || raw === '') return DEFAULT_STREAM_MAX_RETRIES;
+  const parsed = Number(raw);
   const value =
     Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : DEFAULT_STREAM_MAX_RETRIES;
   return Math.min(value, 5);
@@ -210,6 +213,26 @@ export function parseSseLine(line: string): SseLineResult {
 }
 
 
+function assertExecuteRawStreamTerminal(state: StreamingState): void {
+  const rawReason = (state.finishReason ?? '').trim().toLowerCase();
+  if (rawReason === 'error') {
+    throw new Error('[provider stream] Provider error during generation (finish_reason: error)');
+  }
+  const reason = normalizeFinishReason(state.finishReason ?? '');
+  if (reason === 'length' && state.partialModelOutput) {
+    throw new Error('[provider stream] Provider output budget exhausted (finish_reason: length)');
+  }
+}
+
+async function releaseStreamReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+  await reader.cancel().catch(() => {});
+  try {
+    reader.releaseLock();
+  } catch {
+    // Lock may already be released by the platform after cancel/close.
+  }
+}
+
 export async function readStreamingResponse(
   response: Response,
   callbacks: RunnerCallbacks | undefined,
@@ -231,11 +254,34 @@ export async function readStreamingResponse(
   let buffer = '';
   let firstChunkReceived = false;
   let totalBytes = 0;
+  const completeStreamingRead = async (): Promise<string> => {
+    assertExecuteRawStreamTerminal(state);
+    await releaseStreamReader(reader);
+    return text;
+  };
+
   const processLine = async (line: string): Promise<boolean> => {
+    if (state.sawDone) return true;
     const normalizedLine = line.replace(/\r$/, '').trim();
     if (!normalizedLine.startsWith('data:')) return false;
     vcrRecorder?.record(normalizedLine);
-    const parsed = parseSseLine(`data: ${normalizedLine.slice(5).trimStart()}`);
+    const payload = normalizedLine.slice(5).trimStart();
+    if (payload === '[DONE]') {
+      state.sawDone = true;
+      state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
+      return true;
+    }
+    try {
+      const envelope = JSON.parse(payload) as { error?: { message?: string } };
+      if (envelope.error) {
+        throw new Error(
+          `[provider stream] Provider stream error: ${envelope.error.message || JSON.stringify(envelope.error)}`,
+        );
+      }
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+    const parsed = parseSseLine(`data: ${payload}`);
     if (parsed.malformed) throw new Error(parsed.malformed);
     if (parsed.observedModelId) state.observedModelId = parsed.observedModelId;
     if (parsed.upstreamProvider) state.upstreamProvider = parsed.upstreamProvider;
@@ -259,9 +305,10 @@ export async function readStreamingResponse(
     return false;
   };
 
+  try {
   while (true) {
     if (signal?.aborted) {
-      reader.cancel().catch(() => {});
+      await releaseStreamReader(reader);
       throw new DOMException('Request cancelled', 'AbortError');
     }
     let onAbort: (() => void) | undefined;
@@ -293,7 +340,7 @@ export async function readStreamingResponse(
       const flushed = decoder.decode();
       raw += flushed;
       buffer += flushed;
-      if (buffer.length > 0 && await processLine(buffer)) return text;
+      if (buffer.length > 0 && await processLine(buffer)) return completeStreamingRead();
       break;
     }
 
@@ -315,8 +362,10 @@ export async function readStreamingResponse(
     const lines = buffer.split('\n');
     buffer = lines.pop() ?? '';
     for (const line of lines) {
-      if (await processLine(line)) return text;
+      if (state.sawDone) break;
+      if (await processLine(line)) return completeStreamingRead();
     }
+    if (state.sawDone) return completeStreamingRead();
   }
 
   // A few OpenAI-compatible gateways return one ordinary JSON response even
@@ -344,7 +393,7 @@ export async function readStreamingResponse(
       state.usage = json.usage ?? state.usage;
       state.sawDone = true;
       state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
-      return text;
+      return completeStreamingRead();
     } catch {
       // Fall through to the truncated-stream error below.
     }
@@ -353,7 +402,55 @@ export async function readStreamingResponse(
     state.generationMs = Date.now() - startedAt - state.ttftMs;
   }
   if (!state.sawDone) {
+    await releaseStreamReader(reader);
     throw new Error('[provider stream] stream closed before terminal [DONE] marker');
   }
+  return completeStreamingRead();
+  } catch (error) {
+    await releaseStreamReader(reader);
+    throw error;
+  }
+}
+
+/** Read a non-streaming response body with the same abort/idle/deadline guards as SSE. */
+export async function readResponseBodyText(
+  response: Response,
+  opts: {
+    idleTimeoutMs: number;
+    requestTimeoutMs: number;
+    signal?: AbortSignal;
+    onFirstByte?: () => void;
+  },
+): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let firstByte = false;
+  const startedAt = Date.now();
+  const deadlineAt = startedAt + opts.requestTimeoutMs;
+  try {
+  while (true) {
+    const { done, value } = await readStreamWithLimits(reader, {
+      idleTimeoutMs: opts.idleTimeoutMs,
+      deadlineAt,
+      requestTimeoutMs: opts.requestTimeoutMs,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      idleMessage: `[provider stream] response body idle timeout after ${opts.idleTimeoutMs}ms`,
+      deadlineMessage: `[provider stream] response body read timeout after ${opts.requestTimeoutMs}ms`,
+    });
+    if (done) break;
+    if (value?.byteLength) {
+      if (!firstByte) {
+        firstByte = true;
+        opts.onFirstByte?.();
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  }
+  text += decoder.decode();
   return text;
+  } finally {
+    await releaseStreamReader(reader);
+  }
 }

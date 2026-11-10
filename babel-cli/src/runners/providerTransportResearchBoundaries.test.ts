@@ -106,7 +106,7 @@ describe('transport research boundary probes (mocked)', () => {
     assert.equal(completed[0]?.partial_model_output, true)
   })
 
-  it('probe 2: complete tool call + [DONE] does not hang while HTTP body stays open', async () => {
+  it('probe 2: complete tool call + [DONE] releases reader while HTTP body stays open', async () => {
     const payload = JSON.stringify({
       choices: [{
         delta: {
@@ -120,18 +120,27 @@ describe('transport research boundary probes (mocked)', () => {
         finish_reason: 'tool_calls',
       }],
     })
-    const started = Date.now()
+    let bodyCancelled = false
+    let pullGate: () => void
+    const pullBlocked = new Promise<void>((resolve) => { pullGate = resolve })
     globalThis.fetch = async () => new Response(
       new ReadableStream({
         start(controller) {
           controller.enqueue(new TextEncoder().encode(`data:${payload}\n\ndata: [DONE]\n\n`))
+        },
+        async pull() {
+          await pullBlocked
+        },
+        cancel() {
+          bodyCancelled = true
+          pullGate()
         },
       }),
       { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
     )
     const events: ToolStreamEvent[] = []
     for await (const event of runner().executeWithToolsStream(USER, [])) events.push(event)
-    assert.ok(Date.now() - started < 300, 'must finalize at [DONE], not wait for body EOF')
+    assert.equal(bodyCancelled, true, 'must cancel reader at [DONE], not wait for body EOF')
     assert.deepEqual(events.map((event) => event.type), ['tool_use', 'done'])
   })
 
