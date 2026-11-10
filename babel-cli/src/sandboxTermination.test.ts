@@ -214,7 +214,7 @@ process.exit(0);
 
 test('abort during natural-close settlement records terminal witness after physical close', {
   skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
-}, async () => {
+}, async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'babel-fg-witness-close-'))
   const childPidFile = join(root, 'child.pid')
   const parentFile = join(root, 'parent.mjs')
@@ -222,15 +222,13 @@ test('abort during natural-close settlement records terminal witness after physi
   const controller = new AbortController()
   const witness = new ProcessWitness()
   const events: string[] = []
-  let supervisorPid: number | undefined
-  const recordStarted = witness.started.bind(witness)
+  let releaseSettlementGate!: () => void
+  const settlementGate = new Promise<void>((resolve) => { releaseSettlementGate = resolve })
+  let hostChildCloseDelivered = false
+  let naturalSettlementEntered = false
   const recordCancel = witness.cancelRequested.bind(witness)
   const recordExit = witness.exited.bind(witness)
   const recordKilled = witness.killed.bind(witness)
-  witness.started = (input, executionId, pid) => {
-    if (typeof pid === 'number' && pid > 0) supervisorPid = pid
-    recordStarted(input, executionId, pid)
-  }
   witness.cancelRequested = (...args) => {
     events.push('cancel_requested')
     recordCancel(...args)
@@ -243,6 +241,13 @@ test('abort during natural-close settlement records terminal witness after physi
     events.push('killed')
     recordKilled(...args)
   }
+  const spawn = childProcess.spawn
+  t.mock.method(childProcess, 'spawn', (...args: Parameters<typeof spawn>) => {
+    const child = spawn(...args)
+    child.once('close', () => { hostChildCloseDelivered = true })
+    return child
+  })
+  syncBuiltinESMExports()
   writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
   writeFileSync(parentFile, `import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
@@ -251,6 +256,13 @@ child.unref();
 writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
 process.exit(0);
 `)
+  const waitFor = async (predicate: () => boolean, label: string): Promise<void> => {
+    const deadline = Date.now() + 5_000
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error(label)
+      await nextTurn()
+    }
+  }
   try {
     const pending = sandbox.spawnCommandAsync(process.execPath, [parentFile], {
       cwd: root,
@@ -259,30 +271,30 @@ process.exit(0);
       signal: controller.signal,
       processWitness: witness,
       processContext: { sessionId: owner },
+      testContext: {
+        onNaturalCloseSettlementEntered: () => { naturalSettlementEntered = true },
+        awaitNaturalCloseSettlementGate: () => settlementGate,
+      },
     })
     let spawnSettled = false
     void pending.finally(() => { spawnSettled = true })
-    const fixtureDeadline = Date.now() + 5_000
-    while (!existsSync(childPidFile) || supervisorPid === undefined) {
-      if (Date.now() > fixtureDeadline) throw new Error('fixture did not publish descendant and supervisor ids')
-      await new Promise(resolve => setTimeout(resolve, 10))
-    }
+    await waitFor(() => existsSync(childPidFile), 'descendant pid must be published before the controlled boundary')
     const childPid = Number(readFileSync(childPidFile, 'utf8'))
     assert.ok(Number.isFinite(childPid) && childPid > 0)
-    const closeDeadline = Date.now() + 5_000
-    while (isProcessAlive(supervisorPid!)) {
-      if (Date.now() > closeDeadline) throw new Error('host did not observe supervisor physical exit')
-      await new Promise(resolve => setTimeout(resolve, 10))
-    }
+    await waitFor(
+      () => hostChildCloseDelivered && naturalSettlementEntered,
+      'host child close and natural-settlement entry must precede cancel',
+    )
     assert.equal(spawnSettled, false,
-      'spawn must remain unsettled after host-observed close while natural-close settlement runs')
+      'spawn must remain unsettled while the natural-close gate holds settlement pending')
     assert.equal(isProcessAlive(childPid), true,
-      'owned descendant must remain live before cancel during natural-close settlement')
+      'owned descendant must remain live at the controlled settlement boundary')
     assert.deepEqual(events, [],
-      'terminal witness must not publish before cancel at the post-close settlement boundary')
+      'terminal witness must not publish before cancel at the settlement barrier')
     controller.abort()
     assert.deepEqual(events, ['cancel_requested'],
-      'cancel must arrive only after host-observed physical close and before terminal witness')
+      'cancel must arrive only after the host close/settlement barrier')
+    releaseSettlementGate()
     const drain = sandbox.awaitPendingProcessTerminations(owner)
     const result = await pending
     await drain
@@ -292,6 +304,8 @@ process.exit(0);
       'confirmed tree settlement must publish terminal witness after cancel settled the spawn')
   } finally {
     try { await sandbox.awaitPendingProcessTerminations(owner) } catch { /* asserted above */ }
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
     rmSync(root, { recursive: true, force: true })
   }
 })

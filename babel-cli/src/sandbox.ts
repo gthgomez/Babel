@@ -568,6 +568,14 @@ export async function awaitPendingProcessTerminations(ownerId?: string): Promise
   }
 }
 
+/** Narrow host test hooks for spawnCommandAsync; not used in production Chat paths. */
+export interface SpawnCommandAsyncTestContext {
+  /** Synchronous signal that the close handler entered POSIX natural settlement. */
+  onNaturalCloseSettlementEntered?: (pid: number) => void;
+  /** Awaited before the first owned process-group probe; holds settlement pending in tests. */
+  awaitNaturalCloseSettlementGate?: () => void | Promise<void>;
+}
+
 /**
  * W0.1 Process supervisor — async spawn with AbortSignal, output caps, tree kill.
  * Used by SafeExecutor.shellExecAsync (chat/REPL foreground path).
@@ -582,6 +590,7 @@ export function spawnCommandAsync(
     signal?: AbortSignal;
     processWitness?: ProcessWitness;
     processContext?: Pick<ProcessWitnessInput, 'sessionId' | 'turnId' | 'toolCallId' | 'toolName' | 'projectRoot'>;
+    testContext?: SpawnCommandAsyncTestContext;
   },
 ): Promise<AsyncSpawnResult> {
   const processInput: ProcessWitnessInput = {
@@ -864,10 +873,14 @@ export function spawnCommandAsync(
         }
       } else if (process.platform !== 'win32' && child.pid) {
         const pid = child.pid;
+        options.testContext?.onNaturalCloseSettlementEntered?.(pid);
         let settlementError: Error | undefined;
         termination = new Promise<void>((resolveTermination, rejectTermination) => {
           void (async () => {
             try {
+              if (options.testContext?.awaitNaturalCloseSettlementGate) {
+                await options.testContext.awaitNaturalCloseSettlementGate();
+              }
               let descendantsSettled = await waitForProcessGroupExit(pid, 150);
               let hadLingeringDescendants = false;
               if (!descendantsSettled) {
