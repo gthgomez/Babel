@@ -116,7 +116,7 @@ test('buildChatQualificationArtifacts retains usage before provider stop', async
       'vague_repair',
       ws,
       cli,
-      (t) => t,
+      (t: string) => t,
       packageRoot,
       Date.now(),
     )
