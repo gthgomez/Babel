@@ -20,7 +20,7 @@ import {
 import { readJsonFile, writeJsonAtomic } from './memoryStoreMigrationIO.js';
 import {
   readMemoryReconciliation,
-  validateMemoryReconciliation,
+  validateReconciliationBootstrap,
 } from './memoryStoreReconciliation.js';
 
 export type MemoryRootBlockerCode =
@@ -172,14 +172,16 @@ function tryExplicitReconciliation(
 ): MemoryRootResolution | null {
   const record = readMemoryReconciliation(layout.canonicalProjectDir);
   if (!record || !memoryRootHasContent(layout.canonicalMemoryRoot)) return null;
-  if (!validateMemoryReconciliation(layout.absolute, layout.canonicalMemoryRoot, record)) {
+  if (!validateReconciliationBootstrap(layout.absolute, layout.canonicalMemoryRoot, record)) {
     return {
       memoryRoot: null,
       blocker: {
         code: 'reconciliation_invalid',
-        message: 'Reconciliation file present but does not attest all canonical memory fingerprints.',
+        message:
+          'Reconciliation bootstrap failed: attested files missing or bytes changed since attestation.',
         manualReconciliation:
-          `Regenerate ${MEMORY_RECONCILIATION_FILE} from current canonical bytes or fix fingerprints.`,
+          `Fix listed files or regenerate ${MEMORY_RECONCILIATION_FILE}; extra canonical files not in ` +
+          'the attestation are allowed only after digest provenance is established.',
       },
     };
   }
@@ -187,6 +189,27 @@ function tryExplicitReconciliation(
     slugFormat: 'digest-v1',
     projectRoot: layout.absolute,
   });
+  const bootMigrated = record.memoryFiles.map((f) => f.name);
+  writeJsonAtomic(join(layout.canonicalProjectDir, MEMORY_MIGRATION_FILE), {
+    schemaVersion: 1,
+    status: 'complete',
+    sourceLegacySlug: layout.legacySlug,
+    sourceLegacyMemoryRoot: layout.legacyMemoryRoot,
+    projectRoot: layout.absolute,
+    migratedFiles: bootMigrated,
+    preservedOriginal: true,
+    updatedAt: new Date().toISOString(),
+  });
+  return { memoryRoot: layout.canonicalMemoryRoot };
+}
+
+function openEstablishedCanonicalStore(
+  layout: ReturnType<typeof pathsForProject>,
+  canonicalProvenance: MemoryProvenance | null,
+): MemoryRootResolution | null {
+  if (!canonicalProvenance || !provenanceMatchesProjectRoot(canonicalProvenance, layout.absolute)) {
+    return null;
+  }
   return { memoryRoot: layout.canonicalMemoryRoot };
 }
 
@@ -223,12 +246,9 @@ export function resolveMemoryRootWithMigration(
   try {
     mkdirSync(layout.canonicalMemoryRoot, { recursive: true });
 
-    const reconciled = tryExplicitReconciliation(layout);
-    if (reconciled?.memoryRoot) {
-      return reconciled;
-    }
-    if (reconciled?.blocker) {
-      return reconciled;
+    const established = openEstablishedCanonicalStore(layout, canonicalProvenance);
+    if (established) {
+      return established;
     }
 
     if (migration?.status === 'complete' && projectRootMatches(migration.projectRoot, layout.absolute)) {
@@ -239,17 +259,27 @@ export function resolveMemoryRootWithMigration(
       return { memoryRoot: layout.canonicalMemoryRoot };
     }
 
-    if (migration?.status === 'blocked_conflict' && projectRootMatches(migration.projectRoot, layout.absolute)) {
-      if (migration.conflicts?.length) {
-        return conflictBlocker(layout, migration.conflicts);
-      }
-    }
-
-    if (migration?.status === 'partial' && projectRootMatches(migration.projectRoot, layout.absolute)) {
+    if (
+      (migration?.status === 'blocked_conflict' || migration?.status === 'partial') &&
+      projectRootMatches(migration.projectRoot, layout.absolute)
+    ) {
       if (!legacyProvenance || !provenanceMatchesProjectRoot(legacyProvenance, layout.absolute)) {
+        if (migration.status === 'blocked_conflict') {
+          return migration.conflicts?.length
+            ? conflictBlocker(layout, migration.conflicts)
+            : unprovenBlocker(layout);
+        }
         return unprovenBlocker(layout);
       }
       return migrateFromValidatedLegacy(layout);
+    }
+
+    const reconciled = tryExplicitReconciliation(layout);
+    if (reconciled?.memoryRoot) {
+      return reconciled;
+    }
+    if (reconciled?.blocker) {
+      return reconciled;
     }
 
     if (canonicalHasContent && !legacyHasContent) {
