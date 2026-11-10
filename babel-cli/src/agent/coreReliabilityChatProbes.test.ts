@@ -296,7 +296,7 @@ test('chat probe (3) negative: ACTION value=2 with actual 999 cannot publish NO_
   try {
     mkdirSync(join(root, 'src'), { recursive: true })
     writeFileSync(join(root, 'src', 'source.js'), 'export const value = 999;\n')
-    const task = 'Fix source.js so the exported value is 2.\nRequirements:\n- `node -e "process.exit(0)"` must pass.'
+    const task = 'Fix source.js so the exported value is 2.'
     const o = await driveChat(root, task, [
       [
         { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'src/source.js' } },
