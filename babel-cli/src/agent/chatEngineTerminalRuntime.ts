@@ -169,8 +169,20 @@ function formatTerminalAnswerForOutcome(input: {
 }): string {
   const unverifiedTerminal = input.status === 'completed' && input.outcome === 'UNVERIFIED_PATCH'
   const blockedRecovery = input.status === 'blocked' && input.outcome === 'BLOCKED_POLICY'
-  if ((!unverifiedTerminal && !blockedRecovery) || !input.hasMutation || !input.answer.trim() ||
-      satisfiesRequestedBareJsonAnswer(input.answer, input.task)) return input.answer
+  const decisionDeferral = input.outcome === 'NEEDS_HUMAN_DECISION'
+  if (!input.answer.trim() || satisfiesRequestedBareJsonAnswer(input.answer, input.task)) {
+    return input.answer
+  }
+  if (decisionDeferral) {
+    return input.acceptanceEvidence?.length
+      ? appendCriterionEvidenceSummary(
+          input.answer,
+          input.acceptanceEvidence,
+          input.acceptanceEvidenceOmitted,
+        )
+      : input.answer
+  }
+  if ((!unverifiedTerminal && !blockedRecovery) || !input.hasMutation) return input.answer
 
   const artifactRefs = collectConfirmedMutationArtifactPaths(input.toolCallLog)
   if (blockedRecovery && input.preservedUnverifiedCandidate) {
