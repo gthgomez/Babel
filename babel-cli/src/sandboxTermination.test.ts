@@ -11,6 +11,26 @@ import childProcess from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { createToolExecutor, ToolExecutionCancelledError } from './agent/toolExecutor.js'
 
+function readPublishedDescendantPid(childPidFile: string): number | undefined {
+  if (!existsSync(childPidFile)) return undefined
+  const raw = readFileSync(childPidFile, 'utf8').trim()
+  if (!/^\d+$/.test(raw)) return undefined
+  const pid = Number(raw)
+  return Number.isFinite(pid) && pid > 0 ? pid : undefined
+}
+
+function parentSpawnsGrandchildFixture(root: string, childPidFile: string): string {
+  return `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
+child.unref();
+child.once('spawn', () => {
+  writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid));
+  process.exit(0);
+});
+`
+}
+
 test('container removal waits for the cancelled launch client physical closure', async t => {
   const executor = new sandbox.SafeExecutor(process.cwd())
   const controller = new AbortController()
@@ -178,6 +198,197 @@ test('cancel records process_exited before process_killed on the witness bus', a
   assert.deepEqual(events, [], 'witness must not fire before physical close and latch drain')
   await sandbox.awaitPendingProcessTerminations('pr242-cancel-witness-order')
   assert.deepEqual(events, ['exited', 'killed'], 'exited must precede killed')
+})
+
+test('a natural foreground close does not return success while owned group descendants remain', {
+  skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-fg-linger-'))
+  const childPidFile = join(root, 'child.pid')
+  const parentFile = join(root, 'parent.mjs')
+  writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
+  writeFileSync(parentFile, parentSpawnsGrandchildFixture(root, childPidFile))
+  try {
+    const result = await sandbox.spawnCommandAsync(process.execPath, [parentFile], {
+      cwd: root,
+      timeoutMs: 15_000,
+      env: process.env,
+      processContext: { sessionId: 'synthetic-fg-linger' },
+    })
+    assert.equal(result.timedOut, false)
+    assert.equal(result.status, 1)
+    assert.ok(result.error)
+    assert.match(result.error.message, /descendants remained|could not be confirmed/i)
+    const childPid = Number(readFileSync(childPidFile, 'utf8'))
+    assert.equal(isProcessAlive(childPid), false, 'owned descendants must be terminated before settle')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('abort during natural-close settlement records terminal witness after physical close', {
+  skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
+}, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-fg-witness-close-'))
+  const childPidFile = join(root, 'child.pid')
+  const parentFile = join(root, 'parent.mjs')
+  const owner = 'synthetic-fg-natural-close-witness'
+  const controller = new AbortController()
+  const witness = new ProcessWitness()
+  const events: string[] = []
+  let releaseSettlementGate!: () => void
+  const settlementGate = new Promise<void>((resolve) => { releaseSettlementGate = resolve })
+  let hostChildCloseDelivered = false
+  let naturalSettlementEntered = false
+  const recordCancel = witness.cancelRequested.bind(witness)
+  const recordExit = witness.exited.bind(witness)
+  const recordKilled = witness.killed.bind(witness)
+  witness.cancelRequested = (...args) => {
+    events.push('cancel_requested')
+    recordCancel(...args)
+  }
+  witness.exited = (...args) => {
+    events.push('exited')
+    recordExit(...args)
+  }
+  witness.killed = (...args) => {
+    events.push('killed')
+    recordKilled(...args)
+  }
+  const spawn = childProcess.spawn
+  t.mock.method(childProcess, 'spawn', (...args: Parameters<typeof spawn>) => {
+    const child = spawn(...args)
+    child.once('close', () => { hostChildCloseDelivered = true })
+    return child
+  })
+  syncBuiltinESMExports()
+  writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
+  writeFileSync(parentFile, parentSpawnsGrandchildFixture(root, childPidFile))
+  const waitFor = async (predicate: () => boolean, label: string): Promise<void> => {
+    const deadline = Date.now() + 5_000
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error(label)
+      await nextTurn()
+    }
+  }
+  try {
+    const pending = sandbox.spawnCommandAsync(process.execPath, [parentFile], {
+      cwd: root,
+      timeoutMs: 15_000,
+      env: process.env,
+      signal: controller.signal,
+      processWitness: witness,
+      processContext: { sessionId: owner },
+      testContext: {
+        onNaturalCloseSettlementEntered: () => { naturalSettlementEntered = true },
+        awaitNaturalCloseSettlementGate: () => settlementGate,
+      },
+    })
+    let spawnSettled = false
+    void pending.finally(() => { spawnSettled = true })
+    await waitFor(
+      () => readPublishedDescendantPid(childPidFile) !== undefined,
+      'descendant pid must be published before the controlled boundary',
+    )
+    const childPid = readPublishedDescendantPid(childPidFile)!
+    await waitFor(
+      () => hostChildCloseDelivered && naturalSettlementEntered,
+      'host child close and natural-settlement entry must precede cancel',
+    )
+    assert.equal(spawnSettled, false,
+      'spawn must remain unsettled while the natural-close gate holds settlement pending')
+    assert.equal(isProcessAlive(childPid), true,
+      'owned descendant must remain live at the controlled settlement boundary')
+    assert.deepEqual(events, [],
+      'terminal witness must not publish before cancel at the settlement barrier')
+    controller.abort()
+    assert.deepEqual(events, ['cancel_requested'],
+      'cancel must arrive only after the host close/settlement barrier')
+    releaseSettlementGate()
+    const drain = sandbox.awaitPendingProcessTerminations(owner)
+    const result = await pending
+    await drain
+    assert.equal(result.aborted, true)
+    assert.equal(isProcessAlive(childPid), false)
+    assert.deepEqual(events, ['cancel_requested', 'exited', 'killed'],
+      'confirmed tree settlement must publish terminal witness after cancel settled the spawn')
+  } finally {
+    try { await sandbox.awaitPendingProcessTerminations(owner) } catch { /* asserted above */ }
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('abort during natural-close settlement preserves owner drain without latch timeout', {
+  skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-fg-abort-close-'))
+  const childPidFile = join(root, 'child.pid')
+  const parentFile = join(root, 'parent.mjs')
+  const owner = 'synthetic-fg-abort-during-settlement'
+  const controller = new AbortController()
+  writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
+  writeFileSync(parentFile, parentSpawnsGrandchildFixture(root, childPidFile))
+  try {
+    const pending = sandbox.spawnCommandAsync(process.execPath, [parentFile], {
+      cwd: root,
+      timeoutMs: 15_000,
+      env: process.env,
+      signal: controller.signal,
+      processContext: { sessionId: owner },
+    })
+    const deadline = Date.now() + 5_000
+    let childPid: number | undefined
+    while ((childPid = readPublishedDescendantPid(childPidFile)) === undefined) {
+      if (Date.now() > deadline) throw new Error('owned descendant never published its pid')
+      await nextTurn()
+    }
+    await nextTurn()
+    controller.abort()
+    const drain = sandbox.awaitPendingProcessTerminations(owner)
+    const result = await pending
+    await drain
+    assert.equal(result.aborted, true)
+    assert.equal(isProcessAlive(childPid), false)
+  } finally {
+    try { await sandbox.awaitPendingProcessTerminations(owner) } catch { /* asserted above */ }
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('owner drain waits for natural-close descendant cleanup', {
+  skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-fg-drain-'))
+  const childPidFile = join(root, 'child.pid')
+  const parentFile = join(root, 'parent.mjs')
+  const owner = 'synthetic-fg-linger-drain'
+  writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
+  writeFileSync(parentFile, parentSpawnsGrandchildFixture(root, childPidFile))
+  try {
+    const pending = sandbox.spawnCommandAsync(process.execPath, [parentFile], {
+      cwd: root,
+      timeoutMs: 15_000,
+      env: process.env,
+      processContext: { sessionId: owner },
+    })
+    const deadline = Date.now() + 5_000
+    let childPid: number | undefined
+    while ((childPid = readPublishedDescendantPid(childPidFile)) === undefined) {
+      if (Date.now() > deadline) throw new Error('owned descendant never published its pid')
+      await nextTurn()
+    }
+    const drain = sandbox.awaitPendingProcessTerminations(owner)
+    const result = await pending
+    await drain
+    assert.equal(result.status, 1)
+    assert.ok(result.error)
+    assert.equal(isProcessAlive(childPid), false, 'owner drain must observe natural-close tree cleanup')
+  } finally {
+    try { await sandbox.awaitPendingProcessTerminations(owner) } catch { /* asserted above */ }
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('a local supervisor deadline does not return while its owned descendant is alive', async () => {
