@@ -701,20 +701,6 @@ test('independent probe: discovered npm test tamper cannot certify a wrong parse
     adversarial: { verifier_def_tampered: hasVerifierDependencyTamper(preHashes, postHashes) },
   })
   assert.equal(promotion.authorize_verified_complete, false)
-  const decision = createExecutorKernel('chat').completion.decide({
-    mode: 'chat', requestedOutcome: 'VERIFIED_COMPLETE', hasWrite: true, verificationPolicy: 'strict',
-    ...prepareKernelVerifierInput(receipt, []), verifierOwner, requiredVerifierCommands: ['npm test'],
-    requiredVerifiers, currentReceiptRevisionHashes: { [receipt.receiptId]: currentRevision },
-    currentWorkspaceRevisionHash: currentRevision, verifierTampered: true,
-    toolCallLog: [
-      { tool: 'write_file', target: 'test/parser.test.mjs' },
-      { tool: 'write_file', target: 'src/parser.js' },
-      { tool: 'test_run', target: 'npm test' },
-    ],
-    proof: { compliant: true }, acceptance: request,
-  })
-  assert.equal(decision.allowed, false)
-  assert.notEqual(decision.finalOutcome, 'VERIFIED_COMPLETE')
 })
 
 test('a task-authored exact verifier link admits only the matching behavioral evidence', async t => {

@@ -433,7 +433,11 @@ import {
 } from "./turnRuntime.js";
 import {restoreTurnRuntime} from './restoreTurnRuntime.js';
 import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjectiveSubmission,type ObjectiveAdmissionHost,type ObjectiveAdmissionResult} from './chatEngineObjectiveAdmission.js';
-import type { CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
+import {
+  evaluateCriterionCompletionV1,
+  type CriterionCompletionRequestV1,
+  type CriterionCompletionServiceV1,
+} from '../authority/criterionCompletion.js';
 import {requiresObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog} from './taskObjectiveLifecycle.js';
 
 import { admitProjectContentRead, isReadOnlyChat } from "./chatReadOnly.js";
@@ -2667,10 +2671,122 @@ export class ChatEngine {
    * fail the completion gate; neither path can certify a patch.
    */
   private isAcceptedReadOnlyTerminal(): boolean {
-    return (
-      this.lastTurnRuntime?.effectiveOperation === "READ_ONLY" ||
-      isReadOnlyChat() || (this.lastTurnRuntime !== null && hasInspectedNoChangeEvidence(this.toolCallLog))
-    );
+    if (this.lastTurnRuntime?.effectiveOperation === "READ_ONLY" || isReadOnlyChat()) {
+      return true;
+    }
+    if (
+      this.lastTurnRuntime?.effectiveOperation === "MUTATING" &&
+      this.lastTurnRuntime !== null &&
+      !this.hasAnyWrites() &&
+      hasInspectedNoChangeEvidence(this.toolCallLog)
+    ) {
+      return !this.mutatingInspectionLeavesRequiredCriteriaUnmet();
+    }
+    return false;
+  }
+
+  /**
+   * Mutating tasks may conclude without writes only when frozen acceptance no
+   * longer lists required criteria as missing after honest inspection evidence.
+   */
+  private mutatingInspectionLeavesRequiredCriteriaUnmet(): boolean {
+    if (!this.criterionCompletion) return true;
+    try {
+      const request = this.criterionCompletion.currentRequest();
+      if (!request) return true;
+      const verifierInput = this.buildVerifierInput();
+      this.criterionCompletion.refreshPrivateEvidence({
+        proof: { compliant: true },
+        allowPartialEvidence: true,
+        receipts: verifierInput.criterionChatReceipts,
+        candidate_sha: this.criterionCandidateRevisionSha(),
+        has_mutation: false,
+      });
+      const evaluation = evaluateCriterionCompletionV1(request);
+      if (evaluation.verified) return false;
+      if (this.inspectionSatisfiesNumericValueGoals(request, this.toolCallLog)) {
+        return false;
+      }
+      if (this.inspectionContradictsFrozenBehavioralGoals(request, this.toolCallLog)) {
+        return true;
+      }
+      const missing = evaluation.missing_requirements ?? [];
+      if (missing.length === 0) return evaluation.status !== "VERIFIED";
+      const missingItems = missing
+        .map((id) => request.contract.acceptance.find((entry) => entry.id === id))
+        .filter((item): item is NonNullable<typeof item> => Boolean(item?.required));
+      if (missingItems.length === 0) return false;
+      const meaningOnly = missingItems.every(
+        (item) => item.verification.verifier_id.startsWith("meaning:"),
+      );
+      const hasExecutableFrozenChecks = request.contract.acceptance.some(
+        (item) => item.required && !item.verification.verifier_id.startsWith("meaning:"),
+      );
+      const allowsInspectionOnlyMeaningSatisfaction =
+        meaningOnly
+        && !hasExecutableFrozenChecks
+        && hasInspectedNoChangeEvidence(this.toolCallLog)
+        && !missingItems.some((item) => /\bvalue\s*(?:is|=)\s*\d+\b/i.test(item.description));
+      if (allowsInspectionOnlyMeaningSatisfaction) {
+        return false;
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  private inspectionSatisfiesNumericValueGoals(
+    request: CriterionCompletionRequestV1,
+    log: typeof this.toolCallLog,
+  ): boolean {
+    const readDetails = log
+      .filter((entry) => entry.tool === "read_file" && !entry.error && (entry.exit_code === undefined || entry.exit_code === 0))
+      .map((entry) => entry.detail ?? "")
+      .filter((detail) => detail.trim().length > 0);
+    if (readDetails.length === 0) return false;
+    const corpus = readDetails.join("\n");
+  const valueGoals = request.contract.acceptance.filter(
+    (item) => item.required
+      && item.verification.verifier_id.startsWith("meaning:")
+      && /\bvalue\s*(?:is|=)\s*(\d+)\b/i.test(item.description),
+  );
+  if (valueGoals.length === 0) return false;
+  return valueGoals.every((item) => {
+    const goalNumber = item.description.match(/\bvalue\s*(?:is|=)\s*(\d+)\b/i)?.[1];
+    if (!goalNumber) return false;
+    return corpus.split(/\r?\n/).some((line) => {
+      const match = line.match(/\bvalue\s*=\s*(\d+)\b/i);
+      return match?.[1] === goalNumber;
+    });
+  });
+  }
+
+  private inspectionContradictsFrozenBehavioralGoals(
+    request: CriterionCompletionRequestV1,
+    log: typeof this.toolCallLog,
+  ): boolean {
+    const readDetails = log
+      .filter((entry) => entry.tool === "read_file" && !entry.error && (entry.exit_code === undefined || entry.exit_code === 0))
+      .map((entry) => entry.detail ?? "")
+      .filter((detail) => detail.trim().length > 0);
+    if (readDetails.length === 0) return false;
+    const corpus = readDetails.join("\n");
+    for (const item of request.contract.acceptance) {
+      if (!item.required || !item.verification.verifier_id.startsWith("meaning:")) continue;
+      const goalNumber = item.description.match(/\bvalue\s*(?:is|=)\s*(\d+)\b/i)?.[1];
+      if (!goalNumber) continue;
+      const observed = corpus.match(/\bvalue\s*=\s*(\d+)\b/gi) ?? [];
+      if (
+        observed.some((match) => {
+          const actual = match.match(/(\d+)/)?.[1];
+          return actual !== undefined && actual !== goalNumber;
+        })
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private decideCompletion(

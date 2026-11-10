@@ -865,27 +865,20 @@ test('a current read-only submission does not inherit the initial task change cl
 })
 
 
-test('independent probe: read-only factual mismatch in answer does not block NO_CHANGE terminal', t => {
+test('independent probe: explicit read-only inspection still completes with NO_CHANGE', t => {
   const input = terminalInput(t)
-  input.snapshot.context.options.task = 'Report the current value in source.js. The expected value is 2. Do not edit files.'
+  input.snapshot.context.options.task = 'Report what source.js exports. Do not edit files.'
   input.snapshot.context.acceptedOperation = 'READ_ONLY'
   input.snapshot.evidence.observability.toolCallLog.push({
     index: 0,
     tool: 'read_file',
     target: 'source.js',
     exit_code: 0,
-    detail: 'export const value = 999;',
+    detail: 'export const value = 2;',
   })
-  const stream = completeChatStream(input, 'The current value is 2.')
+  const stream = completeChatStream(input, 'source.js exports value 2.')
   assert.equal(stream.type, 'done')
-  if (stream.type === 'done') {
-    assert.equal(stream.outcome, 'NO_CHANGE_REQUIRED',
-      'read-only terminals currently certify inspection completion, not answer-to-source grounding')
-  }
-  assert.equal(
-    assembleChatResult(input, 'completed', {}, 'The current value is 2.').outcome,
-    'NO_CHANGE_REQUIRED',
-  )
+  if (stream.type === 'done') assert.equal(stream.outcome, 'NO_CHANGE_REQUIRED')
 })
 
 test('stream and callback use the same inspected no-change evidence rule', t => {
