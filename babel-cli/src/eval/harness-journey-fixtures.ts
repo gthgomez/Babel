@@ -8,7 +8,7 @@ import { JourneySpecSchema, type JourneySpec } from './harness-journey-contract.
 import { isCredentialTargetPath } from '../authority/protectedPath.js'
 import { normalizeSandboxFixturePermissions } from './sandboxFixturePermissions.js'
 import { decodeTaskGitOutput } from '../agent/taskMutationOwnership.js'
-import { benchmarkGitObserveEnv, runBenchmarkGitCommandBytes, runBenchmarkGitObserve } from '../utils/benchmarkGitObserve.js'
+import { benchmarkGitObserveEnv, runBenchmarkGitCommandBytes, runBenchmarkGitObserve } from '../utils/gitExec.js'
 
 const FileMap = z.record(z.string(), z.string())
 export const JourneyFixtureSchema = z.object({

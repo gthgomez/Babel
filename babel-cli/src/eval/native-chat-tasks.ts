@@ -160,7 +160,7 @@ export async function runNativeChatTasks(options: {
     'sandboxFixturePermissions.ts',
     '../config/benchmarkContainer.ts', '../config/dockerIsolationArgs.ts', '../config/executionProfiles.ts',
     '../authority/protectedPath.ts', '../authority/commandSpec.ts', '../authority/literalSearch.ts',
-    '../authority/unprivilegedChildEnv.ts', '../utils/benchmarkGitObserve.ts', '../utils/commandArgv.ts', '../utils/safeEnv.ts', '../utils/gitExec.ts',
+    '../authority/unprivilegedChildEnv.ts', '../utils/commandArgv.ts', '../utils/safeEnv.ts', '../utils/gitExec.ts',
   ].map(path => join(root, 'babel-cli/src/eval', path))]
   const sourceHashes = await Promise.all(protectedFiles.map(async path => ({ path: relative(root, path).replaceAll('\\', '/'), sha256: digest(await readFile(path)) })))
   const calibration = options.mode === 'calibration'

@@ -8,7 +8,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { observeBenchmarkWorkingTreeDirty } from '../utils/benchmarkGitObserve.js';
+import { observeBenchmarkWorkingTreeDirty } from '../utils/gitExec.js';
 import { readdirSync, readFileSync, realpathSync, statSync, type Dirent } from 'node:fs';
 import { join, posix, relative } from 'node:path';
 import {

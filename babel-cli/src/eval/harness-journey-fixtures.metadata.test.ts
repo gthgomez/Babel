@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { TaskMutationOwnership, decodeTaskGitOutput } from '../agent/taskMutationOwnership.js'
-import { benchmarkPorcelainRecords, observeBenchmarkWorkingTreeDirty, runBenchmarkGitCommandBytes, runBenchmarkGitObserve } from '../utils/benchmarkGitObserve.js'
+import { benchmarkPorcelainRecords, observeBenchmarkWorkingTreeDirty, runBenchmarkGitCommandBytes, runBenchmarkGitObserve } from '../utils/gitExec.js'
 import {
   captureJourneyGitState,
   diffFixtureMetadataEntries,

@@ -5,7 +5,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isCredentialTargetPath } from './autonomyEnforcement.js'
 import { WorkspaceTransactionManager, type MutationBatchTransaction } from '../services/workspaceTransactions.js'
 import { runGitCommandBytes } from '../utils/gitExec.js'
-import { runBenchmarkGitCommandBytes } from '../utils/benchmarkGitObserve.js'
+import { runBenchmarkGitCommandBytes } from '../utils/gitExec.js'
 
 export interface TaskWorkspaceChangeClassification {
   taskOwnedPaths: string[]
