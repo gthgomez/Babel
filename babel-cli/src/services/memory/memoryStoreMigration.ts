@@ -231,20 +231,32 @@ function openEstablishedCanonicalStore(
     return null;
   }
 
-  const canonicalProvenance = readMemoryProvenance(layout.canonicalProjectDir);
-  if (!canonicalProvenance || !provenanceMatchesProjectRoot(canonicalProvenance, layout.absolute)) {
-    return null;
-  }
-
-  if (migration?.status === 'complete' && projectRootMatches(migration.projectRoot, layout.absolute)) {
-    return { memoryRoot: layout.canonicalMemoryRoot };
-  }
-
-  if (!migration && !memoryRootHasContent(layout.legacyMemoryRoot)) {
-    return { memoryRoot: layout.canonicalMemoryRoot };
-  }
-
   return null;
+}
+
+/**
+ * Empty canonical + no legacy: establish ownership before first write (no pre-existing files to trust).
+ */
+function commitGreenfieldEstablishment(
+  layout: ReturnType<typeof pathsForProject>,
+): MemoryRootResolution {
+  const migration: MemoryMigrationRecord = {
+    schemaVersion: 1,
+    status: 'complete',
+    sourceLegacySlug: layout.legacySlug,
+    sourceLegacyMemoryRoot: layout.legacyMemoryRoot,
+    projectRoot: layout.absolute,
+    migratedFiles: [],
+    preservedOriginal: true,
+    updatedAt: new Date().toISOString(),
+  };
+  writeMemoryEstablishmentAtomic(layout.canonicalProjectDir, {
+    projectRoot: layout.absolute,
+    source: 'greenfield',
+    provenance: { slugFormat: 'digest-v1', projectRoot: layout.absolute },
+    migration,
+  });
+  return { memoryRoot: layout.canonicalMemoryRoot };
 }
 
 function migrateFromValidatedLegacy(layout: ReturnType<typeof pathsForProject>): MemoryRootResolution {
@@ -320,24 +332,37 @@ export function resolveMemoryRootWithMigration(
     const established = openEstablishedCanonicalStore(layout);
     if (established) return established;
 
-    if (canonicalHasContent && !legacyHasContent) {
-      const reconOnly = commitReconciliationBootstrap(layout);
-      if (reconOnly?.memoryRoot) return reconOnly;
-      if (reconOnly?.blocker) return reconOnly;
-    }
-
     if (!legacyHasContent) {
       if (canonicalHasContent) {
-        return commitReconciliationBootstrap(layout) ?? {
-          memoryRoot: null,
-          blocker: {
-            code: 'reconciliation_invalid',
-            message: 'Canonical memory requires full-set reconciliation before first use.',
-            manualReconciliation: `Write ${MEMORY_RECONCILIATION_FILE} attesting every file.`,
-          },
-        };
+        if (!readMemoryEstablishment(layout.canonicalProjectDir)) {
+          const reconOnly = commitReconciliationBootstrap(layout);
+          if (reconOnly?.memoryRoot) return reconOnly;
+          return {
+            memoryRoot: null,
+            blocker: {
+              code: 'reconciliation_invalid',
+              message:
+                'Pre-existing canonical memory was not operator-reviewed; full-set reconciliation required.',
+              manualReconciliation: `Write ${MEMORY_RECONCILIATION_FILE} attesting every canonical .md file.`,
+            },
+          };
+        }
+        const establishedWithContent = openEstablishedCanonicalStore(layout);
+        if (establishedWithContent) return establishedWithContent;
+      } else if (!readMemoryEstablishment(layout.canonicalProjectDir)) {
+        return commitGreenfieldEstablishment(layout);
+      } else {
+        const establishedEmpty = openEstablishedCanonicalStore(layout);
+        if (establishedEmpty) return establishedEmpty;
       }
-      return { memoryRoot: layout.canonicalMemoryRoot };
+      return {
+        memoryRoot: null,
+        blocker: {
+          code: 'reconciliation_invalid',
+          message: 'Canonical store state could not be resolved safely.',
+          manualReconciliation: 'Inspect establishment and canonical memory files.',
+        },
+      };
     }
 
     if (isDegenerateLegacySharedBucket(layout.legacySlug)) {

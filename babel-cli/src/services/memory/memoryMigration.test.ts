@@ -620,6 +620,63 @@ canonical wins
     }
   });
 
+  it('fresh greenfield lifecycle: resolve → writeMemory → resolve → edit (public API)', () => {
+    const project = mkdtempSync(join(tmpdir(), 'babel-mem-fresh-lifecycle-'));
+    try {
+      const first = resolveMemoryRoot(project);
+      assert.ok(first);
+      assert.ok(readMemoryEstablishment(pathsForProject(project).canonicalProjectDir));
+
+      assert.ok(
+        writeMemory(first!, {
+          name: 'first-write',
+          description: 'fresh',
+          metadata: { type: 'reference' },
+        }, 'initial body'),
+      );
+      const second = resolveMemoryRoot(project);
+      assert.ok(second);
+      assert.ok(findByName(second!, 'first-write'));
+
+      assert.ok(
+        writeMemory(second!, {
+          name: 'first-write',
+          description: 'fresh',
+          metadata: { type: 'reference' },
+        }, 'edited body'),
+      );
+      const third = resolveMemoryRoot(project);
+      assert.ok(third);
+      assert.equal(findByName(third!, 'first-write')?.body.trim(), 'edited body');
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it('pre-existing unreviewed canonical files block without full-set reconciliation', () => {
+    const project = mkdtempSync(join(tmpdir(), 'babel-mem-preexisting-unproven-'));
+    try {
+      const layout = pathsForProject(project);
+      mkdirSync(layout.canonicalMemoryRoot, { recursive: true });
+      writeFileSync(join(layout.canonicalMemoryRoot, 'dropped-in.md'), `---
+name: dropped-in
+description: x
+metadata:
+  type: reference
+---
+
+unreviewed
+`, 'utf-8');
+
+      const res = resolveMemoryRootWithMigration(project);
+      assert.equal(res.memoryRoot, null);
+      assert.equal(res.blocker?.code, 'reconciliation_invalid');
+      assert.equal(readMemoryEstablishment(layout.canonicalProjectDir), null);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
   it('refuses degenerate legacy shared bucket with content', () => {
     const degenerate = memoryRootForSlug('');
     mkdirSync(degenerate, { recursive: true });

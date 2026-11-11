@@ -58,7 +58,7 @@ export interface MemoryEstablishment {
   projectRoot: string;
   provenance: MemoryProvenance;
   migration: MemoryMigrationRecord;
-  source: 'reconciliation' | 'legacy_migration';
+  source: 'reconciliation' | 'legacy_migration' | 'greenfield';
   establishedAt: string;
 }
 
