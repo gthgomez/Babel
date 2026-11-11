@@ -25,7 +25,8 @@ test('resume preserves a saved Docker boundary and migration requires an explici
   try{
     assert.throws(()=>resolveResumedSessionPolicy(id,undefined,{}),/explicit execution profile/i);
     persistExecutionPolicyRecord(chatSessionDir(id),{profile:'safe_repo',source:'default'},{kind:'docker'});
-    assert.deepEqual(resolveResumedSessionPolicy(id,undefined,{BABEL_EXECUTION_PROFILE:'host_native'}),
+    assert.throws(()=>resolveResumedSessionPolicy(id,undefined,{BABEL_EXECUTION_PROFILE:'host_native'}),/differs from the saved/i);
+    assert.deepEqual(resolveResumedSessionPolicy(id,undefined,{BABEL_EXECUTION_PROFILE:'safe_repo'}),
       {profile:'safe_repo',source:'persisted',expectedBoundary:'docker'});
     const migration=resolveResumedSessionPolicy(id,'host_native',{});
     assert.equal(migration.source,'migration');

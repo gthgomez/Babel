@@ -75,6 +75,11 @@ export function resolveExecutionPolicyChoice(input: ExecutionPolicyChoiceInput):
     if (!saved) {
       throw new Error('This session has no proven execution policy. Select an explicit execution profile before resuming.');
     }
+    // A stricter ambient profile must not be silently dropped on resume; the
+    // operator can still migrate deliberately with an explicit selection.
+    if (environment !== undefined && environment !== saved.profile) {
+      throw new Error('The environment execution profile differs from the saved session policy. Select an explicit execution profile to change it.');
+    }
     return { profile: saved.profile, source: 'persisted', expectedBoundary: saved.effectiveBoundary };
   }
   if (environment !== undefined) {

@@ -18,7 +18,7 @@ import { ChatEngine } from '../agent/chatEngine.js';
 import { hasUnsettledBackgroundShells } from '../agent/backgroundShell.js';
 import { chatSessionDir } from '../cli/runsLayout.js';
 import { acquireSessionPolicyLease, type SessionPolicyLease } from '../config/sessionPolicyLease.js';
-import { constrainNewSessionPolicy } from '../config/sessionExecutionPolicy.js';
+import { constrainNewSessionPolicy, recordNewSessionPolicy } from '../config/sessionExecutionPolicy.js';
 import { withExecutionPolicyChoice } from '../config/executionPolicySelection.js';
 import { INSTRUCTION_MANIFEST_FILENAME, TASK_CONTRACT_FILENAME, TASK_MODE_HISTORY_FILENAME,
   loadLiveSessionAuthorityStrict, recoverCheckpointArtifacts } from '../agent/liveSessionBridge.js';
@@ -179,9 +179,12 @@ function matchesDescriptor(descriptor: SessionDescriptor | null, authority: Auth
 
 /** Returns only a bounded display preview; durable evidence is kept separately. */
 function previewText(value: string, bytes = MAX_PREVIEW_BYTES): { text: string; truncated: boolean } {
-  if (Buffer.byteLength(value, 'utf8') <= bytes) return { text: value, truncated: false };
-  const buffer = Buffer.from(value.slice(0, bytes), 'utf8');
-  return { text: buffer.subarray(0, bytes).toString('utf8'), truncated: true };
+  const buffer = Buffer.from(value, 'utf8');
+  if (buffer.length <= bytes) return { text: value, truncated: false };
+  let text = buffer.subarray(0, bytes).toString('utf8');
+  // Avoid leaving a partial code point at the cut.
+  if (text.endsWith('\uFFFD')) text = text.slice(0, -1);
+  return { text, truncated: true };
 }
 
 export function startPrivateWorker({ input, output, host: injectedHost, onEngineCreated }: PrivateWorkerOptions): PrivateWorker {
@@ -253,15 +256,23 @@ export function startPrivateWorker({ input, output, host: injectedHost, onEngine
     engine?.closeAdmissionStore();
     host?.admissionStores.get(thread)?.close();
     host?.admissionStores.delete(thread);
-    try { owner.lease.release(); } finally { owned.delete(thread); }
-    host?.engines.delete(thread);
-    host?.descriptors.delete(thread);
-    host?.restoreReports.delete(thread);
-    host?.launchCounters.delete(thread);
-    host?.verificationByThread.delete(thread);
-    for (const key of host?.idempotency.keys() ?? []) if (key.startsWith(`${thread}:`)) host?.idempotency.delete(key);
-    for (const key of host?.lastMessageIntegrity.keys() ?? []) if (key.startsWith(`${thread}:`)) host?.lastMessageIntegrity.delete(key);
-    for (const key of host?.turnTerminals.keys() ?? []) if (key.startsWith(`${thread}:`)) host?.turnTerminals.delete(key);
+    let leaseError: unknown;
+    try { owner.lease.release(); }
+    catch (error) { leaseError = error; }
+    finally {
+      // Host state must not outlive the ownership record even when the lease
+      // release fails; otherwise close() can never reach this engine.
+      owned.delete(thread);
+      host?.engines.delete(thread);
+      host?.descriptors.delete(thread);
+      host?.restoreReports.delete(thread);
+      host?.launchCounters.delete(thread);
+      host?.verificationByThread.delete(thread);
+      for (const key of host?.idempotency.keys() ?? []) if (key.startsWith(`${thread}:`)) host?.idempotency.delete(key);
+      for (const key of host?.lastMessageIntegrity.keys() ?? []) if (key.startsWith(`${thread}:`)) host?.lastMessageIntegrity.delete(key);
+      for (const key of host?.turnTerminals.keys() ?? []) if (key.startsWith(`${thread}:`)) host?.turnTerminals.delete(key);
+    }
+    if (leaseError) throw leaseError;
   };
   const ownThread = (thread: string): OwnedThread => {
     const prior = owned.get(thread);
@@ -421,8 +432,8 @@ export function startPrivateWorker({ input, output, host: injectedHost, onEngine
             const retained = loadLiveSessionAuthorityStrict(sessionDir);
             if (retained.taskContract.mode !== descriptor.mode) throw new Error('Retained session mode does not match');
           }
-          const executionPolicy=constrainNewSessionPolicy({profile:candidate.execution_profile,source:'environment'});
-          return withExecutionPolicyChoice(executionPolicy,()=>new ChatEngine({
+          const executionPolicy=constrainNewSessionPolicy({profile:candidate.execution_profile,source:'explicit'});
+          const engine=withExecutionPolicyChoice(executionPolicy,()=>new ChatEngine({
             task: descriptor.task ?? `Session ${descriptor.threadId}`,
             projectRoot: descriptor.projectRoot,
             runtimeMode: 'direct',
@@ -433,6 +444,10 @@ export function startPrivateWorker({ input, output, host: injectedHost, onEngine
             runId: descriptor.threadId,
             ...(hasRetainedAuthority ? { resumeExisting: true } : {}),
           }));
+          // A new worker-created session must publish the same durable policy a
+          // CLI-created session does, so a later resume preserves its boundary.
+          if (!hasRetainedAuthority) recordNewSessionPolicy(engine);
+          return engine;
         });
         host.engineFactory = (descriptor) => {
           const engine = buildEngine(descriptor);
@@ -471,7 +486,14 @@ export function startPrivateWorker({ input, output, host: injectedHost, onEngine
           };
         }
         respond(id, { protocol_version: 1, engine_generation: candidate.engine_generation, mode: 'chat' });
-      } catch (error) { authority = undefined; fail(id, -32602, error instanceof Error ? error.message : 'Invalid worker authority'); }
+      } catch (error) {
+        authority = undefined;
+        if (host && !injectedHost) {
+          try { closeProtocolHostState(host); } catch { /* fail closed */ }
+          host = undefined;
+        }
+        fail(id, -32602, error instanceof Error ? error.message : 'Invalid worker authority');
+      }
       return;
     }
     if (!authority || !host) { fail(id, -32600, 'Initialize the worker first'); return; }
@@ -528,6 +550,7 @@ export function startPrivateWorker({ input, output, host: injectedHost, onEngine
         if (previous) {
           if (previous.hash !== hash) throw new Error('Command id was already used for another message');
           if (previous.turnId !== undefined) { respond(id, { thread_id: thread, turn_id: previous.turnId, replayed: true }); return; }
+          if (previous.rejected) throw new Error('This command id was already rejected; use a new command id to retry');
           throw new Error('Previous submission outcome is unresolved; inspect durable evidence before retrying');
         }
         if (host.activeTurns.size) throw new Error('A worker turn is already active');

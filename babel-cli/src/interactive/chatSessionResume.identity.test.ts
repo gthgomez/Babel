@@ -158,17 +158,25 @@ test('an unknown legacy policy needs a deliberate selection before interactive r
   }
 });
 
-test('interactive resume retains saved Docker policy when the ambient default is host',async()=>{
+test('interactive resume refuses an ambient profile that differs from the saved boundary',async()=>{
   const fixture=withTempRunsDir();const target=mkdtempSync(join(tmpdir(),'babel-resume-docker-'));
   const ctx=makeResumeCtx(makeTarget(target));const id='saved-docker-policy';
   try{
     writeTranscript(fixture.root,id,'fixture history');
     process.env['BABEL_EXECUTION_PROFILE']='host_native';
+    const refused=await resumeChatSession(ctx,id,{confirmUnknownIdentity:true});
+    assert.equal(refused.ok,false);
+    assert.match(refused.message,/differs from the saved/i);
+    assert.equal(process.env['BABEL_EXECUTION_PROFILE'],'host_native');
+    assert.equal(ctx.chatEngine,undefined);
+    process.env['BABEL_EXECUTION_PROFILE']='safe_repo';
     const outcome=await resumeChatSession(ctx,id,{confirmUnknownIdentity:true});
     assert.equal(outcome.ok,true);
-    assert.equal(ctx.chatEngine?.getExecutionPolicy()?.profile,'safe_repo');
-    assert.equal(ctx.chatEngine?.getExecutionPolicy()?.expectedBoundary,'docker');
-    assert.equal(process.env['BABEL_EXECUTION_PROFILE'],'host_native');
+    const resumed=ctx.chatEngine as unknown as {getExecutionPolicy?:()=>{profile?:string;expectedBoundary?:string}}|undefined;
+    assert.ok(resumed);
+    assert.equal(resumed.getExecutionPolicy?.().profile,'safe_repo');
+    assert.equal(resumed.getExecutionPolicy?.().expectedBoundary,'docker');
+    assert.equal(process.env['BABEL_EXECUTION_PROFILE'],'safe_repo');
   }finally{ctx.chatEngine?.closeAdmissionStore();fixture.cleanup();rmSync(target,{recursive:true,force:true});}
 });
 

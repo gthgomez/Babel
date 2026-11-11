@@ -15,6 +15,7 @@ export function resolveRunScope(options:{
   if(options.executionScope!=='conversation')throw new Error('Invalid execution scope. Use project or conversation.')
   if(!['chat','chat-headless'].includes(options.mode??'chat')||options.useChatPipeline||env['BABEL_LITE_WORKER_CHAIN']==='1')throw new Error('Conversation scope requires the ChatEngine chat controller.')
   if(options.project!==undefined||options.projectRoot!==undefined||options.sessionId!==undefined||options.sessionStartPath!==undefined||options.localLearningRoot!==undefined||options.orchestrator!==undefined)throw new Error('Conversation scope cannot be combined with project or pipeline bindings.')
-  if(options.executionProfile!==undefined&&!['safe_repo','host_native'].includes(normalizeExecutionProfile(options.executionProfile)??''))throw new Error('Conversation scope does not admit that execution profile.')
+  const configuredProfile=options.executionProfile??process.env['BABEL_EXECUTION_PROFILE']
+  if(configuredProfile!==undefined&&!['safe_repo','host_native'].includes(normalizeExecutionProfile(configuredProfile)??''))throw new Error('Conversation scope does not admit that execution profile.')
   return 'conversation'
 }

@@ -40,8 +40,11 @@ test('durable policy metadata is versioned and corrupt records fail closed', () 
 
 test('resume preserves the recorded boundary and requires an explicit choice when it is unknown', () => {
   const saved = { version: 1, profile: 'safe_repo', source: 'default', effectiveBoundary: 'docker' } as const;
-  const choice = resolveExecutionPolicyChoice({ resume: true, persisted: saved, environmentProfile: 'host_native', defaultProfile: 'host_native' });
+  const choice = resolveExecutionPolicyChoice({ resume: true, persisted: saved, environmentProfile: 'safe_repo', defaultProfile: 'host_native' });
   assert.deepEqual(choice, { profile: 'safe_repo', source: 'persisted', expectedBoundary: 'docker' });
+  // A different ambient profile must not silently replace the recorded
+  // boundary, even when the ambient profile is less restrictive.
+  assert.throws(() => resolveExecutionPolicyChoice({ resume: true, persisted: saved, environmentProfile: 'host_native' }), /differs from the saved/i);
   assert.throws(() => resolveExecutionPolicyChoice({ resume: true, environmentProfile: 'host_native' }), /explicit execution profile/i);
   assert.throws(() => resolveExecutionPolicyChoice({ resume: true, persisted: { ...saved, profile: 'safe_reop' } }), /invalid.*policy/i);
   assert.throws(() => resolveExecutionPolicyChoice({ resume: true, explicitProfile:'host_native', persisted:{ ...saved, profile:'safe_reop' } }), /invalid.*policy/i);
