@@ -541,8 +541,7 @@ function grantSegmentHasUnsupportedCondition(segment: string): boolean {
   if (/\b(?:but\s+not|instead\s+of|except(?:\s+for)?|unless|rather\s+than)\b/i.test(segment)) return true;
   if (/\b(?:do\s+not|don't|never)\s+edit\b/i.test(segment) && /\btests?\//i.test(segment)) return true;
   if (/\bnot\s+tests?\//i.test(segment)) return true;
-  if (/\bif\s+you\b/i.test(segment) && /\btests?\//i.test(segment)) return true;
-  if (/\bwhen\s+you\b/i.test(segment) && /\btests?\//i.test(segment)) return true;
+  if (/\b(?:if|when|only\s+if|provided\s+that)\b/i.test(segment) && /\btests?\//i.test(segment)) return true;
   return false;
 }
 

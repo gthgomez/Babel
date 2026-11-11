@@ -730,6 +730,7 @@ describe('symbol coverage + localization gate', () => {
     for (const conditioned of [
       'Fix parseExpression. You may edit test/allowed.test.mjs but not test/forbidden.test.mjs.',
       'Fix parseExpression. You may edit test/allowed.test.mjs instead of test/forbidden.test.mjs.',
+      'You may edit test/parser.test.mjs if CI passes.',
     ]) {
       assert.equal(collectPermittedAuxiliaryTestPaths(conditioned).size, 0, conditioned);
       for (const touched of [['test/allowed.test.mjs'], ['test/forbidden.test.mjs']]) {
