@@ -20,8 +20,9 @@ import {resolveOfficialCli,bundledEnvironment,resolveDesktopProfile} from './run
 import {diagnoseRuntime} from './diagnostics.mjs';
 import {applySandboxEnvironment,configureSandboxImage,packagedSandboxPrerequisiteMessage,probeDockerInstallation,sandboxIpcFailureMessage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
 import {configureCredentialProtection,hasProviderCredential,saveProviderCredential,providerCredentialStatus,removeProviderCredential,migrateProviderCredential} from './credentials.mjs';
-import {saveDesktopProviderRoute} from './provider-route-save.mjs';
+import {saveDesktopProviderRoute,reconcileProviderRoute} from './provider-route-save.mjs';
 import {assertCredentialEngineCapability} from './credential-engine.mjs';
+import {checkConnection,reconcileAuthentication} from './provider-auth.mjs';
 import {applyProjectCredentialScope,applySelectedModelEnvironment,applyOwnedCliCredentialEnvironment} from './childEnv.mjs';
 import {resolveEngineIdentity} from './identity.mjs';
 import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,precheckSafety,resolveNpmInvocation,runDevelopmentUpdate,runDevelopmentRebuild,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
@@ -86,7 +87,19 @@ async function ownedCliEnvironment(){
   return runtimeEnvironment({credentials:true});
 }
 let diagnostics=null;
+let diagnosticsInFlight=null;
 let dockerInstallationCache;
+/**
+ * Reuse an in-flight doctor instead of spawning another 30s subprocess for the
+ * same execution profile. Only the pending result is shared; the completed
+ * report is still cleared whenever credentials, route, trust or sandbox change.
+ */
+function sharedDiagnostics(runtime,options,executionProfile){
+  if(diagnosticsInFlight?.key===executionProfile)return diagnosticsInFlight.promise;
+  const promise=diagnoseRuntime(runtime,options).finally(()=>{if(diagnosticsInFlight?.promise===promise)diagnosticsInFlight=null;});
+  diagnosticsInFlight={key:executionProfile,promise};
+  return promise;
+}
 async function linuxDockerInstallation(){
   if(process.platform!=='linux')return null;
   if(dockerInstallationCache===undefined)dockerInstallationCache=await probeDockerInstallation();
@@ -184,15 +197,15 @@ function activeCliEntry(){
 }
 function cliPackageDir(){const entry=activeCliEntry();return entry?dirname(dirname(entry)):null;}
 function cliCheckoutRoot(){const dir=cliPackageDir();return dir?dirname(dir):null;}
-async function getInfo(){
+async function getInfo({passive=false}={}){
   const official=officialRuntime();
   const cliEntry=activeCliEntry();
   let ready=false;
   let scope={scope:preferences.projectRoot?'project':'conversation',trusted:false,identity:null,reason:null};
   try{scope=await projectAuthority.inspect(preferences.projectRoot);}catch{scope.reason='Project identity is unavailable. Select and verify the project again.';}
   try{ready=Boolean(cliEntry&&(!preferences.projectRoot||scope.trusted)&&(await stat(cliEntry)).isFile());}catch{}
-  if(app.isPackaged&&preferences.projectRoot&&!diagnostics){
-    try{diagnostics=await diagnoseRuntime(official,{env:await ownedCliEnvironment(),cwd:app.getPath('userData'),executionProfile:EXECUTION_PROFILE});}
+  if(app.isPackaged&&preferences.projectRoot&&!diagnostics&&passive!==true){
+    try{diagnostics=await sharedDiagnostics(official,{env:await ownedCliEnvironment(),cwd:app.getPath('userData'),executionProfile:EXECUTION_PROFILE},EXECUTION_PROFILE);}
     catch{diagnostics={ready:false,provider:'unavailable',error:'Credential storage or project authority is unavailable. Review provider settings and project trust.'};}
   }
   const engine=resolveEngineIdentity({
@@ -234,6 +247,15 @@ async function getInfo(){
   };
 }
 const credentialBindings=new Map();
+/**
+ * Ephemeral, main-process-only authentication observations. Keyed by provider,
+ * scope and profile; each carries the credential revision it measured so a stale
+ * result is never applied to a newer key. Never persisted, never sent to disk.
+ */
+const credentialAuthObservations=new Map();
+function authObservationKey({provider,scope,configDirectory,projectRoot}){
+  return [provider,scope,configDirectory??'',scope==='project'?projectRoot??'':''].join('\u0000');
+}
 async function credentialRequestContext(options,bound=false){
   if(!options||typeof options!=='object'||!['private','project'].includes(options.scope))throw new Error('Select an explicit credential destination.');
   const context={provider:options.provider,scope:options.scope,configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,projectRoot:preferences.projectRoot};
@@ -319,7 +341,20 @@ async function start(){
   protocol.handle('babel',request=>isAppUrl(request.url)?new Response(html,{headers:{'Content-Type':'text/html; charset=utf-8','X-Content-Type-Options':'nosniff'}}):new Response('Not found',{status:404}));
   session.defaultSession.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
   session.defaultSession.setPermissionCheckHandler(()=>false);
-  handle('babel:get-info',getInfo);
+  handle('babel:get-info',()=>getInfo());
+  handle('babel:check-connection',async options=>{
+    if(!options||typeof options!=='object'||!['private','project'].includes(options.scope))throw new Error('Select an explicit credential destination.');
+    // Only the native authority decides which credential and endpoint are used.
+    return withConnectionChange(async()=>{
+      const context=await credentialRequestContext({provider:options.provider,scope:options.scope});
+      const result=await checkConnection(context);
+      // Remember the observation only against the revision it actually measured.
+      credentialAuthObservations.set(authObservationKey(context),{
+        state:result.state,reason:result.reason,checkedAt:result.checkedAt,observedRevision:result.observedRevision,
+      });
+      return result;
+    });
+  });
   handle('babel:copy-text',text=>writeClipboardText(clipboard,text));
   composerDrafts=new ComposerDraftStore(app.getPath('userData'));
   handle('babel:read-composer-drafts',()=>composerDrafts.read(composerDraftScope(preferences.projectRoot)));
@@ -454,30 +489,66 @@ async function start(){
     const status=providerCredentialStatus(context);
     const binding=randomUUID();
     credentialBindings.clear();credentialBindings.set(binding,{...context,generation:projectAuthority.generation});
-    return {...status,binding};
+    // A stored key is not an authenticated key: report the observation only when
+    // it belongs to this exact credential identity.
+    const observed=credentialAuthObservations.get(authObservationKey(context));
+    return {...status,binding,authentication:reconcileAuthentication(observed,status.credentialIdentity)};
   });
   handle('babel:remove-provider-credential',async options=>{
     return withConnectionChange(async()=>{
       const context=await credentialRequestContext(options,true);
-      const result=removeProviderCredential(context);diagnostics=null;await retireResidentWorker();return result;
+      const result=removeProviderCredential(context);diagnostics=null;await retireResidentWorker();
+      credentialAuthObservations.delete(authObservationKey(context));
+      return result;
     });
   });
   handle('babel:migrate-provider-credential',async options=>{
     return withConnectionChange(async()=>{
       const context=await credentialRequestContext({...options,scope:'private'},true);
       if(options?.confirm!==true)throw new Error('Confirm retention of the legacy plaintext recovery file.');
-      const result=migrateProviderCredential({...context,confirm:true});diagnostics=null;await retireResidentWorker();return result;
+      const result=migrateProviderCredential({...context,confirm:true});diagnostics=null;await retireResidentWorker();
+      credentialAuthObservations.delete(authObservationKey(context));
+      return result;
     });
   });
   handle('babel:save-provider-route',async options=>{
     return withConnectionChange(async()=>{
-    if(options?.apiKey || options?.scope==='project')await credentialRequestContext(options,Boolean(options?.apiKey));
-    const result=await saveDesktopProviderRoute({
-      options, configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR, preferences, savePreferences,
-    });
-    diagnostics=null;
-    await retireResidentWorker();
-    return result;
+    // Structured envelopes only: a thrown Electron error loses custom fields, so
+    // every anticipated outcome is returned as serializable data.
+    try{
+      if(options?.apiKey || options?.scope==='project')await credentialRequestContext(options,Boolean(options?.apiKey));
+      const result=await saveDesktopProviderRoute({
+        options, configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR, preferences, savePreferences,
+        checkConnection:Boolean(options?.checkAfterSave)
+          ? ({provider,scope})=>checkConnection({provider,scope,configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,projectRoot:preferences.projectRoot})
+          : null,
+      });
+      diagnostics=null;
+      if(result.ok&&result.credentialChanged){
+        await retireResidentWorker();
+        credentialAuthObservations.delete(authObservationKey(await credentialRequestContext({provider:options?.provider,scope:options?.scope??'private'})));
+      }
+      return result;
+    }catch(error){
+      // An unanticipated rejection may have occurred after a write. Re-read the
+      // real state instead of assuming nothing persisted.
+      const observed=reconcileProviderRoute({
+        configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,
+        provider:options?.provider, scope:options?.scope==='project'?'project':'private',
+        projectRoot:preferences.projectRoot, preferences,
+      });
+      return {
+        ok:false,
+        code:'request_rejected',
+        safeMessage:typeof error?.message==='string'&&error.message?error.message:'The provider save was rejected.',
+        retryable:false,
+        persisted:{credential:Boolean(observed.credential?.present),modelPolicy:'unknown',route:'unknown',preferences:'unknown'},
+        credentialChanged:false,
+        storage:observed.credential?.storage??'unknown',
+        revision:observed.credential?.revision??null,
+        recoveryAction:'Review the selected provider, model and credential destination, then retry.',
+      };
+    }
     });
   });
   handle('babel:save-provider-credential',async options=>{
@@ -637,9 +708,15 @@ async function start(){
     const effectiveProfile=sessionPolicy.profile;
     const resumeProfileSelection=Boolean(request.sessionId)&&!sessionPolicy.recorded;
     if(!conversationOnly)await projectAuthority.admit(preferences.projectRoot);
-    if(!(await getInfo()).ready)throw new Error('The selected Babel CLI or project is no longer available');
+    // Read-only admission check: the run owns its one diagnostic decision below,
+    // so admission never triggers an extra capability probe or doctor child.
+    if(!(await getInfo({passive:true})).ready)throw new Error('The selected Babel CLI or project is no longer available');
+    // Exactly one credential resolution per run. The doctor and the child must
+    // observe the same credential, and a stale environment must never be reused
+    // across a credential change.
+    const runEnvironment=await ownedCliEnvironment();
     if(app.isPackaged&&!conversationOnly){
-      diagnostics=await diagnoseRuntime(officialRuntime(),{env:await ownedCliEnvironment(),cwd:app.getPath('userData'),executionProfile:effectiveProfile});
+      diagnostics=await sharedDiagnostics(officialRuntime(),{env:runEnvironment,cwd:app.getPath('userData'),executionProfile:effectiveProfile},effectiveProfile);
       if(!diagnostics.ready)throw new Error(packagedSandboxPrerequisiteMessage());
     }
     // Validate native-bound scope and route before spawning; no arbitrary flags.
@@ -664,7 +741,7 @@ async function start(){
       projectRoot:runAuthority?.identity.root??preferences.projectRoot,
     });
     buildRunArgs(cliEntry, preferences.projectRoot, runRequest);
-    const childEnvironment=applySelectedModelEnvironment(await ownedCliEnvironment(),selectedModel);
+    const childEnvironment=applySelectedModelEnvironment(runEnvironment,selectedModel);
     if(admissionEpoch!==runAdmissionEpoch){runAuthority=null;return {started:false};}
     const bridge=remoteBridge;
     const remoteEpoch=remoteAdmissionEpoch;

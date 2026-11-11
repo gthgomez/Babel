@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('babelDesktop',Object.freeze({
   refreshDiagnostics:()=>ipcRenderer.invoke('babel:refresh-diagnostics'),
   configureSandbox:options=>ipcRenderer.invoke('babel:configure-sandbox',options),
   providerCredentialStatus:options=>ipcRenderer.invoke('babel:provider-credential-status',options),
+  checkConnection:options=>ipcRenderer.invoke('babel:check-connection',options),
   removeProviderCredential:options=>ipcRenderer.invoke('babel:remove-provider-credential',options),
   migrateProviderCredential:options=>ipcRenderer.invoke('babel:migrate-provider-credential',options),
   saveProviderCredential:options=>ipcRenderer.invoke('babel:save-provider-credential',options),

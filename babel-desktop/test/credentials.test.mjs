@@ -32,7 +32,13 @@ test('private profile is the default; the target project is never touched',()=>{
     const config=join(root,'private','config');
     const project=makeGitProject(root);
     const result=saveProviderCredential({provider:'deepseek',apiKey:FIXTURE_VALUE,configDirectory:config,projectRoot:project});
-    assert.deepEqual(result,{provider:'deepseek',scope:'private',configured:true});
+    assert.equal(result.provider,'deepseek');
+    assert.equal(result.scope,'private');
+    assert.equal(result.configured,true);
+    assert.equal(result.present,true);
+    assert.equal(result.storage,'os-protected');
+    assert.equal(result.credentialChanged,true);
+    assert.match(result.revision,/^[a-f0-9-]{16,64}$/);
     assert.equal(readFileSync(join(config,'desktop-credentials.json'),'utf8').includes(FIXTURE_VALUE),false);
     assert.equal(statSync(join(config,'desktop-credentials.json')).mode & 0o777,process.platform==='win32'?statSync(join(config,'desktop-credentials.json')).mode & 0o777:0o600);
     assert.throws(()=>saveProviderCredential({provider:'deepseek',apiKey:FIXTURE_VALUE,configDirectory:config}),/already has a setting|Migrate/);

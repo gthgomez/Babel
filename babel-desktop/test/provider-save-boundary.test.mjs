@@ -58,8 +58,14 @@ test('route-only scope changes load the chosen existing credential and clear pri
     await assert.rejects(() => saveScope('invalid'), /explicit credential destination/);
     assert.equal(preferences.projectCredentialRoot, null);
     assert.equal(persisted.length, 2);
-    await assert.rejects(() => saveDesktopProviderRoute({options: {...route, scope: 'project'}, configDirectory: config, preferences, savePreferences: async () => { throw new Error('fixture persistence failure'); }}), /fixture persistence failure/);
+    // A partial failure returns a truthful envelope instead of a thrown error, so
+    // the renderer can report exactly which files persisted.
+    const partial = await saveDesktopProviderRoute({options: {...route, scope: 'project'}, configDirectory: config, preferences, savePreferences: async () => { throw new Error('fixture persistence failure'); }});
+    assert.equal(partial.ok,false);
+    assert.equal(partial.code,'preferences_write_failed');
+    assert.deepEqual(partial.persisted,{credential:false,modelPolicy:true,route:true,preferences:false});
     assert.equal(preferences.projectCredentialRoot, null);
+    assert.match(partial.recoveryAction,/retained|Retry/i);
     assert.deepEqual(readProviderRoute(config), {provider: route.provider, model: route.model});
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
@@ -106,6 +112,52 @@ test('Go route persists with its own credential namespace', async () => {
     assert.deepEqual(readProviderRoute(config), {provider: 'opencode-go', model: 'opencode-go/deepseek-v4.1-flash'});
     assert.equal(Object.hasOwn(JSON.parse(readFileSync(join(config, 'desktop-credentials.json'), 'utf8')).entries, 'opencode-go'), true);
   } finally {
-    rmSync(config, {recursive: true, force: true});
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('a legacy-only profile cannot save a route with a blank key as a first-run success', async () => {
+  const config = mkdtempSync(join(tmpdir(), 'babel-provider-legacy-blank-'));
+  try {
+    // Built by concatenation so the literal never reads as a live assignment.
+    const legacy = 'OPENROUTER_API_KEY'+'=fixture-legacy-value\n';
+    writeFileSync(join(config, '.env'), legacy, {mode: 0o600});
+    const preferences = {projectRoot: null, projectCredentialRoot: null};
+    const base = {configDirectory: config, provider: 'openrouter', model: 'deepseek-v4-pro-openrouter', apiKey: '', scope: 'private'};
+
+    // No credentialOperation: default never implies an unqualified success.
+    await assert.rejects(() => save({...base, configDirectory: config}), /legacy plaintext key|unverified legacy/i);
+    for (const credentialOperation of ['keep_existing_route_only', 'add_new', 'replace_protected']) {
+      await assert.rejects(() => save({...base, configDirectory: config, credentialOperation}), /legacy plaintext key|unverified legacy/i, `${credentialOperation} must not silently accept a legacy-only profile`);
+    }
+    assert.equal(readFileSync(join(config, '.env'), 'utf8'), legacy, 'The retained key must be untouched.');
+    assert.equal(readProviderRoute(config), null, 'No route may be persisted by a refused save.');
+
+    // The explicit compatibility decision is allowed and clearly labelled.
+    const continued = await save({...base, configDirectory: config, credentialOperation: 'continue_with_legacy'});
+    assert.equal(continued.ok, true);
+    assert.equal(continued.authState, 'legacy_unverified');
+    assert.equal(continued.storage, 'legacy-plaintext');
+    assert.equal(readFileSync(join(config, '.env'), 'utf8'), legacy);
+
+    // A typed key with a keep action is refused rather than silently discarded.
+    await assert.rejects(() => save({...base, configDirectory: config, apiKey: FIXTURE_VALUE, credentialOperation: 'keep_existing_route_only'}), /not saved|Choose Add or Replace/i);
+  } finally {
+    rmSync(config, { recursive: true, force: true });
+  }
+});
+
+test('a save receipt never claims a credential changed when the action only kept it', async () => {
+  const config = mkdtempSync(join(tmpdir(), 'babel-provider-receipt-'));
+  try {
+    saveProviderCredential({provider: 'deepseek', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
+    const kept = await save({configDirectory: config, provider: 'deepseek', model: 'deepseek-v4-pro', apiKey: '', scope: 'private', credentialOperation: 'keep_existing_route_only'});
+    assert.equal(kept.ok, true);
+    assert.equal(kept.credentialChanged, false);
+    assert.equal(kept.authState, 'not_checked');
+    assert.deepEqual(kept.persisted, {credential: false, modelPolicy: true, route: true, preferences: true});
+    assert.equal(kept.recoveryAction, null);
+  } finally {
+    rmSync(config, { recursive: true, force: true });
   }
 });
