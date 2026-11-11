@@ -11,7 +11,7 @@ Implement the supplied BabelTuiNorthStar.png, not a redesign. The accompanying m
 5. Exercise parser, native adapter against a local fixture subprocess, and UI in Chromium at reference and laptop viewports. Produce an offline, self-contained HTML preview and a source archive.
 
 ## Important integration boundaries found in current source
-- `babel run --mode chat --project-root --output-format stream-json --execution-profile safe_repo` is the desktop child. It does not pass `--read-only` or `--yes`.
+- `babel run --mode chat --project-root --output-format stream-json --execution-profile <effective>` is the desktop child, where `<effective>` is `host_native` for a new project chat and the resumed session's recorded profile otherwise. It does not pass `--read-only` or `--yes`.
 - The chat path forwards answer chunks, thoughts, tool rows, file changes, and cancellation onto stream-json. Plan and deep still use the pipeline event stream. Do not invent events the CLI did not emit.
 - `--resume-chat <id>` restores a persisted Babel chat transcript for a later chat turn. `--session-id` remains the Local Mode evidence flag.
 - With `BABEL_DESKTOP_IPC=1`, one stdin JSON line carries `allow_once`, `deny`, or `cancel`. Cancel calls the chat engine cancel, and the desktop process-tree kill is the backstop.

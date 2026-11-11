@@ -49,7 +49,7 @@ Renderer: sandbox enabled, Node integration disabled, context isolation enabled,
 
 Native: user-selected trusted CLI, project trust and scoped CLI admission, one child, no shell, no automatic approvals. Stderr is bounded and not sent to the renderer because it may contain sensitive provider diagnostics. Common credential paths and binary files are excluded from the viewer; all contents shown are escaped. The viewer is not a DLP scanner and cannot prove an ordinary source file contains no secrets. Folder results are limited to 300 entries; file contents to 256 KiB; CLI stream JSONL lines to 1 MiB; stdout display to 24 MiB. Retained archive history is paged separately.
 
-These controls do not establish that an arbitrary selected executable is safe. The CLI retains the user's existing permissions. `safe_repo` is Babel's guarded profile, not an OS sandbox.
+These controls do not establish that an arbitrary selected executable is safe. The CLI retains the user's existing permissions. New Desktop project chats default to `host_native`, which runs eligible commands with the OS user's authority and is not an OS sandbox; an explicit or recorded `safe_repo` boundary remains Docker-backed.
 
 ## Required before a production Desktop claim
 
