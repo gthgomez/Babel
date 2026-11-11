@@ -17,8 +17,25 @@ type Packet = Record<string, any>;
 
 const priorOperatorApproval = process.env['BABEL_REMOTE_OPERATOR_APPROVAL'];
 const priorDesktopProvider = process.env['BABEL_DESKTOP_PROVIDER'];
-before(() => { process.env['BABEL_REMOTE_OPERATOR_APPROVAL'] = '1'; process.env['BABEL_DESKTOP_PROVIDER'] = 'ollama'; });
+const CREDENTIAL_NAMES = [
+  'OPENROUTER_API_KEY', 'DEEPINFRA_API_KEY', 'DEEPSEEK_API_KEY', 'COMMAND_CODE_API_KEY',
+  'BABEL_OPENCODE_GO_API_KEY', 'BABEL_COMPACTION_API_KEY', 'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GROQ_API_KEY', 'OPENCODE_API_KEY',
+  'BABEL_COMPATIBLE_API_KEY', 'DEEPINFRA_TOKEN',
+] as const;
+const priorCredentials = CREDENTIAL_NAMES.map((name) => [name, process.env[name]] as const);
+before(() => {
+  // The worker must start without provider credentials. Never depend on the
+  // ambient shell; isolate this fixture even when a developer has keys set.
+  for (const name of CREDENTIAL_NAMES) delete process.env[name];
+  process.env['BABEL_REMOTE_OPERATOR_APPROVAL'] = '1';
+  process.env['BABEL_DESKTOP_PROVIDER'] = 'ollama';
+});
 after(() => {
+  for (const [name, value] of priorCredentials) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   if (priorOperatorApproval === undefined) delete process.env['BABEL_REMOTE_OPERATOR_APPROVAL'];
   else process.env['BABEL_REMOTE_OPERATOR_APPROVAL'] = priorOperatorApproval;
   if (priorDesktopProvider === undefined) delete process.env['BABEL_DESKTOP_PROVIDER'];
