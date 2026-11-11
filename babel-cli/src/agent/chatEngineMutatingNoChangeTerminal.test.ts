@@ -565,15 +565,9 @@ test('green npm test does not clear an separate unmet behavioral goal', () => {
   }), false)
 })
 
-test('grounded file read can substantiate a simple fix-file meaning criterion for no-change', () => {
+test('word-presence in read detail cannot close a meaning criterion without admissible verifier evidence', () => {
   const task = 'Fix settings.txt so mode is safe.'
-  assert.equal(resolveAcceptedReadOnlyTerminal({
-    effectiveOperation: 'MUTATING',
-    ambientReadOnly: false,
-    hasAnyWrites: false,
-    toolCallLog: [
-      { tool: 'read_file', target: 'settings.txt', detail: 'mode=safe\n', exit_code: 0 },
-    ],
+  assert.equal(mutatingInspectionLeavesRequiredCriteriaUnmet({
     criterionCompletion: {
       currentRequest: () => ({
         context: { schema_version: 1, kind: 'criterion-completion:v1' },
@@ -600,12 +594,20 @@ test('grounded file read can substantiate a simple fix-file meaning criterion fo
       }],
       context: { schema_version: 1, kind: 'criterion-completion:v1' },
     } as never,
+    toolCallLog: [
+      {
+        tool: 'read_file',
+        target: 'settings.txt',
+        detail: 'mode=unsafe\n# mode=safe is not implemented\n',
+        exit_code: 0,
+      },
+    ],
     buildCriterionRefresh: () => ({
       criterionChatReceipts: [],
       candidate_sha: null,
       has_mutation: false,
     }),
-  }), true)
+  }), true, 'substring "safe" in read text must not satisfy mode-is-safe obligation')
 })
 
 test('meaning-only obligations cannot satisfy terminal on inspection alone', () => {

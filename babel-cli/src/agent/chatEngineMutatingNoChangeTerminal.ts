@@ -54,46 +54,6 @@ function receiptStructuredArgvConsistent(receipt: BoundChatVerifierReceipt): boo
   }
 }
 
-const MEANING_INSPECTION_FILE_RE =
-  /\b([\w./-]+\.(?:txt|ts|tsx|js|mjs|cjs|json|csv|md|ya?ml))\b/i;
-
-/** Conservative: a grounded read of the task-named file shows the "so …" / "include …" clause. */
-function inspectionSubstantiatesMeaningCriterion(
-  item: AcceptanceRequirementV1,
-  toolCallLog: readonly GateToolLogEntry[],
-): boolean {
-  const description = item.description.trim();
-  const fileMatch = description.match(MEANING_INSPECTION_FILE_RE);
-  if (!fileMatch?.[1]) return false;
-  const file = fileMatch[1];
-  const read = toolCallLog.find((entry) => (
-    (entry.tool === 'read_file' || entry.tool === 'read_range')
-    && (entry.exit_code ?? 1) === 0
-    && !entry.error
-    && (Boolean(entry.detail?.trim()) || Boolean(entry.stdout?.trim()))
-    && (entry.target === file || entry.target?.replace(/\\/g, '/').endsWith(`/${file}`))
-  ));
-  if (!read) return false;
-  const rawContent = (
-    typeof read.stdout === 'string' && read.stdout.trim().length > 0
-      ? read.stdout
-      : read.detail
-  );
-  if (!rawContent?.trim()) return false;
-  const detail = rawContent.toLowerCase();
-  const soMatch = description.match(/\bso\s+(.+?)(?:\.|$)/is);
-  if (soMatch?.[1]) {
-    const tokens = soMatch[1].toLowerCase().split(/[^a-z0-9_=]+/).filter((t) => t.length >= 3);
-    return tokens.length > 0 && tokens.every((token) => detail.includes(token));
-  }
-  const includeMatch = description.match(/\binclude\s+(.+?)(?:\.|$)/is);
-  if (includeMatch?.[1]) {
-    const tokens = includeMatch[1].toLowerCase().split(/[^a-z0-9_=]+/).filter((t) => t.length >= 3);
-    return tokens.length > 0 && tokens.every((token) => detail.includes(token));
-  }
-  return false;
-}
-
 function isMeaningBoundAcceptance(item: AcceptanceRequirementV1): boolean {
   if (commandHintFromDescription(item.description)) return false;
   return item.verification_strategy === 'meaning'
@@ -174,9 +134,8 @@ function requiredCriterionStillOpen(input: {
   const listedMissing = input.missingRequired.includes(input.item.id);
 
   if (isMeaningBoundAcceptance(input.item)) {
-    if (!(advisoryOpen || listedMissing)) return false;
-    if (inspectionSubstantiatesMeaningCriterion(input.item, input.toolCallLog)) return false;
-    return true;
+    if (advisoryOpen || listedMissing) return true;
+    return false;
   }
 
   if (isCommandBoundAcceptance(input.item)) {

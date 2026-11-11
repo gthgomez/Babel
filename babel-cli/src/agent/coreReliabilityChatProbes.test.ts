@@ -904,3 +904,202 @@ test('chat probe (3) positive: already-correct CSV with relevant bound verifier 
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+const SETTINGS_VERIFIER_MJS = [
+  "import assert from 'node:assert/strict';",
+  "import { readFileSync } from 'node:fs';",
+  "const text = readFileSync('settings.txt', 'utf8');",
+  "assert.match(text, /^mode=safe\\s*$/m);",
+  "assert.doesNotMatch(text, /^mode=unsafe/m);",
+].join('\n') + '\n'
+
+function writeSettingsProbeFixture(root: string, settingsBytes: string): string {
+  const bound = 'npm run verify'
+  writeFileSync(join(root, 'settings.txt'), settingsBytes)
+  writeFileSync(join(root, 'verify.mjs'), SETTINGS_VERIFIER_MJS)
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name: 'settings-probe-fixture',
+    private: true,
+    type: 'module',
+    scripts: { verify: 'node verify.mjs' },
+  }))
+  initGitFixture(root)
+  return bound
+}
+
+test('chat probe (inspection authority) negative: mode=unsafe plus safe comment cannot NO_CHANGE on read alone', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-inspect-unsafe-'))
+  try {
+    const bound = writeSettingsProbeFixture(root, 'mode=unsafe\n# mode=safe is not implemented\n')
+    const task = [
+      'Fix settings.txt so mode is safe.',
+      'Requirements:',
+      `- \`${bound}\` must pass.`,
+    ].join('\n')
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'settings.txt' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'Read settings.txt; the comment says mode=safe so no edit is needed.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    assert.equal(
+      (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string }> })
+        .toolCallLog.some((e) => e.tool === 'run_command' && e.target === bound),
+      false,
+      'bound verifier must not be satisfied by inspection prose alone',
+    )
+    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'substring-safe read cannot prove mode=safe')
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('chat probe (inspection authority) negative: misleading comment cannot NO_CHANGE without green bound verifier', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-inspect-comment-'))
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true })
+    writeFileSync(join(root, 'src', 'parser.js'), [
+      '// parseSum(2, 3) returns 5 — verified',
+      'export function parseSum(a, b) { return 0; }',
+      '',
+    ].join('\n'))
+    writeFileSync(join(root, 'check.mjs'), [
+      'import assert from "node:assert/strict";',
+      'import { parseSum } from "./src/parser.js";',
+      'assert.equal(parseSum(2, 3), 5);',
+    ].join('\n') + '\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', private: true }))
+    initGitFixture(root)
+    const bound = 'node check.mjs'
+    const task = [
+      'Fix parser.js so parseSum(2, 3) returns 5.',
+      'Requirements:',
+      `- \`${bound}\` must pass.`,
+    ].join('\n')
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'src/parser.js' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'The comment documents parseSum(2, 3) returns 5; implementation already correct.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'comment text is not admissible criterion proof')
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('chat probe (inspection authority) negative: wrong numeric implementation cannot NO_CHANGE without verifier', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-inspect-wrong-sum-'))
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true })
+    writeFileSync(join(root, 'src', 'parser.js'), 'export function parseSum(a, b) { return a - b; }\n')
+    writeFileSync(join(root, 'check.mjs'), [
+      'import assert from "node:assert/strict";',
+      'import { parseSum } from "./src/parser.js";',
+      'assert.equal(parseSum(2, 3), 5);',
+    ].join('\n') + '\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', private: true }))
+    initGitFixture(root)
+    const bound = 'node check.mjs'
+    const task = [
+      'Fix parser.js so parseSum(2, 3) returns 5.',
+      'Requirements:',
+      `- \`${bound}\` must pass.`,
+    ].join('\n')
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'src/parser.js' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'parseSum is present in source; no change required.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'identifier presence does not prove numeric behavior')
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('chat probe (inspection authority) partial: semantic fix goal with green npm verify stays UNVERIFIED_PATCH', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-inspect-settings-partial-'))
+  try {
+    const bound = writeSettingsProbeFixture(root, 'mode=safe\n')
+    const task = [
+      'Fix settings.txt so mode is safe.',
+      'Requirements:',
+      `- \`${bound}\` must pass.`,
+    ].join('\n')
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'settings.txt' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: bound } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'settings already safe; npm run verify passed.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    const verify = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
+      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === bound)
+    assert.equal(verify?.exit_code, 0)
+    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED',
+      'dual semantic+command criteria must not close on command evidence alone')
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+    assert.ok(
+      o.outcome === 'UNVERIFIED_PATCH' || o.outcome === 'BLOCKED_POLICY',
+      `non-certifying dual-obligation terminal (got ${o.outcome})`,
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('chat probe (inspection authority) positive: command-bound verify alone may NO_CHANGE when already correct', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-inspect-settings-pos-'))
+  try {
+    const bound = writeSettingsProbeFixture(root, 'mode=safe\n')
+    const task = [
+      'Requirements:',
+      `- \`${bound}\` must pass.`,
+    ].join('\n')
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'settings.txt' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: bound } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'settings.txt is already safe; npm run verify passed.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    const verify = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
+      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === bound)
+    assert.equal(verify?.exit_code, 0)
+    assert.equal(o.outcome, 'NO_CHANGE_REQUIRED',
+      'frozen command identity with green verify is admissible no-change proof (no parallel meaning shortcut)')
+    assert.equal(readFileSync(join(root, 'settings.txt'), 'utf8'), 'mode=safe\n')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

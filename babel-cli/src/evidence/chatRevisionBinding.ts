@@ -522,9 +522,6 @@ export function toGateToolLog(
     tool: entry.tool,
     target: entry.target ?? '',
     ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
-    ...((entry.tool === 'read_file' || entry.tool === 'read_range') && typeof entry.stdout === 'string'
-      ? { stdout: entry.stdout.slice(0, 4096) }
-      : {}),
     ...(entry.error !== undefined ? { error: entry.error } : {}),
     ...(entry.exit_code !== undefined ? { exit_code: entry.exit_code } : {}),
     ...(entry.verifierExecuted !== undefined ? { verifierExecuted: entry.verifierExecuted } : {}),
