@@ -19,7 +19,9 @@ test(`ordinary CLI ${variant} retains only eligible unverified delivery`, (t) =>
       : variant === 'conditional' ? ' Run npm test if available; otherwise explain why it could not run.'
         : variant === 'combined-quoted' ? ' Run npm test if available. The README says \"Run npm test before completing\".'
         : variant === 'quoted' ? ' The old README says: \"Run npm test before completing\".' : '')
-    const env = fixture.env
+    // This suite exercises the Docker-boundary denial, so pin the isolated
+    // profile explicitly instead of relying on the ordinary host default.
+    const env = { ...fixture.env, BABEL_EXECUTION_PROFILE: 'safe_repo' }
     const evidence = join(fixture.root, 'observed.json')
     const preload = join(fixture.root, 'response.mjs')
     writeFileSync(preload, `import assert from 'node:assert/strict';

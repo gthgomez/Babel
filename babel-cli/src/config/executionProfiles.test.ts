@@ -43,10 +43,11 @@ test('execution profile names normalize common spelling variants', () => {
   assert.equal(normalizeExecutionProfile('nope'), null);
 });
 
-test('ordinary execution defaults to host-native while named profiles retain their boundary', () => {
+test('the generic resolver stays fail-closed while ordinary entry points select host-native explicitly', () => {
   const implicit = resolveExecutionProfile(undefined);
-  assert.equal(implicit.name, 'host_native');
-  assert.equal(implicit.dockerSandbox, false);
+  assert.equal(implicit.name, 'safe_repo');
+  assert.equal(implicit.dockerSandbox, true);
+  assert.equal(resolveExecutionProfile('host_native').dockerSandbox, false);
   assert.equal(resolveExecutionProfile('safe_repo').dockerSandbox, true);
   assert.equal(resolveExecutionProfile('dev_local').dockerSandbox, false);
   assert.ok(getExecutionProfileCommandAdditions('host_native').includes('cargo'));

@@ -182,6 +182,7 @@ export async function executeChatTask(
         task,
         executionPolicy: constrainNewSessionPolicy(resolveExecutionPolicyChoice({
           ...(process.env['BABEL_EXECUTION_PROFILE'] !== undefined ? { environmentProfile: process.env['BABEL_EXECUTION_PROFILE'] } : {}),
+          defaultProfile: 'host_native',
         })),
         projectRoot: target.targetRoot,
         ...(systemContext ? { systemContext } : {}),

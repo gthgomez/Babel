@@ -12,7 +12,7 @@ export const EXECUTION_PROFILE_NAMES = [
 
 export type ExecutionProfileName = (typeof EXECUTION_PROFILE_NAMES)[number];
 
-export const DEFAULT_EXECUTION_PROFILE: ExecutionProfileName = 'host_native';
+export const DEFAULT_EXECUTION_PROFILE: ExecutionProfileName = 'safe_repo';
 
 export interface ExecutionProfileToolPolicy {
   allowedTools: string[];

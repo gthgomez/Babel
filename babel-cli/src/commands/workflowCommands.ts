@@ -203,6 +203,7 @@ function resolveCommandPolicyChoice(explicitProfile: string | undefined): Execut
     return constrainNewSessionPolicy(resolveExecutionPolicyChoice({
       ...(explicitProfile !== undefined ? { explicitProfile } : {}),
       ...(environmentProfile !== undefined ? { environmentProfile } : {}),
+      defaultProfile: 'host_native',
     }));
   } catch { return null; }
 }

@@ -64,10 +64,17 @@ function terminateOwnedWorker(target: ChildProcess, job?: Job, outcome?: RepoMap
   target.unref();
   target.channel?.unref();
 
-  // A broken OS/process handle must not hold provider dispatch forever. Keep
-  // the worker quarantined and do not start a replacement until exit is seen.
+  // A broken OS/process handle must not hold provider dispatch forever. The
+  // exit observation is bounded so shutdown/termination always settles even
+  // when a killed process never reports an exit event.
   const grace = job && outcome ? setTimeout(() => finish(job, outcome), TERMINATION_GRACE_MS) : undefined;
-  const completion = exited.then(() => {
+  const completion = Promise.race([
+    exited.then(() => true),
+    new Promise<boolean>((resolve) => {
+      const bounded = setTimeout(() => resolve(false), TERMINATION_GRACE_MS + 1_000);
+      bounded.ref?.();
+    }),
+  ]).then(() => {
     if (grace) clearTimeout(grace);
     if (job && outcome) finish(job, outcome);
     terminatingJob = undefined;
