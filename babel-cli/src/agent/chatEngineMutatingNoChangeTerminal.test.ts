@@ -110,6 +110,126 @@ test('sole meaning criterion stays open despite informal npm test prose and gree
   }), true)
 })
 
+test('argument-qualified npm run must match full frozen argv for no-change', () => {
+  const requiredCommand = 'npm run test:unit -- --filter critical'
+  const criterionCompletion = {
+    currentRequest: () => ({
+      context: { schema_version: 1, kind: 'criterion-completion:v1' },
+      contract: {
+        frozen: true,
+        acceptance: [{
+          id: 'acceptance:unit',
+          description: `\`${requiredCommand}\` must pass.`,
+          required: true,
+          type: 'unit_test',
+          verification_strategy: 'Run full npm argv.',
+          verification: {
+            kind: 'unit_test',
+            verifier_id: 'verifier:npm',
+            executable_id: 'npm',
+            argv: ['run', 'test:unit', '--', '--filter', 'critical'],
+          },
+        }],
+      },
+      run_id: 'r',
+      project_root: '/tmp',
+    }),
+    refreshPrivateEvidence: () => {},
+    reportAdvisoryEvidence: () => [{
+      requirement_id: 'acceptance:unit',
+      status: 'missing',
+      evidence_class: 'command',
+    }],
+    context: { schema_version: 1, kind: 'criterion-completion:v1' },
+  } as never
+  const buildCriterionRefresh = () => ({
+    criterionChatReceipts: [],
+    candidate_sha: null,
+    has_mutation: false,
+  })
+  const base = {
+    effectiveOperation: 'MUTATING' as const,
+    ambientReadOnly: false,
+    hasAnyWrites: false,
+    criterionCompletion,
+    buildCriterionRefresh,
+  }
+  assert.equal(resolveAcceptedReadOnlyTerminal({
+    ...base,
+    toolCallLog: [
+      { tool: 'read_file', target: 'src/source.js', detail: 'value=2', exit_code: 0 },
+      { tool: 'run_command', target: 'npm run test:unit', exit_code: 0, effect_status: 'confirmed_no_change' as const },
+    ],
+  }), false)
+  assert.equal(resolveAcceptedReadOnlyTerminal({
+    ...base,
+    toolCallLog: [
+      { tool: 'read_file', target: 'src/source.js', detail: 'value=2', exit_code: 0 },
+      { tool: 'run_command', target: requiredCommand, exit_code: 0, effect_status: 'confirmed_no_change' as const },
+    ],
+  }), true)
+})
+
+test('non-npm executable-bound verifier requires full argv identity', () => {
+  const requiredCommand = 'node verify.mjs --mode strict'
+  const criterionCompletion = {
+    currentRequest: () => ({
+      context: { schema_version: 1, kind: 'criterion-completion:v1' },
+      contract: {
+        frozen: true,
+        acceptance: [{
+          id: 'acceptance:verify',
+          description: `\`${requiredCommand}\` must pass.`,
+          required: true,
+          type: 'custom',
+          verification_strategy: 'Run node with mode flag.',
+          verification: {
+            kind: 'custom',
+            verifier_id: 'verifier:node',
+            executable_id: 'node',
+            argv: ['verify.mjs', '--mode', 'strict'],
+          },
+        }],
+      },
+      run_id: 'r',
+      project_root: '/tmp',
+    }),
+    refreshPrivateEvidence: () => {},
+    reportAdvisoryEvidence: () => [{
+      requirement_id: 'acceptance:verify',
+      status: 'missing',
+      evidence_class: 'command',
+    }],
+    context: { schema_version: 1, kind: 'criterion-completion:v1' },
+  } as never
+  const build = () => ({
+    criterionChatReceipts: [],
+    candidate_sha: null,
+    has_mutation: false,
+  })
+  const base = {
+    effectiveOperation: 'MUTATING' as const,
+    ambientReadOnly: false,
+    hasAnyWrites: false,
+    criterionCompletion,
+    buildCriterionRefresh: build,
+  }
+  assert.equal(resolveAcceptedReadOnlyTerminal({
+    ...base,
+    toolCallLog: [
+      { tool: 'read_file', target: 'src/source.js', detail: 'ok', exit_code: 0 },
+      { tool: 'run_command', target: 'node verify.mjs', exit_code: 0, effect_status: 'confirmed_no_change' as const },
+    ],
+  }), false)
+  assert.equal(resolveAcceptedReadOnlyTerminal({
+    ...base,
+    toolCallLog: [
+      { tool: 'read_file', target: 'src/source.js', detail: 'ok', exit_code: 0 },
+      { tool: 'run_command', target: requiredCommand, exit_code: 0, effect_status: 'confirmed_no_change' as const },
+    ],
+  }), true)
+})
+
 test('command-bound green npm test in tool log supports inspection-only no-change', () => {
   assert.equal(resolveAcceptedReadOnlyTerminal({
     effectiveOperation: 'MUTATING',

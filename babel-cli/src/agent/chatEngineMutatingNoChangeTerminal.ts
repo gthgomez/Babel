@@ -12,7 +12,10 @@ import { hasInspectedNoChangeEvidence, type GateToolLogEntry } from './completio
 import type { TaskOperation } from '../config/chatTaskClass.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
 import type { AcceptanceRequirementV1 } from './taskContract.js';
-import { commandsMatchForExecutableBinding } from './taskAcceptanceExecutableBinding.js';
+import {
+  canonicalCommandFromFrozenVerification,
+  commandsMatchForExecutableBinding,
+} from './taskAcceptanceExecutableBinding.js';
 
 function normalizeCommandToken(command: string): string {
   return command.trim().replace(/\s+/g, ' ');
@@ -26,15 +29,8 @@ function commandHintFromDescription(description: string): string | null {
 function declaredAcceptanceCommand(item: AcceptanceRequirementV1): string | null {
   const verification = item.verification;
   if (!verification) return null;
-  if (verification.executable_id === 'npm') {
-    const argv = verification.argv ?? [];
-    if (argv.length === 1 && argv[0] === 'test') return 'npm test';
-    if (argv.length >= 2 && argv[0] === 'run') return normalizeCommandToken(`npm run ${argv[1]}`);
-    return 'npm test';
-  }
-  if (Array.isArray(verification.argv) && verification.argv.length > 0) {
-    return normalizeCommandToken(verification.argv.join(' '));
-  }
+  const fromFrozen = canonicalCommandFromFrozenVerification(verification);
+  if (fromFrozen) return normalizeCommandToken(fromFrozen);
   return commandHintFromDescription(item.description);
 }
 

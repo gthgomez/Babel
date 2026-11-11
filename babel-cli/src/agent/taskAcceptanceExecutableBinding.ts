@@ -1,10 +1,11 @@
-import { sha256Canonical } from '../acceptance/canonical.js'
+import { canonicalJson, sha256Canonical } from '../acceptance/canonical.js'
+import { formatArgvAsCommand, parseCommandArgv } from '../utils/commandArgv.js'
 import {
   explicitNodeTestFileArgs,
   isAuthoritativeVerifierCommand,
   parseStructuredVerifierCommand,
 } from './completionGatePolicy.js'
-import type { AcceptanceRequirementV1, AcceptanceRequirementType } from './taskContract.js'
+import type { AcceptanceRequirementV1, AcceptanceRequirementType, VerificationSpecV1 } from './taskContract.js'
 import type { AcceptanceMeaningSource, TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
 
@@ -48,6 +49,52 @@ function structuredCommandIdentity(command: string): string | null {
     executable: parsed.executable.toLowerCase(),
     argv: parsed.args,
   })
+}
+
+/**
+ * Reconstruct the full frozen verifier command (executable + full argv) for
+ * identity comparison. Returns null when the representation is ambiguous or
+ * cannot round-trip through the structured command parser (fail-closed).
+ */
+export function canonicalCommandFromFrozenVerification(
+  verification: Pick<VerificationSpecV1, 'executable_id' | 'argv'>,
+): string | null {
+  const executable = verification.executable_id?.trim()
+  const argv = verification.argv
+  if (!executable || !argv || argv.length === 0) return null
+  let display: string
+  try {
+    display = formatArgvAsCommand([executable, ...argv])
+  } catch {
+    return null
+  }
+  const parsed = parseStructuredVerifierCommand(display, {
+    authoritySource: 'built_in_runner',
+  })
+  if (!parsed || parsed.executable.toLowerCase() !== executable.toLowerCase()) {
+    return null
+  }
+  try {
+    if (canonicalJson(parsed.args) !== canonicalJson(argv)) return null
+    const reparsedArgv = parseCommandArgv(display)
+    if (canonicalJson(reparsedArgv.slice(1)) !== canonicalJson(argv)) return null
+  } catch {
+    return null
+  }
+  const identity = structuredCommandIdentity(display)
+  const expected = sha256Canonical({ executable: executable.toLowerCase(), argv })
+  if (!identity || identity !== expected) return null
+  return display
+}
+
+/** Whether a trusted host command exactly matches a frozen executable binding. */
+export function frozenVerificationMatchesTrustedCommand(
+  verification: Pick<VerificationSpecV1, 'executable_id' | 'argv'>,
+  trustedCommand: string,
+): boolean {
+  const declared = canonicalCommandFromFrozenVerification(verification)
+  if (!declared) return false
+  return commandsMatchForExecutableBinding(declared, trustedCommand)
 }
 
 /** Trusted and criterion commands must match exact parsed argv (no alias or prefix weakening). */

@@ -559,6 +559,105 @@ test('chat probe (3) negative (explicit npm): wrong behavior plus unrelated gree
   }
 })
 
+test('chat probe (3) negative (argv-qualified npm): shortened npm run cannot satisfy bound post-run args', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-3-npm-argv-neg-'))
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true })
+    writeFileSync(join(root, 'src', 'source.js'), 'export const value = 999;\n')
+    writeFileSync(join(root, 'verify-filter.mjs'), [
+      "import assert from 'node:assert/strict';",
+      "import { readFileSync } from 'node:fs';",
+      'const filterIndex = process.argv.indexOf("--filter");',
+      'const critical = filterIndex >= 0 && process.argv[filterIndex + 1] === "critical";',
+      'if (critical) {',
+      "  assert.match(readFileSync('src/source.js', 'utf8'), /value = 2/);",
+      '}',
+    ].join('\n') + '\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      name: 'npm-argv-fixture',
+      private: true,
+      scripts: { 'test:unit': 'node verify-filter.mjs' },
+    }))
+    initGitFixture(root)
+    const bound = 'npm run test:unit -- --filter critical'
+    const task = [
+      'Fix source.js so the exported value is 2.',
+      'Requirements:',
+      `- \`${bound}\` must pass.`,
+    ].join('\n')
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'src/source.js' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'u1', name: 'run_command', input: { command: 'npm run test:unit' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'Behavior already correct; npm run test:unit passed.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    const npm = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
+      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'npm run test:unit')
+    assert.equal(npm?.exit_code, 0, 'shortened npm may still exit green without critical filter checks')
+    assert.equal(readFileSync(join(root, 'src', 'source.js'), 'utf8'), 'export const value = 999;\n')
+    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED')
+    assert.notEqual(o.durableOutcome, 'NO_CHANGE_REQUIRED')
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('chat probe (3) positive (npm script identity): exact frozen npm run argv may conclude NO_CHANGE_REQUIRED', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-3-npm-script-pos-'))
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true })
+    writeFileSync(join(root, 'src', 'source.js'), 'export const value = 2;\n')
+    writeFileSync(join(root, 'unit-check.mjs'), [
+      "import assert from 'node:assert/strict';",
+      "import { readFileSync } from 'node:fs';",
+      "assert.match(readFileSync('src/source.js', 'utf8'), /value = 2/);",
+    ].join('\n') + '\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      name: 'npm-script-pos-fixture',
+      private: true,
+      scripts: { 'test:unit': 'node unit-check.mjs' },
+    }))
+    initGitFixture(root)
+    const bound = 'npm run test:unit'
+    const task = [
+      'Requirements:',
+      `- \`${bound}\` must pass.`,
+    ].join('\n')
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'src/source.js' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: bound } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'Value is already 2; npm run test:unit passed.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    const run = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number; processExecuted?: boolean }> })
+      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === bound)
+    assert.equal(run?.exit_code, 0, 'frozen npm run identity must execute green on the host')
+    assert.equal(run?.processExecuted, true)
+    assert.equal(o.outcome, 'NO_CHANGE_REQUIRED',
+      'canonical npm executable+argv must match frozen criterion for inspection no-change')
+    assert.equal(readFileSync(join(root, 'src', 'source.js'), 'utf8'), 'export const value = 2;\n')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('chat probe (3) negative (command spoof): echo npm test cannot publish NO_CHANGE_REQUIRED', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-3-spoof-npm-'))
   try {

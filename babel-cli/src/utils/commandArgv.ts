@@ -140,3 +140,16 @@ export function buildWindowsCommandShellArgs(argv: readonly string[]): string[] 
   const commandLine = argv.map(quoteWindowsCommandArg).join(' ')
   return ['/d', '/s', '/c', `"${commandLine}"`]
 }
+
+/** Quote one argv item for a POSIX-style command line (no shell). */
+export function quotePosixCommandArg(value: string): string {
+  if (value.length === 0) return "''"
+  if (!/[^\w@%+=:,./-]/.test(value)) return value
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/** Serialize parsed argv back to a command line that `parseCommandArgv` round-trips. */
+export function formatArgvAsCommand(argv: readonly string[]): string {
+  if (argv.length === 0) throw new CommandArgvParseError('Command must contain an executable')
+  return argv.map(quotePosixCommandArg).join(' ')
+}
