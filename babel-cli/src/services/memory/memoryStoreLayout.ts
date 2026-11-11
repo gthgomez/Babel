@@ -10,6 +10,7 @@ import { resolveRuntimeUserStateRoot } from '../../config/runtimePaths.js';
 export const MEMORY_PROVENANCE_FILE = '.babel-memory-provenance.json';
 export const MEMORY_MIGRATION_FILE = '.babel-memory-migration.json';
 export const MEMORY_RECONCILIATION_FILE = '.babel-memory-reconciliation.json';
+export const MEMORY_ESTABLISHMENT_FILE = '.babel-memory-establishment.json';
 
 export type MemorySlugFormat = 'legacy-v0' | 'digest-v1';
 
@@ -46,7 +47,19 @@ export interface MemoryReconciliation {
   kind: 'explicit_operator';
   establishedAt: string;
   memoryFiles: Array<{ name: string; contentSha256: string }>;
+  /** When set, canonical attestation overrides legacy import for conflicting names. */
+  canonicalAuthoritativeOverLegacy?: boolean;
   note?: string;
+}
+
+/** Atomic bootstrap bundle: provenance + migration written in one replace. */
+export interface MemoryEstablishment {
+  schemaVersion: 1;
+  projectRoot: string;
+  provenance: MemoryProvenance;
+  migration: MemoryMigrationRecord;
+  source: 'reconciliation' | 'legacy_migration';
+  establishedAt: string;
 }
 
 /**

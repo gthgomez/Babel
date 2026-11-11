@@ -36,6 +36,8 @@ import {
   resolveMemoryRootWithMigration,
   writeMemoryProvenance,
 } from './memoryStoreMigration.js';
+import { readMemoryEstablishment } from './memoryStoreEstablishment.js';
+import { MEMORY_ESTABLISHMENT_FILE } from './memoryStoreLayout.js';
 import {
   buildMemoryReconciliationFromCanonical,
   writeMemoryReconciliation,
@@ -469,6 +471,152 @@ operator canonical
       assert.equal(copyMemoryFileExclusive(src, dest, 'x.md').status, 'conflict');
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects bootstrap when an extra unreviewed canonical file exists (full-set)', () => {
+    const project = mkdtempSync(join(tmpdir(), 'babel-mem-fullset-neg-'));
+    try {
+      const layout = pathsForProject(project);
+      mkdirSync(layout.canonicalMemoryRoot, { recursive: true });
+      writeFileSync(join(layout.canonicalMemoryRoot, 'attested.md'), `---
+name: attested
+description: a
+metadata:
+  type: reference
+---
+
+a
+`, 'utf-8');
+      writeFileSync(join(layout.canonicalMemoryRoot, 'sneaky-extra.md'), `---
+name: sneaky
+description: x
+metadata:
+  type: reference
+---
+
+x
+`, 'utf-8');
+      const record = buildMemoryReconciliationFromCanonical(project);
+      assert.ok(record);
+      writeMemoryReconciliation(layout.canonicalProjectDir, {
+        ...record!,
+        memoryFiles: record!.memoryFiles.filter((f) => f.name === 'attested.md'),
+      });
+
+      const res = resolveMemoryRootWithMigration(project);
+      assert.equal(res.memoryRoot, null);
+      assert.equal(res.blocker?.code, 'reconciliation_invalid');
+      assert.equal(readMemoryEstablishment(layout.canonicalProjectDir), null);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it('partial migration does not establish ownership until complete', () => {
+    const project = mkdtempSync(join(tmpdir(), 'babel-mem-partial-est-'));
+    try {
+      const layout = pathsForProject(project);
+      mkdirSync(layout.legacyMemoryRoot, { recursive: true });
+      writeMemoryProvenance(layout.legacyProjectDir, {
+        slugFormat: 'legacy-v0',
+        projectRoot: layout.absolute,
+      });
+      writeMemory(layout.legacyMemoryRoot, {
+        name: 'one',
+        description: '1',
+        metadata: { type: 'reference' },
+      }, '1');
+      writeMemory(layout.legacyMemoryRoot, {
+        name: 'two',
+        description: '2',
+        metadata: { type: 'reference' },
+      }, '2');
+      mkdirSync(layout.canonicalMemoryRoot, { recursive: true });
+      copyFileSync(join(layout.legacyMemoryRoot, 'one.md'), join(layout.canonicalMemoryRoot, 'one.md'));
+      writeFileSync(
+        join(layout.canonicalProjectDir, MEMORY_MIGRATION_FILE),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          status: 'partial',
+          sourceLegacySlug: layout.legacySlug,
+          sourceLegacyMemoryRoot: layout.legacyMemoryRoot,
+          projectRoot: layout.absolute,
+          migratedFiles: ['one.md'],
+          preservedOriginal: true,
+          updatedAt: new Date().toISOString(),
+        })}\n`,
+        'utf-8',
+      );
+
+      assert.equal(readMemoryEstablishment(layout.canonicalProjectDir), null);
+      const first = resolveMemoryRootWithMigration(project);
+      assert.ok(first.memoryRoot);
+      assert.equal(readMemoryMigration(layout.canonicalProjectDir)?.status, 'complete');
+      assert.ok(readMemoryEstablishment(layout.canonicalProjectDir));
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it('interrupted bootstrap: corrupt establishment does not unlock store', () => {
+    const project = mkdtempSync(join(tmpdir(), 'babel-mem-interrupt-'));
+    try {
+      const layout = pathsForProject(project);
+      mkdirSync(layout.canonicalProjectDir, { recursive: true });
+      writeFileSync(join(layout.canonicalProjectDir, MEMORY_ESTABLISHMENT_FILE), '{ broken', 'utf-8');
+      mkdirSync(layout.legacyMemoryRoot, { recursive: true });
+      writeMemory(layout.legacyMemoryRoot, {
+        name: 'legacy',
+        description: 'l',
+        metadata: { type: 'reference' },
+      }, 'legacy');
+      const res = resolveMemoryRootWithMigration(project);
+      assert.equal(readMemoryEstablishment(layout.canonicalProjectDir), null);
+      assert.equal(res.memoryRoot, null);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it('blocked_conflict uses full-set reconciliation to choose canonical over legacy', () => {
+    const project = mkdtempSync(join(tmpdir(), 'babel-mem-recon-override-'));
+    try {
+      const layout = pathsForProject(project);
+      mkdirSync(layout.legacyMemoryRoot, { recursive: true });
+      writeMemoryProvenance(layout.legacyProjectDir, {
+        slugFormat: 'legacy-v0',
+        projectRoot: layout.absolute,
+      });
+      writeMemory(layout.legacyMemoryRoot, {
+        name: 'fact',
+        description: 'legacy',
+        metadata: { type: 'reference' },
+      }, 'legacy');
+      mkdirSync(layout.canonicalMemoryRoot, { recursive: true });
+      writeFileSync(join(layout.canonicalMemoryRoot, 'fact.md'), `---
+name: fact
+description: c
+metadata:
+  type: reference
+---
+
+canonical wins
+`, 'utf-8');
+      assert.equal(resolveMemoryRootWithMigration(project).blocker?.code, 'migration_content_conflict');
+
+      const record = buildMemoryReconciliationFromCanonical(project);
+      assert.ok(record);
+      writeMemoryReconciliation(layout.canonicalProjectDir, {
+        ...record!,
+        canonicalAuthoritativeOverLegacy: true,
+      });
+      const opened = resolveMemoryRoot(project);
+      assert.ok(opened);
+      assert.match(readFileSync(join(opened!, 'fact.md'), 'utf-8'), /canonical wins/);
+      assert.ok(readMemoryEstablishment(layout.canonicalProjectDir));
+    } finally {
+      rmSync(project, { recursive: true, force: true });
     }
   });
 

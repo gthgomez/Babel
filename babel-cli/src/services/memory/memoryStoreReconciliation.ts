@@ -55,8 +55,8 @@ export function buildMemoryReconciliationFromCanonical(
 }
 
 /**
- * Bootstrap gate: every attested file must match on disk; additional canonical files are allowed
- * after unlock (digest provenance becomes the ongoing authority).
+ * Bootstrap gate (full set): every canonical memory file must be attested and match fingerprints.
+ * After establishment, digest provenance allows legitimate adds/edits without re-attestation.
  */
 export function validateReconciliationBootstrap(
   absoluteProjectRoot: string,
@@ -64,11 +64,15 @@ export function validateReconciliationBootstrap(
   record: MemoryReconciliation,
 ): boolean {
   if (!projectRootMatches(record.projectRoot, absoluteProjectRoot)) return false;
-  if (record.memoryFiles.length === 0) return false;
-  for (const { name, contentSha256 } of record.memoryFiles) {
-    if (!existsSync(join(canonicalMemoryRoot, name))) return false;
+  const onDisk = listMdMemoryNames(canonicalMemoryRoot);
+  if (onDisk.length === 0 || record.memoryFiles.length === 0) return false;
+  if (record.memoryFiles.length !== onDisk.length) return false;
+  const attested = new Map(record.memoryFiles.map((f) => [f.name, f.contentSha256]));
+  for (const name of onDisk) {
+    const expected = attested.get(name);
+    if (!expected) return false;
     const actual = sha256File(join(canonicalMemoryRoot, name));
-    if (actual !== contentSha256) return false;
+    if (actual !== expected) return false;
   }
   return true;
 }
