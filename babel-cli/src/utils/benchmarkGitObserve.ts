@@ -1,7 +1,12 @@
 /** Non-mutating, hardened Git observation for benchmark/calibration fixture repos. */
+import { isUtf8 } from 'node:buffer'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { getGitCommand } from './gitExec.js'
+
+function decodeGitStdout(output: Buffer): string | null {
+  return isUtf8(output) ? output.toString('utf8') : null
+}
 
 const CONFIG_OVERRIDES = [
   ['-c', 'core.hooksPath=/dev/null'],
@@ -25,12 +30,11 @@ export function benchmarkGitObserveEnv(base: NodeJS.ProcessEnv = process.env): N
   }
 }
 
-/** Hardened Git with explicit fixture git-dir/work-tree; avoids index stat refresh from porcelain status. */
-export function runBenchmarkGitObserve(
+function spawnBenchmarkGit(
   root: string,
   args: string[],
-  options: { timeoutMs?: number } = {},
-): { status: number | null; stdout: string; stderr: string } {
+  options: { timeoutMs?: number; maxBuffer?: number; encoding: 'utf8' | 'buffer' },
+): { status: number | null; stdout: string | Buffer; stderr: string | Buffer } {
   const env = benchmarkGitObserveEnv()
   const result = spawnSync(getGitCommand(env), [
     ...CONFIG_OVERRIDES.flat(),
@@ -39,40 +43,65 @@ export function runBenchmarkGitObserve(
     ...args,
   ], {
     cwd: root,
-    encoding: 'utf8',
+    encoding: options.encoding,
     timeout: options.timeoutMs ?? 10_000,
+    ...(options.maxBuffer !== undefined ? { maxBuffer: options.maxBuffer } : {}),
     env,
     windowsHide: true,
   })
-  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' }
+  return {
+    status: result.error ? null : result.status,
+    stdout: result.stdout ?? (options.encoding === 'buffer' ? Buffer.alloc(0) : ''),
+    stderr: result.stderr ?? (options.encoding === 'buffer' ? Buffer.alloc(0) : ''),
+  }
 }
 
-/** Read-only dirty-tree observation: diff-index + untracked listing never refresh index stat cache. */
+/** UTF-8 text observer for non-porcelain benchmark queries. */
+export function runBenchmarkGitObserve(
+  root: string,
+  args: string[],
+  options: { timeoutMs?: number } = {},
+): { status: number | null; stdout: string; stderr: string } {
+  const result = spawnBenchmarkGit(root, args, { ...options, encoding: 'utf8' })
+  return {
+    status: result.status,
+    stdout: String(result.stdout),
+    stderr: String(result.stderr),
+  }
+}
+
+/** Byte-accurate porcelain and pathname output; never decodes before validation. */
+export function runBenchmarkGitCommandBytes(
+  root: string,
+  args: string[],
+  options: { timeoutMs?: number; maxBuffer?: number } = {},
+): { status: number | null; stdout: Buffer; stderr: Buffer } {
+  const result = spawnBenchmarkGit(root, args, { ...options, encoding: 'buffer' })
+  return {
+    status: result.status,
+    stdout: Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.alloc(0),
+    stderr: Buffer.isBuffer(result.stderr) ? result.stderr : Buffer.alloc(0),
+  }
+}
+
+/** Read-only dirty-tree observation via byte-accurate porcelain (GIT_OPTIONAL_LOCKS=0). */
 export function observeBenchmarkWorkingTreeDirty(projectRoot: string): boolean {
-  return describeBenchmarkPorcelain(projectRoot).length > 0
+  return benchmarkPorcelainRecords(projectRoot).length > 0
 }
 
-/** Porcelain-shaped lines without invoking `git status` (which refreshes index stat cache). */
-export function describeBenchmarkPorcelain(projectRoot: string): string[] {
-  if (runBenchmarkGitObserve(projectRoot, ['rev-parse', 'HEAD']).status !== 0) return []
-  const lines: string[] = []
-  const diff = runBenchmarkGitObserve(projectRoot, ['diff-index', 'HEAD', '-z', '--name-status'])
-  if (diff.status !== 0) return []
-  const parts = diff.stdout.split('\0').filter(part => part.length > 0)
-  for (let index = 0; index < parts.length; index += 2) {
-    const status = parts[index] ?? ''
-    const path = parts[index + 1] ?? ''
-    if (!path || path === '.babel' || path.startsWith('.babel/')) continue
-  // diff-index emits XY path; map to porcelain prefix (first column staged, second worktree)
-    const staged = status[0] === ' ' ? ' ' : status[0] ?? ' '
-    const worktree = status[1] === ' ' ? ' ' : status[1] ?? ' '
-    lines.push(`${staged}${worktree} ${path}`)
-  }
-  const untracked = runBenchmarkGitObserve(projectRoot, ['ls-files', '-o', '-z', '--exclude-standard'])
-  if (untracked.status !== 0) return lines
-  for (const path of untracked.stdout.split('\0')) {
-    if (!path || path === '.babel' || path.startsWith('.babel/')) continue
-    lines.push(`?? ${path}`)
-  }
-  return lines.sort()
+/** NUL-delimited porcelain v1 records from hardened `git status`; empty when clean. */
+export function benchmarkPorcelainRecords(projectRoot: string): string[] {
+  const status = runBenchmarkGitCommandBytes(projectRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
+  if (status.status !== 0) return []
+  const decoded = decodeGitStdout(status.stdout)
+  if (decoded === null) return []
+  const records = decoded.split('\0')
+  if (records.pop() !== '') return []
+  return records.filter(record =>
+    record.length >= 4
+    && record[2] === ' '
+    && (() => {
+      const path = record.slice(3)
+      return path !== '.babel' && !path.startsWith('.babel/')
+    })())
 }

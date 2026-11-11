@@ -7,7 +7,8 @@ import { z } from 'zod'
 import { JourneySpecSchema, type JourneySpec } from './harness-journey-contract.js'
 import { isCredentialTargetPath } from '../authority/protectedPath.js'
 import { normalizeSandboxFixturePermissions } from './sandboxFixturePermissions.js'
-import { benchmarkGitObserveEnv, describeBenchmarkPorcelain, runBenchmarkGitObserve } from '../utils/benchmarkGitObserve.js'
+import { decodeTaskGitOutput } from '../agent/taskMutationOwnership.js'
+import { benchmarkGitObserveEnv, runBenchmarkGitCommandBytes, runBenchmarkGitObserve } from '../utils/benchmarkGitObserve.js'
 
 const FileMap = z.record(z.string(), z.string())
 export const JourneyFixtureSchema = z.object({
@@ -165,8 +166,10 @@ export async function captureJourneyGitState(root: string, expectedMetadataDiges
   if (metadataDigest !== expectedMetadataDigest) return { head: '', porcelainStatus: 'not_observed:metadata_changed', metadataDigest }
   const head = runBenchmarkGitObserve(root, ['rev-parse', 'HEAD'])
   if (head.status !== 0) return { head: '', porcelainStatus: 'not_observed:git_unavailable', metadataDigest }
-  const porcelain = describeBenchmarkPorcelain(root)
-  const porcelainStatus = porcelain.length ? `${porcelain.join('\n')}\n` : ''
+  const porcelain = runBenchmarkGitCommandBytes(root, ['status', '--porcelain=v1', '--untracked-files=all', '--ignore-submodules=all'])
+  if (porcelain.status !== 0) return { head: head.stdout.trim(), porcelainStatus: 'not_observed:git_unavailable', metadataDigest }
+  const decoded = decodeTaskGitOutput(porcelain.stdout)
+  const porcelainStatus = decoded === null ? 'not_observed:invalid_git_output' : decoded
   return { head: head.stdout.trim(), porcelainStatus, metadataDigest }
 }
 

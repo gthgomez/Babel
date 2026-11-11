@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { observeBenchmarkWorkingTreeDirty, runBenchmarkGitObserve } from '../utils/benchmarkGitObserve.js'
+import { TaskMutationOwnership, decodeTaskGitOutput } from '../agent/taskMutationOwnership.js'
+import { benchmarkPorcelainRecords, observeBenchmarkWorkingTreeDirty, runBenchmarkGitCommandBytes, runBenchmarkGitObserve } from '../utils/benchmarkGitObserve.js'
 import {
   captureJourneyGitState,
   diffFixtureMetadataEntries,
@@ -23,6 +24,14 @@ async function j03Fixture() {
   const root = await mkdtemp(join(tmpdir(), 'babel-fixture-metadata-'))
   const corpus = await readJourneyCorpus(corpusPath)
   const spec = { ...corpus.journeys.find(row => row.id === 'J03')!, id: 'read-only-metadata' }
+  const prepared = await prepareJourneyFixture(spec, corpus.fixtures[spec.fixtureId]!, join(root, 'cell'))
+  return { root, prepared, candidateRoot: prepared.candidateRoot }
+}
+
+async function j05Fixture() {
+  const root = await mkdtemp(join(tmpdir(), 'babel-fixture-metadata-'))
+  const corpus = await readJourneyCorpus(corpusPath)
+  const spec = { ...corpus.journeys.find(row => row.id === 'J05')!, id: 'quantity-metadata' }
   const prepared = await prepareJourneyFixture(spec, corpus.fixtures[spec.fixtureId]!, join(root, 'cell'))
   return { root, prepared, candidateRoot: prepared.candidateRoot }
 }
@@ -57,7 +66,40 @@ test('benchmark git observe does not refresh fixture index bytes', async () => {
   assert.equal(digestAfter, prepared.gitMetadataDigest)
 })
 
-test('porcelain git status refreshes index bytes but not semantic index binding', async () => {
+test('clean hardened benchmark porcelain -z is empty and ownership stays verifiable', async () => {
+  const { candidateRoot } = await j05Fixture()
+  const status = runBenchmarkGitCommandBytes(candidateRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
+  assert.equal(status.status, 0)
+  assert.equal(status.stdout.length, 0)
+  const prior = process.env['BABEL_BENCHMARK_MODE']
+  process.env['BABEL_BENCHMARK_MODE'] = '1'
+  try {
+    assert.deepEqual(new TaskMutationOwnership(candidateRoot, 'benchmark-clean').classifyChanges().unverifiablePaths, [])
+    assert.equal(benchmarkPorcelainRecords(candidateRoot).length, 0)
+  } finally {
+    if (prior === undefined) delete process.env['BABEL_BENCHMARK_MODE']
+    else process.env['BABEL_BENCHMARK_MODE'] = prior
+  }
+})
+
+test('staged hardened benchmark porcelain preserves staged column semantics', async () => {
+  const { candidateRoot } = await j05Fixture()
+  const path = 'lib/total.mjs'
+  await writeFile(join(candidateRoot, path), 'export const staged = 1\n')
+  assert.equal(runBenchmarkGitCommandBytes(candidateRoot, ['add', path]).status, 0)
+  const decoded = decodeTaskGitOutput(runBenchmarkGitCommandBytes(candidateRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']).stdout)
+  assert.notEqual(decoded, null)
+  const record = decoded!.split('\0').filter(Boolean)[0]!
+  assert.match(record, /^M[ MD]/)
+  assert.doesNotMatch(record, /^ M /)
+})
+
+test('undecodable porcelain bytes gate ownership as git-status unverifiable', () => {
+  const bytes = Buffer.from([0x3f, 0x3f, 0x20, 0xff, 0x2e, 0x74, 0x78, 0x74, 0])
+  assert.equal(decodeTaskGitOutput(bytes), null)
+})
+
+test('unhardened porcelain git status refreshes index bytes but not semantic index binding', async () => {
   const { candidateRoot, prepared } = await j03Fixture()
   const bindingBefore = fixtureGitIndexSemanticBinding(candidateRoot)
   const digestBefore = await fixtureMetadataDigest(candidateRoot)
