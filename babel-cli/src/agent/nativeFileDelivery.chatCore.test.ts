@@ -31,6 +31,9 @@ if (!process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']) {
         t.after(() => { if (before === undefined) delete process.env['BABEL_HEADLESS']; else process.env['BABEL_HEADLESS'] = before })
       }
       const dir = join(root, variant)
+      const priorProfile = process.env['BABEL_EXECUTION_PROFILE']
+      process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo'
+      t.after(() => { if (priorProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE']; else process.env['BABEL_EXECUTION_PROFILE'] = priorProfile })
       mkdirSync(join(dir, 'apps/web'), { recursive: true }); mkdirSync(join(dir, 'packages/api'), { recursive: true })
       writeFileSync(join(dir, 'REPO_MAP.md'), '# Repository map\n- src/client\n- src/server\n')
       writeFileSync(join(dir, 'apps/web/main.mjs'), 'export const page = "web"\n')
