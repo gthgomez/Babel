@@ -28,6 +28,11 @@ describe('invocation deadline helpers', { concurrency: 1 }, () => {
       /request timeout after 100ms/,
     )
   })
+
+  it('sleepInvocationRetryBackoff allows immediate retry when backoff is 0 and budget remains', async () => {
+    const invocationDeadlineAt = Date.now() + 5_000
+    await sleepInvocationRetryBackoff(0, invocationDeadlineAt, 'fixture', 'model', 5_000)
+  })
 })
 
 describe('physical dispatch budget floor (deterministic clock)', { concurrency: 1 }, () => {

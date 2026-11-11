@@ -79,6 +79,10 @@ export async function sleepInvocationRetryBackoff(
   assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs);
   const capped = Math.min(backoffMs, remainingInvocationBudgetMs(invocationDeadlineAt));
   if (capped <= 0) {
+    // Retry-After: 0 (or sub-ms leftover) means an immediate retry, not an exhausted budget.
+    if (backoffMs === 0 && canDispatchPhysicalRequest(invocationDeadlineAt)) {
+      return;
+    }
     throw new Error(invocationTimeoutMessage(providerId, model, requestTimeoutMs));
   }
   await sleep(capped, signal);
