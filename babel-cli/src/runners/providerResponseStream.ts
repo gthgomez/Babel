@@ -121,8 +121,28 @@ export async function releaseStreamReader(
 }
 
 
-export async function readErrorBody(response: Response): Promise<string> {
-  return (await response.text().catch(() => '')).slice(0, 200);
+export async function readErrorBody(
+  response: Response,
+  opts?: {
+    idleTimeoutMs: number;
+    deadlineAt: number;
+    requestTimeoutMs: number;
+    signal?: AbortSignal;
+  },
+): Promise<string> {
+  if (!opts) {
+    return (await response.text().catch(() => '')).slice(0, 200);
+  }
+  if (!response.body) {
+    return '';
+  }
+  const text = await readResponseBodyText(response, {
+    idleTimeoutMs: opts.idleTimeoutMs,
+    deadlineAt: opts.deadlineAt,
+    requestTimeoutMs: opts.requestTimeoutMs,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  });
+  return text.slice(0, 200);
 }
 
 /** Map ProviderMessage[] to the OpenAI-compatible wire format (shared P0-B mapper). */

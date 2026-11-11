@@ -339,6 +339,85 @@ describe('executeRaw transport boundaries (mocked)', () => {
         assert.equal(completed[0]?.status, 'failed')
       })
 
+      it('HTTP 429 retry-after cannot schedule a second physical dispatch past deadline', async () => {
+        process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = '3'
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '120'
+        let calls = 0
+        globalThis.fetch = async () => {
+          calls += 1
+          return new Response('rate limited', {
+            status: 429,
+            headers: { 'retry-after': '30' },
+          })
+        }
+        const completed: Array<{ status: string; failure_stage?: string | null }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /request timeout after/i,
+        )
+        assert.equal(calls, 1, 'must not dispatch another billable physical fetch after deadline')
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.failure_stage, 'request')
+      })
+
+      it('HTTP error response body read respects invocation deadline', async () => {
+        process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = '1'
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '120'
+        process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '40'
+        globalThis.fetch = async () => new Response(
+          new ReadableStream({ start() { /* stall */ } }),
+          { status: 401, headers: { 'content-type': 'text/plain' } },
+        )
+        const completed: Array<{ status: string; failure_stage?: string | null }> = []
+        const started = Date.now()
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /timeout/i,
+        )
+        assert.ok(Date.now() - started < 300)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.failure_stage, 'response')
+      })
+
+      it('stream idle retry cannot dispatch physical fetch after deadline (partial preserved)', async () => {
+        process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'] = '1'
+        process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '30'
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '100'
+        let calls = 0
+        globalThis.fetch = async () => {
+          calls += 1
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode(
+                  `${wrapSsePayload(adapter, { choices: [{ delta: { content: 'partial' } }] })}\n\n`,
+                ))
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+          )
+        }
+        const completed: Array<{ status: string; partial_model_output?: boolean; failure_stage?: string | null }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onChunk: () => {},
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /timeout|stream idle timeout/i,
+        )
+        assert.equal(calls, 1)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.partial_model_output, true)
+        assert.equal(completed[0]?.failure_stage, 'stream')
+      })
+
       it('raw-nonstream-post-headers-abort: JSON body read honours caller abort', async () => {
         const abort = new AbortController()
         let bodyCancelled = false

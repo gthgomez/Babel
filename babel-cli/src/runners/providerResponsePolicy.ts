@@ -17,6 +17,55 @@ export const REQUEST_MAX_RETRIES =
 const RETRY_BASE_DELAY_MS = 200;
 
 
+export function remainingInvocationBudgetMs(invocationDeadlineAt: number, now = Date.now()): number {
+  return Math.max(0, invocationDeadlineAt - now);
+}
+
+export function invocationDeadlineExpired(invocationDeadlineAt: number, now = Date.now()): boolean {
+  return remainingInvocationBudgetMs(invocationDeadlineAt, now) === 0;
+}
+
+export function invocationTimeoutMessage(
+  providerId: string,
+  model: string,
+  requestTimeoutMs: number,
+): string {
+  return `[${providerId}] request timeout after ${requestTimeoutMs}ms (${model})`;
+}
+
+export function isInvocationTimeoutError(error: unknown): boolean {
+  return error instanceof Error && /request timeout after \d+ms/.test(error.message);
+}
+
+export function assertInvocationBudgetRemaining(
+  invocationDeadlineAt: number,
+  providerId: string,
+  model: string,
+  requestTimeoutMs: number,
+): void {
+  if (invocationDeadlineExpired(invocationDeadlineAt)) {
+    throw new Error(invocationTimeoutMessage(providerId, model, requestTimeoutMs));
+  }
+}
+
+/** Cap retry backoff to remaining invocation budget; never sleep past the deadline. */
+export async function sleepInvocationRetryBackoff(
+  backoffMs: number,
+  invocationDeadlineAt: number,
+  providerId: string,
+  model: string,
+  requestTimeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs);
+  const capped = Math.min(backoffMs, remainingInvocationBudgetMs(invocationDeadlineAt));
+  if (capped <= 0) {
+    throw new Error(invocationTimeoutMessage(providerId, model, requestTimeoutMs));
+  }
+  await sleep(capped, signal);
+  assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs);
+}
+
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(new DOMException('Request cancelled', 'AbortError'));
   return new Promise((resolveSleep, reject) => {

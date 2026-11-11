@@ -37,9 +37,13 @@ import {
   getRequestTimeoutMs,
   isAbortError,
   isCallerCancelError,
+  invocationDeadlineExpired,
+  invocationTimeoutMessage,
+  isInvocationTimeoutError,
   linkExternalAbortSignal,
+  remainingInvocationBudgetMs,
   retryDelayMs,
-  sleep,
+  sleepInvocationRetryBackoff,
   type FetchRedirectPolicy,
 } from '../providerResponsePolicy.js';
 import { notifyProviderRetryOrFinalizeOnCallbackError } from '../providerRetryCallback.js';
@@ -265,6 +269,12 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
     const requestMaxRetries = Math.max(1, this.getRequestMaxRetries());
     const requestTimeoutMs = this.getRequestTimeoutMs();
     const invocationDeadlineAt = startedAt + requestTimeoutMs;
+    const errorBodyReadOpts = {
+      idleTimeoutMs: getStreamIdleTimeoutMs(),
+      deadlineAt: invocationDeadlineAt,
+      requestTimeoutMs,
+      ...(signal ? { signal } : {}),
+    };
     const streamMaxRetries = isStreaming ? this.getStreamMaxRetries() : 0;
     const maxAttempts = requestMaxRetries + streamMaxRetries;
 
@@ -558,10 +568,10 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
     };
     for (let attempt = 1; attempt <= requestMaxRetries; attempt += 1) {
       lastAttempt = attempt;
-      const attemptBudgetMs = Math.max(0, invocationDeadlineAt - Date.now());
+      const attemptBudgetMs = remainingInvocationBudgetMs(invocationDeadlineAt);
       if (attemptBudgetMs === 0) {
         const timeoutError = new Error(
-          `[${this.providerId}] request timeout after ${requestTimeoutMs}ms (${this.model})`,
+          invocationTimeoutMessage(this.providerId, this.model, requestTimeoutMs),
         );
         lastError = timeoutError;
         settleRetry('failed');
@@ -635,14 +645,31 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
             failure: { kind: 'transport', transportErrorMessage: lastError.message, transportPhase: isAbortError(err) ? 'timeout' : 'transport' },
           });
           try {
-            await sleep(retryDelay, signal);
+            await sleepInvocationRetryBackoff(
+              retryDelay,
+              invocationDeadlineAt,
+              this.providerId,
+              this.model,
+              requestTimeoutMs,
+              signal,
+            );
           } catch (sleepErr) {
-            if (isAbortError(sleepErr) || isCallerCancelError(sleepErr, signal)) {
+            if (isCallerCancelError(sleepErr, signal)) {
               settleRetry('cancelled');
               notifyPhase('provider_error', undefined, 'cancelled');
               notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
                 actualAttempt: attempt,
                 details: { message: `[${this.providerId}] Request cancelled` },
+                failureStage: 'request',
+              });
+              throw sleepErr;
+            }
+            if (isInvocationTimeoutError(sleepErr) || isAbortError(sleepErr)) {
+              settleRetry('failed');
+              notifyPhase('provider_error', undefined, 'timeout');
+              notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+                actualAttempt: attempt,
+                details: { message: sleepErr instanceof Error ? sleepErr.message : String(sleepErr) },
                 failureStage: 'request',
               });
               throw sleepErr;
@@ -686,14 +713,31 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         failure: { kind: 'http', response: response! },
       });
       try {
-        await sleep(retryDelay, signal);
+        await sleepInvocationRetryBackoff(
+          retryDelay,
+          invocationDeadlineAt,
+          this.providerId,
+          this.model,
+          requestTimeoutMs,
+          signal,
+        );
       } catch (sleepErr) {
-        if (isAbortError(sleepErr) || isCallerCancelError(sleepErr, signal)) {
+        if (isCallerCancelError(sleepErr, signal)) {
           settleRetry('cancelled');
           notifyPhase('provider_error', undefined, 'cancelled');
           notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
             actualAttempt: attempt,
             details: { message: `[${this.providerId}] Request cancelled` },
+            failureStage: 'request',
+          });
+          throw sleepErr;
+        }
+        if (isInvocationTimeoutError(sleepErr) || isAbortError(sleepErr)) {
+          settleRetry('failed');
+          notifyPhase('provider_error', undefined, 'timeout');
+          notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+            actualAttempt: attempt,
+            details: { message: sleepErr instanceof Error ? sleepErr.message : String(sleepErr) },
             failureStage: 'request',
           });
           throw sleepErr;
@@ -717,7 +761,26 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
 
     if (!response.ok) {
       settleRetry('failed');
-      const body = await readErrorBody(response);
+      let body = '';
+      try {
+        body = await readErrorBody(response, errorBodyReadOpts);
+      } catch (err) {
+        this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
+        const errMessage = err instanceof Error ? err.message : String(err);
+        const timedOut = isStreamIdleTimeoutError(err) || isProviderRequestDeadlineError(err)
+          || isInvocationTimeoutError(err) || isAbortError(err);
+        notifyPhase('provider_error', response.status, timedOut ? 'timeout' : 'http_error');
+        notifyCompleted('failed', null, body, null, null, null, this.maxTokens, {
+          actualAttempt: lastAttempt,
+          details: {
+            status: response.status,
+            message: errMessage,
+            providerRequestId: providerRequestIdFromResponse(response),
+          },
+          failureStage: 'response',
+        });
+        throw err;
+      }
       this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
       notifyPhase('provider_error', response.status, 'http_error');
       notifyCompleted('failed', null, body, null, null, null, this.maxTokens, {
@@ -834,23 +897,69 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
           physicalAttemptId = retryAttemptId;
           callbacks?.onRetry?.({ provider: this.providerId, model: this.model, attempt: retryAttempt!, reason: 'stream_idle', backoff_ms: retryDelay, request_id: preparedRequest.request_id, attempt_id: retryAttemptId!, body_digest: preparedRequest.body_digest });
           try {
-            await sleep(retryDelay, signal);
+            await sleepInvocationRetryBackoff(
+              retryDelay,
+              invocationDeadlineAt,
+              this.providerId,
+              this.model,
+              requestTimeoutMs,
+              signal,
+            );
           } catch (sleepErr) {
-            if (isAbortError(sleepErr) || isCallerCancelError(sleepErr, signal)) {
+            if (isCallerCancelError(sleepErr, signal)) {
               settleRetry('cancelled');
               notifyPhase('provider_error', undefined, 'cancelled');
-              notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+              notifyCompleted('failed', streamState.observedModelId, text, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
                 actualAttempt: lastAttempt,
                 details: { message: `[${this.providerId}] Request cancelled` },
                 failureStage: 'request',
+                partialModelOutput: streamState.partialModelOutput,
+                outputMaterial: streamState.outputReceipt,
+              });
+              throw sleepErr;
+            }
+            if (isInvocationTimeoutError(sleepErr)) {
+              settleRetry('failed');
+              notifyPhase('provider_error', undefined, 'timeout');
+              notifyCompleted('failed', streamState.observedModelId, text, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
+                actualAttempt: lastAttempt,
+                details: { message: sleepErr instanceof Error ? sleepErr.message : String(sleepErr) },
+                failureStage: 'stream',
+                partialModelOutput: streamState.partialModelOutput,
+                outputMaterial: streamState.outputReceipt,
+              });
+              throw sleepErr;
+            }
+            if (isAbortError(sleepErr)) {
+              settleRetry('cancelled');
+              notifyPhase('provider_error', undefined, 'timeout');
+              notifyCompleted('failed', streamState.observedModelId, text, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
+                actualAttempt: lastAttempt,
+                details: { message: sleepErr instanceof Error ? sleepErr.message : String(sleepErr) },
+                failureStage: 'stream',
+                partialModelOutput: streamState.partialModelOutput,
+                outputMaterial: streamState.outputReceipt,
               });
               throw sleepErr;
             }
             throw sleepErr;
           }
+          const streamRetryBudgetMs = remainingInvocationBudgetMs(invocationDeadlineAt);
+          if (streamRetryBudgetMs === 0) {
+            const timeoutError = new Error(invocationTimeoutMessage(this.providerId, this.model, requestTimeoutMs));
+            settleRetry('failed');
+            notifyPhase('provider_error', undefined, 'timeout');
+            notifyCompleted('failed', streamState.observedModelId, text, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
+              actualAttempt: lastAttempt,
+              details: { message: timeoutError.message },
+              failureStage: 'stream',
+              partialModelOutput: streamState.partialModelOutput,
+              outputMaterial: streamState.outputReceipt,
+            });
+            throw timeoutError;
+          }
           const controller = new AbortController();
           const onStreamRetryAbort = linkExternalAbortSignal(controller, signal);
-          const streamRetryBudgetMs = Math.max(0, invocationDeadlineAt - Date.now());
           const timeout = setTimeout(() => controller.abort(), streamRetryBudgetMs);
           lastAttempt += 1;
           try {
@@ -900,7 +1009,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
           parseRateLimitHeaders(response.headers, this.providerId);
           if (!response.ok) {
             settleRetry('failed');
-            const body = await readErrorBody(response);
+            const body = await readErrorBody(response, errorBodyReadOpts);
             notifyPhase('provider_error', response.status, 'stream_retry_http_error');
             notifyCompleted('failed', streamState.observedModelId, body, streamState.upstreamProvider, null, null, this.maxTokens, {
               actualAttempt: lastAttempt,
@@ -1443,6 +1552,12 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
     let retryAttemptId: string | null = null;
     let physicalAttemptId = preparedRequest.attempt_id;
     const invocationDeadlineAt = startedAt + requestTimeoutMs;
+    const errorBodyReadOpts = {
+      idleTimeoutMs: streamIdleTimeoutMs,
+      deadlineAt: invocationDeadlineAt,
+      requestTimeoutMs,
+      ...(signal ? { signal } : {}),
+    };
     const settleRetry = (outcome: 'succeeded' | 'failed' | 'cancelled'): void => {
       if (retryAttempt === null) return;
       callbacks?.onRetrySettled?.({
@@ -1457,10 +1572,10 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
 
     for (let attempt = 1; attempt <= requestMaxRetries; attempt += 1) {
       lastAttempt = attempt;
-      const attemptBudgetMs = Math.max(0, invocationDeadlineAt - Date.now());
+      const attemptBudgetMs = remainingInvocationBudgetMs(invocationDeadlineAt);
       if (attemptBudgetMs === 0) {
         const timeoutError = new Error(
-          `[${this.providerId}] request timeout after ${requestTimeoutMs}ms (${this.model})`,
+          invocationTimeoutMessage(this.providerId, this.model, requestTimeoutMs),
         );
         lastError = timeoutError;
         settleRetry('failed');
@@ -1540,12 +1655,31 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
             failure: { kind: 'transport', transportErrorMessage: lastError.message, transportPhase: isAbortError(err) ? 'timeout' : 'transport' },
           });
           try {
-            await sleep(retryDelay, signal);
+            await sleepInvocationRetryBackoff(
+              retryDelay,
+              invocationDeadlineAt,
+              this.providerId,
+              this.model,
+              requestTimeoutMs,
+              signal,
+            );
           } catch (sleepErr) {
-            if (isAbortError(sleepErr) || isCallerCancelError(sleepErr, signal)) {
+            if (isCallerCancelError(sleepErr, signal)) {
               settleRetry('cancelled');
               const errMessage = `[${this.providerId}] Request cancelled`;
               notifyPhase('provider_error', undefined, 'cancelled');
+              notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+                actualAttempt: lastAttempt,
+                details: { message: errMessage },
+                failureStage: 'request',
+              });
+              yield { type: 'error', message: errMessage };
+              return;
+            }
+            if (isInvocationTimeoutError(sleepErr) || isAbortError(sleepErr)) {
+              settleRetry('failed');
+              const errMessage = sleepErr instanceof Error ? sleepErr.message : String(sleepErr);
+              notifyPhase('provider_error', undefined, 'timeout');
               notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
                 actualAttempt: lastAttempt,
                 details: { message: errMessage },
@@ -1590,12 +1724,31 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         failure: { kind: 'http', response: response! },
       });
       try {
-        await sleep(retryDelay, signal);
+        await sleepInvocationRetryBackoff(
+          retryDelay,
+          invocationDeadlineAt,
+          this.providerId,
+          this.model,
+          requestTimeoutMs,
+          signal,
+        );
       } catch (sleepErr) {
-        if (isAbortError(sleepErr) || isCallerCancelError(sleepErr, signal)) {
+        if (isCallerCancelError(sleepErr, signal)) {
           settleRetry('cancelled');
           const errMessage = `[${this.providerId}] Request cancelled`;
           notifyPhase('provider_error', undefined, 'cancelled');
+          notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+            actualAttempt: lastAttempt,
+            details: { message: errMessage },
+            failureStage: 'request',
+          });
+          yield { type: 'error', message: errMessage };
+          return;
+        }
+        if (isInvocationTimeoutError(sleepErr) || isAbortError(sleepErr)) {
+          settleRetry('failed');
+          const errMessage = sleepErr instanceof Error ? sleepErr.message : String(sleepErr);
+          notifyPhase('provider_error', undefined, 'timeout');
           notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
             actualAttempt: lastAttempt,
             details: { message: errMessage },
@@ -1608,7 +1761,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
       }
     }
 
-    if (!response) {
+  if (!response) {
       notifyPhase('provider_error', undefined, 'no_response');
       notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
         actualAttempt: lastAttempt,
@@ -1621,7 +1774,27 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
 
     if (!response.ok) {
       settleRetry('failed');
-      const body = await readErrorBody(response);
+      let body = '';
+      try {
+        body = await readErrorBody(response, errorBodyReadOpts);
+      } catch (err) {
+        this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
+        const errMessage = err instanceof Error ? err.message : String(err);
+        const timedOut = isStreamIdleTimeoutError(err) || isProviderRequestDeadlineError(err)
+          || isInvocationTimeoutError(err) || isAbortError(err);
+        notifyPhase('provider_error', response.status, timedOut ? 'timeout' : 'http_error');
+        notifyCompleted('failed', null, body, null, null, null, this.maxTokens, {
+          actualAttempt: lastAttempt,
+          details: {
+            status: response.status,
+            message: errMessage,
+            providerRequestId: providerRequestIdFromResponse(response),
+          },
+          failureStage: 'response',
+        });
+        yield { type: 'error', message: errMessage };
+        return;
+      }
       this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
       notifyPhase('provider_error', response.status, 'http_error');
       notifyCompleted('failed', null, body, null, null, null, this.maxTokens, {
