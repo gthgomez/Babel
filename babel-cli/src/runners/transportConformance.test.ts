@@ -64,6 +64,9 @@ const SRC_DIR = path.resolve(RUNNERS_DIR, '..');
  */
 const API_TRANSPORT_MODULES = [
   'providerEngine.ts',
+  'protocol/openai-chat-completions-base.ts',
+  'protocol/openai-chat-completions-tools.ts',
+  'protocol/openai-chat-completions-sse.ts',
   'protocol/openai-chat-completions.ts',
   'protocol/native-messages.ts',
   'anthropicApi.ts',
@@ -144,14 +147,17 @@ const ADAPTER_INDEX: Readonly<Record<ProviderId, { module: string; adapterClass:
 
 const ADAPTER_MODULE_OF_CLASS: Readonly<Record<string, { module: string }>> = Object.fromEntries(
   [...Object.values(ADAPTER_INDEX).map((entry) => [entry.adapterClass, { module: entry.module }]),
-    ['OpenAiCompatibleRunner', { module: 'protocol/openai-chat-completions.ts' }], ['NativeMessagesRunner', { module: 'protocol/native-messages.ts' }]],
+    ['OpenAiCompatibleRunner', { module: 'protocol/openai-chat-completions-tools.ts' }],
+    ['OpenAiCompatibleRunnerBase', { module: 'protocol/openai-chat-completions-base.ts' }],
+    ['NativeMessagesRunner', { module: 'protocol/native-messages.ts' }]],
 );
 
 /** Adapter inheritance (OpenRouter/Ollama/OpenCode inherit the DeepInfra implementation). */
 const CLASS_EXTENDS: Readonly<Record<string, string | null>> = {
   DeepSeekApiRunner: null,
   DeepInfraApiRunner: 'OpenAiCompatibleRunner',
-  OpenAiCompatibleRunner: null,
+  OpenAiCompatibleRunner: 'OpenAiCompatibleRunnerBase',
+  OpenAiCompatibleRunnerBase: null,
   NativeMessagesRunner: null,
   CompatibleApiRunner: 'OpenAiCompatibleRunner',
   AnthropicApiRunner: 'NativeMessagesRunner',
