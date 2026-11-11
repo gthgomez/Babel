@@ -12,6 +12,7 @@ import { hasInspectedNoChangeEvidence, taskAsksForVerifier, type GateToolLogEntr
 import type { TaskOperation } from '../config/chatTaskClass.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
 import type { AcceptanceRequirementV1 } from './taskContract.js';
+import { commandsMatchForExecutableBinding } from './taskAcceptanceExecutableBinding.js';
 
 function normalizeCommandToken(command: string): string {
   return command.trim().replace(/\s+/g, ' ');
@@ -53,16 +54,18 @@ function isCommandBoundAcceptance(item: AcceptanceRequirementV1): boolean {
       || declaredAcceptanceCommand(item) !== null);
 }
 
+/** Canonical executed-command identity — no substring or prefix weakening. */
+function executedCommandMatchesDeclared(declared: string, observed: string): boolean {
+  return commandsMatchForExecutableBinding(declared, observed);
+}
+
 function toolCallCoversAcceptanceItem(entry: GateToolLogEntry, item: AcceptanceRequirementV1): boolean {
   if (entry.tool !== 'run_command' && entry.tool !== 'test_run') return false;
   if ((entry.exit_code ?? 1) !== 0) return false;
-  const observed = normalizeCommandToken(entry.target);
+  if (entry.effect_status === 'indeterminate') return false;
   const declared = declaredAcceptanceCommand(item);
-  if (declared) {
-    if (observed === declared || observed.includes(declared)) return true;
-  }
-  if (observed === 'npm test' && item.verification?.executable_id === 'npm') return true;
-  return false;
+  if (!declared) return false;
+  return executedCommandMatchesDeclared(declared, normalizeCommandToken(entry.target));
 }
 
 function receiptCoversAcceptanceItem(
@@ -71,12 +74,10 @@ function receiptCoversAcceptanceItem(
 ): boolean {
   const exit = receipt.exit_code ?? receipt.exitCode ?? 1;
   if (exit !== 0 || receipt.stale) return false;
-  const observed = normalizeCommandToken(receipt.command);
   const declared = declaredAcceptanceCommand(item);
-  if (declared) {
-    if (observed === declared || observed.endsWith(` ${declared}`) || observed.includes(declared)) return true;
+  if (declared && executedCommandMatchesDeclared(declared, normalizeCommandToken(receipt.command))) {
+    return true;
   }
-  if (observed === 'npm test' && item.verification?.executable_id === 'npm') return true;
   const boundVerifier = item.verification?.verifier_id;
   const receiptVerifier = receipt.verifierId ?? receipt.verifier_id;
   return Boolean(boundVerifier && receiptVerifier && boundVerifier === receiptVerifier);
@@ -91,17 +92,7 @@ function evidenceCoversAcceptanceItem(
     || toolCallLog.some((entry) => toolCallCoversAcceptanceItem(entry, item));
 }
 
-function commandBoundEvidenceSatisfiesRequired(
-  request: CriterionCompletionRequestV1,
-  receipts: readonly BoundChatVerifierReceipt[],
-  toolCallLog: readonly GateToolLogEntry[],
-): boolean {
-  const commandBound = request.contract.acceptance.filter((item) => item.required && isCommandBoundAcceptance(item));
-  if (commandBound.length === 0) return informalVerifierEvidenceSatisfies(request, toolCallLog);
-  return commandBound.every((item) => evidenceCoversAcceptanceItem(item, receipts, toolCallLog));
-}
-
-function informalVerifierEvidenceSatisfies(
+function informalTaskVerifierEvidenceSatisfies(
   request: CriterionCompletionRequestV1,
   toolCallLog: readonly GateToolLogEntry[],
 ): boolean {
@@ -111,8 +102,44 @@ function informalVerifierEvidenceSatisfies(
     (entry.tool === 'run_command' || entry.tool === 'test_run')
     && (entry.exit_code ?? 1) === 0
     && entry.effect_status !== 'indeterminate'
-    && normalizeCommandToken(entry.target) === 'npm test'
+    && executedCommandMatchesDeclared('npm test', normalizeCommandToken(entry.target))
   ));
+}
+
+function informalSoleMeaningTaskSatisfied(
+  request: CriterionCompletionRequestV1,
+  toolCallLog: readonly GateToolLogEntry[],
+): boolean {
+  const required = request.contract.acceptance.filter((entry) => entry.required);
+  if (required.length !== 1) return false;
+  const only = required[0]!;
+  return isMeaningBoundAcceptance(only) && informalTaskVerifierEvidenceSatisfies(request, toolCallLog);
+}
+
+function requiredCriterionStillOpen(input: {
+  request: CriterionCompletionRequestV1;
+  item: AcceptanceRequirementV1;
+  missingRequired: readonly string[];
+  unsatisfiedRequired: readonly { requirement_id: string; status: string }[];
+  receipts: readonly BoundChatVerifierReceipt[];
+  toolCallLog: readonly GateToolLogEntry[];
+}): boolean {
+  const advisoryOpen = input.unsatisfiedRequired.some(
+    (row) => row.requirement_id === input.item.id && row.status !== 'satisfied',
+  );
+  const listedMissing = input.missingRequired.includes(input.item.id);
+
+  if (isMeaningBoundAcceptance(input.item)) {
+    if (advisoryOpen || listedMissing) return true;
+    return false;
+  }
+
+  if (isCommandBoundAcceptance(input.item)) {
+    if (!(advisoryOpen || listedMissing)) return false;
+    return !evidenceCoversAcceptanceItem(input.item, input.receipts, input.toolCallLog);
+  }
+
+  return advisoryOpen || listedMissing;
 }
 
 export type MutatingNoChangeRefreshInput = Omit<CriterionPrivateEvidenceRefreshV1, 'proof' | 'allowPartialEvidence'> & {
@@ -170,34 +197,33 @@ export function mutatingInspectionLeavesRequiredCriteriaUnmet(input: {
     if (evaluation.verified || evaluation.status === 'VERIFIED') return false;
 
     const receipts = (refresh.criterionChatReceipts ?? []) as BoundChatVerifierReceipt[];
-    const requiredIds = new Set(
-      request.contract.acceptance.filter((item) => item.required).map((item) => item.id),
-    );
+    const requiredItems = request.contract.acceptance.filter((item) => item.required);
+    const requiredIds = new Set(requiredItems.map((item) => item.id));
     const advisory = input.criterionCompletion.reportAdvisoryEvidence();
     const unsatisfiedRequired = advisory.filter(
       (row) => requiredIds.has(row.requirement_id) && row.status !== 'satisfied',
     );
     const missingRequired = (evaluation.missing_requirements ?? []).filter((id) => requiredIds.has(id));
-    const commandEvidenceReady = commandBoundEvidenceSatisfiesRequired(
+
+    if (!refresh.has_mutation && informalSoleMeaningTaskSatisfied(request, input.toolCallLog)) {
+      return false;
+    }
+
+    const anyStillOpen = requiredItems.some((item) => requiredCriterionStillOpen({
       request,
+      item,
+      missingRequired,
+      unsatisfiedRequired,
       receipts,
-      input.toolCallLog,
-    );
-    const missingStillOpen = missingRequired.filter((id) => {
-      const item = request.contract.acceptance.find((entry) => entry.id === id);
-      if (!item) return true;
-      if (isMeaningBoundAcceptance(item)) {
-        return !commandEvidenceReady;
-      }
-      return !evidenceCoversAcceptanceItem(item, receipts, input.toolCallLog);
-    });
-    if (missingStillOpen.length > 0) return true;
+      toolCallLog: input.toolCallLog,
+    }));
 
-    if (!refresh.has_mutation && commandEvidenceReady && missingStillOpen.length === 0) return false;
-
-    if (unsatisfiedRequired.length > 0) return true;
+    if (!refresh.has_mutation && !anyStillOpen) return false;
     return true;
-  } catch {
+  } catch (error) {
+    if (process.env['BABEL_MUTATING_NOCHANGE_DEBUG'] === '1') {
+      console.error('[mutatingInspectionLeavesRequiredCriteriaUnmet]', error);
+    }
     return true;
   }
 }
