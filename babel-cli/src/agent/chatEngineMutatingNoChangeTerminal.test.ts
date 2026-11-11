@@ -565,6 +565,49 @@ test('green npm test does not clear an separate unmet behavioral goal', () => {
   }), false)
 })
 
+test('grounded file read can substantiate a simple fix-file meaning criterion for no-change', () => {
+  const task = 'Fix settings.txt so mode is safe.'
+  assert.equal(resolveAcceptedReadOnlyTerminal({
+    effectiveOperation: 'MUTATING',
+    ambientReadOnly: false,
+    hasAnyWrites: false,
+    toolCallLog: [
+      { tool: 'read_file', target: 'settings.txt', detail: 'mode=safe\n', exit_code: 0 },
+    ],
+    criterionCompletion: {
+      currentRequest: () => ({
+        context: { schema_version: 1, kind: 'criterion-completion:v1' },
+        contract: {
+          frozen: true,
+          user_request: task,
+          acceptance: [{
+            id: 'acceptance:settings',
+            description: task,
+            required: true,
+            type: 'custom',
+            verification_strategy: 'meaning',
+            verification: { kind: 'custom', verifier_id: 'meaning:settings', command_hash: 'x' },
+          }],
+        },
+        run_id: 'r',
+        project_root: '/tmp',
+      }),
+      refreshPrivateEvidence: () => {},
+      reportAdvisoryEvidence: () => [{
+        requirement_id: 'acceptance:settings',
+        status: 'missing',
+        evidence_class: 'inspection',
+      }],
+      context: { schema_version: 1, kind: 'criterion-completion:v1' },
+    } as never,
+    buildCriterionRefresh: () => ({
+      criterionChatReceipts: [],
+      candidate_sha: null,
+      has_mutation: false,
+    }),
+  }), true)
+})
+
 test('meaning-only obligations cannot satisfy terminal on inspection alone', () => {
   assert.equal(mutatingInspectionLeavesRequiredCriteriaUnmet({
     criterionCompletion: {

@@ -507,6 +507,8 @@ export type GateToolLogEntry = {
   tool: string;
   target: string;
   detail?: string;
+  /** Read tools only: bounded content for criterion/no-change inspection gates. */
+  stdout?: string;
   error?: string;
   exit_code?: number;
   mutation_paths?: string[];

@@ -126,6 +126,7 @@ function installRunner(engine: ChatEngine, script: Script): { calls: () => numbe
 function initGitFixture(root: string): void {
   for (const args of [
     ['init', '--quiet'],
+    ['config', 'core.autocrlf', 'false'],
     ['config', 'user.email', 'fixture@example.test'],
     ['config', 'user.name', 'fixture'],
     ['add', '-A'],
