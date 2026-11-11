@@ -99,7 +99,7 @@ test('undecodable porcelain bytes gate ownership as git-status unverifiable', ()
   assert.equal(decodeTaskGitOutput(bytes), null)
 })
 
-test('unhardened porcelain git status refreshes index bytes but not semantic index binding', async () => {
+test('unhardened porcelain git status may refresh index bytes without semantic binding drift', async t => {
   const { candidateRoot, prepared } = await j03Fixture()
   const bindingBefore = fixtureGitIndexSemanticBinding(candidateRoot)
   const digestBefore = await fixtureMetadataDigest(candidateRoot)
@@ -107,9 +107,13 @@ test('unhardened porcelain git status refreshes index bytes but not semantic ind
   spawnSync('git', ['status', '--porcelain'], { cwd: candidateRoot, encoding: 'utf8' })
   const bindingAfter = fixtureGitIndexSemanticBinding(candidateRoot)
   const digestAfter = await fixtureMetadataDigest(candidateRoot)
-  assert.equal(bindingBefore, bindingAfter)
-  assert.notEqual(digestBefore, digestAfter)
-  assert.notEqual(digestAfter, prepared.gitMetadataDigest)
+  assert.equal(bindingBefore, bindingAfter, 'ls-files stage/mode/flags binding must not change under unhardened status')
+  if (digestBefore !== digestAfter) {
+    t.diagnostic('observed .git/index byte refresh on this Git/host after unhardened porcelain status')
+    assert.notEqual(digestAfter, prepared.gitMetadataDigest)
+  } else {
+    t.diagnostic('no index byte refresh observed on this Git/host (environment-sensitive diagnostic; hardened observers still required)')
+  }
 })
 
 test('update-index --skip-worktree fails full metadata digest and semantic binding', async () => {
