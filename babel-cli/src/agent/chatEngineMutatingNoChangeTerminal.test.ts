@@ -58,47 +58,55 @@ const npmBoundCriterion = {
   context: { schema_version: 1, kind: 'criterion-completion:v1' },
 } as never
 
-test('sole informal npm task closes single meaning criterion for no-change', () => {
+test('sole meaning criterion stays open despite informal npm test prose and green npm', () => {
   const task = 'Fix add so it returns the sum of its arguments; run npm test before finishing.'
+  const toolCallLog = [
+    { tool: 'read_file', target: 'parser.ts', detail: 'ok', exit_code: 0 },
+    { tool: 'run_command', target: 'npm test', exit_code: 0, effect_status: 'confirmed_no_change' as const },
+  ]
+  const criterionCompletion = {
+    currentRequest: () => ({
+      context: { schema_version: 1, kind: 'criterion-completion:v1' },
+      contract: {
+        frozen: true,
+        user_request: task,
+        acceptance: [{
+          id: 'acceptance:sole',
+          description: task,
+          required: true,
+          type: 'custom',
+          verification_strategy: 'meaning',
+          verification: { kind: 'custom', verifier_id: 'meaning:sole', command_hash: 'x' },
+        }],
+      },
+      run_id: 'r',
+      project_root: '/tmp',
+    }),
+    refreshPrivateEvidence: () => {},
+    reportAdvisoryEvidence: () => [{
+      requirement_id: 'acceptance:sole',
+      status: 'missing',
+      evidence_class: 'inspection',
+    }],
+    context: { schema_version: 1, kind: 'criterion-completion:v1' },
+  } as never
+  const buildCriterionRefresh = () => ({
+    criterionChatReceipts: [],
+    candidate_sha: null,
+    has_mutation: false,
+  })
   assert.equal(resolveAcceptedReadOnlyTerminal({
     effectiveOperation: 'MUTATING',
     ambientReadOnly: false,
     hasAnyWrites: false,
-    toolCallLog: [
-      { tool: 'read_file', target: 'parser.ts', detail: 'ok', exit_code: 0 },
-      { tool: 'run_command', target: 'npm test', exit_code: 0, effect_status: 'confirmed_no_change' },
-    ],
-    criterionCompletion: {
-      currentRequest: () => ({
-        context: { schema_version: 1, kind: 'criterion-completion:v1' },
-        contract: {
-          frozen: true,
-          user_request: task,
-          acceptance: [{
-            id: 'acceptance:sole',
-            description: task,
-            required: true,
-            type: 'custom',
-            verification_strategy: 'meaning',
-            verification: { kind: 'custom', verifier_id: 'meaning:sole', command_hash: 'x' },
-          }],
-        },
-        run_id: 'r',
-        project_root: '/tmp',
-      }),
-      refreshPrivateEvidence: () => {},
-      reportAdvisoryEvidence: () => [{
-        requirement_id: 'acceptance:sole',
-        status: 'missing',
-        evidence_class: 'inspection',
-      }],
-      context: { schema_version: 1, kind: 'criterion-completion:v1' },
-    } as never,
-    buildCriterionRefresh: () => ({
-      criterionChatReceipts: [],
-      candidate_sha: null,
-      has_mutation: false,
-    }),
+    toolCallLog,
+    criterionCompletion,
+    buildCriterionRefresh,
+  }), false)
+  assert.equal(mutatingInspectionLeavesRequiredCriteriaUnmet({
+    criterionCompletion,
+    toolCallLog,
+    buildCriterionRefresh,
   }), true)
 })
 

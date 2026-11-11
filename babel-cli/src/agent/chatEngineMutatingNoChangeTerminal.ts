@@ -8,7 +8,7 @@ import {
   type CriterionCompletionServiceV1,
   type CriterionPrivateEvidenceRefreshV1,
 } from '../authority/criterionCompletion.js';
-import { hasInspectedNoChangeEvidence, taskAsksForVerifier, type GateToolLogEntry } from './completionGatePolicy.js';
+import { hasInspectedNoChangeEvidence, type GateToolLogEntry } from './completionGatePolicy.js';
 import type { TaskOperation } from '../config/chatTaskClass.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
 import type { AcceptanceRequirementV1 } from './taskContract.js';
@@ -90,30 +90,6 @@ function evidenceCoversAcceptanceItem(
 ): boolean {
   return receipts.some((receipt) => receiptCoversAcceptanceItem(receipt, item))
     || toolCallLog.some((entry) => toolCallCoversAcceptanceItem(entry, item));
-}
-
-function informalTaskVerifierEvidenceSatisfies(
-  request: CriterionCompletionRequestV1,
-  toolCallLog: readonly GateToolLogEntry[],
-): boolean {
-  const userRequest = request.contract.user_request ?? '';
-  if (!taskAsksForVerifier(userRequest)) return false;
-  return toolCallLog.some((entry) => (
-    (entry.tool === 'run_command' || entry.tool === 'test_run')
-    && (entry.exit_code ?? 1) === 0
-    && entry.effect_status !== 'indeterminate'
-    && executedCommandMatchesDeclared('npm test', normalizeCommandToken(entry.target))
-  ));
-}
-
-function informalSoleMeaningTaskSatisfied(
-  request: CriterionCompletionRequestV1,
-  toolCallLog: readonly GateToolLogEntry[],
-): boolean {
-  const required = request.contract.acceptance.filter((entry) => entry.required);
-  if (required.length !== 1) return false;
-  const only = required[0]!;
-  return isMeaningBoundAcceptance(only) && informalTaskVerifierEvidenceSatisfies(request, toolCallLog);
 }
 
 function requiredCriterionStillOpen(input: {
@@ -204,10 +180,6 @@ export function mutatingInspectionLeavesRequiredCriteriaUnmet(input: {
       (row) => requiredIds.has(row.requirement_id) && row.status !== 'satisfied',
     );
     const missingRequired = (evaluation.missing_requirements ?? []).filter((id) => requiredIds.has(id));
-
-    if (!refresh.has_mutation && informalSoleMeaningTaskSatisfied(request, input.toolCallLog)) {
-      return false;
-    }
 
     const anyStillOpen = requiredItems.some((item) => requiredCriterionStillOpen({
       request,

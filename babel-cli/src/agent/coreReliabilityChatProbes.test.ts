@@ -474,6 +474,45 @@ test('chat probe (2c) authorized test edit positive: permitted test refinement w
   }
 })
 
+test('chat probe (3) negative (sole informal npm): one semantic criterion + unrelated green npm suite cannot NO_CHANGE', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-3-sole-informal-npm-'))
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true })
+    writeFileSync(join(root, 'src', 'add.ts'), 'export const add = (a: number, b: number) => a - b;\n')
+    writeFileSync(join(root, 'unrelated.test.mjs'), 'import test from "node:test"; test("unrelated", () => {});\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      type: 'module',
+      name: 'sole-informal-npm-fixture',
+      scripts: { test: 'node --test unrelated.test.mjs' },
+    }))
+    initGitFixture(root)
+    const task = 'Fix add so it returns the sum of its arguments. Run npm test before finishing.'
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'src/add.ts' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'u1', name: 'run_command', input: { command: 'npm test' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'add already implements summation; npm test passed.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    const npm = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
+      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'npm test')
+    assert.equal(npm?.exit_code, 0, 'unrelated suite may still execute green via npm test')
+    assert.equal(readFileSync(join(root, 'src', 'add.ts'), 'utf8'), 'export const add = (a: number, b: number) => a - b;\n')
+    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED')
+    assert.notEqual(o.durableOutcome, 'NO_CHANGE_REQUIRED')
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('chat probe (3) negative (explicit npm): wrong behavior plus unrelated green npm test cannot publish NO_CHANGE_REQUIRED', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-3-neg-explicit-npm-'))
   try {
