@@ -5,7 +5,7 @@ import {
   sleepInvocationRetryBackoff,
 } from './providerResponsePolicy.js'
 
-describe('invocation deadline helpers', () => {
+describe('invocation deadline helpers', { concurrency: 1 }, () => {
   it('sleepInvocationRetryBackoff caps wait then refuses further work past deadline', async () => {
     const invocationDeadlineAt = Date.now() + 80
     const started = Date.now()

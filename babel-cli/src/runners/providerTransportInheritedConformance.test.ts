@@ -108,7 +108,7 @@ function withModel(model: string, chunk: Record<string, unknown>): string {
 }
 
 for (const adapter of ADAPTERS) {
-  describe(`${adapter.label} inherited transport conformance`, () => {
+  describe(`${adapter.label} inherited transport conformance`, { concurrency: 1 }, () => {
     it('split tool-call arguments reconstruct to one tool_use', async () => {
       const { model } = adapter
       globalThis.fetch = async () => makeSseResponse([

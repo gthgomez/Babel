@@ -1009,7 +1009,27 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
           parseRateLimitHeaders(response.headers, this.providerId);
           if (!response.ok) {
             settleRetry('failed');
-            const body = await readErrorBody(response, errorBodyReadOpts);
+            let body = '';
+            try {
+              body = await readErrorBody(response, errorBodyReadOpts);
+            } catch (err) {
+              const errMessage = err instanceof Error ? err.message : String(err);
+              const timedOut = isStreamIdleTimeoutError(err) || isProviderRequestDeadlineError(err)
+                || isInvocationTimeoutError(err) || isAbortError(err);
+              notifyPhase('provider_error', response.status, timedOut ? 'timeout' : 'stream_retry_http_error');
+              notifyCompleted('failed', streamState.observedModelId, body, streamState.upstreamProvider, null, null, this.maxTokens, {
+                actualAttempt: lastAttempt,
+                details: {
+                  status: response.status,
+                  message: errMessage,
+                  providerRequestId: providerRequestIdFromResponse(response),
+                },
+                failureStage: 'response',
+                partialModelOutput: streamState.partialModelOutput,
+                outputMaterial: streamState.outputReceipt,
+              });
+              throw err;
+            }
             notifyPhase('provider_error', response.status, 'stream_retry_http_error');
             notifyCompleted('failed', streamState.observedModelId, body, streamState.upstreamProvider, null, null, this.maxTokens, {
               actualAttempt: lastAttempt,

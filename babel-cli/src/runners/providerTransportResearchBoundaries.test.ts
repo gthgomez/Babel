@@ -62,7 +62,7 @@ async function collectEvents(
   return { events, thrown }
 }
 
-describe('transport research boundary probes (mocked)', () => {
+describe('transport research boundary probes (mocked)', { concurrency: 1 }, () => {
   it('probe 1: partial text then provider stream error yields failed receipt (not delivered)', async () => {
     globalThis.fetch = async () => new Response(
       [
