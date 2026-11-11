@@ -5,6 +5,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isCredentialTargetPath } from './autonomyEnforcement.js'
 import { WorkspaceTransactionManager, type MutationBatchTransaction } from '../services/workspaceTransactions.js'
 import { runGitCommandBytes } from '../utils/gitExec.js'
+import { runBenchmarkGitObserve } from '../utils/benchmarkGitObserve.js'
 
 export interface TaskWorkspaceChangeClassification {
   taskOwnedPaths: string[]
@@ -92,11 +93,26 @@ export class TaskMutationOwnership {
       taskOwnedPaths: [], unexpectedPaths: [], unverifiablePaths: [],
     }
     if (!this.isCurrent) return { ...result, unverifiablePaths: ['<retired-owner>'] }
-    const git = (args: string[]) => runGitCommandBytes(args, this.root, {
-      timeoutMs: 5000, maxBuffer: 1024 * 1024,
-    })
+    const benchmark = process.env['BABEL_BENCHMARK_MODE'] === '1'
+    const git = (args: string[]) => benchmark
+      ? (() => {
+          const observed = runBenchmarkGitObserve(this.root, args, { timeoutMs: 5000 })
+          return { status: observed.status, stdout: Buffer.from(observed.stdout), stderr: Buffer.from(observed.stderr) }
+        })()
+      : runGitCommandBytes(args, this.root, { timeoutMs: 5000, maxBuffer: 1024 * 1024 })
     const rootResult = git(['rev-parse', '--show-toplevel'])
-    const status = git(['status', '--porcelain=v1', '-z', '--untracked-files=all'])
+    const status = benchmark
+      ? (() => {
+          const diff = runBenchmarkGitObserve(this.root, ['diff-index', 'HEAD', '-z', '--name-only'], { timeoutMs: 5000 })
+          const untracked = runBenchmarkGitObserve(this.root, ['ls-files', '-o', '-z', '--exclude-standard'], { timeoutMs: 5000 })
+          if (diff.status !== 0 || untracked.status !== 0) return { status: 1, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }
+          const entries = [
+            ...diff.stdout.split('\0').filter(Boolean).map(path => ` M ${path}`),
+            ...untracked.stdout.split('\0').filter(Boolean).map(path => `?? ${path}`),
+          ]
+          return { status: 0, stdout: Buffer.from(`${entries.join('\0')}\0`), stderr: Buffer.alloc(0) }
+        })()
+      : git(['status', '--porcelain=v1', '-z', '--untracked-files=all'])
     if (rootResult.status !== 0 || status.status !== 0) {
       return { ...result, unverifiablePaths: ['<git-status>'] }
     }

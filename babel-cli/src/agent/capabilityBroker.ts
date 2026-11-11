@@ -8,6 +8,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { observeBenchmarkWorkingTreeDirty } from '../utils/benchmarkGitObserve.js';
 import { readdirSync, readFileSync, realpathSync, statSync, type Dirent } from 'node:fs';
 import { join, posix, relative } from 'node:path';
 import {
@@ -45,6 +46,7 @@ export function detectWorkingTreeDirty(
 ): boolean {
   if (env['BABEL_DIRTY_TREE'] === '1') return true;
   if (env['BABEL_DIRTY_TREE'] === '0') return false;
+  if (env['BABEL_BENCHMARK_MODE'] === '1') return observeBenchmarkWorkingTreeDirty(projectRoot);
   try {
     const result = spawnSync('git', ['status', '--porcelain'], {
       cwd: projectRoot,
