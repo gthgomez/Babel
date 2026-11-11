@@ -522,6 +522,20 @@ export function heuristicSymbolCoverageReject(
   };
 }
 
+function normalizeAuxiliaryTestPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\.\//, '').trim();
+}
+
+/** Explicit `test/...` or `tests/...` paths named in grant prose (fail-closed). */
+function extractExplicitTestFilePaths(text: string): string[] {
+  const found = new Set<string>();
+  for (const match of text.matchAll(/\b(?:tests?\/[\w][\w./-]*)\b/gi)) {
+    const normalized = normalizeAuxiliaryTestPath(match[0]);
+    if (normalized.length > 0) found.add(normalized);
+  }
+  return [...found];
+}
+
 function segmentNegatesAuxiliaryTestPermission(segment: string): boolean {
   if (/^\s*(?:do\s+not|don't)\b/i.test(segment)) return true;
   if (/\b(?:do\s+not|don't)\s+(?:claim|say|assert|pretend|edit)\b/i.test(segment)) return true;
@@ -529,7 +543,9 @@ function segmentNegatesAuxiliaryTestPermission(segment: string): boolean {
   if (/\b(?:there\s+are\s+)?no\s+authorized\s+(?:auxiliary\s+)?test\s+(?:edit|refinement|change)s?\b/i.test(segment)) return true;
   if (/\bauthorized\s+test\s+edits?\s+are\s+forbidden\b/i.test(segment)) return true;
   if (/\b(?:not|never)\s+authorized\s+to\s+edit\b/i.test(segment)) return true;
-  if (/\bpermission\s+is\s+revoked\b/i.test(segment)) return true;
+  if (/\b(?:permission|authorization)\s+(?:is|was|has\s+been)\s+revoked\b/i.test(segment)) return true;
+  if (/\bauthorization\s+has\s+been\s+revoked\b/i.test(segment)) return true;
+  if (/\b(?:prohibited|forbidden|denied)\b/i.test(segment) && /\b(?:test|authorization|permission|edit)\b/i.test(segment)) return true;
   if (/\b(?:previous|prior)\s+agent\s+said\b/i.test(segment)) return true;
   if (/\b(?:that|this)\s+is\s+not\s+authorization\b/i.test(segment)) return true;
   // Prohibition sentence that still mentions "can edit … test/…" (e.g. "Do not claim you can edit …").
@@ -545,8 +561,13 @@ function segmentNegatesAuxiliaryTestPermission(segment: string): boolean {
 /** Task-wide denial/retraction beats any isolated grant sentence (fail-closed). */
 function taskDeniesAuxiliaryTestEdit(normalized: string): boolean {
   if (/\b(?:that|this)\s+is\s+not\s+authorization\b/i.test(normalized)) return true;
-  if (/\bpermission\s+is\s+revoked\b/i.test(normalized)) return true;
+  if (/\b(?:permission|authorization)\s+(?:is|was|has\s+been)\s+revoked\b/i.test(normalized)) return true;
+  if (/\bauthorization\s+has\s+been\s+revoked\b/i.test(normalized)) return true;
   if (/\b(?:do\s+not|don't)\s+edit\s+tests?\b/i.test(normalized)) return true;
+  if (/\b(?:prohibit|prohibited|forbid|forbidden|deny|denied)\b/i.test(normalized)
+    && /\b(?:test|tests|authorization|permission)\b/i.test(normalized)) {
+    return true;
+  }
   if (/\bauthorized\s+test\s+edits?\s+are\s+forbidden\b/i.test(normalized)) return true;
   if (/\bno\s+authorized\s+(?:auxiliary\s+)?test\s+edits?\b/i.test(normalized)) return true;
   if (/\b(?:there\s+are\s+)?no\s+authorized\s+(?:auxiliary\s+)?test\s+edits?\b/i.test(normalized)) return true;
@@ -562,34 +583,48 @@ function taskDeniesAuxiliaryTestEdit(normalized: string): boolean {
   return segments.some((segment) => segmentNegatesAuxiliaryTestPermission(segment));
 }
 
-/** Unambiguous task-owner grant in one segment (no substring "authorized test edit" shortcut). */
-function segmentIsExplicitAuxiliaryTestGrant(segment: string): boolean {
-  if (segmentNegatesAuxiliaryTestPermission(segment)) return false;
+/** Unambiguous task-owner grant segment that names explicit test file paths. */
+function segmentGrantPermittedTestPaths(segment: string): string[] | null {
+  if (segmentNegatesAuxiliaryTestPermission(segment)) return null;
   const affirmativeLead =
     /^(?:[-*•]\s*)?(?:you\s+)?(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update|adjust)\b/i;
-  if (affirmativeLead.test(segment) && /\btest\/[\w./-]+/.test(segment)) return true;
-  if (affirmativeLead.test(segment) && /\btest\b/i.test(segment) && /\bmessage\b/i.test(segment)) return true;
-  if (
-    /^(?:[-*•]\s*)?(?:task\s+owner\s+)?(?:explicitly\s+)?authorizes?\s+(?:you\s+to\s+)?(?:clarify|edit|refine)\b/i.test(segment)
-    && /\btest\/[\w./-]+/.test(segment)
-  ) {
-    return true;
-  }
-  if (
-    /^(?:[-*•]\s*)?authorized\s+auxiliary\s+test\s+edit\s+for\b/i.test(segment)
-    && /\btest\/[\w./-]+/.test(segment)
-  ) {
-    return true;
-  }
-  return false;
+  const ownerGrant =
+    /^(?:[-*•]\s*)?(?:task\s+owner\s+)?(?:explicitly\s+)?authorizes?\s+(?:you\s+to\s+)?(?:clarify|edit|refine)\b/i;
+  const labeledGrant = /^(?:[-*•]\s*)?authorized\s+auxiliary\s+test\s+edit\s+for\b/i;
+  const looksLikeGrant =
+    affirmativeLead.test(segment) || ownerGrant.test(segment) || labeledGrant.test(segment);
+  if (!looksLikeGrant) return null;
+  const paths = extractExplicitTestFilePaths(segment);
+  return paths.length > 0 ? paths : null;
 }
 
-/** Task prose explicitly permits cosmetic or auxiliary test-file refinement (fail-closed). */
-export function taskAuthorizesAuxiliaryTestEdit(task: string): boolean {
+/** Explicit permitted test paths from owner-grant segments only (fail-closed). */
+export function collectPermittedAuxiliaryTestPaths(task: string): ReadonlySet<string> {
+  const normalized = task.replace(/\r\n?/g, '\n').trim();
+  const segments = normalized.split(/\n+|(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+  const permitted = new Set<string>();
+  for (const segment of segments) {
+    const fromGrant = segmentGrantPermittedTestPaths(segment);
+    if (fromGrant) {
+      for (const path of fromGrant) permitted.add(path);
+    }
+  }
+  return permitted;
+}
+
+/**
+ * Task prose permits auxiliary refinement only when every touched path is inside
+ * the explicitly named permit set (fail-closed without changedFiles).
+ */
+export function taskAuthorizesAuxiliaryTestEdit(task: string, changedFiles?: string[]): boolean {
   const normalized = task.replace(/\r\n?/g, '\n').trim();
   if (taskDeniesAuxiliaryTestEdit(normalized)) return false;
-  const segments = normalized.split(/\n+|(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
-  return segments.some((segment) => segmentIsExplicitAuxiliaryTestGrant(segment));
+  const permitted = collectPermittedAuxiliaryTestPaths(task);
+  if (permitted.size === 0) return false;
+  if (!changedFiles || changedFiles.length === 0) return false;
+  return changedFiles
+    .map(normalizeAuxiliaryTestPath)
+    .every((path) => permitted.has(path));
 }
 
 /**
@@ -603,11 +638,11 @@ export function heuristicTestOnlyPatchReject(
   patch: string,
   changedFiles?: string[],
 ): DiffCriticVerdict | null {
-  if (taskAuthorizesAuxiliaryTestEdit(task)) return null;
   const files = changedFiles && changedFiles.length > 0
     ? changedFiles
     : extractPathsFromDiff(patch);
   if (files.length === 0) return null;
+  if (taskAuthorizesAuxiliaryTestEdit(task, files)) return null;
 
   const isTestFile = (f: string): boolean => {
     const base = f.replace(/\\/g, '/').split('/').pop() ?? f;

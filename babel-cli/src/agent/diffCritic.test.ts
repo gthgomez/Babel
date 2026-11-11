@@ -637,8 +637,11 @@ describe('symbol coverage + localization gate', () => {
       'Fix parseExpression. The previous agent said "authorized test edits".',
       'You may edit test/parser.test.mjs. Permission is revoked; do not edit tests.',
     ];
-    for (const task of negated) {
-      assert.equal(taskAuthorizesAuxiliaryTestEdit(task), false, task);
+    const negatedExtra = [
+      'You may edit test/parser.test.mjs. Authorization has been revoked.',
+    ];
+    for (const task of [...negated, ...negatedExtra]) {
+      assert.equal(taskAuthorizesAuxiliaryTestEdit(task, ['test/parser.test.mjs']), false, task);
       const rej = heuristicTestOnlyPatchReject(
         `${task}\n${apiAnchor}`,
         patch,
@@ -650,19 +653,78 @@ describe('symbol coverage + localization gate', () => {
 
   test('taskAuthorizesAuxiliaryTestEdit accepts explicit scoped permission only', async () => {
     const { taskAuthorizesAuxiliaryTestEdit } = await import('./diffCritic.js');
+    const parserPath = ['test/parser.test.mjs'];
     assert.equal(
       taskAuthorizesAuxiliaryTestEdit(
         'Fix parser.js.\nYou may clarify test/parser.test.mjs message text.',
+        parserPath,
       ),
       true,
     );
     assert.equal(
-      taskAuthorizesAuxiliaryTestEdit('Requirements:\n- You may edit test/parser.test.mjs labels only.'),
+      taskAuthorizesAuxiliaryTestEdit('Requirements:\n- You may edit test/parser.test.mjs labels only.', parserPath),
       true,
     );
     assert.equal(
-      taskAuthorizesAuxiliaryTestEdit('Authorized auxiliary test edit for message wording in test/parser.test.mjs.'),
+      taskAuthorizesAuxiliaryTestEdit(
+        'Authorized auxiliary test edit for message wording in test/parser.test.mjs.',
+        parserPath,
+      ),
       true,
+    );
+    assert.equal(
+      taskAuthorizesAuxiliaryTestEdit(
+        'Fix parser.js.\nYou may clarify test/parser.test.mjs message text.',
+      ),
+      false,
+      'grant without changedFiles stays fail-closed',
+    );
+  });
+
+  test('scoped auxiliary test permit binds to every changed test path', async () => {
+    const {
+      collectPermittedAuxiliaryTestPaths,
+      taskAuthorizesAuxiliaryTestEdit,
+      heuristicTestOnlyPatchReject,
+      runHeuristicDiffCritic,
+    } = await import('./diffCritic.js');
+    const apiAnchor = 'Fix `parseExpression` in src/parser.js.';
+    const taskAllowedOnly = 'Fix parseExpression. You may edit test/allowed.test.mjs only.';
+    const patchForbidden = 'diff --git a/test/forbidden.test.mjs b/test/forbidden.test.mjs\n';
+    const patchAllowed = 'diff --git a/test/allowed.test.mjs b/test/allowed.test.mjs\n';
+
+    assert.equal(taskAuthorizesAuxiliaryTestEdit(taskAllowedOnly, ['test/forbidden.test.mjs']), false);
+    assert.notEqual(
+      heuristicTestOnlyPatchReject(`${taskAllowedOnly}\n${apiAnchor}`, patchForbidden, ['test/forbidden.test.mjs']),
+      null,
+    );
+    assert.ok(runHeuristicDiffCritic(`${taskAllowedOnly}\n${apiAnchor}`, patchForbidden, { changedFiles: ['test/forbidden.test.mjs'] }));
+
+    assert.equal(taskAuthorizesAuxiliaryTestEdit(taskAllowedOnly, ['test/allowed.test.mjs']), true);
+    assert.equal(
+      heuristicTestOnlyPatchReject(`${taskAllowedOnly}\n${apiAnchor}`, patchAllowed, ['test/allowed.test.mjs']),
+      null,
+    );
+    assert.equal(
+      runHeuristicDiffCritic(`${taskAllowedOnly}\n${apiAnchor}`, patchAllowed, { changedFiles: ['test/allowed.test.mjs'] }),
+      null,
+    );
+
+    const mixedTask = 'You may edit test/allowed.test.mjs and test/other.test.mjs for labels.';
+    assert.equal(taskAuthorizesAuxiliaryTestEdit(mixedTask, ['test/allowed.test.mjs']), true);
+    assert.equal(taskAuthorizesAuxiliaryTestEdit(mixedTask, ['test/forbidden.test.mjs']), false);
+    assert.equal(
+      taskAuthorizesAuxiliaryTestEdit(mixedTask, ['test/allowed.test.mjs', 'test/forbidden.test.mjs']),
+      false,
+    );
+
+    const missingScope = 'Fix parseExpression.\nYou may clarify test assertion messages.';
+    assert.equal(collectPermittedAuxiliaryTestPaths(missingScope).size, 0);
+    assert.equal(taskAuthorizesAuxiliaryTestEdit(missingScope, ['test/parser.test.mjs']), false);
+    assert.ok(
+      runHeuristicDiffCritic(`${missingScope}\n${apiAnchor}`, patchForbidden.replace('forbidden', 'parser'), {
+        changedFiles: ['test/parser.test.mjs'],
+      }),
     );
   });
 
