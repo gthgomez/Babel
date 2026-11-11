@@ -40,9 +40,12 @@ export function scoreCanaryTrials(
   const allTrials = validTrials
   const taskSuccesses = trials.filter(t => !t.invalid_task && t.grading_status === 'complete' && t.contract_success && t.hidden_ok && !t.false_complete).length
   const accountableTrials = validTrials
-  const attemptedTrials = accountableTrials.filter(
-    (t) => t.launch_status === 'launched' || t.launch_status === undefined || t.launch_status === 'unknown',
-  )
+  const scheduledValid = accountableTrials.length
+  const launchedValid = accountableTrials.filter(t => t.launch_status === 'launched').length
+  const notLaunchedValid = accountableTrials.filter(t => t.launch_status === 'not_launched').length
+  const launchUnknownValid = accountableTrials.filter(
+    t => t.launch_status === undefined || t.launch_status === 'unknown',
+  ).length
   const costComplete =
     accountableTrials.length > 0 &&
     accountableTrials.every(t => t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0)
@@ -88,11 +91,20 @@ export function scoreCanaryTrials(
     },
     attempt_accounting: {
       scheduled: trials.length,
+      scheduled_valid: scheduledValid,
       launched: trials.filter(t => t.launch_status === 'launched').length,
+      launched_valid: launchedValid,
       not_launched: trials.filter(t => t.launch_status === 'not_launched').length,
+      not_launched_valid: notLaunchedValid,
       launch_unknown: trials.filter(t => t.launch_status === undefined || t.launch_status === 'unknown').length,
+      launch_unknown_valid: launchUnknownValid,
       task_successes: taskSuccesses,
-      task_success_rate: attemptedTrials.length === 0 ? null : taskSuccesses / attemptedTrials.length,
+      // Scheduled rate: claim-eligible successes over every valid scheduled row (includes preflight not_launched).
+      scheduled_task_success_rate: scheduledValid === 0 ? null : taskSuccesses / scheduledValid,
+      // Launched rate: successes only over rows that actually launched (never treat infrastructure refusal as attempt).
+      launched_task_success_rate: launchedValid === 0 ? null : taskSuccesses / launchedValid,
+      // Legacy alias — same as scheduled_task_success_rate so mixed launch/refusal cannot read as 100%.
+      task_success_rate: scheduledValid === 0 ? null : taskSuccesses / scheduledValid,
       cost_complete: costComplete,
       known_cost_usd: accountableTrials.some(t => t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0)
         ? knownCost

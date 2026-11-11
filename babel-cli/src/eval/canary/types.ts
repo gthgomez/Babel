@@ -98,10 +98,21 @@ export interface CanaryReport {
   /** All scheduled rows, including preflight refusals; legacy qualified rates remain separate. */
   attempt_accounting?: {
     scheduled: number;
+    /** Valid (non-invalid_task) scheduled rows. */
+    scheduled_valid?: number;
     launched: number;
+    /** Valid scheduled rows with launch_status launched. */
+    launched_valid?: number;
     not_launched: number;
+    not_launched_valid?: number;
     launch_unknown: number;
+    launch_unknown_valid?: number;
     task_successes: number;
+    /** Successes / scheduled_valid; includes not_launched preflight in the denominator. */
+    scheduled_task_success_rate?: number | null;
+    /** Successes / launched_valid; conditional on actual launch only. */
+    launched_task_success_rate?: number | null;
+    /** Alias of scheduled_task_success_rate for older consumers. */
     task_success_rate: number | null;
     cost_complete: boolean;
     known_cost_usd: number | null;

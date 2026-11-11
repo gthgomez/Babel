@@ -86,7 +86,7 @@ async function main() {
   mkdirSync(captureDirectory, { recursive: true });
   const tapPath = join(captureDirectory, 'producer.tap');
   for (const name of ['full.tap', 'full.tap.stderr.log', 'execution.json', 'results.json']) rmSync(join(artifacts, name), { force: true });
-  const hostPython = probeUnitShardHostPython(selection.selected);
+  const hostPython = probeUnitShardHostPython(selection.selected, process.env);
   writeHostPythonProbeRecord(packageRoot, hostPython.record);
   if (hostPython.record.required && !hostPython.record.resolved) {
     console.error(`[ci-unit] host Python required for: ${hostPython.record.selected.join(', ')}; tried: ${hostPython.record.tried.join(', ')}`);

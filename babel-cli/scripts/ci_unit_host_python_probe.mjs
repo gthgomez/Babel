@@ -33,14 +33,39 @@ function candidates() {
 }
 
 /**
+ * @param {readonly string[]} selected
+ * @param {NodeJS.ProcessEnv} [parentEnv]
  * @returns {{ env: Record<string, string>, record: object }}
  */
-export function probeUnitShardHostPython(selected) {
+export function probeUnitShardHostPython(selected, parentEnv = process.env) {
   const needs = selected.filter(path => HOST_PYTHON_UNIT_PATHS.includes(path))
   if (needs.length === 0) {
     return { env: {}, record: { required: false, selected: [] } }
   }
+  const configured =
+    parentEnv.BABEL_WORKSPACE_PYTHON?.trim() || parentEnv.BABEL_PYTHON?.trim() || ''
   const tried = []
+  if (configured) {
+    tried.push(`env:${configured}`)
+    const configuredWorks = probe(configured)
+    const record = {
+      required: true,
+      selected: needs,
+      platform: process.platform,
+      configuredInterpreter: configured,
+      configuredWorks,
+      resolved: configuredWorks ? `env:${configured}` : null,
+      tried,
+      coordinatorProtectedWorkflow: '.github/workflows/typecheck.yml',
+      coordinatorAction: configuredWorks
+        ? null
+        : 'Configured BABEL_WORKSPACE_PYTHON/BABEL_PYTHON is not executable; fix operator binding before auto-probe.',
+      whyAllowedPathInsufficient: configuredWorks
+        ? null
+        : 'Explicit interpreter binding must remain authoritative; probe does not override a broken configured path.',
+    }
+    return { env: {}, record }
+  }
   let resolved = null
   for (const candidate of candidates()) {
     tried.push(candidate.label)
@@ -53,6 +78,8 @@ export function probeUnitShardHostPython(selected) {
     required: true,
     selected: needs,
     platform: process.platform,
+    configuredInterpreter: null,
+    configuredWorks: null,
     resolved: resolved?.label ?? null,
     tried,
     coordinatorProtectedWorkflow: '.github/workflows/typecheck.yml',
