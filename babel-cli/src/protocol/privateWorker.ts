@@ -446,7 +446,14 @@ export function startPrivateWorker({ input, output, host: injectedHost, onEngine
           }));
           // A new worker-created session must publish the same durable policy a
           // CLI-created session does, so a later resume preserves its boundary.
-          if (!hasRetainedAuthority) recordNewSessionPolicy(engine);
+          // Re-materialization may find the record already present; that is the
+          // intended durable state, not an error.
+          if (!hasRetainedAuthority) {
+            try { recordNewSessionPolicy(engine); }
+            catch (error) {
+              if (!/already exists/i.test(error instanceof Error ? error.message : '')) throw error;
+            }
+          }
           return engine;
         });
         host.engineFactory = (descriptor) => {

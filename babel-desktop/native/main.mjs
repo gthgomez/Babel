@@ -660,6 +660,7 @@ async function start(){
     const workerCompatible=!request.sessionId||workerThreadCompatible(request.sessionId,{
       sessionsDir:runsSessionsDir(packageRoot,runtimeEnvironment().BABEL_RUNS_DIR),
       provider:route?.provider,model:runRequest.model,profile:effectiveProfile,
+      projectRoot:preferences.projectRoot,
     });
     buildRunArgs(cliEntry, preferences.projectRoot, runRequest);
     const childEnvironment=applySelectedModelEnvironment(await ownedCliEnvironment(),selectedModel);

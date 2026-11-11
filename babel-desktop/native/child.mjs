@@ -34,6 +34,9 @@ export function buildChildEnvironment(base, {runId, executionScope, resumeProfil
   const env=applyExecutionScopeEnvironment({...base,
     BABEL_DESKTOP_IPC:'1', BABEL_DESKTOP_RUN_ID:runId, BABEL_DAEMON_ENABLED:'false',
   },executionScope);
+  // Desktop always passes the effective profile explicitly; an ambient value
+  // must not conflict with a recorded session policy.
+  delete env['BABEL_EXECUTION_PROFILE'];
   if(resumeProfileSelection===true)env['BABEL_DESKTOP_RESUME_PROFILE_SELECTION']='explicit';
   return env;
 }

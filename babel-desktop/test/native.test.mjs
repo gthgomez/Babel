@@ -8,11 +8,12 @@ const load = (name) => import(`../native/${name}.mjs`).catch(() => ({}));
 
 test('child environment marks only a legacy resume as an explicit profile migration',async()=>{
  const {buildChildEnvironment}=await load('child');
- const base={PATH:'x',BABEL_PROJECT_ROOT:'ambient',BABEL_ALLOWED_ROOTS:'ambient'};
+ const base={PATH:'x',BABEL_PROJECT_ROOT:'ambient',BABEL_ALLOWED_ROOTS:'ambient',BABEL_EXECUTION_PROFILE:'read_only_audit'};
  const fresh=buildChildEnvironment(base,{runId:'run-1',executionScope:{kind:'project',projectRoot:'C:/p'}});
  assert.equal(fresh.BABEL_DESKTOP_IPC,'1');
  assert.equal(fresh.BABEL_DESKTOP_RESUME_PROFILE_SELECTION,undefined);
  assert.equal(fresh.BABEL_PROJECT_ROOT,'ambient');
+ assert.equal(fresh.BABEL_EXECUTION_PROFILE,undefined,'desktop passes the effective profile explicitly');
  const legacy=buildChildEnvironment(base,{runId:'run-2',executionScope:{kind:'project',projectRoot:'C:/p'},resumeProfileSelection:true});
  assert.equal(legacy.BABEL_DESKTOP_RESUME_PROFILE_SELECTION,'explicit');
  const conversation=buildChildEnvironment(base,{runId:'run-3',executionScope:{kind:'conversation'}});

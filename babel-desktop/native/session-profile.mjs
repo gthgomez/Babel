@@ -1,7 +1,15 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 
 export const SESSION_POLICY_FILE = 'execution-policy.json'
+
+function canonicalRoot(value) {
+  if (typeof value !== 'string' || !value) return null
+  try {
+    const root = realpathSync(value)
+    return process.platform === 'win32' ? root.toLowerCase() : root
+  } catch { return null }
+}
 
 /**
  * Resolve the command boundary a resumed Desktop session already proved.
@@ -37,7 +45,7 @@ export function resolveSessionExecutionProfile(sessionId, { sessionsDir, default
  * its authority. A session continued under a different provider/model/profile
  * must resume through the per-run CLI child instead of failing forever.
  */
-export function workerThreadCompatible(sessionId, { sessionsDir, provider, model, profile }) {
+export function workerThreadCompatible(sessionId, { sessionsDir, provider, model, profile, projectRoot }) {
   if (typeof sessionId !== 'string' || !sessionId) return true
   if (typeof sessionsDir !== 'string' || !sessionsDir) return false
   let raw
@@ -52,4 +60,6 @@ export function workerThreadCompatible(sessionId, { sessionsDir, provider, model
     && descriptor.provider === provider
     && descriptor.model === model
     && descriptor.policyProfile === profile
+    && canonicalRoot(descriptor.projectRoot) !== null
+    && canonicalRoot(descriptor.projectRoot) === canonicalRoot(projectRoot)
 }
