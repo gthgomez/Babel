@@ -40,7 +40,13 @@ function finish(job: Job, outcome: RepoMapGraphOutcome): void {
 }
 
 function terminateOwnedWorker(target: ChildProcess, job?: Job, outcome?: RepoMapGraphOutcome): Promise<void> {
-  if (worker !== target) return terminationPromise ?? Promise.resolve();
+  if (worker !== target) {
+    // A failed spawn can retire the handle before the caller marks its job
+    // active; still settle that caller instead of leaving a pending promise
+    // that no live handle can ever resolve.
+    if (job && outcome) finish(job, outcome);
+    return terminationPromise ?? Promise.resolve();
+  }
   worker = undefined;
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = undefined;
@@ -146,11 +152,14 @@ function pump(): void {
   if (active || terminating || queue.length === 0) return;
   const job = queue.shift()!;
   if (job.settled) { pump(); return; }
+  // Mark the job active before spawning: a synchronous spawn error must fail
+  // this job, not a background channel that is no longer owned.
+  active = job;
   try {
     const target = getWorker();
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = undefined;
-    active = job;
+    if (target.exitCode !== null || target.signalCode !== null || !target.connected) throw new Error('Indexer worker exited');
     target.ref();
     target.channel?.ref();
     if (!target.connected || !target.send) throw new Error('Indexer IPC is unavailable');
