@@ -522,14 +522,44 @@ export function heuristicSymbolCoverageReject(
   };
 }
 
-/** Task prose explicitly permits cosmetic or auxiliary test-file refinement. */
+function segmentNegatesAuxiliaryTestPermission(segment: string): boolean {
+  if (/^\s*(?:do\s+not|don't)\b/i.test(segment)) return true;
+  if (/\b(?:do\s+not|don't)\s+(?:claim|say|assert|pretend)\b/i.test(segment)) return true;
+  if (/\bno\s+authorized\s+test\b/i.test(segment)) return true;
+  if (/\b(?:there\s+are\s+)?no\s+authorized\s+test\s+(?:edit|refinement|change)s?\b/i.test(segment)) return true;
+  if (/\b(?:not|never)\s+authorized\s+to\s+edit\b/i.test(segment)) return true;
+  // Prohibition sentence that still mentions "can edit … test/…" (e.g. "Do not claim you can edit …").
+  if (
+    /\b(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update|adjust)\b/i.test(segment)
+    && /\b(?:do\s+not|don't|cannot|can't|must\s+not|never|(?:^|\s)no\s+)\b[\s\S]{0,120}\b(?:may|can)\s+/i.test(segment)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function segmentAffirmsAuxiliaryTestPermission(segment: string): boolean {
+  if (segmentNegatesAuxiliaryTestPermission(segment)) return false;
+  if (
+    /\bauthorized\s+(?:auxiliary\s+)?test\s+(?:edit|refinement|change)s?\b/i.test(segment)
+    && !/\bno\s+authorized\s+test\b/i.test(segment)
+  ) {
+    return true;
+  }
+  const affirmativeLead =
+    /^(?:[-*•]\s*)?(?:you\s+)?(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update|adjust)\b/i;
+  if (!affirmativeLead.test(segment)) return false;
+  if (/\btest\/[\w./-]+/.test(segment)) return true;
+  if (/\btest\b/i.test(segment) && /\bmessage\b/i.test(segment)) return true;
+  return false;
+}
+
+/** Task prose explicitly permits cosmetic or auxiliary test-file refinement (fail-closed). */
 export function taskAuthorizesAuxiliaryTestEdit(task: string): boolean {
-  const normalized = task.replace(/\r\n?/g, '\n');
-  return (
-    /\b(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update|adjust)\b[^.\n]{0,120}\btest\/[\w./-]+/i.test(normalized)
-    || /\b(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update)\b[^.\n]{0,80}\btest\b[^.\n]{0,40}\bmessage\b/i.test(normalized)
-    || /\bauthorized\s+(?:auxiliary\s+)?test\s+(?:edit|refinement|change)/i.test(normalized)
-  );
+  const normalized = task.replace(/\r\n?/g, '\n').trim();
+  if (/\b(?:that|this)\s+is\s+not\s+authorization\b/i.test(normalized)) return false;
+  const segments = normalized.split(/\n+|(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+  return segments.some((segment) => segmentAffirmsAuxiliaryTestPermission(segment));
 }
 
 /**

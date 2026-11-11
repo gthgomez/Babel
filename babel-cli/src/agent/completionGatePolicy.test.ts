@@ -1059,6 +1059,37 @@ describe('planCompletionGateReject', () => {
     assert.equal(incomplete.reason, 'verifier_scope');
   });
 
+  test('unrelated green command does not satisfy bound Requirements harness', () => {
+    const task = 'Fix source.js so the exported value is 2.\nRequirements:\n- `node verify.mjs` must pass.';
+    const log = [
+      { tool: 'read_file', target: 'src/source.js', index: 0, exit_code: 0 },
+      {
+        tool: 'run_command',
+        target: 'npm test',
+        exit_code: 0,
+        processExecuted: true,
+        processCompleted: true,
+        verifierExecuted: true,
+        index: 1,
+      },
+    ];
+    assert.equal(groundedGreenRequiredVerifiersInToolLog(['node verify.mjs'], log), false);
+    assert.equal(
+      evaluateCompletionGateForEngine({
+        turnType: 'completion',
+        taskIntent: 'execute',
+        task,
+        taskClass: 'quick_fix',
+        toolCallLog: log,
+        lastVerifierReceipt: null,
+        requiredVerifierCommands: ['node verify.mjs'],
+        requiredVerifiers: [],
+        executedVerifierLedger: [],
+      }),
+      'reject',
+    );
+  });
+
   test('bound Requirements harness grounds partial completion without ledger promotion', () => {
     const task = 'Fix parser.js so parseSum(2, 3) returns 5.\nRequirements:\n- `node check.mjs` must pass.';
     const log = [
@@ -1081,6 +1112,7 @@ describe('planCompletionGateReject', () => {
         task,
         taskClass: 'quick_fix',
         toolCallLog: log,
+        lastVerifierReceipt: null,
         requiredVerifierCommands: ['node check.mjs'],
         requiredVerifiers: [],
         executedVerifierLedger: [],

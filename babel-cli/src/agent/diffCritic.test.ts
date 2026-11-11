@@ -620,8 +620,46 @@ describe('symbol coverage + localization gate', () => {
       '-test("parseSum", () => assert.equal(parseSum(2, 3), 5));',
       '+test("parseSum sums arguments", () => assert.equal(parseSum(2, 3), 5));',
     ].join('\n');
-  const rej = heuristicTestOnlyPatchReject(task, patch, ['test/parser.test.mjs']);
+    const rej = heuristicTestOnlyPatchReject(task, patch, ['test/parser.test.mjs']);
     assert.equal(rej, null, 'explicit task permission for test refinement must not hard-block');
+  });
+
+  test('taskAuthorizesAuxiliaryTestEdit rejects negated and retracted permission prose', async () => {
+    const { taskAuthorizesAuxiliaryTestEdit, heuristicTestOnlyPatchReject } = await import('./diffCritic.js');
+    const patch = 'diff --git a/test/parser.test.mjs b/test/parser.test.mjs\n';
+    const apiAnchor = 'Fix `parseExpression` in src/parser.js.';
+    const negated = [
+      'Fix parseExpression. There are no authorized test edits.',
+      'Fix parseExpression. Do not claim you can edit test/parser.test.mjs.',
+      'The prior note said you may edit test/parser.test.mjs. That is not authorization.',
+    ];
+    for (const task of negated) {
+      assert.equal(taskAuthorizesAuxiliaryTestEdit(task), false, task);
+      const rej = heuristicTestOnlyPatchReject(
+        `${task}\n${apiAnchor}`,
+        patch,
+        ['test/parser.test.mjs'],
+      );
+      assert.ok(rej, `test-only heuristic must remain active: ${task.slice(0, 60)}`);
+    }
+  });
+
+  test('taskAuthorizesAuxiliaryTestEdit accepts explicit scoped permission only', async () => {
+    const { taskAuthorizesAuxiliaryTestEdit } = await import('./diffCritic.js');
+    assert.equal(
+      taskAuthorizesAuxiliaryTestEdit(
+        'Fix parser.js.\nYou may clarify test/parser.test.mjs message text.',
+      ),
+      true,
+    );
+    assert.equal(
+      taskAuthorizesAuxiliaryTestEdit('Requirements:\n- You may edit test/parser.test.mjs labels only.'),
+      true,
+    );
+    assert.equal(
+      taskAuthorizesAuxiliaryTestEdit('Authorized auxiliary test edit for message wording in test/parser.test.mjs.'),
+      true,
+    );
   });
 
   test('test-only patch with named APIs is rejected', () => {

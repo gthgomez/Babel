@@ -760,13 +760,17 @@ test('chat probe (3) negative: wrong value plus unrelated green verifier cannot 
     const unrelated = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
       .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'npm test')
     assert.equal(unrelated?.exit_code, 0, 'unrelated suite may run green without proving the behavioral requirement')
-    assert.ok(
-      o.result.status === 'completed' || o.result.status === 'blocked',
-      `bound harness commands must not certify unrelated green alone (status ${o.result.status})`,
-    )
     assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'unrelated green receipt must not satisfy the behavioral requirement')
     assert.notEqual(o.durableOutcome, 'NO_CHANGE_REQUIRED')
-    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE', 'unrelated green must not certify task completion')
+    assert.notEqual(o.durableOutcome, 'VERIFIED_COMPLETE')
+    assert.ok(
+      o.outcome === 'BLOCKED_POLICY'
+        || o.outcome === 'UNVERIFIED_PATCH'
+        || o.outcome === 'AGENT_FAILURE'
+        || o.outcome === 'NEEDS_HUMAN_DECISION',
+      `unrelated green verifier cannot certify completion (got ${o.outcome})`,
+    )
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
