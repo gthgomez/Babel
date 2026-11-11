@@ -2193,7 +2193,7 @@ Notes:
         const explicitResumeProfile = process.env['BABEL_DESKTOP_IPC']==='1' &&
           process.env['BABEL_DESKTOP_RESUME_PROFILE_SELECTION']!=='explicit'
           ? undefined : options.executionProfile;
-        if (mode==='chat' && options.resumeChat !== undefined) {
+        if ((mode==='chat' || mode==='chat-headless') && options.resumeChat !== undefined) {
           try { executionPolicy=resolveResumedSessionPolicy(options.resumeChat,explicitResumeProfile); }
           catch(error) {
             const message=error instanceof Error?error.message:'The saved execution policy is unavailable.';
