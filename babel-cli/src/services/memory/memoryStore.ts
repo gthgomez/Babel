@@ -1,8 +1,7 @@
-import { resolveRuntimeUserStateRoot } from '../../config/runtimePaths.js';
 /**
  * memoryStore.ts — CRUD operations on the Babel memory directory.
  *
- * Manages a per-project memory directory at ~/.babel/projects/{sanitized-git-root}/memory/.
+ * Manages a per-project memory directory at ~/.babel/projects/{project-slug}/memory/.
  * Each memory is a .md file with YAML-style frontmatter parsed as structured metadata.
  * The MEMORY.md index is maintained as a quick-scan table of contents.
  */
@@ -26,39 +25,32 @@ import {
   readIndex,
   rewriteIndex,
 } from './memoryIndex.js';
+import {
+  deriveMemoryProjectSlug,
+  legacyMemoryProjectSlug,
+  sanitizeGitRoot,
+} from './memoryStoreLayout.js';
+import { resolveMemoryRootWithMigration } from './memoryStoreMigration.js';
 
-// ─── Git Root Sanitization ─────────────────────────────────────────────────
-
-/**
- * Sanitize a git root path to a filesystem-safe slug.
- * Replaces characters that are invalid in folder names (especially on Windows).
- */
-export function sanitizeGitRoot(gitRoot: string): string {
-  return gitRoot
-    .replace(/^[A-Za-z]:(?=\/|\\)/, '') // Strip Windows drive letter (e.g., "C:" → "")
-    .replace(/[/\\:<>"|?*]+/g, '-') // Replace invalid/special chars with hyphens
-    .replace(/^[-.]+|[-.]+$/g, '') // Strip leading/trailing hyphens and dots
-    .replace(/-+/g, '-') // Collapse consecutive hyphens
-    .toLowerCase();
-}
+export {
+  deriveMemoryProjectSlug,
+  legacyMemoryProjectSlug,
+  sanitizeGitRoot,
+} from './memoryStoreLayout.js';
+export type { MemoryRootResolution } from './memoryStoreMigration.js';
+export { resolveMemoryRootWithMigration } from './memoryStoreMigration.js';
 
 /**
  * Resolve the memory root directory for a given project root.
- * Creates the directory if it does not exist (idempotent).
- * Returns null on filesystem errors.
+ * Migrates legacy v0 stores when ownership is attributable; returns null when ambiguous.
  */
 export function resolveMemoryRoot(projectRoot: string): string | null {
-  try {
-    const sanitized = sanitizeGitRoot(resolve(projectRoot));
-    const memoryRoot = join(resolveRuntimeUserStateRoot(), 'projects', sanitized, 'memory');
-    mkdirSync(memoryRoot, { recursive: true });
-    return memoryRoot;
-  } catch (err) {
-    console.warn(
-      `Babel memory: failed to resolve memory root for "${projectRoot}": ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return null;
+  const resolution = resolveMemoryRootWithMigration(projectRoot);
+  if (resolution.memoryRoot) return resolution.memoryRoot;
+  if (resolution.blocker) {
+    console.warn(`Babel memory: ${resolution.blocker.code}: ${resolution.blocker.message}`);
   }
+  return null;
 }
 
 // ─── Frontmatter Parsing ───────────────────────────────────────────────────
