@@ -142,6 +142,17 @@ export function diffFixtureMetadataEntries(
   })
 }
 
+/** Phase deltas that indicate protected Git metadata tamper, not benign host Git housekeeping. */
+export function fixtureMetadataTamperDrift(
+  drift: readonly { path: string; before: string | null; after: string | null }[],
+): typeof drift {
+  return drift.filter(entry => {
+    const path = entry.path.replace(/\/$/, '')
+    // Read-only host `git status` can refresh index stat entries without candidate writes.
+    return path !== 'index'
+  })
+}
+
 /** Bound Git metadata fingerprint for fixture regression checks (exported for native Chat calibration). */
 export async function fixtureMetadataDigest(root: string): Promise<string> {
   return createHash('sha256').update(JSON.stringify(await fixtureMetadataEntries(root))).digest('hex')

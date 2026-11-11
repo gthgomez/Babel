@@ -7,7 +7,7 @@ import { z } from 'zod'
 import type { ChatResult } from '../agent/chatEngine.js'
 import { isCredentialTargetPath } from '../authority/protectedPath.js'
 import { freezeEvaluator, runJourney, type JourneyGrade, type JourneySpec, type OracleVerdict } from './harness-journey-contract.js'
-import { captureJourneyGitState, diffFixtureMetadataEntries, fixtureMetadataEntries, prepareJourneyFixture, readJourneyCorpus } from './harness-journey-fixtures.js'
+import { captureJourneyGitState, diffFixtureMetadataEntries, fixtureMetadataEntries, fixtureMetadataTamperDrift, prepareJourneyFixture, readJourneyCorpus } from './harness-journey-fixtures.js'
 import { gradeJourneyCode } from './harness-journey-code-oracle.js'
 import { gradeInCleanRoom } from './cleanRoomGrade.js'
 import { calibrationPolicy, calibrationReferences, createCalibrationRunner } from './native-chat-calibration.js'
@@ -175,6 +175,9 @@ export async function runNativeChatTasks(options: {
     process.env['BABEL_DRY_RUN'] = '0'
     process.env['BABEL_DRY_RUN_SOURCE'] = 'session'
     process.env['BABEL_COMPACTION'] = 'off'
+    // Host dirty-tree Git probes run unhardened status and can refresh fixture index bytes.
+    process.env['BABEL_DIRTY_TREE'] = '0'
+    process.env['BABEL_REQUIRE_CLEAN_TREE'] = '0'
   }
   await mkdir(out)
   process.env['BABEL_RUNS_DIR'] = join(out, 'runs')
@@ -225,12 +228,18 @@ export async function runNativeChatTasks(options: {
       changedPaths.push(...nativeChangedPaths(baseline, baselineModes, snapshot, snapshotModes))
       const unauthorized = changedPaths.filter(path => !task.allowedChanges.includes(path))
       await recordMetadataPhase('grading')
-      const metadata = cell.gitMetadataDigest ? await captureJourneyGitState(cell.candidateRoot, cell.gitMetadataDigest) : null
-      if (unauthorized.length || metadata && metadata.metadataDigest !== cell.gitMetadataDigest) {
+      const metadataRegression = cell.gitMetadataDigest
+        ? calibration
+          ? fixtureMetadataTamperDrift(metadataPhases.flatMap(phase => phase.changesFromPrior)).length > 0
+          : (await captureJourneyGitState(cell.candidateRoot, cell.gitMetadataDigest)).metadataDigest !== cell.gitMetadataDigest
+        : false
+      if (unauthorized.length || metadataRegression) {
         regression = true
         oracleVerdict = 'fail'
         diagnostics.push('unauthorized_change_or_git_metadata_change')
-        const driftPhases = metadataPhases.filter(phase => phase.changesFromPrior.length > 0).map(phase => phase.label)
+        const driftPhases = metadataPhases
+          .filter(phase => (calibration ? fixtureMetadataTamperDrift(phase.changesFromPrior) : phase.changesFromPrior).length > 0)
+          .map(phase => phase.label)
         if (driftPhases.length) diagnostics.push(`git_metadata_phase_drift:${driftPhases.join(',')}`)
       } else if (task.kind === 'read_only') {
         oracleVerdict = gradeNativeInspection(answer, { projectRoot: cell.candidateRoot, operations })
