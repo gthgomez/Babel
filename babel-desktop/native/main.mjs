@@ -632,7 +632,9 @@ async function start(){
     const cliEntry=activeCliEntry();
     if(!cliEntry)throw new Error(app.isPackaged?(process.platform==='win32'?'Bundled CLI or Node is missing. Extract the complete ZIP again.':'Bundled CLI or Node is missing. Download the complete AppImage again.'):'The official Babel CLI is not built. Build babel-cli/dist/index.js, or choose another entry from Advanced.');
     const conversationOnly=!preferences.projectRoot;
-    const effectiveProfile=resolveDesktopExecutionProfile(request.sessionId);
+    const sessionPolicy=resolveDesktopExecutionProfile(request.sessionId);
+    const effectiveProfile=sessionPolicy.profile;
+    const resumeProfileSelection=Boolean(request.sessionId)&&!sessionPolicy.recorded;
     if(!conversationOnly)await projectAuthority.admit(preferences.projectRoot);
     if(!(await getInfo()).ready)throw new Error('The selected Babel CLI or project is no longer available');
     if(app.isPackaged&&!conversationOnly){
@@ -641,7 +643,7 @@ async function start(){
     }
     // Validate native-bound scope and route before spawning; no arbitrary flags.
     const route = readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR);
-    const runRequest = {...request,executionProfile:effectiveProfile,executionScope:conversationOnly?{kind:'conversation'}:{kind:'project',projectRoot:preferences.projectRoot}};
+    const runRequest = {...request,executionProfile:effectiveProfile,resumeProfileSelection,executionScope:conversationOnly?{kind:'conversation'}:{kind:'project',projectRoot:preferences.projectRoot}};
     if (route?.model && !runRequest.model) {
       runRequest.model = route.model;
     }

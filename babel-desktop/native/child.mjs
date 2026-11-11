@@ -29,6 +29,15 @@ function terminateChildTree(child) {
   try { child.kill(); } catch { /* The child may already have exited. */ }
 }
 
+/** Build the exact child environment; a legacy resume is a deliberate migration. */
+export function buildChildEnvironment(base, {runId, executionScope, resumeProfileSelection}) {
+  const env=applyExecutionScopeEnvironment({...base,
+    BABEL_DESKTOP_IPC:'1', BABEL_DESKTOP_RUN_ID:runId, BABEL_DAEMON_ENABLED:'false',
+  },executionScope);
+  if(resumeProfileSelection===true)env['BABEL_DESKTOP_RESUME_PROFILE_SELECTION']='explicit';
+  return env;
+}
+
 /** No shell, interpolated command, automatic approval, or invented runtime flag. */
 export function buildRunArgs(entry, projectRoot, {task, mode, sessionId, model,executionScope,executionProfile}) {
   const conversation=executionScope?.kind==='conversation';
@@ -81,12 +90,12 @@ export class BabelChild {
       if(['run_complete','run_error','turn.completed','turn.failed','cancelled'].includes(event.type)){terminalReceived=true;this.#approval=null;this.#approvalClosed=true;}
       if(!displayLimited || CONTROL_EVENTS.has(event.type)) send({kind:'event',event});
     }, report);
+    const childEnvironment=buildChildEnvironment({
+      ...(this.inheritEnv ? process.env : {}), ...this.env,
+    },{runId:request.runId,executionScope:request.executionScope,resumeProfileSelection:request.resumeProfileSelection});
     const child = spawn(this.executable, productionNodeCliArgv(this.entry, args.slice(1)), {
       cwd: this.launchDirectory, shell: false, windowsHide: true,
-      stdio: ['pipe','pipe','pipe'], env: applyExecutionScopeEnvironment({
-        ...(this.inheritEnv ? process.env : {}), ...this.env,
-        BABEL_DESKTOP_IPC:'1', BABEL_DESKTOP_RUN_ID:request.runId, BABEL_DAEMON_ENABLED:'false',
-      },request.executionScope)
+      stdio: ['pipe','pipe','pipe'], env: childEnvironment
     });
     this.#child = child;
     child.stdout.on('data', chunk => {

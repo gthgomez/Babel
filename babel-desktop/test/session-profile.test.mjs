@@ -9,8 +9,8 @@ test('a legacy session without a record keeps the proven Docker boundary', () =>
   const root = mkdtempSync(join(tmpdir(), 'babel-session-profile-'))
   try {
     mkdirSync(join(root, 'chat-legacy'), { recursive: true })
-    assert.equal(resolveSessionExecutionProfile('chat-legacy', { sessionsDir: root }), 'safe_repo')
-    assert.equal(resolveSessionExecutionProfile(undefined, { sessionsDir: root }), 'host_native')
+    assert.deepEqual(resolveSessionExecutionProfile('chat-legacy', { sessionsDir: root }), { profile: 'safe_repo', recorded: false })
+    assert.deepEqual(resolveSessionExecutionProfile(undefined, { sessionsDir: root }), { profile: 'host_native', recorded: false })
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -23,8 +23,8 @@ test('a recorded boundary is restored and corruption fails closed', () => {
     for (const dir of [host, docker, broken]) mkdirSync(dir, { recursive: true })
     writeFileSync(join(host, 'execution-policy.json'), JSON.stringify({ version: 1, profile: 'host_native', source: 'explicit', effectiveBoundary: 'host' }))
     writeFileSync(join(docker, 'execution-policy.json'), JSON.stringify({ version: 1, profile: 'safe_repo', source: 'persisted', effectiveBoundary: 'docker' }))
-    assert.equal(resolveSessionExecutionProfile('chat-host', { sessionsDir: root }), 'host_native')
-    assert.equal(resolveSessionExecutionProfile('chat-docker', { sessionsDir: root }), 'safe_repo')
+    assert.deepEqual(resolveSessionExecutionProfile('chat-host', { sessionsDir: root }), { profile: 'host_native', recorded: true })
+    assert.deepEqual(resolveSessionExecutionProfile('chat-docker', { sessionsDir: root }), { profile: 'safe_repo', recorded: true })
     for (const bad of [
       '{broken',
       JSON.stringify({ version: 1, profile: 'host_native', source: 'explicit', effectiveBoundary: 'docker' }),
