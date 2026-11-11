@@ -10,7 +10,9 @@ import {
   installNoAmbientInferenceGuard,
   isNoAmbientInferenceGuardInstalled,
 } from './no-ambient-inference.mjs';
+import { preferTrustedHostToolPathForTests } from './prefer-trusted-host-tool-path.mjs';
 
+preferTrustedHostToolPathForTests();
 installNoAmbientInferenceGuard();
 if (!isNoAmbientInferenceGuardInstalled()) {
   throw new Error('NO_AMBIENT_INFERENCE_GUARD_NOT_INSTALLED: test:unit bootstrap failed to install the guard');
