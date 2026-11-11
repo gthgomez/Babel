@@ -41,6 +41,7 @@ import {
 } from '../runtime/contextCheckpoints.js';
 import type { AdmissionStore } from '../runtime/admission.js';
 import { resumeChatSession } from '../interactive/chatSessionResume.js';
+import { persistRequiredExecutionPolicyRecord } from '../config/executionPolicySelection.js';
 import type { ReplContext } from '../interactive/context.js';
 import { runChatEngineOnce } from '../interactive/execution/chatCore.js';
 import type { ConversationalRenderer } from '../ui/waterfall.js';
@@ -105,7 +106,13 @@ async function withRunsDir(fn: (runsRoot: string) => Promise<void>): Promise<voi
   } finally {
     if (previous === undefined) delete process.env['BABEL_RUNS_DIR'];
     else process.env['BABEL_RUNS_DIR'] = previous;
-    rmSync(runsRoot, { recursive: true, force: true });
+    try {
+      rmSync(runsRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch (error) {
+      // Windows can retain a just-closed SQLite mapping briefly; the handle
+      // assertions above already cover logical leaks.
+      if (!['EPERM', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+    }
   }
 }
 
@@ -724,6 +731,7 @@ test('resume releases the admission store when construction throws before assign
     {
       const dir = chatSessionDir(controlId);
       mkdirSync(dir, { recursive: true });
+      persistRequiredExecutionPolicyRecord(dir, { profile: 'host_native', source: 'explicit' });
       writeFileSync(
         join(dir, 'transcript.jsonl'),
         `${JSON.stringify({ role: 'user', content: 'hello' })}\n`,
@@ -743,6 +751,7 @@ test('resume releases the admission store when construction throws before assign
     {
       const dir = chatSessionDir(leakId);
       mkdirSync(dir, { recursive: true });
+      persistRequiredExecutionPolicyRecord(dir, { profile: 'host_native', source: 'explicit' });
       const log = createThreadEventLog(leakId);
       startTurn(log, {
         task: 'resume me',
@@ -759,13 +768,13 @@ test('resume releases the admission store when construction throws before assign
       );
 
       const ctx = makeResumeCtx();
-      // An unconfigured model family makes `new ChatEngine(...)` throw inside
+      // An unavailable connection key makes engine construction throw inside
       // createEngineFromEventLog — the designed pre-assignment throw path.
-      ctx.state.model = 'not-a-configured-model-family';
+      ctx.state.model = 'connection/does-not-exist';
       const outcome = await resumeChatSession(ctx, leakId, { confirmUnknownIdentity: true });
       assert.equal(outcome.ok, false, 'construction failure surfaces as a failed resume');
       if (!outcome.ok) {
-        assert.match(outcome.message, /not configured/, 'the throw really came from construction');
+        assert.match(outcome.message, /unavailable|connection|not configured/i, `unexpected construction error: ${outcome.message}`);
       }
       assert.equal(ctx.chatEngine, undefined, 'no engine adopted the store');
       assert.equal(

@@ -53,6 +53,7 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
     const { loadThreadEventLogFromDir } = await load('agent/threadEventLog.js')
     const { persistTranscriptToDisk } = await load('agent/chatEngineObservability.js')
     const { resumeChatSession } = await load('interactive/chatSessionResume.js')
+    const { persistRequiredExecutionPolicyRecord } = await load('config/executionPolicySelection.js')
     const buggy = 'export const add = (a, b) => a - b\n'
     const fixed = 'export const add = (a, b) => a + b\n'
     writeFileSync(join(fixture, 'parser.mjs'), buggy)
@@ -225,6 +226,7 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
     // Close the producer and resume through the ordinary UI seam. Historical
     // terminal evidence stays historical; a new read-only task gains no verifier.
     const sessionId = cancelledEngine.getParityRuntime().eventLog.thread_id
+    persistRequiredExecutionPolicyRecord(chatSessionDir(sessionId), { profile: 'host_native', source: 'explicit' })
     await persistTranscriptToDisk(chatSessionDir(sessionId), [...cancelledEngine.getConversation()])
     cancelledEngine.closeAdmissionStore()
     const ctx = { state: { model: 'deepseek-v4-flash' }, turns: [], turnCounter: 0,

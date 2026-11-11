@@ -32,6 +32,7 @@ import { tmpdir } from 'node:os';
 import { ChatEngine, type ChatEvent, type ChatResult } from './chatEngine.js';
 import type { ProviderMessage, ToolDefinition, ToolStreamEvent } from '../runners/base.js';
 import { chatSessionDir, openSessionAdmissionStore } from '../cli/runsLayout.js';
+import { persistRequiredExecutionPolicyRecord } from '../config/executionPolicySelection.js';
 import { resumeChatSession } from '../interactive/chatSessionResume.js';
 import type { ReplContext } from '../interactive/context.js';
 import { rebuildProviderMessagesFromEvents } from './threadEventLog.js';
@@ -1464,6 +1465,7 @@ describe('S07 ordinary-loop qualification', { concurrency: false }, () => {
         }),
       } as unknown as ReplContext;
       const readResumedEngine = (): ChatEngine | undefined => ctx.chatEngine;
+      persistRequiredExecutionPolicyRecord(chatSessionDir(produced.eventLog.thread_id), { profile: 'dev_local', source: 'explicit' });
       const resumed = await resumeChatSession(ctx, produced.eventLog.thread_id);
       resumedEngine = readResumedEngine();
       assert.equal(resumed.ok, true, resumed.ok ? '' : resumed.message);

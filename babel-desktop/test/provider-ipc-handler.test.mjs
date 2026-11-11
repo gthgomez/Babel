@@ -44,6 +44,7 @@ async function registeredHandler(source, config, channel = 'babel:save-provider-
     credentialRequestContext:async()=>({}), assertIdle() {}, runtimeEnvironment: () => ({BABEL_CONFIG_DIR: config}),
     preferences: {projectRoot: null, projectCredentialRoot: null},
     savePreferences: async () => {}, diagnostics: null,
+    retireResidentWorker: async () => {},
     connectionChangeBusy: false, runAdmission: false, runner: null, remoteBridge: null, updateBusy: false,
     ...lifecycle,
   };

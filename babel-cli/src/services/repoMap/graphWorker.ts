@@ -20,7 +20,7 @@ type WorkerRequest =
   | { type: 'build'; id: number; root: string; options: Omit<RepoMapGraphOptions, 'signal' | 'maxDurationMs'> }
   | { type: 'invalidate'; file?: string };
 
-process.on('disconnect', () => process.exit(0));
+process.on('disconnect', () => { process.exitCode = 0; });
 process.on('message', (value: unknown) => {
   const request = value as WorkerRequest;
   if (request.type === 'invalidate') {

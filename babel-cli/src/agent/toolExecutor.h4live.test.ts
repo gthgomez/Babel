@@ -785,25 +785,27 @@ describe('H4 detectWorkingTreeDirty + isolation profile mapping', () => {
     }
   });
 
-  it('evaluateGovernedIsolation("chat") must not be used as isolation profile (safe_repo default trap)', async () => {
+  it('unknown chat-mode names are rejected instead of defaulting to an isolation profile', async () => {
     const { evaluateGovernedIsolation, setDockerAvailableForTest, resetDockerAvailabilityCache } =
       await import('../config/benchmarkContainer.js');
     const { resolveExecutionProfile } = await import('../config/executionProfiles.js');
     // ChatExecutionProfile names are NOT ExecutionProfileNames
-    assert.strictEqual(resolveExecutionProfile('chat').name, 'safe_repo');
+    assert.throws(() => resolveExecutionProfile('chat'), /Invalid execution profile/);
     // Production path must use BABEL_EXECUTION_PROFILE (or undefined → env), never 'chat'
     resetDockerAvailabilityCache();
     setDockerAvailableForTest(false);
     try {
-      const fromChatMode = evaluateGovernedIsolation('chat', '', {
-        BABEL_ALLOW_HOST_FALLBACK: undefined,
-        BABEL_DOCKER_DISABLE: undefined,
-        BABEL_BENCHMARK_DOCKER_IMAGE: undefined,
-      } as unknown as NodeJS.ProcessEnv);
+      assert.throws(
+        () => evaluateGovernedIsolation('chat', '', {
+          BABEL_ALLOW_HOST_FALLBACK: undefined,
+          BABEL_DOCKER_DISABLE: undefined,
+          BABEL_BENCHMARK_DOCKER_IMAGE: undefined,
+        } as unknown as NodeJS.ProcessEnv),
+        /Invalid execution profile/,
+      );
       const fromDevLocal = evaluateGovernedIsolation(undefined, '', {
         BABEL_EXECUTION_PROFILE: 'dev_local',
       } as NodeJS.ProcessEnv);
-      assert.strictEqual(fromChatMode.kind, 'fail_closed');
       assert.strictEqual(fromDevLocal.kind, 'host_profile');
     } finally {
       resetDockerAvailabilityCache();
