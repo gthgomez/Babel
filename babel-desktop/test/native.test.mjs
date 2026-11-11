@@ -53,7 +53,7 @@ test('child arguments cannot turn task text into options or shell commands',asyn
  const entry=join(tmpdir(),'Babel Space','index.js');const root=join(tmpdir(),'project space');
  const task='--yes; echo unsafe && exit';const args=buildRunArgs(entry,root,{task,mode:'chat'});
  assert.deepEqual(args.slice(-2),['--',task]);
- assert.ok(args.includes('--execution-profile')&&args.includes('safe_repo'));
+ assert.ok(args.includes('--execution-profile')&&args.includes('host_native'));
  assert.ok(!args.includes('--read-only'));
  assert.ok(!args.includes('--resume-chat'));
  assert.ok(!args.slice(0,-1).includes('--yes'));

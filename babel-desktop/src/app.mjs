@@ -1,5 +1,6 @@
-import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus, modeUnavailableReason,isConversationOnlyConnection,hydrateArchivedMessage,setupDockerLabel,runtimeProviderLabel,runtimeDockerLabel,runtimeReadinessLabel,composerSendBlockMessage } from './core.mjs';
+import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus, modeUnavailableReason,isConversationOnlyConnection,hydrateArchivedMessage,setupDockerLabel,runtimeProviderLabel,runtimeDockerLabel,runtimeReadinessLabel,composerSendBlockMessage,executionBoundaryLabel } from './core.mjs';
 import { icon } from './icons.mjs';
+import { createConversationDom } from './conversation-dom.mjs';
 const MODE_OPTIONS=[{id:'chat',label:'Chat',description:'Coding tasks'},{id:'plan',label:'Plan',description:'Read-only planning'},{id:'deep',label:'Deep',description:'Governed workflow'}];
 
 const LOGO = '__LOGO__';
@@ -167,8 +168,9 @@ function renderRuntime() {
     runtimeRow('CLI source', sourceText, source.dirty ? 'warn' : ''),
     runtimeRow('Engine origin', originLabels[engine.origin] ?? engine.origin ?? 'unknown'),
     runtimeRow('Execution profile', engine.executionProfile ?? 'unknown'),
+    runtimeRow('Execution boundary', executionBoundaryLabel({executionProfile:engine.executionProfile}) ?? 'unknown'),
     runtimeRow('Provider', runtimeProviderLabel({platform:nativeInfo?.platform, providerConfigured:Boolean(configuredRoute), reported:engine.readiness?.provider})),
-    runtimeRow('Docker', runtimeDockerLabel({platform:nativeInfo?.platform, docker:engine.readiness?.docker, dockerInstallation:nativeInfo?.dockerInstallation})),
+    runtimeRow('Docker', runtimeDockerLabel({platform:nativeInfo?.platform, docker:engine.readiness?.docker, dockerInstallation:nativeInfo?.dockerInstallation, executionProfile:engine.executionProfile})),
     runtimeRow('Sandbox image', engine.readiness?.sandboxImage ?? 'unknown'),
     runtimeRow('Readiness', runtimeReadinessLabel({platform:nativeInfo?.platform, providerConfigured:Boolean(configuredRoute), engineReady:Boolean(engine.readiness?.ready)})),
     runtimeRow('Update channel', update.channel === 'preview' ? 'development build' : update.channel === 'stable' ? 'stable release' : (update.channel ?? 'not set')),
@@ -238,7 +240,7 @@ function renderTree() {
   $('#project-tree').innerHTML = `${changed}<button class="tree-row tree-root" data-action="folder" data-path="." aria-expanded="${expandedFolders.has('.')}">${icon(expandedFolders.has('.') ? 'down':'chevron')}${icon('folderOpen')}<span class="tree-label">${e(projectName)}</span></button>${expandedFolders.has('.') ? `<div class="tree-children root-children">${treeMarkup(files)}</div>` : ''}`;
 }
 function toolRows(rows) {
-  return `<div class="tool-feed">${rows.map(t => `<div class="tool-item"><button class="tool-row ${e(t.status)}" data-action="expand-tool" data-id="${e(t.id)}" aria-expanded="${expandedTools.has(t.id)}" title="Expand ${e(t.label)}">${icon('chevron')}<span class="tool-label">${t.action ? `<span class="tool-action">${e(t.action)}</span><span class="tool-path">${e(t.path)}</span>` : `<span class="tool-path">${e(t.label)}</span>`}</span><span class="tool-meta"><span>${e(t.meta ?? (t.status === 'running' ? 'running...' : ''))}</span>${t.duration ? `<span class="duration-dot">•</span><span class="duration">${e(t.duration)}</span>` : ''}</span><span class="tool-status ${e(t.status)}">${t.status === 'complete' ? icon('check') : t.status === 'failed' ? icon('close') : ''}</span></button>${expandedTools.has(t.id) ? `<pre class="tool-detail">${e(t.detail ?? 'No additional output was reported.')}</pre>` : ''}</div>`).join('')}</div>`;
+  return `<div class="tool-feed">${rows.map(t => `<div class="tool-item" data-tool-key="${e(t.id)}"><button class="tool-row ${e(t.status)}" data-action="expand-tool" data-id="${e(t.id)}" aria-expanded="${expandedTools.has(t.id)}" title="Expand ${e(t.label)}">${icon('chevron')}<span class="tool-label">${t.action ? `<span class="tool-action">${e(t.action)}</span><span class="tool-path">${e(t.path)}</span>` : `<span class="tool-path">${e(t.label)}</span>`}</span><span class="tool-meta"><span>${e(t.meta ?? (t.status === 'running' ? 'running...' : ''))}</span>${t.duration ? `<span class="duration-dot">•</span><span class="duration">${e(t.duration)}</span>` : ''}</span><span class="tool-status ${e(t.status)}">${t.status === 'complete' ? icon('check') : t.status === 'failed' ? icon('close') : ''}</span></button>${expandedTools.has(t.id) ? `<pre class="tool-detail">${e(t.detail ?? 'No additional output was reported.')}</pre>` : ''}</div>`).join('')}</div>`;
 }
 function messageHasWork(message) {
   if (!message) return false;
@@ -277,6 +279,7 @@ function messageMarkup(m, index) {
   return `<article class="message assistant-message"${identity}><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${expansion}${archiveInfo}${m.toolsTruncated?'<p class="fine-print">Tool preview limited to 100 entries. Complete retained details are available in message sections.</p>':''}${m.terminalConflict?'<p class="fine-print">Terminal records disagree. Refresh or inspect the session evidence.</p>':''}${review}${approval}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${''}${e(({complete:'Response complete',plan_ready:'Plan ready · not applied',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions"><button data-action="copy-message" data-index="${index}" ${!m.text || m.status === 'running' ? 'disabled' : ''}>${icon('copy')} Copy</button></div></article>`;
 }
 let conversationFrame = null;
+const conversationDom = createConversationDom($('#conversation'));
 function scheduleConversationRender() {
   if (conversationFrame !== null) return;
   conversationFrame = requestAnimationFrame(() => {
@@ -295,12 +298,12 @@ function renderConversation(forceBottom = false, reset = false) {
   const previousTop = scroller.scrollTop;
   const session = activeSession();
   if (!session.fixture && session.messages.length === 0) {
-    scroller.innerHTML = `<div class="empty-state"><img src="${LOGO}" alt=""><h1>Run. Verify. Understand.</h1><div class="empty-state-body">${emptyStateBody()}</div><div class="preview-note">${icon('info')}${'Babel CLI · permissions and verification built in'}</div></div>`;
+    conversationDom.render({currentSession:session,empty:`<div class="empty-state"><img src="${LOGO}" alt=""><h1>Run. Verify. Understand.</h1><div class="empty-state-body">${emptyStateBody()}</div><div class="preview-note">${icon('info')}${'Babel CLI · permissions and verification built in'}</div></div>`,history:'',messages:[],messageMarkup});
   } else {
     const viewingOlder=(session.history?.olderOffset ?? 0) > 0;
     const historyWarnings=[session.history?.tailOnly?'Legacy archive reader returned a tail window only.':null,session.history?.skippedOversizedLines?'Oversized archive records could not be displayed; the original archive is preserved.':null,session.history?.snapshotChanged?'The archive changed while loading. Reload the latest messages before relying on this view.':null,session.history?.outcomesBounded?'Terminal evidence exceeds this reader’s limit; status remains unverified where evidence is unavailable.':null].filter(Boolean).map(text=>`<p class="fine-print history-banner">${e(text)}</p>`).join('');
     const historyBanner=(session.history?.hasOlder || viewingOlder ? `<div class="history-banner"><p class="muted">Showing ${session.messages.length} of ${session.history.totalMessages ?? 'unknown'} messages.</p><div class="dialog-actions">${session.history?.hasOlder ? '<button class="button" data-action="load-older-messages">Load earlier messages</button>' : ''}${viewingOlder ? '<button class="button" data-action="load-latest-messages">Return to latest messages</button>' : ''}</div></div>` : '')+historyWarnings;
-    scroller.innerHTML = `${historyBanner}${session.messages.map(messageMarkup).join('')}`;
+    conversationDom.render({currentSession:session,empty:null,history:historyBanner,messages:session.messages,messageMarkup});
   }
   if (reset) scroller.scrollTop = 0;
   else if (forceBottom || atBottom) scroller.scrollTop = scroller.scrollHeight;
@@ -371,8 +374,8 @@ function connectionDialog() {
     ${runtimeRow('Project access',isConversationOnlyConnection(nativeInfo)?'Conversation only':nativeInfo?.projectAuthority?.trusted?'Trusted':nativeInfo?.projectAuthority?.reason??'Unknown or not trusted')}
     ${nativeInfo?.projectRoot?`<div class="dialog-actions"><button class="button" data-action="${nativeInfo.projectAuthority?.trusted?'revoke-trust':'trust-project'}">${nativeInfo.projectAuthority?.trusted?'Revoke project trust':'Trust selected project'}</button></div>`:''}
     ${runtimeRow('Provider',configuredRouteLabel||'Not selected')}
-    ${runtimeRow('Docker',setupDockerLabel({platform:nativeInfo?.platform,conversationOnly:isConversationOnlyConnection(nativeInfo),docker:d?.docker,dockerInstallation:nativeInfo?.dockerInstallation}))}
-    ${runtimeRow('Sandbox',isConversationOnlyConnection(nativeInfo)?'Not required for conversation':d?.sandboxImage==='available'?'Verified':'Prepare an image for project tools')}
+    ${runtimeRow('Docker',setupDockerLabel({platform:nativeInfo?.platform,conversationOnly:isConversationOnlyConnection(nativeInfo),docker:d?.docker,dockerInstallation:nativeInfo?.dockerInstallation,executionProfile:engine.executionProfile}))}
+    ${runtimeRow('Sandbox',executionBoundaryLabel({executionProfile:engine.executionProfile})==='Host · no OS sandbox'?'Not used · commands run with your OS user authority':isConversationOnlyConnection(nativeInfo)?'Not required for conversation':d?.sandboxImage==='available'?'Verified':'Prepare an image for project tools')}
     <p class="fine-print">The recommended Linux image includes Git, Node 24 and npm. Preparing it downloads Docker image layers and may take several minutes. Other projects may need an image with their own test tools.</p>
     <div class="dialog-actions"><button class="button" data-action="prepare-sandbox" ${sandboxBusy?'disabled':''}>Prepare recommended image</button></div>
     <details><summary>Use an existing local image</summary><label class="credential-label" for="sandbox-image">Existing sandbox image</label><input class="credential-control" id="sandbox-image" spellcheck="false" value="${e(nativeInfo?.sandbox?.reference??'')}" ${sandboxBusy?'disabled':''}><div class="dialog-actions"><button class="button" data-action="save-sandbox" ${sandboxBusy?'disabled':''}>Validate and use image</button></div><p class="fine-print">Validation runs an isolated shell and Git check without mounting your project. The verified image is saved for Desktop and ${nativeInfo?.platform==='linux'?'babel-harness':'Babel Harness.cmd'}.</p></details>
