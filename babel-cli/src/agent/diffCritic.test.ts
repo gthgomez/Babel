@@ -632,6 +632,10 @@ describe('symbol coverage + localization gate', () => {
       'Fix parseExpression. There are no authorized test edits.',
       'Fix parseExpression. Do not claim you can edit test/parser.test.mjs.',
       'The prior note said you may edit test/parser.test.mjs. That is not authorization.',
+      'Fix parseExpression. No authorized auxiliary test edits.',
+      'Fix parseExpression. Authorized test edits are forbidden.',
+      'Fix parseExpression. The previous agent said "authorized test edits".',
+      'You may edit test/parser.test.mjs. Permission is revoked; do not edit tests.',
     ];
     for (const task of negated) {
       assert.equal(taskAuthorizesAuxiliaryTestEdit(task), false, task);

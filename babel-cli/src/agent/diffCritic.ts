@@ -524,10 +524,14 @@ export function heuristicSymbolCoverageReject(
 
 function segmentNegatesAuxiliaryTestPermission(segment: string): boolean {
   if (/^\s*(?:do\s+not|don't)\b/i.test(segment)) return true;
-  if (/\b(?:do\s+not|don't)\s+(?:claim|say|assert|pretend)\b/i.test(segment)) return true;
-  if (/\bno\s+authorized\s+test\b/i.test(segment)) return true;
-  if (/\b(?:there\s+are\s+)?no\s+authorized\s+test\s+(?:edit|refinement|change)s?\b/i.test(segment)) return true;
+  if (/\b(?:do\s+not|don't)\s+(?:claim|say|assert|pretend|edit)\b/i.test(segment)) return true;
+  if (/\bno\s+authorized\s+(?:auxiliary\s+)?test\b/i.test(segment)) return true;
+  if (/\b(?:there\s+are\s+)?no\s+authorized\s+(?:auxiliary\s+)?test\s+(?:edit|refinement|change)s?\b/i.test(segment)) return true;
+  if (/\bauthorized\s+test\s+edits?\s+are\s+forbidden\b/i.test(segment)) return true;
   if (/\b(?:not|never)\s+authorized\s+to\s+edit\b/i.test(segment)) return true;
+  if (/\bpermission\s+is\s+revoked\b/i.test(segment)) return true;
+  if (/\b(?:previous|prior)\s+agent\s+said\b/i.test(segment)) return true;
+  if (/\b(?:that|this)\s+is\s+not\s+authorization\b/i.test(segment)) return true;
   // Prohibition sentence that still mentions "can edit … test/…" (e.g. "Do not claim you can edit …").
   if (
     /\b(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update|adjust)\b/i.test(segment)
@@ -538,28 +542,54 @@ function segmentNegatesAuxiliaryTestPermission(segment: string): boolean {
   return false;
 }
 
-function segmentAffirmsAuxiliaryTestPermission(segment: string): boolean {
+/** Task-wide denial/retraction beats any isolated grant sentence (fail-closed). */
+function taskDeniesAuxiliaryTestEdit(normalized: string): boolean {
+  if (/\b(?:that|this)\s+is\s+not\s+authorization\b/i.test(normalized)) return true;
+  if (/\bpermission\s+is\s+revoked\b/i.test(normalized)) return true;
+  if (/\b(?:do\s+not|don't)\s+edit\s+tests?\b/i.test(normalized)) return true;
+  if (/\bauthorized\s+test\s+edits?\s+are\s+forbidden\b/i.test(normalized)) return true;
+  if (/\bno\s+authorized\s+(?:auxiliary\s+)?test\s+edits?\b/i.test(normalized)) return true;
+  if (/\b(?:there\s+are\s+)?no\s+authorized\s+(?:auxiliary\s+)?test\s+edits?\b/i.test(normalized)) return true;
+  if (/\b(?:previous|prior)\s+agent\s+said\b/i.test(normalized)) return true;
+  if (/\b(?:said|noted|claimed)\s+["'`][^"'`]*authorized\s+test\s+edit/i.test(normalized)) return true;
+  if (/\bauthorized\s+test\s+edits?\b/i.test(normalized)
+    && !/\b(?:you\s+)?(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine)\b/i.test(normalized)
+    && !/^authorized\s+auxiliary\s+test\s+edit\s+for\b/im.test(normalized)) {
+  // Bare mention of the phrase (denial, attribution, or discussion) — not an owner grant.
+    return true;
+  }
+  const segments = normalized.split(/\n+|(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+  return segments.some((segment) => segmentNegatesAuxiliaryTestPermission(segment));
+}
+
+/** Unambiguous task-owner grant in one segment (no substring "authorized test edit" shortcut). */
+function segmentIsExplicitAuxiliaryTestGrant(segment: string): boolean {
   if (segmentNegatesAuxiliaryTestPermission(segment)) return false;
+  const affirmativeLead =
+    /^(?:[-*•]\s*)?(?:you\s+)?(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update|adjust)\b/i;
+  if (affirmativeLead.test(segment) && /\btest\/[\w./-]+/.test(segment)) return true;
+  if (affirmativeLead.test(segment) && /\btest\b/i.test(segment) && /\bmessage\b/i.test(segment)) return true;
   if (
-    /\bauthorized\s+(?:auxiliary\s+)?test\s+(?:edit|refinement|change)s?\b/i.test(segment)
-    && !/\bno\s+authorized\s+test\b/i.test(segment)
+    /^(?:[-*•]\s*)?(?:task\s+owner\s+)?(?:explicitly\s+)?authorizes?\s+(?:you\s+to\s+)?(?:clarify|edit|refine)\b/i.test(segment)
+    && /\btest\/[\w./-]+/.test(segment)
   ) {
     return true;
   }
-  const affirmativeLead =
-    /^(?:[-*•]\s*)?(?:you\s+)?(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update|adjust)\b/i;
-  if (!affirmativeLead.test(segment)) return false;
-  if (/\btest\/[\w./-]+/.test(segment)) return true;
-  if (/\btest\b/i.test(segment) && /\bmessage\b/i.test(segment)) return true;
+  if (
+    /^(?:[-*•]\s*)?authorized\s+auxiliary\s+test\s+edit\s+for\b/i.test(segment)
+    && /\btest\/[\w./-]+/.test(segment)
+  ) {
+    return true;
+  }
   return false;
 }
 
 /** Task prose explicitly permits cosmetic or auxiliary test-file refinement (fail-closed). */
 export function taskAuthorizesAuxiliaryTestEdit(task: string): boolean {
   const normalized = task.replace(/\r\n?/g, '\n').trim();
-  if (/\b(?:that|this)\s+is\s+not\s+authorization\b/i.test(normalized)) return false;
+  if (taskDeniesAuxiliaryTestEdit(normalized)) return false;
   const segments = normalized.split(/\n+|(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
-  return segments.some((segment) => segmentAffirmsAuxiliaryTestPermission(segment));
+  return segments.some((segment) => segmentIsExplicitAuxiliaryTestGrant(segment));
 }
 
 /**
