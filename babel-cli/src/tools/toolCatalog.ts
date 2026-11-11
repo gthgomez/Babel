@@ -1,8 +1,5 @@
 import {
-  DEFAULT_EXECUTION_PROFILE,
-  normalizeExecutionProfile,
   resolveExecutionProfile,
-  type ExecutionProfileName,
 } from '../config/executionProfiles.js';
 import { getToolCapabilityRegistrySnapshot } from '../config/toolCapabilities.js';
 import { getAllowedShellCommands } from '../sandbox.js';
@@ -42,10 +39,6 @@ function normalizeToolSet(values: readonly string[] | undefined): Set<string> {
   );
 }
 
-function resolveProfileName(raw: string | null | undefined): ExecutionProfileName {
-  return normalizeExecutionProfile(raw) ?? DEFAULT_EXECUTION_PROFILE;
-}
-
 function policyForExecutorTool(
   tool: ExecutorToolSnapshot,
   options: ToolCatalogOptions,
@@ -62,7 +55,7 @@ function policyForExecutorTool(
     reasons.push('disabled because it is not in run-level allowed_tools');
   }
 
-  const profile = resolveExecutionProfile(resolveProfileName(options.executionProfile));
+  const profile = resolveExecutionProfile(options.executionProfile);
   if (profile.disallowedTools.includes(toolName)) {
     reasons.push(`disabled by execution profile ${profile.name}`);
   }
@@ -95,7 +88,7 @@ function executorToolCatalogEntry(
 }
 
 function capabilityCatalogEntries(options: ToolCatalogOptions): ToolCatalogEntry[] {
-  const profileName = resolveProfileName(options.executionProfile);
+  const profileName = resolveExecutionProfile(options.executionProfile).name;
   const allowedCommands = new Set(getAllowedShellCommands(profileName));
   return getToolCapabilityRegistrySnapshot().map((capability) => {
     const profileSupported = capability.profiles.includes(profileName);

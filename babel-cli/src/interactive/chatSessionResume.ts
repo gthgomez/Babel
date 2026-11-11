@@ -24,6 +24,9 @@ import { SessionEventLogRestoreError } from '../agent/sessionEvents.js';
 import { inspectSessionEventLogFromDir } from '../agent/sessionEvents.js';
 import type { SessionEventLog } from '../agent/sessionEvents.js';
 import type { ReplContext } from './context.js';
+import { acquireSessionPolicyLease, type SessionPolicyLease } from '../config/sessionPolicyLease.js';
+import { recordResumedSessionMigration, resolveResumedSessionPolicy } from '../config/sessionExecutionPolicy.js';
+import { withExecutionPolicyChoice } from '../config/executionPolicySelection.js';
 import {
   hydrateReplTurnsFromCells,
   hydrateReplTurnsFromChatTranscript,
@@ -56,6 +59,7 @@ export interface ResumeChatSessionFailure {
 /** R0-3: explicit rebind when a session's durable repository identity is unknown. */
 export interface ResumeChatSessionOptions {
   confirmUnknownIdentity?: boolean;
+  executionProfile?: string;
 }
 
 /** D04: last durable project_root recorded in session-events.jsonl, if any. */
@@ -77,6 +81,7 @@ export async function resumeChatSession(
   sessionId: string,
   options: ResumeChatSessionOptions = {},
 ): Promise<ResumeChatSessionOutcome> {
+  if (!/^[\w-]{1,80}$/.test(sessionId)) return {ok:false,sessionId,reason:'error',message:'Invalid session identity.'};
   if (ctx.isRunning || ctx.preparingRun) return { ok: false, sessionId, reason: 'error', message: 'A task is active; wait for it to settle before resuming a session.' };
   if (ctx.chatEngine?.getEngineRunId?.() === sessionId) return { ok: false, sessionId, reason: 'error', message: 'This session is already active.' };
   ctx.preparingRun = true;
@@ -118,6 +123,9 @@ async function resumeChatSessionOwned(
   // or it would leak for process lifetime. Hoisted so the outer catch can see it.
   let resumeAdmission: ReturnType<typeof openSessionAdmissionStore> | null = null;
   let resumeAdmissionAdopted = false;
+  let resumeLease: SessionPolicyLease | undefined;
+  let leaseAdopted = false;
+  let candidate: ChatEngine | undefined;
 
   try {
     const target = ctx.resolveCurrentTarget();
@@ -199,20 +207,33 @@ async function resumeChatSessionOwned(
     // → checkpoints stay inert. Owner of close: the ReplContext engine
     // lifecycle — each assignment below releases the previous engine's
     // reference first.
+    resumeLease=acquireSessionPolicyLease(sessionId);
+    const policy=resolveResumedSessionPolicy(sessionId,options.executionProfile);
     const admission = openSessionAdmissionStore(sessionId);
     resumeAdmission = admission;
+    if(!admission.ok)throw new Error('Session admission evidence is unavailable; inspect the session before continuing.');
     const resumeOptions = {
       ...engineOptions,
-      ...(admission.ok ? { admissionStore: admission.store } : {}),
+      admissionStore: admission.store,
+      executionPolicy: policy,
+    };
+    const adopt=(engine:ChatEngine):void=>{
+      candidate=engine;
+      if(isCancelled())throw new Error('Session restoration cancelled.');
+      recordResumedSessionMigration(sessionId,policy);
+      engine.attachSessionPolicyLease(resumeLease!);
+      leaseAdopted=true;
+      ctx.chatEngine?.closeAdmissionStore?.();
+      ctx.chatEngine=engine;
+      resumeAdmissionAdopted=true;
     };
 
     if (eventLog && eventLog.events.length > 0) {
-      ctx.chatEngine?.closeAdmissionStore?.();
-      ctx.chatEngine = createEngineFromEventLog(resumeOptions, eventLog);
-      resumeAdmissionAdopted = true;
-      ctx.chatEngine.assignRunId(sessionId);
+      candidate = withExecutionPolicyChoice(policy,()=>createEngineFromEventLog(resumeOptions, eventLog));
+      candidate.assignRunId(sessionId);
       // W2.2: session-events settle after run id assignment (same session dir).
-      ctx.chatEngine.restoreSessionEventsFromDir(sessionDir);
+      candidate.restoreSessionEventsFromDir(sessionDir);
+      adopt(candidate);
       if (hasThreadStore) {
         hydrateResumedThreadToScreen(ctx, sessionId);
         const cells = loadThreadCells(sessionId);
@@ -249,9 +270,8 @@ async function resumeChatSessionOwned(
 
     if (hasThreadStore) {
       const cells = loadThreadCells(sessionId);
-      ctx.chatEngine?.closeAdmissionStore?.();
-      ctx.chatEngine = createEngineFromThreadCells(sessionId, resumeOptions, cells);
-      resumeAdmissionAdopted = true;
+      candidate = withExecutionPolicyChoice(policy,()=>createEngineFromThreadCells(sessionId, resumeOptions, cells));
+      adopt(candidate);
       // If an event log appears mid-session, keep cells as UI; still prefer empty event log path above
       hydrateResumedThreadToScreen(ctx, sessionId);
       const { turnCount, exchangeCount } = hydrateReplTurnsFromCells(ctx, cells, {
@@ -271,7 +291,7 @@ async function resumeChatSessionOwned(
 
     let engine: ChatEngine;
     try {
-      engine = await ChatEngine.restore(sessionId, resumeOptions);
+      engine = await withExecutionPolicyChoice(policy,()=>ChatEngine.restore(sessionId, resumeOptions));
     } catch (err) {
       // Legacy transcript-only sessions may predate session-events.jsonl.
       // They remain resumable as conversation history; the durable event log
@@ -285,12 +305,14 @@ async function resumeChatSessionOwned(
       }
       if (isCancelled()) throw new Error('Session restoration cancelled.');
       const messages = readLegacyTranscriptForContext(txPath);
-      engine = createEngineFromThreadCells(sessionId,resumeOptions,[]);
+      engine = withExecutionPolicyChoice(policy,()=>createEngineFromThreadCells(sessionId,resumeOptions,[]));
       engine.replaceConversation(messages);
     }
+    candidate=engine;
     if (isCancelled()) {
       engine.closeAdmissionStore();
       resumeAdmissionAdopted = true;
+      resumeLease!.release();
       return { ok: false, sessionId, reason: 'cancelled', message: 'Session restoration cancelled.' };
     }
     // Attach event log if it lands after transcript restore
@@ -298,9 +320,7 @@ async function resumeChatSessionOwned(
     if (lateLog && lateLog.events.length > 0) {
       applyEventLogToChatEngine(engine, lateLog);
     }
-    ctx.chatEngine?.closeAdmissionStore?.();
-    ctx.chatEngine = engine;
-    resumeAdmissionAdopted = true;
+    adopt(engine);
     const { turnCount, exchangeCount } = hydrateReplTurnsFromChatTranscript(ctx, {
       sessionId,
       transcriptPath: txPath,
@@ -323,6 +343,11 @@ async function resumeChatSessionOwned(
       ...degraded,
     };
   } catch (err) {
+    if(candidate){
+      candidate.closeAdmissionStore();
+      if(ctx.chatEngine===candidate)ctx.chatEngine=undefined;
+    }
+    if(!leaseAdopted)resumeLease?.release();
     // I2: a throw before any assignment never handed the store to the REPL
     // lifecycle — release the reference, then surface the failure as before.
     if (resumeAdmission?.ok === true && !resumeAdmissionAdopted) {

@@ -72,6 +72,7 @@ import {
   isToolAllowedForExecutionProfile,
   resolveExecutionProfile,
 } from './config/executionProfiles.js';
+import { getScopedExecutionProfile } from './config/executionPolicySelection.js';
 import {
   getDependencyInstallApprovalDecision,
   isDependencyInstallApproved,
@@ -683,7 +684,7 @@ export class SafeExecutor {
       return resolve(this.projectRoot, sanitizePath(rest));
     }
 
-    const profile = resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']);
+    const profile = resolveExecutionProfile(getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']));
     if (
       profile.name === 'benchmark_container' &&
       (canonicalLower === appPrefix || canonicalLower.startsWith(`${appPrefix}/`))
@@ -919,11 +920,11 @@ export class SafeExecutor {
   }
 
   private checkExecutionProfileToolDenial(tool: string): ToolResult | null {
-    if (isToolAllowedForExecutionProfile(process.env['BABEL_EXECUTION_PROFILE'], tool)) {
+    if (isToolAllowedForExecutionProfile(getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']), tool)) {
       return null;
     }
 
-    const profile = resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']);
+    const profile = resolveExecutionProfile(getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']));
     return policyDeniedResult(
       'execution_profile_tool_rejected',
       `[sandbox] Execution profile "${profile.name}" does not allow mutating tool "${tool}".`,
@@ -1203,7 +1204,7 @@ export class SafeExecutor {
       const dockerImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? '';
       const immutableDockerImage = /^sha256:[a-f0-9]{64}$/i.test(dockerImage) || /@sha256:[a-f0-9]{64}$/i.test(dockerImage);
       const sandboxReadableTestEligible = process.platform === 'linux' && !this.shadowRoot && targetPath === safePath &&
-        shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']) && getDockerDaemonMode() === 'rootful' &&
+        shouldUseDockerSandbox(getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE'])) && getDockerDaemonMode() === 'rootful' &&
         immutableDockerImage && dockerExtraArgs.ok && !explicitContainerIdentity &&
         isSandboxReadableTestPath(relative(this.projectRoot, safePath));
       const runtimeIdentity = sandboxReadableTestEligible ? getDockerImageRuntimeIdentity(dockerImage) : null;
@@ -1281,7 +1282,7 @@ export class SafeExecutor {
     const compatibilityIssue = validateExecutorShellCommand(
       command,
       process.platform,
-      process.env['BABEL_EXECUTION_PROFILE'],
+      getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']),
       { approvalQueue: true, projectRoot: this.projectRoot },
     );
     if (compatibilityIssue) {
@@ -1345,12 +1346,12 @@ export class SafeExecutor {
 
     const benchmarkDockerImage = process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim();
     const isolation = evaluateGovernedIsolation(
-      process.env['BABEL_EXECUTION_PROFILE'],
+      getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']),
       benchmarkDockerImage,
     );
     const useDockerSandbox =
       isolation.kind === 'docker' &&
-      shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE']);
+      shouldUseDockerSandbox(getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']));
     // Report the missing isolation prerequisite before resolving a tool that
     // belongs inside the container rather than on the host.
     if (isolation.kind === 'fail_closed') {
@@ -1379,16 +1380,16 @@ export class SafeExecutor {
     const classified = useDockerSandbox
       ? classifyExecutionRisk(command, { repoRoot: this.projectRoot })
       : classifyResolvedCommand(resolvedExecutable!, argv.slice(1), { repoRoot: this.projectRoot, invokedBase: rawCmd });
-    // Project-or-container-only commands stay denied on host profiles even
-    // when the governed isolation decision resolved to a host kind — unless
-    // the operator explicitly authorized a host fallback for this run. The
-    // explicit escalation keeps host execution auditable instead of making it
-    // the silent default for Docker-only risk classes.
+    // Only the explicitly selected host-native profile admits project-code
+    // commands on the host. Other host profiles retain their restrictions;
+    // container-only commands still require the existing explicit escalation.
     const hostFallbackAuthorized = ['1', 'true', 'yes'].includes(
       (process.env['BABEL_ALLOW_HOST_FALLBACK'] ?? '').toLowerCase(),
     );
+    const hostNativeProjectCode = isolation.kind === 'host_profile' &&
+      isolation.profile === 'host_native' && classified.executionRisk === 'project_code';
     if (requiresDockerIsolation(classified.executionRisk) && isolation.kind !== 'docker') {
-      if (!hostFallbackAuthorized) {
+      if (!hostFallbackAuthorized && !hostNativeProjectCode) {
         return policyDeniedResult(
           'isolation_required',
           `[sandbox] isolation_required: ${classified.base || command} executes project or container-only code and is denied on the host.`,
@@ -1398,9 +1399,11 @@ export class SafeExecutor {
       }
       // Explicit host fallback: keep the auditable boundary visible at the
       // point of execution instead of silently honoring the env var.
-      console.warn(
-        `[sandbox] host fallback authorized for project-or-container-only command "${classified.base || command}" (BABEL_ALLOW_HOST_FALLBACK is set)`,
-      );
+      if (hostFallbackAuthorized) {
+        console.warn(
+          `[sandbox] host fallback authorized for project-or-container-only command "${classified.base || command}" (BABEL_ALLOW_HOST_FALLBACK is set)`,
+        );
+      }
     }
     if (classified.executionRisk === 'forbidden') {
       return policyDeniedResult(

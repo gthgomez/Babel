@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { getActiveExecutionPolicyChoice } from '../config/executionPolicySelection.js';
 import { existsSync, readFileSync } from 'node:fs';
 import {
   captureApprovedObservation,
@@ -439,7 +440,7 @@ export class ChatEngineP11Authority {
         runtimeMode: readRuntimeMode(),
         effectiveDryRun: dryRun.dryRun,
         dryRunSource: dryRun.source,
-        configuredExecutionProfile: process.env['BABEL_EXECUTION_PROFILE'] ?? null,
+        configuredExecutionProfile: getActiveExecutionPolicyChoice()?.profile ?? process.env['BABEL_EXECUTION_PROFILE'] ?? null,
         benchmarkImage: process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? null,
         dockerExtraArgs: dockerExtraArgs.args,
         dockerDisabled: process.env['BABEL_DOCKER_DISABLE'] === 'true',

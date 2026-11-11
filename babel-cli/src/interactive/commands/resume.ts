@@ -11,11 +11,27 @@ import { OutputBuffer } from '../../ui/outputBuffer.js';
 
 // ─── Handler ────────────────────────────────────────────────────────────────
 
+export function parseResumeArguments(args:string[]): {sessionId?:string;options:ResumeChatSessionOptions} {
+  let sessionId:string | undefined;
+  let executionProfile:string | undefined;
+  let confirmUnknownIdentity=false;
+  for(let index=0;index<args.length;index++){
+    const arg=args[index]!;
+    if(arg==='--confirm-repo-identity'){if(confirmUnknownIdentity)throw new Error('Duplicate identity confirmation.');confirmUnknownIdentity=true;continue;}
+    if(arg==='--execution-profile'){
+      if(executionProfile!==undefined||!args[index+1]||args[index+1]!.startsWith('--'))throw new Error('Provide one execution profile after --execution-profile.');
+      executionProfile=args[++index];continue;
+    }
+    if(arg.startsWith('--')||sessionId!==undefined)throw new Error('Usage: /resume [session-id] [--execution-profile profile] [--confirm-repo-identity]');
+    sessionId=arg;
+  }
+  return {...(sessionId!==undefined?{sessionId}:{}),options:{confirmUnknownIdentity,...(executionProfile!==undefined?{executionProfile}:{})}};
+}
+
 export async function handleResume(ctx: ReplContext, args: string[]): Promise<void> {
-  // R0-3: explicit rebind for a session whose durable repository identity is
-  // unknown. Without it, resume refuses to admit execution.
-  const confirmUnknownIdentity = args.includes('--confirm-repo-identity');
-  const sessionId = args.find((arg) => !arg.startsWith('--'));
+  let parsed:ReturnType<typeof parseResumeArguments>;
+  try{parsed=parseResumeArguments(args);}catch(problem){OutputBuffer.getInstance().write(error(`\n  ${problem instanceof Error?problem.message:'Invalid resume arguments.'}\n`));return;}
+  const {sessionId,options}=parsed;
 
   if (!sessionId) {
     if (process.stdout.isTTY && !process.env['CI']) {
@@ -32,7 +48,7 @@ export async function handleResume(ctx: ReplContext, args: string[]): Promise<vo
         const restored = notifyOverlayClosed();
         if (restored) adapter.setInputText?.(restored);
         if (choice.action === 'resume') {
-          await resumeSession(ctx, choice.sessionId, { confirmUnknownIdentity });
+          await resumeSession(ctx, choice.sessionId, options);
         }
         return;
       }
@@ -41,7 +57,7 @@ export async function handleResume(ctx: ReplContext, args: string[]): Promise<vo
     return;
   }
 
-  await resumeSession(ctx, sessionId, { confirmUnknownIdentity });
+  await resumeSession(ctx, sessionId, options);
 }
 
 // ─── Resume a specific session ──────────────────────────────────────────────

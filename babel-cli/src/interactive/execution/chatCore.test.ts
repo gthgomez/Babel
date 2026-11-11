@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, test } from 'node:test';
@@ -8,6 +8,9 @@ import type { ChatEngineOptions, ChatEvent, ChatResult } from '../../agent/chatE
 import { ChatEngine } from '../../agent/chatEngine.js';
 import { ChatTurnTelemetryCollector } from '../../agent/chatTurnTelemetry.js';
 import { globalCostTracker } from '../../services/costTracker.js';
+import { chatSessionDir } from '../../cli/runsLayout.js';
+import { acquireSessionPolicyLease, type SessionPolicyLease } from '../../config/sessionPolicyLease.js';
+import { loadExecutionPolicyRecord } from '../../config/executionPolicySelection.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import {
   buildChatRunPayload,
@@ -249,6 +252,7 @@ test('runChatEngineOnce uses injected engineFactory and submitMessage', async ()
     factoryCalled = true;
     assert.equal(options.task, 'hello task');
     assert.equal(options.projectRoot, target.targetRoot);
+    assert.deepEqual(options.executionPolicy, {profile:'host_native',source:'explicit'});
     return mockEngine;
   };
 
@@ -257,6 +261,7 @@ test('runChatEngineOnce uses injected engineFactory and submitMessage', async ()
     target,
     onChatEvent: (event) => chatEvents.push(event),
     engineFactory,
+    executionPolicy: {profile:'host_native',source:'explicit'},
     useStreaming: false,
     preflightContext: '',
   });
@@ -266,6 +271,30 @@ test('runChatEngineOnce uses injected engineFactory and submitMessage', async ()
   assert.equal(result.status, 'completed');
   assert.equal(result.answer, 'mock answer');
   assert.equal(chatEvents.filter((event) => event.type === 'done').length, 1);
+});
+
+test('headless chat holds session ownership while its engine executes and releases it after settlement', async () => {
+  const root=mkdtempSync(join(tmpdir(),'babel-headless-policy-'));
+  const previous=process.env['BABEL_RUNS_DIR'];process.env['BABEL_RUNS_DIR']=join(root,'runs');
+  const id='chat-headless-policy';mkdirSync(chatSessionDir(id),{recursive:true});
+  const policy={profile:'host_native',source:'explicit',expectedBoundary:'host'} as const;
+  let lease:SessionPolicyLease | undefined;
+  const engine={
+    getEngineRunId:()=>id,getExecutionPolicy:()=>policy,attachSessionPolicyLease:(value:SessionPolicyLease)=>{lease=value;},
+    submitMessage:async()=>{assert.throws(()=>acquireSessionPolicyLease(id),/already owned|unavailable/i);return completedResult('done');},
+    cancel(){},closeAdmissionStore(){lease?.release();},
+  } as unknown as ChatEngine;
+  try{
+    const result=await runChatEngineOnce({task:'Inspect',target:makeTarget(root),engineFactory:()=>engine,
+      executionPolicy:policy,preflightContext:'',useStreaming:false});
+    assert.equal(result.answer,'done');
+    assert.equal(loadExecutionPolicyRecord(chatSessionDir(id))?.effectiveBoundary,'host');
+    const next=acquireSessionPolicyLease(id);next.release();
+  }finally{
+    lease?.release();
+    if(previous===undefined)delete process.env['BABEL_RUNS_DIR'];else process.env['BABEL_RUNS_DIR']=previous;
+    rmSync(root,{recursive:true,force:true});
+  }
 });
 
 test('runChatEngineOnce streaming path uses submitMessageStream via engineFactory', async () => {
@@ -360,6 +389,12 @@ test('runChatEngineOnce reuses provided engine without calling factory', async (
 
   assert.equal(factoryCalled, false);
   assert.equal(result.answer, 'reused');
+});
+
+test('a reused chat engine rejects a conflicting execution-policy claim', async () => {
+  const engine={getExecutionPolicy:()=>({profile:'safe_repo',source:'persisted',expectedBoundary:'docker'})} as unknown as ChatEngine;
+  await assert.rejects(runChatEngineOnce({task:'continue',target:makeTarget('/tmp/project'),engine,
+    executionPolicy:{profile:'host_native',source:'explicit'},preflightContext:''}),/execution policy/i);
 });
 
 // ── C1/E3: Intent plan + first-move injection via runChatEngineOnce ────────

@@ -57,6 +57,18 @@ export interface ChatTurnTimingBreakdown {
   firstTokenAt: number | null;
   /** Time to first token in ms (firstTokenAt - submittedAt) */
   ttftMs: number | null;
+  /** Engine-local preparation durations; null means the stage did not settle. */
+  objectiveAdmissionMs?: number | null;
+  repositoryContextMs?: number | null;
+  systemPromptPreparationMs?: number | null;
+  /** Elapsed from engine turn preparation, not from the Desktop submit. */
+  providerRequestCreatedMs?: number | null;
+  providerDispatchStartedMs?: number | null;
+  providerResponseStartedMs?: number | null;
+  /** Engine-local elapsed time until the first completed useful tool action. */
+  firstUsefulToolCompletedMs?: number | null;
+  /** Engine-local elapsed time until a durable verified terminal outcome. */
+  verifiedOutcomeMs?: number | null;
   /** Aggregate duration of provider API requests in ms */
   providerDurationMs: number;
   /** Aggregate duration of tool executions in ms */
@@ -98,11 +110,32 @@ export interface ChatTurnTelemetryRecord {
   cumulativeSessionTokens: number;
 }
 
+/** Facts about a completed action; no command text, paths or tool output. */
+export interface UsefulToolActionEvidence {
+  action: string;
+  succeeded: boolean;
+  preDispatchNoEffect?: boolean;
+  performed?: boolean;
+  processExecuted?: boolean;
+  processCompleted?: boolean;
+  mutationConfirmed?: boolean;
+}
+
+const USEFUL_READ_ACTIONS = new Set(['read_file', 'read_range', 'grep', 'glob', 'list_dir', 'semantic_search']);
+const USEFUL_MUTATION_ACTIONS = new Set(['write_file', 'str_replace', 'apply_patch']);
+
 export class ChatTurnTelemetryCollector {
   private nowFn: () => number;
   private submittedAt: number;
   private startedAt: number = 0;
   private firstTokenAt: number | null = null;
+  private firstUsefulToolCompletedAt: number | null = null;
+  private preparationMs: Record<'objectiveAdmission' | 'repositoryContext' | 'systemPrompt', number | null> = {
+    objectiveAdmission: null, repositoryContext: null, systemPrompt: null,
+  };
+  private providerPhases: Record<'request_created' | 'request_dispatched' | 'response_started', number | null> = {
+    request_created: null, request_dispatched: null, response_started: null,
+  };
   private providerDurationMs: number = 0;
   private toolDurationMs: number = 0;
   private verificationDurationMs: number = 0;
@@ -136,6 +169,30 @@ export class ChatTurnTelemetryCollector {
     if (this.firstTokenAt === null) {
       this.firstTokenAt = this.nowFn();
     }
+  }
+
+  public startPreparationSpan(stage: 'objectiveAdmission' | 'repositoryContext' | 'systemPrompt'): { end: () => void } {
+    const start = this.nowFn();
+    return { end: () => {
+      if (this.preparationMs[stage] === null) this.preparationMs[stage] = Math.max(0, this.nowFn() - start);
+    } };
+  }
+
+  /** Record the first event of each phase; retries do not rewrite the first attempt. */
+  public markProviderPhase(phase: string): void {
+    if ((phase === 'request_created' || phase === 'request_dispatched' || phase === 'response_started') &&
+        this.providerPhases[phase] === null) this.providerPhases[phase] = this.nowFn();
+  }
+
+  /** Count settled evidence, not a requested, denied, simulated or skipped action. */
+  public recordUsefulToolAction(evidence: UsefulToolActionEvidence, completedAt = this.nowFn()): void {
+    if (this.firstUsefulToolCompletedAt !== null || !evidence.succeeded ||
+        evidence.preDispatchNoEffect || evidence.performed === false) return;
+    const useful = USEFUL_READ_ACTIONS.has(evidence.action) ||
+      (USEFUL_MUTATION_ACTIONS.has(evidence.action) && evidence.mutationConfirmed === true) ||
+      ((evidence.action === 'run_command' || evidence.action === 'test_run') &&
+        evidence.processExecuted === true && evidence.processCompleted === true);
+    if (useful) this.firstUsefulToolCompletedAt = completedAt;
   }
 
   public startProviderSpan(): { end: () => void } {
@@ -258,6 +315,8 @@ export class ChatTurnTelemetryCollector {
     promptTokens?: number | null;
     completionTokens?: number | null;
     cumulativeSessionTokens: number;
+    /** True only after the verified terminal outcome was durably committed. */
+    verifiedOutcome?: boolean;
   }): ChatTurnTelemetryRecord {
     const endedAt = this.nowFn();
     const effectiveStart = this.startedAt || this.submittedAt;
@@ -284,6 +343,16 @@ export class ChatTurnTelemetryCollector {
         startedAt: this.startedAt,
         firstTokenAt: this.firstTokenAt,
         ttftMs,
+        objectiveAdmissionMs: this.preparationMs.objectiveAdmission,
+        repositoryContextMs: this.preparationMs.repositoryContext,
+        systemPromptPreparationMs: this.preparationMs.systemPrompt,
+        providerRequestCreatedMs: this.providerPhases.request_created === null ? null : Math.max(0, this.providerPhases.request_created - this.submittedAt),
+        providerDispatchStartedMs: this.providerPhases.request_dispatched === null ? null : Math.max(0, this.providerPhases.request_dispatched - this.submittedAt),
+        providerResponseStartedMs: this.providerPhases.response_started === null ? null : Math.max(0, this.providerPhases.response_started - this.submittedAt),
+        firstUsefulToolCompletedMs: this.firstUsefulToolCompletedAt === null
+          ? null : Math.max(0, this.firstUsefulToolCompletedAt - this.submittedAt),
+        verifiedOutcomeMs: opts.verifiedOutcome === true
+          ? Math.max(0, endedAt - this.submittedAt) : null,
         providerDurationMs: this.providerDurationMs,
         toolDurationMs: this.toolDurationMs,
         verificationDurationMs: this.verificationDurationMs,

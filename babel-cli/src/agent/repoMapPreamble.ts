@@ -7,13 +7,27 @@
  * Apache-2.0). The legacy directory-listing preamble remains the fallback
  * when the graph pipeline fails (no parseable files, repo over the size cap).
  */
-import { existsSync } from 'node:fs';
-import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
-
-import { buildRepoMapGraph } from '../services/repoMap/graph.js';
+import { buildRepoMapGraphDetailed, type RepoMapGraphOutcome, type RepoMapLimitReason } from '../services/repoMap/graph.js';
 import { estimateTokens, type ChatMessage } from './chatCompaction.js';
 import { computePreambleBudget } from './preambleBudget.js';
+
+export { buildLegacyRepoMapPreamble } from '../services/repoMap/legacy.js';
+
+/** Diagnostic metadata never includes project content or paths. */
+export type RepoMapGraphDiagnostic =
+  | { status: 'ok' | 'empty' }
+  | { status: 'limited'; reason: RepoMapLimitReason }
+  | { status: 'cancelled'; reason: 'aborted' | 'deadline' }
+  | { status: 'failed'; reason: 'worker_failure' | 'io_failure' };
+
+function graphDiagnostic(outcome: RepoMapGraphOutcome): RepoMapGraphDiagnostic {
+  switch (outcome.status) {
+    case 'ok': case 'empty': return { status: outcome.status };
+    case 'limited': return { status: 'limited', reason: outcome.reason };
+    case 'cancelled': return { status: 'cancelled', reason: outcome.reason };
+    case 'failed': return { status: 'failed', reason: outcome.reason };
+  }
+}
 
 export interface RepoMapPreambleOptions {
   /** Token budget for the rendered map (default 1_000; expanded when no seeds). */
@@ -22,36 +36,12 @@ export interface RepoMapPreambleOptions {
   seedFiles?: string[];
   /** Identifiers mentioned in chat that boost matching symbols. */
   mentionedIdents?: Set<string>;
-}
-
-const SKIP_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'runs',
-  'artifacts',
-  'runtime',
-  '.claude',
-  '.cursor',
-  'coverage',
-  '.nyc_output',
-  'tmp',
-]);
-
-function isKeyConfigFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  return (
-    lower === 'package.json' ||
-    lower === 'tsconfig.json' ||
-    lower === 'claude.md' ||
-    lower.endsWith('.yaml') ||
-    lower.endsWith('.yml') ||
-    lower === '.gitignore' ||
-    lower === 'dockerfile' ||
-    lower === 'makefile' ||
-    lower.endsWith('.toml') ||
-    lower.endsWith('.cfg')
-  );
+  /** Cancel the owned index worker before returning a fallback. */
+  signal?: AbortSignal;
+  /** Wall-clock limit for discovery, parsing, graphing, rendering, and fallback. */
+  maxDurationMs?: number;
+  /** Receives the reason for an empty, limited, cancelled, or failed graph. */
+  onGraphOutcome?: (outcome: RepoMapGraphDiagnostic) => void;
 }
 
 /** Repos with more source files than this use the legacy preamble. */
@@ -65,24 +55,27 @@ const SEED_PATH_PATTERN = /[\w./\\-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|rs|go)\b/g;
  */
 export function collectChatSeedFiles(
   conversation: ReadonlyArray<{ content: unknown }>,
-  projectRoot: string,
+  _projectRoot: string,
 ): string[] {
   const seeds = new Set<string>();
-  for (const message of conversation) {
-    const content = typeof message.content === 'string' ? message.content : '';
+  let remainingChars = 256_000;
+  let candidates = 0;
+  // Seed collection runs on the calling thread, so bound it and avoid any
+  // synchronous filesystem probes before the interruptible worker starts.
+  for (let i = conversation.length - 1; i >= Math.max(0, conversation.length - 64) && remainingChars > 0; i--) {
+    const message = conversation[i];
+    const text = typeof message?.content === 'string' ? message.content : '';
+    const content = text.slice(-Math.min(16_384, remainingChars));
+    remainingChars -= content.length;
     if (!content) continue;
     for (const match of content.matchAll(SEED_PATH_PATTERN)) {
+      if (seeds.size >= 64 || ++candidates > 256) return [...seeds];
       const candidate = match[0].replace(/\\/g, '/');
       // Only repo-relative paths count; strip a leading ./ or project prefix.
       const normalized = candidate.replace(/^\.\//, '');
-      if (normalized.startsWith('/') || /^[a-zA-Z]:/.test(normalized)) {
-        const rel = normalized.toLowerCase().replace(/\\/g, '/').split('/').pop();
-        void rel; // absolute paths outside the root are ignored below
-        continue;
-      }
-      if (normalized.includes('/') || existsSync(join(projectRoot, normalized))) {
-        seeds.add(normalized);
-      }
+      if (normalized.length > 4_096 || normalized.startsWith('/') ||
+          /^[a-zA-Z]:/.test(normalized) || normalized.split('/').includes('..')) continue;
+      seeds.add(normalized);
     }
   }
   return [...seeds].slice(0, 64);
@@ -99,91 +92,24 @@ export async function buildRepoMapPreamble(
   const budget =
     options.budgetTokens ?? (seedCount > 0 ? 1_000 : 2_000);
   try {
-    const graphMap = await buildRepoMapGraph(projectRoot, {
+    const outcome = await buildRepoMapGraphDetailed(projectRoot, {
       budgetTokens: budget,
       maxFiles: REPO_MAP_FILE_CAP,
+      includeLegacyFallback: true,
       ...(options.seedFiles ? { seedFiles: options.seedFiles } : {}),
       ...(options.mentionedIdents ? { mentionedIdents: options.mentionedIdents } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.maxDurationMs !== undefined ? { maxDurationMs: options.maxDurationMs } : {}),
     });
-    if (graphMap && graphMap.map.trim().length > 0) {
-      return graphMap.map.trimEnd();
+    try { options.onGraphOutcome?.(graphDiagnostic(outcome)); } catch { /* Diagnostics must not change the map. */ }
+    if (outcome.status === 'ok' && outcome.result.map.trim().length > 0) {
+      return outcome.result.map.trimEnd();
     }
+    if ('fallback' in outcome && outcome.fallback) return outcome.fallback;
   } catch {
-    // Fall through to legacy directory-listing preamble.
+    // Failed or timed-out workers must never leave a partial graph behind.
   }
-  return buildLegacyRepoMapPreamble(projectRoot);
-}
-
-/**
- * Legacy fallback preamble: top-level dirs + config files + npm scripts.
- */
-export async function buildLegacyRepoMapPreamble(projectRoot: string): Promise<string> {
-  try {
-    let topDirs: string[] = [];
-    let keyFiles: string[] = [];
-
-    try {
-      const entries = await readdir(projectRoot, { withFileTypes: true });
-      topDirs = entries
-        .filter((e) => e.isDirectory() && !SKIP_DIRS.has(e.name) && !e.name.startsWith('.'))
-        .map((e) => `${e.name}/`)
-        .sort();
-      keyFiles = entries
-        .filter((e) => e.isFile() && !SKIP_DIRS.has(e.name))
-        .filter((e) => isKeyConfigFile(e.name))
-        .map((e) => e.name)
-        .sort();
-    } catch {
-      // readdir failed — use empty lists
-    }
-
-    const lines: string[] = ['## Repository Map'];
-    if (topDirs.length > 0) {
-      lines.push(`- Top-level: ${topDirs.join(' ')}`);
-    }
-    if (keyFiles.length > 0) {
-      lines.push(`- Key files: ${keyFiles.join(', ')}`);
-    }
-    const testDirs = topDirs.filter((d) => /test/i.test(d));
-    if (testDirs.length > 0) {
-      lines.push(`- Tests: ${testDirs.join(' ')}`);
-    }
-
-    try {
-      const pkgPath = join(projectRoot, 'package.json');
-      if (existsSync(pkgPath)) {
-        const pkgJson = JSON.parse(await readFile(pkgPath, 'utf-8')) as Record<string, unknown>;
-        const scripts = pkgJson['scripts'] as Record<string, string> | undefined;
-        if (scripts) {
-          if (scripts['build']) lines.push('- Build: npm run build');
-          if (scripts['test']) lines.push('- Test: npm test');
-          if (scripts['typecheck']) lines.push('- TypeCheck: npm run typecheck');
-        }
-      }
-    } catch {
-      // Best-effort
-    }
-
-    try {
-      const tsconfigPath = join(projectRoot, 'tsconfig.json');
-      if (existsSync(tsconfigPath)) {
-        const tsconfig = JSON.parse(await readFile(tsconfigPath, 'utf-8')) as Record<
-          string,
-          unknown
-        >;
-        const compilerOptions = tsconfig['compilerOptions'] as Record<string, unknown> | undefined;
-        if (compilerOptions && compilerOptions['strict'] === true) {
-          lines.push('- TypeScript strict mode: true');
-        }
-      }
-    } catch {
-      // Best-effort
-    }
-
-    return lines.join('\n');
-  } catch {
-    return '';
-  }
+  return '## Repository Map';
 }
 
 /** Packet B5 repo-map preamble sized from resident conversation history. */
@@ -192,7 +118,12 @@ export async function buildChatEngineRepoMapPreamble(
   conversation: ReadonlyArray<{ role: string; content: string }>,
   contextWindowTokens: number,
   userInput?: string,
+  options: Pick<RepoMapPreambleOptions, 'signal' | 'maxDurationMs' | 'onGraphOutcome'> = {},
 ): Promise<string> {
+  if (options.signal?.aborted) {
+    try { options.onGraphOutcome?.({ status: 'cancelled', reason: 'aborted' }); } catch { /* Best effort. */ }
+    return '## Repository Map';
+  }
   const seedFiles = collectChatSeedFiles(
     userInput
       ? [...conversation, { role: 'user', content: userInput }]
@@ -207,6 +138,7 @@ export async function buildChatEngineRepoMapPreamble(
     return await buildRepoMapPreamble(projectRoot, {
       seedFiles,
       budgetTokens: mapBudget.maxMapTokens,
+      ...options,
     });
   } catch {
     return '';

@@ -116,6 +116,7 @@ for (const route of ['ordinary_raw', 'legacy_fallback', 'native_downgrade', 'go_
     })
     if (route === 'unbudgeted_arguments_cancelled') runner.cancelOnInvalidArguments = () => engine.cancel()
     ;(engine as any).repoMapCache = '## Project map\nPOLICY_MAP_SENTINEL\n'
+    ;(engine as any).generateRepoMap = async () => '## Project map\nPOLICY_MAP_SENTINEL\n'
     const events = []
     const announced: string[] = []
     const settled: string[] = []

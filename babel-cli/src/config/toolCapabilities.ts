@@ -85,7 +85,7 @@ const TOOL_CAPABILITIES: readonly ToolCapability[] = [
   {
     id: 'inspect.git_bundle',
     intent: 'Validate or inspect a Git bundle artifact with Git-native commands.',
-    profiles: ['safe_repo', 'dev_local', 'benchmark_container'],
+    profiles: ['host_native', 'safe_repo', 'dev_local', 'benchmark_container'],
     risk: 'read_only',
     blockedCommandBases: ['file'],
     implementations: [
@@ -104,7 +104,7 @@ const TOOL_CAPABILITIES: readonly ToolCapability[] = [
   {
     id: 'inspect.tar_archive',
     intent: 'Inspect a tar archive using tar rather than a generic file-type probe.',
-    profiles: ['safe_repo', 'dev_local', 'benchmark_container'],
+    profiles: ['host_native', 'safe_repo', 'dev_local', 'benchmark_container'],
     risk: 'read_only',
     blockedCommandBases: ['file'],
     implementations: [
@@ -118,7 +118,7 @@ const TOOL_CAPABILITIES: readonly ToolCapability[] = [
   {
     id: 'inspect.gzip_stream',
     intent: 'Validate a gzip stream using gzip rather than a generic file-type probe.',
-    profiles: ['safe_repo', 'dev_local', 'benchmark_container'],
+    profiles: ['host_native', 'safe_repo', 'dev_local', 'benchmark_container'],
     risk: 'read_only',
     blockedCommandBases: ['file'],
     implementations: [

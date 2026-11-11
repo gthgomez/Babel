@@ -14,8 +14,8 @@
  *      definition pairs; render the top prefix under a token budget using a
  *      binary search over prefix size (Aider `get_ranked_tags_map_uncached`).
  *
- * Per-file tag cache is keyed by mtime + content hash; writes invalidate via
- * `invalidateRepoMapFile` (wired to the coding loop's post-edit hook).
+ * Per-file tags are cached by content hash with bounded retention; writes
+ * invalidate via `invalidateRepoMapFile` (the coding loop's post-edit hook).
  *
  * This module has no hard dependency on tree-sitter — it degrades to the
  * regex tagger, and the caller (repoMapPreamble) falls back to the legacy
@@ -24,9 +24,14 @@
  */
 
 import { createHash } from 'node:crypto';
-import { stat, readFile } from 'node:fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { stat, open, opendir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { extname, relative, sep } from 'node:path';
+import { isMainThread } from 'node:worker_threads';
+
+import { invalidateWorkerCache, runRepoMapWorker } from './graphWorkerClient.js';
+import { RepoMapTagCache } from './tagCache.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -45,6 +50,18 @@ export interface RepoMapGraphOptions {
   seedFiles?: string[];
   /** Extra identifiers mentioned in chat that boost matching symbols. */
   mentionedIdents?: Set<string>;
+  /** Abort active indexing; the owned worker is stopped before returning. */
+  signal?: AbortSignal;
+  /** Overall wall-clock budget, including worker startup and discovery. */
+  maxDurationMs?: number;
+  /** Maximum number of file-reference edges to materialize. */
+  maxEdges?: number;
+  /** Maximum total source bytes read by one indexing pass. */
+  maxSourceBytes?: number;
+  /** Maximum source bytes in one file. */
+  maxFileBytes?: number;
+  /** Prepare the legacy directory summary inside the same bounded worker. */
+  includeLegacyFallback?: boolean;
 }
 
 export interface RepoMapResult {
@@ -52,6 +69,45 @@ export interface RepoMapResult {
   filesConsidered: number;
   tagSource: 'tree-sitter' | 'regex';
   tokens: number;
+}
+
+export type RepoMapLimitReason =
+  | 'file_limit' | 'directory_limit' | 'file_size_limit' | 'source_size_limit'
+  | 'tag_limit' | 'edge_limit' | 'parser_limit' | 'file_changed';
+
+export type RepoMapGraphOutcome =
+  | { status: 'ok'; result: RepoMapResult }
+  | { status: 'empty'; fallback?: string }
+  | { status: 'limited'; reason: RepoMapLimitReason; fallback?: string }
+  | { status: 'cancelled'; reason: 'aborted' | 'deadline' }
+  | { status: 'failed'; reason: 'worker_failure' | 'io_failure' };
+
+export class RepoMapLimitError extends Error {
+  constructor(readonly reason: RepoMapLimitReason) {
+    super(`Repository map budget exceeded: ${reason}`);
+  }
+}
+
+export class RepoMapIoError extends Error {}
+
+const DEFAULT_MAX_EDGES = 250_000;
+const DEFAULT_MAX_SOURCE_BYTES = 16 * 1024 * 1024;
+const DEFAULT_MAX_FILE_BYTES = 512 * 1024;
+const DEFAULT_MAX_TAGS = 250_000;
+const DEFAULT_MAX_DIRECTORY_ENTRIES = 40_000;
+
+function boundedLimit(value: number | undefined, ceiling: number): number {
+  if (value === undefined) return ceiling;
+  return Number.isSafeInteger(value) && value >= 0 ? Math.min(value, ceiling) : 0;
+}
+
+interface WorkBudget {
+  maxSourceBytes: number;
+  maxFileBytes: number;
+  sourceBytes: number;
+  tags: number;
+  directoryEntries: number;
+  versions: Map<string, import('node:fs').Stats>;
 }
 
 // ─── Optional tree-sitter loader (same pattern as ui/treeSitterHighlight) ───
@@ -173,24 +229,30 @@ const REGEX_DEF_PATTERNS: RegExp[] = [
   /^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][\w]*)/gm,
 ];
 
+function appendTag(tags: RepoTag[], tag: RepoTag): void {
+  if (tags.length >= DEFAULT_MAX_TAGS) throw new RepoMapLimitError('tag_limit');
+  tags.push(tag);
+}
+
 function extractTagsRegex(code: string): RepoTag[] {
   const tags: RepoTag[] = [];
-  const lines = code.split('\n');
   for (const pattern of REGEX_DEF_PATTERNS) {
     pattern.lastIndex = 0;
     let m: RegExpExecArray | null;
+    let offset = 0;
+    let line = 0;
     while ((m = pattern.exec(code)) !== null) {
       const name = m[1];
       if (!name) continue;
-      const line = code.slice(0, m.index).split('\n').length - 1;
-      if (line < lines.length) tags.push({ name, kind: 'def', line });
+      for (; offset < m.index; offset++) if (code[offset] === '\n') line++;
+      appendTag(tags, { name, kind: 'def', line });
     }
   }
   // References: identifier occurrences in other lines (aider-style ref pass).
   const identRe = /[A-Za-z_$][\w$]{3,}/g;
   let im: RegExpExecArray | null;
   while ((im = identRe.exec(code)) !== null) {
-    tags.push({ name: im[0], kind: 'ref', line: 0 });
+    appendTag(tags, { name: im[0], kind: 'ref', line: 0 });
   }
   return tags;
 }
@@ -214,7 +276,7 @@ function collectTreeSitterNodes(node: TsNode, code: string, out: RepoTag[], dept
       (c) => c.type === 'identifier' || c.type === 'type_identifier' || c.type === 'name',
     );
     if (nameNode) {
-      out.push({
+      appendTag(out, {
         name: code.slice(nameNode.startIndex, nameNode.endIndex),
         kind: 'def',
         line: node.startPosition.row,
@@ -224,7 +286,7 @@ function collectTreeSitterNodes(node: TsNode, code: string, out: RepoTag[], dept
   for (const child of node.children) {
     if (child.type === 'identifier' || child.type === 'type_identifier') {
       const name = code.slice(child.startIndex, child.endIndex);
-      if (name.length >= 4) out.push({ name, kind: 'ref', line: child.startPosition.row });
+      if (name.length >= 4) appendTag(out, { name, kind: 'ref', line: child.startPosition.row });
     }
     collectTreeSitterNodes(child, code, out, depth + 1);
   }
@@ -233,13 +295,18 @@ function collectTreeSitterNodes(node: TsNode, code: string, out: RepoTag[], dept
 export async function extractFileTags(file: string, code: string): Promise<RepoTag[]> {
   const lang = langForFile(file);
   const parser = lang ? ensureParser(lang) : null;
-  if (parser) {
+  // Native parsing must have its own bound: a worker termination cannot
+  // interrupt arbitrary native code until the parser returns to JavaScript.
+  if (parser && typeof parser.setTimeoutMicros === 'function') {
     try {
+      parser.setTimeoutMicros(25_000);
       const tree = parser.parse(code);
+      if (!tree) throw new RepoMapLimitError('parser_limit');
       const tags: RepoTag[] = [];
       collectTreeSitterNodes(tree.rootNode, code, tags);
       if (tags.length > 0) return tags;
-    } catch {
+    } catch (error) {
+      if (error instanceof RepoMapLimitError) throw error;
       /* fall through to regex */
     }
   }
@@ -248,44 +315,66 @@ export async function extractFileTags(file: string, code: string): Promise<RepoT
 
 // ─── Per-file cache (mtime + hash) ──────────────────────────────────────────
 
-interface CacheEntry {
-  mtimeMs: number;
-  size: number;
-  hash: string;
-  tags: RepoTag[];
-}
-
-const tagCache = new Map<string, CacheEntry>();
+const MAX_CACHE_BYTES = 16 * 1024 * 1024;
+const MAX_CACHE_ENTRIES = 4_000;
+const tagCache = new RepoMapTagCache(MAX_CACHE_BYTES, MAX_CACHE_ENTRIES);
 
 /** Invalidate the cached tags for one file; call on write events. */
 export function invalidateRepoMapFile(absPath: string): void {
   tagCache.delete(absPath);
+  if (isMainThread) invalidateWorkerCache(absPath);
 }
 
 /** Invalidate the entire tag cache (e.g. on checkout/branch switch). */
 export function invalidateRepoMapCache(): void {
   tagCache.clear();
+  if (isMainThread) invalidateWorkerCache();
 }
 
-async function loadTags(file: string): Promise<RepoTag[] | null> {
+async function loadTags(file: string, budget?: WorkBudget): Promise<RepoTag[] | null> {
   try {
-    const st = await stat(file);
+    const handle = await open(file, 'r');
+    let before: import('node:fs').Stats;
+    let bytes: Buffer;
+    try {
+      before = await handle.stat();
+      const maxBytes = budget?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
+      if (before.size > maxBytes) throw new RepoMapLimitError('file_size_limit');
+      if (budget) {
+        budget.sourceBytes += before.size;
+        if (budget.sourceBytes > budget.maxSourceBytes) throw new RepoMapLimitError('source_size_limit');
+      }
+      // Read at most the original file size plus one byte. A file that grows
+      // after stat must not bypass the per-file memory limit.
+      const buffer = Buffer.allocUnsafe(before.size + 1);
+      let offset = 0;
+      while (offset < buffer.length) {
+        const result = await handle.read(buffer, offset, buffer.length - offset, offset);
+        if (result.bytesRead === 0) break;
+        offset += result.bytesRead;
+      }
+      if (offset !== before.size) throw new RepoMapLimitError('file_changed');
+      bytes = buffer.subarray(0, offset);
+    } finally {
+      await handle.close();
+    }
+    const after = await stat(file);
+    if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
+      || before.ino !== after.ino || before.dev !== after.dev) {
+      throw new RepoMapLimitError('file_changed');
+    }
+    budget?.versions.set(file, after);
     const cached = tagCache.get(file);
-    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
-      return cached.tags;
-    }
-    const code = await readFile(file, 'utf-8');
-    const hash = createHash('sha256').update(code).digest('hex');
+    const hash = createHash('sha256').update(bytes).digest('hex');
     if (cached && cached.hash === hash) {
-      // Content unchanged (touch) — refresh stat key only.
-      cached.mtimeMs = st.mtimeMs;
       return cached.tags;
     }
-    const tags = await extractFileTags(file, code);
-    tagCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, hash, tags });
+    const tags = await extractFileTags(file, bytes.toString('utf-8'));
+    tagCache.set(file, hash, tags, bytes.length);
     return tags;
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof RepoMapLimitError) throw error;
+    throw new RepoMapIoError('Repository source could not be read');
   }
 }
 
@@ -325,24 +414,27 @@ async function collectSourceFiles(
   dir: string,
   out: string[],
   maxFiles: number,
+  budget: WorkBudget,
   depth = 0,
 ): Promise<void> {
   if (out.length >= maxFiles || depth > 12) return;
-  let entries: import('node:fs').Dirent[];
   try {
-    const { readdir } = await import('node:fs/promises');
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (out.length >= maxFiles) return;
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
-      await collectSourceFiles(`${dir}${sep}${entry.name}`, out, maxFiles, depth + 1);
-    } else if (entry.isFile() && SOURCE_EXTS.has(extname(entry.name).toLowerCase())) {
-      out.push(`${dir}${sep}${entry.name}`);
+    const entries = await opendir(dir);
+    for await (const entry of entries) {
+      if (++budget.directoryEntries > DEFAULT_MAX_DIRECTORY_ENTRIES) {
+        throw new RepoMapLimitError('directory_limit');
+      }
+      if (out.length >= maxFiles) return;
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+        await collectSourceFiles(`${dir}${sep}${entry.name}`, out, maxFiles, budget, depth + 1);
+      } else if (entry.isFile() && SOURCE_EXTS.has(extname(entry.name).toLowerCase())) {
+        out.push(`${dir}${sep}${entry.name}`);
+      }
     }
+  } catch (error) {
+    if (error instanceof RepoMapLimitError) throw error;
+    throw new RepoMapIoError('Repository directory could not be read');
   }
 }
 
@@ -366,17 +458,26 @@ export interface FileGraph {
  */
 export async function buildFileGraph(
   files: string[],
-  options: { mentionedIdents?: Set<string>; chatRel?: Set<string> } = {},
+  options: {
+    mentionedIdents?: Set<string>;
+    chatRel?: Set<string>;
+    projectRoot?: string;
+    maxEdges?: number;
+    budget?: WorkBudget;
+  } = {},
 ): Promise<{ graph: FileGraph; defines: Map<string, Map<string, RepoTag[]>>; chatRel: Set<string> }> {
+  const projectRoot = options.projectRoot ?? legacyProjectRoot.getStore();
   const defines = new Map<string, Map<string, RepoTag[]>>(); // ident → file → tags
-  const references = new Map<string, string[]>(); // ident → files
-  const relOf = new Map<string, string>();
+  const references = new Map<string, Map<string, number>>(); // ident → file → count
 
   for (const file of files) {
-    const rel = relativeToRoot(file);
-    relOf.set(file, rel);
-    const tags = await loadTags(file);
+    const rel = relativeToRoot(projectRoot, file);
+    const tags = await loadTags(file, options.budget);
     if (!tags) continue;
+    if (options.budget) {
+      options.budget.tags += tags.length;
+      if (options.budget.tags > DEFAULT_MAX_TAGS) throw new RepoMapLimitError('tag_limit');
+    }
     for (const tag of tags) {
       if (tag.kind === 'def') {
         let perFile = defines.get(tag.name);
@@ -391,12 +492,12 @@ export async function buildFileGraph(
         }
         list.push(tag);
       } else {
-        let list = references.get(tag.name);
-        if (!list) {
-          list = [];
-          references.set(tag.name, list);
+        let counts = references.get(tag.name);
+        if (!counts) {
+          counts = new Map();
+          references.set(tag.name, counts);
         }
-        list.push(rel);
+        counts.set(rel, (counts.get(rel) ?? 0) + 1);
       }
     }
   }
@@ -404,13 +505,23 @@ export async function buildFileGraph(
   // No references at all → treat every definition as a reference (Aider).
   if (references.size === 0) {
     for (const [ident, perFile] of defines) {
-      references.set(ident, [...perFile.keys()]);
+      references.set(ident, new Map([...perFile.keys()].map((file) => [file, 1])));
     }
   }
 
   const idents = [...defines.keys()].filter((ident) => references.has(ident));
   const edges: GraphEdge[] = [];
   const nodeSet = new Set<string>();
+  // Count the distinct referencer × definer pairs before materializing any
+  // edges. A rejected graph is never returned or installed as complete.
+  let estimatedEdges = 0;
+  for (const [ident, perFile] of defines) {
+    const refs = references.get(ident);
+    estimatedEdges += refs ? refs.size * perFile.size : perFile.size;
+    if (estimatedEdges > boundedLimit(options.maxEdges, DEFAULT_MAX_EDGES)) {
+      throw new RepoMapLimitError('edge_limit');
+    }
+  }
 
   // Small self-edges for unreferenced definitions (Aider).
   for (const [ident, perFile] of defines) {
@@ -432,10 +543,7 @@ export async function buildFileGraph(
     if (ident.startsWith('_')) mul *= 0.1;
     if (definers.size > 5) mul *= 0.1;
 
-    const refCount = new Map<string, number>();
-    for (const refFile of references.get(ident)!) {
-      refCount.set(refFile, (refCount.get(refFile) ?? 0) + 1);
-    }
+    const refCount = references.get(ident)!;
     for (const [referencer, numRefs] of refCount) {
       for (const definer of definers.keys()) {
         // Aider: references from files already in chat count 50x.
@@ -566,15 +674,19 @@ export function renderRepoMapTagLines(tags: RenderedTag[]): string {
 
 // ─── Top-level entry ────────────────────────────────────────────────────────
 
-let projectRootCache: string | null = null;
+// Preserve the older low-level setter for external deep imports without
+// sharing a root across asynchronous execution contexts. New code passes an
+// explicit root and each graph build snapshots it before its first await.
+const legacyProjectRoot = new AsyncLocalStorage<string>();
 
+/** @deprecated Pass projectRoot to buildFileGraph instead. */
 export function setRepoMapProjectRoot(root: string): void {
-  projectRootCache = root;
+  legacyProjectRoot.enterWith(root);
 }
 
-function relativeToRoot(file: string): string {
-  if (projectRootCache) {
-    const rel = relative(projectRootCache, file);
+function relativeToRoot(projectRoot: string | undefined, file: string): string {
+  if (projectRoot) {
+    const rel = relative(projectRoot, file);
     if (rel && !rel.startsWith('..')) return rel.split(sep).join('/');
   }
   return file.split(sep).join('/');
@@ -589,17 +701,42 @@ export async function buildRepoMapGraph(
   projectRoot: string,
   options: RepoMapGraphOptions = {},
 ): Promise<RepoMapResult | null> {
+  const outcome = await buildRepoMapGraphDetailed(projectRoot, options);
+  return outcome.status === 'ok' ? outcome.result : null;
+}
+
+/** The outcome distinguishes an empty project from a rejected or cancelled scan. */
+export async function buildRepoMapGraphDetailed(
+  projectRoot: string,
+  options: RepoMapGraphOptions = {},
+): Promise<RepoMapGraphOutcome> {
+  return runRepoMapWorker(projectRoot, options);
+}
+
+/** Worker-only computation. Interactive callers should use the bounded wrapper. */
+export async function buildRepoMapGraphInWorker(
+  projectRoot: string,
+  options: Omit<RepoMapGraphOptions, 'signal' | 'maxDurationMs'> = {},
+): Promise<RepoMapResult | null> {
   const budgetTokens = options.budgetTokens ?? 1_000;
-  const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
-  setRepoMapProjectRoot(projectRoot);
+  const maxFiles = boundedLimit(options.maxFiles, DEFAULT_MAX_FILES);
+  const workBudget: WorkBudget = {
+    maxSourceBytes: boundedLimit(options.maxSourceBytes, DEFAULT_MAX_SOURCE_BYTES),
+    maxFileBytes: boundedLimit(options.maxFileBytes, DEFAULT_MAX_FILE_BYTES),
+    sourceBytes: 0,
+    tags: 0,
+    directoryEntries: 0,
+    versions: new Map(),
+  };
 
   const files: string[] = [];
-  await collectSourceFiles(projectRoot, files, maxFiles + 1);
-  if (files.length === 0 || files.length > maxFiles) return null;
+  await collectSourceFiles(projectRoot, files, maxFiles + 1, workBudget);
+  if (files.length > maxFiles) throw new RepoMapLimitError('file_limit');
+  if (files.length === 0) return null;
 
   const seeds = new Set<string>();
   for (const seed of options.seedFiles ?? []) {
-    seeds.add(relativeToRoot(seed));
+    seeds.add(relativeToRoot(projectRoot, seed));
   }
 
   const mentionedIdents = options.mentionedIdents;
@@ -607,6 +744,9 @@ export async function buildRepoMapGraph(
   for (const s of seeds) chatRel.add(s);
   const { graph, defines } = await buildFileGraph(files, {
     ...(mentionedIdents !== undefined ? { mentionedIdents } : {}),
+    ...(options.maxEdges !== undefined ? { maxEdges: options.maxEdges } : {}),
+    projectRoot,
+    budget: workBudget,
     chatRel,
   });
   const rank = personalizedPageRank(graph, seeds);
@@ -620,7 +760,6 @@ export async function buildRepoMapGraph(
 
   // Distribute node rank across out-edges onto (dst, ident) definition pairs.
   const edgeRank = new Map<string, number>(); // "dst\u0000ident" → rank
-  const nodeIndex = new Map<string, number>(graph.nodes.map((f, i) => [f, i]));
   const outWeight = new Map<string, number>();
   for (const e of graph.edges) {
     outWeight.set(e.src, (outWeight.get(e.src) ?? 0) + e.weight);
@@ -662,7 +801,7 @@ export async function buildRepoMapGraph(
   };
 
   const renderFileTails = (files2: string[]): string =>
-    files2.map((f) => `${relativeToRoot(f)}\n`).join('');
+    files2.map((f) => `${relativeToRoot(projectRoot, f)}\n`).join('');
 
   // Binary search prefix size against the token budget (Aider search_and_fit).
   const header = `## Repository Map\n\n`;
@@ -693,6 +832,24 @@ export async function buildRepoMapGraph(
   if (!best) return null;
 
   const map = header + best.slice(header.length).replace(/\n+$/, '\n');
+  // Reject scans invalidated by a file change, addition, deletion, or branch
+  // switch while the graph was being assembled. This is a best-effort
+  // filesystem check, not an atomic repository snapshot.
+  const verifyFiles: string[] = [];
+  const verifyBudget: WorkBudget = { ...workBudget, directoryEntries: 0 };
+  await collectSourceFiles(projectRoot, verifyFiles, maxFiles + 1, verifyBudget);
+  const originalFiles = new Set(files);
+  if (verifyFiles.length !== files.length || verifyFiles.some((file) => !originalFiles.has(file))) {
+    throw new RepoMapLimitError('file_changed');
+  }
+  for (const [file, before] of workBudget.versions) {
+    let after: import('node:fs').Stats;
+    try { after = await stat(file); } catch { throw new RepoMapLimitError('file_changed'); }
+    if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
+      || before.ino !== after.ino || before.dev !== after.dev) {
+      throw new RepoMapLimitError('file_changed');
+    }
+  }
   return {
     map,
     filesConsidered: files.length,

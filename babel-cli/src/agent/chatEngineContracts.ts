@@ -158,6 +158,8 @@ export interface SubmitMessageOptions {
  */
 
 export interface ChatEngineOptions {
+  /** Trusted host policy selection; separate from the Chat/Plan/Deep mode. */
+  executionPolicy?: import('../config/executionPolicySelection.js').ExecutionPolicyChoice
   /** Trusted external session adapter owns inference; Babel native dispatch stays disabled. */
   inferenceOwner?: 'external-harness'
   /** Caller-selected intent only; never grants effects or bypasses admission. */

@@ -4,9 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 
-import { buildRepoMapPreamble } from './repoMapPreamble.js';
+import { buildRepoMapPreamble, collectChatSeedFiles } from './repoMapPreamble.js';
 
 describe('buildRepoMapPreamble (L17 repo-map)', () => {
+  test('seed extraction accepts relative names without disk probes and rejects traversal', () => {
+    const seeds = collectChatSeedFiles([{ content: 'Inspect missing.ts and ../outside.ts.' }], 'unused-root');
+    assert.ok(seeds.includes('missing.ts'));
+    assert.ok(!seeds.some((seed) => seed.split('/').includes('..')));
+  });
+
   test('includes top-level dirs, key files, and npm scripts', async () => {
     const root = mkdtempSync(join(tmpdir(), 'babel-repomap-'));
     try {
@@ -45,6 +51,45 @@ describe('buildRepoMapPreamble (L17 repo-map)', () => {
     try {
       const map = await buildRepoMapPreamble(root);
       assert.equal(map, '## Repository Map');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('oversized source uses the legacy summary and reports the budget reason', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-repomap-large-'));
+    try {
+      mkdirSync(join(root, 'src'));
+      writeFileSync(join(root, 'src', 'large.ts'), 'x'.repeat(512 * 1024 + 1));
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));
+      let status = '';
+      const map = await buildRepoMapPreamble(root, {
+        maxDurationMs: 10_000,
+        onGraphOutcome: (outcome) => {
+          status = outcome.status === 'limited' ? outcome.reason : outcome.status;
+        },
+      });
+      assert.equal(status, 'file_size_limit');
+      assert.match(map, /Top-level:.*src\//);
+      assert.match(map, /- Test: npm test/);
+      assert.doesNotMatch(map, /large\.ts/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('an aborted scan returns a safe fallback and exposes cancellation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-repomap-cancelled-'));
+    try {
+      const controller = new AbortController();
+      controller.abort();
+      let status = '';
+      const map = await buildRepoMapPreamble(root, {
+        signal: controller.signal,
+        onGraphOutcome: (outcome) => { status = outcome.status; },
+      });
+      assert.equal(map, '## Repository Map');
+      assert.equal(status, 'cancelled');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -7,10 +7,11 @@ import { isOfflineChatMode } from './chatModelPolicy.js';
 import type { ToolDefinition } from '../runners/base.js';
 import type { TaskOperation } from '../config/chatTaskClass.js';
 import type { ChatToolAction } from './chatToolDefinitions.js';
+import { getScopedExecutionProfile } from '../config/executionPolicySelection.js';
 
 /** Read-only is orthogonal to Chat/Plan/Deep and applies before fast paths. */
 export function isReadOnlyChat(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env['BABEL_READ_ONLY'] === 'true' || env['BABEL_EXECUTION_PROFILE'] === 'read_only_audit';
+  return env['BABEL_READ_ONLY'] === 'true' || getScopedExecutionProfile(env['BABEL_EXECUTION_PROFILE']) === 'read_only_audit';
 }
 
 export function deniesReadOnlyChatAction(action: string, env: NodeJS.ProcessEnv = process.env): boolean {

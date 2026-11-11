@@ -16,6 +16,8 @@ import { error, muted } from '../../ui/theme.js';
 import { updateConversationMemory } from '../turns.js';
 import { alert } from '../../ui/dialog.js';
 import { resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
+import { resolveExecutionPolicyChoice } from '../../config/executionPolicySelection.js';
+import { constrainNewSessionPolicy } from '../../config/sessionExecutionPolicy.js';
 import {
   analyzeTaskShape,
   describeInteractiveCodingProfile,
@@ -178,6 +180,9 @@ export async function executeChatTask(
       }
       const engineOptions: ChatEngineOptions = {
         task,
+        executionPolicy: constrainNewSessionPolicy(resolveExecutionPolicyChoice({
+          ...(process.env['BABEL_EXECUTION_PROFILE'] !== undefined ? { environmentProfile: process.env['BABEL_EXECUTION_PROFILE'] } : {}),
+        })),
         projectRoot: target.targetRoot,
         ...(systemContext ? { systemContext } : {}),
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),

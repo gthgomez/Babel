@@ -9,6 +9,7 @@ import { evaluatePlanThenExecuteGate } from "./planThenExecute.js";
 import { evaluateHardPlanModeGate } from "./planExecuteMode.js";
 import { evaluatePhaseToolGate } from "./phaseToolPolicy.js";
 import { getChatTaskTune } from "../config/chatTaskClass.js";
+import { getScopedExecutionProfile } from '../config/executionPolicySelection.js';
 import { appendPatchRecovery } from "./patchRecovery.js";
 import { buildFullRereadSkipObservation, shouldSkipFullReread } from "./readThrashPolicy.js";
 import {
@@ -194,6 +195,7 @@ export class ChatEngineActionExecutor {
     const artifactAccess = captureRunArtifactAccess(this.host, ownerGeneration, String(meta.idempotencyKey ?? toolId), tool);
     const restoreProjectRoot = pinProjectRootEnv(requireProjectRoot(this.host.options));
     const toolStart = performance.now();
+    let observedToolExecution = false;
 
     try {
     const frozenVerifierDispatch = action.type === 'run_command' || action.type === 'test_run' ? {
@@ -1358,7 +1360,7 @@ export class ChatEngineActionExecutor {
         // isolation, network and approval decisions still govern dispatch.
         this.host.executionProfile === "plan" ||
           process.env["BABEL_READ_ONLY"] === "true" ||
-          process.env["BABEL_EXECUTION_PROFILE"] === "read_only_audit"
+          getScopedExecutionProfile(process.env["BABEL_EXECUTION_PROFILE"]) === "read_only_audit"
           ? "read_only"
           : "workspace_write",
         toolContext,
@@ -1475,6 +1477,8 @@ export class ChatEngineActionExecutor {
       }
 
       const lastResult = result.results[result.results.length - 1];
+      observedToolExecution = lastResult !== undefined && lastResult.simulated !== true &&
+        !result.policyBlocked && !result.notStarted && result.preDispatchNoEffect !== true;
       if (lastResult) {
         if (
           lastResult.exit_code !== 0 ||
@@ -1974,6 +1978,16 @@ export class ChatEngineActionExecutor {
         toolStart,
         toolEnd,
       );
+      turnTelemetry?.recordUsefulToolAction({
+        action: action.type,
+        succeeded: lastEntry !== undefined && !lastEntry.error && lastEntry.exit_code === 0,
+        preDispatchNoEffect: lastEntry?.preDispatchNoEffect === true,
+        performed: !['read_file', 'read_range', 'grep', 'glob', 'list_dir', 'semantic_search'].includes(action.type) ||
+          (observedToolExecution && lastEntry?.detail !== 'cached' && lastEntry?.detail !== 'read_limit'),
+        processExecuted: lastEntry?.processExecuted === true,
+        processCompleted: lastEntry?.processCompleted === true,
+        mutationConfirmed: lastEntry?.effect_status === 'confirmed_change',
+      }, toolEnd);
       restoreProjectRoot();
     }
   }

@@ -110,6 +110,7 @@ export type ChatUsageScope = {
 };
 
 export interface ChatProviderRetryHost {
+  recordProviderPhase?(phase: string): void;
   readonly conversation: unknown[];
   readonly engineRunDir: string;
   readonly options: { projectRoot: string | null; task: string };
@@ -608,6 +609,7 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
         checkpointParityEventLog(host.parity, host.engineRunDir);
       },
       onInvocationPhase: (event) => {
+        if (isOwnerCurrent() && (context.executionStage ?? 'chat') === 'chat') host.recordProviderPhase?.(event.phase);
         if (event.phase === 'request_dispatched' && context.usageScope?.taskOwnerId && startedInvocation) {
           const scope = context.usageScope;
           const ownerId = scope.taskOwnerId!;

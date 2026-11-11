@@ -84,6 +84,15 @@ test('legacy job profiles normalize without bypassing approved-root checks', () 
   });
 });
 
+test('invalid explicit job profiles are rejected before a job or approval is created', () => {
+  withJobState(({scratch,registryPath})=>{
+    for(const profile of ['', 'safe_reop']){
+      assert.throws(()=>createAgentJob({id:'invalid-profile',task:'Update README title',projectRoot:scratch,executionProfile:profile,registryPath}),/invalid execution profile/i);
+    }
+    assert.equal(listAgentJobs({registryPath}).jobs.length,0);
+  });
+});
+
 test('agent jobs create exact escalation approvals for hard tasks', () => {
   withJobState(({ scratch }) => {
     const job = createAgentJob({

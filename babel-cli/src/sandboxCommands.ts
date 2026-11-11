@@ -1,6 +1,7 @@
 import { basename } from 'node:path';
 import { isBenchmarkProjectExecutableCommand, shouldUseDockerSandbox } from './config/benchmarkContainer.js';
 import { getExecutionProfileCommandAdditions, isToolAllowedForExecutionProfile, resolveExecutionProfile } from './config/executionProfiles.js';
+import { getScopedExecutionProfile } from './config/executionPolicySelection.js';
 import { getDependencyInstallApprovalDecision, isDependencyInstallApproved, requestDependencyInstallApproval } from './services/approvalQueue.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
 import { CommandArgvParseError, parseCommandArgv } from './utils/commandArgv.js';
@@ -128,7 +129,7 @@ function isDependencyInstallCommand(command: string): boolean {
 }
 
 export function getAllowedShellCommands(
-  executionProfile: string | null | undefined = process.env['BABEL_EXECUTION_PROFILE'],
+  executionProfile: string | null | undefined = getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']),
 ): string[] {
   return [...getEffectiveAllowedCommands(executionProfile)].sort((left, right) =>
     left.localeCompare(right),
@@ -138,7 +139,7 @@ export function getAllowedShellCommands(
 export function validateExecutorShellCommand(
   command: string,
   platform: NodeJS.Platform = process.platform,
-  executionProfile: string | null | undefined = process.env['BABEL_EXECUTION_PROFILE'],
+  executionProfile: string | null | undefined = getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']),
   options: ShellCommandValidationOptions = {},
 ): ShellCommandValidationIssue | null {
   const trimmed = command.trim();

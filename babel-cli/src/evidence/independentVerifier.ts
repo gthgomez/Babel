@@ -14,6 +14,7 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { getScopedExecutionProfile } from '../config/executionPolicySelection.js';
 import {
   parseStructuredVerifierCommand,
   isAuthoritativeVerifierCommand,
@@ -57,10 +58,10 @@ function resolveProfileForIndependentVerifier(
   if (isExecutionProfileObject(profile)) {
     return profile;
   }
-  if (typeof profile === 'string' && profile.trim().length > 0) {
+  if (typeof profile === 'string') {
     return resolveExecutionProfile(profile);
   }
-  return resolveExecutionProfile(env['BABEL_EXECUTION_PROFILE']);
+  return resolveExecutionProfile(getScopedExecutionProfile(env['BABEL_EXECUTION_PROFILE']));
 }
 
 /**

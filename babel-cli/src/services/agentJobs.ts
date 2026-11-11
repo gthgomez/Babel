@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join, resolve } from 'node:path';
 
 import { BABEL_RUNS_DIR, type ValidMode } from '../cli/constants.js';
-import { normalizeExecutionProfile } from '../config/executionProfiles.js';
+import { normalizeExecutionProfile, resolveExecutionProfile } from '../config/executionProfiles.js';
 import {
   approveApproval,
   inspectApproval,
@@ -207,7 +207,7 @@ export function createAgentJob(options: CreateAgentJobOptions & AgentJobServiceO
   }
 
   const requestedProfile = options.executionProfile ?? 'workspace_manager';
-  const executionProfile = normalizeExecutionProfile(requestedProfile) ?? requestedProfile;
+  const executionProfile = resolveExecutionProfile(requestedProfile).name;
   const resolvedProject = options.projectRoot
     ? executionProfile === 'workspace_manager'
       ? resolveApprovedWorkspacePath(options.projectRoot)

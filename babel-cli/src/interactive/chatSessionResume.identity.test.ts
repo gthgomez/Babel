@@ -9,7 +9,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -31,6 +31,8 @@ import type { AgentTargetContext } from '../services/targetResolver.js';
 import type { ReplContext } from './context.js';
 import { resumeChatSession } from './chatSessionResume.js';
 import type { SessionState } from './types.js';
+import { loadExecutionPolicyRecord, persistExecutionPolicyRecord } from '../config/executionPolicySelection.js';
+import { acquireSessionPolicyLease } from '../config/sessionPolicyLease.js';
 
 test('session resume refuses an active or preparing task before replacing its owner', async () => {
   for (const busy of [{ isRunning: true }, { preparingRun: true }]) {
@@ -67,12 +69,16 @@ test('session resume holds admission until its asynchronous completion', async (
 function withTempRunsDir() {
   const root = mkdtempSync(join(tmpdir(), 'babel-d04-seam-'));
   const prev = process.env['BABEL_RUNS_DIR'];
+  const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
   process.env['BABEL_RUNS_DIR'] = root;
+  process.env['BABEL_EXECUTION_PROFILE'] = 'safe_repo';
   return {
     root,
     cleanup() {
       if (prev === undefined) delete process.env['BABEL_RUNS_DIR'];
       else process.env['BABEL_RUNS_DIR'] = prev;
+      if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
+      else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
       rmSync(root, { recursive: true, force: true });
     },
   };
@@ -121,6 +127,8 @@ function writeTranscript(runRoot: string, sessionId: string, content: string): s
     `${JSON.stringify({ role: 'user', content })}\n`,
     'utf8',
   );
+  // These tests isolate repository identity; give the fixture a known policy.
+  persistExecutionPolicyRecord(sessionDir,{profile:'safe_repo',source:'explicit'},{kind:'docker'});
   return sessionDir;
 }
 
@@ -129,6 +137,40 @@ function writeThreadIdentity(sessionDir: string, sessionId: string, projectRoot:
   startTurn(log, { task: 't', model: 'm', provider: 'p', projectRoot, policyPreset: 'workspace_write' });
   persistThreadEventLog(sessionDir, log);
 }
+
+test('an unknown legacy policy needs a deliberate selection before interactive resume',async()=>{
+  const fixture=withTempRunsDir();const target=mkdtempSync(join(tmpdir(),'babel-resume-policy-'));
+  const ctx=makeResumeCtx(makeTarget(target));const id='legacy-policy-unknown';
+  try{
+    const directory=writeTranscript(fixture.root,id,'fixture history');
+    unlinkSync(join(directory,'execution-policy.json'));
+    const denied=await resumeChatSession(ctx,id,{confirmUnknownIdentity:true});
+    assert.equal(denied.ok,false);
+    if(!denied.ok)assert.match(denied.message,/explicit execution profile/i);
+    const free=acquireSessionPolicyLease(id);free.release();
+    process.env['BABEL_EXECUTION_PROFILE']='host_native';
+    const resumed=await resumeChatSession(ctx,id,{confirmUnknownIdentity:true,executionProfile:'host_native'});
+    assert.equal(resumed.ok,true);
+    assert.equal(loadExecutionPolicyRecord(directory)?.source,'migration');
+    assert.throws(()=>acquireSessionPolicyLease(id),/already owned|unavailable/i);
+  }finally{
+    ctx.chatEngine?.closeAdmissionStore();fixture.cleanup();rmSync(target,{recursive:true,force:true});
+  }
+});
+
+test('interactive resume retains saved Docker policy when the ambient default is host',async()=>{
+  const fixture=withTempRunsDir();const target=mkdtempSync(join(tmpdir(),'babel-resume-docker-'));
+  const ctx=makeResumeCtx(makeTarget(target));const id='saved-docker-policy';
+  try{
+    writeTranscript(fixture.root,id,'fixture history');
+    process.env['BABEL_EXECUTION_PROFILE']='host_native';
+    const outcome=await resumeChatSession(ctx,id,{confirmUnknownIdentity:true});
+    assert.equal(outcome.ok,true);
+    assert.equal(ctx.chatEngine?.getExecutionPolicy()?.profile,'safe_repo');
+    assert.equal(ctx.chatEngine?.getExecutionPolicy()?.expectedBoundary,'docker');
+    assert.equal(process.env['BABEL_EXECUTION_PROFILE'],'host_native');
+  }finally{ctx.chatEngine?.closeAdmissionStore();fixture.cleanup();rmSync(target,{recursive:true,force:true});}
+});
 
 test('delayed transcript restoration retains admission until the engine settles', async () => {
   const fixture = withTempRunsDir()

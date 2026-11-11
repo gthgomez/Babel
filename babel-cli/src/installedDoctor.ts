@@ -8,8 +8,9 @@ import {probeInstalledSandboxImage} from './config/installedSandbox.js'
 import { CLI_COMMAND } from './cli/commandName.js'
 import { dockerCheckMessage, formatManualProviderEnvExample, sandboxImageCheckMessage } from './cli/firstRunText.js'
 import { inspectRunningProduct, runningProduct, type RunningProduct } from './services/runningProduct.js'
+import { resolveExecutionProfile, type ExecutionProfileName } from './config/executionProfiles.js'
 
-type Check = { id: string; status: 'ok' | 'warn' | 'fail'; message: string }
+type Check = { id: string; status: 'ok' | 'warn' | 'fail' | 'not_required'; message: string }
 
 /** Fixed-argument Docker calls for installed diagnostics. The host-process manifest owns this file. */
 export function runInstalledDockerCommand(args: readonly string[], timeout: number, env: NodeJS.ProcessEnv): { status: number | null; stdout: string } {
@@ -34,8 +35,12 @@ export function runInstalledDoctor(options: {
   imageProbe?: (image:string) => boolean
   platform?: NodeJS.Platform
   running?: RunningProduct
-} = {}): { status: 'ok' | 'warn' | 'fail'; kind: string; paths: ReturnType<typeof resolveRuntimePaths>; checks: Check[] } {
+  /** Explicit opt-in; omission keeps the original diagnostic protocol for old clients. */
+  executionProfile?: string
+} = {}): { status: 'ok' | 'warn' | 'fail'; kind: string; paths: ReturnType<typeof resolveRuntimePaths>; checks: Check[]; profileDiagnosticsVersion?: 1; executionProfile?: ExecutionProfileName } {
   const env = options.env ?? process.env
+  const profile = options.executionProfile === undefined ? undefined : resolveExecutionProfile(options.executionProfile)
+  const requiresDocker = profile?.dockerSandbox !== false
   const paths = options.paths ?? resolveRuntimePaths(env)
   const nodeReady = supportsInstalledNode(process.versions.node)
   const effective = resolveEffectiveSettings({ settings: options.settings ?? readUserSettings({ env }), env, projectRoot: paths.targetProjectRoot })
@@ -43,8 +48,8 @@ export function runInstalledDoctor(options: {
   const spec = connection ? getProviderSpec(connection.provider) : null
   const keyName = connection?.apiKeyEnvVar ?? spec?.credentialEnvVar
   const configured = Boolean(connection && effective.model.value && (connection.authentication === 'none' || !spec?.requiresCredential || (keyName && env[keyName]?.trim())))
-  const dockerReady = options.dockerProbe ? options.dockerProbe() :
-    spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 3000, stdio: 'ignore', env }).status === 0
+  const dockerReady = requiresDocker && (options.dockerProbe ? options.dockerProbe() :
+    spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 3000, stdio: 'ignore', env }).status === 0)
   const image=env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim()
   const imageReady=Boolean(dockerReady&&image&&(options.imageProbe?options.imageProbe(image):probeInstalledSandboxImage(image,{
     env,execute:(_binary,args,settings)=>spawnSync('docker',args,settings),
@@ -61,11 +66,12 @@ export function runInstalledDoctor(options: {
       `Selected ${connection!.id}: ${connection!.provider}/${effective.model.value}; source ${effective.connection.source}. Credential presence checked; connectivity and observed model unverified.` :
       `No provider is selected yet. Run ${CLI_COMMAND} setup in a terminal, or save one key in ${envFile}. Read-only commands work; nothing was contacted.` },
     { id: 'executable', status: product.restartNeeded ? 'warn' : 'ok', message: `Running Babel ${product.runningVersion ?? 'unknown'}; revision ${product.revision ?? 'unknown'}; command ${CLI_COMMAND} (alias babel-agent); CLI entry ${product.entrypoint ?? 'unknown'}; Node executable ${product.executable}; package ${product.packageRoot}; ${product.restartNeeded === true ? 'package files changed; restart to use the current installation' : product.restartNeeded === null ? 'installation change detection unknown' : 'no change detected in package manifest or entrypoint'}` },
-    { id: 'docker', status: dockerReady ? 'ok' : 'fail', message: dockerCheckMessage(dockerReady, platform) },
-    { id:'sandbox_image',status:imageReady?'ok':'fail',message:sandboxImageCheckMessage(imageReady, dockerReady, platform) },
+    { id: 'docker', status: !requiresDocker ? 'not_required' : dockerReady ? 'ok' : 'fail', message: !requiresDocker ? 'Docker is not required for the selected execution profile; it was not checked.' : dockerCheckMessage(dockerReady, platform) },
+    { id:'sandbox_image',status:!requiresDocker?'not_required':imageReady?'ok':'fail',message:!requiresDocker?'A Docker sandbox image is not required for the selected execution profile; it was not checked.':sandboxImageCheckMessage(imageReady, dockerReady, platform) },
   ]
   return { status: checks.some(c => c.status === 'fail' || (options.strict && c.status === 'warn')) ? 'fail' :
-    checks.some(c => c.status === 'warn') ? 'warn' : 'ok', kind: 'installed_user', paths, checks }
+    checks.some(c => c.status === 'warn') ? 'warn' : 'ok', kind: 'installed_user', paths, checks,
+    ...(profile ? {profileDiagnosticsVersion:1 as const,executionProfile:profile.name} : {}) }
 }
 
 /** Read-only first steps for the installed executable. */

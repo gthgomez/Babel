@@ -8,6 +8,8 @@ import { executedVerifierProgressSignature } from './toolExecutionIdentity.js';
 import {normalizeChatExecutionScope,requireProjectRoot,assertConversationRestoreScope,assertBoundGitProjectScope} from './chatExecutionScope.js';
 import type { RunControl, StopRequest } from '../runtime/run-control.js';
 import { initializeChatSubmissionControl, activateChatSubmissionGeneration, type ChatSubmissionControlHost } from './chatEngineRunControl.js';
+import { scopeExecutionPolicyGenerator, withExecutionPolicyChoice } from '../config/executionPolicySelection.js';
+import { quarantineSessionPolicyLease, type SessionPolicyLease } from '../config/sessionPolicyLease.js';
 import {providerMessagesToChatMessages,legacyArchiveToChatMessages} from './providerMessagesToChatMessages.js';
 import {retainedLegacyArchive} from './chatArchiveLegacy.js';
 import { buildChatEngineExecutionContext, type ChatExecutionContextHost } from './chatEngineExecutionContext.js';
@@ -638,6 +640,7 @@ export class ChatEngine {
   private activeProviderDispatchStarted = false;
   private physicalSettlementUnknown = false;
   private admissionStoreClosed = false;
+  private sessionPolicyLease: SessionPolicyLease | undefined;
 
   markPhysicalSettlementUnknown(): void {
     this.physicalSettlementUnknown = true;
@@ -871,7 +874,8 @@ export class ChatEngine {
     if (options.runId && options.resumeExisting !== true && hasUnsettledBackgroundShells(options.runId, scope.kind === 'project' ? scope.projectRoot : null)) {
       throw new Error('An owned background command is still running or settling. Wait for it to finish before reopening this session.');
     }
-    options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null};
+    options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null,
+      ...(options.executionPolicy ? { executionPolicy: Object.freeze({ ...options.executionPolicy }) } : {})};
     if(scope.kind==="conversation"&&(options.instructionRoot||options.workspaceRoot||options.compiledChatStack?.project_root))throw new Error("Conflicting project context in conversation scope");
     options = { ...options, compiledChatStack: resolveChatInstructionContext(options) };
     this.options = options;
@@ -2106,10 +2110,11 @@ export class ChatEngine {
     if (this.options.inferenceOwner === 'external-harness') {
       throw new Error('EXTERNAL_HARNESS_INFERENCE_OWNED: This session requires its external adapter; Babel inference is disabled.');
     }
-    return scopeAsyncGenerator(
+    const stream = scopeAsyncGenerator(
       () => this.buildBaseExecutionContext(),
       this.submitMessageStreamBody(userInput, taskIntent, submitOpts),
     );
+    return this.options.executionPolicy ? scopeExecutionPolicyGenerator(this.options.executionPolicy, stream) : stream;
   }
 
   /**
@@ -2140,15 +2145,15 @@ export class ChatEngine {
     // effect batch. Unknown physical settlement is never silently cleared.
     const priorStopKind = this.runControl?.stop()?.kind;
     const priorReleased = priorStopKind === 'cancelled' || priorStopKind === 'superseded';
+    // Cancellation retires logical ownership, but it does not prove that an
+    // already-started process or its descendants stopped making changes.
+    const admission = durableAdmissionState(this.parity.admissionStore, this.engineRunId);
+    if (this.physicalSettlementUnknown || admission.indeterminate) {
+      yield { type: 'failed', error: 'A previous request may still be settling or its physical effect is unknown. Inspect the workspace and evidence before continuing.',
+        reason_code: 'physical_settlement_unknown' };
+      return;
+    }
     if (!priorReleased) {
-      // An indeterminate admission means a prior physical effect was never
-      // reconciled; it blocks regardless of whether a wrapper is still live.
-      const admission = durableAdmissionState(this.parity.admissionStore, this.engineRunId);
-      if (this.physicalSettlementUnknown || admission.indeterminate) {
-        yield { type: 'failed', error: 'A previous request may still be settling or its physical effect is unknown. Inspect the workspace and evidence before continuing.',
-          reason_code: 'physical_settlement_unknown' };
-        return;
-      }
       // A claimed admission with no live owner is stale (e.g. a primed or
       // pre-crash record) and may be superseded. With a live owner it is
       // unsettled work and must settle or be cancelled first.
@@ -2744,6 +2749,16 @@ export class ChatEngine {
     return this.engineRunId;
   }
 
+  getExecutionPolicy(): Readonly<import('../config/executionPolicySelection.js').ExecutionPolicyChoice> | undefined {
+    return this.options.executionPolicy;
+  }
+
+  /** A logical terminal does not prove all owned physical effects have settled. */
+  hasKnownPhysicalSettlement(): boolean {
+    return !this.physicalSettlementUnknown && this.activeSubmissionOwner === null &&
+      !hasUnsettledBackgroundShells(this.engineRunId, this.options.projectRoot);
+  }
+
   assignRunId(runId: string): void {
     if (runId === this.engineRunId) return;
     if (
@@ -2790,6 +2805,11 @@ export class ChatEngine {
     this.admissionStoreClosed = false;
   }
 
+  attachSessionPolicyLease(lease: SessionPolicyLease): void {
+    if (this.sessionPolicyLease) throw new Error('Session policy ownership is already attached.');
+    this.sessionPolicyLease = lease;
+  }
+
   /**
    * Session teardown (REPL /clear, resume replacement, headless run end,
    * protocol-host close): a session ending aborts any still-live admitted
@@ -2812,6 +2832,12 @@ export class ChatEngine {
     }
     this.parity.admissionStore?.close();
     this.admissionStoreClosed = true;
+    const lease = this.sessionPolicyLease;
+    this.sessionPolicyLease = undefined;
+    if (lease) {
+      if (this.hasKnownPhysicalSettlement()) lease.release();
+      else quarantineSessionPolicyLease(this.engineRunId, lease);
+    }
   }
 
   replaceConversation(messages: ChatMessage[]): void {
@@ -3835,12 +3861,10 @@ export class ChatEngine {
     callbacks: ChatCallbacks,
     meta: { index: number; idempotencyKey?: string; ownerGeneration?: number },
   ): Promise<ChatActionResult> {
-    return this.actionExecutor.executeOneAction(
-      action,
-      toolContext,
-      callbacks,
-      meta,
-    );
+    const execute = () => this.actionExecutor.executeOneAction(action, toolContext, callbacks, meta);
+    return this.options.executionPolicy
+      ? withExecutionPolicyChoice(this.options.executionPolicy, execute)
+      : execute();
   }
 
   /**
@@ -3886,6 +3910,7 @@ export class ChatEngine {
       this.conversation,
       this.limits.maxEstimatedTokens,
       userInput,
+      { signal: this.abortController.signal },
     );
   }
   private async synthesizeAnswer(
@@ -4078,6 +4103,7 @@ export class ChatEngine {
   private providerAccountingHost(): ChatProviderRetryHost {
     const engine = this;
     return {
+      recordProviderPhase: (phase) => engine.currentTurnTelemetry?.markProviderPhase(phase),
       conversation: this.conversation,
       engineRunDir: this.engineRunDir,
       options: this.options,

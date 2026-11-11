@@ -20,6 +20,9 @@ import {
   resolveExecutionProfile,
   type ExecutionProfileName,
 } from '../config/executionProfiles.js';
+import { resolveExecutionPolicyChoice, type ExecutionPolicyChoice } from '../config/executionPolicySelection.js';
+import { constrainNewSessionPolicy, resolveResumedSessionPolicy } from '../config/sessionExecutionPolicy.js';
+import { acquireSessionPolicyLease, type SessionPolicyLease } from '../config/sessionPolicyLease.js';
 import { buildSmokeFixtures } from '../services/smokeFixtures.js';
 import {
   resolveApprovedWorkspacePath,
@@ -194,6 +197,16 @@ async function promptPlanApproval(task: string, autoApprove = false): Promise<bo
   }
 }
 
+function resolveCommandPolicyChoice(explicitProfile: string | undefined): ExecutionPolicyChoice | null {
+  const environmentProfile = process.env['BABEL_EXECUTION_PROFILE'];
+  try {
+    return constrainNewSessionPolicy(resolveExecutionPolicyChoice({
+      ...(explicitProfile !== undefined ? { explicitProfile } : {}),
+      ...(environmentProfile !== undefined ? { environmentProfile } : {}),
+    }));
+  } catch { return null; }
+}
+
 async function runDeepCommand(taskParts: string[], options: DeepCommandOptions): Promise<Awaited<ReturnType<typeof runBabelPipeline>> | undefined> {
   if (!options.model) {
     const selected = selectedConnectionModel({}, options.projectRoot ?? process.cwd());
@@ -213,12 +226,13 @@ async function runDeepCommand(taskParts: string[], options: DeepCommandOptions):
   const normalizedModel = normalizeModelName(options.model);
   const normalizedModelTier =
     options.modelTier !== undefined ? options.modelTier.trim().toLowerCase() : undefined;
-  const executionProfile = normalizeExecutionProfile(options.executionProfile ?? 'safe_repo');
+  const executionPolicy = resolveCommandPolicyChoice(options.executionProfile);
+  const executionProfile = executionPolicy?.profile ?? null;
   const resolvedProject = options.project ?? detectProjectFromCwd() ?? undefined;
 
   if (executionProfile === null) {
     throw new Error(
-      `Invalid execution profile "${options.executionProfile}". Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`,
+      `Invalid execution profile selection or environment. Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`,
     );
   }
   if (options.model !== undefined && normalizedModel === undefined) {
@@ -1147,7 +1161,8 @@ async function runLiteCommand(
   const normalizedModel = normalizeModelName(options.model);
   const normalizedModelTier =
     options.modelTier !== undefined ? options.modelTier.trim().toLowerCase() : undefined;
-  const executionProfile = normalizeExecutionProfile(options.executionProfile ?? 'safe_repo');
+  const executionPolicy = resolveCommandPolicyChoice(options.executionProfile);
+  const executionProfile = executionPolicy?.profile ?? null;
   const resolvedProject = options.project ?? detectProjectFromCwd() ?? undefined;
   const routeDecision = routeLiteOrFull(task, {
     requestedVerb: verb === 'report' ? 'do' : verb,
@@ -1157,7 +1172,7 @@ async function runLiteCommand(
 
   if (executionProfile === null) {
     throw new Error(
-      `Invalid execution profile "${options.executionProfile}". Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`,
+      `Invalid execution profile selection or environment. Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`,
     );
   }
 
@@ -2021,7 +2036,6 @@ Notes:
     .option(
       '--execution-profile <profile>',
       `Execution profile: ${getExecutionProfileHelpText()}`,
-      'safe_repo',
     )
     .option('--benchmark', 'Enable performance benchmarking and output manifest resolution latency')
     .option('--json', 'Emit final run result as structured JSON only')
@@ -2173,7 +2187,22 @@ Notes:
           ? READ_ONLY_RUN_TOOLS
           : parseCommaSeparatedFiles(options.allowedTools);
         const disallowedTools = parseCommaSeparatedFiles(options.disallowedTools);
-        const executionProfile = normalizeExecutionProfile(options.executionProfile);
+        let executionPolicy = resolveCommandPolicyChoice(options.executionProfile);
+        // Older Desktop versions always pass a generated safe_repo flag. It is
+        // not evidence that a person chose to migrate an existing session.
+        const explicitResumeProfile = process.env['BABEL_DESKTOP_IPC']==='1' &&
+          process.env['BABEL_DESKTOP_RESUME_PROFILE_SELECTION']!=='explicit'
+          ? undefined : options.executionProfile;
+        if (mode==='chat' && options.resumeChat !== undefined) {
+          try { executionPolicy=resolveResumedSessionPolicy(options.resumeChat,explicitResumeProfile); }
+          catch(error) {
+            const message=error instanceof Error?error.message:'The saved execution policy is unavailable.';
+            if(isStructuredOutput)writeRunAdmissionFailure(message,outputFormat);
+            else console.error(`Babel: ${message}`);
+            process.exitCode=1;return;
+          }
+        }
+        const executionProfile = executionPolicy?.profile ?? null;
         let resolvedProjectRoot: string | undefined;
         let resolvedWorkspaceRoot: string | null = null;
         let resolvedAllowedRoots: string[] = [];
@@ -2189,7 +2218,7 @@ Notes:
         }
 
         if (executionProfile === null) {
-          const message = `Invalid execution profile "${options.executionProfile}". Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`;
+          const message = `Invalid execution profile selection or environment. Valid values: ${getExecutionProfileHelpText().replace(/ \| /g, ', ')}`;
           if (isStructuredOutput) {
             writeRunAdmissionFailure(message, outputFormat);
           } else {
@@ -2557,7 +2586,16 @@ Notes:
               }),
             );
           }
+          let resumeLease:SessionPolicyLease | undefined;
+          let leaseAdopted=false;
           try {
+            if(options.resumeChat !== undefined) {
+              resumeLease=acquireSessionPolicyLease(options.resumeChat);
+              const current=resolveResumedSessionPolicy(options.resumeChat,explicitResumeProfile);
+              if(!executionPolicy || current.profile!==executionPolicy.profile || current.source!==executionPolicy.source || current.expectedBoundary!==executionPolicy.expectedBoundary){
+                throw new Error('Session execution policy changed while opening; retry after reviewing the selection.');
+              }
+            }
             const { payload, exitCode } = await withExecutionProfileEnv(
               executionProfile,
               allowedTools,
@@ -2580,6 +2618,7 @@ Notes:
                         : {}),
                       ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
                       ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
+                      ...(executionPolicy ? { executionPolicy } : {}),
                       outputFormat: isStructuredOutput
                         ? (outputFormat as 'json' | 'stream-json')
                         : 'text',
@@ -2587,6 +2626,7 @@ Notes:
                         ? { onStreamEvent: (event) => writeChatStreamLine(event) }
                         : {}),
                       ...(options.resumeChat !== undefined ? { sessionId: options.resumeChat } : {}),
+                      ...(resumeLease ? { sessionLease:resumeLease, onSessionLeaseAdopted:()=>{leaseAdopted=true;} } : {}),
                     }),
                   ),
                 ),
@@ -2652,6 +2692,8 @@ Notes:
             }
             process.exitCode = 1;
             return;
+          } finally {
+            if(!leaseAdopted)resumeLease?.release();
           }
         }
 
