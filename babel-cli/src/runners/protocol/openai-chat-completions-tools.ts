@@ -1029,11 +1029,11 @@ async *executeWithToolsStream(
       await releaseStreamReader(reader);
     }
 
-    if (!this.lastInvocationMetadata) {
+    if (!invocationFailed || !this.lastInvocationMetadata) {
       this.lastInvocationMetadata = buildStreamingInvocationMetadata(
         this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
       );
-    };
+    }
     if (invocationFailed) {
       this.validateObservedModelId(streamState.observedModelId);
       this.validateObservedUpstream(streamState.upstreamProvider);

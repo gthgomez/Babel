@@ -20,6 +20,7 @@ import {
   getStreamMaxRetries,
 } from './providerResponseStream.js'
 import type { OpenAiCompatibleRunner } from './protocol/openai-chat-completions.js'
+import type { ProviderInvocationCompleted } from './base.js'
 
 const originalFetch = globalThis.fetch
 const originalEnv = {
@@ -167,6 +168,40 @@ describe('executeRaw transport boundaries (mocked)', { concurrency: 1 }, () => {
         assert.equal(completed[0]?.status, 'failed')
         assert.equal(completed[0]?.partial_model_output, true)
         assert.equal(completed.some((entry) => entry.status === 'delivered'), false)
+      })
+
+      it('HTTP transport throw then successful SSE preserves observed model and usage metadata', async () => {
+        if (adapter.label === 'deepinfra') return
+        process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = '4'
+        let physicalAttempts = 0
+        globalThis.fetch = async () => {
+          physicalAttempts += 1
+          if (physicalAttempts === 1) throw new TypeError('fetch failed')
+          return new Response(
+            sseFixture(adapter, [
+              wrapSsePayload(adapter, {
+                choices: [{ delta: { content: 'retried-ok' }, finish_reason: 'stop' }],
+                usage: { prompt_tokens: 41, completion_tokens: 9, total_tokens: 50 },
+              }),
+              'data: [DONE]',
+            ]),
+            { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+          )
+        }
+        const runner = adapter.runner()
+        const completed: ProviderInvocationCompleted[] = []
+        const text = await runner.executeRaw('probe', {
+          onChunk: () => {},
+          onInvocationCompleted: (value) => { completed.push(value) },
+        }, 'system')
+        assert.equal(text, 'retried-ok')
+        assert.equal(physicalAttempts, 2)
+        const metadata = (runner as OpenAiCompatibleRunner).getLastInvocationMetadata?.()
+        assert.equal(metadata?.observed_model_id, ROUTED_MODEL)
+        assert.equal(metadata?.prompt_tokens, 41)
+        assert.equal(metadata?.completion_tokens, 9)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'delivered')
       })
 
       it('raw-stream-held-open-after-done-success: releases reader without waiting for EOF', async () => {

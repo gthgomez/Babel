@@ -25,6 +25,7 @@ beforeEach(() => {
   process.env['OPENROUTER_API_KEY'] = 'test-openrouter-key'
   process.env['COMMAND_CODE_API_KEY'] = 'test-command-code-key'
   process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '2000'
+  process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = '4'
 })
 
 afterEach(() => {
@@ -109,6 +110,38 @@ function withModel(model: string, chunk: Record<string, unknown>): string {
 
 for (const adapter of ADAPTERS) {
   describe(`${adapter.label} inherited transport conformance`, { concurrency: 1 }, () => {
+    it('HTTP transport throw then successful SSE preserves observed model and usage metadata', async () => {
+      const { model } = adapter
+      let physicalAttempts = 0
+      globalThis.fetch = async () => {
+        physicalAttempts += 1
+        if (physicalAttempts === 1) throw new TypeError('fetch failed')
+        return makeSseResponse([
+          withModel(model, {
+            choices: [{ delta: { content: 'routed-ok' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 31, completion_tokens: 7, total_tokens: 38 },
+          }),
+          'data: [DONE]',
+        ])
+      }
+      const runner = adapter.runner() as OpenRouterApiRunner | CommandCodeApiRunner
+      const completed: ProviderInvocationCompleted[] = []
+      const events = await collect(
+        runner.executeWithToolsStream(USER, [], undefined, undefined, 'auto', {
+          onInvocationCompleted: (value) => { completed.push(value) },
+        }),
+        completed,
+      )
+      assert.equal(physicalAttempts, 2)
+      assert.deepEqual(events.map((event) => event.type), ['text_delta', 'done'])
+      const metadata = runner.getLastInvocationMetadata()
+      assert.equal(metadata?.observed_model_id, model)
+      assert.equal(metadata?.prompt_tokens, 31)
+      assert.equal(metadata?.completion_tokens, 7)
+      assert.equal(metadata?.provider, adapter.label === 'openrouter' ? 'openrouter' : 'command-code')
+      assert.equal(completed[0]?.status, 'delivered')
+    })
+
     it('split tool-call arguments reconstruct to one tool_use', async () => {
       const { model } = adapter
       globalThis.fetch = async () => makeSseResponse([
