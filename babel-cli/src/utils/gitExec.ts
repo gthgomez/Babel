@@ -237,17 +237,17 @@ export function runBenchmarkGitCommandBytes(
   };
 }
 
-export function observeBenchmarkWorkingTreeDirty(projectRoot: string): boolean {
-  return benchmarkPorcelainRecords(projectRoot).length > 0;
-}
+export type BenchmarkPorcelainObserveFailure =
+  | 'spawn_failed'
+  | 'git_exit'
+  | 'non_utf8'
+  | 'truncated_nul';
 
-export function benchmarkPorcelainRecords(projectRoot: string): string[] {
-  const status = runBenchmarkGitCommandBytes(projectRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
-  if (status.status !== 0) return [];
-  const decoded = decodeFixtureGitStdout(status.stdout);
-  if (decoded === null) return [];
-  const records = decoded.split('\0');
-  if (records.pop() !== '') return [];
+export type BenchmarkPorcelainObserveResult =
+  | { ok: true; records: readonly string[] }
+  | { ok: false; reason: BenchmarkPorcelainObserveFailure };
+
+function filterBenchmarkPorcelainRecords(records: string[]): string[] {
   return records.filter(record =>
     record.length >= 4
     && record[2] === ' '
@@ -255,4 +255,40 @@ export function benchmarkPorcelainRecords(projectRoot: string): string[] {
       const path = record.slice(3);
       return path !== '.babel' && !path.startsWith('.babel/');
     })());
+}
+
+/** Classify hardened fixture porcelain bytes; empty records mean valid clean. */
+export function parseBenchmarkPorcelainBytes(
+  status: number | null,
+  stdout: Buffer,
+): BenchmarkPorcelainObserveResult {
+  if (status !== 0) {
+    return { ok: false, reason: status === null ? 'spawn_failed' : 'git_exit' };
+  }
+  const decoded = decodeFixtureGitStdout(stdout);
+  if (decoded === null) return { ok: false, reason: 'non_utf8' };
+  const records = decoded.split('\0');
+  if (records.pop() !== '') return { ok: false, reason: 'truncated_nul' };
+  return { ok: true, records: filterBenchmarkPorcelainRecords(records) };
+}
+
+export function observeBenchmarkPorcelain(projectRoot: string): BenchmarkPorcelainObserveResult {
+  const status = runBenchmarkGitCommandBytes(projectRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  return parseBenchmarkPorcelainBytes(status.status, status.stdout);
+}
+
+/**
+ * Benchmark dirty probe: valid clean → false; valid dirty → true;
+ * unverifiable Git/porcelain → true (conservative; broker must not skip ownership).
+ */
+export function observeBenchmarkWorkingTreeDirty(projectRoot: string): boolean {
+  const observed = observeBenchmarkPorcelain(projectRoot);
+  if (!observed.ok) return true;
+  return observed.records.length > 0;
+}
+
+/** Valid porcelain paths only; invalid/unavailable observation yields empty (use observeBenchmarkPorcelain). */
+export function benchmarkPorcelainRecords(projectRoot: string): string[] {
+  const observed = observeBenchmarkPorcelain(projectRoot);
+  return observed.ok ? [...observed.records] : [];
 }

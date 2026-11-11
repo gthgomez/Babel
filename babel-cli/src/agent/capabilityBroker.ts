@@ -37,7 +37,9 @@ export function matchesProtectedPath(
 
 /**
  * Detect a dirty git working tree from workspace evidence (not env-only).
- * Returns false when git is unavailable / not a repo (fail-open on detection).
+ * Non-benchmark: returns false when git is unavailable / not a repo (fail-open).
+ * Benchmark mode (BABEL_BENCHMARK_MODE=1): hardened observer is fail-closed —
+ * unverifiable porcelain counts as dirty so ownership still classifies <git-status>.
  * Env overrides for tests: BABEL_DIRTY_TREE=1 force dirty, =0 force clean.
  */
 export function detectWorkingTreeDirty(
@@ -46,7 +48,9 @@ export function detectWorkingTreeDirty(
 ): boolean {
   if (env['BABEL_DIRTY_TREE'] === '1') return true;
   if (env['BABEL_DIRTY_TREE'] === '0') return false;
-  if (env['BABEL_BENCHMARK_MODE'] === '1') return observeBenchmarkWorkingTreeDirty(projectRoot);
+  if (env['BABEL_BENCHMARK_MODE'] === '1') {
+    return observeBenchmarkWorkingTreeDirty(projectRoot);
+  }
   try {
     const result = spawnSync('git', ['status', '--porcelain'], {
       cwd: projectRoot,

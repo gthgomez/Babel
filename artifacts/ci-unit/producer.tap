@@ -1,0 +1,4 @@
+TAP version 13
+# Subtest: parseAgentActions
+    # Subtest: parses a fenced JSON actions array
+    ok 1 - parses a fenced JSON actions array
