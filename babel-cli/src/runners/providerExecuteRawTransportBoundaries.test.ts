@@ -4,6 +4,9 @@
  *
  * Mutates globalThis.fetch — when batching with other runner transport suites,
  * pass `--test-concurrency=1` to avoid parallel fetch/env races.
+ *
+ * Physical dispatch after HTTP/stream-idle retry uses PHYSICAL_DISPATCH_MIN_BUDGET_MS
+ * (10ms intentional margin; see providerResponsePolicy.ts + providerInvocationDeadline.test.ts).
  */
 
 import assert from 'node:assert/strict'
@@ -342,10 +345,11 @@ describe('executeRaw transport boundaries (mocked)', { concurrency: 1 }, () => {
         assert.equal(completed[0]?.status, 'failed')
       })
 
-      it('HTTP 429 retry-after cannot schedule a second physical dispatch past deadline', async () => {
+      it('HTTP 429 enters retry backoff once; invocation deadline blocks second physical dispatch', async () => {
         process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = '3'
-        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '50'
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '60'
         let calls = 0
+        let httpRetryCallbacks = 0
         globalThis.fetch = async () => {
           calls += 1
           assert.ok(calls <= 1, 'must not dispatch another billable physical fetch after deadline')
@@ -357,10 +361,12 @@ describe('executeRaw transport boundaries (mocked)', { concurrency: 1 }, () => {
         const completed: Array<{ status: string; failure_stage?: string | null }> = []
         await assert.rejects(
           () => adapter.runner().executeRaw('probe', {
+            onRetry: () => { httpRetryCallbacks += 1 },
             onInvocationCompleted: (value) => { completed.push(value) },
           }, 'system'),
           /request timeout after/i,
         )
+        assert.equal(httpRetryCallbacks, 1, 'must schedule HTTP 429 retry backoff before deadline blocks dispatch')
         assert.equal(calls, 1, 'must not dispatch another billable physical fetch after deadline')
         assert.equal(completed.length, 1)
         assert.equal(completed[0]?.status, 'failed')
@@ -389,11 +395,12 @@ describe('executeRaw transport boundaries (mocked)', { concurrency: 1 }, () => {
         assert.equal(completed[0]?.failure_stage, 'response')
       })
 
-      it('stream idle retry blocked by deadline: empty first stream emits no partial output', async () => {
+      it('stream idle retry scheduled once; deadline blocks second physical dispatch (empty first stream)', async () => {
         process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'] = '1'
-        process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '35'
-        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '40'
+        process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '30'
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '80'
         let calls = 0
+        let streamIdleRetryCallbacks = 0
         globalThis.fetch = async () => {
           calls += 1
           assert.ok(calls <= 1, 'must not physical-fetch after invocation deadline')
@@ -408,10 +415,14 @@ describe('executeRaw transport boundaries (mocked)', { concurrency: 1 }, () => {
         await assert.rejects(
           () => adapter.runner().executeRaw('probe', {
             onChunk: () => {},
+            onRetry: (info) => {
+              if (info.reason === 'stream_idle') streamIdleRetryCallbacks += 1
+            },
             onInvocationCompleted: (value) => { completed.push(value) },
           }, 'system'),
           /timeout|stream idle timeout/i,
         )
+        assert.equal(streamIdleRetryCallbacks, 1, 'must enter stream idle retry before deadline blocks dispatch')
         assert.equal(calls, 1, 'must not physical-fetch after invocation deadline')
         assert.equal(completed.length, 1)
         assert.equal(completed[0]?.status, 'failed')

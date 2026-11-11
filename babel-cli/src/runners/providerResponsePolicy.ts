@@ -17,7 +17,19 @@ export const REQUEST_MAX_RETRIES =
 const RETRY_BASE_DELAY_MS = 200;
 
 
-/** Minimum remaining invocation budget required before opening another physical HTTP dispatch. */
+/**
+ * Minimum remaining invocation budget before opening another physical HTTP dispatch
+ * (request retries, stream-idle physical retries).
+ *
+ * This is an intentional transport margin, not a second timeout:
+ * - `invocationDeadlineAt` is the hard wall clock; sleeps are capped to remaining budget.
+ * - Sub-millisecond leftovers after capped backoff used to schedule `abort(0)` fetches
+ *   that still bill as a physical attempt on some providers.
+ * - Requiring >= 10ms remaining rejects those edge dispatches while leaving normal retries
+ *   unchanged when the caller's budget still has usable room.
+ *
+ * Boundary (fixed `now`): remaining 0–9ms → no dispatch; 10ms+ → dispatch allowed.
+ */
 export const PHYSICAL_DISPATCH_MIN_BUDGET_MS = 10;
 
 export function remainingInvocationBudgetMs(invocationDeadlineAt: number, now = Date.now()): number {
