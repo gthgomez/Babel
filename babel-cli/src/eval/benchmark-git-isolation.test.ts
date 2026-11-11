@@ -86,6 +86,14 @@ test('parseBenchmarkPorcelainBytes distinguishes valid clean from invalid porcel
     (parseBenchmarkPorcelainBytes(0, Buffer.from('bogus\0', 'utf8')) as { reason: string }).reason,
     'invalid_porcelain',
   )
+  assert.equal(
+    (parseBenchmarkPorcelainBytes(0, Buffer.from('XY .babel/hidden\0', 'utf8')) as { reason: string }).reason,
+    'invalid_porcelain',
+  )
+  assert.equal(
+    (parseBenchmarkPorcelainBytes(0, Buffer.from('    \0', 'utf8')) as { reason: string }).reason,
+    'invalid_porcelain',
+  )
 })
 
 test('rename porcelain pairs validate continuation paths before internal filtering', () => {
@@ -107,6 +115,9 @@ test('rename porcelain pairs validate continuation paths before internal filteri
     (parseBenchmarkPorcelainBytes(0, Buffer.from('R  dest.mjs\0 M bad.mjs\0', 'utf8')) as { reason: string }).reason,
     'invalid_porcelain',
   )
+  const ambiguousPartner = parseBenchmarkPorcelainBytes(0, Buffer.from('R  dest.mjs\0 M lib/path.mjs\0', 'utf8'))
+  assert.equal(ambiguousPartner.ok, false)
+  assert.equal((ambiguousPartner as { reason: string }).reason, 'invalid_porcelain')
 })
 
 test('benchmark observer treats spawn and git failures as conservatively dirty', async () => {

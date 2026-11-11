@@ -252,9 +252,18 @@ function isBenchmarkInternalPath(path: string): boolean {
   return path === '.babel' || path.startsWith('.babel/');
 }
 
+/** Git porcelain v1 XY columns (index + work tree). */
+const PORCELAIN_XY = /^[ MADRCU?!]{2}$/;
+
+function isPorcelainStatusRecord(record: string): boolean {
+  if (record.length < 4 || record[2] !== ' ') return false;
+  if (!PORCELAIN_XY.test(record.slice(0, 2))) return false;
+  const path = record.slice(3);
+  return path.length > 0 && path.trim().length > 0;
+}
+
 function porcelainStatusPath(record: string): string | null {
-  if (record.length < 4 || record[2] !== ' ') return null;
-  return record.slice(3);
+  return isPorcelainStatusRecord(record) ? record.slice(3) : null;
 }
 
 type PorcelainDigest =
@@ -272,7 +281,7 @@ function digestBenchmarkPorcelainRecords(records: string[]): PorcelainDigest {
       index += 1;
       if (index >= records.length) return { ok: false, reason: 'invalid_porcelain' };
       const partner = records[index]!;
-      if (!partner || porcelainStatusPath(partner) !== null) {
+      if (!partner || isPorcelainStatusRecord(partner)) {
         return { ok: false, reason: 'invalid_porcelain' };
       }
       const touchesWorkspace = !isBenchmarkInternalPath(path) || !isBenchmarkInternalPath(partner);
