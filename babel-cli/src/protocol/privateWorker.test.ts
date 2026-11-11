@@ -9,7 +9,9 @@ import test, { after, before } from 'node:test';
 
 import { ChatEngine } from '../agent/chatEngine.js';
 import { requestChatActionApproval } from '../agent/chatApproval.js';
+import { chatSessionDir } from '../cli/runsLayout.js';
 import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../config/benchmarkContainer.js';
+import { loadExecutionPolicyRecord } from '../config/executionPolicySelection.js';
 import { SafeExecutor } from '../sandbox.js';
 import { createProtocolHostState } from './client/host.js';
 
@@ -168,6 +170,9 @@ test('private worker retains one real ChatEngine per thread for ten turns', asyn
     assert.equal(instances[0]!.getProviderSelectionStatus().requestedModel, 'deepseek/deepseek-v4-flash-0731');
     assert.ok(instances[0]!.getConversation().filter((item) => item.role === 'user').length >= 10,
       'the reused engine must keep the earlier conversation');
+    const durablePolicy = loadExecutionPolicyRecord(chatSessionDir(firstId));
+    assert.equal(durablePolicy?.profile, 'safe_repo', 'a worker session must publish its boundary');
+    assert.equal(durablePolicy?.effectiveBoundary, 'docker');
 
     const second = await client.request(30, 'thread.create', { task: 'hello' });
     const secondId = second.result.thread_id as string;

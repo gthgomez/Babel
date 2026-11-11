@@ -19,7 +19,7 @@ import { hasUnsettledBackgroundShells } from '../agent/backgroundShell.js';
 import { chatSessionDir } from '../cli/runsLayout.js';
 import { acquireSessionPolicyLease, type SessionPolicyLease } from '../config/sessionPolicyLease.js';
 import { constrainNewSessionPolicy, recordNewSessionPolicy } from '../config/sessionExecutionPolicy.js';
-import { withExecutionPolicyChoice } from '../config/executionPolicySelection.js';
+import { loadExecutionPolicyRecord, withExecutionPolicyChoice } from '../config/executionPolicySelection.js';
 import { INSTRUCTION_MANIFEST_FILENAME, TASK_CONTRACT_FILENAME, TASK_MODE_HISTORY_FILENAME,
   loadLiveSessionAuthorityStrict, recoverCheckpointArtifacts } from '../agent/liveSessionBridge.js';
 import { getThreadDir } from '../services/threadStore/threadStore.js';
@@ -446,13 +446,17 @@ export function startPrivateWorker({ input, output, host: injectedHost, onEngine
           }));
           // A new worker-created session must publish the same durable policy a
           // CLI-created session does, so a later resume preserves its boundary.
-          // Re-materialization may find the record already present; that is the
-          // intended durable state, not an error.
+          // Re-materialization may find the record already present; accept it
+          // only when it authorizes exactly the policy this engine runs under.
           if (!hasRetainedAuthority) {
-            try { recordNewSessionPolicy(engine); }
-            catch (error) {
-              if (!/already exists/i.test(error instanceof Error ? error.message : '')) throw error;
-            }
+            const existing = loadExecutionPolicyRecord(chatSessionDir(descriptor.threadId));
+            const current = engine.getExecutionPolicy();
+            if (existing) {
+              if (!current || existing.profile !== current.profile
+                || existing.effectiveBoundary !== current.expectedBoundary) {
+                throw new Error('The persisted execution policy does not match this thread authority.');
+              }
+            } else recordNewSessionPolicy(engine);
           }
           return engine;
         });

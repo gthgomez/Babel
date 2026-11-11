@@ -45,11 +45,11 @@ export function resolveSessionExecutionProfile(sessionId, { sessionsDir, default
  * its authority. A session continued under a different provider/model/profile
  * must resume through the per-run CLI child instead of failing forever.
  */
-export function workerThreadCompatible(sessionId, { sessionsDir, provider, model, profile, projectRoot }) {
+export function workerThreadCompatible(sessionId, { threadsDir, provider, model, profile, projectRoot }) {
   if (typeof sessionId !== 'string' || !sessionId) return true
-  if (typeof sessionsDir !== 'string' || !sessionsDir) return false
+  if (typeof threadsDir !== 'string' || !threadsDir) return false
   let raw
-  try { raw = readFileSync(join(sessionsDir, sessionId, 'session-descriptor.json'), 'utf8') }
+  try { raw = readFileSync(join(threadsDir, sessionId, 'session-descriptor.json'), 'utf8') }
   catch { return false }
   if (raw.length > 16_384) return false
   let descriptor

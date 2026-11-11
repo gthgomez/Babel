@@ -21,7 +21,7 @@ test('the resident worker is used only for a matching thread descriptor', () => 
     mkdirSync(dir, { recursive: true })
     const descriptor = { schemaVersion: 1, threadId: 'chat-worker', mode: 'chat', projectRoot: root, provider: 'openrouter', model: 'fixture-model', policyProfile: 'host_native' }
     writeFileSync(join(dir, 'session-descriptor.json'), JSON.stringify(descriptor))
-    const options = { sessionsDir: root, provider: 'openrouter', model: 'fixture-model', profile: 'host_native', projectRoot: root }
+    const options = { threadsDir: root, provider: 'openrouter', model: 'fixture-model', profile: 'host_native', projectRoot: root }
     assert.equal(workerThreadCompatible('chat-worker', options), true)
     assert.equal(workerThreadCompatible('chat-worker', { ...options, model: 'another-model' }), false)
     assert.equal(workerThreadCompatible('chat-worker', { ...options, provider: 'deepseek' }), false)

@@ -29,7 +29,7 @@ import {parseBuildMetadata} from './identity.mjs';
 import {readActiveEngine, writeActiveEngine} from './engine-manager.mjs';
 import {checkPackagedCliUpdate, installPreviewSourceBuild, installStableReleaseArchive, resolveBundledNpmCli} from './engine-artifact.mjs';
 import {qualifiedProviders, readProviderRoute, saveProviderRoute, validateProviderRoute,refreshModelCatalog} from './provider-routing.mjs';
-import {listSavedChats,readSavedChat,searchSavedChats,readSavedMessage,runsSessionsDir} from './sessions.mjs';
+import {listSavedChats,readSavedChat,searchSavedChats,readSavedMessage,runsSessionsDir,runsThreadsDir} from './sessions.mjs';
 import {ComposerDraftStore,composerDraftScope} from './composer-drafts.mjs';
 import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose,createCloseRequest} from './lifecycle.mjs';
 import {readBridgeHostAuthToken} from './bridge-host-token.mjs';
@@ -655,16 +655,16 @@ async function start(){
     const selectedModel=models.find(model=>model.id===runRequest.model&&model.enabled!==false);
     if(!selectedModel)throw new Error('The selected model is disabled or belongs to another provider. Choose an enabled model.');
     if(selectedModel.selectable===false)throw new Error(selectedModel.unavailableReason||'The selected model is unavailable. Choose another model in Settings.');
+    runAuthority=conversationOnly?null:await projectAuthority.admit(preferences.projectRoot);
     // A thread whose descriptor no longer matches the selected provider/model/
     // profile cannot be rebound by the worker; continue it through the CLI child.
     const workerCompatible=!request.sessionId||workerThreadCompatible(request.sessionId,{
-      sessionsDir:runsSessionsDir(packageRoot,runtimeEnvironment().BABEL_RUNS_DIR),
+      threadsDir:runsThreadsDir(packageRoot,runtimeEnvironment().BABEL_RUNS_DIR),
       provider:route?.provider,model:runRequest.model,profile:effectiveProfile,
-      projectRoot:preferences.projectRoot,
+      projectRoot:runAuthority?.identity.root??preferences.projectRoot,
     });
     buildRunArgs(cliEntry, preferences.projectRoot, runRequest);
     const childEnvironment=applySelectedModelEnvironment(await ownedCliEnvironment(),selectedModel);
-    runAuthority=conversationOnly?null:await projectAuthority.admit(preferences.projectRoot);
     if(admissionEpoch!==runAdmissionEpoch){runAuthority=null;return {started:false};}
     const bridge=remoteBridge;
     const remoteEpoch=remoteAdmissionEpoch;
