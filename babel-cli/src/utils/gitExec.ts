@@ -241,20 +241,47 @@ export type BenchmarkPorcelainObserveFailure =
   | 'spawn_failed'
   | 'git_exit'
   | 'non_utf8'
-  | 'truncated_nul';
+  | 'truncated_nul'
+  | 'invalid_porcelain';
 
 export type BenchmarkPorcelainObserveResult =
   | { ok: true; records: readonly string[] }
   | { ok: false; reason: BenchmarkPorcelainObserveFailure };
 
-function filterBenchmarkPorcelainRecords(records: string[]): string[] {
-  return records.filter(record =>
-    record.length >= 4
-    && record[2] === ' '
-    && (() => {
-      const path = record.slice(3);
-      return path !== '.babel' && !path.startsWith('.babel/');
-    })());
+function isBenchmarkInternalPath(path: string): boolean {
+  return path === '.babel' || path.startsWith('.babel/');
+}
+
+function porcelainStatusPath(record: string): string | null {
+  if (record.length < 4 || record[2] !== ' ') return null;
+  return record.slice(3);
+}
+
+type PorcelainDigest =
+  | { ok: true; records: string[] }
+  | { ok: false; reason: 'invalid_porcelain' };
+
+function digestBenchmarkPorcelainRecords(records: string[]): PorcelainDigest {
+  const dirty: string[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]!;
+    const path = porcelainStatusPath(record);
+    if (path === null) return { ok: false, reason: 'invalid_porcelain' };
+    const renameOrCopy = /[RC]/.test(record.slice(0, 2));
+    if (renameOrCopy) {
+      index += 1;
+      if (index >= records.length) return { ok: false, reason: 'invalid_porcelain' };
+      const partner = records[index]!;
+      if (!partner || porcelainStatusPath(partner) !== null) {
+        return { ok: false, reason: 'invalid_porcelain' };
+      }
+      const touchesWorkspace = !isBenchmarkInternalPath(path) || !isBenchmarkInternalPath(partner);
+      if (touchesWorkspace) dirty.push(record);
+      continue;
+    }
+    if (!isBenchmarkInternalPath(path)) dirty.push(record);
+  }
+  return { ok: true, records: dirty };
 }
 
 /** Classify hardened fixture porcelain bytes; empty records mean valid clean. */
@@ -269,7 +296,10 @@ export function parseBenchmarkPorcelainBytes(
   if (decoded === null) return { ok: false, reason: 'non_utf8' };
   const records = decoded.split('\0');
   if (records.pop() !== '') return { ok: false, reason: 'truncated_nul' };
-  return { ok: true, records: filterBenchmarkPorcelainRecords(records) };
+  if (records.length === 0) return { ok: true, records: [] };
+  const digested = digestBenchmarkPorcelainRecords(records);
+  if (!digested.ok) return { ok: false, reason: digested.reason };
+  return { ok: true, records: digested.records };
 }
 
 export function observeBenchmarkPorcelain(projectRoot: string): BenchmarkPorcelainObserveResult {
