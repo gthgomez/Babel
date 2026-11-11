@@ -727,6 +727,20 @@ describe('symbol coverage + localization gate', () => {
       }),
     );
 
+    const grantThenCondition = [
+      'You may edit test/parser.test.mjs.',
+      'You may edit test/parser.test.mjs only if CI passes.',
+    ].join(' ');
+    assert.equal(collectPermittedAuxiliaryTestPaths(grantThenCondition).size, 0);
+    assert.equal(taskAuthorizesAuxiliaryTestEdit(grantThenCondition, ['test/parser.test.mjs']), false);
+    assert.ok(
+      runHeuristicDiffCritic(
+        `${grantThenCondition}\n${apiAnchor}`,
+        'diff --git a/test/parser.test.mjs b/test/parser.test.mjs\n',
+        { changedFiles: ['test/parser.test.mjs'] },
+      ),
+    );
+
     for (const conditioned of [
       'Fix parseExpression. You may edit test/allowed.test.mjs but not test/forbidden.test.mjs.',
       'Fix parseExpression. You may edit test/allowed.test.mjs instead of test/forbidden.test.mjs.',

@@ -545,6 +545,22 @@ function grantSegmentHasUnsupportedCondition(segment: string): boolean {
   return false;
 }
 
+function segmentLooksLikeAuxiliaryTestGrant(segment: string): boolean {
+  const affirmativeLead =
+    /^(?:[-*•]\s*)?(?:you\s+)?(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update|adjust)\b/i;
+  const ownerGrant =
+    /^(?:[-*•]\s*)?(?:task\s+owner\s+)?(?:explicitly\s+)?authorizes?\s+(?:you\s+to\s+)?(?:clarify|edit|refine)\b/i;
+  const labeledGrant = /^(?:[-*•]\s*)?authorized\s+auxiliary\s+test\s+edit\s+for\b/i;
+  return affirmativeLead.test(segment) || ownerGrant.test(segment) || labeledGrant.test(segment);
+}
+
+/** One conditional/exclusion grant segment voids permits from earlier unconditional grants. */
+function taskHasPoisonedAuxiliaryGrantScope(segments: string[]): boolean {
+  return segments.some(
+    (segment) => segmentLooksLikeAuxiliaryTestGrant(segment) && grantSegmentHasUnsupportedCondition(segment),
+  );
+}
+
 function segmentNegatesAuxiliaryTestPermission(segment: string): boolean {
   if (/^\s*(?:do\s+not|don't)\b/i.test(segment)) return true;
   if (/\b(?:do\s+not|don't)\s+(?:claim|say|assert|pretend|edit)\b/i.test(segment)) return true;
@@ -596,14 +612,7 @@ function taskDeniesAuxiliaryTestEdit(normalized: string): boolean {
 function segmentGrantPermittedTestPaths(segment: string): string[] | null {
   if (segmentNegatesAuxiliaryTestPermission(segment)) return null;
   if (grantSegmentHasUnsupportedCondition(segment)) return null;
-  const affirmativeLead =
-    /^(?:[-*•]\s*)?(?:you\s+)?(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update|adjust)\b/i;
-  const ownerGrant =
-    /^(?:[-*•]\s*)?(?:task\s+owner\s+)?(?:explicitly\s+)?authorizes?\s+(?:you\s+to\s+)?(?:clarify|edit|refine)\b/i;
-  const labeledGrant = /^(?:[-*•]\s*)?authorized\s+auxiliary\s+test\s+edit\s+for\b/i;
-  const looksLikeGrant =
-    affirmativeLead.test(segment) || ownerGrant.test(segment) || labeledGrant.test(segment);
-  if (!looksLikeGrant) return null;
+  if (!segmentLooksLikeAuxiliaryTestGrant(segment)) return null;
   const paths = extractExplicitTestFilePaths(segment);
   return paths.length > 0 ? paths : null;
 }
@@ -612,6 +621,7 @@ function segmentGrantPermittedTestPaths(segment: string): string[] | null {
 export function collectPermittedAuxiliaryTestPaths(task: string): ReadonlySet<string> {
   const normalized = task.replace(/\r\n?/g, '\n').trim();
   const segments = normalized.split(/\n+|(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+  if (taskHasPoisonedAuxiliaryGrantScope(segments)) return new Set();
   const permitted = new Set<string>();
   for (const segment of segments) {
     const fromGrant = segmentGrantPermittedTestPaths(segment);
