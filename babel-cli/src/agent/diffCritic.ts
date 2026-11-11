@@ -526,7 +526,7 @@ function normalizeAuxiliaryTestPath(path: string): string {
   return path.replace(/\\/g, '/').replace(/^\.\//, '').trim();
 }
 
-/** Explicit `test/...` or `tests/...` paths named in grant prose (fail-closed). */
+/** Explicit `test/...` or `tests/...` paths named in prose (fail-closed). */
 function extractExplicitTestFilePaths(text: string): string[] {
   const found = new Set<string>();
   for (const match of text.matchAll(/\b(?:tests?\/[\w][\w./-]*)\b/gi)) {
@@ -534,6 +534,16 @@ function extractExplicitTestFilePaths(text: string): string[] {
     if (normalized.length > 0) found.add(normalized);
   }
   return [...found];
+}
+
+/** Grant segments with exclusions/contrasts/conditions are not unambiguous owner grants. */
+function grantSegmentHasUnsupportedCondition(segment: string): boolean {
+  if (/\b(?:but\s+not|instead\s+of|except(?:\s+for)?|unless|rather\s+than)\b/i.test(segment)) return true;
+  if (/\b(?:do\s+not|don't|never)\s+edit\b/i.test(segment) && /\btests?\//i.test(segment)) return true;
+  if (/\bnot\s+tests?\//i.test(segment)) return true;
+  if (/\bif\s+you\b/i.test(segment) && /\btests?\//i.test(segment)) return true;
+  if (/\bwhen\s+you\b/i.test(segment) && /\btests?\//i.test(segment)) return true;
+  return false;
 }
 
 function segmentNegatesAuxiliaryTestPermission(segment: string): boolean {
@@ -586,6 +596,7 @@ function taskDeniesAuxiliaryTestEdit(normalized: string): boolean {
 /** Unambiguous task-owner grant segment that names explicit test file paths. */
 function segmentGrantPermittedTestPaths(segment: string): string[] | null {
   if (segmentNegatesAuxiliaryTestPermission(segment)) return null;
+  if (grantSegmentHasUnsupportedCondition(segment)) return null;
   const affirmativeLead =
     /^(?:[-*•]\s*)?(?:you\s+)?(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update|adjust)\b/i;
   const ownerGrant =

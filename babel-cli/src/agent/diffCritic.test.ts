@@ -726,6 +726,20 @@ describe('symbol coverage + localization gate', () => {
         changedFiles: ['test/parser.test.mjs'],
       }),
     );
+
+    for (const conditioned of [
+      'Fix parseExpression. You may edit test/allowed.test.mjs but not test/forbidden.test.mjs.',
+      'Fix parseExpression. You may edit test/allowed.test.mjs instead of test/forbidden.test.mjs.',
+    ]) {
+      assert.equal(collectPermittedAuxiliaryTestPaths(conditioned).size, 0, conditioned);
+      for (const touched of [['test/allowed.test.mjs'], ['test/forbidden.test.mjs']]) {
+        assert.equal(taskAuthorizesAuxiliaryTestEdit(conditioned, touched), false, `${conditioned} → ${touched}`);
+        assert.ok(
+          runHeuristicDiffCritic(`${conditioned}\n${apiAnchor}`, patchForbidden, { changedFiles: touched }),
+          `heuristic active for conditioned grant: ${touched.join()}`,
+        );
+      }
+    }
   });
 
   test('test-only patch with named APIs is rejected', () => {
