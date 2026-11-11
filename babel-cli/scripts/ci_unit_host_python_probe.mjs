@@ -18,6 +18,18 @@ function probe(bin, prefixArgs = []) {
   return !result.error && result.status === 0
 }
 
+/** Direct interpreter path suitable for BABEL_WORKSPACE_PYTHON (excludes py launcher). */
+export function discoverDirectHostPythonBin(parentEnv = process.env) {
+  const configured =
+    parentEnv.BABEL_WORKSPACE_PYTHON?.trim() || parentEnv.BABEL_PYTHON?.trim() || ''
+  if (configured) return configured
+  for (const candidate of candidates()) {
+    if (candidate.bin === 'py') continue
+    if (probe(candidate.bin, candidate.args ?? [])) return candidate.bin
+  }
+  return null
+}
+
 function candidates() {
   if (process.platform === 'win32') {
     return [

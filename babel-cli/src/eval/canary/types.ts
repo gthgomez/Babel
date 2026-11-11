@@ -108,6 +108,8 @@ export interface CanaryReport {
     launch_unknown: number;
     launch_unknown_valid?: number;
     task_successes: number;
+    /** Successes among launched_valid rows only (same cohort as launched_task_success_rate). */
+    launched_task_successes?: number;
     /** Successes / scheduled_valid; includes not_launched preflight in the denominator. */
     scheduled_task_success_rate?: number | null;
     /** Successes / launched_valid; conditional on actual launch only. */

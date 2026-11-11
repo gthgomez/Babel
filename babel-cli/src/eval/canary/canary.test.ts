@@ -14,7 +14,7 @@ import { uncertaintyForTrials, scoreCanaryTrials } from "./score.js";
 import { CANARY_TASKS, getCanaryTask } from "./tasks.js";
 import { verifyCanaryTaskValidity } from "./validity.js";
 import { isLiveSuccessScope } from "../evalTypes.js";
-import type { CanaryTaskSpec } from "./types.js";
+import type { CanaryTaskSpec, CanaryTrialResult } from "./types.js";
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import childProcess from 'node:child_process';
@@ -163,6 +163,48 @@ test('attempt accounting separates scheduled success from launched-only success'
   assert.equal(mixed.attempt_accounting?.task_success_rate, 0.1);
 });
 
+test('launched success rate excludes legacy or unknown launch rows from the numerator', () => {
+  const noOp = runCodingCanary({ provider: 'mock', taskId: 'C08', trials: 1 }).trials[0]!;
+  const launched = {
+    ...noOp,
+    trial_index: 1,
+    launch_status: 'launched' as const,
+    grading_status: 'complete' as const,
+    contract_success: true,
+    hidden_ok: true,
+    false_complete: false,
+  };
+  const legacy: CanaryTrialResult = {
+    ...noOp,
+    trial_index: 2,
+    grading_status: 'complete',
+    contract_success: true,
+    hidden_ok: true,
+    false_complete: false,
+  };
+  delete legacy.launch_status;
+  const unknownLaunch: CanaryTrialResult = {
+    ...noOp,
+    trial_index: 3,
+    launch_status: 'unknown',
+    grading_status: 'complete',
+    contract_success: true,
+    hidden_ok: true,
+    false_complete: false,
+  };
+  const report = scoreCanaryTrials([launched, legacy, unknownLaunch], 'MOCK_ORCHESTRATION');
+  assert.equal(report.attempt_accounting?.task_successes, 3);
+  assert.equal(report.attempt_accounting?.launched_task_successes, 1);
+  assert.equal(report.attempt_accounting?.launched_valid, 1);
+  assert.equal(report.attempt_accounting?.launch_unknown_valid, 2);
+  assert.equal(report.attempt_accounting?.launched_task_success_rate, 1);
+  assert.equal(report.attempt_accounting?.scheduled_task_success_rate, 1);
+  assert.ok(
+    (report.attempt_accounting?.launched_task_success_rate ?? 0) <= 1,
+    'launched rate must never exceed 100% when cohorts match',
+  );
+});
+
 test('attempt accounting mixed launch, refusal, failure and unknown grading stay explicit', () => {
   const noOp = runCodingCanary({ provider: 'mock', taskId: 'C08', trials: 1 }).trials[0]!;
   const rows = [
@@ -177,6 +219,7 @@ test('attempt accounting mixed launch, refusal, failure and unknown grading stay
   assert.equal(report.attempt_accounting?.not_launched_valid, 1);
   assert.equal(report.attempt_accounting?.launch_unknown_valid, 1);
   assert.equal(report.attempt_accounting?.task_successes, 1);
+  assert.equal(report.attempt_accounting?.launched_task_successes, 1);
   assert.equal(report.attempt_accounting?.scheduled_task_success_rate, 0.25);
   assert.equal(report.attempt_accounting?.launched_task_success_rate, 0.5);
   assert.equal(report.grading_counts?.unknown, 1);
