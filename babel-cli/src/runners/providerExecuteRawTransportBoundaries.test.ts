@@ -344,7 +344,7 @@ describe('executeRaw transport boundaries (mocked)', { concurrency: 1 }, () => {
 
       it('HTTP 429 retry-after cannot schedule a second physical dispatch past deadline', async () => {
         process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = '3'
-        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '80'
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '50'
         let calls = 0
         globalThis.fetch = async () => {
           calls += 1
@@ -391,8 +391,8 @@ describe('executeRaw transport boundaries (mocked)', { concurrency: 1 }, () => {
 
       it('stream idle retry blocked by deadline: empty first stream emits no partial output', async () => {
         process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'] = '1'
-        process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '50'
-        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '80'
+        process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '35'
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '40'
         let calls = 0
         globalThis.fetch = async () => {
           calls += 1

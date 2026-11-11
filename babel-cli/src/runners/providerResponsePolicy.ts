@@ -17,8 +17,15 @@ export const REQUEST_MAX_RETRIES =
 const RETRY_BASE_DELAY_MS = 200;
 
 
+/** Minimum remaining invocation budget required before opening another physical HTTP dispatch. */
+export const PHYSICAL_DISPATCH_MIN_BUDGET_MS = 10;
+
 export function remainingInvocationBudgetMs(invocationDeadlineAt: number, now = Date.now()): number {
   return Math.max(0, invocationDeadlineAt - now);
+}
+
+export function canDispatchPhysicalRequest(invocationDeadlineAt: number, now = Date.now()): boolean {
+  return remainingInvocationBudgetMs(invocationDeadlineAt, now) >= PHYSICAL_DISPATCH_MIN_BUDGET_MS;
 }
 
 export function invocationDeadlineExpired(invocationDeadlineAt: number, now = Date.now()): boolean {

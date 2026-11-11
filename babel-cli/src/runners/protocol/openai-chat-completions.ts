@@ -38,6 +38,7 @@ import {
   isAbortError,
   isCallerCancelError,
   invocationDeadlineExpired,
+  canDispatchPhysicalRequest,
   invocationTimeoutMessage,
   isInvocationTimeoutError,
   linkExternalAbortSignal,
@@ -568,8 +569,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
     };
     for (let attempt = 1; attempt <= requestMaxRetries; attempt += 1) {
       lastAttempt = attempt;
-      const attemptBudgetMs = remainingInvocationBudgetMs(invocationDeadlineAt);
-      if (attemptBudgetMs === 0) {
+      if (!canDispatchPhysicalRequest(invocationDeadlineAt)) {
         const timeoutError = new Error(
           invocationTimeoutMessage(this.providerId, this.model, requestTimeoutMs),
         );
@@ -583,6 +583,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         });
         throw timeoutError;
       }
+      const attemptBudgetMs = remainingInvocationBudgetMs(invocationDeadlineAt);
       const controller = new AbortController();
       // Link external abort signal so Esc/Ctrl+C cancels in-flight HTTP requests
       const onExternalAbort = linkExternalAbortSignal(controller, signal);
@@ -944,8 +945,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
             }
             throw sleepErr;
           }
-          const streamRetryBudgetMs = remainingInvocationBudgetMs(invocationDeadlineAt);
-          if (streamRetryBudgetMs === 0) {
+          if (!canDispatchPhysicalRequest(invocationDeadlineAt)) {
             const timeoutError = new Error(invocationTimeoutMessage(this.providerId, this.model, requestTimeoutMs));
             settleRetry('failed');
             notifyPhase('provider_error', undefined, 'timeout');
@@ -958,6 +958,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
             });
             throw timeoutError;
           }
+          const streamRetryBudgetMs = remainingInvocationBudgetMs(invocationDeadlineAt);
           const controller = new AbortController();
           const onStreamRetryAbort = linkExternalAbortSignal(controller, signal);
           const timeout = setTimeout(() => controller.abort(), streamRetryBudgetMs);
@@ -1592,8 +1593,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
 
     for (let attempt = 1; attempt <= requestMaxRetries; attempt += 1) {
       lastAttempt = attempt;
-      const attemptBudgetMs = remainingInvocationBudgetMs(invocationDeadlineAt);
-      if (attemptBudgetMs === 0) {
+      if (!canDispatchPhysicalRequest(invocationDeadlineAt)) {
         const timeoutError = new Error(
           invocationTimeoutMessage(this.providerId, this.model, requestTimeoutMs),
         );
@@ -1608,6 +1608,7 @@ export class OpenAiCompatibleRunner extends CompatibleConfiguration implements L
         yield { type: 'error', message: timeoutError.message };
         return;
       }
+      const attemptBudgetMs = remainingInvocationBudgetMs(invocationDeadlineAt);
       const controller = new AbortController();
       const onExternalAbort = linkExternalAbortSignal(controller, signal);
       const timeout = setTimeout(() => controller.abort(), attemptBudgetMs);
