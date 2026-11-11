@@ -12,26 +12,46 @@ import { hasInspectedNoChangeEvidence, type GateToolLogEntry } from './completio
 import type { TaskOperation } from '../config/chatTaskClass.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
 import type { AcceptanceRequirementV1 } from './taskContract.js';
+import { canonicalJson } from '../acceptance/canonical.js';
+import { parseCommandArgv } from '../utils/commandArgv.js';
 import {
   canonicalCommandFromFrozenVerification,
   commandsMatchForExecutableBinding,
 } from './taskAcceptanceExecutableBinding.js';
 
-function normalizeCommandToken(command: string): string {
-  return command.trim().replace(/\s+/g, ' ');
+/** Trim framing whitespace only — never collapse spaces inside quoted argv. */
+function trimCommandForComparison(command: string): string {
+  return command.trim();
 }
 
 function commandHintFromDescription(description: string): string | null {
   const match = description.match(/`([^`]+)`\s+must\s+pass/i);
-  return match?.[1] ? normalizeCommandToken(match[1]) : null;
+  return match?.[1] ? trimCommandForComparison(match[1]) : null;
 }
 
 function declaredAcceptanceCommand(item: AcceptanceRequirementV1): string | null {
   const verification = item.verification;
   if (!verification) return null;
   const fromFrozen = canonicalCommandFromFrozenVerification(verification);
-  if (fromFrozen) return normalizeCommandToken(fromFrozen);
+  if (fromFrozen) return fromFrozen;
   return commandHintFromDescription(item.description);
+}
+
+function frozenReceiptArgvExpected(
+  verification: AcceptanceRequirementV1['verification'],
+): string[] | null {
+  if (!verification?.executable_id || !verification.argv?.length) return null;
+  return [verification.executable_id, ...verification.argv];
+}
+
+function receiptStructuredArgvConsistent(receipt: BoundChatVerifierReceipt): boolean {
+  if (!receipt.argv?.length) return true;
+  try {
+    return canonicalJson(parseCommandArgv(trimCommandForComparison(receipt.command)))
+      === canonicalJson(receipt.argv);
+  } catch {
+    return false;
+  }
 }
 
 function isMeaningBoundAcceptance(item: AcceptanceRequirementV1): boolean {
@@ -61,7 +81,7 @@ function toolCallCoversAcceptanceItem(entry: GateToolLogEntry, item: AcceptanceR
   if (entry.effect_status === 'indeterminate') return false;
   const declared = declaredAcceptanceCommand(item);
   if (!declared) return false;
-  return executedCommandMatchesDeclared(declared, normalizeCommandToken(entry.target));
+  return executedCommandMatchesDeclared(declared, trimCommandForComparison(entry.target));
 }
 
 function receiptCoversAcceptanceItem(
@@ -70,13 +90,25 @@ function receiptCoversAcceptanceItem(
 ): boolean {
   const exit = receipt.exit_code ?? receipt.exitCode ?? 1;
   if (exit !== 0 || receipt.stale) return false;
-  const declared = declaredAcceptanceCommand(item);
-  if (declared && executedCommandMatchesDeclared(declared, normalizeCommandToken(receipt.command))) {
-    return true;
+
+  if (!isCommandBoundAcceptance(item)) {
+    const boundVerifier = item.verification?.verifier_id;
+    const receiptVerifier = receipt.verifierId ?? receipt.verifier_id;
+    return Boolean(boundVerifier && receiptVerifier && boundVerifier === receiptVerifier);
   }
-  const boundVerifier = item.verification?.verifier_id;
-  const receiptVerifier = receipt.verifierId ?? receipt.verifier_id;
-  return Boolean(boundVerifier && receiptVerifier && boundVerifier === receiptVerifier);
+
+  const declared = declaredAcceptanceCommand(item);
+  if (!declared) return false;
+  const observed = trimCommandForComparison(receipt.command);
+  if (!executedCommandMatchesDeclared(declared, observed)) return false;
+
+  const expectedArgv = frozenReceiptArgvExpected(item.verification);
+  if (expectedArgv) {
+    if (receipt.argv && canonicalJson(receipt.argv) !== canonicalJson(expectedArgv)) return false;
+    if (!receiptStructuredArgvConsistent(receipt)) return false;
+  }
+
+  return true;
 }
 
 function evidenceCoversAcceptanceItem(

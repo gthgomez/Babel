@@ -36,10 +36,6 @@ function isFullyAnchoredPositiveSuccessTail(text: string): boolean {
 const COMPOUND_OR_NEGATED_RE =
   /\b(?:and|or|but|unless|except|when|if|not|fail|fails|failing|failed|error|errors|invalid|broken|red)\b/i
 
-function normalizeCommandText(command: string): string {
-  return command.trim().replace(/\s+/g, ' ').toLowerCase()
-}
-
 function structuredCommandIdentity(command: string): string | null {
   const parsed = parseStructuredVerifierCommand(command.trim(), {
     authoritySource: 'built_in_runner',
@@ -104,9 +100,12 @@ export function commandsMatchForExecutableBinding(
 ): boolean {
   const left = structuredCommandIdentity(criterionCommand)
   const right = structuredCommandIdentity(trustedCommand)
-  if (!left || !right) return false
-  if (left !== right) return false
-  return normalizeCommandText(criterionCommand) === normalizeCommandText(trustedCommand)
+  if (!left || !right || left !== right) return false
+  try {
+    return canonicalJson(parseCommandArgv(criterionCommand.trim())) === canonicalJson(parseCommandArgv(trustedCommand.trim()))
+  } catch {
+    return false
+  }
 }
 
 /**

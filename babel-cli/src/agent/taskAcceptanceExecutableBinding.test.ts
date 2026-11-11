@@ -139,6 +139,26 @@ test('canonical frozen verification requires executable_id with argv (no argv-on
   )
 })
 
+test('quoted argument whitespace is not collapsed into a false argv match', () => {
+  const withDoubleSpace = 'node --test "test  files/foo.test.mjs"'
+  const withSingleSpace = 'node --test "test files/foo.test.mjs"'
+  assert.equal(commandsMatchForExecutableBinding(withDoubleSpace, withSingleSpace), false)
+  assert.equal(
+    frozenVerificationMatchesTrustedCommand(
+      { executable_id: 'node', argv: ['--test', 'test  files/foo.test.mjs'] },
+      withSingleSpace,
+    ),
+    false,
+  )
+  assert.equal(
+    frozenVerificationMatchesTrustedCommand(
+      { executable_id: 'node', argv: ['--test', 'test  files/foo.test.mjs'] },
+      withDoubleSpace,
+    ),
+    true,
+  )
+})
+
 test('coverage argv weakening does not bind to trusted npm test', () => {
   assert.equal(
     criterionExplicitlyNamesTrustedCommand('npm test -- --coverage passes', 'npm test'),

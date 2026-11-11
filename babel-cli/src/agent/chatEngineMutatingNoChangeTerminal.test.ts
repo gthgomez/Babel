@@ -5,6 +5,7 @@ import {
   mutatingInspectionLeavesRequiredCriteriaUnmet,
   resolveAcceptedReadOnlyTerminal,
 } from './chatEngineMutatingNoChangeTerminal.js'
+import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js'
 
 const inspectedLog = [{ tool: 'read_file', target: 'a.ts', detail: 'export const value = 1', exit_code: 0 }]
 
@@ -225,6 +226,174 @@ test('non-npm executable-bound verifier requires full argv identity', () => {
     ...base,
     toolCallLog: [
       { tool: 'read_file', target: 'src/source.js', detail: 'ok', exit_code: 0 },
+      { tool: 'run_command', target: requiredCommand, exit_code: 0, effect_status: 'confirmed_no_change' as const },
+    ],
+  }), true)
+})
+
+test('verifier_id fallback cannot satisfy command-bound acceptance after command mismatch', () => {
+  const requiredCommand = 'npm run test:unit'
+  const criterionCompletion = {
+    currentRequest: () => ({
+      context: { schema_version: 1, kind: 'criterion-completion:v1' },
+      contract: {
+        frozen: true,
+        acceptance: [{
+          id: 'acceptance:unit',
+          description: `\`${requiredCommand}\` must pass.`,
+          required: true,
+          type: 'unit_test',
+          verification_strategy: 'Run npm script.',
+          verification: {
+            kind: 'unit_test',
+            verifier_id: 'verifier:npm',
+            executable_id: 'npm',
+            argv: ['run', 'test:unit'],
+          },
+        }],
+      },
+      run_id: 'r',
+      project_root: '/tmp',
+    }),
+    refreshPrivateEvidence: () => {},
+    reportAdvisoryEvidence: () => [{
+      requirement_id: 'acceptance:unit',
+      status: 'missing',
+      evidence_class: 'command',
+    }],
+    context: { schema_version: 1, kind: 'criterion-completion:v1' },
+  } as never
+  assert.equal(mutatingInspectionLeavesRequiredCriteriaUnmet({
+    criterionCompletion,
+    toolCallLog: inspectedLog,
+    buildCriterionRefresh: () => ({
+      criterionChatReceipts: [{
+        exit_code: 0,
+        command: 'npm test',
+        verifier_id: 'verifier:npm',
+        verifierId: 'verifier:npm',
+        argv: ['npm', 'test'],
+        summary: 'ok',
+      }],
+      candidate_sha: null,
+      has_mutation: false,
+    }),
+  }), true)
+})
+
+test('receipt argv must match frozen executable binding when provided', () => {
+  const requiredCommand = 'npm run test:unit'
+  const criterionCompletion = {
+    currentRequest: () => ({
+      context: { schema_version: 1, kind: 'criterion-completion:v1' },
+      contract: {
+        frozen: true,
+        acceptance: [{
+          id: 'acceptance:unit',
+          description: `\`${requiredCommand}\` must pass.`,
+          required: true,
+          type: 'unit_test',
+          verification_strategy: 'Run npm script.',
+          verification: {
+            kind: 'unit_test',
+            verifier_id: 'verifier:npm',
+            executable_id: 'npm',
+            argv: ['run', 'test:unit'],
+          },
+        }],
+      },
+      run_id: 'r',
+      project_root: '/tmp',
+    }),
+    refreshPrivateEvidence: () => {},
+    reportAdvisoryEvidence: () => [{
+      requirement_id: 'acceptance:unit',
+      status: 'missing',
+      evidence_class: 'command',
+    }],
+    context: { schema_version: 1, kind: 'criterion-completion:v1' },
+  } as never
+  const build = () => ({
+    criterionChatReceipts: [] as BoundChatVerifierReceipt[],
+    candidate_sha: null,
+    has_mutation: false,
+  })
+  const open = (receipts: BoundChatVerifierReceipt[]) =>
+    mutatingInspectionLeavesRequiredCriteriaUnmet({
+      criterionCompletion,
+      toolCallLog: inspectedLog,
+      buildCriterionRefresh: () => ({ ...build(), criterionChatReceipts: receipts }),
+    })
+  assert.equal(open([{
+    exit_code: 0,
+    command: requiredCommand,
+    verifier_id: 'verifier:npm',
+    argv: ['npm', 'run', 'test:other'],
+    summary: 'ok',
+  }]), true)
+  assert.equal(open([{
+    exit_code: 0,
+    command: requiredCommand,
+    verifier_id: 'verifier:npm',
+    argv: ['npm', 'run', 'test:unit'],
+    summary: 'ok',
+  }]), false)
+})
+
+test('quoted path spaces in tool target must match frozen command exactly', () => {
+  const requiredCommand = 'node --test "test  files/foo.test.mjs"'
+  const criterionCompletion = {
+    currentRequest: () => ({
+      context: { schema_version: 1, kind: 'criterion-completion:v1' },
+      contract: {
+        frozen: true,
+        acceptance: [{
+          id: 'acceptance:node-test',
+          description: `\`${requiredCommand}\` must pass.`,
+          required: true,
+          type: 'unit_test',
+          verification_strategy: 'Run node test.',
+          verification: {
+            kind: 'unit_test',
+            verifier_id: 'verifier:node',
+            executable_id: 'node',
+            argv: ['--test', 'test  files/foo.test.mjs'],
+          },
+        }],
+      },
+      run_id: 'r',
+      project_root: '/tmp',
+    }),
+    refreshPrivateEvidence: () => {},
+    reportAdvisoryEvidence: () => [{
+      requirement_id: 'acceptance:node-test',
+      status: 'missing',
+      evidence_class: 'command',
+    }],
+    context: { schema_version: 1, kind: 'criterion-completion:v1' },
+  } as never
+  const base = {
+    effectiveOperation: 'MUTATING' as const,
+    ambientReadOnly: false,
+    hasAnyWrites: false,
+    criterionCompletion,
+    buildCriterionRefresh: () => ({
+      criterionChatReceipts: [],
+      candidate_sha: null,
+      has_mutation: false,
+    }),
+  }
+  assert.equal(resolveAcceptedReadOnlyTerminal({
+    ...base,
+    toolCallLog: [
+      { tool: 'read_file', target: 'x', detail: 'ok', exit_code: 0 },
+      { tool: 'run_command', target: 'node --test "test files/foo.test.mjs"', exit_code: 0, effect_status: 'confirmed_no_change' as const },
+    ],
+  }), false)
+  assert.equal(resolveAcceptedReadOnlyTerminal({
+    ...base,
+    toolCallLog: [
+      { tool: 'read_file', target: 'x', detail: 'ok', exit_code: 0 },
       { tool: 'run_command', target: requiredCommand, exit_code: 0, effect_status: 'confirmed_no_change' as const },
     ],
   }), true)
