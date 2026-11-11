@@ -522,6 +522,16 @@ export function heuristicSymbolCoverageReject(
   };
 }
 
+/** Task prose explicitly permits cosmetic or auxiliary test-file refinement. */
+export function taskAuthorizesAuxiliaryTestEdit(task: string): boolean {
+  const normalized = task.replace(/\r\n?/g, '\n');
+  return (
+    /\b(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update|adjust)\b[^.\n]{0,120}\btest\/[\w./-]+/i.test(normalized)
+    || /\b(?:may|can)\s+(?:also\s+)?(?:clarify|edit|refine|update)\b[^.\n]{0,80}\btest\b[^.\n]{0,40}\bmessage\b/i.test(normalized)
+    || /\bauthorized\s+(?:auxiliary\s+)?test\s+(?:edit|refinement|change)/i.test(normalized)
+  );
+}
+
 /**
  * Detect patches that only touch test files while the task names specific
  * implementation APIs. Test-only patches that claim to fix a named API are
@@ -533,6 +543,7 @@ export function heuristicTestOnlyPatchReject(
   patch: string,
   changedFiles?: string[],
 ): DiffCriticVerdict | null {
+  if (taskAuthorizesAuxiliaryTestEdit(task)) return null;
   const files = changedFiles && changedFiles.length > 0
     ? changedFiles
     : extractPathsFromDiff(patch);

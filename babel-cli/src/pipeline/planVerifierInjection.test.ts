@@ -276,6 +276,18 @@ test('task verifier extraction preserves dotted selectors and literal quoted arg
     ['node --test test/parser.test.cjs'],
   )
   assert.deepEqual(
+    extractRequiredVerifierCommandsFromTask(
+      'Fix parser.js.\nRequirements:\n- `node check.mjs` must pass.',
+    ),
+    ['node check.mjs'],
+  )
+  assert.deepEqual(
+    extractRequiredVerifierCommandsFromTask(
+      'Fix parser.js.\nRequirements:\n- `npm run verify` must pass.',
+    ),
+    ['npm run verify'],
+  )
+  assert.deepEqual(
     extractRequiredVerifierCommandsFromTask('Sample:\n- node --test test/parser.test.cjs must pass.'),
     [],
     'commands in examples are not promoted into required verification',

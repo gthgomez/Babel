@@ -607,6 +607,23 @@ describe('symbol coverage + localization gate', () => {
     assert.equal(rej!.tier, 'heuristic');
   });
 
+  test('task-authorized auxiliary test edit is not flagged test-only', () => {
+    const task = [
+      'Fix parser.js so parseSum(2, 3) returns 5.',
+      'You may clarify test/parser.test.mjs message text; keep asserting parseSum(2, 3) === 5.',
+    ].join('\n');
+    const patch = [
+      'diff --git a/test/parser.test.mjs b/test/parser.test.mjs',
+      '--- a/test/parser.test.mjs',
+      '+++ b/test/parser.test.mjs',
+      '@@ -1,3 +1,3 @@',
+      '-test("parseSum", () => assert.equal(parseSum(2, 3), 5));',
+      '+test("parseSum sums arguments", () => assert.equal(parseSum(2, 3), 5));',
+    ].join('\n');
+  const rej = heuristicTestOnlyPatchReject(task, patch, ['test/parser.test.mjs']);
+    assert.equal(rej, null, 'explicit task permission for test refinement must not hard-block');
+  });
+
   test('test-only patch with named APIs is rejected', () => {
     const task =
       'Fix `Symbol.__new__` to handle the extra kwarg in sympy.core.symbol.';

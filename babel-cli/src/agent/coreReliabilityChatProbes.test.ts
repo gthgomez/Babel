@@ -475,6 +475,31 @@ test('chat probe (2c) authorized test edit positive: permitted test refinement w
   }
 })
 
+test('chat probe (3) negative (semantic-only): implementation criterion without bound command cannot NO_CHANGE', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-3-semantic-only-'))
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true })
+    writeFileSync(join(root, 'src', 'parser.js'), 'export function parseSum(a, b) { return a - b; }\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', private: true }))
+    initGitFixture(root)
+    const task = 'Fix parser.js so parseSum(2, 3) returns 5.'
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'src/parser.js' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'Implementation is present; no change required.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'semantic criterion alone must not close without behavior evidence')
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('chat probe (3) negative (sole informal npm): one semantic criterion + unrelated green npm suite cannot NO_CHANGE', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-3-sole-informal-npm-'))
   try {
@@ -735,7 +760,10 @@ test('chat probe (3) negative: wrong value plus unrelated green verifier cannot 
     const unrelated = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
       .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'npm test')
     assert.equal(unrelated?.exit_code, 0, 'unrelated suite may run green without proving the behavioral requirement')
-    assert.equal(o.result.status, 'completed')
+    assert.ok(
+      o.result.status === 'completed' || o.result.status === 'blocked',
+      `bound harness commands must not certify unrelated green alone (status ${o.result.status})`,
+    )
     assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'unrelated green receipt must not satisfy the behavioral requirement')
     assert.notEqual(o.durableOutcome, 'NO_CHANGE_REQUIRED')
     assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
