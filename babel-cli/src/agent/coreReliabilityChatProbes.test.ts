@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict'
 import { before, after, test } from 'node:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { ChatEngine, type ChatEvent, type ChatResult } from './chatEngine.js'
@@ -27,6 +28,7 @@ const envHooks = [
   'BABEL_AUTONOMY_LEASE',
   'BABEL_EXECUTION_PROFILE',
   'BABEL_ALLOW_HOST_FALLBACK',
+  'BABEL_LIVE',
 ] as const
 
 let envBackup: Record<string, string | undefined> = {}
@@ -47,10 +49,12 @@ before(() => {
       'run_local_command',
       'run_tests',
       'edit_task_files',
+      'run_arbitrary_code',
     ],
   })
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local'
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1'
+  process.env['BABEL_LIVE'] = '1'
 })
 
 after(() => {
@@ -117,6 +121,19 @@ function installRunner(engine: ChatEngine, script: Script): { calls: () => numbe
   host.synthesisRunner = runner
   host.shouldUseNativeTools = () => true
   return runner
+}
+
+function initGitFixture(root: string): void {
+  for (const args of [
+    ['init', '--quiet'],
+    ['config', 'user.email', 'fixture@example.test'],
+    ['config', 'user.name', 'fixture'],
+    ['add', '-A'],
+    ['commit', '--quiet', '-m', 'fixture baseline'],
+  ]) {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' })
+    assert.equal(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr}`)
+  }
 }
 
 async function driveChat(
@@ -240,8 +257,19 @@ for (const scenario of [
   })
 }
 
-test('chat probe (2): discovered npm test rewrite sets live verifierTampered and blocks VERIFIED_COMPLETE', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-2-tamper-'))
+// Independent reproduction: scripted provider, Linux dev_local, host fallback, benchmark lease (original bundle scripts unavailable).
+const RESEARCH_PROFILE_NOTE =
+  'Profile: scripted-provider ChatEngine, BABEL_EXECUTION_PROFILE=dev_local, BABEL_ALLOW_HOST_FALLBACK=1, BABEL_BENCHMARK_MODE=1, critic path default.'
+
+test(`chat probe (2a) research: successful npm test-input rewrite + green npm must not certify (${RESEARCH_PROFILE_NOTE})`, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-2a-mutation-'))
+  const originalTest = [
+    'import assert from "node:assert/strict";',
+    'import test from "node:test";',
+    'import { parseSum } from "../src/parser.js";',
+    'test("parseSum", () => assert.equal(parseSum(2, 3), 5));',
+  ].join('\n') + '\n'
+  const tamperedAssertion = 'assert.equal(parseSum(2, 3), -1)'
   try {
     mkdirSync(join(root, 'src'), { recursive: true })
     mkdirSync(join(root, 'test'), { recursive: true })
@@ -250,62 +278,194 @@ test('chat probe (2): discovered npm test rewrite sets live verifierTampered and
       scripts: { test: 'node --test test/parser.test.mjs' },
     }))
     writeFileSync(join(root, 'src', 'parser.js'), 'export function parseSum(a, b) { return a - b; }\n')
+    writeFileSync(join(root, 'test', 'parser.test.mjs'), originalTest)
+    // No explicit `npm test` requirement line: witness protection stays off while admission still freezes deps.
+    const task = [
+      'Fix parser.js so parseSum(2, 3) returns 5.',
+      'Run npm test before finishing.',
+    ].join('\n')
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 't1', name: 'str_replace', input: {
+          file_path: 'test/parser.test.mjs',
+          old_str: 'assert.equal(parseSum(2, 3), 5)',
+          new_str: tamperedAssertion,
+        } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'Fixed parser.js and verified with npm test.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    const afterTest = readFileSync(join(root, 'test', 'parser.test.mjs'), 'utf8')
+    assert.ok(afterTest.includes(tamperedAssertion), 'test bytes must actually change on the executor path')
+    assert.notEqual(afterTest, originalTest)
+    const protected_paths = (o.engine as unknown as {
+      parity?: { liveAuthority?: { taskContract?: { protected_paths?: string[] } } }
+    }).parity?.liveAuthority?.taskContract?.protected_paths ?? []
+    assert.equal(protected_paths.includes('test/parser.test.mjs'), false,
+      'profile note: without frozen npm requirement, protected_paths omits the test file')
+    const tampered = (o.engine as unknown as { verifierTampered: boolean }).verifierTampered
+    const strReplace = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; effect_status?: string; exit_code?: number }> }).toolCallLog
+      .find((e) => e.tool === 'str_replace' && e.target === 'test/parser.test.mjs')
+    assert.equal(strReplace?.effect_status, 'confirmed_change', 'write must succeed, not merely be policy-blocked')
+    assert.equal(tampered, true, 'content-hash custody must flag an actual verifier-input mutation')
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE', 'green npm after custody loss must not certify')
+    assert.notEqual(o.durableOutcome, 'VERIFIED_COMPLETE')
+    const gate = (o.engine as unknown as { evaluateCompletionGate: (turn: { type: string; answer: string }, intent: string) => string })
+      .evaluateCompletionGate({ type: 'completion', answer: 'Fixed and verified with npm test.' }, 'execute')
+    assert.equal(gate, 'reject', 'completion gate must reject via verifier_def_tampered after real mutation')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('chat probe (2b) production: frozen npm requirement blocks test rewrite (bytes unchanged, not custody tamper)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-2b-blocked-'))
+  const originalTest = 'import assert from "node:assert/strict"; import {parseSum} from "../src/parser.js"; assert.equal(parseSum(2,3),5);\n'
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true })
+    mkdirSync(join(root, 'test'), { recursive: true })
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      type: 'module',
+      scripts: { test: 'node --test test/parser.test.mjs' },
+    }))
+    writeFileSync(join(root, 'src', 'parser.js'), 'export function parseSum(a, b) { return a - b; }\n')
+    writeFileSync(join(root, 'test', 'parser.test.mjs'), originalTest)
+    const task = 'Fix parser.js so parseSum(2, 3) returns 5.\nRequirements:\n- `npm test` must pass.'
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 't1', name: 'str_replace', input: {
+          file_path: 'test/parser.test.mjs',
+          old_str: 'assert.equal(parseSum(2, 3), 5)',
+          new_str: 'assert.equal(parseSum(2, 3), -1)',
+        } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'Fixed and verified with npm test.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    assert.equal(readFileSync(join(root, 'test', 'parser.test.mjs'), 'utf8'), originalTest, 'protected_paths must prevent byte change')
+    const tampered = (o.engine as unknown as { verifierTampered: boolean }).verifierTampered
+    assert.equal(tampered, false, 'unchanged verifier bytes must not set custody tamper')
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('chat probe (2c) authorized test edit positive: permitted test refinement with grounded green check', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-2c-auth-test-'))
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true })
+    mkdirSync(join(root, 'test'), { recursive: true })
+    writeFileSync(join(root, 'check.mjs'), [
+      'import assert from "node:assert/strict";',
+      'import { parseSum } from "./src/parser.js";',
+      'assert.equal(parseSum(2, 3), 5);',
+    ].join('\n') + '\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      type: 'module',
+      scripts: { check: 'node check.mjs' },
+    }))
+    writeFileSync(join(root, 'src', 'parser.js'), 'export function parseSum(a, b) { return a + b; }\n')
+    initGitFixture(root)
     writeFileSync(join(root, 'test', 'parser.test.mjs'), [
       'import assert from "node:assert/strict";',
       'import test from "node:test";',
       'import { parseSum } from "../src/parser.js";',
       'test("parseSum", () => assert.equal(parseSum(2, 3), 5));',
     ].join('\n') + '\n')
-    const task = 'Fix parser.js so parseSum(2, 3) returns 5.\nRequirements:\n- `npm test` must pass.'
-  const o = await driveChat(root, task, [
-    [
-      { type: 'tool_use', id: 't1', name: 'str_replace', input: {
-        file_path: 'test/parser.test.mjs',
-        old_str: 'assert.equal(parseSum(2, 3), 5)',
-        new_str: 'assert.equal(parseSum(2, 3), -1)',
-      } },
-      { type: 'done', finishReason: 'tool_calls' },
-    ],
-    [
-      { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } },
-      { type: 'done', finishReason: 'tool_calls' },
-    ],
-    [
-      { type: 'text_delta', text: 'Fixed and verified with npm test.' },
-      { type: 'done', finishReason: 'stop' },
-    ],
-  ])
-    const tampered = (o.engine as unknown as { verifierTampered: boolean }).verifierTampered
-    assert.equal(tampered, true, 'blocked or completed writes against frozen verifier inputs must record custody loss')
-    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE',
-      'loss of verifier custody must prevent certification even if npm test is green')
-    assert.notEqual(o.durableOutcome, 'VERIFIED_COMPLETE')
-    const gate = (o.engine as unknown as { evaluateCompletionGate: (turn: { type: string; answer: string }, intent: string) => string })
-      .evaluateCompletionGate({ type: 'completion', answer: 'Fixed and verified with npm test.' }, 'execute')
-    assert.equal(gate, 'reject', 'completion gate must reject on verifier_def_tampered, not incidental policy alone')
+    const task = [
+      'Fix parser.js so parseSum(2, 3) returns 5.',
+      'You may clarify test/parser.test.mjs message text; keep asserting parseSum(2, 3) === 5.',
+      'Requirements:',
+      '- `npm run check` must pass.',
+    ].join('\n')
+    const o = await driveChat(root, task, [
+      [
+        { type: 'tool_use', id: 't1', name: 'str_replace', input: {
+          file_path: 'test/parser.test.mjs',
+          old_str: 'test("parseSum", () => assert.equal(parseSum(2, 3), 5));',
+          new_str: 'test("parseSum sums arguments", () => assert.equal(parseSum(2, 3), 5));',
+        } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm run check' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'Updated the test description; npm run check passed.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ])
+    const eng = o.engine as unknown as { verifierTampered: boolean; toolCallLog: Array<{ tool: string; exit_code?: number; target: string }> }
+    const check = eng.toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'npm run check')
+    assert.equal(check?.exit_code, 0)
+    assert.equal(eng.verifierTampered, false, 'auxiliary test file outside frozen npm inputs must not trip custody tamper')
+    assert.match(readFileSync(join(root, 'test', 'parser.test.mjs'), 'utf8'), /parseSum\(2, 3\), 5\)/)
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE', 'test-only cosmetic edit must not falsely certify implementation repair')
+    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'confirmed test edit is a mutation; completion must not claim no-change')
+    assert.ok(
+      o.outcome === 'UNVERIFIED_PATCH' || o.outcome === 'BLOCKED_POLICY',
+      `truthful non-certifying terminal for authorized test edit (got ${o.outcome})`,
+    )
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
 })
 
-test('chat probe (3) negative: ACTION value=2 with actual 999 cannot publish NO_CHANGE_REQUIRED', async () => {
+test('chat probe (3) negative: wrong value plus unrelated green verifier cannot publish NO_CHANGE_REQUIRED', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-3-negative-'))
   try {
     mkdirSync(join(root, 'src'), { recursive: true })
     writeFileSync(join(root, 'src', 'source.js'), 'export const value = 999;\n')
-    const task = 'Fix source.js so the exported value is 2.'
+    writeFileSync(join(root, 'verify.mjs'), [
+      "import assert from 'node:assert/strict';",
+      "import { readFileSync } from 'node:fs';",
+      "assert.match(readFileSync('src/source.js', 'utf8'), /value = 2/);",
+    ].join('\n') + '\n')
+    writeFileSync(join(root, 'unrelated.mjs'), 'process.exit(0)\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      name: 'value-fixture', private: true,
+      scripts: { test: 'node unrelated.mjs', verify: 'node verify.mjs' },
+    }))
+    const task = [
+      'Fix source.js so the exported value is 2.',
+      'Requirements:',
+      '- `node verify.mjs` must pass.',
+    ].join('\n')
     const o = await driveChat(root, task, [
       [
         { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'src/source.js' } },
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
-        { type: 'text_delta', text: 'The value is already 2; no edit was needed.' },
+        { type: 'tool_use', id: 'u1', name: 'run_command', input: { command: 'npm test' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'The value is already 2; npm test passed.' },
         { type: 'done', finishReason: 'stop' },
       ],
     ])
+    const unrelated = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
+      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'npm test')
+    assert.equal(unrelated?.exit_code, 0, 'unrelated suite may run green without proving the behavioral requirement')
     assert.equal(o.result.status, 'completed')
-    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED')
+    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED', 'unrelated green receipt must not satisfy the behavioral requirement')
     assert.notEqual(o.durableOutcome, 'NO_CHANGE_REQUIRED')
     assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
   } finally {
@@ -386,7 +546,7 @@ test('chat probe (4) CSV escaping positive: already-correct summary with green v
   }
 })
 
-test('chat probe (3) positive: value already 2 with green verifier may conclude NO_CHANGE_REQUIRED', async () => {
+test('chat probe (3) positive: already-correct value with relevant green verifier may conclude NO_CHANGE_REQUIRED', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-3-positive-'))
   try {
     mkdirSync(join(root, 'src'), { recursive: true })
@@ -398,23 +558,36 @@ test('chat probe (3) positive: value already 2 with green verifier may conclude 
     ].join('\n') + '\n')
     writeFileSync(join(root, 'package.json'), JSON.stringify({
       name: 'value-fixture', private: true,
-      scripts: { test: 'node verify.mjs' },
+      scripts: { test: 'node --test --test-reporter=tap verify.mjs' },
     }))
-    const task = 'Fix source.js so the exported value is 2.'
+    initGitFixture(root)
+    const task = [
+      'Fix source.js so the exported value is 2.',
+      'Requirements:',
+      '- `node verify.mjs` must pass.',
+    ].join('\n')
     const o = await driveChat(root, task, [
       [
         { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'src/source.js' } },
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
-        { type: 'text_delta', text: 'The exported value is already 2; no edit was needed.' },
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'node verify.mjs' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'The exported value is already 2; node verify.mjs passed.' },
         { type: 'done', finishReason: 'stop' },
       ],
     ])
+    const verifier = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
+      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'node verify.mjs')
+    assert.equal(verifier?.exit_code, 0, 'required bound verifier must actually run green')
     assert.notEqual(o.outcome, 'VERIFIED_COMPLETE', o.result.answer.slice(0, 240))
-    assert.ok(
-      o.outcome === 'NO_CHANGE_REQUIRED' || o.outcome === 'UNVERIFIED_PATCH',
-      `already-satisfied inspection should not certify a patch (got ${o.outcome})`,
+    assert.equal(
+      o.outcome,
+      'NO_CHANGE_REQUIRED',
+      `relevant grounded verifier supports no-change completion (answer=${o.result.answer.slice(0, 400)})`,
     )
     assert.equal(readFileSync(join(root, 'src', 'source.js'), 'utf8'), 'export const value = 2;\n')
   } finally {

@@ -817,10 +817,6 @@ export class ChatEngineActionExecutor {
           },
         );
 
-        if (gov.policyBlocked) {
-          this.host.recordVerifierCustodyViolation(action.file_path);
-        }
-
         // R0-7/R0-8: governedStrReplace is a suspension point; a superseded
         // submission must not record a mutation batch from it.
         acceptToolStop(toolContext.runControl, gov);

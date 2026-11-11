@@ -4,11 +4,116 @@
  */
 import {
   evaluateCriterionCompletionV1,
+  type CriterionCompletionRequestV1,
   type CriterionCompletionServiceV1,
   type CriterionPrivateEvidenceRefreshV1,
 } from '../authority/criterionCompletion.js';
-import { hasInspectedNoChangeEvidence, type GateToolLogEntry } from './completionGatePolicy.js';
+import { hasInspectedNoChangeEvidence, taskAsksForVerifier, type GateToolLogEntry } from './completionGatePolicy.js';
 import type { TaskOperation } from '../config/chatTaskClass.js';
+import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
+import type { AcceptanceRequirementV1 } from './taskContract.js';
+
+function normalizeCommandToken(command: string): string {
+  return command.trim().replace(/\s+/g, ' ');
+}
+
+function commandHintFromDescription(description: string): string | null {
+  const match = description.match(/`([^`]+)`\s+must\s+pass/i);
+  return match?.[1] ? normalizeCommandToken(match[1]) : null;
+}
+
+function declaredAcceptanceCommand(item: AcceptanceRequirementV1): string | null {
+  const verification = item.verification;
+  if (!verification) return null;
+  if (verification.executable_id === 'npm') {
+    const argv = verification.argv ?? [];
+    if (argv.length === 1 && argv[0] === 'test') return 'npm test';
+    if (argv.length >= 2 && argv[0] === 'run') return normalizeCommandToken(`npm run ${argv[1]}`);
+    return 'npm test';
+  }
+  if (Array.isArray(verification.argv) && verification.argv.length > 0) {
+    return normalizeCommandToken(verification.argv.join(' '));
+  }
+  return commandHintFromDescription(item.description);
+}
+
+function isMeaningBoundAcceptance(item: AcceptanceRequirementV1): boolean {
+  if (commandHintFromDescription(item.description)) return false;
+  return item.verification_strategy === 'meaning'
+    || (item.type === 'custom' && item.verification?.kind === 'custom');
+}
+
+function isCommandBoundAcceptance(item: AcceptanceRequirementV1): boolean {
+  return !isMeaningBoundAcceptance(item)
+    && (item.verification?.kind === 'command'
+      || item.verification?.kind === 'unit_test'
+      || item.type === 'unit_test'
+      || item.type === 'integration_test'
+      || commandHintFromDescription(item.description) !== null
+      || declaredAcceptanceCommand(item) !== null);
+}
+
+function toolCallCoversAcceptanceItem(entry: GateToolLogEntry, item: AcceptanceRequirementV1): boolean {
+  if (entry.tool !== 'run_command' && entry.tool !== 'test_run') return false;
+  if ((entry.exit_code ?? 1) !== 0) return false;
+  const observed = normalizeCommandToken(entry.target);
+  const declared = declaredAcceptanceCommand(item);
+  if (declared) {
+    if (observed === declared || observed.includes(declared)) return true;
+  }
+  if (observed === 'npm test' && item.verification?.executable_id === 'npm') return true;
+  return false;
+}
+
+function receiptCoversAcceptanceItem(
+  receipt: BoundChatVerifierReceipt,
+  item: AcceptanceRequirementV1,
+): boolean {
+  const exit = receipt.exit_code ?? receipt.exitCode ?? 1;
+  if (exit !== 0 || receipt.stale) return false;
+  const observed = normalizeCommandToken(receipt.command);
+  const declared = declaredAcceptanceCommand(item);
+  if (declared) {
+    if (observed === declared || observed.endsWith(` ${declared}`) || observed.includes(declared)) return true;
+  }
+  if (observed === 'npm test' && item.verification?.executable_id === 'npm') return true;
+  const boundVerifier = item.verification?.verifier_id;
+  const receiptVerifier = receipt.verifierId ?? receipt.verifier_id;
+  return Boolean(boundVerifier && receiptVerifier && boundVerifier === receiptVerifier);
+}
+
+function evidenceCoversAcceptanceItem(
+  item: AcceptanceRequirementV1,
+  receipts: readonly BoundChatVerifierReceipt[],
+  toolCallLog: readonly GateToolLogEntry[],
+): boolean {
+  return receipts.some((receipt) => receiptCoversAcceptanceItem(receipt, item))
+    || toolCallLog.some((entry) => toolCallCoversAcceptanceItem(entry, item));
+}
+
+function commandBoundEvidenceSatisfiesRequired(
+  request: CriterionCompletionRequestV1,
+  receipts: readonly BoundChatVerifierReceipt[],
+  toolCallLog: readonly GateToolLogEntry[],
+): boolean {
+  const commandBound = request.contract.acceptance.filter((item) => item.required && isCommandBoundAcceptance(item));
+  if (commandBound.length === 0) return informalVerifierEvidenceSatisfies(request, toolCallLog);
+  return commandBound.every((item) => evidenceCoversAcceptanceItem(item, receipts, toolCallLog));
+}
+
+function informalVerifierEvidenceSatisfies(
+  request: CriterionCompletionRequestV1,
+  toolCallLog: readonly GateToolLogEntry[],
+): boolean {
+  const userRequest = request.contract.user_request ?? '';
+  if (!taskAsksForVerifier(userRequest)) return false;
+  return toolCallLog.some((entry) => (
+    (entry.tool === 'run_command' || entry.tool === 'test_run')
+    && (entry.exit_code ?? 1) === 0
+    && entry.effect_status !== 'indeterminate'
+    && normalizeCommandToken(entry.target) === 'npm test'
+  ));
+}
 
 export type MutatingNoChangeRefreshInput = Omit<CriterionPrivateEvidenceRefreshV1, 'proof' | 'allowPartialEvidence'> & {
   criterionChatReceipts: CriterionPrivateEvidenceRefreshV1['receipts'];
@@ -62,10 +167,9 @@ export function mutatingInspectionLeavesRequiredCriteriaUnmet(input: {
       has_mutation: false,
     });
     const evaluation = evaluateCriterionCompletionV1(request);
-    const receipts = refresh.criterionChatReceipts ?? [];
-    const hasGreenReceipt = receipts.length > 0 && receipts.every((r) => (r.exit_code ?? 1) === 0);
-    if (evaluation.verified) return false;
+    if (evaluation.verified || evaluation.status === 'VERIFIED') return false;
 
+    const receipts = (refresh.criterionChatReceipts ?? []) as BoundChatVerifierReceipt[];
     const requiredIds = new Set(
       request.contract.acceptance.filter((item) => item.required).map((item) => item.id),
     );
@@ -73,19 +177,25 @@ export function mutatingInspectionLeavesRequiredCriteriaUnmet(input: {
     const unsatisfiedRequired = advisory.filter(
       (row) => requiredIds.has(row.requirement_id) && row.status !== 'satisfied',
     );
-    if (unsatisfiedRequired.length > 0 && (!hasGreenReceipt || refresh.has_mutation)) return true;
+    const missingRequired = (evaluation.missing_requirements ?? []).filter((id) => requiredIds.has(id));
+    const commandEvidenceReady = commandBoundEvidenceSatisfiesRequired(
+      request,
+      receipts,
+      input.toolCallLog,
+    );
+    const missingStillOpen = missingRequired.filter((id) => {
+      const item = request.contract.acceptance.find((entry) => entry.id === id);
+      if (!item) return true;
+      if (isMeaningBoundAcceptance(item)) {
+        return !commandEvidenceReady;
+      }
+      return !evidenceCoversAcceptanceItem(item, receipts, input.toolCallLog);
+    });
+    if (missingStillOpen.length > 0) return true;
 
-    const missing = evaluation.missing_requirements ?? [];
-    if (missing.length === 0) {
-      if (evaluation.status === 'VERIFIED') return false;
-      if (!refresh.has_mutation && hasGreenReceipt) return false;
-      return true;
-    }
-    const missingItems = missing
-      .map((id) => request.contract.acceptance.find((entry) => entry.id === id))
-      .filter((item): item is NonNullable<typeof item> => Boolean(item?.required));
-    if (missingItems.length === 0) return false;
-    if (hasGreenReceipt && !refresh.has_mutation) return false;
+    if (!refresh.has_mutation && commandEvidenceReady && missingStillOpen.length === 0) return false;
+
+    if (unsatisfiedRequired.length > 0) return true;
     return true;
   } catch {
     return true;
