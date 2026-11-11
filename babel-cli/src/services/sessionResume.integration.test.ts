@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { HISTORY_CELL_SCHEMA_VERSION } from '../ui/historyCells/types.js';
-import { transcriptPath } from '../cli/runsLayout.js';
+import { chatSessionDir, transcriptPath } from '../cli/runsLayout.js';
 import {
   createSessionEventLog,
   flushSessionEventLog,
@@ -18,6 +18,7 @@ import type { AgentTargetContext } from './targetResolver.js';
 import { appendTurnCells } from './threadStore/index.js';
 import { listResumableSessions } from './chatSessionIndex.js';
 import { resumeChatSession } from '../interactive/chatSessionResume.js';
+import { persistRequiredExecutionPolicyRecord } from '../config/executionPolicySelection.js';
 import { ChatEngine } from '../agent/chatEngine.js';
 import type { ReplContext } from '../interactive/context.js';
 import type { SessionState } from '../interactive/types.js';
@@ -34,6 +35,14 @@ function withTempRunsDir() {
       rmSync(root, { recursive: true, force: true });
     },
   };
+}
+
+function seedPolicy(sessionId: string): void {
+  const dir = chatSessionDir(sessionId);
+  mkdirSync(dir, { recursive: true });
+  if (!existsSync(join(dir, 'execution-policy.json'))) {
+    persistRequiredExecutionPolicyRecord(dir, { profile: 'host_native', source: 'explicit' });
+  }
 }
 
 function makeUserCell(threadId: string, message: string, cellId = 'cell-u1') {
@@ -105,6 +114,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
     try {
       const sessionId = 'chat-thread-only-int';
       appendTurnCells(sessionId, 1, [makeUserCell(sessionId, 'thread-only hello')]);
+      seedPolicy(sessionId);
 
       const listed = await listResumableSessions({ limit: 10 });
       const entry = listed.find((s) => s.id === sessionId);
@@ -134,6 +144,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       const sessionId = 'chat-transcript-only-int';
       const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
       mkdirSync(sessionDir, { recursive: true });
+    persistRequiredExecutionPolicyRecord(sessionDir, { profile: 'host_native', source: 'explicit' });
       writeFileSync(
         join(sessionDir, 'transcript.jsonl'),
         `${JSON.stringify({ role: 'user', content: 'transcript-only hello' })}\n`,
@@ -162,6 +173,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       const sessionId = 'chat-valid-events-int';
       const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
       mkdirSync(sessionDir, { recursive: true });
+    persistRequiredExecutionPolicyRecord(sessionDir, { profile: 'host_native', source: 'explicit' });
       writeFileSync(join(sessionDir, 'transcript.jsonl'), `${JSON.stringify({ role: 'user', content: 'valid durable history' })}\n`, 'utf8');
       new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: 'valid durable history', projectRoot: target.targetRoot, runId: sessionId });
       const log = createSessionEventLog(sessionId);
@@ -187,6 +199,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       const sessionId = 'chat-malformed-events-int';
       const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
       mkdirSync(sessionDir, { recursive: true });
+    persistRequiredExecutionPolicyRecord(sessionDir, { profile: 'host_native', source: 'explicit' });
       writeFileSync(join(sessionDir, 'transcript.jsonl'), `${JSON.stringify({ role: 'user', content: 'must not hide corruption' })}\n`, 'utf8');
       writeFileSync(join(sessionDir, SESSION_EVENTS_FILENAME), '{"schema_version":1}\n', 'utf8');
 
@@ -207,6 +220,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
         const sessionId = 'chat-invalid-empty-events-int-' + suffix;
         const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
         mkdirSync(sessionDir, { recursive: true });
+    persistRequiredExecutionPolicyRecord(sessionDir, { profile: 'host_native', source: 'explicit' });
         writeFileSync(
           join(sessionDir, 'transcript.jsonl'),
           JSON.stringify({ role: 'user', content: 'empty evidence is not legacy' }) + '\n',
@@ -230,6 +244,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       const sessionId = 'chat-clean-truncation-events-int';
       const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
       mkdirSync(sessionDir, { recursive: true });
+    persistRequiredExecutionPolicyRecord(sessionDir, { profile: 'host_native', source: 'explicit' });
       writeFileSync(
         join(sessionDir, 'transcript.jsonl'),
         JSON.stringify({ role: 'user', content: 'clean truncation is not legacy' }) + '\n',
@@ -266,6 +281,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       const sourceSessionId = 'chat-provenance-source-int';
       const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
       mkdirSync(sessionDir, { recursive: true });
+    persistRequiredExecutionPolicyRecord(sessionDir, { profile: 'host_native', source: 'explicit' });
       writeFileSync(
         join(sessionDir, 'transcript.jsonl'),
         JSON.stringify({ role: 'user', content: 'provenance must be bound' }) + '\n',
@@ -293,6 +309,7 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
         const sessionId = `chat-invalid-events-int-${suffix}`;
         const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
         mkdirSync(sessionDir, { recursive: true });
+    persistRequiredExecutionPolicyRecord(sessionDir, { profile: 'host_native', source: 'explicit' });
         writeFileSync(join(sessionDir, 'transcript.jsonl'), `${JSON.stringify({ role: 'user', content: 'not a fallback' })}\n`, 'utf8');
         writeFileSync(join(sessionDir, SESSION_EVENTS_FILENAME), raw, 'utf8');
 
@@ -311,12 +328,14 @@ test('sessionResume integration', { concurrency: false }, async (t) => {
       const sessionId = 'chat-collision-int';
       const sessionDir = join(fixture.root, 'chat-sessions', sessionId);
       mkdirSync(sessionDir, { recursive: true });
+    persistRequiredExecutionPolicyRecord(sessionDir, { profile: 'host_native', source: 'explicit' });
       writeFileSync(
         join(sessionDir, 'transcript.jsonl'),
         `${JSON.stringify({ role: 'user', content: 'stale transcript message' })}\n`,
         'utf8',
       );
       appendTurnCells(sessionId, 1, [makeUserCell(sessionId, 'thread store wins')]);
+      seedPolicy(sessionId);
 
       ctx = makeResumeCtx(target);
       // R0-3: no durable identity in this fixture -> explicit rebind required.
