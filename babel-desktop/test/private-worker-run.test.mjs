@@ -136,7 +136,8 @@ test('a failed worker handshake tears down its owned process instead of leaking 
     assert.equal(dead, true, 'the rejected worker process must exit')
   } finally {
     await runner.shutdown()
-    rmSync(root, { recursive: true, force: true })
+    // A killed child can hold its cwd briefly on Windows after the PID is gone.
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   }
 })
 
