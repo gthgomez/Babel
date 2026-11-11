@@ -134,7 +134,7 @@ export class PrivateWorkerRun {
   #onPacket = null
   #idleCallbacks = []
   #approvals = new Map()
-  #pendingApproval = null
+  #pendingApprovals = new Map()
   #approvalTimer = null
   #unverified = false
   #exited = false
@@ -158,7 +158,7 @@ export class PrivateWorkerRun {
   }
 
   get busy() { return this.#busy }
-  get awaitingApproval() { return Boolean(this.#pendingApproval && Date.parse(this.#pendingApproval.expires_at) > Date.now()) }
+  get awaitingApproval() { return [...this.#pendingApprovals.values()].some(binding => Date.parse(binding.expires_at) > Date.now()) }
   get alive() { return Boolean(this.#child && !this.#exited) }
 
   #send(packet) {
@@ -191,6 +191,8 @@ export class PrivateWorkerRun {
     if (packet.method === 'turn.event') {
       const params = packet.params ?? {}
       if (params.thread_id !== this.#threadId) return
+      if (this.#turnId !== null && params.turn_id !== undefined && params.turn_id !== this.#turnId) return
+      if (params.preview_truncated === true && TERMINALS.has(params.event?.type)) this.#unverified = true
       this.#onEvent(params.event)
       return
     }
@@ -234,8 +236,10 @@ export class PrivateWorkerRun {
     this.#busy = false
     this.#stopApprovalPolling()
     clearTimeout(this.#terminalGuard)
-    this.#pendingApproval = null
+    this.#pendingApprovals.clear()
     this.#approvals.clear()
+    this.#turnId = null
+    this.#cancelRequested = false
     this.#emit({ kind: 'exit', code, signal: null, diagnosticAvailable: this.#stderr.length > 0, displayLimited: false })
     this.#runId = null
     this.#onPacket = null
@@ -270,17 +274,25 @@ export class PrivateWorkerRun {
     })
     const input = child.stdio[3]
     const output = child.stdio[4]
-    if (!input || !output) throw new Error('The Babel worker did not expose its private pipes')
+    if (!input || !output) {
+      this.#destroyChild(child)
+      throw new Error('The Babel worker did not expose its private pipes')
+    }
     this.#input = input
     this.#output = output
     output.setEncoding('utf8')
     output.on('data', chunk => this.#onData(chunk))
-    output.on('error', () => this.#fail('The Babel worker connection failed.'))
-    child.on('error', error => this.#fail(`Could not start the Babel runtime: ${error.message}`))
+    output.on('error', () => this.#workerFailed(child, 'The Babel worker connection failed.'))
+    child.on('error', error => this.#workerFailed(child, `Could not start the Babel runtime: ${error.message}`))
     child.on('close', (code, signal) => {
+      // A replaced or intentionally destroyed child must not disturb a newer one.
+      if (this.#child !== child) return
       this.#exited = true
       this.#started = false
       for (const [id, waiter] of this.#pending) { clearTimeout(waiter.timer); waiter.reject(new Error('The Babel worker exited')); this.#pending.delete(id) }
+      this.#child = null
+      this.#input = null
+      this.#output = null
       if (this.#busy) {
         this.#emit({ kind: 'event', event: { type: 'run_error', error: 'The Babel runtime exited before the turn settled.' } })
         this.#finish({ code: code ?? 1, signal })
@@ -301,9 +313,37 @@ export class PrivateWorkerRun {
       configuration_generation: this.configurationGeneration,
       engine_generation: this.engineGeneration,
     }
-    await this.#request('worker.initialize', { protocol_version: 1, authority })
-    await this.#request('worker.credentials', { values: credential })
+    try {
+      await this.#request('worker.initialize', { protocol_version: 1, authority })
+      await this.#request('worker.credentials', { values: credential })
+    } catch (error) {
+      // A worker that failed authentication or credential binding must not
+      // remain as an unowned resident process.
+      this.#destroyChild(child)
+      throw error
+    }
     this.#started = true
+  }
+
+  /** Stop exactly the child this instance still owns. */
+  #destroyChild(expected) {
+    const child = this.#child
+    if (!child || (expected && child !== expected)) return false
+    this.#child = null
+    this.#input = null
+    this.#output = null
+    this.#started = false
+    this.#exited = true
+    try { child.stdio[3]?.destroy() } catch { /* already closed */ }
+    try { child.stdio[4]?.destroy() } catch { /* already closed */ }
+    try { child.kill() } catch { /* already exited */ }
+    return true
+  }
+
+  #workerFailed(child, message) {
+    if (this.#child !== child) return
+    this.#destroyChild(child)
+    this.#fail(message)
   }
 
   async #ensureThread(request) {
@@ -330,7 +370,8 @@ export class PrivateWorkerRun {
     this.#runId = request.runId
     this.#onPacket = onPacket
     this.#unverified = false
-    this.#pendingApproval = null
+    this.#pendingApprovals.clear()
+    this.#cancelRequested = false
     try {
       await this.#ensureStarted()
       const threadId = await this.#ensureThread(request)
@@ -340,6 +381,7 @@ export class PrivateWorkerRun {
       })
       if (!submitted || !Number.isSafeInteger(submitted.turn_id)) throw new Error('The Babel worker did not admit the turn')
       this.#turnId = submitted.turn_id
+      if (this.#cancelRequested) this.#sendCancel()
       this.#startApprovalPolling()
       this.#terminalGuard = setTimeout(() => {
         this.#fail(this.#unverified ? 'The turn ended without verified terminal evidence.' : 'The Babel worker did not report a terminal outcome.')
@@ -353,6 +395,13 @@ export class PrivateWorkerRun {
   }
 
   #terminalGuard = null
+  #cancelRequested = false
+
+  #sendCancel() {
+    if (!this.#threadId || !this.#turnId) return
+    void this.#request('turn.cancel', { thread_id: this.#threadId }, 15_000)
+      .catch(() => this.#fail('The Babel worker did not acknowledge cancellation.'))
+  }
 
   #startApprovalPolling() {
     this.#stopApprovalPolling()
@@ -365,7 +414,7 @@ export class PrivateWorkerRun {
           const mapped = approvalToDesktop(record, this.#runId)
           if (!mapped) continue
           this.#approvals.set(record.approval_id, record)
-          this.#pendingApproval = mapped.approval
+          this.#pendingApprovals.set(record.approval_id, mapped.approval)
           this.#emit({ kind: 'event', event: mapped.event })
         }
       } catch { /* polling is advisory; the terminal event carries the outcome */ }
@@ -383,17 +432,21 @@ export class PrivateWorkerRun {
   reply(request) {
     if (!this.#busy || !this.#threadId || !this.#turnId) return false
     if (request?.runId !== this.#runId) return false
-    const reply = scopedApprovalReply(request, this.#pendingApproval)
-    if (!reply) return false
-    const approvalId = String(reply.approval.request_id).replace(/^worker:/, '')
-    const record = this.#approvals.get(approvalId)
-    if (!record) return false
-    this.#pendingApproval = null
-    void this.#request('approval.decide', {
-      thread_id: this.#threadId, turn_id: String(record.turn_id), approval_id: approvalId,
-      decision: reply.decision, ...(record.operation_digest ? { operation_digest: record.operation_digest } : {}),
-    }).catch(() => undefined)
-    return true
+    // Several approvals can be live in one turn. Accept the decision for
+    // whichever binding it actually matches rather than only the newest.
+    for (const [approvalId, binding] of this.#pendingApprovals) {
+      const reply = scopedApprovalReply(request, binding)
+      if (!reply) continue
+      const record = this.#approvals.get(approvalId)
+      if (!record) continue
+      this.#pendingApprovals.delete(approvalId)
+      void this.#request('approval.decide', {
+        thread_id: this.#threadId, turn_id: String(record.turn_id), approval_id: approvalId,
+        decision: reply.decision, ...(record.operation_digest ? { operation_digest: record.operation_digest } : {}),
+      }).catch(() => undefined)
+      return true
+    }
+    return false
   }
 
   whenIdle(callback) {
@@ -403,10 +456,13 @@ export class PrivateWorkerRun {
   }
 
   cancel() {
-    this.#pendingApproval = null
-    if (!this.#busy || !this.#threadId || !this.#turnId) return
-    void this.#request('turn.cancel', { thread_id: this.#threadId }, 15_000)
-      .catch(() => this.#fail('The Babel worker did not acknowledge cancellation.'))
+    this.#pendingApprovals.clear()
+    if (!this.#busy) return
+    // Cancellation can arrive while the worker is still starting or admitting
+    // the turn; send it as soon as the turn id exists instead of targeting a
+    // previous turn or silently doing nothing.
+    this.#cancelRequested = true
+    this.#sendCancel()
   }
 
   /** End the resident worker and wait for its owned process to exit. */

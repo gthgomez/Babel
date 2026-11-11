@@ -8,7 +8,7 @@ import { PrivateWorkerRun, approvalToDesktop, buildWorkerEnvironment, workerEven
 
 const entry = fileURLToPath(new URL('./fixtures/fake-private-worker.mjs', import.meta.url))
 
-function harness(root) {
+function harness(root, extraEnv = {}) {
   const packets = []
   const runner = new PrivateWorkerRun({
     executable: process.execPath,
@@ -17,7 +17,7 @@ function harness(root) {
     provider: 'openrouter',
     providerModelId: 'fixture/provider-model',
     model: 'fixture-model',
-    env: { FAKE_WORKER_MARKER: root, OPENROUTER_API_KEY: 'synthetic-worker-canary' },
+    env: { FAKE_WORKER_MARKER: root, OPENROUTER_API_KEY: 'synthetic-worker-canary', ...extraEnv },
     inheritEnv: false,
   })
   const start = request => new Promise((resolve, reject) => {
@@ -109,6 +109,31 @@ test('cancellation is sent to the worker and its terminal is preserved', async (
     const terminal = await take(packets, packet => packet.event?.type === 'cancelled')
     assert.equal(terminal.runId, 'run-cancel')
     await take(packets, packet => packet.kind === 'exit')
+  } finally {
+    await runner.shutdown()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a failed worker handshake tears down its owned process instead of leaking it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-desktop-worker-fail-'))
+  const { runner, packets, start } = harness(root, { FAKE_WORKER_REJECT_CREDENTIALS: '1' })
+  try {
+    void start({ runId: 'run-fail', task: 'fail', mode: 'chat', executionScope: { kind: 'project', projectRoot: root } })
+    const failure = await take(packets, packet => packet.event?.type === 'run_error')
+    assert.match(failure.event.error, /credential rejection/i)
+    await take(packets, packet => packet.kind === 'exit')
+    const spawned = readFileSync(join(root, 'spawns.txt'), 'utf8').trim().split('\n')
+    assert.equal(spawned.length, 1)
+    const pid = Number(spawned[0])
+    assert.ok(Number.isSafeInteger(pid) && pid > 0)
+    const deadline = Date.now() + 10_000
+    let dead = false
+    while (Date.now() < deadline && !dead) {
+      try { process.kill(pid, 0) } catch { dead = true; break }
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    assert.equal(dead, true, 'the rejected worker process must exit')
   } finally {
     await runner.shutdown()
     rmSync(root, { recursive: true, force: true })

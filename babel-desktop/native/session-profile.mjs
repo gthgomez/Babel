@@ -31,3 +31,25 @@ export function resolveSessionExecutionProfile(sessionId, { sessionsDir, default
   }
   return { profile, recorded: true }
 }
+
+/**
+ * The resident worker refuses to rebind a thread whose descriptor differs from
+ * its authority. A session continued under a different provider/model/profile
+ * must resume through the per-run CLI child instead of failing forever.
+ */
+export function workerThreadCompatible(sessionId, { sessionsDir, provider, model, profile }) {
+  if (typeof sessionId !== 'string' || !sessionId) return true
+  if (typeof sessionsDir !== 'string' || !sessionsDir) return false
+  let raw
+  try { raw = readFileSync(join(sessionsDir, sessionId, 'session-descriptor.json'), 'utf8') }
+  catch { return false }
+  if (raw.length > 16_384) return false
+  let descriptor
+  try { descriptor = JSON.parse(raw) } catch { return false }
+  return descriptor?.schemaVersion === 1
+    && !descriptor.harness_adapter_id
+    && descriptor.mode === 'chat'
+    && descriptor.provider === provider
+    && descriptor.model === model
+    && descriptor.policyProfile === profile
+}

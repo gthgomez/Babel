@@ -8,7 +8,7 @@ import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {BabelChild,buildRunArgs,EXECUTION_PROFILE} from './child.mjs';
 import {PrivateWorkerRun,WORKER_PROVIDER_KEYS} from './private-worker-run.mjs';
-import {resolveSessionExecutionProfile} from './session-profile.mjs';
+import {resolveSessionExecutionProfile,workerThreadCompatible} from './session-profile.mjs';
 import {SharedProtocolRun} from './sharedProtocolRun.mjs';
 import {RemoteBridgeChild,releaseBridgeIfCurrent} from './remoteHost.mjs';
 import {listDirectory,readProjectFile} from './workspace.mjs';
@@ -106,8 +106,9 @@ let runner=null;
 let residentWorker=null;
 let residentWorkerIdentity=null;
 function residentWorkerEntry(cliEntry){return cliEntry?join(dirname(cliEntry),'protocol','privateWorkerMain.js'):null;}
-function residentWorkerEligible({conversationOnly,mode,provider,runAuthority,selectedModel,cliEntry,executionProfile}){
+function residentWorkerEligible({conversationOnly,mode,provider,runAuthority,selectedModel,cliEntry,executionProfile,workerCompatible}){
   if(conversationOnly||mode!=='chat'||executionProfile!=='host_native'||EXECUTION_PROFILE!=='host_native')return false;
+  if(workerCompatible===false)return false;
   if(!runAuthority||!selectedModel||typeof selectedModel.modelId!=='string')return false;
   if(!Object.hasOwn(WORKER_PROVIDER_KEYS,provider))return false;
   const entry=residentWorkerEntry(cliEntry);
@@ -126,7 +127,7 @@ async function retireResidentWorker(){
  */
 function resolveDesktopExecutionProfile(sessionId){
   return resolveSessionExecutionProfile(sessionId,{
-    sessionsDir:runsSessionsDir(packageRoot),defaultProfile:EXECUTION_PROFILE,
+    sessionsDir:runsSessionsDir(packageRoot,runtimeEnvironment().BABEL_RUNS_DIR),defaultProfile:EXECUTION_PROFILE,
   });
 }
 let projectAuthority=null;
@@ -654,6 +655,12 @@ async function start(){
     const selectedModel=models.find(model=>model.id===runRequest.model&&model.enabled!==false);
     if(!selectedModel)throw new Error('The selected model is disabled or belongs to another provider. Choose an enabled model.');
     if(selectedModel.selectable===false)throw new Error(selectedModel.unavailableReason||'The selected model is unavailable. Choose another model in Settings.');
+    // A thread whose descriptor no longer matches the selected provider/model/
+    // profile cannot be rebound by the worker; continue it through the CLI child.
+    const workerCompatible=!request.sessionId||workerThreadCompatible(request.sessionId,{
+      sessionsDir:runsSessionsDir(packageRoot,runtimeEnvironment().BABEL_RUNS_DIR),
+      provider:route?.provider,model:runRequest.model,profile:effectiveProfile,
+    });
     buildRunArgs(cliEntry, preferences.projectRoot, runRequest);
     const childEnvironment=applySelectedModelEnvironment(await ownedCliEnvironment(),selectedModel);
     runAuthority=conversationOnly?null:await projectAuthority.admit(preferences.projectRoot);
@@ -686,7 +693,7 @@ async function start(){
         env:childEnvironment,
         inheritEnv:false,
       });
-    }else if(residentWorkerEligible({conversationOnly,mode:runRequest.mode,provider:route?.provider,runAuthority,selectedModel,cliEntry,executionProfile:effectiveProfile})){
+    }else if(residentWorkerEligible({conversationOnly,mode:runRequest.mode,provider:route?.provider,runAuthority,selectedModel,cliEntry,executionProfile:effectiveProfile,workerCompatible})){
       // Host-native chat keeps one authenticated worker (and one engine per
       // thread) for sequential turns. Other modes/profile changes keep the
       // per-run CLI path until their parity is qualified.

@@ -14,6 +14,7 @@ let current = null
 let pending = null
 
 if (marker) writeFileSync(join(marker, 'spawns.txt'), `${process.pid}\n`, { flag: 'a' })
+if (marker) process.on('exit', () => writeFileSync(join(marker, 'exits.txt'), `${process.pid}\n`, { flag: 'a' }))
 
 const send = packet => output.write(`${JSON.stringify({ ...packet, worker_seq: sequence++ })}\n`)
 const respond = (id, result) => send({ jsonrpc: '2.0', id, result })
@@ -65,6 +66,7 @@ input.on('data', chunk => {
     } else if (!ready) {
       fail(id, 'Initialize the worker first')
     } else if (method === 'worker.credentials') {
+      if (process.env['FAKE_WORKER_REJECT_CREDENTIALS'] === '1') { fail(id, 'fixture credential rejection'); continue }
       respond(id, { bound: true })
     } else if (method === 'thread.create') {
       threads += 1
