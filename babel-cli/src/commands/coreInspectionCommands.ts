@@ -11,6 +11,7 @@ import { inspectSessionEventLogFromDir } from "../agent/sessionEvents.js";
 import { getExecutorToolRegistrySnapshot, getExecutorToolSnapshot } from "../localTools.js";
 import type { ExecutorToolSnapshot } from "../tools/executorRegistry.js";
 import { buildToolCatalog, formatToolCatalogHuman } from "../tools/toolCatalog.js";
+import { resolveExecutionProfile } from "../config/executionProfiles.js";
 import { BABEL_RUNS_DIR } from "../cli/constants.js";
 import { formatBdnsDiagnosticHuman, loadBdnsDiagnosticBundle } from "../diagnostics/bdns/reader.js";
 import { readAcceptanceArtifacts } from "../acceptance/recording.js";
@@ -39,9 +40,12 @@ function printExecutorToolList(options: {
     options.policy === true ||
     options.whyDisabled === true ||
     options.capabilities === true;
+  const executionProfile = showCatalog
+    ? resolveExecutionProfile(options.executionProfile ?? process.env["BABEL_EXECUTION_PROFILE"]).name
+    : undefined;
   const catalog = showCatalog
     ? buildToolCatalog(tools, {
-        executionProfile: options.executionProfile,
+        executionProfile,
         allowedTools: parseToolList(options.allowedTools),
         disallowedTools: parseToolList(options.disallowedTools),
         includeCapabilities: options.capabilities === true,
@@ -57,10 +61,7 @@ function printExecutorToolList(options: {
           tools,
           ...(showCatalog
             ? {
-                execution_profile:
-                  options.executionProfile ??
-                  process.env["BABEL_EXECUTION_PROFILE"] ??
-                  "safe_repo",
+                execution_profile: executionProfile,
                 catalog,
               }
             : {}),
@@ -138,7 +139,7 @@ function handleExecutorToolInspect(
 
   if (options.policy === true) {
     const catalogEntry = buildToolCatalog([tool], {
-      executionProfile: options.executionProfile,
+      executionProfile: resolveExecutionProfile(options.executionProfile ?? process.env["BABEL_EXECUTION_PROFILE"]).name,
     })[0];
     if (options.json === true) {
       process.stdout.write(

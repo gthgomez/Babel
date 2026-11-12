@@ -17,6 +17,11 @@ export function runsSessionsDir(packageRoot, runsDir = process.env.BABEL_RUNS_DI
   return runsDir ? join(runsDir, 'chat-sessions') : join(packageRoot, '..', 'runs', 'chat-sessions');
 }
 
+/** Thread descriptors live beside chat sessions under the same runs root. */
+export function runsThreadsDir(packageRoot, runsDir = process.env.BABEL_RUNS_DIR) {
+  return runsDir ? join(runsDir, 'threads') : join(packageRoot, '..', 'runs', 'threads');
+}
+
 function parseTranscriptRecord(line) {
   return parseArchiveRecord(line);
 }

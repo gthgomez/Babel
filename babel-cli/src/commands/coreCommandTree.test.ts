@@ -4,11 +4,13 @@ import test from 'node:test';
 import { Command } from 'commander';
 import { registerCoreCommands } from './coreCommands.js';
 import { registerWorkflowCommands } from './workflowCommands.js';
+import { resolveExecutionPolicyChoice } from '../config/executionPolicySelection.js';
 
 // Captured before the ownership extraction. This binds names, ordering, aliases,
 // descriptions, arguments and option flags without machine-specific defaults.
 // Consumer packaging deliberately adds --contributor to setup and doctor.
 // Generic doctor project examples intentionally update its option description.
+// Profile-aware installed doctor adds one separately checked option.
 // Budget help distinguishes compiled instruction capacity from cumulative goal usage.
 type CommandContract = {
   name: string; aliases: string[]; description: string;
@@ -37,6 +39,8 @@ function withoutIntentionalCommandExtensions(contract: CommandContract): Command
           ? { ...option, description: 'Token budget ceiling' } : option) }
         : child.name === 'setup'
         ? { ...child, description: 'Show the read-only first-five-minutes setup checklist' }
+        : child.name === 'doctor'
+        ? { ...child, options: child.options.filter(option => option.flags !== '--execution-profile <profile>') }
         : child.name === 'interactive'
           ? { ...child, options: child.options.map(option => option.flags === '--mode <mode>'
             ? { ...option, description: 'Default mode for this session' } : option) }
@@ -62,6 +66,9 @@ test('core registration preserves the complete existing command contract', () =>
   });
   assert.equal(contract.children.find(child => child.name === 'setup')?.description,
     'Guide provider, credential, model and budget setup; no inference is sent');
+  assert.deepEqual(contract.children.find(child => child.name === 'doctor')?.options.find(option => option.flags === '--execution-profile <profile>'), {
+    flags: '--execution-profile <profile>', description: 'Check prerequisites for a specific execution profile (installed diagnostics)', mandatory: false,
+  });
   assert.equal(contract.children.find(child => child.name === 'interactive')?.options.find(option => option.flags === '--mode <mode>')?.description,
     'Workflow for this session: work or plan');
   assert.equal(program.commands.find(child => child.name() === 'interactive')?.options.find(option => option.flags === '--mode <mode>')?.defaultValue, undefined);
@@ -158,6 +165,49 @@ test('run budget help describes instruction-stack admission', () => {
   assert.deepEqual(commandTree(program).children.find(child => child.name === 'run')?.options.find(option => option.flags === '--budget <tokens>'), {
     flags: '--budget <tokens>', description: 'Compiled instruction-stack token ceiling (not cumulative model usage)', mandatory: false,
   });
+});
+
+test('run leaves an omitted execution profile unspecified for provenance and resume', async () => {
+  const parseProfile = async (args: string[]): Promise<string | undefined> => {
+    const program = new Command();
+    registerWorkflowCommands(program);
+    const run = program.commands.find(command => command.name() === 'run');
+    assert.ok(run);
+    let profile: string | undefined;
+    run.action((_task: string, options: { executionProfile?: string }) => { profile = options.executionProfile; });
+    await program.parseAsync(['node', 'babel', 'run', 'task', ...args]);
+    return profile;
+  };
+  const omitted = await parseProfile([]);
+  assert.equal(omitted, undefined);
+  assert.deepEqual(resolveExecutionPolicyChoice({ environmentProfile: 'host_native' }), {
+    profile: 'host_native', source: 'environment',
+  });
+  assert.throws(() => resolveExecutionPolicyChoice({ resume: true }), /explicit execution profile/i);
+  assert.equal(await parseProfile(['--execution-profile', 'safe_repo']), 'safe_repo');
+  assert.deepEqual(resolveExecutionPolicyChoice({ resume: true, explicitProfile: 'safe_repo' }), {
+    profile: 'safe_repo', source: 'migration',
+  });
+});
+
+test('tool policy inspection reports and evaluates the same environment profile', async () => {
+  const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
+  const previousWrite = process.stdout.write;
+  let output = '';
+  try {
+    process.env['BABEL_EXECUTION_PROFILE'] = 'read_only_audit';
+    process.stdout.write = ((chunk: string | Uint8Array) => { output += String(chunk); return true; }) as typeof process.stdout.write;
+    const program = new Command();
+    registerCoreCommands(program);
+    await program.parseAsync(['node', 'babel', 'tools', 'list', '--policy', '--json']);
+    const payload = JSON.parse(output) as { execution_profile: string; catalog: Array<{name: string; policy: {status: string}}> };
+    assert.equal(payload.execution_profile, 'read_only_audit');
+    assert.equal(payload.catalog.find(item => item.name === 'file_write')?.policy.status, 'disabled');
+  } finally {
+    process.stdout.write = previousWrite;
+    if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
+    else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
+  }
 });
 
 test('resume help truthfully describes the temporary action quarantine', () => {

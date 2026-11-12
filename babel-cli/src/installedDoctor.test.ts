@@ -5,6 +5,19 @@ import { join } from 'node:path'
 import { it } from 'node:test'
 import { runInstalledDoctor, installedSetupChecklist, supportsInstalledNode } from './installedDoctor.js'
 
+it('profile-aware host diagnostics skip Docker probes while Docker remains required for safe_repo',()=>{
+  const host=runInstalledDoctor({env:{},executionProfile:'host_native',dockerProbe:()=>{throw new Error('unexpected Docker probe')},imageProbe:()=>{throw new Error('unexpected image probe')}})
+  assert.equal(host.profileDiagnosticsVersion,1)
+  assert.equal(host.executionProfile,'host_native')
+  assert.equal(host.checks.find(check=>check.id==='docker')?.status,'not_required')
+  assert.equal(host.checks.find(check=>check.id==='sandbox_image')?.status,'not_required')
+  let probes=0
+  const docker=runInstalledDoctor({env:{},executionProfile:'safe_repo',dockerProbe:()=>{probes++;return false}})
+  assert.equal(probes,1)
+  assert.equal(docker.checks.find(check=>check.id==='docker')?.status,'fail')
+  assert.throws(()=>runInstalledDoctor({env:{},executionProfile:'safe_reop',dockerProbe:()=>{throw new Error('must not probe')}}),/Invalid execution profile/)
+})
+
 it('does not report a usable execution environment from a healthy daemon alone',()=>{
   const result=runInstalledDoctor({env:{},dockerProbe:()=>true})
   assert.equal(result.status,'fail')

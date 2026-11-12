@@ -8,6 +8,8 @@ import { executedVerifierProgressSignature } from './toolExecutionIdentity.js';
 import {normalizeChatExecutionScope,requireProjectRoot,assertConversationRestoreScope,assertBoundGitProjectScope} from './chatExecutionScope.js';
 import type { RunControl, StopRequest } from '../runtime/run-control.js';
 import { initializeChatSubmissionControl, activateChatSubmissionGeneration, type ChatSubmissionControlHost } from './chatEngineRunControl.js';
+import { scopeExecutionPolicyGenerator, withExecutionPolicyChoice } from '../config/executionPolicySelection.js';
+import { quarantineSessionPolicyLease, type SessionPolicyLease } from '../config/sessionPolicyLease.js';
 import {providerMessagesToChatMessages,legacyArchiveToChatMessages} from './providerMessagesToChatMessages.js';
 import {retainedLegacyArchive} from './chatArchiveLegacy.js';
 import { buildChatEngineExecutionContext, type ChatExecutionContextHost } from './chatEngineExecutionContext.js';
@@ -191,7 +193,8 @@ import {
   type WorkingState,
 } from "./codingLoop/index.js";
 
-import { recoveryBindingUnavailableReason, recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
+import { recoveryTargetIdentity } from "./codingLoop/recoveryIdentity.js";
+import { buildVerifierBlockedReport as buildVerifierBlockedReportFromHost } from "./chatEngineVerifierReport.js";
 
 import {
   beginLocalizationCall,
@@ -638,6 +641,7 @@ export class ChatEngine {
   private activeProviderDispatchStarted = false;
   private physicalSettlementUnknown = false;
   private admissionStoreClosed = false;
+  private sessionPolicyLease: SessionPolicyLease | undefined;
 
   markPhysicalSettlementUnknown(): void {
     this.physicalSettlementUnknown = true;
@@ -871,7 +875,8 @@ export class ChatEngine {
     if (options.runId && options.resumeExisting !== true && hasUnsettledBackgroundShells(options.runId, scope.kind === 'project' ? scope.projectRoot : null)) {
       throw new Error('An owned background command is still running or settling. Wait for it to finish before reopening this session.');
     }
-    options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null};
+    options={...options,executionScope:scope,projectRoot:scope.kind==="project"?scope.projectRoot:null,
+      ...(options.executionPolicy ? { executionPolicy: Object.freeze({ ...options.executionPolicy }) } : {})};
     if(scope.kind==="conversation"&&(options.instructionRoot||options.workspaceRoot||options.compiledChatStack?.project_root))throw new Error("Conflicting project context in conversation scope");
     options = { ...options, compiledChatStack: resolveChatInstructionContext(options) };
     this.options = options;
@@ -2106,10 +2111,11 @@ export class ChatEngine {
     if (this.options.inferenceOwner === 'external-harness') {
       throw new Error('EXTERNAL_HARNESS_INFERENCE_OWNED: This session requires its external adapter; Babel inference is disabled.');
     }
-    return scopeAsyncGenerator(
+    const stream = scopeAsyncGenerator(
       () => this.buildBaseExecutionContext(),
       this.submitMessageStreamBody(userInput, taskIntent, submitOpts),
     );
+    return this.options.executionPolicy ? scopeExecutionPolicyGenerator(this.options.executionPolicy, stream) : stream;
   }
 
   /**
@@ -2140,15 +2146,15 @@ export class ChatEngine {
     // effect batch. Unknown physical settlement is never silently cleared.
     const priorStopKind = this.runControl?.stop()?.kind;
     const priorReleased = priorStopKind === 'cancelled' || priorStopKind === 'superseded';
+    // Cancellation retires logical ownership, but it does not prove that an
+    // already-started process or its descendants stopped making changes.
+    const admission = durableAdmissionState(this.parity.admissionStore, this.engineRunId);
+    if (this.physicalSettlementUnknown || admission.indeterminate) {
+      yield { type: 'failed', error: 'A previous request may still be settling or its physical effect is unknown. Inspect the workspace and evidence before continuing.',
+        reason_code: 'physical_settlement_unknown' };
+      return;
+    }
     if (!priorReleased) {
-      // An indeterminate admission means a prior physical effect was never
-      // reconciled; it blocks regardless of whether a wrapper is still live.
-      const admission = durableAdmissionState(this.parity.admissionStore, this.engineRunId);
-      if (this.physicalSettlementUnknown || admission.indeterminate) {
-        yield { type: 'failed', error: 'A previous request may still be settling or its physical effect is unknown. Inspect the workspace and evidence before continuing.',
-          reason_code: 'physical_settlement_unknown' };
-        return;
-      }
       // A claimed admission with no live owner is stale (e.g. a primed or
       // pre-crash record) and may be superseded. With a live owner it is
       // unsettled work and must settle or be cancelled first.
@@ -2744,6 +2750,16 @@ export class ChatEngine {
     return this.engineRunId;
   }
 
+  getExecutionPolicy(): Readonly<import('../config/executionPolicySelection.js').ExecutionPolicyChoice> | undefined {
+    return this.options.executionPolicy;
+  }
+
+  /** A logical terminal does not prove all owned physical effects have settled. */
+  hasKnownPhysicalSettlement(): boolean {
+    return !this.physicalSettlementUnknown && this.activeSubmissionOwner === null &&
+      !hasUnsettledBackgroundShells(this.engineRunId, this.options.projectRoot);
+  }
+
   assignRunId(runId: string): void {
     if (runId === this.engineRunId) return;
     if (
@@ -2790,6 +2806,11 @@ export class ChatEngine {
     this.admissionStoreClosed = false;
   }
 
+  attachSessionPolicyLease(lease: SessionPolicyLease): void {
+    if (this.sessionPolicyLease) throw new Error('Session policy ownership is already attached.');
+    this.sessionPolicyLease = lease;
+  }
+
   /**
    * Session teardown (REPL /clear, resume replacement, headless run end,
    * protocol-host close): a session ending aborts any still-live admitted
@@ -2812,6 +2833,12 @@ export class ChatEngine {
     }
     this.parity.admissionStore?.close();
     this.admissionStoreClosed = true;
+    const lease = this.sessionPolicyLease;
+    this.sessionPolicyLease = undefined;
+    if (lease) {
+      if (this.hasKnownPhysicalSettlement()) lease.release();
+      else quarantineSessionPolicyLease(this.engineRunId, lease);
+    }
   }
 
   replaceConversation(messages: ChatMessage[]): void {
@@ -3835,12 +3862,10 @@ export class ChatEngine {
     callbacks: ChatCallbacks,
     meta: { index: number; idempotencyKey?: string; ownerGeneration?: number },
   ): Promise<ChatActionResult> {
-    return this.actionExecutor.executeOneAction(
-      action,
-      toolContext,
-      callbacks,
-      meta,
-    );
+    const execute = () => this.actionExecutor.executeOneAction(action, toolContext, callbacks, meta);
+    return this.options.executionPolicy
+      ? withExecutionPolicyChoice(this.options.executionPolicy, execute)
+      : execute();
   }
 
   /**
@@ -3886,6 +3911,7 @@ export class ChatEngine {
       this.conversation,
       this.limits.maxEstimatedTokens,
       userInput,
+      { signal: this.abortController.signal },
     );
   }
   private async synthesizeAnswer(
@@ -4078,6 +4104,7 @@ export class ChatEngine {
   private providerAccountingHost(): ChatProviderRetryHost {
     const engine = this;
     return {
+      recordProviderPhase: (phase) => engine.currentTurnTelemetry?.markProviderPhase(phase),
       conversation: this.conversation,
       engineRunDir: this.engineRunDir,
       options: this.options,
@@ -4436,71 +4463,7 @@ export class ChatEngine {
   }
 
   private buildVerifierBlockedReport(reason: string): BlockedReport {
-    // R0-A: a harness-origin block must carry REAL checked evidence, never an
-    // empty `checked` array (BlockedReportSchema requires >=1) and never a fake
-    // placeholder. Prefer the actual verifier attempt when one ran red; else the
-    // completion gate's own rejection is the evidence of record.
-    const gate = this.workingState.recoveryGate;
-    if (gate) {
-      const records = gate.readRecords ?? [];
-      const failed = this.workingState.settledFailedVerifier;
-      return { schema_version: 1, status: "BLOCKED", reason, reason_code: "verification_failed", cause_class: "verification",
-        missing: recoveryBindingUnavailableReason() ?? (gate.failureSignature === "unbound-red-verifier" || !gate.binding
-          ? "Re-observe the exact failed verifier through its governed execution context to bind the current failure."
-          : records.length ? "A concrete repair plan referencing current delivered reads for every existing edit target, followed by verification."
-            : "Fresh delivered reads of the failure and relevant implementation; diagnostic candidates are inspection hints."),
-        checked: records.length ? records.slice(-4).map(record => ({ action: record.tool, target: record.target,
-          finding: `Retained read ${record.id}: lines ${record.window.startLine}-${record.window.endLine} of ${record.window.totalLines}; full file=${record.window.completeFile}.` }))
-          : [{ action: failed ? "test_run" : "recovery_gate", target: failed?.command ?? this.workingState.lastVerifier?.identity ?? "failure",
-            finding: failed ? `Started verifier settled with exit ${failed.exitCode}; this execution history is not a completion receipt.` : gate.requiredEvidence }],
-      };
-    }
-    const receipt = this.lastVerifierReceipt;
-    const redReceipt =
-      receipt && receipt.exit_code !== 0 && receipt.stale !== true
-        ? receipt
-        : null;
-    if (redReceipt) {
-      const finding = (
-        redReceipt.summary && redReceipt.summary.trim() !== ""
-          ? redReceipt.summary
-          : `exit ${redReceipt.exit_code}`
-      ).slice(0, 500);
-      return {
-        schema_version: 1,
-        status: "BLOCKED",
-        reason,
-        missing:
-          "A passing authoritative verifier for the current workspace revision.",
-        reason_code: "verification_failed",
-        cause_class: "verification",
-        checked: [
-          {
-            action: "run_command",
-            target: redReceipt.command || "verifier",
-            finding,
-          },
-        ],
-      };
-    }
-    return {
-      schema_version: 1,
-      status: "BLOCKED",
-      reason,
-      missing:
-        "A completion that satisfies the artifact and verifier honesty gate.",
-      reason_code: "recovery_exhausted",
-      cause_class: "harness",
-      checked: [
-        {
-          action: "completion_gate",
-          target: this.hasAnyWrites()
-            ? "verifier_honesty"
-            : "zero_successful_writes",
-          finding: reason.slice(0, 500),
-        },
-      ],
-    };
+    return buildVerifierBlockedReportFromHost({ workingState: this.workingState, lastVerifierReceipt: this.lastVerifierReceipt, hasAnyWrites: () => this.hasAnyWrites() }, reason);
   }
 
   private hashContent(content: string): string {

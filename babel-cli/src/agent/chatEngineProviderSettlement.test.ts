@@ -63,6 +63,19 @@ function openRouterMetadata(overrides: Partial<RunnerInvocationMetadata>): Runne
   }
 }
 
+test('provider phase timing is scoped to the current chat owner', () => {
+  const phases: string[] = []
+  const host = mockHost('phase-fixture', {
+    parity: { turnId: '' } as ChatProviderRetryHost['parity'],
+    recordProviderPhase: phase => phases.push(phase),
+  })
+  const event = { inference_id:'fixture',provider:'openrouter' as const,model:'fixture',phase:'request_created' as const }
+  buildProviderRetryCallbacks(host,{executionStage:'chat',isOwnerCurrent:()=>true}).onInvocationPhase?.(event)
+  buildProviderRetryCallbacks(host,{executionStage:'chat',isOwnerCurrent:()=>false}).onInvocationPhase?.(event)
+  buildProviderRetryCallbacks(host,{executionStage:'critic',isOwnerCurrent:()=>true}).onInvocationPhase?.(event)
+  assert.deepEqual(phases,['request_created'])
+})
+
 test('settlementReportedCostUsd prefers provider_reported and ignores estimated_cost_usd', () => {
   assert.equal(settlementReportedCostUsd(openRouterMetadata({
     provider_reported_total_charge_usd: 0.002,

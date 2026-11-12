@@ -68,11 +68,12 @@ for (const actionKind of ['write_file', 'run_command', 'failed_command', 'in_tre
     assert.notEqual(host.toolCallLog.at(-1)?.error, 'blocked')
     assert.ok(host.toolCallLog.length > 0, 'the fixture action must reach executor settlement')
     assert.ok(captures.length >= 2, `next request missing: ${events.map(event => event.type === 'failed' ? event.error : event.type).join(', ')}`)
+    assert.match(captures[1]!, /NEW_MAP_SENTINEL/)
+    assert.doesNotMatch(captures[1]!, /OLD_MAP_SENTINEL/)
     if (actionKind === 'isolated_child') {
-      assert.match(captures[1]!, /OLD_MAP_SENTINEL/)
-    } else {
-      assert.doesNotMatch(captures[1]!, /OLD_MAP_SENTINEL/)
-      assert.match(captures[1]!, /NEW_MAP_SENTINEL/)
+      // An isolated child cannot mutate the parent project, so the refreshed
+      // parent map still describes the original symbol.
+      assert.match(captures[1]!, /OLD_SYMBOL/)
     }
   })
 }

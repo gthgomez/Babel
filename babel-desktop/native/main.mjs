@@ -1,12 +1,14 @@
 import {modeUnavailableReason} from '../src/core.mjs';
 import {app,BrowserWindow,clipboard,dialog,ipcMain,protocol,session,shell,Tray,Menu,safeStorage} from 'electron';
 import {writeClipboardText} from './clipboard.mjs';
-import {readFileSync} from 'node:fs';
+import {readFileSync,existsSync} from 'node:fs';
 import {readFile,writeFile,rename,mkdir,stat,realpath} from 'node:fs/promises';
 import {basename,dirname,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {BabelChild,buildRunArgs,EXECUTION_PROFILE} from './child.mjs';
+import {PrivateWorkerRun,WORKER_PROVIDER_KEYS} from './private-worker-run.mjs';
+import {resolveSessionExecutionProfile,workerThreadCompatible} from './session-profile.mjs';
 import {SharedProtocolRun} from './sharedProtocolRun.mjs';
 import {RemoteBridgeChild,releaseBridgeIfCurrent} from './remoteHost.mjs';
 import {listDirectory,readProjectFile} from './workspace.mjs';
@@ -18,8 +20,9 @@ import {resolveOfficialCli,bundledEnvironment,resolveDesktopProfile} from './run
 import {diagnoseRuntime} from './diagnostics.mjs';
 import {applySandboxEnvironment,configureSandboxImage,packagedSandboxPrerequisiteMessage,probeDockerInstallation,sandboxIpcFailureMessage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
 import {configureCredentialProtection,hasProviderCredential,saveProviderCredential,providerCredentialStatus,removeProviderCredential,migrateProviderCredential} from './credentials.mjs';
-import {saveDesktopProviderRoute} from './provider-route-save.mjs';
+import {saveDesktopProviderRoute,reconcileProviderRoute} from './provider-route-save.mjs';
 import {assertCredentialEngineCapability} from './credential-engine.mjs';
+import {checkConnection,reconcileAuthentication} from './provider-auth.mjs';
 import {applyProjectCredentialScope,applySelectedModelEnvironment,applyOwnedCliCredentialEnvironment} from './childEnv.mjs';
 import {resolveEngineIdentity} from './identity.mjs';
 import {createGitRunner,createStepRunner,inspectDevelopmentCheckout,planDevelopmentUpdate,precheckSafety,resolveNpmInvocation,runDevelopmentUpdate,runDevelopmentRebuild,compareReleaseVersion,EXPECTED_ORIGIN} from './updater.mjs';
@@ -27,10 +30,11 @@ import {parseBuildMetadata} from './identity.mjs';
 import {readActiveEngine, writeActiveEngine} from './engine-manager.mjs';
 import {checkPackagedCliUpdate, installPreviewSourceBuild, installStableReleaseArchive, resolveBundledNpmCli} from './engine-artifact.mjs';
 import {qualifiedProviders, readProviderRoute, saveProviderRoute, validateProviderRoute,refreshModelCatalog} from './provider-routing.mjs';
-import {listSavedChats,readSavedChat,searchSavedChats,readSavedMessage} from './sessions.mjs';
+import {listSavedChats,readSavedChat,searchSavedChats,readSavedMessage,runsSessionsDir,runsThreadsDir} from './sessions.mjs';
 import {ComposerDraftStore,composerDraftScope} from './composer-drafts.mjs';
 import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose,createCloseRequest} from './lifecycle.mjs';
 import {readBridgeHostAuthToken} from './bridge-host-token.mjs';
+import {createCrashDiagnosticRecorder} from './crash-diagnostics.mjs';
 
 const packageRoot=dirname(dirname(fileURLToPath(import.meta.url)));
 const sharedSessionTrace=process.env.BABEL_TEST_SHARED_SESSION_TRACE==='1';
@@ -57,6 +61,14 @@ function bundledBuildRecord(){
   if(!app.isPackaged)return null;
   try{return parseBuildMetadata(readFileSync(join(process.resourcesPath,'..','BUILD.json'),'utf8'));}catch{return null;}
 }
+const recordCrash=createCrashDiagnosticRecorder({directory:app.getPath('userData'),build:bundledBuildRecord()});
+const unexpectedExitReasons=new Set(['abnormal-exit','crashed','oom','launch-failed','integrity-failure','memory-eviction']);
+function recordUnexpectedExit(processType,details){
+  if(!unexpectedExitReasons.has(details?.reason))return;
+  recordCrash(processType,details).catch(()=>console.error('[babel-desktop] Could not record a process failure.'));
+}
+app.on('render-process-gone',(_event,_contents,details)=>recordUnexpectedExit('renderer',details));
+app.on('child-process-gone',(_event,details)=>recordUnexpectedExit(details?.type,details));
 function runtimeEnvironment({credentials=false}={}) {
   const profile=join(app.getPath('userData'),'engine','config');
   const env=app.isPackaged?bundledEnvironment(app.getPath('userData')):{...process.env,ELECTRON_RUN_AS_NODE:'1',BABEL_CONFIG_DIR:profile};
@@ -75,7 +87,19 @@ async function ownedCliEnvironment(){
   return runtimeEnvironment({credentials:true});
 }
 let diagnostics=null;
+let diagnosticsInFlight=null;
 let dockerInstallationCache;
+/**
+ * Reuse an in-flight doctor instead of spawning another 30s subprocess for the
+ * same execution profile. Only the pending result is shared; the completed
+ * report is still cleared whenever credentials, route, trust or sandbox change.
+ */
+function sharedDiagnostics(runtime,options,executionProfile){
+  if(diagnosticsInFlight?.key===executionProfile)return diagnosticsInFlight.promise;
+  const promise=diagnoseRuntime(runtime,options).finally(()=>{if(diagnosticsInFlight?.promise===promise)diagnosticsInFlight=null;});
+  diagnosticsInFlight={key:executionProfile,promise};
+  return promise;
+}
 async function linuxDockerInstallation(){
   if(process.platform!=='linux')return null;
   if(dockerInstallationCache===undefined)dockerInstallationCache=await probeDockerInstallation();
@@ -92,6 +116,33 @@ let draftCloseRequest=null;
 let draftCloseReady=false;
 let preferences={cliEntry:null,projectRoot:null,projectCredentialRoot:null};
 let runner=null;
+let residentWorker=null;
+let residentWorkerIdentity=null;
+function residentWorkerEntry(cliEntry){return cliEntry?join(dirname(cliEntry),'protocol','privateWorkerMain.js'):null;}
+function residentWorkerEligible({conversationOnly,mode,provider,runAuthority,selectedModel,cliEntry,executionProfile,workerCompatible}){
+  if(conversationOnly||mode!=='chat'||executionProfile!=='host_native'||EXECUTION_PROFILE!=='host_native')return false;
+  if(workerCompatible===false)return false;
+  if(!runAuthority||!selectedModel||typeof selectedModel.modelId!=='string')return false;
+  if(!Object.hasOwn(WORKER_PROVIDER_KEYS,provider))return false;
+  const entry=residentWorkerEntry(cliEntry);
+  try{return Boolean(entry&&existsSync(entry));}catch{return false;}
+}
+async function retireResidentWorker(){
+  const worker=residentWorker;
+  residentWorker=null;
+  residentWorkerIdentity=null;
+  if(worker){try{await worker.shutdown();}catch{ /* the owned process may already have exited */ }}
+}
+/**
+ * Resolve the boundary a resumed session already proved. Older Desktop builds
+ * always launched the guarded Docker profile, so a legacy session with no
+ * record retains that Docker boundary instead of silently acquiring host authority.
+ */
+function resolveDesktopExecutionProfile(sessionId){
+  return resolveSessionExecutionProfile(sessionId,{
+    sessionsDir:runsSessionsDir(packageRoot,runtimeEnvironment().BABEL_RUNS_DIR),defaultProfile:EXECUTION_PROFILE,
+  });
+}
 let projectAuthority=null;
 let runAdmissionLedger=null;
 let runAuthority=null;
@@ -146,15 +197,15 @@ function activeCliEntry(){
 }
 function cliPackageDir(){const entry=activeCliEntry();return entry?dirname(dirname(entry)):null;}
 function cliCheckoutRoot(){const dir=cliPackageDir();return dir?dirname(dir):null;}
-async function getInfo(){
+async function getInfo({passive=false}={}){
   const official=officialRuntime();
   const cliEntry=activeCliEntry();
   let ready=false;
   let scope={scope:preferences.projectRoot?'project':'conversation',trusted:false,identity:null,reason:null};
   try{scope=await projectAuthority.inspect(preferences.projectRoot);}catch{scope.reason='Project identity is unavailable. Select and verify the project again.';}
   try{ready=Boolean(cliEntry&&(!preferences.projectRoot||scope.trusted)&&(await stat(cliEntry)).isFile());}catch{}
-  if(app.isPackaged&&preferences.projectRoot&&!diagnostics){
-    try{diagnostics=await diagnoseRuntime(official,{env:await ownedCliEnvironment(),cwd:app.getPath('userData')});}
+  if(app.isPackaged&&preferences.projectRoot&&!diagnostics&&passive!==true){
+    try{diagnostics=await sharedDiagnostics(official,{env:await ownedCliEnvironment(),cwd:app.getPath('userData'),executionProfile:EXECUTION_PROFILE},EXECUTION_PROFILE);}
     catch{diagnostics={ready:false,provider:'unavailable',error:'Credential storage or project authority is unavailable. Review provider settings and project trust.'};}
   }
   const engine=resolveEngineIdentity({
@@ -196,6 +247,15 @@ async function getInfo(){
   };
 }
 const credentialBindings=new Map();
+/**
+ * Ephemeral, main-process-only authentication observations. Keyed by provider,
+ * scope and profile; each carries the credential revision it measured so a stale
+ * result is never applied to a newer key. Never persisted, never sent to disk.
+ */
+const credentialAuthObservations=new Map();
+function authObservationKey({provider,scope,configDirectory,projectRoot}){
+  return [provider,scope,configDirectory??'',scope==='project'?projectRoot??'':''].join('\u0000');
+}
 async function credentialRequestContext(options,bound=false){
   if(!options||typeof options!=='object'||!['private','project'].includes(options.scope))throw new Error('Select an explicit credential destination.');
   const context={provider:options.provider,scope:options.scope,configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,projectRoot:preferences.projectRoot};
@@ -281,7 +341,20 @@ async function start(){
   protocol.handle('babel',request=>isAppUrl(request.url)?new Response(html,{headers:{'Content-Type':'text/html; charset=utf-8','X-Content-Type-Options':'nosniff'}}):new Response('Not found',{status:404}));
   session.defaultSession.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
   session.defaultSession.setPermissionCheckHandler(()=>false);
-  handle('babel:get-info',getInfo);
+  handle('babel:get-info',()=>getInfo());
+  handle('babel:check-connection',async options=>{
+    if(!options||typeof options!=='object'||!['private','project'].includes(options.scope))throw new Error('Select an explicit credential destination.');
+    // Only the native authority decides which credential and endpoint are used.
+    return withConnectionChange(async()=>{
+      const context=await credentialRequestContext({provider:options.provider,scope:options.scope});
+      const result=await checkConnection(context);
+      // Remember the observation only against the revision it actually measured.
+      credentialAuthObservations.set(authObservationKey(context),{
+        state:result.state,reason:result.reason,checkedAt:result.checkedAt,observedRevision:result.observedRevision,
+      });
+      return result;
+    });
+  });
   handle('babel:copy-text',text=>writeClipboardText(clipboard,text));
   composerDrafts=new ComposerDraftStore(app.getPath('userData'));
   handle('babel:read-composer-drafts',()=>composerDrafts.read(composerDraftScope(preferences.projectRoot)));
@@ -416,29 +489,66 @@ async function start(){
     const status=providerCredentialStatus(context);
     const binding=randomUUID();
     credentialBindings.clear();credentialBindings.set(binding,{...context,generation:projectAuthority.generation});
-    return {...status,binding};
+    // A stored key is not an authenticated key: report the observation only when
+    // it belongs to this exact credential identity.
+    const observed=credentialAuthObservations.get(authObservationKey(context));
+    return {...status,binding,authentication:reconcileAuthentication(observed,status.credentialIdentity)};
   });
   handle('babel:remove-provider-credential',async options=>{
     return withConnectionChange(async()=>{
       const context=await credentialRequestContext(options,true);
-      const result=removeProviderCredential(context);diagnostics=null;return result;
+      const result=removeProviderCredential(context);diagnostics=null;await retireResidentWorker();
+      credentialAuthObservations.delete(authObservationKey(context));
+      return result;
     });
   });
   handle('babel:migrate-provider-credential',async options=>{
     return withConnectionChange(async()=>{
       const context=await credentialRequestContext({...options,scope:'private'},true);
       if(options?.confirm!==true)throw new Error('Confirm retention of the legacy plaintext recovery file.');
-      const result=migrateProviderCredential({...context,confirm:true});diagnostics=null;return result;
+      const result=migrateProviderCredential({...context,confirm:true});diagnostics=null;await retireResidentWorker();
+      credentialAuthObservations.delete(authObservationKey(context));
+      return result;
     });
   });
   handle('babel:save-provider-route',async options=>{
     return withConnectionChange(async()=>{
-    if(options?.apiKey || options?.scope==='project')await credentialRequestContext(options,Boolean(options?.apiKey));
-    const result=await saveDesktopProviderRoute({
-      options, configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR, preferences, savePreferences,
-    });
-    diagnostics=null;
-    return result;
+    // Structured envelopes only: a thrown Electron error loses custom fields, so
+    // every anticipated outcome is returned as serializable data.
+    try{
+      if(options?.apiKey || options?.scope==='project')await credentialRequestContext(options,Boolean(options?.apiKey));
+      const result=await saveDesktopProviderRoute({
+        options, configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR, preferences, savePreferences,
+        checkConnection:Boolean(options?.checkAfterSave)
+          ? ({provider,scope})=>checkConnection({provider,scope,configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,projectRoot:preferences.projectRoot})
+          : null,
+      });
+      diagnostics=null;
+      if(result.ok&&result.credentialChanged){
+        await retireResidentWorker();
+        credentialAuthObservations.delete(authObservationKey(await credentialRequestContext({provider:options?.provider,scope:options?.scope??'private'})));
+      }
+      return result;
+    }catch(error){
+      // An unanticipated rejection may have occurred after a write. Re-read the
+      // real state instead of assuming nothing persisted.
+      const observed=reconcileProviderRoute({
+        configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR,
+        provider:options?.provider, scope:options?.scope==='project'?'project':'private',
+        projectRoot:preferences.projectRoot, preferences,
+      });
+      return {
+        ok:false,
+        code:'request_rejected',
+        safeMessage:typeof error?.message==='string'&&error.message?error.message:'The provider save was rejected.',
+        retryable:false,
+        persisted:{credential:Boolean(observed.credential?.present),modelPolicy:'unknown',route:'unknown',preferences:'unknown'},
+        credentialChanged:false,
+        storage:observed.credential?.storage??'unknown',
+        revision:observed.credential?.revision??null,
+        recoveryAction:'Review the selected provider, model and credential destination, then retry.',
+      };
+    }
     });
   });
   handle('babel:save-provider-credential',async options=>{
@@ -473,12 +583,13 @@ async function start(){
     try{await savePreferences();}
     catch(error){preferences.projectCredentialRoot=previousRoot;throw error;}
     diagnostics=null; // Next doctor reflects the saved file, without inspecting the key.
+    await retireResidentWorker();
     return result;
     });
   });
   handle('babel:choose-project',()=>withNativeDialog(()=>withConnectionChange(async()=>{
     const selection=await dialog.showOpenDialog(window,{title:'Open project',properties:['openDirectory']});
-    if(!selection.canceled){preferences.projectRoot=await realpath(selection.filePaths[0]);await savePreferences();}
+    if(!selection.canceled){preferences.projectRoot=await realpath(selection.filePaths[0]);await savePreferences();await retireResidentWorker();}
     return getInfo();
   })));
   handle('babel:trust-project',()=>withNativeDialog(()=>withConnectionChange(async()=>{
@@ -496,6 +607,7 @@ async function start(){
     remoteAdmissionEpoch++;
     runAuthority=null;
     runner?.cancel();remoteBridge?.stop();remoteBridge=null;
+    await retireResidentWorker();
     try{await revocation;}catch{throw new Error('Project access stopped in this app, but revocation could not be saved. Retry before reopening Babel.');}
     return getInfo();
   });
@@ -592,15 +704,24 @@ async function start(){
     const cliEntry=activeCliEntry();
     if(!cliEntry)throw new Error(app.isPackaged?(process.platform==='win32'?'Bundled CLI or Node is missing. Extract the complete ZIP again.':'Bundled CLI or Node is missing. Download the complete AppImage again.'):'The official Babel CLI is not built. Build babel-cli/dist/index.js, or choose another entry from Advanced.');
     const conversationOnly=!preferences.projectRoot;
+    const sessionPolicy=resolveDesktopExecutionProfile(request.sessionId);
+    const effectiveProfile=sessionPolicy.profile;
+    const resumeProfileSelection=Boolean(request.sessionId)&&!sessionPolicy.recorded;
     if(!conversationOnly)await projectAuthority.admit(preferences.projectRoot);
-    if(!(await getInfo()).ready)throw new Error('The selected Babel CLI or project is no longer available');
+    // Read-only admission check: the run owns its one diagnostic decision below,
+    // so admission never triggers an extra capability probe or doctor child.
+    if(!(await getInfo({passive:true})).ready)throw new Error('The selected Babel CLI or project is no longer available');
+    // Exactly one credential resolution per run. The doctor and the child must
+    // observe the same credential, and a stale environment must never be reused
+    // across a credential change.
+    const runEnvironment=await ownedCliEnvironment();
     if(app.isPackaged&&!conversationOnly){
-      diagnostics=await diagnoseRuntime(officialRuntime(),{env:await ownedCliEnvironment(),cwd:app.getPath('userData')});
+      diagnostics=await sharedDiagnostics(officialRuntime(),{env:runEnvironment,cwd:app.getPath('userData'),executionProfile:effectiveProfile},effectiveProfile);
       if(!diagnostics.ready)throw new Error(packagedSandboxPrerequisiteMessage());
     }
     // Validate native-bound scope and route before spawning; no arbitrary flags.
     const route = readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR);
-    const runRequest = {...request,executionScope:conversationOnly?{kind:'conversation'}:{kind:'project',projectRoot:preferences.projectRoot}};
+    const runRequest = {...request,executionProfile:effectiveProfile,resumeProfileSelection,executionScope:conversationOnly?{kind:'conversation'}:{kind:'project',projectRoot:preferences.projectRoot}};
     if (route?.model && !runRequest.model) {
       runRequest.model = route.model;
     }
@@ -611,9 +732,16 @@ async function start(){
     const selectedModel=models.find(model=>model.id===runRequest.model&&model.enabled!==false);
     if(!selectedModel)throw new Error('The selected model is disabled or belongs to another provider. Choose an enabled model.');
     if(selectedModel.selectable===false)throw new Error(selectedModel.unavailableReason||'The selected model is unavailable. Choose another model in Settings.');
-    buildRunArgs(cliEntry, preferences.projectRoot, runRequest);
-    const childEnvironment=applySelectedModelEnvironment(await ownedCliEnvironment(),selectedModel);
     runAuthority=conversationOnly?null:await projectAuthority.admit(preferences.projectRoot);
+    // A thread whose descriptor no longer matches the selected provider/model/
+    // profile cannot be rebound by the worker; continue it through the CLI child.
+    const workerCompatible=!request.sessionId||workerThreadCompatible(request.sessionId,{
+      threadsDir:runsThreadsDir(packageRoot,runtimeEnvironment().BABEL_RUNS_DIR),
+      provider:route?.provider,model:runRequest.model,profile:effectiveProfile,
+      projectRoot:runAuthority?.identity.root??preferences.projectRoot,
+    });
+    buildRunArgs(cliEntry, preferences.projectRoot, runRequest);
+    const childEnvironment=applySelectedModelEnvironment(runEnvironment,selectedModel);
     if(admissionEpoch!==runAdmissionEpoch){runAuthority=null;return {started:false};}
     const bridge=remoteBridge;
     const remoteEpoch=remoteAdmissionEpoch;
@@ -643,11 +771,37 @@ async function start(){
         env:childEnvironment,
         inheritEnv:false,
       });
+    }else if(residentWorkerEligible({conversationOnly,mode:runRequest.mode,provider:route?.provider,runAuthority,selectedModel,cliEntry,executionProfile:effectiveProfile,workerCompatible})){
+      // Host-native chat keeps one authenticated worker (and one engine per
+      // thread) for sequential turns. Other modes/profile changes keep the
+      // per-run CLI path until their parity is qualified.
+      const workerIdentity=[runAuthority.identity.root,route.provider,runRequest.model,selectedModel.modelId,cliEntry].join('\n');
+      if(residentWorker && residentWorkerIdentity!==workerIdentity){
+        await retireResidentWorker();
+      }
+      if(!residentWorker){
+        residentWorker=new PrivateWorkerRun({
+          executable:officialRuntime().executable,
+          entry:join(dirname(cliEntry),'protocol','privateWorkerMain.js'),
+          projectRoot:runAuthority.identity.root,
+          provider:route.provider,
+          providerModelId:selectedModel.modelId,
+          model:runRequest.model,
+          env:childEnvironment,
+          inheritEnv:false,
+        });
+        residentWorkerIdentity=workerIdentity;
+      }
+      runner=residentWorker;
     }else{
       runner=new BabelChild({executable:officialRuntime().executable, entry:cliEntry, projectRoot:runAuthority?.identity.root??null,launchDirectory:app.getPath('userData'), env:childEnvironment, inheritEnv:false});
+      if(runAuthority) await retireResidentWorker();
     }
     backgroundStatus='Babel is working';
-    void runner.start(runRequest, handleBabelPacket);
+    void Promise.resolve(runner.start(runRequest, handleBabelPacket)).catch(error=>{
+      handleBabelPacket({runId:runRequest.runId,kind:'event',event:{type:'run_error',error:error instanceof Error?error.message:'Babel could not start this run.'}});
+      handleBabelPacket({runId:runRequest.runId,kind:'exit',code:1,signal:null,diagnosticAvailable:false,displayLimited:false});
+    });
     try{updateTray();}catch{ /* Tray refresh cannot invalidate an already admitted run. */ }
     emitSharedSessionTrace('babel:run:started',{runId:runRequest.runId});
     return {started:true};
@@ -755,6 +909,7 @@ async function stopThenClose(){
     if(runner?.busy)runner.whenIdle(()=>{clearTimeout(timer);resolve();});
     else{clearTimeout(timer);resolve();}
   });
+  await retireResidentWorker();
   return finishClosingWindow();
 }
 async function flushComposerBeforeClose(){
@@ -778,6 +933,7 @@ async function finishClosingWindow(){
   try{
     if(!await flushComposerBeforeClose()){closingWindow=false;showWindow();return false;}
     closeFinished=true;
+    await retireResidentWorker();
     if(window&&!window.isDestroyed())window.destroy();
     app.quit();
     return true;
@@ -786,6 +942,6 @@ async function finishClosingWindow(){
 }
 app.on('before-quit',event=>{
   if(!closeFinished&&window&&!window.isDestroyed()){event.preventDefault();window.close();return;}
-  runner?.cancel();remoteBridge?.stop();tray?.destroy();tray=null;
+  runner?.cancel();void retireResidentWorker();remoteBridge?.stop();tray?.destroy();tray=null;
 });
 app.on('window-all-closed',()=>{if(decideLastWindow()==='quit')app.quit();});

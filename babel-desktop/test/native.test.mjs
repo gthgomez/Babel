@@ -6,6 +6,20 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 const load = (name) => import(`../native/${name}.mjs`).catch(() => ({}));
 
+test('child environment marks only a legacy resume as an explicit profile migration',async()=>{
+ const {buildChildEnvironment}=await load('child');
+ const base={PATH:'x',BABEL_PROJECT_ROOT:'ambient',BABEL_ALLOWED_ROOTS:'ambient',BABEL_EXECUTION_PROFILE:'read_only_audit'};
+ const fresh=buildChildEnvironment(base,{runId:'run-1',executionScope:{kind:'project',projectRoot:'C:/p'}});
+ assert.equal(fresh.BABEL_DESKTOP_IPC,'1');
+ assert.equal(fresh.BABEL_DESKTOP_RESUME_PROFILE_SELECTION,undefined);
+ assert.equal(fresh.BABEL_PROJECT_ROOT,'ambient');
+ assert.equal(fresh.BABEL_EXECUTION_PROFILE,undefined,'desktop passes the effective profile explicitly');
+ const legacy=buildChildEnvironment(base,{runId:'run-2',executionScope:{kind:'project',projectRoot:'C:/p'},resumeProfileSelection:true});
+ assert.equal(legacy.BABEL_DESKTOP_RESUME_PROFILE_SELECTION,'explicit');
+ const conversation=buildChildEnvironment(base,{runId:'run-3',executionScope:{kind:'conversation'}});
+ assert.equal(conversation.BABEL_PROJECT_ROOT,undefined);
+ assert.equal(conversation.BABEL_ALLOWED_ROOTS,undefined);
+});
 test('closing an idle window quits while a busy window requires a choice',async()=>{
  const {decideWindowClose,decideLastWindow,CLOSE_GRACE_MS}=await load('lifecycle');
  assert.equal(decideWindowClose({busy:false,closing:false}),'close');
@@ -53,7 +67,7 @@ test('child arguments cannot turn task text into options or shell commands',asyn
  const entry=join(tmpdir(),'Babel Space','index.js');const root=join(tmpdir(),'project space');
  const task='--yes; echo unsafe && exit';const args=buildRunArgs(entry,root,{task,mode:'chat'});
  assert.deepEqual(args.slice(-2),['--',task]);
- assert.ok(args.includes('--execution-profile')&&args.includes('safe_repo'));
+ assert.ok(args.includes('--execution-profile')&&args.includes('host_native'));
  assert.ok(!args.includes('--read-only'));
  assert.ok(!args.includes('--resume-chat'));
  assert.ok(!args.slice(0,-1).includes('--yes'));

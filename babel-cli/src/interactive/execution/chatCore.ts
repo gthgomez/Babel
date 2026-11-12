@@ -1,5 +1,8 @@
 import { isReadOnlyChat } from '../../agent/chatReadOnly.js';
 import { currentInvocationSettings } from '../../config/invocationSettings.js';
+import { getActiveExecutionPolicyChoice, getScopedExecutionProfile, resolveExecutionPolicyChoice, withExecutionPolicyChoice, type ExecutionPolicyChoice } from '../../config/executionPolicySelection.js';
+import { constrainNewSessionPolicy, recordNewSessionPolicy } from '../../config/sessionExecutionPolicy.js';
+import { acquireSessionPolicyLease, type SessionPolicyLease } from '../../config/sessionPolicyLease.js';
 import { chatInspectionCoverage } from '../../agent/chatInspectionCoverage.js';
 import { terminalReasonGuidance } from '../../agent/chatTerminalReason.js';
 // ─── Chat Core ──────────────────────────────────────────────────────────────
@@ -59,7 +62,7 @@ import {
   isRuntimeCoordinatorEnabled,
 } from '../../runtime/coordinator.js'
 import type { RuntimeCoordinator, RuntimeExecution } from '../../runtime/contracts.js';
-import type { TurnPersistence } from './turnPersistence.js';
+import { TurnPersistence } from './turnPersistence.js';
 import { buildAskResultPayload } from '../../cli/structuredOutput.js';
 import { runGitCommandAsync } from '../../utils/gitExec.js';
 import { loadProjectSessionIdentity } from '../identity.js';
@@ -685,7 +688,7 @@ function persistTurnAssistantCells(
 /**
  * Run one chat turn via ChatEngine (streaming or callback path).
  */
-export async function runChatEngineOnce(input: {
+export interface RunChatEngineOnceInput {
   task: string;
   /** Trusted host intent; runtime admission independently governs all effects. */
   operation?: RequestedTaskOperation;
@@ -709,18 +712,41 @@ export async function runChatEngineOnce(input: {
   onCancel?: () => void;
   taskIntent?: TaskIntent;
   executionProfile?: ChatExecutionProfile;
+  executionPolicy?: ExecutionPolicyChoice;
   runtimeMode?: ChatRuntimeMode;
   /** P03: product mode for runtime-coordinator dispatch. Defaults to chat. */
   mode?: BabelMode;
   /** P03: inject the shared runtime coordinator (surfaces / deterministic tests). */
   coordinator?: RuntimeCoordinator;
-}): Promise<ChatResult> {
+  /** A protocol host already owns the turn id and its approval transport. */
+  externalProtocolTurn?: { threadId: string; turnId: number; isCancelled: () => boolean };
+}
+
+export function runChatEngineOnce(input: RunChatEngineOnceInput): Promise<ChatResult> {
+  const policy=(input.engine && typeof input.engine.getExecutionPolicy==='function' ? input.engine.getExecutionPolicy() : undefined) ?? input.executionPolicy;
+  return policy ? withExecutionPolicyChoice(policy,()=>runChatEngineOnceScoped(input)) : runChatEngineOnceScoped(input);
+}
+
+async function runChatEngineOnceScoped(input: RunChatEngineOnceInput): Promise<ChatResult> {
+  const assertExternalTurnActive = () => {
+    if (input.externalProtocolTurn?.isCancelled()) throw new Error('PROTOCOL_TURN_CANCELLED_BEFORE_DISPATCH');
+  };
+  assertExternalTurnActive();
+  const retainedPolicy = input.engine && typeof input.engine.getExecutionPolicy === 'function'
+    ? input.engine.getExecutionPolicy() : undefined;
+  if (input.engine && input.executionPolicy && (!retainedPolicy ||
+      retainedPolicy.profile !== input.executionPolicy.profile ||
+      retainedPolicy.source !== input.executionPolicy.source ||
+      retainedPolicy.expectedBoundary !== input.executionPolicy.expectedBoundary)) {
+    throw new Error('The active engine execution policy does not match this turn.');
+  }
   const scope=normalizeChatExecutionScope({projectRoot:input.target?.targetRoot??null,executionScope:input.executionScope});
   const projectRoot=scope.kind==='project'?scope.projectRoot:null;
   if(scope.kind==='conversation'&&(input.instructionRoot||input.systemContext||input.preflightContext))throw new Error('Conflicting project context in conversation scope');
   const factory = input.engineFactory ?? defaultEngineFactory;
   const preflightContext =
     projectRoot ? input.preflightContext ?? (await gatherChatPreflightContext(projectRoot)) : undefined;
+  assertExternalTurnActive();
 
   // S01/#211: resolve the effective contract ONCE from the existing TaskShape
   // machinery. Preparation, prompt compilation and limits all consume this
@@ -778,9 +804,22 @@ export async function runChatEngineOnce(input: {
       workspaceRoot: input.target?.workspaceRoot ?? null,
       ...(intentPlanUserMessage ? { intentPlanUserMessage } : {}),
       ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
+      ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
       ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
     });
 
+  try {
+  if (!input.engine && input.executionPolicy) {
+    const id = typeof engine.getEngineRunId === 'function' ? engine.getEngineRunId() : null;
+    const lease = id && typeof engine.attachSessionPolicyLease === 'function' ? acquireSessionPolicyLease(id) : null;
+    try {
+      recordNewSessionPolicy(engine);
+      if (lease) engine.attachSessionPolicyLease(lease);
+    } catch (error) {
+      lease?.release();
+      throw error;
+    }
+  }
   if (input.engine) {
     applyEngineTurnPreparation(input.engine, {
       task: input.task,
@@ -799,7 +838,6 @@ export async function runChatEngineOnce(input: {
       ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
     });
   }
-
   // Acceptance V0 is an opt-in recording lane. Build the patch-blind snapshot
   // before the first model turn; the kernel and TerminalOutcome stay untouched.
   let acceptanceBundle: AcceptanceRecordingBundleV0 | null = null;
@@ -823,7 +861,14 @@ export async function runChatEngineOnce(input: {
   let protocolSession: ProtocolTurnSession | null = null;
   let turnPersistence: TurnPersistence | null = null;
 
-  if (convRenderer) {
+  if (input.externalProtocolTurn) {
+    if (convRenderer || getEngineThreadId(engine) !== input.externalProtocolTurn.threadId ||
+        !Number.isSafeInteger(input.externalProtocolTurn.turnId) || input.externalProtocolTurn.turnId < 1) {
+      throw new Error('Invalid externally owned chat turn');
+    }
+    turnPersistence = new TurnPersistence(input.externalProtocolTurn.threadId, input.externalProtocolTurn.turnId);
+    turnPersistence.persistUserMessage(input.task);
+  } else if (convRenderer) {
     const turnCtx = await prepareRendererTurn(convRenderer, engine, input.task);
     protocolSession = turnCtx.protocolSession;
     turnPersistence = turnCtx.turnPersistence;
@@ -847,6 +892,7 @@ export async function runChatEngineOnce(input: {
   const useStreaming =
     input.useStreaming ??
     (convRenderer !== null ? isChatStreamingEnabled() : true);
+  assertExternalTurnActive();
   const resolvedIntent = effectiveOperation === 'READ_ONLY' ? 'explain'
     : input.operation === 'CHANGE' ? 'execute'
     : input.taskIntent ?? ChatEngine.classifyChatTaskIntent(input.task);
@@ -864,7 +910,7 @@ export async function runChatEngineOnce(input: {
       mode: input.mode ?? 'chat',
       provider: 'default',
       model: input.model ?? 'default',
-      policyProfile: 'safe_repo',
+      policyProfile: (typeof engine.getExecutionPolicy === 'function' ? engine.getExecutionPolicy()?.profile : undefined) ?? input.executionPolicy?.profile ?? getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']),
       createdAt: new Date().toISOString(),
       kernelVersion: 'executor-kernel-v1',
       contractVersion: 'executor-contract-v1',
@@ -872,7 +918,8 @@ export async function runChatEngineOnce(input: {
     execution = coordinator.beginTurn({
       prepared: buildPreparedTurn(descriptor),
       threadId: threadId ?? '',
-      turnId: protocolSession?.turnId !== undefined ? String(protocolSession.turnId) : '0',
+      turnId: input.externalProtocolTurn ? String(input.externalProtocolTurn.turnId)
+        : protocolSession?.turnId !== undefined ? String(protocolSession.turnId) : '0',
       task: input.task,
       intent: resolvedIntent,
       subject: engine,
@@ -881,7 +928,7 @@ export async function runChatEngineOnce(input: {
 
   let result: ChatResult;
   try {
-    if (desktopApprovalEnabled()) {
+    if (!input.externalProtocolTurn && desktopApprovalEnabled()) {
       startDesktopIpc();
       setDesktopCancelHandler(cancelViaProtocol);
     }
@@ -970,16 +1017,13 @@ export async function runChatEngineOnce(input: {
     persistTurnAssistantCells(turnPersistence, convRenderer);
     finalizeProtocolTurn(protocolSession);
   } finally {
-    if (desktopApprovalEnabled()) stopDesktopIpc();
+    if (!input.externalProtocolTurn && desktopApprovalEnabled()) stopDesktopIpc();
     if (execution !== null) coordinator.settle(execution);
-    // Headless run end: release this run's admission-store reference (no-op
-    // when the engine, and therefore the store, belongs to the caller).
-    if (!input.engine && typeof engine.closeAdmissionStore === 'function') engine.closeAdmissionStore();
   }
 
   // C1: Persist intent plan to run_dir/intent_plan.json after the run
   if (intentPlan && result.runDir) {
-    persistIntentPlan(result.runDir, intentPlan).catch(() => {});
+    await persistIntentPlan(result.runDir, intentPlan);
   }
 
   // Persist chat stack manifest hash next to the run when possible
@@ -1089,10 +1133,10 @@ export async function runChatEngineOnce(input: {
     recordAcceptanceArtifacts(result.runDir, acceptanceBundle);
   }
 
-  // Idempotent backstop for failures thrown outside the stream stage above.
-  if (!input.engine && typeof engine.closeAdmissionStore === 'function') engine.closeAdmissionStore();
-
   return result;
+  } finally {
+    if (!input.engine && typeof engine.closeAdmissionStore === 'function') engine.closeAdmissionStore();
+  }
 }
 
 /**
@@ -1660,8 +1704,11 @@ export async function runCliChatTask(input: {
   onStreamEvent?: (event: ChatStreamEvent) => void;
   engineFactory?: ChatEngineFactory;
   executionProfile?: ChatExecutionProfile;
+  executionPolicy?: ExecutionPolicyChoice;
   /** Persisted chat session to restore before this turn. Chat mode only. */
   sessionId?: string;
+  sessionLease?: SessionPolicyLease;
+  onSessionLeaseAdopted?: () => void;
 }): Promise<{ payload: Record<string, unknown>; exitCode: number }> {
   const outputFormat = input.outputFormat ?? 'text';
   const scope=normalizeChatExecutionScope(input);
@@ -1685,6 +1732,22 @@ export async function runCliChatTask(input: {
   // Classify intent up front so the gate and payload status are consistent.
   const resolvedIntent = ChatEngine.classifyChatTaskIntent(input.task);
   const runtimeMode = useConversational ? 'tui' : 'headless';
+  // A new session must carry a validated, durable execution policy so a later
+  // resume can preserve its proven boundary instead of guessing one. The
+  // admitted turn scope wins; otherwise resolve the ordinary implicit choice.
+  const executionPolicy = input.executionPolicy ?? (input.sessionId ? undefined : (() => {
+    const scoped = getActiveExecutionPolicyChoice();
+    if (scoped) return scoped;
+    try {
+      return constrainNewSessionPolicy(resolveExecutionPolicyChoice({
+        ...(process.env['BABEL_EXECUTION_PROFILE'] !== undefined
+          ? { environmentProfile: process.env['BABEL_EXECUTION_PROFILE'] } : {}),
+        defaultProfile: 'host_native',
+      }));
+    } catch {
+      throw new Error('Invalid execution profile selection or environment. Select a valid execution profile.');
+    }
+  })());
   const resumedEngine = input.sessionId
     ? await openResumedChatEngine(input.sessionId, {
         task: input.task,
@@ -1694,6 +1757,10 @@ export async function runCliChatTask(input: {
         ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
         runtimeMode,
+        ...(executionPolicy ? { executionPolicy } : {}),
+      }, {
+        ...(input.sessionLease ? {lease:input.sessionLease} : {}),
+        ...(input.onSessionLeaseAdopted ? {onAdopted:input.onSessionLeaseAdopted} : {}),
       })
     : undefined;
 
@@ -1713,6 +1780,7 @@ export async function runCliChatTask(input: {
     ...(resumedEngine ? { engine: resumedEngine } : {}),
     ...(input.engineFactory ? { engineFactory: input.engineFactory } : {}),
     ...(input.executionProfile ? { executionProfile: input.executionProfile } : {}),
+    ...(executionPolicy ? { executionPolicy } : {}),
     runtimeMode,
   }).finally(()=>resumedEngine?.closeAdmissionStore());
 

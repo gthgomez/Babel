@@ -44,9 +44,20 @@ async function registeredHandler(source, config, channel = 'babel:save-provider-
     credentialRequestContext:async()=>({}), assertIdle() {}, runtimeEnvironment: () => ({BABEL_CONFIG_DIR: config}),
     preferences: {projectRoot: null, projectCredentialRoot: null},
     savePreferences: async () => {}, diagnostics: null,
+    retireResidentWorker: async () => {},
+    // Ephemeral auth observations are main-process state; the harness supplies
+    // the real shape so the registered handler runs unmodified.
+    credentialAuthObservations: new Map(),
+    // Bind reconcileAuthentication to the real export, not a placeholder, so a
+    // status read under the harness proves the same projection as production.
+    reconcileAuthentication: (await import('../native/provider-auth.mjs')).reconcileAuthentication,
     connectionChangeBusy: false, runAdmission: false, runner: null, remoteBridge: null, updateBusy: false,
     ...lifecycle,
   };
+  // Extract the real observation-key function so the harness cannot drift from
+  // the implementation's key shape.
+  const observationKey = source.match(/function authObservationKey\(\{[^}]+\}\)\{[\s\S]*?\n\}/)?.[0];
+  assert.ok(observationKey, 'authObservationKey must be found in native/main.mjs');
   const busyBinding = extractBusyBinding(source);
   const idle = source.match(/function assertIdle\(\)\{[^\n]+\}/)?.[0];
   const connection = source.match(/async function withConnectionChange\(fn\)\{[\s\S]+?\n\}/)?.[0] ?? '';
@@ -59,7 +70,7 @@ async function registeredHandler(source, config, channel = 'babel:save-provider-
       bindings[local] = module[exported];
     }
   }
-  const handlers = runInNewContext(`${busyBinding}\n${idle}\n${connection}\n[${callbacks.join(',')}]`, bindings);
+  const handlers = runInNewContext(`${busyBinding}\n${observationKey}\n${idle}\n${connection}\n[${callbacks.join(',')}]`, bindings);
   return Array.isArray(channel) ? handlers : handlers[0];
 }
 

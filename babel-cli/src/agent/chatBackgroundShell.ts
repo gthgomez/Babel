@@ -19,6 +19,7 @@ import {
 import { SafeExecutor, validateExecutorShellCommand, type ToolResult } from '../sandbox.js';
 import { readRuntimeMode } from '../config/runtimeMode.js';
 import { isToolAllowedForExecutionProfile } from '../config/executionProfiles.js';
+import { getScopedExecutionProfile } from '../config/executionPolicySelection.js';
 import { evaluateGovernedIsolation, shouldUseDockerSandbox } from '../config/benchmarkContainer.js';
 import { requiresDockerIsolation } from '../authority/commandSpec.js';
 import { commandControlledRoots, resolveAndClassifyCommand } from '../authority/commandResolver.js';
@@ -323,7 +324,7 @@ export function executeBackgroundRunCommandAction(
     );
   }
 
-  if (!isToolAllowedForExecutionProfile(process.env['BABEL_EXECUTION_PROFILE'], 'shell_exec')) {
+  if (!isToolAllowedForExecutionProfile(getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']), 'shell_exec')) {
     return denyBg(
       'Execution profile does not allow shell_exec (background run_command blocked).',
       'profile_denied',
@@ -332,7 +333,7 @@ export function executeBackgroundRunCommandAction(
 
   // Docker sandbox profiles require containerized shellExec; async background
   // path is host-only — refuse rather than silently skip container isolation.
-  if (shouldUseDockerSandbox(process.env['BABEL_EXECUTION_PROFILE'])) {
+  if (shouldUseDockerSandbox(getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']))) {
     return denyBg(
       'Background shell is not available under Docker sandbox profiles. Use foreground run_command.',
       'docker_sandbox_denied',
@@ -352,7 +353,7 @@ export function executeBackgroundRunCommandAction(
   const validation = validateExecutorShellCommand(
     action.command,
     process.platform,
-    process.env['BABEL_EXECUTION_PROFILE'],
+    getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']),
     { approvalQueue: true, projectRoot: ctx.projectRoot },
   );
   if (validation) {
@@ -392,14 +393,17 @@ export function executeBackgroundRunCommandAction(
     );
   }
   const isolation = evaluateGovernedIsolation(
-    process.env['BABEL_EXECUTION_PROFILE'],
+    getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']),
     process.env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim(),
   );
   const hostFallbackAuthorized = ['1', 'true', 'yes'].includes(
     (process.env['BABEL_ALLOW_HOST_FALLBACK'] ?? '').toLowerCase(),
   );
+  const hostNativeProjectCode = isolation.kind === 'host_profile' &&
+    isolation.profile === 'host_native' && commandPolicy.classification.executionRisk === 'project_code';
   if (requiresDockerIsolation(commandPolicy.classification.executionRisk) &&
-      (isolation.kind === 'fail_closed' || isolation.kind === 'docker' || !hostFallbackAuthorized)) {
+      (isolation.kind === 'fail_closed' || isolation.kind === 'docker' ||
+       (!hostFallbackAuthorized && !hostNativeProjectCode))) {
     return denyBg(
       `[sandbox] isolation_required: ${commandPolicy.classification.base || action.command} executes project or container-only code and is denied on the host.`,
       'isolation_required',

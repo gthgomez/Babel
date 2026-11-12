@@ -9,6 +9,7 @@ import {
   normalizeExecutionProfile,
   resolveExecutionProfile,
 } from './executionProfiles.js';
+import { evaluateGovernedIsolation } from './benchmarkContainer.js';
 
 test('legacy workspace inputs normalize to a secure canonical profile and warn once', (t) => {
   const warning = t.mock.method(process, 'emitWarning', () => undefined);
@@ -42,8 +43,21 @@ test('execution profile names normalize common spelling variants', () => {
   assert.equal(normalizeExecutionProfile('nope'), null);
 });
 
-test('safe_repo remains the default profile', () => {
-  assert.equal(resolveExecutionProfile(undefined).name, 'safe_repo');
+test('the generic resolver stays fail-closed while ordinary entry points select host-native explicitly', () => {
+  const implicit = resolveExecutionProfile(undefined);
+  assert.equal(implicit.name, 'safe_repo');
+  assert.equal(implicit.dockerSandbox, true);
+  assert.equal(resolveExecutionProfile('host_native').dockerSandbox, false);
+  assert.equal(resolveExecutionProfile('safe_repo').dockerSandbox, true);
+  assert.equal(resolveExecutionProfile('dev_local').dockerSandbox, false);
+  assert.ok(getExecutionProfileCommandAdditions('host_native').includes('cargo'));
+});
+
+test('explicit unknown or empty execution profiles do not fall back to the default', () => {
+  for (const value of ['safe_reop', '', '   ']) {
+    assert.throws(() => resolveExecutionProfile(value), /invalid execution profile/i);
+    assert.throws(() => evaluateGovernedIsolation(value, undefined, {}), /invalid execution profile/i);
+  }
 });
 
 test('dev_local adds common local build commands', () => {

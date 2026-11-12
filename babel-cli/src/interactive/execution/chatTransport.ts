@@ -4,6 +4,9 @@
 
 import type { ChatEngine, ChatEngineOptions, ChatEvent } from '../../agent/chatEngine.js';
 import { openSessionAdmissionStore } from '../../cli/runsLayout.js';
+import { recordNewSessionPolicy } from '../../config/sessionExecutionPolicy.js';
+import { acquireSessionPolicyLease } from '../../config/sessionPolicyLease.js';
+import { withExecutionPolicyChoice } from '../../config/executionPolicySelection.js';
 import {
   allocateThreadViaProtocol,
   getProtocolClient,
@@ -124,19 +127,36 @@ export async function createChatEngineForSession(
   options: ChatEngineOptions,
   engineFactory: (opts: ChatEngineOptions) => ChatEngine,
 ): Promise<ChatEngine> {
-  const engine = engineFactory(options);
+  const engine = options.executionPolicy ? withExecutionPolicyChoice(options.executionPolicy,()=>engineFactory(options)) : engineFactory(options);
   const protocolThreadId = await allocateThreadViaProtocol(options);
   if (protocolThreadId) {
     engine.assignRunId(protocolThreadId);
     registerEngineWithProtocolHost(protocolThreadId, engine);
+  }
+  if (options.executionPolicy) {
+    const id = typeof engine.getEngineRunId === 'function' ? engine.getEngineRunId() : null;
+    const lease = id && typeof engine.attachSessionPolicyLease === 'function' ? acquireSessionPolicyLease(id) : null;
+    try {
+      recordNewSessionPolicy(engine);
+      if (lease) engine.attachSessionPolicyLease(lease);
+    } catch (error) {
+      lease?.release();
+      if (typeof engine.closeAdmissionStore === 'function') engine.closeAdmissionStore();
+      throw error;
+    }
   }
   // P05/P11: open the durable admission store for the engine's FINAL run id
   // (after protocol thread allocation) and attach it before any command runs.
   // Owner of close: the ReplContext engine lifecycle (/clear and resume
   // replacement release the reference); headless one-shots close in
   // runChatEngineOnce. Degrades fail-closed when the store cannot open.
-  attachSessionAdmissionStore(engine);
-  return engine;
+  try {
+    attachSessionAdmissionStore(engine);
+    return engine;
+  } catch (error) {
+    if (typeof engine.closeAdmissionStore === 'function') engine.closeAdmissionStore();
+    throw error;
+  }
 }
 
 /**

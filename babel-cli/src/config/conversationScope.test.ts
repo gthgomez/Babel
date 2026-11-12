@@ -10,7 +10,9 @@ test('bootstrap recognizes conversation scope before argument parsing, including
 test('explicit conversation scope cannot fall through project, pipeline or unsupported mode paths',()=>{
   assert.equal(resolveRunScope({},{}),'project')
   assert.equal(resolveRunScope({executionScope:'conversation'},{}),'conversation')
+  assert.equal(resolveRunScope({executionScope:'conversation',executionProfile:'host_native'},{}),'conversation')
+  assert.equal(resolveRunScope({executionScope:'conversation',executionProfile:'safe_repo'},{}),'conversation')
   assert.throws(()=>resolveRunScope({executionScope:'unknown'},{}),/Invalid execution scope/)
-  for(const extra of [{mode:'deep'},{mode:'plan'},{mode:'manual'},{useChatPipeline:true},{project:'x'},{projectRoot:'/tmp/project'},{executionProfile:'dev_local'},{orchestrator:'v9'},{sessionId:'x'}])assert.throws(()=>resolveRunScope({executionScope:'conversation',...extra},{}),/Conversation scope/)
+  for(const extra of [{mode:'deep'},{mode:'plan'},{mode:'manual'},{useChatPipeline:true},{project:'x'},{projectRoot:'/tmp/project'},{executionProfile:'dev_local'},{executionProfile:'safe_reop'},{executionProfile:''},{orchestrator:'v9'},{sessionId:'x'}])assert.throws(()=>resolveRunScope({executionScope:'conversation',...extra},{}),/Conversation scope/)
   assert.throws(()=>resolveRunScope({executionScope:'conversation'},{BABEL_LITE_WORKER_CHAIN:'1'}),/Conversation scope/)
 })

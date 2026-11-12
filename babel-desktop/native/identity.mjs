@@ -86,7 +86,7 @@ export function resolveEngineIdentity(options = {}) {
   const {
     isPackaged = false, resourcesPath = '', desktopVersion = '', cliEntry = null,
     official = {ready:false, label:null, source:null}, advancedEntry = false,
-    ready = false, executionProfile = 'safe_repo', diagnostics = null, update = {},requiresSandbox=true,
+    ready = false, executionProfile = 'host_native', diagnostics = null, update = {},requiresSandbox=true,
     readText = defaultReadText, git = defaultGit,
   } = options;
   const origin = classifyOrigin({isPackaged, advancedEntry, officialReady: Boolean(official.ready)});

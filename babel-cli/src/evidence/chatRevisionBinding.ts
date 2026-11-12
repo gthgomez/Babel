@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { getScopedExecutionProfile } from '../config/executionPolicySelection.js';
 /**
  * Chat-path revision binding for verifier receipts (H7/H8).
  *
@@ -676,7 +677,7 @@ export function evaluateChatCompletionProof(input: {
     const mutationPaths = mutationPathsFromSessionEvents(input.events);
     const env = input.env ?? process.env;
     const executionProfile =
-      input.executionProfile ?? env['BABEL_EXECUTION_PROFILE'];
+      input.executionProfile ?? getScopedExecutionProfile(env['BABEL_EXECUTION_PROFILE']);
     for (const err of independentVerifierProofErrors({
       projectRoot: input.projectRoot,
       command: receipt.command,

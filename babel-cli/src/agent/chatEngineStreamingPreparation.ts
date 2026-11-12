@@ -11,35 +11,30 @@ import { ChatTurnTelemetryCollector } from "./chatTurnTelemetry.js";
 import { resetGateRejectedCompletionCapture } from "./preservedUnverifiedTerminal.js";
 import { readOnlyExecutionConflictReport } from './chatToolScopeAdmission.js';
 
-/**
- * Fill a missing repository map for this submission.
- * Failures stay best-effort. A superseded generation must not install.
- */
+// More than one refresh can overlap around cancellation or an edit. Only the
+// newest refresh for this engine may publish repository context.
+const repositoryRefreshes = new WeakMap<ChatEngineStreamingLoopHost, number>();
+
+/** Revalidate repository context for each submission without publishing stale work. */
 export async function ensureRepositoryContext(
   host: ChatEngineStreamingLoopHost,
   submissionGeneration: number,
 ): Promise<void> {
   if(host.options.executionScope?.kind==='conversation')return;
-  if (host.repoMapCache !== null) {
-    host.repoMapInvalidated = false;
-    return;
-  }
+  const signal = host.abortController.signal;
+  if (signal.aborted) return;
+  const refresh = (repositoryRefreshes.get(host) ?? 0) + 1;
+  repositoryRefreshes.set(host, refresh);
   // Clear before the scan so a write during generation re-arms a refresh.
   host.repoMapInvalidated = false;
+  const canInstall = () => repositoryRefreshes.get(host) === refresh &&
+    !signal.aborted && !host.repoMapInvalidated && host.isSubmissionCurrent(submissionGeneration);
   try {
     const map = await host.generateRepoMap();
-    // R0-8: a map produced for a superseded submission must not seed the
-    // current task. A write while this scan ran invalidated the result.
-    if (
-      map &&
-      host.repoMapCache === null &&
-      !host.repoMapInvalidated &&
-      host.isSubmissionCurrent(submissionGeneration)
-    ) {
-      host.repoMapCache = map;
-    }
+    if (canInstall()) host.repoMapCache = map || null;
   } catch {
-    /* best-effort */
+    // An old map is not a safe fallback after an unvalidated external edit.
+    if (canInstall()) host.repoMapCache = null;
   }
 }
 
@@ -69,13 +64,16 @@ export async function prepareStreamingSubmission(
   const modelName=host.modelPolicy?.providerModelId??host.options.model??host.modelPolicy?.family??'unknown';
   const providerName=host.modelPolicy?.provider??(modelName.toLowerCase().includes('deepseek')?'deepseek':modelName.toLowerCase().includes('ollama')?'ollama':'deepinfra');
   // W0.3: fresh TurnRuntime per user submission (isolate counters by default).
-  const admission = host.admitUserSubmission({
+  const admissionSpan = host.currentTurnTelemetry.startPreparationSpan('objectiveAdmission');
+  let admission: ReturnType<ChatEngineStreamingLoopHost['admitUserSubmission']>;
+  try { admission = host.admitUserSubmission({
     userInput,
     ...(taskIntent !== undefined ? { taskIntent } : {}),
     ...(submitOpts?.continueTask !== undefined
       ? { continueTask: submitOpts.continueTask }
       : {}),
-  },{model:modelName,provider:providerName},objective);
+  },{model:modelName,provider:providerName},objective); }
+  finally { admissionSpan.end(); }
   if(admission.status==='halted')return {halted:true,haltEvent:admission.haltEvent} as const;
   host.initializeSubmissionControl(submissionGeneration);
   const runtime=admission.runtime;
@@ -158,12 +156,15 @@ export async function prepareStreamingSubmission(
   // Refresh optional repository context before either system-prompt path.
   // A retained system message must not populate the prompt cache before the
   // refreshed map is ready. Waiting later in the loop cannot repair that cache.
-  await ensureRepositoryContext(host, submissionGeneration);
+  const repositorySpan = host.currentTurnTelemetry.startPreparationSpan('repositoryContext');
+  try { await ensureRepositoryContext(host, submissionGeneration); }
+  finally { repositorySpan.end(); }
   // A superseded preparation must not install context or begin execution.
   if (!host.isSubmissionCurrent(submissionGeneration))
     return { halted: true, haltEvent: null } as const;
 
-  if (
+  const systemPromptSpan = host.currentTurnTelemetry.startPreparationSpan('systemPrompt');
+  try { if (
     host.conversation.length === 1 ||
     host.conversation[0]?.role !== "system"
   ) {
@@ -187,7 +188,7 @@ export async function prepareStreamingSubmission(
     host.conversation[0].content = host.getOrBuildSystemPrompt(
       useNativeInit ? "native" : useTextInit ? "text" : "legacy",
     );
-  }
+  } } finally { systemPromptSpan.end(); }
 
   const maxTurns = Math.max(
     0,

@@ -352,7 +352,7 @@ test('transport: transports only EMIT tool_use events — the agent lane execute
   assert.match(providerRuntime, /case ["']tool_use["']/, 'agent provider owner consumes tool_use events');
   assert.match(providerRuntime, /nativeActions\.push\(action\)/, 'agent provider owner retains actions for execution');
   assert.match(chatEngine, /new ChatEngineActionExecutor\(/, 'agent lane retains its governed action executor');
-  assert.match(chatEngine, /return this\.actionExecutor\.executeOneAction\(/, 'agent lane forwards actions to its governed owner');
+  assert.match(chatEngine, /this\.executeOneAction\(/, 'agent lane forwards actions to its governed owner');
   const awaitsGovernedDispatch = (source: string): boolean => {
     const retained = source.match(/\bconst\s+(\w+)\s*=\s*executeActionWithPolicy\(/);
     return /await executeActionWithPolicy\(/.test(source) ||

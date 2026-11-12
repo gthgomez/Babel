@@ -19,7 +19,7 @@ import {
   summarizeSyntheticProviderOutput,
 } from '../testinfra/synthetic-provider-fixture.mjs'
 
-const childTestCount = 12
+const childTestCount = 15
 
 if (!isSyntheticProviderFixtureReady()) {
   const isolationTimeoutMs = process.platform === 'win32' ? 120_000 : 60_000
@@ -67,6 +67,7 @@ if (!isSyntheticProviderFixtureReady()) {
 } else {
   const { ChatEngine } = await import('./chatEngine.js')
   const { prepareStreamingSubmission } = await import('./chatEngineStreamingPreparation.js')
+  const { repoMapWorkerState, shutdownRepoMapWorker } = await import('../services/repoMap/graphWorkerClient.js')
   type Mode = 'native' | 'legacy' | 'text'
   type Dispatch = { system: string; conversation: string }
   type Internals = {
@@ -158,6 +159,17 @@ if (!isSyntheticProviderFixtureReady()) {
   }
 
   for (const mode of ['native', 'legacy'] as const) {
+    test(`${mode}: each submission revalidates repository context without an in-engine edit`, { timeout: 10_000 }, async t => {
+      const { engine, internals, dispatches } = makeFixture(t, mode)
+      let map = 'FIXTURE_MAP_BEFORE_EXTERNAL_EDIT'
+      internals.generateRepoMap = async () => map
+      await drain(engine.submitMessageStream('Inspect the source.', 'explain'))
+      assertMap(dispatches[0], map, [])
+      map = 'FIXTURE_MAP_AFTER_EXTERNAL_EDIT'
+      await drain(engine.submitMessageStream('Continue inspecting the source.', 'explain', { continueTask: true }))
+      assertMap(dispatches.at(-1), map, ['FIXTURE_MAP_BEFORE_EXTERNAL_EDIT'])
+    })
+
     test(`${mode}: initial, fresh and continued requests await maps after completed edits`, { timeout: 10_000 }, async t => {
       const { engine, internals, dispatches, edit } = makeFixture(t, mode)
       internals.generateRepoMap = async () => 'FIXTURE_MAP_INITIAL'
@@ -253,6 +265,17 @@ if (!isSyntheticProviderFixtureReady()) {
       assert.equal(internals.getOrBuildSystemPrompt(mode).includes('FIXTURE_MAP_SUPERSEDED'), false)
     })
   }
+
+  test('ChatEngine abort stops its active repository index before returning', { timeout: 10_000 }, async t => {
+    await shutdownRepoMapWorker()
+    const { engine, internals } = makeFixture(t, 'native')
+    const pending = internals.generateRepoMap()
+    assert.equal(repoMapWorkerState().active, true, 'the actual engine started indexing')
+    engine.abortTurn()
+    await pending
+    assert.equal(repoMapWorkerState().active, false)
+    assert.equal(repoMapWorkerState().processId, null, 'the owned index process terminated')
+  })
 
   test('completed edit invalidates all rendered prompt modes before another submission', { timeout: 10_000 }, async t => {
     const { engine, internals, edit } = makeFixture(t, 'native')

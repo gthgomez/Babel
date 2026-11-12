@@ -1,4 +1,5 @@
 export const EXECUTION_PROFILE_NAMES = [
+  'host_native',
   'safe_repo',
   'dev_local',
   'benchmark_container',
@@ -111,11 +112,29 @@ const MUTATING_EXECUTOR_TOOLS = [
 ];
 
 const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
+  host_native: {
+    name: 'host_native',
+    dockerSandbox: false,
+    description:
+      'Host-native repository work. Eligible project commands run with the current OS user\'s filesystem and network authority; this is not an OS sandbox.',
+    commandAdditions: COMMON_LOCAL_BUILD_COMMANDS,
+    allowedTools: [],
+    disallowedTools: [],
+    reasoningEffort: 'medium',
+    toolTimeoutMs: 120_000,
+    maxToolIterations: 25,
+    promptLines: {
+      orchestrator: ['Use narrow plans, explicit verification, and project-local evidence.'],
+      swe: ['Eligible project commands execute on the host with the current OS user\'s authority.'],
+      qa: ['Audit source evidence, tool-policy fit, and regression coverage before passing the plan.'],
+      executor: ['Execute only approved steps and halt on policy or verification mismatch.'],
+    },
+  },
   safe_repo: {
     name: 'safe_repo',
     dockerSandbox: true,
     description:
-      'Default guarded profile for normal repository work (Docker sandbox; clean-room IndependentVerifier off by default).',
+      'Guarded profile for repository work (Docker sandbox; clean-room IndependentVerifier off by default).',
     commandAdditions: [],
     allowedTools: [],
     disallowedTools: [],
@@ -347,6 +366,8 @@ const PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
 };
 
 const ALIASES: Record<string, ExecutionProfileName> = {
+  host_native: 'host_native',
+  'host-native': 'host_native',
   safe: 'safe_repo',
   safe_repo: 'safe_repo',
   'safe-repo': 'safe_repo',
@@ -392,7 +413,7 @@ let warnedLegacyWorkspaceProfile = false;
 export function normalizeExecutionProfile(
   value: string | null | undefined,
 ): ExecutionProfileName | null {
-  if (value === null || value === undefined || value.trim().length === 0) {
+  if (value === null || value === undefined) {
     return DEFAULT_EXECUTION_PROFILE;
   }
   const token = normalizeToken(value);
@@ -410,7 +431,8 @@ export function normalizeExecutionProfile(
 }
 
 export function resolveExecutionProfile(value: string | null | undefined): ExecutionProfile {
-  const normalized = normalizeExecutionProfile(value) ?? DEFAULT_EXECUTION_PROFILE;
+  const normalized = normalizeExecutionProfile(value);
+  if (normalized === null) throw new Error('Invalid execution profile.');
   const profile = PROFILES[normalized];
   return {
     ...profile,

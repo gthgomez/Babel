@@ -1,5 +1,6 @@
-import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus, modeUnavailableReason,isConversationOnlyConnection,hydrateArchivedMessage,setupDockerLabel,runtimeProviderLabel,runtimeDockerLabel,runtimeReadinessLabel,composerSendBlockMessage } from './core.mjs';
+import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus, modeUnavailableReason,isConversationOnlyConnection,hydrateArchivedMessage,setupDockerLabel,runtimeProviderLabel,runtimeDockerLabel,runtimeReadinessLabel,composerSendBlockMessage,executionBoundaryLabel } from './core.mjs';
 import { icon } from './icons.mjs';
+import { createConversationDom } from './conversation-dom.mjs';
 const MODE_OPTIONS=[{id:'chat',label:'Chat',description:'Coding tasks'},{id:'plan',label:'Plan',description:'Read-only planning'},{id:'deep',label:'Deep',description:'Governed workflow'}];
 
 const LOGO = '__LOGO__';
@@ -167,8 +168,9 @@ function renderRuntime() {
     runtimeRow('CLI source', sourceText, source.dirty ? 'warn' : ''),
     runtimeRow('Engine origin', originLabels[engine.origin] ?? engine.origin ?? 'unknown'),
     runtimeRow('Execution profile', engine.executionProfile ?? 'unknown'),
+    runtimeRow('Execution boundary', executionBoundaryLabel({executionProfile:engine.executionProfile}) ?? 'unknown'),
     runtimeRow('Provider', runtimeProviderLabel({platform:nativeInfo?.platform, providerConfigured:Boolean(configuredRoute), reported:engine.readiness?.provider})),
-    runtimeRow('Docker', runtimeDockerLabel({platform:nativeInfo?.platform, docker:engine.readiness?.docker, dockerInstallation:nativeInfo?.dockerInstallation})),
+    runtimeRow('Docker', runtimeDockerLabel({platform:nativeInfo?.platform, docker:engine.readiness?.docker, dockerInstallation:nativeInfo?.dockerInstallation, executionProfile:engine.executionProfile})),
     runtimeRow('Sandbox image', engine.readiness?.sandboxImage ?? 'unknown'),
     runtimeRow('Readiness', runtimeReadinessLabel({platform:nativeInfo?.platform, providerConfigured:Boolean(configuredRoute), engineReady:Boolean(engine.readiness?.ready)})),
     runtimeRow('Update channel', update.channel === 'preview' ? 'development build' : update.channel === 'stable' ? 'stable release' : (update.channel ?? 'not set')),
@@ -238,7 +240,7 @@ function renderTree() {
   $('#project-tree').innerHTML = `${changed}<button class="tree-row tree-root" data-action="folder" data-path="." aria-expanded="${expandedFolders.has('.')}">${icon(expandedFolders.has('.') ? 'down':'chevron')}${icon('folderOpen')}<span class="tree-label">${e(projectName)}</span></button>${expandedFolders.has('.') ? `<div class="tree-children root-children">${treeMarkup(files)}</div>` : ''}`;
 }
 function toolRows(rows) {
-  return `<div class="tool-feed">${rows.map(t => `<div class="tool-item"><button class="tool-row ${e(t.status)}" data-action="expand-tool" data-id="${e(t.id)}" aria-expanded="${expandedTools.has(t.id)}" title="Expand ${e(t.label)}">${icon('chevron')}<span class="tool-label">${t.action ? `<span class="tool-action">${e(t.action)}</span><span class="tool-path">${e(t.path)}</span>` : `<span class="tool-path">${e(t.label)}</span>`}</span><span class="tool-meta"><span>${e(t.meta ?? (t.status === 'running' ? 'running...' : ''))}</span>${t.duration ? `<span class="duration-dot">•</span><span class="duration">${e(t.duration)}</span>` : ''}</span><span class="tool-status ${e(t.status)}">${t.status === 'complete' ? icon('check') : t.status === 'failed' ? icon('close') : ''}</span></button>${expandedTools.has(t.id) ? `<pre class="tool-detail">${e(t.detail ?? 'No additional output was reported.')}</pre>` : ''}</div>`).join('')}</div>`;
+  return `<div class="tool-feed">${rows.map(t => `<div class="tool-item" data-tool-key="${e(t.id)}"><button class="tool-row ${e(t.status)}" data-action="expand-tool" data-id="${e(t.id)}" aria-expanded="${expandedTools.has(t.id)}" title="Expand ${e(t.label)}">${icon('chevron')}<span class="tool-label">${t.action ? `<span class="tool-action">${e(t.action)}</span><span class="tool-path">${e(t.path)}</span>` : `<span class="tool-path">${e(t.label)}</span>`}</span><span class="tool-meta"><span>${e(t.meta ?? (t.status === 'running' ? 'running...' : ''))}</span>${t.duration ? `<span class="duration-dot">•</span><span class="duration">${e(t.duration)}</span>` : ''}</span><span class="tool-status ${e(t.status)}">${t.status === 'complete' ? icon('check') : t.status === 'failed' ? icon('close') : ''}</span></button>${expandedTools.has(t.id) ? `<pre class="tool-detail">${e(t.detail ?? 'No additional output was reported.')}</pre>` : ''}</div>`).join('')}</div>`;
 }
 function messageHasWork(message) {
   if (!message) return false;
@@ -277,6 +279,7 @@ function messageMarkup(m, index) {
   return `<article class="message assistant-message"${identity}><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${expansion}${archiveInfo}${m.toolsTruncated?'<p class="fine-print">Tool preview limited to 100 entries. Complete retained details are available in message sections.</p>':''}${m.terminalConflict?'<p class="fine-print">Terminal records disagree. Refresh or inspect the session evidence.</p>':''}${review}${approval}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${''}${e(({complete:'Response complete',plan_ready:'Plan ready · not applied',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions"><button data-action="copy-message" data-index="${index}" ${!m.text || m.status === 'running' ? 'disabled' : ''}>${icon('copy')} Copy</button></div></article>`;
 }
 let conversationFrame = null;
+const conversationDom = createConversationDom($('#conversation'));
 function scheduleConversationRender() {
   if (conversationFrame !== null) return;
   conversationFrame = requestAnimationFrame(() => {
@@ -295,12 +298,12 @@ function renderConversation(forceBottom = false, reset = false) {
   const previousTop = scroller.scrollTop;
   const session = activeSession();
   if (!session.fixture && session.messages.length === 0) {
-    scroller.innerHTML = `<div class="empty-state"><img src="${LOGO}" alt=""><h1>Run. Verify. Understand.</h1><div class="empty-state-body">${emptyStateBody()}</div><div class="preview-note">${icon('info')}${'Babel CLI · permissions and verification built in'}</div></div>`;
+    conversationDom.render({currentSession:session,empty:`<div class="empty-state"><img src="${LOGO}" alt=""><h1>Run. Verify. Understand.</h1><div class="empty-state-body">${emptyStateBody()}</div><div class="preview-note">${icon('info')}${'Babel CLI · permissions and verification built in'}</div></div>`,history:'',messages:[],messageMarkup});
   } else {
     const viewingOlder=(session.history?.olderOffset ?? 0) > 0;
     const historyWarnings=[session.history?.tailOnly?'Legacy archive reader returned a tail window only.':null,session.history?.skippedOversizedLines?'Oversized archive records could not be displayed; the original archive is preserved.':null,session.history?.snapshotChanged?'The archive changed while loading. Reload the latest messages before relying on this view.':null,session.history?.outcomesBounded?'Terminal evidence exceeds this reader’s limit; status remains unverified where evidence is unavailable.':null].filter(Boolean).map(text=>`<p class="fine-print history-banner">${e(text)}</p>`).join('');
     const historyBanner=(session.history?.hasOlder || viewingOlder ? `<div class="history-banner"><p class="muted">Showing ${session.messages.length} of ${session.history.totalMessages ?? 'unknown'} messages.</p><div class="dialog-actions">${session.history?.hasOlder ? '<button class="button" data-action="load-older-messages">Load earlier messages</button>' : ''}${viewingOlder ? '<button class="button" data-action="load-latest-messages">Return to latest messages</button>' : ''}</div></div>` : '')+historyWarnings;
-    scroller.innerHTML = `${historyBanner}${session.messages.map(messageMarkup).join('')}`;
+    conversationDom.render({currentSession:session,empty:null,history:historyBanner,messages:session.messages,messageMarkup});
   }
   if (reset) scroller.scrollTop = 0;
   else if (forceBottom || atBottom) scroller.scrollTop = scroller.scrollHeight;
@@ -371,8 +374,8 @@ function connectionDialog() {
     ${runtimeRow('Project access',isConversationOnlyConnection(nativeInfo)?'Conversation only':nativeInfo?.projectAuthority?.trusted?'Trusted':nativeInfo?.projectAuthority?.reason??'Unknown or not trusted')}
     ${nativeInfo?.projectRoot?`<div class="dialog-actions"><button class="button" data-action="${nativeInfo.projectAuthority?.trusted?'revoke-trust':'trust-project'}">${nativeInfo.projectAuthority?.trusted?'Revoke project trust':'Trust selected project'}</button></div>`:''}
     ${runtimeRow('Provider',configuredRouteLabel||'Not selected')}
-    ${runtimeRow('Docker',setupDockerLabel({platform:nativeInfo?.platform,conversationOnly:isConversationOnlyConnection(nativeInfo),docker:d?.docker,dockerInstallation:nativeInfo?.dockerInstallation}))}
-    ${runtimeRow('Sandbox',isConversationOnlyConnection(nativeInfo)?'Not required for conversation':d?.sandboxImage==='available'?'Verified':'Prepare an image for project tools')}
+    ${runtimeRow('Docker',setupDockerLabel({platform:nativeInfo?.platform,conversationOnly:isConversationOnlyConnection(nativeInfo),docker:d?.docker,dockerInstallation:nativeInfo?.dockerInstallation,executionProfile:nativeInfo?.engine?.executionProfile}))}
+    ${runtimeRow('Sandbox',executionBoundaryLabel({executionProfile:nativeInfo?.engine?.executionProfile})==='Host · no OS sandbox'?'Not used · commands run with your OS user authority':isConversationOnlyConnection(nativeInfo)?'Not required for conversation':d?.sandboxImage==='available'?'Verified':'Prepare an image for project tools')}
     <p class="fine-print">The recommended Linux image includes Git, Node 24 and npm. Preparing it downloads Docker image layers and may take several minutes. Other projects may need an image with their own test tools.</p>
     <div class="dialog-actions"><button class="button" data-action="prepare-sandbox" ${sandboxBusy?'disabled':''}>Prepare recommended image</button></div>
     <details><summary>Use an existing local image</summary><label class="credential-label" for="sandbox-image">Existing sandbox image</label><input class="credential-control" id="sandbox-image" spellcheck="false" value="${e(nativeInfo?.sandbox?.reference??'')}" ${sandboxBusy?'disabled':''}><div class="dialog-actions"><button class="button" data-action="save-sandbox" ${sandboxBusy?'disabled':''}>Validate and use image</button></div><p class="fine-print">Validation runs an isolated shell and Git check without mounting your project. The verified image is saved for Desktop and ${nativeInfo?.platform==='linux'?'babel-harness':'Babel Harness.cmd'}.</p></details>
@@ -412,7 +415,7 @@ async function providerCredentialsDialog() {
     <label class="credential-label" for="model-search">Enabled models</label><input class="credential-control" id="model-search" type="search" placeholder="Search models">
     <div id="enabled-models" class="enabled-model-list"></div>
     <p id="provider-error" class="provider-error" role="alert"></p>
-    <label class="credential-label" for="credential-operation">Key action</label><select class="credential-control" id="credential-operation"><option value="add">Add a new key</option><option value="replace">Replace the saved key</option></select><p id="credential-status" class="fine-print" role="status"></p><div class="dialog-actions"><button class="button" id="remove-provider-key" disabled>Remove saved key</button><button class="button" id="migrate-provider-key" hidden>Migrate legacy key</button></div><label id="credential-migration-consent" hidden><input type="checkbox" id="credential-retain-recovery"> Keep the original plaintext private .env for recovery. Migration does not erase it.</label><details><summary>Credential storage</summary><label class="credential-label" for="credential-scope">Save to</label><select class="credential-control" id="credential-scope"><option value="private">Private profile (OS-protected)</option>${nativeInfo?.projectName?'<option value="project">Selected project (Git-ignored .env only)</option>':''}</select><p class="fine-print">Leave the key blank to retain it. Project storage is plaintext and requires an ignored, untracked file. In the CLI, pass --project-root with this project’s path.</p></details>
+    <label class="credential-label" for="credential-operation">Key action</label><select class="credential-control" id="credential-operation"><option value="add_new">Add a new key</option><option value="replace_protected">Replace the saved key</option><option value="supersede_legacy_with_new">Replace the legacy key with OS-protected storage</option><option value="continue_with_legacy">Keep using the legacy key (unverified)</option></select><p id="credential-status" class="fine-print" role="status"></p><div class="dialog-actions"><button class="button" id="remove-provider-key" disabled>Remove saved key</button><button class="button" id="migrate-provider-key" hidden>Migrate legacy key</button><button class="button" id="check-connection" hidden>Test connection</button></div><label id="credential-migration-consent" hidden><input type="checkbox" id="credential-retain-recovery"> Keep the original plaintext private .env for recovery. Migration does not erase it.</label><details><summary>Credential storage</summary><label class="credential-label" for="credential-scope">Save to</label><select class="credential-control" id="credential-scope"><option value="private">Private profile (OS-protected)</option>${nativeInfo?.projectName?'<option value="project">Selected project (Git-ignored .env only)</option>':''}</select><p class="fine-print">Leave the key blank to retain it. Project storage is plaintext and requires an ignored, untracked file. In the CLI, pass --project-root with this project’s path.</p></details>
     <div class="dialog-actions provider-save-actions"><button class="button primary" data-action="save-provider-credential">Save provider</button><button class="button" data-action="close-dialog">Cancel</button></div>`,'#credential-provider');
   const providerSelect=$('#credential-provider'),modelSelect=$('#credential-model');
   $('#credential-scope').value=nativeInfo?.projectCredentialsSelected&&nativeInfo?.projectName?'project':'private';
@@ -446,22 +449,54 @@ async function providerCredentialsDialog() {
   modelSource.addEventListener('change',renderModelSource);
   const scopeSelect=$('#credential-scope');
   let statusRevision=0;
+  const AUTH_LABELS={
+    authenticated:'Authenticated',unauthorized:'Not authorized',permission_denied:'Forbidden for this key',
+    payment_required:'Payment required',rate_limited:'Rate limited',unavailable:'Could not verify',not_checked:'Not checked',
+  };
+  const renderCredentialStatus=status=>{
+    if(status.storage==='legacy-plaintext')return 'Legacy plaintext key found. It is unverified and not OS-protected. Choose how to continue below; the original file is retained for recovery.';
+    if(status.storage==='project-plaintext')return `Project plaintext storage. ${status.present?'A saved key is present.':'No key saved.'}`;
+    if(status.storage==='os-protected')return `OS-protected storage. ${status.present?'A saved key is present.':'Key removed.'}`;
+    return status.protectionAvailable?'OS protection is available. No key saved.':'OS protection is unavailable. Private key writes are disabled.';
+  };
+  const renderAuthStatus=authentication=>{
+    if(!authentication)return '';
+    const label=AUTH_LABELS[authentication.state]??'Not checked';
+    if(authentication.state==='authenticated')return `${label} at ${authentication.checkedAt??'an unrecorded time'}. This confirms the key only, not model or tool access.`;
+    if(authentication.state==='not_checked')return authentication.reason==='credential_changed'?'Not checked since the key changed. Test the connection to verify it.':'Not checked. Saving does not require a network check.';
+    if(authentication.state==='unauthorized')return 'Not authorized: the provider rejected this exact key. Replace it, then test again.';
+    if(authentication.state==='payment_required')return 'Payment required: the key may be valid but the account cannot run requests. This is not a rejected key.';
+    if(authentication.state==='permission_denied')return 'Forbidden: this key lacks permission for the request. This is not evidence the key was revoked.';
+    if(authentication.state==='rate_limited')return 'Rate limited: the provider is throttling. The key was not reported as invalid.';
+    return 'Could not verify the key right now. The saved key is unchanged; retry when the provider is reachable.';
+  };
   const refreshCredentialStatus=async()=>{
     const revision=++statusRevision;
     delete scopeSelect.dataset.binding;
-    $('#remove-provider-key').disabled=true;$('#migrate-provider-key').hidden=true;$('#credential-migration-consent').hidden=true;
+    $('#remove-provider-key').disabled=true;$('#migrate-provider-key').hidden=true;$('#credential-migration-consent').hidden=true;$('#check-connection').hidden=true;
     if(!native.providerCredentialStatus){$('#credential-status').textContent='Credential status is unavailable in this preview.';return;}
     $('#credential-status').textContent='Checking selected credential destination…';
     try{
       const status=await native.providerCredentialStatus({provider:providerSelect.value,scope:scopeSelect.value});
       if(revision!==statusRevision||!scopeSelect.isConnected)return;
       scopeSelect.dataset.binding=status.binding;
-      $('#credential-operation').value=status.configured?'replace':'add';
-      $('#credential-status').textContent=status.storage==='legacy-plaintext'?'Legacy plaintext key found. Migrate it before replacing or removing. The original file is retained for recovery.':status.storage==='project-plaintext'?`Project plaintext storage. ${status.configured?'A saved key is present.':'No key saved.'}`:status.storage==='os-protected'?`OS-protected storage. ${status.configured?'A saved key is present.':'Key removed.'}`:status.protectionAvailable?'OS protection is available. No key saved.':'OS protection is unavailable. Private key writes are disabled.';
-      $('#remove-provider-key').disabled=!status.configured||status.migrationAvailable;
+      const present=Boolean(status.present ?? status.configured);
+      const ownedProtected=Boolean(status.ownedProtectedEntry ?? (status.storage==='os-protected'&&present));
+      const legacy=status.storage==='legacy-plaintext'&&!ownedProtected;
+      $('#credential-operation').value=legacy?'supersede_legacy_with_new':ownedProtected?'replace_protected':'add_new';
+      // A legacy-only profile cannot use Add/Replace until it decides explicitly.
+      for(const option of $('#credential-operation').options)option.disabled=legacy&&!['supersede_legacy_with_new','continue_with_legacy'].includes(option.value);
+      $('#credential-status').textContent=[renderCredentialStatus(status),renderAuthStatus(status.authentication)].filter(Boolean).join(' ');
+      const hint=$('#provider-key-hint');
+      const selectedSpec=providers.find(spec=>spec.id===providerSelect.value);
+      if(hint)hint.textContent=legacy
+        ? 'Enter a new key to replace the legacy plaintext key with OS-protected storage, or choose \u201cKeep using the legacy key\u201d to continue without copying it.'
+        : selectedSpec?.local?'Lists models registered with the local Ollama daemon. Execution may be local or cloud-backed; locality needs separate verification.':'Leave the key blank to retain it. Choose Add or Replace for the selected destination.';
+      $('#remove-provider-key').disabled=!ownedProtected;
       $('#migrate-provider-key').hidden=!status.migrationAvailable;
       $('#migrate-provider-key').disabled=!status.protectionAvailable;
       $('#credential-migration-consent').hidden=!status.migrationAvailable;
+      $('#check-connection').hidden=!present||!native.checkConnection;
     }catch(error){if(revision===statusRevision&&scopeSelect.isConnected)$('#credential-status').textContent=error.message||'Credential status unavailable.';}
   };
   providerSelect.addEventListener('change',()=>{$('#credential-key').value='';currentRoute=null;renderModels();refreshCredentialStatus();});
@@ -476,6 +511,14 @@ async function providerCredentialsDialog() {
       finally{if(button.isConnected)await refreshCredentialStatus();}
     });
   }
+  $('#check-connection').addEventListener('click',async ev=>{
+    const button=ev.currentTarget;button.disabled=true;const previous=button.textContent;button.textContent='Testing…';
+    try{
+      await native.checkConnection({provider:providerSelect.value,scope:scopeSelect.value});
+      await refreshCredentialStatus();
+    }catch(error){$('#provider-error').textContent=error.message||'The connection test could not run.';}
+    finally{if(button.isConnected){button.textContent=previous;button.disabled=false;}}
+  });
   modelSelect.addEventListener('change',()=>{const box=[...$('#enabled-models').querySelectorAll('input')].find(box=>box.value===modelSelect.value);if(box)box.checked=true;});
   $('#model-search').addEventListener('input',ev=>{const query=ev.target.value.toLowerCase();for(const row of $('#enabled-models').querySelectorAll('label'))row.hidden=!row.dataset.modelLabel.includes(query);});
   $('#refresh-models').addEventListener('click',async ev=>{
@@ -500,7 +543,14 @@ async function saveProviderFromDialog(button) {
   try {
     const enabledModels=[...document.querySelectorAll('#enabled-models input:checked:not(:disabled)')].map(input=>input.value);
     if(manual&&!enabledModels.includes(model))enabledModels.push(model);
-    const result=await native.saveProviderRoute({provider,apiKey,scope,model,...(manual?{manualModelId}:{}),binding:$('#credential-scope')?.dataset.binding,credentialOperation:$('#credential-operation')?.value??'add',enabledModels});
+    const result=await native.saveProviderRoute({provider,apiKey,scope,model,...(manual?{manualModelId}:{}),binding:$('#credential-scope')?.dataset.binding,credentialOperation:$('#credential-operation')?.value??'add_new',enabledModels});
+    // A rejected save reports what did and did not persist; never claim success.
+    if(result&&result.ok===false){
+      const persisted=result.persisted??{};
+      const kept=Object.entries(persisted).filter(([,saved])=>saved===true).map(([stage])=>stage);
+      $('#provider-error').textContent=[result.safeMessage||'The provider save did not complete.',kept.length?`Already stored: ${kept.join(', ')}.`:null,result.recoveryAction].filter(Boolean).join(' ');
+      return;
+    }
     const route=result?.route ?? {provider, model};
     configuredRoute=route;state.model=route.model;
     if(modeBlockReason(state.mode,route.provider)) {state.mode='chat';announce('Chat selected. Plan and Deep need an authorized project and a supported provider.');}
@@ -508,7 +558,8 @@ async function saveProviderFromDialog(button) {
     try { providerCatalog=await native.listQualifiedProviders(); } catch {}
     nativeInfo=await native.refreshDiagnostics();
     closeDialog();
-    toast(result.credentialUpdated ? 'Credential and route saved.' : 'Provider route saved.');
+    toast(result?.authState==='legacy_unverified'?'Provider route saved. The legacy key remains unverified — test the connection.':
+      result?.credentialChanged?'Credential and route saved. Authentication was not checked.':'Provider route saved.');
     renderControls();
   } catch(error) {
     const target=$('#provider-error');if(target)target.textContent=String(error?.message??'Could not save provider.');else toast('Provider setup failed.');

@@ -42,8 +42,6 @@ import { runWithFallback, clearRoutingCache, withPipelineModelRoute } from './ex
 import { withExclusiveTerminalSurface } from './ui/inputCoordinator.js';
 import { resolveMode, type ValidMode } from './cli/constants.js';
 import {
-  DEFAULT_EXECUTION_PROFILE,
-  normalizeExecutionProfile,
   resolveExecutionProfile,
   type ExecutionProfileName,
 } from './config/executionProfiles.js';
@@ -933,9 +931,7 @@ async function runBabelPipelineInternal(
     process.env['BABEL_LOCAL_LEARNING_ROOT']?.trim() ||
     undefined;
   const requestedExecutionProfile =
-    options.executionProfile ??
-    normalizeExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']) ??
-    DEFAULT_EXECUTION_PROFILE;
+    options.executionProfile ?? process.env['BABEL_EXECUTION_PROFILE'];
   const executionProfile = resolveExecutionProfile(requestedExecutionProfile);
   const harnessMetadata = collectHarnessMetadata(sessionStartPath, localLearningRoot);
   const authoritativeProjectRoot = process.env['BABEL_PROJECT_ROOT']?.trim() || null;

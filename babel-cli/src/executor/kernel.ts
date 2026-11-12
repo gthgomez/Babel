@@ -7,6 +7,7 @@ import type {
 } from "../localTools.js";
 import { executeActionWithPolicy } from "../agent/toolExecutor.js";
 import { evaluateGovernedIsolation } from '../config/benchmarkContainer.js';
+import { getScopedExecutionProfile } from '../config/executionPolicySelection.js';
 import type { AgentAction } from "../agent/actions.js";
 
 import {
@@ -248,7 +249,7 @@ export function createExecutorKernel(
         // The authority gate must see the same runtime boundary the sandbox
         // will enforce. Omitted facts mean unavailable, even with Docker ready.
         const isolation = evaluateGovernedIsolation(
-          process.env['BABEL_EXECUTION_PROFILE'],
+          getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']),
           process.env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? null,
         );
         const result = await executeActionWithPolicy(

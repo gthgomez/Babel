@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { basename, join, relative, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { resolveExecutionProfile } from './executionProfiles.js';
+import { assertScopedExecutionPolicy } from './executionPolicySelection.js';
 import { validateDockerIsolationArgs } from './dockerIsolationArgs.js';
 import { isProjectRelativeExecutable } from '../authority/commandSpec.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
@@ -439,12 +440,13 @@ export function evaluateGovernedIsolation(
   dockerImage?: string | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): GovernedIsolationDecision {
-  const profile = executionProfile
-    ? resolveExecutionProfile(executionProfile)
-    : resolveExecutionProfile(env['BABEL_EXECUTION_PROFILE']);
+  const profile = resolveExecutionProfile(executionProfile ?? env['BABEL_EXECUTION_PROFILE']);
+  assertScopedExecutionPolicy(profile.name);
 
   if (!profile.dockerSandbox) {
-    return { kind: 'host_profile', profile: profile.name };
+    const decision: GovernedIsolationDecision = { kind: 'host_profile', profile: profile.name };
+    assertScopedExecutionPolicy(profile.name, decision);
+    return decision;
   }
 
   const extraArgs = validateDockerIsolationArgs(env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']);
@@ -460,7 +462,9 @@ export function evaluateGovernedIsolation(
   const dockerDisabled = env['BABEL_DOCKER_DISABLE'] === 'true';
   const image = (dockerImage ?? env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? '').trim();
   if (!dockerDisabled && isDockerAvailable() && image.length > 0) {
-    return { kind: 'docker' };
+    const decision: GovernedIsolationDecision = { kind: 'docker' };
+    assertScopedExecutionPolicy(profile.name, decision);
+    return decision;
   }
 
   const unavailable = getDockerUnavailableReason() || 'Docker is not available';
@@ -470,7 +474,9 @@ export function evaluateGovernedIsolation(
       : unavailable;
 
   if (isHostIsolationEscalationAllowed(env)) {
-    return { kind: 'host_escalated', profile: profile.name, reason };
+    const decision: GovernedIsolationDecision = { kind: 'host_escalated', profile: profile.name, reason };
+    assertScopedExecutionPolicy(profile.name, decision);
+    return decision;
   }
 
   return {
@@ -499,6 +505,9 @@ export function shouldUseDockerSandbox(
   executionProfile?: string | null | undefined,
   dockerImage?: string | null | undefined,
 ): boolean {
+  // Validate the explicit profile even when another setting disables Docker.
+  const profile = resolveExecutionProfile(executionProfile ?? process.env['BABEL_EXECUTION_PROFILE']);
+  assertScopedExecutionPolicy(profile.name);
   // Explicit opt-out via env var
   if (process.env['BABEL_DOCKER_DISABLE'] === 'true') {
     return false;
@@ -508,9 +517,6 @@ export function shouldUseDockerSandbox(
   }
 
   // Load profile and check dockerSandbox field
-  const profile = executionProfile
-    ? resolveExecutionProfile(executionProfile)
-    : resolveExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']);
   if (!profile.dockerSandbox) {
     return false;
   }

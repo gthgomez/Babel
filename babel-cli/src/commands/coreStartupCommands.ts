@@ -333,6 +333,7 @@ program
     )
     .option("--json", "Emit structured JSON only")
     .option("--strict", "Treat warnings as fatal in the overall result")
+    .option("--execution-profile <profile>", "Check prerequisites for a specific execution profile (installed diagnostics)")
     .option(
       "--strict-enterprise",
       "Require explicit managed enterprise policy controls",
@@ -370,15 +371,18 @@ Examples:
         scope?: string;
         skills?: boolean;
         contributor?: boolean;
+        executionProfile?: string;
       }) => {
         validateRuntimeEnvForCommand({ json: options.json === true });
 
         if (resolveRuntimePaths().isInstalled && !options.contributor) {
-          const report = runInstalledDoctor({ strict: options.strict === true });
+          const report = runInstalledDoctor({ strict: options.strict === true, ...(options.executionProfile !== undefined ? { executionProfile: options.executionProfile } : {}) });
           printJsonOrHuman(report, report.checks.map(check => `${check.status}: ${check.id} — ${check.message}`).join("\n"), options.json === true);
           if (report.status === "fail") process.exitCode = 1;
           return;
         }
+
+        if (options.executionProfile !== undefined) throw new Error('Profile-aware diagnostics require an installed Babel runtime.');
 
         if (options.skills === true) {
           const report = runSkillDoctor(BABEL_ROOT);

@@ -34,6 +34,8 @@ dialog.showErrorBox=(title,message)=>{console.error(title+': '+message);app.quit
     env.BABEL_RUNS_DIR=join(profile,'engine','state','runs');
     application=await _electron.launch({executablePath:process.env.BABEL_TEST_ELECTRON_EXECUTABLE,args:[bootstrap,`--profile-dir=${profile}`],env,timeout:20000});
     const page=await application.firstWindow();
+    await page.waitForURL('babel://app/index.html');
+    await page.waitForFunction(()=>Boolean(window.babelDesktop&&document.querySelector('#composer-form')));
     await application.evaluate(({dialog,Menu})=>{
       globalThis.__dialogs=[];
       dialog.showMessageBox=async(_window,options)=>{globalThis.__dialogs.push(options.title);return {response:1,checkboxChecked:false};};
@@ -168,7 +170,7 @@ test('actual Electron continues project-free Chat and restores rich retained his
   skip:!process.env.BABEL_TEST_ELECTRON_EXECUTABLE,timeout:30000,
 },async t=>{
   const root=await mkdtemp(join(tmpdir(),'babel-conversation-electron-'));
-  let application,phase='setup';
+  let application,page,phase='setup';
   try{
     const profile=join(root,'profile'),config=join(profile,'engine','config'),entry=join(root,'fixture.mjs'),receipt=join(root,'scope.json');
     await mkdir(config,{recursive:true});
@@ -198,7 +200,7 @@ process.stdout.write(JSON.stringify({type:'run_complete',result:{session_id:'con
     for(const name of ['PATH','SystemRoot','WINDIR','TEMP','TMP','LOCALAPPDATA','APPDATA','USERPROFILE','HOME','COMSPEC','PATHEXT','DISPLAY','XAUTHORITY'])if(process.env[name])env[name]=process.env[name];
     env.BABEL_RUNS_DIR=join(profile,'engine','state','runs');
     application=await _electron.launch({executablePath:process.env.BABEL_TEST_ELECTRON_EXECUTABLE,args:[bootstrap,`--profile-dir=${profile}`],env,timeout:20000});
-    const page=await application.firstWindow();
+    page=await application.firstWindow();
     page.setDefaultTimeout(7000);
     phase='ready';
     await application.evaluate(({dialog})=>{globalThis.__dialogs=[];dialog.showMessageBox=async(_window,options)=>{globalThis.__dialogs.push(options.title);return {response:0,checkboxChecked:false};};});
@@ -241,7 +243,14 @@ process.stdout.write(JSON.stringify({type:'run_complete',result:{session_id:'con
     await reopened.locator('#sessions .session-button').filter({hasText:'Retained rich fixture'}).click();
     assert.equal(await reopened.locator('#composer-input').inputValue(),'Unsent draft retained by the real Electron profile');
     assert.equal((await reopened.evaluate(()=>window.babelDesktop.readComposerDrafts())).drafts.find(draft=>draft.sessionId==='rich-archive').text,'Unsent draft retained by the real Electron profile');
-  }catch(error){t.diagnostic(JSON.stringify({phase}));throw error;}finally{
+  }catch(error){
+    const details=phase==='draft-close'&&page?await page.evaluate(async()=>({
+      draftWarning:document.querySelector('#toast')?.textContent?.includes('Draft')??false,
+      draftState:await window.babelDesktop.readComposerDrafts().then(value=>({readOnly:value.readOnly,revision:value.revision,draftCount:value.drafts.length}),()=>null),
+    })).catch(()=>null):null;
+    const dialogs=phase==='draft-close'&&application?await application.evaluate(()=>globalThis.__dialogs??[]).catch(()=>[]):[];
+    t.diagnostic(JSON.stringify({phase,details,dialogs}));throw error;
+  }finally{
     if(application){await application.evaluate(({app})=>app.exit(0)).catch(()=>{});await application.close().catch(()=>{});}
     await rm(root,{recursive:true,force:true});
   }

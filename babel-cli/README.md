@@ -61,7 +61,9 @@ supported provider for model-backed tasks; presence alone is not authentication.
 A local Ollama route needs its service and selected model available.
 
 Read-only help, context preview, and stack resolution need no provider. The
-**default `safe_repo` profile requires a running Docker server** for execution;
+**default `host_native` profile runs eligible project commands on the host with
+the current OS user's authority**; it is not an OS sandbox. An explicit
+`safe_repo` selection requires Docker and fails closed when it is unavailable;
 doctor reports missing Docker and never enables host fallback. Contributor
 `learn`, `skill`, `benchmark`, `smoke`, `test`, and `audit` utilities require a source
 checkout because they manage source-library artifacts. Use
@@ -303,7 +305,7 @@ remain advanced compatibility controls rather than additional primary workflows.
 
 `settings show` reports effective values and sources, runtime limits, permissions,
 model identity status, persistence, and instruction owners. Built-ins are Work,
-standard review, auto-apply off, `safe_repo` isolation, unlimited cost and whole-task
+standard review, auto-apply off, host-native execution, unlimited cost and whole-task
 wall time, a 200-turn safety ceiling, 20 conversation messages, a 128,000 estimated
 context threshold, 8 stall turns, and 200,000 tokens per round. Task tunes, explicit
 environment and saved preferences can change effective limits. Setup asks for a
@@ -439,7 +441,8 @@ node dist/index.js run "Solve benchmark task" --execution-profile benchmark_cont
 node dist/index.js run "Audit this repo" --execution-profile read_only_audit
 ```
 
-- `safe_repo` is the default guarded profile (`dockerSandbox: true`). After H13 it **fail-closes** without Docker daemon + image (`BABEL_BENCHMARK_DOCKER_IMAGE`) unless you escalate with `BABEL_ALLOW_HOST_FALLBACK=1` or `BABEL_DOCKER_DISABLE=true`.
+- `host_native` is the implicit default (`dockerSandbox: false`): eligible project commands run with the current OS user's authority, which is not an OS sandbox.
+- `safe_repo` is the explicit guarded profile (`dockerSandbox: true`). It **fail-closes** without Docker daemon + image (`BABEL_BENCHMARK_DOCKER_IMAGE`) unless you escalate with `BABEL_ALLOW_HOST_FALLBACK=1` or `BABEL_DOCKER_DISABLE=true`.
 - `dev_local` is host-friendly (`dockerSandbox: false`); permits common local build tools such as pnpm, yarn, cargo, go, gcc, make, uv, and dotnet while keeping shell wrappers and destructive commands rejected. Prefer this for host-only day-to-day work. It runs tools directly on your host — do not point it at untrusted repositories or unreviewed code.
 - You can also set `BABEL_EXECUTION_PROFILE=dev_local` instead of the CLI flag.
 - `benchmark_container` is for Terminal-Bench style isolated tasks and relaxes benchmark-fixture QA posture without enabling host shell operators.

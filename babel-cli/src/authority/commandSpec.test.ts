@@ -838,6 +838,9 @@ const HOST_PROCESS_SURFACE = new Set([
   'tools/auditUiTool.ts',
   'tools/mcpTransport.ts',
   'tools/ripgrep.ts',
+  // Repository-map indexing worker: fixed module path and --max-old-space flag; no caller argv,
+  // IPC-only stdio, scrubbed env, deadline/cancel owned by the parent, and tree termination.
+  'services/repoMap/graphWorkerClient.ts',
   // Test fixture helper: fixed-argument git init for P11/admission integration tests.
   'testUtils/chatAdmissionFixture.ts',
 ]);

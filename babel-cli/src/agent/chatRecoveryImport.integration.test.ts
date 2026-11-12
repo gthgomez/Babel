@@ -4,7 +4,7 @@ import {test} from 'node:test'
 import {existsSync,mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join,dirname} from 'node:path'
-import {execFileSync} from 'node:child_process'
+import {execFileSync,spawnSync} from 'node:child_process'
 import {ChatEngine} from './chatEngine.js'
 import type {ChatToolAction} from './chatToolDefinitions.js'
 import type {ToolContext} from '../localTools.js'
@@ -13,6 +13,14 @@ import {ingestVerifierResult} from './codingLoop/chatBindings.js'
 import {recoveryObservationId} from './codingLoop/recoveryPlan.js'
 import {SafeExecutor} from '../sandbox.js'
 import {buildBenchmarkContainerCommand,resetDockerAvailabilityCache,setDockerAvailableForTest} from '../config/benchmarkContainer.js'
+
+function hostPythonAvailable(): boolean {
+  for (const command of ['py', 'python', 'python3']) {
+    const result = spawnSync(command, ['--version'], { stdio: 'ignore' })
+    if (!result.error && result.status === 0) return true
+  }
+  return false
+}
 
 const fixtures = [
   {name:'named import',path:'math.js',testPath:'math.test.js',label:'addition',source:'export function add(a,b) { return a-b; }\n',old:'return a-b;',replacement:'return a+b;',
@@ -175,7 +183,9 @@ test('an actually started red without a receipt can rerun through normal governe
   assert.match(denied.observationList.join('\n'), /RECOVERY_|DENY|denied/i)
 })
 
-test('governed Python write/check/read/repair path avoids host bytecode drift', async t => {
+test('governed Python write/check/read/repair path avoids host bytecode drift', {
+  skip: hostPythonAvailable() ? false : 'no host Python interpreter is installed on this runner',
+}, async t => {
   const storage = mkdtempSync(join(tmpdir(), 'babel-python-recovery-cache-'))
   const root = join(storage, 'project'), runDir = join(storage, 'runtime')
   mkdirSync(root); mkdirSync(runDir)

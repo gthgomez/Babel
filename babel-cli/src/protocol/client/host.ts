@@ -129,6 +129,11 @@ export interface ProtocolHostState {
    * by `closeProtocolHostState`.
    */
   admissionStores: Map<string, AdmissionStore>;
+  /** Optional canonical Chat controller for an owner that provides its own transport. */
+  runCanonicalChatTurn?: (input: {
+    engine: ChatEngine; descriptor: SessionDescriptor; task: string; turnId: number;
+    isCancelled: () => boolean; emit: (event: ChatEvent) => void;
+  }) => Promise<void>;
   /** Test-only: overrides OpenCode PATH probe for thread.create (constructor injection). */
   openCodeInstallProbe?: () => Promise<import('../../bridge/openCodeCliDiscovery.js').OpenCodeInstallProbe>;
   claudeCodeRegistry?: ClaudeCodeAgentRuntimeRegistry;
@@ -932,28 +937,21 @@ export async function handleProtocolRequest(
           const launchTurn = async () => {
             let seq = 0;
             let runtimeExecution: RuntimeExecution | null = null;
-            const emitEvents = async (events: AsyncIterable<ChatEvent>): Promise<void> => {
-              for await (const event of events) {
-                if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') {
-                  recordTurnTerminalFromChatEvent(state, params.thread_id, turnId, event);
-                }
-                const mapped = mapChatEventToTurnStreamEvent(event);
-                if (!mapped) continue;
-                try {
-                  onNotification?.({
-                    jsonrpc: '2.0',
-                    method: 'turn.event',
-                    params: {
-                      thread_id: params.thread_id,
-                      turn_id: turnId,
-                      seq: seq++,
-                      event: mapped,
-                    }
-                  });
-                } catch {
-                  /* client disconnected */
-                }
+            const emitEvent = (event: ChatEvent): void => {
+              if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled') {
+                recordTurnTerminalFromChatEvent(state, params.thread_id, turnId, event);
               }
+              const mapped = mapChatEventToTurnStreamEvent(event);
+              if (!mapped) return;
+              try {
+                onNotification?.({
+                  jsonrpc: '2.0', method: 'turn.event',
+                  params: { thread_id: params.thread_id, turn_id: turnId, seq: seq++, event: mapped },
+                });
+              } catch { /* client disconnected */ }
+            };
+            const emitEvents = async (events: AsyncIterable<ChatEvent>): Promise<void> => {
+              for await (const event of events) emitEvent(event);
             };
             try {
               // Hash immediately before the engine call — ChatEngine boundary.
@@ -968,7 +966,10 @@ export async function handleProtocolRequest(
                 descriptor != null &&
                 harnessAdapterId !== 'command-code' &&
                 harnessAdapterId !== 'opencode';
-              if (useRuntimeCoordinator) {
+              if (state.runCanonicalChatTurn && descriptor?.mode === 'chat' && !harnessAdapterId) {
+                await state.runCanonicalChatTurn({engine,descriptor,task:params.message,turnId,
+                  isCancelled:()=>launch.cancelRequested,emit:emitEvent});
+              } else if (useRuntimeCoordinator) {
                 runtimeExecution = state.coordinator.beginTurn({
                   prepared: buildPreparedTurn(descriptor),
                   threadId: params.thread_id,
@@ -981,10 +982,11 @@ export async function handleProtocolRequest(
                 await emitEvents(engine.submitMessageStream(params.message));
               }
             } catch (err: any) {
-              const failedEvent: ChatEvent = {
-                type: 'failed',
-                error: err instanceof Error ? err.message : String(err),
-              };
+              if (launch.cancelRequested && err instanceof Error && err.message === 'PROTOCOL_TURN_CANCELLED_BEFORE_DISPATCH') {
+                emitEvent({type:'cancelled',status:'cancelled',outcome:'CANCELLED'});
+                return;
+              }
+              const failedEvent: ChatEvent = { type: 'failed', error: err instanceof Error ? err.message : String(err) };
               recordTurnTerminalFromChatEvent(state, params.thread_id, turnId, failedEvent);
               try {
                 onNotification?.({

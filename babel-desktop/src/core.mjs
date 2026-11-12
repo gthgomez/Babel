@@ -9,7 +9,8 @@ export function hydrateArchivedMessage(message) {
   return {...base,role:'assistant',status:message.activity?null:message.status??'unverified',tools,blocks};
 }
 /** Setup dialog Docker row. Windows conversation copy stays fixed. */
-export function setupDockerLabel({platform, conversationOnly, docker, dockerInstallation} = {}) {
+export function setupDockerLabel({platform, conversationOnly, docker, dockerInstallation, executionProfile} = {}) {
+  if (executionProfile === 'host_native') return 'Not required · host-native commands run with your OS user authority';
   if (platform === 'linux') {
     if (docker === 'available' || dockerInstallation === 'running') return 'Running';
     if (dockerInstallation === 'missing' || docker === 'unavailable') return 'Not installed. Install Docker Engine, start it, and choose Prepare recommended image again.';
@@ -26,7 +27,14 @@ export function runtimeProviderLabel({platform, providerConfigured, reported} = 
   if (!providerConfigured) return 'Not selected';
   return reported === 'configured' ? 'Configured' : 'Selected';
 }
-export function runtimeDockerLabel({platform, docker, dockerInstallation} = {}) {
+/** The effective command boundary shown beside the selected profile. */
+export function executionBoundaryLabel({executionProfile} = {}) {
+  if (executionProfile === 'host_native') return 'Host · no OS sandbox';
+  if (executionProfile === 'safe_repo') return 'Docker sandbox';
+  return null;
+}
+export function runtimeDockerLabel({platform, docker, dockerInstallation, executionProfile} = {}) {
+  if (executionProfile === 'host_native') return 'Not required';
   if (platform !== 'linux') return docker ?? 'unknown';
   if (docker === 'available' || dockerInstallation === 'running') return 'Running';
   if (dockerInstallation === 'missing' || docker === 'unavailable') return 'Not installed';

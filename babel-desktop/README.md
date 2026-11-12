@@ -14,7 +14,7 @@ Private keys use Electron `safeStorage` OS protection in `desktop-credentials.js
 
 Legacy private `.env` keys remain usable until explicitly migrated. Migration copies one provider into OS-protected storage and retains the original plaintext `.env` unchanged for recovery. Once migrated, the protected entry (including a removal marker) is authoritative, and retrying migration cannot restore a removed or replaced key. Future or invalid protected-store schemas reject edits. The standalone Node launcher cannot unlock OS protection and rejects any profile containing protected entries or removal markers; run that profile in Desktop. App-owned execution requires the CLI native credential capability; update or rebuild older engines. See [credential integration](docs/INTEGRATION.md) for recovery details.
 
-Send a task to run the real CLI with the `safe_repo` execution profile. Run tests and Git status request tasks through that same run/approval path. Stop cancels the CLI process; Allow and Deny answer its approvals. File viewing is read-only. Unknown telemetry stays unknown. A zero exit without a trustworthy terminal result is unverified.
+Send a task to run the real CLI with the `host_native` execution profile for new project chats; a resumed session keeps the boundary it recorded (older sessions retain the Docker-backed `safe_repo` profile). Run tests and Git status request tasks through that same run/approval path. Stop cancels the CLI process; Allow and Deny answer its approvals. File viewing is read-only. Unknown telemetry stays unknown. A zero exit without a trustworthy terminal result is unverified.
 
 Chat follows Babel's persisted session ID for follow-up messages. Plan and Deep start their corresponding CLI workflows. Keyboard: Ctrl/Cmd+Enter sends, Ctrl/Cmd+K searches, Ctrl/Cmd+Alt+N starts a session, Alt+1/2/3 selects mode, Escape closes dialogs or drawers.
 
@@ -34,7 +34,7 @@ npm run test:ui
 
 `npm run preview` serves the renderer for layout inspection; a browser without the native bridge cannot execute tasks. Desktop execution requires Electron. Renderer doubles and packaged fixture tests explicitly identify their test basis; they do not establish real provider authentication.
 
-The native boundary validates IPC senders, provider/model choices, project files, task arguments and approvals. The CLI runs without shell interpolation. `safe_repo` is Babel's execution profile, not an OS sandbox. Runtime identity and diagnostics show the engine actually used. CLI update checks and activation retain qualification and checksum gates; source and packaged updates have distinct paths.
+The native boundary validates IPC senders, provider/model choices, project files, task arguments and approvals. The CLI runs without shell interpolation. `host_native` runs eligible commands with your OS user's authority; it is not an OS sandbox. Runtime identity and diagnostics show the engine actually used, including the effective execution boundary. CLI update checks and activation retain qualification and checksum gates; source and packaged updates have distinct paths.
 
 ## Build Windows distributions
 

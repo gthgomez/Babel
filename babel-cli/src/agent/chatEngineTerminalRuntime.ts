@@ -530,6 +530,7 @@ export function completeChatStream(
       completionTokens: snapshot.presentation.lastRequestCompletionTokens,
       cumulativeSessionTokens:
         globalCostTracker.getSessionSummary().totalTokens,
+      verifiedOutcome: terminal.outcome === 'VERIFIED_COMPLETE',
     })
   effects.storeTelemetry(finalizedTelemetry ?? null)
   const runAllowance = assembleChatRunAllowance(input, terminal.status)

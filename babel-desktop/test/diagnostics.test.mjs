@@ -2,6 +2,19 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import * as diagnostics from '../native/diagnostics.mjs';
 
+test('profile-aware host readiness requires a matching versioned report and never labels Docker available',()=>{
+  const checks=[{id:'node',status:'ok'},{id:'resources',status:'ok'},{id:'provider',status:'warn'},
+    {id:'docker',status:'not_required'},{id:'sandbox_image',status:'not_required'}];
+  const report={kind:'installed_user',profileDiagnosticsVersion:1,executionProfile:'host_native',checks};
+  assert.deepEqual(diagnostics.prerequisiteStatus(report,{executionProfile:'host_native'}),{
+    ready:true,node:'ready',resources:'ready',provider:'missing',docker:'not_required',sandboxImage:'not_required',
+  });
+  assert.equal(diagnostics.prerequisiteStatus({...report,profileDiagnosticsVersion:undefined},{executionProfile:'host_native'}).ready,false);
+  assert.equal(diagnostics.prerequisiteStatus({...report,executionProfile:'safe_repo'},{executionProfile:'host_native'}).ready,false);
+  assert.equal(diagnostics.prerequisiteStatus({...report,checks:[...checks,{id:'docker',status:'not_required'}]},{executionProfile:'host_native'}).ready,false);
+  assert.equal(diagnostics.prerequisiteStatus(report,{executionProfile:'safe_repo'}).ready,false);
+});
+
 test('diagnostics show only known prerequisite status, never raw provider text', () => {
   const result = diagnostics.prerequisiteStatus({kind:'installed_user', checks:[
     {id:'node',status:'ok',message:'private path'},

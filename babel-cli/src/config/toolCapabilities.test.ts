@@ -111,3 +111,11 @@ test('tool capability prompt lines expose capability-first guidance', () => {
   assert.match(lines, /Do not substitute a different file format/);
   assert.match(lines, /Do not copy unavailable replacement commands/);
 });
+
+test('host-native and safe-repo expose the same general inspection capabilities', () => {
+  const host = buildToolCapabilityPromptLines('host_native');
+  assert.deepEqual(host, buildToolCapabilityPromptLines('safe_repo'));
+  assert.match(host.join('\n'), /inspect\.git_bundle/);
+  assert.match(host.join('\n'), /inspect\.tar_archive/);
+  assert.match(host.join('\n'), /inspect\.gzip_stream/);
+});

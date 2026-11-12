@@ -25,13 +25,13 @@ test('credential dialog clears transient input, binds explicit lifecycle changes
   await page.locator('#composer-input').fill('Retain this unsent composer text');
   const open=async()=>{await page.locator('.more-models').click();await page.waitForFunction(()=>document.querySelector('#credential-scope')?.dataset.binding==='fixture-binding');};
   await open();await page.locator('#credential-key').fill('BabelRendererSyntheticFixture0000');await page.locator('[data-action="save-provider-credential"]').click();await page.locator('#dialog').waitFor({state:'hidden'});
-  await open();assert.equal(await page.locator('#credential-operation').inputValue(),'replace');await page.locator('#credential-key').fill('BabelRendererReplacementFixture0000');await page.locator('[data-action="save-provider-credential"]').click();await page.locator('#dialog').waitFor({state:'hidden'});
+  await open();assert.equal(await page.locator('#credential-operation').inputValue(),'replace_protected');await page.locator('#credential-key').fill('BabelRendererReplacementFixture0000');await page.locator('[data-action="save-provider-credential"]').click();await page.locator('#dialog').waitFor({state:'hidden'});
   await open();await page.locator('#credential-key').fill('BabelRendererDiscardedFixture0000');await page.locator('#remove-provider-key').click();await page.waitForFunction(()=>window.__receipts.some(receipt=>receipt.action==='remove'));
   await page.getByRole('button',{name:'Cancel',exact:true}).click();
   await page.evaluate(()=>{window.__credential.legacy=true;window.__credential.configured=true;});
   await open();await page.locator('#migrate-provider-key').click();assert.match(await page.locator('#provider-error').innerText(),/Confirm recovery/);
   await page.locator('#credential-retain-recovery').check();await page.locator('#migrate-provider-key').click();await page.waitForFunction(()=>window.__receipts.some(receipt=>receipt.action==='migrate'));
   assert.equal(await page.locator('#composer-input').inputValue(),'Retain this unsent composer text');
-  assert.deepEqual(await page.evaluate(()=>window.__receipts),[{action:'add',cleared:true,scope:'private',bound:true,keyPresent:true},{action:'replace',cleared:true,scope:'private',bound:true,keyPresent:true},{action:'remove',cleared:true,scope:'private',bound:true},{action:'migrate',bound:true,confirm:true}]);
+  assert.deepEqual(await page.evaluate(()=>window.__receipts),[{action:'add_new',cleared:true,scope:'private',bound:true,keyPresent:true},{action:'replace_protected',cleared:true,scope:'private',bound:true,keyPresent:true},{action:'remove',cleared:true,scope:'private',bound:true},{action:'migrate',bound:true,confirm:true}]);
  }finally{await browser.close();}
 });

@@ -10,6 +10,8 @@
  * Unknown BABEL_* variables (including potential secrets) are stripped.
  * New BABEL_* configuration variables must be explicitly added to this set.
  */
+import { getActiveExecutionPolicyChoice } from '../config/executionPolicySelection.js';
+
 const SAFE_ENV_ALLOWLIST = new Set([
   'PATH',
   'Path',
@@ -93,7 +95,10 @@ const BABEL_SAFE_VARS = new Set([
 ]);
 
 export function getSafeEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return Object.fromEntries(
+  const safe = Object.fromEntries(
     Object.entries(env).filter(([key]) => SAFE_ENV_ALLOWLIST.has(key) || BABEL_SAFE_VARS.has(key)),
   ) as NodeJS.ProcessEnv;
+  const policy=getActiveExecutionPolicyChoice();
+  if(policy)safe['BABEL_EXECUTION_PROFILE']=policy.profile;
+  return safe;
 }

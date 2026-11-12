@@ -10,6 +10,7 @@
 import { evaluateGovernedIsolation } from '../config/benchmarkContainer.js';
 import { detectWorkingTreeDirty } from './capabilityBroker.js';
 import { getExecutionContext } from './executionContext.js';
+import { getScopedExecutionProfile } from '../config/executionPolicySelection.js';
 
 export interface IsolationBrokerFlags {
   isolationRequired: boolean;
@@ -28,7 +29,7 @@ export function resolveIsolationBrokerFlags(
   env: NodeJS.ProcessEnv = process.env,
 ): IsolationBrokerFlags {
   const d = evaluateGovernedIsolation(
-    env['BABEL_EXECUTION_PROFILE'],
+    getScopedExecutionProfile(env['BABEL_EXECUTION_PROFILE']),
     env['BABEL_BENCHMARK_DOCKER_IMAGE'] ?? null,
     env,
   );

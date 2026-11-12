@@ -15,6 +15,7 @@ import { appendTurnCells, ensureThread } from '../../services/threadStore/index.
 import { HISTORY_CELL_SCHEMA_VERSION, type HistoryCellRecord } from '../../ui/historyCells/types.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { resumeChatSession } from '../chatSessionResume.js';
+import { persistRequiredExecutionPolicyRecord } from '../../config/executionPolicySelection.js';
 import { BabelRepl } from '../BabelRepl.js';
 import type { ReplContext } from '../context.js';
 import { stripAnsi } from '../../ui/theme.js';
@@ -373,6 +374,7 @@ describe('resume then follow-up and cancel', () => {
       const sessionId = 'dd-resume-session';
       const sessionDir = join(root, 'chat-sessions', sessionId);
       mkdirSync(sessionDir, { recursive: true });
+      persistRequiredExecutionPolicyRecord(sessionDir, { profile: 'host_native', source: 'explicit' });
       writeFileSync(
         join(sessionDir, 'transcript.jsonl'),
         `${JSON.stringify({ role: 'user', content: 'prior task about retry leak' })}\n${JSON.stringify({ role: 'assistant', content: 'fixed retry leak' })}\n`,
