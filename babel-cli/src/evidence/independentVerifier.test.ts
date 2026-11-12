@@ -288,3 +288,38 @@ test('runIsolatedVerificationSync leaves primary workspace un-mutated', async ()
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+test('clean-room verifier runs the frozen command in an isolated copy (POSIX path)', async () => {
+  // Guards the platform-neutral path the Windows cmd.exe branch mirrors: a
+  // green frozen command must pass in the copy, and a red one must report the
+  // observed child status rather than a launch failure. Each case uses its own
+  // project root so the copy is not reused across runs.
+  const makeRoot = async (body: string) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-iv-unit-'));
+    await fs.writeFile(path.join(root, 'verify.mjs'), body);
+    return root;
+  };
+  const greenRoot = await makeRoot(
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('ok', () => assert.equal(1, 1));\n",
+  );
+  const redRoot = await makeRoot(
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('bad', () => assert.equal(1, 2));\n",
+  );
+  try {
+    const green = IndependentVerifier.runIsolatedVerificationSync(
+      greenRoot,
+      'node --test verify.mjs',
+      ['verify.mjs'],
+    );
+    assert.equal(green.exitCode, 0);
+    const red = IndependentVerifier.runIsolatedVerificationSync(
+      redRoot,
+      'node --test verify.mjs',
+      ['verify.mjs'],
+    );
+    assert.notEqual(red.exitCode, 0);
+  } finally {
+    await fs.rm(greenRoot, { recursive: true, force: true });
+    await fs.rm(redRoot, { recursive: true, force: true });
+  }
+});

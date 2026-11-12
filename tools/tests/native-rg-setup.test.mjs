@@ -20,7 +20,7 @@ test('required native setup rejects a different executable before selecting proj
     assert.notEqual(result.status,0)
     assert.match(result.stderr,/Native qualification requires pinned ripgrep 15\.1\.0/)
     assert.ok(!result.stderr.includes('ENOENT'), 'Setup must fail before looking for test source')
-  } finally { rmSync(root,{recursive:true,force:true}) }
+  } finally { rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100}) }
 })
 
 test('required native setup rejects an absent executable before selecting project tests', () => {
@@ -31,7 +31,7 @@ test('required native setup rejects an absent executable before selecting projec
     assert.notEqual(result.status,0)
     assert.match(result.stderr,/Native qualification requires a real rg executable/)
     assert.ok(!result.stderr.includes('ENOENT'), 'Setup must fail before looking for test source')
-  } finally { rmSync(root,{recursive:true,force:true}) }
+  } finally { rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100}) }
 })
 
 function assertNativeGraph(workflow) {
