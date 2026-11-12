@@ -39,6 +39,10 @@ const MANAGED_ENV = [
   'BABEL_EXECUTION_PROFILE',
   'BABEL_ALLOW_HOST_FALLBACK',
   'BABEL_CHAT_MAX_COST',
+  // The asymmetric diff critic defaults on under CI/headless and issues its own
+  // provider call. This fixture scripts only the primary write/verify stream, so
+  // pin the critic off explicitly instead of depending on the ambient env.
+  'BABEL_DIFF_CRITIC',
   INDEPENDENT_VERIFIER_ENV,
 ] as const;
 
@@ -164,6 +168,7 @@ before(() => {
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
   process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1';
   process.env['BABEL_CHAT_MAX_COST'] = 'unlimited';
+  process.env['BABEL_DIFF_CRITIC'] = '0';
   process.env[INDEPENDENT_VERIFIER_ENV] = '1';
 });
 
