@@ -5,6 +5,11 @@ import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { summarizeRequiredTap } from '../../babel-cli/scripts/summarize_required_tap.mjs';
+import {
+  discoverDirectHostPythonBin,
+  HOST_PYTHON_UNIT_PATHS,
+  probeUnitShardHostPython,
+} from '../../babel-cli/scripts/ci_unit_host_python_probe.mjs';
 
 const implementation = new URL('../../babel-cli/scripts/run_ci_unit_shard.mjs', import.meta.url);
 const prefix = 'tsx --no-warnings=ExperimentalWarning --import ./src/testinfra/register-no-ambient-inference.mjs --test ';
@@ -105,6 +110,7 @@ function runnableFixture(t, fails = false) {
   // module location so Windows uses the existing native containment owner.
   const capture = new URL('../../babel-cli/scripts/run_logged_tap_child.mjs', import.meta.url).href;
   writeFileSync(join(root, 'scripts/run_ci_unit_shard.mjs'), readFileSync(implementation, 'utf8').replace("'./run_logged_tap_child.mjs'", JSON.stringify(capture)));
+  writeFileSync(join(root, 'scripts/ci_unit_host_python_probe.mjs'), readFileSync(new URL('../../babel-cli/scripts/ci_unit_host_python_probe.mjs', import.meta.url)));
   writeFileSync(join(root, 'scripts/required_tap_reporter.mjs'), readFileSync(new URL('../../babel-cli/scripts/required_tap_reporter.mjs', import.meta.url)));
   writeFileSync(join(root, 'src/testinfra/register-no-ambient-inference.mjs'), '');
   writeFileSync(join(root, 'src/actual.test.ts'), `import test from 'node:test'; import { existsSync } from 'node:fs'; test('positive control', () => {}); test('actual disposable test', () => { if (existsSync('artifacts/ci-unit/full.tap')) throw Error('growing TAP must stay outside source capture'); ${fails ? "throw Error('intentional fixture failure')" : ''} });\n`);
@@ -158,6 +164,45 @@ test('a failed launch replaces prior TAP and removes stale execution evidence', 
   assert.equal(existsSync(join(artifacts, 'results.json')), false);
   assert.match(readFileSync(join(artifacts, 'full.tap.stderr.log'), 'utf8'), /deliberate launch failure/);
   assert.notEqual(summarizeRequiredTap('unit', artifacts).status, 'complete');
+});
+
+test('host-python probe is a no-op when shard selection has no governed integration tests', () => {
+  const { env, record } = probeUnitShardHostPython(['src/other.test.ts']);
+  assert.deepEqual(env, {});
+  assert.equal(record.required, false);
+});
+
+test('host-python probe preserves explicit BABEL_WORKSPACE_PYTHON without override', (t) => {
+  const bin = discoverDirectHostPythonBin({
+    ...process.env,
+    BABEL_WORKSPACE_PYTHON: undefined,
+    BABEL_PYTHON: undefined,
+  });
+  if (!bin) {
+    t.skip('no direct host Python on this runner (py launcher alone is insufficient for BABEL_WORKSPACE_PYTHON)');
+  }
+  const { env, record } = probeUnitShardHostPython(HOST_PYTHON_UNIT_PATHS, {
+    ...process.env,
+    BABEL_WORKSPACE_PYTHON: bin,
+    BABEL_PYTHON: undefined,
+  });
+  assert.deepEqual(env, {});
+  assert.equal(record.configuredInterpreter, bin);
+  assert.equal(record.configuredWorks, true);
+  assert.equal(record.resolved, `env:${bin}`);
+});
+
+test('host-python probe does not auto-discover when explicit binding is broken', () => {
+  const { env, record } = probeUnitShardHostPython(HOST_PYTHON_UNIT_PATHS, {
+    ...process.env,
+    BABEL_WORKSPACE_PYTHON: '/nonexistent/babel/python-should-not-auto-fallback',
+    BABEL_PYTHON: undefined,
+  });
+  assert.deepEqual(env, {});
+  assert.equal(record.configuredWorks, false);
+  assert.equal(record.resolved, null);
+  assert.match(record.coordinatorAction ?? '', /Configured BABEL_WORKSPACE_PYTHON/);
+  assert.ok(!('BABEL_WORKSPACE_PYTHON' in env));
 });
 
 test('listing a shard does not launch tests or fabricate execution evidence', t => {

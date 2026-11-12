@@ -1,7 +1,16 @@
+import { isUtf8 } from 'node:buffer';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { hardenGitHostEnvironment } from '../authority/unprivilegedChildEnv.js';
+
+const FIXTURE_GIT_CONFIG_OVERRIDES = [
+  '-c', 'core.hooksPath=/dev/null',
+  '-c', 'core.fsmonitor=false',
+  '-c', 'core.attributesFile=/dev/null',
+  '-c', 'core.autocrlf=false',
+  '-c', 'commit.gpgsign=false',
+] as const;
 
 export interface GitCommandResult {
   status: number | null;
@@ -153,4 +162,172 @@ export function runGitCommandAsync(
       });
     });
   });
+}
+
+function decodeFixtureGitStdout(output: Buffer): string | null {
+  return isUtf8(output) ? output.toString('utf8') : null;
+}
+
+/** Isolated env for disposable fixture roots only; not used by runGitCommandBytes. */
+export function benchmarkGitObserveEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    PATH: base['PATH'],
+    SystemRoot: base['SystemRoot'],
+    TEMP: base['TEMP'],
+    TMP: base['TMP'],
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_ATTR_NOSYSTEM: '1',
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_OPTIONAL_LOCKS: '0',
+  };
+}
+
+function spawnFixtureGit(
+  root: string,
+  args: string[],
+  options: { timeoutMs?: number; maxBuffer?: number; encoding: 'utf8' | 'buffer' },
+): { status: number | null; stdout: string | Buffer; stderr: string | Buffer } {
+  const env = benchmarkGitObserveEnv();
+  const result = spawnSync(getGitCommand(env), [
+    ...FIXTURE_GIT_CONFIG_OVERRIDES,
+    '--git-dir', join(root, '.git'),
+    '--work-tree', root,
+    ...args,
+  ], {
+    cwd: root,
+    encoding: options.encoding,
+    timeout: options.timeoutMs ?? 10_000,
+    ...(options.maxBuffer !== undefined ? { maxBuffer: options.maxBuffer } : {}),
+    env,
+    windowsHide: true,
+  });
+  return {
+    status: result.error ? null : result.status,
+    stdout: result.stdout ?? (options.encoding === 'buffer' ? Buffer.alloc(0) : ''),
+    stderr: result.stderr ?? (options.encoding === 'buffer' ? Buffer.alloc(0) : ''),
+  };
+}
+
+/** Fixture-only UTF-8 observer; hardened porcelain uses runBenchmarkGitCommandBytes. */
+export function runBenchmarkGitObserve(
+  root: string,
+  args: string[],
+  options: { timeoutMs?: number } = {},
+): { status: number | null; stdout: string; stderr: string } {
+  const result = spawnFixtureGit(root, args, { ...options, encoding: 'utf8' });
+  return {
+    status: result.status,
+    stdout: String(result.stdout),
+    stderr: String(result.stderr),
+  };
+}
+
+/** Fixture-only byte-accurate Git output (GIT_OPTIONAL_LOCKS=0, explicit git-dir/work-tree). */
+export function runBenchmarkGitCommandBytes(
+  root: string,
+  args: string[],
+  options: { timeoutMs?: number; maxBuffer?: number } = {},
+): GitCommandBytesResult {
+  const result = spawnFixtureGit(root, args, { ...options, encoding: 'buffer' });
+  return {
+    status: result.status,
+    stdout: Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.alloc(0),
+    stderr: Buffer.isBuffer(result.stderr) ? result.stderr : Buffer.alloc(0),
+  };
+}
+
+export type BenchmarkPorcelainObserveFailure =
+  | 'spawn_failed'
+  | 'git_exit'
+  | 'non_utf8'
+  | 'truncated_nul'
+  | 'invalid_porcelain';
+
+export type BenchmarkPorcelainObserveResult =
+  | { ok: true; records: readonly string[] }
+  | { ok: false; reason: BenchmarkPorcelainObserveFailure };
+
+function isBenchmarkInternalPath(path: string): boolean {
+  return path === '.babel' || path.startsWith('.babel/');
+}
+
+/** Git porcelain v1 XY columns (index + work tree). */
+const PORCELAIN_XY = /^[ MADRCU?!]{2}$/;
+
+function isPorcelainStatusRecord(record: string): boolean {
+  if (record.length < 4 || record[2] !== ' ') return false;
+  if (!PORCELAIN_XY.test(record.slice(0, 2))) return false;
+  const path = record.slice(3);
+  return path.length > 0 && path.trim().length > 0;
+}
+
+function porcelainStatusPath(record: string): string | null {
+  return isPorcelainStatusRecord(record) ? record.slice(3) : null;
+}
+
+type PorcelainDigest =
+  | { ok: true; records: string[] }
+  | { ok: false; reason: 'invalid_porcelain' };
+
+function digestBenchmarkPorcelainRecords(records: string[]): PorcelainDigest {
+  const dirty: string[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]!;
+    const path = porcelainStatusPath(record);
+    if (path === null) return { ok: false, reason: 'invalid_porcelain' };
+    const renameOrCopy = /[RC]/.test(record.slice(0, 2));
+    if (renameOrCopy) {
+      index += 1;
+      if (index >= records.length) return { ok: false, reason: 'invalid_porcelain' };
+      const partner = records[index]!;
+      if (!partner || isPorcelainStatusRecord(partner)) {
+        return { ok: false, reason: 'invalid_porcelain' };
+      }
+      const touchesWorkspace = !isBenchmarkInternalPath(path) || !isBenchmarkInternalPath(partner);
+      if (touchesWorkspace) dirty.push(record);
+      continue;
+    }
+    if (!isBenchmarkInternalPath(path)) dirty.push(record);
+  }
+  return { ok: true, records: dirty };
+}
+
+/** Classify hardened fixture porcelain bytes; empty records mean valid clean. */
+export function parseBenchmarkPorcelainBytes(
+  status: number | null,
+  stdout: Buffer,
+): BenchmarkPorcelainObserveResult {
+  if (status !== 0) {
+    return { ok: false, reason: status === null ? 'spawn_failed' : 'git_exit' };
+  }
+  const decoded = decodeFixtureGitStdout(stdout);
+  if (decoded === null) return { ok: false, reason: 'non_utf8' };
+  const records = decoded.split('\0');
+  if (records.pop() !== '') return { ok: false, reason: 'truncated_nul' };
+  if (records.length === 0) return { ok: true, records: [] };
+  const digested = digestBenchmarkPorcelainRecords(records);
+  if (!digested.ok) return { ok: false, reason: digested.reason };
+  return { ok: true, records: digested.records };
+}
+
+export function observeBenchmarkPorcelain(projectRoot: string): BenchmarkPorcelainObserveResult {
+  const status = runBenchmarkGitCommandBytes(projectRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  return parseBenchmarkPorcelainBytes(status.status, status.stdout);
+}
+
+/**
+ * Benchmark dirty probe: valid clean → false; valid dirty → true;
+ * unverifiable Git/porcelain → true (conservative; broker must not skip ownership).
+ */
+export function observeBenchmarkWorkingTreeDirty(projectRoot: string): boolean {
+  const observed = observeBenchmarkPorcelain(projectRoot);
+  if (!observed.ok) return true;
+  return observed.records.length > 0;
+}
+
+/** Valid porcelain paths only; invalid/unavailable observation yields empty (use observeBenchmarkPorcelain). */
+export function benchmarkPorcelainRecords(projectRoot: string): string[] {
+  const observed = observeBenchmarkPorcelain(projectRoot);
+  return observed.ok ? [...observed.records] : [];
 }

@@ -189,14 +189,16 @@ export async function runNativeChatTasks(options: {
     const metadataPhases: MetadataPhase[] = cell.gitMetadataDigest
       ? [{ label: 'fixture_prepared', digest: cell.gitMetadataDigest, changesFromPrior: [] }]
       : []
-    let priorMetadataEntries: [string, string][] | null = null
+    let priorMetadataEntries: [string, string][] | null = cell.gitMetadataDigest
+      ? await fixtureMetadataEntries(cell.candidateRoot)
+      : null
     const recordMetadataPhase = async (label: string): Promise<void> => {
       if (!cell.gitMetadataDigest) return
       const entries = await fixtureMetadataEntries(cell.candidateRoot)
       const phaseDigest = digest(JSON.stringify(entries))
       const changesFromPrior = priorMetadataEntries ? diffFixtureMetadataEntries(priorMetadataEntries, entries) : []
       priorMetadataEntries = entries
-      metadataPhases.push({ label, digest: phaseDigest, changesFromPrior: changesFromPrior.slice(0, 48) })
+      metadataPhases.push({ label, digest: phaseDigest, changesFromPrior })
     }
     let terminal: NativeTaskTerminal | null = null
     let routes: unknown[] = []
@@ -225,7 +227,9 @@ export async function runNativeChatTasks(options: {
       changedPaths.push(...nativeChangedPaths(baseline, baselineModes, snapshot, snapshotModes))
       const unauthorized = changedPaths.filter(path => !task.allowedChanges.includes(path))
       await recordMetadataPhase('grading')
-      const metadata = cell.gitMetadataDigest ? await captureJourneyGitState(cell.candidateRoot, cell.gitMetadataDigest) : null
+      const metadata = cell.gitMetadataDigest
+        ? await captureJourneyGitState(cell.candidateRoot, cell.gitMetadataDigest)
+        : null
       if (unauthorized.length || metadata && metadata.metadataDigest !== cell.gitMetadataDigest) {
         regression = true
         oracleVerdict = 'fail'

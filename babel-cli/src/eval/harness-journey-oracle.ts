@@ -142,6 +142,7 @@ export async function evaluateJourneyOutput(input: JourneyOracleInput, options: 
       add('conversation_without_tools', noTools() && noMutations()); blind(); break
     case 'J02':
       add('version_and_current_values', /\b6\b/.test(input.answer) && /\b4\b/.test(input.answer) && /\b8\b/.test(input.answer) && /stale|outdated/i.test(input.answer))
+      add('research_without_mutation', noMutations())
       citations(); blind(); break
     case 'J03':
       add('actual_and_stale_paths', ['apps/web/main.mjs', 'packages/api/server.mjs', 'src/client', 'src/server'].every(path => input.answer.includes(path)))

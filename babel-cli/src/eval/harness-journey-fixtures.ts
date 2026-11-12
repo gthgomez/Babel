@@ -7,6 +7,8 @@ import { z } from 'zod'
 import { JourneySpecSchema, type JourneySpec } from './harness-journey-contract.js'
 import { isCredentialTargetPath } from '../authority/protectedPath.js'
 import { normalizeSandboxFixturePermissions } from './sandboxFixturePermissions.js'
+import { decodeTaskGitOutput } from '../agent/taskMutationOwnership.js'
+import { benchmarkGitObserveEnv, runBenchmarkGitCommandBytes, runBenchmarkGitObserve } from '../utils/gitExec.js'
 
 const FileMap = z.record(z.string(), z.string())
 export const JourneyFixtureSchema = z.object({
@@ -94,12 +96,20 @@ async function materialize(root: string, files: Record<string, string>): Promise
 // Fixture-only Git commands run in newly created disposable repos. Check every
 // exit code, disable hooks/config/prompting, and never mutate a user repository.
 function git(root: string, args: string[]): string {
-  const result = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.attributesFile=/dev/null', '-c', 'core.autocrlf=false', '-c', 'commit.gpgsign=false', '-c', 'user.name=Journey Fixture', '-c', 'user.email=fixture@example.invalid', ...args], {
-    cwd: root, encoding: 'utf8', timeout: 10_000, windowsHide: true,
-    env: { PATH: process.env['PATH'], SystemRoot: process.env['SystemRoot'], TEMP: process.env['TEMP'], TMP: process.env['TMP'], GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_ATTR_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
+  const env = { ...benchmarkGitObserveEnv(), ...{ GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'user.name', GIT_CONFIG_VALUE_0: 'Journey Fixture', GIT_CONFIG_KEY_1: 'user.email', GIT_CONFIG_VALUE_1: 'fixture@example.invalid' } }
+  const result = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.attributesFile=/dev/null', '-c', 'core.autocrlf=false', '-c', 'commit.gpgsign=false', ...args], {
+    cwd: root, encoding: 'utf8', timeout: 10_000, windowsHide: true, env,
   })
   if (result.error || result.status !== 0) throw new Error(`Fixture git ${args[0]} failed (exit ${result.status ?? 'unknown'})`)
   return result.stdout
+}
+
+/** Stage/mode/flag binding of the fixture index; changes on skip-worktree or staged edits. */
+export function fixtureGitIndexSemanticBinding(root: string): string {
+  const staged = runBenchmarkGitObserve(root, ['ls-files', '-s', '-z'])
+  const flags = runBenchmarkGitObserve(root, ['ls-files', '-v', '-z'])
+  if (staged.status !== 0 || flags.status !== 0) throw new Error('Fixture index semantic observation failed')
+  return createHash('sha256').update(staged.stdout).update('\0').update(flags.stdout).digest('hex')
 }
 
 /** Ordered .git entry fingerprints for same-fixture phased drift diagnostics. */
@@ -154,11 +164,13 @@ export async function captureJourneyGitState(root: string, expectedMetadataDiges
   // Never ask host Git to interpret a changed config/include/filter. Equality
   // binds to our generated baseline, whose config has no external execution.
   if (metadataDigest !== expectedMetadataDigest) return { head: '', porcelainStatus: 'not_observed:metadata_changed', metadataDigest }
-  const metadataRoot = join(root, '.git')
-  const selection = [`--git-dir=${metadataRoot}`, `--work-tree=${root}`]
-  const head = git(root, [...selection, 'rev-parse', 'HEAD']).trim()
-  const porcelainStatus = git(root, [...selection, 'status', '--porcelain=v1', '--untracked-files=all', '--ignore-submodules=all'])
-  return { head, porcelainStatus, metadataDigest }
+  const head = runBenchmarkGitObserve(root, ['rev-parse', 'HEAD'])
+  if (head.status !== 0) return { head: '', porcelainStatus: 'not_observed:git_unavailable', metadataDigest }
+  const porcelain = runBenchmarkGitCommandBytes(root, ['status', '--porcelain=v1', '--untracked-files=all', '--ignore-submodules=all'])
+  if (porcelain.status !== 0) return { head: head.stdout.trim(), porcelainStatus: 'not_observed:git_unavailable', metadataDigest }
+  const decoded = decodeTaskGitOutput(porcelain.stdout)
+  const porcelainStatus = decoded === null ? 'not_observed:invalid_git_output' : decoded
+  return { head: head.stdout.trim(), porcelainStatus, metadataDigest }
 }
 
 async function history(root: string, changes: readonly Record<string, string>[]): Promise<{ baselineHead: string; head: string }> {

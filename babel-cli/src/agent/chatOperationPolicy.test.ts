@@ -15,10 +15,20 @@ import { verifierSemanticProgress } from './verifierSemanticProgress.js';
 
 import assert from 'node:assert/strict';
 import { describe, test, after } from 'node:test';
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { platform, tmpdir } from 'node:os';
+
+/**
+ * Stable cwd identity for logged verifier paths (Windows 8.3 aliases, ino=0).
+ * Transplanted from core review commit cb47d0da1b7479bb5ebe62ad5a5e733dc1e5b9c9
+ * (chatOperationPolicy.test.ts cwd assertions only; no other files from that commit).
+ */
+function canonicalWorkingDirPath(path: string): string {
+  const resolved = realpathSync.native(path);
+  return platform() === 'win32' ? resolved.toLowerCase() : resolved;
+}
 
 import { ChatEngine, type ChatEvent, type ChatResult } from './chatEngine.js';
 import {
@@ -528,18 +538,14 @@ describe('D01/D02 effective-operation policy', () => {
       assert.equal(verifierLog?.verifierExecuted, true,
         'the reset requires a host-observed executed red verifier');
       assert.equal(verifierLog?.exit_code, 1, 'red test command exits nonzero and is not authoritative completion');
-      const loggedCwdIdentity = statSync(verifierLog!.working_directory!);
-      const expectedCwdIdentity = statSync(join(root, 'nested'));
-      assert.equal(loggedCwdIdentity.isDirectory(), true, 'logged cwd resolves to a directory');
-      assert.equal(loggedCwdIdentity.dev, expectedCwdIdentity.dev,
-        'cwd provenance identifies the expected filesystem device');
-      assert.equal(loggedCwdIdentity.ino, expectedCwdIdentity.ino,
-        'cwd provenance identifies the expected directory even when Windows uses an 8.3 alias');
-      const distinctCwdIdentity = statSync(root);
-      assert.ok(
-        loggedCwdIdentity.dev !== distinctCwdIdentity.dev || loggedCwdIdentity.ino !== distinctCwdIdentity.ino,
-        'cwd provenance continues to distinguish a genuinely different working directory',
-      );
+      assert.ok(verifierLog?.working_directory, 'host must log working_directory for nested verifier dispatch');
+      const loggedCanonical = canonicalWorkingDirPath(verifierLog.working_directory);
+      const nestedCanonical = canonicalWorkingDirPath(join(root, 'nested'));
+      const rootCanonical = canonicalWorkingDirPath(root);
+      assert.equal(loggedCanonical, nestedCanonical,
+        'logged cwd must resolve to the nested fixture directory (8.3-safe)');
+      assert.notEqual(loggedCanonical, rootCanonical,
+        'cwd provenance continues to distinguish a genuinely different working directory');
       assert.equal(verifierLog?.processExecuted, true);
       assert.equal(verifierLog?.processCompleted, true, JSON.stringify(verifierLog));
       assert.notEqual(result.outcome, 'VERIFIED_COMPLETE', 'a red verifier cannot certify the task');

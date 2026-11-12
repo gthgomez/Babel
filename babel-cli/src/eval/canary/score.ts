@@ -38,9 +38,24 @@ export function scoreCanaryTrials(
   const passAt1 = tasks.reduce((s, t) => s + t.single_trial_success_rate, 0) / n
   const passHat3 = tasks.filter((t) => t.all_trials_reliable).length / n
   const allTrials = validTrials
-  const taskSuccesses = trials.filter(t => !t.invalid_task && t.grading_status === 'complete' && t.contract_success && t.hidden_ok && !t.false_complete).length
-  const costComplete = trials.every(t => t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0)
-  const knownCost = trials.reduce((sum, t) => sum + (t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0 ? t.cost_usd : 0), 0)
+  const isTaskSuccess = (t: CanaryTrialResult): boolean =>
+    !t.invalid_task && t.grading_status === 'complete' && t.contract_success && t.hidden_ok && !t.false_complete
+  const accountableTrials = validTrials
+  const taskSuccesses = accountableTrials.filter(isTaskSuccess).length
+  const launchedTaskSuccesses = accountableTrials.filter(t => t.launch_status === 'launched' && isTaskSuccess(t)).length
+  const scheduledValid = accountableTrials.length
+  const launchedValid = accountableTrials.filter(t => t.launch_status === 'launched').length
+  const notLaunchedValid = accountableTrials.filter(t => t.launch_status === 'not_launched').length
+  const launchUnknownValid = accountableTrials.filter(
+    t => t.launch_status === undefined || t.launch_status === 'unknown',
+  ).length
+  const costComplete =
+    accountableTrials.length > 0 &&
+    accountableTrials.every(t => t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0)
+  const knownCost = accountableTrials.reduce(
+    (sum, t) => sum + (t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0 ? t.cost_usd : 0),
+    0,
+  )
   return {
     schema_version: 1,
     evidence_scope,
@@ -79,13 +94,25 @@ export function scoreCanaryTrials(
     },
     attempt_accounting: {
       scheduled: trials.length,
+      scheduled_valid: scheduledValid,
       launched: trials.filter(t => t.launch_status === 'launched').length,
+      launched_valid: launchedValid,
       not_launched: trials.filter(t => t.launch_status === 'not_launched').length,
+      not_launched_valid: notLaunchedValid,
       launch_unknown: trials.filter(t => t.launch_status === undefined || t.launch_status === 'unknown').length,
+      launch_unknown_valid: launchUnknownValid,
       task_successes: taskSuccesses,
-      task_success_rate: trials.length === 0 ? null : taskSuccesses / trials.length,
+      launched_task_successes: launchedTaskSuccesses,
+      // Scheduled rate: claim-eligible successes over every valid scheduled row (includes preflight not_launched).
+      scheduled_task_success_rate: scheduledValid === 0 ? null : taskSuccesses / scheduledValid,
+      // Launched rate: numerator and denominator both require launch_status launched (legacy/unknown successes excluded).
+      launched_task_success_rate: launchedValid === 0 ? null : launchedTaskSuccesses / launchedValid,
+      // Legacy alias — same as scheduled_task_success_rate so mixed launch/refusal cannot read as 100%.
+      task_success_rate: scheduledValid === 0 ? null : taskSuccesses / scheduledValid,
       cost_complete: costComplete,
-      known_cost_usd: trials.some(t => t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0) ? knownCost : null,
+      known_cost_usd: accountableTrials.some(t => t.cost_usd !== null && Number.isFinite(t.cost_usd) && t.cost_usd >= 0)
+        ? knownCost
+        : null,
       cost_per_success_usd: costComplete && taskSuccesses > 0 ? knownCost / taskSuccesses : null,
     },
   }

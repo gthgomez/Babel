@@ -5,6 +5,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isCredentialTargetPath } from './autonomyEnforcement.js'
 import { WorkspaceTransactionManager, type MutationBatchTransaction } from '../services/workspaceTransactions.js'
 import { runGitCommandBytes } from '../utils/gitExec.js'
+import { runBenchmarkGitCommandBytes } from '../utils/gitExec.js'
 
 export interface TaskWorkspaceChangeClassification {
   taskOwnedPaths: string[]
@@ -92,9 +93,10 @@ export class TaskMutationOwnership {
       taskOwnedPaths: [], unexpectedPaths: [], unverifiablePaths: [],
     }
     if (!this.isCurrent) return { ...result, unverifiablePaths: ['<retired-owner>'] }
-    const git = (args: string[]) => runGitCommandBytes(args, this.root, {
-      timeoutMs: 5000, maxBuffer: 1024 * 1024,
-    })
+    const benchmark = process.env['BABEL_BENCHMARK_MODE'] === '1'
+    const git = (args: string[]) => benchmark
+      ? runBenchmarkGitCommandBytes(this.root, args, { timeoutMs: 5000, maxBuffer: 1024 * 1024 })
+      : runGitCommandBytes(args, this.root, { timeoutMs: 5000, maxBuffer: 1024 * 1024 })
     const rootResult = git(['rev-parse', '--show-toplevel'])
     const status = git(['status', '--porcelain=v1', '-z', '--untracked-files=all'])
     if (rootResult.status !== 0 || status.status !== 0) {

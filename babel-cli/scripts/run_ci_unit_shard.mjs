@@ -6,6 +6,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { runLoggedTapChild } from './run_logged_tap_child.mjs';
+import { probeUnitShardHostPython, writeHostPythonProbeRecord } from './ci_unit_host_python_probe.mjs';
 
 const hash = files => createHash('sha256').update(files.join('\n')).digest('hex');
 
@@ -85,10 +86,17 @@ async function main() {
   mkdirSync(captureDirectory, { recursive: true });
   const tapPath = join(captureDirectory, 'producer.tap');
   for (const name of ['full.tap', 'full.tap.stderr.log', 'execution.json', 'results.json']) rmSync(join(artifacts, name), { force: true });
+  const hostPython = probeUnitShardHostPython(selection.selected, process.env);
+  writeHostPythonProbeRecord(packageRoot, hostPython.record);
+  if (hostPython.record.required && !hostPython.record.resolved) {
+    console.error(`[ci-unit] host Python required for: ${hostPython.record.selected.join(', ')}; tried: ${hostPython.record.tried.join(', ')}`);
+  }
   let result;
   try {
     result = await runLoggedTapChild(process.execPath, [join(packageRoot, 'node_modules/tsx/dist/cli.mjs'), ...selection.args], {
-      cwd: packageRoot, env: { ...process.env, BABEL_TAP_EXECUTION_PATH: join(artifacts, 'execution.json') }, tapPath, label: 'ci-unit',
+      cwd: packageRoot,
+      env: { ...process.env, ...hostPython.env, BABEL_TAP_EXECUTION_PATH: join(artifacts, 'execution.json') },
+      tapPath, label: 'ci-unit',
     });
   } finally {
     for (const suffix of ['', '.stderr.log']) {
