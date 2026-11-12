@@ -24,6 +24,7 @@ import {
   type ExecutionProfile,
   type ExecutionProfileName,
 } from '../config/executionProfiles.js';
+import { repositoryRelativeMutationPaths } from '../agent/chatEngineVerifierAdapter.js';
 import { RevisionManager, type RevisionBoundReceipt } from './revisionBoundReceipt.js';
 
 /** Env flag for Chat/finalize clean-room verification (default off unless profile opts in). */
@@ -115,13 +116,33 @@ function runVerifierInCopy(
   if (!structured) {
     return { exitCode: 126, authority };
   }
+  // A clean-room run must not inherit the caller's test-runner context: with
+  // NODE_TEST_CONTEXT set, a nested `node --test` is treated as an in-process
+  // subtest and exits 0 without running, which would fake a green verifier.
+  const cleanEnv: NodeJS.ProcessEnv = { ...process.env };
+  delete cleanEnv['NODE_TEST_CONTEXT'];
   try {
-    execFileSync(structured.executable, structured.args, {
-      cwd: tempDir,
-      stdio: 'ignore',
-      timeout: 120_000,
-      windowsHide: true,
-    });
+    // Windows resolves package-manager shims such as npm as `npm.cmd`, which
+    // execFileSync cannot launch directly. Match the repository convention
+    // (runners/cliBase.ts): invoke cmd.exe /c with the executable as argv[0]
+    // so PATH resolution works without `shell: true` (DEP0190).
+    if (process.platform === 'win32') {
+      execFileSync('cmd.exe', ['/d', '/s', '/c', structured.executable, ...structured.args], {
+        cwd: tempDir,
+        stdio: 'ignore',
+        timeout: 120_000,
+        windowsHide: true,
+        env: cleanEnv,
+      });
+    } else {
+      execFileSync(structured.executable, structured.args, {
+        cwd: tempDir,
+        stdio: 'ignore',
+        timeout: 120_000,
+        windowsHide: true,
+        env: cleanEnv,
+      });
+    }
     return { exitCode: 0, authority };
   } catch (err: unknown) {
     const status =
@@ -230,11 +251,18 @@ export function independentVerifierProofErrors(input: {
   if (input.exitCode !== 0) {
     return ['independent clean-room verifier skipped: primary receipt not green'];
   }
+  const mutationPaths = repositoryRelativeMutationPaths(
+    input.projectRoot,
+    input.mutationPaths,
+  );
+  if (mutationPaths === null && input.mutationPaths.length > 0) {
+    return ['independent clean-room verifier unavailable: mutation path escapes project root'];
+  }
   try {
     const independent = IndependentVerifier.runIsolatedVerificationSync(
       input.projectRoot,
       input.command,
-      [...input.mutationPaths],
+      mutationPaths ?? [],
     );
     if (independent.exitCode !== 0) {
       return [

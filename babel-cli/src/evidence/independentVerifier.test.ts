@@ -231,6 +231,46 @@ test('independentVerifierProofErrors env OFF disables even high-assurance profil
   }
 });
 
+test('independentVerifierProofErrors accepts absolute session mutation paths like primary receipt binding', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-iv-abs-'));
+  try {
+    await fs.mkdir(path.join(tempDir, 'src'), { recursive: true });
+    const rel = 'src/keep.ts';
+    const absolute = path.join(tempDir, rel);
+    await fs.writeFile(absolute, 'export const value = 1\n');
+    const errors = independentVerifierProofErrors({
+      projectRoot: tempDir,
+      command: 'node -e "process.exit(0)"',
+      exitCode: 0,
+      mutationPaths: [absolute],
+      env: { [INDEPENDENT_VERIFIER_ENV]: '1' },
+    });
+    assert.deepEqual(errors, [], `absolute mutation paths must not block clean-room verification: ${errors.join('; ')}`);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('independentVerifierProofErrors fails closed when an absolute mutation path escapes the project root', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-iv-escape-'));
+  const external = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-iv-outside-'));
+  try {
+    await fs.writeFile(path.join(external, 'outside.ts'), 'leak\n');
+    const errors = independentVerifierProofErrors({
+      projectRoot: tempDir,
+      command: 'node -e "process.exit(0)"',
+      exitCode: 0,
+      mutationPaths: [path.join(external, 'outside.ts')],
+      env: { [INDEPENDENT_VERIFIER_ENV]: '1' },
+    });
+    assert.ok(errors.length >= 1);
+    assert.match(errors[0] ?? '', /escapes project root/);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(external, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test('runIsolatedVerificationSync leaves primary workspace un-mutated', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-iv-sync-'));
   try {
@@ -246,5 +286,40 @@ test('runIsolatedVerificationSync leaves primary workspace un-mutated', async ()
     assert.equal(receipt.exitCode, 0);
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('clean-room verifier runs the frozen command in an isolated copy (POSIX path)', async () => {
+  // Guards the platform-neutral path the Windows cmd.exe branch mirrors: a
+  // green frozen command must pass in the copy, and a red one must report the
+  // observed child status rather than a launch failure. Each case uses its own
+  // project root so the copy is not reused across runs.
+  const makeRoot = async (body: string) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'babel-iv-unit-'));
+    await fs.writeFile(path.join(root, 'verify.mjs'), body);
+    return root;
+  };
+  const greenRoot = await makeRoot(
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('ok', () => assert.equal(1, 1));\n",
+  );
+  const redRoot = await makeRoot(
+    "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('bad', () => assert.equal(1, 2));\n",
+  );
+  try {
+    const green = IndependentVerifier.runIsolatedVerificationSync(
+      greenRoot,
+      'node --test verify.mjs',
+      ['verify.mjs'],
+    );
+    assert.equal(green.exitCode, 0);
+    const red = IndependentVerifier.runIsolatedVerificationSync(
+      redRoot,
+      'node --test verify.mjs',
+      ['verify.mjs'],
+    );
+    assert.notEqual(red.exitCode, 0);
+  } finally {
+    await fs.rm(greenRoot, { recursive: true, force: true });
+    await fs.rm(redRoot, { recursive: true, force: true });
   }
 });
