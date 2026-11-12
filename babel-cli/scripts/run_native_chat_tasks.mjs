@@ -28,6 +28,9 @@ if (values.mode === 'calibration') {
   })
   process.stdout.write(child.stdout ?? '')
   process.stderr.write(child.stderr ?? '')
+  if ((child.status ?? 1) !== 0 && child.stderr) {
+    process.stderr.write(`\n[run_native_chat_tasks] child failed; inspect --out for report.json and attempt-*.json when present.\n`)
+  }
   process.exitCode = child.status ?? 1
 } else {
   const { runNativeChatTasks } = await import('../src/eval/native-chat-tasks.ts')

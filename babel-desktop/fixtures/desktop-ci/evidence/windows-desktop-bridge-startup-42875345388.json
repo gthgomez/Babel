@@ -1,0 +1,32 @@
+{
+  "schema": "desktop-ci/bridge-startup-failure/v2",
+  "verdict": "ROOT_CAUSE_UNPROVEN",
+  "github_actions_run_id": 42875345388,
+  "job_id": 130038859106,
+  "matrix": "desktop-tests (windows-latest)",
+  "qualification_head_sha": "c4bbfc742d9302b1832c112a46a0b62dec55fe97",
+  "test": "shared bridge startup with spawn env floor reaches ready",
+  "path": "babel-desktop/test/shared-protocol-bridge-launcher.test.mjs",
+  "hosted_evidence_establishes_only": {
+    "assertion_line_ref": "shared-protocol-bridge-launcher.test.mjs (startup test)",
+    "message": "Remote bridge exited before ready (code=1, signal=null)",
+    "child_stderr_retained_in_hosted_log": false,
+    "remote_stderr_forwarding_policy": "withheld (REMOTE_STDERR_*); production bridge startup does not export raw child stderr to CI"
+  },
+  "primary_hypothesis_not_proven": {
+    "label": "runner_profile_homedir_windows_babel_acl",
+    "summary": "Under inheritEnv:false spawn-floor tests, child may resolve homedir() to GHA runner profile; Windows loadBridgeConfig/persistBridgeConfig may enforce owner-only ACL on ~/.babel.",
+    "code_path_if_hypothesis_hold": [
+      "babel-cli/src/bridge/auth.ts (loadBridgeConfig, persistBridgeConfig)",
+      "babel-cli/src/runtime/windowsOwnerAcl.ts (win32 only)",
+      "babel-desktop/native/spawn-env-floor.mjs (pre-mitigation: no HOME/USERPROFILE isolation)"
+    ],
+    "why_unproven": "No hosted stderr, ACL return code, or BridgeAclError text in retained artifacts; Linux pass consistent with win32-only ACL enforcer but does not confirm failure mode on Windows."
+  },
+  "harness_gap_observed_in_repo": {
+    "pre_mitigation": "nodeChildSpawnEnvironment({ BABEL_CONFIG_DIR, BABEL_RUNS_DIR, ELECTRON_RUN_AS_NODE }) without fixture HOME/USERPROFILE override",
+    "note": "Gap is factual in c4bbfc harness; it does not by itself prove exit code 1 mechanism on hosted runner."
+  },
+  "retained_artifacts_preserved": true,
+  "supersedes_interpretation_field": "root_cause_classification removed in v2 (was overstated)"
+}

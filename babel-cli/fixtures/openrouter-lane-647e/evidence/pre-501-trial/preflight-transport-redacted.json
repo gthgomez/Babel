@@ -1,0 +1,13 @@
+{
+  "schema": "openrouter-lane-647e/preflight/v1",
+  "streaming_ping": {
+    "status": "ok",
+    "latency_ms": 661,
+    "observed_model_id": "deepseek/deepseek-v4.1-flash-1017",
+    "upstream_provider": "InferenceNet",
+    "total_tokens": 97,
+    "provider_reported_total_charge_usd": 0.000021676,
+    "cost_precision": "exact"
+  },
+  "structured_execute_note": "Initial harness used z.union schema and returned empty body once; explicit object schema succeeded on immediate retry — not treated as product defect"
+}

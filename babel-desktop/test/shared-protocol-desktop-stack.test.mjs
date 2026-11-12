@@ -13,7 +13,7 @@ import { RemoteBridgeChild } from '../native/remoteHost.mjs';
 import { SharedProtocolRun } from '../native/sharedProtocolRun.mjs';
 import { saveProviderRoute, qualifiedProviders, readProviderRoute } from '../native/provider-routing.mjs';
 import { productionNodeCliArgv } from '../native/cli-launch.mjs';
-import { nodeChildSpawnEnvironment } from '../native/spawn-env-floor.mjs';
+import { isolatedCredentialHomeEnvironment } from '../native/spawn-env-floor.mjs';
 import { rmTempDirWithOwnedChildDrain } from './temp-dir-cleanup.mjs';
 import { buildDesktopCliShimEntrySource } from './shared-protocol-shim-import.mjs';
 
@@ -93,6 +93,7 @@ async function runTurn({
   projectRoot,
   config,
   runsDir,
+  credentialHome,
   runId,
   task,
   sessionId,
@@ -120,7 +121,7 @@ async function runTurn({
     port: bridge.port,
     desktopClientId: bridge.desktopClientId,
     desktopProofKey: bridge.desktopProofKey,
-    env: nodeChildSpawnEnvironment({
+    env: isolatedCredentialHomeEnvironment(credentialHome, {
       BABEL_CONFIG_DIR: config,
       BABEL_RUNS_DIR: runsDir,
       ELECTRON_RUN_AS_NODE: '1',
@@ -181,11 +182,13 @@ test('desktop stack reaches run_complete through shim and shared bridge (no Elec
         const project = join(root, 'project');
         const config = join(root, 'config');
         const runsDir = join(root, 'runs');
+        const credentialHome = join(root, 'credential-home');
         const entry = join(root, 'shim.mjs');
         const receipt = join(root, 'receipt.jsonl');
         await mkdir(project);
         await mkdir(config, { recursive: true });
         await mkdir(runsDir, { recursive: true });
+        await mkdir(credentialHome, { recursive: true });
         await writeFile(join(project, 'README.md'), '# stack');
         await writeFile(
           entry,
@@ -199,7 +202,7 @@ test('desktop stack reaches run_complete through shim and shared bridge (no Elec
           provider: 'openrouter',
           model: 'deepseek-v4-pro-openrouter',
         });
-        return { project, config, runsDir, entry, receipt };
+        return { project, config, runsDir, credentialHome, entry, receipt };
       })(),
       'fixture-setup',
     );
@@ -208,6 +211,7 @@ test('desktop stack reaches run_complete through shim and shared bridge (no Elec
     const project = join(root, 'project');
     const config = join(root, 'config');
     const runsDir = join(root, 'runs');
+    const credentialHome = join(root, 'credential-home');
     const entry = join(root, 'shim.mjs');
     const receipt = join(root, 'receipt.jsonl');
 
@@ -215,7 +219,7 @@ test('desktop stack reaches run_complete through shim and shared bridge (no Elec
       executable: process.execPath,
       entry,
       projectRoot: project,
-      env: nodeChildSpawnEnvironment({
+      env: isolatedCredentialHomeEnvironment(credentialHome, {
         BABEL_CONFIG_DIR: config,
         BABEL_RUNS_DIR: runsDir,
         ELECTRON_RUN_AS_NODE: '1',
@@ -234,6 +238,7 @@ test('desktop stack reaches run_complete through shim and shared bridge (no Elec
       projectRoot: project,
       config,
       runsDir,
+      credentialHome,
       runId: 'stack-1',
       task: 'stack turn one',
     });
@@ -247,6 +252,7 @@ test('desktop stack reaches run_complete through shim and shared bridge (no Elec
       projectRoot: project,
       config,
       runsDir,
+      credentialHome,
       runId: 'stack-2',
       task: 'stack turn two',
       sessionId: first.result.session_id,

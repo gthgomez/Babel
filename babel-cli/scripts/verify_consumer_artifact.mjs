@@ -9,12 +9,27 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, readdirSyn
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import {
+  buildInstallPathComparison,
+  installPathClass,
+  npmInstallProbe,
+  runtimeProjectPathClass,
+  validateAsciiInstallControlPrefix,
+} from './consumer_install_path_qualification.mjs'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const output = resolve(packageRoot, '../artifacts/consumer-package')
+const isWin = process.platform === 'win32'
 const scratch = mkdtempSync(join(tmpdir(), 'babel consumer é-'))
+/** Windows-only: separate ASCII scratch so control full path has no Unicode/space ancestor. */
+const scratchAsciiControl = isWin ? mkdtempSync(join(tmpdir(), 'babel-consumer-')) : null
 const project = join(scratch, 'project 空 space')
-const prefix = join(scratch, 'install prefix é')
+/** Primary qualification: npm production install must succeed at this Unicode path on every platform. */
+const prefixUnicode = join(scratch, 'install prefix é')
+const prefix = prefixUnicode
+/** Windows-only diagnostic control; not a substitute for unicode install-path qualification. */
+const prefixAsciiControl = isWin && scratchAsciiControl ? join(scratchAsciiControl, 'install-prefix') : null
+if (prefixAsciiControl) validateAsciiInstallControlPrefix(prefixAsciiControl)
 const user = join(scratch, 'user space')
 for (const dir of [output, project, user]) mkdirSync(dir, { recursive: true })
 const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
@@ -28,22 +43,122 @@ writeFileSync(env.npm_config_globalconfig, '')
 const guardedEnv = { ...env, NODE_OPTIONS: `--import=${pathToFileURL(guard).href}` }
 const configuredTuiEnv = { ...guardedEnv, BABEL_STATE_DIR: join(scratch, 'configured TUI state'), OPENAI_API_KEY: 'fixture-only' }
 const records = []
+function writeCommandFailureDiagnostics(diag) {
+  try {
+    mkdirSync(output, { recursive: true })
+    writeFileSync(join(output, 'command-failure-diagnostics.json'), JSON.stringify(diag, null, 2) + '\n')
+  } catch {
+    process.stderr.write(`${JSON.stringify(diag)}\n`)
+  }
+}
 function command(binary, args, options = {}) {
-  const result = spawnSync(binary, args, { cwd: project, env, encoding: 'utf8',
-    timeout: 120000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, ...options })
-  assert.ifError(result.error)
-  assert.ok((options.codes ?? [0]).includes(result.status), `${args.join(' ')}\n${result.stdout}\n${result.stderr}`)
+  const started = Date.now()
+  const { timeout: timeoutMs, codes, diagPhase, cwd: optCwd, env: optEnv, ...spawnRest } = options
+  const timeout = timeoutMs ?? 120000
+  const result = spawnSync(binary, args, {
+    cwd: optCwd ?? project,
+    env: optEnv ?? env,
+    encoding: 'utf8',
+    timeout,
+    maxBuffer: 16 * 1024 * 1024,
+    windowsHide: true,
+    ...spawnRest,
+  })
+  if (result.error || !(codes ?? [0]).includes(result.status)) {
+    const diag = {
+      schema: 'consumer-artifact/command-failure/v1',
+      phase: diagPhase ?? 'command',
+      platform: process.platform,
+      arch: process.arch,
+      node: process.version,
+      elapsed_ms: Date.now() - started,
+      timeout_ms: timeout,
+      cwd: optCwd ?? project,
+      install_prefix: options.installPrefix ?? prefix,
+      scratch_root: scratch,
+      install_path_class: options.installPathClass ?? 'unicode_install_prefix',
+      argv: [binary, ...args].slice(0, 16),
+      error: result.error ? { message: result.error.message, code: result.error.code, errno: result.error.errno } : null,
+      status: result.status,
+      signal: result.signal,
+      stdout_tail: String(result.stdout ?? '').slice(-8000),
+      stderr_tail: String(result.stderr ?? '').slice(-8000),
+    }
+    writeCommandFailureDiagnostics(diag)
+    assert.fail(
+      result.error
+        ? `Consumer command error: ${result.error.code ?? result.error.message}\n${JSON.stringify(diag, null, 2)}`
+        : `Consumer command exit ${result.status}: ${args.join(' ')}\n${JSON.stringify(diag, null, 2)}`,
+    )
+  }
   return result
 }
-function npm(args, options = {}) { return command(process.execPath, [npmCli, ...args], { timeout: 300000, ...options }) }
-function installArtifact(artifact) {
-  const result = npm(['install', '--prefix', prefix, '--omit=dev', '--no-audit', '--no-fund', artifact])
-  assert.doesNotMatch(result.stdout + '\n' + result.stderr,
-    /deprecated node-domexception|install-scripts[^\n]*protobufjs/i,
-    'Production installation emitted a retired dependency warning')
-  for (const name of ['node-domexception', 'protobufjs']) {
-    assert.ok(!existsSync(join(prefix, 'node_modules', name)), `Unexpected production dependency: ${name}`)
+function npm(args, options = {}) {
+  return command(process.execPath, [npmCli, ...args], { timeout: 300000, diagPhase: 'npm', ...options })
+}
+function npmProbeInput(installPrefix, artifact, phase) {
+  return { installPrefix, artifact, npmCli, project, env, scratch, phase }
+}
+function writeInstallPathComparison(comparison) {
+  try {
+    mkdirSync(output, { recursive: true })
+    writeFileSync(join(output, 'install-path-comparison.json'), JSON.stringify(comparison, null, 2) + '\n')
+  } catch {
+    process.stderr.write(`${JSON.stringify(comparison)}\n`)
   }
+}
+function installArtifact(artifact) {
+  const unicodeProbe = npmInstallProbe(npmProbeInput(prefixUnicode, artifact, 'npm_install_unicode_path'))
+  let installPathComparison = null
+  if (isWin && prefixAsciiControl) {
+    const asciiProbe = npmInstallProbe(
+      npmProbeInput(prefixAsciiControl, artifact, 'npm_install_ascii_path_control'),
+    )
+    installPathComparison = buildInstallPathComparison({
+      unicodeProbe,
+      asciiProbe,
+      baselineEvidence: 'fixtures/consumer-artifact/evidence/windows-ci-42843069423-etimedout-baseline.json',
+    })
+    writeInstallPathComparison(installPathComparison)
+  }
+  if (!unicodeProbe.success) {
+    const diag = {
+      schema: 'consumer-artifact/command-failure/v1',
+      phase: 'npm_install_unicode_path',
+      platform: process.platform,
+      arch: process.arch,
+      node: process.version,
+      install_path_class: 'unicode_install_prefix',
+      root_cause: 'unestablished',
+      unicode_install_path_required: true,
+      unicode_probe: unicodeProbe,
+      install_path_comparison: installPathComparison,
+    }
+    writeCommandFailureDiagnostics(diag)
+    assert.fail(`Unicode install-path qualification failed:\n${JSON.stringify(diag, null, 2)}`)
+  }
+  assert.doesNotMatch(
+    `${unicodeProbe.stdout_tail}\n${unicodeProbe.stderr_tail}`,
+    /deprecated node-domexception|install-scripts[^\n]*protobufjs/i,
+    'Production installation emitted a retired dependency warning',
+  )
+  for (const name of ['node-domexception', 'protobufjs']) {
+    assert.ok(!existsSync(join(prefixUnicode, 'node_modules', name)), `Unexpected production dependency: ${name}`)
+  }
+  const installPathQualification = unicodeProbe.success ? 'qualified' : 'unqualified'
+  const installRecord = {
+    check: 'unicode install-path production npm install',
+    qualification: installPathQualification,
+    install_prefix: prefixUnicode,
+    install_path_class: installPathClass(prefixUnicode),
+    not_equivalent_to: ['consumer_environment_unicode_config_only', 'ascii_install_prefix_control'],
+    comparison_ref: installPathComparison ? 'artifacts/consumer-package/install-path-comparison.json' : null,
+  }
+  if (installPathComparison?.ascii_control?.success && !unicodeProbe.success) {
+    installRecord.interpretation =
+      'ASCII control install succeeded; Unicode install-path qualification remains unqualified (not silently equivalent).'
+  }
+  records.push(installRecord)
 }
 const installed = join(prefix, 'node_modules', ...pkg.name.split('/'))
 const bin = join(installed, pkg.bin['babel-agent'])
@@ -178,6 +293,21 @@ try {
     ? command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${shim}" --version"`], { env: guardedEnv, windowsVerbatimArguments: true })
     : command(shim, ['--version'], { env: guardedEnv })
   assert.equal(shimVersion.stdout.trim(), pkg.version)
+  records.push({
+    check: 'runtime project workspace unicode+space cwd',
+    qualification: 'qualified',
+    project_root: project,
+    project_path_class: runtimeProjectPathClass(project),
+    note: 'Installed CLI/TUI/mechanics exercise this cwd; distinct from install-path qualification.',
+  })
+  records.push({
+    check: 'installed shim under unicode install prefix',
+    qualification: existsSync(shim) ? 'qualified' : 'unqualified',
+    shim_path: shim,
+    install_prefix: prefixUnicode,
+    install_path_class: installPathClass(prefixUnicode),
+    not_equivalent_to: ['runtime_project_unicode_cwd_only'],
+  })
   const setup = json(['setup', '--json'])
   assert.equal(setup.mutates_workspace, false)
   const doctor = json(['doctor', '--json'])
@@ -279,4 +409,5 @@ try {
 } finally {
   if (existsSync(installed)) readonly(installed, false)
   rmSync(scratch, { recursive: true, force: true })
+  if (scratchAsciiControl) rmSync(scratchAsciiControl, { recursive: true, force: true })
 }

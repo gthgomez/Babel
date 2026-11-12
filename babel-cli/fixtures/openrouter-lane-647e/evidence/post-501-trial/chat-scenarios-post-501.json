@@ -1,0 +1,134 @@
+{
+  "schema": "openrouter-lane-647e/live-trial/v1",
+  "trial_label": "post-501",
+  "phases_executed": [
+    "paid_provider_execution"
+  ],
+  "pre_501_evidence_preserved": "fixtures/openrouter-lane-647e/evidence/pre-501-trial/chat-scenarios-redacted.json (frozen at base 1dc598e2)",
+  "main_merge_sha": "ed0c44451a493b70a3a4361cc3236ebb07b453e4",
+  "qualification_head_sha": "5b16e7e1ff165e6b032c6485c44125e713743fc7",
+  "route_key": "deepseek-v4.1-flash-openrouter",
+  "provider": "openrouter",
+  "provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
+  "adapter": "OpenRouterApiRunner",
+  "provider_errors": [],
+  "stopped_billable": false,
+  "results": [
+    {
+      "phase": "paid_provider_execution",
+      "id": "readonly_explain",
+      "latency_ms": 10031,
+      "exit_code": 0,
+      "terminal_outcome": "NO_CHANGE_REQUIRED",
+      "status": "ANSWER_READY",
+      "session_id": "chat-70dd868b8016",
+      "run_dir_basename": "chat-70dd868b8016",
+      "usage": {
+        "actual_cost_usd": 0.001183029,
+        "total_input_tokens": 12774,
+        "total_output_tokens": 675,
+        "total_tokens": 13449,
+        "cost_complete": true,
+        "model_breakdown_keys": [
+          "deepseek/deepseek-v4.1-flash-1017"
+        ]
+      },
+      "timed_out": false,
+      "failure_capsule": null,
+      "provider_error_observed": null,
+      "host_checks": {
+        "oracle_score_exit": 1,
+        "oracle_stdout": "TAP version 13\n# Subtest: add sums two numbers\nnot ok 1 - add sums two numbers\n  ---\n  duration_ms: 1.038079\n  type: 'test'\n  location: '/tmp/or647e-ws-0siF4M/tests/math.test.js:5:1'\n  failureType: 't",
+        "math_js": "export const add = (a, b) => a - b;",
+        "npm_test_exit": 1
+      }
+    },
+    {
+      "phase": "paid_provider_execution",
+      "id": "vague_repair",
+      "latency_ms": 23111,
+      "exit_code": 1,
+      "terminal_outcome": "BLOCKED_POLICY",
+      "status": "BLOCKED",
+      "session_id": "chat-12ce45007541",
+      "run_dir_basename": "chat-12ce45007541",
+      "usage": {
+        "actual_cost_usd": 0.006510656000000001,
+        "total_input_tokens": 105282,
+        "total_output_tokens": 2635,
+        "total_tokens": 107917,
+        "cost_complete": true,
+        "model_breakdown_keys": [
+          "deepseek/deepseek-v4.1-flash-1017"
+        ]
+      },
+      "timed_out": false,
+      "failure_capsule": null,
+      "provider_error_observed": null,
+      "host_checks": {
+        "oracle_score_exit": 0,
+        "oracle_stdout": "TAP version 13\n# Subtest: add sums two numbers\nok 1 - add sums two numbers\n  ---\n  duration_ms: 0.552204\n  type: 'test'\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# to",
+        "math_js": "export const add = (a, b) => a + b;",
+        "npm_test_exit": 0
+      }
+    },
+    {
+      "phase": "paid_provider_execution",
+      "id": "vague_feature_export",
+      "latency_ms": 21447,
+      "exit_code": 0,
+      "terminal_outcome": "UNVERIFIED_PATCH",
+      "status": "ANSWER_READY",
+      "session_id": "chat-fcc601aac49b",
+      "run_dir_basename": "chat-fcc601aac49b",
+      "usage": {
+        "actual_cost_usd": 0.00442980924,
+        "total_input_tokens": 76289,
+        "total_output_tokens": 2736,
+        "total_tokens": 79025,
+        "cost_complete": true,
+        "model_breakdown_keys": [
+          "deepseek/deepseek-v4.1-flash-1017"
+        ]
+      },
+      "timed_out": false,
+      "failure_capsule": null,
+      "provider_error_observed": null,
+      "host_checks": {
+        "npm_test_exit": 0,
+        "has_index_ts": true
+      }
+    },
+    {
+      "phase": "paid_provider_execution",
+      "id": "multiturn_resume",
+      "latency_ms": 738,
+      "exit_code": 1,
+      "terminal_outcome": null,
+      "status": "EXECUTOR_HALTED",
+      "session_id": null,
+      "run_dir_basename": null,
+      "usage": null,
+      "timed_out": false,
+      "failure_capsule": null,
+      "provider_error_observed": null,
+      "host_checks": {
+        "oracle_score_exit": 0,
+        "oracle_stdout": "TAP version 13\n# Subtest: add sums two numbers\nok 1 - add sums two numbers\n  ---\n  duration_ms: 0.474088\n  type: 'test'\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# to",
+        "math_js": "export const add = (a, b) => a + b;",
+        "npm_test_exit": 0
+      },
+      "resume_target_session": "chat-12ce45007541"
+    },
+    {
+      "phase": "paid_provider_execution",
+      "id": "cancellation_stream_abort",
+      "status": "unexpected_complete",
+      "deltas": 162,
+      "latency_ms": 9536
+    }
+  ],
+  "aggregate_known_cost_usd": 0.012123494240000001,
+  "provider_errors_observed": 0,
+  "verdict": "provider_calls_completed"
+}

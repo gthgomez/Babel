@@ -1,0 +1,142 @@
+{
+  "schema": "openrouter-lane-647e/redacted-run-records/v1",
+  "trial_label": "post-502-main",
+  "qualification_head_sha": "7a5a29f5df791adc557646385a5b6c656646cb67",
+  "main_merge_sha": "9e34af80bfd93b55d98bc0a52da458660349a366",
+  "records": [
+    {
+      "id": "readonly_explain",
+      "session_id": "chat-25a145b41990",
+      "exit_code": 0,
+      "terminal_outcome": "NO_CHANGE_REQUIRED",
+      "status": "ANSWER_READY",
+      "answer_excerpt": "## What this project is\n\nA minimal ES-module arithmetic library, set up as a bare Node.js project with no dependencies.\n\n**Structure**\n\n| Path | Role |\n|---|---|\n| `src/math.js` | The library — currently a single named export, `add` |\n| `tests/math.test.js` | The contract, per the README: \"Tests define the contract\" |\n| `package.json` | `\"type\": \"module\"` (native ESM) and one script: `test` → `nod",
+      "stdout_tail_redacted": "l_call_count\": 6,\n  \"write_count\": 0,\n  \"verifier_attempt_count\": 0,\n  \"verifier_tool_call_count\": 0,\n  \"verifier_execution_count\": 0,\n  \"tools_before_first_write\": 6,\n  \"patch_reality\": {\n    \"patch_bytes\": 0,\n    \"changed_files\": [],\n    \"empty_patch\": true,\n    \"capture_method\": \"tool_log\",\n    \"tool_write_count\": 0,\n    \"git_write_signal\": false\n  },\n  \"transcript_path\": null,\n  \"critic_receipt\": {\n    \"verdict\": \"skip\",\n    \"reasons\": [\n      \"Diff critic skipped — task intent is explain, not execute\"\n    ],\n    \"confidence\": 0,\n    \"skipped_reason\": \"non_execute\"\n  },\n  \"env_blocked\": false,\n  \"empty_patch_scoreable\": true,\n  \"empty_patch_score_reason\": \"true_empty\",\n  \"phase_gate_block_count\": 0,\n  \"phase_gate_write_block_count\": 0,\n  \"dedupe_hit_count\": 0,\n  \"turn_summaries\": []\n}\n",
+      "stderr_tail_redacted": "",
+      "workspace_diff": {
+        "diff_stat": null,
+        "diff_excerpt": null,
+        "diff_paths": []
+      },
+      "usage": {
+        "actual_cost_usd": 0.0023436409999999996,
+        "total_input_tokens": 12738,
+        "total_output_tokens": 660,
+        "total_tokens": 13398,
+        "cost_complete": true,
+        "cost_precision": "complete"
+      },
+      "provider_stop_matches": []
+    },
+    {
+      "id": "vague_repair",
+      "session_id": "chat-9f2d05f68018",
+      "exit_code": 0,
+      "terminal_outcome": "UNVERIFIED_PATCH",
+      "status": "ANSWER_READY",
+      "answer_excerpt": "Completion status: UNVERIFIED_PATCH.\nThe required task-acceptance evidence was not established; task completion is not certified.\n\nPaths with recorded confirmed mutations (final workspace state not re-checked): \"/tmp/or647e-ws-MN8ij4/src/math.js\"\n\nUnverified model response:\n---\nUNVERIFIED: A file change was confirmed and the path was read afterward, but shell isolation is unavailable. Required aut",
+      "stdout_tail_redacted": " to `a + b` directly fixes the obvious arithmetic bug in `add`, matching the stated contract `add(1, 2) === 3`.\",\n      \"No tests were deleted or weakened, and no unrelated helper was touched.\",\n      \"Caveat: the fix is unverified by execution (test runner blocked), but the diff is a minimal, self-evidently correct correction for the only function in the file, so the lack of a verifier receipt does not indicate an incomplete or mislocalized fix.\"\n    ],\n    \"confidence\": 0.8,\n    \"model\": \"deepseek/deepseek-v4.1-flash-1017\",\n    \"tier\": \"flash\",\n    \"latency_ms\": 7528\n  },\n  \"env_blocked\": false,\n  \"empty_patch_scoreable\": false,\n  \"empty_patch_score_reason\": \"not_empty\",\n  \"phase_gate_block_count\": 0,\n  \"phase_gate_write_block_count\": 0,\n  \"dedupe_hit_count\": 0,\n  \"turn_summaries\": []\n}\n",
+      "stderr_tail_redacted": "",
+      "workspace_diff": {
+        "diff_stat": "src/math.js | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)",
+        "diff_excerpt": "diff --git a/src/math.js b/src/math.js\nindex dc1ead9..d0f87bf 100644\n--- a/src/math.js\n+++ b/src/math.js\n@@ -1 +1 @@\n-export const add = (a, b) => a - b;\n+export const add = (a, b) => a + b;\n",
+        "diff_paths": [
+          "src/math.js"
+        ]
+      },
+      "usage": {
+        "actual_cost_usd": 0.006220167720000002,
+        "total_input_tokens": 57730,
+        "total_output_tokens": 1496,
+        "total_tokens": 59226,
+        "cost_complete": true,
+        "cost_precision": "complete"
+      },
+      "provider_stop_matches": []
+    },
+    {
+      "id": "vague_feature_export",
+      "session_id": "chat-fb4d92224075",
+      "exit_code": 0,
+      "terminal_outcome": "UNVERIFIED_PATCH",
+      "status": "ANSWER_READY",
+      "answer_excerpt": "Completion status: UNVERIFIED_PATCH.\nThe required task-acceptance evidence was not established; task completion is not certified.\n\nPaths with recorded confirmed mutations (final workspace state not re-checked): \"/tmp/or647e-ws-YbK39f/src/greet.ts\", \"/tmp/or647e-ws-YbK39f/src/index.ts\"\n\nUnverified model response:\n---\nUNVERIFIED: A file change was confirmed and the path was read afterward, but shell",
+      "stdout_tail_redacted": "tch directly fixes the two relevant files: it implements the existing `formatGreeting` symbol in `src/greet.ts` and re-exports it from `src/index.ts`, replacing the empty `export {};`.\",\n      \"No unrelated symbols or files were modified; `src/decoy.ts` was left untouched as claimed.\",\n      \"The `.ts` import specifier is consistent with the stated Node type-stripping test setup, and the named re-export matches the existing named export contract.\"\n    ],\n    \"confidence\": 0.85,\n    \"model\": \"deepseek/deepseek-v4.1-flash-1017\",\n    \"tier\": \"pro\",\n    \"latency_ms\": 13482\n  },\n  \"env_blocked\": false,\n  \"empty_patch_scoreable\": false,\n  \"empty_patch_score_reason\": \"not_empty\",\n  \"phase_gate_block_count\": 0,\n  \"phase_gate_write_block_count\": 0,\n  \"dedupe_hit_count\": 0,\n  \"turn_summaries\": []\n}\n",
+      "stderr_tail_redacted": "",
+      "workspace_diff": {
+        "diff_stat": "src/greet.ts | 2 +-\n src/index.ts | 2 +-\n 2 files changed, 2 insertions(+), 2 deletions(-)",
+        "diff_excerpt": "diff --git a/src/greet.ts b/src/greet.ts\nindex 3c8932f..472b61a 100644\n--- a/src/greet.ts\n+++ b/src/greet.ts\n@@ -1 +1 @@\n-export const formatGreeting = (_name: string): string => 'TODO';\n+export const formatGreeting = (name: string): string => `Hello, ${name}!`;\ndiff --git a/src/index.ts b/src/index.ts\nindex cb0ff5c..d5085ca 100644\n--- a/src/index.ts\n+++ b/src/index.ts\n@@ -1 +1 @@\n-export {};\n+export { formatGreeting } from './greet.ts';\n",
+        "diff_paths": [
+          "src/greet.ts",
+          "src/index.ts"
+        ]
+      },
+      "usage": {
+        "actual_cost_usd": 0.00585473,
+        "total_input_tokens": 54646,
+        "total_output_tokens": 3631,
+        "total_tokens": 58277,
+        "cost_complete": true,
+        "cost_precision": "complete"
+      },
+      "provider_stop_matches": []
+    },
+    {
+      "id": "multiturn_resume",
+      "session_id": null,
+      "exit_code": 1,
+      "terminal_outcome": null,
+      "status": "EXECUTOR_HALTED",
+      "answer_excerpt": null,
+      "stdout_tail_redacted": "_path\": null,\n    \"condition_summary\": \"Conversation scope cannot be combined with project or pipeline bindings.\",\n    \"verifier_contract\": null\n  },\n  \"recovery\": {\n    \"status\": \"CONTINUE_READY\",\n    \"classification\": \"retry_same_command\",\n    \"retryable\": true,\n    \"reason\": \"No specialized recovery path was detected; retrying the same user command is the safest next action.\",\n    \"next_action\": \"babel continue latest\",\n    \"next_command\": \"babel continue latest\",\n    \"run_dir\": \"/tmp/or647e-runs-FGNnuY/threads\",\n    \"available_artifacts\": [],\n    \"missing_artifacts\": [\n      {\n        \"key\": \"terminal_status_summary\",\n        \"filename\": \"terminal_status_summary.json\"\n      },\n      {\n        \"key\": \"execution_report\",\n        \"filename\": \"04_execution_report.json\"\n      }\n    ]\n  }\n}\n",
+      "stderr_tail_redacted": "(node:60971) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n(Use `node --trace-warnings ...` to show where the warning was created)\n(node:60971) ExperimentalWarning: Importing WebAssembly module instances is an experimental feature and might change at any time\n",
+      "workspace_diff": {
+        "diff_stat": "src/math.js | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)",
+        "diff_excerpt": "diff --git a/src/math.js b/src/math.js\nindex dc1ead9..d0f87bf 100644\n--- a/src/math.js\n+++ b/src/math.js\n@@ -1 +1 @@\n-export const add = (a, b) => a - b;\n+export const add = (a, b) => a + b;\n",
+        "diff_paths": [
+          "src/math.js"
+        ]
+      },
+      "usage": {
+        "actual_cost_usd": null,
+        "total_input_tokens": null,
+        "total_output_tokens": null,
+        "total_tokens": null,
+        "cost_complete": null,
+        "cost_precision": "unknown"
+      },
+      "provider_stop_matches": []
+    },
+    {
+      "id": "cancellation_stream_abort",
+      "exit_code": null,
+      "terminal_outcome": null,
+      "status": null,
+      "answer_excerpt": null,
+      "stdout_tail_redacted": "",
+      "stderr_tail_redacted": "",
+      "cancellation_probe": {
+        "status": "inconclusive",
+        "interpretation": "Adapter emitted typed error event for caller cancellation; single event does not certify truncated billing or usage.",
+        "content_deltas": 0,
+        "event_tally": {
+          "text_deltas": 0,
+          "error_events": [
+            "[openrouter] Request cancelled"
+          ],
+          "done_events": 0,
+          "other_events": 0
+        },
+        "provider_stop_matches": null,
+        "provider_error_observed": null,
+        "latency_ms": 126,
+        "usage": {
+          "actual_cost_usd": null,
+          "total_tokens": null,
+          "cost_precision": "unknown"
+        },
+        "prior_status_reclassified_from": "unexpected_complete"
+      }
+    }
+  ]
+}

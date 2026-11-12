@@ -1,0 +1,21 @@
+{
+  "schema": "openrouter-lane-647e/runtime-diagnostic/v1",
+  "cell_id": "multiturn_resume",
+  "trial": "post-502-main",
+  "qualification_head_sha": "7a5a29f5df791adc557646385a5b6c656646cb67",
+  "main_merge_sha": "9e34af80bfd93b55d98bc0a52da458660349a366",
+  "status": "EXECUTOR_HALTED",
+  "exit_code": 1,
+  "session_id_observed": null,
+  "resume_target_session": "chat-9f2d05f68018",
+  "root_cause_summary": "CLI rejected --execution-scope conversation together with project-scoped resume/bindings before provider dispatch.",
+  "condition_summary": "Conversation scope cannot be combined with project or pipeline bindings.",
+  "recovery_classification": "retry_same_command",
+  "not_attributed_to": [
+    "openrouter_lane_harness",
+    "sandbox_tree_kill_502",
+    "provider_transport_stop"
+  ],
+  "redacted_evidence_ref": "fixtures/openrouter-lane-647e/evidence/post-502-trial/redacted-run-records/post-502-main.json#multiturn_resume",
+  "coordination": "core_cli_execution_scope_owner — not lane 647e harness"
+}

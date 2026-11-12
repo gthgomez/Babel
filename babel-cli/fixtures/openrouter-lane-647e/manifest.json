@@ -1,0 +1,39 @@
+{
+  "schema": "openrouter-lane-647e/manifest/v1",
+  "lane": "provider-openrouter-qualification",
+  "base_sha_at_dispatch": "1dc598e2a2f1de914591570349708a6f01d66479",
+  "default_chat_cli_shape": "babel run --mode chat-headless --json --yes --project-root <workspace> --model <route_key> <prompt>",
+  "canonical_live_route_key": "deepseek-v4.1-flash-openrouter",
+  "canonical_provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
+  "adapter": "OpenRouterApiRunner",
+  "research_v2_policy_route_key": "deepseek-v4-flash-openrouter",
+  "research_v2_provider_model_id": "deepseek/deepseek-v4-flash-0731",
+  "scenarios": [
+    {
+      "id": "readonly_explain",
+      "prompt": "Explain what this project does. Do not edit any files.",
+      "fixture": "coding-output-acceptance/workspaces/ordinary-bug"
+    },
+    {
+      "id": "vague_repair",
+      "prompt": "fix this",
+      "fixture": "coding-output-acceptance/workspaces/ordinary-bug"
+    },
+    {
+      "id": "vague_feature",
+      "prompt": "make export work",
+      "fixture": "coding-output-acceptance/workspaces/multi-file"
+    },
+    {
+      "id": "multiturn_followup_tests",
+      "prompt": "Run npm test and tell me if everything passes now.",
+      "requires": "--resume-chat <session_id>",
+      "fixture": "coding-output-acceptance/workspaces/ordinary-bug"
+    }
+  ],
+  "excluded_ownership": [
+    "production Chat runtime terminal outcomes",
+    "evaluator / criterion binding (#499/#500 refreshed on main)",
+    "structured task decisions (#501 reserved)"
+  ]
+}

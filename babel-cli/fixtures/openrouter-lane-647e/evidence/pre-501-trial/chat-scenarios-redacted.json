@@ -1,0 +1,51 @@
+{
+  "schema": "openrouter-lane-647e/chat/v1",
+  "candidate_sha": "1dc598e2a2f1de914591570349708a6f01d66479",
+  "route_key": "deepseek-v4.1-flash-openrouter",
+  "provider": "openrouter",
+  "provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
+  "provider_errors_observed": 0,
+  "results": [
+    {
+      "id": "readonly_explain",
+      "latency_ms": 12084,
+      "exit_code": 0,
+      "terminal_outcome": "NO_CHANGE_REQUIRED",
+      "status": "ANSWER_READY",
+      "actual_cost_usd": 0.0014713,
+      "total_tokens": 12084
+    },
+    {
+      "id": "vague_repair",
+      "latency_ms": 29099,
+      "exit_code": 0,
+      "terminal_outcome": "UNVERIFIED_PATCH",
+      "status": "ANSWER_READY",
+      "actual_cost_usd": 0.004879626,
+      "total_tokens": 64495,
+      "behavior_note": "src/math.js corrected; npm test passes; terminal UNVERIFIED_PATCH is runtime acceptance not provider"
+    },
+    {
+      "id": "vague_feature",
+      "latency_ms": 39160,
+      "exit_code": 1,
+      "terminal_outcome": "BLOCKED_POLICY",
+      "status": "BLOCKED",
+      "actual_cost_usd": 0.004459416,
+      "total_tokens": 93012,
+      "behavior_note": "policy block before completion; OpenRouter calls succeeded"
+    },
+    {
+      "id": "multiturn_followup_tests",
+      "latency_ms": 1092,
+      "exit_code": 1,
+      "terminal_outcome": null,
+      "status": "FAILED_RETRYABLE",
+      "actual_cost_usd": null,
+      "behavior_note": "CLI resume path failed before provider dispatch; handoff to core Chat lane"
+    }
+  ],
+  "aggregate_known_cost_usd": 0.010810342,
+  "verdict": "provider_transport_healthy_on_executed_cells",
+  "qualification_claim": "live_diagnostic_not_full_verified_complete"
+}

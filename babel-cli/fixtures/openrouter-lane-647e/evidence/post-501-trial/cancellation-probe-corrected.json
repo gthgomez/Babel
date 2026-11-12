@@ -1,0 +1,42 @@
+{
+  "schema": "openrouter-lane-647e/live-trial/v1",
+  "trial_label": "post-501-cancellation-corrected",
+  "phases_executed": [
+    "paid_provider_execution_cancellation_only"
+  ],
+  "pre_501_evidence_preserved": "fixtures/openrouter-lane-647e/evidence/pre-501-trial/chat-scenarios-redacted.json (frozen at base 1dc598e2)",
+  "main_merge_sha": "ed0c44451a493b70a3a4361cc3236ebb07b453e4",
+  "qualification_head_sha": "9f7820b92c315842c5f1d765b4c1f0b59288db59",
+  "build_provenance": {
+    "dist_gate": "ensure",
+    "dist_exists": true,
+    "dist_stale": false,
+    "dist_reason": "dist/index.js is present and not older than scanned sources"
+  },
+  "route_key": "deepseek-v4.1-flash-openrouter",
+  "provider": "openrouter",
+  "provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
+  "adapter": "OpenRouterApiRunner",
+  "provider_errors": [],
+  "stopped_billable": false,
+  "results": [
+    {
+      "id": "cancellation_stream_abort",
+      "phase": "paid_provider_execution",
+      "status": "unexpected_complete",
+      "deltas": 1,
+      "latency_ms": 123,
+      "signal_forwarded": true,
+      "usage": {
+        "actual_cost_usd": null,
+        "total_tokens": null,
+        "cost_precision": "unknown"
+      }
+    }
+  ],
+  "matrix_skipped": true,
+  "aggregate_known_cost_usd": 0,
+  "provider_errors_observed": 0,
+  "verdict": "provider_calls_completed",
+  "redacted_run_records_path": "fixtures/openrouter-lane-647e/evidence/post-501-trial/redacted-run-records/post-501-cancellation-corrected.json"
+}

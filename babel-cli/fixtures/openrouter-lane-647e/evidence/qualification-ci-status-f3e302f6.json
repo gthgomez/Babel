@@ -1,0 +1,57 @@
+{
+  "schema": "openrouter-lane-647e/qualification-ci-status/v1",
+  "head_sha": "f3e302f63283287f72c81a79386c930435703343",
+  "pr": 505,
+  "draft": true,
+  "exact_head_release_gate": {
+    "status": "NOT_DISPATCHED",
+    "observed_workflows_on_head": [
+      {
+        "run_id": 42907029011,
+        "workflow": "Public PR Metadata",
+        "conclusion": "success",
+        "event": "pull_request_target"
+      },
+      {
+        "run_id": 42907014509,
+        "workflow": "Trusted Control Plane",
+        "conclusion": "success",
+        "event": "pull_request_target"
+      },
+      {
+        "run_id": 42919898139,
+        "workflow": "Trusted Control Plane",
+        "conclusion": "success",
+        "event": "pull_request_target",
+        "note": "after full-ci label"
+      }
+    ],
+    "public_release_gate_runs_on_head": []
+  },
+  "nearest_green_full_gate": {
+    "run_id": 42887153879,
+    "head_sha": "49f2de8d61b5f428c02cee0e2d0bcccb8faf2ac6",
+    "conclusion": "success",
+    "not_exact_head_for": "f3e302f63283287f72c81a79386c930435703343"
+  },
+  "merge_lane_policy": {
+    "classifier": "tools/ci-merge-lane.mjs",
+    "pr_vs_main_full_lane": true,
+    "last_commit_paths_still_under": ["babel-desktop/"],
+    "docs_only_fast_lane_reuse": "NOT_APPLICABLE — trusted babel-desktop/ prefix forces full matrix for PR diff",
+    "reuse_49f2de8d_as_exact_head_proof": false,
+    "rationale": "CONTRIBUTOR_PROCEDURES: exact-head checks; old success cannot certify newer head"
+  },
+  "dispatch_attempts_this_session": {
+    "synchronize_on_f3e302f": "observed metadata/control-plane only",
+    "full_ci_label_added": "2026-11-11 session; no Public Release Gate run observed within poll window"
+  },
+  "supported_normal_triggers_per_typecheck_yml": [
+    "pull_request synchronize",
+    "pull_request labeled/unlabeled (e.g. full-ci)",
+    "pull_request reopened"
+  ],
+  "no_workflow_dispatch_on_release_gate": true,
+  "blocker_summary": "Exact-head Public Release Gate qualification pending dispatch at f3e302f6; do not merge on 49f2de8d gate alone.",
+  "root_cause_unproven_evidence_preserved": "babel-desktop/fixtures/desktop-ci/evidence/windows-desktop-bridge-startup-42875345388.json verdict ROOT_CAUSE_UNPROVEN"
+}
