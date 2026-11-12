@@ -17,6 +17,78 @@ export const REQUEST_MAX_RETRIES =
 const RETRY_BASE_DELAY_MS = 200;
 
 
+/**
+ * Minimum remaining invocation budget before opening another physical HTTP dispatch
+ * (request retries, stream-idle physical retries).
+ *
+ * This is an intentional transport margin, not a second timeout:
+ * - `invocationDeadlineAt` is the hard wall clock; sleeps are capped to remaining budget.
+ * - Sub-millisecond leftovers after capped backoff used to schedule `abort(0)` fetches
+ *   that still bill as a physical attempt on some providers.
+ * - Requiring >= 10ms remaining rejects those edge dispatches while leaving normal retries
+ *   unchanged when the caller's budget still has usable room.
+ *
+ * Boundary (fixed `now`): remaining 0–9ms → no dispatch; 10ms+ → dispatch allowed.
+ */
+export const PHYSICAL_DISPATCH_MIN_BUDGET_MS = 10;
+
+export function remainingInvocationBudgetMs(invocationDeadlineAt: number, now = Date.now()): number {
+  return Math.max(0, invocationDeadlineAt - now);
+}
+
+export function canDispatchPhysicalRequest(invocationDeadlineAt: number, now = Date.now()): boolean {
+  return remainingInvocationBudgetMs(invocationDeadlineAt, now) >= PHYSICAL_DISPATCH_MIN_BUDGET_MS;
+}
+
+export function invocationDeadlineExpired(invocationDeadlineAt: number, now = Date.now()): boolean {
+  return remainingInvocationBudgetMs(invocationDeadlineAt, now) === 0;
+}
+
+export function invocationTimeoutMessage(
+  providerId: string,
+  model: string,
+  requestTimeoutMs: number,
+): string {
+  return `[${providerId}] request timeout after ${requestTimeoutMs}ms (${model})`;
+}
+
+export function isInvocationTimeoutError(error: unknown): boolean {
+  return error instanceof Error && /request timeout after \d+ms/.test(error.message);
+}
+
+export function assertInvocationBudgetRemaining(
+  invocationDeadlineAt: number,
+  providerId: string,
+  model: string,
+  requestTimeoutMs: number,
+): void {
+  if (invocationDeadlineExpired(invocationDeadlineAt)) {
+    throw new Error(invocationTimeoutMessage(providerId, model, requestTimeoutMs));
+  }
+}
+
+/** Cap retry backoff to remaining invocation budget; never sleep past the deadline. */
+export async function sleepInvocationRetryBackoff(
+  backoffMs: number,
+  invocationDeadlineAt: number,
+  providerId: string,
+  model: string,
+  requestTimeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs);
+  const capped = Math.min(backoffMs, remainingInvocationBudgetMs(invocationDeadlineAt));
+  if (capped <= 0) {
+    // Retry-After: 0 (or sub-ms leftover) means an immediate retry, not an exhausted budget.
+    if (backoffMs === 0 && canDispatchPhysicalRequest(invocationDeadlineAt)) {
+      return;
+    }
+    throw new Error(invocationTimeoutMessage(providerId, model, requestTimeoutMs));
+  }
+  await sleep(capped, signal);
+  assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs);
+}
+
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(new DOMException('Request cancelled', 'AbortError'));
   return new Promise((resolveSleep, reject) => {
@@ -47,7 +119,8 @@ export function getRequestTimeoutMs(): number {
 
 export function getRequestMaxRetries(): number {
   const raw = process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] ?? process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES'];
-  const value = raw === undefined ? REQUEST_MAX_RETRIES : Number(raw);
+  if (raw === undefined || raw === '') return REQUEST_MAX_RETRIES;
+  const value = Number(raw);
   return Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), 10) : REQUEST_MAX_RETRIES;
 }
 

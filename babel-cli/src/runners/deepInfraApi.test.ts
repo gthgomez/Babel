@@ -385,7 +385,7 @@ test('DeepInfra native stream preserves partial output provenance on malformed S
   assert.equal(completions.at(-1)?.partial_model_output, true);
 });
 
-test('DeepInfra native stream rejects a malformed unterminated final SSE frame', async () => {
+test('DeepInfra native stream ignores post-[DONE] buffered garbage', async () => {
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
   const { DeepInfraApiRunner } = await import('./deepInfraApi.js');
   globalThis.fetch = (async () => new Response(
@@ -401,8 +401,7 @@ test('DeepInfra native stream rejects a malformed unterminated final SSE frame',
     [],
   )) events.push(event);
 
-  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'error']);
-  assert.match(events[1]!.message, /Malformed SSE event chunk/);
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'done']);
 });
 
 test('DeepInfra API runner executeWithToolsStream yields error on HTTP failure', async () => {

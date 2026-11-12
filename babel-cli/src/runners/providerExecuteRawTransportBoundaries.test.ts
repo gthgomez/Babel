@@ -1,0 +1,548 @@
+/**
+ * Mocked transport probes for executeRaw / executeRawStream (_executeRequest) paths.
+ * Descriptive IDs only — no private A-T label mapping.
+ *
+ * Mutates globalThis.fetch — when batching with other runner transport suites,
+ * pass `--test-concurrency=1` to avoid parallel fetch/env races.
+ *
+ * Physical dispatch after HTTP/stream-idle retry uses PHYSICAL_DISPATCH_MIN_BUDGET_MS
+ * (10ms intentional margin; see providerResponsePolicy.ts + providerInvocationDeadline.test.ts).
+ */
+
+import assert from 'node:assert/strict'
+import { afterEach, beforeEach, describe, it } from 'node:test'
+
+import { DeepInfraApiRunner } from './deepInfraApi.js'
+import { OpenRouterApiRunner } from './openRouterApi.js'
+import { CommandCodeApiRunner } from './commandCodeApi.js'
+import {
+  DEFAULT_STREAM_MAX_RETRIES,
+  getStreamMaxRetries,
+} from './providerResponseStream.js'
+import type { OpenAiCompatibleRunner } from './protocol/openai-chat-completions.js'
+import type { ProviderInvocationCompleted } from './base.js'
+
+const originalFetch = globalThis.fetch
+const originalEnv = {
+  deepinfraKey: process.env['DEEPINFRA_API_KEY'],
+  openrouterKey: process.env['OPENROUTER_API_KEY'],
+  commandCodeKey: process.env['COMMAND_CODE_API_KEY'],
+  streamRetries: process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'],
+  deepinfraStreamRetries: process.env['BABEL_DEEPINFRA_STREAM_MAX_RETRIES'],
+  idle: process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'],
+  timeout: process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'],
+}
+
+beforeEach(() => {
+  process.env['DEEPINFRA_API_KEY'] = 'fixture-deepinfra-key'
+  process.env['OPENROUTER_API_KEY'] = 'fixture-openrouter-key'
+  process.env['COMMAND_CODE_API_KEY'] = 'fixture-command-code-key'
+  process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '200'
+  process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '1000'
+})
+
+afterEach(() => {
+  globalThis.fetch = originalFetch
+  if (originalEnv.deepinfraKey === undefined) delete process.env['DEEPINFRA_API_KEY']
+  else process.env['DEEPINFRA_API_KEY'] = originalEnv.deepinfraKey
+  if (originalEnv.openrouterKey === undefined) delete process.env['OPENROUTER_API_KEY']
+  else process.env['OPENROUTER_API_KEY'] = originalEnv.openrouterKey
+  if (originalEnv.commandCodeKey === undefined) delete process.env['COMMAND_CODE_API_KEY']
+  else process.env['COMMAND_CODE_API_KEY'] = originalEnv.commandCodeKey
+  if (originalEnv.streamRetries === undefined) delete process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES']
+  else process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'] = originalEnv.streamRetries
+  if (originalEnv.deepinfraStreamRetries === undefined) delete process.env['BABEL_DEEPINFRA_STREAM_MAX_RETRIES']
+  else process.env['BABEL_DEEPINFRA_STREAM_MAX_RETRIES'] = originalEnv.deepinfraStreamRetries
+  if (originalEnv.idle === undefined) delete process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS']
+  else process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = originalEnv.idle
+  if (originalEnv.timeout === undefined) delete process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS']
+  else process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = originalEnv.timeout
+})
+
+type RawRunner = Pick<OpenAiCompatibleRunner, 'executeRaw' | 'executeRawStream'>
+
+type AdapterCase = {
+  label: string
+  runner: () => RawRunner
+}
+
+const ROUTED_MODEL = 'deepseek/deepseek-v4.1-flash'
+
+function wrapSsePayload(adapter: AdapterCase, payload: Record<string, unknown>): string {
+  const body = adapter.label === 'deepinfra' ? payload : { model: ROUTED_MODEL, ...payload }
+  return `data: ${JSON.stringify(body)}`
+}
+
+function sseFixture(adapter: AdapterCase, lines: string[]): string {
+  return `${lines.join('\n')}\n`
+}
+
+const ADAPTERS: AdapterCase[] = [
+  {
+    label: 'deepinfra',
+    runner: () => new DeepInfraApiRunner('deepseek-ai/DeepSeek-V3-0324'),
+  },
+  {
+    label: 'openrouter',
+    runner: () => new OpenRouterApiRunner(
+      'deepseek/deepseek-v4.1-flash',
+      { maxTokens: 128 },
+      { env: process.env, explicitCredential: 'fixture-only' },
+    ),
+  },
+  {
+    label: 'command-code',
+    runner: () => new CommandCodeApiRunner(
+      'deepseek/deepseek-v4.1-flash',
+      { maxTokens: 128 },
+      { env: process.env, explicitCredential: 'fixture-only' },
+    ),
+  },
+]
+
+function heldOpenStreamAfterDone(ssePrefix: string): { response: Response; onCancel: () => boolean } {
+  let bodyCancelled = false
+  let pullGate: () => void
+  const pullBlocked = new Promise<void>((resolve) => { pullGate = resolve })
+  const response = new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(ssePrefix))
+      },
+      async pull() {
+        await pullBlocked
+      },
+      cancel() {
+        bodyCancelled = true
+        pullGate()
+      },
+    }),
+    { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+  )
+  return { response, onCancel: () => bodyCancelled }
+}
+
+describe('executeRaw transport boundaries (mocked)', { concurrency: 1 }, () => {
+  for (const adapter of ADAPTERS) {
+    describe(`${adapter.label} executeRaw / executeRawStream`, { concurrency: 1 }, () => {
+      it('raw-stream-partial-then-provider-error: must not finalize delivered', async () => {
+        globalThis.fetch = async () => new Response(
+          sseFixture(adapter, [
+            wrapSsePayload(adapter, { choices: [{ delta: { content: 'partial' } }] }),
+            wrapSsePayload(adapter, { error: { message: 'upstream overloaded' } }),
+            'data: [DONE]',
+          ]),
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+        )
+        const completed: Array<{ status: string; partial_model_output?: boolean }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onChunk: () => {},
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /Provider stream error|upstream overloaded/i,
+        )
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.partial_model_output, true)
+        assert.equal(completed.some((entry) => entry.status === 'delivered'), false)
+      })
+
+      it('raw-stream-partial-finish-reason-length: must not finalize delivered', async () => {
+        globalThis.fetch = async () => new Response(
+          sseFixture(adapter, [
+            wrapSsePayload(adapter, { choices: [{ delta: { content: 'partial' }, finish_reason: 'length' }] }),
+            'data: [DONE]',
+          ]),
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+        )
+        const completed: Array<{ status: string; partial_model_output?: boolean }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onChunk: () => {},
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /finish_reason: length|output budget/i,
+        )
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.partial_model_output, true)
+        assert.equal(completed.some((entry) => entry.status === 'delivered'), false)
+      })
+
+      it('HTTP transport throw then successful SSE preserves observed model and usage metadata', async () => {
+        if (adapter.label === 'deepinfra') return
+        process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = '4'
+        let physicalAttempts = 0
+        globalThis.fetch = async () => {
+          physicalAttempts += 1
+          if (physicalAttempts === 1) throw new TypeError('fetch failed')
+          return new Response(
+            sseFixture(adapter, [
+              wrapSsePayload(adapter, {
+                choices: [{ delta: { content: 'retried-ok' }, finish_reason: 'stop' }],
+                usage: { prompt_tokens: 41, completion_tokens: 9, total_tokens: 50 },
+              }),
+              'data: [DONE]',
+            ]),
+            { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+          )
+        }
+        const runner = adapter.runner()
+        const completed: ProviderInvocationCompleted[] = []
+        const text = await runner.executeRaw('probe', {
+          onChunk: () => {},
+          onInvocationCompleted: (value) => { completed.push(value) },
+        }, 'system')
+        assert.equal(text, 'retried-ok')
+        assert.equal(physicalAttempts, 2)
+        const metadata = (runner as OpenAiCompatibleRunner).getLastInvocationMetadata?.()
+        assert.equal(metadata?.observed_model_id, ROUTED_MODEL)
+        assert.equal(metadata?.prompt_tokens, 41)
+        assert.equal(metadata?.completion_tokens, 9)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'delivered')
+      })
+
+      it('raw-stream-held-open-after-done-success: releases reader without waiting for EOF', async () => {
+        const { response, onCancel } = heldOpenStreamAfterDone(
+          `${wrapSsePayload(adapter, { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`,
+        )
+        globalThis.fetch = async () => response
+        const completed: Array<{ status: string }> = []
+        const text = await adapter.runner().executeRaw('probe', {
+          onChunk: () => {},
+          onInvocationCompleted: (value) => { completed.push(value) },
+        }, 'system')
+        assert.equal(text, 'ok')
+        assert.equal(onCancel(), true)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'delivered')
+      })
+
+      it('raw-stream-held-open-after-done-success via executeRawStream', async () => {
+        const { response, onCancel } = heldOpenStreamAfterDone(
+          `${wrapSsePayload(adapter, { choices: [{ delta: { content: 'stream-ok' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`,
+        )
+        globalThis.fetch = async () => response
+        const completed: Array<{ status: string }> = []
+        const chunks: string[] = []
+        for await (const chunk of adapter.runner().executeRawStream('probe', 'system', undefined, {
+          onInvocationCompleted: (value) => { completed.push(value) },
+        })) chunks.push(chunk)
+        assert.deepEqual(chunks, ['stream-ok'])
+        assert.equal(onCancel(), true)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'delivered')
+      })
+
+      it('raw-stream-held-open-after-done-length: rejects and cancels reader (not delivered)', async () => {
+        const { response, onCancel } = heldOpenStreamAfterDone(
+          `${wrapSsePayload(adapter, { choices: [{ delta: { content: 'partial' }, finish_reason: 'length' }] })}\n\ndata: [DONE]\n\n`,
+        )
+        globalThis.fetch = async () => response
+        const completed: Array<{ status: string; partial_model_output?: boolean }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onChunk: () => {},
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /finish_reason: length|output budget/i,
+        )
+        assert.equal(onCancel(), true)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.partial_model_output, true)
+      })
+
+      it('raw-stream-held-open-after-done-provider-error: rejects and cancels reader', async () => {
+        const { response, onCancel } = heldOpenStreamAfterDone(
+          `${wrapSsePayload(adapter, { choices: [{ delta: { content: 'partial' } }] })}\n${wrapSsePayload(adapter, { error: { message: 'upstream overloaded' } })}\ndata: [DONE]\n\n`,
+        )
+        globalThis.fetch = async () => response
+        const completed: Array<{ status: string }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onChunk: () => {},
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /Provider stream error|upstream overloaded/i,
+        )
+        assert.equal(onCancel(), true)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed.some((entry) => entry.status === 'delivered'), false)
+      })
+
+      it('raw-nonstream-body-read-timeout-is-not-json-parse-error', async () => {
+        process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '40'
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '500'
+        globalThis.fetch = async () => new Response(
+          new ReadableStream({ start() { /* stall after headers */ } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+        const completed: Array<{ status: string; failure_stage?: string | null }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          (error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error)
+            assert.match(message, /timeout/i)
+            assert.doesNotMatch(message, /Failed to parse API response as JSON/i)
+            return true
+          },
+        )
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.failure_stage, 'stream')
+      })
+
+      it('raw-nonstream-invocation-deadline-not-reset-after-headers', async () => {
+        const totalBudgetMs = 120
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = String(totalBudgetMs)
+        process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = String(totalBudgetMs)
+        const started = Date.now()
+        globalThis.fetch = async () => {
+          await new Promise<void>((resolve) => { setTimeout(resolve, 90) })
+          return new Response(
+            new ReadableStream({ start() { /* consume only remaining budget */ } }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        const completed: Array<{ status: string }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /timeout/i,
+        )
+        const elapsed = Date.now() - started
+        assert.ok(
+          elapsed < totalBudgetMs + 80,
+          `expected invocation deadline ~${totalBudgetMs}ms, observed ${elapsed}ms (deadline must not reset after headers)`,
+        )
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+      })
+
+      it('raw-stream-truncation-without-done: executeRawStream surfaces failure without delivered receipt', async () => {
+        globalThis.fetch = async () => new Response(
+          `${wrapSsePayload(adapter, { choices: [{ delta: { content: 'partial' } }] })}\n\n`,
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+        )
+        const completed: Array<{ status: string }> = []
+        let thrown: unknown
+        const chunks: string[] = []
+        try {
+          for await (const chunk of adapter.runner().executeRawStream('probe', 'system', undefined, {
+            onInvocationCompleted: (value) => { completed.push(value) },
+          })) chunks.push(chunk)
+        } catch (error) {
+          thrown = error
+        }
+        assert.ok(thrown instanceof Error)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.ok(chunks.includes('partial'))
+      })
+
+      it('raw-stream-early-consumer-exit: aborts lane and cancels held-open body', async () => {
+        let bodyCancelled = false
+        let pullGate: () => void
+        const pullBlocked = new Promise<void>((resolve) => { pullGate = resolve })
+        globalThis.fetch = async () => new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(
+                `${wrapSsePayload(adapter, { choices: [{ delta: { content: 'partial' } }] })}\n\n`,
+              ))
+            },
+            async pull() {
+              await pullBlocked
+            },
+            cancel() {
+              bodyCancelled = true
+              pullGate()
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+        )
+        const completed: Array<{ status: string }> = []
+        for await (const chunk of adapter.runner().executeRawStream('probe', 'system', undefined, {
+          onInvocationCompleted: (value) => { completed.push(value) },
+        })) {
+          if (chunk === 'partial') break
+        }
+        await new Promise<void>((resolve) => { setTimeout(resolve, 30) })
+        assert.equal(bodyCancelled, true)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+      })
+
+      it('HTTP 429 enters retry backoff once; invocation deadline blocks second physical dispatch', async () => {
+        process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = '3'
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '60'
+        let calls = 0
+        let httpRetryCallbacks = 0
+        globalThis.fetch = async () => {
+          calls += 1
+          assert.ok(calls <= 1, 'must not dispatch another billable physical fetch after deadline')
+          return new Response('rate limited', {
+            status: 429,
+            headers: { 'retry-after': '30' },
+          })
+        }
+        const completed: Array<{ status: string; failure_stage?: string | null }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onRetry: () => { httpRetryCallbacks += 1 },
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /request timeout after/i,
+        )
+        assert.equal(httpRetryCallbacks, 1, 'must schedule HTTP 429 retry backoff before deadline blocks dispatch')
+        assert.equal(calls, 1, 'must not dispatch another billable physical fetch after deadline')
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.failure_stage, 'request')
+      })
+
+      it('HTTP error response body read respects invocation deadline', async () => {
+        process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = '1'
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '120'
+        process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '40'
+        globalThis.fetch = async () => new Response(
+          new ReadableStream({ start() { /* stall */ } }),
+          { status: 401, headers: { 'content-type': 'text/plain' } },
+        )
+        const completed: Array<{ status: string; failure_stage?: string | null }> = []
+        const started = Date.now()
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /timeout/i,
+        )
+        assert.ok(Date.now() - started < 300)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.failure_stage, 'response')
+      })
+
+      it('stream idle retry scheduled once; deadline blocks second physical dispatch (empty first stream)', async () => {
+        process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'] = '1'
+        process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '30'
+        process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '80'
+        let calls = 0
+        let streamIdleRetryCallbacks = 0
+        globalThis.fetch = async () => {
+          calls += 1
+          assert.ok(calls <= 1, 'must not physical-fetch after invocation deadline')
+          return new Response(
+            new ReadableStream({
+              start() { /* no bytes — idle timeout without partialModelOutput */ },
+            }),
+            { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+          )
+        }
+        const completed: Array<{ status: string; partial_model_output?: boolean; failure_stage?: string | null }> = []
+        await assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onChunk: () => {},
+            onRetry: (info) => {
+              if (info.reason === 'stream_idle') streamIdleRetryCallbacks += 1
+            },
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system'),
+          /timeout|stream idle timeout/i,
+        )
+        assert.equal(streamIdleRetryCallbacks, 1, 'must enter stream idle retry before deadline blocks dispatch')
+        assert.equal(calls, 1, 'must not physical-fetch after invocation deadline')
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.partial_model_output, false)
+        assert.equal(completed[0]?.failure_stage, 'stream')
+      })
+
+      it('raw-nonstream-post-headers-abort: JSON body read honours caller abort', async () => {
+        const abort = new AbortController()
+        let bodyCancelled = false
+        globalThis.fetch = async () => new Response(
+          new ReadableStream({
+            start() { /* stall after headers */ },
+            cancel() { bodyCancelled = true },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+        const completed: Array<{ status: string; failure_stage?: string | null }> = []
+        const pending = assert.rejects(
+          () => adapter.runner().executeRaw('probe', {
+            onInvocationCompleted: (value) => { completed.push(value) },
+          }, 'system', abort.signal),
+          (error: unknown) => error instanceof Error && error.name === 'AbortError',
+        )
+        setTimeout(() => abort.abort(), 25)
+        await pending
+        assert.equal(bodyCancelled, true)
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.failure_stage, 'stream')
+      })
+    })
+  }
+
+for (const adapter of ADAPTERS.filter((entry) => entry.label === 'openrouter' || entry.label === 'command-code')) {
+  describe(`${adapter.label} stream idle retry (empty first stream)`, { concurrency: 1 }, () => {
+    it('idle timeout dispatches second physical fetch; stalled retry error body yields one receipt', async () => {
+      process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'] = '1'
+      process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '40'
+      process.env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] = '5000'
+      process.env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] = '1'
+      let calls = 0
+      let secondBodyCancelled = false
+      globalThis.fetch = async () => {
+        calls += 1
+        if (calls === 1) {
+          return new Response(
+            new ReadableStream({ start() { /* no output before idle */ } }),
+            { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+          )
+        }
+        return new Response(
+          new ReadableStream({
+            start() { /* stall error body under deadline guards */ },
+            cancel() { secondBodyCancelled = true },
+          }),
+          { status: 503, headers: { 'content-type': 'text/plain' } },
+        )
+      }
+      const completed: Array<{ status: string; partial_model_output?: boolean; failure_stage?: string | null }> = []
+      await assert.rejects(
+        () => adapter.runner().executeRaw('probe', {
+          onChunk: () => {},
+          onInvocationCompleted: (value) => { completed.push(value) },
+        }, 'system'),
+        /timeout|503|stream retry/i,
+      )
+      assert.equal(calls, 2)
+      assert.equal(secondBodyCancelled, true)
+      assert.equal(completed.length, 1)
+      assert.equal(completed[0]?.status, 'failed')
+      assert.equal(completed[0]?.partial_model_output, false)
+      assert.equal(completed[0]?.failure_stage, 'response')
+    })
+  })
+}
+
+  it('stream-retry-env-empty: getStreamMaxRetries keeps declared default 1', () => {
+    delete process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES']
+    delete process.env['BABEL_DEEPINFRA_STREAM_MAX_RETRIES']
+    assert.equal(getStreamMaxRetries(), DEFAULT_STREAM_MAX_RETRIES)
+    assert.equal(DEFAULT_STREAM_MAX_RETRIES, 1)
+    process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'] = ''
+    assert.equal(getStreamMaxRetries(), 1)
+    process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'] = '0'
+    assert.equal(getStreamMaxRetries(), 0)
+  })
+})
