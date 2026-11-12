@@ -217,7 +217,7 @@ describe('streamed answers are not duplicated', () => {
     assert.equal(joined, done.answer, 'streamed text must equal the final answer exactly once');
   });
 
-  test('zero-stream completion emits the answer exactly once', async () => {
+  test('zero-stream completion is not a fabricated OK answer', async () => {
     const state = { calls: 0 };
     const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
       task: 'hello',
@@ -238,13 +238,17 @@ describe('streamed answers are not duplicated', () => {
       .filter((e): e is Extract<ChatEvent, { type: 'answer_chunk' }> => e.type === 'answer_chunk')
       .map((e) => e.text)
       .filter((t) => t.length > 0);
+
+    // A done-only stream carries no assistant output. It must not be turned
+    // into a synthetic "OK" answer or a successful completion.
+    assert.equal(chunks.length, 0, `done-only stream must not emit an answer, got ${JSON.stringify(chunks)}`);
     const done = events.filter((e) => e.type === 'done').at(-1) as
       | Extract<ChatEvent, { type: 'done' }>
       | undefined;
-
-    assert.ok(done, 'expected done event');
-    assert.equal(chunks.length, 1, `expected a single emission for zero-stream, got ${JSON.stringify(chunks)}`);
-    assert.equal(chunks[0], done.answer);
+    assert.notEqual(done?.answer, 'OK', 'completion must not fabricate an OK answer');
+    const succeeded = done?.outcome === 'NO_CHANGE_REQUIRED' ||
+      done?.outcome === 'VERIFIED_COMPLETE';
+    assert.equal(succeeded, false, `done-only stream must not succeed (outcome=${done?.outcome ?? 'none'})`);
   });
 
   test('normalized legacy JSON final is buffered — parsed answer emitted exactly once', async () => {
