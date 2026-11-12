@@ -41,17 +41,24 @@ function harness(root, extraEnv = {}) {
   return { runner, packets, start }
 }
 
-const take = async (packets, predicate, timeoutMs = 15_000) => {
+// tsx + module graph startup on a loaded CI runner can exceed a short budget.
+// These wait on a local fixture child only; a generous ceiling still fails a
+// real hang quickly enough to be actionable.
+const take = async (packets, predicate, timeoutMs = 60_000) => {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const index = packets.findIndex(predicate)
     if (index >= 0) return packets.splice(index, 1)[0]
-    if (Date.now() >= deadline) throw new Error('Timed out waiting for a Desktop worker packet')
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Timed out after ${timeoutMs}ms waiting for a Desktop worker packet; saw ${JSON.stringify(packets.map(packet => packet.kind ?? packet.event?.type ?? 'unknown'))}`,
+      )
+    }
     await new Promise(resolve => setTimeout(resolve, 10))
   }
 }
 
-test('resident worker reuses one process and one thread across sequential turns', async () => {
+test('resident worker reuses one process and one thread across sequential turns', { timeout: 120_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-desktop-worker-'))
   const { runner, packets, start } = harness(root)
   try {
