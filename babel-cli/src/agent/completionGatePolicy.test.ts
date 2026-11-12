@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
   buildGreenVerifierRejectionMessage,
+  evaluateCompletionGateForEngine,
   evaluateExecuteCompletionHonesty,
+  groundedGreenRequiredVerifiersInToolLog,
   hasGreenVerifierReceipt,
   hasVerifierShellComposition,
   isAgentOwnedAdHocVerifier,
@@ -803,36 +805,20 @@ describe('planCompletionGateReject', () => {
     assert.equal(p.kind, 'blocked');
   });
 
-  test('mandatory verifier contract reject_continue on inspected no-change before max strikes', async () => {
+  test('mandatory verifier contract does not hard-block inspected no-change without writes', async () => {
     const { planCompletionGateReject } = await import('./completionGatePolicy.js');
-    const p = planCompletionGateReject({
-      hasWrites: false,
-      hasInspectedNoChange: true,
-      policy: 'required',
-      hardGate: false,
-      hadToolCallsThisTurn: true,
-      gateStrikes: 1,
-      maxGateStrikes: 3,
-      mandatoryVerifierContract: true,
-    });
-    assert.equal(p.kind, 'reject_continue');
-  });
-
-  test('mandatory verifier contract blocks interactive soft_allow on inspected no-change after max strikes', async () => {
-    const { planCompletionGateReject } = await import('./completionGatePolicy.js');
-    const p = planCompletionGateReject({
-      hasWrites: false,
-      hasInspectedNoChange: true,
-      policy: 'required',
-      hardGate: false,
-      hadToolCallsThisTurn: true,
-      gateStrikes: 5,
-      maxGateStrikes: 3,
-      mandatoryVerifierContract: true,
-    });
-    assert.equal(p.kind, 'blocked');
-    if (p.kind === 'blocked') {
-      assert.match(p.reason, /verifier/i);
+    for (const gateStrikes of [1, 5]) {
+      const p = planCompletionGateReject({
+        hasWrites: false,
+        hasInspectedNoChange: true,
+        policy: 'required',
+        hardGate: false,
+        hadToolCallsThisTurn: true,
+        gateStrikes,
+        maxGateStrikes: 3,
+        mandatoryVerifierContract: true,
+      });
+      assert.equal(p.kind, 'soft_allow', `strikes=${gateStrikes}`);
     }
   });
 
@@ -1071,5 +1057,71 @@ describe('planCompletionGateReject', () => {
     });
     assert.equal(incomplete.allow, false);
     assert.equal(incomplete.reason, 'verifier_scope');
+  });
+
+  test('unrelated green command does not satisfy bound Requirements harness', () => {
+    const task = 'Fix source.js so the exported value is 2.\nRequirements:\n- `node verify.mjs` must pass.';
+    const log = [
+      { tool: 'read_file', target: 'src/source.js', index: 0, exit_code: 0 },
+      {
+        tool: 'run_command',
+        target: 'npm test',
+        exit_code: 0,
+        processExecuted: true,
+        processCompleted: true,
+        verifierExecuted: true,
+        index: 1,
+      },
+    ];
+    assert.equal(groundedGreenRequiredVerifiersInToolLog(['node verify.mjs'], log), false);
+    assert.equal(
+      evaluateCompletionGateForEngine({
+        turnType: 'completion',
+        taskIntent: 'execute',
+        task,
+        taskClass: 'quick_fix',
+        toolCallLog: log,
+        lastVerifierReceipt: null,
+        requiredVerifierCommands: ['node verify.mjs'],
+        requiredVerifiers: [],
+        executedVerifierLedger: [],
+      }),
+      'reject',
+    );
+  });
+
+  test('raw green tool-log shape cannot launder receipt adaptation errors', () => {
+    // A command that printed exit 0 is not an adapted, owner-bound receipt. If
+    // receipt adaptation reported errors, that is a fail-closed condition even
+    // when the tool log happens to look green.
+    const task = 'Fix parser.js so parseSum(2, 3) returns 5.\nRequirements:\n- `node check.mjs` must pass.';
+    const log = [
+      { tool: 'str_replace', target: 'test/parser.test.mjs', effect_status: 'confirmed_change' as const, index: 0 },
+      {
+        tool: 'run_command',
+        target: 'node check.mjs',
+        exit_code: 0,
+        processExecuted: true,
+        processCompleted: true,
+        verifierExecuted: false,
+        index: 1,
+      },
+    ];
+    assert.equal(groundedGreenRequiredVerifiersInToolLog(['node check.mjs'], log), true);
+    assert.equal(
+      evaluateCompletionGateForEngine({
+        turnType: 'completion',
+        taskIntent: 'execute',
+        task,
+        taskClass: 'quick_fix',
+        toolCallLog: log,
+        lastVerifierReceipt: null,
+        requiredVerifierCommands: ['node check.mjs'],
+        requiredVerifiers: [],
+        executedVerifierLedger: [],
+        verifierEvidenceErrors: ['Missing host-bound required verifiers'],
+      }),
+      'reject',
+    );
   });
 });

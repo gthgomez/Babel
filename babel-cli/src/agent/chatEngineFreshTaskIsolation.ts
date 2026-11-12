@@ -67,6 +67,7 @@ export interface FreshTaskIsolationHost {
   activePlaybook: PlaybookDefinition | null
   requireTodoBeforeMutate: boolean
   clearVerifierEvidenceState(): void
+  reseedVerifierGuardAfterFreshIsolation?(): void
   clearSystemPromptCache(): void
   resolveSubmissionLimits(runtime: TurnRuntimeSnapshot): ChatEngineLimits
   startIndependentTaskCostScope(): void
@@ -94,6 +95,7 @@ export function isolateEngineForFreshUserSubmission(
   host.terminatingLimiter = null
   host.terminalLimiterReason = null
   host.clearVerifierEvidenceState()
+  host.reseedVerifierGuardAfterFreshIsolation?.()
   host.workingState = createWorkingState(runtime.taskText.slice(0, 240))
   host.p11ObservationRefs = []
   host.p11ObservationCaptureIssues = []

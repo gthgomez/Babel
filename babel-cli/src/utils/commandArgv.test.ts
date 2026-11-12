@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildWindowsCommandShellArgs,
   CommandArgvParseError,
+  formatArgvAsCommand,
   parseCommandArgv,
   quoteWindowsCommandArg,
 } from './commandArgv.js';
@@ -55,6 +56,13 @@ test('Windows quoting round-trips trailing backslashes and embedded quotes', () 
     assert.deepEqual(parseCommandArgv(command, 'win32'), ['node', value], value);
   }
 });
+
+test('formatArgvAsCommand round-trips npm post-run arguments', () => {
+  const argv = ['npm', 'run', 'test:unit', '--', '--filter', 'critical']
+  const command = formatArgvAsCommand(argv)
+  assert.equal(command, 'npm run test:unit -- --filter critical')
+  assert.deepEqual(parseCommandArgv(command), argv)
+})
 
 test('Windows cmd invocation keeps the quoted command as one verbatim payload', () => {
   assert.deepEqual(

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -86,6 +87,20 @@ function project(): string {
   return root
 }
 
+function initGitFixture(root: string): void {
+  for (const args of [
+    ['init', '--quiet'],
+    ['config', 'core.autocrlf', 'false'],
+    ['config', 'user.email', 'fixture@example.test'],
+    ['config', 'user.name', 'fixture'],
+    ['add', '-A'],
+    ['commit', '--quiet', '-m', 'fixture baseline'],
+  ]) {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' })
+    assert.equal(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr}`)
+  }
+}
+
 function installFeedbackSensitiveScript(engine: ChatEngine) {
   let calls = 0
   let readIssued = false
@@ -97,7 +112,10 @@ function installFeedbackSensitiveScript(engine: ChatEngine) {
     ) {
       const request = messages ?? []
       requests.push(request.map(message => ({ ...message })))
-      const hasControllerFeedback = request.some(message => message.name === 'harness_feedback' && !message.content.startsWith('Verification evidence at submission start:'))
+      const hasControllerFeedback = request.some((message) => (
+        message.name === 'harness_feedback'
+        && !message.content.startsWith('Verification evidence at submission start:')
+      ))
       calls += 1
 
       if (!hasControllerFeedback) {
@@ -196,7 +214,8 @@ test('rejected native completion feedback is controller-owned, durable, and chan
     content: message.content,
   })))
   assert.equal(runner.calls(), 3, JSON.stringify(capturedMessages))
-  assert.equal(done.outcome, 'NO_CHANGE_REQUIRED')
+  assert.equal(done.outcome, 'UNVERIFIED_PATCH',
+    'inspection-only closure cannot certify semantic obligation without admissible verifier evidence')
   assert.equal(readFileSync(join(root, 'settings.txt'), 'utf8'), existingBytes)
   assert.equal(done.toolCalls?.filter(call => ['write_file', 'str_replace', 'apply_patch'].includes(call.tool)).length, 0)
 
@@ -233,6 +252,109 @@ test('rejected native completion feedback is controller-owned, durable, and chan
     durableFeedback.map(event => ({ content: event.content, provenance: event.provenance, authoritative: event.authoritative })),
     'cold reconstruction retains the same advisory provenance without granting authority',
   )
+})
+
+test('command-bound npm verify supplies admissible NO_CHANGE evidence when already correct', async (t) => {
+  const liveKeys = [
+    'BABEL_LIVE',
+    'BABEL_BENCHMARK_MODE',
+    'BABEL_BENCHMARK_AUTO_APPROVE',
+    'BABEL_ALLOW_HOST_FALLBACK',
+    'BABEL_EXECUTION_PROFILE',
+    'BABEL_AUTONOMY_LEASE',
+  ] as const
+  const liveBackup = Object.fromEntries(liveKeys.map((key) => [key, process.env[key]]))
+  process.env['BABEL_LIVE'] = '1'
+  process.env['BABEL_BENCHMARK_MODE'] = '1'
+  process.env['BABEL_BENCHMARK_AUTO_APPROVE'] = '1'
+  process.env['BABEL_ALLOW_HOST_FALLBACK'] = '1'
+  process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local'
+  process.env['BABEL_AUTONOMY_LEASE'] = JSON.stringify({
+    version: 2,
+    leaseId: 'harness-feedback-criterion',
+    scope: { repository: 'harness-feedback', objective: 'criterion-bound no-change' },
+    allowedCapabilities: [
+      'inspect_repository',
+      'run_local_command',
+      'run_tests',
+      'edit_task_files',
+    ],
+  })
+  t.after(() => {
+    for (const key of liveKeys) {
+      const prev = liveBackup[key]
+      if (prev === undefined) delete process.env[key]
+      else process.env[key] = prev
+    }
+  })
+
+  const root = project()
+  const bound = 'npm run verify'
+  writeFileSync(join(root, 'settings.txt'), 'mode=safe\n')
+  writeFileSync(join(root, 'verify.mjs'), [
+    "import assert from 'node:assert/strict';",
+    "import { readFileSync } from 'node:fs';",
+    "const text = readFileSync('settings.txt', 'utf8');",
+    "assert.match(text, /^mode=safe\\s*$/m);",
+    "assert.doesNotMatch(text, /^mode=unsafe/m);",
+  ].join('\n') + '\n')
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name: 'harness-feedback-fixture',
+    private: true,
+    type: 'module',
+    scripts: { verify: 'node verify.mjs' },
+  }))
+  initGitFixture(root)
+  const task = ['Requirements:', `- \`${bound}\` must pass.`].join('\n')
+  const runId = `harness-feedback-criterion-${Math.random().toString(36).slice(2, 10)}`
+  const engine = new ChatEngine({
+    model: 'deepseek-v4-flash',
+    task,
+    projectRoot: root,
+    runId,
+    maxTurns: 10,
+  })
+  let step = 0
+  const script = [
+    [
+      { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'settings.txt' } },
+      { type: 'done', finishReason: 'tool_calls' },
+    ],
+    [
+      { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: bound } },
+      { type: 'done', finishReason: 'tool_calls' },
+    ],
+    [
+      { type: 'text_delta', text: 'settings.txt already satisfies npm run verify.' },
+      { type: 'done', finishReason: 'stop' },
+    ],
+  ]
+  const runner = {
+    async *executeWithToolsStream() {
+      const events = script[step] ?? script.at(-1)!
+      step += 1
+      for (const event of events) yield event
+    },
+    async execute() { return { type: 'completion', answer: 'scripted' } },
+    async executeRaw() { return 'scripted' },
+    getLastInvocationMetadata() { return null },
+  }
+  const host = engine as unknown as {
+    deliberationRunner: typeof runner
+    synthesisRunner: typeof runner
+    shouldUseNativeTools: () => boolean
+  }
+  host.deliberationRunner = runner
+  host.synthesisRunner = runner
+  host.shouldUseNativeTools = () => true
+
+  const events = await run(engine, task)
+  const done = finalDone(events)
+  const verify = (engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
+    .toolCallLog.find((entry) => entry.tool === 'run_command' && entry.target === bound)
+  assert.equal(verify?.exit_code, 0, 'frozen npm verify identity must execute green')
+  assert.equal(done.outcome, 'NO_CHANGE_REQUIRED')
+  assert.equal(readFileSync(join(root, 'settings.txt'), 'utf8'), 'mode=safe\n')
 })
 
 test('fresh nonoverlapping ranges on one file preserve inspection and reach natural completion', async () => {

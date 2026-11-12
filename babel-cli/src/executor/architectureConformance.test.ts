@@ -603,16 +603,52 @@ test("live kernel rejects coarse golden proof without owned criterion evidence",
 
 test("canonical kernel requires coverage for all required verifiers in multi-verifier mode", () => {
   const kernel = createExecutorKernel("chat");
+  const executionContext = {
+    workspaceRoot: "/fixture",
+    taskId: "task",
+    contractHash: "contract",
+    workingDirectory: "/fixture",
+    environmentFingerprint: "environment",
+    targetSelectors: [] as string[],
+  };
+  const verifierOwner = { ...executionContext, sessionId: "session" };
   const greenNpm = {
     receiptId: "r-npm",
     command: "npm test",
+    argv: ["npm", "test"],
     exitCode: 0,
     authority: true,
     authoritySource: "built_in_runner" as const,
-    boundRevision: { fileHashes: {} } as any,
-    capturedAt: Date.now(),
+    boundRevision: {
+      gitCommitHash: null,
+      compositeTreeHash: "fixture-revision",
+      fileHashes: {},
+      capturedAt: 1,
+    },
+    capturedAt: 1,
     stale: false,
+    scope: "full_suite" as const,
+    tests_total: 1,
+    tests_passed: 1,
+    tests_failed: 0,
+    tests_skipped: 0,
+    executionContext,
+    order: { sessionId: "session", seq: 1 },
   };
+  const requiredVerifiers = [
+    {
+      command: "npm test",
+      executionContext,
+      requiredScope: "full_suite" as const,
+      greenRequired: true,
+    },
+    {
+      command: "pytest",
+      executionContext,
+      requiredScope: "full_suite" as const,
+      greenRequired: true,
+    },
+  ];
 
   const decision = kernel.completion.decide({
     mode: "chat",
@@ -620,7 +656,10 @@ test("canonical kernel requires coverage for all required verifiers in multi-ver
     hasWrite: true,
     verificationPolicy: "strict",
     requiredVerifierCommands: ["npm test", "pytest"],
+    requiredVerifiers,
+    verifierOwner,
     executedVerifierLedger: [greenNpm],
+    currentWorkspaceRevisionHash: "fixture-revision",
     toolCallLog: [],
     proof: { compliant: true },
   });

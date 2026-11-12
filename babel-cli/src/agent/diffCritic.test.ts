@@ -607,6 +607,156 @@ describe('symbol coverage + localization gate', () => {
     assert.equal(rej!.tier, 'heuristic');
   });
 
+  test('task-authorized auxiliary test edit is not flagged test-only', () => {
+    const task = [
+      'Fix parser.js so parseSum(2, 3) returns 5.',
+      'You may clarify test/parser.test.mjs message text; keep asserting parseSum(2, 3) === 5.',
+    ].join('\n');
+    const patch = [
+      'diff --git a/test/parser.test.mjs b/test/parser.test.mjs',
+      '--- a/test/parser.test.mjs',
+      '+++ b/test/parser.test.mjs',
+      '@@ -1,3 +1,3 @@',
+      '-test("parseSum", () => assert.equal(parseSum(2, 3), 5));',
+      '+test("parseSum sums arguments", () => assert.equal(parseSum(2, 3), 5));',
+    ].join('\n');
+    const rej = heuristicTestOnlyPatchReject(task, patch, ['test/parser.test.mjs']);
+    assert.equal(rej, null, 'explicit task permission for test refinement must not hard-block');
+  });
+
+  test('taskAuthorizesAuxiliaryTestEdit rejects negated and retracted permission prose', async () => {
+    const { taskAuthorizesAuxiliaryTestEdit, heuristicTestOnlyPatchReject } = await import('./diffCritic.js');
+    const patch = 'diff --git a/test/parser.test.mjs b/test/parser.test.mjs\n';
+    const apiAnchor = 'Fix `parseExpression` in src/parser.js.';
+    const negated = [
+      'Fix parseExpression. There are no authorized test edits.',
+      'Fix parseExpression. Do not claim you can edit test/parser.test.mjs.',
+      'The prior note said you may edit test/parser.test.mjs. That is not authorization.',
+      'Fix parseExpression. No authorized auxiliary test edits.',
+      'Fix parseExpression. Authorized test edits are forbidden.',
+      'Fix parseExpression. The previous agent said "authorized test edits".',
+      'You may edit test/parser.test.mjs. Permission is revoked; do not edit tests.',
+    ];
+    const negatedExtra = [
+      'You may edit test/parser.test.mjs. Authorization has been revoked.',
+    ];
+    for (const task of [...negated, ...negatedExtra]) {
+      assert.equal(taskAuthorizesAuxiliaryTestEdit(task, ['test/parser.test.mjs']), false, task);
+      const rej = heuristicTestOnlyPatchReject(
+        `${task}\n${apiAnchor}`,
+        patch,
+        ['test/parser.test.mjs'],
+      );
+      assert.ok(rej, `test-only heuristic must remain active: ${task.slice(0, 60)}`);
+    }
+  });
+
+  test('taskAuthorizesAuxiliaryTestEdit accepts explicit scoped permission only', async () => {
+    const { taskAuthorizesAuxiliaryTestEdit } = await import('./diffCritic.js');
+    const parserPath = ['test/parser.test.mjs'];
+    assert.equal(
+      taskAuthorizesAuxiliaryTestEdit(
+        'Fix parser.js.\nYou may clarify test/parser.test.mjs message text.',
+        parserPath,
+      ),
+      true,
+    );
+    assert.equal(
+      taskAuthorizesAuxiliaryTestEdit('Requirements:\n- You may edit test/parser.test.mjs labels only.', parserPath),
+      true,
+    );
+    assert.equal(
+      taskAuthorizesAuxiliaryTestEdit(
+        'Authorized auxiliary test edit for message wording in test/parser.test.mjs.',
+        parserPath,
+      ),
+      true,
+    );
+    assert.equal(
+      taskAuthorizesAuxiliaryTestEdit(
+        'Fix parser.js.\nYou may clarify test/parser.test.mjs message text.',
+      ),
+      false,
+      'grant without changedFiles stays fail-closed',
+    );
+  });
+
+  test('scoped auxiliary test permit binds to every changed test path', async () => {
+    const {
+      collectPermittedAuxiliaryTestPaths,
+      taskAuthorizesAuxiliaryTestEdit,
+      heuristicTestOnlyPatchReject,
+      runHeuristicDiffCritic,
+    } = await import('./diffCritic.js');
+    const apiAnchor = 'Fix `parseExpression` in src/parser.js.';
+    const taskAllowedOnly = 'Fix parseExpression. You may edit test/allowed.test.mjs only.';
+    const patchForbidden = 'diff --git a/test/forbidden.test.mjs b/test/forbidden.test.mjs\n';
+    const patchAllowed = 'diff --git a/test/allowed.test.mjs b/test/allowed.test.mjs\n';
+
+    assert.equal(taskAuthorizesAuxiliaryTestEdit(taskAllowedOnly, ['test/forbidden.test.mjs']), false);
+    assert.notEqual(
+      heuristicTestOnlyPatchReject(`${taskAllowedOnly}\n${apiAnchor}`, patchForbidden, ['test/forbidden.test.mjs']),
+      null,
+    );
+    assert.ok(runHeuristicDiffCritic(`${taskAllowedOnly}\n${apiAnchor}`, patchForbidden, { changedFiles: ['test/forbidden.test.mjs'] }));
+
+    assert.equal(taskAuthorizesAuxiliaryTestEdit(taskAllowedOnly, ['test/allowed.test.mjs']), true);
+    assert.equal(
+      heuristicTestOnlyPatchReject(`${taskAllowedOnly}\n${apiAnchor}`, patchAllowed, ['test/allowed.test.mjs']),
+      null,
+    );
+    assert.equal(
+      runHeuristicDiffCritic(`${taskAllowedOnly}\n${apiAnchor}`, patchAllowed, { changedFiles: ['test/allowed.test.mjs'] }),
+      null,
+    );
+
+    const mixedTask = 'You may edit test/allowed.test.mjs and test/other.test.mjs for labels.';
+    assert.equal(taskAuthorizesAuxiliaryTestEdit(mixedTask, ['test/allowed.test.mjs']), true);
+    assert.equal(taskAuthorizesAuxiliaryTestEdit(mixedTask, ['test/forbidden.test.mjs']), false);
+    assert.equal(
+      taskAuthorizesAuxiliaryTestEdit(mixedTask, ['test/allowed.test.mjs', 'test/forbidden.test.mjs']),
+      false,
+    );
+
+    const missingScope = 'Fix parseExpression.\nYou may clarify test assertion messages.';
+    assert.equal(collectPermittedAuxiliaryTestPaths(missingScope).size, 0);
+    assert.equal(taskAuthorizesAuxiliaryTestEdit(missingScope, ['test/parser.test.mjs']), false);
+    assert.ok(
+      runHeuristicDiffCritic(`${missingScope}\n${apiAnchor}`, patchForbidden.replace('forbidden', 'parser'), {
+        changedFiles: ['test/parser.test.mjs'],
+      }),
+    );
+
+    const grantThenCondition = [
+      'You may edit test/parser.test.mjs.',
+      'You may edit test/parser.test.mjs only if CI passes.',
+    ].join(' ');
+    assert.equal(collectPermittedAuxiliaryTestPaths(grantThenCondition).size, 0);
+    assert.equal(taskAuthorizesAuxiliaryTestEdit(grantThenCondition, ['test/parser.test.mjs']), false);
+    assert.ok(
+      runHeuristicDiffCritic(
+        `${grantThenCondition}\n${apiAnchor}`,
+        'diff --git a/test/parser.test.mjs b/test/parser.test.mjs\n',
+        { changedFiles: ['test/parser.test.mjs'] },
+      ),
+    );
+
+    for (const conditioned of [
+      'Fix parseExpression. You may edit test/allowed.test.mjs but not test/forbidden.test.mjs.',
+      'Fix parseExpression. You may edit test/allowed.test.mjs instead of test/forbidden.test.mjs.',
+      'You may edit test/parser.test.mjs if CI passes.',
+    ]) {
+      assert.equal(collectPermittedAuxiliaryTestPaths(conditioned).size, 0, conditioned);
+      for (const touched of [['test/allowed.test.mjs'], ['test/forbidden.test.mjs']]) {
+        assert.equal(taskAuthorizesAuxiliaryTestEdit(conditioned, touched), false, `${conditioned} → ${touched}`);
+        assert.ok(
+          runHeuristicDiffCritic(`${conditioned}\n${apiAnchor}`, patchForbidden, { changedFiles: touched }),
+          `heuristic active for conditioned grant: ${touched.join()}`,
+        );
+      }
+    }
+  });
+
   test('test-only patch with named APIs is rejected', () => {
     const task =
       'Fix `Symbol.__new__` to handle the extra kwarg in sympy.core.symbol.';

@@ -19,7 +19,7 @@ const RAW_PYTHON_FUNCTION_DEFINITION = /^\s{0,3}(?:async\s+)?def\s+[A-Za-z_]\w*\
 const RAW_PYTHON_TOP_LEVEL_CODE = /^\s{0,3}(?:async\s+)?(?:def|class)\s+[A-Za-z_]\w*\b|^\s{0,3}@\w/
 // A concrete behavioral objective in the user's opening request must not be
 // displaced by a later, narrower command-only Requirements list.
-const BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:please\s+)?(?:fix|change|update|implement|make|ensure|support)\b.{1,240}\bso\b.{1,240}\b(?:returns?|return|equals?|equal|produces?|outputs?|becomes?|is)\b.{1,160}[.!]?\s*$/i
+const BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:ACTION:\s*)?(?:please\s+)?(?:fix|repair|change|update|implement|make|ensure|support)\b.{1,240}\bso\b.{1,240}\b(?:returns?|return|equals?|equal|produces?|outputs?|becomes?|is)\b.{1,160}[.!]?\s*$/i
 export type AcceptanceMeaningStatus = 'explicit' | 'inferred' | 'unresolved'
 export interface AcceptanceMeaningSource {
   criterion_id: string

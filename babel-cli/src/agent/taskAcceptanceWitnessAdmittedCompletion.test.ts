@@ -494,6 +494,215 @@ test('exact behavioral goal plus unrelated green npm test cannot certify a wrong
   assert.notEqual(decision.finalOutcome, 'VERIFIED_COMPLETE', decision.reason)
 })
 
+test('independent probe: Repair wording preserves behavioral goal against unrelated green npm test', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-repair-goal-preservation-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'test'), { recursive: true })
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name: 'repair-goal-preservation-fixture', type: 'module',
+    scripts: { test: 'node --test test/unrelated.test.mjs' },
+  }))
+  writeFileSync(join(root, 'src', 'parser.js'), 'export function parseSum(a, b) { return 0; }\n')
+  writeFileSync(join(root, 'test', 'unrelated.test.mjs'), [
+    'import assert from "node:assert/strict";',
+    'import test from "node:test";',
+    'test("unrelated fixture still works", () => assert.equal(2 + 2, 4));',
+  ].join('\n') + '\n')
+
+  const task = 'Repair parser.js so parseSum(2, 3) returns 5.\nRequirements:\n- `npm test` must pass.'
+  const authority = resolveLiveSessionAuthority({
+    mode: 'chat', task, projectRoot: root,
+    projectTestCommands: ['npm test'], verifierRequirements: ['npm test'],
+  })
+  const contract = authority.taskContract
+  const goal = contract.acceptance.find(item => item.description === 'Repair parser.js so parseSum(2, 3) returns 5.')
+  const testCriterion = contract.acceptance.find(item => item.description === '`npm test` must pass.')
+  assert.ok(goal, 'Repair admission must keep the requested behavior as a required criterion')
+  assert.ok(testCriterion, 'admission keeps the test requirement as its own criterion')
+  assert.ok(goal.verification.verifier_id.startsWith('meaning:'), 'unrelated test success is not pre-bound as proof of behavior')
+
+  const runId = 'repair-goal-preservation-wrong-patch'
+  const service = createCriterionCompletionServiceV1(() => ({ contract, runId, projectRoot: root }))
+  const request = service.currentRequest()!
+  const sessionEvents = createSessionEventLog(runId)
+  const verifierOwner = chatVerifierOwner({ projectRoot: root, sessionId: sessionEvents.session_id,
+    taskId: contract.task_id, contractHash: contract.contract_hash })!
+  const recording = { sessionEvents, ledger: [] as NonNullable<Parameters<typeof captureAndRecordVerifierReceipt>[0]['ledger']>,
+    cache: new Map(), verifierOwner }
+  const mutationPath = 'src/parser.js'
+  await governedMutateSrcFix(root, runId, mutationPath,
+    'export function parseSum(a, b) { return a - b; }\n')
+
+  const npmExecPath = process.env.npm_execpath
+  const bundledNpmCli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  const executable = npmExecPath && existsSync(npmExecPath) ? process.execPath
+    : existsSync(bundledNpmCli) ? process.execPath : 'npm'
+  const args = npmExecPath && existsSync(npmExecPath) ? [npmExecPath, 'test']
+    : existsSync(bundledNpmCli) ? [bundledNpmCli, 'test'] : ['test']
+  const execution = await executeActionWithPolicy(
+    { type: 'test_run', command: 'npm test' }, 'workspace_write', policyCtx(runId, root), {
+      executor: createToolExecutor({
+        executeTool: async request => {
+          assert.equal(request.tool, 'test_run')
+          const child = spawnSync(executable, args, {
+            cwd: root, encoding: 'utf8', env: witnessExecutionEnvironment(root),
+            timeout: 30_000, windowsHide: true,
+          })
+          assert.ifError(child.error)
+          return { exit_code: child.status ?? 1, stdout: child.stdout ?? '', stderr: child.stderr ?? '' }
+        },
+      }),
+      mode: 'chat', lease: null, hostFallbackAllowed: true, isolationAvailable: true,
+    },
+  )
+  assert.equal(execution.policyBlocked, false, JSON.stringify(execution))
+  const stdout = execution.results[0]?.stdout ?? ''
+  const exitCode = execution.results[0]?.exit_code ?? 1
+  assert.equal(exitCode, 0, stdout)
+  assert.match(stdout, /pass 1/, 'the unrelated npm test is genuinely green')
+  const cacheIdentity = resolveVerifierCacheIdentity({ projectRoot: root, command: 'npm test',
+    envKey: verifierEnvironmentKey(witnessExecutionEnvironment(root)) })
+  const receipt = await captureAndRecordVerifierReceipt({
+    projectRoot: root, command: 'npm test', exitCode, summary: '1/1 unrelated test passed', stdout,
+    stderr: execution.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
+    sessionEvents, turnId: runId, ledger: recording.ledger, cache: recording.cache, writeCount: 1,
+    cacheIdentity, verifierOwner: recording.verifierOwner, executionBackend: 'host-process',
+  })
+  assert.ok(receipt)
+  const candidate = candidateShaFromReceipt(root, receipt)
+  service.refreshPrivateEvidence({ proof: { compliant: true }, receipts: [receipt], candidate_sha: candidate, has_mutation: true })
+
+  const result = evaluateCriterionCompletionV1(request)
+  assert.equal(result.verified, false)
+  assert.ok(result.missing_requirements.includes(goal!.id), 'green npm evidence cannot satisfy the behavioral goal')
+
+  const requiredVerifierCommands = ['npm test']
+  const requiredVerifiers = chatVerifierRequirements(verifierOwner, requiredVerifierCommands, task, root).map(requirement => ({
+    ...requirement,
+    executionContext: { ...requirement.executionContext,
+      environmentFingerprint: verifierEnvironmentKey(witnessExecutionEnvironment(root)) },
+  }))
+  const currentRevision = captureCompletionWorkspaceRevisionHash({ projectRoot: root }, [mutationPath], receipt)
+  assert.ok(currentRevision && receipt.receiptId)
+  const decision = createExecutorKernel('chat').completion.decide({
+    mode: 'chat', requestedOutcome: 'VERIFIED_COMPLETE', hasWrite: true,
+    verificationPolicy: 'strict', ...prepareKernelVerifierInput(receipt, recording.ledger),
+    verifierOwner, requiredVerifierCommands, requiredVerifiers,
+    currentReceiptRevisionHashes: { [receipt.receiptId]: currentRevision },
+    currentWorkspaceRevisionHash: currentRevision,
+    toolCallLog: [{ tool: 'write_file', target: mutationPath }, { tool: 'test_run', target: 'npm test' }],
+    proof: { compliant: true }, acceptance: request,
+  })
+  assert.equal(decision.allowed, false)
+  assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
+})
+
+test('independent probe: discovered npm test tamper cannot certify a wrong parser patch', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-npm-discovered-tamper-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'test'), { recursive: true })
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name: 'npm-discovered-tamper-fixture', type: 'module',
+    scripts: { test: 'node --test test/parser.test.mjs' },
+  }))
+  writeFileSync(join(root, 'src', 'parser.js'), 'export function parseSum(a, b) { return a - b; }\n')
+  writeFileSync(join(root, 'test', 'parser.test.mjs'), [
+    'import assert from "node:assert/strict";',
+    'import test from "node:test";',
+    'import { parseSum } from "../src/parser.js";',
+    'test("parseSum returns the required value", () => assert.equal(parseSum(2, 3), 5));',
+  ].join('\n') + '\n')
+
+  const task = 'Fix parser.js so parseSum(2, 3) returns 5.\nRequirements:\n- `npm test` must pass.'
+  const authority = resolveLiveSessionAuthority({
+    mode: 'chat', task, projectRoot: root, projectTestCommands: ['npm test'], verifierRequirements: ['npm test'],
+  })
+  const contract = authority.taskContract
+  const preHashes = computeVerifierDependencyHashes(root, ['npm test'])
+
+  writeFileSync(join(root, 'test', 'parser.test.mjs'), [
+    'import assert from "node:assert/strict";',
+    'import test from "node:test";',
+    'import { parseSum } from "../src/parser.js";',
+    'test("parseSum returns the required value", () => assert.equal(parseSum(2, 3), -1));',
+  ].join('\n') + '\n')
+  const postHashes = computeVerifierDependencyHashes(root, ['npm test'])
+  assert.equal(hasVerifierDependencyTamper(preHashes, postHashes), true, 'rewritten expectations must register as verifier tamper')
+
+  const runId = 'npm-discovered-tamper-negative'
+  const service = createCriterionCompletionServiceV1(() => ({ contract, runId, projectRoot: root }))
+  const request = service.currentRequest()!
+  const sessionEvents = createSessionEventLog(runId)
+  const verifierOwner = chatVerifierOwner({ projectRoot: root, sessionId: sessionEvents.session_id,
+    taskId: contract.task_id, contractHash: contract.contract_hash })!
+  const env = witnessExecutionEnvironment(root)
+  const npmExecPath = process.env.npm_execpath
+  const bundledNpmCli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  const executable = npmExecPath && existsSync(npmExecPath) ? process.execPath
+    : existsSync(bundledNpmCli) ? process.execPath : 'npm'
+  const args = npmExecPath && existsSync(npmExecPath) ? [npmExecPath, 'test']
+    : existsSync(bundledNpmCli) ? [bundledNpmCli, 'test'] : ['test']
+  const execution = await executeActionWithPolicy(
+    { type: 'test_run', command: 'npm test' }, 'workspace_write', policyCtx(runId, root), {
+      executor: createToolExecutor({
+        executeTool: async request => {
+          assert.equal(request.tool, 'test_run')
+          const child = spawnSync(executable, args, {
+            cwd: root, encoding: 'utf8', env, timeout: 30_000, windowsHide: true,
+          })
+          assert.ifError(child.error)
+          return { exit_code: child.status ?? 1, stdout: child.stdout ?? '', stderr: child.stderr ?? '' }
+        },
+      }),
+      mode: 'chat', lease: null, hostFallbackAllowed: true, isolationAvailable: true,
+    },
+  )
+  assert.equal(execution.policyBlocked, false, JSON.stringify(execution))
+  const stdout = execution.results[0]?.stdout ?? ''
+  const exitCode = execution.results[0]?.exit_code ?? 1
+  assert.equal(exitCode, 0, stdout)
+  const receipt = await captureAndRecordVerifierReceipt({
+    projectRoot: root, command: 'npm test', exitCode, summary: 'misleading green after tamper', stdout,
+    stderr: execution.results[0]?.stderr ?? '', mutationPaths: ['test/parser.test.mjs', 'src/parser.js'],
+    sessionEvents, turnId: runId, ledger: [], cache: new Map(), writeCount: 2,
+    cacheIdentity: resolveVerifierCacheIdentity({ projectRoot: root, command: 'npm test', envKey: verifierEnvironmentKey(env) }),
+    verifierOwner, executionBackend: 'host-process',
+  })
+  assert.ok(receipt)
+  service.refreshPrivateEvidence({ proof: { compliant: true }, receipts: [receipt], candidate_sha: candidateShaFromReceipt(root, receipt), has_mutation: true })
+
+  const requiredVerifiers = chatVerifierRequirements(verifierOwner, ['npm test'], task, root)
+  const currentRevision = captureCompletionWorkspaceRevisionHash({ projectRoot: root }, ['src/parser.js', 'test/parser.test.mjs'], receipt)
+  assert.ok(currentRevision && receipt.receiptId)
+  const promotion = evaluateVerifierPromotion({
+    mutating: true,
+    task_class: 'general_swe',
+    required_verifier_commands: ['npm test'],
+    receipts: [buildVerifierReceiptV2({
+      receipt_id: receipt.receiptId ?? 'tamper',
+      verifier_id: 'verifier:npm',
+      argv: ['test'],
+      cwd: root,
+      env_profile_hash: 'env',
+      started_at: new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      exit_code: 0,
+      stdout,
+      stderr: '',
+      workspace_revision: { compositeTreeHash: currentRevision },
+      scope: 'full_suite',
+      command: 'npm test',
+      authoritative: true,
+      freshness: 'fresh',
+    })],
+    current_revision_hash: currentRevision,
+    adversarial: { verifier_def_tampered: hasVerifierDependencyTamper(preHashes, postHashes) },
+  })
+  assert.equal(promotion.authorize_verified_complete, false)
+})
+
 test('a task-authored exact verifier link admits only the matching behavioral evidence', async t => {
   const root = mkdtempSync(join(tmpdir(), 'babel-linked-criterion-proof-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))

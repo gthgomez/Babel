@@ -410,11 +410,10 @@ import {
   checkVerifierTamper as checkVerifierTamperFn,
   extractVerifierCommand as extractVerifierCommandFn,
   hashContent as hashContentFn,
-  initializeVerifierDependencyHashes,
 } from "./chatEngineVerifierSession.js";
-import { explicitCriterionVerifierCommands } from "./taskAcceptanceExecutableBinding.js";
-import { inferTaskAcceptanceV3 } from "./taskAcceptanceMeaning.js";
-
+import { resolveAcceptedReadOnlyTerminal } from "./chatEngineMutatingNoChangeTerminal.js";
+import { seedChatVerifierDependencyHashes } from "./verifierDependencyAdmission.js";
+import { admitVerifierCustodyViolation } from "./verifierCustodyAdmission.js";
 import { RepetitionDetector } from "./repetitionDetector.js";
 import { captureThought } from "./thoughtCapture.js";
 import { persistPreambleBudget } from "./preambleBudgetDiagnostics.js";
@@ -2656,21 +2655,22 @@ export class ChatEngine {
     return { ...canonical, verifierEvidenceErrors: canonical.verifierEvidenceErrors, requiredVerifierCommands, requiredVerifiers, verifierOwner, currentWorkspaceRevisionHash, currentReceiptRevisionHashes, unplannedAttemptEnvironmentFingerprint, proofSelection, selectedChatReceipts, criterionChatReceipts };
   }
 
-  /**
-   * R0/D01: terminal read-only input must be the *accepted* operation for this
-   * submission, not an ambient mode inference. `effectiveOperation` is resolved
-   * once from TaskShape in `beginUserSubmission`; `isReadOnlyChat()` remains a
-   * sufficient explicit read-only signal (BABEL_READ_ONLY / read_only_audit).
-   *
-   * A concluded change request with successful inspection and no mutations
-   * projects a non-certified no-change result. Bare empty completions still
-   * fail the completion gate; neither path can certify a patch.
-   */
   private isAcceptedReadOnlyTerminal(): boolean {
-    return (
-      this.lastTurnRuntime?.effectiveOperation === "READ_ONLY" ||
-      isReadOnlyChat() || (this.lastTurnRuntime !== null && hasInspectedNoChangeEvidence(this.toolCallLog))
-    );
+    return resolveAcceptedReadOnlyTerminal({
+      effectiveOperation: this.lastTurnRuntime?.effectiveOperation,
+      ambientReadOnly: isReadOnlyChat(),
+      hasAnyWrites: this.hasAnyWrites(),
+      toolCallLog: toGateToolLog(this.toolCallLog),
+      criterionCompletion: this.criterionCompletion,
+      buildCriterionRefresh: () => {
+        const verifierInput = this.buildVerifierInput();
+        return {
+          criterionChatReceipts: verifierInput.criterionChatReceipts,
+          candidate_sha: this.criterionCandidateRevisionSha(),
+          has_mutation: false,
+        };
+      },
+    });
   }
 
   private decideCompletion(
@@ -2991,7 +2991,12 @@ export class ChatEngine {
     const previousClass = this.taskClass;
     this.options = { ...this.options, task: runtime.taskText,...(accepted?.compiledChatStack?{compiledChatStack:accepted.compiledChatStack}:{}) };
     this.taskClass = runtime.taskClass;
-    if (previousTask !== runtime.taskText || accepted?.acceptanceChanged) {
+    const continuationScopeUnavailable =
+      input.continueTask === true &&
+      !runtime.continuedTask &&
+      this.taskCostScopeUnavailable;
+    const isolateFresh = !runtime.continuedTask && !continuationScopeUnavailable;
+    if ((previousTask !== runtime.taskText || accepted?.acceptanceChanged) && !isolateFresh) {
       this.initializeVerifierGuard();
     }
     if (previousTask !== runtime.taskText || previousClass !== runtime.taskClass
@@ -3018,17 +3023,7 @@ export class ChatEngine {
       this.terminalLimiterReason = null;
     }
 
-    const continuationScopeUnavailable =
-      input.continueTask === true &&
-      !runtime.continuedTask &&
-      this.taskCostScopeUnavailable;
-    if (!runtime.continuedTask && !continuationScopeUnavailable) {
-      isolateEngineForFreshUserSubmission(
-        this as unknown as import('./chatEngineFreshTaskIsolation.js').FreshTaskIsolationHost,
-        runtime,
-        accepted,
-      );
-    }
+    if (isolateFresh) isolateEngineForFreshUserSubmission(this as unknown as import('./chatEngineFreshTaskIsolation.js').FreshTaskIsolationHost, runtime, accepted);
 
     if (continuationScopeUnavailable) {
       this.budgetExceeded = true;
@@ -4396,18 +4391,23 @@ export class ChatEngine {
     return systemContent;
   }
 
+  reseedVerifierGuardAfterFreshIsolation(): void { if (this.options.projectRoot) this.initializeVerifierGuard(); }
+
   private initializeVerifierGuard(): void {
-    this.verifierInputsUnfrozen = initializeVerifierDependencyHashes(
-      this.options.task,
-      requireProjectRoot(this.options),
-      this.verifierDependencyHashes,
-      [
-        ...this.getResolvedRequiredVerifiers(),
-        ...explicitCriterionVerifierCommands(inferTaskAcceptanceV3(this.options.task)),
-      ],
-    ).length > 0;
+    this.verifierInputsUnfrozen = seedChatVerifierDependencyHashes({
+      task: this.options.task,
+      projectRoot: requireProjectRoot(this.options),
+      hashes: this.verifierDependencyHashes,
+      resolvedVerifierCommands: this.getResolvedRequiredVerifiers(),
+      discoveredTestCommands: this.discoveredTestCommands.map((entry) => entry.command),
+    });
   }
 
+  recordVerifierCustodyViolation(filePath: string): void {
+    const host = { verifierDependencyHashes: this.verifierDependencyHashes, verifierTampered: this.verifierTampered, tamperCount: this.tamperCount, tamperedThisTurn: this.tamperedThisTurn, ...(this.parity.liveAuthority?.taskContract.protected_paths ? { protectedPaths: this.parity.liveAuthority.taskContract.protected_paths } : {}) };
+    admitVerifierCustodyViolation(host, filePath);
+    Object.assign(this, { verifierTampered: host.verifierTampered, tamperCount: host.tamperCount, tamperedThisTurn: host.tamperedThisTurn });
+  }
   private checkVerifierTamper(filePath: string): string | null {
     const state = {
       verifierDependencyHashes: this.verifierDependencyHashes,

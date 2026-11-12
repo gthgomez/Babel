@@ -66,6 +66,38 @@ function cleanCommand(raw: string): string {
     .trim();
 }
 
+/** Requirements/acceptance bullets name session-bound harness commands beyond global verifier prefixes. */
+function pushAcceptanceRequirementLine(line: string, acceptanceCommands: string[]): void {
+  const directNodeTest = line.match(
+    /^\s*(?:[-*]\s*)?(node(?:\.exe)?\s+--test(?:(?!\s+(?:must|should|has\s+to|before|after)\b)\s+(?:"[^"]*"|'[^']*'|[^\s;])+)*)(?=\s+(?:must|should|has\s+to|before|after)\b|[.!?]?\s*$)/i,
+  );
+  if (directNodeTest?.[1]) {
+    acceptanceCommands.push(cleanCommand(directNodeTest[1]));
+    return;
+  }
+  const backtickMustPass = line.match(
+    /^\s*(?:[-*]\s*)?`([^`]+)`\s+(?:must|should|has\s+to)\s+(?:pass|succeed)/i,
+  );
+  if (backtickMustPass?.[1]) {
+    acceptanceCommands.push(cleanCommand(backtickMustPass[1]));
+    return;
+  }
+  const inlineMustPass = line.match(
+    /^\s*(?:[-*]\s*)?(?!`)(.+?)\s+(?:must|should|has\s+to)\s+(?:pass|succeed)/i,
+  );
+  if (inlineMustPass?.[1]) acceptanceCommands.push(cleanCommand(inlineMustPass[1]));
+}
+
+function isAcceptanceSectionBoundCommand(command: string): boolean {
+  if (isVerifierCommand(command)) return true;
+  const trimmed = command.trim();
+  if (!trimmed || /[;|&]/.test(trimmed)) return false;
+  if (/^node(?:\.exe)?\s+(?:-e|--eval)\b/i.test(trimmed)) return false;
+  if (/^node(?:\.exe)?\s+(?:["']?)(?:\.\/)?[\w./\\-]+\.(?:mjs|cjs|js)\b/i.test(trimmed)) return true;
+  if (/^npm\s+run\s+[\w:./-]+/i.test(trimmed)) return true;
+  return false;
+}
+
 function uniqueCommands(commands: readonly string[]): string[] {
   const seen = new Set<string>();
   const output: string[] = [];
@@ -81,7 +113,8 @@ function uniqueCommands(commands: readonly string[]): string[] {
 
 export function extractRequiredVerifierCommandsFromTask(task: string): string[] {
   task = mandatoryVerifierProse(task);
-  const commands: string[] = [];
+  const acceptanceCommands: string[] = [];
+  const proseCommands: string[] = [];
   let inAcceptanceSection = false;
   let activeFence: { marker: '`' | '~'; length: number } | null = null;
   for (const rawLine of task.split(/\r?\n/)) {
@@ -104,15 +137,13 @@ export function extractRequiredVerifierCommandsFromTask(task: string): string[] 
     // than "Run ... before completing". Preserve the command as a verifier
     // obligation so its exact test inputs can be frozen at session admission.
     if (inAcceptanceSection) {
-      const directNodeTest = line.match(
-        /^\s*(?:[-*]\s*)?(node(?:\.exe)?\s+--test(?:(?!\s+(?:must|should|has\s+to|before|after)\b)\s+(?:"[^"]*"|'[^']*'|[^\s;])+)*)(?=\s+(?:must|should|has\s+to|before|after)\b|[.!?]?\s*$)/i,
-      );
-      if (directNodeTest?.[1]) commands.push(cleanCommand(directNodeTest[1]));
+      const requirementLine = heading ? line : rawLine;
+      if (requirementLine.trim()) pushAcceptanceRequirementLine(requirementLine, acceptanceCommands);
     }
 
     const match = rawLine.match(/\bVerifier commands?\s*:\s*(.+)$/i);
     if (match?.[1]) {
-      commands.push(...splitCommandList(trimTrailingTaskLabels(match[1])));
+      proseCommands.push(...splitCommandList(trimTrailingTaskLabels(match[1])));
     }
   }
   for (const clause of splitCommandText(task, true)) {
@@ -120,15 +151,18 @@ export function extractRequiredVerifierCommandsFromTask(task: string): string[] 
     const masked = maskQuotedCommandAtoms(clause);
     for (const match of masked.matchAll(runBeforePattern)) {
       const offset = match.index! + /^Run\s+/i.exec(match[0])![0].length;
-      if (match[1]) commands.push(cleanCommand(clause.slice(offset, offset + match[1].length)));
+      if (match[1]) proseCommands.push(cleanCommand(clause.slice(offset, offset + match[1].length)));
     }
     const verifierIsPattern = /\bverifier\s+(?:is|:)\s*(.+)/gi;
     for (const match of masked.matchAll(verifierIsPattern)) {
       const offset = match.index! + /^verifier\s+(?:is|:)\s*/i.exec(match[0])![0].length;
-      if (match[1]) commands.push(cleanCommand(clause.slice(offset, offset + match[1].length)));
+      if (match[1]) proseCommands.push(cleanCommand(clause.slice(offset, offset + match[1].length)));
     }
   }
-  return uniqueCommands(commands.filter((command) => isVerifierCommand(command)));
+  return uniqueCommands([
+    ...acceptanceCommands.filter((command) => isAcceptanceSectionBoundCommand(command)),
+    ...proseCommands.filter((command) => isVerifierCommand(command)),
+  ]);
 }
 
 function looksLikeTestCommand(command: string): boolean {

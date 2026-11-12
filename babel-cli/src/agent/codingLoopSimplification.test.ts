@@ -250,13 +250,14 @@ describe('ordinary coding-loop behaviors', () => {
     const events = await run(engine, task);
     assert.equal(runner.calls(), 2, JSON.stringify(events.map((event) => event.type === 'thought' ? event.text : event.type)));
     assert.equal(events.some((event) => event.type === 'failed'), false);
-    assert.equal(terminal(events).outcome, 'NO_CHANGE_REQUIRED');
+    assert.equal(terminal(events).outcome, 'UNVERIFIED_PATCH',
+      'inspection-only mutating completion requires grounded evidence, not inspection alone');
     assert.equal(engine.getTurnRuntimeSnapshot()?.effectiveOperation, 'MUTATING');
     assert.equal(readFileSync(join(root, 'parser.ts'), 'utf8'),
       'export const add = (a: number, b: number) => a + b;\n');
   });
 
-  test('an already-correct change with an explicit green verifier completes as no-change', async () => {
+  test('sole semantic task with informal npm prose does not publish NO_CHANGE from green npm alone', async () => {
     await withLiveHostAuthority(async () => {
       const root = project();
       writeFileSync(join(root, 'parser.ts'), 'export const add = (a: number, b: number) => a + b;\n');
@@ -294,12 +295,11 @@ describe('ordinary coding-loop behaviors', () => {
       } | null }).lastVerifierReceipt;
 
       assert.equal(verifier?.exit_code, 0, 'the requested verifier really executed and passed');
-      assert.equal(done.outcome, 'NO_CHANGE_REQUIRED', 'successful no-change is reported without patch certification');
+      assert.notEqual(done.outcome, 'NO_CHANGE_REQUIRED',
+        'informal run npm test prose does not close a sole semantic criterion without criterion-bound proof');
+      assert.notEqual(done.outcome, 'VERIFIED_COMPLETE');
       assert.equal(receipt?.command, 'npm test');
       assert.equal(receipt?.exit_code, 0);
-      assert.equal(receipt?.stale, false);
-      assert.deepEqual(receipt?.boundRevision?.scope, { kind: 'repository' });
-      assert.ok(receipt?.boundRevision?.gitCommitHash, 'the no-change receipt has a Git-backed revision');
       assert.equal(readFileSync(join(root, 'parser.ts'), 'utf8'),
         'export const add = (a: number, b: number) => a + b;\n');
       assert.equal(runner.calls(), 3);

@@ -8,6 +8,20 @@ import { PrivateWorkerRun, approvalToDesktop, buildWorkerEnvironment, workerEven
 
 const entry = fileURLToPath(new URL('./fixtures/fake-private-worker.mjs', import.meta.url))
 
+/**
+ * Remove a temp fixture directory. On Windows a just-killed child can hold its
+ * cwd open briefly, so retry with a real budget rather than racing the OS.
+ */
+function removeFixtureDir(root) {
+  try {
+    rmSync(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 })
+  } catch (error) {
+    if (process.platform !== 'win32' || error?.code !== 'EBUSY') throw error
+    // A leaked handle on the runner is not a product failure; the OS will
+    // reclaim the temp directory. Do not fail the assertion under test.
+  }
+}
+
 function harness(root, extraEnv = {}) {
   const packets = []
   const runner = new PrivateWorkerRun({
@@ -27,17 +41,24 @@ function harness(root, extraEnv = {}) {
   return { runner, packets, start }
 }
 
-const take = async (packets, predicate, timeoutMs = 15_000) => {
+// tsx + module graph startup on a loaded CI runner can exceed a short budget.
+// These wait on a local fixture child only; a generous ceiling still fails a
+// real hang quickly enough to be actionable.
+const take = async (packets, predicate, timeoutMs = 60_000) => {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const index = packets.findIndex(predicate)
     if (index >= 0) return packets.splice(index, 1)[0]
-    if (Date.now() >= deadline) throw new Error('Timed out waiting for a Desktop worker packet')
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Timed out after ${timeoutMs}ms waiting for a Desktop worker packet; saw ${JSON.stringify(packets.map(packet => packet.kind ?? packet.event?.type ?? 'unknown'))}`,
+      )
+    }
     await new Promise(resolve => setTimeout(resolve, 10))
   }
 }
 
-test('resident worker reuses one process and one thread across sequential turns', async () => {
+test('resident worker reuses one process and one thread across sequential turns', { timeout: 120_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-desktop-worker-'))
   const { runner, packets, start } = harness(root)
   try {
@@ -58,7 +79,7 @@ test('resident worker reuses one process and one thread across sequential turns'
     assert.equal(spawns.length, 1, 'two turns must reuse the resident worker process')
   } finally {
     await runner.shutdown()
-    rmSync(root, { recursive: true, force: true })
+    removeFixtureDir(root)
   }
 })
 
@@ -75,7 +96,7 @@ test('a new conversation without a session id creates a new thread', async () =>
     assert.equal(readFileSync(join(root, 'threads.txt'), 'utf8').trim().split('\n').length, 2)
   } finally {
     await runner.shutdown()
-    rmSync(root, { recursive: true, force: true })
+    removeFixtureDir(root)
   }
 })
 
@@ -95,7 +116,7 @@ test('approvals surface through the Desktop binding and deny stays deny', async 
     await take(packets, packet => packet.kind === 'exit')
   } finally {
     await runner.shutdown()
-    rmSync(root, { recursive: true, force: true })
+    removeFixtureDir(root)
   }
 })
 
@@ -111,7 +132,7 @@ test('cancellation is sent to the worker and its terminal is preserved', async (
     await take(packets, packet => packet.kind === 'exit')
   } finally {
     await runner.shutdown()
-    rmSync(root, { recursive: true, force: true })
+    removeFixtureDir(root)
   }
 })
 
@@ -137,7 +158,7 @@ test('a failed worker handshake tears down its owned process instead of leaking 
   } finally {
     await runner.shutdown()
     // A killed child can hold its cwd briefly on Windows after the PID is gone.
-    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    removeFixtureDir(root)
   }
 })
 

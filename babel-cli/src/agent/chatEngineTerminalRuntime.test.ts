@@ -865,6 +865,22 @@ test('a current read-only submission does not inherit the initial task change cl
 })
 
 
+test('independent probe: explicit read-only inspection still completes with NO_CHANGE', t => {
+  const input = terminalInput(t)
+  input.snapshot.context.options.task = 'Report what source.js exports. Do not edit files.'
+  input.snapshot.context.acceptedOperation = 'READ_ONLY'
+  input.snapshot.evidence.observability.toolCallLog.push({
+    index: 0,
+    tool: 'read_file',
+    target: 'source.js',
+    exit_code: 0,
+    detail: 'export const value = 2;',
+  })
+  const stream = completeChatStream(input, 'source.js exports value 2.')
+  assert.equal(stream.type, 'done')
+  if (stream.type === 'done') assert.equal(stream.outcome, 'NO_CHANGE_REQUIRED')
+})
+
 test('stream and callback use the same inspected no-change evidence rule', t => {
   const input = terminalInput(t)
   input.snapshot.context.options.task = 'Fix the missing behavior.'

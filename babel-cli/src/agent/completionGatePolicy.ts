@@ -25,6 +25,36 @@ import { isCatOrTypeCommand } from './codingLoop/verificationStages.js';
 import { parseNativeNodeFooter } from './nativeTestResultCounts.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
 import { isNodeTestCommand, isPythonTestCommand } from '../authority/commandDecoder.js';
+import { isVerifierCommand } from '../services/terminalStatus.js';
+
+/** Green bound verifier execution recorded in the tool log (ledger promotion optional). */
+export function groundedGreenVerifierInToolLog(
+  requiredCommand: string,
+  log: readonly GateToolLogEntry[],
+): boolean {
+  return log.some((entry) => (
+    (entry.tool === 'run_command' || entry.tool === 'test_run')
+    && (entry.exit_code ?? 1) === 0
+    && entry.error !== 'blocked'
+    && entry.error !== 'error'
+    && satisfiesVerifierRequirement(requiredCommand, entry.target)
+    && (entry as { processExecuted?: boolean }).processExecuted !== false
+    && (entry as { processCompleted?: boolean }).processCompleted !== false
+    && (
+      entry.verifierExecuted === true
+      || isAuthoritativeVerifierCommand(entry.target, [requiredCommand])
+    )
+  ));
+}
+
+/** All frozen required commands have grounded green host execution in the tool log. */
+export function groundedGreenRequiredVerifiersInToolLog(
+  requiredCommands: readonly string[],
+  log: readonly GateToolLogEntry[],
+): boolean {
+  return requiredCommands.length > 0
+    && requiredCommands.every((command) => groundedGreenVerifierInToolLog(command, log));
+}
 
 /** Preserve ledger scope; never force targeted → full_suite (H5 live gate). */
 export function receiptScopeFromLedgerEntry(r: unknown): VerifierScope {
@@ -627,7 +657,8 @@ export function resolveCompletionVerificationContext(opts: {
       : noChangeNeedsVerification && resolvedPolicy === 'none'
         ? 'required'
         : resolvedPolicy;
-  const mandatoryVerifierContract = requiredVerifierCommands.length > 0;
+  const mandatoryVerifierContract = requiredVerifierCommands.some((command) =>
+    isVerifierCommand(command));
   return {
     requiredVerifiers: opts.requiredVerifiers ?? [],
     ...(opts.verifierOwner ? { verifierOwner: opts.verifierOwner } : {}),
@@ -772,19 +803,20 @@ export function evaluateExecuteCompletionHonesty(opts: {
   unplannedAttemptEnvironmentFingerprint?: string;
   proofSelection?: CompletionProofSelection;
 }): { allow: boolean; reason: CompletionGateRejectReason } {
-  // Precedence 1: Receipt adaptation failures deterministically reject completion.
-  if (opts.verifierEvidenceErrors && opts.verifierEvidenceErrors.length > 0) {
-    return { allow: false, reason: 'verifier_receipt_invalid' };
-  }
-
   if (!opts.hasWrite && !(opts.allowInspectedNoChange && hasInspectedNoChangeEvidence(opts.toolCallLog))) {
     return { allow: false, reason: 'no_writes' };
+  }
+
+  const required = opts.requiredVerifierCommands ?? [];
+  // Precedence 1: Receipt adaptation failures deterministically reject completion.
+  // A raw green tool-log shape is never substituted for adapted, bound evidence:
+  // it carries no owner/revision/scope/custody identity of its own.
+  if (opts.verifierEvidenceErrors && opts.verifierEvidenceErrors.length > 0) {
+    return { allow: false, reason: 'verifier_receipt_invalid' };
   }
   if (opts.policy === 'none') {
     return { allow: true, reason: null };
   }
-
-  const required = opts.requiredVerifierCommands ?? [];
   const unplannedDelivery=opts.policy === 'required' && required.length === 0 && (opts.requiredVerifiers?.length ?? 0) === 0 && !!opts.unplannedAttemptEnvironmentFingerprint;
   if (opts.requiredVerifiers !== undefined || opts.verifierOwner !== undefined) {
     const selection = opts.proofSelection ?? selectCompletionProof({
@@ -795,8 +827,10 @@ export function evaluateExecuteCompletionHonesty(opts: {
       ...(opts.currentReceiptRevisionHashes !== undefined ? { currentReceiptRevisionHashes: opts.currentReceiptRevisionHashes } : {}),
       receipts: opts.executedVerifierLedger ?? (opts.lastVerifierReceipt ? [opts.lastVerifierReceipt] : []),
     });
-    if (required.some(command => !(opts.requiredVerifiers ?? []).some(record =>
-      satisfiesVerifierRequirement(command, record.command)))) return { allow: false, reason: 'verifier_scope' };
+    if ((opts.requiredVerifiers?.length ?? 0) > 0 && required.some(command => !(opts.requiredVerifiers ?? []).some(record =>
+      satisfiesVerifierRequirement(command, record.command)))) {
+      return { allow: false, reason: 'verifier_scope' };
+    }
     if (selection.evidenceErrors.length || (opts.policy === 'strict' && selection.integrityFindings.length)) return { allow: false, reason: 'verifier_receipt_invalid' };
     if (unplannedDelivery) return {allow:selection.currentAttempts.length > 0,reason:selection.currentAttempts.length ? null : 'verifier_missing'};
     if (selection.unresolvedRelevantFailures.length && opts.policy === 'strict') return { allow: false, reason: 'verifier_red' };
@@ -1572,7 +1606,7 @@ export function planCompletionGateReject(opts: {
     policy: opts.policy,
     hardGate: opts.hardGate,
   });
-  if (opts.mandatoryVerifierContract) {
+  if (opts.mandatoryVerifierContract && opts.hasWrites) {
     enforceHard = true;
   }
 
@@ -1735,7 +1769,12 @@ export function evaluateCompletionGateForEngine(opts: {
   const needsPromotion = hasWrite && requiredVerifierCommands.length > 0
     && (policy === 'strict' || verification.requiredVerifiers.some(requirement => requirement.greenRequired));
   if (needsPromotion) {
-    if (selection.evidenceErrors.length || selection.integrityFindings.length || selection.missingRequirements.length || selection.unresolvedRelevantFailures.length) return 'reject';
+    if (selection.evidenceErrors.length || selection.integrityFindings.length || selection.unresolvedRelevantFailures.length) {
+      return 'reject';
+    }
+    if (selection.missingRequirements.length > 0) {
+      return 'reject';
+    }
     const receipts = selection.selectedCoveringReceipts.map((r) => buildVerifierReceiptV2({
       receipt_id: r.receiptId ?? '', verifier_id: r.verifierId ?? ('verifier_id' in r ? r.verifier_id : undefined) ?? '',
       argv: r.argv ? [...r.argv] : [], cwd: r.executionContext!.workingDirectory,
@@ -1803,7 +1842,9 @@ export function evaluateCompletionGateForEngine(opts: {
       required_verifiers: verification.requiredVerifiers,
       adversarial,
     });
-    if (!promo.authorize_verified_complete) return 'reject';
+    if (!promo.authorize_verified_complete) {
+      return 'reject';
+    }
   }
   return 'allow';
 }

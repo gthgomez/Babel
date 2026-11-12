@@ -6,8 +6,10 @@ import test from 'node:test'
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import {
   bindExecutableVerifiersToTaskAcceptance,
+  canonicalCommandFromFrozenVerification,
   commandsMatchForExecutableBinding,
   criterionExplicitlyNamesTrustedCommand,
+  frozenVerificationMatchesTrustedCommand,
   explicitCriterionVerifierCommands,
   extractPositiveCommandSuccessCriterion,
   mergeTrustedVerifierCommands,
@@ -93,6 +95,67 @@ test('backtick criteria reject extra obligations before a trailing success tail'
   assert.equal(
     criterionExplicitlyNamesTrustedCommand('`npm test` with coverage must pass', 'npm test'),
     false,
+  )
+})
+
+test('canonical frozen verification preserves npm argv after run script name', () => {
+  const canonical = canonicalCommandFromFrozenVerification({
+    executable_id: 'npm',
+    argv: ['run', 'test:unit', '--', '--filter', 'critical'],
+  })
+  assert.equal(canonical, 'npm run test:unit -- --filter critical')
+  assert.equal(
+    frozenVerificationMatchesTrustedCommand(
+      { executable_id: 'npm', argv: ['run', 'test:unit', '--', '--filter', 'critical'] },
+      'npm run test:unit',
+    ),
+    false,
+  )
+  assert.equal(
+    frozenVerificationMatchesTrustedCommand(
+      { executable_id: 'npm', argv: ['run', 'test:unit', '--', '--filter', 'critical'] },
+      'npm run test:unit -- --filter critical',
+    ),
+    true,
+  )
+})
+
+test('canonical frozen verification requires executable_id with argv (no argv-only lossy join)', () => {
+  assert.equal(
+    canonicalCommandFromFrozenVerification({ argv: ['node', 'verify.mjs'] }),
+    null,
+  )
+  const canonical = canonicalCommandFromFrozenVerification({
+    executable_id: 'node',
+    argv: ['verify.mjs', '--mode', 'strict'],
+  })
+  assert.equal(canonical, 'node verify.mjs --mode strict')
+  assert.equal(
+    frozenVerificationMatchesTrustedCommand(
+      { executable_id: 'node', argv: ['verify.mjs', '--mode', 'strict'] },
+      'node verify.mjs',
+    ),
+    false,
+  )
+})
+
+test('quoted argument whitespace is not collapsed into a false argv match', () => {
+  const withDoubleSpace = 'node --test "test  files/foo.test.mjs"'
+  const withSingleSpace = 'node --test "test files/foo.test.mjs"'
+  assert.equal(commandsMatchForExecutableBinding(withDoubleSpace, withSingleSpace), false)
+  assert.equal(
+    frozenVerificationMatchesTrustedCommand(
+      { executable_id: 'node', argv: ['--test', 'test  files/foo.test.mjs'] },
+      withSingleSpace,
+    ),
+    false,
+  )
+  assert.equal(
+    frozenVerificationMatchesTrustedCommand(
+      { executable_id: 'node', argv: ['--test', 'test  files/foo.test.mjs'] },
+      withDoubleSpace,
+    ),
+    true,
   )
 })
 

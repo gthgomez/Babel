@@ -854,6 +854,7 @@ export interface ChatEngineActionExecutorHost {
     rawTarget: string,
   ) => boolean
   checkVerifierTamper: (filePath: string) => string | null
+  recordVerifierCustodyViolation: (filePath: string) => void
   consumeFailureBudget: (failure: FailureCapsuleV1) => boolean
   currentRecoveryBinding: () => RecoveryCandidateBinding | null
   currentTurnTelemetry: ChatTurnTelemetryCollector | null

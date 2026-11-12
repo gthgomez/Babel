@@ -63,5 +63,6 @@ test('change tasks retain productive investigation and may find no required chan
   assert.equal(missingReadCapability, 0)
   assert.equal(unchanged, true)
   assert.ok(terminal?.type === 'done')
-  assert.equal(terminal.outcome, 'NO_CHANGE_REQUIRED')
+  assert.notEqual(terminal.outcome, 'VERIFIED_COMPLETE', 'productive investigation without verifier evidence must not certify')
+  assert.notEqual(terminal.outcome, 'NO_CHANGE_REQUIRED', 'implementation completion stays separate from investigation-only evidence')
 })
