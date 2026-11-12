@@ -24,7 +24,7 @@ Runner-profile `homedir()` under `inheritEnv: false` spawn-floor tests may inter
 | **Head** | `49f2de8d` |
 | **Change** | `isolatedCredentialHomeEnvironment` in bridge/stack tests |
 | **Independent review** | CI green at this head |
-| **Meaning** | Isolation **mitigation** and regression clearance; **does not** prove the hypothesis was the actual exit-1 mechanism on the failed run |
+| **Meaning** | Isolation **mitigation** and regression clearance; **does not establish** the hypothesis was the actual exit-1 mechanism on the failed run |
 
 Artifact: `evidence/windows-desktop-bridge-startup-mitigation-49f2de8d.json`
 
