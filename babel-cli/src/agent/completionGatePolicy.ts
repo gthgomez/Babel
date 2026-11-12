@@ -808,20 +808,13 @@ export function evaluateExecuteCompletionHonesty(opts: {
   }
 
   const required = opts.requiredVerifierCommands ?? [];
-  const logGroundedRequired = opts.hasWrite && opts.policy === 'required' && required.length > 0
-    && groundedGreenRequiredVerifiersInToolLog(required, opts.toolCallLog);
   // Precedence 1: Receipt adaptation failures deterministically reject completion.
-  if (opts.verifierEvidenceErrors && opts.verifierEvidenceErrors.length > 0 && !logGroundedRequired) {
+  // A raw green tool-log shape is never substituted for adapted, bound evidence:
+  // it carries no owner/revision/scope/custody identity of its own.
+  if (opts.verifierEvidenceErrors && opts.verifierEvidenceErrors.length > 0) {
     return { allow: false, reason: 'verifier_receipt_invalid' };
   }
   if (opts.policy === 'none') {
-    return { allow: true, reason: null };
-  }
-  if (logGroundedRequired) {
-    return { allow: true, reason: null };
-  }
-  if (!opts.hasWrite && opts.policy === 'required' && required.length > 0
-    && groundedGreenRequiredVerifiersInToolLog(required, opts.toolCallLog)) {
     return { allow: true, reason: null };
   }
   const unplannedDelivery=opts.policy === 'required' && required.length === 0 && (opts.requiredVerifiers?.length ?? 0) === 0 && !!opts.unplannedAttemptEnvironmentFingerprint;
@@ -847,10 +840,6 @@ export function evaluateExecuteCompletionHonesty(opts: {
       const attemptedAll = selection.missingRequirements.every(requirement =>
         selection.currentAttempts.some(receipt => receiptCoversRequirement(requirement, receipt)));
       if (opts.policy === 'required' && attemptedAll) return { allow: true, reason: null };
-      const logGrounded = opts.policy === 'required' && opts.hasWrite
-        && selection.missingRequirements.every((requirement) =>
-          groundedGreenVerifierInToolLog(requirement.command, opts.toolCallLog));
-      if (logGrounded) return { allow: true, reason: null };
       return { allow: false, reason: 'verifier_missing' };
     }
     return { allow: true, reason: null };
@@ -1781,27 +1770,9 @@ export function evaluateCompletionGateForEngine(opts: {
     && (policy === 'strict' || verification.requiredVerifiers.some(requirement => requirement.greenRequired));
   if (needsPromotion) {
     if (selection.evidenceErrors.length || selection.integrityFindings.length || selection.unresolvedRelevantFailures.length) {
-      const tampered = opts.adversarial?.verifier_def_tampered === true
-        || opts.adversarial?.verifier_inputs_unfrozen === true;
-      if (
-        policy === 'required'
-        && !tampered
-        && groundedGreenRequiredVerifiersInToolLog(requiredVerifierCommands, log)
-      ) {
-        return 'allow';
-      }
       return 'reject';
     }
     if (selection.missingRequirements.length > 0) {
-      const tampered = opts.adversarial?.verifier_def_tampered === true
-        || opts.adversarial?.verifier_inputs_unfrozen === true;
-      if (
-        policy === 'required'
-        && !tampered
-        && groundedGreenRequiredVerifiersInToolLog(requiredVerifierCommands, log)
-      ) {
-        return 'allow';
-      }
       return 'reject';
     }
     const receipts = selection.selectedCoveringReceipts.map((r) => buildVerifierReceiptV2({
@@ -1872,15 +1843,6 @@ export function evaluateCompletionGateForEngine(opts: {
       adversarial,
     });
     if (!promo.authorize_verified_complete) {
-      const tampered = opts.adversarial?.verifier_def_tampered === true
-        || opts.adversarial?.verifier_inputs_unfrozen === true;
-      if (
-        policy === 'required'
-        && !tampered
-        && groundedGreenRequiredVerifiersInToolLog(requiredVerifierCommands, log)
-      ) {
-        return 'allow';
-      }
       return 'reject';
     }
   }

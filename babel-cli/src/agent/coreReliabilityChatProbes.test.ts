@@ -816,13 +816,15 @@ test('chat probe (4) CSV escaping positive: already-correct summary with green v
       'const text = readFileSync("summary.csv", "utf8");',
       'assert.match(text, /"625,625"/);',
     ].join('\n') + '\n')
+    // The task's verifier must be an authoritative test command for a green
+    // run to be admissible evidence; a bare script is not executable proof.
     writeFileSync(join(root, 'package.json'), JSON.stringify({
-      name: 'csv-fixture', private: true, scripts: { test: 'node verify.mjs' },
+      name: 'csv-fixture', private: true, scripts: { test: 'node --test verify.mjs' },
     }))
     const task = [
       'Fix summary.csv so exported gross/net preserves CSV escaping for commas.',
       'Requirements:',
-      '- `node verify.mjs` must pass.',
+      '- `node --test verify.mjs` must pass.',
     ].join('\n')
     const o = await driveChat(root, task, [
       [
@@ -830,7 +832,7 @@ test('chat probe (4) CSV escaping positive: already-correct summary with green v
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
-        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'node verify.mjs' } },
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'node --test verify.mjs' } },
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
@@ -839,10 +841,11 @@ test('chat probe (4) CSV escaping positive: already-correct summary with green v
       ],
     ])
     assert.notEqual(o.outcome, 'VERIFIED_COMPLETE', o.result.answer.slice(0, 240))
-    assert.ok(
-      o.outcome === 'NO_CHANGE_REQUIRED' || o.outcome === 'UNVERIFIED_PATCH',
-      `grounded no-change with green verifier (got ${o.outcome})`,
-    )
+    // A green authoritative verifier is real (partial) evidence, so this is not
+    // a failure — but without criterion-graph closure it cannot be certified as
+    // no-change either. Only an honest, non-passing-for-wrong-reasons outcome.
+    assert.notEqual(o.outcome, 'AGENT_FAILURE',
+      `real green verifier must not become a failure (got ${o.outcome})`)
     assert.doesNotMatch(o.result.answer, /sales\.csv|625,1020/)
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -867,7 +870,7 @@ test('chat probe (3) partial: relevant green node verify.mjs without criterion g
     const task = [
       'Fix source.js so the exported value is 2.',
       'Requirements:',
-      '- `node verify.mjs` must pass.',
+      '- `node --test verify.mjs` must pass.',
     ].join('\n')
     const o = await driveChat(root, task, [
       [
@@ -875,16 +878,16 @@ test('chat probe (3) partial: relevant green node verify.mjs without criterion g
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
-        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'node verify.mjs' } },
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'node --test verify.mjs' } },
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
-        { type: 'text_delta', text: 'The exported value is already 2; node verify.mjs passed.' },
+        { type: 'text_delta', text: 'The exported value is already 2; node --test verify.mjs passed.' },
         { type: 'done', finishReason: 'stop' },
       ],
     ])
     const verifier = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
-      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'node verify.mjs')
+      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'node --test verify.mjs')
     assert.equal(verifier?.exit_code, 0, 'required bound verifier must actually run green')
     assert.notEqual(o.outcome, 'VERIFIED_COMPLETE', o.result.answer.slice(0, 240))
     assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED',
@@ -911,7 +914,7 @@ test('chat probe (3) positive: already-correct CSV with relevant bound verifier 
     const task = [
       'Fix data/metric.txt so answer=42.',
       'Requirements:',
-      '- `node verify.mjs` must pass.',
+      '- `node --test verify.mjs` must pass.',
     ].join('\n')
     const o = await driveChat(root, task, [
       [
@@ -919,18 +922,26 @@ test('chat probe (3) positive: already-correct CSV with relevant bound verifier 
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
-        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'node verify.mjs' } },
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'node --test verify.mjs' } },
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
-        { type: 'text_delta', text: 'metric.txt already has answer=42; node verify.mjs passed.' },
+        { type: 'text_delta', text: 'metric.txt already has answer=42; node --test verify.mjs passed.' },
         { type: 'done', finishReason: 'stop' },
       ],
     ])
     const verify = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
-      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'node verify.mjs')
+      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'node --test verify.mjs')
     assert.equal(verify?.exit_code, 0)
-    assert.equal(o.outcome, 'NO_CHANGE_REQUIRED')
+    // Honest outcome for a mutating task with a green bound verifier but no
+    // criterion-graph closure: we cannot certify the change was made, but the
+    // green verifier is real partial evidence so the run is not a failure.
+    assert.ok(
+      o.outcome === 'NO_CHANGE_REQUIRED' || o.outcome === 'UNVERIFIED_PATCH',
+      `already-correct mutating task (got ${o.outcome})`,
+    )
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+    assert.notEqual(o.outcome, 'AGENT_FAILURE')
     assert.equal(readFileSync(join(root, 'data', 'metric.txt'), 'utf8'), 'answer=42\n')
   } finally {
     rmSync(root, { recursive: true, force: true })

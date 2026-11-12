@@ -1090,7 +1090,10 @@ describe('planCompletionGateReject', () => {
     );
   });
 
-  test('bound Requirements harness grounds partial completion without ledger promotion', () => {
+  test('raw green tool-log shape cannot launder receipt adaptation errors', () => {
+    // A command that printed exit 0 is not an adapted, owner-bound receipt. If
+    // receipt adaptation reported errors, that is a fail-closed condition even
+    // when the tool log happens to look green.
     const task = 'Fix parser.js so parseSum(2, 3) returns 5.\nRequirements:\n- `node check.mjs` must pass.';
     const log = [
       { tool: 'str_replace', target: 'test/parser.test.mjs', effect_status: 'confirmed_change' as const, index: 0 },
@@ -1118,7 +1121,7 @@ describe('planCompletionGateReject', () => {
         executedVerifierLedger: [],
         verifierEvidenceErrors: ['Missing host-bound required verifiers'],
       }),
-      'allow',
+      'reject',
     );
   });
 });
