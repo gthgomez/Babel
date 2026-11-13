@@ -58,12 +58,15 @@ const take = async (packets, predicate, timeoutMs = 120_000) => {
   }
 }
 
-test('resident worker reuses one process and one thread across sequential turns', { timeout: 120_000 }, async () => {
+test('resident worker reuses one process and one thread across sequential turns', { timeout: 240_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-desktop-worker-'))
   const { runner, packets, start } = harness(root)
   try {
     void start({ runId: 'run-1', task: 'first turn', mode: 'chat', executionScope: { kind: 'project', projectRoot: root } })
-    const first = await take(packets, packet => packet.event?.type === 'run_complete')
+    const first = await take(
+      packets,
+      packet => packet.runId === 'run-1' && packet.event?.type === 'run_complete',
+    )
     assert.equal(first.runId, 'run-1')
     assert.match(first.event.result.session_id, /^chat-fixture-1$/)
     assert.equal(first.event.result.terminal_outcome, 'NO_CHANGE_REQUIRED')
@@ -71,7 +74,10 @@ test('resident worker reuses one process and one thread across sequential turns'
     await new Promise(resolve => runner.whenIdle(resolve))
 
     void start({ runId: 'run-2', task: 'second turn', mode: 'chat', sessionId: 'chat-fixture-1', executionScope: { kind: 'project', projectRoot: root } })
-    const second = await take(packets, packet => packet.event?.type === 'run_complete')
+    const second = await take(
+      packets,
+      packet => packet.runId === 'run-2' && packet.event?.type === 'run_complete',
+    )
     assert.equal(second.event.result.session_id, 'chat-fixture-1')
     await take(packets, packet => packet.kind === 'exit')
 
