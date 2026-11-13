@@ -10,15 +10,15 @@ import {
 
 describe('invocation deadline helpers', { concurrency: 1 }, () => {
   it('sleepInvocationRetryBackoff caps wait then refuses further work past deadline', async () => {
-    const invocationDeadlineAt = Date.now() + 80
     const started = Date.now()
+    const invocationDeadlineAt = started + 25
     await assert.rejects(
       () => sleepInvocationRetryBackoff(5_000, invocationDeadlineAt, 'fixture', 'model', 80),
       /request timeout after 80ms/,
     )
     const elapsed = Date.now() - started
     assert.ok(elapsed < 200, `expected capped sleep, observed ${elapsed}ms`)
-    assert.ok(elapsed >= 40, `expected non-zero capped wait, observed ${elapsed}ms`)
+    assert.ok(elapsed >= 10, `expected non-zero capped wait, observed ${elapsed}ms`)
   })
 
   it('sleepInvocationRetryBackoff rejects when budget is already exhausted', async () => {
