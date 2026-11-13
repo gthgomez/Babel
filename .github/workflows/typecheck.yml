@@ -1332,7 +1332,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         node: ['22.19.0', '24.13.1', '24']
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # macOS matrix cells routinely exceed 30m under release-gate queue load.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:

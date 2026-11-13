@@ -295,13 +295,6 @@ export interface ApplyPatchInput {
   patch: string;
 }
 
-/**
- * Apply a unified diff through the central policy gate, identically to
- * str_replace: each target file's new content is written via a write_file
- * AgentAction so checkpoint, integrity, and cache invalidation share the same
- * path as other mutations. Whole-patch semantics are transactional: hunks are
- * applied in memory first; any failed hunk means nothing is written.
- */
 /** Report a rollback truthfully: restored paths and paths deliberately left in place. */
 function formatRollbackOutcome(rollback: PatchRollbackOutcome): string {
   const sections: string[] = [];
@@ -360,6 +353,13 @@ async function runExclusivePaths<T>(
   return acquire(0, []);
 }
 
+/**
+ * Apply a unified diff through the central policy gate, identically to
+ * str_replace: each target file's new content is written via a write_file
+ * AgentAction so checkpoint, integrity, and cache invalidation share the same
+ * path as other mutations. Whole-patch semantics are transactional: hunks are
+ * applied in memory first; any failed hunk means nothing is written.
+ */
 export async function governedApplyPatch(
   input: ApplyPatchInput,
   options: {

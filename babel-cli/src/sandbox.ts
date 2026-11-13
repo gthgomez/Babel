@@ -1655,6 +1655,15 @@ export class SafeExecutor {
     }
     if (result.error) {
       if (result.aborted) {
+        if (result.termination) {
+          try {
+            await result.termination
+          } catch {
+            await awaitPendingProcessTerminations(sessionId ?? 'unscoped')
+          }
+        } else {
+          await awaitPendingProcessTerminations(sessionId ?? 'unscoped')
+        }
         return attachExecutionBackend({
           exit_code: 1,
           stdout: '',

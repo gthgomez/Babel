@@ -1,21 +1,25 @@
 /**
- * daemon/queue.ts — Daemon job queue consumer (Phase 3 hardened)
+ * daemon/queue.ts — Daemon job queue consumer
  *
- * Polls the agentJobs registry, dequeues eligible 'queued' jobs,
- * executes them via runBabelPipeline. Supports:
- * - Priority ordering (lower = higher priority)
- * - Retry with exponential backoff
- * - Rate limiting (sliding window)
- * - Drain on shutdown (Phase 7)
+ * Polls the agentJobs registry, dequeues eligible 'queued' jobs, and executes
+ * them through the shared agent-job pipeline runner. Supports priority ordering,
+ * retry with exponential backoff, rate limiting (sliding window), and drain on shutdown.
  * Concurrency limit: 1 (MVP). Reuses agentJobs.ts for persistence.
  */
 
-import { createAgentJob, updateAgentJob, listAgentJobs } from '../services/agentJobs.js';
+import { updateAgentJob, listAgentJobs } from '../services/agentJobs.js';
 import type { AgentJob } from '../services/agentJobs.js';
+import {
+  runAgentJobThroughPipeline,
+  type AgentJobPipelineRun,
+} from '../services/agentJobPipeline.js';
 import { DAEMON_QUEUE_TICK_INTERVAL_MS } from './constants.js';
 import { writeDaemonJobResult, writeDaemonJobTelemetry } from './evidence.js';
-import type { DaemonJobMeta } from './evidence.js';
+import { isDaemonPipelineQualified } from './pipelineQualification.js';
 import { recommendModel } from './resourceOptimizer.js';
+
+export const DAEMON_PIPELINE_QUARANTINE_MESSAGE =
+  'UNSUPPORTED_OPERATION: Daemon pipeline execution is quarantined pending settlement and recovery qualification.';
 
 /**
  * Truthful queue wait: the wall time between the job record's creation and the
@@ -28,7 +32,6 @@ export function realQueueWaitMs(startedAt: number, createdAt: string | null | un
   if (!Number.isFinite(parsed)) return 0;
   return Math.max(0, startedAt - parsed);
 }
-
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +54,12 @@ export interface DrainResult {
 const DEFAULT_MAX_JOBS_PER_MINUTE = 30;
 const DEFAULT_BASE_BACKOFF_MS = 5000;
 
+/** Injectable seams for deterministic daemon queue tests (production omits). */
+export interface DaemonQueueTestHooks {
+  isPipelineQualified?: () => boolean;
+  runJobPipeline?: (job: AgentJob) => Promise<AgentJobPipelineRun>;
+}
+
 // ── Queue Consumer ───────────────────────────────────────────────────────────
 
 export class DaemonQueue {
@@ -67,6 +76,7 @@ export class DaemonQueue {
     private concurrency: number = 1,
     private maxJobsPerMinute: number = DEFAULT_MAX_JOBS_PER_MINUTE,
     private baseBackoffMs: number = DEFAULT_BASE_BACKOFF_MS,
+    private readonly hooks: DaemonQueueTestHooks = {},
   ) {}
 
   // ── Lifecycle ───────────────────────────────────────────────────────────
@@ -96,7 +106,6 @@ export class DaemonQueue {
   async drain(): Promise<DrainResult> {
     this.stop();
     const abandoned = this._activeJobId;
-    // Brief wait for active job to complete naturally
     if (abandoned) {
       const deadline = Date.now() + 1000;
       while (this._activeJobId !== null && Date.now() < deadline) {
@@ -119,7 +128,6 @@ export class DaemonQueue {
       const pending = this.pendingCount;
       if (pending === 0) return;
 
-      // Rate limit check
       if (this.isRateLimited()) {
         this._rateLimitActive = true;
         return;
@@ -166,16 +174,15 @@ export class DaemonQueue {
     try {
       const result = listAgentJobs();
       allJobs = result.jobs;
-    } catch (err: any) {
-      console.error('[daemon:queue] Failed to list jobs:', err.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[daemon:queue] Failed to list jobs:', message);
       return;
     }
 
-    // Filter to queued, skip retry-delayed
     const eligible = allJobs.filter((j) => j.status === 'queued' && !this.isRetryDelayed(j));
     if (eligible.length === 0) return;
 
-    // Sort by priority (ascending), then created_at (FIFO within priority)
     eligible.sort((a, b) => {
       const pa = a.priority ?? 0;
       const pb = b.priority ?? 0;
@@ -193,58 +200,64 @@ export class DaemonQueue {
 
   private async executeJob(job: AgentJob): Promise<void> {
     this._activeJobId = job.id;
-    this.recordCompletion();
     const startedAt = Date.now();
-
-    // Phase 9: Evidence — pre-execution metadata
     let runDir = '';
-    try {
-      updateAgentJob(job.id, { status: 'running' });
-      console.log(`[daemon:queue] Executing job ${job.id}: ${job.task.slice(0, 80)}...`);
+    let recordedRateLimit = false;
 
-      // Phase 11: Multi-model routing
-      const modelRec = recommendModel(job);
-      let triggerSource: DaemonJobMeta['trigger_source'] = 'cli';
-      if ((job.tags ?? []).includes('scheduler')) triggerSource = 'scheduler';
-      if ((job.tags ?? []).includes('file-watcher')) triggerSource = 'file_watcher';
-      if ((job.retry_count ?? 0) > 0) triggerSource = 'retry';
-
-      // Phase 10: Governance — pre-execution policy check
-      if (job.verify_commands && job.verify_commands.length > 0) {
-        // Policy: verify_commands present — record in evidence but run pipeline
-        console.log(
-          `[daemon:queue] Job ${job.id} has ${job.verify_commands.length} verify command(s).`,
-        );
+    const finishRateLimit = (): void => {
+      if (!recordedRateLimit) {
+        this.recordJobFinished();
+        recordedRateLimit = true;
       }
+    };
 
-      // Phase 12: Rollback — checkpoint before mutation for verified/autonomous modes.
-      // The daemon is not wired to the checkpoint service: creating a real
-      // pre-mutation checkpoint requires the tool-executor request context.
-      // No checkpoint ID may be claimed without an authoritative creation
-      // receipt, so deep-mode jobs record an explicit not-wired status instead.
-      const checkpointId: string | null = null;
-      const checkpointStatus: 'not_wired' | 'skipped' = job.mode === 'deep' ? 'not_wired' : 'skipped';
-      const checkpointNote = checkpointStatus === 'not_wired'
+    const checkpointId: string | null = null;
+    const checkpointStatus: 'not_wired' | 'skipped' = job.mode === 'deep' ? 'not_wired' : 'skipped';
+    const checkpointNote =
+      checkpointStatus === 'not_wired'
         ? 'Daemon deep-mode pre-mutation checkpointing is not wired to the checkpoint service; no recoverability claim is made.'
         : null;
 
-      const { runBabelPipeline } = await import('../pipeline.js');
-      const result = await runBabelPipeline(job.task, {
-        mode: job.mode,
-        ...(job.project_root ? { project: job.project_root } : {}),
-      });
+    try {
+      if (!(this.hooks.isPipelineQualified ?? isDaemonPipelineQualified)()) {
+        updateAgentJob(job.id, {
+          status: 'failed',
+          error: DAEMON_PIPELINE_QUARANTINE_MESSAGE,
+        });
+        this._totalFailed++;
+        finishRateLimit();
+        console.error(`[daemon:queue] Job ${job.id} blocked: pipeline quarantined.`);
+        return;
+      }
+
+      updateAgentJob(job.id, { status: 'running' });
+      console.log(`[daemon:queue] Executing job ${job.id}: ${job.task.slice(0, 80)}...`);
+
+      const modelRec = recommendModel(job);
+      if (job.verify_commands?.length) {
+        console.log(
+          `[daemon:queue] Job ${job.id} binds ${job.verify_commands.length} verify command(s) before execution.`,
+        );
+      }
+
+      const runPipeline = this.hooks.runJobPipeline ?? runAgentJobThroughPipeline;
+      const pipelineRun = await runPipeline(job);
+      const { result, resolvedModel, status, completionVerification, diagnosis } = pipelineRun;
 
       runDir = result.runDir ?? '';
       const durationMs = Date.now() - startedAt;
-      const isSuccess = result.status === 'COMPLETE' || result.status === 'SMALL_FIX_COMPLETE';
 
-      // Phase 9: Evidence — post-execution artifacts
       if (runDir) {
         writeDaemonJobResult(runDir, job.id, {
-          status: isSuccess ? 'complete' : 'failed',
+          status:
+            status === 'complete'
+              ? 'complete'
+              : status === 'verification_failed'
+                ? 'verification_failed'
+                : 'failed',
           pipelineStatus: result.status,
           durationMs,
-          error: isSuccess ? null : `Pipeline ended with status: ${result.status}`,
+          error: pipelineRun.error,
           modelRequested: job.model ?? null,
           modelRecommended: modelRec.model,
           checkpointId,
@@ -259,78 +272,48 @@ export class DaemonQueue {
         });
       }
 
-      if (result.runDir) {
-        updateAgentJob(job.id, {
-          status: isSuccess ? 'complete' : 'failed',
-          run_dir: result.runDir,
-          pipeline_status: result.status,
-          error: isSuccess ? null : `Pipeline ended with status: ${result.status}`,
-        });
-      } else {
-        updateAgentJob(job.id, {
-          status: 'failed',
-          pipeline_status: result.status,
-          error: 'Pipeline produced no run directory.',
-        });
-      }
+      updateAgentJob(job.id, {
+        status,
+        run_dir: result.runDir ?? null,
+        pipeline_status: result.status,
+        completion_verification: completionVerification,
+        diagnosis,
+        error: pipelineRun.error,
+      });
 
-      // Phase 10: Post-execution verification
-      if (job.verify_commands && job.verify_commands.length > 0 && !isSuccess) {
-        // Verification already handled by pipeline; if pipeline failed, mark verification_failed
-        updateAgentJob(job.id, {
-          status: 'verification_failed',
-          error: `Pipeline failed. Verify commands: ${job.verify_commands.join(', ')}`,
-        });
-        this._totalFailed++;
+      finishRateLimit();
+
+      if (status === 'complete') {
+        this._totalCompleted++;
+        console.log(
+          `[daemon:queue] Job ${job.id} completed: ${result.status} (resolved model: ${resolvedModel ?? 'default'}, recommended: ${modelRec.model})`,
+        );
         return;
       }
 
-      // Phase 12: Rollback on pipeline failure — only meaningful when an
-      // authoritative checkpoint record exists (never today; see above).
-      if (!isSuccess && checkpointId && job.project_root) {
-        try {
-          const { restoreCheckpoint, findCheckpoint } = await import('../services/checkpoints.js');
-          const cp = findCheckpoint(checkpointId);
-          if (cp) {
-            restoreCheckpoint(cp.record);
-            console.log(`[daemon:queue] Rolled back checkpoint ${checkpointId} for job ${job.id}`);
-            if (runDir) {
-              writeDaemonJobResult(runDir, job.id, {
-                status: 'failed',
-                pipelineStatus: result.status,
-                durationMs,
-                error: 'Pipeline failed. Rollback performed.',
-                rollbackPerformed: true,
-                checkpointId,
-                checkpointStatus: 'created',
-                modelRequested: job.model ?? null,
-                modelRecommended: modelRec.model,
-              });
-            }
-          }
-        } catch (rollbackErr: any) {
-          console.error(`[daemon:queue] Rollback failed for job ${job.id}:`, rollbackErr.message);
-        }
+      if (status === 'verification_failed') {
+        this._totalFailed++;
+        console.error(`[daemon:queue] Job ${job.id} verification_failed: ${diagnosis.headline}`);
+        return;
       }
 
-      if (isSuccess) {
-        this._totalCompleted++;
-        console.log(
-          `[daemon:queue] Job ${job.id} completed: ${result.status} (recommended model: ${modelRec.model})`,
-        );
-      } else {
-        this.handleFailure(job, `Pipeline status: ${result.status}`);
+      if (!result.runDir) {
+        this._totalFailed++;
+        console.error(`[daemon:queue] Job ${job.id} failed: pipeline produced no run directory.`);
+        return;
       }
-    } catch (err: any) {
+
+      this.handleFailure(job, diagnosis.headline ?? `Pipeline status: ${result.status}`);
+    } catch (err: unknown) {
       const durationMs = Date.now() - startedAt;
-      // Phase 9: Write evidence even on failure
+      const message = err instanceof Error ? err.message : String(err);
       if (runDir) {
         try {
           writeDaemonJobResult(runDir, job.id, {
             status: 'failed',
             pipelineStatus: null,
             durationMs,
-            error: err.message ?? 'Unknown error',
+            error: message,
           });
           writeDaemonJobTelemetry(runDir, job.id, {
             queueWaitMs: realQueueWaitMs(startedAt, job.created_at),
@@ -342,7 +325,14 @@ export class DaemonQueue {
           /* best effort */
         }
       }
-      this.handleFailure(job, err.message ?? 'Unknown error');
+      if (/SETUP_REQUIRED|BUDGET_UNSUPPORTED/i.test(message)) {
+        updateAgentJob(job.id, { status: 'failed', error: message });
+        this._totalFailed++;
+        finishRateLimit();
+        return;
+      }
+      finishRateLimit();
+      this.handleFailure(job, message);
     } finally {
       this._activeJobId = null;
     }
@@ -355,7 +345,6 @@ export class DaemonQueue {
     const retryCount = (job.retry_count ?? 0) + 1;
 
     if (retryCount <= maxRetries) {
-      // Exponential backoff
       const delayMs = this.baseBackoffMs * Math.pow(2, retryCount - 1);
       const retryAfter = new Date(Date.now() + delayMs).toISOString();
 
@@ -376,7 +365,6 @@ export class DaemonQueue {
           `after ${delayMs}ms: ${errorMsg.slice(0, 60)}`,
       );
     } else {
-      // Max retries exhausted
       this._totalFailed++;
       console.error(`[daemon:queue] Job ${job.id} failed (max retries exhausted): ${errorMsg}`);
       try {
@@ -399,15 +387,13 @@ export class DaemonQueue {
 
   private isRateLimited(): boolean {
     const now = Date.now();
-    const windowMs = 60_000; // 1 minute sliding window
-    // Prune old entries
+    const windowMs = 60_000;
     this._completionTimestamps = this._completionTimestamps.filter((ts) => now - ts < windowMs);
     return this._completionTimestamps.length >= this.maxJobsPerMinute;
   }
 
-  private recordCompletion(): void {
+  private recordJobFinished(): void {
     this._completionTimestamps.push(Date.now());
-    // Keep array bounded
     if (this._completionTimestamps.length > this.maxJobsPerMinute * 2) {
       const now = Date.now();
       this._completionTimestamps = this._completionTimestamps.filter((ts) => now - ts < 60_000);

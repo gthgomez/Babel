@@ -1,4 +1,5 @@
-import { open, lstat, rename, link, mkdir, mkdtemp, realpath } from 'node:fs/promises'
+import { open, lstat, rename, link, mkdir, mkdtemp, realpath, access } from 'node:fs/promises'
+import { constants } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
@@ -86,7 +87,12 @@ export async function compensatePatchWrites(
         restored = true
       } else {
         const creationOwnership = created.has(path) ? createdFileOwnership?.get(path) : undefined
-        if (!before?.isFile() || before.isSymbolicLink() || (before.mode & 0o222n) === 0n) {
+        if (!before || !before.isFile() || before.isSymbolicLink()) {
+          throw new Error('not restored — target is not a writable owned regular file')
+        }
+        try {
+          await access(anchors.path(ownedTarget()), constants.W_OK)
+        } catch {
           throw new Error('not restored — target is not a writable owned regular file')
         }
         if (created.has(path) && (!creationOwnership || creationOwnership.expectedContent !== expected

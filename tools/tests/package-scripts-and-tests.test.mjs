@@ -428,6 +428,8 @@ export const SPECIALIZED_LANES = {
       'src/daemon/integration.test.ts',
       'src/daemon/ipc.test.ts',
       'src/daemon/queue.test.ts',
+      'src/daemon/queue.quarantine.test.ts',
+      'src/daemon/queue.execution.test.ts',
       'src/daemon/recovery.test.ts',
     ],
     command: 'npm run test:daemon',
@@ -866,7 +868,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   }
 
   const totalSpecializedFiles = Object.values(SPECIALIZED_LANES).reduce((acc, l) => acc + l.files.length, 0);
-  assert.equal(totalSpecializedFiles, 23, `Expected exactly 23 specialized test files, found ${totalSpecializedFiles}`);
+  assert.equal(totalSpecializedFiles, 25, `Expected exactly 25 specialized test files, found ${totalSpecializedFiles}`);
 
   const { errors, specializedSet, unclassified, overlap } = validateTestClassification(
     allTests,
@@ -877,7 +879,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   );
 
   assert.equal(errors.length, 0, `Test classification errors:\n${errors.join('\n')}`);
-  assert.equal(specializedSet.size, 23);
+  assert.equal(specializedSet.size, 25);
   assert.equal(unclassified.length, 0);
   assert.equal(overlap.length, 0);
   const classified = [...unitInventory, ...specializedSet].sort();

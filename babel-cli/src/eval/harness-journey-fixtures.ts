@@ -98,7 +98,7 @@ async function materialize(root: string, files: Record<string, string>): Promise
 function git(root: string, args: string[]): string {
   const env = { ...benchmarkGitObserveEnv(), ...{ GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'user.name', GIT_CONFIG_VALUE_0: 'Journey Fixture', GIT_CONFIG_KEY_1: 'user.email', GIT_CONFIG_VALUE_1: 'fixture@example.invalid' } }
   const result = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.attributesFile=/dev/null', '-c', 'core.autocrlf=false', '-c', 'commit.gpgsign=false', ...args], {
-    cwd: root, encoding: 'utf8', timeout: 10_000, windowsHide: true, env,
+    cwd: root, encoding: 'utf8', timeout: process.platform === 'win32' ? 30_000 : 10_000, windowsHide: true, env,
   })
   if (result.error || result.status !== 0) throw new Error(`Fixture git ${args[0]} failed (exit ${result.status ?? 'unknown'})`)
   return result.stdout

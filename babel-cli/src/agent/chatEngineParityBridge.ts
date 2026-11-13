@@ -1421,7 +1421,9 @@ export function checkpointParityEventLog(rt: ParityRuntime, runDir: string): voi
  * Await every authority-bearing checkpoint artifact. Compaction and other
  * state-replacing operations must use this path instead of fire-and-forget.
  *
- * Multi-artifact atomicity (all-or-nothing across 5 primaries):
+ * Multi-artifact atomicity (all-or-nothing across five mandatory primaries,
+ * plus optional context checkpoint, task-mode history, objective lifecycle,
+ * and budget artifacts when present):
  * 1. Memory-only prepare (budget dual-write for payload; cursors not advanced)
  * 2. Stage sibling `.tmp` files for the full batch
  * 3. Backup existing primaries to `.bak`
