@@ -100,7 +100,6 @@ function normalizeProjectName(name: string): string {
 }
 
 function resolveCanonicalName(dirName: string): string {
-  // Check aliases first (case-insensitive)
   for (const [alias, canonical] of Object.entries(PROJECT_NAME_ALIASES)) {
     if (alias.toLowerCase() === dirName.toLowerCase()) {
       return canonical;
@@ -151,12 +150,12 @@ export class WorkspaceScanner {
 
   /**
    * Walk up from `cwd` looking for a directory with project markers.
-   * Returns the first match, or null if none found (including when we reach workspace root).
+   * Stops at the configured workspace root unless that root itself has markers
+   * (monorepo/workspace-root-as-project). Returns null when no qualifying directory is found.
    */
   detectFromCwd(cwd?: string): WorkspaceProject | null {
     const startDir = resolve(cwd ?? process.cwd());
 
-    // Check cache
     const cached = this.projectCache.get(startDir);
     if (cached !== undefined) return cached;
 
@@ -206,7 +205,6 @@ export class WorkspaceScanner {
     const normalized = normalizeProjectName(name);
     if (!normalized) return null;
 
-    // Check cache
     const cached = this.projectCache.get(`__name__${normalized.toLowerCase()}`);
     if (cached !== undefined) return cached?.root ?? null;
 
@@ -220,7 +218,6 @@ export class WorkspaceScanner {
       }
     }
 
-    // Check aliases
     const canonicalName = resolveCanonicalName(normalized);
     if (canonicalName.toLowerCase() !== normalized.toLowerCase()) {
       for (const project of projects) {

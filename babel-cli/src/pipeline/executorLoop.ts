@@ -1880,7 +1880,8 @@ export async function runExecutorLoop(
     return map;
   })();
 
-  // ── Phase 5: Structured Turn History (dual-write alongside legacy string) ──
+  // Structured TurnHistory is recorded in parallel with legacy executionHistory;
+  // executor turn prompts are still built from executionHistory until migration completes.
   const turnHistory = new TurnHistory();
 
   for (let turn = 1; turn <= MAX_EXECUTOR_TURNS; turn++) {
@@ -1911,7 +1912,6 @@ export async function runExecutorLoop(
       executionHistory = compactionResult.newHistory;
     }
 
-    // Phase 5: compact structured turn history alongside legacy string compaction
     if (turn > 5) {
       turnHistory.compact({ keepRecent: 5, maxFullTurns: 20 });
     }
