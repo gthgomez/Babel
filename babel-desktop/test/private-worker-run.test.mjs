@@ -44,7 +44,7 @@ function harness(root, extraEnv = {}) {
 // tsx + module graph startup on a loaded CI runner can exceed a short budget.
 // These wait on a local fixture child only; a generous ceiling still fails a
 // real hang quickly enough to be actionable.
-const take = async (packets, predicate, timeoutMs = 60_000) => {
+const take = async (packets, predicate, timeoutMs = 120_000) => {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const index = packets.findIndex(predicate)
