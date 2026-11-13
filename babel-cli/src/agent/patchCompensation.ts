@@ -1,4 +1,5 @@
-import { open, lstat, rename, link, mkdir, mkdtemp, realpath } from 'node:fs/promises'
+import { open, lstat, rename, link, mkdir, mkdtemp, realpath, access } from 'node:fs/promises'
+import { constants } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
@@ -10,12 +11,6 @@ import { acquireEffectDirectoryAnchors, type EffectDirectoryAnchors } from '../e
 
 export interface PatchRollbackOutcome { rolledBack: string[]; failures: string[] }
 const hash = (bytes: string): string => createHash('sha256').update(bytes).digest('hex')
-
-function isWritableOwnedRegularFile(mode: bigint, isFile: boolean, isSymbolicLink: boolean): boolean {
-  if (!isFile || isSymbolicLink) return false
-  if (process.platform === 'win32') return true
-  return (mode & 0o222n) !== 0n
-}
 
 /**
  * Caller retains its FileWriteMutex locks. Capture by rename, validate the
@@ -92,7 +87,12 @@ export async function compensatePatchWrites(
         restored = true
       } else {
         const creationOwnership = created.has(path) ? createdFileOwnership?.get(path) : undefined
-        if (!before || !isWritableOwnedRegularFile(before.mode, before.isFile(), before.isSymbolicLink())) {
+        if (!before || !before.isFile() || before.isSymbolicLink()) {
+          throw new Error('not restored — target is not a writable owned regular file')
+        }
+        try {
+          await access(anchors.path(ownedTarget()), constants.W_OK)
+        } catch {
           throw new Error('not restored — target is not a writable owned regular file')
         }
         if (created.has(path) && (!creationOwnership || creationOwnership.expectedContent !== expected
