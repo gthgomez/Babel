@@ -154,7 +154,7 @@ async function main(): Promise<void> {
     return { shutdown: true };
   });
 
-  // ── Queue IPC handlers (Phase 3) ──────────────────────────────────────
+  // ── Queue IPC handlers ───────────────────────────────────────────────
 
   ipc.on('queue.enqueue', async (params: any) => {
     const job = createAgentJob({
@@ -196,7 +196,7 @@ async function main(): Promise<void> {
     };
   });
 
-  // ── File watcher IPC handlers (Phase 4) ───────────────────────────────
+  // ── File watcher IPC handlers ─────────────────────────────────────────
 
   ipc.on('watcher.add', async (params: any) => {
     if (!watcher) {
@@ -228,7 +228,7 @@ async function main(): Promise<void> {
     return { rules: watcher?.listRules() ?? loadWatchRules() };
   });
 
-  // ── Scheduler IPC handlers (Phase 8) ──────────────────────────────────
+  // ── Scheduler IPC handlers ────────────────────────────────────────────
 
   const scheduler = new DaemonScheduler(60_000);
   scheduler.start();
@@ -261,7 +261,7 @@ async function main(): Promise<void> {
     return { deleted: result.deleted };
   });
 
-  // ── Optimizer IPC handlers (Phase 11) ──────────────────────────────────
+  // ── Optimizer IPC handlers ──────────────────────────────────────────────
 
   ipc.on('optimizer.recommend', async (params: any) => {
     const { recommendModel } = await import('./resourceOptimizer.js');
@@ -272,7 +272,7 @@ async function main(): Promise<void> {
     return rec;
   });
 
-  // ── Protocol IPC handlers (Phase 5) ───────────────────────────────────
+  // ── Protocol IPC handlers ───────────────────────────────────────────────
 
   const { createProtocolHostState, handleProtocolRequest } = await import('../protocol/client/host.js');
   const { isJsonRpcErrorResponse } = await import('../protocol/jsonRpc.js');
@@ -505,7 +505,7 @@ async function main(): Promise<void> {
     return { success: false, error: 'No active pipeline found for request' };
   });
 
-  // ── Doctor IPC handlers (Phase 5) ─────────────────────────────────────
+  // ── Doctor IPC handlers ─────────────────────────────────────────────────
 
   ipc.on('doctor.metrics', async () => {
     const status = queue.getStatus();

@@ -159,6 +159,10 @@ export async function runLaneVerifiers(ctx: VerifierContext): Promise<LaneVerifi
  *
  * Read-only lanes check that the plan/report doesn't contradict task invariants.
  * Mutating lanes check that changed files satisfy invariants.
+ *
+ * Tool-call substring checks in this verifier are advisory (warn status). They do
+ * not replace frozen verifier receipts, workspace-manager gates, or ChatEngine completion
+ * honesty policies for mandatory green verification.
  */
 export function createExactInvariantsVerifier(): Verifier {
   return {
