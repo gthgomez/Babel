@@ -151,7 +151,8 @@ export class WorkspaceScanner {
 
   /**
    * Walk up from `cwd` looking for a directory with project markers.
-   * Returns the first match, or null if none found (including when we reach workspace root).
+   * Stops at the configured workspace root unless that root itself has markers
+   * (monorepo/workspace-root-as-project). Returns null when no qualifying directory is found.
    */
   detectFromCwd(cwd?: string): WorkspaceProject | null {
     const startDir = resolve(cwd ?? process.cwd());

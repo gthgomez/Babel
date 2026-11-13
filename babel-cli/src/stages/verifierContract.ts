@@ -17,6 +17,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parseCommandArgv } from '../utils/commandArgv.js';
 
 // ── Core Interface ───────────────────────────────────────────────────────────
 
@@ -209,17 +210,19 @@ export function createExactInvariantsVerifier(): Verifier {
 
       if (expectedVerifiers.size > 0 && ctx.toolCallLog) {
         for (const cmd of expectedVerifiers) {
-          const wasRun = ctx.toolCallLog.some(
-            (entry) =>
-              entry.tool === 'shell_exec' &&
-              typeof entry.input?.command === 'string' &&
-              entry.input.command.includes(cmd),
-          );
+          const expectedArgv = parseCommandArgv(cmd);
+          const wasRun = ctx.toolCallLog.some((entry) => {
+            if (entry.tool !== 'shell_exec' || typeof entry.input?.command !== 'string') {
+              return false;
+            }
+            const executedArgv = parseCommandArgv(entry.input.command);
+            return JSON.stringify(executedArgv) === JSON.stringify(expectedArgv);
+          });
           if (!wasRun) {
             checks.push({
               id: `verifier_not_run_${cmd.replace(/\s+/g, '_')}`,
               status: 'warn',
-              message: `Expected verification command "${cmd}" was not found in the tool call log.`,
+              message: `Expected verification command "${cmd}" was not executed with matching argv in the tool call log.`,
             });
           }
         }

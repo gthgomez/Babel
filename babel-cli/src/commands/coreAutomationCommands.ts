@@ -1,17 +1,14 @@
 import { join } from "node:path";
 import { Command } from "commander";
 import { printJsonErrorAndExit, printJsonOrHuman } from "./output.js";
-import { BabelEventBus, runBabelPipeline } from "../pipeline.js";
 import { resolveInspectRunDir } from "../inspect/loaders.js";
 import { BABEL_RUNS_DIR, VALID_MODES, resolveMode, type ValidMode } from "../cli/constants.js";
 import { formatBdnsDiagnosticHuman, loadBdnsDiagnosticBundle } from "../diagnostics/bdns/reader.js";
 import { approveAgentJob, createAgentJob, formatAgentJobHuman, formatAgentJobListHuman, getAgentJob, getAgentJobApprovalState, listAgentJobs, pauseAgentJob, resumeAgentJob, updateAgentJob, writeAgentJobReport, type AgentJob } from "../services/agentJobs.js";
 import { APPROVAL_STATUSES, approveApproval, denyApproval, formatApprovalHuman, formatApprovalListHuman, inspectApproval, listApprovals, requestDependencyInstallApproval, requestModelEscalationApproval, type ApprovalRecord, type ApprovalStatus } from "../services/approvalQueue.js";
-import { evaluateCompletionVerification, type CompletionVerificationGate } from "../services/completionVerification.js";
 import { diagnoseRun, formatHaltDiagnosisHuman, type HaltDiagnosis } from "../services/haltDiagnosis.js";
 import { formatEscalationRecommendationHuman, recommendModelEscalation } from "../services/modelEscalationRules.js";
-import { verifyWorkspaceProject } from "../services/workspaceManager.js";
-import { resolveAgentJobModel } from '../services/agentJobs.js';
+import { runAgentJobThroughPipeline } from '../services/agentJobPipeline.js';
 
 
 function parseApprovalStatus(
@@ -72,34 +69,6 @@ function parseSemicolonCommands(raw: string | undefined): string[] {
     .filter((command) => command.length > 0);
 }
 
-async function withJobEnv<T>(job: AgentJob, run: () => Promise<T>): Promise<T> {
-  const previousProfile = process.env["BABEL_EXECUTION_PROFILE"];
-  const previousProjectRoot = process.env["BABEL_PROJECT_ROOT"];
-  const previousAllowedRoots = process.env["BABEL_ALLOWED_ROOTS"];
-
-  process.env["BABEL_EXECUTION_PROFILE"] = job.execution_profile;
-  if (job.project_root) {
-    process.env["BABEL_PROJECT_ROOT"] = job.project_root;
-  }
-  if (job.approved_roots.length > 0) {
-    process.env["BABEL_ALLOWED_ROOTS"] = job.approved_roots.join(",");
-  }
-
-  try {
-    return await run();
-  } finally {
-    if (previousProfile === undefined)
-      delete process.env["BABEL_EXECUTION_PROFILE"];
-    else process.env["BABEL_EXECUTION_PROFILE"] = previousProfile;
-    if (previousProjectRoot === undefined)
-      delete process.env["BABEL_PROJECT_ROOT"];
-    else process.env["BABEL_PROJECT_ROOT"] = previousProjectRoot;
-    if (previousAllowedRoots === undefined)
-      delete process.env["BABEL_ALLOWED_ROOTS"];
-    else process.env["BABEL_ALLOWED_ROOTS"] = previousAllowedRoots;
-  }
-}
-
 function jobRequiresApproval(job: AgentJob): boolean {
   const approvalState = getAgentJobApprovalState(job);
   return approvalState.pending.length > 0 || approvalState.denied.length > 0;
@@ -125,81 +94,21 @@ async function runAgentJobNow(jobId: string): Promise<AgentJob> {
     });
   }
 
-  const model = resolveAgentJobModel(existing);
   const running = updateAgentJob(existing.id, {
     status: "running",
     error: null,
   });
 
-  try {
-    const eventBus = new BabelEventBus();
-    const result = await withJobEnv(running, () =>
-      runBabelPipeline(running.task, {
-        mode: running.mode,
-        ...(model ? { modelOverride: model } : {}),
-        ...(running.model_tier ? { modelTier: running.model_tier } : {}),
-        ...(running.execution_profile
-          ? { executionProfile: running.execution_profile as never }
-          : {}),
-        ...(running.model_tier === "escalation"
-          ? { allowExpensive: true }
-          : {}),
-        eventBus,
-      }),
-    );
-
-    const verification =
-      result.status === "COMPLETE" && running.project_root
-        ? verifyWorkspaceProject(running.project_root, {
-            ...(running.verify_commands.length > 0
-              ? { commands: running.verify_commands }
-              : {}),
-          })
-        : null;
-    const completionGate: CompletionVerificationGate =
-      evaluateCompletionVerification({
-        pipelineStatus: result.status,
-        executionProfile: running.execution_profile,
-        projectRoot: running.project_root,
-        verification,
-      });
-    const diagnosis: HaltDiagnosis = diagnoseRun({
-      runDir: result.runDir,
-      pipelineStatus: result.status,
-      verification: completionGate,
-      escalation: running.escalation,
-    });
-    const status =
-      completionGate.status === "fail"
-        ? "verification_failed"
-        : result.status === "COMPLETE"
-          ? "complete"
-          : "failed";
-    const updated = updateAgentJob(running.id, {
-      status,
-      run_dir: result.runDir,
-      pipeline_status: result.status,
-      completion_verification: completionGate,
-      diagnosis,
-      error:
-        status === "failed" || status === "verification_failed"
-          ? diagnosis.headline
-          : null,
-    });
-    return writeAgentJobReport(updated);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    const diagnosis = diagnoseRun({
-      pipelineStatus: "FAILED",
-      escalation: running.escalation,
-    });
-    const updated = updateAgentJob(running.id, {
-      status: "failed",
-      diagnosis,
-      error: message,
-    });
-    return writeAgentJobReport(updated);
-  }
+  const pipelineRun = await runAgentJobThroughPipeline(running);
+  const updated = updateAgentJob(running.id, {
+    status: pipelineRun.status,
+    run_dir: pipelineRun.result.runDir ?? null,
+    pipeline_status: pipelineRun.result.status,
+    completion_verification: pipelineRun.completionVerification,
+    diagnosis: pipelineRun.diagnosis,
+    error: pipelineRun.error,
+  });
+  return writeAgentJobReport(updated);
 }
 
 export function registerCoreAutomationCommands(program: Command): void {
