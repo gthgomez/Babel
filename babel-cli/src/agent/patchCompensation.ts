@@ -11,6 +11,12 @@ import { acquireEffectDirectoryAnchors, type EffectDirectoryAnchors } from '../e
 export interface PatchRollbackOutcome { rolledBack: string[]; failures: string[] }
 const hash = (bytes: string): string => createHash('sha256').update(bytes).digest('hex')
 
+function isWritableOwnedRegularFile(mode: bigint, isFile: boolean, isSymbolicLink: boolean): boolean {
+  if (!isFile || isSymbolicLink) return false
+  if (process.platform === 'win32') return true
+  return (mode & 0o222n) !== 0n
+}
+
 /**
  * Caller retains its FileWriteMutex locks. Capture by rename, validate the
  * captured entry, and recreate exclusively: never overwrite or unlink a name
@@ -86,7 +92,7 @@ export async function compensatePatchWrites(
         restored = true
       } else {
         const creationOwnership = created.has(path) ? createdFileOwnership?.get(path) : undefined
-        if (!before?.isFile() || before.isSymbolicLink() || (before.mode & 0o222n) === 0n) {
+        if (!before || !isWritableOwnedRegularFile(before.mode, before.isFile(), before.isSymbolicLink())) {
           throw new Error('not restored — target is not a writable owned regular file')
         }
         if (created.has(path) && (!creationOwnership || creationOwnership.expectedContent !== expected
