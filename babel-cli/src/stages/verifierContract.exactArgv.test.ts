@@ -24,6 +24,26 @@ test('exact invariants verifier rejects echo spoof of npm test', async () => {
   assert.match(missing!.message, /npm test/);
 });
 
+test('exact invariants verifier rejects echo for vague verify requests', async () => {
+  const verifier = createExactInvariantsVerifier();
+  const result = await verifier.verify({
+    task: 'Please verify the fix before you finish.',
+    verb: 'fix',
+    projectRoot: '/tmp/project',
+    runDir: '/tmp/project/runs/test',
+    toolCallLog: [
+      {
+        tool: 'shell_exec',
+        input: { command: 'echo verification complete' },
+      },
+    ],
+  });
+
+  const missing = result.checks.find((c) => c.id === 'verification_missing');
+  assert.ok(missing);
+  assert.equal(missing!.status, 'fail');
+});
+
 test('exact invariants verifier accepts exact argv match', async () => {
   const verifier = createExactInvariantsVerifier();
   const result = await verifier.verify({

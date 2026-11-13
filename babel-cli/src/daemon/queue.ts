@@ -9,7 +9,10 @@
 
 import { updateAgentJob, listAgentJobs } from '../services/agentJobs.js';
 import type { AgentJob } from '../services/agentJobs.js';
-import { runAgentJobThroughPipeline } from '../services/agentJobPipeline.js';
+import {
+  runAgentJobThroughPipeline,
+  type AgentJobPipelineRun,
+} from '../services/agentJobPipeline.js';
 import { DAEMON_QUEUE_TICK_INTERVAL_MS } from './constants.js';
 import { writeDaemonJobResult, writeDaemonJobTelemetry } from './evidence.js';
 import { isDaemonPipelineQualified } from './pipelineQualification.js';
@@ -51,6 +54,12 @@ export interface DrainResult {
 const DEFAULT_MAX_JOBS_PER_MINUTE = 30;
 const DEFAULT_BASE_BACKOFF_MS = 5000;
 
+/** Injectable seams for deterministic daemon queue tests (production omits). */
+export interface DaemonQueueTestHooks {
+  isPipelineQualified?: () => boolean;
+  runJobPipeline?: (job: AgentJob) => Promise<AgentJobPipelineRun>;
+}
+
 // ── Queue Consumer ───────────────────────────────────────────────────────────
 
 export class DaemonQueue {
@@ -67,6 +76,7 @@ export class DaemonQueue {
     private concurrency: number = 1,
     private maxJobsPerMinute: number = DEFAULT_MAX_JOBS_PER_MINUTE,
     private baseBackoffMs: number = DEFAULT_BASE_BACKOFF_MS,
+    private readonly hooks: DaemonQueueTestHooks = {},
   ) {}
 
   // ── Lifecycle ───────────────────────────────────────────────────────────
@@ -209,7 +219,7 @@ export class DaemonQueue {
         : null;
 
     try {
-      if (!isDaemonPipelineQualified()) {
+      if (!(this.hooks.isPipelineQualified ?? isDaemonPipelineQualified)()) {
         updateAgentJob(job.id, {
           status: 'failed',
           error: DAEMON_PIPELINE_QUARANTINE_MESSAGE,
@@ -230,7 +240,8 @@ export class DaemonQueue {
         );
       }
 
-      const pipelineRun = await runAgentJobThroughPipeline(job);
+      const runPipeline = this.hooks.runJobPipeline ?? runAgentJobThroughPipeline;
+      const pipelineRun = await runPipeline(job);
       const { result, resolvedModel, status, completionVerification, diagnosis } = pipelineRun;
 
       runDir = result.runDir ?? '';

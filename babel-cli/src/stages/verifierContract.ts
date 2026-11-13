@@ -228,18 +228,27 @@ export function createExactInvariantsVerifier(): Verifier {
         }
       }
 
-      // Check 3: Task mentions "test" or "verify" — ensure some verification happened
+      // Check 3 (advisory fallthrough): vague "verify/test" tasks without explicit
+      // npm/cargo/pytest patterns from Check 2 still need a real shell invocation,
+      // not echo/printf spoofing of command text.
       const needsVerification = /\b(?:test|verify|validate|check|assert)\b/i.test(ctx.task);
+      const shellArgvLooksLikeVerification = (command: string): boolean => {
+        const argv = parseCommandArgv(command);
+        const binary = argv[0]?.toLowerCase() ?? '';
+        if (binary === 'echo' || binary === 'printf') return false;
+        return argv.some((token) => /\b(?:test|verify|check|lint)\b/i.test(token));
+      };
       const hasVerificationRun =
         ctx.toolCallLog?.some(
           (entry) =>
             entry.tool === 'shell_exec' &&
             typeof entry.input?.command === 'string' &&
-            /\b(?:test|verify|check|lint)\b/i.test(entry.input.command),
+            shellArgvLooksLikeVerification(entry.input.command),
         ) ?? false;
 
       if (
         needsVerification &&
+        expectedVerifiers.size === 0 &&
         !hasVerificationRun &&
         !['plan', 'report', 'review', 'ask'].includes(ctx.verb)
       ) {
