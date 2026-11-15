@@ -1,12 +1,16 @@
 // License: Apache-2.0
 import {createHash} from 'node:crypto';
-import {mkdir, readFile, stat, writeFile} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
+import {mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
 import {_electron as electron} from 'playwright';
 import {parseBuildMetadata} from '../../native/identity.mjs';
-import {HISTORY_SESSION_ID, assertAcceptanceSource, writePackagedAcceptanceProfile} from './packaged-fixture-lane.mjs';
+import {HISTORY_SESSION_ID, assertAcceptanceSource, assertFixtureTaskReceipt, assertReadOnlyDenial, buildPackagedLaunchEnvironment, writePackagedAcceptanceProfile} from './packaged-fixture-lane.mjs';
+import {assertRepairBaseline, assertRepairComplete} from './packaged-repair-fixture.mjs';
+import {startScriptedProvider} from './scripted-provider.mjs';
+import {cleanupOwnedFixture} from './owned-cleanup.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = join(scriptDir, '..', '..');
@@ -92,6 +96,50 @@ async function waitForPackagedPreload(window) {
   );
 }
 
+/** Submit in the installed renderer and observe, but never synthesize, its native events. */
+async function submitFixtureTask(window, {task, projectRoot, allowVerifier, expectedOutcome, expectedStatus}) {
+  await window.locator('button.icon-button[data-action="new-session"]').click();
+  await window.evaluate(() => {
+    window.__packagedAcceptanceUnsubscribe?.();
+    window.__packagedAcceptanceEvents = [];
+    window.__packagedAcceptanceUnsubscribe = window.babelDesktop.onEvent(packet => {
+      const event = packet?.event;
+      window.__packagedAcceptanceEvents.push({kind: packet?.kind, code: packet?.code, displayLimited: packet?.displayLimited, type: event?.type,
+        tool: event?.item?.tool, detail: event?.item?.detail, command: event?.item?.command,
+        cwd: event?.item?.cwd, outcome: event?.result?.terminal_outcome, userStatus: event?.result?.user_status,
+        verification: event?.result?.verification?.status, approvalRequired: event?.result?.approval_required});
+    });
+  });
+  await window.locator('#composer-input').fill(task);
+  await window.locator('#send-button').click();
+  const deadline = Date.now() + 120_000;
+  let approvals = 0;
+  for (;;) {
+    const events = await window.evaluate(() => window.__packagedAcceptanceEvents);
+    const exit = events.find(event => event.kind === 'exit');
+    if (exit) {
+      assertFixtureTaskReceipt(events, expectedOutcome);
+      await window.waitForFunction(() => !document.querySelector('#send-button')?.disabled, null, {timeout: 15_000});
+      await window.locator(`.assistant-message .message-status.${expectedStatus}`).last().waitFor({timeout: 15_000});
+      return {events, approvals};
+    }
+    if (await window.locator('.assistant-message .message-status.failed').count()) throw new Error('fixture task failed before a clean exit');
+    const allow = window.locator('.approval-card [data-action="approve-run"]');
+    if (await allow.count()) {
+      const approval = [...events].reverse().find(event => event.type === 'approval.required');
+      const key = path => resolve(path).toLowerCase();
+      if (!allowVerifier || approval?.command !== 'npm test' || typeof approval.cwd !== 'string' ||
+          key(approval.cwd) !== key(projectRoot) || !await allow.isEnabled()) {
+        throw new Error('unexpected fixture approval request');
+      }
+      await allow.click(); approvals++;
+      await allow.waitFor({state: 'detached', timeout: 15_000});
+    }
+    if (Date.now() >= deadline) throw new Error('fixture task timed out');
+    await window.waitForTimeout(250);
+  }
+}
+
 async function main() {
   const artifacts = artifactDir();
   const untestedJourneys = [];
@@ -106,6 +154,7 @@ async function main() {
         'saved-chat history paging in installed app',
         'provider route configuration without credentials',
         'project-connected live shell without model execution',
+        'installed Desktop repair and read-only task execution',
         'interactive NSIS installer failure dialog (hosted lane launches installed exe only)',
       ],
     };
@@ -114,16 +163,20 @@ async function main() {
     return;
   }
 
-  const installRoot = process.env.BABEL_DESKTOP_INSTALL_ROOT;
-  if (!installRoot) throw new Error('BABEL_DESKTOP_INSTALL_ROOT is required');
-  const install = resolve(installRoot);
-  const exe = join(install, 'Babel Desktop.exe');
-  const buildPath = join(install, 'BUILD.json');
   const checks = [];
   const errors = [];
-  const identity = {installRoot: install, executable: exe};
+  const identity = {};
+  let exe;
+  let failure = null;
 
   try {
+    const installRoot = process.env.BABEL_DESKTOP_INSTALL_ROOT;
+    if (!installRoot) throw new Error('BABEL_DESKTOP_INSTALL_ROOT is required');
+    const install = resolve(installRoot);
+    exe = join(install, 'Babel Desktop.exe');
+    const buildPath = join(install, 'BUILD.json');
+    identity.installRoot = install;
+    identity.executable = exe;
     await stat(exe);
     identity.executablePresent = true;
     const buildText = await readFile(buildPath, 'utf8');
@@ -139,36 +192,54 @@ async function main() {
     }
     checks.push('installed executable and BUILD.json identity verified on disk');
   } catch (error) {
-    errors.push(String(error?.message ?? error));
-    const report = {passed: 0, checks, errors, identity, journeys, untestedJourneys};
+    const reason = String(error?.message ?? error);
+    errors.push(reason);
+    failure = {stage: 'artifact-preflight', reason};
+    const report = {passed: 0, checks, errors, failure, identity, journeys, untestedJourneys};
     await writeReport(artifacts, report);
     console.log(JSON.stringify(report, null, 2));
     process.exit(1);
   }
 
-  const profile = join(tmpdir(), `babel-desktop-gui-${Date.now()}`);
-  await mkdir(profile, {recursive: true});
-  const fixtures = await writePackagedAcceptanceProfile(profile);
-  identity.fixtureProjectRoot = fixtures.projectRoot;
-  identity.fixtureMissingInstallId = fixtures.missingInstallId;
-
+  let profile;
   let app;
+  let window;
+  let provider;
+  let launchProcess;
+  let launchAttempted = false;
+  let launchExited = false;
+  let launchExit;
+  let taskMayBeActive = false;
+  let retainedProvider = null;
+  let stage = 'fixture-preflight';
   try {
-    const launchEnv={...process.env};
-    for(const name of Object.keys(launchEnv))if(/(?:API_KEY|TOKEN|SECRET)$/.test(name))delete launchEnv[name];
-    delete launchEnv.BABEL_MODEL_POLICY_PATH;
-    launchEnv.USERPROFILE=profile;launchEnv.HOME=profile;
-    launchEnv.BABEL_OPENCODE_GO_HELPER=join(profile,'absent-fixture-helper.cjs');
+    profile = await mkdtemp(join(tmpdir(), 'babel-desktop-gui-'));
+    const fixtures = await writePackagedAcceptanceProfile(profile);
+    identity.fixtureProjectRoot = fixtures.projectRoot;
+    identity.fixtureMissingInstallId = fixtures.missingInstallId;
+    journeys.repairBaseline = {status: 'executed', ...await assertRepairBaseline(fixtures.projectRoot)};
+    checks.push('independent repair fixture starts with four failing cases and a clean Git tree');
+    // The test server owns 127.0.0.1:11434 before the packaged process can run.
+    provider = await startScriptedProvider();
+    const launchEnv = buildPackagedLaunchEnvironment(process.env, profile);
+    stage = 'installed-launch';
+    launchAttempted = true;
     app = await electron.launch({
       executablePath: exe,
       args: [`--profile-dir=${profile}`],
       env:launchEnv,
       timeout: 120_000,
     });
-    const window = await app.firstWindow();
-    window.on('pageerror', error => errors.push(`pageerror: ${error?.message ?? error}`));
+    launchProcess = app.process();
+    launchExit = new Promise(resolveExit => {
+      if (launchProcess.exitCode !== null || launchProcess.signalCode !== null) { launchExited = true; resolveExit(); }
+      else launchProcess.once('exit', () => { launchExited = true; resolveExit(); });
+    });
+    stage = 'render';
+    window = await app.firstWindow();
+    window.on('pageerror', error => { errors.push(`pageerror: ${error?.message ?? error}`); failure ??= {stage: 'render', reason: 'renderer page error'}; });
     window.on('console', message => {
-      if (message.type() === 'error') errors.push(`console: ${message.text()}`);
+      if (message.type() === 'error') { errors.push(`console: ${message.text()}`); failure ??= {stage: 'render', reason: 'renderer console error'}; }
     });
     await waitForPackagedPreload(window);
 
@@ -214,6 +285,7 @@ async function main() {
     checks.push('fixture-backed project connects with truthful ready state (no model run)');
     journeys.project = {status: 'executed', transport: 'preload IPC getInfo + listDirectory'};
 
+    stage = 'project-and-history-transport';
     const tree = await evaluateInPackagedWindow(window, async () => {
       const entries = await window.babelDesktop.listDirectory('.');
       return entries.map(entry => entry.name);
@@ -245,7 +317,8 @@ async function main() {
     checks.push('installed history IPC pages tail and older windows without overlap');
     journeys.historyIpc = {status: 'executed'};
 
-    const provider = await evaluateInPackagedWindow(window, async () => {
+    stage = 'provider-configuration';
+    const providerRoute = await evaluateInPackagedWindow(window, async () => {
       const providers = await window.babelDesktop.listQualifiedProviders();
       const saved = await window.babelDesktop.saveProviderRoute({provider: 'ollama', model: 'ollama/local-fixture'});
       const route = await window.babelDesktop.readProviderRoute();
@@ -256,9 +329,9 @@ async function main() {
         routeModel: route?.model,
       };
     });
-    if (provider.providerCount < 1) throw new Error('listQualifiedProviders returned no providers');
-    if (provider.savedProvider !== 'ollama' || provider.routeProvider !== 'ollama') {
-      throw new Error(`provider route not persisted: ${JSON.stringify(provider)}`);
+    if (providerRoute.providerCount < 1) throw new Error('listQualifiedProviders returned no providers');
+    if (providerRoute.savedProvider !== 'ollama' || providerRoute.routeProvider !== 'ollama') {
+      throw new Error(`provider route not persisted: ${JSON.stringify(providerRoute)}`);
     }
     checks.push('provider route saves via IPC without API credentials (ollama local route)');
     journeys.provider = {status: 'executed', note: 'route-only; no credential file or model call'};
@@ -271,6 +344,7 @@ async function main() {
     await window.locator('#dialog').waitFor({state:'hidden',timeout:30_000});
     if (!await window.locator('#model-controls').innerText().then(text=>text.includes('Local acceptance fixture'))) throw new Error('Saved provider did not update renderer model selection');
 
+    stage = 'history-render';
     const harness = await connectLiveFromPackagedStartupDialog(window);
     if (!harness.connected) throw new Error('Installed history connection failed');
     journeys.connection = {status: 'executed', executionReady: info.diagnostics?.ready === true, docker: info.diagnostics?.docker ?? null};
@@ -293,7 +367,11 @@ async function main() {
     const selection = JSON.parse(await readFile(join(profile, 'engine', 'active-engine.json'), 'utf8'));
     if (selection.id !== fixtures.missingInstallId) throw new Error('Read-only fallback must preserve the missing engine selection on disk');
     journeys.engineFallback = {status: 'executed', missingInstallId: fixtures.missingInstallId, origin: info.engine.origin, runtimeSource: info.runtimeSource, selectionPreserved: true, note: 'Read-only history; no task execution.'};
-    if (info.diagnostics?.ready !== true) {
+    journeys.readOnlyHistoryControl = {status: 'executed', ...await assertRepairBaseline(fixtures.projectRoot),
+      note: 'History and project browsing only; this is not a submitted read-only task.'};
+    checks.push('read-only history and project browsing leave the independent repair baseline unchanged');
+    const currentInfo = await evaluateInPackagedWindow(window, () => window.babelDesktop.getInfo());
+    if (currentInfo.diagnostics?.ready !== true) {
       if (!await window.locator('#send-button').isDisabled()) throw new Error('Execution must remain blocked without ready diagnostics');
       journeys.executionAdmission = {status: 'blocked correctly', note: 'No task execution.'};
     }
@@ -309,23 +387,95 @@ async function main() {
     checks.push('provider configuration dialog opens from settings on installed renderer');
     journeys.providerUi = {status: 'executed', note: 'dialog open/cancel only; no credential entry'};
 
+    stage = 'execution-admission';
+    if (currentInfo.diagnostics?.ready !== true) throw new Error('installed project execution prerequisites are unavailable');
+    stage = 'read-only-task';
+    provider.selectScenario('readOnly');
+    taskMayBeActive = true;
+    const readOnly = await submitFixtureTask(window, {task: 'Review parser.mjs and explain its defect. Do not modify files.',
+      projectRoot: fixtures.projectRoot, allowVerifier: false, expectedOutcome: 'NO_CHANGE_REQUIRED', expectedStatus: 'no_change'});
+    taskMayBeActive = false;
+    assertReadOnlyDenial(readOnly.events);
+    if (!readOnly.events.some(event => event.type === 'run_complete' && event.outcome === 'NO_CHANGE_REQUIRED')) throw new Error('read-only task did not complete with no change required');
+    await provider.waitForCounts(3, 0);
+    journeys.readOnlyTask = {status: 'executed', terminal: 'NO_CHANGE_REQUIRED', deniedEdit: true,
+      baseline: await assertRepairBaseline(fixtures.projectRoot)};
+    checks.push('installed renderer submits a read-only task and runtime denies a scripted edit');
+    await window.screenshot({path: join(artifacts, 'packaged-electron-read-only.png'), fullPage: true});
+
+    stage = 'repair-task';
+    provider.selectScenario('repair');
+    taskMayBeActive = true;
+    const repair = await submitFixtureTask(window, {task: 'Investigate why parser_test fails and fix it.\nRequirements:\n- `npm test` passes.',
+      projectRoot: fixtures.projectRoot, allowVerifier: true, expectedOutcome: 'VERIFIED_COMPLETE', expectedStatus: 'complete'});
+    taskMayBeActive = false;
+    if (!repair.events.some(event => event.type === 'run_complete' && event.outcome === 'VERIFIED_COMPLETE')) throw new Error('repair task did not report verified completion');
+    await provider.waitForCounts(5, 0);
+    stage = 'independent-oracle';
+    const independent = await assertRepairComplete(fixtures.projectRoot);
+    journeys.repair = {status: 'executed', terminal: 'VERIFIED_COMPLETE', approvals: repair.approvals, independent};
+    checks.push('installed renderer completes the repair with independent passing behavior and scoped Git diff');
+    await window.screenshot({path: join(artifacts, 'packaged-electron-repair.png'), fullPage: true});
+    stage = 'screenshots';
+
     await mkdir(artifacts, {recursive: true});
     await window.screenshot({path: join(artifacts, 'packaged-electron-window.png'), fullPage: true});
     checks.push('screenshots captured from packaged Electron window');
   } catch (error) {
-    errors.push(String(error?.message ?? error));
+    const reason = String(error?.message ?? error);
+    errors.push(`${stage}: ${reason}`);
+    failure ??= {stage, reason, ...(provider ? {provider: provider.snapshot()} : {})};
+    if (window) {
+      try {
+        await mkdir(artifacts, {recursive: true});
+        await window.screenshot({path: join(artifacts, 'packaged-electron-failure.png'), fullPage: true});
+      } catch { errors.push('Failure screenshot unavailable'); }
+    }
   } finally {
-    if (app) {
-      try { await app.close(); }
-      catch (error) { errors.push(`Owned Electron cleanup: ${error.message}`); }
+    const cleanup = await cleanupOwnedFixture({
+      settleTurn: async () => {
+        if (!taskMayBeActive) return;
+        if (!window) throw new Error('No renderer for active task');
+        const alreadyExited = await window.evaluate(() => window.__packagedAcceptanceEvents?.some(event => event.kind === 'exit') === true);
+        if (!alreadyExited) {
+          const stop = window.locator('.stop-button[data-action="stop"]');
+          if (!await stop.isVisible()) throw new Error('Stop control is unavailable');
+          await stop.click({timeout: 5_000});
+          await window.waitForFunction(() => window.__packagedAcceptanceEvents?.some(event => event.kind === 'exit') === true,
+            null, {timeout: 20_000});
+        }
+      },
+      terminateTree: async () => {
+        if (!app) return !launchAttempted;
+        // Never signal a PID after the captured launcher has already exited.
+        if (!launchProcess?.pid || launchExited || launchProcess.exitCode !== null || launchProcess.signalCode !== null) return false;
+        const windowsRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
+        const killed = spawnSync(join(windowsRoot, 'System32', 'taskkill.exe'), ['/PID', String(launchProcess.pid), '/T', '/F'],
+          {windowsHide: true, stdio: 'ignore', timeout: 10_000});
+        if (killed.status !== 0) return false;
+        let timer;
+        try {
+          return await Promise.race([launchExit.then(() => true), new Promise(resolveExit => { timer = setTimeout(() => resolveExit(false), 10_000); })]);
+        } finally { clearTimeout(timer); }
+      },
+      releaseProvider: async () => { if (provider) await provider.close(); },
+      retainProvider: () => { if (provider) retainedProvider = provider.retain(); },
+      removeProfile: async () => { if (profile) await rm(profile, {recursive: true, force: true}); },
+    });
+    journeys.cleanup = {...cleanup, ...(retainedProvider ? {retainedProviderPid: retainedProvider.pid} : {})};
+    if (cleanup.state !== 'terminated' || !cleanup.turnSettled || cleanup.errors?.length) {
+      errors.push('Owned fixture cleanup did not settle completely');
+      failure ??= {stage: 'cleanup', reason: 'owned process tree or fixture cleanup is unresolved'};
     }
   }
 
   untestedJourneys.push(
-    'babel:run task execution with any provider (no paid or live model calls in acceptance)',
+    'live-provider task execution and authentication',
     'chooseProject native open-directory dialog automation',
     'interactive NSIS installer failure dialog visibility (lifecycle exercises corrupt payload rejection without Electron UI)',
   );
+  if (!journeys.readOnlyTask) journeys.readOnlyTask = {status: 'not completed', stage};
+  if (!journeys.repair) journeys.repair = {status: 'not completed', stage};
   journeys.installerInteractiveFailure = {
     status: 'blocked',
     reason: 'NSIS interactive failure surface is not exposed to Playwright; corrupt upgrade is validated in run-lifecycle.ps1 step 6 only',
@@ -336,6 +486,7 @@ async function main() {
     basis: 'Installed Babel Desktop.exe via Playwright _electron.launch({ executablePath }) with fixture profile',
     checks,
     errors,
+    failure,
     identity,
     journeys,
     untestedJourneys,
