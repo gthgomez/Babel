@@ -1,7 +1,7 @@
 // License: Apache-2.0
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {spawnSync} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {chmod, mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {delimiter, dirname, join} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -69,6 +69,23 @@ test('a second scripted provider cannot take an owned loopback address', async (
   } finally { await provider.close(); }
 });
 
+test('closing a scripted provider releases its loopback address', async () => {
+  const provider = await startScriptedProvider({port: 0, scenarioOrder: ['readOnly']});
+  let replacement, closed = false;
+  try {
+    await provider.close();
+    closed = true;
+    replacement = await startScriptedProvider({port: provider.port, scenarioOrder: ['readOnly']});
+    const response = await fetch(`http://127.0.0.1:${replacement.port}/v1/chat/completions`, {method: 'POST',
+      headers: {'content-type': 'application/json'}, body: JSON.stringify({model: 'local-fixture'})});
+    assert.equal(response.status, 200);
+    assert.match((await response.json()).choices[0].message.content, /\[TOOL:read_file\]/);
+  } finally {
+    if (replacement) await replacement.close();
+    if (!closed) await provider.close();
+  }
+});
+
 test('unexpected requests before the selected task cannot be hidden by resetting counters', async () => {
   const provider = await startScriptedProvider({port: 0, scenarioOrder: ['readOnly']});
   try {
@@ -114,6 +131,78 @@ test('retained provider survives its controller exiting and keeps the address ex
         try { process.kill(retained.pid); } catch { }
       }
     } catch (error) { testError ??= error; }
+    try { if (retained?.runtimeRoot) await rm(retained.runtimeRoot, {recursive: true, force: true, maxRetries: 10, retryDelay: 100}); }
+    catch (error) { testError ??= error; }
+    try { await rm(root, {recursive: true, force: true}); }
+    catch (error) { testError ??= error; }
+  }
+  if (testError) throw testError;
+});
+
+test('retained provider survives termination of the controller process group', {
+  skip: process.platform === 'win32' ? 'process-group signals require POSIX' : false,
+  timeout: 45_000,
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'babel-provider-group-'));
+  const receiptPath = join(root, 'receipt');
+  const moduleUrl = new URL('./scripted-provider.mjs', import.meta.url).href;
+  const program = `import {renameSync, writeFileSync} from 'node:fs'; import {startScriptedProvider} from ${JSON.stringify(moduleUrl)};
+    const starting = startScriptedProvider({port: 0, scenarioOrder: ['readOnly']});
+    process.once('SIGTERM', async () => { try { const provider = await starting; await provider.close(); } finally { process.exit(0); } });
+    const provider = await starting;
+    try {
+      writeFileSync(process.env.BABEL_RETAIN_RECEIPT + '.tmp', JSON.stringify({port: provider.port, ...provider.retain()}));
+      renameSync(process.env.BABEL_RETAIN_RECEIPT + '.tmp', process.env.BABEL_RETAIN_RECEIPT);
+    } catch (error) { await provider.close(); throw error; }
+    setInterval(() => {}, 1000);`;
+  const controller = spawn(process.execPath, ['--input-type=module', '--eval', program], {
+    detached: true, stdio: 'ignore', env: {...fixtureEnv(root), BABEL_RETAIN_RECEIPT: receiptPath},
+  });
+  const controllerClosed = new Promise((resolve, reject) => {
+    controller.once('error', reject);
+    controller.once('close', (code, signal) => resolve({code, signal}));
+  });
+  let retained, testError;
+  try {
+    const deadline = Date.now() + 15_000;
+    while (!retained && Date.now() < deadline) {
+      try { retained = JSON.parse(await readFile(receiptPath, 'utf8')); }
+      catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        if (controller.exitCode !== null || controller.signalCode !== null) throw new Error('controller exited before its receipt');
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+    }
+    assert.ok(retained, 'controller did not publish a retention receipt');
+    const endpoint = `http://127.0.0.1:${retained.port}`;
+    const probe = await fetch(`${endpoint}/__fixture__/shutdown`, {method: 'POST',
+      headers: {'content-type': 'application/json'}, body: JSON.stringify({nonce: 'invalid'}), signal: AbortSignal.timeout(5_000)});
+    assert.equal(probe.status, 400);
+    process.kill(-controller.pid, 'SIGKILL');
+    assert.equal((await controllerClosed).signal, 'SIGKILL');
+    const response = await fetch(`${endpoint}/v1/chat/completions`, {method: 'POST',
+      headers: {'content-type': 'application/json'}, body: JSON.stringify({model: 'local-fixture'}), signal: AbortSignal.timeout(5_000)});
+    assert.equal(response.status, 200);
+    assert.match((await response.json()).choices[0].message.content, /\[TOOL:read_file\]/);
+    await assert.rejects(startScriptedProvider({port: retained.port, scenarioOrder: ['repair']}), /bind|listen/i);
+  } catch (error) { testError = error; }
+  finally {
+    if (controller.pid && controller.exitCode === null && controller.signalCode === null) {
+      try {
+        if (retained) process.kill(-controller.pid, 'SIGKILL');
+        else controller.kill('SIGTERM');
+        await controllerClosed;
+      }
+      catch (error) { if (error.code !== 'ESRCH') testError ??= error; }
+    }
+    if (retained?.shutdownNonce) {
+      try {
+        const stopped = await fetch(`http://127.0.0.1:${retained.port}/__fixture__/shutdown`, {method: 'POST',
+          headers: {'content-type': 'application/json'}, body: JSON.stringify({nonce: retained.shutdownNonce}),
+          signal: AbortSignal.timeout(5_000)});
+        assert.equal(stopped.status, 200);
+      } catch (error) { if (error.cause?.code !== 'ECONNREFUSED') testError ??= error; }
+    }
     try { if (retained?.runtimeRoot) await rm(retained.runtimeRoot, {recursive: true, force: true, maxRetries: 10, retryDelay: 100}); }
     catch (error) { testError ??= error; }
     try { await rm(root, {recursive: true, force: true}); }

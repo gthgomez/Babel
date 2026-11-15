@@ -29,7 +29,10 @@ export async function startScriptedProvider({port = 11434, scenarioOrder = ['rea
   }
   Object.assign(env, {HOME: runtimeRoot, USERPROFILE: runtimeRoot, TEMP: runtimeRoot, TMP: runtimeRoot,
     XDG_CACHE_HOME: runtimeRoot, XDG_DATA_HOME: runtimeRoot});
-  const child = spawn('pwsh', ['-NoProfile', '-File', serverScript], {env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore']});
+  // A retained listener must outlive its controller and its process group.
+  const child = spawn('pwsh', ['-NoProfile', '-File', serverScript], {
+    env, windowsHide: true, detached: true, stdio: ['pipe', 'pipe', 'ignore'],
+  });
   const childClosed = new Promise(resolve => child.once('close', resolve));
   child.stdin.on('error', () => {});
   let output = '', accepted = 0, rejected = 0, scenario = null, scenarioIndex = -1, acceptedAtStart = 0, rejectedAtStart = 0;
