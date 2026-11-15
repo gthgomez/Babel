@@ -27,6 +27,10 @@ another repository has adapted it to its own runner and acceptance criteria.
   upgrade-fixture commit in its checkout; do not run it in a working checkout.
   Step 3b invokes the installed Electron acceptance. Its scripted provider must
   exclusively bind `127.0.0.1:11434`; an occupied port is a preflight failure.
+  `run-packaged-gui.ps1` fails closed unless `packaged-electron-acceptance.json`
+  records this checkout's source SHA, engine readiness, an unchanged read-only
+  task, and the one-line `parser.mjs` repair diff. A process exit alone is not
+  that evidence.
   Keep its JSON, actual fixture diff and screenshots with the run URL and
   artifact identity. The lifecycle retains `installer-build.json`,
   `installer.sha256` and `payload-SHA256SUMS` in the same artifact directory.

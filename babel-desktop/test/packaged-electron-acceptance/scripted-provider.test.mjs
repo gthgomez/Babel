@@ -10,6 +10,14 @@ import {PassThrough} from 'node:stream';
 import {startScriptedProvider} from './scripted-provider.mjs';
 import {captureSanitizedStderr} from './sanitized-stderr.mjs';
 
+function processParent(pid) {
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-Command',
+    `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").ParentProcessId`],
+  {encoding: 'utf8', windowsHide: true});
+  const value = Number(String(result.stdout ?? '').trim());
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
 function fixtureEnv(root) {
   const env = {};
   for (const name of ['PATH', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT']) {
@@ -238,6 +246,11 @@ test('retained provider survives its controller exiting and keeps the address ex
       body: JSON.stringify({model: 'local-fixture'}), signal: AbortSignal.timeout(5_000)});
     assert.equal(response.status, 200);
     assert.match((await response.json()).choices[0].message.content, /\[TOOL:read_file\]/);
+    if (process.platform === 'win32') {
+      assert.notEqual(retained.supervisorPid, retained.pid);
+      assert.equal(processParent(retained.pid), retained.supervisorPid);
+      assert.doesNotThrow(() => process.kill(retained.supervisorPid, 0));
+    }
     await assert.rejects(startScriptedProvider({port: retained.port, scenarioOrder: ['repair']}), /bind|listen/i);
     assert.equal(typeof retained.shutdownNonce, 'string');
   } catch (error) { testError = error; }

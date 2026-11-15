@@ -52,6 +52,11 @@ try {
 Write-PackagedPreflight 'harness-start' 'Acceptance process did not finish writing its receipt' 1
 node $acceptance
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+. (Join-Path $PSScriptRoot 'acceptance-evidence.ps1')
+$acceptanceReport = Join-Path $env:BABEL_DESKTOP_ACCEPTANCE_DIR 'packaged-electron-acceptance.json'
+if (-not (Test-PackagedAcceptanceEvidence -ReportPath $acceptanceReport -ExpectedSourceSha $SourceSha)) {
+  throw 'Packaged acceptance receipt is missing installed identity, readiness, the read-only control, or the repair diff'
+}
 
 if ($NativeProjectPicker) {
   node (Join-Path $PSScriptRoot 'native_project_picker.mjs')
