@@ -6,6 +6,7 @@ import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {captureSanitizedStderr, sanitizeSignal, sanitizeSpawnCode} from './sanitized-stderr.mjs';
 
 const read = path => `[TOOL:read_file]\npath: ${path}`;
 const edit = '[TOOL:str_replace]\nfile_path: parser.mjs\nold_str: a - b\nnew_str: a + b';
@@ -17,9 +18,14 @@ const scripts = Object.freeze({
 const serverScript = fileURLToPath(new URL('./scripted-provider.ps1', import.meta.url));
 
 /** Bind the fixed loopback endpoint with Windows socket exclusivity before launching Desktop. */
-export async function startScriptedProvider({port = 11434, scenarioOrder = ['readOnly', 'repair']} = {}) {
+export async function startScriptedProvider({port = 11434, scenarioOrder = ['readOnly', 'repair'],
+  startupTimeoutMs = 15_000, cleanupTimeoutMs = 5_000} = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535 || !scenarioOrder.length ||
-      scenarioOrder.some(name => !Object.hasOwn(scripts, name))) throw new Error('invalid scripted provider configuration');
+      scenarioOrder.some(name => !Object.hasOwn(scripts, name)) ||
+      !Number.isInteger(startupTimeoutMs) || startupTimeoutMs < 1 || startupTimeoutMs > 15_000 ||
+      !Number.isInteger(cleanupTimeoutMs) || cleanupTimeoutMs < 1 || cleanupTimeoutMs > 5_000) {
+    throw new Error('invalid scripted provider configuration');
+  }
   const runtimeRoot = await mkdtemp(join(tmpdir(), 'babel-scripted-provider-'));
   const shutdownNonce = randomBytes(32).toString('hex');
   const env = {};
@@ -31,17 +37,44 @@ export async function startScriptedProvider({port = 11434, scenarioOrder = ['rea
     XDG_CACHE_HOME: runtimeRoot, XDG_DATA_HOME: runtimeRoot});
   // A retained listener must outlive its controller and its process group.
   const child = spawn('pwsh', ['-NoProfile', '-File', serverScript], {
-    env, windowsHide: true, detached: true, stdio: ['pipe', 'pipe', 'ignore'],
+    env, windowsHide: true, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
   });
-  const childClosed = new Promise(resolve => child.once('close', resolve));
   child.stdin.on('error', () => {});
   let output = '', accepted = 0, rejected = 0, scenario = null, scenarioIndex = -1, acceptedAtStart = 0, rejectedAtStart = 0;
-  let serverError = null;
+  let serverError = null, readySeen = false, spawnCode = null, exitSeen = false;
+  let observedExitCode = null, observedSignal = null;
+  const stderrReceipt = captureSanitizedStderr(child.stderr);
   let readyResolve, readyReject;
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
-  const timer = setTimeout(() => readyReject(new Error('scripted provider failed to bind or listen')), 15_000);
-  child.on('error', () => { serverError = new Error('scripted provider failed to bind or listen'); readyReject(serverError); });
-  child.on('exit', () => { serverError = new Error('scripted provider failed to bind or listen'); readyReject(serverError); });
+  const diagnostic = (phase, code = observedExitCode, signal = observedSignal) => {
+    return {phase, controllerPid: process.pid, providerPid: child.pid ?? null,
+      exitCode: Number.isInteger(code) ? code : null,
+      signal: sanitizeSignal(signal),
+      spawnCode, stderr: stderrReceipt()};
+  };
+  const diagnosticError = details => {
+    const error = new Error('scripted provider listener failed: ' + JSON.stringify(details));
+    error.diagnostic = details;
+    return error;
+  };
+  const childClosed = new Promise(resolve => child.once('close', (code, signal) => {
+    serverError = diagnosticError(diagnostic(readySeen ? 'provider-runtime' : 'provider-start', code, signal));
+    if (!readySeen) readyReject(serverError);
+    resolve();
+  }));
+  const timer = setTimeout(() => readyReject(diagnosticError(diagnostic(
+    exitSeen ? 'provider-drain-timeout' : 'provider-timeout'))), startupTimeoutMs);
+  child.on('error', error => {
+    spawnCode = sanitizeSpawnCode(error.code ?? 'other');
+  });
+  child.stderr.on('error', () => {
+    serverError = diagnosticError(diagnostic('provider-stderr'));
+    if (!readySeen) readyReject(serverError);
+  });
+  child.on('exit', (code, signal) => {
+    exitSeen = true; observedExitCode = code; observedSignal = signal;
+    if (readySeen) serverError = diagnosticError(diagnostic('provider-runtime', code, signal));
+  });
   child.stdout.on('data', chunk => {
     output += String(chunk);
     if (output.length > 65_536) { serverError = new Error('scripted provider output limit exceeded'); child.kill(); return; }
@@ -50,25 +83,32 @@ export async function startScriptedProvider({port = 11434, scenarioOrder = ['rea
       const line = output.slice(0, newline); output = output.slice(newline + 1);
       let event;
       try { event = JSON.parse(line); } catch { serverError = new Error('scripted provider sent an invalid receipt'); child.kill(); return; }
-      if (event.event === 'ready' && Number.isInteger(event.port)) readyResolve(event.port);
+      if (event.event === 'ready' && Number.isInteger(event.port)) { readySeen = true; readyResolve(event.port); }
       else if (event.event === 'request') { if (event.accepted === true) accepted++; else rejected++; }
-      else if (event.event === 'error') { serverError = new Error('scripted provider failed to bind or listen'); readyReject(serverError); }
+      else if (event.event === 'error') { /* Wait for close to capture the bounded diagnostic. */ }
     }
   });
   child.stdin.write(`${JSON.stringify({port, steps: scenarioOrder.flatMap(name => scripts[name]), shutdownNonce})}\n`);
+  const unrefChild = () => {
+    child.stdin.unref?.(); child.stdout.unref?.(); child.stderr.unref?.(); child.unref();
+  };
   const stopChild = async () => {
     if (child.pid && child.exitCode === null && child.signalCode === null) child.kill();
     let stopTimer;
     try {
       await Promise.race([childClosed, new Promise((_, reject) => {
-        stopTimer = setTimeout(() => reject(new Error('scripted provider cleanup timed out')), 5_000);
+        stopTimer = setTimeout(() => reject(new Error('scripted provider cleanup timed out')), cleanupTimeoutMs);
       })]);
     } finally { clearTimeout(stopTimer); }
   };
   let boundPort;
   try { boundPort = await ready; }
   catch (error) {
-    await stopChild();
+    try { await stopChild(); }
+    catch {
+      unrefChild();
+      throw diagnosticError({...error.diagnostic, cleanup: 'unresolved'});
+    }
     await rm(runtimeRoot, {recursive: true, force: true});
     throw error;
   }
@@ -101,7 +141,7 @@ export async function startScriptedProvider({port = 11434, scenarioOrder = ['rea
       await rm(runtimeRoot, {recursive: true, force: true});
     },
     retain: () => {
-      child.stdin.unref?.(); child.stdout.unref?.(); child.unref();
+      unrefChild();
       return {pid: child.pid, runtimeRoot, shutdownNonce};
     },
   };

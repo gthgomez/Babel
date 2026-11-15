@@ -211,6 +211,7 @@ async function main() {
   let launchExit;
   let taskMayBeActive = false;
   let retainedProvider = null;
+  let providerStartupFailure = null;
   let stage = 'fixture-preflight';
   try {
     profile = await mkdtemp(join(tmpdir(), 'babel-desktop-gui-'));
@@ -422,6 +423,7 @@ async function main() {
     await window.screenshot({path: join(artifacts, 'packaged-electron-window.png'), fullPage: true});
     checks.push('screenshots captured from packaged Electron window');
   } catch (error) {
+    if (!provider && error?.diagnostic?.cleanup === 'unresolved') providerStartupFailure = error;
     const reason = String(error?.message ?? error);
     errors.push(`${stage}: ${reason}`);
     failure ??= {stage, reason, ...(provider ? {provider: provider.snapshot()} : {})};
@@ -433,6 +435,7 @@ async function main() {
     }
   } finally {
     const cleanup = await cleanupOwnedFixture({
+      startupFailure: providerStartupFailure,
       settleTurn: async () => {
         if (!taskMayBeActive) return;
         if (!window) throw new Error('No renderer for active task');

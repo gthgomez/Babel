@@ -6,7 +6,9 @@ import {chmod, mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {delimiter, dirname, join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
+import {PassThrough} from 'node:stream';
 import {startScriptedProvider} from './scripted-provider.mjs';
+import {captureSanitizedStderr} from './sanitized-stderr.mjs';
 
 function fixtureEnv(root) {
   const env = {};
@@ -17,6 +19,125 @@ function fixtureEnv(root) {
   return {...env, HOME: root, USERPROFILE: root, APPDATA: root, LOCALAPPDATA: root,
     TEMP: root, TMP: root, XDG_CONFIG_HOME: root, XDG_CACHE_HOME: root, XDG_DATA_HOME: root};
 }
+
+test('stderr stream errors are classified without exposing the message', () => {
+  const stream = new PassThrough();
+  const receipt = captureSanitizedStderr(stream);
+  stream.emit('error', new Error('FAKE_SECRET_MARKER'));
+  assert.equal(receipt().streamError, true);
+  assert.ok(!JSON.stringify(receipt()).includes('FAKE_SECRET_MARKER'));
+  stream.destroy();
+});
+
+test('provider startup failure reports bounded sanitized stderr and exit ownership', {
+  skip: process.platform === 'win32' ? 'uses a POSIX fixture executable' : false,
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'babel-provider-diagnostic-'));
+  const fake = join(root, 'pwsh');
+  const previous = process.env.PATH;
+  try {
+    await writeFile(fake, '#!/bin/sh\ni=0; while [ "$i" -lt 400 ]; do printf "console handle is invalid HRESULT: 0xdeadbeef FAKE_SECRET_MARKER ">&2; i=$((i+1)); done\nexit 23\n');
+    await chmod(fake, 0o700);
+    process.env.PATH = root;
+    let failure;
+    try { await startScriptedProvider({port: 0, scenarioOrder: ['readOnly']}); }
+    catch (error) { failure = error; }
+    const diagnostic = failure?.diagnostic;
+    assert.ok(diagnostic, 'startup failure must contain a diagnostic');
+    assert.equal(diagnostic.phase, 'provider-start');
+    assert.equal(diagnostic.exitCode, 23);
+    assert.equal(diagnostic.controllerPid, process.pid);
+    assert.ok(Number.isInteger(diagnostic.providerPid) && diagnostic.providerPid > 0);
+    assert.equal(diagnostic.stderr.capturedBytes, 4096);
+    assert.equal(diagnostic.stderr.truncated, true);
+    assert.ok(diagnostic.stderr.categories.includes('console'));
+    assert.ok(diagnostic.stderr.categories.includes('invalid-handle'));
+    assert.ok(diagnostic.stderr.hresult === 'other', 'unknown HRESULT is classified without exposing its value');
+    assert.ok(String(failure).includes(JSON.stringify(diagnostic)), 'reported error must contain the sanitized receipt');
+    assert.ok(!JSON.stringify(diagnostic).includes('FAKE_SECRET_MARKER'));
+    assert.ok(!JSON.stringify(diagnostic).includes('deadbeef'), 'stderr receipt must not expose an arbitrary HRESULT');
+    assert.ok(!String(failure).includes('FAKE_SECRET_MARKER'));
+  } finally {
+    if (previous === undefined) delete process.env.PATH;
+    else process.env.PATH = previous;
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('unresolved startup retains cleanup and lets its controller exit while the pipe holder runs', {
+  skip: process.platform === 'win32' ? 'uses a POSIX fixture executable' : false,
+  timeout: 12_000,
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), "babel-provider-controller-'-"));
+  const holderPath = join(root, 'holder.mjs');
+  const stopPath = join(root, 'stop');
+  const donePath = join(root, 'done');
+  const heartbeatPath = join(root, 'heartbeat');
+  const receiptPath = join(root, 'result.json');
+  const moduleUrl = new URL('./scripted-provider.mjs', import.meta.url).href;
+  const cleanupUrl = new URL('./owned-cleanup.mjs', import.meta.url).href;
+  const quote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+  try {
+    const holderScript = `import {existsSync, writeFileSync, renameSync} from 'node:fs';
+      const stop = ${JSON.stringify(stopPath)}, done = ${JSON.stringify(donePath)}, beat = ${JSON.stringify(heartbeatPath)};
+      const deadline = Date.now() + 12_000; let count = 0;
+      while (Date.now() < deadline && !existsSync(stop)) {
+        writeFileSync(beat + '.new', String(count++)); renameSync(beat + '.new', beat);
+        await new Promise(resolve => setTimeout(resolve, 40));
+      }
+      writeFileSync(done, 'done');`;
+    await writeFile(holderPath, holderScript);
+    await writeFile(join(root, 'pwsh'), `#!/bin/sh\n${quote(process.execPath)} ${quote(holderPath)} &\nexit 23\n`);
+    await chmod(join(root, 'pwsh'), 0o700);
+    const controllerScript = `import {writeFileSync} from 'node:fs';
+      import {startScriptedProvider} from ${JSON.stringify(moduleUrl)};
+      import {cleanupOwnedFixture} from ${JSON.stringify(cleanupUrl)};
+      let failure;
+      try { await startScriptedProvider({port: 0, scenarioOrder: ['readOnly'], startupTimeoutMs: 300, cleanupTimeoutMs: 200}); }
+      catch (error) { failure = error; }
+      const operations = [];
+      const cleanup = await cleanupOwnedFixture({startupFailure: failure, settleTurn: async () => {}, terminateTree: async () => true,
+        releaseProvider: async () => operations.push('release'), retainProvider: () => operations.push('retain'),
+        removeProfile: async () => operations.push('remove')});
+      if (cleanup.state !== 'unresolved' || operations.join(',') !== 'retain') process.exitCode = 1;
+      writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify(failure?.diagnostic ?? {}));`;
+    const controller = spawnSync(process.execPath, ['--input-type=module', '--eval', controllerScript], {
+      env: {...fixtureEnv(root), PATH: root, TMPDIR: root}, stdio: 'ignore', timeout: 3_000,
+    });
+    assert.equal(controller.status, 0, 'controller must exit after reporting unresolved cleanup');
+    let receipt;
+    try { receipt = JSON.parse(await readFile(receiptPath, 'utf8')); } catch { throw new Error('invalid synthetic controller receipt'); }
+    assert.equal(receipt.phase, 'provider-drain-timeout');
+    assert.equal(receipt.exitCode, 23);
+    assert.equal(receipt.cleanup, 'unresolved');
+    let first;
+    let deadline = Date.now() + 2_000;
+    while (Date.now() < deadline && first === undefined) {
+      try { first = await readFile(heartbeatPath, 'utf8'); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (first === undefined) await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    assert.notEqual(first, undefined, 'pipe holder must start');
+    deadline = Date.now() + 2_000;
+    let changed = false;
+    while (Date.now() < deadline && !changed) {
+      await new Promise(resolve => setTimeout(resolve, 40));
+      changed = (await readFile(heartbeatPath, 'utf8')) !== first;
+    }
+    assert.ok(changed, 'pipe holder must still make progress after controller exit');
+  } finally {
+    await writeFile(stopPath, 'stop');
+    const deadline = Date.now() + 3_000;
+    let done = false;
+    while (Date.now() < deadline && !done) {
+      try { await readFile(donePath); done = true; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (!done) await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    if (!done) throw new Error('synthetic pipe holder cleanup is unresolved');
+    await rm(root, {recursive: true, force: true});
+  }
+});
 
 test('scripted loopback provider limits its route, model, and bounded response sequence', async () => {
   const provider = await startScriptedProvider({port: 0, scenarioOrder: ['readOnly']});

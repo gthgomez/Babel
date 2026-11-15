@@ -45,7 +45,7 @@ try {
 } finally { Pop-Location }
 
 try {
-  node --test (Join-Path $PSScriptRoot 'scripted-provider.test.mjs') (Join-Path $PSScriptRoot 'owned-cleanup.test.mjs')
+  node --test (Join-Path $PSScriptRoot 'scripted-provider.test.mjs') (Join-Path $PSScriptRoot 'owned-cleanup.test.mjs') (Join-Path $PSScriptRoot 'supervisor-lifetime-control.test.mjs')
   if ($LASTEXITCODE -ne 0) { Stop-PackagedPreflight 'provider-preflight' 'Scripted provider checks failed' $LASTEXITCODE }
 } catch { Stop-PackagedPreflight 'provider-preflight' 'Scripted provider checks could not start' 1 }
 

@@ -1,10 +1,11 @@
 // License: Apache-2.0
 /** Release the loopback provider only after the owned application tree is gone. */
-export async function cleanupOwnedFixture({settleTurn, terminateTree, releaseProvider, retainProvider, removeProfile}) {
+export async function cleanupOwnedFixture({settleTurn, terminateTree, releaseProvider, retainProvider, removeProfile, startupFailure}) {
   let turnSettled = true;
   try { await settleTurn(); } catch { turnSettled = false; }
   let terminated = false;
   try { terminated = await terminateTree(); } catch { /* Preserve the provider when ownership is uncertain. */ }
+  if (startupFailure?.diagnostic?.cleanup === 'unresolved') terminated = false;
   if (!terminated) {
     retainProvider();
     return {state: 'unresolved', turnSettled};
