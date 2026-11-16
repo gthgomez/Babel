@@ -82,6 +82,7 @@ function checkInstalledSharedCredential(install, profile, env, connectionId, exp
 /** Report only synthetic self-test and path-guard facts when the hosted store fails. */
 function diagnoseInstalledWindowsCredentialBridge(install, env) {
   const code = `import {readFileSync,lstatSync,realpathSync} from 'node:fs';
+    import {spawnSync} from 'node:child_process';
     import {join,resolve,sep} from 'node:path';
     const input=JSON.parse(readFileSync(0,'utf8'));
     const result={};
@@ -94,9 +95,11 @@ function diagnoseInstalledWindowsCredentialBridge(install, env) {
         executableFile:lstatSync(exe).isFile(),tempDirectory:lstatSync(temp).isDirectory()};
       const {createWindowsHelperRunner,createWindowsCredentialBackend}=await import(input.module);
       const run=createWindowsHelperRunner({systemRoot:root,helper:input.helper,temp,tmp:temp});
-      const probe=operation=>{const outcome=run(JSON.stringify({operation,id:input.id}));let body={};try{body=JSON.parse(outcome.stdout)}catch{}
-        return {status:outcome.status,timedOut:outcome.error?.code==='ETIMEDOUT',ok:body.ok===true,missing:body.result===null};};
+      const probe=(operation,runner=run)=>{const started=Date.now(), outcome=runner(JSON.stringify({operation,id:input.id}));let body={};try{body=JSON.parse(outcome.stdout)}catch{}
+        return {status:outcome.status,timedOut:outcome.error?.code==='ETIMEDOUT',elapsedMs:Date.now()-started,ok:body.ok===true,missing:body.result===null};};
       result.selftest=probe('selftest');
+      if(result.selftest.timedOut){const longer=createWindowsHelperRunner({systemRoot:root,helper:input.helper,temp,tmp:temp,
+        invoke:(exe,args,options)=>spawnSync(exe,args,{...options,timeout:45000})});result.longerSelftest=probe('selftest',longer)}
       if(result.selftest.ok)result.rawGet=probe('get');
       if(result.rawGet?.ok && result.rawGet.missing){try{result.backendGet=createWindowsCredentialBackend().get(input.id)===null?'missing':'unexpected-entry'}catch{result.backendGet='unavailable'}}
     } catch {result.diagnostic='failed'}
@@ -105,7 +108,7 @@ function diagnoseInstalledWindowsCredentialBridge(install, env) {
   const child=spawnSync(join(install,'resources','babel-runtime','node','node.exe'),['--input-type=module','-e',code],{
     input:JSON.stringify({module:pathToFileURL(join(cli,'dist','config','sharedCredentialStore.js')).href,
       helper:join(cli,'dist','config','sharedCredential.windows.ps1'),id:randomUUID()}),
-    env,encoding:'utf8',windowsHide:true,timeout:60000,maxBuffer:4096,
+    env,encoding:'utf8',windowsHide:true,timeout:120000,maxBuffer:4096,
   });
   try{return child.status===0?JSON.parse(child.stdout):{diagnostic:'process-failed',status:child.status}}catch{return {diagnostic:'invalid-result'}}
 }
@@ -396,9 +399,12 @@ async function main() {
           if (!status.shareAvailable) throw new Error('Synthetic protected credential is not available to share');
           return window.babelDesktop.shareProviderCredential({provider:'openrouter',scope:'private',binding:status.binding});
         });
-      } catch {
+      } catch (error) {
         const elapsedMs = Date.now() - sharingStarted;
-        throw new Error(`Shared credential setup failed after ${elapsedMs}ms; isolated bridge diagnostics: ${JSON.stringify(diagnoseInstalledWindowsCredentialBridge(install,launchEnv))}`);
+        const message = String(error?.message ?? '');
+        const category = /Synthetic protected credential is not available to share/.test(message) ? 'private-credential-unavailable'
+          : /OS-protected credential storage is unavailable or locked/.test(message) ? 'shared-store-unavailable' : 'other';
+        throw new Error(`Shared credential setup failed (${category}) after ${elapsedMs}ms; isolated bridge diagnostics: ${JSON.stringify(diagnoseInstalledWindowsCredentialBridge(install,launchEnv))}`);
       }
       if (!receipt?.shared || !receipt.connectionId) throw new Error('Synthetic credential sharing was not confirmed');
       await app.close();
