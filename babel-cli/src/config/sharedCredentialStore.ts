@@ -96,8 +96,10 @@ export function createWindowsHelperRunner(options: { systemRoot: string; helper:
     PSModulePath: join(options.systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules'),
     ...(options.temp ? { TEMP: options.temp } : {}), ...(options.tmp ? { TMP: options.tmp } : {}) }
   const invoke = options.invoke ?? ((file, args, childOptions) => spawnSync(file, args, childOptions))
+  // PowerShell compiles the Windows interop on startup; a hosted Windows
+  // runner took 28 seconds. Keep a finite bound without aborting that case.
   return input => invoke(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', options.helper], {
-    input, encoding: 'utf8', windowsHide: true, shell: false, timeout: 15000, maxBuffer: 32768, env,
+    input, encoding: 'utf8', windowsHide: true, shell: false, timeout: 45000, maxBuffer: 32768, env,
   })
 }
 /** A blocked Secret Service request cannot hang the owning process indefinitely. */

@@ -74,7 +74,7 @@ function checkInstalledSharedCredential(install, profile, env, connectionId, exp
   const child = spawnSync(join(install,'resources','babel-runtime','node','node.exe'), ['--input-type=module','-e',code], {
     input:JSON.stringify({module:pathToFileURL(join(cli,'dist','config','sharedConnectionService.js')).href,
       preferences:join(profile,'.babel','preferences.json'),connection:connectionId,expected,missing}),
-    env,encoding:'utf8',windowsHide:true,timeout:45000,maxBuffer:4096,
+    env,encoding:'utf8',windowsHide:true,timeout:60000,maxBuffer:4096,
   });
   if (child.status !== 0) throw new Error(missing ? 'Installed CLI did not observe removal of the synthetic shared credential' : 'Installed CLI could not read the synthetic shared credential after restart');
 }
@@ -99,7 +99,7 @@ function diagnoseInstalledWindowsCredentialBridge(install, env) {
         return {status:outcome.status,timedOut:outcome.error?.code==='ETIMEDOUT',elapsedMs:Date.now()-started,ok:body.ok===true,missing:body.result===null};};
       result.selftest=probe('selftest');
       if(result.selftest.timedOut){const longer=createWindowsHelperRunner({systemRoot:root,helper:input.helper,temp,tmp:temp,
-        invoke:(exe,args,options)=>spawnSync(exe,args,{...options,timeout:45000})});result.longerSelftest=probe('selftest',longer)}
+        invoke:(exe,args,options)=>spawnSync(exe,args,{...options,timeout:90000})});result.longerSelftest=probe('selftest',longer)}
       if(result.selftest.ok)result.rawGet=probe('get');
       if(result.rawGet?.ok && result.rawGet.missing){try{result.backendGet=createWindowsCredentialBackend().get(input.id)===null?'missing':'unexpected-entry'}catch{result.backendGet='unavailable'}}
     } catch {result.diagnostic='failed'}
@@ -108,7 +108,7 @@ function diagnoseInstalledWindowsCredentialBridge(install, env) {
   const child=spawnSync(join(install,'resources','babel-runtime','node','node.exe'),['--input-type=module','-e',code],{
     input:JSON.stringify({module:pathToFileURL(join(cli,'dist','config','sharedCredentialStore.js')).href,
       helper:join(cli,'dist','config','sharedCredential.windows.ps1'),id:randomUUID()}),
-    env,encoding:'utf8',windowsHide:true,timeout:120000,maxBuffer:4096,
+    env,encoding:'utf8',windowsHide:true,timeout:180000,maxBuffer:4096,
   });
   try{return child.status===0?JSON.parse(child.stdout):{diagnostic:'process-failed',status:child.status}}catch{return {diagnostic:'invalid-result'}}
 }

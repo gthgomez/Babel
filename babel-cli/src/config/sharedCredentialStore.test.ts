@@ -101,7 +101,9 @@ test('Windows helper uses fixed bounded arguments and never passes credentials i
   assert.equal(captured?.options['input'], input)
   assert.equal(captured?.options['shell'], false)
   assert.equal(captured?.options['windowsHide'], true)
-  assert.equal(captured?.options['timeout'], 15000)
+  const timeout = captured?.options['timeout']
+  assert.ok(typeof timeout === 'number' && timeout >= 35000 && timeout <= 45000,
+    'Windows helper must allow the observed slow compiler while remaining bounded')
   assert.doesNotMatch(JSON.stringify(captured?.args), /synthetic-key|ExecutionPolicy/i)
   assert.doesNotMatch(JSON.stringify(captured?.options['env']), /synthetic-key|OPENROUTER/i)
 })
