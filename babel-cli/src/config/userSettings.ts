@@ -11,6 +11,7 @@ import { isSharedCredentialReference } from './sharedCredentialStore.js'
 
 const name = z.string().trim().min(1).max(200).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/)
 const positiveInt = z.number().int().positive()
+const protectedCredentialReference = z.string().refine(isSharedCredentialReference, 'Invalid protected credential reference.')
 const preferences = z.object({
   connection: name.optional(),
   model: z.string().trim().min(1).max(500).optional(),
@@ -28,7 +29,8 @@ const connectionSchema = z.object({
     try { validateProviderBaseUrl(value); return true } catch { return false }
   }, 'Endpoint must use HTTPS (or loopback HTTP), without credentials, query or fragment.').optional(),
   apiKeyEnvVar: z.string().regex(/^[A-Z][A-Z0-9_]*$/).optional(),
-  credentialRef: z.string().refine(isSharedCredentialReference, 'Invalid protected credential reference.').optional(),
+  credentialRef: protectedCredentialReference.optional(),
+  retiredCredentialRefs: z.array(protectedCredentialReference).optional(),
   authentication: z.enum(['api-key', 'none']).optional(),
   contextWindow: positiveInt.optional(),
   maxOutputTokens: positiveInt.optional(),
@@ -49,6 +51,9 @@ const settingsSchema = z.object({
   for (const [id, connection] of Object.entries(settings.connections)) {
     if (connection.credentialRef && settings.schemaVersion !== 2) ctx.addIssue({ code: 'custom', message: 'Protected credentials require settings schema version 2.', path: ['schemaVersion'] })
     if (connection.credentialRef && connection.apiKeyEnvVar) ctx.addIssue({ code: 'custom', message: 'Choose one credential source for a connection.', path: ['connections', id] })
+    const retired = connection.retiredCredentialRefs ?? []
+    if (retired.length && !connection.credentialRef) ctx.addIssue({ code: 'custom', message: 'Retired credentials require an active protected reference.', path: ['connections', id] })
+    if (new Set(retired).size !== retired.length || (connection.credentialRef && retired.includes(connection.credentialRef))) ctx.addIssue({ code: 'custom', message: 'Protected credential references must be distinct.', path: ['connections', id] })
     if (connection.provider === 'openai-compatible' && !connection.baseUrl) ctx.addIssue({ code: 'custom', message: 'Custom compatible connections require a base URL.', path: ['connections', id] })
     if (connection.baseUrl && !['openai-compatible', 'openai', 'gemini', 'anthropic'].includes(connection.provider)) ctx.addIssue({ code: 'custom', message: 'This provider pins its endpoint; use an explicit compatible connection for a custom endpoint.', path: ['connections', id] })
     if (connection.authentication === 'none' && connection.provider !== 'openai-compatible') ctx.addIssue({ code: 'custom', message: 'No-auth mode is only supported by explicit compatible connections.', path: ['connections', id] })

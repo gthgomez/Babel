@@ -46,6 +46,7 @@ test('Desktop and CLI share one synthetic account through replacement and remova
   assert.equal(env.OPENROUTER_API_KEY, 'fixtureKey02')
   assert.equal(credential(), 'fixtureKey02')
   desktop.removeProviderCredential({ provider: 'openrouter', scope: 'private', configDirectory })
+  assert.equal(values.size, 0, 'Desktop removal also deletes credentials retired by CLI replacement')
   assert.throws(credential, /missing/i)
   desktop.applyNativeCredentialEnvironment(env, { provider: 'openrouter', configDirectory })
   assert.equal(env.OPENROUTER_API_KEY, undefined)

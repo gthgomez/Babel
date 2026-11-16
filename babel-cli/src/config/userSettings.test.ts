@@ -59,6 +59,17 @@ test('a protected account cannot ambiguously select an environment credential to
   assert.throws(() => updateUserSettings({ connections: { x: { id: 'x', provider: 'openrouter', apiKeyEnvVar: 'OTHER_KEY', credentialRef: 'babel-os-v1:11111111-1111-4111-8111-111111111111' } } }, { path }))
 })
 
+test('retired protected references must be valid and distinct from the active reference', async () => {
+  const { updateUserSettings } = await import('./userSettings.js')
+  const path = join(mkdtempSync(join(tmpdir(), 'babel-settings-retired-')), 'settings.json')
+  const ref = 'babel-os-v1:11111111-1111-4111-8111-111111111111'
+  const other = 'babel-os-v1:22222222-2222-4222-8222-222222222222'
+  for (const retiredCredentialRefs of [[ref], ['invalid'], [other, other]]) {
+    assert.throws(() => updateUserSettings({ connections: { x: { id: 'x', provider: 'openrouter', credentialRef: ref, retiredCredentialRefs } } }, { path }))
+  }
+  assert.throws(() => updateUserSettings({ connections: { x: { id: 'x', provider: 'openrouter', retiredCredentialRefs: [ref] } } }, { path }))
+})
+
 test('protected accounts upgrade the preferences schema so older CLI versions fail closed', async () => {
   const { updateUserSettings, readUserSettings } = await import('./userSettings.js')
   const path = join(mkdtempSync(join(tmpdir(), 'babel-settings-version-')), 'settings.json')

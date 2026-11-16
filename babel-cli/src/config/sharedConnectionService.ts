@@ -43,7 +43,8 @@ export function createSharedConnectionService(options: { path: string; store?: (
       updateUserSettings(current => {
         const selected = current.connections[id]
         if (!selected || selected.provider !== provider || selected.credentialRef !== prior.credentialRef) throw new Error('The shared connection changed while saving. Review it before retrying.')
-        return { connections: { [id]: { ...selected, credentialRef: reference } } }
+        return { connections: { [id]: { ...selected, credentialRef: reference,
+          retiredCredentialRefs: [...(selected.retiredCredentialRefs ?? []), prior.credentialRef!] } } }
       }, { path: options.path })
       return reference
     },
@@ -53,9 +54,16 @@ export function createSharedConnectionService(options: { path: string; store?: (
       updateUserSettings(current => {
         const connection = current.connections[id]
         if (!connection || connection.provider !== provider || !connection.credentialRef) throw new Error('The shared connection is missing or has a different provider.')
-        removed = store().remove(connection.credentialRef)
+        const references = [connection.credentialRef, ...(connection.retiredCredentialRefs ?? [])]
+        for (const [otherId, other] of Object.entries(current.connections)) {
+          if (otherId !== id && references.some(reference => reference === other.credentialRef || other.retiredCredentialRefs?.includes(reference))) {
+            throw new Error('A protected credential is referenced by another connection. No keys were removed; repair the connection before retrying.')
+          }
+        }
+        const protectedStore = store()
+        for (const reference of references) removed = protectedStore.remove(reference) || removed
         onRemoved?.()
-        return {}
+        return { connections: { [id]: { ...connection, retiredCredentialRefs: [] } } }
       }, { path: options.path })
       // Leave the reference in place: a missing key must not fall back to an
       // unrelated environment variable or a retained Desktop ciphertext.

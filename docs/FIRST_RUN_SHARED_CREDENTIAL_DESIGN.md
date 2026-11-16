@@ -48,7 +48,9 @@ security model](https://www.electronjs.org/docs/latest/api/safe-storage).
    are preserved. Replacing the account changes the shared reference; removal
    leaves the CLI reference pointing to a missing key so it cannot fall back.
    Cross-file writes cannot be fully atomic: uncertain outcomes are reported and
-   old encrypted data is retained until an explicit removal. A route update does
+   old encrypted data is retained until an explicit removal. Non-secret retired
+   references are retained with the connection so removal can delete each saved
+   key; a partial failure keeps the references for a safe retry. A route update does
    not alter execution permissions or replay a task.
 6. Package the platform-specific adapter for both npm and Desktop; account for
    Desktop builds that omit optional dependencies. A standalone WSL process uses
