@@ -32,8 +32,7 @@ Interactive slash command map:
           ...(options.mode !== undefined ? { mode: (options.mode === 'work' ? 'chat' : options.mode) as never, modeExplicit: true } : {}),
         });
       } catch (err: unknown) {
-        console.error(`Interactive session error: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
+        throw new Error(`Interactive session error: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
       }
     });
 }

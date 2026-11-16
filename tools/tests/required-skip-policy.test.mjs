@@ -3,6 +3,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { reviewedSkip, skipPolicySha256 } from '../../babel-cli/scripts/required_skip_policy.mjs'
 
+test('Windows credential helper skip is limited to its exact non-Windows unit fixture', () => {
+  const record = {path:'src/config/sharedCredentialStore.test.ts',name:'Windows helper compiles under the restricted process environment without touching a credential store',reason:'Windows credential helper requires Windows'}
+  for (const platform of ['linux','darwin']) assert.ok(reviewedSkip(record,platform,'unit',true))
+  assert.equal(reviewedSkip(record,'win32','unit',true),null)
+  assert.equal(reviewedSkip(record,'linux','chat-truth',true),null)
+  assert.equal(reviewedSkip({...record,name:'another test'},'linux','unit',true),null)
+})
+
 const windows = { path: 'src/ui/terminalProbe.test.ts', name: 'Windows Terminal defaults dec2026Sync to false', reason: 'Windows-specific fixture' }
 test('native directory sharing exclusions bind only the two Windows contracts off Windows', () => {
   for (const name of [

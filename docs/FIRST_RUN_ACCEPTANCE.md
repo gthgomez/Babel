@@ -46,6 +46,13 @@ repository and a separate repository edit whose result is checked by an
 independent Node test. Their scripted provider responses do not qualify a live
 model, and the edit fixture uses benchmark-only admission settings.
 
+On a disposable GitHub-hosted Windows runner, the NSIS lifecycle lane also
+installs the packaged Desktop app, explicitly simulates acceptance of the
+share-with-CLI confirmation, restarts Desktop, and checks the synthetic shared
+credential through the installed CLI. It then removes the credential and
+checks that the installed CLI reports it missing. This lane sends no provider
+request; it does not qualify authentication or a live coding task.
+
 Run `babel-desktop/test/empty-state-electron.test.mjs` for the actual Electron
 main/preload/renderer path with an isolated profile, and set
 `BABEL_TEST_ELECTRON_EXECUTABLE` to a trusted local Electron binary when running
@@ -81,7 +88,7 @@ builds. Do not substitute a source Electron launch for an installed Windows app.
 | --- | --- |
 | Fresh profile, each approved gateway | Composer appears; choosing a provider and model requires no inference; saved credentials are reported as unverified. |
 | Returning profile | Connection and project restore without repeated setup; the effective project, environment and session precedence is visible. |
-| Existing and legacy credentials | Explicit sharing and plaintext-to-Desktop migration retain their recovery copies; sharing never auto-imports plaintext. Missing and removed credentials or unavailable OS protection block Send. Verify schema-2 rejection for each supported prior build and prohibit unqualified downgrades. An unreadable saved key fails before provider dispatch and retains the draft; secrets do not appear in output. |
+| Existing and legacy credentials | Explicit sharing and plaintext-to-Desktop migration retain their recovery copies; sharing never auto-imports plaintext. Known missing credentials or unavailable protection block Send. A shared reference is shown as unverified without unlocking the OS store at startup; if its key is missing or locked, admission fails before provider dispatch and retains the draft. Verify schema-2 rejection for each supported prior build and prohibit unqualified downgrades. Secrets do not appear in output. |
 | Offline and headless | No prompts or unexpected remote provider/catalog/voice requests; protected accounts fail clearly rather than prompting for an OS unlock in headless mode. Explicit environment-backed headless connections still work. |
 | 401, 403, 404, 429 and network failure | Synthetic transport tests distinguish the failures, retain the conversation and draft, and never silently switch provider or replay a task. |
 | Provider/model switch | The next request uses the chosen account and exact model; conversation and execution authority remain intact. |

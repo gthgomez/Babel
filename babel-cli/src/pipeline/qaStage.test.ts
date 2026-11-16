@@ -19,6 +19,8 @@ const originalFetch = globalThis.fetch;
 const originalApiKey = process.env['DEEPINFRA_API_KEY'];
 const originalAdversarial = process.env['BABEL_ADVERSARIAL_REVIEW'];
 const originalOffline = process.env['BABEL_PIPELINE_V9_OFFLINE'];
+const originalProductOffline = process.env['BABEL_OFFLINE'];
+const originalOpenRouterKey = process.env['OPENROUTER_API_KEY'];
 const originalFallback = process.env['BABEL_ADVERSARIAL_QA_FALLBACK'];
 
 test.afterEach(() => {
@@ -38,6 +40,8 @@ test.afterEach(() => {
   } else {
     process.env['BABEL_PIPELINE_V9_OFFLINE'] = originalOffline;
   }
+  if (originalProductOffline === undefined) delete process.env['BABEL_OFFLINE']; else process.env['BABEL_OFFLINE'] = originalProductOffline;
+  if (originalOpenRouterKey === undefined) delete process.env['OPENROUTER_API_KEY']; else process.env['OPENROUTER_API_KEY'] = originalOpenRouterKey;
   if (originalFallback === undefined) {
     delete process.env['BABEL_ADVERSARIAL_QA_FALLBACK'];
   } else {
@@ -139,14 +143,12 @@ function makeRejectVerdict(): QaVerdictReject {
 
 /** Mock fetch that returns a controlled QA API response */
 function mockFetchResponse(verdictText: string) {
-  return (async () => {
-    return new Response(
-      JSON.stringify({
-        choices: [{ message: { content: JSON.stringify(JSON.parse(verdictText)) } }],
-        usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
-      }),
-      { status: 200 },
-    );
+  return (async (url, init) => {
+    assert.equal(String(url), 'https://openrouter.ai/api/v1/chat/completions');
+    const model = JSON.parse(String(init?.body)).model;
+    const frame = { model, choices: [{ delta: { content: JSON.stringify(JSON.parse(verdictText)) }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } };
+    return new Response(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`, { status: 200, headers: {'Content-Type':'text/event-stream'} });
   }) as typeof fetch;
 }
 
@@ -157,13 +159,30 @@ function mockFetchError(message: string) {
   }) as typeof fetch;
 }
 
-/** Use the mocked DeepInfra transport explicitly; never depend on a live key. */
-function useMockedDeepInfra(): void {
-  process.env['DEEPINFRA_API_KEY'] = 'test-key';
-  process.env['BABEL_PIPELINE_V9_OFFLINE'] = '1';
+/** Exercise the approved route through a fetch double; no provider is contacted. */
+function useMockedProvider(): void {
+  process.env['OPENROUTER_API_KEY'] = 'synthetic-fixture';
+  process.env['BABEL_PIPELINE_V9_OFFLINE'] = '0';
+  process.env['BABEL_OFFLINE'] = '0';
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────
+
+test('offline pipeline refuses remote adversarial review before transport', async () => {
+  process.env['BABEL_PIPELINE_V9_OFFLINE'] = '1';
+  process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
+  process.env['DEEPINFRA_API_KEY'] = 'synthetic-offline-fixture';
+  let calls = 0;
+  globalThis.fetch = (async () => { calls++; throw new Error('unexpected transport'); }) as typeof fetch;
+  const { runAdversarialQaGate } = await import('./qaStage.js');
+  const runDir = mkdtempSync(join(tmpdir(), 'babel-qa-offline-'));
+  try {
+    const result = await runAdversarialQaGate(makeSwePlan(), makePassVerdict(), 'task', 1, runDir, () => {});
+    assert.equal(result.passed, false);
+    assert.match(result.reason ?? '', /offline/i);
+    assert.equal(calls, 0);
+  } finally { rmSync(runDir, { recursive: true, force: true }); }
+});
 
 test('runAdversarialQaGate returns { passed: true } when BABEL_ADVERSARIAL_REVIEW is NOT set', async () => {
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
@@ -212,7 +231,7 @@ test('runAdversarialQaGate returns { passed: true } when env var is set to false
 });
 
 test('runAdversarialQaGate activates when BABEL_ADVERSARIAL_REVIEW=true and returns PASS on agreement', async () => {
-  useMockedDeepInfra();
+  useMockedProvider();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
 
   // Adversarial model agrees with original PASS
@@ -241,7 +260,7 @@ test('runAdversarialQaGate activates when BABEL_ADVERSARIAL_REVIEW=true and retu
 });
 
 test('runAdversarialQaGate returns { passed: false } when adversarial model finds new failures', async () => {
-  useMockedDeepInfra();
+  useMockedProvider();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
 
   // Adversarial model finds a new issue the original reviewer missed
@@ -272,7 +291,7 @@ test('runAdversarialQaGate returns { passed: false } when adversarial model find
 });
 
 test('runAdversarialQaGate adds new failures beyond original REJECT verdict', async () => {
-  useMockedDeepInfra();
+  useMockedProvider();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
 
   // Adversarial finds an ADDITIONAL failure beyond the original
@@ -302,7 +321,7 @@ test('runAdversarialQaGate adds new failures beyond original REJECT verdict', as
 });
 
 test('runAdversarialQaGate handles runner error by rejecting with halt fallback (F1 fix, default)', async () => {
-  useMockedDeepInfra();
+  useMockedProvider();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
   // Default: BABEL_ADVERSARIAL_QA_FALLBACK is unset → 'halt' (reject on error)
 
@@ -332,7 +351,7 @@ test('runAdversarialQaGate handles runner error by rejecting with halt fallback 
 });
 
 test('runAdversarialQaGate handles runner error with warn fallback (old behavior opt-in)', async () => {
-  useMockedDeepInfra();
+  useMockedProvider();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
   process.env['BABEL_ADVERSARIAL_QA_FALLBACK'] = 'warn';
 
@@ -363,7 +382,7 @@ test('runAdversarialQaGate handles runner error with warn fallback (old behavior
 });
 
 test('runAdversarialQaGate handles runner error with skip fallback (silent, least safe)', async () => {
-  useMockedDeepInfra();
+  useMockedProvider();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
   process.env['BABEL_ADVERSARIAL_QA_FALLBACK'] = 'skip';
 
@@ -392,7 +411,7 @@ test('runAdversarialQaGate handles runner error with skip fallback (silent, leas
 });
 
 test('runAdversarialQaGate writes evidence JSON to run directory', async () => {
-  useMockedDeepInfra();
+  useMockedProvider();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
 
   globalThis.fetch = mockFetchResponse('{"verdict":"PASS","overall_confidence":5}');
@@ -415,8 +434,8 @@ test('runAdversarialQaGate writes evidence JSON to run directory', async () => {
   }
 });
 
-test('runAdversarialQaGate uses step-flash model (not nemotron) after Phase 1A swap', async () => {
-  useMockedDeepInfra();
+test('legacy adversarial selection maps to step-flash while product review uses an approved route', async () => {
+  useMockedProvider();
   process.env['BABEL_ADVERSARIAL_REVIEW'] = 'true';
 
   // Verify the model mapping resolves step-flash correctly

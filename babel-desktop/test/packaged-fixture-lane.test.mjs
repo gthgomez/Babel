@@ -24,6 +24,8 @@ test('missing installed selection stays on disk while real resolvers and history
     const packageRoot = join(resourcesPath, 'app');
     const fixtures = await writePackagedAcceptanceProfile(profile);
     assert.equal(fixtures.missingInstallId, MISSING_INSTALL_ID);
+    const catalog = JSON.parse(await readFile(join(profile, 'engine', 'config', 'desktop-model-catalog.json'), 'utf8'));
+    assert.deepEqual(catalog.models.map(({provider,id}) => ({provider,id})), [{provider:'openrouter',id:'openrouter/fixture-model'}]);
     assert.equal(readActiveEngine(profile).id, MISSING_INSTALL_ID);
     const selectionFile = join(profile, 'engine', 'active-engine.json');
     const before = await readFile(selectionFile);

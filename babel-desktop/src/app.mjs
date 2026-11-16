@@ -472,7 +472,7 @@ async function providerCredentialsDialog() {
     if(status.storage==='legacy-plaintext')return 'Legacy plaintext key found. It is unverified and not OS-protected. Choose how to continue below; the original file is retained for recovery.';
     if(status.storage==='project-plaintext')return `Project plaintext storage. ${status.present?'A saved key is present.':'No key saved.'}`;
     if(status.storage==='os-protected')return `OS-protected storage. ${status.present?'A saved key is present.':'Key removed.'}`;
-    if(status.storage==='shared-os')return status.sharedReady?'OS-protected key shared with the Babel CLI. Authentication has not been established by storage.':'Shared connection unavailable. Repair the CLI connection before sending a task.';
+    if(status.storage==='shared-os')return status.sharedReady===false?'Shared connection unavailable. Repair the CLI connection before sending a task.':'Connection shared with the Babel CLI. Key availability and authentication have not been checked.';
     return status.protectionAvailable?'OS protection is available. No key saved.':'OS protection is unavailable. Private key writes are disabled.';
   };
   const renderAuthStatus=authentication=>{

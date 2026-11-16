@@ -4,6 +4,17 @@ import {mkdtempSync,mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {installLinuxKeyringBinding} from '../scripts/lib/linux-keyring-binding.mjs';
+import {installCanvasPlatformBinding,resolveCanvasPlatformBindingPackage} from '../../babel-cli/scripts/research-v2-canvas-platform-binding.mjs';
+
+test('installing the canvas binding does not restore unrelated optional native packages',()=>{
+  const cwd=mkdtempSync(join(tmpdir(),'babel-canvas-package-'));
+  mkdirSync(join(cwd,'node_modules','@napi-rs','canvas'),{recursive:true});
+  let args;
+  installCanvasPlatformBinding({cwd,npmCli:'npm-cli.js',nodeExec:'node',execute:(_exe,actual)=>{args=actual;}});
+  assert.ok(args.includes(`${resolveCanvasPlatformBindingPackage()}@0.1.80`));
+  assert.ok(args.includes('--omit=optional'));
+  assert.ok(args.includes('--ignore-scripts'));
+});
 
 test('Linux packaging installs the exact native binding and requires its notices',()=>{
   const cwd=mkdtempSync(join(tmpdir(),'babel-keyring-package-'));

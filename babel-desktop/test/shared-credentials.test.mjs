@@ -7,7 +7,7 @@ import {applyCliCredentialScope} from '../native/childEnv.mjs';
 import {saveProviderRoute} from '../native/provider-routing.mjs';
 import {fixtureProtection} from './credential-fixture.mjs';
 import {configureCredentialProtection,configureSharedCredentialService,saveProviderCredential,shareProviderCredential,
-  providerCredentialStatus,removeProviderCredential,applyNativeCredentialEnvironment,assertStandaloneCredentialCompatibility} from '../native/credentials.mjs';
+  providerCredentialStatus,connectionCredentialReadiness,removeProviderCredential,applyNativeCredentialEnvironment,assertStandaloneCredentialCompatibility} from '../native/credentials.mjs';
 
 configureCredentialProtection(fixtureProtection);
 function fixture(){
@@ -69,4 +69,18 @@ test('a missing shared account never falls back to retained ciphertext or ambien
   assert.throws(()=>applyNativeCredentialEnvironment(env,{provider:'openrouter',configDirectory}),/missing|unavailable/i);
   assert.equal(env.OPENROUTER_API_KEY,undefined);
   assert.equal(providerCredentialStatus({provider:'openrouter',configDirectory}).configured,false);
+});
+
+test('shared metadata alone does not claim the protected key was checked',()=>{
+  const {configDirectory,accounts}=fixture();
+  saveProviderCredential({provider:'openrouter',apiKey:key,configDirectory});
+  const shared=shareProviderCredential({provider:'openrouter',configDirectory,confirm:true});
+  // Simulate a deleted or locked key while its connection metadata survives.
+  accounts.get(shared.connectionId).key=null;
+  const status=providerCredentialStatus({provider:'openrouter',configDirectory});
+  assert.equal(status.sharedReady,null);
+  assert.equal(connectionCredentialReadiness({route:{provider:'openrouter',model:'fixture'},configDirectory}).state,'configured_unverified');
+  const env={OPENROUTER_API_KEY:'wrong-account'};
+  assert.throws(()=>applyNativeCredentialEnvironment(env,{provider:'openrouter',configDirectory}),/missing|unavailable/i);
+  assert.equal(env.OPENROUTER_API_KEY,undefined);
 });

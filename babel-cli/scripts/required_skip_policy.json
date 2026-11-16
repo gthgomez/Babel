@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "rules": [
     {
+      "id": "windows-credential-helper",
+      "platforms": ["linux", "darwin"],
+      "reasons": ["Windows credential helper requires Windows"],
+      "rationale": "The Windows unit lane compiles this helper under its restricted environment; non-Windows lanes exercise the portable credential-store contracts.",
+      "suites": ["unit"],
+      "files": {
+        "src/config/sharedCredentialStore.test.ts": [
+          "Windows helper compiles under the restricted process environment without touching a credential store"
+        ]
+      }
+    },
+    {
       "id": "windows-guarded-plan-reader",
       "platforms": ["linux", "darwin"],
       "reasons": ["Windows guarded candidate"],

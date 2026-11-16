@@ -121,7 +121,7 @@ test('Linux and macOS keyring workers are bounded and receive no ambient provide
   assert.doesNotMatch(JSON.stringify(captured?.options['env']), /never-pass|OPENROUTER/)
 })
 
-test('Windows helper compiles under the restricted process environment without touching a credential store', { skip: process.platform !== 'win32' }, () => {
+test('Windows helper compiles under the restricted process environment without touching a credential store', { skip: process.platform !== 'win32' ? 'Windows credential helper requires Windows' : false }, () => {
   const systemRoot = process.env['SystemRoot'] ?? process.env['WINDIR']
   assert.ok(systemRoot)
   assert.ok(process.env['LOCALAPPDATA'])

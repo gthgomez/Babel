@@ -110,6 +110,10 @@ function buildLifecycleStyleEnv(profileDir) {
   ]) {
     if (process.env[name]) env[name] = process.env[name];
   }
+  env.USERPROFILE = profileDir;
+  env.HOME = profileDir;
+  env.LOCALAPPDATA = join(profileDir, 'local');
+  env.APPDATA = join(profileDir, 'roaming');
   env.BABEL_RUNS_DIR = join(profileDir, 'engine', 'state', 'runs');
   env.BABEL_TEST_SHARED_SESSION_TRACE = '1';
   env.ELECTRON_NO_SANDBOX = '1';
@@ -195,7 +199,12 @@ test('shared-session Electron run uses host-run child and preserves thread acros
     const legacyRunReceipt = join(root, 'legacy-run-receipt.txt');
     await mkdir(project);
     await mkdir(config, { recursive: true });
+    await mkdir(join(profile, 'local', 'Temp'), {recursive: true});
+    await mkdir(join(profile, 'roaming'), {recursive: true});
     await writeFile(join(project, 'README.md'), 'Synthetic shared-session project');
+    // This session test uses a local CLI shim; the synthetic legacy fixture
+    // satisfies credential admission without accessing an OS store or provider.
+    await writeFile(join(config, '.env'), 'OPENROUTER_API_KEY=BabelSyntheticSharedSessionFixture0000\n');
 
     await writeFile(
       entry,

@@ -1,8 +1,9 @@
 // License: Apache-2.0
-import {createHash} from 'node:crypto';
-import {mkdir, readFile, stat, writeFile} from 'node:fs/promises';
+import {createHash, randomUUID} from 'node:crypto';
+import {mkdir, readFile, realpath, stat, writeFile} from 'node:fs/promises';
 import {dirname, join, resolve} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
+import {spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {_electron as electron} from 'playwright';
 import {parseBuildMetadata} from '../../native/identity.mjs';
@@ -58,6 +59,25 @@ async function connectLiveFromPackagedStartupDialog(window) {
 }
 
 const NAVIGATION_RETRY_MS = 60_000;
+
+/** Compare only the synthetic value in a separate installed CLI process. */
+function checkInstalledSharedCredential(install, profile, env, connectionId, expected, missing = false) {
+  const code = `import {readFileSync} from 'node:fs';
+    const input=JSON.parse(readFileSync(0,'utf8'));
+    try {
+      const {createSharedConnectionService}=await import(input.module);
+      const service=createSharedConnectionService({path:input.preferences});
+      const value=service.read(input.connection,'openrouter');
+      process.exitCode=!input.missing && value===input.expected ? 0 : 1;
+    } catch(error) { process.exitCode=input.missing && error?.code==='MISSING' ? 0 : 1; }`;
+  const cli = join(install,'resources','babel-runtime','cli');
+  const child = spawnSync(join(install,'resources','babel-runtime','node','node.exe'), ['--input-type=module','-e',code], {
+    input:JSON.stringify({module:pathToFileURL(join(cli,'dist','config','sharedConnectionService.js')).href,
+      preferences:join(profile,'.babel','preferences.json'),connection:connectionId,expected,missing}),
+    env,encoding:'utf8',windowsHide:true,timeout:45000,maxBuffer:4096,
+  });
+  if (child.status !== 0) throw new Error(missing ? 'Installed CLI did not observe removal of the synthetic shared credential' : 'Installed CLI could not read the synthetic shared credential after restart');
+}
 
 function isDestroyedContextError(error) {
   const msg = String(error?.message ?? error);
@@ -122,6 +142,7 @@ async function main() {
   const checks = [];
   const errors = [];
   const identity = {installRoot: install, executable: exe};
+  const syntheticCredential = `BabelSyntheticFixture-${randomUUID()}`;
 
   try {
     await stat(exe);
@@ -146,8 +167,9 @@ async function main() {
     process.exit(1);
   }
 
-  const profile = join(tmpdir(), `babel-desktop-gui-${Date.now()}`);
-  await mkdir(profile, {recursive: true});
+  const profilePath = join(tmpdir(), `babel-desktop-gui-${Date.now()}`);
+  await mkdir(profilePath, {recursive: true});
+  const profile = await realpath(profilePath);
   const fixtures = await writePackagedAcceptanceProfile(profile);
   identity.fixtureProjectRoot = fixtures.projectRoot;
   identity.fixtureMissingInstallId = fixtures.missingInstallId;
@@ -158,6 +180,11 @@ async function main() {
     for(const name of Object.keys(launchEnv))if(/(?:API_KEY|TOKEN|SECRET)$/.test(name))delete launchEnv[name];
     delete launchEnv.BABEL_MODEL_POLICY_PATH;
     launchEnv.USERPROFILE=profile;launchEnv.HOME=profile;
+    launchEnv.LOCALAPPDATA=join(profile,'AppData','Local');
+    launchEnv.APPDATA=join(profile,'AppData','Roaming');
+    launchEnv.BABEL_OFFLINE='1';
+    await mkdir(join(launchEnv.LOCALAPPDATA,'Temp'),{recursive:true});
+    await mkdir(launchEnv.APPDATA,{recursive:true});
     launchEnv.BABEL_OPENCODE_GO_HELPER=join(profile,'absent-fixture-helper.cjs');
     app = await electron.launch({
       executablePath: exe,
@@ -208,10 +235,13 @@ async function main() {
     if (info.ready !== true || info.projectName !== 'acceptance-project') {
       throw new Error(`fixture project not connected (ready=${info.ready}, project=${info.projectName})`);
     }
-    if (info.engine?.readiness?.ready !== (info.diagnostics?.ready === true)) {
-      throw new Error('engine.readiness.ready must match verified execution prerequisites for the connected fixture project');
+    if (info.engine?.executionProfile === 'safe_repo' && info.engine?.readiness?.ready && info.diagnostics?.ready !== true) {
+      throw new Error('safe_repo execution cannot be ready without verified diagnostics');
     }
-    checks.push('fixture-backed project connects with truthful ready state (no model run)');
+    if (info.engine?.executionProfile !== 'safe_repo' && info.engine?.readiness?.ready !== true) {
+      throw new Error('host-native readiness must not require sandbox diagnostics');
+    }
+    checks.push('fixture-backed project reports execution readiness appropriate to its profile (no model run)');
     journeys.project = {status: 'executed', transport: 'preload IPC getInfo + listDirectory'};
 
     const tree = await evaluateInPackagedWindow(window, async () => {
@@ -245,35 +275,39 @@ async function main() {
     checks.push('installed history IPC pages tail and older windows without overlap');
     journeys.historyIpc = {status: 'executed'};
 
-    const provider = await evaluateInPackagedWindow(window, async () => {
+    const provider = await evaluateInPackagedWindow(window, async syntheticCredential => {
       const providers = await window.babelDesktop.listQualifiedProviders();
-      const saved = await window.babelDesktop.saveProviderRoute({provider: 'ollama', model: 'ollama/local-fixture'});
+      const credential = await window.babelDesktop.providerCredentialStatus({provider:'openrouter',scope:'private'});
+      const saved = await window.babelDesktop.saveProviderRoute({provider:'openrouter',model:'openrouter/fixture-model',
+        scope:'private',binding:credential.binding,credentialOperation:'add_new',apiKey:syntheticCredential});
       const route = await window.babelDesktop.readProviderRoute();
       return {
-        providerCount: providers.length,
+        providers: providers.map(item=>item.id).sort(),
+        saved: saved?.ok,
         savedProvider: saved?.route?.provider,
         routeProvider: route?.provider,
         routeModel: route?.model,
       };
-    });
-    if (provider.providerCount < 1) throw new Error('listQualifiedProviders returned no providers');
-    if (provider.savedProvider !== 'ollama' || provider.routeProvider !== 'ollama') {
+    }, syntheticCredential);
+    if (provider.providers.join(',') !== 'command-code,openrouter') throw new Error('installed provider list does not match the product policy');
+    if (!provider.saved || provider.savedProvider !== 'openrouter' || provider.routeProvider !== 'openrouter' || provider.routeModel !== 'openrouter/fixture-model') {
       throw new Error(`provider route not persisted: ${JSON.stringify(provider)}`);
     }
-    checks.push('provider route saves via IPC without API credentials (ollama local route)');
-    journeys.provider = {status: 'executed', note: 'route-only; no credential file or model call'};
+    checks.push('approved provider route and synthetic protected credential save via IPC without a provider request');
+    journeys.provider = {status: 'executed', note: 'synthetic credential; offline; no model call'};
 
-    // Exercise the renderer save transition too; this profile has a synthetic local catalog only.
+    // Exercise the renderer save transition using the existing synthetic credential.
     await window.locator('[data-action="models"]').click();
-    await window.locator('#credential-provider').selectOption('ollama');
-    await window.locator('#credential-model').selectOption('ollama/local-fixture');
+    await window.locator('#credential-provider').selectOption('openrouter');
+    await window.locator('#credential-model').selectOption('openrouter/fixture-model');
+    await window.waitForFunction(()=>Boolean(document.querySelector('#credential-scope')?.dataset.binding));
     await window.locator('#dialog [data-action="save-provider-credential"]').click();
     await window.locator('#dialog').waitFor({state:'hidden',timeout:30_000});
-    if (!await window.locator('#model-controls').innerText().then(text=>text.includes('Local acceptance fixture'))) throw new Error('Saved provider did not update renderer model selection');
+    if (!await window.locator('#model-controls').innerText().then(text=>text.includes('Packaged acceptance fixture'))) throw new Error('Saved provider did not update renderer model selection');
 
     const harness = await connectLiveFromPackagedStartupDialog(window);
     if (!harness.connected) throw new Error('Installed history connection failed');
-    journeys.connection = {status: 'executed', executionReady: info.diagnostics?.ready === true, docker: info.diagnostics?.docker ?? null};
+    journeys.connection = {status: 'executed', executionReady: info.engine?.readiness?.ready === true, docker: info.diagnostics?.docker ?? null};
     {
       checks.push('startup automatically connects the real harness; incomplete setup remains accessible');
       await window.waitForSelector('button.session-button[data-action="session"]', {timeout: 30_000});
@@ -293,7 +327,7 @@ async function main() {
     const selection = JSON.parse(await readFile(join(profile, 'engine', 'active-engine.json'), 'utf8'));
     if (selection.id !== fixtures.missingInstallId) throw new Error('Read-only fallback must preserve the missing engine selection on disk');
     journeys.engineFallback = {status: 'executed', missingInstallId: fixtures.missingInstallId, origin: info.engine.origin, runtimeSource: info.runtimeSource, selectionPreserved: true, note: 'Read-only history; no task execution.'};
-    if (info.diagnostics?.ready !== true) {
+    if (info.engine?.executionProfile === 'safe_repo' && info.diagnostics?.ready !== true) {
       if (!await window.locator('#send-button').isDisabled()) throw new Error('Execution must remain blocked without ready diagnostics');
       journeys.executionAdmission = {status: 'blocked correctly', note: 'No task execution.'};
     }
@@ -312,6 +346,43 @@ async function main() {
     await mkdir(artifacts, {recursive: true});
     await window.screenshot({path: join(artifacts, 'packaged-electron-window.png'), fullPage: true});
     checks.push('screenshots captured from packaged Electron window');
+
+    // Only GitHub-hosted Windows runners provide the disposable OS identity
+    // required for this real Credential Manager test. The native confirmation
+    // is simulated as an explicit user acceptance inside this test process.
+    if (process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted') {
+      await app.evaluate(({dialog}) => {
+        dialog.showMessageBox = async (_window, options) => {
+          if (options?.title !== 'Share this key with Babel CLI?' || !options?.buttons?.includes('Share with CLI')) throw new Error('Expected explicit shared-key confirmation');
+          return {response:1,checkboxChecked:false};
+        };
+      });
+      const receipt = await evaluateInPackagedWindow(window, async () => {
+        const status = await window.babelDesktop.providerCredentialStatus({provider:'openrouter',scope:'private'});
+        if (!status.shareAvailable) throw new Error('Synthetic protected credential is not available to share');
+        return window.babelDesktop.shareProviderCredential({provider:'openrouter',scope:'private',binding:status.binding});
+      });
+      if (!receipt?.shared || !receipt.connectionId) throw new Error('Synthetic credential sharing was not confirmed');
+      await app.close();
+      app = await electron.launch({executablePath:exe,args:[`--profile-dir=${profile}`],env:launchEnv,timeout:120_000});
+      const restartedWindow = await app.firstWindow();
+      await waitForPackagedPreload(restartedWindow);
+      const restarted = await evaluateInPackagedWindow(restartedWindow, async () => {
+        return window.babelDesktop.providerCredentialStatus({provider:'openrouter',scope:'private'});
+      });
+      if (restarted.storage !== 'shared-os' || restarted.sharedReady !== null) throw new Error('Shared connection metadata did not restore as unverified after Desktop restart');
+      checkInstalledSharedCredential(install,profile,launchEnv,receipt.connectionId,syntheticCredential);
+      await evaluateInPackagedWindow(restartedWindow, async () => {
+        const status = await window.babelDesktop.providerCredentialStatus({provider:'openrouter',scope:'private'});
+        await window.babelDesktop.removeProviderCredential({provider:'openrouter',scope:'private',binding:status.binding});
+      });
+      checkInstalledSharedCredential(install,profile,launchEnv,receipt.connectionId,syntheticCredential,true);
+      checks.push('isolated Windows shared credential survives Desktop and installed CLI process restarts and remains removed');
+      journeys.sharedCredentialRestart = {status:'executed',note:'synthetic key; disposable hosted Windows identity; confirmation simulated; no provider request'};
+    } else {
+      journeys.sharedCredentialRestart = {status:'not run',note:'requires a disposable GitHub-hosted Windows identity'};
+      untestedJourneys.push('shared Windows credential-store restart outside a disposable hosted runner');
+    }
   } catch (error) {
     errors.push(String(error?.message ?? error));
   } finally {

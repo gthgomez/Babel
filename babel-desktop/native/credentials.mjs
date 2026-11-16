@@ -222,7 +222,9 @@ export function providerCredentialStatus({provider,scope='private',configDirecto
     tombstoned,
     migrationAvailable:legacyEffective&&protectionAvailable(),
     shareAvailable:Boolean(ownedPresent&&!sharedId&&isApprovedDesktopProvider(provider)&&sharedCredentialService&&protectionAvailable()),
-    sharedConnection:sharedId,sharedReady:sharedId?Boolean(sharedIdentity):null,
+    // A durable reference does not prove that the OS key is readable. Avoid
+    // unlocking a keychain during passive startup; resolve it only for a run.
+    sharedConnection:sharedId,sharedReady:sharedId&&!sharedIdentity?false:null,
     credentialRevision:revision,
     // A legacy key has no revision, but a stale authorization result still must
     // not survive an out-of-band edit. This identity is a file fact, not a hash.
@@ -241,7 +243,7 @@ export function connectionCredentialReadiness({route,scope='private',configDirec
   if(!isApprovedDesktopProvider(route.provider))return {state:'unsupported_provider',provider:route.provider,model:route.model};
   if(isDesktopOffline())return {state:'offline',provider:route.provider,model:route.model};
   const status=providerCredentialStatus({provider:route.provider,scope,configDirectory,projectRoot});
-  const state=(status.storage==='os-protected'&&!status.protectionAvailable)||(status.storage==='shared-os'&&!status.sharedReady)?'credential_unavailable':status.configured?'configured_unverified':'credential_missing';
+  const state=(status.storage==='os-protected'&&!status.protectionAvailable)||(status.storage==='shared-os'&&status.sharedReady===false)?'credential_unavailable':status.configured?'configured_unverified':'credential_missing';
   return {state,
     provider:route.provider,model:route.model,scope,storage:status.storage};
 }

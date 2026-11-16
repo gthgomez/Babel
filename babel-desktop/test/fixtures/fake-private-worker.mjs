@@ -77,6 +77,27 @@ input.on('data', chunk => {
     } else if (method === 'turn.submit') {
       if (current) { fail(id, 'A worker turn is already active'); continue }
       const turn = Number(params.command_id.replace(/\D/g, '')) || 1
+      if (process.env.FAKE_WORKER_WRONG_THREAD === '1') {
+        respond(id, {thread_id:'wrong-thread',turn_id:turn});
+        continue
+      }
+      if (process.env.FAKE_WORKER_FLOOD_ADMISSION === '1') {
+        const packet = {jsonrpc:'2.0',method:'turn.event',params:{thread_id:params.thread_id,turn_id:turn,event:{type:'thinking'}}};
+        output.write(Array.from({length:4097},()=>JSON.stringify({...packet,worker_seq:sequence++})).join('\n')+'\n');
+        continue
+      }
+      if (process.env.FAKE_WORKER_COALESCE_ADMISSION === '1') {
+        // One write makes the admission response and terminal events arrive
+        // in the same read, before the consumer's await continuation runs.
+        const packets = [
+          ...(turn > 1 ? [{jsonrpc:'2.0',method:'turn.event',params:{thread_id:params.thread_id,turn_id:turn-1,event:{type:'done',answer:'stale prior turn'}}}] : []),
+          {jsonrpc:'2.0',id,result:{thread_id:params.thread_id,turn_id:turn}},
+          {jsonrpc:'2.0',method:'turn.event',params:{thread_id:params.thread_id,turn_id:turn,event:{type:'answer_chunk',text:'fixture answer'}}},
+          {jsonrpc:'2.0',method:'turn.event',params:{thread_id:params.thread_id,turn_id:turn,event:{type:'done',answer:'fixture answer',outcome:'NO_CHANGE_REQUIRED',status:'complete'}}},
+        ];
+        output.write(packets.map(packet=>JSON.stringify({...packet,worker_seq:sequence++})).join('\n')+'\n');
+        continue
+      }
       respond(id, { thread_id: params.thread_id, turn_id: turn })
       runTurn(params.thread_id, turn, params.message)
     } else if (method === 'approval.lookup') {
