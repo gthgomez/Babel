@@ -107,10 +107,12 @@ test('interactive review preference works independently and setup follows the re
   const { handleCommand } = await import('../interactive/commands.js')
   const { handleMode } = await import('../interactive/commands/config.js')
   const root = mkdtempSync(join(tmpdir(), 'babel-session-target-'))
-  updateUserSettings({ defaults: { review: 'thorough' }, setup: { completed: true }, connections: { b: { id: 'b', provider: 'gemini', model: 'b-model' } }, projects: { [root]: { connection: 'b' } } })
+  updateUserSettings({ defaults: { review: 'thorough' }, setup: { completed: true }, connections: { b: { id: 'b', provider: 'command-code', model: 'b-model' } }, projects: { [root]: { connection: 'b' } } })
   const ctx = { state: { mode: 'chat', model: 'connection/a/a-model', connectionId: 'a', modelSource: 'session', operatorMode: 'hard_plan' }, projectSettingsApplied: true,
     resolveCurrentTarget: () => ({ targetRoot: root }), resolveSessionModel: () => {}, saveSessionState: () => {} }
   const previous = process.env['BABEL_INTERACTIVE']
+  const previousKey = process.env['COMMAND_CODE_API_KEY']
+  delete process.env['BABEL_OFFLINE']; process.env['COMMAND_CODE_API_KEY'] = 'synthetic-command-code-key'
   try {
     await bootstrapReplSession(ctx as never, () => null, { warmRuntime: false, startIndexing: false })
     assert.equal(ctx.state.mode, 'deep')
@@ -118,7 +120,10 @@ test('interactive review preference works independently and setup follows the re
     assert.equal(ctx.state.mode, 'deep'); assert.equal(ctx.state.operatorMode, 'hard_plan')
     await handleCommand(ctx as never, '/setup')
     assert.equal(ctx.state.model, 'connection/b/b-model'); assert.equal(ctx.state.connectionId, 'b')
-  } finally { if (previous === undefined) delete process.env['BABEL_INTERACTIVE']; else process.env['BABEL_INTERACTIVE'] = previous }
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_INTERACTIVE']; else process.env['BABEL_INTERACTIVE'] = previous
+    if (previousKey === undefined) delete process.env['COMMAND_CODE_API_KEY']; else process.env['COMMAND_CODE_API_KEY'] = previousKey
+  }
 }))
 
 test('plain presentation does not change approval flags or select an animated renderer', async () => {

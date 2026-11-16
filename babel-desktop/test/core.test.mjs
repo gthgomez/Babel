@@ -3,6 +3,14 @@ import assert from 'node:assert/strict';
 
 const load = () => import('../src/core.mjs').catch(() => ({}));
 
+test('provider recovery guidance distinguishes authorization, payment, permission and throttling',async()=>{
+ const {connectionFailureAdvice}=await load();
+ for(const [status,expected] of [[401,/key.*provider settings/i],[402,/payment/i],[403,/permission/i],[429,/rate limit/i],[404,/model|endpoint/i]])
+  assert.match(connectionFailureAdvice(`HTTP ${status}`),expected);
+ assert.match(connectionFailureAdvice('OS-protected credential could not be unlocked.'),/unlock.*provider settings/i);
+ assert.equal(connectionFailureAdvice('unrelated failure'),'');
+});
+
 test('runtime provider selection does not claim a missing or validated credential',async()=>{
  const {runtimeProviderLabel}=await load();
  for(const platform of ['win32','linux']){

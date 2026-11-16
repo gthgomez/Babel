@@ -1,15 +1,25 @@
-import { createInterface } from 'node:readline/promises';
 import { stdin as input, stderr as output } from 'node:process';
 import { once } from 'node:events';
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { listProviderSpecs } from '../runners/providerRegistry.js';
+import { getProviderSpec, isApprovedProductProvider } from '../runners/providerRegistry.js';
+import { resolveEffectiveSettings } from './userSettings.js';
 import { resolvePrivateCredentialEnvPath } from './envBootstrap.js';
+import { isOfflineRequested } from './offlineMode.js';
+import { platformSharedCredentialStore } from './sharedCredentialStore.js';
 
 export interface InteractiveCredentialOptions {
   input?: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?: (mode: boolean) => void; isRaw?: boolean };
   output?: NodeJS.WritableStream & { isTTY?: boolean };
+  /** False keeps the credential only in this process. */
+  persist?: boolean;
+  /** Explicit repair may replace an already-present process credential. */
+  replaceExisting?: boolean;
+  /** Resolve project-scoped preferences against the already selected target. */
+  projectRoot?: string;
+  /** A connection explicitly selected by this invocation takes precedence. */
+  connectionId?: string;
 }
 
 function isInteractive(
@@ -17,11 +27,13 @@ function isInteractive(
   outStream: { isTTY?: boolean } = output,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return Boolean(inStream.isTTY && outStream.isTTY && env['CI'] !== 'true' && env['CI'] !== '1');
+  return Boolean(inStream.isTTY && outStream.isTTY && !['1', 'true'].includes(env['CI'] ?? '') && !['1', 'true'].includes(env['BABEL_HEADLESS'] ?? ''));
 }
 
 function isMachineOutput(argv: string[]): boolean {
-  return argv.includes('--json') || argv.some(arg => /^--output-format=(?:json|stream-json|jsonl|ndjson)$/.test(arg));
+  return argv.includes('--json') || argv.includes('--headless') || argv.some((arg, index) =>
+    /^--output-format=(?:json|stream-json|jsonl|ndjson)$/.test(arg) ||
+    (arg === '--output-format' && /^(?:json|stream-json|jsonl|ndjson)$/.test(argv[index + 1] ?? '')));
 }
 
 function safeApiKey(key: string): boolean {
@@ -81,11 +93,11 @@ function appendCredential(envFile: string, name: string, key: string): void {
   let existing = '';
   if (existsSync(envFile)) {
     const info = lstatSync(envFile);
-    if (!info.isFile() || info.isSymbolicLink() || info.size > 256 * 1024) {
+    if (!info.isFile() || info.isSymbolicLink() || info.nlink > 1 || info.size > 256 * 1024) {
       throw new Error('Existing credential file is unsafe.');
     }
     existing = readFileSync(envFile, 'utf8');
-    if (new RegExp(`(?:^|\\n)\\s*${name}\\s*=`, 'm').test(existing)) return;
+    if (new RegExp(`(?:^|\\n)\\s*${name}\\s*=`, 'm').test(existing)) throw new Error('An existing credential entry was preserved. Update it explicitly before saving another key.');
   }
   const temp = `${envFile}.${randomUUID()}.tmp`;
   const separator = existing && !existing.endsWith('\n') ? '\n' : '';
@@ -97,16 +109,28 @@ function appendCredential(envFile: string, name: string, key: string): void {
 export async function promptForProviderCredential(name: string, env: NodeJS.ProcessEnv = process.env,
   options: InteractiveCredentialOptions = {}): Promise<boolean> {
   if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error('Invalid credential environment variable name.')
-  if (env[name]?.trim()) return true
+  if (env[name]?.trim() && options.replaceExisting !== true) return true
   const inStream = options.input ?? input
   const outStream = options.output ?? output
   if (!isInteractive(inStream, outStream, env)) return false
   const key = (await readMaskedLine(inStream, outStream)).trim()
   if (!safeApiKey(key)) throw new Error('Credential was not saved: invalid token format.')
-  appendCredential(resolvePrivateCredentialEnvPath(env), name, key)
+  if (options.persist !== false) appendCredential(resolvePrivateCredentialEnvPath(env), name, key)
   env[name] = key
-  outStream.write('Credential saved to your private Babel profile.\n')
+  outStream.write(options.persist === false ? 'Credential kept for this process only.\n' : 'Credential saved as plaintext in your private Babel profile.\n')
   return true
+}
+
+/** The key is sent directly to the OS store and never added to the environment. */
+export async function promptForProtectedCredential(env: NodeJS.ProcessEnv = process.env, options: InteractiveCredentialOptions = {}): Promise<string | null> {
+  const inStream = options.input ?? input;
+  const outStream = options.output ?? output;
+  if (!isInteractive(inStream, outStream, env)) return null;
+  const key = (await readMaskedLine(inStream, outStream)).trim();
+  if (!safeApiKey(key)) throw new Error('Credential was not saved: invalid token format.');
+  const reference = platformSharedCredentialStore().save(key);
+  outStream.write('Credential saved in OS-protected storage. Provider access is unverified.\n');
+  return reference;
 }
 
 /**
@@ -120,34 +144,14 @@ export async function maybePromptForMissingProviderCredential(
 ): Promise<void> {
   const inStream = options?.input ?? input;
   const outStream = options?.output ?? output;
-  if (!isInteractive(inStream, outStream, env) || isMachineOutput(argv)) return;
-  const missing = listProviderSpecs()
-    .filter(spec => spec.authorityConformance === 'certified' && spec.credentialEnvVar)
-    .map(spec => spec.credentialEnvVar!)
-    .filter(name => !env[name]);
-  if (missing.length === 0) return;
-  const target = resolvePrivateCredentialEnvPath(env);
-  outStream.write('\nBabel needs a provider credential for live model calls.\n');
-  outStream.write(`Supported variables: ${missing.join(', ')}\n`);
-  outStream.write(`Credentials are saved to your private profile: ${target}\n`);
-  let name = '';
-  const rl = createInterface({ input: inStream, output: outStream, terminal: true });
-  try {
-    outStream.write('Provider env variable to set (blank to skip): ');
-    name = (await rl.question('')).trim();
-  } finally {
-    rl.close();
-  }
-  if (!name || !missing.includes(name)) {
-    outStream.write('Credential setup skipped.\n');
-    return;
-  }
-  const key = (await readMaskedLine(inStream, outStream)).trim();
-  if (!safeApiKey(key)) {
-    outStream.write('Credential was not saved: invalid token format.\n');
-    return;
-  }
-  appendCredential(resolve(target), name, key);
-  env[name] = key;
-  outStream.write('Credential saved to your private Babel profile.\n');
+  if (!isInteractive(inStream, outStream, env) || isMachineOutput(argv) || argv.includes('--offline') || isOfflineRequested(env)) return;
+  const connection = resolveEffectiveSettings({ env, ...(options?.projectRoot ? { projectRoot: options.projectRoot } : {}),
+    ...(options?.connectionId ? { invocation: { connection: options.connectionId } } : {}) }).connection.value;
+  if (!connection || !isApprovedProductProvider(connection.provider)) return;
+  if (connection.credentialRef) return; // Unlock only when the selected task starts.
+  const spec = getProviderSpec(connection.provider);
+  const name = connection.apiKeyEnvVar ?? spec.credentialEnvVar;
+  if (!spec.requiresCredential || !name || env[name]?.trim()) return;
+  outStream.write(`\nThe selected ${connection.provider} connection needs ${name}. The key will be kept only for this process.\n`);
+  await promptForProviderCredential(name, env, { ...options, persist: false });
 }

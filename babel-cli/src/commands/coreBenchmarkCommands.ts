@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Command } from "commander";
+import { isOfflineRequested, OfflineModeError } from '../config/offlineMode.js';
 import { printJsonErrorAndExit, printJsonOrHuman } from "./output.js";
 import { formatEvalDoctorHuman, runEvalDoctor } from "../eval/evalDoctor.js";
 import { runCodingCanary, describeCanaryPlan } from "../eval/canary/runner.js";
@@ -556,6 +557,7 @@ benchmarkCommand
               ...(labelMode ? { labelMode } : {}),
               delayMs: Number.isFinite(delayMs) ? delayMs : 500,
               llmCall: async (prompt: string): Promise<string> => {
+                if (isOfflineRequested()) throw new OfflineModeError('Offline mode cannot contact a remote benchmark provider.');
                 if (provider === "anthropic") {
                   const resp = await fetch(
                     "https://api.anthropic.com/v1/messages",
@@ -744,6 +746,7 @@ benchmarkCommand
               multiTurnDefense: options.multiTurnDefense === true,
               delayMs: Number.isFinite(delayMs) ? delayMs : 500,
               llmCall: async (prompt: string): Promise<string> => {
+                if (isOfflineRequested()) throw new OfflineModeError('Offline mode cannot contact a remote benchmark provider.');
                 if (provider === "anthropic") {
                   const resp = await fetch(
                     "https://api.anthropic.com/v1/messages",

@@ -15,6 +15,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { readUserSettings } from '../../config/userSettings.js';
+import { resolveConnectionModelPolicy } from '../../config/connectionModelPolicy.js';
 import { resolveChatModelPolicy, isOfflineChatMode } from '../../agent/chatModelPolicy.js';
 import {
   getAvailableModels,
@@ -154,6 +155,11 @@ export function resetModelSnapshotCache(): void {
 /** Status-bar/header label: session override, else the resolved default key, else 'auto'. */
 export function resolveStatusBarModelLabel(sessionModel: string | undefined): string {
   if (sessionModel?.startsWith('connection/')) {
+    // A saved selection stays visible even when offline or otherwise unavailable.
+    try {
+      const selected = resolveConnectionModelPolicy(sessionModel);
+      if (selected) return `${selected.provider}/${selected.providerModelId}`;
+    } catch { /* Fall through to the existing unavailable label. */ }
     const snapshot = resolveModelSnapshot(sessionModel);
     return snapshot ? `${snapshot.policy.provider}/${snapshot.policy.providerModelId}` : 'not configured';
   }
@@ -399,7 +405,7 @@ function describeCredential(
     }
     return {
       state: 'missing',
-      text: `${cred.envVar} not set — provider requests will fail until it is configured`,
+      text: `${cred.envVar} not set — check the selected connection for another credential source`,
       isWarning: true,
     };
   } catch {

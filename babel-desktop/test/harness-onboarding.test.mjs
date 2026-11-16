@@ -11,7 +11,7 @@ test('Setup prepares or validates a sandbox and keeps execution blocked after a 
     const page=await browser.newPage();
     await page.evaluate(()=>{
       window.__sandboxReady=false;window.__setupCalls=[];
-      const info=()=>({packaged:true,ready:true,officialCliReady:true,projectName:'fixture',projectRoot:'C:/fixture',sandbox:{reference:window.__sandboxReady?'custom:v1':null},diagnostics:{ready:window.__sandboxReady,docker:'available',sandboxImage:window.__sandboxReady?'available':'unavailable'}});
+      const info=()=>({packaged:true,ready:true,officialCliReady:true,projectName:'fixture',projectRoot:'C:/fixture',engine:{executionProfile:'safe_repo'},connection:{state:'configured_unverified',provider:'openrouter',model:'fixture-route'},sandbox:{reference:window.__sandboxReady?'custom:v1':null},diagnostics:{ready:window.__sandboxReady,docker:'available',sandboxImage:window.__sandboxReady?'available':'unavailable'}});
       window.babelDesktop={getInfo:async()=>info(),listDirectory:async()=>[],listSessions:async()=>({sessions:[]}),readProviderRoute:async()=>({provider:'openrouter',model:'fixture-route'}),onEvent(){},
         configureSandbox:async options=>{window.__setupCalls.push(options);if(!options.prepareRecommended&&options.reference!=='custom:v1')throw new Error('Sandbox image is not available locally.');await new Promise(resolve=>window.__finishSetup=resolve);window.__sandboxReady=true;return info();}};
     });
@@ -42,12 +42,12 @@ test('Setup prepares or validates a sandbox and keeps execution blocked after a 
   }finally{await browser.close();}
 });
 
-test('Go permits Chat and explains unavailable pipeline modes before sending',async()=>{
+test('Command Code permits Chat and explains unavailable pipeline modes before sending',async()=>{
   const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE});
   try{
     const page=await browser.newPage();
     await page.evaluate(()=>{
-      window.babelDesktop={getInfo:async()=>({ready:true,projectRoot:'C:/fixture',projectName:'fixture'}),listDirectory:async()=>[],listSessions:async()=>({sessions:[]}),readProviderRoute:async()=>({provider:'opencode-go',model:'opencode-go/deepseek-v4.1-flash'}),onEvent:()=>{},run:async()=>{window.__requests=(window.__requests??0)+1;return {started:true};}};
+      window.babelDesktop={getInfo:async()=>({ready:true,projectRoot:'C:/fixture',projectName:'fixture',connection:{state:'configured_unverified',provider:'command-code',model:'command-code/fixture'}}),listDirectory:async()=>[],listSessions:async()=>({sessions:[]}),readProviderRoute:async()=>({provider:'command-code',model:'command-code/fixture'}),onEvent:()=>{},run:async()=>{window.__requests=(window.__requests??0)+1;return {started:true};}};
     });
     await page.setContent(html);await page.waitForFunction(()=>!document.querySelector('#send-button').disabled);
     for(const mode of ['plan','deep']) {
@@ -65,7 +65,7 @@ test('Setup Done and Recheck preserve the active same-project mode and completed
   try{
     const page=await browser.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
     await page.evaluate(()=>{
-      const info=()=>({packaged:true,ready:true,projectName:'fixture',projectRoot:'C:/fixture',diagnostics:{ready:true}});
+      const info=()=>({packaged:true,ready:true,projectName:'fixture',projectRoot:'C:/fixture',connection:{state:'configured_unverified',provider:'openrouter',model:'fixture-route'},diagnostics:{ready:true}});
       window.babelDesktop={getInfo:async()=>info(),refreshDiagnostics:async()=>info(),listDirectory:async()=>[],listSessions:async()=>({sessions:[]}),readProviderRoute:async()=>({provider:'openrouter',model:'fixture-route'}),onEvent:callback=>window.__emit=callback,run:async request=>{window.__run=request.runId;return {started:true};}};
     });
     await page.setContent(html);await page.waitForFunction(()=>!document.querySelector('#send-button').disabled);
@@ -90,7 +90,7 @@ test('first project onboarding loads its files and switching roots starts a new 
     const page=await browser.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
     await page.evaluate(()=>{
       window.__root=null;window.__nextRoot='project-a';window.__runs=[];
-      const info=()=>({packaged:true,ready:Boolean(window.__root),projectName:window.__root,projectRoot:window.__root?`C:/${window.__root}`:null,diagnostics:{ready:true}});
+      const info=()=>({packaged:true,ready:Boolean(window.__root),projectName:window.__root,projectRoot:window.__root?`C:/${window.__root}`:null,connection:{state:'configured_unverified',provider:'openrouter',model:'fixture-route'},diagnostics:{ready:true}});
       window.babelDesktop={getInfo:async()=>info(),refreshDiagnostics:async()=>info(),
         chooseProject:async()=>{window.__root=window.__nextRoot;return info();},listDirectory:async()=>[{name:`${window.__root}-only.txt`,type:'file'}],listSessions:async()=>({sessions:[]}),
         readProviderRoute:async()=>({provider:'openrouter',model:'fixture-route'}),listQualifiedProviders:async()=>[{id:'openrouter',label:'OpenRouter',requiresApiKey:true,routes:[{id:'fixture-route',label:'Fixture route'}]}],
@@ -121,7 +121,7 @@ test('native startup is a real harness and provider save makes the selected rout
     await page.evaluate(() => {
       window.__runs=[]; window.__saved=null;
       window.babelDesktop={
-        getInfo:async()=>({packaged:true,ready:true,officialCliReady:true,projectName:'test-project',projectCredentialsSelected:true,diagnostics:{ready:true,node:'ready',resources:'ready',provider:'configured',docker:'available'}}),
+        getInfo:async()=>({packaged:true,ready:true,officialCliReady:true,projectName:'test-project',projectCredentialsSelected:true,connection:{state:'configured_unverified',...(window.__saved?.route??{provider:'openrouter',model:'openrouter/model-a'})},diagnostics:{ready:true,node:'ready',resources:'ready',provider:'configured',docker:'available'}}),
         refreshDiagnostics:async()=>window.babelDesktop.getInfo(),
         listDirectory:async()=>[{name:'README.md',type:'file'}],listSessions:async()=>({sessions:[],total:0}),
         listQualifiedProviders:async()=>[{id:'openrouter',label:'OpenRouter',requiresApiKey:true,routes:[{id:'openrouter/model-a',label:'Model A',enabled:true},{id:'openrouter/model-b',label:'Model B',enabled:true}]}],
@@ -183,7 +183,7 @@ test('a real CLI terminal review result renders safely and releases the composer
   try {
     const page=await browser.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
     await page.evaluate(()=>{
-      window.babelDesktop={getInfo:async()=>({packaged:true,ready:true,officialCliReady:true,projectName:'fixture',diagnostics:{ready:true}}),listDirectory:async()=>[],listSessions:async()=>({sessions:[]}),readProviderRoute:async()=>({provider:'openrouter',model:'fixture-route'}),onEvent:callback=>{window.__emit=callback;},run:async request=>{window.__run=request.runId;return {started:true};}};
+      window.babelDesktop={getInfo:async()=>({packaged:true,ready:true,officialCliReady:true,projectName:'fixture',connection:{state:'configured_unverified',provider:'openrouter',model:'fixture-route'},diagnostics:{ready:true}}),listDirectory:async()=>[],listSessions:async()=>({sessions:[]}),readProviderRoute:async()=>({provider:'openrouter',model:'fixture-route'}),onEvent:callback=>{window.__emit=callback;},run:async request=>{window.__run=request.runId;return {started:true};}};
     });
     await page.setContent(html);await page.waitForFunction(()=>!document.querySelector('#send-button').disabled);
     await page.locator('#composer-input').fill('Review README.md');await page.keyboard.press('Control+Enter');

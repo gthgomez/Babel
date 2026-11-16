@@ -17,6 +17,13 @@ import type {
   SttEngineConfig,
   AudioChunk,
 } from './types.js';
+import { isOfflineRequested, OfflineModeError } from '../config/offlineMode.js';
+
+function assertVoiceConnectionAllowed(): void {
+  // The WebSocket API does not expose a redirect policy, so even a loopback
+  // endpoint cannot be established safely under the offline contract.
+  if (isOfflineRequested()) throw new OfflineModeError('Offline mode cannot open or use a voice WebSocket.');
+}
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -51,6 +58,7 @@ export class SttClient {
    * Idempotent — subsequent calls return the existing connection.
    */
   async connect(): Promise<void> {
+    assertVoiceConnectionAllowed();
     if (this.isConnected && this.ws?.readyState === WebSocket.OPEN) {
       return;
     }
@@ -68,6 +76,7 @@ export class SttClient {
   }
 
   private async doConnect(): Promise<void> {
+    assertVoiceConnectionAllowed();
     const url = this.buildUrl();
     this.ws = new WebSocket(url);
 
@@ -80,6 +89,8 @@ export class SttClient {
 
       this.ws.onopen = () => {
         clearTimeout(timeout);
+        try { assertVoiceConnectionAllowed(); }
+        catch (error) { this.ws?.close(); reject(error); return; }
         this.isConnected = true;
         this.sendConfigMessage();
         resolve();
@@ -135,6 +146,7 @@ export class SttClient {
    * Send a chunk of PCM16 audio as a binary WebSocket frame.
    */
   sendAudio(chunk: AudioChunk): void {
+    assertVoiceConnectionAllowed();
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.currentAudioDurationMs += (chunk.sampleCount / 16000) * 1000;
 
@@ -147,6 +159,7 @@ export class SttClient {
    * Signal end of audio stream — triggers finalisation on the provider side.
    */
   finalize(): void {
+    assertVoiceConnectionAllowed();
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     // Send end-of-stream marker (provider-specific)

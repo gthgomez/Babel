@@ -89,6 +89,59 @@ test('resident worker reuses one process and one thread across sequential turns'
   }
 })
 
+test('coalesced admission and terminal frames do not strand the next turn', { timeout: 15_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-desktop-worker-coalesced-'))
+  const { runner, packets, start } = harness(root, { FAKE_WORKER_COALESCE_ADMISSION: '1' })
+  try {
+    void start({ runId:'run-1', task:'first turn', mode:'chat', executionScope:{kind:'project',projectRoot:root} })
+    const first = await take(packets, packet => packet.runId === 'run-1' && packet.event?.type === 'run_complete', 4_000)
+    await take(packets, packet => packet.kind === 'exit', 4_000)
+    await new Promise(resolve => runner.whenIdle(resolve))
+    void start({ runId:'run-2', task:'second turn', mode:'chat', sessionId:first.event.result.session_id, executionScope:{kind:'project',projectRoot:root} })
+    const second = await take(packets, packet => packet.runId === 'run-2' && packet.event?.type === 'run_complete', 4_000)
+    assert.equal(second.event.result.session_id, first.event.result.session_id)
+    assert.equal(second.event.result.answer.answer, 'fixture answer')
+    await take(packets, packet => packet.kind === 'exit', 4_000)
+    assert.equal(readFileSync(join(root, 'spawns.txt'), 'utf8').trim().split('\n').length, 1)
+  } finally {
+    await runner.shutdown()
+    removeFixtureDir(root)
+  }
+})
+
+test('unbounded events before admission fail the owned worker closed', { timeout: 15_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-desktop-worker-flood-'))
+  const { runner, packets, start } = harness(root, { FAKE_WORKER_FLOOD_ADMISSION: '1' })
+  try {
+    void start({ runId:'run-1', task:'fixture', mode:'chat', executionScope:{kind:'project',projectRoot:root} })
+    const failure = await take(packets, packet => packet.event?.type === 'run_error', 5_000)
+    assert.match(failure.event.error, /too many events before turn admission/)
+    await take(packets, packet => packet.kind === 'exit', 5_000)
+    assert.equal(runner.busy, false)
+    assert.equal(runner.alive, false)
+    assert.equal(packets.some(packet => packet.event?.type === 'run_complete'), false)
+  } finally {
+    await runner.shutdown()
+    removeFixtureDir(root)
+  }
+})
+
+test('turn admission cannot substitute a different thread', { timeout: 15_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-desktop-worker-wrong-thread-'))
+  const { runner, packets, start } = harness(root, { FAKE_WORKER_WRONG_THREAD: '1' })
+  try {
+    void start({runId:'run-1',task:'fixture',mode:'chat',executionScope:{kind:'project',projectRoot:root}})
+    const failure = await take(packets, packet => packet.event?.type === 'run_error', 5_000)
+    assert.match(failure.event.error, /did not admit the turn/)
+    await take(packets, packet => packet.kind === 'exit', 5_000)
+    assert.equal(runner.alive, false)
+    assert.equal(packets.some(packet => packet.event?.type === 'run_complete'), false)
+  } finally {
+    await runner.shutdown()
+    removeFixtureDir(root)
+  }
+})
+
 test('a new conversation without a session id creates a new thread', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-desktop-worker-new-'))
   const { runner, packets, start } = harness(root)

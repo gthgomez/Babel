@@ -1,6 +1,6 @@
 // License: Apache-2.0
 import { CLI_COMMAND } from './commandName.js';
-import { listProviderSpecs } from '../runners/providerRegistry.js';
+import { isApprovedProductProvider, listProviderSpecs } from '../runners/providerRegistry.js';
 
 /** What to install so the default safe_repo profile can run project commands. */
 export function dockerFailureGuidance(platform: NodeJS.Platform): string {
@@ -35,19 +35,16 @@ export function sandboxImageCheckMessage(ready: boolean, dockerReady: boolean, p
 
 /** Placeholder-only copy for a manual provider file. Never include a real key. */
 export function formatManualProviderEnvExample(envFile: string): string {
-  const coding = listProviderSpecs().filter((spec) => spec.authorityConformance === 'certified' && spec.operations.includes('native_tool_stream'));
+  const coding = listProviderSpecs().filter((spec) => isApprovedProductProvider(spec.id));
   const keyed = coding.filter((spec) => spec.credentialEnvVar);
   const lines = keyed.map((spec, index) => `${index === 0 ? '' : '# '}${spec.credentialEnvVar}=your-key-here`);
   return [
     'Save one provider key in this file (keep it out of the project and out of chat):',
     `  ${envFile}`,
-    'On macOS and Linux the file is created with permissions 0600. Replace your-key-here, keep a single provider, and do not commit the file.',
+    'This file stores plaintext. On macOS and Linux use permissions 0600; never commit it. Environment variables are another option.',
     '',
     '# example',
     ...lines,
-    '# Ollama on this machine does not use an API key.',
-    `# Choose it with: ${CLI_COMMAND} provider connect ollama --model <exact-model>`,
-    '',
-    `Or run ${CLI_COMMAND} setup in a terminal. It stores the key without printing it.`,
+    `Or run ${CLI_COMMAND} setup in a terminal for masked entry.`,
   ].join('\n');
 }

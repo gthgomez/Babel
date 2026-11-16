@@ -16,7 +16,7 @@ async function withRun(body) {
       window.__runs = [];
       window.__copies = [];
       window.babelDesktop = {
-        getInfo:async()=>({ready:true,officialCliReady:true,projectName:'fixture',diagnostics:{ready:true}}),
+        getInfo:async()=>({ready:true,officialCliReady:true,projectName:'fixture',connection:{state:'configured_unverified',provider:'openrouter',model:'fixture'},diagnostics:{ready:true}}),
         listDirectory:async()=>[], listSessions:async()=>({sessions:[],total:0}),
         readProviderRoute:async()=>({provider:'openrouter',model:'fixture'}),
         run:async request=>{window.__runs.push(request);return {started:true};},

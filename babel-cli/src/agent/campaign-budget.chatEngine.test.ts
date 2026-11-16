@@ -81,7 +81,9 @@ test('ChatEngine submitMessageStream runs one qualified native turn under campai
   const priorOffline = process.env['BABEL_OFFLINE']
   const priorMaxCost = process.env['BABEL_CHAT_MAX_COST']
   const priorCompaction = process.env['BABEL_COMPACTION']
-  process.env['BABEL_OFFLINE'] = '1'
+  // This case exercises the remote adapter through the fetch double below.
+  // Offline dispatch has separate fail-closed coverage.
+  process.env['BABEL_OFFLINE'] = '0'
   process.env['BABEL_CHAT_MAX_COST'] = 'unlimited'
   process.env['BABEL_COMPACTION'] = 'off'
   t.after(() => {

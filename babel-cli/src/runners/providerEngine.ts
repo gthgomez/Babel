@@ -24,12 +24,14 @@ import { CommandCodeApiRunner } from './commandCodeApi.js'
 import { CompatibleApiRunner } from './compatibleApi.js'
 import { resolveProviderCredential } from './credentialHub.js'
 import {
+  isProviderId,
   providerSupportsOperation,
   type BenchmarkProviderId,
   type ProviderId,
   type ProviderOperation,
 } from './providerRegistry.js'
 import type { ResolvedExecutionEnvelope } from '../intelligence/types.js'
+import { assertOfflineProviderAllowed } from '../config/offlineMode.js'
 
 interface RawLlmRunner extends LlmRunner {
   executeRaw?: (
@@ -53,6 +55,7 @@ export interface ProviderEngineOptions {
   sampling?: { maxTokens?: number; temperature?: number }
   apiKeyEnvVar?: string
   explicitCredential?: string
+  credentialRef?: string
   env?: NodeJS.ProcessEnv
   /** Shared caller-owned allowance ledger; required for the exact V4.1 Go pilot. */
   budget?: OpenCodeGoBudget
@@ -72,9 +75,14 @@ export interface ProviderEngineOptions {
 }
 
 export function createProviderAdapter(options: ProviderEngineOptions): RawLlmRunner {
+  if (options.credentialRef) assertOfflineProviderAllowed(options.provider, options.baseUrl, options.env)
+  if (options.credentialRef && !isProviderId(options.provider)) throw new Error('Protected credentials require a registered provider.')
+  const selectedCredential = options.credentialRef && isProviderId(options.provider)
+    ? resolveProviderCredential(options.provider, { credentialRef: options.credentialRef, ...(options.env ? { env: options.env } : {}), ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}) })
+    : options.explicitCredential
   const credential = {
     ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}),
-    ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}),
+    ...(selectedCredential ? { explicitCredential: selectedCredential } : {}),
     ...(options.env ? { env: options.env } : {}),
     ...(options.executionEnvelope ? { executionEnvelope: options.executionEnvelope } : {}),
   }
@@ -156,15 +164,30 @@ export class ProviderEngine implements LlmRunner {
   readonly provider: ProviderId | BenchmarkProviderId
   readonly modelId: string
   private readonly adapter: RawLlmRunner
+  private readonly baseUrl: string | undefined
+  private readonly environment: NodeJS.ProcessEnv | undefined
+  private readonly credentialReference: string | undefined
+  private readonly protectedCredentialReference: string | undefined
+  private readonly authentication: 'api-key' | 'none' | undefined
 
   constructor(options: ProviderEngineOptions) {
     this.provider = options.provider
     this.modelId = options.modelId
+    this.baseUrl = options.baseUrl
+    this.environment = options.env
+    this.credentialReference = options.apiKeyEnvVar
+    this.protectedCredentialReference = options.credentialRef
+    this.authentication = options.authentication
     this.adapter = createProviderAdapter(options)
   }
 
   /** Identity of the configured route, independent of any observed response. */
   getPinnedModelId(): string { return this.modelId }
+
+  /** Non-secret fields that bind a cached runner to an account and endpoint. */
+  matchesRoute(options: { apiKeyEnvVar?: string; credentialRef?: string; baseUrl?: string; authentication?: 'api-key' | 'none' }): boolean {
+    return this.credentialReference === options.apiKeyEnvVar && this.protectedCredentialReference === options.credentialRef && this.baseUrl === options.baseUrl && this.authentication === options.authentication
+  }
 
   /** Compatibility accessor for retained OpenCode conversation consumers. */
   getLastOpenCodeSessionId(): string | null {
@@ -197,6 +220,7 @@ export class ProviderEngine implements LlmRunner {
     systemPrompt?: string,
     signal?: AbortSignal,
   ): Promise<T> {
+    assertOfflineProviderAllowed(this.provider, this.baseUrl, this.environment)
     return this.adapter.execute(prompt, schema, callbacks, systemPrompt, signal)
   }
 
@@ -206,6 +230,7 @@ export class ProviderEngine implements LlmRunner {
     systemPrompt?: string,
     signal?: AbortSignal,
   ): Promise<string> {
+    assertOfflineProviderAllowed(this.provider, this.baseUrl, this.environment)
     if (!this.adapter.executeRaw) {
       throw new Error(`[ProviderEngine] ${this.provider} does not support raw chat execution.`)
     }
@@ -218,6 +243,7 @@ export class ProviderEngine implements LlmRunner {
     signal?: AbortSignal,
     callbacks?: RunnerCallbacks,
   ): AsyncGenerator<string, void, undefined> {
+    assertOfflineProviderAllowed(this.provider, this.baseUrl, this.environment)
     if (!this.adapter.executeRawStream) {
       throw new Error(`[ProviderEngine] ${this.provider} does not support raw chat streaming.`)
     }
@@ -232,6 +258,7 @@ export class ProviderEngine implements LlmRunner {
     toolChoice?: 'auto' | 'required',
     callbacks?: RunnerCallbacks,
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
+    assertOfflineProviderAllowed(this.provider, this.baseUrl, this.environment)
     if (!this.adapter.executeWithToolsStream) {
       throw new Error(`[ProviderEngine] ${this.provider} does not support native tool streaming.`)
     }
@@ -258,6 +285,7 @@ export function createProviderRunner(options: ProviderEngineOptions): ProviderEn
 
 /** Compatibility for callers needing the concrete adapter's qualified conversation operations. */
 export function createChatProviderAdapter(options: ProviderEngineOptions): ChatLlmRunner {
+  assertOfflineProviderAllowed(options.provider, options.baseUrl, options.env)
   const adapter = createProviderAdapter(options)
   if (!adapter.executeRaw || !adapter.executeRawStream || !adapter.executeWithToolsStream || !adapter.getLastInvocationMetadata) {
     throw new Error(`[${options.provider}] Conversation inference is unsupported.`)

@@ -10,6 +10,7 @@ import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {configureCredentialProtection,saveProviderCredential,removeProviderCredential,migrateProviderCredential,providerCredentialStatus,hasProviderCredential,applyNativeCredentialEnvironment,normalizeCredentialOperation} from '../native/credentials.mjs';
 import {fixtureProtection} from './credential-fixture.mjs';
+import * as credentialModule from '../native/credentials.mjs';
 configureCredentialProtection(fixtureProtection);
 
 const NEW_KEY='BabelFirstRunNewProtectedKey0000';
@@ -26,6 +27,28 @@ function legacyProfile(config,text=`# retained recovery file\nDEEPSEEK_API_KEY=$
   return {text,digest:digest(text)};
 }
 const status=(config,extra={})=>providerCredentialStatus({provider:'deepseek',scope:'private',configDirectory:config,...extra});
+
+test('connection readiness follows the selected credential after it is added or removed',()=>fixture(config=>{
+  assert.equal(typeof credentialModule.connectionCredentialReadiness,'function');
+  const route={provider:'openrouter',model:'openrouter/vendor/model'};
+  const readiness=()=>credentialModule.connectionCredentialReadiness({route,scope:'private',configDirectory:config});
+  assert.equal(readiness().state,'credential_missing');
+  saveProviderCredential({provider:'openrouter',scope:'private',configDirectory:config,apiKey:NEW_KEY});
+  assert.equal(readiness().state,'configured_unverified');
+  removeProviderCredential({provider:'openrouter',scope:'private',configDirectory:config});
+  assert.equal(readiness().state,'credential_missing');
+}));
+
+test('a protected credential is not usable while OS protection is unavailable',()=>fixture(config=>{
+  const route={provider:'openrouter',model:'openrouter/vendor/model'};
+  saveProviderCredential({provider:'openrouter',scope:'private',configDirectory:config,apiKey:NEW_KEY});
+  try{
+    configureCredentialProtection({isEncryptionAvailable:()=>false});
+    const readiness=credentialModule.connectionCredentialReadiness({route,scope:'private',configDirectory:config});
+    assert.equal(readiness.state,'credential_unavailable');
+    assert.equal(JSON.stringify(readiness).includes(NEW_KEY),false);
+  }finally{configureCredentialProtection(fixtureProtection);}
+}));
 
 test('legacy-only status reports plaintext storage without claiming authentication',()=>fixture(config=>{
   legacyProfile(config);

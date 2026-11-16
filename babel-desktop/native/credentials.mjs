@@ -4,13 +4,25 @@ import {closeSync,fstatSync,lstatSync,mkdirSync,openSync,readSync,renameSync,rmS
 import {spawnSync} from 'node:child_process';
 import {dirname,isAbsolute,join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {homedir} from 'node:os';
 
+import {isApprovedDesktopProvider,isDesktopOffline} from './product-provider-policy.mjs';
 const PROVIDERS=Object.freeze({deepseek:'DEEPSEEK_API_KEY',deepinfra:'DEEPINFRA_API_KEY',openrouter:'OPENROUTER_API_KEY','command-code':'COMMAND_CODE_API_KEY','opencode-go':'BABEL_OPENCODE_GO_API_KEY',ollama:null});
 const FILE_LIMIT=256*1024;
 export const PROTECTED_CREDENTIAL_FILE='desktop-credentials.json';
 let protection=null;
+let sharedCredentialService=null;
 /** Main-process bootstrap only; never exposed over IPC. */
 export function configureCredentialProtection(value){protection=value;}
+/** Only trusted bundled code may supply this service; renderer receives no key API. */
+export function configureSharedCredentialService(value){sharedCredentialService=value;}
+/** Match the standalone CLI's user-preferences location, including profile overrides. */
+export function sharedUserPreferencesPath(env=process.env,systemHome=homedir()){
+  const home=env.USERPROFILE||env.HOME||systemHome;
+  if(typeof home!=='string'||!isAbsolute(home))throw new Error('A real absolute user profile is required for shared credentials.');
+  return join(resolve(home),'.babel','preferences.json');
+}
+function requireSharedService(){if(!sharedCredentialService)throw new Error('Shared OS-protected credential storage is unavailable. Existing credentials were preserved.');return sharedCredentialService;}
 export function credentialProviders(){return Object.keys(PROVIDERS);}
 function providerName(provider){
   if(!Object.hasOwn(PROVIDERS,provider))throw new Error('Select a supported, authority-qualified cloud provider.');
@@ -70,15 +82,20 @@ function locked(target,work){
   try{fd=openSync(lock,'wx',0o600);}catch{throw new Error('Credential setup is already running or the storage directory is not writable.');}
   try{return work();}finally{closeSync(fd);rmSync(lock,{force:true});}
 }
-function emptyStore(){return {schemaVersion:1,entries:{},migrations:{},revisions:{},superseded:{}};}
+function emptyStore(){return {schemaVersion:1,entries:{},migrations:{},revisions:{},superseded:{},shared:{}};}
 function readStore(configDirectory){
   const raw=readSafe(privateTarget(configDirectory,PROTECTED_CREDENTIAL_FILE),null);
   if(raw===null)return emptyStore();
   try{
     const value=JSON.parse(raw);
-    if(value.schemaVersion!==1||!value.entries||typeof value.entries!=='object'||Array.isArray(value.entries)||!value.migrations||typeof value.migrations!=='object'||Array.isArray(value.migrations))throw new Error();
+    if(![1,2].includes(value.schemaVersion)||!value.entries||typeof value.entries!=='object'||Array.isArray(value.entries)||!value.migrations||typeof value.migrations!=='object'||Array.isArray(value.migrations))throw new Error();
     for(const [provider,entry] of Object.entries(value.entries))if(!Object.hasOwn(PROVIDERS,provider)||!PROVIDERS[provider]||(entry!==null&&(typeof entry!=='string'||entry.length<4||! /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(entry))))throw new Error();
     for(const [provider,entry] of Object.entries(value.migrations))if(!Object.hasOwn(PROVIDERS,provider)||entry!==true||!Object.hasOwn(value.entries,provider))throw new Error();
+    if(value.schemaVersion===1&&value.shared!==undefined&&(!value.shared||typeof value.shared!=='object'||Array.isArray(value.shared)||Object.keys(value.shared).length))throw new Error();
+    if(value.schemaVersion===2){
+      if(!value.shared||typeof value.shared!=='object'||Array.isArray(value.shared))throw new Error();
+      for(const [provider,id] of Object.entries(value.shared))if(!isApprovedDesktopProvider(provider)||typeof id!=='string'||! /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/.test(id)||!Object.hasOwn(value.entries,provider)||value.entries[provider]===null)throw new Error();
+    } else value.shared={};
     // Revision and supersede markers are optional so stores written by earlier
     // builds stay readable; an unknown marker is a hard error, never a guess.
     for(const field of ['revisions','superseded']){
@@ -178,8 +195,10 @@ export function providerCredentialStatus({provider,scope='private',configDirecto
     if(key){try{identity=fileIdentity(target,'project');}catch{/* identity unavailable */}}
     return {...base,configured:Boolean(key),present:Boolean(key),storage:'project-plaintext',ownedProtectedEntry:false,legacyPresent:Boolean(key),legacySuperseded:false,migrationAvailable:false,credentialRevision:null,credentialIdentity:identity,authentication:unknownAuthentication()};
   }
-  const store=readStore(configDirectory),owned=Object.hasOwn(store.entries,provider);
+  const store=readStore(configDirectory),owned=Object.hasOwn(store.entries,provider),sharedId=store.shared[provider]??null;
   const ownedPresent=owned&&store.entries[provider]!==null, tombstoned=owned&&store.entries[provider]===null;
+  let sharedIdentity=null;
+  if(sharedId&&sharedCredentialService)try{sharedIdentity=sharedCredentialService.reference(sharedId,provider);}catch{/* preserve the marker and report unavailable */}
   let legacy=false,legacyFile=null;
   try{
     const target=privateTarget(configDirectory);
@@ -194,18 +213,22 @@ export function providerCredentialStatus({provider,scope='private',configDirecto
   const revision=store.revisions[provider]??null;
   return {
     ...base,
-    configured:ownedPresent||legacyEffective,
+    configured:sharedId?Boolean(sharedIdentity):ownedPresent||legacyEffective,
     present:ownedPresent||legacyEffective,
-    storage:ownedPresent?'os-protected':legacyEffective?'legacy-plaintext':'none',
+    storage:sharedId?'shared-os':ownedPresent?'os-protected':legacyEffective?'legacy-plaintext':'none',
     ownedProtectedEntry:ownedPresent,
     legacyPresent:legacy,
     legacySuperseded:tombstoned||store.superseded[provider]===true,
     tombstoned,
     migrationAvailable:legacyEffective&&protectionAvailable(),
+    shareAvailable:Boolean(ownedPresent&&!sharedId&&isApprovedDesktopProvider(provider)&&sharedCredentialService&&protectionAvailable()),
+    // A durable reference does not prove that the OS key is readable. Avoid
+    // unlocking a keychain during passive startup; resolve it only for a run.
+    sharedConnection:sharedId,sharedReady:sharedId&&!sharedIdentity?false:null,
     credentialRevision:revision,
     // A legacy key has no revision, but a stale authorization result still must
     // not survive an out-of-band edit. This identity is a file fact, not a hash.
-    credentialIdentity:ownedPresent?revision:legacyIdentity,
+    credentialIdentity:sharedId?sharedIdentity:ownedPresent?revision:legacyIdentity,
     authentication:unknownAuthentication(),
   };
 }
@@ -213,6 +236,17 @@ export function unknownAuthentication(reason='not_checked'){
   return {state:'not_checked',reason,checkedAt:null,observedRevision:null};
 }
 export function hasProviderCredential(options={}){return providerCredentialStatus(options).configured;}
+
+/** Report only local readiness; credential presence never proves authentication. */
+export function connectionCredentialReadiness({route,scope='private',configDirectory,projectRoot}={}){
+  if(!route)return {state:'setup_required',provider:null,model:null};
+  if(!isApprovedDesktopProvider(route.provider))return {state:'unsupported_provider',provider:route.provider,model:route.model};
+  if(isDesktopOffline())return {state:'offline',provider:route.provider,model:route.model};
+  const status=providerCredentialStatus({provider:route.provider,scope,configDirectory,projectRoot});
+  const state=(status.storage==='os-protected'&&!status.protectionAvailable)||(status.storage==='shared-os'&&status.sharedReady===false)?'credential_unavailable':status.configured?'configured_unverified':'credential_missing';
+  return {state,
+    provider:route.provider,model:route.model,scope,storage:status.storage};
+}
 function mutateProject(target,name,key,operation){
   locked(target,()=>{
     const previous=readSafe(target),lines=entryLines(previous,name),present=lines.some(entry=>entry.match);
@@ -232,10 +266,12 @@ function nextRevision(store,provider){
   return revision;
 }
 function mutatePrivate(configDirectory,provider,key,operation){
-  requireProtection();const target=privateTarget(configDirectory,PROTECTED_CREDENTIAL_FILE,true);
+  const target=privateTarget(configDirectory,PROTECTED_CREDENTIAL_FILE,true);
   return locked(target,()=>{
     const store=readStore(configDirectory),owned=Object.hasOwn(store.entries,provider);
     const present=owned&&store.entries[provider]!==null;
+    const sharedId=store.shared[provider]??null;
+    if(!sharedId)requireProtection();
     const legacy=legacyKey(readSafe(privateTarget(configDirectory)),PROVIDERS[provider]);
     // Persist the revision with the store; a receipt never claims a revision the
     // durable record does not contain.
@@ -244,6 +280,24 @@ function mutatePrivate(configDirectory,provider,key,operation){
       atomicWrite(target,JSON.stringify(store)+'\n');
       return {present:true,storage:'os-protected',revision,credentialChanged,supersededLegacy,authenticated:false,...extra};
     };
+    if(sharedId){
+      const shared=requireSharedService();
+      if(operation==='replace_protected'){
+        const identity=shared.replace(sharedId,provider,key);
+        return commit(true,false,{storage:'shared-os',credentialIdentity:identity});
+      }
+      if(operation==='remove'){
+        let outcome=null;
+        shared.remove(sharedId,provider,()=>{
+          store.entries[provider]=null;delete store.shared[provider];delete store.superseded[provider];
+          outcome={...commit(true,false),present:false,storage:'none'};
+        });
+        if(!outcome)throw new Error('Shared credential removal could not be confirmed. Refresh settings before retrying.');
+        return outcome;
+      }
+      if(operation==='keep_existing_route_only')return {present:true,storage:'shared-os',revision:store.revisions[provider]??null,credentialChanged:false,supersededLegacy:false,authenticated:false};
+      throw new Error('This provider already has a shared credential. Choose Replace or Remove explicitly.');
+    }
     if(operation==='add_new'||operation==='replace_protected'){
       // A legacy-only profile must choose explicitly; a silent overwrite would
       // destroy the user's only working credential without consent. Report this
@@ -330,6 +384,27 @@ export function migrateProviderCredential({provider,configDirectory,confirm}={})
     return {provider,scope:'private',migrated:true,recoveryRetained:true,revision};
   });
 }
+/** Explicitly share one Desktop-protected account with the standalone CLI. */
+export function shareProviderCredential({provider,configDirectory,model,confirm}={}){
+  if(confirm!==true)throw new Error('Confirm sharing this protected key with the Babel CLI.');
+  if(!isApprovedDesktopProvider(provider))throw new Error('Select an approved provider.');
+  const shared=requireSharedService();requireProtection();
+  const target=privateTarget(configDirectory,PROTECTED_CREDENTIAL_FILE,true);
+  return locked(target,()=>{
+    const store=readStore(configDirectory);
+    if(store.shared[provider])return {provider,shared:true,connectionId:store.shared[provider],recoveryRetained:true};
+    if(!store.entries[provider])throw new Error('No Desktop-protected credential is available to share.');
+    if(!store.revisions[provider]){nextRevision(store,provider);atomicWrite(target,JSON.stringify(store)+'\n');}
+    const id=`desktop-${provider}-${store.revisions[provider]}`;
+    const key=decrypt(store.entries[provider]);
+    shared.register({id,provider,...(model?{model}:{}),key});
+    // Schema 2 makes old builds fail closed instead of reviving the retained
+    // encrypted copy after a later shared-account removal.
+    store.schemaVersion=2;store.shared[provider]=id;
+    try{atomicWrite(target,JSON.stringify(store)+'\n');}catch{throw new Error('The CLI connection may have been created, but Desktop could not finish sharing. Retry sharing; the existing key was retained.');}
+    return {provider,shared:true,connectionId:id,recoveryRetained:true};
+  });
+}
 /** Native-only resolution: clear inherited provider secrets and load only the selected scope.
  * Successful handoff flags instruct the owned CLI to avoid reloading plaintext dotenv.
  */
@@ -343,7 +418,8 @@ export function applyNativeCredentialEnvironment(env,{provider,scope='private',c
       const store=readStore(configDirectory);
       // An owned entry, including a removal tombstone, always outranks the
       // retained legacy file; a superseded legacy key is never resolved again.
-      if(Object.hasOwn(store.entries,provider))key=store.entries[provider]===null?null:decrypt(store.entries[provider]);
+      if(store.shared[provider])key=requireSharedService().read(store.shared[provider],provider);
+      else if(Object.hasOwn(store.entries,provider))key=store.entries[provider]===null?null:decrypt(store.entries[provider]);
       else if(!store.superseded[provider])key=legacyKey(readSafe(privateTarget(configDirectory)),name);
     }else throw new Error('Select an explicit credential destination.');
   }
@@ -357,5 +433,6 @@ export function applyNativeCredentialEnvironment(env,{provider,scope='private',c
 export function assertStandaloneCredentialCompatibility(configDirectory){
   const store=readStore(configDirectory);
   // Args and auxiliary calls can select providers other than the saved default.
-  if(Object.keys(store.entries).length)throw new Error('This profile has Desktop-managed OS-protected credentials or removal markers. Run it in Babel Desktop; the standalone Node launcher cannot safely use this profile.');
+  if(Object.keys(store.entries).some(provider=>!store.shared[provider]))throw new Error('This profile has Desktop-managed OS-protected credentials or removal markers. Run it in Babel Desktop; the standalone Node launcher cannot safely use this profile.');
+  return {...store.shared};
 }

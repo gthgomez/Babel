@@ -1043,56 +1043,7 @@ function getRecoverableErrorFields(error: unknown): Record<string, unknown> {
   };
 }
 
-export function classifyDoTask(task: string): Exclude<LiteVerb, 'do'> {
-  const normalized = task.toLowerCase();
-  const hasMutationIntent =
-    /\b(fix|repair|apply|update|edit|modify|change|implement|write|create|delete|remove)\b/.test(
-      normalized,
-    );
-  const startsWithPlanningIntent =
-    /^\s*(plan|design|approach|compare|outline)\b/.test(normalized) ||
-    /\b(implementation path|migration plan)\b/.test(normalized);
-  if (
-    startsWithPlanningIntent &&
-    !/^\s*(apply|fix|repair|write|create|delete|remove)\b/.test(normalized)
-  ) {
-    return 'plan';
-  }
-  if (
-    /\b(explain|summarize|what|why|how|read[- ]only|do not edit|do not modify|without editing|without changes)\b/.test(
-      normalized,
-    ) &&
-    !hasMutationIntent
-  ) {
-    return 'ask';
-  }
-  if (
-    /\b(plan|design|approach|compare|implementation path)\b/.test(normalized) &&
-    !hasMutationIntent
-  ) {
-    return 'plan';
-  }
-  if (
-    /\b(investigate|analy[sz]e|audit|diagnose|diagnostic|assess|report|findings?|evaluate)\b/.test(
-      normalized,
-    ) &&
-    !hasMutationIntent
-  ) {
-    return 'report';
-  }
-  if (
-    /\b(patch|diff|propose|proposal)\b/.test(normalized) &&
-    !/\b(apply|edit|modify|change|fix|repair|implement|write|create|delete|remove)\b/.test(
-      normalized,
-    )
-  ) {
-    return 'patch';
-  }
-  if (hasMutationIntent) {
-    return 'fix';
-  }
-  return 'plan';
-}
+export { classifyDoTask } from '../cli/taskIntent.js';
 
 async function runLiteCommand(
   verb: LiteVerb,
@@ -2116,7 +2067,6 @@ Notes:
         }
 
         applyRunCommandEnvFlags(options);
-        await maybePromptForMissingProviderCredential();
         assertEnvFileActiveForPipelineCommand();
         const isManualMode = options.mode === 'manual';
         const requestedMode = options.mode ?? 'chat';
@@ -2304,6 +2254,14 @@ Notes:
           }
           process.exit(1);
         }
+
+        // Resolve project-scoped connection preferences only after the target
+        // is known; never ask for an unrelated default account's credential.
+        const explicitConnection = normalizedModel?.startsWith('connection/') ? normalizedModel.split('/')[1] : undefined;
+        await maybePromptForMissingProviderCredential(process.env, process.argv, {
+          ...(resolvedProjectRoot ? { projectRoot: resolvedProjectRoot } : {}),
+          ...(explicitConnection ? { connectionId: explicitConnection } : {}),
+        });
 
         const useNativeReadOnlyChat = shouldUseReadOnlyQuestionPath && options.useChatPipeline !== true &&
           isCommandCodeChatSelection(normalizedModel);

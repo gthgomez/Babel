@@ -1,6 +1,6 @@
 {
   "name": "babel-harness",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Local coding agent runtime for Babel — chat, plan, and deep modes with TUI/REPL",
   "license": "Apache-2.0",
   "author": "Jonathan Gomez Aguilar",
@@ -188,6 +188,7 @@
     "@anthropic-ai/claude-agent-sdk": "0.3.304",
     "@anthropic-ai/sdk": "^0.101.0",
     "@napi-rs/canvas": "0.1.80",
+    "@napi-rs/keyring": "2.1.2",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.223.0",
     "@opentelemetry/resources": "^2.12.0",
@@ -236,6 +237,7 @@
     "dist/bridge/claude-agent-sdk-pin.json",
     "dist/bridge/claudeCodeIsolatedResolveWorker.mjs",
     "dist/authority/ownedFileAssertion.windows.ps1",
+    "dist/config/sharedCredential.windows.ps1",
     "dist/voice/audio-capture-worker.mjs",
     "dist/voice/vad-worker.mjs",
     "dist/services/playbooks/*.json",

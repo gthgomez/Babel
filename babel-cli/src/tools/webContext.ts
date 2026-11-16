@@ -6,6 +6,7 @@ import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 import type { LookupFunction } from 'node:net';
 import { dirname, join } from 'node:path';
+import { assertOfflineEndpointAllowed, isOfflineRequested } from '../config/offlineMode.js';
 
 import {
   evaluateNetworkHostPolicy,
@@ -298,6 +299,7 @@ function pinnedHttpRequest(
   maxBytes: number,
   timeoutMs: number,
 ): Promise<PinnedHttpResponse> {
+  assertOfflineEndpointAllowed(url.href);
   const request = url.protocol === 'https:' ? httpsRequest : httpRequest;
   const lookupFn = buildPinnedLookup(target);
   const options: RequestOptions = {
@@ -533,6 +535,7 @@ export async function handleWebFetch(
   req: WebFetchRequest,
   context: WebToolContext,
 ): Promise<ToolResult> {
+  if (isOfflineRequested()) return { exit_code: 1, stdout: '', stderr: '[WEB_FETCH_OFFLINE] Offline mode cannot contact the web.' };
   let url: URL;
   try {
     url = safeUrl(req.url);
@@ -647,7 +650,9 @@ export async function handleWebSearch(
 
   const searchUrl = new URL('https://duckduckgo.com/html/');
   searchUrl.searchParams.set('q', req.query);
+  if (isOfflineRequested()) return { exit_code: 1, stdout: '', stderr: '[WEB_SEARCH_OFFLINE] Offline mode cannot contact the web.' };
   try {
+    assertOfflineEndpointAllowed(searchUrl.href);
     const response = await fetch(searchUrl.href, {
       headers: { 'user-agent': USER_AGENT, accept: 'text/html' },
       signal: AbortSignal.timeout(15_000),

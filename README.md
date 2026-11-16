@@ -9,7 +9,7 @@ Babel is an **agent harness**. It runs on your computer, talks to a model you ch
 
 It is for developers who want a coding agent in a project they already have, including Python and Java projects. You do not have to learn Babel's internals first.
 
-Use it when you want the agent on your machine, with a provider you pick, and with project commands kept in a Docker sandbox by default instead of running straight on the host.
+Use it when you want the agent on your machine, with a provider you pick and an explicit execution profile for project commands.
 
 <!-- TODO: add a short Desktop demo video here once the recording exists. Do not link a file until it is in the repo. -->
 
@@ -21,78 +21,73 @@ You need **Node.js 22.19.0 or newer on the 22 line, or Node.js 24.13.1 or newer 
 node --version
 ```
 
-Then install the published package and run the commands that were checked against `babel-harness@0.2.0`:
+Install the latest published package and start Babel from the repository you want to work in:
 
 ```sh
-npm install --global babel-harness@0.2.0
+npm install --global babel-harness
 babel-harness --version
-babel-harness --help
-babel-harness doctor
-babel-harness setup
-```
-
-The command name to use in these docs is `babel-harness`. The published 0.2.0 installer also adds `babel-agent`, which is the same program. The current repository package (0.2.1) installs all three names — `babel`, `babel-agent`, and `babel-harness` — with identical behavior; use whichever you prefer.
-
-`doctor` exits 1 on a machine without Docker. That means the default sandbox is not ready. The install itself succeeded. `setup` prints a checklist. It does not ask you questions and it does not call a model.
-
-Create a private env file and set **one** key. `setup` on 0.2.0 lists these names:
-
-```sh
-mkdir -p ~/.babel/config
-```
-
-```dotenv
-# ~/.babel/config/.env
-OPENROUTER_API_KEY=your-key
-```
-
-The same checklist also accepts `DEEPINFRA_API_KEY`, `DEEPSEEK_API_KEY`, `BABEL_OPENCODE_GO_API_KEY`, or `COMMAND_CODE_API_KEY`. Local Ollama does not use a cloud key. On macOS and Linux, make the file owner-only after you write it (`chmod 600 ~/.babel/config/.env`). A saved key is not proof that the provider accepts it.
-
-From the repository you want to work in, this read-only command works with no key:
-
-```sh
 cd /path/to/your/repository
+babel-harness
+```
+
+The first-run flow below describes version 0.3.0 and later. Check the installed version: older published releases use different setup and provider options. Version 0.3.0 installs `babel`, `babel-agent`, and `babel-harness` as names for the same CLI.
+
+The composer opens before provider setup. On your first task, choose OpenRouter or Command Code, connect a credential, and accept a suggested model or enter an exact model ID. A suggestion is unverified and may not be available to your account. Setup does not send an inference request. You can also run `babel-harness setup` before opening the workspace.
+
+Start with a task such as:
+
+```text
+Explain this repository in one sentence. Do not change files.
+```
+
+Sending the task uses the provider and model you selected. A saved credential is not proof of authentication, model access, or a successful coding result. On later launches Babel restores the saved connection; saved conversations and drafts remain available in the workspace.
+
+To inspect a file without a provider, run:
+
+```sh
 babel-harness context preview @file README.md --json
 ```
 
-This is the smallest model task. Without a key it exits 1 and tells you which key is missing:
-
-```sh
-babel-harness "Explain this repository in one sentence. Do not change files."
-```
-
 More commands: [Start here](START_HERE.md), [CLI reference](docs/CLI_QUICKSTART.md), [Troubleshooting](docs/TROUBLESHOOTING.md).
+
+### Credentials and connection recovery
+
+Desktop can store private credentials using operating-system protection. Standalone setup can save a masked key to the OS credential store, use a provider environment variable, or explicitly choose a plaintext private-profile file. Interactive sessions can also keep a key for that process only. Desktop's existing protected key stays private to Desktop until you explicitly choose **Share saved key with CLI**. On Linux the shared store requires Secret Service; on Windows it uses local-machine Credential Manager persistence. WSL uses its own Linux credential service.
+
+Use `/setup` to repair a connection, `/provider` to switch a configured connection, and `/model` to select a model. `/model refresh` explicitly requests public provider model metadata without an inference request; cached and bundled choices remain unverified. A saved connection is shown as unverified; authentication, model availability, and successful coding are separate results. Repair never automatically replays a failed task. Headless jobs must select an explicitly environment-backed connection so they do not trigger a keychain unlock prompt. Optional spending limits and Plan/Deep remain available without being required during setup.
+
+`BABEL_OFFLINE=1` (or `--offline` on commands that support it) blocks remote model transports, model-catalog refresh, connection checks, web context, voice WebSockets, and the guarded embedding and auxiliary model calls. Local model endpoints must use loopback; an external local service may have its own networking behavior. Offline mode is not an OS network sandbox for Babel or commands you authorize. Ambient `OPENAI_API_KEY` alone no longer enables paid embeddings: explicitly configure `BABEL_EMBEDDING_API_KEY`, or opt in with `BABEL_EMBEDDING_ENABLE=1` before using an OpenAI key.
 
 ## What to expect
 
 Babel is pre-1.0. A green `doctor` line, a saved key, and a finished answer are three different things.
 
 - `doctor` checks Node, the installed files, whether a key is present, Docker, and a sandbox image. It does not call the provider.
-- The default execution profile is `host_native`. Eligible project commands run with your OS user's authority; this is not an OS sandbox. Explicitly selecting `safe_repo` keeps the Docker boundary and fails closed without Docker and a usable image.
+- Ordinary Chat defaults to `host_native`. Eligible project commands run with your OS user's authority; this is not an OS sandbox. Explicitly selecting `safe_repo` keeps the Docker boundary and fails closed without Docker and a usable image. Other workflows may use different profiles.
 - `plan` prepares a plan and asks before it applies. `deep` is a heavier command for riskier work. Having the command does not make it more reliable than a normal task.
 - Checks Babel runs are the checks it was given or could infer. They are not a guarantee for every task.
 - Node may print `ExperimentalWarning` lines about SQLite and WebAssembly. On Node 22.23.4 those warnings showed up while `doctor`, `setup`, and `context preview` still ran. See [Troubleshooting](docs/TROUBLESHOOTING.md).
 
 ## How this is different
 
-These are things you can see in this repo and in the published 0.2.0 package. They are not a benchmark against other tools.
+These are things you can inspect in the current source. They are not a benchmark against other tools.
 
 - The agent runs locally. You bring the model account. Babel does not ship one.
 - The instructions it loads are files in this repository: `prompt_catalog.yaml` and the numbered folders `00_` through `07_`. You can open them.
-- Project commands use the `host_native` profile unless you explicitly select another one. Selecting `safe_repo` fails closed when Docker or the sandbox image is missing.
+- Ordinary Chat uses the `host_native` profile unless you select another one. Selecting `safe_repo` fails closed when Docker or the sandbox image is missing.
 - `babel-harness --help` shows separate `plan` and `deep` commands, plus a default task command.
 
 ## Desktop
 
-Published Desktop builds are **Windows x64 only** (a Setup `.exe` and a portable `.zip`). [v0.2.0](https://github.com/gthgomez/Babel/releases/tag/v0.2.0) and [v0.1.3](https://github.com/gthgomez/Babel/releases/tag/v0.1.3) both include those files. Linux and macOS should use the npm CLI above.
+See the [latest release](https://github.com/gthgomez/Babel/releases/latest) for available Desktop downloads. The source can build a Windows x64 Setup `.exe` and portable `.zip`, as well as a Linux x64 AppImage. The npm CLI is an alternative on Linux, macOS, Windows, and WSL.
 
 The Windows installer is unsigned, and SmartScreen can warn. Setup steps for the v0.2.0 tag: [babel-desktop/docs/INSTALL-WINDOWS.md](https://github.com/gthgomez/Babel/blob/v0.2.0/babel-desktop/docs/INSTALL-WINDOWS.md).
 
 ## Providers and the sandbox
 
-`babel-harness setup` on 0.2.0 tells you to set one of the five keys above, or to use Ollama. The package also contains ids for OpenAI, Anthropic, Gemini, Groq, OpenCode, and a generic OpenAI-compatible endpoint. In that package those ids are marked untested, and `setup` does not list their keys. The source tree on `main` has moved since 0.2.0, so a later install can differ. Trust `setup` on the version you installed.
+Babel's product connections use OpenRouter or Command Code with your own credentials. A ChatGPT or Claude subscription is not a Babel provider credential. Legacy adapters remain in the source for internal compatibility; they are not automatically selected as product connections.
 
-Docker is required only when you explicitly select the `safe_repo` profile, so that project commands run in a container. There is no Babel image and no Dockerfile in this repo. Windows Desktop Setup pulls a pinned public Node image. The same pull is the non-Windows path, if you already have Docker:
+Ordinary Chat does not require Docker. A containerized execution profile such as `safe_repo` requires Docker and a usable image. There is no Babel image and no Dockerfile in this repo. Windows Desktop Setup pulls a pinned public Node image. The same pull is the non-Windows path, if you already have Docker:
 
 ```sh
 docker pull --platform=linux/amd64 docker.io/library/node:24-bookworm@sha256:9af606de2e947cfb3f276633b7c5130c4cd22365aa10f5a647b7675d5cfce0c0

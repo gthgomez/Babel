@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { assertOfflineEndpointAllowed, isLoopbackEndpoint, isOfflineRequested, OfflineModeError } from '../config/offlineMode.js'
+
 /** Canonical provider identifiers understood by Babel's model runtime. */
 export const PROVIDER_IDS = [
   'deepinfra',
@@ -15,6 +18,39 @@ export const PROVIDER_IDS = [
 ] as const
 
 export type ProviderId = (typeof PROVIDER_IDS)[number]
+
+/** Product connections currently use only these explicitly approved gateways. */
+export function isApprovedProductProvider(provider: string): provider is 'openrouter' | 'command-code' {
+  return provider === 'openrouter' || provider === 'command-code'
+}
+
+export class ProductProviderPolicyError extends Error {
+  constructor(provider: string) {
+    super(`Unsupported provider ${provider}. Choose OpenRouter or Command Code; existing settings were retained.`)
+    this.name = 'ProductProviderPolicyError'
+  }
+}
+export function assertApprovedProductProvider(provider: string): void {
+  if (!isApprovedProductProvider(provider)) throw new ProductProviderPolicyError(provider)
+}
+
+// Product entry points enforce the published gateway policy. Internal research
+// adapters remain testable without changing their authority or budget contracts.
+const productProviderPolicy = new AsyncLocalStorage<boolean>()
+export function withProductProviderPolicy<T>(work: () => T): T { return productProviderPolicy.run(true, work) }
+export function isProductProviderPolicyActive(): boolean {
+  return productProviderPolicy.getStore() === true || process.env['BABEL_DESKTOP_IPC'] === '1'
+}
+
+/** Check the actual endpoint at dispatch, including cached and direct adapters. */
+export function assertProviderDispatchAllowed(provider: string, url: string, env?: NodeJS.ProcessEnv): void {
+  assertOfflineEndpointAllowed(url, env)
+  if (process.env['BABEL_PIPELINE_V9_OFFLINE'] === '1' || env?.['BABEL_PIPELINE_V9_OFFLINE'] === '1') {
+    throw new OfflineModeError('Pipeline offline fixtures cannot dispatch provider requests.')
+  }
+  const localOffline = isOfflineRequested(env) && (provider === 'ollama' || provider === 'openai-compatible') && isLoopbackEndpoint(url)
+  if (isProductProviderPolicyActive() && !localOffline) assertApprovedProductProvider(provider)
+}
 
 /** Benchmark-only identities; intentionally excluded from production ProviderId. */
 export const BENCHMARK_PROVIDER_IDS = ['opencode-go', 'opencode-zen'] as const

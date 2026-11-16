@@ -3,6 +3,7 @@
 // supplies a URL, and a 200 here establishes authorization at that moment, not
 // model entitlement, tool support, spending capacity or successful inference.
 import {applyNativeCredentialEnvironment,providerCredentialStatus} from './credentials.mjs';
+import {offlineBlocksEndpoint} from './product-provider-policy.mjs';
 
 /** Documented, non-inference authorization endpoints. */
 export const AUTH_ENDPOINTS=Object.freeze({openrouter:'https://openrouter.ai/api/v1/key'});
@@ -89,6 +90,7 @@ export async function checkConnection({
 }={}){
   const endpoint=Object.hasOwn(AUTH_ENDPOINTS,provider)?AUTH_ENDPOINTS[provider]:null;
   if(!endpoint)return envelope({provider,state:'unavailable',reason:'unsupported_provider',checkedAt:now()});
+  if(offlineBlocksEndpoint(endpoint))return envelope({provider,state:'unavailable',reason:'offline',checkedAt:now()});
   let status;
   try{status=providerCredentialStatus({provider,scope,configDirectory,projectRoot});}
   catch(error){return envelope({provider,state:'unavailable',reason:'credential_unreadable',checkedAt:now()});}

@@ -83,8 +83,8 @@ test('workflow preflight resolves the standard DeepSeek Flash default through Op
 });
 
 for (const scenario of [
-  { name: 'Chat backend selector', args: ['--mode', 'chat', '--model', 'opencode-go/deepseek-v4.1-flash'], admitted: true },
-  { name: 'headless Chat provider model id', args: ['--mode', 'chat-headless', '--model', 'deepseek-v4.1-flash'], admitted: true },
+  { name: 'unapproved Chat backend selector', args: ['--mode', 'chat', '--model', 'opencode-go/deepseek-v4.1-flash'], admitted: false, denial: 'Unsupported provider' },
+  { name: 'unapproved headless Chat provider model id', args: ['--mode', 'chat-headless', '--model', 'deepseek-v4.1-flash'], admitted: false, denial: 'Unsupported provider' },
   { name: 'legacy Chat pipeline', args: ['--mode', 'chat-headless', '--model', 'deepseek-v4.1-flash', '--use-chat-pipeline'], admitted: false },
   { name: 'Plan workflow', args: ['--mode', 'plan', '--model', 'deepseek-v4.1-flash'], admitted: false },
   { name: 'Command Code Chat selector', args: ['--mode', 'chat', '--model', 'command-code/deepseek-v4.1-flash'], admitted: true, provider: 'command-code' },
@@ -124,7 +124,7 @@ for (const scenario of [
         assert.equal(dispatch.model, scenario.provider === 'command-code' ? 'deepseek/deepseek-v4.1-flash' : 'deepseek-v4.1-flash');
       } else {
         assert.equal(child.status, 1);
-        assert.equal(output.includes('[LIVE_MODEL_POLICY]') || output.includes('not-configured'), true);
+        assert.equal(scenario.denial ? output.includes(scenario.denial) : output.includes('[LIVE_MODEL_POLICY]') || output.includes('not-configured'), true);
       }
     } finally {
       removeSyntheticProviderFixture(fixture.root);

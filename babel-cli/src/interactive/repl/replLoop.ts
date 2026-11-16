@@ -11,8 +11,7 @@ import {
 } from '../../ui/interruptHost.js';
 import { OutputBuffer } from '../../ui/outputBuffer.js';
 import { openEditor } from '../openEditor.js';
-import { handleCommand } from '../commands.js';
-import type { ReplContext } from '../context.js';
+import { handleImmediateCommand, type ReplContext } from '../context.js';
 import { printIdleHeader, renderTurnStatusBar } from './replSessionUi.js';
 
 interface ReadlineWithHistory extends readline.Interface {
@@ -21,6 +20,17 @@ interface ReadlineWithHistory extends readline.Interface {
 
 export interface ReplLoopDeps {
   executeTask: (input: string) => Promise<void>;
+  requestSetup?: () => Promise<void>;
+}
+
+async function handleCommand(ctx: ReplContext, input: string, options?: { automaticSetup?: boolean }): Promise<void> {
+  if (handleImmediateCommand(ctx, input)) return;
+  const commands = await import('../commands.js');
+  return commands.handleCommand(ctx, input, options);
+}
+
+function needsConnection(ctx: ReplContext): boolean {
+  return ctx.state?.readinessState === 'setup_required' || ctx.state?.readinessState === 'action_required';
 }
 
 function hasUnclosedBraces(line: string): boolean {
@@ -38,6 +48,19 @@ export async function executeTaskAndDrainQueue(
   deps: ReplLoopDeps,
   input: string,
 ): Promise<void> {
+  if (needsConnection(ctx)) {
+    try {
+      if (deps.requestSetup) await deps.requestSetup();
+      else if (process.stdin.isTTY && process.stderr.isTTY && !['1', 'true'].includes(process.env['CI'] ?? '') && !['1', 'true'].includes(process.env['BABEL_HEADLESS'] ?? '')) await handleCommand(ctx, '/setup', { automaticSetup: true });
+    } catch {
+      // Cancellation or invalid input must not lose the user's original task.
+    }
+    if (needsConnection(ctx)) {
+      setAdapterDraft(ctx, input);
+      OutputBuffer.getInstance().write(muted('\n  Connection setup is incomplete. Your draft is preserved; use /setup to continue.\n'));
+      return;
+    }
+  }
   // Ordinary Chat/Plan/Deep work stays hosted in the root shell. Exclusive
   // terminal ownership is reserved for intentional foreign surfaces such as
   // the pager or external editor; wrapping the whole task would hide the
@@ -47,7 +70,7 @@ export async function executeTaskAndDrainQueue(
 }
 
 export async function drainQueuedTasks(ctx: ReplContext, deps: ReplLoopDeps): Promise<void> {
-  while (!ctx.isRunning && !ctx.preparingRun) {
+  while (!ctx.isRunning && !ctx.preparingRun && !needsConnection(ctx)) {
     const next = dequeueComposerMessage();
     if (!next) break;
     await deps.executeTask(next);

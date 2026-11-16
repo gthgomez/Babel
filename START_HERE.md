@@ -2,7 +2,7 @@
 
 This is the same first path as the [README](README.md): install the published npm package, check that the command runs, then point it at a repository. Babel Desktop for Windows is an alternative. Building from source is for people changing Babel.
 
-The command name in this guide is `babel-harness`. The published 0.2.0 installer also adds `babel-agent`. The current repository package (0.2.1) installs `babel`, `babel-agent`, and `babel-harness`, all running the same program.
+The command name in this guide is `babel-harness`. Version 0.3.0 also installs `babel` and `babel-agent` as names for the same program. This guide describes 0.3.0 and later; older releases use different setup and provider options.
 
 ## 1. Check Node, then install
 
@@ -10,49 +10,40 @@ Babel needs **Node.js 22.19.0+ on the 22 line, or 24.13.1+ on the 24 line**.
 
 ```sh
 node --version
-npm install --global babel-harness@0.2.0
+npm install --global babel-harness
 babel-harness --version
-babel-harness doctor
-babel-harness setup
 ```
 
 Those commands are the same in bash and PowerShell. On PowerShell you can also write them one per line without `&&`.
 
-`--version` should print `0.2.0`. `doctor` exits 1 when Docker is missing. Read that as "the sandbox is not ready," not "the install failed." `setup` prints where to put a key. It does not prompt.
+Check the version before following this guide. `npm install` selects the latest published package, which may be older than the current source.
 
-On Node 20 the install finishes with an `EBADENGINE` warning, and every command then prints `[babel-agent] Node ^22.19.0 or ^24.13.1 is required.` and exits 1. See [Troubleshooting](docs/TROUBLESHOOTING.md).
+Other Node major versions are unsupported. See [Troubleshooting](docs/TROUBLESHOOTING.md).
 
-## 2. Add one provider key
-
-```sh
-mkdir -p ~/.babel/config
-```
-
-Put one line in `~/.babel/config/.env` (on Windows: `%USERPROFILE%\.babel\config\.env`):
-
-```dotenv
-OPENROUTER_API_KEY=your-key
-```
-
-`setup` on 0.2.0 also accepts `DEEPINFRA_API_KEY`, `DEEPSEEK_API_KEY`, `BABEL_OPENCODE_GO_API_KEY`, or `COMMAND_CODE_API_KEY`. Ollama is the local option and does not need one of those keys. Keep the file out of the repository. On macOS and Linux, run `chmod 600 ~/.babel/config/.env`. The loader rejects a private credential file with broader permissions.
-
-A key in the file means the variable is set. It does not mean the provider accepted it.
-
-## 3. Run it in your repository
+## 2. Start and connect a provider
 
 ```sh
 cd /path/to/your/repository
-babel-harness context preview @file README.md --json
-babel-harness "Explain this repository in one sentence. Do not change files."
+babel-harness
 ```
 
-`context preview` reads a file and does not need a key. The sentence task exits 1 until a key is set. With a key, it calls the model. Check the printed target before you trust the answer. This is one request, not a reliability score.
+The composer opens first. Submit a task and choose OpenRouter or Command Code when prompted. Connect your own credential, then accept a suggested model or enter an exact model ID. You can also run `babel-harness setup` before opening the workspace. Setup does not send an inference request.
 
-`babel-harness plan "Describe a small safe change"` and `babel-harness deep "Make that change and run the project's tests"` are separate commands listed in `--help`. `deep` is not automatically safer or more reliable than the default task. Project tests need the sandbox in the next section, or they will not run under the default profile.
+Private credentials can use OS-protected storage when available, a provider environment variable, or an explicitly chosen private-profile file. A saved key and model are unverified until the provider accepts a request. Linux shared credentials require Secret Service; WSL uses its own Linux credential service.
 
-## 4. Docker, when you want project commands
+## 3. Run it in your repository
 
-The default profile is `safe_repo`. It runs project commands in Docker and does not fall back to the host. `doctor` fails `docker` and `sandbox_image` until both are ready.
+```text
+Explain this repository in one sentence. Do not change files.
+```
+
+Sending the task uses the selected provider and model. Review the result against the repository. A successful connection or a single answer does not establish overall task reliability.
+
+Use `/setup` to repair a connection, `/provider` to switch connections, and `/model` to select a model. `/model refresh` explicitly requests public model metadata without inference. A failed task is not automatically replayed after repair. `plan` and `deep` remain optional workflows.
+
+## 4. Choose an execution boundary
+
+Ordinary Chat defaults to `host_native`: eligible project commands run with your OS user's authority, not in an OS sandbox. Docker is not required for that profile. Selecting `safe_repo` uses a Docker sandbox and fails closed when Docker or the configured image is unavailable. Other workflows may use different profiles.
 
 There is no Babel-published image. Windows Desktop can prepare one. On any machine with Docker, this is the same public image Desktop pulls:
 
@@ -72,9 +63,9 @@ That image has a shell, Git, and Node. It does not have a Python or Java toolcha
 
 ## Windows Desktop
 
-If you are on Windows x64, you can skip npm and use Desktop instead. Download the Setup `.exe` or the portable `.zip` from the [v0.2.0 release](https://github.com/gthgomez/Babel/releases/tag/v0.2.0). Both are Windows x64 only. The installer is unsigned. Follow [the setup guide at that tag](https://github.com/gthgomez/Babel/blob/v0.2.0/babel-desktop/docs/INSTALL-WINDOWS.md).
+If you are on Windows x64, you can skip npm and use Desktop instead. Download a Setup `.exe` or portable `.zip` from the [latest release](https://github.com/gthgomez/Babel/releases/latest). The current installer is unsigned; follow the installation guide included with the selected release.
 
-There is no published macOS or Linux Desktop build. Use the npm steps above.
+See the release page for available platform builds. The npm CLI is an alternative on Linux, macOS, and WSL.
 
 ## Build from source
 
@@ -88,11 +79,11 @@ npm --prefix ./babel-cli run build
 node ./babel-cli/dist/index.js doctor
 ```
 
-PowerShell uses `.\babel-cli` in those npm prefixes. The source tree can be ahead of `babel-harness@0.2.0`. The 0.2.1 source package installs all three command names and includes `work`, `provider`, and `settings`, which were not in the 0.2.0 package. To exercise the exact repository build, pack it and install the archive into a clean directory:
+PowerShell uses `.\babel-cli` in those npm prefixes. The source tree can be ahead of the published package. To exercise the exact repository build, pack it and install the archive into a clean directory:
 
 ```sh
 npm --prefix ./babel-cli pack --pack-destination ./artifacts
-npm install --prefix /tmp/babel-consumer --omit=dev ./artifacts/babel-harness-0.2.1.tgz
+npm install --prefix /tmp/babel-consumer --omit=dev ./artifacts/babel-harness-0.3.0.tgz
 /tmp/babel-consumer/node_modules/.bin/babel-harness --version
 /tmp/babel-consumer/node_modules/.bin/babel --help
 ```

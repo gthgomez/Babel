@@ -83,7 +83,7 @@ export async function assertCanvasNativeBindingLoads(cwd) {
 
 /**
  * Install platform binding into an existing node_modules tree (no package.json mutation).
- * @param {{ cwd: string, npmCli?: string, nodeExec?: string }} options
+ * @param {{ cwd: string, npmCli?: string, nodeExec?: string, execute?: typeof execFileSync }} options
  */
 export function installCanvasPlatformBinding(options) {
   const bindingPkg = resolveCanvasPlatformBindingPackage()
@@ -102,9 +102,12 @@ export function installCanvasPlatformBinding(options) {
   if (!existsSync(join(options.cwd, 'node_modules', '@napi-rs', 'canvas'))) {
     throw new Error('@napi-rs/canvas must be installed before platform binding')
   }
-  execFileSync(
+  // Installing one binding must not reintroduce unrelated optional native
+  // packages omitted from the staged runtime (including Windows keyring).
+  const execute = options.execute ?? execFileSync
+  execute(
     nodeExec,
-    [npmCli, 'install', `${bindingPkg}@${CANVAS_PACKAGE_VERSION}`, '--omit=dev', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund'],
+    [npmCli, 'install', `${bindingPkg}@${CANVAS_PACKAGE_VERSION}`, '--omit=dev', '--omit=optional', '--no-save', '--ignore-scripts', '--no-audit', '--no-fund'],
     { cwd: options.cwd, stdio: 'inherit', windowsHide: true },
   )
   return bindingPkg

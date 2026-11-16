@@ -11,6 +11,7 @@ import {homedir} from 'node:os';
 import {assertAppImportsResolve} from './lib/verify-app-imports.mjs';
 import {assertLinuxPackagingTools} from './lib/linux-package-preflight.mjs';
 import {installCanvasPlatformBinding} from '../../babel-cli/scripts/research-v2-canvas-platform-binding.mjs';
+import {installLinuxKeyringBinding} from './lib/linux-keyring-binding.mjs';
 import {isAllowlistedCanvasVendorNativeArtifact} from '../../babel-cli/scripts/research-v2-canvas-vendor-allowlist.mjs';
 import {containsPersonalBuildPath} from './lib/linux-package-paths.mjs';
 
@@ -85,6 +86,7 @@ command('tar', ['-xzf', join(output, pack.filename), '-C', cli, '--strip-compone
 cpSync(join(cliSource, 'package-lock.json'), join(cli, 'package-lock.json'));
 command(process.execPath, [npmCli, 'ci', '--omit=dev', '--omit=optional', '--ignore-scripts', '--no-audit', '--no-fund'], cli, {capture: false, timeout: 600000});
 installCanvasPlatformBinding({cwd: cli, npmCli, nodeExec: process.execPath});
+installLinuxKeyringBinding({cwd: cli, npmCli, nodeExec: process.execPath});
 const nodeExtract = join(output, `node-${sourceSha.slice(0, 12)}`);
 mkdirSync(nodeExtract);
 command('tar', ['-xJf', archive, '-C', nodeExtract], repo, {capture: false, timeout: 300000});

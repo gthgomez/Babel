@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
+import { describe, it, mock } from 'node:test'
 
 import {
   PHYSICAL_DISPATCH_MIN_BUDGET_MS,
@@ -10,15 +10,21 @@ import {
 
 describe('invocation deadline helpers', { concurrency: 1 }, () => {
   it('sleepInvocationRetryBackoff caps wait then refuses further work past deadline', async () => {
-    const started = Date.now()
-    const invocationDeadlineAt = started + 25
-    await assert.rejects(
-      () => sleepInvocationRetryBackoff(5_000, invocationDeadlineAt, 'fixture', 'model', 80),
-      /request timeout after 80ms/,
-    )
-    const elapsed = Date.now() - started
-    assert.ok(elapsed < 200, `expected capped sleep, observed ${elapsed}ms`)
-    assert.ok(elapsed >= 10, `expected non-zero capped wait, observed ${elapsed}ms`)
+    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 10_000 })
+    try {
+      let settled = false
+      const pending = sleepInvocationRetryBackoff(5_000, 10_025, 'fixture', 'model', 80)
+      const observed = pending.then(() => { settled = true }, () => { settled = true })
+      mock.timers.tick(24)
+      await Promise.resolve()
+      await Promise.resolve()
+      assert.equal(settled, false)
+      mock.timers.tick(1)
+      await assert.rejects(pending, /request timeout after 80ms/)
+      await observed
+    } finally {
+      mock.timers.reset()
+    }
   })
 
   it('sleepInvocationRetryBackoff rejects when budget is already exhausted', async () => {
@@ -27,6 +33,26 @@ describe('invocation deadline helpers', { concurrency: 1 }, () => {
       () => sleepInvocationRetryBackoff(1_000, anchor, 'fixture', 'model', 100),
       /request timeout after 100ms/,
     )
+  })
+
+  it('does not retry a delay that exceeds the budget when a timer fires early', async () => {
+    const clock = mock.method(Date, 'now', () => 10_000)
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      let settled = false
+      const pending = sleepInvocationRetryBackoff(5_000, 10_025, 'fixture', 'model', 80)
+      const observed = pending.then(() => { settled = true }, () => { settled = true })
+      mock.timers.tick(24)
+      await Promise.resolve()
+      await Promise.resolve()
+      assert.equal(settled, false)
+      mock.timers.tick(1)
+      await assert.rejects(pending, /request timeout after 80ms/)
+      await observed
+    } finally {
+      mock.timers.reset()
+      clock.mock.restore()
+    }
   })
 
   it('sleepInvocationRetryBackoff allows immediate retry when backoff is 0 and budget remains', async () => {

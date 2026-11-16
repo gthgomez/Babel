@@ -3,6 +3,11 @@ import { join } from 'node:path'
 
 export const SESSION_POLICY_FILE = 'execution-policy.json'
 
+/** Compare in memory only; never serialize, hash, or log the credential. */
+export function workerConnectionMatches(previousRoute, currentRoute, previousKey, currentKey) {
+  return previousRoute === currentRoute && typeof previousKey === 'string' && previousKey.length > 0 && previousKey === currentKey
+}
+
 function canonicalRoot(value) {
   if (typeof value !== 'string' || !value) return null
   try {

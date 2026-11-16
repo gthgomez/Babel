@@ -13,6 +13,7 @@ export class CompatibleConfiguration {
   protected readonly providerId: ProviderId;
   protected readonly contextWindowTokens: number | undefined;
   protected readonly executionEnvelope: ResolvedExecutionEnvelope | undefined;
+  protected readonly authorityEnvironment: NodeJS.ProcessEnv | undefined;
   protected readonly maxTokens: number | null;
   protected readonly temperature: number;
 
@@ -40,6 +41,7 @@ export class CompatibleConfiguration {
     const provider = credential.provider;
     if (!provider) throw new Error('A compatible provider adapter must declare its provider.');
     this.providerId = provider;
+    this.authorityEnvironment = credential.env;
     this.executionEnvelope = credential.executionEnvelope;
     this.contextWindowTokens = credential.contextWindowTokens;
     if (this.executionEnvelope && this.executionEnvelope.provider.gateway !== provider) {

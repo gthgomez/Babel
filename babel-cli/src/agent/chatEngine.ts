@@ -2746,6 +2746,28 @@ export class ChatEngine {
     return [...this.conversation];
   }
 
+  /** Change only the next settled turn's provider route; session authority and history stay owned. */
+  selectProviderModel(model: string): void {
+    if (!this.hasKnownPhysicalSettlement() || this.activeEffectActionBatches > 0 ||
+        (this.activeAdmissionClaim && !this.activeAdmissionClaim.settled)) {
+      throw new Error('The current run has not fully settled. Wait before changing the connection.');
+    }
+    if (this.options.providerRunner || this.options.providerPolicy || this.options.inferenceOwner === 'external-harness') {
+      throw new Error('This session uses an externally owned provider and cannot change its route here.');
+    }
+    const { policy } = resolveChatModelPolicy({ model, ...(process.env['BABEL_ROOT'] ? { babelRoot: process.env['BABEL_ROOT'] } : {}) });
+    const editFormat = createEditFormatSession({ family: resolveEditFormatFamily({
+      policyFamily: policy.family, provider: policy.provider, modelId: policy.providerModelId,
+    }) });
+    this.options = { ...this.options, model };
+    this.modelPolicy = policy;
+    this.editFormatSession = editFormat;
+    this.deliberationRunner = null; this.synthesisRunner = null; this.fallbackRunner = null;
+    this.investigateRunner = null; this.mutateRunner = null;
+    this.criticRunner = null; this.criticProRunner = null;
+    this.clearSystemPromptCache();
+  }
+
   getEngineRunId(): string {
     return this.engineRunId;
   }

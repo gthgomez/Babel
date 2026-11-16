@@ -41,7 +41,7 @@ const env = consumerEnvironment(process.env, scratch)
 writeFileSync(env.npm_config_userconfig, '')
 writeFileSync(env.npm_config_globalconfig, '')
 const guardedEnv = { ...env, NODE_OPTIONS: `--import=${pathToFileURL(guard).href}` }
-const configuredTuiEnv = { ...guardedEnv, BABEL_STATE_DIR: join(scratch, 'configured TUI state'), OPENAI_API_KEY: 'fixture-only' }
+const configuredTuiEnv = { ...guardedEnv, BABEL_STATE_DIR: join(scratch, 'configured TUI state'), OPENROUTER_API_KEY: 'fixture-only' }
 const records = []
 function writeCommandFailureDiagnostics(diag) {
   try {
@@ -204,19 +204,25 @@ async function tui(configured = false) {
   const child = spawn(process.execPath, [bin, 'interactive'], { cwd: project, env: tuiEnv, windowsHide: true })
   let transcript = ''
   let sent = false
-  const timer = setTimeout(() => child.kill(), 20000)
+  let exited = false
+  const timer = setTimeout(() => child.kill(), 60000)
   try {
     const code = await new Promise((resolveExit, reject) => {
       child.on('error', reject)
       child.on('exit', resolveExit)
-      child.stderr.on('data', data => { transcript += data })
-      child.stdout.on('data', data => {
+      const onOutput = data => {
         transcript += data
         if (!sent && /babel[^\r\n]*[>❯]|type.*(?:message|help)|Babel session/i.test(transcript)) {
           sent = true
-          child.stdin.write('/doctor\n/exit\n')
+          child.stdin.write('/doctor\n')
         }
-      })
+        if (sent && !exited && /Docker is (?:running|not available)/.test(transcript)) {
+          exited = true
+          child.stdin.write('/exit\n')
+        }
+      }
+      child.stderr.on('data', onOutput)
+      child.stdout.on('data', onOutput)
     })
     assert.equal(code, 0, transcript)
     assert.ok(sent, 'TUI advertised startup before exit was sent')
@@ -228,16 +234,13 @@ async function tui(configured = false) {
       .trim().split(/\r?\n/).map(line => JSON.parse(line))
     const ready = diagnostics.find(entry => entry.channel === 'status' && /Auto-spawned daemon ready\. PID: \d+/.test(entry.message))
     assert.ok(diagnostics.some(entry => entry.channel === 'startup' && entry.message.includes(`Setup state: ${configured ? 'configured_unverified' : 'setup_required'}`)), 'Startup records its actual setup state')
+    assert.equal(ready, undefined, 'Startup must not warm up a daemon before it is needed')
     if (!configured) {
-      assert.equal(ready, undefined, 'Fresh setup must not warm up a daemon')
       assert.match(transcript, /SETUP|[Ss]etup required|[Nn]ot configured/)
       records.push({ check: 'fresh TUI setup/doctor/exit without daemon warmup', status: 'pass', transport: 'pipes; PTY qualification separately recorded' })
       return
     }
-    const daemonPid = Number(ready?.message.match(/PID: (\d+)/)?.[1])
-    assert.ok(daemonPid > 0, 'Production installed startup recorded its own ready daemon')
-    assert.throws(() => process.kill(daemonPid, 0), /ESRCH/, 'Owned daemon exited before successful UI termination')
-    records.push({ check: 'TUI start/doctor/exit and owned daemon cleanup', status: 'pass', transport: 'pipes; PTY qualification separately recorded' })
+    records.push({ check: 'configured TUI start/doctor/exit without daemon warmup', status: 'pass', transport: 'pipes; PTY qualification separately recorded' })
   } finally { clearTimeout(timer); child.kill() }
 }
 try {
@@ -351,7 +354,7 @@ try {
   assert.ok(existsSync(join(env.BABEL_CONFIG_DIR, 'runtime-flags.json')))
   await tui()
   const profileProbe = join(scratch, 'configured-profile.mjs')
-  writeFileSync(profileProbe, `import {updateUserSettings} from ${JSON.stringify(pathToFileURL(join(installed, 'dist/config/userSettings.js')).href)};\nupdateUserSettings({connections:{fixture:{id:'fixture',provider:'openai',model:'fixture-model'}},defaults:{connection:'fixture',model:'fixture-model',budgetUsd:'unlimited'},setup:{completed:true}});\n`)
+  writeFileSync(profileProbe, `import {updateUserSettings} from ${JSON.stringify(pathToFileURL(join(installed, 'dist/config/userSettings.js')).href)};\nupdateUserSettings({connections:{fixture:{id:'fixture',provider:'openrouter',model:'fixture-model'}},defaults:{connection:'fixture',model:'fixture-model',budgetUsd:'unlimited'},setup:{completed:true}});\n`)
   command(process.execPath, [profileProbe], { env: configuredTuiEnv })
   await tui(true)
   const stateProbe = join(scratch, 'state-probe.mjs')

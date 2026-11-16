@@ -56,6 +56,40 @@ test('REPL rejection cannot clear another active owner', async () => {
   assert.equal(ctx.isRunning, true); assert.equal(ctx.cancelActiveRun, cancel)
 })
 
+test('REPL reserves task admission before asynchronously loading the dispatcher', async () => {
+  const { BabelRepl } = await import('../BabelRepl.js')
+  const ctx = Object.create(BabelRepl.prototype) as ReplContext
+  ctx.isRunning = false; ctx.preparingRun = false
+  ctx.state = { readinessState: 'setup_required' } as ReplContext['state']
+  ctx.saveSessionState = () => {}
+  const pending = (ctx as unknown as { executeTask(input: string): Promise<void> }).executeTask('first task')
+  try {
+    assert.equal(ctx.preparingRun, true, 'a second submitted line must see the pending owner')
+    assert.equal(typeof ctx.cancelActiveRun, 'function')
+  } finally {
+    await pending
+  }
+  assert.equal(ctx.preparingRun, false)
+  assert.equal(ctx.cancelActiveRun, undefined)
+})
+
+test('cancelling dispatcher loading prevents the task from starting', async () => {
+  const { BabelRepl } = await import('../BabelRepl.js')
+  const ctx = Object.create(BabelRepl.prototype) as ReplContext
+  let saves = 0; let previousEngineAborts = 0
+  ctx.isRunning = false; ctx.preparingRun = false
+  ctx.state = { readinessState: 'setup_required' } as ReplContext['state']
+  ctx.saveSessionState = () => { saves++ }
+  ctx.chatEngine = { abortTurn: () => { previousEngineAborts++ } } as ReplContext['chatEngine']
+  const pending = (ctx as unknown as { executeTask(input: string): Promise<void> }).executeTask('first task')
+  ctx.cancelActiveRun?.()
+  await pending
+  assert.equal(saves, 0)
+  assert.equal(previousEngineAborts, 0)
+  assert.equal(ctx.preparingRun, false)
+  assert.equal(ctx.cancelActiveRun, undefined)
+})
+
 test('legacy REPL dispatch rejection cannot clear another active owner', async () => {
   const { executeReplTask } = await import('../repl/replCommandDispatch.js')
   const cancel = () => {}

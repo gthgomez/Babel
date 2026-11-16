@@ -11,7 +11,7 @@ test('catalog labels active identity, provider, credential prerequisite and both
   const text = stripAnsi(formatModelCatalog([{ key: 'fixture-model', entry }], { activeKey: 'fixture-model', width: 60, env: {} }));
   assert.match(text, /fixture-model \(active\)/);
   assert.match(text, /openrouter/);
-  assert.match(text, /requires OPENROUTER_API_KEY/);
+  assert.match(text, /OPENROUTER_API_KEY not set/);
   assert.match(text, /Input \$0\/M.*Output \$0.25\/M/);
   assert.doesNotMatch(text, /durable budget|campaign internals/);
   const normalizedText = text.replace(/\s+/g, ' ');

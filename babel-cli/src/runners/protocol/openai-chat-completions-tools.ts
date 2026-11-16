@@ -1,4 +1,6 @@
 import { RunStoppedError, type RunControl } from '../../runtime/run-control.js';
+import { OfflineModeError } from '../../config/offlineMode.js';
+import { assertProviderDispatchAllowed, ProductProviderPolicyError } from '../providerRegistry.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { isRetryableStatus, normalizeFinishReason } from '../providerNormalize.js';
 import { ProviderHttpError } from '../providerHttpError.js';
@@ -70,6 +72,7 @@ async *executeWithToolsStream(
     toolChoice?: 'auto' | 'required',
     callbacks?: RunnerCallbacks,
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
+    assertProviderDispatchAllowed(this.providerId, this.apiUrl, this.authorityEnvironment);
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
     const stopped = callbacks?.runControl?.stop();
@@ -348,6 +351,7 @@ async *executeWithToolsStream(
           inferenceId,
         );
       } catch (err) {
+        if (err instanceof OfflineModeError || err instanceof ProductProviderPolicyError) throw err;
         if (err instanceof RunStoppedError) {
           settleRetry('cancelled');
           notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {

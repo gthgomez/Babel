@@ -1,7 +1,7 @@
 import { selectedConnectionModel } from './connectionSettings.js';
 import { assertFiniteBudgetSupported } from '../config/laneBudget.js';
 import { createProviderRunner, type ProviderEngine } from '../runners/providerEngine.js'
-import { isProviderId } from '../runners/providerRegistry.js'
+import { assertApprovedProductProvider, isProductProviderPolicyActive, isProviderId } from '../runners/providerRegistry.js'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -111,15 +111,14 @@ export function resolveAskModelPolicyWithLiveGate(
     : undefined;
   const explicitDirectRequest = Boolean(backendKey);
   const explicitOpenCodeRequest = configuredEntry?.provider === 'opencode';
-  if (explicitDirectRequest && backendKey) {
-    return resolveModelByKey({
+  const policy = explicitDirectRequest && backendKey
+    ? resolveModelByKey({
       key: backendKey,
       ...(explicitOpenCodeRequest ? {} : { liveOnly }),
       ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
       babelRoot,
-    });
-  }
-  return resolveFamilyModelPolicy({
+    })
+    : resolveFamilyModelPolicy({
     family: selectedModel ?? 'DeepSeek',
     ...(options.modelTier !== undefined
       ? { requestedTier: options.modelTier }
@@ -127,7 +126,9 @@ export function resolveAskModelPolicyWithLiveGate(
     ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
     ...(explicitOpenCodeRequest ? {} : { liveOnly }),
     babelRoot,
-  });
+    });
+  if (liveOnly && isProductProviderPolicyActive()) assertApprovedProductProvider(policy.provider);
+  return policy;
 }
 
 function taskMentionsTarget(task: string, projectRoot: string): boolean {
@@ -448,7 +449,7 @@ function failureCodeForError(error: unknown): string {
 function createAskRunner(modelPolicy: ResolvedModelPolicy, _liveOnly: boolean): ProviderEngine {
   if (!isProviderId(modelPolicy.provider)) throw new Error('Unsupported selected provider; refusing substitution.')
   return createProviderRunner({ provider: modelPolicy.provider, modelId: modelPolicy.providerModelId,
-    ...(modelPolicy.contextWindow ? { contextWindowTokens: modelPolicy.contextWindow } : {}), ...(modelPolicy.authentication ? { authentication: modelPolicy.authentication } : {}), ...(modelPolicy.requestedOutputTokens ? { sampling: { maxTokens: modelPolicy.requestedOutputTokens } } : {}), ...(modelPolicy.apiKeyEnvVar ? { apiKeyEnvVar: modelPolicy.apiKeyEnvVar } : {}), ...(modelPolicy.baseUrl ? { baseUrl: modelPolicy.baseUrl } : {}) })
+    ...(modelPolicy.contextWindow ? { contextWindowTokens: modelPolicy.contextWindow } : {}), ...(modelPolicy.authentication ? { authentication: modelPolicy.authentication } : {}), ...(modelPolicy.requestedOutputTokens ? { sampling: { maxTokens: modelPolicy.requestedOutputTokens } } : {}), ...(modelPolicy.apiKeyEnvVar ? { apiKeyEnvVar: modelPolicy.apiKeyEnvVar } : {}), ...(modelPolicy.credentialRef ? { credentialRef: modelPolicy.credentialRef } : {}), ...(modelPolicy.baseUrl ? { baseUrl: modelPolicy.baseUrl } : {}) })
 }
 
 async function runDirectAsk(

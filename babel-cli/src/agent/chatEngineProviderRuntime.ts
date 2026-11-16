@@ -61,7 +61,7 @@ const TURN_TIMEOUT_MS = 120_000
 /** Preserve explicit OpenRouter routes and the retained exact campaign contract. */
 function isExactOpenRouterRoute(policy: ResolvedModelPolicy | undefined): boolean {
   return policy?.provider === 'openrouter' &&
-    (policy.providerModelId === LIVE_OPENROUTER_MODEL_ID || policy.resolvedBackendKey?.startsWith('openrouter/') === true)
+    (policy.connectionId !== undefined || policy.providerModelId === LIVE_OPENROUTER_MODEL_ID || policy.resolvedBackendKey?.startsWith('openrouter/') === true)
 }
 
 /** Resolve the selected route once; configuration failures never choose another provider. */
@@ -77,7 +77,12 @@ export function resolveChatDeliberationRunner(
   const provider = modelPolicy.provider
   const modelId = modelPolicy.providerModelId
   if (current instanceof ProviderEngine) {
-    if (current.provider === provider && current.modelId === modelId &&
+    if (current.provider === provider && current.modelId === modelId && current.matchesRoute({
+      ...(modelPolicy.apiKeyEnvVar ? { apiKeyEnvVar: modelPolicy.apiKeyEnvVar } : {}),
+      ...(modelPolicy.credentialRef ? { credentialRef: modelPolicy.credentialRef } : {}),
+      ...(modelPolicy.baseUrl ? { baseUrl: modelPolicy.baseUrl } : {}),
+      ...(modelPolicy.authentication ? { authentication: modelPolicy.authentication } : {}),
+    }) &&
       (!goOptions?.budget || current.usesBudget(goOptions.budget))) return current
   } else if (current) {
     // Trusted embedding runners remain usable; exact vendor routes must still match.
@@ -100,6 +105,7 @@ export function resolveChatDeliberationRunner(
     ...(modelPolicy.requestedOutputTokens ? { sampling: { maxTokens: modelPolicy.requestedOutputTokens } } : {}),
     ...goOptions,
     ...(modelPolicy.apiKeyEnvVar ? { apiKeyEnvVar: modelPolicy.apiKeyEnvVar } : {}),
+    ...(modelPolicy.credentialRef ? { credentialRef: modelPolicy.credentialRef } : {}),
     ...(modelPolicy.baseUrl ? { baseUrl: modelPolicy.baseUrl } : {}),
     requireExactModelId: isExactOpenRouterRoute(modelPolicy),
   })

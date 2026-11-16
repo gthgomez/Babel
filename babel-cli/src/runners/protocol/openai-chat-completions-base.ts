@@ -1,6 +1,8 @@
 import { CompatibleConfiguration } from './compatible-configuration.js';
 /** Shared OpenAI Chat Completions protocol; vendor configuration belongs in adapters. */
 import { dispatchRunOperation, RunStoppedError, type RunControl } from '../../runtime/run-control.js';
+import { isOfflineRequested, OfflineModeError } from '../../config/offlineMode.js';
+import { assertProviderDispatchAllowed, isProductProviderPolicyActive, ProductProviderPolicyError } from '../providerRegistry.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ZodType } from 'zod';
 import { isRetryableStatus, normalizeFinishReason } from '../providerNormalize.js';
@@ -234,7 +236,11 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
 
   /** Dispatch unchanged by default; specialized transports may gate every request. */
   protected dispatchFetch(url: string, init: RequestInit, control?: RunControl, operationId = 'provider_fetch'): Promise<Response> {
-    return dispatchRunOperation(control, 'model', operationId, () => fetch(url, init));
+    assertProviderDispatchAllowed(this.providerId, url, this.authorityEnvironment);
+    return dispatchRunOperation(control, 'model', operationId, () => {
+      assertProviderDispatchAllowed(this.providerId, url, this.authorityEnvironment);
+      return fetch(url, isOfflineRequested(this.authorityEnvironment) || isProductProviderPolicyActive() ? { ...init, redirect: 'error' } : init);
+    });
   }
 
   // ── Shared request/response logic ──────────────────────────────────────────
@@ -253,6 +259,7 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
     startedAt: number;
     streamState: StreamingState;
   }> {
+    assertProviderDispatchAllowed(this.providerId, this.apiUrl, this.authorityEnvironment);
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
     const stopped = callbacks?.runControl?.stop();
@@ -606,6 +613,7 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
           inferenceId,
         );
       } catch (err) {
+        if (err instanceof OfflineModeError || err instanceof ProductProviderPolicyError) throw err;
         if (err instanceof RunStoppedError) {
           settleRetry('cancelled');
           notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {

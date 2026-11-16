@@ -1,4 +1,4 @@
-import { escapeHtml, contextPercent, normalizeEvent, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus, modeUnavailableReason,isConversationOnlyConnection,hydrateArchivedMessage,setupDockerLabel,runtimeProviderLabel,runtimeDockerLabel,runtimeReadinessLabel,composerSendBlockMessage,executionBoundaryLabel } from './core.mjs';
+import { escapeHtml, contextPercent, normalizeEvent, connectionFailureAdvice, rememberChange, sessionIdFromResult, absorbFileChange, reviewFromResult, liveModelFromResult, liveRequestTokens, toolsFromResult, verifiedStatus, modeUnavailableReason,isConversationOnlyConnection,hydrateArchivedMessage,setupDockerLabel,runtimeProviderLabel,runtimeDockerLabel,runtimeReadinessLabel,composerSendBlockMessage,executionBoundaryLabel } from './core.mjs';
 import { icon } from './icons.mjs';
 import { createConversationDom } from './conversation-dom.mjs';
 const MODE_OPTIONS=[{id:'chat',label:'Chat',description:'Coding tasks'},{id:'plan',label:'Plan',description:'Read-only planning'},{id:'deep',label:'Deep',description:'Governed workflow'}];
@@ -29,6 +29,8 @@ let sandboxBusy = false;
 let sandboxStatus = '';
 let connectionInitialized = false;
 let connectedProjectRoot;
+let workspaceLoadGeneration = 0;
+let treeLoadGeneration = 0;
 let liveModel = '';
 let liveTokens = null;
 let changedFiles = [];
@@ -188,25 +190,36 @@ function renderRuntime() {
   setButtons(true, canUpdate);
   updateButton.textContent = engine.origin === 'bundled' ? 'Update CLI' : 'Update development CLI';
 }
+function connectionMatchesRoute(){
+  return Boolean(configuredRoute&&nativeInfo?.connection?.provider===configuredRoute.provider&&nativeInfo?.connection?.model===configuredRoute.model);
+}
 function executionBlocked() {
   // A slow or rejected native handshake cannot admit synthetic preview tasks.
   if (!native || !nativeInfo || connecting || projectSwitching || sandboxBusy) return true;
   if(native && !nativeInfo.ready)return true;
   if(!configuredRoute)return true;
-  return !isConversationOnlyConnection(nativeInfo) && nativeInfo?.packaged === true && nativeInfo.diagnostics?.ready !== true;
+  if(nativeInfo.connection?.state!=='configured_unverified')return true;
+  if(!connectionMatchesRoute())return true;
+  // Explicit sandbox sessions keep their prerequisite gate; native admission
+  // also checks the effective profile of resumed sessions before dispatch.
+  return !isConversationOnlyConnection(nativeInfo) && nativeInfo.packaged === true &&
+    nativeInfo.engine?.executionProfile === 'safe_repo' && nativeInfo.diagnostics?.ready !== true;
 }
 function renderStatus(status) {
   const msg = activeSession().messages.filter(m => m.role === 'assistant').at(-1);
   const s = status ?? (activeRun ? activeRun.terminalReceived ? 'finishing' : 'running' : msg?.status ?? 'ready');
   const names={running:'Running',finishing:'Finishing',failed:'Failed',blocked:'Blocked',cancelled:'Stopped',complete:'Verified',plan_ready:'Plan ready',no_change:'No change',unverified:'Unverified',ready:'Ready'};
   $('#main-status').textContent = !activeRun&&executionBlocked() ? (!nativeInfo&&!connectionError&&native?'Connecting':'Setup required') : names[s] ?? 'Ready';
+  if(!activeRun&&!executionBlocked()&&s==='ready'&&nativeInfo?.connection?.state==='configured_unverified')$('#main-status').textContent='Connection saved · unverified';
   $('#main-status-dot').className = `status-dot ${['failed','blocked'].includes(s) ? s : ''}`;
   $('.status-main').className = `status-main ${['failed','blocked'].includes(s) ? s : ''}`;
   const changedNote = transport === 'live' && changedFiles.length ? ` ${changedFiles.length} changed file${changedFiles.length === 1 ? '' : 's'}.` : '';
   const liveRunning = activeRun?.stopping ? 'Stopping the Babel CLI.' : (messageHasWork(msg) ? `Babel CLI is working on this task.${changedNote}` : 'Starting the Babel CLI.');
   const detail=s==='finishing'?'Response received; waiting for the CLI to exit.':s==='running'?liveRunning:s==='unverified'?'Run ended; verification not established.':s==='failed'?'See the run details in the conversation.':s==='blocked'?'Babel is waiting for a decision.':`Connected to the Babel CLI.${changedNote}`;
-  $('#status-detail').textContent = executionBlocked() ? !nativeInfo ? connectionError || (native?'Connecting to the Babel harness…':'Open the installed Babel Desktop app to run tasks.') : !nativeInfo.ready ? nativeInfo.projectRoot?'Project access requires verified trust. Open Setup.':nativeInfo.officialCliReady?'Project binding is unavailable or unknown. Open Setup. Saved sessions remain available.':'The Babel CLI is unavailable. Open Setup. Saved sessions remain available.' : !configuredRoute?'Choose a provider and default model to begin.':nativeInfo.diagnostics?.error || 'Runtime setup needs attention. Open Setup to see what is missing.' : isConversationOnlyConnection(nativeInfo)&&!activeRun?'Conversation only · select a project when you need files or commands.':detail;
-  $('#send-button').disabled = Boolean(activeRun) || executionBlocked();
+  $('#status-detail').textContent = executionBlocked() ? !nativeInfo ? connectionError || (native?'Connecting to the Babel harness…':'Open the installed Babel Desktop app to run tasks.') : !nativeInfo.ready ? nativeInfo.projectRoot?'Project access requires verified trust. Open Setup.':nativeInfo.officialCliReady?'Project binding is unavailable or unknown. Open Setup. Saved sessions remain available.':'The Babel CLI is unavailable. Open Setup. Saved sessions remain available.' : !configuredRoute?'Choose a provider and default model to begin.':nativeInfo.connection?.state==='offline'?'Offline mode cannot contact the selected provider. Leave offline mode to use this connection.':nativeInfo.connection?.state==='unsupported_provider'?'This saved provider is not supported. Choose OpenRouter or Command Code in provider settings.':nativeInfo.connection?.state==='credential_missing'?'No credential is available for the selected provider. Open provider settings to repair it.':nativeInfo.connection?.state==='credential_unavailable'?'OS-protected credential storage is unavailable. Unlock it or repair provider settings.':nativeInfo.connection?.state!=='configured_unverified'?'Connection status is unavailable. Open provider settings to repair it.':!connectionMatchesRoute()?'Connection changed. Open provider settings to refresh the selected route.':nativeInfo.diagnostics?.error || 'Runtime setup needs attention. Open Setup to see what is missing.' : isConversationOnlyConnection(nativeInfo)&&!activeRun?'Conversation only · select a project when you need files or commands.':detail;
+  const modeUnavailable=modeBlockReason(state.mode,configuredRoute?.provider);
+  if(!activeRun&&!executionBlocked()&&modeUnavailable){$('#main-status').textContent='Mode unavailable';$('#status-detail').textContent=modeUnavailable;}
+  $('#send-button').disabled = Boolean(activeRun) || executionBlocked() || Boolean(modeUnavailable);
   $('#composer-input').disabled = projectSwitching||Boolean(activeRun&&!activeRun.admitted);
   $('.stop-button').hidden = !activeRun;
   const emergencyHostStop = Boolean(
@@ -276,7 +289,9 @@ function messageMarkup(m, index) {
   const approval = m.pendingApproval ? `<div class="approval-card"><p>${e(m.pendingApproval)}</p>${m.approvalCommand?`<p>Operation</p><pre class="tool-detail">${e(m.approvalCommand)}</pre>${m.approvalCwd?`<p>Working directory: ${e(m.approvalCwd)}</p>`:''}${m.approvalDetails?`<details><summary>Operation payload</summary><pre class="tool-detail">${e(m.approvalDetails)}</pre></details>`:''}`:'<p class="fine-print">Operation details unavailable. Deny this request and update the runtime before retrying.</p>'}${!canApprove?'<p class="fine-print">Approval identity is missing, expired or superseded. Update an older runtime before retrying this operation.</p>':''}<div class="dialog-actions"><button class="button primary" data-action="approve-run" ${canApprove&&m.approvalCommand?'':'disabled'}>Allow</button><button class="button" data-action="deny-run" ${canApprove?'':'disabled'}>Deny</button></div></div>` : '';
   const review = m.review?.reasons?.length ? `<section class="approval-card"><strong>${e(m.review.title || 'REVIEW')}</strong><ul>${m.review.reasons.map(reason=>`<li>${e(reason)}</li>`).join('')}</ul></section>` : '';
   const evidence = m.result && ['failed','blocked','unverified'].includes(m.status) ? `<details class="raw-result"><summary>CLI result / evidence</summary><pre class="tool-detail">${e(JSON.stringify(m.result,null,2))}</pre></details>` : '';
-  return `<article class="message assistant-message"${identity}><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${expansion}${archiveInfo}${m.toolsTruncated?'<p class="fine-print">Tool preview limited to 100 entries. Complete retained details are available in message sections.</p>':''}${m.terminalConflict?'<p class="fine-print">Terminal records disagree. Refresh or inspect the session evidence.</p>':''}${review}${approval}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${''}${e(({complete:'Response complete',plan_ready:'Plan ready · not applied',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions"><button data-action="copy-message" data-index="${index}" ${!m.text || m.status === 'running' ? 'disabled' : ''}>${icon('copy')} Copy</button></div></article>`;
+  const advice=m.status==='failed'?connectionFailureAdvice(m.text):'';
+  const restore=m.status==='failed'&&activeSession()?.messages.slice(0,index).some(message=>message.role==='user'&&message.text)?`<button data-action="restore-task" data-index="${index}">Restore task</button>`:'';
+  return `<article class="message assistant-message"${identity}><img class="assistant-avatar" src="${LOGO}" alt=""><div class="message-label">BABEL</div><div class="message-body">${assistantBody(m)}${expansion}${archiveInfo}${m.toolsTruncated?'<p class="fine-print">Tool preview limited to 100 entries. Complete retained details are available in message sections.</p>':''}${m.terminalConflict?'<p class="fine-print">Terminal records disagree. Refresh or inspect the session evidence.</p>':''}${review}${approval}${advice?`<p class="fine-print">${e(advice)}</p>`:''}${m.status && m.status !== 'running' ? `<div class="message-status ${e(m.status)}">${''}${e(({complete:'Response complete',plan_ready:'Plan ready · not applied',no_change:'No change required',failed:'Run failed',blocked:'Approval or environment action required',cancelled:'Response stopped',unverified:'Run ended · not verified'})[m.status] ?? m.status)}</div>` : ''}${evidence}</div><div class="message-actions">${restore}<button data-action="copy-message" data-index="${index}" ${!m.text || m.status === 'running' ? 'disabled' : ''}>${icon('copy')} Copy</button></div></article>`;
 }
 let conversationFrame = null;
 const conversationDom = createConversationDom($('#conversation'));
@@ -402,7 +417,7 @@ async function providerCredentialsDialog() {
   let providers,currentRoute;
   try {providers=await native.listQualifiedProviders();currentRoute=await native.readProviderRoute();}
   catch(error){toast(error.message||'Provider catalog is unavailable.');return;}
-  const selectedProvider=currentRoute?.provider??providers[0]?.id;
+  const selectedProvider=providers.some(spec=>spec.id===currentRoute?.provider)?currentRoute.provider:providers[0]?.id;
   const options=providers.map(spec=>`<option value="${e(spec.id)}">${e(spec.label)}</option>`).join('');
   openDialog('PROVIDERS AND MODELS',`<p>Choose a provider, enable the models you want to use, and set a default.</p>
     <label class="credential-label" for="credential-provider">Provider</label><select class="credential-control" id="credential-provider">${options}</select>
@@ -415,7 +430,7 @@ async function providerCredentialsDialog() {
     <label class="credential-label" for="model-search">Enabled models</label><input class="credential-control" id="model-search" type="search" placeholder="Search models">
     <div id="enabled-models" class="enabled-model-list"></div>
     <p id="provider-error" class="provider-error" role="alert"></p>
-    <label class="credential-label" for="credential-operation">Key action</label><select class="credential-control" id="credential-operation"><option value="add_new">Add a new key</option><option value="replace_protected">Replace the saved key</option><option value="supersede_legacy_with_new">Replace the legacy key with OS-protected storage</option><option value="continue_with_legacy">Keep using the legacy key (unverified)</option></select><p id="credential-status" class="fine-print" role="status"></p><div class="dialog-actions"><button class="button" id="remove-provider-key" disabled>Remove saved key</button><button class="button" id="migrate-provider-key" hidden>Migrate legacy key</button><button class="button" id="check-connection" hidden>Test connection</button></div><label id="credential-migration-consent" hidden><input type="checkbox" id="credential-retain-recovery"> Keep the original plaintext private .env for recovery. Migration does not erase it.</label><details><summary>Credential storage</summary><label class="credential-label" for="credential-scope">Save to</label><select class="credential-control" id="credential-scope"><option value="private">Private profile (OS-protected)</option>${nativeInfo?.projectName?'<option value="project">Selected project (Git-ignored .env only)</option>':''}</select><p class="fine-print">Leave the key blank to retain it. Project storage is plaintext and requires an ignored, untracked file. In the CLI, pass --project-root with this project’s path.</p></details>
+    <label class="credential-label" for="credential-operation">Key action</label><select class="credential-control" id="credential-operation"><option value="add_new">Add a new key</option><option value="replace_protected">Replace the saved key</option><option value="supersede_legacy_with_new">Replace the legacy key with OS-protected storage</option><option value="continue_with_legacy">Keep using the legacy key (unverified)</option></select><p id="credential-status" class="fine-print" role="status"></p><div class="dialog-actions"><button class="button" id="remove-provider-key" disabled>Remove saved key</button><button class="button" id="migrate-provider-key" hidden>Migrate legacy key</button><button class="button" id="share-provider-key" hidden>Share saved key with CLI</button><button class="button" id="check-connection" hidden>Test connection</button></div><label id="credential-migration-consent" hidden><input type="checkbox" id="credential-retain-recovery"> Keep the original plaintext private .env for recovery. Migration does not erase it.</label><details><summary>Credential storage</summary><label class="credential-label" for="credential-scope">Save to</label><select class="credential-control" id="credential-scope"><option value="private">Private profile (OS-protected)</option>${nativeInfo?.projectName?'<option value="project">Selected project (Git-ignored .env only)</option>':''}</select><p class="fine-print">Leave the key blank to retain it. Project storage is plaintext and requires an ignored, untracked file. In the CLI, pass --project-root with this project’s path.</p></details>
     <div class="dialog-actions provider-save-actions"><button class="button primary" data-action="save-provider-credential">Save provider</button><button class="button" data-action="close-dialog">Cancel</button></div>`,'#credential-provider');
   const providerSelect=$('#credential-provider'),modelSelect=$('#credential-model');
   $('#credential-scope').value=nativeInfo?.projectCredentialsSelected&&nativeInfo?.projectName?'project':'private';
@@ -457,6 +472,7 @@ async function providerCredentialsDialog() {
     if(status.storage==='legacy-plaintext')return 'Legacy plaintext key found. It is unverified and not OS-protected. Choose how to continue below; the original file is retained for recovery.';
     if(status.storage==='project-plaintext')return `Project plaintext storage. ${status.present?'A saved key is present.':'No key saved.'}`;
     if(status.storage==='os-protected')return `OS-protected storage. ${status.present?'A saved key is present.':'Key removed.'}`;
+    if(status.storage==='shared-os')return status.sharedReady===false?'Shared connection unavailable. Repair the CLI connection before sending a task.':'Connection shared with the Babel CLI. Key availability and authentication have not been checked.';
     return status.protectionAvailable?'OS protection is available. No key saved.':'OS protection is unavailable. Private key writes are disabled.';
   };
   const renderAuthStatus=authentication=>{
@@ -468,12 +484,13 @@ async function providerCredentialsDialog() {
     if(authentication.state==='payment_required')return 'Payment required: the key may be valid but the account cannot run requests. This is not a rejected key.';
     if(authentication.state==='permission_denied')return 'Forbidden: this key lacks permission for the request. This is not evidence the key was revoked.';
     if(authentication.state==='rate_limited')return 'Rate limited: the provider is throttling. The key was not reported as invalid.';
+    if(authentication.reason==='offline')return 'Offline mode prevents a remote connection check. The saved key is unchanged.';
     return 'Could not verify the key right now. The saved key is unchanged; retry when the provider is reachable.';
   };
   const refreshCredentialStatus=async()=>{
     const revision=++statusRevision;
     delete scopeSelect.dataset.binding;
-    $('#remove-provider-key').disabled=true;$('#migrate-provider-key').hidden=true;$('#credential-migration-consent').hidden=true;$('#check-connection').hidden=true;
+    $('#remove-provider-key').disabled=true;$('#migrate-provider-key').hidden=true;$('#share-provider-key').hidden=true;$('#credential-migration-consent').hidden=true;$('#check-connection').hidden=true;
     if(!native.providerCredentialStatus){$('#credential-status').textContent='Credential status is unavailable in this preview.';return;}
     $('#credential-status').textContent='Checking selected credential destination…';
     try{
@@ -495,17 +512,28 @@ async function providerCredentialsDialog() {
       $('#remove-provider-key').disabled=!ownedProtected;
       $('#migrate-provider-key').hidden=!status.migrationAvailable;
       $('#migrate-provider-key').disabled=!status.protectionAvailable;
+      $('#share-provider-key').hidden=!status.shareAvailable||!native.shareProviderCredential;
       $('#credential-migration-consent').hidden=!status.migrationAvailable;
       $('#check-connection').hidden=!present||!native.checkConnection;
     }catch(error){if(revision===statusRevision&&scopeSelect.isConnected)$('#credential-status').textContent=error.message||'Credential status unavailable.';}
   };
   providerSelect.addEventListener('change',()=>{$('#credential-key').value='';currentRoute=null;renderModels();refreshCredentialStatus();});
   scopeSelect.addEventListener('change',()=>{$('#credential-key').value='';$('#credential-retain-recovery').checked=false;refreshCredentialStatus();});
+  $('#share-provider-key').addEventListener('click',async ev=>{
+    const button=ev.currentTarget;button.disabled=true;$('#credential-key').value='';
+    try{const result=await native.shareProviderCredential({provider:providerSelect.value,scope:'private',binding:scopeSelect.dataset.binding});if(result?.shared)toast('Key shared with the Babel CLI.');}
+    catch(error){$('#provider-error').textContent=error.message||'Sharing could not be completed.';}
+    finally{if(button.isConnected){button.disabled=false;await refreshCredentialStatus();}}
+  });
   for(const [id,method] of [['remove-provider-key','removeProviderCredential'],['migrate-provider-key','migrateProviderCredential']]){
     $('#'+id).addEventListener('click',async ev=>{
       const button=ev.currentTarget;$('#credential-key').value='';button.disabled=true;
       try{
         await native[method]({provider:providerSelect.value,scope:scopeSelect.value,binding:scopeSelect.dataset.binding,confirm:$('#credential-retain-recovery').checked});
+        if(method==='removeProviderCredential'){
+          try{nativeInfo=await native.getInfo();}catch{nativeInfo={...nativeInfo,connection:{state:'unavailable'}};}
+          renderControls();
+        }
         toast(method==='removeProviderCredential'?'Saved key removed from the selected destination.':'Key migrated. Original plaintext recovery file retained.');
       }catch(error){$('#provider-error').textContent=error.message||'Credential change failed.';}
       finally{if(button.isConnected)await refreshCredentialStatus();}
@@ -553,10 +581,10 @@ async function saveProviderFromDialog(button) {
     }
     const route=result?.route ?? {provider, model};
     configuredRoute=route;state.model=route.model;
-    if(modeBlockReason(state.mode,route.provider)) {state.mode='chat';announce('Chat selected. Plan and Deep need an authorized project and a supported provider.');}
+    if(modeBlockReason(state.mode,route.provider)) announce('The current mode is unavailable for this provider. Choose a supported mode to continue.');
     configuredRouteLabel=`${route.provider} · ${route.model}`;
     try { providerCatalog=await native.listQualifiedProviders(); } catch {}
-    nativeInfo=await native.refreshDiagnostics();
+    nativeInfo=await native.getInfo();
     closeDialog();
     toast(result?.authState==='legacy_unverified'?'Provider route saved. The legacy key remains unverified — test the connection.':
       result?.credentialChanged?'Credential and route saved. Authentication was not checked.':'Provider route saved.');
@@ -931,12 +959,16 @@ async function enableLive() {
   const projectRoot=nativeInfo.projectRoot??nativeInfo.projectName??null;
   if(connectionInitialized&&projectRoot===connectedProjectRoot){closeDialog();renderControls();return;}
   connecting=true;
+  const generation=++workspaceLoadGeneration;
+  const treeGeneration=++treeLoadGeneration;
+  const stillCurrent=()=>generation===workspaceLoadGeneration&&projectRoot===(nativeInfo?.projectRoot??nativeInfo?.projectName??null);
   try{
   const initialDraft=connectionInitialized?'':$('#composer-input').value;
   composerDraftState=null;composerDraftPending=null;composerDraftFailure=false;
   state={version:1,mode:'chat',model:'',sessions:[],activeId:''};
   liveModel='';liveTokens=null;changedFiles=[];
   files=[];projectName=nativeInfo.projectName || 'No project';expandedFolders=new Set(['.']);
+  savedSessionList={offset:0,total:0,limit:savedSessionList.limit};
   closeDialog();newSession(true);
   if(initialDraft){$('#composer-input').value=initialDraft;activeSession().draft=initialDraft;resizeComposer();}
   try{
@@ -948,21 +980,33 @@ async function enableLive() {
       }
     }
   }catch{composerDraftFailure=true;toast('Saved drafts could not be loaded. Existing data was preserved.');}
-  files=nativeInfo.projectName&&nativeInfo.projectAuthority?.trusted!==false ? await native.listDirectory('.') : [];
+  // Project browsing and saved-chat discovery are useful but are not run
+  // admission prerequisites. Fence their results to this project generation.
+  if(nativeInfo.projectName&&nativeInfo.projectAuthority?.trusted!==false)void (async()=>{
+    try{const entries=await native.listDirectory('.');if(stillCurrent()&&treeGeneration===treeLoadGeneration&&nativeInfo.projectAuthority?.trusted!==false){files=entries;renderTree();}}
+    catch{if(stillCurrent()&&treeGeneration===treeLoadGeneration)toast('Project files could not be listed. You can retry from the project tree.');}
+  })();
+  void (async()=>{
+    try {
+      const saved=await native.listSessions({limit:savedSessionList.limit,offset:0});
+      if(!stillCurrent())return;
+      savedSessionList={offset:saved.offset??0,total:saved.total??saved.sessions?.length??0,limit:saved.limit??30};
+      for(const item of (saved.sessions??saved)){
+        if(state.sessions.some(session=>session.babelSessionId===item.id))continue;
+        state.sessions.push({id:id(),title:item.title||'Saved chat',messages:[],babelSessionId:item.id,saved:true,messageCount:item.messages});
+      }
+      renderSessions();
+    }catch{/* A missing runs directory leaves the new session in place. */}
+  })();
   renderTree();
-  try {
-    const saved = await native.listSessions({limit: savedSessionList.limit, offset: 0});
-    savedSessionList={offset: saved.offset ?? 0, total: saved.total ?? saved.sessions?.length ?? 0, limit: saved.limit ?? 30};
-    for (const item of (saved.sessions ?? saved)) {
-      if (state.sessions.some(session => session.babelSessionId === item.id)) continue;
-      state.sessions.push({ id: id(), title: item.title || 'Saved chat', messages: [], babelSessionId: item.id, saved: true, messageCount: item.messages });
-    }
-  } catch { /* A missing runs directory leaves the new session in place. */ }
   configuredRoute=null;configuredRouteLabel='';providerCatalog=[];
   try {
     const route=await native.readProviderRoute();
     if(route){configuredRoute=route;state.model=route.model;configuredRouteLabel=`${route.provider} · ${route.model}`;}
-    if(native.listQualifiedProviders)providerCatalog=await native.listQualifiedProviders();
+    if(native.listQualifiedProviders)void (async()=>{
+      try{const catalog=await native.listQualifiedProviders();if(stillCurrent()&&configuredRoute===route){providerCatalog=catalog;renderControls();}}
+      catch{/* Provider settings can retry catalog loading on demand. */}
+    })();
   } catch {toast('Provider settings could not be loaded. Open Providers and models to retry.');}
   renderSessions();renderControls();persist();
   connectedProjectRoot=projectRoot;connectionInitialized=true;
@@ -1071,11 +1115,18 @@ document.addEventListener('click',async event=>{
   else if(a==='open-project')await chooseProject();
   else if(a==='trust-project'||a==='revoke-trust'){
     try{
-      nativeInfo=await (a==='trust-project'?native.trustProject():native.revokeProjectTrust());
+      const treeGeneration=++treeLoadGeneration;
+      const projectRoot=nativeInfo?.projectRoot??nativeInfo?.projectName??null;
+      const info=await (a==='trust-project'?native.trustProject():native.revokeProjectTrust());
+      if(treeGeneration!==treeLoadGeneration||projectRoot!==(nativeInfo?.projectRoot??nativeInfo?.projectName??null))return;
+      nativeInfo=info;
       if(a==='revoke-trust'){
         files=[];renderTree();
         if(activeRun){activeRun.stopping=true;activeRun.message.pendingApproval='';activeRun.message.approval=null;renderConversation();}
-      }else if(nativeInfo.projectAuthority?.trusted){files=await native.listDirectory('.');renderTree();}
+      }else if(nativeInfo.projectAuthority?.trusted){
+        const entries=await native.listDirectory('.');
+        if(treeGeneration===treeLoadGeneration&&projectRoot===(nativeInfo?.projectRoot??nativeInfo?.projectName??null)&&nativeInfo.projectAuthority?.trusted){files=entries;renderTree();}
+      }
       renderControls();connectionDialog();
     }catch(err){toast(err.message);}
   }
@@ -1101,6 +1152,14 @@ document.addEventListener('click',async event=>{
   else if(a==='toggle-left')$('.workspace').classList.toggle('show-left');
   else if(a==='toggle-right')$('.workspace').classList.toggle('show-right');
   else if(a==='copy-message'){try{const message=activeSession().messages[Number(button.dataset.index)];if(!message?.text||message.status==='running')return;if(!native?.copyText)throw new Error('Clipboard unavailable');await native.copyText(message.text);toast('Message copied.');}catch{toast('Clipboard unavailable. Select and copy the message text.');}}
+  else if(a==='restore-task'){
+    const input=$('#composer-input');
+    if(activeRun||input.value.trim()){toast('Keep or clear the current draft before restoring another task.');return;}
+    const prior=activeSession().messages.slice(0,Number(button.dataset.index)).reverse().find(message=>message.role==='user'&&message.text);
+    if(!prior){toast('The original task is unavailable in this history page.');return;}
+    input.value=prior.text;resizeComposer();persist();input.focus();
+    toast('Task restored. Review completed actions before sending it again.');
+  }
   else if(a==='about')openDialog('ABOUT BABEL',`<div class="about-brand"><img src="${LOGO}" alt=""><div><h3>BABEL</h3><p class="muted">Run. Verify. Understand.</p></div></div><p>A desktop workspace for the Babel coding-agent harness.</p><p class="muted">Babel CLI runs each task, requests approvals, and reports its verification results here.</p><div class="dialog-actions"><button class="button" data-action="connection">Connection details</button><button class="button" data-action="settings">Settings</button></div>`);
   else if(a==='repo'){if(native){await native.openRepository();}else{openDialog('BABEL REPOSITORY','<p>The canonical source repository is:</p><p><a href="https://github.com/gthgomez/Babel" target="_blank" rel="noopener noreferrer">github.com/gthgomez/Babel</a></p><p class="fine-print">Open the repository to read the source and documentation.</p>');}}
 });

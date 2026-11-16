@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { printJsonErrorAndExit, printJsonOrHuman } from "./output.js";
 import { runBabelMcpServer } from "../mcp/server.js";
 import { startInteractiveSession } from "../interactive.js";
+import { registerInteractiveCommand } from './interactiveCommand.js';
 import { resolveInspectRunDir } from "../inspect/loaders.js";
 import { findCheckpoint, formatCheckpointInspect, formatCheckpointList, listCheckpoints, restoreCheckpoint } from "../services/checkpoints.js";
 import { getMcpServersConfigPath, readMcpServers, removeMcpServer, upsertMcpServer } from "../config/mcpServers.js";
@@ -158,57 +159,7 @@ checkpointCommand
       },
     );
 
-program
-    .command("interactive")
-    .alias("app")
-    .description("Default: enter persistent interactive Babel session (REPL)")
-    .option("-p, --project <name>", "Default project for this session")
-    .option("--mode <mode>", "Workflow for this session: work or plan")
-    .option(
-      "--resume [sessionId]",
-      "Resume a prior session (latest if omitted)",
-    )
-    .option(
-      "--resume-picker",
-      "Show the session picker at startup (off by default)",
-    )
-    .addHelpText(
-      "after",
-      `
-Interactive slash command map:
-  /checkpoint, /restore, /session
-  /mcp, /plugins, /plugin, /agents
-`,
-    )
-    .action(
-      async (options: {
-        project?: string;
-        mode?: string;
-        resume?: string | boolean;
-        resumePicker?: boolean;
-      }) => {
-        try {
-          if (options.resumePicker) process.env["BABEL_RESUME_PICKER"] = "1";
-          if (options.resume !== undefined) {
-            process.env["BABEL_RESUME_SESSION"] =
-              options.resume === true || options.resume === ""
-                ? "latest"
-                : String(options.resume);
-          }
-          await startInteractiveSession({
-            ...(options.project !== undefined
-              ? { project: options.project }
-              : {}),
-            ...(options.mode !== undefined ? { mode: (options.mode === 'work' ? 'chat' : options.mode) as never, modeExplicit: true } : {}),
-          });
-        } catch (err: unknown) {
-          console.error(
-            `Interactive session error: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          process.exit(1);
-        }
-      },
-    );
+registerInteractiveCommand(program);
 
 // Conversation recovery is explicit; legacy `session` commands retain evidence inspection.
 const conversation = program.command('conversation').description('List or resume persisted conversations');

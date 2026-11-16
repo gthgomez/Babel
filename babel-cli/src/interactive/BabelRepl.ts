@@ -2,7 +2,7 @@ import * as readline from 'node:readline/promises';
 import * as rl from 'node:readline';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { InteractiveRunBusyError } from './context.js';
+import { assertInteractiveRunAvailable, InteractiveRunBusyError } from './context.js';
 
 interface ReadlineWithHistory extends readline.Interface {
   history: string[];
@@ -45,11 +45,8 @@ import {
 import { type SessionState, type InteractiveTurn } from './types.js';
 import * as Session from './session.js';
 import * as Turn from './turns.js';
-import { handleCommand } from './commands.js';
-import { executeTask } from './execution/dispatch.js';
 import { printRunSummary as printRunSummaryModule } from './execution/summary.js';
-import { reverseHistorySearch } from './commands/service.js';
-import { ChatEngine } from '../agent/chatEngine.js';
+import type { ChatEngine } from '../agent/chatEngine.js';
 import { VoiceStreamManager } from '../voice/voice-stream-manager.js';
 import type { PromptInputAdapter } from '../ui/promptInputAdapter.js';
 import { OutputBuffer } from '../ui/outputBuffer.js';
@@ -94,6 +91,7 @@ export class BabelRepl {
   state: SessionState;
   isRunning: boolean = false;
   preparingRun: boolean = false;
+  cancelActiveRun?: (() => void) | undefined;
   logBuffer: string[] = [];
   currentStageIdx: number = 0;
   verboseMode: boolean = false;
@@ -700,6 +698,7 @@ export class BabelRepl {
   // ── Command router ────────────────────────────────────────────────────────
 
   private async handleCommand(input: string): Promise<void> {
+    const { handleCommand } = await import('./commands.js');
     return handleCommand(this, input);
   }
 
@@ -764,6 +763,21 @@ export class BabelRepl {
 
   private async executeTask(input: string): Promise<void> {
     try {
+      assertInteractiveRunAvailable(this);
+      let cancelled = false;
+      const cancelDispatchLoad = () => { cancelled = true; };
+      this.preparingRun = true;
+      this.cancelActiveRun = cancelDispatchLoad;
+      let executeTask: typeof import('./execution/dispatch.js').executeTask;
+      try {
+        ({ executeTask } = await import('./execution/dispatch.js'));
+        if (cancelled) return;
+      } finally {
+        if (this.cancelActiveRun === cancelDispatchLoad) {
+          this.preparingRun = false;
+          delete this.cancelActiveRun;
+        }
+      }
       return await executeTask(this, input);
     } catch (err: any) {
       if (!(err instanceof InteractiveRunBusyError)) this.isRunning = false;
@@ -862,6 +876,7 @@ export class BabelRepl {
   // ── Exit ─────────────────────────────────────────────────────────────────
 
   private async handleReverseSearch(): Promise<void> {
+    const { reverseHistorySearch } = await import('./commands/service.js');
     const history = (this.rl as ReadlineWithHistory).history;
     await this.withExclusiveTerminal('reverse-history', () =>
       reverseHistorySearch(this.rl, history),

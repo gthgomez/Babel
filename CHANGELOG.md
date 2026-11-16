@@ -4,7 +4,7 @@ Entries below are taken from git tags and GitHub release notes. They do not add 
 
 ## [Unreleased]
 
-Changes on `main` after the npm `babel-harness@0.2.0` publish. The source package is version `0.2.1`; `0.2.1` has not been published to npm.
+Changes on `main` after the npm `babel-harness@0.2.0` publish. The current source package targets version `0.3.0`; consult npm for the latest published version.
 
 ### Changed
 - The package installs `babel`, `babel-agent`, and `babel-harness` as one executable; all three names run the same CLI.

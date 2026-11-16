@@ -17,7 +17,7 @@
  * @returns {NodeJS.ProcessEnv} the same env object, for convenience
  */
 import {applyProviderRoute} from './provider-routing.mjs';
-import {applyNativeCredentialEnvironment,assertStandaloneCredentialCompatibility} from './credentials.mjs';
+import {applyNativeCredentialEnvironment,assertStandaloneCredentialCompatibility,sharedUserPreferencesPath} from './credentials.mjs';
 import {isAbsolute,resolve} from 'node:path';
 
 export {applySelectedModelEnvironment} from './provider-routing.mjs';
@@ -58,7 +58,22 @@ export function applyCliCredentialScope(env, {args = [], cwd = process.cwd(), pr
   const opted = preferences.projectCredentialRoot;
   const projectCredentialRoot = typeof opted==='string' && isAbsolute(opted) ? resolve(opted) : null;
   applyProjectCredentialScope(env,{projectRoot,projectCredentialRoot,configDirectory});
-  if(configDirectory)assertStandaloneCredentialCompatibility(configDirectory);
+  if(configDirectory){
+    const shared=assertStandaloneCredentialCompatibility(configDirectory);
+    if(Object.keys(shared).length){
+      const provider=env.BABEL_DESKTOP_PROVIDER;
+      if(!provider||!shared[provider])throw new Error('The selected provider has no shared credential. Choose a shared connection in Desktop first.');
+      if(projectRoot&&projectCredentialRoot===projectRoot)throw new Error('This project uses a project-local credential. Open it in Desktop or choose a private shared connection explicitly.');
+      for(const name of Object.keys(env))if(/^(?:DEEPSEEK_API_KEY|DEEPINFRA_API_KEY|OPENROUTER_API_KEY|COMMAND_CODE_API_KEY|BABEL_OPENCODE_GO_API_KEY|OPENCODE_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GROQ_API_KEY|BABEL_COMPACTION_API_KEY|BABEL_OPENCODE_GO_HELPER)$/i.test(name))delete env[name];
+      env.BABEL_CONNECTION=shared[provider];
+      if(env.BABEL_COMPACTION_MODEL)env.BABEL_MODEL=env.BABEL_COMPACTION_MODEL;
+      // The launcher now uses the canonical connection route. Retaining the
+      // Desktop-only legacy route would bypass its protected credential ref.
+      for(const name of ['BABEL_DESKTOP_PROVIDER','BABEL_DESKTOP_MODEL_ROUTE','BABEL_COMPACTION_API_BASE','BABEL_COMPACTION_MODEL','BABEL_DIFF_CRITIC_MODEL','BABEL_DIFF_CRITIC_PRO_MODEL'])delete env[name];
+      env.BABEL_PREFERENCES_FILE=sharedUserPreferencesPath(env);
+      env.BABEL_DESKTOP_IPC='1';env.BABEL_DESKTOP_CREDENTIALS_RESOLVED='1';env.BABEL_SHARED_CREDENTIALS='1';
+    }
+  }
   return env;
 }
 

@@ -14,6 +14,7 @@
  */
 
 import type { LlmRefinementResult, LlmRefinerConfig } from './types.js';
+import { assertOfflineEndpointAllowed, isOfflineRequested } from '../config/offlineMode.js';
 
 // ── System prompt ───────────────────────────────────────────────────────────
 
@@ -114,8 +115,10 @@ export class LlmRefiner {
     body: string,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
+    assertOfflineEndpointAllowed(this.config.endpoint);
     const response = await fetch(this.config.endpoint, {
       method: 'POST',
+      ...(isOfflineRequested() ? { redirect: 'error' as const } : {}),
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.config.apiKey}`,

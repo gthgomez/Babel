@@ -23,7 +23,7 @@ export function isFirstRun(): boolean {
  * Keep this list short and focused on what a new user needs first.
  */
 const QUICK_COMMANDS: Array<[string, string]> = [
-  ['/setup', 'Connect your provider, model and budget'],
+  ['/setup', 'Connect your provider and model'],
   ['/provider status', 'Show connection and credential readiness'],
   ['/help', 'Show all commands and groups'],
   ['/model use <id>', 'Choose an exact model on this connection'],

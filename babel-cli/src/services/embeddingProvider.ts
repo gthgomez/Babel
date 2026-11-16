@@ -7,7 +7,8 @@
  *
  * ## Graceful no-op
  *
- * When `OPENAI_API_KEY` is unset or `BABEL_EMBEDDING_DISABLE=1`, the factory
+ * Unless `BABEL_EMBEDDING_API_KEY` is set or use of `OPENAI_API_KEY` is explicitly enabled,
+ * or when `BABEL_EMBEDDING_DISABLE=1`, the factory
  * returns `null` and the embedding path is silently skipped. FTS5 full-text
  * search remains the fallback (see `SemanticIndexer.search()`).
  *
@@ -15,7 +16,9 @@
  *
  * All configuration is via environment variables (no config file changes needed):
  *
- *   OPENAI_API_KEY           — required; embedding disabled when unset
+ *   BABEL_EMBEDDING_API_KEY  — explicit embedding-provider credential
+ *   OPENAI_API_KEY           — used only when embedding is explicitly enabled
+ *   BABEL_EMBEDDING_ENABLE   — set to "1" to opt in to using OPENAI_API_KEY
  *   BABEL_EMBEDDING_DISABLE   — set to "1" to skip embedding entirely
  *   BABEL_EMBEDDING_MODEL     — model name (default: text-embedding-3-small)
  *   BABEL_EMBEDDING_BASE_URL  — API base URL (default: https://api.openai.com/v1)
@@ -29,6 +32,8 @@
  *
  * @module embeddingProvider
  */
+
+import { assertOfflineEndpointAllowed, isOfflineRequested, OfflineModeError } from '../config/offlineMode.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -60,7 +65,7 @@ function resolveApiKey(): string | null {
   if (process.env['BABEL_EMBEDDING_API_KEY']?.trim()) {
     return process.env['BABEL_EMBEDDING_API_KEY'].trim();
   }
-  if (process.env['OPENAI_API_KEY']?.trim()) {
+  if (['1', 'true'].includes(process.env['BABEL_EMBEDDING_ENABLE'] ?? '') && process.env['OPENAI_API_KEY']?.trim()) {
     return process.env['OPENAI_API_KEY'].trim();
   }
   return null;
@@ -135,12 +140,15 @@ class OpenAiEmbeddingProvider implements EmbeddingProvider {
     if (texts.length === 0) return [];
 
     const url = `${this.baseUrl.replace(/\/$/, '')}/embeddings`;
+    assertOfflineEndpointAllowed(url);
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
+        assertOfflineEndpointAllowed(url);
         const response = await fetch(url, {
           method: 'POST',
+          ...(isOfflineRequested() ? { redirect: 'error' as const } : {}),
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${this.apiKey}`,
@@ -163,11 +171,12 @@ class OpenAiEmbeddingProvider implements EmbeddingProvider {
           return parseEmbeddingResponse(body, texts.length);
         }
 
+        // Provider bodies are untrusted and may echo input or credentials.
+        await response.body?.cancel().catch(() => {});
+
         // Retryable errors
         if (response.status === 429 || response.status >= 500) {
-          lastError = new Error(
-            `OpenAI embedding API returned ${response.status}: ${await response.text().catch(() => '(no body)')}`,
-          );
+          lastError = new Error(`OpenAI embedding API returned ${response.status}.`);
           if (attempt < MAX_RETRIES) {
             await sleep(RETRY_DELAYS_MS[attempt]!);
             continue;
@@ -176,10 +185,9 @@ class OpenAiEmbeddingProvider implements EmbeddingProvider {
         }
 
         // Non-retryable errors
-        throw new Error(
-          `OpenAI embedding API returned ${response.status}: ${await response.text().catch(() => '(no body)')}`,
-        );
+        throw new Error(`OpenAI embedding API returned ${response.status}.`);
       } catch (err) {
+        if (err instanceof OfflineModeError) throw err;
         if (
           attempt < MAX_RETRIES &&
           !(err instanceof EmbeddingResponseError) &&
@@ -205,7 +213,7 @@ class OpenAiEmbeddingProvider implements EmbeddingProvider {
  * Create an embedding provider from environment configuration.
  *
  * Returns `null` when:
- * - `OPENAI_API_KEY` and `BABEL_EMBEDDING_API_KEY` are both unset/empty
+ * - `BABEL_EMBEDDING_API_KEY` is unset and use of `OPENAI_API_KEY` was not explicitly enabled
  * - `BABEL_EMBEDDING_DISABLE` is set to "1" or "true"
  *
  * Callers should treat `null` as "embeddings unavailable — skip the vector path."

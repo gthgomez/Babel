@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 
 import { BABEL_ROOT, BABEL_RUNS_DIR } from '../cli/constants.js';
 import { rewriteArgv } from '../cli/argv.js';
-import { classifyDoTask } from '../commands/workflowCommands.js';
+import { classifyDoTask } from '../cli/taskIntent.js';
 
 export type LiteUsabilityStatus = 'pass' | 'fail';
 

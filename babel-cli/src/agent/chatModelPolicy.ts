@@ -8,10 +8,11 @@ import {
   resolveBareModelIdBackendKey,
   type ResolvedModelPolicy,
 } from '../modelPolicy.js';
-import { getProviderSpec, providerSupportsOperation } from '../runners/providerRegistry.js';
+import { assertApprovedProductProvider, getProviderSpec, isProductProviderPolicyActive, providerSupportsOperation } from '../runners/providerRegistry.js';
 import { resolveConnectionModelPolicy } from '../config/connectionModelPolicy.js';
 import { resolveEffectiveSettings } from '../config/userSettings.js';
 import { selectedConnectionModel } from '../services/connectionSettings.js';
+import { assertOfflineProviderAllowed, isLoopbackEndpoint, isOfflineMode } from '../config/offlineMode.js';
 
 /** Exact existing Go routes allowed for explicit Chat selection; native budget gates still apply. */
 export function isChatOpenCodeGoRoute(
@@ -33,12 +34,13 @@ export interface ChatModelPolicyOptions {
 
 /** Return whether ChatEngine should use offline provider compatibility behavior. */
 export function isOfflineChatMode(): boolean {
-  return (
-    process.env['BABEL_OFFLINE'] === '1' ||
-    process.env['BABEL_OFFLINE'] === 'true' ||
-    process.env['BABEL_DESKTOP_PROVIDER'] === 'ollama' ||
-    process.argv.includes('--offline')
-  );
+  return isOfflineMode();
+}
+
+function assertChatProviderAllowed(policy: ResolvedModelPolicy, offline: boolean): void {
+  const localOffline = offline && (policy.provider === 'ollama' ||
+    (policy.provider === 'openai-compatible' && isLoopbackEndpoint(policy.baseUrl)));
+  if (!localOffline && isProductProviderPolicyActive()) assertApprovedProductProvider(policy.provider);
 }
 
 /** Resolve explicit connections and retain named legacy routes under their live gates. */
@@ -61,7 +63,11 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const connectionSelector = explicitModel && !explicitModel.startsWith('connection/') && !desktopProvider && canBindConnection
     ? selectedConnectionModel({ model: explicitModel }) ?? explicitModel : explicitModel;
   const connectionPolicy = resolveConnectionModelPolicy(connectionSelector, { models: configuredModels });
-  if (connectionPolicy) return { policy: connectionPolicy, offline };
+  if (connectionPolicy) {
+    assertOfflineProviderAllowed(connectionPolicy.provider, connectionPolicy.baseUrl);
+    assertChatProviderAllowed(connectionPolicy, offline);
+    return { policy: connectionPolicy, offline };
+  }
   if (!explicitModel && !desktopProvider && !offline) {
     throw new Error('SETUP_REQUIRED: Select your provider and exact model with babel-harness setup. No cloud provider is selected.');
   }
@@ -140,6 +146,8 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
       });
 
   assertSelectedProvider(policy.provider);
+  assertOfflineProviderAllowed(policy.provider, policy.baseUrl);
+  assertChatProviderAllowed(policy, offline);
 
   if (explicitGoRequest || explicitCommandCodeRequest) {
     const backend = policy.waterfall[0]!;

@@ -1,7 +1,5 @@
-import { loadBabelCliEnv } from './config/envBootstrap.js';
-import { conversationScopeRequested } from './config/conversationScope.js';
 import { desktopCapabilities, isDesktopCapabilityProbe } from './config/desktopCapabilities.js';
-import { withInvocationSettings } from './config/invocationSettings.js';
+import { bootstrapCliEnvironment, withCliInvocation } from './cli/cliBootstrap.js';
 import { Command } from 'commander';
 import { rewriteArgv } from './cli/argv.js';
 import { isDeprecatedSurfaceCommand, printDeprecatedSurfaceAndExit } from './cli/deprecation.js';
@@ -50,15 +48,10 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
   if (typeof surfaceCommand === 'string' && isDeprecatedSurfaceCommand(surfaceCommand)) {
     printDeprecatedSurfaceAndExit(surfaceCommand);
   }
-  await withInvocationSettings({}, () => program.parseAsync(rewrittenArgv));
+  await withCliInvocation(() => program.parseAsync(rewrittenArgv));
 }
 
 export async function startCli(argv: string[] = process.argv) {
-  if (!isDesktopCapabilityProbe(argv)) {
-    loadBabelCliEnv(process.env, undefined, {
-      executionScope: conversationScopeRequested(argv) ? 'conversation' : 'project',
-    });
-    process.env['BABEL_ENV_LOADED'] = 'true';
-  }
+  bootstrapCliEnvironment(argv);
   await runCli(argv);
 }

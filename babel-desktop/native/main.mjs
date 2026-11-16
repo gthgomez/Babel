@@ -4,11 +4,11 @@ import {writeClipboardText} from './clipboard.mjs';
 import {readFileSync,existsSync} from 'node:fs';
 import {readFile,writeFile,rename,mkdir,stat,realpath} from 'node:fs/promises';
 import {basename,dirname,join,isAbsolute} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {BabelChild,buildRunArgs,EXECUTION_PROFILE} from './child.mjs';
 import {PrivateWorkerRun,WORKER_PROVIDER_KEYS} from './private-worker-run.mjs';
-import {resolveSessionExecutionProfile,workerThreadCompatible} from './session-profile.mjs';
+import {resolveSessionExecutionProfile,workerThreadCompatible,workerConnectionMatches} from './session-profile.mjs';
 import {SharedProtocolRun} from './sharedProtocolRun.mjs';
 import {RemoteBridgeChild,releaseBridgeIfCurrent} from './remoteHost.mjs';
 import {listDirectory,readProjectFile} from './workspace.mjs';
@@ -19,7 +19,7 @@ import {APP_URL,REPOSITORY_URL,isAppUrl,parsePreferences} from './security.mjs';
 import {resolveOfficialCli,bundledEnvironment,resolveDesktopProfile} from './runtime.mjs';
 import {diagnoseRuntime} from './diagnostics.mjs';
 import {applySandboxEnvironment,configureSandboxImage,packagedSandboxPrerequisiteMessage,probeDockerInstallation,sandboxIpcFailureMessage,RECOMMENDED_IMAGE} from './sandbox-setup.mjs';
-import {configureCredentialProtection,hasProviderCredential,saveProviderCredential,providerCredentialStatus,removeProviderCredential,migrateProviderCredential} from './credentials.mjs';
+import {configureCredentialProtection,configureSharedCredentialService,sharedUserPreferencesPath,hasProviderCredential,saveProviderCredential,providerCredentialStatus,removeProviderCredential,migrateProviderCredential,shareProviderCredential,connectionCredentialReadiness} from './credentials.mjs';
 import {saveDesktopProviderRoute,reconcileProviderRoute} from './provider-route-save.mjs';
 import {assertCredentialEngineCapability} from './credential-engine.mjs';
 import {checkConnection,reconcileAuthentication} from './provider-auth.mjs';
@@ -30,6 +30,7 @@ import {parseBuildMetadata} from './identity.mjs';
 import {readActiveEngine, writeActiveEngine} from './engine-manager.mjs';
 import {checkPackagedCliUpdate, installPreviewSourceBuild, installStableReleaseArchive, resolveBundledNpmCli} from './engine-artifact.mjs';
 import {qualifiedProviders, readProviderRoute, saveProviderRoute, validateProviderRoute,refreshModelCatalog} from './provider-routing.mjs';
+import {assertApprovedDesktopProvider,isApprovedDesktopProvider} from './product-provider-policy.mjs';
 import {listSavedChats,readSavedChat,searchSavedChats,readSavedMessage,runsSessionsDir,runsThreadsDir} from './sessions.mjs';
 import {ComposerDraftStore,composerDraftScope} from './composer-drafts.mjs';
 import {CLOSE_GRACE_MS,decideLastWindow,decideWindowClose,createCloseRequest} from './lifecycle.mjs';
@@ -57,6 +58,14 @@ if(profileArgument){
   app.setPath('userData',resolved.profile);
 }
 const officialRuntime=()=>resolveOfficialCli(packageRoot,{isPackaged:app.isPackaged,resourcesPath:process.resourcesPath,userData:app.getPath('userData')});
+async function configureBundledSharedCredentials(){
+  // Never load credential-handling code from a user-selected engine or project.
+  const cliRoot=app.isPackaged?join(process.resourcesPath,'babel-runtime','cli'):join(packageRoot,'..','babel-cli');
+  try{
+    const module=await import(pathToFileURL(join(cliRoot,'dist','config','sharedConnectionService.js')).href);
+    configureSharedCredentialService(module.createSharedConnectionService({path:sharedUserPreferencesPath(process.env,app.getPath('home'))}));
+  }catch{configureSharedCredentialService(null);}
+}
 function bundledBuildRecord(){
   if(!app.isPackaged)return null;
   try{return parseBuildMetadata(readFileSync(join(process.resourcesPath,'..','BUILD.json'),'utf8'));}catch{return null;}
@@ -118,6 +127,7 @@ let preferences={cliEntry:null,projectRoot:null,projectCredentialRoot:null};
 let runner=null;
 let residentWorker=null;
 let residentWorkerIdentity=null;
+let residentWorkerCredential=null;
 function residentWorkerEntry(cliEntry){return cliEntry?join(dirname(cliEntry),'protocol','privateWorkerMain.js'):null;}
 function residentWorkerEligible({conversationOnly,mode,provider,runAuthority,selectedModel,cliEntry,executionProfile,workerCompatible}){
   if(conversationOnly||mode!=='chat'||executionProfile!=='host_native'||EXECUTION_PROFILE!=='host_native')return false;
@@ -131,6 +141,7 @@ async function retireResidentWorker(){
   const worker=residentWorker;
   residentWorker=null;
   residentWorkerIdentity=null;
+  residentWorkerCredential=null;
   if(worker){try{await worker.shutdown();}catch{ /* the owned process may already have exited */ }}
 }
 /**
@@ -178,7 +189,7 @@ const singleInstance=app.requestSingleInstanceLock();
 if(!singleInstance) app.quit();
 else {
   app.on('second-instance',showWindow);
-  app.whenReady().then(()=>{configureCredentialProtection(safeStorage);return start();}).catch(error=>{
+  app.whenReady().then(async()=>{configureCredentialProtection(safeStorage);await configureBundledSharedCredentials();return start();}).catch(error=>{
     dialog.showErrorBox('Babel Desktop could not start',error.message);
     app.quit();
   });
@@ -197,13 +208,22 @@ function activeCliEntry(){
 }
 function cliPackageDir(){const entry=activeCliEntry();return entry?dirname(dirname(entry)):null;}
 function cliCheckoutRoot(){const dir=cliPackageDir();return dir?dirname(dir):null;}
-async function getInfo({passive=false}={}){
+async function getInfo({passive=true}={}){
   const official=officialRuntime();
   const cliEntry=activeCliEntry();
   let ready=false;
   let scope={scope:preferences.projectRoot?'project':'conversation',trusted:false,identity:null,reason:null};
   try{scope=await projectAuthority.inspect(preferences.projectRoot);}catch{scope.reason='Project identity is unavailable. Select and verify the project again.';}
   try{ready=Boolean(cliEntry&&(!preferences.projectRoot||scope.trusted)&&(await stat(cliEntry)).isFile());}catch{}
+  let connection={state:'setup_required',provider:null,model:null};
+  try{
+    const configDirectory=runtimeEnvironment().BABEL_CONFIG_DIR;
+    const route=readProviderRoute(configDirectory);
+    const credentialScope=preferences.projectRoot&&preferences.projectCredentialRoot===preferences.projectRoot?'project':'private';
+    connection=credentialScope==='project'&&!scope.trusted
+      ? {state:'unavailable',provider:route?.provider??null,model:route?.model??null}
+      : connectionCredentialReadiness({route,scope:credentialScope,configDirectory,projectRoot:preferences.projectRoot});
+  }catch{connection={state:'unavailable',provider:null,model:null};}
   if(app.isPackaged&&preferences.projectRoot&&!diagnostics&&passive!==true){
     try{diagnostics=await sharedDiagnostics(official,{env:await ownedCliEnvironment(),cwd:app.getPath('userData'),executionProfile:EXECUTION_PROFILE},EXECUTION_PROFILE);}
     catch{diagnostics={ready:false,provider:'unavailable',error:'Credential storage or project authority is unavailable. Review provider settings and project trust.'};}
@@ -211,7 +231,7 @@ async function getInfo({passive=false}={}){
   const engine=resolveEngineIdentity({
     isPackaged:app.isPackaged,resourcesPath:process.resourcesPath,desktopVersion:app.getVersion(),
     cliEntry,official,advancedEntry:Boolean(!app.isPackaged&&preferences.cliEntry),ready,
-    executionProfile:EXECUTION_PROFILE,diagnostics,update:cliUpdate,requiresSandbox:Boolean(preferences.projectRoot),
+    executionProfile:EXECUTION_PROFILE,diagnostics,update:cliUpdate,requiresSandbox:Boolean(preferences.projectRoot)&&EXECUTION_PROFILE==='safe_repo',
   });
   if(official.engineId&&official.engineId!=='bundled') engine.activeEngineId=official.engineId;
   return {
@@ -220,12 +240,13 @@ async function getInfo({passive=false}={}){
     projectRoot:preferences.projectRoot,
     projectAuthority:scope,
     ready,
+    connection,
     officialCliLabel:official.label,
     officialCliReady:official.ready,
     runtimeSource:!app.isPackaged&&preferences.cliEntry?'advanced':official.ready?official.source:'missing',
     packaged:app.isPackaged,
     platform:process.platform,
-    dockerInstallation:process.platform==='linux'?await linuxDockerInstallation():null,
+    dockerInstallation:process.platform==='linux'&&!passive?await linuxDockerInstallation():null,
     diagnostics,
     engine,
     sandbox:{image:runtimeEnvironment().BABEL_BENCHMARK_DOCKER_IMAGE??null,reference:preferences.sandboxImageReference??runtimeEnvironment().BABEL_BENCHMARK_DOCKER_IMAGE??null,recommended:RECOMMENDED_IMAGE},
@@ -363,7 +384,7 @@ async function start(){
     if(!draftCloseRequest||request?.token!==draftCloseRequest.token)return {accepted:false};
     draftCloseRequest.finish(request.saved===true);return {accepted:true};
   });
-  handle('babel:refresh-diagnostics',async()=>{assertIdle();diagnostics=null;dockerInstallationCache=undefined;return getInfo();});
+  handle('babel:refresh-diagnostics',async()=>{assertIdle();diagnostics=null;dockerInstallationCache=undefined;return getInfo({passive:false});});
   handle('babel:configure-sandbox',async options=>withConnectionChange(async()=>{
     if(!options||typeof options!=='object')throw new Error('Invalid sandbox setup request.');
     let configured;
@@ -480,8 +501,8 @@ async function start(){
     if(consent.response!==1)return getInfo();
     preferences.cliEntry=selected;await savePreferences();return getInfo();
   })));
-  handle('babel:list-qualified-providers',()=>qualifiedProviders(runtimeEnvironment().BABEL_CONFIG_DIR));
-  handle('babel:refresh-models',provider=>withConnectionChange(()=>refreshModelCatalog({provider,configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR})));
+  handle('babel:list-qualified-providers',()=>qualifiedProviders(runtimeEnvironment().BABEL_CONFIG_DIR).filter(entry=>isApprovedDesktopProvider(entry.id)));
+  handle('babel:refresh-models',provider=>withConnectionChange(()=>{assertApprovedDesktopProvider(provider);return refreshModelCatalog({provider,configDirectory:runtimeEnvironment().BABEL_CONFIG_DIR});}));
   handle('babel:read-provider-route',()=>readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR));
   handle('babel:provider-credential-status',async options=>{
     assertIdle();
@@ -511,6 +532,18 @@ async function start(){
       return result;
     });
   });
+  handle('babel:share-provider-credential',async options=>withNativeDialog(()=>withConnectionChange(async()=>{
+    const context=await credentialRequestContext({...options,scope:'private'},true);
+    const confirmation=await dialog.showMessageBox(window,{type:'question',title:'Share this key with Babel CLI?',
+      message:'Allow the Babel CLI on this computer to use this provider key?',
+      detail:'A protected copy will be shared with your user account. The existing encrypted Desktop copy is retained for recovery. No provider request will be sent.',
+      buttons:['Cancel','Share with CLI'],defaultId:0,cancelId:0,noLink:true});
+    if(confirmation.response!==1)return {shared:false};
+    const route=readProviderRoute(context.configDirectory);
+    const model=route?.provider===context.provider?qualifiedProviders(context.configDirectory).find(item=>item.id===context.provider)?.routes.find(item=>item.id===route.model)?.modelId:undefined;
+    const result=shareProviderCredential({...context,...(model?{model}:{}),confirm:true});diagnostics=null;await retireResidentWorker();
+    credentialAuthObservations.delete(authObservationKey(context));return result;
+  })));
   handle('babel:save-provider-route',async options=>{
     return withConnectionChange(async()=>{
     // Structured envelopes only: a thrown Electron error loses custom fields, so
@@ -556,6 +589,7 @@ async function start(){
     if(!options || typeof options!=='object' || (options.scope!=='private' && options.scope!=='project')) {
       throw new Error('Select an explicit credential destination.');
     }
+    assertApprovedDesktopProvider(options.provider);
     if(options.scope==='project'&&!preferences.projectRoot) {
       throw new Error('Select a project before choosing project-local credentials.');
     }
@@ -710,22 +744,30 @@ async function start(){
     if(!conversationOnly)await projectAuthority.admit(preferences.projectRoot);
     // Read-only admission check: the run owns its one diagnostic decision below,
     // so admission never triggers an extra capability probe or doctor child.
-    if(!(await getInfo({passive:true})).ready)throw new Error('The selected Babel CLI or project is no longer available');
+    const admissionInfo=await getInfo({passive:true});
+    if(!admissionInfo.ready)throw new Error('The selected Babel CLI or project is no longer available');
+    const route = readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR);
+    if(!route)throw new Error('Choose a provider and default model in Settings before sending a task.');
+    assertApprovedDesktopProvider(route.provider);
+    if(admissionInfo.connection.provider!==route.provider||admissionInfo.connection.model!==route.model)throw new Error('The provider selection changed. Refresh provider settings before sending a task.');
+    if(admissionInfo.connection.state==='offline')throw new Error('Offline mode cannot contact the selected provider. Leave offline mode to use this connection.');
+    if(admissionInfo.connection.state==='credential_unavailable')throw new Error('OS-protected credential storage is unavailable. Unlock it or repair provider settings.');
+    if(admissionInfo.connection.state!=='configured_unverified')throw new Error('The selected provider credential is unavailable. Open provider settings to repair it.');
     // Exactly one credential resolution per run. The doctor and the child must
     // observe the same credential, and a stale environment must never be reused
     // across a credential change.
     const runEnvironment=await ownedCliEnvironment();
+    const keyName=WORKER_PROVIDER_KEYS[route.provider];
+    if(keyName&&!runEnvironment[keyName]?.trim())throw new Error('The selected provider credential is unavailable. Open provider settings to repair it.');
     if(app.isPackaged&&!conversationOnly){
       diagnostics=await sharedDiagnostics(officialRuntime(),{env:runEnvironment,cwd:app.getPath('userData'),executionProfile:effectiveProfile},effectiveProfile);
       if(!diagnostics.ready)throw new Error(packagedSandboxPrerequisiteMessage());
     }
     // Validate native-bound scope and route before spawning; no arbitrary flags.
-    const route = readProviderRoute(runtimeEnvironment().BABEL_CONFIG_DIR);
     const runRequest = {...request,executionProfile:effectiveProfile,resumeProfileSelection,executionScope:conversationOnly?{kind:'conversation'}:{kind:'project',projectRoot:preferences.projectRoot}};
     if (route?.model && !runRequest.model) {
       runRequest.model = route.model;
     }
-    if(!route)throw new Error('Choose a provider and default model in Settings before sending a task.');
     const unavailableMode=modeUnavailableReason(runRequest.mode,route.provider,conversationOnly?'conversation':'project');
     if(unavailableMode)throw new Error(unavailableMode);
     const models=qualifiedProviders(runtimeEnvironment().BABEL_CONFIG_DIR).find(p=>p.id===route.provider)?.routes??[];
@@ -776,7 +818,7 @@ async function start(){
       // thread) for sequential turns. Other modes/profile changes keep the
       // per-run CLI path until their parity is qualified.
       const workerIdentity=[runAuthority.identity.root,route.provider,runRequest.model,selectedModel.modelId,cliEntry].join('\n');
-      if(residentWorker && residentWorkerIdentity!==workerIdentity){
+      if(residentWorker && !workerConnectionMatches(residentWorkerIdentity,workerIdentity,residentWorkerCredential,childEnvironment[keyName])){
         await retireResidentWorker();
       }
       if(!residentWorker){
@@ -791,6 +833,7 @@ async function start(){
           inheritEnv:false,
         });
         residentWorkerIdentity=workerIdentity;
+        residentWorkerCredential=childEnvironment[keyName]??null;
       }
       runner=residentWorker;
     }else{

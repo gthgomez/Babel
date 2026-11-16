@@ -14,12 +14,21 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { ChatEngine } from './chatEngine.js'
+import { loadModelPolicyConfig } from '../modelPolicy.js'
 
-const MANAGED_ENV = ['BABEL_OFFLINE', 'BABEL_DIFF_CRITIC', 'BABEL_DIFF_CRITIC_PRO', 'BABEL_CHAT_MAX_COST'] as const
+const MANAGED_ENV = ['BABEL_OFFLINE', 'BABEL_DIFF_CRITIC', 'BABEL_DIFF_CRITIC_PRO', 'BABEL_CHAT_MAX_COST', 'BABEL_MODEL_POLICY_PATH'] as const
 let envSnapshot: Record<string, string | undefined> = {}
+let policyFixtureRoot = ''
 
 before(() => {
   envSnapshot = Object.fromEntries(MANAGED_ENV.map((key) => [key, process.env[key]]))
+  const policy = JSON.parse(JSON.stringify(loadModelPolicyConfig().config)) as { models: Record<string, unknown>; family_defaults: Record<string, unknown> }
+  policy.models['critic-local-fixture'] = { provider: 'ollama', model_id: 'critic-local-fixture', tier: 'cheap', enabled: true }
+  policy.family_defaults['Ollama'] = Object.fromEntries(['cheap', 'standard', 'triage', 'fallback', 'escalation'].map(tier => [tier, 'critic-local-fixture']))
+  policyFixtureRoot = mkdtempSync(join(tmpdir(), 'babel-critic-policy-'))
+  const policyPath = join(policyFixtureRoot, 'model-policy.json')
+  writeFileSync(policyPath, JSON.stringify(policy))
+  process.env['BABEL_MODEL_POLICY_PATH'] = policyPath
   process.env['BABEL_OFFLINE'] = '1'
   process.env['BABEL_DIFF_CRITIC'] = '1'
   // Unpriced mock usage otherwise trips the finite cost cap's unknown-pricing
@@ -34,6 +43,7 @@ after(() => {
     if (previous === undefined) delete process.env[key]
     else process.env[key] = previous
   }
+  if (policyFixtureRoot) rmSync(policyFixtureRoot, { recursive: true, force: true })
 })
 
 function deferred<T = void>(): {
@@ -146,7 +156,8 @@ test('stale critic inference cannot mutate the current task owner', async () => 
     const engine = new ChatEngine({
       task: 'Task A: mutate the project',
       projectRoot: root,
-      model: 'deepseek-v4-flash',
+      // Let offline policy choose its local fixture route; the critic runner
+      // below remains the explicitly injected, delayed in-memory transport.
       providerRunner: criticRunner as never,
       runId: 'r0-critic-' + Math.random().toString(36).slice(2, 10),
     })
@@ -170,7 +181,11 @@ test('stale critic inference cannot mutate the current task owner', async () => 
       {},
       'execute',
     )
-    await criticStarted.promise
+    const firstOutcome = await Promise.race([
+      criticStarted.promise.then(() => 'started'),
+      aCritic.then((decision) => `finished:${decision}`),
+    ])
+    assert.equal(firstOutcome, 'started', `The injected critic must start before ownership changes: ${JSON.stringify(box.lastCriticReceipt)}`)
 
     // Task B is now the live owner and remains mid-turn while A is suspended.
     box.activeSubmissionGeneration = 2

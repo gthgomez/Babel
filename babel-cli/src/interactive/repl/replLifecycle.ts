@@ -1,5 +1,5 @@
 import { resolveEffectiveSettings } from '../../config/userSettings.js'
-import { getSetupStatus, runProviderSetup } from '../../services/providerSetup.js'
+import { getSetupStatus } from '../../services/providerSetup.js'
 import { selectedConnectionModel } from '../../services/connectionSettings.js'
 import process from 'node:process';
 
@@ -8,10 +8,8 @@ import { getAvailableModels } from '../../modelPolicy.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 import { detectProjectFromCwd } from '../../cli/helpers.js';
 import { readRuntimeMode } from '../../config/runtimeMode.js';
-import { resolveRuntimePaths } from '../../config/runtimePaths.js';
 import { readProjectSettings, mergeProjectSettings } from '../../config/projectSettings.js';
-import { warmReplRuntime, stopReplWarmup } from '../replWarmup.js';
-import { startBackgroundIndexing } from '../../services/knowledgeGraphIndexer.js';
+import { stopReplWarmup } from '../replWarmup.js';
 import { showOnboarding, isFirstRun } from '../../ui/onboarding.js';
 import { listResumableSessions } from '../../services/chatSessionIndex.js';
 import { SessionPicker } from '../../ui/sessionPicker.js';
@@ -113,23 +111,12 @@ export async function bootstrapReplSession(
     if (!ctx.state.model && merged.model) OutputBuffer.getInstance().write(muted('Legacy project model found. Use /setup to explicitly select its provider and account.\n'))
   }
   if (isFirstRun()) showOnboarding()
-  if (!ctx.state.model && process.stdin.isTTY && process.stderr.isTTY && !process.env['CI']) {
-    const setup = () => runProviderSetup()
-    if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('first-run-setup', setup)
-    else await setup()
-    const selected = selectedConnectionModel({}, target)
-    if (selected) { ctx.state.model = selected; ctx.state.modelSource = 'user'; const id = resolveEffectiveSettings({ projectRoot: target }).connection.value?.id; if (id) ctx.state.connectionId = id; ctx.resolveSessionModel() }
-  }
   const status = getSetupStatus(process.env, ctx.state.connectionId ? { connection: ctx.state.connectionId } : {}, target)
   ctx.state.readinessState = status.state
-  recordInteractiveDiagnostic('startup', `Setup state: ${status.state}; runtime warmup: ${ctx.state.model && status.state !== 'action_required' ? 'eligible' : 'skipped'}`)
+  recordInteractiveDiagnostic('startup', `Setup state: ${status.state}; background preparation deferred`)
   if (!ctx.state.model || status.state === 'action_required') ctx.state.lastRunUserStatus = 'blocked'
-  if (ctx.state.model && status.state !== 'action_required') {
-    if (typeof hooks.warmRuntime === 'function') hooks.warmRuntime()
-    else if (hooks.warmRuntime !== false && process.env['NODE_ENV'] !== 'test' && !process.env['BABEL_TEST']) warmReplRuntime()
-    if (typeof hooks.startIndexing === 'function') hooks.startIndexing()
-    else if (hooks.startIndexing !== false && !resolveRuntimePaths().isInstalled && process.env['NODE_ENV'] !== 'test' && !process.env['BABEL_TEST']) startBackgroundIndexing()
-  }
+  // Task dispatch schedules project indexing only when a task needs the workspace.
+  void hooks
   void readRuntimeMode()
 
 }

@@ -6,7 +6,7 @@ import { getSetupStatus } from '../services/providerSetup.js';
 import { accentBright, muted } from '../ui/theme.js';
 import { findClosestCommands } from './utils.js';
 import type { ReplContext } from './context.js';
-import { assertInteractiveRunAvailable } from './context.js';
+import { assertInteractiveRunAvailable, handleImmediateCommand } from './context.js';
 
 // Config commands
 import {
@@ -80,7 +80,8 @@ import { handleConnectionCommand } from '../commands/connectionCommands.js';
 import { runProviderSetup } from '../services/providerSetup.js';
 import { withSavedPlanApplication } from '../services/savedPlan.js';
 
-export async function handleCommand(ctx: ReplContext, input: string): Promise<void> {
+export async function handleCommand(ctx: ReplContext, input: string, options: { automaticSetup?: boolean } = {}): Promise<void> {
+  if (handleImmediateCommand(ctx, input)) return;
   const parts = input.slice(1).split(' ');
   const cmd = parts[0]?.toLowerCase() ?? '';
   const args = parts.slice(1);
@@ -101,13 +102,32 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
     }
     case 'setup': {
       assertInteractiveRunAvailable(ctx);
-      const setup = () => runProviderSetup();
-      if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('provider-setup', setup);
-      else await setup();
+      const targetRoot = ctx.resolveCurrentTarget().targetRoot;
+      const setup = () => runProviderSetup({ sessionCredentials: true, offerCredentialReplacement: !options.automaticSetup,
+        ...(ctx.state.connectionId ? { initialConnection: ctx.state.connectionId } : {}), ...(targetRoot ? { projectRoot: targetRoot } : {}) });
+      let result: Awaited<ReturnType<typeof runProviderSetup>>;
+      try {
+        result = ctx.withExclusiveTerminal ? await ctx.withExclusiveTerminal('provider-setup', setup) : await setup();
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : 'Provider setup was cancelled.');
+        return;
+      }
+      if (result.state !== 'configured_unverified') {
+        if (!ctx.state.model) ctx.state.readinessState = result.state;
+        return;
+      }
       const { selectedConnectionModel, connectionStatus } = await import('../services/connectionSettings.js');
       const root = ctx.resolveCurrentTarget().targetRoot;
-      const selected = selectedConnectionModel({}, root);
-      const status = connectionStatus({}, root);
+      const selection = { ...(result.connection ? { connection: result.connection } : {}), ...(result.model ? { model: result.model } : {}) };
+      const selected = selectedConnectionModel(selection, root);
+      const status = connectionStatus(selection, root);
+      if (ctx.chatEngine && selected) {
+        try { ctx.chatEngine.selectProviderModel(selected); }
+        catch (error) {
+          console.error(`Settings were saved, but the active chat was not changed: ${error instanceof Error ? error.message : 'connection unavailable'}`);
+          return;
+        }
+      }
       delete ctx.state.model; delete ctx.state.connectionId; delete ctx.state.resolvedModelId;
       if (selected) { ctx.state.model = selected; ctx.resolveSessionModel(); }
       if (status.connection) ctx.state.connectionId = status.connection;
@@ -115,17 +135,10 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
       ctx.state.modelSource = status.modelSource;
       ctx.state.readinessState = status.state as NonNullable<typeof ctx.state.readinessState>;
       delete ctx.state.savedPlanId;
-      ctx.chatEngine?.closeAdmissionStore?.();
-      ctx.chatEngine = undefined;
       ctx.saveSessionState();
       break;
     }
     // ── Session control ──────────────────────────────────────────────
-    case 'exit':
-    case 'quit':
-    case 'q':
-      ctx.exit();
-      break;
     case 'clear':
       handleClear(ctx, []);
       break;
