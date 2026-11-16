@@ -120,7 +120,7 @@ test('registered legacy handler restores the last persisted scope after preferen
     const init = spawnSync('git', ['init', '--quiet'], {cwd: preferences.projectRoot, encoding: 'utf8', windowsHide: true});
     assert.equal(init.status, 0, 'the disposable project must initialize as a Git repository');
     writeFileSync(join(preferences.projectRoot, '.gitignore'), '.env\n');
-    writeFileSync(join(preferences.projectRoot, '.env'), `OPENROUTER_API_KEY=${FIXTURE_VALUE}\n`);
+    writeFileSync(join(preferences.projectRoot, '.env'), `OPENROUTER_API_KEY=${FIXTURE_VALUE}\n`, {mode:0o600});
     const handler = await registeredHandler(source, config, 'babel:save-provider-credential', {
       preferences, savePreferences: async () => { throw new Error('Fixture preferences rejected'); },
     });

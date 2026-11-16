@@ -79,6 +79,37 @@ function checkInstalledSharedCredential(install, profile, env, connectionId, exp
   if (child.status !== 0) throw new Error(missing ? 'Installed CLI did not observe removal of the synthetic shared credential' : 'Installed CLI could not read the synthetic shared credential after restart');
 }
 
+/** Report only synthetic self-test and path-guard facts when the hosted store fails. */
+function diagnoseInstalledWindowsCredentialBridge(install, env) {
+  const code = `import {readFileSync,lstatSync,realpathSync} from 'node:fs';
+    import {join,resolve,sep} from 'node:path';
+    const input=JSON.parse(readFileSync(0,'utf8'));
+    const result={};
+    try {
+      const root=resolve(process.env.SystemRoot), exe=join(root,'System32','WindowsPowerShell','v1.0','powershell.exe');
+      const temp=resolve(process.env.LOCALAPPDATA,'Temp'), profile=resolve(process.env.USERPROFILE);
+      const same=path=>{try{return realpathSync(path).toLowerCase()===path.toLowerCase()}catch{return false}};
+      result.guard={rootReal:same(root),executableReal:same(exe),tempReal:same(temp),
+        tempInProfile:temp.toLowerCase().startsWith(profile.toLowerCase()+sep.toLowerCase()),
+        executableFile:lstatSync(exe).isFile(),tempDirectory:lstatSync(temp).isDirectory()};
+      const {createWindowsHelperRunner,createWindowsCredentialBackend}=await import(input.module);
+      const run=createWindowsHelperRunner({systemRoot:root,helper:input.helper,temp,tmp:temp});
+      const probe=operation=>{const outcome=run(JSON.stringify({operation,id:input.id}));let body={};try{body=JSON.parse(outcome.stdout)}catch{}
+        return {status:outcome.status,timedOut:outcome.error?.code==='ETIMEDOUT',ok:body.ok===true,missing:body.result===null};};
+      result.selftest=probe('selftest');
+      if(result.selftest.ok)result.rawGet=probe('get');
+      if(result.rawGet?.ok && result.rawGet.missing){try{result.backendGet=createWindowsCredentialBackend().get(input.id)===null?'missing':'unexpected-entry'}catch{result.backendGet='unavailable'}}
+    } catch {result.diagnostic='failed'}
+    process.stdout.write(JSON.stringify(result));`;
+  const cli=join(install,'resources','babel-runtime','cli');
+  const child=spawnSync(join(install,'resources','babel-runtime','node','node.exe'),['--input-type=module','-e',code],{
+    input:JSON.stringify({module:pathToFileURL(join(cli,'dist','config','sharedCredentialStore.js')).href,
+      helper:join(cli,'dist','config','sharedCredential.windows.ps1'),id:randomUUID()}),
+    env,encoding:'utf8',windowsHide:true,timeout:60000,maxBuffer:4096,
+  });
+  try{return child.status===0?JSON.parse(child.stdout):{diagnostic:'process-failed',status:child.status}}catch{return {diagnostic:'invalid-result'}}
+}
+
 function isDestroyedContextError(error) {
   const msg = String(error?.message ?? error);
   return /Execution context was destroyed|most likely because of a navigation/i.test(msg);
@@ -357,11 +388,18 @@ async function main() {
           return {response:1,checkboxChecked:false};
         };
       });
-      const receipt = await evaluateInPackagedWindow(window, async () => {
-        const status = await window.babelDesktop.providerCredentialStatus({provider:'openrouter',scope:'private'});
-        if (!status.shareAvailable) throw new Error('Synthetic protected credential is not available to share');
-        return window.babelDesktop.shareProviderCredential({provider:'openrouter',scope:'private',binding:status.binding});
-      });
+      let receipt;
+      const sharingStarted = Date.now();
+      try {
+        receipt = await evaluateInPackagedWindow(window, async () => {
+          const status = await window.babelDesktop.providerCredentialStatus({provider:'openrouter',scope:'private'});
+          if (!status.shareAvailable) throw new Error('Synthetic protected credential is not available to share');
+          return window.babelDesktop.shareProviderCredential({provider:'openrouter',scope:'private',binding:status.binding});
+        });
+      } catch {
+        const elapsedMs = Date.now() - sharingStarted;
+        throw new Error(`Shared credential setup failed after ${elapsedMs}ms; isolated bridge diagnostics: ${JSON.stringify(diagnoseInstalledWindowsCredentialBridge(install,launchEnv))}`);
+      }
       if (!receipt?.shared || !receipt.connectionId) throw new Error('Synthetic credential sharing was not confirmed');
       await app.close();
       app = await electron.launch({executablePath:exe,args:[`--profile-dir=${profile}`],env:launchEnv,timeout:120_000});

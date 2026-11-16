@@ -204,7 +204,7 @@ test('shared-session Electron run uses host-run child and preserves thread acros
     await writeFile(join(project, 'README.md'), 'Synthetic shared-session project');
     // This session test uses a local CLI shim; the synthetic legacy fixture
     // satisfies credential admission without accessing an OS store or provider.
-    await writeFile(join(config, '.env'), 'OPENROUTER_API_KEY=BabelSyntheticSharedSessionFixture0000\n');
+    await writeFile(join(config, '.env'), 'OPENROUTER_API_KEY=BabelSyntheticSharedSessionFixture0000\n', {mode:0o600});
 
     await writeFile(
       entry,
