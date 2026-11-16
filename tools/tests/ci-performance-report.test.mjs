@@ -400,6 +400,39 @@ test('classifyPlatformStep: unrecognized status stays unknown, not executed', ()
   assert.equal(row.bucket, 'unknown')
 })
 
+test('stage, workload, wait, and supersession summaries keep unsupported attribution unknown', () => {
+  const input = docs({
+    runs: [
+      run({ id: 100, name: 'Release', workflow_id: 7, head_branch: 'feature', head_sha: sha('a'), conclusion: 'cancelled', status: 'completed', created_at: '2026-10-30T00:00:00Z', updated_at: '2026-10-30T00:02:00Z', required_check_completed_at: '2026-10-30T00:01:30Z' }),
+      run({ id: 101, name: 'Release', workflow_id: 7, head_branch: 'feature', head_sha: sha('b'), created_at: '2026-10-30T00:03:00Z' }),
+    ],
+    attempts: [attempt({ jobs: [
+      job({ id: 11, name: 'unit-shards (windows-latest, 3)', started_at: '2026-10-30T00:00:02Z', completed_at: '2026-10-30T00:10:02Z', steps: [
+        { name: 'Checkout', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:00:02Z', completed_at: '2026-10-30T00:00:12Z' },
+        { name: 'Install dependencies', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:00:12Z', completed_at: '2026-10-30T00:00:42Z' },
+        { name: 'Run complete unit shard', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:00:42Z', completed_at: '2026-10-30T00:02:22Z' },
+        { name: 'Mystery step', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:02:22Z', completed_at: '2026-10-30T00:02:32Z' },
+      ] }),
+      job({ id: 12, conclusion: 'cancelled', status: 'completed', created_at: '2026-10-30T00:00:00Z', started_at: '2026-10-30T00:00:00Z', completed_at: '2026-10-30T00:01:40Z', steps: undefined }),
+      job({ id: 13, name: 'linux-validation', conclusion: 'failure' }),
+    ] })],
+  })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.equal(report.stageBreakdown.stages.setup.observedSeconds, 40)
+  assert.equal(report.stageBreakdown.stages.task.observedSeconds, 100)
+  assert.equal(report.stageBreakdown.stages.unknown.observedSeconds, 10)
+  assert.equal(report.stageBreakdown.unattributedRunnerSeconds, 1050)
+  assert.equal(report.executionAccounting.runnerlessCancelledJobs, 1)
+  assert.equal(report.executionAccounting.runnerlessUnstartedLifetimeSeconds, 100)
+  assert.equal(report.workload.failedJobRows, 1)
+  assert.equal(report.workload.rootFailureCandidates, 0)
+  assert.equal(report.runSummaries.find(row => row.runId === 100).endToEndSeconds, 120)
+  assert.deepEqual(report.runSummaries.find(row => row.runId === 100).potentiallySupersededByRunIds, [101])
+  assert.equal(report.runSummaries.find(row => row.runId === 100).requiredCheckCompletionStatus, 'observed')
+  assert.equal(report.runSummaries.find(row => row.runId === 100).requiredCheckCompletionSeconds, 90)
+  assert.equal(report.stageBreakdown.billingSeconds, null)
+})
+
 test('platformCoreSteps: nameless and null step observations reconcile via unnamed bucket', () => {
   const input = docs({
     attempts: [attempt({
