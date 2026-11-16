@@ -12,12 +12,13 @@ async function renderer(diagnostics, body, handshake = 'ready',scope=null,draftS
   const browser = await chromium.launch({headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE});
   try {
     const page = await browser.newPage();
+    page.setDefaultTimeout(10000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.evaluate(({diagnostics, handshake,scope,draftSeed,infoOverride}) => {
       window.__runs = [];
       window.__projectReads=[];
-      window.__info = {packaged: true, ready: true, officialCliReady: true, projectName: 'fixture-project', diagnostics,...(scope?{projectRoot:null,projectName:null,projectAuthority:scope}:{}),...(infoOverride??{})};
+      window.__info = {packaged: true, ready: true, officialCliReady: true, projectName: 'fixture-project', diagnostics,connection:{state:'configured_unverified',provider:'openrouter',model:'fixture-openrouter'},...(scope?{projectRoot:null,projectName:null,projectAuthority:scope}:{}),...(infoOverride??{})};
       window.babelDesktop = {
         getInfo: async () => {
           if (handshake === 'rejected') throw new Error('Fixture handshake rejected');
@@ -513,18 +514,18 @@ test('packaged connection permits latest → older → latest history with faile
     assert.equal(await conversation.getByText('message-9', {exact: true}).count(), 0);
     assert.equal(await page.locator('#send-button').isDisabled(), true);
     assert.equal(await page.evaluate(() => window.__runs.length), 0);
-  });
+  },'ready',null,null,{engine:{executionProfile:'safe_repo'}});
 });
 
 for (const [name, diagnostics] of [['missing', undefined], ['failed', {ready: false, docker: 'unavailable'}]]) {
-  test(`packaged ${name} diagnostics block keyboard and form submissions before and after connection`, async () => {
+  test(`packaged safe_repo ${name} diagnostics block keyboard and form submissions before and after connection`, async () => {
     await renderer(diagnostics, async page => {
       await blockedSubmissions(page);
       await page.locator('#dialog [data-action="close-dialog"]').click();
       await page.locator('#preview-badge').click();
       await connect(page);
       await blockedSubmissions(page);
-    });
+    },'ready',null,null,{engine:{executionProfile:'safe_repo'}});
   });
 }
 
@@ -606,7 +607,7 @@ for (const handshake of ['pending', 'rejected']) {
   });
 }
 
-test('refreshing diagnostics after connection revokes renderer execution admission', async () => {
+test('refreshing failed safe_repo diagnostics after connection revokes renderer execution admission', async () => {
   await renderer({ready: true, docker: 'available'}, async page => {
     await connect(page);
     await page.evaluate(() => {window.__info.diagnostics = {ready: false, docker: 'unavailable'};});
@@ -615,5 +616,5 @@ test('refreshing diagnostics after connection revokes renderer execution admissi
     await page.waitForFunction(() => document.querySelector('#send-button').disabled);
     await page.locator('#dialog [data-action="close-dialog"]').click();
     await blockedSubmissions(page);
-  });
+  },'ready',null,null,{engine:{executionProfile:'safe_repo'}});
 });

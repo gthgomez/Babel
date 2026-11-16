@@ -30,6 +30,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js';
+import { assertOfflineEndpointAllowed, isOfflineRequested } from '../config/offlineMode.js';
 import { prepareProviderRequest } from '../runners/preparedProviderRequest.js';
 import { CampaignBudgetDeniedError, CampaignRouteUnsupportedError } from '../runners/campaignDispatchGate.js';
 import { applyCampaignOpenRouterWireBody } from '../eval/campaign-openrouter-wire.js';
@@ -667,6 +668,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     callbacks?: RunnerCallbacks,
     onUsageRecorded?: CompactionOptions['onUsageRecorded'],
   ): Promise<CompactionApiResult> {
+    assertOfflineEndpointAllowed(baseUrl);
     const timeoutMs = 30_000; // compaction should be fast
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -758,24 +760,24 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     let completed = false;
     try {
       callbacks?.campaignMeter?.gate.repeatRunControlBeforeFetch(callbacks?.runControl);
-      const response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch(baseUrl, {
+      const response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => { assertOfflineEndpointAllowed(baseUrl); return fetch(baseUrl, {
         method: 'POST',
-        redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
+        redirect: isOfflineRequested() || process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
         signal: controller.signal,
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
-      }));
+      }); });
       responseStarted = true;
       phase('response_started', response.status);
 
       if (!response.ok) {
-        const body = await response.text().catch(() => '');
+        await response.body?.cancel().catch(() => {});
         phase('provider_error', response.status, `http_${response.status}`);
         failurePhaseRecorded = true;
-        throw new Error(`Compaction API error (${response.status}): ${body.slice(0, 200)}`);
+        throw new Error(`Compaction API error (${response.status}).`);
       }
 
       const data = (await response.json()) as {
@@ -873,6 +875,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     callbacks?: RunnerCallbacks,
     onUsageRecorded?: CompactionOptions['onUsageRecorded'],
   ): Promise<CompactionApiResult> {
+    assertOfflineEndpointAllowed('https://api.anthropic.com/v1/messages');
     const timeoutMs = 30_000;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -926,7 +929,7 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
     let failurePhaseRecorded = false;
     let completed = false;
     try {
-      const response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch('https://api.anthropic.com/v1/messages', {
+      const response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => { assertOfflineEndpointAllowed('https://api.anthropic.com/v1/messages'); return fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
         signal: controller.signal,
@@ -936,15 +939,15 @@ export class LLMSummarizeCompaction implements CompactionStrategy {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
-      }));
+      }); });
       responseStarted = true;
       phase('response_started', response.status);
 
       if (!response.ok) {
-        const body = await response.text().catch(() => '');
+        await response.body?.cancel().catch(() => {});
         phase('provider_error', response.status, `http_${response.status}`);
         failurePhaseRecorded = true;
-        throw new Error(`Compaction Anthropic API error (${response.status}): ${body.slice(0, 200)}`);
+        throw new Error(`Compaction Anthropic API error (${response.status}).`);
       }
 
       const data = (await response.json()) as {

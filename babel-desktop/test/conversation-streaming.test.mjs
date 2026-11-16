@@ -10,7 +10,7 @@ test('streaming preserves conversation identity, selection, focus, scroll and ap
     const page=await browser.newPage({viewport:{width:1440,height:900}});
     await page.evaluate(()=>{
       const messages=Array.from({length:120},(_,i)=>({role:i%2?'assistant':'user',text:`Fixture ${i}: ${'sample '.repeat(20)}`,sourceEventId:`fixture-${i}`,status:'unverified'}));
-      const info={ready:true,officialCliReady:true,projectRoot:null,projectName:null,projectAuthority:{scope:'conversation',identity:null,trusted:false},diagnostics:{ready:true}};
+      const info={ready:true,officialCliReady:true,projectRoot:null,projectName:null,projectAuthority:{scope:'conversation',identity:null,trusted:false},connection:{state:'configured_unverified',provider:'openrouter',model:'fixture-model'},diagnostics:{ready:true}};
       window.babelDesktop={getInfo:async()=>info,listSessions:async()=>({sessions:[{id:'fixture',title:'Fixture history',messages:120}],total:1}),
         openSession:async()=>({messages,history:{totalMessages:120,hasOlder:false,olderOffset:0}}),listDirectory:async()=>[],
         readProviderRoute:async()=>({provider:'openrouter',model:'fixture-model'}),

@@ -717,6 +717,9 @@ function collectSpawnFiles(srcRoot: string): string[] {
 
 /** Production (non-test) files that spawn child processes. Update when adding a site. */
 const HOST_PROCESS_SURFACE = new Set([
+  // Credential bridges: fixed System32 PowerShell or the bundled native-store
+  // worker; secret input is pipe-only, environment minimized, timeout bounded.
+  'config/sharedCredentialStore.ts',
   // Installed diagnostics probes Docker readiness using fixed arguments and a bounded timeout.
   'installedDoctor.ts',
   // Evaluator-owned comparison processes and native harness transport.

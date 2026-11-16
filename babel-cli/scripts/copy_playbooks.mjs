@@ -36,6 +36,11 @@ mkdirSync(dirname(oracleDestination), { recursive: true });
 cpSync(oracleSource, oracleDestination);
 console.log('copy_playbooks: copied owned native oracle asset');
 
+const credentialBridgeSource = resolve(packageRoot, 'src', 'config', 'sharedCredential.windows.ps1');
+const credentialBridgeDestination = resolve(packageRoot, 'dist', 'config', 'sharedCredential.windows.ps1');
+mkdirSync(dirname(credentialBridgeDestination), { recursive: true });
+cpSync(credentialBridgeSource, credentialBridgeDestination);
+
 const openCodePinSource = resolve(packageRoot, 'src', 'bridge', 'opencode-acp-source-pin.json');
 const openCodePinDestination = resolve(packageRoot, 'dist', 'bridge', 'opencode-acp-source-pin.json');
 if (!existsSync(openCodePinSource)) {

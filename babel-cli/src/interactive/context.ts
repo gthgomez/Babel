@@ -24,6 +24,15 @@ export function assertInteractiveRunAvailable(ctx: Pick<ReplContext, 'isRunning'
   if (ctx.isRunning || ctx.preparingRun) throw new InteractiveRunBusyError();
 }
 
+/** Exit remains immediately available without loading the full command graph. */
+export function handleImmediateCommand(ctx: Pick<ReplContext, 'exit'>, input: string): boolean {
+  if (!input.startsWith('/')) return false;
+  const command = input.slice(1).split(' ')[0]?.toLowerCase();
+  if (command !== 'exit' && command !== 'quit' && command !== 'q') return false;
+  ctx.exit();
+  return true;
+}
+
 export interface ReplContext {
   // ── I/O ──────────────────────────────────────────────────────────────────
   rl: readline.Interface;

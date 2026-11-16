@@ -1,9 +1,11 @@
 /** Shared CLI/TUI application operations for non-secret connection preferences. */
 import { resolve } from 'node:path'
 import { getAvailableModels } from '../modelPolicy.js'
-import { getProviderSpec, isProviderId, listProviderSpecs } from '../runners/providerRegistry.js'
+import { assertApprovedProductProvider, getProviderSpec, isApprovedProductProvider, isProviderId, listProviderSpecs } from '../runners/providerRegistry.js'
 import { readUserSettings, resolveEffectiveSettings, updateUserSettings, type Connection, type UserPreferences } from '../config/userSettings.js'
 import { connectionModelSelector } from '../config/connectionModelPolicy.js'
+import { isLoopbackEndpoint, isOfflineMode } from '../config/offlineMode.js'
+import { readProviderModelCatalog } from './providerModelCatalog.js'
 
 export interface SelectionSession { [key: string]: unknown; connection?: string; model?: string | undefined; modelsByConnection?: Record<string, string> }
 export type SaveScope = 'user' | 'project'
@@ -17,7 +19,7 @@ export function savePreferences(preferences: UserPreferences, scope: SaveScope, 
   else {
     const settings = readUserSettings()
     const key = resolve(projectRoot)
-    updateUserSettings({ projects: { ...settings.projects, [key]: { ...settings.projects?.[key], ...preferences, ...(preferences.modelsByConnection ? { modelsByConnection: { ...settings.projects?.[key]?.modelsByConnection, ...preferences.modelsByConnection } } : {}), ...(preferences.plans ? { plans: { ...settings.projects?.[key]?.plans, ...preferences.plans } } : {}) } } })
+    updateUserSettings({ projects: { [key]: { ...settings.projects?.[key], ...preferences, ...(preferences.modelsByConnection ? { modelsByConnection: { ...settings.projects?.[key]?.modelsByConnection, ...preferences.modelsByConnection } } : {}), ...(preferences.plans ? { plans: { ...settings.projects?.[key]?.plans, ...preferences.plans } } : {}) } } })
   }
 }
 
@@ -26,6 +28,9 @@ export function connectProvider(provider: string, options: {
   name?: string; model?: string; baseUrl?: string; apiKeyEnvVar?: string; contextWindow?: number; maxOutputTokens?: number; authentication?: 'api-key' | 'none'
 } = {}): Connection {
   if (!isProviderId(provider)) throw new Error('Unknown provider. Use babel-harness provider list.')
+  assertApprovedProductProvider(provider)
+  if (options.authentication === 'none') throw new Error('This gateway requires API-key authentication.')
+  if (options.baseUrl) throw new Error('This gateway uses a fixed endpoint; a custom base URL is not supported.')
   const id = options.name ?? provider
   const previous = readUserSettings().connections[id]
   if (previous && previous.provider !== provider) throw new Error('Connection name already belongs to another provider; choose another --name.')
@@ -41,13 +46,21 @@ export function connectionStatus(session: SelectionSession = {}, projectRoot = p
   const connection = effective.connection.value
   const spec = connection ? getProviderSpec(connection.provider) : null
   const keyName = connection?.apiKeyEnvVar ?? spec?.credentialEnvVar ?? null
-  const configured = Boolean(connection && effective.model.value && (connection.authentication === 'none' || !spec?.requiresCredential || (keyName && env[keyName]?.trim())))
+  const localOffline = Boolean(connection && isOfflineMode(env) && (
+    (connection.provider === 'ollama' && isLoopbackEndpoint(env['BABEL_OLLAMA_BASE_URL'] ?? 'http://localhost:11434/v1')) ||
+    (connection.provider === 'openai-compatible' && isLoopbackEndpoint(connection.baseUrl))))
+  const supported = !connection || isApprovedProductProvider(connection.provider) || localOffline
+  const offlineBlocked = Boolean(connection && isOfflineMode(env) && !localOffline)
+  const headlessBlocked = Boolean(connection?.credentialRef && (['1', 'true'].includes(env['BABEL_HEADLESS'] ?? '') || ['1', 'true'].includes(env['CI'] ?? '')))
+  const credentialPresent = Boolean(connection?.credentialRef || (keyName && env[keyName]?.trim()))
+  const configured = Boolean(connection && supported && !offlineBlocked && !headlessBlocked && effective.model.value && (connection.authentication === 'none' || !spec?.requiresCredential || credentialPresent))
   return {
     state: !connection || !effective.model.value ? 'setup_required' : configured ? 'configured_unverified' : 'action_required',
+    reason: offlineBlocked ? 'offline' : headlessBlocked ? 'headless_keychain' : !supported ? 'unsupported_provider' : !configured ? 'prerequisite_missing' : 'not_verified',
     connection: connection?.id ?? null, provider: connection?.provider ?? null, model: effective.model.value,
     endpoint: connection?.baseUrl ?? 'provider default',
     selectionSource: effective.connection.source, modelSource: effective.model.source,
-    credential: { required: connection?.authentication !== 'none' && Boolean(spec?.requiresCredential), variable: connection?.authentication === 'none' ? null : keyName, present: connection?.authentication === 'none' || (keyName ? Boolean(env[keyName]?.trim()) : !spec?.requiresCredential) },
+    credential: { required: connection?.authentication !== 'none' && Boolean(spec?.requiresCredential), variable: connection?.authentication === 'none' || connection?.credentialRef ? null : keyName, source: connection?.credentialRef ? 'os-protected' : 'environment', present: connection?.authentication === 'none' || credentialPresent || !spec?.requiresCredential },
     operations: spec?.operations ?? [], authorityConformance: spec?.authorityConformance ?? 'unknown',
     connectivity: 'unverified', observedModel: null,
     autoApply: effective.autoApply, workflow: effective.workflow, review: effective.review, budgetUsd: effective.budgetUsd,
@@ -108,16 +121,19 @@ export function selectedConnectionModel(session: SelectionSession = {}, projectR
 
 /** List configured accounts and known models without live discovery. Manual exact entry stays available. */
 export function listConnections() {
-  return { providers: listProviderSpecs().map(spec => ({ id: spec.id, credentialVariable: spec.credentialEnvVar, operations: spec.operations, authorityConformance: spec.authorityConformance })),
-    connections: Object.values(readUserSettings().connections).map(connection => ({ id: connection.id, provider: connection.provider, model: connection.model ?? null, endpoint: connection.baseUrl ?? 'provider default' })) }
+  return { providers: listProviderSpecs().filter(spec => isApprovedProductProvider(spec.id)).map(spec => ({ id: spec.id, credentialVariable: spec.credentialEnvVar, operations: spec.operations, authorityConformance: spec.authorityConformance })),
+    connections: Object.values(readUserSettings().connections).map(connection => ({ id: connection.id, provider: connection.provider, model: connection.model ?? null, endpoint: connection.baseUrl ?? 'provider default', supported: isApprovedProductProvider(connection.provider) })) }
 }
 
 export function listConnectionModels(session: SelectionSession = {}, projectRoot = process.cwd()) {
   const effective = resolveEffectiveSettings({ session, projectRoot })
   const provider = effective.connection.value?.provider
+  const cached = provider ? readProviderModelCatalog(provider) : null
+  const models = getAvailableModels().filter(({ entry }) => entry.provider === provider).map(({ entry }) => ({ id: entry.model_id, contextWindow: entry.context_window ?? null, maxOutputTokens: entry.max_output_tokens ?? null,
+    sourceUrl: entry.source_url ?? null, verifiedAt: entry.verified_at ?? null,
+    nativeToolUse: entry.native_tool_use_unverified ? null : entry.native_tool_use ?? null, capabilities: entry.capabilities ?? [], capabilitySource: entry.native_tool_use === undefined || entry.native_tool_use_unverified ? 'unknown' : 'policy', qualification: 'unverified' }))
+  const known = new Set(models.map(model => model.id))
+  for (const id of cached?.models ?? []) if (!known.has(id)) models.push({ id, contextWindow: null, maxOutputTokens: null, sourceUrl: cached!.source, verifiedAt: cached!.fetchedAt, nativeToolUse: null, capabilities: [], capabilitySource: 'unknown', qualification: 'unverified' })
   return { connection: effective.connection.value?.id ?? null,
-    models: getAvailableModels().filter(({ entry }) => entry.provider === provider).map(({ entry }) => ({ id: entry.model_id, contextWindow: entry.context_window ?? null, maxOutputTokens: entry.max_output_tokens ?? null,
-      sourceUrl: entry.source_url ?? null, verifiedAt: entry.verified_at ?? null,
-      nativeToolUse: entry.native_tool_use_unverified ? null : entry.native_tool_use ?? null, capabilities: entry.capabilities ?? [], capabilitySource: entry.native_tool_use === undefined || entry.native_tool_use_unverified ? 'unknown' : 'policy', qualification: 'unverified' })),
-    manualEntry: 'model use <exact-model-id>', discovery: 'local catalog; live model discovery has not been requested' }
+    models, manualEntry: 'model use <exact-model-id>', discovery: cached ? `cached public catalog from ${cached.fetchedAt}; access and capabilities unverified` : 'bundled catalog; use model refresh to request public metadata' }
 }

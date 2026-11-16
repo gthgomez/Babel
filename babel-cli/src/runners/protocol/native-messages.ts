@@ -15,6 +15,8 @@ import { ProviderHttpError } from '../providerHttpError.js'
 import { dispatchRunOperation, RunStoppedError } from '../../runtime/run-control.js'
 import { extractJson } from '../../utils/extractJson.js'
 import { validateProviderBaseUrl } from '../providerEndpoint.js'
+import { OfflineModeError } from '../../config/offlineMode.js'
+import { assertProviderDispatchAllowed, ProductProviderPolicyError } from '../providerRegistry.js'
 
 export interface NativeRunnerOptions {
   explicitCredential?: string
@@ -50,6 +52,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
   protected readonly maxTokens: number
   protected readonly temperature: number | undefined
   protected readonly baseUrl: string | undefined
+  private readonly authorityEnvironment: NodeJS.ProcessEnv | undefined
   private readonly contextWindowTokens: number | undefined
   private metadata: RunnerInvocationMetadata | null = null
 
@@ -61,6 +64,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
     if (!Number.isSafeInteger(this.maxTokens) || this.maxTokens <= 0) throw new Error('Output token budget must be a positive integer.')
     this.temperature = options.temperature
     this.baseUrl = options.baseUrl
+    this.authorityEnvironment = options.env
     this.contextWindowTokens = options.contextWindowTokens
   }
 
@@ -105,6 +109,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
 
   protected async *executeNative(messages: ProviderMessage[], tools: ToolDefinition[], systemPrompt?: string,
     signal?: AbortSignal, toolChoice: 'auto' | 'required' = 'auto', callbacks?: RunnerCallbacks, stream = true): AsyncGenerator<ToolStreamEvent, void, undefined> {
+    assertProviderDispatchAllowed(this.provider, this.endpoint(stream), this.authorityEnvironment)
     this.metadata = null
     const startedAt = Date.now()
     if (signal?.aborted) throw new DOMException('Request cancelled', 'AbortError')
@@ -163,13 +168,13 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
           response = await session.dispatchAdmittedFetch({ basePrepared: request, physicalAttemptId: attemptId, operationId: request.request_id,
             ...(callbacks?.runControl ? { runControl: callbacks.runControl } : {}),
             fetch: () => dispatchRunOperation(callbacks?.runControl, 'model', request.request_id, async () => {
-              try { phase('request_dispatched'); return await fetch(this.endpoint(stream), { method: 'POST', headers: this.headers(), body: request.body, signal: controller.signal, redirect: 'error' }) }
+              try { assertProviderDispatchAllowed(this.provider, this.endpoint(stream), this.authorityEnvironment); phase('request_dispatched'); return await fetch(this.endpoint(stream), { method: 'POST', headers: this.headers(), body: request.body, signal: controller.signal, redirect: 'error' }) }
               catch (error) { transportFailed = true; throw error }
             }) })
           if (response.ok || !isRetryableStatus(response.status) || attempt === attempts) break
           await response.body?.cancel()
         } catch (error) {
-          if (!transportFailed || controller.signal.aborted || error instanceof RunStoppedError || attempt === attempts) throw error
+          if (!transportFailed || controller.signal.aborted || error instanceof RunStoppedError || error instanceof OfflineModeError || error instanceof ProductProviderPolicyError || attempt === attempts) throw error
         }
         session.settleUnknownOnOpenAdmission()
         settleRetry('failed')

@@ -219,6 +219,18 @@ export function statusFromTerminalOutcome(outcome) {
   };
   return states[outcome] ?? 'unverified';
 }
+/** Recovery guidance describes the reported failure without asserting key or model health. */
+export function connectionFailureAdvice(text) {
+  const value=typeof text==='string'?text:'';
+  if(/OS-protected credential.*(?:unlocked|unavailable)/i.test(value))return 'Unlock OS credential storage or replace the key in provider settings before retrying.';
+  if(/\bHTTP\s*401\b/i.test(value))return 'The provider reported HTTP 401. Check or replace the selected key in provider settings; review any completed actions before retrying.';
+  if(/\bHTTP\s*402\b/i.test(value))return 'The provider reported HTTP 402. Check the account’s payment or spending status before retrying.';
+  if(/\bHTTP\s*403\b/i.test(value))return 'The provider reported HTTP 403. Check the key’s permissions and model access before retrying.';
+  if(/\bHTTP\s*429\b/i.test(value))return 'The provider reported HTTP 429. Wait or check the account’s rate limits before retrying.';
+  if(/\bHTTP\s*404\b|MODEL_UNAVAILABLE/i.test(value))return 'The selected model or endpoint was unavailable. Check the provider and model selection before retrying.';
+  if(/network error|request timeout|timed out/i.test(value))return 'The connection failed. Check the network and provider status before retrying; review any completed actions first.';
+  return '';
+}
 export function normalizeEvent(event) {
   if (!event || typeof event !== 'object') return {kind:'unknown'};
   if (event.type === 'assistant_chunk' && typeof event.chunk === 'string') return {kind:'delta',text:event.chunk};

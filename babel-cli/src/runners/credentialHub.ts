@@ -1,5 +1,6 @@
 import { getProviderSpec, type ProviderId } from './providerRegistry.js'
 import { resolveRuntimePaths } from '../config/runtimePaths.js'
+import { platformSharedCredentialStore } from '../config/sharedCredentialStore.js'
 
 export class ProviderCredentialError extends Error {
   readonly code = 'PROVIDER_CREDENTIAL_MISSING'
@@ -18,6 +19,9 @@ export interface ResolveCredentialOptions {
   env?: NodeJS.ProcessEnv
   envVarOverride?: string
   explicitCredential?: string
+  credentialRef?: string
+  /** Injection point for deterministic tests; production uses the OS store. */
+  readSharedCredential?: (reference: string) => string
 }
 
 export interface CredentialStatus {
@@ -45,6 +49,20 @@ export function resolveProviderCredential(
 
   const explicit = options.explicitCredential?.trim()
   if (explicit) return explicit
+
+  // A selected account is authoritative: never substitute an ambient key when
+  // its protected entry is missing or locked.
+  if (options.credentialRef) {
+    const env = options.env ?? process.env
+    const headless = ['1', 'true'].includes(env['BABEL_HEADLESS'] ?? '') || ['1', 'true'].includes(env['CI'] ?? '') ||
+      process.argv.includes('--headless') || process.argv.includes('--json') ||
+      process.argv.some((arg, index) => /^--output-format=(?:json|stream-json|jsonl|ndjson)$/.test(arg) ||
+        (arg === '--output-format' && /^(?:json|stream-json|jsonl|ndjson)$/.test(process.argv[index + 1] ?? '')))
+    if (headless) throw new Error('A protected connection cannot request an OS keychain unlock in headless mode. Select an explicitly environment-backed connection instead.')
+    if (options.readSharedCredential) return options.readSharedCredential(options.credentialRef)
+    if (!process.stdin.isTTY) throw new Error('A protected connection cannot request an OS keychain unlock in noninteractive mode. Select an explicitly environment-backed connection instead.')
+    return platformSharedCredentialStore().read(options.credentialRef)
+  }
 
   const envVar = normalizeEnvVarName(options.envVarOverride ?? spec.credentialEnvVar ?? '')
   const value = (options.env ?? process.env)[envVar]?.trim()

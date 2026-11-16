@@ -85,8 +85,11 @@ function readOrigin(projectRoot: string): string {
 }
 
 async function githubJson<T>(url: string): Promise<T> {
+  const { assertOfflineEndpointAllowed, isOfflineRequested } = await import('../config/offlineMode.js');
+  assertOfflineEndpointAllowed(url);
   const token = process.env['GITHUB_TOKEN']?.trim();
   const response = await fetch(url, {
+    ...(isOfflineRequested() ? { redirect: 'error' as const } : {}),
     headers: {
       accept: 'application/vnd.github+json',
       ...(token ? { authorization: `Bearer ${token}` } : {}),

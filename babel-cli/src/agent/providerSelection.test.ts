@@ -20,13 +20,15 @@ if (!isSyntheticProviderFixtureReady()) {
     const diagnostic = summarizeSyntheticProviderOutput(output, code)
     t.diagnostic(diagnostic)
     assert.equal(code, 0, diagnostic)
-    assert.deepEqual(JSON.parse(diagnostic), { exitCode: 0, tests: 8, passed: 8, failed: 0, skipped: 0, isolationRejected: false, networkDispatchBlocked: false })
+    assert.deepEqual(JSON.parse(diagnostic), { exitCode: 0, tests: 10, passed: 10, failed: 0, skipped: 0, isolationRejected: false, networkDispatchBlocked: false })
   })
 } else {
   const { resolveChatDeliberationRunner, resolveChatSynthesisRunner, resolveChatFallbackRunner } = await import('./chatEngineProviderRuntime.js')
   const { resolveModelByKey } = await import('../modelPolicy.js')
   const { ProviderEngine } = await import('../runners/providerEngine.js')
   const { resolveConnectionModelPolicy } = await import('../config/connectionModelPolicy.js')
+  const { resolveChatModelPolicy } = await import('./chatModelPolicy.js')
+  const { updateUserSettings } = await import('../config/userSettings.js')
 
   test('missing Chat selection does not invent a provider or model', () => {
     assert.throws(() => resolveChatDeliberationRunner(null, undefined), /setup|selection|select/i)
@@ -127,6 +129,43 @@ if (!isSyntheticProviderFixtureReady()) {
     } finally {
       globalThis.fetch = priorFetch
       if (priorKey === undefined) delete process.env['COMMAND_CODE_API_KEY']; else process.env['COMMAND_CODE_API_KEY'] = priorKey
+    }
+  })
+
+  test('offline Chat rejects explicitly selected cloud connections', () => {
+    const priorOffline = process.env['BABEL_OFFLINE']
+    try {
+      updateUserSettings({ connections: {
+        router: { id: 'router', provider: 'openrouter', model: 'vendor/test-model' },
+        command: { id: 'command', provider: 'command-code', model: 'vendor/test-model' },
+      } })
+      process.env['BABEL_OFFLINE'] = '1'
+      for (const id of ['router', 'command']) {
+        assert.throws(() => resolveChatModelPolicy({ model: `connection/${id}/vendor/test-model` }), /offline/i)
+      }
+    } finally {
+      if (priorOffline === undefined) delete process.env['BABEL_OFFLINE']; else process.env['BABEL_OFFLINE'] = priorOffline
+    }
+  })
+
+  test('offline authority blocks a cached cloud runner at dispatch', async () => {
+    const priorOffline = process.env['BABEL_OFFLINE']; const priorFetch = globalThis.fetch
+    try {
+      delete process.env['BABEL_OFFLINE']
+      const policy = resolveConnectionModelPolicy(undefined, { settings: {
+        schemaVersion: 1, connections: { fixture: { id: 'fixture', provider: 'openrouter', model: 'vendor/test-model' } },
+        defaults: { connection: 'fixture' },
+      } })
+      assert.ok(policy)
+      const runner = resolveChatDeliberationRunner(null, policy) as InstanceType<typeof ProviderEngine>
+      let calls = 0
+      globalThis.fetch = async () => { calls++; return new Response('{}', { status: 401 }) }
+      process.env['BABEL_OFFLINE'] = '1'
+      await assert.rejects(async () => { await runner.executeRaw('fixture') }, /offline/i)
+      assert.equal(calls, 0)
+    } finally {
+      globalThis.fetch = priorFetch
+      if (priorOffline === undefined) delete process.env['BABEL_OFFLINE']; else process.env['BABEL_OFFLINE'] = priorOffline
     }
   })
 }

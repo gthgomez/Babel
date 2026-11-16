@@ -27,12 +27,16 @@ for(const [width,height] of [[1200,680],[960,700]])test(`Electron empty guidance
     await writeFile(bootstrap,`const {app,dialog}=require('electron');dialog.showErrorBox=(title,message)=>{console.error(title+': '+message);app.quit();};import(${JSON.stringify(new URL('../native/main.mjs',import.meta.url).href)}).catch(error=>{console.error(error);app.quit();});`);
     const env={};
     // Keep the xvfb display connection supplied by Linux CI without inheriting provider configuration.
-    for(const name of ['PATH','SystemRoot','WINDIR','TEMP','TMP','LOCALAPPDATA','APPDATA','USERPROFILE','HOME','COMSPEC','PATHEXT','DISPLAY','XAUTHORITY'])if(process.env[name])env[name]=process.env[name];
+    for(const name of ['PATH','SystemRoot','WINDIR','COMSPEC','PATHEXT','DISPLAY','XAUTHORITY'])if(process.env[name])env[name]=process.env[name];
+    const isolatedHome=join(root,'home'),isolatedConfig=join(root,'config'),isolatedTemp=join(root,'tmp');
+    await Promise.all([isolatedHome,isolatedConfig,isolatedTemp].map(directory=>mkdir(directory,{recursive:true})));
+    Object.assign(env,{HOME:isolatedHome,USERPROFILE:isolatedHome,APPDATA:isolatedConfig,LOCALAPPDATA:isolatedConfig,
+      TEMP:isolatedTemp,TMP:isolatedTemp,BABEL_OFFLINE:'1'});
     env.BABEL_RUNS_DIR=runs;
     application=await _electron.launch({executablePath:process.env.BABEL_TEST_ELECTRON_EXECUTABLE??electronExecutable,args:[bootstrap,`--profile-dir=${profile}`],env,timeout:20000});
     const page=await application.firstWindow();
     // Settle renderer navigation/handshake before evaluate or viewport sizing (Windows 960×700 CI race).
-    await waitForDesktopRendererReady(page);
+    await waitForDesktopRendererReady(page,{statuses:['Setup required']});
     await application.evaluate(({BrowserWindow},{width,height})=>{const window=BrowserWindow.getAllWindows()[0];window.setContentSize(width,height);window.setPosition(0,0);},{width,height});
     // Fractional display scaling (Windows DPI, Linux CI/Xvfb) can round client size by a few CSS pixels.
     // Slack formula is unit-tested in electron-content-size-slop.test.mjs (in-page polling only; no separate DPR evaluate).

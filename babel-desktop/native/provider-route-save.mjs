@@ -1,6 +1,7 @@
 // License: Apache-2.0 — see LICENSE
 import {saveProviderCredential, providerCredentialStatus, normalizeCredentialOperation} from './credentials.mjs';
 import {qualifiedProviders, saveProviderRoute, validateProviderRoute} from './provider-routing.mjs';
+import {assertApprovedDesktopProvider} from './product-provider-policy.mjs';
 
 /**
  * Save a validated Desktop route and the user's explicit credential decision.
@@ -12,6 +13,7 @@ import {qualifiedProviders, saveProviderRoute, validateProviderRoute} from './pr
  */
 export async function saveDesktopProviderRoute({options, configDirectory, preferences, savePreferences, checkConnection=null}) {
   if (!options || typeof options !== 'object') throw new Error('Invalid provider route request.');
+  assertApprovedDesktopProvider(options.provider);
   const route = validateProviderRoute(options,configDirectory);
   const scope = options.scope ?? 'private';
   const apiKey = typeof options.apiKey === 'string' ? options.apiKey : '';
@@ -28,7 +30,7 @@ export async function saveDesktopProviderRoute({options, configDirectory, prefer
   // Every branch below is prevalidated; nothing after this point can reject the
   // request for a reason the user could have been told about before writing.
   const action = resolveAction({options,apiKey,before,requiresKey});
-  if (requiresKey && !apiKey && action !== 'keep_existing_route_only' && action !== 'continue_with_legacy' && !before.present) {
+  if (requiresKey && !apiKey && !before.present) {
     throw new Error('Enter a provider API key or keep the existing saved credential.');
   }
   // A key the user typed must never be silently discarded by an action that
@@ -53,7 +55,7 @@ export async function saveDesktopProviderRoute({options, configDirectory, prefer
       });
       persisted.credential = action !== 'continue_with_legacy';
     } catch (error) {
-      return failure({code:'credential_write_failed',error,persisted,retryable:true,recoveryAction:'Review the credential destination, then retry. Your key was not stored.'});
+      return failure({code:'credential_write_failed',error,persisted,retryable:true,recoveryAction:'The credential write could not be confirmed. Refresh its status before retrying; existing settings were retained where possible.'});
     }
   }
 

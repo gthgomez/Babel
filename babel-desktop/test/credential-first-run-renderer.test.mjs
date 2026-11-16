@@ -15,7 +15,7 @@ function fixtureScript(){
     ...window.__state,
     authentication:window.__auth??{state:'not_checked',reason:'not_checked',checkedAt:null,observedRevision:null},
   });
-  const info={ready:true,officialCliReady:true,projectRoot:null,projectName:null,diagnostics:{ready:true}};
+  const info={ready:true,officialCliReady:true,projectRoot:null,projectName:null,connection:{state:'configured_unverified',provider:'openrouter',model:'openrouter/fixture-model'},diagnostics:{ready:true}};
   window.babelDesktop={
     getInfo:async()=>info,refreshDiagnostics:async()=>info,listSessions:async()=>({sessions:[]}),listDirectory:async()=>[],onEvent(){},
     readProviderRoute:async()=>({provider:'openrouter',model:'openrouter/fixture-model'}),

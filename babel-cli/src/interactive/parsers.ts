@@ -3,7 +3,7 @@
 // classifyInteractiveTaskIntent. These are the two publicly-exported parser
 // functions used by the REPL dispatch and by external consumers (tests).
 
-import { classifyDoTask } from '../commands/workflowCommands.js';
+import { classifyDoTask } from '../cli/taskIntent.js';
 import {
   DAILY_COMMAND_VERBS,
   AMBIGUOUS_CONFIRMATION_PATTERN,

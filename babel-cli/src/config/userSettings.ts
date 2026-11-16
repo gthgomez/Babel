@@ -1,12 +1,13 @@
 /** User-owned, non-secret connection preferences and their effective provenance. */
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { PROVIDER_IDS } from '../runners/providerRegistry.js'
 import { resolveRuntimeUserStateRoot } from './runtimePaths.js'
 import { currentInvocationSettings } from './invocationSettings.js'
 import { validateProviderBaseUrl } from '../runners/providerEndpoint.js'
+import { isSharedCredentialReference } from './sharedCredentialStore.js'
 
 const name = z.string().trim().min(1).max(200).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/)
 const positiveInt = z.number().int().positive()
@@ -27,12 +28,13 @@ const connectionSchema = z.object({
     try { validateProviderBaseUrl(value); return true } catch { return false }
   }, 'Endpoint must use HTTPS (or loopback HTTP), without credentials, query or fragment.').optional(),
   apiKeyEnvVar: z.string().regex(/^[A-Z][A-Z0-9_]*$/).optional(),
+  credentialRef: z.string().refine(isSharedCredentialReference, 'Invalid protected credential reference.').optional(),
   authentication: z.enum(['api-key', 'none']).optional(),
   contextWindow: positiveInt.optional(),
   maxOutputTokens: positiveInt.optional(),
 }).passthrough()
 const settingsSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.union([z.literal(1), z.literal(2)]),
   connections: z.record(z.string(), connectionSchema),
   defaults: preferences.optional(),
   projects: z.record(z.string(), preferences).optional(),
@@ -45,6 +47,8 @@ const settingsSchema = z.object({
   }
   if (hasLiteralSecret(settings)) ctx.addIssue({ code: 'custom', message: 'Store credential references, never credential values.' })
   for (const [id, connection] of Object.entries(settings.connections)) {
+    if (connection.credentialRef && settings.schemaVersion !== 2) ctx.addIssue({ code: 'custom', message: 'Protected credentials require settings schema version 2.', path: ['schemaVersion'] })
+    if (connection.credentialRef && connection.apiKeyEnvVar) ctx.addIssue({ code: 'custom', message: 'Choose one credential source for a connection.', path: ['connections', id] })
     if (connection.provider === 'openai-compatible' && !connection.baseUrl) ctx.addIssue({ code: 'custom', message: 'Custom compatible connections require a base URL.', path: ['connections', id] })
     if (connection.baseUrl && !['openai-compatible', 'openai', 'gemini', 'anthropic'].includes(connection.provider)) ctx.addIssue({ code: 'custom', message: 'This provider pins its endpoint; use an explicit compatible connection for a custom endpoint.', path: ['connections', id] })
     if (connection.authentication === 'none' && connection.provider !== 'openai-compatible') ctx.addIssue({ code: 'custom', message: 'No-auth mode is only supported by explicit compatible connections.', path: ['connections', id] })
@@ -76,6 +80,10 @@ export interface EffectiveSettings {
 
 /** Preferences live outside the project so repositories cannot set credential destinations. */
 export function userSettingsPath(env: NodeJS.ProcessEnv = process.env): string {
+  if (env['BABEL_PREFERENCES_FILE']) {
+    if (!isAbsolute(env['BABEL_PREFERENCES_FILE']) || env['BABEL_PREFERENCES_FILE'].includes('\0')) throw new Error('Babel preferences path must be absolute.')
+    return resolve(env['BABEL_PREFERENCES_FILE'])
+  }
   return join(resolveRuntimeUserStateRoot(env), 'preferences.json')
 }
 
@@ -93,23 +101,36 @@ export function readUserSettings(options: { path?: string; env?: NodeJS.ProcessE
 }
 
 /** Validate the entire candidate before an atomic save, preserving forward-compatible fields. */
-export function updateUserSettings(update: Partial<UserSettings>, options: { path?: string; env?: NodeJS.ProcessEnv } = {}): UserSettings {
+export function updateUserSettings(update: Partial<UserSettings> | ((current: UserSettings) => Partial<UserSettings>), options: { path?: string; env?: NodeJS.ProcessEnv } = {}): UserSettings {
   const path = options.path ?? userSettingsPath(options.env)
-  const current = readUserSettings({ ...options, path })
-  const candidate = {
-    ...current, ...update,
-    connections: { ...current.connections, ...update.connections },
-    defaults: { ...current.defaults, ...update.defaults, ...(update.defaults?.plans ? { plans: { ...current.defaults?.plans, ...update.defaults.plans } } : {}) },
-    projects: { ...current.projects, ...update.projects },
-    setup: { ...current.setup, ...update.setup },
-  }
-  const result = settingsSchema.safeParse(candidate)
-  if (!result.success) throw new Error('Invalid Babel preference update; previous preferences were preserved.')
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  const lock = `${path}.babel-lock`
+  let lockFd: number
+  try { lockFd = openSync(lock, 'wx', 0o600) } catch { throw new Error('Babel preferences are locked or another settings update is already running.') }
   const temporary = `${path}.${randomUUID()}.tmp`
-  writeFileSync(temporary, `${JSON.stringify(result.data, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
-  renameSync(temporary, path)
-  return result.data
+  try {
+    const current = readUserSettings({ ...options, path })
+    const changes = typeof update === 'function' ? update(current) : update
+    const candidate = {
+      ...current, ...changes,
+      connections: { ...current.connections, ...changes.connections },
+      defaults: { ...current.defaults, ...changes.defaults,
+        ...(changes.defaults?.modelsByConnection ? { modelsByConnection: { ...current.defaults?.modelsByConnection, ...changes.defaults.modelsByConnection } } : {}),
+        ...(changes.defaults?.plans ? { plans: { ...current.defaults?.plans, ...changes.defaults.plans } } : {}) },
+      projects: { ...current.projects, ...changes.projects },
+      setup: { ...current.setup, ...changes.setup },
+    }
+    // Older CLI builds ignore unknown connection fields. Version 2 makes them
+    // reject this file instead of silently borrowing an ambient account key.
+    if (current.schemaVersion === 2 || Object.values(candidate.connections).some(connection => Boolean(connection.credentialRef))) candidate.schemaVersion = 2
+    const result = settingsSchema.safeParse(candidate)
+    if (!result.success) throw new Error('Invalid Babel preference update; previous preferences were preserved.')
+    writeFileSync(temporary, `${JSON.stringify(result.data, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
+    renameSync(temporary, path)
+    return result.data
+  } finally {
+    rmSync(temporary, { force: true }); closeSync(lockFd); rmSync(lock, { force: true })
+  }
 }
 
 /** Resolve selection once; environment credentials never choose a provider. */
@@ -151,7 +172,7 @@ export function resolveEffectiveSettings(options: {
   return {
     connection: { value: connection ? { id: connection.id, provider: connection.provider,
       ...(connection.model ? { model: connection.model } : {}), ...(connection.baseUrl ? { baseUrl: connection.baseUrl } : {}),
-      ...(connection.apiKeyEnvVar ? { apiKeyEnvVar: connection.apiKeyEnvVar } : {}), ...(connection.authentication ? { authentication: connection.authentication } : {}),
+      ...(connection.apiKeyEnvVar ? { apiKeyEnvVar: connection.apiKeyEnvVar } : {}), ...(connection.credentialRef ? { credentialRef: connection.credentialRef } : {}), ...(connection.authentication ? { authentication: connection.authentication } : {}),
       ...(connection.contextWindow ? { contextWindow: connection.contextWindow } : {}), ...(connection.maxOutputTokens ? { maxOutputTokens: connection.maxOutputTokens } : {}) } : null, source: selected.source }, model,
     workflow: field('workflow', 'work') as EffectiveValue<'work' | 'plan'>,
     review: field('review', 'standard') as EffectiveValue<'standard' | 'thorough'>,

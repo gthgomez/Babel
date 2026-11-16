@@ -110,7 +110,7 @@ if (!isSyntheticProviderFixtureReady()) {
       assert.equal(completed[0]?.observed_model_id, route.model)
     })
 
-    for (const status of [401, 429]) test(`${route.provider} HTTP ${status} fails on the selected route without credential leakage`, async () => {
+    for (const status of [401, 403, 404, 429]) test(`${route.provider} HTTP ${status} fails on the selected route without credential leakage`, async () => {
       let requests = 0
       globalThis.fetch = async () => { requests++; return new Response(JSON.stringify({ error: { message: 'fixture rejection' } }), { status }) }
       const completed: ProviderInvocationCompleted[] = []
@@ -122,7 +122,7 @@ if (!isSyntheticProviderFixtureReady()) {
       const errorEvent = events[0]
       assert.equal(errorEvent?.type, 'error')
       if (errorEvent?.type !== 'error') assert.fail('expected typed transport error')
-      assert.equal(errorEvent.failure?.retryable, status === 429, 'authentication is fatal and rate limiting is retryable')
+      assert.equal(errorEvent.failure?.retryable, status === 429, 'authorization and model errors are fatal; rate limiting is retryable')
       assert.equal(requests, 1)
       assert.equal(completed.length, 1)
       assert.equal(completed[0]?.status, 'failed')

@@ -103,7 +103,7 @@ export function resolveOfficialCli(packageRoot, {isPackaged = false, resourcesPa
 export function bundledEnvironment(userData, inherited = process.env) {
   const env = {...inherited};
   for (const name of Object.keys(env)) {
-    if (/^(?:NODE_OPTIONS|NODE_PATH|NODE_COMPILE_CACHE|ELECTRON_RUN_AS_NODE|BABEL_(?:ROOT|ENV_LOADED|CONFIG_DIR|STATE_DIR|CACHE_DIR|RUNS_DIR|PROJECT_ROOT))$/i.test(name)) delete env[name];
+    if (/^(?:NODE_OPTIONS|NODE_PATH|NODE_COMPILE_CACHE|ELECTRON_RUN_AS_NODE|BABEL_(?:ROOT|ENV_LOADED|CONFIG_DIR|STATE_DIR|CACHE_DIR|RUNS_DIR|PROJECT_ROOT|PREFERENCES_FILE|SHARED_CREDENTIALS))$/i.test(name)) delete env[name];
   }
   return {...env,
     BABEL_CONFIG_DIR: join(userData, 'engine', 'config'),

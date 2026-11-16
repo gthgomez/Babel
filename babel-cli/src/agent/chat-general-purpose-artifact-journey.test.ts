@@ -10,6 +10,7 @@
  *   (`BLOCKED_POLICY`) — not evidence of successful journey completion (P09/P10).
  */
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -407,6 +408,55 @@ test('H4: requested file is written and read back without being mislabeled verif
   assert.ok(terminal?.type === 'done')
   assert.notEqual(terminal.outcome, 'VERIFIED_COMPLETE', 'file existence and readback do not certify tests')
   assert.match(terminal.answer, /solution\.py/i)
+})
+
+test('mocked coding turn edits a disposable repository and an independent test checks the result', async t => {
+  const prior = Object.fromEntries(MANAGED_ENV.map(key => [key, process.env[key]]))
+  const workspace = mkdtempSync(join(tmpdir(), 'babel-first-task-edit-'))
+  t.after(() => {
+    for (const key of MANAGED_ENV) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+    refreshDryRunState()
+    rmSync(workspace, { recursive: true, force: true })
+  })
+
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: workspace, windowsHide: true, encoding: 'utf8' })
+  git('init', '-q')
+  git('config', 'user.email', 'fixture@example.test')
+  git('config', 'user.name', 'Fixture')
+  git('config', 'core.autocrlf', 'false')
+  writeFileSync(join(workspace, 'solution.cjs'), 'exports.add = (a, b) => a - b;\n')
+  writeFileSync(join(workspace, 'solution.test.cjs'), "const test = require('node:test'); const assert = require('node:assert/strict'); const {add} = require('./solution.cjs'); test('adds numbers', () => assert.equal(add(2, 3), 5));\n")
+  git('add', '--', 'solution.cjs', 'solution.test.cjs')
+  git('commit', '-q', '-m', 'fixture')
+  const task = 'Fix add in solution.cjs so it adds its inputs; leave the test file unchanged.'
+  applyBenchmarkFixtureEnv(task)
+  const { runner } = buildRunner([
+    [
+      { type: 'tool_use', id: 'read-solution', name: 'read_file', input: { path: 'solution.cjs' } },
+      { type: 'done', finishReason: 'tool_calls' },
+    ],
+    [
+      { type: 'tool_use', id: 'fix-solution', name: 'write_file', input: { path: 'solution.cjs', content: 'exports.add = (a, b) => a + b;\n' } },
+      { type: 'done', finishReason: 'tool_calls' },
+    ],
+    [
+      { type: 'text_delta', text: 'Updated solution.cjs.' },
+      { type: 'done', finishReason: 'stop' },
+    ],
+  ])
+  const engine = new ChatEngine({
+    task, projectRoot: workspace, executionScope: { kind: 'project', projectRoot: workspace },
+    runId: `first-task-edit-${randomUUID()}`, model: 'deepseek-v4-flash', maxTurns: 6,
+    providerRunner: runner as never, providerPolicy: { ...FIXTURE_POLICY, provider: 'openrouter' },
+  })
+  const events = await collectStream(engine.submitMessageStream(task))
+  assert.ok(events.some(event => event.type === 'done' || event.type === 'failed'))
+  assert.equal(git('diff', '--name-only').trim(), 'solution.cjs')
+  // This separate Node process is the verifier, not a model assertion or a tool receipt.
+  execFileSync(process.execPath, ['--test', 'solution.test.cjs'], { cwd: workspace, windowsHide: true, stdio: 'pipe' })
 })
 
 test('H4: ephemeral non-Git project workspace writes sourced artifacts; headless completion blocks without verifier', async t => {

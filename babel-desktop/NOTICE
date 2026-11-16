@@ -5,5 +5,9 @@ supplied BabelTuiNorthStar.png. The Babel name and logo are retained from that
 reference. The included logo crop and reference image are not newly designed
 or independently relicensed branding assets.
 
+Linux packaged builds include the @napi-rs/keyring native binding. Its platform
+package contains LICENSE.third-party.md, including notices for the statically
+linked libdbus (AFL-2.1 OR GPL-2.0-or-later) and other bundled dependencies.
+
 New implementation source is provided under Apache-2.0. This package is not an
 upstream Babel release and contains no model provider credentials or font files.

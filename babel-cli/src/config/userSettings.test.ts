@@ -43,6 +43,33 @@ test('invalid settings update preserves the file and valid updates preserve unkn
   assert.equal(JSON.parse(readFileSync(path, 'utf8')).future.enabled, true)
 })
 
+test('a concurrent settings writer fails closed without overwriting the active writer', async () => {
+  const { updateUserSettings } = await import('./userSettings.js')
+  const path = join(mkdtempSync(join(tmpdir(), 'babel-settings-lock-')), 'settings.json')
+  const before = JSON.stringify({ schemaVersion: 1, connections: {} })
+  writeFileSync(path, before)
+  writeFileSync(`${path}.babel-lock`, 'other writer')
+  assert.throws(() => updateUserSettings({ defaults: { workflow: 'plan' } }, { path }), /already|locked/i)
+  assert.equal(readFileSync(path, 'utf8'), before)
+})
+
+test('a protected account cannot ambiguously select an environment credential too', async () => {
+  const { updateUserSettings } = await import('./userSettings.js')
+  const path = join(mkdtempSync(join(tmpdir(), 'babel-settings-source-')), 'settings.json')
+  assert.throws(() => updateUserSettings({ connections: { x: { id: 'x', provider: 'openrouter', apiKeyEnvVar: 'OTHER_KEY', credentialRef: 'babel-os-v1:11111111-1111-4111-8111-111111111111' } } }, { path }))
+})
+
+test('protected accounts upgrade the preferences schema so older CLI versions fail closed', async () => {
+  const { updateUserSettings, readUserSettings } = await import('./userSettings.js')
+  const path = join(mkdtempSync(join(tmpdir(), 'babel-settings-version-')), 'settings.json')
+  const ref = 'babel-os-v1:11111111-1111-4111-8111-111111111111'
+  updateUserSettings({ connections: { x: { id: 'x', provider: 'openrouter', credentialRef: ref } } }, { path })
+  assert.equal(readUserSettings({ path }).schemaVersion, 2)
+  assert.equal(updateUserSettings({ schemaVersion: 1 }, { path }).schemaVersion, 2)
+  writeFileSync(path, JSON.stringify({ schemaVersion: 1, connections: { x: { id: 'x', provider: 'openrouter', credentialRef: ref } } }))
+  assert.throws(() => readUserSettings({ path }), /invalid|unsupported/i)
+})
+
 test('switching connections never carries another provider model default into the new connection', async () => {
   const { resolveEffectiveSettings } = await import('./userSettings.js')
   const settings = { schemaVersion: 1 as const, connections: {

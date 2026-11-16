@@ -1,5 +1,5 @@
 /** Synthetic provider tests use a fresh process; no host credentials enter it. */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, delimiter, isAbsolute, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -37,6 +37,25 @@ export function summarizeSyntheticProviderOutput(output, code) {
     isolationRejected: String(output).includes('SYNTHETIC_PROVIDER_FIXTURE_ISOLATION_INVALID'),
     networkDispatchBlocked: String(output).includes('SYNTHETIC_PROVIDER_NETWORK_DISPATCH_BLOCKED'),
   })
+}
+
+/** Execute a provider test file in its own isolated profile and return scalar facts only. */
+export async function runSyntheticProviderTestFile(testUrl, timeoutMs = 45000) {
+  const fixture = prepareSyntheticProviderFixture()
+  try {
+    const child = spawn(process.execPath, [
+      '--import', import.meta.url, '--import', import.meta.resolve('tsx'),
+      '--import', new URL('./register-no-ambient-inference.mjs', import.meta.url).href,
+      '--test', '--test-reporter=tap', fileURLToPath(testUrl),
+    ], { cwd: fixture.cwd, env: fixture.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    let output = ''
+    child.stdout.on('data', chunk => { output += String(chunk) })
+    child.stderr.on('data', chunk => { output += String(chunk) })
+    const timer = setTimeout(() => child.kill(), timeoutMs)
+    const code = await new Promise(resolve => { child.once('error', () => resolve(1)); child.once('close', value => resolve(value ?? 1)) })
+    clearTimeout(timer)
+    return JSON.parse(summarizeSyntheticProviderOutput(output, code))
+  } finally { removeSyntheticProviderFixture(fixture.root) }
 }
 
 /** Resolve the host Git executable directory for isolated child PATH (Windows only). */

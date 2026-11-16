@@ -263,7 +263,9 @@ export async function runDeterministicGradleBootstrapLane(
 
     if (!existsSync(archivePath)) {
       const signal = getRunAbortSignal();
-      const response = await fetch(distributionUrl, signal ? { signal } : {});
+      const { assertOfflineEndpointAllowed, isOfflineRequested } = await import('../config/offlineMode.js');
+      assertOfflineEndpointAllowed(distributionUrl);
+      const response = await fetch(distributionUrl, { ...(signal ? { signal } : {}), ...(isOfflineRequested() ? { redirect: 'error' as const } : {}) });
       if (!response.ok) {
         recordSyntheticStep(
           'file_write',

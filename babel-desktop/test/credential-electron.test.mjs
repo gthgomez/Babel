@@ -17,6 +17,6 @@ test('actual Electron safeStorage protects synthetic private data in an isolated
   assert.equal(result.status,0,'Synthetic Electron fixture failed; raw child output withheld');
   let receipt;try{receipt=JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1));}catch{}
   assert.equal(Boolean(receipt),true,'Synthetic Electron scalar receipt missing');
-  assert.deepEqual(receipt,{available:true,roundTrip:true,plaintextAbsent:true,dotenvAbsent:true,removed:true});
+  assert.deepEqual(receipt,{available:true,roundTrip:true,plaintextAbsent:true,dotenvAbsent:true,removed:true,sharedHomeMatches:true});
  }finally{rmSync(root,{recursive:true,force:true});}
 });

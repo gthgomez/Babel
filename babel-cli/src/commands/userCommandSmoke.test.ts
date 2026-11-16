@@ -315,9 +315,9 @@ test('fresh plan fails with setup guidance before choosing a cloud account', () 
 
 
 test('a CLI connection flag has invocation provenance and does not save or leak a default', () => {
-  const connected = runCli(['provider', 'connect', 'openai', '--name', 'fixture-account', '--model', 'Vendor/ExactCase']); assert.equal(connected.status, 0, connected.stderr)
+  const connected = runCli(['provider', 'connect', 'openrouter', '--name', 'fixture-account', '--model', 'Vendor/ExactCase']); assert.equal(connected.status, 0, connected.stderr)
   const status = runCli(['--connection', 'fixture-account', 'provider', 'status', '--json']); assert.equal(status.status, 0, status.stderr)
-  const selection = JSON.parse(status.stdout); assert.equal(selection.provider, 'openai'); assert.equal(selection.model, 'Vendor/ExactCase'); assert.equal(selection.selectionSource, 'invocation')
+  const selection = JSON.parse(status.stdout); assert.equal(selection.provider, 'openrouter'); assert.equal(selection.model, 'Vendor/ExactCase'); assert.equal(selection.selectionSource, 'invocation')
   const next = runCli(['provider', 'status', '--json']); assert.equal(JSON.parse(next.stdout).connection, null)
 })
 

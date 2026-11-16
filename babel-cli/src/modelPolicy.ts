@@ -273,6 +273,7 @@ export interface ResolvedModelPolicy {
   connectionId?: string;
   authentication?: 'api-key' | 'none';
   apiKeyEnvVar?: string;
+  credentialRef?: string;
   baseUrl?: string;
   policyPath: string;
   family: string;

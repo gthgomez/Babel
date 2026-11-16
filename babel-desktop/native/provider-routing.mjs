@@ -5,6 +5,7 @@ import {dirname, join, resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {DESKTOP_ROUTE_CATALOG, listDesktopProviderDescriptors, normalizeProviderRoute,defaultModelPolicy,manualProviderModel} from './desktop-route-catalog.mjs';
 import {MODEL_CATALOG_ENDPOINTS,parseModelCatalog} from './model-catalog.mjs';
+import {offlineBlocksEndpoint} from './product-provider-policy.mjs';
 
 const ROUTE_FILE = 'desktop-routing.json';
 const CATALOG_BYTE_LIMIT=4*1024*1024;
@@ -93,6 +94,7 @@ function readCatalogCache(configDirectory){
 export async function refreshModelCatalog({configDirectory,provider,credential,fetchImpl=fetch}={}) {
   const endpoint=MODEL_CATALOG_ENDPOINTS[provider];
   if(!endpoint)throw new Error('Select a supported provider catalog.');
+  if(offlineBlocksEndpoint(endpoint))throw new Error('Offline mode cannot refresh a remote provider catalog. Cached choices were retained.');
   if(typeof configDirectory!=='string'||!configDirectory)throw new Error('Configuration directory is unavailable.');
   const dir=resolve(configDirectory);mkdirSync(dir,{recursive:true,mode:0o700});
   if(lstatSync(dir).isSymbolicLink())throw new Error('Configuration directory is unsafe.');
@@ -109,6 +111,7 @@ export async function refreshModelCatalog({configDirectory,provider,credential,f
   try{
     const headers={Accept:'application/json'};
     if(provider==='deepseek'&&typeof credential==='string'&&credential&&!/[\r\n\0]/.test(credential))headers.Authorization=`Bearer ${credential}`;
+    if(offlineBlocksEndpoint(endpoint))throw new Error('Model catalog request is unavailable in offline mode.');
     const response=await fetchImpl(endpoint,{headers,redirect:'error',signal:AbortSignal.timeout(15000)});
     if(!response.ok)throw new Error(response.status===401?'Catalog authentication is required. Save a credential for this provider.':`Model catalog request failed (HTTP ${response.status}). Check your connection and retry.`);
     const text=await readCatalogBody(response);

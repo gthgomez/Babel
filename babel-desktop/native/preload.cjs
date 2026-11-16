@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('babelDesktop',Object.freeze({
   providerCredentialStatus:options=>ipcRenderer.invoke('babel:provider-credential-status',options),
   checkConnection:options=>ipcRenderer.invoke('babel:check-connection',options),
   removeProviderCredential:options=>ipcRenderer.invoke('babel:remove-provider-credential',options),
+  shareProviderCredential:options=>ipcRenderer.invoke('babel:share-provider-credential',options),
   migrateProviderCredential:options=>ipcRenderer.invoke('babel:migrate-provider-credential',options),
   saveProviderCredential:options=>ipcRenderer.invoke('babel:save-provider-credential',options),
   readProviderRoute:()=>ipcRenderer.invoke('babel:read-provider-route'),

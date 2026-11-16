@@ -75,6 +75,7 @@ function restoreFetch() {
 
 beforeEach(() => {
   resetEnv();
+  setEnv('BABEL_EMBEDDING_ENABLE', '1');
 });
 
 afterEach(() => {
@@ -112,7 +113,7 @@ test('createEmbeddingProvider returns null when BABEL_EMBEDDING_DISABLE=true', (
 
 // ── Section 2: Provider creation ─────────────────────────────────────────────
 
-test('createEmbeddingProvider succeeds with valid OPENAI_API_KEY', () => {
+test('createEmbeddingProvider succeeds with an explicitly enabled OPENAI_API_KEY', () => {
   setEnv('OPENAI_API_KEY', 'sk-your_XXXXXXXXXXXXXXXXXXXX');
   const provider = createEmbeddingProvider();
   assert.ok(provider !== null);

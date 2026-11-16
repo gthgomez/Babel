@@ -8,6 +8,7 @@ import type { ReplContext } from '../interactive/context.js'
 import { assertInteractiveRunAvailable } from '../interactive/context.js'
 import { CommandPalette } from '../ui/palette.js'
 import { withExclusiveStdin } from '../ui/inputCoordinator.js'
+import { refreshProviderModelCatalog } from '../services/providerModelCatalog.js'
 
 interface CommandHost {
   session?: SelectionSession
@@ -50,19 +51,27 @@ export function registerConnectionCommands(program: Command, host: CommandHost =
     .action((id: string, options: { save?: string }) => {
       const save = scope(options.save)
       requireScope(save)
-      const next = selectConnection(id, host.session ?? {}, { ...(save ? { save } : {}), ...(host.projectRoot ? { projectRoot: host.projectRoot } : {}) })
+      const next = selectConnection(id, host.session ?? {}, { ...(host.projectRoot ? { projectRoot: host.projectRoot } : {}) })
       host.select?.(next)
+      if (save) savePreferences({ connection: id, model: next.model, ...(next.model ? { modelsByConnection: { [id]: next.model } } : {}) }, save, host.projectRoot)
       emit({ selected: next.connection, model: next.model ?? null, scope: save ?? 'session', connectivity: 'unverified' })
     })
   const model = program.command('model').description('Choose an exact model on the selected connection')
   model.command('list').description('List known models; manual exact IDs are accepted').option('--json').action(() => emit(listConnectionModels(host.session, host.projectRoot)))
+  model.command('refresh').description('Refresh public model metadata for the selected provider; no inference').option('--json').action(async () => {
+    const selected = resolveEffectiveSettings({ ...(host.session ? { session: host.session } : {}), ...(host.projectRoot ? { projectRoot: host.projectRoot } : {}) }).connection.value
+    if (!selected) throw new Error('Select a provider connection before refreshing models.')
+    const catalog = await refreshProviderModelCatalog(selected.provider)
+    emit({ connection: selected.id, provider: selected.provider, ...catalog })
+  })
   model.command('show').description('Show requested model, provider and selection source').option('--json').action(() => emit(connectionStatus(host.session, host.projectRoot)))
   selectionOptions(model.command('use <model>').description('Select an exact model ID without changing provider'))
     .action((id: string, options: { save?: string }) => {
       const save = scope(options.save)
       requireScope(save)
-      const next = selectModel(id, host.session ?? {}, { ...(save ? { save } : {}), ...(host.projectRoot ? { projectRoot: host.projectRoot } : {}) })
+      const next = selectModel(id, host.session ?? {}, { ...(host.projectRoot ? { projectRoot: host.projectRoot } : {}) })
       host.select?.(next)
+      if (save) savePreferences({ connection: next.connection, model: next.model, modelsByConnection: { [next.connection!]: next.model! } }, save, host.projectRoot)
       emit({ selected: next.model, connection: next.connection, scope: save ?? 'session', observedModel: null })
     })
   const settings = program.command('settings').description('Inspect effective settings and save explicit preferences')
@@ -100,7 +109,7 @@ export async function handleConnectionCommand(ctx: ReplContext, name: 'provider'
   try {
     if (name === 'provider' && args.length === 1 && !['list', 'status', 'use', 'connect'].includes(args[0]!)) {
       args = ['use', resolveConnectionReference(args[0]!)]
-    } else if (name === 'model' && args.length === 1 && !['list', 'show', 'use'].includes(args[0]!)) {
+    } else if (name === 'model' && args.length === 1 && !['list', 'show', 'use', 'refresh'].includes(args[0]!)) {
       let reference = args[0]!
       const colon = reference.indexOf(':')
       if (colon > 0 && !reference.slice(0, colon).includes('/')) {
@@ -139,8 +148,10 @@ export async function handleConnectionCommand(ctx: ReplContext, name: 'provider'
       console.log(JSON.stringify(value && typeof value === 'object' ? { ...value, ...evidence } : value, null, 2));
     },
     select: selection => {
-      ctx.chatEngine?.closeAdmissionStore?.()
-      ctx.chatEngine = undefined
+      if (ctx.chatEngine) {
+        if (!selection.connection || !selection.model) throw new Error('Choose a model before changing the connection for this chat.')
+        ctx.chatEngine.selectProviderModel(connectionModelSelector(selection.connection, selection.model))
+      }
       if (selection.connection) ctx.state.connectionId = selection.connection
       if (selection.modelsByConnection) ctx.state.modelsByConnection = selection.modelsByConnection
       if (selection.connection && selection.model) {

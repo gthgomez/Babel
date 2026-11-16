@@ -45,11 +45,8 @@ import {
 import { type SessionState, type InteractiveTurn } from './types.js';
 import * as Session from './session.js';
 import * as Turn from './turns.js';
-import { handleCommand } from './commands.js';
-import { executeTask } from './execution/dispatch.js';
 import { printRunSummary as printRunSummaryModule } from './execution/summary.js';
-import { reverseHistorySearch } from './commands/service.js';
-import { ChatEngine } from '../agent/chatEngine.js';
+import type { ChatEngine } from '../agent/chatEngine.js';
 import { VoiceStreamManager } from '../voice/voice-stream-manager.js';
 import type { PromptInputAdapter } from '../ui/promptInputAdapter.js';
 import { OutputBuffer } from '../ui/outputBuffer.js';
@@ -700,6 +697,7 @@ export class BabelRepl {
   // ── Command router ────────────────────────────────────────────────────────
 
   private async handleCommand(input: string): Promise<void> {
+    const { handleCommand } = await import('./commands.js');
     return handleCommand(this, input);
   }
 
@@ -764,6 +762,7 @@ export class BabelRepl {
 
   private async executeTask(input: string): Promise<void> {
     try {
+      const { executeTask } = await import('./execution/dispatch.js');
       return await executeTask(this, input);
     } catch (err: any) {
       if (!(err instanceof InteractiveRunBusyError)) this.isRunning = false;
@@ -862,6 +861,7 @@ export class BabelRepl {
   // ── Exit ─────────────────────────────────────────────────────────────────
 
   private async handleReverseSearch(): Promise<void> {
+    const { reverseHistorySearch } = await import('./commands/service.js');
     const history = (this.rl as ReadlineWithHistory).history;
     await this.withExclusiveTerminal('reverse-history', () =>
       reverseHistorySearch(this.rl, history),

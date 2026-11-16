@@ -1,12 +1,8 @@
 /** Dispatch shell selections through the existing repl handlers. */
 
 import type { ReplContext } from '../../interactive/context.js'
-import {
-  resumeChatSession,
-  type ResumeChatSessionOutcome,
-} from '../../interactive/chatSessionResume.js'
+import type { ResumeChatSessionOutcome } from '../../interactive/chatSessionResume.js'
 import { handleClear, handleMode, handleModel, handleRetarget } from '../../interactive/commands/config.js'
-import { handleCommand } from '../../interactive/commands.js'
 import type { ShellCommand } from './shellNavigation.js'
 
 export interface ShellResumeResult {
@@ -126,7 +122,8 @@ export function createShellCommandOperations(
   host: ShellOperationHost,
   dependencies: ShellOperationDependencies = {},
 ): ShellCommandOperations {
-  const resume = dependencies.resumeChatSession ?? resumeChatSession
+  const resume: NonNullable<ShellOperationDependencies['resumeChatSession']> = dependencies.resumeChatSession ??
+    (async (target, id) => (await import('../../interactive/chatSessionResume.js')).resumeChatSession(target, id))
   return {
     async resumeSession(id: string): Promise<ShellResumeResult> {
       const outcome = await resume(ctx, id)
@@ -168,6 +165,7 @@ export function createShellCommandOperations(
       host.invalidate('model')
     },
     async runAction(command: string): Promise<void> {
+      const { handleCommand } = await import('../../interactive/commands.js')
       await handleCommand(ctx, command)
     },
     toggleInspector(): void {

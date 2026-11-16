@@ -7,6 +7,8 @@
  */
 
 import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js';
+import { OfflineModeError } from '../config/offlineMode.js';
+import { assertProviderDispatchAllowed, ProductProviderPolicyError } from './providerRegistry.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ZodType } from 'zod';
 import { parseRetryAfterHeader, isRetryableStatus, normalizeFinishReason, classifyProviderError } from './providerNormalize.js';
@@ -516,12 +518,14 @@ export class DeepSeekApiRunner implements LlmRunner {
 
   private readonly maxTokens: number;
   private readonly contextWindowTokens: number | undefined;
+  private readonly authorityEnvironment: NodeJS.ProcessEnv | undefined;
 
   constructor(
     model = 'deepseek-v4-flash',
     credential: { explicitCredential?: string; env?: NodeJS.ProcessEnv; envVarOverride?: string; maxTokens?: number; contextWindowTokens?: number } = {},
   ) {
     const key = resolveProviderCredential('deepseek', credential);
+    this.authorityEnvironment = credential.env;
     this.maxTokens = credential.maxTokens ?? MAX_TOKENS;
     this.contextWindowTokens = credential.contextWindowTokens;
     if (key === null) throw new Error('[deepSeekApi] credential resolution failed');
@@ -566,6 +570,7 @@ export class DeepSeekApiRunner implements LlmRunner {
       sawDone: boolean;
     };
   }> {
+    assertProviderDispatchAllowed('deepseek', API_URL, this.authorityEnvironment);
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
     const stopped = callbacks?.runControl?.stop();
@@ -808,7 +813,7 @@ export class DeepSeekApiRunner implements LlmRunner {
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
-        response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch(API_URL, {
+        response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => { assertProviderDispatchAllowed('deepseek', API_URL, this.authorityEnvironment); return fetch(API_URL, {
           method: 'POST',
           redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
           signal: controller.signal,
@@ -817,8 +822,9 @@ export class DeepSeekApiRunner implements LlmRunner {
             'Content-Type': 'application/json',
           },
           body: requestBody,
-        }));
+        }); });
       } catch (err) {
+        if (err instanceof OfflineModeError || err instanceof ProductProviderPolicyError) throw err;
         if (err instanceof RunStoppedError) {
           settleRetry('cancelled');
           notifyCompleted('failed', '', { actualAttempt: attempt, details: { message: err.message }, failureStage: 'request', inferenceStarted: false });
@@ -1225,6 +1231,7 @@ export class DeepSeekApiRunner implements LlmRunner {
     toolChoice?: 'auto' | 'required',
     callbacks?: RunnerCallbacks,
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
+    assertProviderDispatchAllowed('deepseek', API_URL, this.authorityEnvironment);
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
     const stopped = callbacks?.runControl?.stop();
@@ -1421,7 +1428,7 @@ export class DeepSeekApiRunner implements LlmRunner {
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
-        response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch(API_URL, {
+        response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => { assertProviderDispatchAllowed('deepseek', API_URL, this.authorityEnvironment); return fetch(API_URL, {
           method: 'POST',
           redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
           signal: controller.signal,
@@ -1430,8 +1437,9 @@ export class DeepSeekApiRunner implements LlmRunner {
             'Content-Type': 'application/json',
           },
           body: requestBody,
-        }));
+        }); });
       } catch (err) {
+        if (err instanceof OfflineModeError || err instanceof ProductProviderPolicyError) throw err;
         if (err instanceof RunStoppedError) {
           settleRetry('cancelled');
           notifyCompleted('failed', '', { actualAttempt: attempt, details: { message: err.message }, failureStage: 'request', inferenceStarted: false });

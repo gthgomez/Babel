@@ -1144,6 +1144,8 @@ export async function runSameModelLlmFactorial(input: {
   ): Promise<EvalTaskResult> {
     const t0 = Date.now();
     try {
+      const { assertOfflineEndpointAllowed } = await import('../config/offlineMode.js');
+      assertOfflineEndpointAllowed('https://openrouter.ai/api/v1/chat/completions');
       const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {

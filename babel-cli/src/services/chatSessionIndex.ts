@@ -5,7 +5,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 
 import { chatSessionsDir, transcriptPath } from '../cli/runsLayout.js';
-import { listThreads, threadStoreExists } from './threadStore/index.js';
+// The barrel also exports engine reconstruction, which is only needed on resume.
+import { listThreads, threadStoreExists } from './threadStore/threadStore.js';
 
 export interface ChatSessionInfo {
   id: string;

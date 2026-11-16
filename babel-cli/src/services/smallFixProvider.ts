@@ -230,6 +230,10 @@ export async function runSmallFixModel(
       : undefined;
 
   if (provider === 'live') {
+    if (modelPolicy) {
+      const { assertApprovedProductProvider, isProductProviderPolicyActive } = await import('../runners/providerRegistry.js');
+      if (isProductProviderPolicyActive()) assertApprovedProductProvider(modelPolicy.provider);
+    }
     if (!selectedModel?.startsWith('connection/')) assertLiveProviderCredential(modelPolicy?.provider);
   }
   if (provider === 'mock') {
@@ -266,6 +270,7 @@ export async function runSmallFixModel(
     }
     const runner = createProviderRunner({ provider: policyProvider, modelId: modelPolicy.providerModelId,
       ...(modelPolicy.apiKeyEnvVar ? { apiKeyEnvVar: modelPolicy.apiKeyEnvVar } : {}),
+      ...(modelPolicy.credentialRef ? { credentialRef: modelPolicy.credentialRef } : {}),
       ...(modelPolicy.baseUrl ? { baseUrl: modelPolicy.baseUrl } : {}),
       ...(modelPolicy.authentication ? { authentication: modelPolicy.authentication } : {}),
       ...(modelPolicy.contextWindow ? { contextWindowTokens: modelPolicy.contextWindow } : {}),

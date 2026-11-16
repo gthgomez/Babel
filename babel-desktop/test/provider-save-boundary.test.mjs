@@ -44,10 +44,10 @@ test('route-only scope changes load the chosen existing credential and clear pri
   const preferences = {projectRoot: project, projectCredentialRoot: null};
   const persisted = [];
   const savePreferences = async () => { persisted.push({...preferences}); };
-  const route = {provider: 'deepseek', model: 'deepseek-v4-pro', apiKey: ''};
+  const route = {provider: 'openrouter', model: 'deepseek-v4-pro-openrouter', apiKey: ''};
   try {
-    saveProviderCredential({provider: 'deepseek', apiKey: FIXTURE_VALUE, scope: 'project', projectRoot: project});
-    saveProviderCredential({provider: 'deepseek', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
+    saveProviderCredential({provider: 'openrouter', apiKey: FIXTURE_VALUE, scope: 'project', projectRoot: project});
+    saveProviderCredential({provider: 'openrouter', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
     const saveScope = scope => saveDesktopProviderRoute({options: {...route, scope}, configDirectory: config, preferences, savePreferences});
     assert.equal((await saveScope('project')).credentialUpdated, false);
     assert.equal(persisted.at(-1).projectCredentialRoot, project);
@@ -82,7 +82,7 @@ test('invalid model is rejected before any credential file mutation', async () =
   const config = mkdtempSync(join(tmpdir(), 'babel-provider-boundary-'));
   try {
     await assert.rejects(
-      () => save({configDirectory: config, provider: 'deepseek', model: 'unknown-model', apiKey: FIXTURE_VALUE, scope: 'private'}),
+      () => save({configDirectory: config, provider: 'openrouter', model: 'unknown-model', apiKey: FIXTURE_VALUE, scope: 'private'}),
       /not supported/,
     );
     assert.equal(existsSync(join(config, '.env')), false);
@@ -95,10 +95,23 @@ test('invalid model is rejected before any credential file mutation', async () =
 test('route-only save succeeds when private credential already exists', async () => {
   const config = mkdtempSync(join(tmpdir(), 'babel-provider-route-only-'));
   try {
-    saveProviderCredential({provider: 'deepseek', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
-    const {route} = await save({configDirectory: config, provider: 'deepseek', model: 'deepseek-v4-pro', apiKey: '', scope: 'private'});
-    assert.deepEqual(route, {provider: 'deepseek', model: 'deepseek-v4-pro'});
+    saveProviderCredential({provider: 'openrouter', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
+    const {route} = await save({configDirectory: config, provider: 'openrouter', model: 'deepseek-v4-pro-openrouter', apiKey: '', scope: 'private'});
+    assert.deepEqual(route, {provider: 'openrouter', model: 'deepseek-v4-pro-openrouter'});
     assert.equal(readFileSync(join(config, 'desktop-credentials.json'), 'utf8').includes(FIXTURE_VALUE), false);
+  } finally {
+    rmSync(config, {recursive: true, force: true});
+  }
+});
+
+test('route-only save rejects a missing credential without persisting the route', async () => {
+  const config = mkdtempSync(join(tmpdir(), 'babel-provider-missing-key-'));
+  try {
+    const options = {configDirectory: config, provider: 'openrouter', model: 'deepseek-v4-pro-openrouter', apiKey: '', scope: 'private'};
+    for (const credentialOperation of [undefined, 'keep_existing_route_only']) {
+      await assert.rejects(() => save({...options, credentialOperation}), /provider API key|existing saved credential/i);
+      assert.equal(readProviderRoute(config), null);
+    }
   } finally {
     rmSync(config, {recursive: true, force: true});
   }
@@ -150,8 +163,8 @@ test('a legacy-only profile cannot save a route with a blank key as a first-run 
 test('a save receipt never claims a credential changed when the action only kept it', async () => {
   const config = mkdtempSync(join(tmpdir(), 'babel-provider-receipt-'));
   try {
-    saveProviderCredential({provider: 'deepseek', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
-    const kept = await save({configDirectory: config, provider: 'deepseek', model: 'deepseek-v4-pro', apiKey: '', scope: 'private', credentialOperation: 'keep_existing_route_only'});
+    saveProviderCredential({provider: 'openrouter', apiKey: FIXTURE_VALUE, scope: 'private', configDirectory: config});
+    const kept = await save({configDirectory: config, provider: 'openrouter', model: 'deepseek-v4-pro-openrouter', apiKey: '', scope: 'private', credentialOperation: 'keep_existing_route_only'});
     assert.equal(kept.ok, true);
     assert.equal(kept.credentialChanged, false);
     assert.equal(kept.authState, 'not_checked');

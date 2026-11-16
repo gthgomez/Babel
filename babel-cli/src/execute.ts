@@ -1,6 +1,7 @@
 import { createProviderRunner } from './runners/providerEngine.js'
 import { assertFiniteBudgetSupported } from './config/laneBudget.js'
-import { isProviderId, providerSupportsOperation } from './runners/providerRegistry.js'
+import { assertApprovedProductProvider, isProductProviderPolicyActive, isProviderId, ProductProviderPolicyError, providerSupportsOperation } from './runners/providerRegistry.js'
+import { assertOfflineProviderAllowed, OfflineModeError } from './config/offlineMode.js'
 import { ProviderHttpError } from './runners/providerHttpError.js'
 /**
  * execute.ts — Per-Stage LLM Waterfall Executor
@@ -113,6 +114,8 @@ export function getPipelineSelectedModel(): string | undefined {
 function explicitModelTier(model: string, liveOnly: boolean, allowExpensive = false): TierSpec {
   if (liveOnly && !model.startsWith('connection/')) assertLiveModelId(model, 'live pipeline selection');
   const resolved = resolveModelByKey({key:model, liveOnly, allowExpensive, bindStagesToSelectedModel:true});
+  assertOfflineProviderAllowed(resolved.provider, resolved.baseUrl)
+  if (liveOnly && isProductProviderPolicyActive()) assertApprovedProductProvider(resolved.provider)
   const selectedProvider = process.env['BABEL_DESKTOP_PROVIDER'];
   if (selectedProvider && resolved.provider !== selectedProvider) {
     throw new Error('The requested pipeline model does not belong to the selected provider. Choose its provider in Desktop Settings before running this profile.');
@@ -121,7 +124,7 @@ function explicitModelTier(model: string, liveOnly: boolean, allowExpensive = fa
   const provider = resolved.provider
   return { kind: 'api', name: resolved.resolvedBackendKey, provider, backendKey: resolved.resolvedBackendKey,
     factory: () => createProviderRunner({ provider, modelId: resolved.providerModelId,
-      ...(resolved.contextWindow ? { contextWindowTokens: resolved.contextWindow } : {}), ...(resolved.authentication ? { authentication: resolved.authentication } : {}), ...(resolved.requestedOutputTokens ? { sampling: { maxTokens: resolved.requestedOutputTokens } } : {}), ...(resolved.apiKeyEnvVar ? { apiKeyEnvVar: resolved.apiKeyEnvVar } : {}), ...(resolved.baseUrl ? { baseUrl: resolved.baseUrl } : {}) }) }
+      ...(resolved.contextWindow ? { contextWindowTokens: resolved.contextWindow } : {}), ...(resolved.authentication ? { authentication: resolved.authentication } : {}), ...(resolved.requestedOutputTokens ? { sampling: { maxTokens: resolved.requestedOutputTokens } } : {}), ...(resolved.apiKeyEnvVar ? { apiKeyEnvVar: resolved.apiKeyEnvVar } : {}), ...(resolved.credentialRef ? { credentialRef: resolved.credentialRef } : {}), ...(resolved.baseUrl ? { baseUrl: resolved.baseUrl } : {}) }) }
 
 }
 
@@ -1046,6 +1049,7 @@ async function runWaterfall<T>(
     try {
       runner = spec.factory();
     } catch (err) {
+      if (err instanceof OfflineModeError || err instanceof ProductProviderPolicyError) throw err;
       lastError = err instanceof Error ? err : new Error(String(err));
       tiersSkipped.push(spec.name);
       if (next) {
@@ -1228,6 +1232,7 @@ async function runWaterfall<T>(
           },
         };
       } catch (err) {
+        if (err instanceof OfflineModeError || err instanceof ProductProviderPolicyError) throw err;
         if (err instanceof JitDenialError) {
           throw err;
         }
@@ -1553,6 +1558,10 @@ export async function runWithFallback<T>(
     return result;
   }
 
+  if (process.env['BABEL_PIPELINE_V9_OFFLINE'] === '1') {
+    throw new OfflineModeError(`No pipeline offline fixture is available for stage ${label}; no provider request was sent.`);
+  }
+
   // ── Dynamic Routing v1 ────────────────────────────────────────────────────
   // Explicit `startTierIndex` from the caller wins; otherwise consult the
   // routing engine (which returns null when disabled or data is too thin).
@@ -1713,6 +1722,7 @@ export async function runDirectAsk<T>(
       );
       return result;
     } catch (error) {
+      if (error instanceof OfflineModeError || error instanceof ProductProviderPolicyError) throw error;
       lastError = error instanceof Error ? error : new Error(String(error));
       if (attempt < maxAttempts) {
         await new Promise((r) => setTimeout(r, 500));

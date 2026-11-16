@@ -8,7 +8,7 @@
  * written under artifacts/pty/.
  *
  *   node scripts/verify_consumer_pty.mjs --bin bin/babel.js
- *   node scripts/verify_consumer_pty.mjs --archive babel-harness-0.2.1.tgz
+ *   node scripts/verify_consumer_pty.mjs --archive babel-harness-0.3.0.tgz
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'

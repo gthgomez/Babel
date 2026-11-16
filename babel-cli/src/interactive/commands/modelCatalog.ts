@@ -24,7 +24,7 @@ export function formatModelCatalog(
     try {
       const status = getProviderCredentialStatus(entry.provider as ProviderId, options.env ?? process.env);
       availability = !status.required ? 'no API key required; availability not checked'
-        : status.configured ? 'key configured; availability not checked' : `requires ${status.envVar}`;
+        : status.configured ? 'environment key present; availability not checked' : `${status.envVar} not set; check the selected connection`;
     } catch { /* Unregistered providers retain an honest unknown status. */ }
     const tags = entry.capabilities?.slice(0, 3).join(', ');
     const details = `${entry.provider}${entry.experimental ? ' · experimental' : ''}${tags ? ` · ${tags}` : ''} · ${availability}\n${formatModelPricing(entry)}`;

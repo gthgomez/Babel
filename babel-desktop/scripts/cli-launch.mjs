@@ -47,6 +47,7 @@ try {
   }
 } catch { /* An absent or unsafe preference file never grants project credential access. */ }
 applyCliCredentialScope(env,{args,cwd:process.cwd(),preferences,configDirectory:env.BABEL_CONFIG_DIR});
+if(env.BABEL_SHARED_CREDENTIALS==='1'&&entryPath!==bundledEntry)throw new Error('This updated CLI has not been qualified for shared credentials. Select the bundled CLI in Desktop before using this launcher.');
 applySandboxEnvironment(env,preferences);
 const child = spawn(nodeExe, [entryPath, ...args], {env, stdio: 'inherit', windowsHide: true, shell: false});
 child.on('error', error => { console.error(`Babel CLI could not start: ${error.message}`); process.exitCode = 1; });

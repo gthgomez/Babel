@@ -46,10 +46,11 @@ test('profiled pipeline rejects foreign model overrides before entering executio
   try {
     for (const provider of ['opencode-go', 'deepseek', 'deepinfra', 'ollama']) {
       process.env['BABEL_DESKTOP_PROVIDER'] = provider;
-      await assert.rejects(() => withPipelineModelRoute('glm-5.3-flash', async () => { entered++; }), /selected provider/);
+      await assert.rejects(() => withPipelineModelRoute('glm-5.3-flash', async () => { entered++; }),
+        provider === 'ollama' ? /offline mode/i : /selected provider/);
     }
     const { runBabelPipeline } = await import('./pipeline.js');
-    await assert.rejects(() => runBabelPipeline('Public admission fixture', { modelOverride: 'glm-5.3-flash' }), /selected provider/);
+    await assert.rejects(() => runBabelPipeline('Public admission fixture', { modelOverride: 'glm-5.3-flash' }), /offline mode/i);
     assert.equal(entered, 0);
     assert.equal(requests, 0);
     process.env['BABEL_DESKTOP_PROVIDER'] = 'openrouter';
