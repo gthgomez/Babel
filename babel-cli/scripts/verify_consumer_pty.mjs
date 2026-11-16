@@ -157,10 +157,11 @@ const transcript = existsSync(join(root, 'transcript.txt'))
   ? readFileSync(join(root, 'transcript.txt'), 'utf8')
   : result.transcript_tail ?? result.last_output ?? ''
 const events = Array.isArray(result.events) ? result.events : []
+const redactFixture = value => value.replaceAll('synthetic-router-credential', '[synthetic]')
 mkdirSync(artifactDir, { recursive: true })
-writeFileSync(join(artifactDir, 'chat-journey.json'), JSON.stringify({ ...result, root, bin }, null, 2))
+writeFileSync(join(artifactDir, 'chat-journey.json'), redactFixture(JSON.stringify({ ...result, root, bin }, null, 2)))
 if (existsSync(join(root, 'transcript.txt'))) {
-  writeFileSync(join(artifactDir, 'chat-journey.txt'), readFileSync(join(root, 'transcript.txt'), 'utf8'))
+  writeFileSync(join(artifactDir, 'chat-journey.txt'), redactFixture(readFileSync(join(root, 'transcript.txt'), 'utf8')))
 }
 
 const firstAnswerAt = transcript.indexOf('Fixed math.js')
@@ -194,7 +195,7 @@ const summary = {
   answer_ms: result.answer_ms,
   duration_ms: result.duration_ms,
   ...(result.ok === true ? {} : { driver_error: result.error ?? 'PTY driver did not complete',
-    failure_output: transcript.replaceAll('synthetic-router-credential', '[synthetic]').slice(-2000) }),
+    failure_output: redactFixture(transcript).slice(-2000) }),
   checks,
   failed,
   artifact: join(artifactDir, 'chat-journey.json'),
