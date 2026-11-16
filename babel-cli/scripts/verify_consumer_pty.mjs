@@ -14,7 +14,8 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { consumerEnvironment } from './consumer_environment.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..')
@@ -35,6 +36,9 @@ const workspace = join(root, 'workspace')
 for (const dir of ['home', 'config', 'state', 'cache', 'runs', 'workspace']) {
   mkdirSync(join(root, dir), { recursive: true })
 }
+const isolatedEnv = consumerEnvironment(process.env, root)
+writeFileSync(isolatedEnv.npm_config_userconfig, '')
+writeFileSync(isolatedEnv.npm_config_globalconfig, '')
 writeFileSync(join(root, 'state', 'preferences.json'), JSON.stringify({
   schemaVersion: 1,
   connections: {
@@ -48,7 +52,7 @@ writeFileSync(join(root, 'state', 'preferences.json'), JSON.stringify({
 }))
 
 const git = (args) => {
-  const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8' })
+  const result = spawnSync('git', args, { cwd: workspace, encoding: 'utf8', env: isolatedEnv })
   if (result.status !== 0) fail(`git ${args.join(' ')} failed`, result.stderr)
 }
 git(['init', '-q'])
@@ -69,6 +73,7 @@ git(['add', '.'])
 git(['commit', '-qm', 'fixture'])
 
 writeFileSync(join(root, 'preload.mjs'), `
+import ${JSON.stringify(pathToFileURL(join(here, 'block_consumer_network.mjs')).href)}
 globalThis.__calls = 0
 globalThis.fetch = async (url, init) => {
   const body = JSON.parse(String(init?.body ?? '{}'))
@@ -110,14 +115,14 @@ let bin = arg('bin') ? resolve(arg('bin')) : join(repoRoot, 'bin', 'babel.js')
 const archive = arg('archive')
 if (archive) {
   const prefix = join(root, 'install')
-  const installed = spawnSync('npm', ['install', '--prefix', prefix, '--omit=dev', '--ignore-scripts', resolve(archive)], { encoding: 'utf8' })
+  const installed = spawnSync('npm', ['install', '--prefix', prefix, '--omit=dev', '--ignore-scripts', resolve(archive)], { encoding: 'utf8', env: isolatedEnv })
   if (installed.status !== 0) fail('npm install of archive failed', installed.stderr)
   bin = join(prefix, 'node_modules', 'babel-harness', 'bin', 'babel.js')
 }
 if (!existsSync(bin)) fail(`CLI entry not found: ${bin}`)
 
 const env = {
-  ...process.env,
+  ...isolatedEnv,
   HOME: join(root, 'home'),
   BABEL_CONFIG_DIR: join(root, 'config'),
   BABEL_STATE_DIR: join(root, 'state'),
@@ -129,6 +134,8 @@ const env = {
   OPENROUTER_API_KEY: 'synthetic-router-credential',
   TERM: 'xterm-256color',
 }
+delete env.BABEL_DRY_RUN
+delete env.BABEL_ROOT
 // This is a real PTY journey. A CI/headless marker inherited from the runner
 // would deliberately select the non-interactive fallback and hide the very
 // renderer, composer queue and tool cells this test exists to qualify.
@@ -148,7 +155,8 @@ let result
 try { result = JSON.parse(driver.stdout) } catch { fail('PTY driver did not return JSON', { stdout: driver.stdout, stderr: driver.stderr }) }
 const transcript = existsSync(join(root, 'transcript.txt'))
   ? readFileSync(join(root, 'transcript.txt'), 'utf8')
-  : result.transcript_tail ?? ''
+  : result.transcript_tail ?? result.last_output ?? ''
+const events = Array.isArray(result.events) ? result.events : []
 mkdirSync(artifactDir, { recursive: true })
 writeFileSync(join(artifactDir, 'chat-journey.json'), JSON.stringify({ ...result, root, bin }, null, 2))
 if (existsSync(join(root, 'transcript.txt'))) {
@@ -171,8 +179,8 @@ const checks = {
   queued_followup_admitted: transcript.includes('Queued (Tab)'),
   // A queued message must run after the active turn settles, not inside it.
   queued_followup_ran_after_first: firstAnswerAt >= 0 && secondAnswerAt > firstAnswerAt,
-  resize_applied: result.events.some(event => event.resize?.[1] === 160) &&
-    result.events.some(event => event.resize?.[1] === 120),
+  resize_applied: events.some(event => event.resize?.[1] === 160) &&
+    events.some(event => event.resize?.[1] === 120),
   cursor_restored: result.cursor_restored === true,
   no_unhandled_rejection: !transcript.includes('Unhandled Rejection'),
   real_mutation: readFileSync(join(workspace, 'math.js'), 'utf8').includes('a + b'),
@@ -185,6 +193,8 @@ const summary = {
   first_output_ms: result.first_output_ms,
   answer_ms: result.answer_ms,
   duration_ms: result.duration_ms,
+  ...(result.ok === true ? {} : { driver_error: result.error ?? 'PTY driver did not complete',
+    failure_output: transcript.replaceAll('synthetic-router-credential', '[synthetic]').slice(-2000) }),
   checks,
   failed,
   artifact: join(artifactDir, 'chat-journey.json'),

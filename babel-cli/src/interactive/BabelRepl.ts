@@ -2,7 +2,7 @@ import * as readline from 'node:readline/promises';
 import * as rl from 'node:readline';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { InteractiveRunBusyError } from './context.js';
+import { assertInteractiveRunAvailable, InteractiveRunBusyError } from './context.js';
 
 interface ReadlineWithHistory extends readline.Interface {
   history: string[];
@@ -91,6 +91,7 @@ export class BabelRepl {
   state: SessionState;
   isRunning: boolean = false;
   preparingRun: boolean = false;
+  cancelActiveRun?: (() => void) | undefined;
   logBuffer: string[] = [];
   currentStageIdx: number = 0;
   verboseMode: boolean = false;
@@ -762,7 +763,21 @@ export class BabelRepl {
 
   private async executeTask(input: string): Promise<void> {
     try {
-      const { executeTask } = await import('./execution/dispatch.js');
+      assertInteractiveRunAvailable(this);
+      let cancelled = false;
+      const cancelDispatchLoad = () => { cancelled = true; };
+      this.preparingRun = true;
+      this.cancelActiveRun = cancelDispatchLoad;
+      let executeTask: typeof import('./execution/dispatch.js').executeTask;
+      try {
+        ({ executeTask } = await import('./execution/dispatch.js'));
+        if (cancelled) return;
+      } finally {
+        if (this.cancelActiveRun === cancelDispatchLoad) {
+          this.preparingRun = false;
+          delete this.cancelActiveRun;
+        }
+      }
       return await executeTask(this, input);
     } catch (err: any) {
       if (!(err instanceof InteractiveRunBusyError)) this.isRunning = false;
