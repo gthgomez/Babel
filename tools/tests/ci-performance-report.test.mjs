@@ -413,7 +413,7 @@ test('stage, workload, wait, and supersession summaries keep unsupported attribu
         { name: 'Run complete unit shard', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:00:42Z', completed_at: '2026-10-30T00:02:22Z' },
         { name: 'Mystery step', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:02:22Z', completed_at: '2026-10-30T00:02:32Z' },
       ] }),
-      job({ id: 12, conclusion: 'cancelled', status: 'completed', created_at: '2026-10-30T00:00:00Z', started_at: '2026-10-30T00:00:00Z', completed_at: '2026-10-30T00:01:40Z', steps: undefined }),
+      job({ id: 12, conclusion: 'cancelled', status: 'completed', runner_id: null, runner_name: null, created_at: '2026-10-30T00:00:00Z', started_at: '2026-10-30T00:00:00Z', completed_at: '2026-10-30T00:01:40Z', steps: undefined }),
       job({ id: 13, name: 'linux-validation', conclusion: 'failure' }),
     ] })],
   })
@@ -438,6 +438,8 @@ test('runnerless cancelled job with zero wait is excluded from executed runner w
     id: 20,
     status: 'completed',
     conclusion: 'cancelled',
+    runner_id: null,
+    runner_name: null,
     created_at: '2026-10-30T00:00:00Z',
     started_at: '2026-10-30T00:00:00Z',
     completed_at: '2026-10-30T00:01:40Z',
@@ -450,6 +452,36 @@ test('runnerless cancelled job with zero wait is excluded from executed runner w
   assert.equal(report.executionAccounting.observedExecutedSeconds, 0)
   assert.equal(report.executionAccounting.executedSeconds, 0)
   assert.equal(report.stageBreakdown.jobsWithRunnerTime, 0)
+})
+
+test('runnerless cancelled empty-step jobs require one of the explicit no-runner encodings', () => {
+  const base = { conclusion: 'cancelled', created_at: '2026-10-30T00:00:00Z', started_at: '2026-10-30T00:00:00Z', completed_at: '2026-10-30T00:00:30Z', steps: [] }
+  const runnerlessNull = { ...job({ id: 20, ...base }), runner_id: null, runner_name: null }
+  const runnerlessZero = { ...job({ id: 21, ...base }), runner_id: 0, runner_name: '' }
+  const missingRunner = job({ id: 22, ...base })
+  const mismatchedRunner = { ...job({ id: 23, ...base }), runner_id: 0, runner_name: 'GitHub Actions 0' }
+  const assignedWithoutSteps = { ...job({ id: 24, ...base }), runner_id: 1234, runner_name: 'GitHub Actions 1234' }
+  const assignedWithObservedStep = {
+    ...job({ id: 25, ...base, steps: [{
+      name: 'Run complete unit shard',
+      status: 'completed',
+      conclusion: 'cancelled',
+      started_at: '2026-10-30T00:00:00Z',
+      completed_at: '2026-10-30T00:00:30Z',
+    }] }),
+    runner_id: 1235,
+    runner_name: 'GitHub Actions 1235',
+  }
+  const jobs = [runnerlessNull, runnerlessZero, missingRunner, mismatchedRunner, assignedWithoutSteps, assignedWithObservedStep]
+  const input = docs({ attempts: [attempt({ total_count: jobs.length, jobs })] })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.equal(report.executionAccounting.runnerlessCancelledJobs, 2)
+  assert.equal(report.executionAccounting.runnerlessUnstartedLifetimeSeconds, 60)
+  assert.equal(report.executionAccounting.executedJobs, 1)
+  assert.equal(report.executionAccounting.unknownJobs, 3)
+  assert.equal(report.executionAccounting.observedExecutedSeconds, 30)
+  assert.equal(report.executionAccounting.executedSeconds, null)
+  assert.equal(report.stageBreakdown.runnerSeconds, 30)
 })
 
 test('in-progress job in a failed run is not counted as a failed job or root candidate', () => {
@@ -478,6 +510,34 @@ test('standard setup-node and post-checkout labels are classified by stage', () 
   assert.equal(report.stageBreakdown.stages.setup.observedSeconds, 20)
   assert.equal(report.stageBreakdown.stages.other.observedSeconds, 10)
   assert.equal(report.stageBreakdown.stages.unknown.observedSeconds, 0)
+})
+
+test('representative GitHub setup, post-action, task, and cleanup labels map conservatively', () => {
+  const names = [
+    'Set up job',
+    'Run actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444',
+    'Install dependencies',
+    'Post actions/cache@v3',
+    'Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09',
+    'Test policy integrity verifier',
+    'Run complete unit shard',
+    'Complete job',
+    'Upload diagnostic artifact',
+    'A user label describing a test for cache cleanup',
+  ]
+  const steps = names.map((name, index) => ({
+    name,
+    status: 'completed',
+    conclusion: 'success',
+    started_at: `2026-10-30T00:00:${String(index * 2).padStart(2, '0')}Z`,
+    completed_at: `2026-10-30T00:00:${String(index * 2 + 1).padStart(2, '0')}Z`,
+  }))
+  const input = docs({ attempts: [attempt({ jobs: [job({ steps })] })] })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.equal(report.stageBreakdown.stages.setup.observedSeconds, 3)
+  assert.equal(report.stageBreakdown.stages.task.observedSeconds, 2)
+  assert.equal(report.stageBreakdown.stages.other.observedSeconds, 4)
+  assert.equal(report.stageBreakdown.stages.unknown.observedSeconds, 1)
 })
 
 test('platformCoreSteps: nameless and null step observations reconcile via unnamed bucket', () => {

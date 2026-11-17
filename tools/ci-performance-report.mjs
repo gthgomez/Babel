@@ -19,7 +19,12 @@ const stamp = value => typeof value === 'string' && TIMESTAMP.test(value) ? Date
 export function classifyExecution(job, attemptStartedAt) {
   const unknown = { classification: 'unknown', executedSeconds: null }
   if (!job || typeof job !== 'object') return unknown
-  if (isRunnerlessCancellation(job)) return { classification: 'runnerless-cancelled', executedSeconds: null }
+  if (job.conclusion === 'cancelled' && hasNoRunnerSteps(job)
+      && stamp(job.created_at) === stamp(job.started_at)) {
+    return isRunnerlessCancellation(job)
+      ? { classification: 'runnerless-cancelled', executedSeconds: null }
+      : unknown
+  }
   if (job.conclusion === 'skipped' || job.status === 'not_run') return { classification: 'not-executed', executedSeconds: 0 }
   const attempt = stamp(attemptStartedAt)
   const start = stamp(job.started_at)
@@ -152,14 +157,27 @@ function cacheState(job) {
 function classifyStepStage(step) {
   if (!step || typeof step.name !== 'string' || !step.name) return 'unknown'
   const name = step.name.toLowerCase()
-  if (/^post\s+run\b|upload .*artifact|stage .*tap|cleanup/.test(name)) return 'other'
-  if (/checkout|set up node(?:\.js)?|setup[- ]node(?:\.js)?|install dependencies|restore cache|download .*artifact|prepare .*prerequisite/.test(name)) return 'setup'
-  if (/build|test|unit shard|validate|verify|typecheck|qualif|lint|policy/.test(name)) return 'task'
+  if (/^post(?:\s+run)?\s+actions\//.test(name) || /^post job cleanup\b/.test(name)
+      || /^complete job$/.test(name) || /^upload\b/.test(name) || /^stage .* tap$/.test(name)
+      || /^summarize .* tap/.test(name) || /^cleanup\b/.test(name)) return 'other'
+  if (/^set up job$/.test(name) || /^checkout$/.test(name) || /^set up node(?:\.js)?$/.test(name)
+      || /^run actions\/(?:checkout|setup-node|setup-python)@/.test(name)
+      || /^install\b/.test(name) || /^clean install\b/.test(name) || /^restore cache\b/.test(name)
+      || /^download\b/.test(name) || /^prepare .* prerequisite/.test(name)) return 'setup'
+  if (/^(?:build|run|test|check|validate|verify|qualify|lint|enforce|public (?:content|scrub|prevention)|retain source-build|capture .*selection|installed .*journey)\b/.test(name)) return 'task'
   return 'unknown'
 }
 
+function hasNoRunnerSteps(job) {
+  return job?.steps == null || (Array.isArray(job.steps) && job.steps.length === 0)
+}
+
 function isRunnerlessCancellation(job) {
-  return job?.conclusion === 'cancelled' && !Array.isArray(job.steps)
+  // GitHub uses two explicit encodings for a job that never received a runner.
+  const explicitNoRunner = (job.runner_id === 0 && job.runner_name === '')
+    || (job.runner_id === null && job.runner_name === null)
+  return job?.conclusion === 'cancelled' && job.status === 'completed' && hasNoRunnerSteps(job)
+    && explicitNoRunner
     && Number.isFinite(stamp(job.created_at)) && Number.isFinite(stamp(job.started_at))
     && stamp(job.created_at) === stamp(job.started_at)
 }
@@ -472,7 +490,6 @@ export function reportPerformance(runsDoc, jobsDoc) {
       executedJobs: executedJobsFresh,
       carriedForwardJobs: observations.filter(row => row.classification === 'carried-forward').length,
       notExecutedJobs: observations.filter(row => row.classification === 'not-executed').length,
-      runnerlessCancelledJobs: observations.filter(row => row.classification === 'runnerless-cancelled').length,
       unknownJobs: observations.filter(row => row.classification === 'unknown').length,
       executedSeconds: collectionCompleteFinal && timingComplete ? observedExecutedSeconds : null,
       observedExecutedSeconds,
@@ -518,6 +535,7 @@ export function reportPerformance(runsDoc, jobsDoc) {
       executedSeconds: 'sum of executed-this-attempt job seconds; null unless collection and timing are both complete',
       observedExecutedSeconds: 'partial sum from classified fresh executions even when timing is incomplete',
       carriedForward: 'started_at and completed_at are both strictly before attempt run_started_at; executedSeconds is 0',
+      runnerlessCancellation: 'cancelled completed job with no steps and created_at equal to started_at; requires runner_id 0 with empty runner_name, or both runner fields null',
       schedulingProxy: 'created_at to started_at; not provider capacity and not workflow dependency delay',
       updatedAt: 'not used as qualification completion',
       stageBreakdown: 'observed step seconds classified by explicit step-name hints; unknown and unassigned runner seconds remain unattributed; not billing time',
