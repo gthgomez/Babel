@@ -19,6 +19,7 @@ const stamp = value => typeof value === 'string' && TIMESTAMP.test(value) ? Date
 export function classifyExecution(job, attemptStartedAt) {
   const unknown = { classification: 'unknown', executedSeconds: null }
   if (!job || typeof job !== 'object') return unknown
+  if (isRunnerlessCancellation(job)) return { classification: 'runnerless-cancelled', executedSeconds: null }
   if (job.conclusion === 'skipped' || job.status === 'not_run') return { classification: 'not-executed', executedSeconds: 0 }
   const attempt = stamp(attemptStartedAt)
   const start = stamp(job.started_at)
@@ -151,8 +152,8 @@ function cacheState(job) {
 function classifyStepStage(step) {
   if (!step || typeof step.name !== 'string' || !step.name) return 'unknown'
   const name = step.name.toLowerCase()
-  if (/checkout|setup node|install dependencies|restore cache|download .*artifact|prepare .*prerequisite/.test(name)) return 'setup'
-  if (/upload .*artifact|stage .*tap|cleanup|post /.test(name)) return 'other'
+  if (/^post\s+run\b|upload .*artifact|stage .*tap|cleanup/.test(name)) return 'other'
+  if (/checkout|set up node(?:\.js)?|setup[- ]node(?:\.js)?|install dependencies|restore cache|download .*artifact|prepare .*prerequisite/.test(name)) return 'setup'
   if (/build|test|unit shard|validate|verify|typecheck|qualif|lint|policy/.test(name)) return 'task'
   return 'unknown'
 }
@@ -317,6 +318,7 @@ export function reportPerformance(runsDoc, jobsDoc) {
           changeClass: typeof run?.changeClass === 'string' ? run.changeClass : 'unknown',
           os: os.length ? os.join(',') : 'unknown',
           outcome: typeof job.conclusion === 'string' ? job.conclusion : (typeof run?.conclusion === 'string' ? run.conclusion : 'unknown'),
+          jobOutcome: typeof job.conclusion === 'string' ? job.conclusion : 'unknown',
           runOutcome: typeof run?.conclusion === 'string' ? run.conclusion : 'unknown',
           cache: cacheState(job),
           status: job.status ?? null,
@@ -377,7 +379,7 @@ export function reportPerformance(runsDoc, jobsDoc) {
       supersessionCausality: 'unknown',
     }
   })
-  const failedJobRows = observations.filter(row => row.outcome === 'failure')
+  const failedJobRows = observations.filter(row => row.jobOutcome === 'failure')
   const failureByIdentity = new Map(failedJobRows.map(row => [`${row.runId}:${row.attempt}:${row.jobId}`, row]))
   const uniqueFailedJobs = [...failureByIdentity.values()]
   const rootFailureCandidates = uniqueFailedJobs.filter(row => !AGGREGATE_FAILURE_JOB.test(row.name.split(' (')[0]))
@@ -470,6 +472,7 @@ export function reportPerformance(runsDoc, jobsDoc) {
       executedJobs: executedJobsFresh,
       carriedForwardJobs: observations.filter(row => row.classification === 'carried-forward').length,
       notExecutedJobs: observations.filter(row => row.classification === 'not-executed').length,
+      runnerlessCancelledJobs: observations.filter(row => row.classification === 'runnerless-cancelled').length,
       unknownJobs: observations.filter(row => row.classification === 'unknown').length,
       executedSeconds: collectionCompleteFinal && timingComplete ? observedExecutedSeconds : null,
       observedExecutedSeconds,

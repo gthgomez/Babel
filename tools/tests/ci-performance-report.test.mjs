@@ -433,6 +433,53 @@ test('stage, workload, wait, and supersession summaries keep unsupported attribu
   assert.equal(report.stageBreakdown.billingSeconds, null)
 })
 
+test('runnerless cancelled job with zero wait is excluded from executed runner work', () => {
+  const input = docs({ attempts: [attempt({ jobs: [job({
+    id: 20,
+    status: 'completed',
+    conclusion: 'cancelled',
+    created_at: '2026-10-30T00:00:00Z',
+    started_at: '2026-10-30T00:00:00Z',
+    completed_at: '2026-10-30T00:01:40Z',
+    steps: undefined,
+  })] })] })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.equal(report.executionAccounting.runnerlessCancelledJobs, 1)
+  assert.equal(report.executionAccounting.runnerlessUnstartedLifetimeSeconds, 100)
+  assert.equal(report.executionAccounting.executedJobs, 0)
+  assert.equal(report.executionAccounting.observedExecutedSeconds, 0)
+  assert.equal(report.executionAccounting.executedSeconds, 0)
+  assert.equal(report.stageBreakdown.jobsWithRunnerTime, 0)
+})
+
+test('in-progress job in a failed run is not counted as a failed job or root candidate', () => {
+  const input = docs({
+    runs: [run({ conclusion: 'failure' })],
+    attempts: [attempt({ jobs: [job({
+      status: 'in_progress',
+      conclusion: null,
+      completed_at: null,
+    })] })],
+  })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.equal(report.workload.failedJobRows, 0)
+  assert.equal(report.workload.rootFailureCandidates, 0)
+  assert.equal(report.workload.rootFailureIdentity.startsWith('unknown'), true)
+})
+
+test('standard setup-node and post-checkout labels are classified by stage', () => {
+  const input = docs({ attempts: [attempt({ jobs: [job({
+    steps: [
+      { name: 'Set up Node.js', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:00:02Z', completed_at: '2026-10-30T00:00:22Z' },
+      { name: 'Post Run actions/checkout', status: 'completed', conclusion: 'success', started_at: '2026-10-30T00:00:22Z', completed_at: '2026-10-30T00:00:32Z' },
+    ],
+  })] })] })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.equal(report.stageBreakdown.stages.setup.observedSeconds, 20)
+  assert.equal(report.stageBreakdown.stages.other.observedSeconds, 10)
+  assert.equal(report.stageBreakdown.stages.unknown.observedSeconds, 0)
+})
+
 test('platformCoreSteps: nameless and null step observations reconcile via unnamed bucket', () => {
   const input = docs({
     attempts: [attempt({
