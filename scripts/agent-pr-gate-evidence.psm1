@@ -1,6 +1,20 @@
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'agent-pr-gate-common.psm1')
 
+function Invoke-AgentSnapshotRead {
+  param(
+    [Parameter(Mandatory = $true)][scriptblock]$ReadJson,
+    [Parameter(Mandatory = $true)][string]$Endpoint,
+    [Parameter(Mandatory = $true)][DateTimeOffset]$Deadline,
+    [Parameter(Mandatory = $true)][ref]$ApiCalls,
+    [Parameter(Mandatory = $true)][int]$MaxRequests
+  )
+  if ([DateTimeOffset]::UtcNow -ge $Deadline) { throw 'github_snapshot_deadline_exceeded' }
+  if ($ApiCalls.Value -ge $MaxRequests) { throw 'github_snapshot_request_limit' }
+  $ApiCalls.Value++
+  return (& $ReadJson $Endpoint)
+}
+
 function Get-CIProperty($Object, [string]$Name) {
   if ($null -eq $Object -or $null -eq $Object.PSObject.Properties[$Name]) { return $null }
   return $Object.PSObject.Properties[$Name].Value
@@ -16,8 +30,7 @@ function Get-AgentJobAttemptSnapshot {
     [Parameter(Mandatory = $true)][DateTimeOffset]$Deadline,
     [Parameter(Mandatory = $true)][ref]$ApiCalls,
     [Parameter(Mandatory = $true)][hashtable]$JobMetadataCache,
-    [Parameter(Mandatory = $true)][string]$BatchRequestCountKey,
-    [Parameter(Mandatory = $true)][int]$MaxBatchRequests
+    [Parameter(Mandatory = $true)][int]$MaxSnapshotRequests
   )
   $rows = @(); $expected = $null
   $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -25,17 +38,7 @@ function Get-AgentJobAttemptSnapshot {
     $endpoint = "repos/$Repository/actions/runs/$RunId/attempts/$Attempt/jobs?per_page=100&page=$page"
     $result = $null
     for ($readAttempt = 0; $readAttempt -lt 2; $readAttempt++) {
-      if ([DateTimeOffset]::UtcNow -ge $Deadline) { throw 'github_snapshot_deadline_exceeded' }
-      $batchRequestCount = 0L
-      if ($JobMetadataCache.ContainsKey($BatchRequestCountKey)) {
-        $storedCount = [string]$JobMetadataCache[$BatchRequestCountKey]
-        if ($storedCount -notmatch '^\d+$' -or [int64]$storedCount -gt $MaxBatchRequests) { throw 'github_snapshot_batch_request_limit' }
-        $batchRequestCount = [int64]$storedCount
-      }
-      if ($batchRequestCount -ge $MaxBatchRequests) { throw 'github_snapshot_batch_request_limit' }
-      $JobMetadataCache[$BatchRequestCountKey] = $batchRequestCount + 1
-      $ApiCalls.Value++
-      $result = & $ReadJson $endpoint
+      $result = Invoke-AgentSnapshotRead -ReadJson $ReadJson -Endpoint $endpoint -Deadline $Deadline -ApiCalls $ApiCalls -MaxRequests $MaxSnapshotRequests
       if ($result.available) { break }
       $readError = [string](Get-CIProperty $result 'error')
       $retryable = $readError -in @('github_api_timeout', 'github_api_server_error', 'github_api_unavailable')
@@ -69,20 +72,20 @@ function Get-AgentCISnapshot {
   param([string]$Repository, [string]$TargetSha, [scriptblock]$ReadJson, [DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(120)), [int64[]]$AuthorityAppIds = @(15368), [hashtable]$JobMetadataCache = $null)
   $observations = @(); $workflows = @(); $cache = @{}; $apiCalls = 0
   $jobCache = if ($null -ne $JobMetadataCache) { $JobMetadataCache } else { @{} }
-  # The recent 125-row PR snapshot needed three batch pages. 32 requests allow
-  # over 10x that observed page count, including retries, while bounding runs
-  # with many rerun attempts independently of the wall-clock deadline.
-  $maxBatchRequests = 32
-  $batchRequestCountKey = 'attempt-jobs:request-count'
+  # The recent 125-row PR snapshot needed 15 evidence reads (checks, workflows,
+  # run metadata, and attempt jobs). 256 reads allow over 17x that complete
+  # observed snapshot, including retries, while placing a deterministic bound
+  # on one poll. The existing 1,800-second wait and 10/20/40/60-second capped
+  # backoff permit at most 32 nonterminal polls, so evidence reads are bounded
+  # to 8,192 for a full wait invocation.
+  $maxSnapshotRequests = 256
   try {
     foreach ($kind in @('checks', 'workflows')) {
       $rows = @(); $expected = $null
       for ($page = 1; $page -le 100; $page++) {
         $endpoint = if ($kind -eq 'checks') { "repos/$Repository/commits/$TargetSha/check-runs?filter=all&per_page=100&page=$page" }
           else { "repos/$Repository/actions/runs?head_sha=$TargetSha&per_page=100&page=$page" }
-        if ([DateTimeOffset]::UtcNow -ge $Deadline) { throw 'github_snapshot_deadline_exceeded' }
-        $apiCalls++
-        $result = & $ReadJson $endpoint
+        $result = Invoke-AgentSnapshotRead -ReadJson $ReadJson -Endpoint $endpoint -Deadline $Deadline -ApiCalls ([ref]$apiCalls) -MaxRequests $maxSnapshotRequests
         if (-not $result.available) {
           $reason = [string](Get-CIProperty $result 'error')
           if ($reason -notmatch '^github_(api_(timeout|forbidden|rate_limited|server_error|unavailable)|json_malformed)$') { $reason = 'github_source_unavailable' }
@@ -114,8 +117,7 @@ function Get-AgentCISnapshot {
       if ($appId -match '^\d+$' -and [int64]$appId -in $AuthorityAppIds -and $url -match $runPattern) {
         $id = $Matches.id
         if (-not $cache.ContainsKey($id)) {
-          if ([DateTimeOffset]::UtcNow -ge $Deadline) { throw 'github_snapshot_deadline_exceeded' }
-          $apiCalls++; $result = & $ReadJson "repos/$Repository/actions/runs/$id"
+          $result = Invoke-AgentSnapshotRead -ReadJson $ReadJson -Endpoint "repos/$Repository/actions/runs/$id" -Deadline $Deadline -ApiCalls ([ref]$apiCalls) -MaxRequests $maxSnapshotRequests
           if (-not $result.available) {
             $reason = [string](Get-CIProperty $result 'error')
             if ($reason -notmatch '^github_(api_(timeout|forbidden|rate_limited|server_error|unavailable)|json_malformed)$') { $reason = 'workflow_metadata_unavailable' }
@@ -145,7 +147,7 @@ function Get-AgentCISnapshot {
             if ($jobCache.ContainsKey($jobKey)) {
               $jobs = @($jobCache[$jobKey])
             } else {
-              $jobs = @(Get-AgentJobAttemptSnapshot -Repository $Repository -RunId $id -Attempt $attempt -TargetSha $TargetSha -ReadJson $ReadJson -Deadline $Deadline -ApiCalls ([ref]$apiCalls) -JobMetadataCache $jobCache -BatchRequestCountKey $batchRequestCountKey -MaxBatchRequests $maxBatchRequests)
+              $jobs = @(Get-AgentJobAttemptSnapshot -Repository $Repository -RunId $id -Attempt $attempt -TargetSha $TargetSha -ReadJson $ReadJson -Deadline $Deadline -ApiCalls ([ref]$apiCalls) -JobMetadataCache $jobCache -MaxSnapshotRequests $maxSnapshotRequests)
               $jobCache[$jobKey] = @($jobs)
             }
             $matchedJobs += @($jobs | Where-Object { [string](Get-CIProperty $_ 'id') -ceq $jobId })
@@ -172,7 +174,7 @@ function Get-AgentCISnapshot {
     return [pscustomobject]@{ available = $true; observations = @($observations); workflows = @($workflows); error = ''; apiCalls = $apiCalls }
   } catch {
     # No raw API error/body is retained: it may contain private diagnostics.
-    $reason = if ($_.Exception.Message -match '^(github_(api_(timeout|forbidden|rate_limited|server_error|unavailable)|json_malformed|source_unavailable|snapshot_(deadline_exceeded|batch_request_limit|shape_invalid|changed_during_pagination|incomplete|duplicate_or_invalid_observation))|workflow_metadata_unavailable|workflow_check_attempt_unavailable)$') { $_.Exception.Message } else { 'github_snapshot_invalid' }
+    $reason = if ($_.Exception.Message -match '^(github_(api_(timeout|forbidden|rate_limited|server_error|unavailable)|json_malformed|source_unavailable|snapshot_(deadline_exceeded|request_limit|shape_invalid|changed_during_pagination|incomplete|duplicate_or_invalid_observation))|workflow_metadata_unavailable|workflow_check_attempt_unavailable)$') { $_.Exception.Message } else { 'github_snapshot_invalid' }
     return [pscustomobject]@{ available = $false; observations = @(); workflows = @(); error = $reason; apiCalls = $apiCalls }
   }
 }

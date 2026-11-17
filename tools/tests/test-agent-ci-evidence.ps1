@@ -159,7 +159,7 @@ $batchRead = {
     $batchReadCounts.runReads++
     return [pscustomobject]@{ available = $true; value = $batchWorkflow; error = '' }
   }
-  if ($Endpoint -match '/actions/runs/90/attempts/(?<attempt>[12])/jobs\?per_page=100&page=(?<page>\d+)$') {
+  if ($Endpoint -match '/actions/runs/90/attempts/(?<attempt>[123])/jobs\?per_page=100&page=(?<page>\d+)$') {
     $attempt = [int]$Matches.attempt; $page = [int]$Matches.page
     $batchReadCounts.jobPages[$attempt]++
     $start = ($page - 1) * 100; $end = [Math]::Min($start + 99, $batchJobs[$attempt].Count - 1)
@@ -168,7 +168,8 @@ $batchRead = {
   if ($Endpoint -like '*/actions/jobs/*') { $batchReadCounts.individualJobReads++; throw 'Individual job endpoint must not be used by batch snapshot' }
   throw "Unexpected batch evidence endpoint: $Endpoint"
 }
-$batchSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $batchRead
+$batchCache = @{}
+$batchSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $batchRead -JobMetadataCache $batchCache
 $batchState = Get-AgentCIState -Snapshot $batchSnapshot -Policies $policy -TargetSha $head
 Assert-CI ($batchSnapshot.available -and $batchSnapshot.observations.Count -eq 210) 'Batch snapshot must retain every check across two attempts'
 Assert-CI ($batchSnapshot.apiCalls -eq 9 -and $batchReadCounts.calls -eq 9 -and $batchReadCounts.checkPages -eq 3 -and
@@ -176,6 +177,20 @@ Assert-CI ($batchSnapshot.apiCalls -eq 9 -and $batchReadCounts.calls -eq 9 -and 
   $batchReadCounts.jobPages[2] -eq 2 -and $batchReadCounts.individualJobReads -eq 0) '210 check rows must use complete 2-attempt paginated batches, not 210 individual job reads'
 Assert-CI ($batchState.state -eq 'complete' -and $batchState.results[0].resolution.selected.check_run_id -eq '302001' -and
   $batchState.results[0].resolution.selected.workflow_run_attempt -eq '2') 'Latest exact-attempt success must remain authoritative after batching'
+$repeatStart = $batchReadCounts.calls
+$repeatSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $batchRead -JobMetadataCache $batchCache
+Assert-CI ($repeatSnapshot.available -and $repeatSnapshot.apiCalls -eq 5 -and ($batchReadCounts.calls - $repeatStart) -eq 5) 'A repeated normal snapshot must get a fresh per-snapshot budget and reuse only immutable job pages'
+$thirdJobId = 3001; $thirdCheckId = 303001
+$batchJobs[3] = @([pscustomobject]@{ id = $thirdJobId; run_id = 90; run_attempt = 3; head_sha = $head; check_run_url = "https://api.github.com/repos/test/repo/check-runs/$thirdCheckId" })
+$batchChecks += [pscustomobject]@{ id = $thirdCheckId; name = 'security'; head_sha = $head; status = 'completed'; conclusion = 'success';
+  started_at = '2026-10-07T12:04:00Z'; completed_at = '2026-10-07T12:05:00Z'; details_url = "https://github.com/test/repo/actions/runs/90/job/$thirdJobId";
+  app = [pscustomobject]@{ id = 15368 }; check_suite = [pscustomobject]@{ id = 903 } }
+$batchWorkflow.run_attempt = 3
+$arrivalStart = $batchReadCounts.calls
+$arrivalSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $batchRead -JobMetadataCache $batchCache
+$arrivalState = Get-AgentCIState -Snapshot $arrivalSnapshot -Policies $policy -TargetSha $head
+Assert-CI ($arrivalSnapshot.available -and $arrivalState.ready -and $arrivalState.results[0].resolution.selected.check_run_id -eq '303001' -and
+  $arrivalState.results[0].resolution.selected.workflow_run_attempt -eq '3' -and ($batchReadCounts.calls - $arrivalStart) -eq 6) 'A newly arrived attempt must be fetched and selected while prior immutable attempt pages remain reusable'
 foreach ($batchFault in @('no_access','partial','duplicate','missing','foreign_run','wrong_attempt','foreign_sha','wrong_check_url','ambiguous')) {
   $faultJobs = @{
     1 = @($batchJobs[1] | ForEach-Object { $_.PSObject.Copy() })
@@ -206,9 +221,9 @@ foreach ($batchFault in @('no_access','partial','duplicate','missing','foreign_r
   $faultSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $faultRead
   Assert-CI (-not $faultSnapshot.available) "$batchFault attempt job evidence must fail closed"
 }
-$ceilingHead = 'c' * 40; $ceilingFixtureCount = 15
+$ceilingHead = 'c' * 40; $ceilingFixtureCount = 84
 $ceilingChecks = @(); $ceilingWorkflows = @(); $ceilingJobs = @{}
-for ($index = 1; $index -le 16; $index++) {
+for ($index = 1; $index -le 85; $index++) {
   $runId = 50000 + $index; $checkId = 60000 + $index; $oldJobId = 70000 + $index; $newJobId = 80000 + $index
   $ceilingChecks += [pscustomobject]@{ id = $checkId; name = $(if ($index -eq 1) { 'security' } else { "ceiling-matrix-$index" });
     head_sha = $ceilingHead; status = 'completed'; conclusion = 'success'; started_at = '2026-10-07T12:02:00Z'; completed_at = '2026-10-07T12:03:00Z';
@@ -220,9 +235,10 @@ for ($index = 1; $index -le 16; $index++) {
     2 = @([pscustomobject]@{ id = $newJobId; run_id = $runId; run_attempt = 2; head_sha = $ceilingHead; check_run_url = "https://api.github.com/repos/test/repo/check-runs/$checkId" })
   }
 }
-$ceilingReads = @{ batchRequests = 0; transient = @{ '50001:1' = 1; '50008:2' = 1 } }
+$ceilingReads = @{ calls = 0; transient = @{ '50001:1' = 1; '50008:2' = 1 } }
 $ceilingRead = {
   param($Endpoint)
+  $ceilingReads.calls++
   if ($Endpoint -like '*check-runs*') { return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = $ceilingFixtureCount; check_runs = @($ceilingChecks[0..($ceilingFixtureCount - 1)]) }; error = '' } }
   if ($Endpoint -like '*/actions/runs`?*') { return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = $ceilingFixtureCount; workflow_runs = @($ceilingWorkflows[0..($ceilingFixtureCount - 1)]) }; error = '' } }
   if ($Endpoint -match '^repos/test/repo/actions/runs/(?<runId>\d+)$') {
@@ -232,7 +248,6 @@ $ceilingRead = {
   }
   if ($Endpoint -match '/actions/runs/(?<runId>\d+)/attempts/(?<attempt>[12])/jobs\?per_page=100&page=1$') {
     $runId = $Matches.runId; $attempt = [int]$Matches.attempt; $requestKey = "$runId`:$attempt"
-    $ceilingReads.batchRequests++
     if ($ceilingReads.transient[$requestKey] -gt 0) {
       $ceilingReads.transient[$requestKey]--
       return [pscustomobject]@{ available = $false; value = $null; error = 'github_api_timeout' }
@@ -244,11 +259,14 @@ $ceilingRead = {
 }
 $ceilingCache = @{}
 $atCeiling = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $ceilingHead -ReadJson $ceilingRead -JobMetadataCache $ceilingCache
-Assert-CI ($atCeiling.available -and $ceilingReads.batchRequests -eq 32 -and $ceilingCache['attempt-jobs:request-count'] -eq 32) 'The 32-request aggregate ceiling must include successful retries and permit the exact boundary'
-$ceilingFixtureCount = 16
-$overCeiling = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $ceilingHead -ReadJson $ceilingRead -JobMetadataCache $ceilingCache
-Assert-CI (-not $overCeiling.available -and $overCeiling.error -eq 'github_snapshot_batch_request_limit' -and
-  $ceilingReads.batchRequests -eq 32 -and $ceilingCache['attempt-jobs:request-count'] -eq 32) 'Batch reads beyond the cumulative ceiling across snapshots must fail closed without issuing request 33'
+Assert-CI ($atCeiling.available -and $atCeiling.apiCalls -eq 256 -and $ceilingReads.calls -eq 256) 'The full evidence-read ceiling must include check/workflow pages, per-run metadata, attempt pages, and retries at the exact boundary'
+$repeatCeilingStart = $ceilingReads.calls
+$repeatCeiling = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $ceilingHead -ReadJson $ceilingRead -JobMetadataCache $ceilingCache
+Assert-CI ($repeatCeiling.available -and $repeatCeiling.apiCalls -eq 86 -and ($ceilingReads.calls - $repeatCeilingStart) -eq 86) 'A repeated bounded snapshot must not inherit a consumed request budget'
+$ceilingFixtureCount = 85
+$overCeiling = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $ceilingHead -ReadJson $ceilingRead
+Assert-CI (-not $overCeiling.available -and $overCeiling.error -eq 'github_snapshot_request_limit' -and
+  $overCeiling.apiCalls -eq 256 -and $ceilingReads.calls -eq ($repeatCeilingStart + 86 + 256)) 'Any 257th evidence read must fail closed without being issued'
 $foreign = $raw[139].PSObject.Copy()
 $foreign.id = 141
 $foreign.app = [pscustomobject]@{ id = 999 }
