@@ -6,9 +6,58 @@ function Get-CIProperty($Object, [string]$Name) {
   return $Object.PSObject.Properties[$Name].Value
 }
 
+function Get-AgentJobAttemptSnapshot {
+  param(
+    [Parameter(Mandatory = $true)][string]$Repository,
+    [Parameter(Mandatory = $true)][string]$RunId,
+    [Parameter(Mandatory = $true)][int]$Attempt,
+    [Parameter(Mandatory = $true)][string]$TargetSha,
+    [Parameter(Mandatory = $true)][scriptblock]$ReadJson,
+    [Parameter(Mandatory = $true)][DateTimeOffset]$Deadline,
+    [Parameter(Mandatory = $true)][ref]$ApiCalls
+  )
+  $rows = @(); $expected = $null
+  $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  for ($page = 1; $page -le 100; $page++) {
+    $endpoint = "repos/$Repository/actions/runs/$RunId/attempts/$Attempt/jobs?per_page=100&page=$page"
+    $result = $null
+    for ($readAttempt = 0; $readAttempt -lt 2; $readAttempt++) {
+      if ([DateTimeOffset]::UtcNow -ge $Deadline) { throw 'github_snapshot_deadline_exceeded' }
+      $ApiCalls.Value++
+      $result = & $ReadJson $endpoint
+      if ($result.available) { break }
+      $readError = [string](Get-CIProperty $result 'error')
+      $retryable = $readError -in @('github_api_timeout', 'github_api_server_error', 'github_api_unavailable')
+      if (-not $retryable -or $readAttempt -eq 1) { break }
+    }
+    if ($null -eq $result -or -not $result.available) { throw 'workflow_check_attempt_unavailable' }
+    $total = Get-CIProperty $result.value 'total_count'
+    $jobsProperty = $result.value.PSObject.Properties['jobs']
+    $pageRows = if ($null -ne $jobsProperty) { @($jobsProperty.Value) } else { $null }
+    if ($null -eq $total -or [string]$total -notmatch '^\d+$' -or $null -eq $jobsProperty) { throw 'github_snapshot_shape_invalid' }
+    if ($null -eq $expected) { $expected = [int]$total }
+    if ($expected -ne [int]$total) { throw 'github_snapshot_changed_during_pagination' }
+    foreach ($job in $pageRows) {
+      $jobId = [string](Get-CIProperty $job 'id')
+      if ($jobId -notmatch '^[1-9]\d*$' -or -not $seen.Add($jobId)) { throw 'github_snapshot_duplicate_or_invalid_observation' }
+      $checkUrl = [string](Get-CIProperty $job 'check_run_url')
+      $checkPattern = '^https://api\.github\.com/repos/' + [regex]::Escape($Repository) + '/check-runs/[1-9]\d*$'
+      if ([string](Get-CIProperty $job 'run_id') -ne $RunId -or
+          [string](Get-CIProperty $job 'run_attempt') -ne [string]$Attempt -or
+          [string](Get-CIProperty $job 'head_sha') -cne $TargetSha -or
+          $checkUrl -notmatch $checkPattern) { throw 'workflow_check_attempt_unavailable' }
+    }
+    $rows += $pageRows
+    if ($rows.Count -eq $expected) { break }
+    if ($rows.Count -gt $expected -or $pageRows.Count -ne 100 -or $page -eq 100) { throw 'github_snapshot_incomplete' }
+  }
+  return @($rows)
+}
+
 function Get-AgentCISnapshot {
   param([string]$Repository, [string]$TargetSha, [scriptblock]$ReadJson, [DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(120)), [int64[]]$AuthorityAppIds = @(15368), [hashtable]$JobMetadataCache = $null)
   $observations = @(); $workflows = @(); $cache = @{}; $apiCalls = 0
+  $jobCache = if ($null -ne $JobMetadataCache) { $JobMetadataCache } else { @{} }
   try {
     foreach ($kind in @('checks', 'workflows')) {
       $rows = @(); $expected = $null
@@ -59,43 +108,37 @@ function Get-AgentCISnapshot {
           $cache[$id] = $result.value
         }
         $run = $cache[$id]
+        $latestAttemptValue = [string](Get-CIProperty $run 'run_attempt')
+        if ([string](Get-CIProperty $run 'id') -ne $id -or
+            [string](Get-CIProperty $run 'head_sha') -cne $TargetSha -or
+            $latestAttemptValue -notmatch '^[1-9]\d*$') { throw 'workflow_check_attempt_unavailable' }
         foreach ($pair in @(@('event', 'event'), @('workflow_id', 'workflow_id'), @('workflow_name', 'name'),
           @('workflow_run_id', 'id'), @('workflow_run_attempt', 'run_attempt'), @('started_at', 'created_at'))) {
           $metadata[$pair[0]] = [string](Get-CIProperty $run $pair[1])
         }
         # The run endpoint describes its latest attempt, not this check's
         # attempt. Reruns retain old checks; bind each to its own Actions job.
-        if ([string](Get-CIProperty $run 'run_attempt') -match '^[1-9]\d*$' -and [int64](Get-CIProperty $run 'run_attempt') -gt 1) {
+        # Fetch each attempt's paginated job list once, then bind by job id.
+        if ([int64]$latestAttemptValue -gt 1) {
           $jobPattern = '^https://github\.com/' + [regex]::Escape($Repository) + '/actions/runs/' + $id + '/job/(?<jobId>[1-9]\d*)(?:[/?]|$)'
           if ($url -notmatch $jobPattern) { throw 'workflow_check_attempt_unavailable' }
           $jobId = $Matches.jobId
-          if ([DateTimeOffset]::UtcNow -ge $Deadline) { throw 'github_snapshot_deadline_exceeded' }
-          $jobKey = $Repository + ':' + $jobId
-          if ($null -ne $JobMetadataCache -and $JobMetadataCache.ContainsKey($jobKey)) {
-            $jobResult = [pscustomobject]@{ available = $true; value = $JobMetadataCache[$jobKey] }
-          } else {
-            $jobEndpoint = "repos/$Repository/actions/jobs/$jobId"
-            for ($jobReadAttempt = 0; $jobReadAttempt -lt 2; $jobReadAttempt++) {
-              if ([DateTimeOffset]::UtcNow -ge $Deadline) { throw 'github_snapshot_deadline_exceeded' }
-              $apiCalls++
-              $jobResult = & $ReadJson $jobEndpoint
-              if ($jobResult.available) { break }
-              $jobReadError = [string](Get-CIProperty $jobResult 'error')
-              $retryableReadError = $jobReadError -in @('github_api_timeout', 'github_api_server_error', 'github_api_unavailable')
-              if (-not $retryableReadError -or $jobReadAttempt -eq 1) { break }
+          $matchedJobs = @()
+          for ($attempt = 1; $attempt -le [int]$latestAttemptValue; $attempt++) {
+            $jobKey = 'attempt-jobs:' + $Repository + ':' + $id + ':' + $TargetSha + ':' + $attempt
+            if ($jobCache.ContainsKey($jobKey)) {
+              $jobs = @($jobCache[$jobKey])
+            } else {
+              $jobs = @(Get-AgentJobAttemptSnapshot -Repository $Repository -RunId $id -Attempt $attempt -TargetSha $TargetSha -ReadJson $ReadJson -Deadline $Deadline -ApiCalls ([ref]$apiCalls))
+              $jobCache[$jobKey] = @($jobs)
             }
+            $matchedJobs += @($jobs | Where-Object { [string](Get-CIProperty $_ 'id') -ceq $jobId })
           }
-          if (-not $jobResult.available) { throw 'workflow_check_attempt_unavailable' }
-          $job = $jobResult.value
-          $jobAttempt = [string](Get-CIProperty $job 'run_attempt')
           $checkUrl = 'https://api.github.com/repos/' + $Repository + '/check-runs/' + [string](Get-CIProperty $check 'id')
-          if ([string](Get-CIProperty $job 'run_id') -ne $id -or
-              [string](Get-CIProperty $job 'check_run_url') -ne $checkUrl -or
-              $jobAttempt -notmatch '^[1-9]\d*$' -or [int64]$jobAttempt -gt [int64](Get-CIProperty $run 'run_attempt')) { throw 'workflow_check_attempt_unavailable' }
+          if ($matchedJobs.Count -ne 1 -or [string](Get-CIProperty $matchedJobs[0] 'run_id') -ne $id -or
+              [string](Get-CIProperty $matchedJobs[0] 'check_run_url') -cne $checkUrl) { throw 'workflow_check_attempt_unavailable' }
+          $jobAttempt = [string](Get-CIProperty $matchedJobs[0] 'run_attempt')
           $metadata['workflow_run_attempt'] = $jobAttempt
-          # Job ids and attempt bindings are immutable; run state and latest
-          # attempt are still fetched live on every snapshot.
-          if ($null -ne $JobMetadataCache) { $JobMetadataCache[$jobKey] = $job }
         }
       }
       $raw = [pscustomobject]@{}

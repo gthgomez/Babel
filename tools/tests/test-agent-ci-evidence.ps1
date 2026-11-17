@@ -50,7 +50,7 @@ $read = {
   }
   if ($Endpoint -like '*/actions/runs/8') {
     $counts.metadata++
-    return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ id = 8; workflow_id = 7; name = 'Public Release Gate'; event = 'pull_request'; run_attempt = 1; created_at = '2026-10-07T12:00:00Z' }; error = '' }
+    return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ id = 8; workflow_id = 7; name = 'Public Release Gate'; event = 'pull_request'; head_sha = $head; run_attempt = 1; created_at = '2026-10-07T12:00:00Z' }; error = '' }
   }
   if ($Endpoint -like '*/actions/runs`?*') { return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = 0; workflow_runs = @() }; error = '' } }
   throw "Unexpected fixture endpoint: $Endpoint"
@@ -59,19 +59,38 @@ $snapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJs
 Assert-CI ($snapshot.available -and $snapshot.observations.Count -eq 140) 'All pages must be present'
 Assert-CI ($counts.pages -eq 2 -and $counts.metadata -eq 1) 'Pagination and per-snapshot metadata cache must be bounded'
 Assert-CI ((Get-AgentCIState -Snapshot $snapshot -Policies $policy -TargetSha $head).state -eq 'complete') 'Page-two required check must pass'
-# Exercise real enrichment: REST check rows omit their workflow attempt.
-$rerunFixture = @{ status = 'queued'; checkAttempt = 1; jobRun = 8; jobTimeouts = 0; jobReads = 0 }
+# Exercise paginated attempt enrichment: REST check rows omit their workflow attempt.
+$rerunAttemptOne = $raw[139].PSObject.Copy()
+$rerunAttemptOne.id = 140
+$rerunAttemptOne.details_url = 'https://github.com/test/repo/actions/runs/8/job/1'
+$rerunAttemptTwo = $raw[139].PSObject.Copy()
+$rerunAttemptTwo.id = 141
+$rerunAttemptTwo.started_at = '2026-10-07T12:02:00Z'
+$rerunAttemptTwo.details_url = 'https://github.com/test/repo/actions/runs/8/job/2'
+$rerunFixture = @{ status = 'queued'; checkAttempt = 1; jobRun = 8; jobTimeouts = 0; jobReads = 0; jobReadsByAttempt = @{ 1 = 0; 2 = 0 }; includeAttemptTwoCheck = $false }
 $rerun = [pscustomobject]@{ id = 8; workflow_id = 7; name = 'Public Release Gate'; event = 'pull_request';
   head_sha = $head; run_attempt = 2; created_at = '2026-10-07T12:00:00Z'; status = 'queued' }
 $rerunRead = {
   param($Endpoint)
-  if ($Endpoint -like '*check-runs*') { return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = 1; check_runs = @($raw[139]) }; error = '' } }
+  if ($Endpoint -like '*check-runs*') {
+    $rows = if ($rerunFixture.includeAttemptTwoCheck) { @($rerunAttemptOne, $rerunAttemptTwo) } else { @($rerunAttemptOne) }
+    return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = $rows.Count; check_runs = $rows }; error = '' }
+  }
   if ($Endpoint -like '*/actions/runs`?*') { $rerun.status = $rerunFixture.status; return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = 1; workflow_runs = @($rerun) }; error = '' } }
   if ($Endpoint -like '*/actions/runs/8') { return [pscustomobject]@{ available = $true; value = $rerun; error = '' } }
-  if ($Endpoint -like '*/actions/jobs/1') {
+  if ($Endpoint -match '/actions/runs/8/attempts/(?<attempt>[12])/jobs\?per_page=100&page=1$') {
+    $attempt = [int]$Matches.attempt
     $rerunFixture.jobReads++
-    if ($rerunFixture.jobTimeouts -gt 0) { $rerunFixture.jobTimeouts--; return [pscustomobject]@{ available = $false; value = $null; error = 'github_api_timeout' } }
-    return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ run_id = $rerunFixture.jobRun; run_attempt = $rerunFixture.checkAttempt; check_run_url = 'https://api.github.com/repos/test/repo/check-runs/140' }; error = '' }
+    $rerunFixture.jobReadsByAttempt[$attempt]++
+    if ($attempt -eq 2 -and $rerunFixture.jobTimeouts -gt 0) { $rerunFixture.jobTimeouts--; return [pscustomobject]@{ available = $false; value = $null; error = 'github_api_timeout' } }
+    $jobs = if ($attempt -eq 1) {
+      @([pscustomobject]@{ id = 1; run_id = $rerunFixture.jobRun; run_attempt = 1; head_sha = $head; check_run_url = 'https://api.github.com/repos/test/repo/check-runs/140' })
+    } elseif ($rerunFixture.includeAttemptTwoCheck) {
+      @([pscustomobject]@{ id = 2; run_id = $rerunFixture.jobRun; run_attempt = 2; head_sha = $head; check_run_url = 'https://api.github.com/repos/test/repo/check-runs/141' })
+    } else {
+      @([pscustomobject]@{ id = 2; run_id = $rerunFixture.jobRun; run_attempt = 2; head_sha = $head; check_run_url = 'https://api.github.com/repos/test/repo/check-runs/142' })
+    }
+    return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = $jobs.Count; jobs = $jobs }; error = '' }
   }
   throw 'Unexpected rerun fixture endpoint'
 }
@@ -82,13 +101,14 @@ $rerunFixture.status = 'completed'
 $rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
 Assert-CI ((Get-AgentCIState -Snapshot $rerunSnapshot -Policies $policy -TargetSha $head).state -eq 'failed') 'A completed newer attempt without its required check must block old success'
 $rerunFixture.checkAttempt = 2
+$rerunFixture.includeAttemptTwoCheck = $true
 $rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
 Assert-CI ((Get-AgentCIState -Snapshot $rerunSnapshot -Policies $policy -TargetSha $head).ready) 'A successful check bound to the latest completed attempt must pass'
-$readsBeforeRetry = $rerunFixture.jobReads
+$readsBeforeRetry = $rerunFixture.jobReadsByAttempt[2]
 $rerunFixture.jobTimeouts = 1
 $rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
 Assert-CI ($rerunSnapshot.available -and (Get-AgentCIState -Snapshot $rerunSnapshot -Policies $policy -TargetSha $head).ready) 'A single transient job metadata timeout may be recovered by the bounded retry'
-Assert-CI ($rerunFixture.jobReads -eq $readsBeforeRetry + 2) 'Job metadata retry count must remain bounded to one retry'
+Assert-CI ($rerunFixture.jobReadsByAttempt[2] -eq ($readsBeforeRetry + 2)) "Attempt job-list retry count must remain bounded to one retry ($readsBeforeRetry -> $($rerunFixture.jobReadsByAttempt[2]))"
 $rerunFixture.jobTimeouts = 2
 $rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
 Assert-CI (-not $rerunSnapshot.available -and $rerunSnapshot.error -eq 'workflow_check_attempt_unavailable') 'Repeated job metadata timeouts must remain fail-closed'
@@ -96,6 +116,87 @@ $rerunFixture.jobRun = 99
 $rerunFixture.jobTimeouts = 0
 $rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
 Assert-CI (-not $rerunSnapshot.available -and $rerunSnapshot.error -eq 'workflow_check_attempt_unavailable') 'Mismatched job lineage must fail closed with a safe diagnostic'
+$batchChecks = @(); $batchJobs = @{ 1 = @(); 2 = @() }; $batchJobCount = 105
+for ($attempt = 1; $attempt -le 2; $attempt++) {
+  for ($index = 1; $index -le $batchJobCount; $index++) {
+    $jobId = if ($attempt -eq 1) { $index } else { 1000 + $index }
+    $checkId = 300000 + ($attempt * 1000) + $index
+    $name = if ($index -eq 1) { 'security' } else { "batch-matrix-$index" }
+    $startedAt = if ($attempt -eq 1) { '2026-10-07T12:00:00Z' } else { '2026-10-07T12:02:00Z' }
+    $batchJobs[$attempt] += [pscustomobject]@{ id = $jobId; run_id = 90; run_attempt = $attempt; head_sha = $head;
+      check_run_url = "https://api.github.com/repos/test/repo/check-runs/$checkId" }
+    $batchChecks += [pscustomobject]@{ id = $checkId; name = $name; head_sha = $head; status = 'completed'; conclusion = 'success';
+      started_at = $startedAt; completed_at = '2026-10-07T12:03:00Z'; details_url = "https://github.com/test/repo/actions/runs/90/job/$jobId";
+      app = [pscustomobject]@{ id = 15368 }; check_suite = [pscustomobject]@{ id = 900 + $attempt } }
+  }
+}
+$batchWorkflow = [pscustomobject]@{ id = 90; name = 'Public Release Gate'; event = 'pull_request'; workflow_id = 7; head_sha = $head;
+  run_attempt = 2; status = 'completed'; conclusion = 'success'; created_at = '2026-10-07T12:00:00Z' }
+$batchReadCounts = @{ calls = 0; checkPages = 0; workflowPages = 0; runReads = 0; jobPages = @{ 1 = 0; 2 = 0 }; individualJobReads = 0 }
+$batchRead = {
+  param($Endpoint)
+  $batchReadCounts.calls++
+  if ($Endpoint -like '*check-runs*') {
+    $batchReadCounts.checkPages++
+    $page = [int]([regex]::Match($Endpoint, 'page=(\d+)$').Groups[1].Value)
+    $start = ($page - 1) * 100; $end = [Math]::Min($start + 99, $batchChecks.Count - 1)
+    return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = $batchChecks.Count; check_runs = @($batchChecks[$start..$end]) }; error = '' }
+  }
+  if ($Endpoint -like '*/actions/runs`?*') {
+    $batchReadCounts.workflowPages++
+    return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = 1; workflow_runs = @($batchWorkflow) }; error = '' }
+  }
+  if ($Endpoint -eq 'repos/test/repo/actions/runs/90') {
+    $batchReadCounts.runReads++
+    return [pscustomobject]@{ available = $true; value = $batchWorkflow; error = '' }
+  }
+  if ($Endpoint -match '/actions/runs/90/attempts/(?<attempt>[12])/jobs\?per_page=100&page=(?<page>\d+)$') {
+    $attempt = [int]$Matches.attempt; $page = [int]$Matches.page
+    $batchReadCounts.jobPages[$attempt]++
+    $start = ($page - 1) * 100; $end = [Math]::Min($start + 99, $batchJobs[$attempt].Count - 1)
+    return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = $batchJobs[$attempt].Count; jobs = @($batchJobs[$attempt][$start..$end]) }; error = '' }
+  }
+  if ($Endpoint -like '*/actions/jobs/*') { $batchReadCounts.individualJobReads++; throw 'Individual job endpoint must not be used by batch snapshot' }
+  throw "Unexpected batch evidence endpoint: $Endpoint"
+}
+$batchSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $batchRead
+$batchState = Get-AgentCIState -Snapshot $batchSnapshot -Policies $policy -TargetSha $head
+Assert-CI ($batchSnapshot.available -and $batchSnapshot.observations.Count -eq 210) 'Batch snapshot must retain every check across two attempts'
+Assert-CI ($batchSnapshot.apiCalls -eq 9 -and $batchReadCounts.calls -eq 9 -and $batchReadCounts.checkPages -eq 3 -and
+  $batchReadCounts.workflowPages -eq 1 -and $batchReadCounts.runReads -eq 1 -and $batchReadCounts.jobPages[1] -eq 2 -and
+  $batchReadCounts.jobPages[2] -eq 2 -and $batchReadCounts.individualJobReads -eq 0) '210 check rows must use complete 2-attempt paginated batches, not 210 individual job reads'
+Assert-CI ($batchState.state -eq 'complete' -and $batchState.results[0].resolution.selected.check_run_id -eq '302001' -and
+  $batchState.results[0].resolution.selected.workflow_run_attempt -eq '2') 'Latest exact-attempt success must remain authoritative after batching'
+foreach ($batchFault in @('no_access','partial','duplicate','missing','foreign_run','wrong_attempt','foreign_sha','wrong_check_url','ambiguous')) {
+  $faultJobs = @{
+    1 = @($batchJobs[1] | ForEach-Object { $_.PSObject.Copy() })
+    2 = @($batchJobs[2] | ForEach-Object { $_.PSObject.Copy() })
+  }
+  switch ($batchFault) {
+    partial { }
+    duplicate { $faultJobs[2][1].id = $faultJobs[2][0].id }
+    missing { $faultJobs[2] = @($faultJobs[2] | Where-Object { $_.id -ne 1001 }) }
+    foreign_run { $faultJobs[2][0].run_id = 99 }
+    wrong_attempt { $faultJobs[2][0].run_attempt = 1 }
+    foreign_sha { $faultJobs[2][0].head_sha = 'b' * 40 }
+    wrong_check_url { $faultJobs[2][0].check_run_url = 'https://api.github.com/repos/test/repo/check-runs/999999' }
+    ambiguous { $faultJobs[2][0].id = 1; $faultJobs[2][0].check_run_url = 'https://api.github.com/repos/test/repo/check-runs/302001' }
+  }
+  $faultRead = {
+    param($Endpoint)
+    if ($Endpoint -match '/actions/runs/90/attempts/2/jobs\?per_page=100&page=(?<page>\d+)$') {
+      if ($batchFault -eq 'no_access') { return [pscustomobject]@{ available = $false; value = $null; error = 'github_api_forbidden' } }
+      $page = [int]$Matches.page; $total = $faultJobs[2].Count
+      if ($batchFault -eq 'partial') { $total++ }
+      $start = ($page - 1) * 100; $end = [Math]::Min($start + 99, $faultJobs[2].Count - 1)
+      $jobs = if ($faultJobs[2].Count -gt 0) { @($faultJobs[2][$start..$end]) } else { @() }
+      return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = $total; jobs = $jobs }; error = '' }
+    }
+    & $batchRead $Endpoint
+  }
+  $faultSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $faultRead
+  Assert-CI (-not $faultSnapshot.available) "$batchFault attempt job evidence must fail closed"
+}
 $foreign = $raw[139].PSObject.Copy()
 $foreign.id = 141
 $foreign.app = [pscustomobject]@{ id = 999 }
