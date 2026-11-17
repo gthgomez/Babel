@@ -14,7 +14,10 @@ function Get-AgentJobAttemptSnapshot {
     [Parameter(Mandatory = $true)][string]$TargetSha,
     [Parameter(Mandatory = $true)][scriptblock]$ReadJson,
     [Parameter(Mandatory = $true)][DateTimeOffset]$Deadline,
-    [Parameter(Mandatory = $true)][ref]$ApiCalls
+    [Parameter(Mandatory = $true)][ref]$ApiCalls,
+    [Parameter(Mandatory = $true)][hashtable]$JobMetadataCache,
+    [Parameter(Mandatory = $true)][string]$BatchRequestCountKey,
+    [Parameter(Mandatory = $true)][int]$MaxBatchRequests
   )
   $rows = @(); $expected = $null
   $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -23,6 +26,14 @@ function Get-AgentJobAttemptSnapshot {
     $result = $null
     for ($readAttempt = 0; $readAttempt -lt 2; $readAttempt++) {
       if ([DateTimeOffset]::UtcNow -ge $Deadline) { throw 'github_snapshot_deadline_exceeded' }
+      $batchRequestCount = 0L
+      if ($JobMetadataCache.ContainsKey($BatchRequestCountKey)) {
+        $storedCount = [string]$JobMetadataCache[$BatchRequestCountKey]
+        if ($storedCount -notmatch '^\d+$' -or [int64]$storedCount -gt $MaxBatchRequests) { throw 'github_snapshot_batch_request_limit' }
+        $batchRequestCount = [int64]$storedCount
+      }
+      if ($batchRequestCount -ge $MaxBatchRequests) { throw 'github_snapshot_batch_request_limit' }
+      $JobMetadataCache[$BatchRequestCountKey] = $batchRequestCount + 1
       $ApiCalls.Value++
       $result = & $ReadJson $endpoint
       if ($result.available) { break }
@@ -58,6 +69,11 @@ function Get-AgentCISnapshot {
   param([string]$Repository, [string]$TargetSha, [scriptblock]$ReadJson, [DateTimeOffset]$Deadline = ([DateTimeOffset]::UtcNow.AddSeconds(120)), [int64[]]$AuthorityAppIds = @(15368), [hashtable]$JobMetadataCache = $null)
   $observations = @(); $workflows = @(); $cache = @{}; $apiCalls = 0
   $jobCache = if ($null -ne $JobMetadataCache) { $JobMetadataCache } else { @{} }
+  # The recent 125-row PR snapshot needed three batch pages. 32 requests allow
+  # over 10x that observed page count, including retries, while bounding runs
+  # with many rerun attempts independently of the wall-clock deadline.
+  $maxBatchRequests = 32
+  $batchRequestCountKey = 'attempt-jobs:request-count'
   try {
     foreach ($kind in @('checks', 'workflows')) {
       $rows = @(); $expected = $null
@@ -129,7 +145,7 @@ function Get-AgentCISnapshot {
             if ($jobCache.ContainsKey($jobKey)) {
               $jobs = @($jobCache[$jobKey])
             } else {
-              $jobs = @(Get-AgentJobAttemptSnapshot -Repository $Repository -RunId $id -Attempt $attempt -TargetSha $TargetSha -ReadJson $ReadJson -Deadline $Deadline -ApiCalls ([ref]$apiCalls))
+              $jobs = @(Get-AgentJobAttemptSnapshot -Repository $Repository -RunId $id -Attempt $attempt -TargetSha $TargetSha -ReadJson $ReadJson -Deadline $Deadline -ApiCalls ([ref]$apiCalls) -JobMetadataCache $jobCache -BatchRequestCountKey $batchRequestCountKey -MaxBatchRequests $maxBatchRequests)
               $jobCache[$jobKey] = @($jobs)
             }
             $matchedJobs += @($jobs | Where-Object { [string](Get-CIProperty $_ 'id') -ceq $jobId })
@@ -156,7 +172,7 @@ function Get-AgentCISnapshot {
     return [pscustomobject]@{ available = $true; observations = @($observations); workflows = @($workflows); error = ''; apiCalls = $apiCalls }
   } catch {
     # No raw API error/body is retained: it may contain private diagnostics.
-    $reason = if ($_.Exception.Message -match '^(github_(api_(timeout|forbidden|rate_limited|server_error|unavailable)|json_malformed|source_unavailable|snapshot_(deadline_exceeded|shape_invalid|changed_during_pagination|incomplete|duplicate_or_invalid_observation))|workflow_metadata_unavailable|workflow_check_attempt_unavailable)$') { $_.Exception.Message } else { 'github_snapshot_invalid' }
+    $reason = if ($_.Exception.Message -match '^(github_(api_(timeout|forbidden|rate_limited|server_error|unavailable)|json_malformed|source_unavailable|snapshot_(deadline_exceeded|batch_request_limit|shape_invalid|changed_during_pagination|incomplete|duplicate_or_invalid_observation))|workflow_metadata_unavailable|workflow_check_attempt_unavailable)$') { $_.Exception.Message } else { 'github_snapshot_invalid' }
     return [pscustomobject]@{ available = $false; observations = @(); workflows = @(); error = $reason; apiCalls = $apiCalls }
   }
 }

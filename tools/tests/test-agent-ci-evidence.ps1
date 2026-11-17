@@ -67,7 +67,7 @@ $rerunAttemptTwo = $raw[139].PSObject.Copy()
 $rerunAttemptTwo.id = 141
 $rerunAttemptTwo.started_at = '2026-10-07T12:02:00Z'
 $rerunAttemptTwo.details_url = 'https://github.com/test/repo/actions/runs/8/job/2'
-$rerunFixture = @{ status = 'queued'; checkAttempt = 1; jobRun = 8; jobTimeouts = 0; jobReads = 0; jobReadsByAttempt = @{ 1 = 0; 2 = 0 }; includeAttemptTwoCheck = $false }
+$rerunFixture = @{ status = 'queued'; checkAttempt = 1; jobRun = 8; jobTimeouts = 0; jobReads = 0; jobReadsByAttempt = @{ 1 = 0; 2 = 0 }; includeAttemptTwoCheck = $false; jobFault = '' }
 $rerun = [pscustomobject]@{ id = 8; workflow_id = 7; name = 'Public Release Gate'; event = 'pull_request';
   head_sha = $head; run_attempt = 2; created_at = '2026-10-07T12:00:00Z'; status = 'queued' }
 $rerunRead = {
@@ -77,12 +77,14 @@ $rerunRead = {
     return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = $rows.Count; check_runs = $rows }; error = '' }
   }
   if ($Endpoint -like '*/actions/runs`?*') { $rerun.status = $rerunFixture.status; return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = 1; workflow_runs = @($rerun) }; error = '' } }
-  if ($Endpoint -like '*/actions/runs/8') { return [pscustomobject]@{ available = $true; value = $rerun; error = '' } }
+  if ($Endpoint -like '*/actions/runs/8') { $rerun.head_sha = if ($rerunFixture.jobFault -eq 'foreign_run_head') { 'b' * 40 } else { $head }; return [pscustomobject]@{ available = $true; value = $rerun; error = '' } }
   if ($Endpoint -match '/actions/runs/8/attempts/(?<attempt>[12])/jobs\?per_page=100&page=1$') {
     $attempt = [int]$Matches.attempt
     $rerunFixture.jobReads++
     $rerunFixture.jobReadsByAttempt[$attempt]++
     if ($attempt -eq 2 -and $rerunFixture.jobTimeouts -gt 0) { $rerunFixture.jobTimeouts--; return [pscustomobject]@{ available = $false; value = $null; error = 'github_api_timeout' } }
+    if ($attempt -eq 2 -and $rerunFixture.jobFault -eq 'null_jobs') { return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = 1; jobs = $null }; error = '' } }
+    if ($attempt -eq 2 -and $rerunFixture.jobFault -eq 'malformed_jobs') { return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = 1; jobs = 'not-a-job-array' }; error = '' } }
     $jobs = if ($attempt -eq 1) {
       @([pscustomobject]@{ id = 1; run_id = $rerunFixture.jobRun; run_attempt = 1; head_sha = $head; check_run_url = 'https://api.github.com/repos/test/repo/check-runs/140' })
     } elseif ($rerunFixture.includeAttemptTwoCheck) {
@@ -116,6 +118,13 @@ $rerunFixture.jobRun = 99
 $rerunFixture.jobTimeouts = 0
 $rerunSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
 Assert-CI (-not $rerunSnapshot.available -and $rerunSnapshot.error -eq 'workflow_check_attempt_unavailable') 'Mismatched job lineage must fail closed with a safe diagnostic'
+$rerunFixture.jobRun = 8
+foreach ($badShape in @('null_jobs','malformed_jobs','foreign_run_head')) {
+  $rerunFixture.jobFault = $badShape
+  $badShapeSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $rerunRead
+  Assert-CI (-not $badShapeSnapshot.available) "$badShape attempt or run metadata must fail closed"
+}
+$rerunFixture.jobFault = ''
 $batchChecks = @(); $batchJobs = @{ 1 = @(); 2 = @() }; $batchJobCount = 105
 for ($attempt = 1; $attempt -le 2; $attempt++) {
   for ($index = 1; $index -le $batchJobCount; $index++) {
@@ -197,6 +206,49 @@ foreach ($batchFault in @('no_access','partial','duplicate','missing','foreign_r
   $faultSnapshot = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $head -ReadJson $faultRead
   Assert-CI (-not $faultSnapshot.available) "$batchFault attempt job evidence must fail closed"
 }
+$ceilingHead = 'c' * 40; $ceilingFixtureCount = 15
+$ceilingChecks = @(); $ceilingWorkflows = @(); $ceilingJobs = @{}
+for ($index = 1; $index -le 16; $index++) {
+  $runId = 50000 + $index; $checkId = 60000 + $index; $oldJobId = 70000 + $index; $newJobId = 80000 + $index
+  $ceilingChecks += [pscustomobject]@{ id = $checkId; name = $(if ($index -eq 1) { 'security' } else { "ceiling-matrix-$index" });
+    head_sha = $ceilingHead; status = 'completed'; conclusion = 'success'; started_at = '2026-10-07T12:02:00Z'; completed_at = '2026-10-07T12:03:00Z';
+    details_url = "https://github.com/test/repo/actions/runs/$runId/job/$newJobId"; app = [pscustomobject]@{ id = 15368 }; check_suite = [pscustomobject]@{ id = 1000 + $index } }
+  $ceilingWorkflows += [pscustomobject]@{ id = $runId; name = 'Public Release Gate'; event = 'pull_request'; workflow_id = 7; head_sha = $ceilingHead;
+    run_attempt = 2; status = 'completed'; conclusion = 'success'; created_at = '2026-10-07T12:00:00Z' }
+  $ceilingJobs[[string]$runId] = @{
+    1 = @([pscustomobject]@{ id = $oldJobId; run_id = $runId; run_attempt = 1; head_sha = $ceilingHead; check_run_url = "https://api.github.com/repos/test/repo/check-runs/$((90000 + $index))" })
+    2 = @([pscustomobject]@{ id = $newJobId; run_id = $runId; run_attempt = 2; head_sha = $ceilingHead; check_run_url = "https://api.github.com/repos/test/repo/check-runs/$checkId" })
+  }
+}
+$ceilingReads = @{ batchRequests = 0; transient = @{ '50001:1' = 1; '50008:2' = 1 } }
+$ceilingRead = {
+  param($Endpoint)
+  if ($Endpoint -like '*check-runs*') { return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = $ceilingFixtureCount; check_runs = @($ceilingChecks[0..($ceilingFixtureCount - 1)]) }; error = '' } }
+  if ($Endpoint -like '*/actions/runs`?*') { return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = $ceilingFixtureCount; workflow_runs = @($ceilingWorkflows[0..($ceilingFixtureCount - 1)]) }; error = '' } }
+  if ($Endpoint -match '^repos/test/repo/actions/runs/(?<runId>\d+)$') {
+    $runId = $Matches.runId
+    $runRecord = $ceilingWorkflows | Where-Object { [string]$_.id -eq $runId } | Select-Object -First 1
+    return [pscustomobject]@{ available = $true; value = $runRecord; error = '' }
+  }
+  if ($Endpoint -match '/actions/runs/(?<runId>\d+)/attempts/(?<attempt>[12])/jobs\?per_page=100&page=1$') {
+    $runId = $Matches.runId; $attempt = [int]$Matches.attempt; $requestKey = "$runId`:$attempt"
+    $ceilingReads.batchRequests++
+    if ($ceilingReads.transient[$requestKey] -gt 0) {
+      $ceilingReads.transient[$requestKey]--
+      return [pscustomobject]@{ available = $false; value = $null; error = 'github_api_timeout' }
+    }
+    $jobs = @($ceilingJobs[$runId][$attempt])
+    return [pscustomobject]@{ available = $true; value = [pscustomobject]@{ total_count = $jobs.Count; jobs = $jobs }; error = '' }
+  }
+  throw "Unexpected ceiling fixture endpoint: $Endpoint"
+}
+$ceilingCache = @{}
+$atCeiling = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $ceilingHead -ReadJson $ceilingRead -JobMetadataCache $ceilingCache
+Assert-CI ($atCeiling.available -and $ceilingReads.batchRequests -eq 32 -and $ceilingCache['attempt-jobs:request-count'] -eq 32) 'The 32-request aggregate ceiling must include successful retries and permit the exact boundary'
+$ceilingFixtureCount = 16
+$overCeiling = Get-AgentCISnapshot -Repository 'test/repo' -TargetSha $ceilingHead -ReadJson $ceilingRead -JobMetadataCache $ceilingCache
+Assert-CI (-not $overCeiling.available -and $overCeiling.error -eq 'github_snapshot_batch_request_limit' -and
+  $ceilingReads.batchRequests -eq 32 -and $ceilingCache['attempt-jobs:request-count'] -eq 32) 'Batch reads beyond the cumulative ceiling across snapshots must fail closed without issuing request 33'
 $foreign = $raw[139].PSObject.Copy()
 $foreign.id = 141
 $foreign.app = [pscustomobject]@{ id = 999 }
