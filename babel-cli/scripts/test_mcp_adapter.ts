@@ -64,26 +64,16 @@ class McpClient {
 
   private drainMessages(): void {
     while (true) {
-      const headerEnd = this.buffer.indexOf('\r\n\r\n');
-      if (headerEnd === -1) {
+      const lineEnd = this.buffer.indexOf('\n');
+      if (lineEnd === -1) {
         return;
       }
 
-      const headerText = this.buffer.subarray(0, headerEnd).toString('utf8');
-      const contentLengthMatch = /Content-Length:\s*(\d+)/i.exec(headerText);
-      if (!contentLengthMatch) {
-        throw new Error(`Missing Content-Length header. stderr=${this.stderr()}`);
-      }
-
-      const contentLength = Number.parseInt(contentLengthMatch[1]!, 10);
-      const bodyStart = headerEnd + 4;
-      const bodyEnd = bodyStart + contentLength;
-      if (this.buffer.length < bodyEnd) {
-        return;
-      }
-
-      const body = this.buffer.subarray(bodyStart, bodyEnd).toString('utf8');
-      this.buffer = this.buffer.subarray(bodyEnd);
+      let contentEnd = lineEnd;
+      if (contentEnd > 0 && this.buffer[contentEnd - 1] === 0x0d) contentEnd -= 1;
+      const body = this.buffer.subarray(0, contentEnd).toString('utf8');
+      this.buffer = this.buffer.subarray(lineEnd + 1);
+      if (body.trim() === '') continue;
       const message = JSON.parse(body) as JsonRpcMessage;
       const waiter = this.waiters.shift();
       if (waiter) {
@@ -98,7 +88,9 @@ class McpClient {
     return this.stderrChunks.join('');
   }
 
-  private async nextMessage(timeoutMs = 10_000): Promise<JsonRpcMessage> {
+  // Serialized heavy CI can delay a cold CLI handshake; keep a generous but
+  // bounded budget so the adapter probe fails only on a real stalled peer.
+  private async nextMessage(timeoutMs = 30_000): Promise<JsonRpcMessage> {
     const queued = this.messages.shift();
     if (queued) {
       return queued;
@@ -127,7 +119,7 @@ class McpClient {
       method,
       ...(params ? { params } : {}),
     });
-    this.child.stdin.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
+    this.child.stdin.write(`${body}\n`);
     const message = await this.nextMessage();
     assert(message.id === id, `Expected MCP response id ${id}, got ${String(message.id)}`);
     return message;
@@ -138,7 +130,7 @@ class McpClient {
       jsonrpc: '2.0',
       method,
     });
-    this.child.stdin.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
+    this.child.stdin.write(`${body}\n`);
   }
 }
 

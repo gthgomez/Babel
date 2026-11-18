@@ -294,9 +294,12 @@ export function registerCoreCommands(program: Command): void {
       const selected = selectedConnectionModel({ model: action.opts()['model'] }, target);
       if (selected) action.setOptionValue('model', selected);
     }
+    const offlineRequested = action.opts()['offline'] === true ||
+      ['1', 'true'].includes(process.env['BABEL_OFFLINE'] ?? '') ||
+      process.argv.includes('--offline');
     if (['run', 'plan', 'deep'].includes(action.name()) && !action.opts()['model'] && !action.opts()['manual'] &&
       !process.env['BABEL_DESKTOP_PROVIDER'] && process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1' &&
-      process.env['BABEL_LITE_OFFLINE'] !== '1' && !['1', 'true'].includes(process.env['BABEL_OFFLINE'] ?? '')) {
+      process.env['BABEL_LITE_OFFLINE'] !== '1' && !offlineRequested) {
       throw new Error(`SETUP_REQUIRED: Run ${CLI_COMMAND} setup to choose a provider connection and exact model before starting work.`);
     }
   });

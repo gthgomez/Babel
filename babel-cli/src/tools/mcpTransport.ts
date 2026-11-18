@@ -6,6 +6,11 @@ import { z } from 'zod';
 
 import { endSpan } from '../telemetry/tracing.js';
 import { readMcpServers, type McpServerConfig } from '../config/mcpServers.js';
+import {
+  frameJsonRpcMessage,
+  McpFrameLimitError,
+  parseFramedMessages,
+} from '../mcp/framing.js';
 import type { ToolResult } from '../sandbox.js';
 import type { ToolCallRequest } from '../localTools.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
@@ -13,14 +18,6 @@ import { terminateChildTree } from '../processTree.js';
 
 /** Hard limit (ms) for a single MCP server round-trip. */
 const MCP_TIMEOUT_MS = 15_000;
-
-/**
- * Retained-byte ceiling for one MCP response frame (and for any partial frame
- * accumulated before its Content-Length arrives). MCP servers are untrusted and
- * must not be able to grow Babel memory independently of the other external
- * adapters. 5 MB matches the shell/ripgrep output caps.
- */
-const MAX_MCP_FRAME_BYTES = 5 * 1024 * 1024;
 
 /** Stop the owned server and bound both graceful close and forced cleanup. */
 async function closeMcpChild(child: ChildProcess, closed: Promise<void>, closeObserved: boolean): Promise<boolean> {
@@ -88,6 +85,38 @@ function buildMcpResult(
     stdout,
     stderr,
     mcp_lifecycle: buildMcpLifecycle(server, phase, outcome, reasonCode, evidence),
+  };
+}
+
+/** Provenance evidence for plugin-supplied MCP executables. */
+function mcpOriginEvidence(config: McpServerConfig): string[] {
+  if (!config.origin) return [];
+  return [
+    `origin:plugin:${config.origin.plugin_id}`,
+    `manifest_sha256:${config.origin.manifest_sha256}`,
+  ];
+}
+
+/** Typed failure when an outbound frame exceeds the local MCP frame ceiling. */
+function frameLimitMcpResult(server: string, method: string, error: unknown): ToolResult {
+  const detail = error instanceof Error ? error.message : String(error);
+  return {
+    ...buildMcpResult(
+      server,
+      'write_request',
+      'failure',
+      1,
+      '',
+      `[MCP_FRAME_LIMIT] ${detail}`,
+      'invalid_request_payload',
+      [`method:${method}`],
+    ),
+    render_intent: 'tool_failure',
+    failure: {
+      code: 'mcp_frame_limit',
+      category: 'input_contract',
+      tool: 'mcp:' + method,
+    },
   };
 }
 
@@ -529,52 +558,6 @@ function serializeValidatedJsonRpcMessage(
   return serialized;
 }
 
-export function frameJsonRpcMessage(messageBody: string): string {
-  return `Content-Length: ${Buffer.byteLength(messageBody, 'utf8')}\r\n\r\n${messageBody}`;
-}
-
-export function parseFramedMessages(buffer: Uint8Array): {
-  messages: Array<Record<string, unknown>>;
-  remainder: Buffer;
-} {
-  const messages: Array<Record<string, unknown>> = [];
-  let remainder = Buffer.from(buffer);
-  if (remainder.length > MAX_MCP_FRAME_BYTES) {
-    throw new Error('MCP response exceeds the bounded output budget.');
-  }
-
-  while (true) {
-    const headerEnd = remainder.indexOf('\r\n\r\n');
-    if (headerEnd === -1) {
-      break;
-    }
-
-    const headerText = remainder.subarray(0, headerEnd).toString('utf8');
-    const contentLengthMatch = /Content-Length:\s*(\d+)/i.exec(headerText);
-    if (!contentLengthMatch) {
-      throw new Error('Missing Content-Length header in MCP response.');
-    }
-
-    const contentLength = Number.parseInt(contentLengthMatch[1]!, 10);
-    if (!Number.isFinite(contentLength) || contentLength < 0 || contentLength > MAX_MCP_FRAME_BYTES) {
-      throw new Error('MCP response exceeds the bounded output budget.');
-    }
-    const bodyStart = headerEnd + 4;
-    const bodyEnd = bodyStart + contentLength;
-    if (remainder.length < bodyEnd) {
-      break;
-    }
-
-    const body = remainder.subarray(bodyStart, bodyEnd).toString('utf8');
-    const parsed = JSON.parse(body);
-    if (typeof parsed === 'object' && parsed !== null) {
-      messages.push(parsed as Record<string, unknown>);
-    }
-    remainder = remainder.subarray(bodyEnd);
-  }
-
-  return { messages, remainder };
-}
 
 interface McpToolAnnotations {
   readOnlyHint?: boolean;
@@ -881,6 +864,21 @@ async function executeMcpMethodImpl(
         const parsed = parseFramedMessages(stdoutBuf);
         parsedMessages = parsed.messages;
         stdoutBuf = parsed.remainder;
+        if (parsed.parseErrors.length > 0) {
+          settle(
+            buildMcpResult(
+              server,
+              'response_parse',
+              'failure',
+              1,
+              '',
+              `[MCP_PARSE_ERROR] ${parsed.parseErrors[0]!}`,
+              'response_parse_error',
+              [`method:${method}`],
+            ),
+          );
+          return;
+        }
       } catch (error: unknown) {
         settle(
           buildMcpResult(
@@ -890,7 +888,7 @@ async function executeMcpMethodImpl(
             1,
             '',
             `[MCP_PARSE_ERROR] ${error instanceof Error ? error.message : String(error)}`,
-            'response_parse_error',
+            error instanceof McpFrameLimitError ? 'frame_limit_exceeded' : 'response_parse_error',
             [`method:${method}`],
           ),
         );
@@ -913,9 +911,13 @@ async function executeMcpMethodImpl(
         }
         responseState = 'await_method';
         if (child.stdin) {
-          child.stdin.write(frameJsonRpcMessage(initializedPayload), 'utf8');
-          child.stdin.write(frameJsonRpcMessage(requestPayload), 'utf8');
-          child.stdin.end();
+          try {
+            child.stdin.write(frameJsonRpcMessage(initializedPayload), 'utf8');
+            child.stdin.write(frameJsonRpcMessage(requestPayload), 'utf8');
+            child.stdin.end();
+          } catch (error) {
+            settle(frameLimitMcpResult(server, method, error));
+          }
         }
         return;
       }
@@ -969,7 +971,7 @@ async function executeMcpMethodImpl(
           }),
           '',
           'response_received',
-          [`command:${config.command}`, `method:${method}`],
+          [`command:${config.command}`, `method:${method}`, ...mcpOriginEvidence(config)],
         ),
       );
     });
@@ -984,7 +986,7 @@ async function executeMcpMethodImpl(
           '',
           `[MCP_SPAWN_ERROR] Failed to start '${config.command}' for server '${server}': ${err.message}`,
           'spawn_error',
-          [`command:${config.command}`, `method:${method}`],
+          [`command:${config.command}`, `method:${method}`, ...mcpOriginEvidence(config)],
         ),
       );
     });
@@ -1007,23 +1009,27 @@ async function executeMcpMethodImpl(
     });
 
     if (child.stdin) {
-      child.stdin.write(frameJsonRpcMessage(initializePayload), 'utf8', (err?: Error | null) => {
-        if (err && !settled) {
-          settle(
-            buildMcpResult(
-              server,
-              'write_request',
-              'failure',
-              1,
-              '',
-              `[MCP_WRITE_ERROR] Could not write to '${server}' stdin: ${err.message}`,
-              'write_error',
-              [`command:${config.command}`, `method:${method}`],
-            ),
-          );
-          return;
-        }
-      });
+      try {
+        child.stdin.write(frameJsonRpcMessage(initializePayload), 'utf8', (err?: Error | null) => {
+          if (err && !settled) {
+            settle(
+              buildMcpResult(
+                server,
+                'write_request',
+                'failure',
+                1,
+                '',
+                `[MCP_WRITE_ERROR] Could not write to '${server}' stdin: ${err.message}`,
+                'write_error',
+                [`command:${config.command}`, `method:${method}`, ...mcpOriginEvidence(config)],
+              ),
+            );
+            return;
+          }
+        });
+      } catch (error) {
+        settle(frameLimitMcpResult(server, 'initialize', error));
+      }
     }
   });
 }
@@ -1199,7 +1205,9 @@ export async function handleMcpRequest(
     );
   }
 
-  console.log(`  [MCP] mcp_request -> server="${req.server}" query="${req.query}"`);
+  console.log(
+    `  [MCP] mcp_request -> server="${req.server}" query_chars=${req.query.length}`,
+  )
 
   let initializePayload: string;
   let initializedPayload: string;
@@ -1306,6 +1314,21 @@ export async function handleMcpRequest(
         const parsed = parseFramedMessages(stdoutBuf);
         parsedMessages = parsed.messages;
         stdoutBuf = parsed.remainder;
+        if (parsed.parseErrors.length > 0) {
+          settle(
+            buildMcpResult(
+              req.server,
+              'response_parse',
+              'failure',
+              1,
+              '',
+              `[MCP_PARSE_ERROR] ${parsed.parseErrors[0]!}`,
+              'response_parse_error',
+              [],
+            ),
+          );
+          return;
+        }
       } catch (error: unknown) {
         settle(
           buildMcpResult(
@@ -1315,7 +1338,7 @@ export async function handleMcpRequest(
             1,
             '',
             `[MCP_PARSE_ERROR] ${error instanceof Error ? error.message : String(error)}`,
-            'response_parse_error',
+            error instanceof McpFrameLimitError ? 'frame_limit_exceeded' : 'response_parse_error',
             [],
           ),
         );
@@ -1453,8 +1476,12 @@ export async function handleMcpRequest(
         responseState = 'await_tool_call';
         dispatchedToolParams = toolParams;
         if (child.stdin) {
-          child.stdin.write(frameJsonRpcMessage(toolCallPayload), 'utf8');
-          child.stdin.end();
+          try {
+            child.stdin.write(frameJsonRpcMessage(toolCallPayload), 'utf8');
+            child.stdin.end();
+          } catch (error) {
+            settle(frameLimitMcpResult(req.server, 'tools/call', error));
+          }
         }
         return;
       }
@@ -1494,7 +1521,7 @@ export async function handleMcpRequest(
           }),
           '',
           'response_received',
-          ['command:' + config.command],
+          ['command:' + config.command, ...mcpOriginEvidence(config)],
         ),
       );
     });
@@ -1510,7 +1537,7 @@ export async function handleMcpRequest(
           `[MCP_SPAWN_ERROR] Failed to start '${config.command}' for server ` +
             `'${req.server}': ${err.message}`,
           'spawn_error',
-          [`command:${config.command}`],
+          [`command:${config.command}`, ...mcpOriginEvidence(config)],
         ),
       );
     });
@@ -1534,22 +1561,26 @@ export async function handleMcpRequest(
     });
 
     if (child.stdin) {
-      child.stdin.write(frameJsonRpcMessage(initializePayload), 'utf8', (err?: Error | null) => {
-        if (err && !settled) {
-          settle(
-            buildMcpResult(
-              req.server,
-              'write_request',
-              'failure',
-              1,
-              '',
-              `[MCP_WRITE_ERROR] Could not write to '${req.server}' stdin: ` + `${err.message}`,
-              'write_error',
-              [`command:${config.command}`],
-            ),
-          );
-        }
-      });
+      try {
+        child.stdin.write(frameJsonRpcMessage(initializePayload), 'utf8', (err?: Error | null) => {
+          if (err && !settled) {
+            settle(
+              buildMcpResult(
+                req.server,
+                'write_request',
+                'failure',
+                1,
+                '',
+                `[MCP_WRITE_ERROR] Could not write to '${req.server}' stdin: ` + `${err.message}`,
+                'write_error',
+                [`command:${config.command}`, ...mcpOriginEvidence(config)],
+              ),
+            );
+          }
+        });
+      } catch (error) {
+        settle(frameLimitMcpResult(req.server, 'initialize', error));
+      }
     }
   });
 }

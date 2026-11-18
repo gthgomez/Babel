@@ -136,6 +136,19 @@ const PluginConfigSchema = z.object({
   enabled_plugin_ids: z.array(PluginIdSchema).default([]),
   allowed_trust_levels: z.array(TrustLevelSchema).default(['metadata', 'read_only']),
   plugin_roots: z.array(z.string()).default([]),
+  /**
+   * Explicit consent for plugin-supplied MCP executables, bound to the exact
+   * manifest bytes that were reviewed. Editing the manifest requires fresh
+   * consent; enablement alone is not launch consent.
+   */
+  mcp_server_launch_consent: z
+    .array(
+      z.object({
+        plugin_id: PluginIdSchema,
+        manifest_sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+      }),
+    )
+    .default([]),
 });
 
 export type PluginTrustLevel = z.infer<typeof TrustLevelSchema>;
@@ -161,8 +174,12 @@ export interface PluginDiagnostic {
 export interface LoadedPlugin {
   manifest: PluginManifest;
   manifest_path: string;
+  /** SHA-256 of the exact manifest bytes that authorized this executable surface. */
+  manifest_sha256: string;
   active: boolean;
   enabled: boolean;
+  /** True only when the operator explicitly consented to plugin MCP launches. */
+  mcp_launch_consented: boolean;
   blocked_reason?: string | undefined;
 }
 
@@ -378,7 +395,9 @@ export function loadPluginRegistry(options: PluginRuntimeOptions = {}): PluginRe
   for (const root of roots) {
     for (const manifestPath of discoverManifestPaths(root)) {
       try {
-        const parsed = PluginManifestSchema.safeParse(readJsonFile(manifestPath));
+        const manifestText = readFileSync(manifestPath, 'utf-8');
+        const manifestSha256 = hashContent(manifestText);
+        const parsed = PluginManifestSchema.safeParse(JSON.parse(manifestText) as unknown);
         if (!parsed.success) {
           diagnostics.push({
             severity: 'fail',
@@ -441,11 +460,33 @@ export function loadPluginRegistry(options: PluginRuntimeOptions = {}): PluginRe
           blockedReason = 'runtime_plugins_enabled is false';
         }
 
+        const mcpLaunchConsented = config.mcp_server_launch_consent.some(
+          (consent) =>
+            consent.plugin_id === manifest.id && consent.manifest_sha256 === manifestSha256,
+        );
+        if (
+          active &&
+          manifest.mcp_servers.length > 0 &&
+          !mcpLaunchConsented
+        ) {
+          diagnostics.push({
+            severity: 'warn',
+            code: 'plugin_mcp_launch_consent_required',
+            message:
+              `Plugin "${manifest.id}" declares ${manifest.mcp_servers.length} MCP ` +
+              'server executable(s) but launch consent is not granted; they are not available.',
+            plugin_id: manifest.id,
+            path: manifestPath,
+          });
+        }
+
         plugins.push({
           manifest,
           manifest_path: manifestPath,
+          manifest_sha256: manifestSha256,
           active,
           enabled,
+          mcp_launch_consented: mcpLaunchConsented,
           ...(blockedReason ? { blocked_reason: blockedReason } : {}),
         });
       } catch (error) {
@@ -482,7 +523,10 @@ export function loadPluginRegistry(options: PluginRuntimeOptions = {}): PluginRe
 
 export function enablePlugin(
   id: string,
-  options: PluginRuntimeOptions & { allowTrust?: PluginTrustLevel | undefined } = {},
+  options: PluginRuntimeOptions & {
+    allowTrust?: PluginTrustLevel | undefined;
+    allowMcpLaunch?: boolean | undefined;
+  } = {},
 ): PluginConfig {
   const registry = loadPluginRegistry(options);
   const plugin = registry.plugins.find((candidate) => candidate.manifest.id === id);
@@ -510,12 +554,32 @@ export function enablePlugin(
     allowedTrust.add(plugin.manifest.trust_level);
   }
 
+  const launchConsent = new Map(
+    registry.config.mcp_server_launch_consent.map((consent) => [consent.plugin_id, consent]),
+  );
+  if (plugin.manifest.mcp_servers.length > 0) {
+    const current = launchConsent.get(id);
+    if (current?.manifest_sha256 !== plugin.manifest_sha256) {
+      if (options.allowMcpLaunch !== true) {
+        throw new Error(
+          `Plugin "${id}" declares ${plugin.manifest.mcp_servers.length} executable MCP ` +
+            'server(s). Re-run with --allow-mcp-launch to consent to launching them.',
+        );
+      }
+      launchConsent.set(id, {
+        plugin_id: id,
+        manifest_sha256: plugin.manifest_sha256,
+      });
+    }
+  }
+
   return writePluginConfig(
     {
       ...registry.config,
       runtime_plugins_enabled: true,
       enabled_plugin_ids: [...new Set([...registry.config.enabled_plugin_ids, id])],
       allowed_trust_levels: [...allowedTrust],
+      mcp_server_launch_consent: [...launchConsent.values()],
     },
     options,
   );
@@ -527,6 +591,10 @@ export function disablePlugin(id: string, options: PluginRuntimeOptions = {}): P
     {
       ...config,
       enabled_plugin_ids: config.enabled_plugin_ids.filter((candidate) => candidate !== id),
+      // Disabling a plugin revokes any previously granted executable launch consent.
+      mcp_server_launch_consent: config.mcp_server_launch_consent.filter(
+        (consent) => consent.plugin_id !== id,
+      ),
     },
     options,
   );
@@ -851,10 +919,17 @@ export function readActivePluginMcpServers(
   }
 
   for (const plugin of registry.plugins.filter((candidate) => candidate.active)) {
+    if (!plugin.mcp_launch_consented) continue;
     for (const server of plugin.manifest.mcp_servers) {
       servers[`${plugin.manifest.id}_${server.name}`] = {
         command: server.command,
-        args: server.args,
+        args: [...server.args],
+        origin: {
+          kind: 'plugin',
+          plugin_id: plugin.manifest.id,
+          manifest_path: plugin.manifest_path,
+          manifest_sha256: plugin.manifest_sha256,
+        },
       };
     }
   }
@@ -894,6 +969,8 @@ export function formatPluginInspectHuman(plugin: LoadedPlugin): string {
     `Trust: ${manifest.trust_level}`,
     `State: ${plugin.active ? 'active' : plugin.enabled ? 'enabled-blocked' : 'disabled'}`,
     `Path: ${plugin.manifest_path}`,
+    `Manifest SHA-256: ${plugin.manifest_sha256}`,
+    `MCP launch consent: ${plugin.mcp_launch_consented ? 'granted' : 'not granted'}`,
     manifest.description ? `Description: ${manifest.description}` : null,
     `Tools: ${manifest.tools.map((tool) => tool.name).join(', ') || '(none)'}`,
     `Slash commands: ${manifest.slash_commands.map((command) => command.name).join(', ') || '(none)'}`,

@@ -107,9 +107,17 @@ test('core registration preserves the complete existing command contract', () =>
   assert.equal(sandbox.description, 'Prepare the Linux sandbox image used for project commands');
   assert.deepEqual(sandbox.children.map(child => child.name), ['prepare']);
   assert.equal(sandbox.children[0]?.description, 'Download the pinned image, check shell and Git, and save it for this user');
+  assert.deepEqual(
+    contract.children
+      .find(child => child.name === 'plugins')
+      ?.children.find(child => child.name === 'enable')
+      ?.options.map(option => option.flags),
+    ['--allow-trust <level>', '--allow-mcp-launch', '--json'],
+    'plugin enable exposes explicit trust and MCP launch consent',
+  );
   const legacy = withoutIntentionalCommandExtensions(contract);
   const digest = createHash('sha256').update(JSON.stringify(legacy)).digest('hex');
-  assert.equal(digest, '5a7149653f90ac455439e49e107a93853b16c738aa04bf07674c23ceb0fa6541');
+  assert.equal(digest, '93c86fe5c100a0ceb776c0c6b3d95995dc995de155c629e431d73e7a7223ebc2');
   assert.deepEqual(replay[0], {
     name: 'replay', aliases: [], description: 'Render the replay transcript of persisted action/observation evidence for a conversation',
     args: [{ name: 'conversation-id', required: true, variadic: false, description: '' }],

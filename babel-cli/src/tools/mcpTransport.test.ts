@@ -8,15 +8,19 @@ import {
   assessMcpToolCallPayload,
   buildMcpToolSearchPayload,
   buildMcpToolCallParams,
-  frameJsonRpcMessage,
   isCanonicalMcpSuccessResult,
   executeMcpMethod,
   handleMcpRequest,
   runWithApprovedMcpJit,
   handleMcpToolCall,
   parseMcpToolCallResult,
-  parseFramedMessages,
 } from './mcpTransport.js';
+import {
+  frameJsonRpcMessage,
+  MCP_MAX_FRAME_BYTES,
+  McpFrameLimitError,
+  parseFramedMessages,
+} from '../mcp/framing.js';
 
 test('parseFramedMessages parses one complete JSON-RPC frame', () => {
   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { ok: true } });
@@ -882,10 +886,56 @@ test('MCP success envelopes disclose the method and tool that actually ran', () 
   );
 });
 
-test('parseFramedMessages rejects response frames over the bounded output budget', () => {
-  const oversizedHeader = 'Content-Length: 6000000\r\n\r\n';
-  assert.throws(() => parseFramedMessages(Buffer.from(oversizedHeader, 'utf8')), /bounded output budget/);
+test('parseFramedMessages rejects response frames over the shared framing budget', () => {
+  // W09's shared framing module owns the ceiling (MCP_MAX_FRAME_BYTES); the W06
+  // adapter parity contract only requires that an oversized frame fails typed.
+  const oversizedHeader = `Content-Length: ${MCP_MAX_FRAME_BYTES + 1}\r\n\r\n`;
+  assert.throws(
+    () => parseFramedMessages(Buffer.from(oversizedHeader, 'utf8')),
+    McpFrameLimitError,
+  );
 
-  const oversizedBuffer = Buffer.alloc(5 * 1024 * 1024 + 1, 0x20);
-  assert.throws(() => parseFramedMessages(oversizedBuffer), /bounded output budget/);
+  const oversizedBuffer = Buffer.alloc(MCP_MAX_FRAME_BYTES + 1, 0x20);
+  assert.throws(() => parseFramedMessages(oversizedBuffer), McpFrameLimitError);
+});
+
+test('oversized outbound MCP frames become typed failures instead of uncaught throws', async () => {
+  const fixtureDir = mkdtempSync(join(tmpdir(), 'babel-mcp-outbound-frame-limit-'));
+  const serverPath = join(fixtureDir, 'server.cjs');
+  const fixture = [
+    "let input = ''; let initialized = false; let listed = false;",
+    "function send(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }",
+    "process.stdin.on('data', (chunk) => {",
+    "  input += chunk.toString();",
+    "  if (!initialized && input.includes('\\\"id\\\":0')) { initialized = true; send({ jsonrpc: '2.0', id: 0, result: {} }); }",
+    "  if (!listed && input.includes('\\\"id\\\":1')) { listed = true; send({ jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } }, annotations: { readOnlyHint: true } }] } }); }",
+    '});',
+  ].join('\n');
+  const huge = 'x'.repeat(MCP_MAX_FRAME_BYTES + 1);
+
+  try {
+    writeFileSync(serverPath, fixture, 'utf8');
+    const direct = await handleMcpToolCall(
+      'fixture',
+      'lookup',
+      { query: huge },
+      5_000,
+      { fixture: { command: 'node', args: [serverPath] } },
+    );
+    assert.equal(direct.exit_code, 1);
+    assert.equal(direct.failure?.code, 'mcp_frame_limit');
+    assert.equal(direct.mcp_lifecycle?.reason_code, 'invalid_request_payload');
+    assert.match(direct.stderr, /MCP_FRAME_LIMIT/);
+
+    const generic = await handleMcpRequest(
+      { tool: 'mcp_request', server: 'fixture', query: huge },
+      { fixture: { command: 'node', args: [serverPath] } },
+    );
+    assert.equal(generic.exit_code, 1);
+    assert.equal(generic.failure?.code, 'mcp_frame_limit');
+    assert.equal(generic.mcp_lifecycle?.reason_code, 'invalid_request_payload');
+    assert.match(generic.stderr, /MCP_FRAME_LIMIT/);
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
 });
