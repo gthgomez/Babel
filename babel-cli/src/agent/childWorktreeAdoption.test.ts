@@ -529,6 +529,37 @@ describe('governed child worktree adoption', () => {
     assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 2;\n');
   });
 
+  it('reports cleanup failure as a failed adoption result', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('POSIX directory modes are required to force worktree removal failure');
+      return;
+    }
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-cleanup-fail');
+    const change = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
+    const adminRoot = join(root, '.git', 'worktrees');
+    chmodSync(adminRoot, 0o500);
+    try {
+      const result = promoteImplementWorktree({
+        projectRoot: root,
+        worktreePath: child.worktree.path,
+        writeScope: ['src'],
+        baseSha: child.baseSha!,
+        expectedChanges: [change],
+        mode: 'copy',
+        cleanupWorktree: true,
+        verify: () => ({ ok: true, summary: 'readback matched' }),
+      });
+
+      assert.equal(result.status, 'cleanup_failed', JSON.stringify(result, null, 2));
+      assert.equal(result.success, false);
+      assert.ok(result.diagnostics.some((d) => d.code === 'worktree_cleanup_failed'));
+      assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 2;\n');
+    } finally {
+      chmodSync(adminRoot, 0o700);
+    }
+  });
+
   it('retains the worktree when cleanup is requested but changes are unadopted', async () => {
     const root = createGitProject();
     const child = await childWorktree(root, 'adopt-retain', { cleanupWorktree: true });
