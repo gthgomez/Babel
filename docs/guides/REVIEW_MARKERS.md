@@ -5,8 +5,16 @@ the local checks that keep pushes green.
 
 ## Markers
 
-The `trusted-control-plane` workflow re-runs its merge audit when the
-repository owner comments on a PR starting with one of:
+Review markers are advisory evidence read by the `trusted-control-plane`
+merge audit. Posting a marker does **not** start, cancel, or rerun any
+workflow: the audit is intentionally not subscribed to comments, so an
+owner comment cannot restart privileged jobs. The audit reads markers on its
+next lifecycle run: `pull_request_target` events `opened`, `synchronize`,
+`reopened`, `ready_for_review`, `converted_to_draft`, `labeled` or
+`unlabeled`, or the `workflow_run` listener when Public Release Gate
+completes. To obtain a fresh audit after posting evidence, use one of those
+events (for example, push the remediation commit); do not promise or retry a
+comment-triggered rerun. Marker bodies start with one of:
 
 - `<!-- babel-controller-independent-review-v3 -->` — human independent review
 - `<!-- babel-controller-ai-reviews-v2 -->` — independent AI review
@@ -21,7 +29,7 @@ pwsh tools/post-ai-review.ps1 -PR <n> -HeadSha <full-40-hex> `
 ```
 
 Evidence binds to the head it names; after remediation commits, post the
-remediation mapping and re-run. The `trusted-control-plane` workflow calls
+remediation mapping for the new head. The `trusted-control-plane` workflow calls
 `scripts/trusted-merge-gate.ps1`, which materializes the trusted-base gate
 components and invokes `scripts/agent-pr-gate.ps1`. Its
 default invocation takes one current snapshot and reports pending checks.
