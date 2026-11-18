@@ -828,7 +828,15 @@ function deepStageRestrictions(source: ToolCatalogEntrySource): string[] {
 export function handleToolCatalog(
   req: Extract<ToolCallRequest, { tool: 'tool_catalog' }>,
 ): ToolResult {
-  const manifestByName = new Map(getManifestSnapshot().map((entry) => [entry.name, entry]));
+  // The executable registry is authoritative. A missing or invalid packaged
+  // manifest must degrade metadata, never fail the catalog itself.
+  let manifestEntries: ReturnType<typeof getManifestSnapshot> = [];
+  try {
+    manifestEntries = getManifestSnapshot();
+  } catch {
+    manifestEntries = [];
+  }
+  const manifestByName = new Map(manifestEntries.map((entry) => [entry.name, entry]));
   const sources: ToolCatalogEntrySource[] = getExecutorToolRegistrySnapshot().map((tool) => {
     const manifest = manifestByName.get(tool.name);
     return {
