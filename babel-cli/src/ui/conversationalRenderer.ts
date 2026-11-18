@@ -1262,7 +1262,9 @@ export class ConversationalRenderer extends BaseRenderer {
 
       const colorFn = levelColors[intervention] || dim;
       const title = colorFn(`[${intervention.toUpperCase()}]`);
-      const body = message ? dim(` - ${message}`) : dim(` (Score: ${score})`);
+      const body = message
+        ? dim(` - ${sanitizeUntrustedTerminalField(message)}`)
+        : dim(` (Score: ${score})`);
 
       const line = `  ${dim('↳')} ${title} Progress/Recovery${body}`;
       this._writeTranscript(`${line}\n`);
@@ -1278,7 +1280,7 @@ export class ConversationalRenderer extends BaseRenderer {
     this._flushPendingToolExecutions();
     if (this.outputBroken || this.paused) return;
     this._recordActivity();
-    const line = message?.trim() || '[Context compacted…]';
+    const line = sanitizeUntrustedTerminalField(message?.trim()) || '[Context compacted…]';
     const display = this.isTTY ? dim(`  ${line}`) : `  ${line}`;
     this._writeTranscript(`${display}\n`);
     this._pushLinesToScrollback(`  ${line}`);

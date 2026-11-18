@@ -16,6 +16,7 @@ import {
 import { formatToolGroupSummary, groupToolExecutions } from './toolPresentation.js';
 import { renderSubAgentOverlay } from './subAgentOverlay.js';
 import { activityColor, normalizeActivityLine } from './rendererSupport.js';
+import { hyperlinkFile } from './theme.js';
 
 const OSC_CLIPBOARD = '\x1b]52;c;dzA4LXN5bnRoZXRpYw==\x07';
 const CSI_CLEAR = '\x1b[2J';
@@ -124,6 +125,12 @@ test('waterfall activity text neutralizes terminal protocol before color/truncat
   assertNoTerminalProtocol(normalizeActivityLine(raw) ?? '', 'normalized activity');
   assertNoTerminalProtocol(activityColor(raw), 'activity color');
   assert.equal(normalizeActivityLine(raw), 'Reading file');
+});
+
+test('file hyperlinks neutralize protocol in both URI and label', () => {
+  const rendered = hyperlinkFile(`${OSC_CLIPBOARD}src/file.ts${CSI_CLEAR}`, `${OSC_CLIPBOARD}src/file.ts`);
+  assertNoTerminalProtocol(rendered, 'hyperlink');
+  assert.match(rendered, /src\/file\.ts/);
 });
 
 test('positive control: ordinary ANSI-free text is preserved verbatim', () => {

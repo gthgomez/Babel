@@ -7,6 +7,7 @@
  */
 
 import { OutputBuffer } from './outputBuffer.js';
+import { sanitizeUntrustedTerminalField } from './sanitize.js';
 import { withRawStdinPrompt } from './inputCoordinator.js';
 import { installKeyHandler, type KeyEvent } from './keyInput.js';
 import {
@@ -97,7 +98,7 @@ export async function renderInteractivePlan(plan: DisplayPlan): Promise<PlanDeci
             `\n  ${bold(primary('Babel Plan'))} ${muted('·')} ${accentBright(plan.planType ?? 'IMPLEMENTATION_PLAN')}\n`,
           );
           if (plan.taskSummary) {
-            stdout.write(`  ${muted(plan.taskSummary.slice(0, width - 4))}\n`);
+            stdout.write(`  ${muted(sanitizeUntrustedTerminalField(plan.taskSummary).slice(0, width - 4))}\n`);
           }
           stdout.write(`  ${dim('─'.repeat(Math.min(width, 80)))}\n\n`);
 
@@ -109,13 +110,13 @@ export async function renderInteractivePlan(plan: DisplayPlan): Promise<PlanDeci
             const step = steps[i]!;
             const op = resolveStepOperation(step);
             const file = resolveTargetFile(step);
-            const desc = step.description || '(unnamed step)';
+            const desc = sanitizeUntrustedTerminalField(step.description || '(unnamed step)');
 
             stdout.write(
               `  ${dim(String(i + 1).padStart(2))}. ${operationSymbol(op)} ${primary(desc.slice(0, width - 20))}\n`,
             );
             if (file) {
-              stdout.write(`     ${dim('└─')} ${hyperlinkFile(file, info(file))}\n`);
+              stdout.write(`     ${dim('└─')} ${hyperlinkFile(file, info(sanitizeUntrustedTerminalField(file)))}\n`);
             }
           }
 
@@ -125,7 +126,7 @@ export async function renderInteractivePlan(plan: DisplayPlan): Promise<PlanDeci
 
           if (plan.estimatedFiles && plan.estimatedFiles.length > 0) {
             stdout.write(
-              `\n  ${muted('Estimated files:')} ${plan.estimatedFiles.slice(0, 5).join(', ')}\n`,
+              `\n  ${muted('Estimated files:')} ${plan.estimatedFiles.slice(0, 5).map(sanitizeUntrustedTerminalField).join(', ')}\n`,
             );
           }
 

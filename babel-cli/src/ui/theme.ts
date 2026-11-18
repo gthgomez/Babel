@@ -12,6 +12,7 @@ import {
   getIdentityTrueColor,
 } from "./terminalProbe.js";
 import { peekInjectedTerminalSize } from "./observe/terminalTransport.js";
+import { sanitizeUntrustedTerminalField } from "./sanitize.js";
 
 // ── Color parse cache ──────────────────────────────────────────────────────
 // Same hex colors are parsed repeatedly per frame (every toneToAnsi call).
@@ -543,10 +544,13 @@ export class ThemeProvider {
  * @returns ANSI-escaped string with OSC 8 hyperlink, or plain text
  */
 export function hyperlinkFile(filePath: string, display?: string): string {
-  if (!HAS_COLOR) return display ?? filePath;
-  if (!filePath) return display ?? "";
-  const absolutePath = path.resolve(filePath);
+  // Paths and labels are tool/model-originated. Strip terminal protocol before
+  // either enters an OSC 8 URI or the visible label.
+  const safePath = sanitizeUntrustedTerminalField(filePath);
+  const safeDisplay = sanitizeUntrustedTerminalField(display ?? filePath);
+  if (!HAS_COLOR) return safeDisplay;
+  if (!safePath) return safeDisplay;
+  const absolutePath = path.resolve(safePath);
   const link = absolutePath.replace(/\\/g, "/");
-  const label = display ?? filePath;
-  return `\x1b]8;;file://${link}\x1b\\${label}\x1b]8;;\x1b\\`;
+  return `\x1b]8;;file://${link}\x1b\\${safeDisplay}\x1b]8;;\x1b\\`;
 }
