@@ -11,11 +11,19 @@ last_verified: 2026-11-18
 
 1. Root [`AGENTS.md`](../../AGENTS.md) — sole contributor operating-policy owner.
 2. Issue [#521](https://github.com/gthgomez/Babel/issues/521) and the canonical register `docs/campaigns/babel-reliability-2026-11/FINDINGS_INDEX.csv` — finding identity, owner and status.
-3. [Program ROADMAP](../campaigns/babel-reliability-2026-11/ROADMAP.md) — wave sequencing and dependency graph.
+3. Program ROADMAP (PR #536, branch `docs/six-audit-parallel-wave-20261118`) — wave sequencing and dependency graph.
 4. This page and [`config/audit-reconciliation.json`](../../config/audit-reconciliation.json) — the evidence vocabulary and the per-stream landing files.
 5. Workstream issues W01–W14 — scope and acceptance for one stream.
 
 At `90583d97` the register exists only as a proposal in PR #536 (branch `docs/six-audit-parallel-wave-20261118`). Until that PR merges, no repository page may claim a canonical reconciled register exists. Audit text pinned to `198193b1` is historical evidence, never a current-head assertion.
+
+## Audit archive identity
+
+- **Reports:** six independent audits, referenced as A1–A6 in the register's `Original audit refs` column. A1–A5 were user-supplied on 2026-11-18; A6 is the sixth report in private PR #164. The public register deduplicates them into 100 stable finding IDs.
+- **Source scope:** `main` at `198193b1` for the first five; the sixth report has private scope. Neither is a statement about current `main`.
+- **Authorship and raw archives:** recorded in the private audit evidence record, not republished here. This repository carries only non-exploitative summaries, command-level evidence and links.
+- **Duplicates:** a behavior reported by several audits keeps one ID and lists every source reference; it is not counted twice. The register validator enforces unique IDs and exact per-stream counts.
+- **Canonicality:** no single report or PR description is authoritative. A report becomes actionable only through a register row, an owner and reproduced-or-disproven evidence on a named head.
 
 ## Evidence vocabulary
 
@@ -70,6 +78,8 @@ Exact heads were read with `gh pr view <n> --json state,headRefOid,mergeCommit`.
 | [#536](https://github.com/gthgomez/Babel/pull/536) | Open draft, head `a255ecdb` | Proposed public register and campaign docs. Still not merged; no page may claim a canonical reconciled register yet. |
 
 No merges, pushes or review claims follow from this table.
+
+**Sequencing rule for overlapping PRs.** #521 sequences cross-stream work and each shared contract has one primary author (see the campaign ROADMAP in PR #536). A merged PR does not close another stream's finding: the owning stream refreshes its base, reruns the relevant integration/negative controls on the integrated head, and only then records `merged` or later. #515 is the current example — it merged after this branch's base, so its owning stream must verify the integrated result rather than cite the PR.
 
 ## Private audit #164 (AR-05)
 
