@@ -405,3 +405,42 @@ test('P3-3 journey: a relevance-bound verifier input cannot be rewritten', async
   assert.equal(readFileSync(join(root, 'test', 'parser.test.mjs'), 'utf8'), RELEVANT_TEST)
   assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
 })
+
+for (const shadow of [
+  { name: 'uninitialized let', lines: ['let five;', 'five = 6;'] },
+  { name: 'destructured let', lines: ['let { five } = { five: 6 };'] },
+] as const) {
+  test(`P1 journey: ${shadow.name} shadow never certifies a wrong patch`, async t => {
+    const root = parserFixture({
+      parser: 'export function parseSum(a, b) { return 0; }\n',
+      test: [
+        'import assert from "node:assert/strict";',
+        'import test from "node:test";',
+        'import { parseSum } from "../src/parser.js";',
+        'const five = 5;',
+        'test("shadow", () => {',
+        ...shadow.lines.map(line => `  ${line}`),
+        '  assert.equal(parseSum(2, 3), five);',
+        '});',
+        '',
+      ].join('\n'),
+    })
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    const o = await driveChat(root, GOAL, [
+      [{ type: 'tool_use', id: 'r0', name: 'read_file', input: { path: 'src/parser.js' } },
+        { type: 'done', finishReason: 'tool_calls' }],
+      [{ type: 'tool_use', id: 't1', name: 'str_replace', input: {
+        file_path: 'src/parser.js',
+        old_str: 'export function parseSum(a, b) { return 0; }',
+        new_str: 'export function parseSum(a, b) { return a * b; }',
+      } }, { type: 'done', finishReason: 'tool_calls' }],
+      [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: VERIFIER } },
+        { type: 'done', finishReason: 'tool_calls' }],
+      [{ type: 'text_delta', text: 'Fixed parser; tests pass.' }, { type: 'done', finishReason: 'stop' }],
+    ], { requiredVerifierCommands: [VERIFIER] })
+    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED')
+    assert.equal(readFileSync(join(root, 'src', 'parser.js'), 'utf8'),
+      'export function parseSum(a, b) { return a * b; }\n')
+  })
+}
