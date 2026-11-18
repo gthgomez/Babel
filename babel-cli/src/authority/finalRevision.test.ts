@@ -460,15 +460,15 @@ test('adversarial read-only options stay read-only', () => {
 test('common read-only inspection shapes certify after a green verifier', () => {
   for (const command of [
     'git rev-parse HEAD',
-    'git branch --show-current',
+    'git --no-pager branch --show-current',
     'git describe --tags',
-    'git -c core.fsmonitor=false blame --no-textconv src/app.ts',
+    'git -c core.fsmonitor=false --no-pager blame --no-textconv src/app.ts',
     'git -c core.fsmonitor=false --no-pager grep TODO',
     'git config --get user.name',
     'git config --file .git/config --get user.name',
     'git stash list',
     'git worktree list',
-    'git tag -l',
+    'git --no-pager tag -l',
     'find . -name "*.ts" | xargs grep TODO',
     'find . -name "*.ts" | xargs wc -l',
     'cat src/app.ts | sed -n 1,10p',
@@ -601,8 +601,8 @@ test('common read flags and read-only options still certify', () => {
   for (const command of [
     'git -c core.fsmonitor=false status -sb',
     'git -c core.fsmonitor=false status -uno',
-    'git branch -av',
-    'git tag -n5',
+    'git --no-pager branch -av',
+    'git --no-pager tag -n5',
     'git config --get user.name',
     'grep -o x src/app.ts',
     'rg --json pattern',
@@ -653,7 +653,7 @@ test('denial corpus is derived from the exported denial structure', () => {
 })
 
 test('config-capability corpus covers every proof-table subcommand', () => {
-  assert.deepEqual([...GIT_CONFIG_CAPABLE_SUBCOMMANDS].sort(), ['blame', 'diff', 'grep', 'log', 'range-diff', 'reflog', 'show', 'status', 'whatchanged'])
+  assert.deepEqual([...GIT_CONFIG_CAPABLE_SUBCOMMANDS].sort(), ['blame', 'branch', 'diff', 'grep', 'log', 'range-diff', 'reflog', 'shortlog', 'show', 'status', 'tag', 'whatchanged'])
   for (const subcommand of GIT_READ_ONLY_SUBCOMMANDS) {
     const probe = GIT_PROBES[subcommand]
     assert.ok(probe, `missing probe for ${subcommand}`)
@@ -679,8 +679,11 @@ test('hardened config-capable invocations restore verified proof', () => {
     'git -c core.fsmonitor=false --no-pager whatchanged --no-ext-diff --no-textconv',
     'git -c core.fsmonitor=false --no-pager status',
     'git -c core.fsmonitor=false --no-pager grep TODO',
-    'git -c core.fsmonitor=false blame --no-textconv file',
-    'git reflog show --format=%H',
+    'git -c core.fsmonitor=false --no-pager blame --no-textconv file',
+    'git --no-pager reflog show --format=%H',
+    'git --no-pager branch --show-current',
+    'git --no-pager tag -l',
+    'git --no-pager shortlog -sn',
   ]) {
     assert.equal(gitConfigEffectUnproven(command), false, command)
     assert.equal(witnessFor(command).status, 'verified', command)
@@ -778,14 +781,14 @@ test('round-4/5/6 probe equivalence: 20 execution vectors stale, 27 read shapes 
 
   const readShapes = [
     'git rev-parse HEAD',
-    'git branch --show-current',
+    'git --no-pager branch --show-current',
     'git describe --tags',
-    'git -c core.fsmonitor=false blame --no-textconv src/app.ts',
+    'git -c core.fsmonitor=false --no-pager blame --no-textconv src/app.ts',
     'git -c core.fsmonitor=false --no-pager grep TODO',
     'git config --get user.name',
     'git stash list',
     'git worktree list',
-    'git tag -l',
+    'git --no-pager tag -l',
     'find . -name "*.ts" | xargs grep TODO',
     'find . -name "*.ts" | xargs wc -l',
     'cat src/app.ts | sed -n 1,10p',
@@ -796,9 +799,9 @@ test('round-4/5/6 probe equivalence: 20 execution vectors stale, 27 read shapes 
     'git show -s',
     'git status -sb',
     'git status -uno',
-    'git branch -av',
+    'git --no-pager branch -av',
     'git diff --stat',
-    'git tag -n5',
+    'git --no-pager tag -n5',
     'git diff --no-renames --text -Sfoo --patience --histogram --summary --minimal --ignore-submodules --compact-summary --dirstat',
     'git log -U3 --unified=3 -w --ignore-all-space',
     'git blame -w -M -C -e -f src/app.ts',
@@ -821,6 +824,50 @@ test('invalid attached -c forms and remote show cannot verify', () => {
     assert.equal(witnessFor(command).status, 'stale', command)
   }
   for (const command of ['git remote -v', 'git remote get-url origin']) {
+    assert.equal(witnessFor(command).status, 'verified', command)
+  }
+})
+
+test('pager-capable subcommands require the pager guard', () => {
+  const unguarded = [
+    'git diff',
+    'git log',
+    'git show',
+    'git whatchanged',
+    'git reflog show',
+    'git blame file',
+    'git grep TODO',
+    'git branch -a',
+    'git tag -l',
+    'git shortlog',
+  ]
+  for (const command of unguarded) {
+    const witness = witnessFor(command)
+    assert.equal(witness.status, 'unverified', command)
+    assert.match(witness.reason ?? '', /^effect_unproven:/, command)
+  }
+  const guarded = [
+    'git -c core.fsmonitor=false --no-pager diff --no-ext-diff --no-textconv',
+    'git -c core.fsmonitor=false --no-pager log --no-ext-diff --no-textconv',
+    'git -c core.fsmonitor=false --no-pager show --no-ext-diff --no-textconv',
+    'git -c core.fsmonitor=false --no-pager whatchanged --no-ext-diff --no-textconv',
+    'git --no-pager reflog show',
+    'git -c core.fsmonitor=false --no-pager blame --no-textconv file',
+    'git -c core.fsmonitor=false --no-pager grep TODO',
+    'git --no-pager branch -a',
+    'git --no-pager tag -l',
+    'git --no-pager shortlog',
+  ]
+  for (const command of guarded) {
+    assert.equal(witnessFor(command).status, 'verified', command)
+  }
+})
+
+test('git help startup options are denied rather than aliased to version', () => {
+  for (const command of ['git --help', 'git -h', 'git help status']) {
+    assert.equal(witnessFor(command).status, 'stale', command)
+  }
+  for (const command of ['git --version', 'git -v', 'git version']) {
     assert.equal(witnessFor(command).status, 'verified', command)
   }
 })

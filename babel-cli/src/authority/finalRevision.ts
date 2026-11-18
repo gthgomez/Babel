@@ -479,6 +479,7 @@ export const GIT_EXEC_WRITE_DENIAL_PROBES: readonly string[] = [
  */
 export const GIT_CONFIG_CAPABLE_SUBCOMMANDS: ReadonlySet<string> = new Set([
   'status', 'diff', 'log', 'show', 'grep', 'whatchanged', 'range-diff', 'blame', 'reflog',
+  'branch', 'tag', 'shortlog',
 ])
 
 export type GitConfigCapability = 'mechanical' | 'config_capable'
@@ -500,7 +501,7 @@ interface ParsedGitRead {
 const SAFE_GIT_CONFIG = new Set(['core.fsmonitor=false', 'core.pager=cat'])
 
 function parseGitRead(tokens: readonly string[]): ParsedGitRead | null {
-  if (tokens[1] === '--version' || tokens[1] === '--help' || tokens[1] === '-v' || tokens[1] === '-h') {
+  if (tokens[1] === '--version' || tokens[1] === '-v') {
     return { sub: 'version', args: [], noPager: true, config: new Set() }
   }
   let noPager = false
@@ -568,10 +569,11 @@ function gitHardeningSatisfied(parsed: ParsedGitRead): boolean {
   const gpgFormat = gitFormatValues(parsed.args).some(value => value.includes('%G'))
   if (parsed.sub === 'status') return fsmonitor
   if (parsed.sub === 'grep') return fsmonitor && pager
-  if (parsed.sub === 'blame') return fsmonitor && has('--no-textconv')
-  if (parsed.sub === 'reflog') return !gpgFormat
+  if (parsed.sub === 'branch' || parsed.sub === 'tag' || parsed.sub === 'shortlog') return pager
+  if (parsed.sub === 'blame') return pager && fsmonitor && has('--no-textconv')
+  if (parsed.sub === 'reflog') return pager && !gpgFormat
   if (['diff', 'log', 'show', 'whatchanged', 'range-diff'].includes(parsed.sub)) {
-    return !gpgFormat && fsmonitor && has('--no-ext-diff') && has('--no-textconv')
+    return pager && !gpgFormat && fsmonitor && has('--no-ext-diff') && has('--no-textconv')
   }
   return true
 }

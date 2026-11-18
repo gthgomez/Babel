@@ -156,13 +156,13 @@ test('hardened diff invocation disables diff.external and stays verified', () =>
     chmodSync(external, 0o755)
     const env = gitEnv(root)
     execFileSync('git', ['config', 'diff.external', external], { cwd: root, env, windowsHide: true })
-    execFileSync('git', ['-c', 'core.fsmonitor=false', 'diff', '--no-ext-diff', '--no-textconv'], {
+    execFileSync('git', ['-c', 'core.fsmonitor=false', '--no-pager', 'diff', '--no-ext-diff', '--no-textconv'], {
       cwd: root, env, stdio: 'ignore', windowsHide: true,
     })
     assert.equal(existsSync(marker), false, '--no-ext-diff must forbid the configured driver')
     const witness = evaluateFinalRevisionWitness({
       projectRoot: root,
-      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git -c core.fsmonitor=false diff --no-ext-diff --no-textconv', exit_code: 0 }],
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git -c core.fsmonitor=false --no-pager diff --no-ext-diff --no-textconv', exit_code: 0 }],
       requiredVerifierCommands: ['npm test'],
     })
     assert.equal(witness.status, 'verified')
@@ -171,7 +171,7 @@ test('hardened diff invocation disables diff.external and stays verified', () =>
       toolCallLog: [
         { step: 1, tool: 'file_write', target: 'file.txt', exit_code: 0, stdout: '', stderr: '', verified: true },
         { step: 2, tool: 'test_run', target: 'npm test', exit_code: 0, stdout: 'ok', stderr: '', verified: true },
-        { step: 3, tool: 'shell_exec', target: 'git -c core.fsmonitor=false diff --no-ext-diff --no-textconv', exit_code: 0, stdout: '', stderr: '', verified: true },
+        { step: 3, tool: 'shell_exec', target: 'git -c core.fsmonitor=false --no-pager diff --no-ext-diff --no-textconv', exit_code: 0, stdout: '', stderr: '', verified: true },
       ],
     })
     assert.equal(final.status, 'COMPLETE')
@@ -232,13 +232,13 @@ test('plain blame runs textconv; hardened blame does not, and verifies', () => {
     assert.equal(plain.status, 'unverified')
     assert.equal(plain.reason, 'effect_unproven:config_capable_git')
     rmSync(marker, { force: true })
-    execFileSync('git', ['-c', 'core.fsmonitor=false', 'blame', '--no-textconv', 'file.bin'], {
+    execFileSync('git', ['-c', 'core.fsmonitor=false', '--no-pager', 'blame', '--no-textconv', 'file.bin'], {
       cwd: root, env, stdio: 'ignore', windowsHide: true,
     })
     assert.equal(existsSync(marker), false, '--no-textconv must disable the driver')
     const hardened = evaluateFinalRevisionWitness({
       projectRoot: root,
-      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git -c core.fsmonitor=false blame --no-textconv file.bin', exit_code: 0 }],
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git -c core.fsmonitor=false --no-pager blame --no-textconv file.bin', exit_code: 0 }],
       requiredVerifierCommands: ['npm test'],
     })
     assert.equal(hardened.status, 'verified')
@@ -360,6 +360,25 @@ test('%G format atoms execute gpg even with hardened diff flags', () => {
       requiredVerifierCommands: ['npm test'],
     })
     assert.equal(plain.status, 'verified')
+  } finally {
+    cleanup()
+  }
+})
+
+test('git blame --contents really prints arbitrary file contents and is denied', () => {
+  const { root, cleanup } = repo()
+  try {
+    const secret = join(root, 'outside-secret.txt')
+    writeFileSync(secret, 'SYNTHETIC_SECRET_FROM_CONTENTS\n')
+    const output = execFileSync('git', ['blame', `--contents=${secret}`, 'file.txt'], {
+      cwd: root, env: gitEnv(root), encoding: 'utf8', windowsHide: true,
+    })
+    assert.match(output, /SYNTHETIC_SECRET_FROM_CONTENTS/)
+    assert.equal(evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: `git blame --contents=${secret} file.txt`, exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    }).status, 'stale')
   } finally {
     cleanup()
   }
