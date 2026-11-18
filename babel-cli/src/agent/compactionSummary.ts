@@ -37,23 +37,35 @@ function formatCompactedUserTurn(content: string): string {
  * cap did exactly that).
  */
 export function summarizeDroppedTurns(dropped: ChatMessage[]): string {
-  const facts: string[] = [];
-  const toolFacts: string[] = [];
+  const userFacts: string[] = [];
+  const toolCandidates: string[] = [];
   for (const m of dropped) {
     if (m.role === 'tool' && m.content) {
       const firstLine = m.content.split('\n')[0]?.trim();
-      if (firstLine && firstLine.length > 10 && firstLine.length < 200 && toolFacts.length < COMPACTED_TOOL_FACT_LIMIT) {
-        toolFacts.push(`- ${firstLine}`);
+      if (firstLine && firstLine.length > 10 && firstLine.length < 200 && toolCandidates.length < COMPACTED_TOOL_FACT_LIMIT) {
+        toolCandidates.push(`- ${firstLine}`);
       }
     } else if (m.role === 'user' && m.content) {
-      facts.push(`- ${formatCompactedUserTurn(m.content)}`);
+      userFacts.push(`- ${formatCompactedUserTurn(m.content)}`);
     }
   }
-  if (facts.length === 0) {
-    if (toolFacts.length === 0) {
+  if (userFacts.length === 0) {
+    if (toolCandidates.length === 0) {
       return `[${dropped.length} earlier messages compacted for length]`;
     }
-    return `[Compacted ${dropped.length} messages. Key context:\n${toolFacts.join('\n')}]`;
+    return `[Compacted ${dropped.length} messages. Key context:\n${toolCandidates.join('\n')}]`;
   }
-  return `[Compacted ${dropped.length} messages. User constraints and key context:\n${[...facts, ...toolFacts].join('\n')}]`;
+  // Tool first lines are secondary: include them only with space left after the
+  // user constraints, so a summary never becomes larger than the text it
+  // replaces (which would break request-admission recovery).
+  const droppedChars = dropped.reduce((sum, message) => sum + message.content.length, 0);
+  const userText = userFacts.join('\n');
+  let toolBudget = Math.max(0, droppedChars - userText.length - 200);
+  const selectedTools: string[] = [];
+  for (const candidate of toolCandidates) {
+    if (candidate.length + 1 > toolBudget) continue;
+    selectedTools.push(candidate);
+    toolBudget -= candidate.length + 1;
+  }
+  return `[Compacted ${dropped.length} messages. User constraints and key context:\n${[userText, ...selectedTools].join('\n')}]`;
 }
