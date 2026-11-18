@@ -193,7 +193,12 @@ and forced fallback tests. Non-PR metadata qualification records explicit
 non-applicability. Desktop discovery checks its independent six-file floor
 before running the test glob.
 
-Unit shards retain their exhaustive modulo assignment. Required TAP summaries
+Unit shards partition the canonical inventory with duration-weighted balancing.
+Files whose exact paths are also selected by a required TAP suite are delegated
+to that suite instead of running twice; delegation is recorded with source
+hashes in `selection.json` and is only valid because both lanes install the same
+dependencies on the same Linux/Windows matrix and the delegated files do not
+require a dist build. Required TAP summaries
 reject TODOs, truncated runs, unexplained skips and empty/all-skipped runs.
 Suite-level SKIP/TODO directives and suite failures also reject qualification,
 even when the leaf counters show a passing test. Zero-byte discovered unit
@@ -250,8 +255,12 @@ Unit shards use content-bound OS duration hints in
 `node babel-cli/scripts/update_ci_unit_durations.mjs <execution.json> [...]`
 from completed unit artifacts. Hints change scheduling only; unknown, changed or
 invalid entries fall back to deterministic weights and cannot omit a file.
-Dedicated suites with different setup remain distinct qualification inputs;
-filename overlap alone is insufficient evidence for removing them.
+Selection evidence reports measured hint coverage, per-shard estimates and the
+estimated imbalance ratio so missing timings are visible instead of silently
+degrading balance. Dedicated suites with different setup remain distinct
+qualification inputs; filename overlap alone is insufficient evidence for
+delegating a file, so the shard helper verifies the canonical raw-suite scripts
+and never delegates a file outside their expanded inventory.
 The portable workflow file is owned by the canonical unit inventory; `npm test`
 does not invoke it a second time. Its focused script remains available.
 
