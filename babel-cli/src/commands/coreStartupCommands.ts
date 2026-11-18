@@ -509,14 +509,14 @@ program
     )
     .option(
       "-p, --project <name>",
-      "Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | example_game_workspace)",
+      "Target project name resolved by the workspace scanner",
     )
     .addHelpText(
       "after",
       `
 Examples:
   $ babel-harness shadow-diff
-  $ babel-harness shadow-diff --project example_saas_backend
+  $ babel-harness shadow-diff --project my-app
 
 Notes:
   - Requires BABEL_SHADOW_ROOT to be set.

@@ -70,3 +70,20 @@ if (!existsSync(claudeWorkerSource)) {
 mkdirSync(dirname(claudeWorkerDestination), { recursive: true });
 cpSync(claudeWorkerSource, claudeWorkerDestination);
 console.log(`copy_playbooks: copied Claude isolated resolve worker → ${claudeWorkerDestination}`);
+
+// Remote supervisory PWA shell: HTML/CSS/SVG/manifest assets are not emitted by
+// tsc, so `remote serve /ui` 500ed in a built or installed package (UX-04).
+const remoteUiSource = resolve(packageRoot, 'src', 'bridge', 'remote-ui');
+const remoteUiDestination = resolve(packageRoot, 'dist', 'bridge', 'remote-ui');
+if (!existsSync(remoteUiSource)) {
+  console.error(`copy_playbooks: Remote UI assets missing: ${remoteUiSource}`);
+  process.exit(1);
+}
+cpSync(remoteUiSource, remoteUiDestination, {
+  recursive: true,
+  filter: (src) => {
+    if (src === remoteUiSource) return true;
+    return /\.(?:html|js|css|svg|webmanifest)$/.test(src);
+  },
+});
+console.log(`copy_playbooks: copied Remote UI shell assets → ${remoteUiDestination}`);

@@ -37,6 +37,7 @@ def main():
     parser.add_argument("--cols", type=int, default=80)
     parser.add_argument("--timeout-ms", type=int, default=120000)
     parser.add_argument("--transcript")
+    parser.add_argument("--raw-transcript", help="Write undecoded terminal bytes for screen replay")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command and args.command[0] == "--" else args.command
@@ -99,6 +100,10 @@ def main():
                         break
                 if found is None:
                     events.append({"error": f"wait_for timeout: {needle}"})
+                    if args.raw_transcript:
+                        open(args.raw_transcript, "wb").write(bytes(raw))
+                    if args.transcript:
+                        open(args.transcript, "w", encoding="utf-8").write(strip(bytes(raw)))
                     print(json.dumps({"ok": False, "error": f"wait_for timeout: {needle}",
                                       "last_output": strip(bytes(raw))[-2000:]}, ensure_ascii=False))
                     return 2
@@ -151,6 +156,8 @@ def main():
         tail = bytes(raw[-400:])
         if args.transcript:
             open(args.transcript, "w", encoding="utf-8").write(text)
+        if args.raw_transcript:
+            open(args.raw_transcript, "wb").write(bytes(raw))
         print(json.dumps({
             "ok": True,
             "exit_code": exit_code,

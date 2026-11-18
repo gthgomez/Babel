@@ -5,6 +5,7 @@ import { FileWriteMutex, findNearMissContext } from "./editReliability.js";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { captureEffectFileIdentity } from '../executor/effectPathIdentity.js';
 
 describe("WorkspaceTransactionManager", () => {
   test("undoLastMutationBatch restores file digests to pre-images", async () => {
@@ -168,10 +169,8 @@ test('rollback removes a confirmed creation only while identity and content matc
     const expected = 'created by this dispatch\n';
     const tx = await WorkspaceTransactionManager.beginBatch([target]);
     fs.writeFileSync(target, expected);
-    const stat = fs.statSync(target);
     WorkspaceTransactionManager.recordCreatedFileOwnership(tx, target, {
-      device: stat.dev.toString(),
-      inode: stat.ino.toString(),
+      ...captureEffectFileIdentity(target),
       expectedContent: expected,
     });
     const result = await WorkspaceTransactionManager.undoLastMutationBatch(tx);
@@ -190,10 +189,9 @@ test('rollback preserves edited, same-byte replacement, and partial creation con
       const expected = 'expected creation bytes\n';
       const tx = await WorkspaceTransactionManager.beginBatch([target]);
       fs.writeFileSync(target, expected);
-      const original = fs.statSync(target);
+      const originalIdentity = captureEffectFileIdentity(target);
       WorkspaceTransactionManager.recordCreatedFileOwnership(tx, target, {
-        device: original.dev.toString(),
-        inode: original.ino.toString(),
+        ...originalIdentity,
         expectedContent: expected,
       });
       if (scenario === 'edited') {
@@ -201,7 +199,7 @@ test('rollback preserves edited, same-byte replacement, and partial creation con
       } else if (scenario === 'same_bytes_replaced') {
         const replacement = path.join(root, `${scenario}.replacement`);
         fs.writeFileSync(replacement, expected);
-        assert.notEqual(fs.statSync(replacement).ino, original.ino);
+        assert.notEqual(String(fs.statSync(replacement, { bigint: true }).ino), originalIdentity.inode);
         fs.renameSync(replacement, target);
       } else {
         fs.writeFileSync(target, 'partial');
@@ -231,15 +229,14 @@ test('rollback restores a same-byte replacement captured between validation and 
   const tx = await WorkspaceTransactionManager.beginBatch([target]);
   try {
     fs.writeFileSync(target, expected);
-    const original = fs.statSync(target);
+    const originalIdentity = captureEffectFileIdentity(target);
     WorkspaceTransactionManager.recordCreatedFileOwnership(tx, target, {
-      device: original.dev.toString(),
-      inode: original.ino.toString(),
+      ...originalIdentity,
       expectedContent: expected,
     });
     fs.writeFileSync(replacement, expected);
-    const replacementStat = fs.statSync(replacement);
-    assert.notEqual(replacementStat.ino, original.ino);
+    const replacementStat = fs.statSync(replacement, { bigint: true });
+    assert.notEqual(String(replacementStat.ino), originalIdentity.inode);
 
     const originalRename = fs.promises.rename;
     let injected = false;
@@ -262,8 +259,9 @@ test('rollback restores a same-byte replacement captured between validation and 
     assert.equal(result.verification, false);
     assert.match(result.conflicts[0] ?? '', /during capture/);
     assert.equal(fs.readFileSync(target, 'utf8'), expected);
-    assert.equal(fs.statSync(target).dev, replacementStat.dev);
-    assert.equal(fs.statSync(target).ino, replacementStat.ino);
+    const displacement = fs.statSync(target, { bigint: true });
+    assert.equal(displacement.dev, replacementStat.dev);
+    assert.equal(displacement.ino, replacementStat.ino);
     assert.equal(fs.readFileSync(displaced, 'utf8'), expected);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

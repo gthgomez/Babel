@@ -46,10 +46,10 @@ Settings:
   ${CLI_COMMAND} settings show
   ${CLI_COMMAND} conversation list             List saved conversations
   ${CLI_COMMAND} conversation resume <id>      Resume a conversation
-  ${CLI_COMMAND} run resume <id>               Recover an execution worker chain
+  ${CLI_COMMAND} continue latest               Inspect recovery for the latest run
   ${CLI_COMMAND} doctor
 
-The command name is babel-harness. babel-agent is an installed alias for this same program.
+The command name is babel-harness; babel and babel-agent are installed aliases for this same program.
 Plan stops by default. Only an explicitly saved plans.autoApply preference enables
 automatic implementation. --plan-only always stops. No cloud provider is preselected.
 Model/provider choices inside the TUI are session-scoped; --save user|project makes

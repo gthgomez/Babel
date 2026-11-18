@@ -1,6 +1,6 @@
 import type { Rect, ShellDimensions, ShellLayout } from './shellTypes.js'
 
-const MIN_SHELL_COLS = 60
+const MIN_SHELL_COLS = 44
 const MIN_SHELL_ROWS = 16
 const MEDIUM_COLS = 120
 const WIDE_COLS = 160
@@ -35,6 +35,20 @@ function emptyLayout(
     composer: null,
     footer: null,
   }
+}
+
+/**
+ * Whether the responsive shell has drawable regions at these dimensions.
+ *
+ * Below the minimum grid `planShellLayout` returns the null-rect linear
+ * fallback. Mounting the full-screen host there paints an empty frame and
+ * hides the composer, so callers must keep the legacy line editor instead.
+ *
+ * @param dimensions - Physical and, when required, guard-adjusted dimensions.
+ * @returns True only when the layout carries real header/composer regions.
+ */
+export function canHostResponsiveShell(dimensions: ShellDimensions): boolean {
+  return planShellLayout(dimensions).mode !== 'linear'
 }
 
 /**

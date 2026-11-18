@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { ShellRuntimeBinding } from './shellRuntimeBinding.js';
+import { ShellRuntimeBinding, compactOutcomeNote } from './shellRuntimeBinding.js';
 
 describe('ShellRuntimeBinding', () => {
   it('keeps streamed revisions and tool lifecycle cells in one hosted view', () => {
@@ -85,8 +85,46 @@ describe('ShellRuntimeBinding', () => {
     assert.doesNotMatch(noteRows, /\u001b\[/, 'notes are stripped before entering the frame');
   });
 
-  it('renders a terminal-only answer without a streamed chunk', () => {
+  it('keeps the answer visible in a 44x16 pane by compacting outcome cards', () => {
+    // UX-02: the full card is ~8 rows and filled the whole 9-row pane.
+    const card = [
+      '✓ Response complete',
+      'Source reads: 0 successful operations. Visual checks: not established.',
+      'Coverage completeness: not established.',
+      'Cost / cumulative usage  $0.0000 known subtotal this task',
+      '1 unresolved charge  usage unconfirmed',
+      'Next',
+      '  [D] Diff   [R] Run verification',
+    ].join('\n');
+    const compact = compactOutcomeNote(card, 9, 40);
+    assert.ok(compact.split('\n').length <= 3, compact);
+    for (const line of compact.split('\n')) assert.ok(line.length <= 38, line);
+    assert.match(compact, /Response complete/);
+    assert.match(compact, /…$/);
+    // Tall panes keep the complete card.
+    assert.equal(compactOutcomeNote(card, 30, 40), card);
+  });
+
+  it('appends captured command output as a settled notice without a turn', () => {    const binding = new ShellRuntimeBinding({ width: 80 });
+    binding.appendNotice('\u001b[36m  Session State:\u001b[0m\n    Mode       work\n');
+
+    const records = binding.store.getRecords();
+    assert.equal(records.length, 1, 'notice is one settled record');
+    assert.equal(records[0]?.kind, 'plain');
+    assert.equal(binding.getSnapshot().turnId, undefined, 'no synthetic turn is created');
+    const rows = binding.getVisibleRows(80, 20).join('\n');
+    assert.match(rows, /Session State:/);
+    assert.match(rows, /Mode\s+work/);
+    assert.doesNotMatch(rows, /\u001b\[/, 'notice text is stripped');
+  });
+
+  it('ignores empty captured output', () => {
     const binding = new ShellRuntimeBinding({ width: 80 });
+    binding.appendNotice('  \n\t\n');
+    assert.equal(binding.store.getRecords().length, 0);
+  });
+
+  it('renders a terminal-only answer without a streamed chunk', () => {    const binding = new ShellRuntimeBinding({ width: 80 });
     binding.beginTurn(10, 'answer without streaming');
     binding.onChatEvent({
       type: 'done',
