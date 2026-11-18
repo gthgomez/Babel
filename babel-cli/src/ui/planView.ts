@@ -79,6 +79,11 @@ function resolveTargetFile(step: PlanStep): string {
  *
  * Non-TTY / offline mode: auto-approves and returns 'approve'.
  */
+/** Plan type is model-supplied display text; never terminal protocol. */
+export function formatPlanType(planType?: string): string {
+  return sanitizeUntrustedTerminalField(planType ?? 'IMPLEMENTATION_PLAN');
+}
+
 export async function renderInteractivePlan(plan: DisplayPlan): Promise<PlanDecision | null> {
   if (process.env['BABEL_PIPELINE_V9_OFFLINE'] === '1') return 'approve';
   if (!process.stdout.isTTY) return 'approve';
@@ -95,7 +100,7 @@ export async function renderInteractivePlan(plan: DisplayPlan): Promise<PlanDeci
         const render = () => {
           stdout.writeControl('[2J[H'); // clear screen, cursor home
           stdout.write(
-            `\n  ${bold(primary('Babel Plan'))} ${muted('·')} ${accentBright(plan.planType ?? 'IMPLEMENTATION_PLAN')}\n`,
+            `\n  ${bold(primary('Babel Plan'))} ${muted('·')} ${accentBright(formatPlanType(plan.planType))}\n`,
           );
           if (plan.taskSummary) {
             stdout.write(`  ${muted(sanitizeUntrustedTerminalField(plan.taskSummary).slice(0, width - 4))}\n`);

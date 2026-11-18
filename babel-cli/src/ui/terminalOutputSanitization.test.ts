@@ -17,6 +17,7 @@ import { formatToolGroupSummary, groupToolExecutions } from './toolPresentation.
 import { renderSubAgentOverlay } from './subAgentOverlay.js';
 import { activityColor, normalizeActivityLine } from './rendererSupport.js';
 import { hyperlinkFile } from './theme.js';
+import { formatPlanType } from './planView.js';
 
 const OSC_CLIPBOARD = '\x1b]52;c;dzA4LXN5bnRoZXRpYw==\x07';
 const CSI_CLEAR = '\x1b[2J';
@@ -131,6 +132,12 @@ test('file hyperlinks neutralize protocol in both URI and label', () => {
   const rendered = hyperlinkFile(`${OSC_CLIPBOARD}src/file.ts${CSI_CLEAR}`, `${OSC_CLIPBOARD}src/file.ts`);
   assertNoTerminalProtocol(rendered, 'hyperlink');
   assert.match(rendered, /src\/file\.ts/);
+});
+
+test('plan type is neutralized before styled rendering', () => {
+  assertNoTerminalProtocol(formatPlanType(`PLAN${OSC_CLIPBOARD}${CSI_TITLE}`), 'plan type');
+  assert.equal(formatPlanType(), 'IMPLEMENTATION_PLAN');
+  assert.equal(formatPlanType('REFACTOR_PLAN'), 'REFACTOR_PLAN');
 });
 
 test('positive control: ordinary ANSI-free text is preserved verbatim', () => {
