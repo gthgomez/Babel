@@ -854,7 +854,7 @@ test('chat probe (4) CSV escaping positive: already-correct summary with green v
   }
 })
 
-test('chat probe (3) partial: relevant green node verify.mjs without criterion graph closure stays non-certifying', async () => {
+test('chat probe (3) positive: no-call module goal certifies NO_CHANGE when already correct', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-3-positive-'))
   try {
     mkdirSync(join(root, 'src'), { recursive: true })
@@ -906,7 +906,7 @@ test('chat probe (3) partial: relevant green node verify.mjs without criterion g
   }
 })
 
-test('chat probe (3) positive: already-correct CSV with relevant bound verifier may conclude NO_CHANGE_REQUIRED', async () => {
+test('chat probe (3) positive: data-file no-call goal certifies NO_CHANGE when already correct', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-core-rel-3-pos-csv-'))
   try {
     mkdirSync(join(root, 'data'), { recursive: true })
@@ -914,8 +914,7 @@ test('chat probe (3) positive: already-correct CSV with relevant bound verifier 
     writeFileSync(join(root, 'verify.mjs'), [
       "import assert from 'node:assert/strict';",
       "import { readFileSync } from 'node:fs';",
-      "const text = readFileSync('data/metric.txt', 'utf8').trim();",
-      "assert.equal(text.split('=')[1], '42');",
+      "assert.equal(readFileSync('data/metric.txt', 'utf8').trim().split('=')[1], '42');",
       "console.log('TAP version 13');",
       "console.log('ok 1 - metric');",
       "console.log('# tests 1');",
@@ -946,15 +945,9 @@ test('chat probe (3) positive: already-correct CSV with relevant bound verifier 
     const verify = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
       .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'npm test')
     assert.equal(verify?.exit_code, 0)
-    // Honest outcome for a mutating task with a green bound verifier but no
-    // criterion-graph closure: we cannot certify the change was made, but the
-    // green verifier is real partial evidence so the run is not a failure.
-    assert.ok(
-      o.outcome === 'NO_CHANGE_REQUIRED' || o.outcome === 'UNVERIFIED_PATCH',
-      `already-correct mutating task (got ${o.outcome})`,
-    )
-    assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
-    assert.notEqual(o.outcome, 'AGENT_FAILURE')
+    assert.equal(o.outcome, 'NO_CHANGE_REQUIRED',
+      'the data-file path is bound to the exact green verifier and the tree already satisfies it')
+    assert.equal(o.durableOutcome, 'NO_CHANGE_REQUIRED')
     assert.equal(readFileSync(join(root, 'data', 'metric.txt'), 'utf8'), 'answer=42\n')
   } finally {
     rmSync(root, { recursive: true, force: true })

@@ -586,7 +586,7 @@ function specMatchesContent(input: {
     ? []
     : [
         ...importedSymbolsForTarget(code, input.inputFile, codeTargets),
-        ...dataTargets.flatMap(path => [path, posix.basename(path)]),
+        ...dataTargets,
       ]
   if (!input.spec.callPattern && requiredSymbols.length === 0) return false
   return assertionEvidenceMatches(

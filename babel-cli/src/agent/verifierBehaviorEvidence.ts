@@ -137,7 +137,7 @@ export function stripSkippedRegistrations(source: string): string {
 export function stripDeadLiteralGuards(source: string): string {
   let out = ''
   let consumed = 0
-  const guard = /\b(?:if|while)\s*\(\s*(?:false|\+0|0x0|0b0|0\.0|0n|-0|0|NaN|''|""|``|null|undefined|void\s+0)\s*\)/g
+  const guard = /\b(?:if|while)\s*\(\s*(?:false|\+0|0x0|0b0|0o0|0e0|0\.0|-0\.0|0n|-0|0|NaN|''|""|``|null|undefined|void\s+0)\s*\)/g
   for (const match of source.matchAll(guard)) {
     if (match.index! < consumed) continue
     let cursor = match.index! + match[0].length
@@ -266,17 +266,44 @@ function numericExpression(value: string): number | null {
   return result !== null && index === tokens.length ? result : null
 }
 
+function bindingNames(pattern: string): string[] {
+  const names: string[] = []
+  for (const part of pattern.slice(1, -1).split(',')) {
+    const segment = part.split(':').at(-1)!.trim().replace(/^\.\.\./, '')
+    const name = segment.match(/[A-Za-z_$][\w$]*/)?.[0]
+    if (name) names.push(name)
+  }
+  return names
+}
+
 function applyDeclarations(scope: string, constants: Map<string, string>): void {
-  for (const match of scope.matchAll(/\b(const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)/g)) {
+  for (const match of scope.matchAll(/\b(const|let|var)\b/g)) {
     const kind = match[1]!
-    const name = match[2]!
-    if (kind !== 'const') {
-      // A mutable local shadows any outer const; resolving the declaration
-      // would certify a possibly stale value. Never fall back to the outer map.
+    const rest = scope.slice(match.index! + match[0].length)
+    // Destructuring shadows every bound name, including a const pattern (its
+    // value cannot be resolved by this lexer, so it fails closed).
+    const destructured = rest.match(/^\s*([{\[][\s\S]*?[}\]])\s*=/)
+    if (destructured) {
+      for (const name of bindingNames(destructured[1]!)) constants.delete(name)
+      continue
+    }
+    // for (let five of ...) / for (const five in ...)
+    const forHead = rest.match(/^\s*([A-Za-z_$][\w$]*)\s+(?:of|in)\b/)
+    if (forHead) {
+      constants.delete(forHead[1]!)
+      continue
+    }
+    const simple = rest.match(/^\s*([A-Za-z_$][\w$]*)\s*(=|,|;|\)|$)/)
+    if (!simple) continue
+    const name = simple[1]!
+    if (kind !== 'const' || simple[2] !== '=') {
+      // Any mutable or uninitialized declaration shadows the outer const;
+      // resolving it would certify a possibly stale value.
       constants.delete(name)
       continue
     }
-    const value = evaluateOperand(match[3]!, constants)
+    const initializer = rest.match(/^\s*[A-Za-z_$][\w$]*\s*=\s*([^;\n]+)/)
+    const value = initializer ? evaluateOperand(initializer[1]!, constants) : null
     if (value === null) constants.delete(name)
     else constants.set(name, value)
   }
@@ -393,7 +420,7 @@ function assertionCandidates(code: string): AssertionCandidate[] {
   return candidates
 }
 
-function liveNestingAllowed(prefix: string): boolean {
+function liveNestingAllowed(prefix: string, emptyArrays: ReadonlySet<string>): boolean {
   let headerEnd = 0
   const arrow = prefix.indexOf('=>')
   if (arrow >= 0) {
@@ -406,6 +433,9 @@ function liveNestingAllowed(prefix: string): boolean {
   const syncNames = '(?:forEach|map|filter|some|every|reduce|flatMap|find|findIndex|reduceRight)'
   // An iteration over a literal empty array never invokes its callback.
   if (new RegExp('\\[\\s*\\]\\s*\\.\\s*' + syncNames + '\\s*\\(').test(body)) return false
+  for (const name of emptyArrays) {
+    if (new RegExp('\\b' + name + '\\s*\\.\\s*' + syncNames + '\\s*\\(').test(body)) return false
+  }
   const extraArrows = (body.match(/=>/g) ?? []).length
   const extraFunctions = (body.match(/\bfunction\b/g) ?? []).length
   const allowed = (body.match(new RegExp('\\.\\s*' + syncNames + '\\s*\\(\\s*(?:function\\b[^()]*|[^()]{0,140}?=>)', 'g')) ?? []).length
@@ -432,11 +462,12 @@ export function assertionEvidenceMatches(
   const code = stripDeadLiteralGuards(stripSkippedRegistrations(stripJsComments(content)))
   const spans = executableTestSpans(code)
   const hasRegistrations = spans.length > 0
+  const emptyArrays = new Set([...code.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*\[\s*\]/g)].map(match => match[1]!))
   for (const candidate of assertionCandidates(code)) {
     if (hasRegistrations && !spans.some(span => candidate.index >= span.start && candidate.index <= span.end)) continue
     const span = spans.find(item => candidate.index >= item.start && candidate.index <= item.end)
-    if (span && !liveNestingAllowed(code.slice(span.start, candidate.index))) continue
     const constants = localConstants(code, candidate.index, span, spans)
+    if (span && !liveNestingAllowed(code.slice(span.start, candidate.index), emptyArrays)) continue
     if (callPattern) {
       const leftCall = callPattern.test(candidate.left)
       const rightCall = callPattern.test(candidate.right)
@@ -447,8 +478,13 @@ export function assertionEvidenceMatches(
     }
     const symbols = options.requiredSymbols ?? []
     if (symbols.length === 0) continue
-    const referencesSymbol = (operand: string) => symbols.some(symbol =>
-      new RegExp(`\\b${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(operand))
+    const resolveOperand = (operand: string) => operand.replace(/\b[A-Za-z_$][\w$]*\b/g,
+      token => constants.get(token) ?? token)
+    const referencesSymbol = (operand: string) => {
+      const resolved = resolveOperand(operand)
+      return symbols.some(symbol =>
+        new RegExp(`\\b${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(resolved))
+    }
     if (referencesSymbol(candidate.left) && valuesEqual(evaluateOperand(candidate.right, constants), fragment)) return true
     if (referencesSymbol(candidate.right) && valuesEqual(evaluateOperand(candidate.left, constants), fragment)) return true
   }

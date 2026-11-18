@@ -731,3 +731,109 @@ test('P3 block-scoped const shadow is unbound (documented lexer limit)', t => {
   }).taskContract.acceptance.find(item => item.description === TASK)
   assert.ok(goal?.verification.verifier_id.startsWith('meaning:'))
 })
+
+test('P1 uninitialized and destructured let/var shadows drop the outer const', t => {
+  const shadows = [
+    ['let five;', 'five = 6;'],
+    ['var five;', 'five = 6;'],
+    ['let { five } = { five: 6 };'],
+    ['var { five } = { five: 6 };'],
+    ['let [five] = [6];'],
+    ['var [five] = [6];'],
+    ['for (let five of [6]) { void five; }'],
+  ]
+  for (const lines of shadows) {
+    const root = parserProject({
+      testFile: 'parser.test.mjs',
+      testSource: [
+        'import assert from "node:assert/strict";',
+        'import test from "node:test";',
+        'import { parseSum } from "../src/parser.js";',
+        'const five = 5;',
+        'test("shadow", () => {',
+        ...lines.map(line => `  ${line}`),
+        '  assert.equal(parseSum(2, 3), five);',
+        '});',
+        '',
+      ].join('\n'),
+    })
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    const goal = resolveLiveSessionAuthority({
+      mode: 'chat', task: TASK, projectRoot: root, projectTestCommands: ['npm test'],
+    }).taskContract.acceptance.find(item => item.description === TASK)
+    assert.ok(goal?.verification.verifier_id.startsWith('meaning:'), lines.join(' '))
+  }
+})
+
+test('P2 const path operand binds the data-file goal', t => {
+  const dataGoal = 'Fix data/metric.txt so answer=42.'
+  const root = parserProject({
+    testFile: 'parser.test.mjs',
+    testSource: [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { readFileSync } from "node:fs";',
+      'const file = "data/metric.txt";',
+      'test("metric", () => assert.equal(readFileSync(file, "utf8").trim().split("=")[1], "42"));',
+      '',
+    ].join('\n'),
+  })
+  mkdirSync(join(root, 'data'), { recursive: true })
+  writeFileSync(join(root, 'data', 'metric.txt'), 'answer=42\n')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const goal = resolveLiveSessionAuthority({
+    mode: 'chat', task: dataGoal, projectRoot: root, projectTestCommands: ['npm test'],
+  }).taskContract.acceptance.find(item => item.description === dataGoal)
+  assert.equal(goal?.verification.verifier_id, 'verifier:npm')
+})
+
+test('P2 same-basename different-directory data goal stays unbound', t => {
+  const dataGoal = 'Fix metrics/metric.txt so answer=42.'
+  const root = parserProject({
+    testFile: 'parser.test.mjs',
+    testSource: [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { readFileSync } from "node:fs";',
+      'test("metric", () => assert.equal(readFileSync("data/metric.txt", "utf8").trim().split("=")[1], "42"));',
+      '',
+    ].join('\n'),
+  })
+  mkdirSync(join(root, 'data'), { recursive: true })
+  mkdirSync(join(root, 'metrics'), { recursive: true })
+  writeFileSync(join(root, 'data', 'metric.txt'), 'answer=42\n')
+  writeFileSync(join(root, 'metrics', 'metric.txt'), 'answer=42\n')
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const goal = resolveLiveSessionAuthority({
+    mode: 'chat', task: dataGoal, projectRoot: root, projectTestCommands: ['npm test'],
+  }).taskContract.acceptance.find(item => item.description === dataGoal)
+  assert.ok(goal?.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('P3 const empty-array receiver and octal/exponent falsy literals are dead', t => {
+  const cases = [
+    'const arr = []; arr.forEach(value => assert.equal(parseSum(2, 3), 5));',
+    'if (0o0) { assert.equal(parseSum(2, 3), 5); }',
+    'if (0e0) { assert.equal(parseSum(2, 3), 5); }',
+    'if (-0.0) { assert.equal(parseSum(2, 3), 5); }',
+  ]
+  for (const body of cases) {
+    const root = parserProject({
+      testFile: 'parser.test.mjs',
+      testSource: [
+        'import assert from "node:assert/strict";',
+        'import test from "node:test";',
+        'import { parseSum } from "../src/parser.js";',
+        'test("dead", () => {',
+        `  ${body}`,
+        '});',
+        '',
+      ].join('\n'),
+    })
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    const goal = resolveLiveSessionAuthority({
+      mode: 'chat', task: TASK, projectRoot: root, projectTestCommands: ['npm test'],
+    }).taskContract.acceptance.find(item => item.description === TASK)
+    assert.ok(goal?.verification.verifier_id.startsWith('meaning:'), body)
+  }
+})
