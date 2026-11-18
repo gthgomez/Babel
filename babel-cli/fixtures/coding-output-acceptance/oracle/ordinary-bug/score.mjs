@@ -9,9 +9,14 @@
  * expected answers and never owns the report channel.
  *
  * The child receives inputs only. Graded inputs are randomized per run; only
- * the documented (1,2) case is public. The child may print whatever it wants to
- * stdout, but the parent accepts exactly one well-formed observation per input
- * index and fails closed on duplicates, malformed lines or missing indices.
+ * the documented (1,2) case is public. Observations are emitted with a captured
+ * low-level fs.writeSync reference to a dedicated pipe fd (3), not through the
+ * mutable stdout stream. Candidate stdout/stderr are ignored. The parent
+ * accepts exactly one well-formed observation per input index and fails closed
+ * on duplicates, malformed lines or missing indices. A candidate cannot
+ * suppress the evaluator's raw fd writes from JS; fake fd-3 lines collide with
+ * the genuine per-index lines, and a write failure kills the evaluator so the
+ * parent rejects a non-clean exit.
  *
  * Sandbox: `--permission --allow-fs-read=<workspace> --allow-fs-read=<evaluator>`
  * denies /proc reads (including /proc/self/mem and /proc/<ppid>/mem), fs writes,
@@ -24,9 +29,13 @@
  *
  * Independence limits: the sandbox is a Node permission-model boundary, not an
  * OS sandbox. OS-level debugging outside it, ptrace-equivalent access, and a
- * future permission-model escape remain theoretical. A candidate that reads
- * the inputs and computes correct answers is right, not a spoof; the oracle
- * proves observed behavior, not authorship.
+ * future permission-model escape remain theoretical. The observation channel
+ * reports the exported function's actual return values through a non-
+ * overridable emission path, so "observed behavior, not authorship" now holds
+ * for this channel: a candidate that reads the inputs and computes correct
+ * answers is right, not a spoof. It cannot suppress genuine observations; if it
+ * supplies a complete fake set it must compute correct values itself, which is
+ * the behavior the oracle grades.
  */
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -75,10 +84,16 @@ function gradedCases() {
 const cases = [...visibleCases, ...gradedCases()];
 
 const evaluator = `
+import { writeSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
-// Capture every primitive the value channel uses before candidate import.
-const writeOut = process.stdout.write.bind(process.stdout)
+// Capture the low-level fd writer and process primitives before candidate
+// import. Candidate code can mutate the shared fs module object or the
+// stdout stream's _write hook, but cannot change this function reference or
+// suppress a raw fd write. A write failure kills the evaluator so the parent
+// rejects the cell instead of accepting a candidate-written observation set.
+const writeFd = writeSync
+const killSelf = process.kill.bind(process)
 const parseJson = JSON.parse
 const stringOf = String
 const numberToString = Number.prototype.toString
@@ -86,7 +101,13 @@ const isFiniteNumber = Number.isFinite
 const bufferFrom = Buffer.from.bind(Buffer)
 const bufferToString = Buffer.prototype.toString
 const encode = (value) => bufferToString.call(bufferFrom(stringOf(value), 'utf8'), 'base64')
-const emit = (line) => writeOut('W04OBS\\t' + line + '\\n')
+const emit = (line) => {
+  try {
+    writeFd(3, 'W04OBS\\t' + line + '\\n')
+  } catch {
+    killSelf(process.pid, 'SIGKILL')
+  }
+}
 
 const inputs = parseJson(process.argv[3])
 let add
@@ -97,7 +118,13 @@ try {
 } catch (error) {
   moduleError = 'module_load_failed: ' + stringOf(error && error.message || error)
 }
-if (moduleError !== null) writeOut('W04MODULE\\t' + encode(moduleError) + '\\n')
+if (moduleError !== null) {
+  try {
+    writeFd(3, 'W04MODULE\\t' + encode(moduleError) + '\\n')
+  } catch {
+    killSelf(process.pid, 'SIGKILL')
+  }
+}
 for (let index = 0; index < inputs.length; index += 1) {
   const [a, b] = inputs[index]
   const prefix = numberToString.call(index, 10)
@@ -153,7 +180,7 @@ try {
     encoding: 'utf8',
     timeout: 30_000,
     windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
     maxBuffer: 8 * 1024 * 1024,
   });
 } catch (error) {
@@ -163,9 +190,9 @@ try {
 }
 rmSync(probeDir, { recursive: true, force: true });
 
-if (child.error || child.status === null) {
-  const detail = child.error?.message ?? child.stderr ?? 'evaluator did not exit';
-  console.error(`FAILED: independent behavioral evaluator could not run: ${String(detail).slice(0, 2000)}`);
+if (child.error || child.status === null || child.status !== 0 || child.signal !== null) {
+  const detail = child.error?.message ?? child.signal ?? child.stderr ?? 'evaluator did not exit cleanly';
+  console.error(`FAILED: independent behavioral evaluator did not complete: ${String(detail).slice(0, 2000)}`);
   process.exit(1);
 }
 
@@ -178,8 +205,10 @@ function invalid(detail) {
   process.exit(1);
 }
 
-const stdout = String(child.stdout ?? '');
-const lines = stdout.split('\n');
+// Only the dedicated fd 3 emission pipe is authoritative. Candidate stdout,
+// stderr and any stream hooks are ignored.
+const frames = String(child.output?.[3] ?? '');
+const lines = frames.split('\n');
 let moduleError = null;
 const observations = new Map();
 for (const line of lines) {

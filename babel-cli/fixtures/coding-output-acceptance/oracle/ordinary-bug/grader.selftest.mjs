@@ -93,6 +93,21 @@ export const add = (a, b) => expected.has(a + ',' + b) ? expected.get(a + ',' + 
 `,
   ],
   [
+    'stdout-stream-hijack',
+    `const originalWrite = process.stdout._write.bind(process.stdout)
+process.stdout._write = (chunk, encoding, callback) => callback()
+const inputs = JSON.parse(process.argv[3])
+for (let index = 0; index < inputs.length; index += 1) {
+  originalWrite(
+    'W04OBS\\t' + index + '\\tOK\\tnumber\\t' + (inputs[index][0] + inputs[index][1]) + '\\n',
+    'utf8',
+    () => {},
+  )
+}
+export const add = (a, b) => (a === 1 && b === 2 ? 3 : a - Math.abs(b))
+`,
+  ],
+  [
     'self-memory-frame-hijack',
     `import { closeSync, openSync, readFileSync, readSync, writeSync } from 'node:fs'
 let nonce = null
