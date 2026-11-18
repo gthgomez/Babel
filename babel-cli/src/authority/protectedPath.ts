@@ -90,29 +90,24 @@ function trimArgumentPunctuation(token: string): string {
   return token.replace(/^[("'`<\s]+/, '').replace(/[)"'`>,\s]+$/, '');
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /**
- * Raw-text fallback built from the same vocabulary, for paths embedded inside
- * quoted interpreter code (`python -c "...open('.env')..."`). Kept in this
- * module so the token and substring checks cannot drift apart.
+ * Raw-text fallback, for paths embedded inside quoted interpreter code
+ * (`python -c "...open('.env')..."`). Candidates are split on quoting and
+ * expression punctuation, then classified by the same path registry above, so
+ * no second vocabulary is introduced. Linear scan; no nested repetition.
  */
-const CREDENTIAL_RAW_PATH_RE = new RegExp(
-  [
-    `(?:^|[\\s"'\`\\/:(=,])${'(?:'}` +
-      `\\.env(?!(?:\\.(?:example|sample|template))(?:[./\\\\]|$))(?:\\.[a-z0-9_-]+)*` +
-      `|\\.envrc(?:\\.[a-z0-9_-]+)*` +
-      `|(?:${[...CREDENTIAL_BASENAMES].sort((a, b) => b.length - a.length).map(escapeRegExp).join('|')})` +
-      `|(?:id_rsa|id_ed25519|id_dsa|id_ecdsa)` +
-      `|(?:[a-z0-9_.-]+\\.(?:pem|p12|pfx|key|jks|keystore))` +
-      ')(?=$|[\\s"\'`\\/:),;])',
-    `|(?:^|[\\s"'\`\\/:(])${[...CREDENTIAL_DIRECTORIES].map(escapeRegExp).join('|')}(?:[\\/]|$)` +
-      '|(?:^|[\\s"\'`\\/:(])\\.config[\\/]gh[\\/]',
-  ].join(''),
-  'i',
-);
+const RAW_CANDIDATE_RE = /[^\s"'`()=,;]+/g;
+
+function rawCandidateMentionsCredential(command: string): boolean {
+  for (const match of command.matchAll(RAW_CANDIDATE_RE)) {
+    const candidate = trimArgumentPunctuation(match[0] ?? '');
+    if (!candidate) continue;
+    for (const revision of revisionSuffixes(candidate)) {
+      if (isCredentialTargetPath(trimArgumentPunctuation(revision))) return true;
+    }
+  }
+  return false;
+}
 
 /**
  * True when a command line mentions a credential-class path.
@@ -131,5 +126,5 @@ export function isCredentialPathReference(command: string): boolean {
       if (isCredentialTargetPath(trimArgumentPunctuation(candidate))) return true;
     }
   }
-  return CREDENTIAL_RAW_PATH_RE.test(command);
+  return rawCandidateMentionsCredential(command);
 }
