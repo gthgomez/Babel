@@ -14,7 +14,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 
-import { frameJsonRpcMessage, parseFramedMessages } from '../../tools/mcpTransport.js';
+import { frameLspMessage, parseLspMessages } from './framing.js';
 import { getSafeEnv } from '../../utils/safeEnv.js';
 import type { InitializeParams, InitializeResult } from './types.js';
 
@@ -125,7 +125,7 @@ export function createLspClient(
     readBuffer = Buffer.concat([readBuffer, chunk]);
 
     try {
-      const { messages, remainder } = parseFramedMessages(readBuffer);
+      const { messages, remainder } = parseLspMessages(readBuffer);
       readBuffer = Buffer.from(remainder);
 
       for (const message of messages) {
@@ -298,7 +298,7 @@ export function createLspClient(
         });
 
         if (childProcess?.stdin) {
-          childProcess.stdin.write(frameJsonRpcMessage(body), (err?: Error | null) => {
+          childProcess.stdin.write(frameLspMessage(body), (err?: Error | null) => {
             if (err) {
               clearTimeout(timer);
               pendingRequests.delete(id);
@@ -346,7 +346,7 @@ export function createLspClient(
         });
 
         if (childProcess?.stdin) {
-          childProcess.stdin.write(frameJsonRpcMessage(body), (err?: Error | null) => {
+          childProcess.stdin.write(frameLspMessage(body), (err?: Error | null) => {
             if (err) {
               clearTimeout(timer);
               pendingRequests.delete(id);
@@ -372,7 +372,7 @@ export function createLspClient(
 
       return new Promise<void>((resolve, reject) => {
         if (childProcess?.stdin) {
-          childProcess.stdin.write(frameJsonRpcMessage(body), (err?: Error | null) => {
+          childProcess.stdin.write(frameLspMessage(body), (err?: Error | null) => {
             if (err) {
               reject(new Error(`Failed to write notification "${method}": ${err.message}`));
             } else {

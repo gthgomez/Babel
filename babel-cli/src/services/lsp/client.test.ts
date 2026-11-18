@@ -6,12 +6,21 @@ import { describe, test, afterEach } from 'node:test';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createLspClient } from './client.js';
+import { createLspClient, type LspClient } from './client.js';
 
-describe('LSP Client', () => {
+describe('LSP Client', { timeout: 45_000 }, () => {
   let tempDir: string | null = null;
+  const clients: LspClient[] = [];
 
-  afterEach(() => {
+  function makeClient(name: string): LspClient {
+    const client = createLspClient(name);
+    clients.push(client);
+    return client;
+  }
+
+  afterEach(async () => {
+    await Promise.allSettled(clients.map((client) => client.stop()));
+    clients.length = 0;
     if (tempDir) {
       try {
         rmSync(tempDir, { recursive: true, force: true });
@@ -186,7 +195,7 @@ stdin.on('end', () => {
 
   test('start and initialize successfully', async () => {
     const scriptPath = createMockScript();
-    const client = createLspClient('mock-test');
+    const client = makeClient('mock-test');
 
     await client.start(process.execPath, [scriptPath]);
 
@@ -209,7 +218,7 @@ stdin.on('end', () => {
   test('strips unknown inherited and per-server environment variables', async () => {
     const scriptPath = createMockScript(true);
     const capturePath = join(tempDir!, 'captured-env.txt');
-    const client = createLspClient('mock-safe-env');
+    const client = makeClient('mock-safe-env');
     const previousSecret = process.env.CODEX_TEST_SECRET;
     process.env.CODEX_TEST_SECRET = 'synthetic-parent-secret';
 
@@ -232,7 +241,7 @@ stdin.on('end', () => {
 
   test('send hover request and receive response', async () => {
     const scriptPath = createMockScript();
-    const client = createLspClient('mock-hover');
+    const client = makeClient('mock-hover');
 
     await client.start(process.execPath, [scriptPath]);
     await client.initialize({
@@ -257,7 +266,7 @@ stdin.on('end', () => {
 
   test('send textDocument/didOpen notification', async () => {
     const scriptPath = createMockScript();
-    const client = createLspClient('mock-didopen');
+    const client = makeClient('mock-didopen');
 
     await client.start(process.execPath, [scriptPath]);
     await client.initialize({
@@ -293,7 +302,7 @@ stdin.on('end', () => {
 
   test('shutdown stops the server gracefully', async () => {
     const scriptPath = createMockScript();
-    const client = createLspClient('mock-shutdown');
+    const client = makeClient('mock-shutdown');
 
     await client.start(process.execPath, [scriptPath]);
     await client.initialize({
@@ -310,7 +319,7 @@ stdin.on('end', () => {
 
   test('sendRequest throws when client is not initialized', async () => {
     const scriptPath = createMockScript();
-    const client = createLspClient('mock-not-init');
+    const client = makeClient('mock-not-init');
 
     await client.start(process.execPath, [scriptPath]);
 
