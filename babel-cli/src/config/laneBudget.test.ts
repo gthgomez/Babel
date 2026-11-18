@@ -8,7 +8,11 @@ import { assertFiniteBudgetSupported } from './laneBudget.js'
 import { updateUserSettings } from './userSettings.js'
 
 function isolatedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return { ...process.env, BABEL_STATE_DIR: mkdtempSync(join(tmpdir(), 'babel-lane-budget-')), ...overrides }
+  const scoped: NodeJS.ProcessEnv = { ...process.env, BABEL_STATE_DIR: mkdtempSync(join(tmpdir(), 'babel-lane-budget-')), ...overrides }
+  for (const name of ['BABEL_CHAT_MAX_COST', 'BABEL_OFFLINE', 'BABEL_DESKTOP_PROVIDER']) {
+    if (!(name in overrides)) delete scoped[name]
+  }
+  return scoped
 }
 
 test('a finite hard ceiling is rejected on an unenforced remote lane before inference', () => {

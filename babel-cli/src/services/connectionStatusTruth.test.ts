@@ -8,7 +8,11 @@ import { connectionStatus } from './connectionSettings.js'
 import { updateUserSettings } from '../config/userSettings.js'
 
 function env(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return { ...process.env, BABEL_STATE_DIR: mkdtempSync(join(tmpdir(), 'babel-status-')), ...overrides }
+  const scoped: NodeJS.ProcessEnv = { ...process.env, BABEL_STATE_DIR: mkdtempSync(join(tmpdir(), 'babel-status-')), ...overrides }
+  for (const name of ['OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'BABEL_OFFLINE', 'BABEL_DESKTOP_PROVIDER']) {
+    if (!(name in overrides)) delete scoped[name]
+  }
+  return scoped
 }
 
 test('status separates configured from verified and names credential presence only', () => {
