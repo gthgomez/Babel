@@ -106,8 +106,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          Copy-Item tools/qualified-consumer-promotion.mjs "$env:RUNNER_TEMP/qualified-consumer-promotion.mjs"
-          node "$env:RUNNER_TEMP/qualified-consumer-promotion.mjs" --download --repository "$env:GITHUB_REPOSITORY" --source-sha "$env:RELEASE_SOURCE" --output "$env:RUNNER_TEMP/cli-candidate"
+          $trusted = Join-Path $env:RUNNER_TEMP 'trusted-tools'
+          New-Item -ItemType Directory -Force -Path (Join-Path $trusted 'tools'), (Join-Path $trusted 'babel-cli/scripts') | Out-Null
+          Copy-Item tools/qualified-consumer-promotion.mjs (Join-Path $trusted 'tools/qualified-consumer-promotion.mjs')
+          Copy-Item babel-cli/scripts/release_artifact_inventory.mjs (Join-Path $trusted 'babel-cli/scripts/release_artifact_inventory.mjs')
+          node (Join-Path $trusted 'tools/qualified-consumer-promotion.mjs') --download --repository "$env:GITHUB_REPOSITORY" --source-sha "$env:RELEASE_SOURCE" --output "$env:RUNNER_TEMP/cli-candidate"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $archives = @(Get-ChildItem "$env:RUNNER_TEMP/cli-candidate/*.tgz")
           if ($archives.Count -ne 1) { throw 'Exactly one qualified CLI candidate archive is required' }
@@ -289,8 +292,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          cp tools/qualified-consumer-promotion.mjs "$RUNNER_TEMP/qualified-consumer-promotion.mjs"
-          node "$RUNNER_TEMP/qualified-consumer-promotion.mjs" --download --repository "$GITHUB_REPOSITORY" --source-sha "$RELEASE_SOURCE" --output "$RUNNER_TEMP/cli-candidate"
+          trusted="$RUNNER_TEMP/trusted-tools"
+          mkdir -p "$trusted/tools" "$trusted/babel-cli/scripts"
+          cp tools/qualified-consumer-promotion.mjs "$trusted/tools/qualified-consumer-promotion.mjs"
+          cp babel-cli/scripts/release_artifact_inventory.mjs "$trusted/babel-cli/scripts/release_artifact_inventory.mjs"
+          node "$trusted/tools/qualified-consumer-promotion.mjs" --download --repository "$GITHUB_REPOSITORY" --source-sha "$RELEASE_SOURCE" --output "$RUNNER_TEMP/cli-candidate"
           archives=$(find "$RUNNER_TEMP/cli-candidate" -maxdepth 1 -name '*.tgz' | wc -l)
           test "$archives" = "1"
           echo "CLI_CANDIDATE=$(find "$RUNNER_TEMP/cli-candidate" -maxdepth 1 -name '*.tgz')" >> "$GITHUB_ENV"

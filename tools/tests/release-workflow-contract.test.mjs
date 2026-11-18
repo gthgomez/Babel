@@ -90,6 +90,7 @@ test('release promotion exercises the exact AppImage bytes and the npm/GitHub ch
     assert.ok(download, `${jobName} must download the qualified candidate`)
     assert.match(download.run, /qualified-consumer-promotion\.mjs/)
     assert.match(download.run, /--source-sha "\$env:RELEASE_SOURCE"|--source-sha "\$RELEASE_SOURCE"/)
+    assert.match(download.run, /release_artifact_inventory\.mjs/, 'copied tool must keep its relative import resolvable')
     const build = job.steps.find(step => step.name.startsWith('Build'))
     assert.match(build.run, /--cli-archive/)
   }
