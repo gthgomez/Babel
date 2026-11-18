@@ -141,6 +141,27 @@ test('a required suite cannot silently delegate no canonical unit file', async t
   assert.throws(() => prepareUnitShard(root, 0, 1), /delegates no canonical unit files/);
 })
 
+test('delegated required suites retain the unit no-ambient bootstrap', async () => {
+  const { DELEGATED_UNIT_SUITES } = await api();
+  const pkg = JSON.parse(readFileSync(new URL('../../babel-cli/package.json', import.meta.url), 'utf8'));
+  const loader = './src/testinfra/register-no-ambient-inference.mjs';
+  for (const script of ['test:unit', ...DELEGATED_UNIT_SUITES.map(suite => `test:${suite}:raw`)]) {
+    const tokens = pkg.scripts[script].trim().split(/\s+/);
+    const imports = tokens.flatMap((token, index) => token === '--import' ? [tokens[index + 1]] : []);
+    assert.deepEqual(imports, [loader], `${script} must declare the same bootstrap import`);
+  }
+});
+
+test('a delegated suite that drops the unit bootstrap fails instead of silently changing conditions', async t => {
+  const { prepareUnitShard } = await api();
+  const root = fixture(t, ['src/a.test.ts'], ['src/*.test.ts']);
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: {
+    'test:unit': prefix + 'src/*.test.ts',
+    'test:chat-truth:raw': 'tsx --no-warnings=ExperimentalWarning --test src/a.test.ts',
+  } }));
+  assert.throws(() => prepareUnitShard(root, 0, 1), /must retain the unit no-ambient bootstrap/);
+})
+
 test('real host shard inventory is a deterministic exhaustive partition after delegation', async t => {
   const { prepareUnitShard } = await api();
   const packageRoot = fileURLToPath(new URL('../../babel-cli/', import.meta.url));

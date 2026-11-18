@@ -198,8 +198,10 @@ minus exact required-suite matches) with duration-weighted balancing. Files
 whose exact paths are also selected by a required TAP suite are delegated to
 that suite instead of running twice; delegation is recorded with source hashes
 in `selection.json` and is only valid because both lanes install the same
-dependencies on the same Linux/Windows matrix and the delegated files do not
-require a dist build. Required TAP summaries
+dependencies, load the same no-ambient inference bootstrap, run on the same
+Linux/Windows matrix, and the delegated files do not require a dist build.
+The shard helper refuses to delegate when a required raw suite drops the unit
+bootstrap. Required TAP summaries
 reject TODOs, truncated runs, unexplained skips and empty/all-skipped runs.
 Suite-level SKIP/TODO directives and suite failures also reject qualification,
 even when the leaf counters show a passing test. Zero-byte discovered unit

@@ -54,15 +54,28 @@ function expandCanonicalTestScript(packageRoot, scriptName, { requiredPrefix = n
 }
 
 /**
- * Return files already executed by required TAP suites. The unit shards may
- * delegate only an exact canonical inventory match, so deleting coverage from
- * either lane fails instead of silently shrinking qualification.
+ * Return canonical unit files already executed by required TAP suites. A file
+ * is delegated only when it appears in both the unit inventory and a required
+ * suite's expanded selection, and that suite keeps the same no-ambient
+ * bootstrap; deleting coverage from either side fails instead of silently
+ * shrinking qualification.
  */
 export function delegatedUnitFiles(packageRoot, inventory) {
+  const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
+  const bootstrapOf = name => {
+    const tokens = typeof pkg.scripts?.[name] === 'string' ? pkg.scripts[name].trim().split(/\s+/) : [];
+    const index = tokens.indexOf('--import');
+    return index >= 0 ? tokens[index + 1] : null;
+  };
+  const unitBootstrap = bootstrapOf('test:unit');
+  if (!unitBootstrap) throw new Error('Canonical unit command must declare its bootstrap import');
   const byPath = new Map();
   for (const suite of DELEGATED_UNIT_SUITES) {
     const files = expandCanonicalTestScript(packageRoot, `test:${suite}:raw`);
     if (files === null) continue;
+    if (bootstrapOf(`test:${suite}:raw`) !== unitBootstrap) {
+      throw new Error(`Required ${suite} suite must retain the unit no-ambient bootstrap`);
+    }
     const selected = files.filter(file => inventory.includes(file));
     if (selected.length === 0) throw new Error(`Required ${suite} suite delegates no canonical unit files`);
     for (const file of selected) {
