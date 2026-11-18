@@ -367,6 +367,15 @@ export function assertionEvidenceMatches(
   const hasRegistrations = spans.length > 0
   for (const candidate of assertionCandidates(code)) {
     if (hasRegistrations && !spans.some(span => candidate.index >= span.start && candidate.index <= span.end)) continue
+    // An assertion nested in another callback inside the test body is not
+    // guaranteed to run (a dead helper/arrow). The test's own callback is the
+    // only function boundary admitted by this lexer.
+    const span = spans.find(item => candidate.index >= item.start && candidate.index <= item.end)
+    if (span) {
+      const prefix = code.slice(span.start, candidate.index)
+      if ((prefix.match(/=>/g) ?? []).length > 1) continue
+      if ((prefix.match(/\bfunction\b/g) ?? []).length > 1) continue
+    }
     if (callPattern) {
       const leftCall = callPattern.test(candidate.left)
       const rightCall = callPattern.test(candidate.right)

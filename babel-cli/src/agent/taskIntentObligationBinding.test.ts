@@ -239,6 +239,14 @@ test('P1-1: weak inputs never bind the behavioral goal', t => {
       'const dead = () => assert.equal(parseSum(2, 3), 5);',
       'test("does not exercise the goal", () => assert.ok(true));',
     ].join('\n') + '\n',
+    [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'test("dead helper inside a live test", () => {',
+      '  const dead = () => assert.equal(parseSum(2, 3), 5);',
+      '  assert.ok(true);',
+      '});',
+    ].join('\n') + '\n',
   ]
   for (const [index, testSource] of weakSources.entries()) {
     const root = parserProject({ testFile: 'parser.test.mjs', testSource })
