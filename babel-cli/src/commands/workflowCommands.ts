@@ -132,6 +132,8 @@ import { createLiteFixProgress } from '../ui/liteFixProgress.js';
 import { runLiteSessionWithSchemaRecovery } from '../services/liteSessionRunner.js';
 import { registerDogfoodCommands } from './dogfoodCommands.js';
 import { loadPlanHandoff, loadPlanHandoffGuarded, PLAN_APPLY_UNAVAILABLE_REASON } from '../agent/planHandoff.js';
+import { isReadOnlyChat } from '../agent/chatReadOnly.js';
+import { readRuntimeMode } from '../config/runtimeMode.js';
 import { runPlanReviewLane } from '../agent/lanes/planReviewLane.js';
 import { resolveFuzzyWorkspaceDirectory } from '../services/pathScanner.js';
 import { isCommandCodeChatSelection, preflightRequestedModelPolicy } from './workflowModelPolicy.js';
@@ -865,15 +867,16 @@ async function runManualBridgeStart(
   }
 
   const clipboard = copyFileToClipboard(result.manualPromptPath);
+  const manualRun = result.runDir;
   const payload: Record<string, unknown> = {
     status: 'MANUAL_BRIDGE_REQUIRED',
     run_dir: result.runDir,
     prompt_path: result.manualPromptPath,
     next: [
-      'babel apply',
-      'If plan.json is not ready, apply opens editor at <run_dir>/manual/plan.json.',
-      'You can also run: babel apply --plan clipboard',
-      'Or paste via stdin: babel apply --plan -',
+      `babel apply --run ${manualRun}`,
+      'If plan.json is not ready, that command opens the editor at <run_dir>/manual/plan.json.',
+      `You can also run: babel apply --run ${manualRun} --plan clipboard`,
+      `Or paste via stdin: babel apply --run ${manualRun} --plan -`,
     ],
   };
   if (options.showModelPolicy === true && result.modelPolicy) {
@@ -1093,6 +1096,15 @@ export function classifyDoTask(task: string): Exclude<LiteVerb, 'do'> {
     return 'fix';
   }
   return 'plan';
+}
+
+/** Saved-Plan apply is advertised only when this profile could admit it. */
+export function planApplyCapability(savedPlanId: string | null, env: NodeJS.ProcessEnv = process.env): { available: boolean; reason: string | null } {
+  if (!savedPlanId) return { available: false, reason: null }
+  if (isReadOnlyChat(env) || /^(?:1|true)$/i.test(env['BABEL_DRY_RUN'] ?? '') || readRuntimeMode(env) === 'plan') {
+    return { available: false, reason: 'Current read-only permissions block plan application.' }
+  }
+  return { available: true, reason: null }
 }
 
 async function runLiteCommand(
@@ -1397,18 +1409,22 @@ async function runLiteCommand(
     payloadRecord['apply_unavailable_reason'] = PLAN_APPLY_UNAVAILABLE_REASON;
     // Automatic application and an explicit saved Plan apply are different
     // capabilities. Neither surface may advertise the explicit route unless a
-    // canonical saved Plan id exists; that route rechecks source scope and asks
-    // for confirmation before any mutation.
-    payloadRecord['explicit_apply_available'] = savedPlanId !== null;
-    payloadRecord['apply_requires_confirmation'] = savedPlanId !== null;
+    // canonical saved Plan id exists and this profile could actually admit it;
+    // that route rechecks source scope and asks for confirmation before any
+    // mutation.
+    const applyCapability = planApplyCapability(savedPlanId);
+    payloadRecord['explicit_apply_available'] = applyCapability.available;
+    payloadRecord['apply_requires_confirmation'] = applyCapability.available;
     const command = invokedCliName();
-    if (savedPlanId) {
-      payloadRecord['plan_id'] = savedPlanId;
+    if (savedPlanId) payloadRecord['plan_id'] = savedPlanId;
+    if (applyCapability.reason) payloadRecord['explicit_apply_unavailable_reason'] = applyCapability.reason;
+    if (savedPlanId && applyCapability.available) {
       payloadRecord['apply_command'] = `${command} apply --plan ${savedPlanId}`;
     }
     humanText = [humanText,
       savedPlanId ? `Plan saved as ${savedPlanId}.` : 'The Plan is retained in its run evidence; canonical saving is unavailable.',
-      savedPlanId ? `Apply: ${payloadRecord['apply_command']} (asks for confirmation; source scope is rechecked).` : null,
+      savedPlanId && applyCapability.available ? `Apply: ${payloadRecord['apply_command']} (asks for confirmation; source scope is rechecked).` : null,
+      savedPlanId && !applyCapability.available ? applyCapability.reason : null,
       PLAN_APPLY_UNAVAILABLE_REASON].filter(Boolean).join('\n');
     if (!savedPlanId) process.exitCode = 1;
   }
@@ -3154,11 +3170,11 @@ Notes:
     .command('resume')
     .argument('[run]', 'latest or a run directory to inspect for resume')
     .description('Inspect resume evidence; action-taking resume is temporarily unavailable')
-    .option('--run <run_dir>', 'Legacy manual-resume route (currently unavailable)')
+    .option('--run <run_dir>', 'Legacy manual-bridge run directory')
     .option('--project <name>', 'Use latest run pointer for this project when --run is omitted')
     .option(
       '--plan <path>',
-      'Legacy manual Plan input (currently unavailable)',
+      'Legacy manual Plan path (use - for stdin, clipboard for the clipboard)',
     )
     .option('-m, --model <model>', 'Override the model family for provider retries')
     .option('--model-tier <tier>', `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')}`)
@@ -3174,7 +3190,9 @@ Examples:
 Important:
   - Action-taking resume is temporarily unavailable until task identity, settlement, and verifier authority are qualified.
   - babel continue latest --inspect-only inspects saved runs without taking an action.
-  - Legacy manual Plan resume is unavailable until source identity and approval are qualified; existing artifacts are retained.
+  - Legacy manual Plan resume remains available explicitly through
+    resume --run <run_dir> --plan <path>; retained artifacts are never
+    rewritten. It is a separate compatibility lane from a saved-Plan apply.
 `,
     )
     .action(
@@ -3200,23 +3218,26 @@ Important:
 
   program
     .command('apply')
-    .description('Apply a saved plan ID; legacy manual Plan execution is unavailable')
-    .option('--run <run_dir>', 'Legacy manual-resume route (currently unavailable)')
-    .option('--project <name>', 'Target project for the saved Plan')
+    .description('Apply a saved plan ID, or resume a legacy manual Plan through --run/--plan <path>')
+    .option('--run <run_dir>', 'Legacy manual-bridge run directory')
+    .option('--project <name>', 'Target project for the saved Plan or manual run')
     .option(
       '--plan <path>',
-      'Saved Plan ID; legacy manual Plan paths are unavailable',
+      'Saved Plan ID, or a legacy manual Plan path (use - for stdin, clipboard for the clipboard)',
     )
     .option('--yes', 'Confirm applying the saved Plan without an interactive prompt')
     .addHelpText(
       'after',
       `
 Notes:
-  - Use --plan <saved-plan-id>. Legacy manual Plan execution is unavailable; retained artifacts remain inspectable.
-  - Applying asks for confirmation on an interactive terminal. Non-interactive
-    callers must pass --yes explicitly.
+  - A saved Plan ID (plan_...) applies through the guarded route and asks for
+    confirmation on an interactive terminal. Non-interactive callers must pass
+    --yes explicitly.
   - The saved Plan source, project identity, fingerprint, permissions and
     read-only mode are rechecked before any mutation.
+  - --run and non-ID --plan values enter the separate legacy manual-bridge
+    lane. Its artifacts and admission checks are its own; it does not use the
+    saved-Plan confirmation.
 `,
     )
     .action(async (options: { run?: string; plan?: string; project?: string; yes?: boolean }) => {
