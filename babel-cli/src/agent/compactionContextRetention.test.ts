@@ -131,23 +131,126 @@ test('a retained window without a user turn still carries the dropped constraint
     message('system', 'system policy'),
     message('user', INITIAL_TASK),
     message('assistant', 'Acknowledged.'),
-    message('tool', `tool line a\n${'detail '.repeat(60)}`),
-    message('user', 'Additional detail for the same task.'),
-    message('tool', `tool line b\n${'detail '.repeat(60)}`),
+    message('tool', 'tool line a\nsecond line'),
+    message('tool', 'tool line b\nsecond line'),
     message('assistant', 'Next step.'),
-    message('tool', `tool line c\n${'detail '.repeat(60)}`),
+    message('tool', 'tool line c\nsecond line'),
     message('assistant', 'Checking.'),
-    message('tool', `tool line d\n${'detail '.repeat(60)}`),
+    message('tool', 'tool line d\nsecond line'),
   ];
   const state = heuristicState(conversation);
   state.maxConversationMessages = 4;
   compactHeuristicConversation(state);
 
   assert.ok(state.conversation.some((entry) => entry.role === 'user'));
-  assert.match(JSON.stringify(state.conversation), /\(4\) Do not add new dependencies/);
+  const text = JSON.stringify(state.conversation);
+  assert.match(text, /\(1\) Never modify src\/legacy/, 'head of the dropped constraint must survive');
+  assert.match(text, /\(5\) Report the exact verifier command/, 'tail of the dropped constraint must survive');
 });
 
-test('cold-resume projection keeps the full original task after a heuristic commit', async () => {
+test('a one- or two-message drop still represents the dropped user sentinel', () => {
+  for (const length of [6, 7]) {
+    const conversation: ChatMessage[] = [message('system', 'system policy')];
+    conversation.push(message('user', 'USER_SENTINEL_MUST_SURVIVE'));
+    while (conversation.length < length) {
+      conversation.push(
+        conversation.length % 2 === 0
+          ? message('assistant', `assistant ${conversation.length}`)
+          : message('tool', `tool ${conversation.length}\nsecond line`),
+      );
+    }
+    const state = heuristicState(conversation);
+    state.maxConversationMessages = 4;
+    compactHeuristicConversation(state);
+    assert.match(
+      JSON.stringify(state.conversation),
+      /USER_SENTINEL_MUST_SURVIVE/,
+      `drop of ${length - 4} message(s) lost the user sentinel`,
+    );
+  }
+});
+
+test('production default window (19 messages) keeps a dropped first user turn', () => {
+  const conversation: ChatMessage[] = [message('system', 'system policy')];
+  conversation.push(message('user', 'PRODUCTION_DEFAULT_SENTINEL must remain in the request'));
+  while (conversation.length < 19) {
+    conversation.push(
+      conversation.length % 2 === 0
+        ? message('assistant', `assistant ${conversation.length}`)
+        : message('tool', `tool ${conversation.length}\nsecond line`),
+    );
+  }
+  const state = heuristicState(conversation);
+  state.maxConversationMessages = 20;
+  compactHeuristicConversation(state);
+  assert.match(JSON.stringify(state.conversation), /PRODUCTION_DEFAULT_SENTINEL/);
+});
+
+test('a 400-char constraint plus three short tool results keeps both constraint ends', () => {
+  const constraint = `CONSTRAINT_START ${'m'.repeat(368)} CONSTRAINT_END`;
+  assert.equal(constraint.length, 400);
+  const conversation: ChatMessage[] = [
+    message('system', 'system policy'),
+    message('user', constraint),
+    message('tool', 'short tool a\nsecond line'),
+    message('tool', 'short tool b\nsecond line'),
+    message('tool', 'short tool c\nsecond line'),
+    message('assistant', 'Working.'),
+    message('assistant', 'Still working.'),
+    message('tool', 'kept tool\nsecond line'),
+    message('assistant', 'Checking.'),
+    message('tool', 'kept tool 2\nsecond line'),
+  ];
+  const state = heuristicState(conversation);
+  state.maxConversationMessages = 8;
+  compactHeuristicConversation(state);
+
+  const text = JSON.stringify(state.conversation);
+  assert.match(text, /CONSTRAINT_START/);
+  assert.match(text, /CONSTRAINT_END/);
+});
+
+test('a tight summary budget emits an explicit head/tail marker', () => {
+  const constraint = `HEAD_TOKEN ${'z'.repeat(400)} TAIL_TOKEN`;
+  const summary = summarizeDroppedTurns([message('user', constraint)], { maxChars: 320 });
+  assert.match(summary, /HEAD_TOKEN/);
+  assert.match(summary, /TAIL_TOKEN/);
+  assert.match(summary, /compaction budget retained/);
+  assert.ok(summary.length <= 360, `summary must respect the requested budget: ${summary.length}`);
+});
+
+test('no heuristic summary path drops every user turn', () => {
+  for (const maxMessages of [4, 8, 20]) {
+    for (let length = 5; length <= 30; length += 5) {
+      const sentinel = `SENTINEL_m${maxMessages}_l${length}`;
+      const conversation: ChatMessage[] = [message('system', 'system policy')];
+      conversation.push(message('user', `${sentinel} user constraint`));
+      while (conversation.length < length) {
+        conversation.push(
+          conversation.length % 2 === 0
+            ? message('assistant', `assistant ${conversation.length}`)
+            : message('tool', `tool ${conversation.length}\nsecond line`),
+        );
+      }
+      const state = heuristicState(conversation);
+      state.maxConversationMessages = maxMessages;
+      compactHeuristicConversation(state);
+      assert.match(
+        JSON.stringify(state.conversation),
+        new RegExp(sentinel),
+        `maxMessages=${maxMessages} length=${length} dropped the user turn with no representation`,
+      );
+    }
+  }
+});
+
+test('user-authored whitespace is preserved in the summary', () => {
+  const content = '  step one\n    nested code block\n  step two';
+  const summary = summarizeDroppedTurns([message('user', content)]);
+  assert.ok(summary.includes(content), 'summary must not trim or reflow user content');
+});
+
+test('a heuristic-strategy commit capsule retains the original task (projection only)', async () => {
   const threadLog = createThreadEventLog('thread-compaction-retention');
   const sessionLog = createSessionEventLog('thread-compaction-retention');
   startTurn(threadLog, {
@@ -197,11 +300,6 @@ test('cold-resume projection keeps the full original task after a heuristic comm
   const rebuilt = rebuildProviderMessagesFromEvents(threadLog);
   assert.ok(
     rebuilt.some((entry) => entry.content?.includes(INITIAL_TASK)),
-    'cold-resume projection must retain the complete original task',
-  );
-  assert.ok(
-    rebuilt.some((entry) => entry.content?.includes('keep the smoke fixture under 2 seconds')
-      || entry.content?.includes('Additional constraint from the user')),
-    'cold-resume projection must retain the later user constraint summary',
+    'commit projection must retain the complete original task',
   );
 });

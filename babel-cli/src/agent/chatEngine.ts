@@ -4063,8 +4063,8 @@ export class ChatEngine {
       maxEstimatedTokens: this.limits.maxEstimatedTokens,
       compactionConsecutiveFailures: this.compactionConsecutiveFailures,
       maxCompactionFailures: ChatEngine.MAX_COMPACTION_FAILURES,
-      summarizeDroppedTurns: (d: ChatMessage[]) =>
-        this.summarizeDroppedTurns(d),
+      summarizeDroppedTurns: (d: ChatMessage[], options?: import('./compactionSummary.js').DroppedTurnSummaryOptions) =>
+        this.summarizeDroppedTurns(d, options),
     };
     compactHeuristicConversation(state);
     this.conversation = state.conversation;
@@ -4072,8 +4072,11 @@ export class ChatEngine {
     this.compactionConsecutiveFailures = state.compactionConsecutiveFailures;
   }
 
-  private summarizeDroppedTurns(dropped: ChatMessage[]): string {
-    return summarizeDroppedTurnsFn(dropped);
+  private summarizeDroppedTurns(
+    dropped: ChatMessage[],
+    options?: import('./compactionSummary.js').DroppedTurnSummaryOptions,
+  ): string {
+    return summarizeDroppedTurnsFn(dropped, options);
   }
   private parseChatTurnLenient(rawText: string): ChatTurn {
     return parseChatTurnLenient(rawText);

@@ -644,7 +644,10 @@ export type CompactConversationState = {
   maxEstimatedTokens: number;
   compactionConsecutiveFailures: number;
   maxCompactionFailures: number;
-  summarizeDroppedTurns: (dropped: ChatMessage[]) => string;
+  summarizeDroppedTurns: (
+    dropped: ChatMessage[],
+    options?: import('./compactionSummary.js').DroppedTurnSummaryOptions,
+  ) => string;
 };
 
 /** Heuristic conversation compaction. Mutates state fields in place. */
@@ -707,39 +710,36 @@ export function compactHeuristicConversation(state: CompactConversationState): v
 
     const skippedCount = oldLen - state.conversation.length;
     if (skippedCount > 0) {
-      const summary = state.summarizeDroppedTurns(dropped);
       const droppedChars = dropped.reduce((sum, message) => sum + message.content.length, 0);
-      // A summary is useful only when it materially reduces the dropped text and
-      // enough history was actually dropped to carry constraints. Otherwise an
-      // emergency compaction of a tiny window would spend more tokens on the
-      // summary than it frees and fail the request-admission check.
-      const worthSummarizing =
-        dropped.length >= 3 &&
-        droppedChars >= 400 &&
-        summary.length < droppedChars;
-      if (worthSummarizing) {
-        const compactPreamble = `[Session state: ${b3WriteCount} writes made, last verifier: ${b3VerifierInfo}, active todos: ${b3TodoInfo}, phase: ${b3PhaseInfo}]`;
-        let lastUserIdx = -1;
-        for (let i = state.conversation.length - 1; i >= 0; i--) {
-          if (state.conversation[i]!.role === 'user') {
-            lastUserIdx = i;
-            break;
-          }
+      // Never suppress a summary that represents dropped user turns. The budget
+      // trims tool noise first and reduces user text only with an explicit
+      // head+tail marker. A compact emergency window may therefore produce a
+      // summary that is not smaller than the dropped text; the commit path then
+      // fails closed and keeps the original conversation instead of losing it.
+      const summary = state.summarizeDroppedTurns(dropped, {
+        maxChars: Math.max(256, droppedChars),
+      });
+      const compactPreamble = `[Session state: ${b3WriteCount} writes made, last verifier: ${b3VerifierInfo}, active todos: ${b3TodoInfo}, phase: ${b3PhaseInfo}]`;
+      let lastUserIdx = -1;
+      for (let i = state.conversation.length - 1; i >= 0; i--) {
+        if (state.conversation[i]!.role === 'user') {
+          lastUserIdx = i;
+          break;
         }
-        if (lastUserIdx >= 0) {
-          const existing = state.conversation[lastUserIdx]!;
-          state.conversation[lastUserIdx] = {
-            ...existing,
-            content: summary + '\n' + compactPreamble + '\n\n' + existing.content,
-          };
-        } else {
-          // No retained user turn: keep the dropped constraints as a visible
-          // user-side context block instead of discarding the summary.
-          state.conversation.push({
-            role: 'user',
-            content: summary + '\n' + compactPreamble,
-          });
-        }
+      }
+      if (lastUserIdx >= 0) {
+        const existing = state.conversation[lastUserIdx]!;
+        state.conversation[lastUserIdx] = {
+          ...existing,
+          content: summary + '\n' + compactPreamble + '\n\n' + existing.content,
+        };
+      } else {
+        // No retained user turn: keep the dropped constraints as a visible
+        // user-side context block instead of discarding the summary.
+        state.conversation.push({
+          role: 'user',
+          content: summary + '\n' + compactPreamble,
+        });
       }
     }
     state.apiTokenCount = 0;
