@@ -179,8 +179,8 @@ function formatExpandedItem(
       `  ${icon} ${dim(tool)}  — ${statusText}${errSuffix}`,
     );
     const budget = Math.max(4, termWidth - staticLen);
-    const truncatedTarget = truncate(item.target, budget);
-    const fittedLine = `  ${icon} ${dim(item.tool)} ${primary(truncatedTarget)} — ${statusText}${errSuffix}`;
+    const truncatedTarget = truncate(target, budget);
+    const fittedLine = `  ${icon} ${dim(tool)} ${primary(truncatedTarget)} — ${statusText}${errSuffix}`;
     return visibleLength(fittedLine) > termWidth
       ? truncate(fittedLine, termWidth)
       : fittedLine;

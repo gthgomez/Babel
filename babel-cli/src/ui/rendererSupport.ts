@@ -12,6 +12,7 @@ import {
 } from './theme.js';
 import { OutputBuffer, isBrokenStdoutError } from './outputBuffer.js';
 import { isRendererPresentationSuspended, registerRendererFenceTarget } from './rendererFence.js';
+import { sanitizeUntrustedTerminalField, stripControlSequences } from './sanitize.js';
 
 
 
@@ -302,7 +303,9 @@ export function activityKey(line: string): string {
 }
 
 export function normalizeActivityLine(line: string): string | null {
-  const text = String(line ?? '').trim();
+  // Activity text is pipeline/model output; strip terminal protocol first so
+  // later width truncation can only re-emit Babel-owned sequences.
+  const text = sanitizeUntrustedTerminalField(line);
   if (!text) return null;
   if (text.includes('### INTERNAL MONOLOGUE')) return null;
   if (text.startsWith('{') || text.includes('"tool":') || /\{.*\}/.test(text)) return null;
@@ -395,7 +398,8 @@ export function normalizeActivityLine(line: string): string | null {
 
 // Color-code activity lines by type for at-a-glance scanability
 export function activityColor(line: string): string {
-  const text = String(line ?? '');
+  // Preserve leading/trailing spaces (layout), but never terminal protocol.
+  const text = stripControlSequences(String(line ?? '')).replace(/[\r\n\t]+/g, ' ');
   if (/error|fail|halt|block|denied|stopped|cancel/i.test(text)) return error(text);
   if (/writ|patched|applying/i.test(text)) return success(text);
   if (/ran |running |shell|command|npm |pytest|gradle/i.test(text)) return warning(text);

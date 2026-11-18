@@ -1292,7 +1292,10 @@ export class ConversationalRenderer extends BaseRenderer {
     if (this.outputBroken || this.paused) return;
     this._recordActivity();
     this._subAgents.set(id, {
-      label: label.length > 60 ? label.slice(0, 57) + '…' : label,
+      label: (() => {
+        const safe = sanitizeUntrustedTerminalField(label);
+        return safe.length > 60 ? safe.slice(0, 57) + '…' : safe;
+      })(),
       startTime: Date.now(),
       status: 'running',
     });
@@ -1320,7 +1323,8 @@ export class ConversationalRenderer extends BaseRenderer {
     const agent = this._subAgents.get(id);
     if (!agent) return;
     agent.status = 'failed';
-    agent.error = error.length > 80 ? error.slice(0, 77) + '…' : error;
+    const safeError = sanitizeUntrustedTerminalField(error);
+    agent.error = safeError.length > 80 ? safeError.slice(0, 77) + '…' : safeError;
 
     setTimeout(() => {
       this._subAgents.delete(id);

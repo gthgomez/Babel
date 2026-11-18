@@ -19,6 +19,7 @@ import {
 import { formatHudCostDisplay, formatSessionCostHud } from '../cli/usageCost.js';
 import { globalCostTracker } from '../services/costTracker.js';
 import { renderMarkdown } from './highlight.js';
+import { sanitizeUntrustedTerminalField } from './sanitize.js';
 import { RawModeManager } from './rawMode.js';
 import { KeybindingManager } from './keybindings.js';
 import { FrameScheduler } from './frameScheduler.js';
@@ -406,6 +407,7 @@ export class WaterfallRenderer extends BaseRenderer {
   }
 
   recordActivity(line: string): void {
+    line = sanitizeUntrustedTerminalField(line);
     const key = activityKey(line);
     if (!line || this.activityKeys.has(key)) {
       return;
@@ -482,7 +484,7 @@ export class WaterfallRenderer extends BaseRenderer {
       lines.push('');
       lines.push(sectionLabel('Files touched:'));
       lines.push(
-        `  ${s.activeFiles.map((f) => hyperlinkFile(f, info(String(f ?? '')))).join(muted(', '))}`,
+        `  ${s.activeFiles.map((f) => hyperlinkFile(f, info(sanitizeUntrustedTerminalField(String(f ?? ''))))).join(muted(', '))}`,
       );
     }
 
@@ -650,12 +652,12 @@ export class WaterfallRenderer extends BaseRenderer {
               sectionLabel('Activity:'),
               // Current action first with primary styling
               ...(s.activeAction
-                ? [`  ${primary('→')} ${primary(s.activeAction.slice(0, width - 6))}`]
+                ? [`  ${primary('→')} ${primary(sanitizeUntrustedTerminalField(s.activeAction).slice(0, width - 6))}`]
                 : []),
               // Historical entries (last 9, to keep total <= 10)
               ...s.activityLog
                 .slice(s.activeAction ? -9 : -10)
-                .map((line) => `  ${activityColor(truncate(stripAnsi(line), Math.max(1, width - 4)))}`),
+                .map((line) => `  ${activityColor(truncate(stripAnsi(sanitizeUntrustedTerminalField(line)), Math.max(1, width - 4)))}`),
             ]
           : []),
         ...(s.activeFiles.length > 0
@@ -664,7 +666,7 @@ export class WaterfallRenderer extends BaseRenderer {
               sectionLabel('Files:'),
               `  ${s.activeFiles
                 .map((f) => {
-                  const display = String(f ?? '');
+                  const display = sanitizeUntrustedTerminalField(String(f ?? ''));
                   const truncated = display.length > 50 ? display.slice(0, 48) + '…' : display;
                   return hyperlinkFile(f, info(truncated));
                 })

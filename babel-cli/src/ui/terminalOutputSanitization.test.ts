@@ -14,6 +14,8 @@ import {
   sanitizeUntrustedTerminalField,
 } from './sanitize.js';
 import { formatToolGroupSummary, groupToolExecutions } from './toolPresentation.js';
+import { renderSubAgentOverlay } from './subAgentOverlay.js';
+import { activityColor, normalizeActivityLine } from './rendererSupport.js';
 
 const OSC_CLIPBOARD = '\x1b]52;c;dzA4LXN5bnRoZXRpYw==\x07';
 const CSI_CLEAR = '\x1b[2J';
@@ -83,6 +85,45 @@ test('renderer neutralizes tool completion and agent stream text before writing'
   assert.match(joined, /shell_exec/);
   assert.match(joined, /stdout/);
   assert.match(joined, /stderr/);
+});
+
+test('overflow truncation cannot re-emit OSC from a sanitized summary', () => {
+  const longTarget = `${OSC_CLIPBOARD}${'a'.repeat(60)}`;
+  for (const item of [
+    { tool: 'shell_exec', target: longTarget, detail: `failed ${CSI_CLEAR}`, exitCode: 1 },
+    { tool: `${OSC_CLIPBOARD}${'mcp_'.repeat(20)}`, target: `src/${'b'.repeat(80)}`, status: 'success' as const },
+    { tool: 'shell_exec', target: `/tmp/${OSC_CLIPBOARD}${'c'.repeat(60)}`, status: 'success' as const },
+  ]) {
+    const groups = groupToolExecutions([item]);
+    for (const verbose of [true, false]) {
+      const rendered = formatToolGroupSummary(groups[0]!, verbose, 40);
+      assertNoTerminalProtocol(rendered, `overflow verbose=${verbose}`);
+      assert.ok(rendered.length > 0);
+    }
+  }
+});
+
+test('subagent overlay neutralizes labels and failure text', () => {
+  const now = Date.now();
+  const lines = renderSubAgentOverlay(
+    new Map([
+      ['a', { label: `explore ${OSC_CLIPBOARD}repo${CSI_CLEAR}`, startTime: now - 1000, status: 'running' }],
+      ['b', { label: `verify ${CSI_TITLE}`, startTime: now - 2000, status: 'failed', error: `boom ${DCS}` }],
+    ]),
+    '◐',
+    now,
+  );
+  const rendered = lines.join('\n');
+  assertNoTerminalProtocol(rendered, 'subagent overlay');
+  assert.match(rendered, /explore repo/);
+  assert.match(rendered, /boom/);
+});
+
+test('waterfall activity text neutralizes terminal protocol before color/truncate', () => {
+  const raw = `Reading ${OSC_CLIPBOARD}src/file.ts${CSI_CLEAR}`;
+  assertNoTerminalProtocol(normalizeActivityLine(raw) ?? '', 'normalized activity');
+  assertNoTerminalProtocol(activityColor(raw), 'activity color');
+  assert.equal(normalizeActivityLine(raw), 'Reading file');
 });
 
 test('positive control: ordinary ANSI-free text is preserved verbatim', () => {
