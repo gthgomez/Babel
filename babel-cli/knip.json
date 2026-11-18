@@ -1,0 +1,32 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/index.ts",
+    "src/cliEntryDispatch.ts",
+    "src/liteCli.ts",
+    "src/daemon/main.ts",
+    "src/protocol/privateWorkerMain.ts",
+    "src/services/candidateCollectorCli.ts",
+    "src/runtime/admissionRestartChild.ts",
+    "src/**/*Worker*.{ts,mjs}",
+    "src/**/*worker*.{ts,mjs}",
+    "src/**/testworkers/*.ts",
+    "src/**/testSupport/*.ts",
+    "src/bridge/remote-ui/*.js",
+    "src/**/index.ts",
+    "src/**/*.test.ts",
+    "src/**/*.test.mjs",
+    "scripts/**/*.ts",
+    "scripts/**/*.mjs",
+    "integration/**/*.ts"
+  ],
+  "project": [
+    "src/**/*.{ts,js,mjs}",
+    "scripts/**/*.{ts,mjs}",
+    "integration/**/*.ts"
+  ],
+  "ignore": [
+    "dist/**",
+    "src/**/*.d.ts"
+  ]
+}

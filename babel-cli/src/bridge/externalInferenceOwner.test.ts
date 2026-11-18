@@ -33,7 +33,9 @@ if (!isSyntheticProviderFixtureReady()) {
   test('external session containers have no fabricated Babel provider identity', () => {
     const engine = new ChatEngine({ ...options, inferenceOwner: 'external-harness' })
     assert.deepEqual(engine.getProviderSelectionStatus(), {
-      provider: null, connection: null, requestedModel: null, sentModel: null, observedModel: null,
+      provider: null, connection: null, requestedModel: null, requestedSelection: null,
+      resolvedModel: null, alias: null, sentModel: null, observedModel: null,
+      capabilities: null, offline: false, budgetUsd: 'unlimited',
     })
     assert.throws(() => engine.submitMessageStream('must not dispatch'), /EXTERNAL_HARNESS_INFERENCE_OWNED/)
   })

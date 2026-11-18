@@ -169,6 +169,12 @@ test('stages catalog assets and defaults while removing stale resources and buil
     for (const dir of ['layer', 'config', 'babel-cli/config', 'babel-cli/dist', 'babel-cli/resources']) {
       mkdirSync(join(root, dir), { recursive: true })
     }
+    // stage_runtime_assets requires the Remote UI shell sources and copies them
+    // into resources/bridge/remote-ui for installed /ui serving (UX-04).
+    const remoteUiSource = join(pkg, 'src/bridge/remote-ui')
+    mkdirSync(remoteUiSource, { recursive: true })
+    writeFileSync(join(remoteUiSource, 'index.html'), '<!doctype html><title>fixture</title>')
+    writeFileSync(join(remoteUiSource, 'app.js'), '// fixture shell')
     writeFileSync(join(root, 'prompt_catalog.yaml'), 'entries:\n  - id: sample\n    path: layer/prompt.md\n')
     writeFileSync(join(root, 'layer/prompt.md'), 'prompt')
     writeFileSync(join(root, 'config/model-policy.json'), '{}')
@@ -212,6 +218,9 @@ test('stages catalog assets and defaults while removing stale resources and buil
     assert.equal(readFileSync(join(pkg, 'resources/layer/prompt.md'), 'utf8'), 'prompt')
     for (const file of ['prompt_catalog.yaml', 'config/model-policy.json', 'babel-cli/config/runtime-mode.json']) {
       assert.ok(existsSync(join(pkg, 'resources', file)), file)
+    }
+    for (const file of ['index.html', 'app.js']) {
+      assert.ok(existsSync(join(pkg, 'resources/bridge/remote-ui', file)), `resources/bridge/remote-ui/${file}`)
     }
     assert.ok(existsSync(join(pkg, 'LICENSE')))
     assert.ok(existsSync(join(pkg, 'dist/index.js')))

@@ -452,15 +452,15 @@ describe('MCP operator approval handoff', () => {
     });
     const server = join(root, 'server.cjs');
     writeFileSync(server, `
-let input = Buffer.alloc(0);
-function send(id, result) { const body = JSON.stringify({ jsonrpc: '2.0', id, result }); process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body); }
+let input = '';
+function send(id, result) { const body = JSON.stringify({ jsonrpc: '2.0', id, result }); process.stdout.write(body + '\\n'); }
 process.stdin.on('data', chunk => {
- input = Buffer.concat([input, chunk]);
+ input += chunk.toString('utf8');
  while (true) {
-  const end = input.indexOf('\\r\\n\\r\\n'); if (end < 0) return;
-  const size = Number(/Content-Length: (\\d+)/i.exec(input.subarray(0, end).toString())[1]);
-  if (input.length < end + 4 + size) return;
-  const message = JSON.parse(input.subarray(end + 4, end + 4 + size).toString()); input = input.subarray(end + 4 + size);
+  const end = input.indexOf('\\n'); if (end < 0) return;
+  const line = input.slice(0, end).replace(/\\r$/, ''); input = input.slice(end + 1);
+  if (!line.trim()) continue;
+  const message = JSON.parse(line);
   if (message.method === 'initialize') send(message.id, {});
   if (message.method === 'tools/list') send(message.id, { tools: [{ name: 'lookup', inputSchema: { properties: { query: {} } }, annotations: { readOnlyHint: true, destructiveHint: false } }] });
   if (message.method === 'tools/call') send(message.id, { content: [{ type: 'text', text: 'approved fixture result' }] });

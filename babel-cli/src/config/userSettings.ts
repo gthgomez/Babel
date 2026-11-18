@@ -7,6 +7,15 @@ import { PROVIDER_IDS } from '../runners/providerRegistry.js'
 import { resolveRuntimeUserStateRoot } from './runtimePaths.js'
 import { currentInvocationSettings } from './invocationSettings.js'
 import { validateProviderBaseUrl } from '../runners/providerEndpoint.js'
+import { isLoopbackEndpoint } from './offlineMode.js'
+
+/** Return only schema-owned text so a preference value is never echoed in an error. */
+function describePreferenceIssues(issues: readonly { path: readonly (string | number | symbol)[]; message: string }[]): string {
+  return issues.slice(0, 4).map(issue => {
+    const path = issue.path.map(String).join('.')
+    return path ? `${path}: ${issue.message}` : issue.message
+  }).join('; ')
+}
 
 const name = z.string().trim().min(1).max(200).regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/)
 const positiveInt = z.number().int().positive()
@@ -46,7 +55,8 @@ const settingsSchema = z.object({
   if (hasLiteralSecret(settings)) ctx.addIssue({ code: 'custom', message: 'Store credential references, never credential values.' })
   for (const [id, connection] of Object.entries(settings.connections)) {
     if (connection.provider === 'openai-compatible' && !connection.baseUrl) ctx.addIssue({ code: 'custom', message: 'Custom compatible connections require a base URL.', path: ['connections', id] })
-    if (connection.baseUrl && !['openai-compatible', 'openai', 'gemini', 'anthropic'].includes(connection.provider)) ctx.addIssue({ code: 'custom', message: 'This provider pins its endpoint; use an explicit compatible connection for a custom endpoint.', path: ['connections', id] })
+    if (connection.baseUrl && !['openai-compatible', 'openai', 'gemini', 'anthropic', 'ollama'].includes(connection.provider)) ctx.addIssue({ code: 'custom', message: 'This provider pins its endpoint; use an explicit compatible connection for a custom endpoint.', path: ['connections', id] })
+    if (connection.baseUrl && connection.provider === 'ollama' && !isLoopbackEndpoint(connection.baseUrl)) ctx.addIssue({ code: 'custom', message: 'Ollama runs locally: its base URL must be loopback HTTP (http://localhost:11434/v1 or http://127.0.0.1:11434/v1), not a remote endpoint.', path: ['connections', id, 'baseUrl'] })
     if (connection.authentication === 'none' && connection.provider !== 'openai-compatible') ctx.addIssue({ code: 'custom', message: 'No-auth mode is only supported by explicit compatible connections.', path: ['connections', id] })
     if (id !== connection.id) ctx.addIssue({ code: 'custom', message: 'Connection key and id must match.', path: ['connections', id] })
     if (connection.contextWindow && connection.maxOutputTokens && connection.maxOutputTokens >= connection.contextWindow) {
@@ -88,7 +98,7 @@ export function readUserSettings(options: { path?: string; env?: NodeJS.ProcessE
   let value: unknown
   try { value = JSON.parse(readFileSync(path, 'utf8')) } catch { throw new Error('Babel preferences contain invalid JSON; preserve the file and repair it before saving.') }
   const result = settingsSchema.safeParse(value)
-  if (!result.success) throw new Error('Babel preferences are invalid or use an unsupported version; preserve the file and repair it before saving.')
+  if (!result.success) throw new Error(`Babel preferences are invalid or use an unsupported version (${describePreferenceIssues(result.error.issues)}); preserve the file and repair it before saving.`)
   return result.data
 }
 
@@ -104,7 +114,7 @@ export function updateUserSettings(update: Partial<UserSettings>, options: { pat
     setup: { ...current.setup, ...update.setup },
   }
   const result = settingsSchema.safeParse(candidate)
-  if (!result.success) throw new Error('Invalid Babel preference update; previous preferences were preserved.')
+  if (!result.success) throw new Error(`Invalid Babel preference update (${describePreferenceIssues(result.error.issues)}); previous preferences were preserved.`)
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const temporary = `${path}.${randomUUID()}.tmp`
   writeFileSync(temporary, `${JSON.stringify(result.data, null, 2)}\n`, { flag: 'wx', mode: 0o600 })

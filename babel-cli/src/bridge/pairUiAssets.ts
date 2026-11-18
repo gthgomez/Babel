@@ -10,7 +10,12 @@ import type { ServerResponse } from 'node:http';
 import { resolveRemoteUiDir } from './remoteUiAssets.js';
 
 export function writePairUiResponse(res: ServerResponse): boolean {
-  const dir = resolveRemoteUiDir();
+  let dir: string;
+  try {
+    dir = resolveRemoteUiDir();
+  } catch {
+    return false;
+  }
   const file = join(dir, 'pair.html');
   if (!existsSync(file)) return false;
   const body = readFileSync(file);

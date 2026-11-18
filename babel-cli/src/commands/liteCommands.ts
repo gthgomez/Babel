@@ -24,7 +24,7 @@ Examples:
 Notes:
   - Internal text-provider lane only. Daily work uses babel "<task>", babel plan, and babel deep.
   - plan performs no API call.
-  - ask and patch save artifacts under runs/babel-lite by default.
+  - ask, patch and the other read-only lanes save artifacts in Babel's private state directory; the JSON result reports the exact path.
   - patch never applies changes automatically.
 `;
 
@@ -38,7 +38,7 @@ Examples:
 Notes:
   - Internal text-provider lane only. Daily work uses babel "<task>", babel plan, and babel deep.
   - plan performs no API call.
-  - ask and patch save artifacts under runs/babel-lite by default.
+  - ask, patch and the other read-only lanes save artifacts in Babel's private state directory; the JSON result reports the exact path.
   - patch never applies changes automatically.
 `;
 

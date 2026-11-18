@@ -12,6 +12,7 @@ import { getProviderSpec, providerSupportsOperation } from '../runners/providerR
 import { resolveConnectionModelPolicy } from '../config/connectionModelPolicy.js';
 import { resolveEffectiveSettings } from '../config/userSettings.js';
 import { selectedConnectionModel } from '../services/connectionSettings.js';
+import { assertOfflineProviderAllowed, isOfflineMode } from '../config/offlineMode.js';
 
 /** Exact existing Go routes allowed for explicit Chat selection; native budget gates still apply. */
 export function isChatOpenCodeGoRoute(
@@ -33,11 +34,15 @@ export interface ChatModelPolicyOptions {
 
 /** Return whether ChatEngine should use offline provider compatibility behavior. */
 export function isOfflineChatMode(): boolean {
-  return (
-    process.env['BABEL_OFFLINE'] === '1' ||
-    process.env['BABEL_OFFLINE'] === 'true' ||
-    process.env['BABEL_DESKTOP_PROVIDER'] === 'ollama' ||
-    process.argv.includes('--offline')
+  return isOfflineMode();
+}
+
+/** Explicit local-route requirement instead of a misleading unconfigured-family error. */
+function offlineModelRequired(): Error {
+  return new Error(
+    'OFFLINE_MODEL_REQUIRED: Offline mode needs an explicit local model. ' +
+      'Save an Ollama connection (babel-harness provider connect ollama --model <exact-id> --base-url http://127.0.0.1:11434/v1), ' +
+      'select it with provider use, or pass its model explicitly. Babel made no provider request.',
   );
 }
 
@@ -61,10 +66,16 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
   const connectionSelector = explicitModel && !explicitModel.startsWith('connection/') && !desktopProvider && canBindConnection
     ? selectedConnectionModel({ model: explicitModel }) ?? explicitModel : explicitModel;
   const connectionPolicy = resolveConnectionModelPolicy(connectionSelector, { models: configuredModels });
-  if (connectionPolicy) return { policy: connectionPolicy, offline };
+  if (connectionPolicy) {
+    // A saved HTTPS connection must not survive an explicit offline request.
+    // Reject with no dispatch rather than constructing a remote-shaped run.
+    if (offline) assertOfflineProviderAllowed(connectionPolicy.provider, connectionPolicy.baseUrl);
+    return { policy: connectionPolicy, offline };
+  }
   if (!explicitModel && !desktopProvider && !offline) {
     throw new Error('SETUP_REQUIRED: Select your provider and exact model with babel-harness setup. No cloud provider is selected.');
   }
+  if (offline && !explicitModel) throw offlineModelRequired();
 
   const selectedModel = directLegacyKey ?? (!offline
     ? (desktopProvider === 'deepseek'
@@ -73,7 +84,7 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
           ? (explicitModel ?? 'deepseek-v4-flash')
           : (resolveOpenRouterDeepSeekBackendKey(explicitModel ?? '') ??
              (explicitModel === undefined ? LIVE_OPENROUTER_DEEPSEEK_BACKEND_KEYS[0] : explicitModel)))
-    : (explicitModel ?? (desktopProvider === 'ollama' ? 'deepseek-v4-flash' : undefined)));
+    : explicitModel);
 
   const requestedBackendKey = selectedModel === undefined
     ? undefined
@@ -115,31 +126,42 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
     requestedBackendKey === `${requestedBackendEntry.provider}/${requestedBackendEntry.model_id}` &&
     getProviderSpec(requestedBackendEntry.provider).authorityConformance === 'certified' &&
     providerSupportsOperation(requestedBackendEntry.provider, 'native_tool_stream');
-  const policy = requestedModelIsBackendKey
-    ? resolveModelByKey({
-        key: requestedBackendKey!,
-        bindStagesToSelectedModel: true,
-        ...(explicitOpenCodeRequest ||
-        explicitCommandCodeRequest ||
-        explicitSavedManualRoute ||
-        explicitGoRequest ||
-        directLegacyKey !== undefined ||
-        desktopProvider === 'deepseek' ||
-        desktopProvider === 'deepinfra' ||
-        explicitDesktopRoute
-          ? {}
-          : { liveOnly: !offline }),
-        ...policyRootOptions,
-      })
-    : resolveFamilyModelPolicy({
-      family: offline ? 'Ollama' : (selectedModel ?? 'DeepSeek'),
-        ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
-        ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
-        liveOnly: !offline && desktopProvider !== 'deepseek',
-        ...policyRootOptions,
-      });
+  let policy: ResolvedModelPolicy;
+  try {
+    policy = requestedModelIsBackendKey
+      ? resolveModelByKey({
+          key: requestedBackendKey!,
+          bindStagesToSelectedModel: true,
+          ...(explicitOpenCodeRequest ||
+          explicitCommandCodeRequest ||
+          explicitSavedManualRoute ||
+          explicitGoRequest ||
+          directLegacyKey !== undefined ||
+          desktopProvider === 'deepseek' ||
+          desktopProvider === 'deepinfra' ||
+          explicitDesktopRoute
+            ? {}
+            : { liveOnly: !offline }),
+          ...policyRootOptions,
+        })
+      : resolveFamilyModelPolicy({
+        family: selectedModel ?? 'DeepSeek',
+          ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
+          ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+          liveOnly: !offline && desktopProvider !== 'deepseek',
+          ...policyRootOptions,
+        });
+  } catch (error) {
+    // Offline has no cloud family fallback. An unknown local model name means
+    // no supported local route exists, not a cloud policy configuration bug.
+    if (offline) throw offlineModelRequired();
+    throw error;
+  }
 
   assertSelectedProvider(policy.provider);
+  // Offline is a hard boundary, not a preference: never hand a remote route to
+  // a caller (or cached runner) that could dispatch it.
+  if (offline) assertOfflineProviderAllowed(policy.provider, policy.baseUrl);
 
   if (explicitGoRequest || explicitCommandCodeRequest) {
     const backend = policy.waterfall[0]!;

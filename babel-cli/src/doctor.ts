@@ -248,6 +248,33 @@ function getWorkspaceRoot(babelRoot: string): string {
   return dirname(resolve(babelRoot));
 }
 
+/** Markers that identify a maintainer multi-repository workspace. */
+const MULTI_REPO_WORKSPACE_MARKERS = [
+  'Babel',
+  'Babel-public',
+  'Babel-public-live',
+  'Workspace.code-workspace',
+  join('config', 'repo-map.json'),
+] as const;
+
+/**
+ * A clean public clone is its own workspace. The historical layout expected the
+ * checkout to sit beside private siblings (`Babel`, `Babel-public-live`) with a
+ * maintainer repo-map.json, which made `doctor` fail on every public install.
+ */
+function isStandaloneCheckout(babelRoot: string): boolean {
+  const root = resolve(babelRoot);
+  if (!existsSync(join(root, 'babel-cli')) || !existsSync(join(root, 'prompt_catalog.yaml'))) {
+    return false;
+  }
+  const parent = dirname(root);
+  return !MULTI_REPO_WORKSPACE_MARKERS.some((marker) => {
+    const candidate = resolve(parent, marker);
+    // The checkout itself is often named `Babel`; never count it as a sibling.
+    return candidate !== root && existsSync(candidate);
+  });
+}
+
 function getRepoMapPath(workspaceRoot: string): string {
   return process.env['BABEL_REPO_MAP_PATH'] ?? join(workspaceRoot, 'config', 'repo-map.json');
 }
@@ -486,6 +513,7 @@ function runWorkspaceChecks(
   workspaceRoot: string,
   repoMapPath: string,
   verbose: boolean,
+  standalone: boolean,
 ): DoctorCheckResult[] {
   const checks: DoctorCheckResult[] = [];
   const workspaceFile = join(workspaceRoot, 'Workspace.code-workspace');
@@ -504,7 +532,9 @@ function runWorkspaceChecks(
       'Workspace root exists',
       existsSync(workspaceRoot) ? 'pass' : 'fail',
       existsSync(workspaceRoot)
-        ? `Workspace root exists at ${workspaceRoot}`
+        ? standalone
+          ? `Standalone checkout is its own workspace at ${workspaceRoot}`
+          : `Workspace root exists at ${workspaceRoot}`
         : `Workspace root missing: ${workspaceRoot}`,
       verbose ? [workspaceRoot] : undefined,
     ),
@@ -519,13 +549,42 @@ function runWorkspaceChecks(
     ['workspace.babel_public.exists', 'Babel-public exists', babelPublicPath],
     ['workspace.repo_map.exists', 'Repo map exists', repoMapPath],
   ] as const) {
+    const present = existsSync(path);
+    if (standalone && id === 'workspace.babel_core.exists') {
+      checks.push(
+        createCheck(
+          'Workspace',
+          id,
+          'Babel checkout found',
+          'pass',
+          `Babel checkout found at ${babelRoot}`,
+          verbose ? [babelRoot] : undefined,
+        ),
+      );
+      continue;
+    }
+    if (standalone && (id === 'workspace.babel_public.exists' || id === 'workspace.repo_map.exists')) {
+      checks.push(
+        createCheck(
+          'Workspace',
+          id,
+          title,
+          'skip',
+          id === 'workspace.repo_map.exists'
+            ? 'repo-map.json is optional; project discovery is dynamic (WorkspaceScanner)'
+            : 'No separate public export checkout in this workspace; optional for using the CLI',
+          verbose ? [path] : undefined,
+        ),
+      );
+      continue;
+    }
     checks.push(
       createCheck(
         'Workspace',
         id,
         title,
-        existsSync(path) ? 'pass' : 'fail',
-        existsSync(path) ? title : `Missing required path: ${path}`,
+        present ? 'pass' : 'fail',
+        present ? title : `Missing required path: ${path}`,
         verbose ? [path] : undefined,
       ),
     );
@@ -770,8 +829,11 @@ function runRuntimeChecks(
   repairPointers: boolean,
 ): DoctorCheckResult[] {
   const checks: DoctorCheckResult[] = [];
+  const packageRootManifest = [join(babelRoot, 'package.json'), join(babelRoot, 'babel-cli', 'package.json')].find(
+    (candidate) => existsSync(candidate),
+  ) ?? join(babelRoot, 'package.json');
   const runtimeTargets = [
-    ['runtime.package_json', 'package.json found', join(babelRoot, 'package.json')],
+    ['runtime.package_json', 'package.json found', packageRootManifest],
     [
       'runtime.cli_entrypoint',
       'CLI entrypoint found',
@@ -947,6 +1009,7 @@ function runResolutionChecks(
   verbose: boolean,
   externalPrerequisites: Set<string> = new Set<string>(),
   powerShellRunner: PowerShellScriptRunner = runPowerShellScript,
+  standalone = false,
 ): DoctorCheckResult[] {
   const checks: DoctorCheckResult[] = [];
   const resolverPath = join(babelRoot, 'tools', 'resolve-local-stack.ps1');
@@ -962,6 +1025,21 @@ function runResolutionChecks(
         verbose ? [resolverPath] : undefined,
         'Restore tools/resolve-local-stack.ps1 before diagnosing repo routing.',
         'RESOLVER_INVALID',
+      ),
+    ];
+  }
+
+  if (standalone) {
+    // The example_* projects are maintainer demo repositories. A public clone
+    // has none of them; probing them produced seven guaranteed failures.
+    return [
+      createCheck(
+        'Resolution',
+        'resolution.example_projects',
+        'Internal example projects resolved',
+        'skip',
+        'No maintainer repo-map.json in this standalone checkout; internal example projects are not present and dynamic discovery handles real targets',
+        verbose ? [resolverPath] : undefined,
       ),
     ];
   }
@@ -1312,10 +1390,24 @@ function runExportChecks(
   babelRoot: string,
   verbose: boolean,
   powerShellRunner: PowerShellScriptRunner = runPowerShellScript,
+  standalone = false,
 ): DoctorCheckResult[] {
   const checks: DoctorCheckResult[] = [];
   const manifestPath = join(babelRoot, 'tools', 'public-export', 'manifest.json');
   const exportScriptPath = join(babelRoot, 'tools', 'export-babel-public.ps1');
+
+  if (standalone && !existsSync(exportScriptPath) && !existsSync(manifestPath)) {
+    return [
+      createCheck(
+        'Export',
+        'export.manifest.exists',
+        'Export manifest valid',
+        'skip',
+        'Maintainer public-export tooling is not part of a public checkout; run this scope from the maintainer workspace',
+        verbose ? [manifestPath] : undefined,
+      ),
+    ];
+  }
 
   checks.push(
     createCheck(
@@ -1640,13 +1732,16 @@ function runEnterprisePolicyChecks(
 
 export async function runDoctor(options: DoctorOptions): Promise<DoctorRunResult> {
   const babelRoot = resolve(options.babelRoot);
-  const workspaceRoot = getWorkspaceRoot(babelRoot);
+  const standalone = isStandaloneCheckout(babelRoot);
+  const workspaceRoot = standalone ? babelRoot : getWorkspaceRoot(babelRoot);
   const repoMapPath = getRepoMapPath(workspaceRoot);
   const checks: DoctorCheckResult[] = [];
   const env = options.env ?? process.env;
   const repoMapResult = shouldRunSection(options.scope, 'Repo Map')
     ? runRepoMapChecks(workspaceRoot, repoMapPath, options.verbose)
     : { checks: [], repoMap: null, externalPrerequisites: new Set<string>() };
+  // Example-project resolution only has meaning with a maintainer repo map.
+  const skipExampleResolution = standalone || repoMapResult.repoMap === null;
 
   if (shouldRunSection(options.scope, 'Environment')) {
     checks.push(
@@ -1655,7 +1750,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorRunResult
   }
 
   if (shouldRunSection(options.scope, 'Workspace')) {
-    checks.push(...runWorkspaceChecks(babelRoot, workspaceRoot, repoMapPath, options.verbose));
+    checks.push(...runWorkspaceChecks(babelRoot, workspaceRoot, repoMapPath, options.verbose, standalone));
   }
 
   if (shouldRunSection(options.scope, 'Repo Map')) {
@@ -1674,6 +1769,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorRunResult
         options.verbose,
         repoMapResult.externalPrerequisites,
         options.powerShellRunner,
+        skipExampleResolution,
       ),
     );
   }
@@ -1683,7 +1779,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorRunResult
   }
 
   if (shouldRunSection(options.scope, 'Export')) {
-    checks.push(...runExportChecks(babelRoot, options.verbose, options.powerShellRunner));
+    checks.push(...runExportChecks(babelRoot, options.verbose, options.powerShellRunner, standalone));
   }
 
   if (shouldRunSection(options.scope, 'Enterprise Policy') || options.strictEnterprise === true) {

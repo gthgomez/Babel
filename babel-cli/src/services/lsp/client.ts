@@ -2,7 +2,8 @@
  * LSP Client — JSON-RPC 2.0 over stdio with Content-Length header framing.
  *
  * Manages communication with an LSP server process via spawn + stdin/stdout.
- * Reuses Content-Length framing patterns from ../tools/mcpTransport.ts.
+ * Uses the LSP-owned Content-Length codec in ./framing.ts; it intentionally
+ * does not share MCP's newline-delimited framing.
  *
  * Each server process gets one LspClient instance. The client handles:
  *   - Process lifecycle (spawn, kill)
@@ -14,7 +15,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 
-import { frameJsonRpcMessage, parseFramedMessages } from '../../tools/mcpTransport.js';
+import { frameLspMessage, parseLspMessages } from './framing.js';
 import { getSafeEnv } from '../../utils/safeEnv.js';
 import type { InitializeParams, InitializeResult } from './types.js';
 
@@ -125,7 +126,7 @@ export function createLspClient(
     readBuffer = Buffer.concat([readBuffer, chunk]);
 
     try {
-      const { messages, remainder } = parseFramedMessages(readBuffer);
+      const { messages, remainder } = parseLspMessages(readBuffer);
       readBuffer = Buffer.from(remainder);
 
       for (const message of messages) {
@@ -177,7 +178,12 @@ export function createLspClient(
         }
       }
     } catch {
-      // Parsing errors are logged but don't crash the client
+      // Never retain a poisoned/oversized prefix: reset the bounded read buffer
+      // so a malformed or oversized frame cannot grow client memory without
+      // limit (including LspFrameLimitError). Request timeouts remain the
+      // fail-closed backstop; parsing errors are swallowed so the client does
+      // not crash.
+      readBuffer = Buffer.alloc(0)
     }
   }
 
@@ -298,7 +304,7 @@ export function createLspClient(
         });
 
         if (childProcess?.stdin) {
-          childProcess.stdin.write(frameJsonRpcMessage(body), (err?: Error | null) => {
+          childProcess.stdin.write(frameLspMessage(body), (err?: Error | null) => {
             if (err) {
               clearTimeout(timer);
               pendingRequests.delete(id);
@@ -346,7 +352,7 @@ export function createLspClient(
         });
 
         if (childProcess?.stdin) {
-          childProcess.stdin.write(frameJsonRpcMessage(body), (err?: Error | null) => {
+          childProcess.stdin.write(frameLspMessage(body), (err?: Error | null) => {
             if (err) {
               clearTimeout(timer);
               pendingRequests.delete(id);
@@ -372,7 +378,7 @@ export function createLspClient(
 
       return new Promise<void>((resolve, reject) => {
         if (childProcess?.stdin) {
-          childProcess.stdin.write(frameJsonRpcMessage(body), (err?: Error | null) => {
+          childProcess.stdin.write(frameLspMessage(body), (err?: Error | null) => {
             if (err) {
               reject(new Error(`Failed to write notification "${method}": ${err.message}`));
             } else {

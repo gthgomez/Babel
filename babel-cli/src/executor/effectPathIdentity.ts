@@ -30,3 +30,25 @@ export function resolveOwnedEffectPath(path: string, expected: EffectParentIdent
   }
   return join(parent, basename(path))
 }
+
+/** Exact host identity of an attested file, captured without Number rounding. */
+export interface EffectFileIdentity { device: string; inode: string }
+
+/**
+ * Capture the exact device/inode strings the host attested for a file.
+ *
+ * Windows stat packs the NTFS MFT reference (record | sequence<<48) into a
+ * double for the Number APIs, so `statSync().ino.toString()` is rounded above
+ * 2^53 while the durable evidence compares exact BigInt strings. Always mint
+ * ownership identity from the BigInt API, and reject unattestable entries.
+ *
+ * @param path - Existing regular file to attest.
+ * @returns Device and inode as exact decimal strings.
+ */
+export function captureEffectFileIdentity(path: string): EffectFileIdentity {
+  const stat = lstatSync(path, { bigint: true })
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.ino <= 0n) {
+    throw new Error('EFFECT_FILE_IDENTITY_UNAVAILABLE')
+  }
+  return { device: String(stat.dev), inode: String(stat.ino) }
+}
