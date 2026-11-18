@@ -46,7 +46,7 @@ function printMcpServers(options: { json?: boolean; status?: boolean }): void {
   }
 }
 
-function redactPluginForDiagnostics(plugin: LoadedPlugin): LoadedPlugin {
+function redactPluginForDiagnostics(plugin: LoadedPlugin): Record<string, unknown> {
   return {
     ...plugin,
     manifest: {
@@ -55,6 +55,8 @@ function redactPluginForDiagnostics(plugin: LoadedPlugin): LoadedPlugin {
         name: server.name,
         command: server.command,
         args: server.args.map(() => "[REDACTED]"),
+        arg_count: server.args.length,
+        args_redacted: true,
       })),
     },
   };

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -135,6 +135,68 @@ test('mcp doctor --json and mcp list --json do not reveal configured arguments',
       }
       assert.match(result.stdout, /"args_redacted": true/u, args.join(' '))
       assert.match(result.stdout, /"arg_count": 6/u, args.join(' '))
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('plugin JSON diagnostics and mcp add use the same redacted argument shape', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'babel-mcp-redaction-plugins-'))
+  const pluginDir = join(dir, 'plugins', 'redact-demo')
+  const configDir = join(dir, 'config')
+  mkdirSync(pluginDir, { recursive: true })
+  mkdirSync(configDir, { recursive: true })
+  const sentinel = 'SYNTHETIC_W09_PLUGIN_SENTINEL'
+  writeFileSync(
+    join(pluginDir, 'plugin.json'),
+    JSON.stringify({
+      schema_version: 1,
+      id: 'redact-demo',
+      name: 'Redact Demo',
+      version: '1.0.0',
+      trust_level: 'read_only',
+      tools: [],
+      slash_commands: [],
+      prompt_skills: [],
+      mcp_servers: [
+        { name: 'service', command: 'node', args: ['--token', sentinel] },
+      ],
+      hooks: [],
+    }),
+    'utf8',
+  )
+  writeFileSync(
+    join(dir, 'plugins.json'),
+    JSON.stringify({
+      schema_version: 1,
+      runtime_plugins_enabled: true,
+      enabled_plugin_ids: ['redact-demo'],
+      allowed_trust_levels: ['metadata', 'read_only'],
+      plugin_roots: [],
+      mcp_server_launch_consent: [],
+    }),
+    'utf8',
+  )
+  writeFileSync(join(configDir, 'mcp_servers.json'), JSON.stringify({ servers: {} }), 'utf8')
+  const env = {
+    BABEL_CONFIG_DIR: configDir,
+    BABEL_PLUGINS_CONFIG: join(dir, 'plugins.json'),
+    BABEL_PLUGIN_ROOTS: join(dir, 'plugins'),
+  }
+
+  try {
+    for (const args of [
+      ['plugins', 'list', '--json'],
+      ['plugins', 'doctor', '--json'],
+      ['plugins', 'inspect', 'redact-demo', '--json'],
+      ['mcp', 'add', '--json', 'added', 'node', 'server.js', sentinel],
+    ]) {
+      const result = runCli(args, env)
+      assert.equal(result.status, 0, `${args.join(' ')} failed: ${result.stderr}`)
+      assert.doesNotMatch(result.stdout, new RegExp(sentinel), args.join(' '))
+      assert.match(result.stdout, /"arg_count": 2/u, args.join(' '))
+      assert.match(result.stdout, /"args_redacted": true/u, args.join(' '))
     }
   } finally {
     rmSync(dir, { recursive: true, force: true })

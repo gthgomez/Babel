@@ -176,7 +176,9 @@ function readConfiguredMcpServers(): Record<string, McpServerConfig> {
     }
     // An explicitly present `servers` object is authoritative even when empty.
     // Falling back here would silently re-enable GitHub/Postgres/SQLite after
-    // the operator removed the last server.
+    // the operator removed the last server. A registry whose entries are all
+    // malformed is also fail-closed to an empty registry (the warnings above
+    // identify each rejected entry) rather than silently restoring defaults.
     return parsedServers;
   } catch {
     process.stderr.write(`[babel] mcp_servers.json: failed to parse, using defaults\n`);

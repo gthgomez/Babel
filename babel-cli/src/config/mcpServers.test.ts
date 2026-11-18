@@ -154,3 +154,27 @@ test('a malformed MCP registry still falls back to documented defaults', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a registry with only malformed entries fails closed to an empty effective set', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-mcp-all-malformed-'))
+  const previous = process.env['BABEL_CONFIG_DIR']
+  process.env['BABEL_CONFIG_DIR'] = root
+  try {
+    writeFileSync(
+      join(root, 'mcp_servers.json'),
+      JSON.stringify({
+        servers: {
+          no_args: { command: 'node' },
+          bad_args: { command: 'node', args: ['ok', 42] },
+        },
+      }),
+      'utf8',
+    )
+    // Intentional fail-closed behavior: do not resurrect the default servers.
+    assert.deepEqual(readMcpServers(), {})
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CONFIG_DIR']
+    else process.env['BABEL_CONFIG_DIR'] = previous
+    rmSync(root, { recursive: true, force: true })
+  }
+})
