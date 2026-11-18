@@ -89,6 +89,29 @@ test('resident worker reuses one process and one thread across sequential turns'
   }
 })
 
+test('coalesced admission and terminal frames preserve the second turn without stale events', { timeout: 15_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-desktop-worker-no-stale-coalesced-'))
+  const { runner, packets, start } = harness(root, { FAKE_WORKER_COALESCE_ADMISSION_NO_STALE: '1' })
+  try {
+    void start({ runId: 'run-1', task: 'first turn', mode: 'chat', executionScope: { kind: 'project', projectRoot: root } })
+    const first = await take(packets, packet => packet.runId === 'run-1' && packet.event?.type === 'run_complete', 4_000)
+    assert.equal(first.event.result.answer.answer, `fixture answer for ${first.event.result.session_id}`)
+    await take(packets, packet => packet.runId === 'run-1' && packet.kind === 'exit', 4_000)
+    await new Promise(resolve => runner.whenIdle(resolve))
+
+    void start({ runId: 'run-2', task: 'second turn', mode: 'chat', sessionId: first.event.result.session_id, executionScope: { kind: 'project', projectRoot: root } })
+    const second = await take(packets, packet => packet.runId === 'run-2' && packet.event?.type === 'run_complete', 4_000)
+    assert.equal(second.runId, 'run-2')
+    assert.equal(second.event.result.session_id, first.event.result.session_id)
+    assert.equal(second.event.result.answer.answer, `fixture answer for ${second.event.result.session_id}`)
+    await take(packets, packet => packet.runId === 'run-2' && packet.kind === 'exit', 4_000)
+    assert.equal(readFileSync(join(root, 'spawns.txt'), 'utf8').trim().split('\n').length, 1)
+  } finally {
+    await runner.shutdown()
+    removeFixtureDir(root)
+  }
+})
+
 test('a new conversation without a session id creates a new thread', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-desktop-worker-new-'))
   const { runner, packets, start } = harness(root)
