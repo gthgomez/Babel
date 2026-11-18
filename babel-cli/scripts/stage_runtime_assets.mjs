@@ -1,5 +1,5 @@
 /** Stage only public runtime resources; prompt_catalog.yaml marks the installed layout. */
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isPrunedDistDirectory, isPrunedDistFile } from './runtime_asset_prune.mjs'
@@ -42,6 +42,14 @@ for (const asset of assets) {
   copyFileSync(resolve(repoRoot, asset), target)
 }
 copyFileSync(resolve(repoRoot, 'LICENSE'), resolve(packageRoot, 'LICENSE'))
+// Remote supervisory PWA shell assets are not TypeScript output. Stage them under
+// resources/bridge/remote-ui so an installed package can serve /ui.
+const remoteUiSource = resolve(packageRoot, 'src', 'bridge', 'remote-ui')
+if (!existsSync(remoteUiSource)) throw new Error(`Missing Remote UI shell assets: ${remoteUiSource}`)
+cpSync(remoteUiSource, resolve(resources, 'bridge', 'remote-ui'), {
+  recursive: true,
+  filter: (source) => source === remoteUiSource || /\.(?:html|js|css|svg|webmanifest)$/.test(source),
+})
 // Ordinary contributor builds retain declarations/maps; only the prepack build is pruned.
 // The same path rules drive check:dist, so a staged tree is not reported as drift.
 function prune(dir, prefix = '') {

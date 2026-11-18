@@ -173,6 +173,17 @@ export class ShellConversationStore {
     return true;
   }
 
+  /**
+   * Append one already-settled record (for example captured slash-command
+   * output) without requiring an active turn. The store still never writes
+   * durable state; callers own persistence.
+   */
+  appendCommittedRecord(record: HistoryCellRecord, sourceEpoch = this.viewEpoch): boolean {
+    if (!this.accepts(sourceEpoch)) return false;
+    this.committedRecords = mergeRecords(this.committedRecords, [record]);
+    return true;
+  }
+
   /** Return durable and live records as one ordered, ID-deduplicated view. */
   getRecords(): HistoryCellRecord[] {
     return mergeRecords(this.committedRecords, this.currentTurnRecords);

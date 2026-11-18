@@ -6,6 +6,7 @@ import { startInteractiveSession } from "../interactive.js";
 import { resolveInspectRunDir } from "../inspect/loaders.js";
 import { findCheckpoint, formatCheckpointInspect, formatCheckpointList, listCheckpoints, restoreCheckpoint } from "../services/checkpoints.js";
 import { getMcpServersConfigPath, readMcpServers, removeMcpServer, upsertMcpServer } from "../config/mcpServers.js";
+import { summarizeMcpServerForDiagnostics, summarizeMcpServersForDiagnostics } from "../mcp/diagnostics.js";
 import { BABEL_RUNS_DIR } from "../cli/constants.js";
 import { prepareContextInjection, summarizeContextInjection } from "../services/contextInjection.js";
 import { runCiReview, formatCiReviewHuman } from "../services/ciReview.js";
@@ -14,16 +15,19 @@ import { buildIdeBridgeContract, buildIdeBridgeSnapshot, formatIdeBridgeSnapshot
 import { buildRunStats, formatRunStatsHuman } from "../services/runStats.js";
 import { createSchedule, deleteSchedule, formatScheduleListHuman, formatScheduleRunHuman, listSchedules, runScheduleNow, type ScheduleJobType } from "../services/schedules.js";
 import { disablePlugin, enablePlugin, formatPluginDoctorHuman, formatPluginInspectHuman, formatPluginListHuman, loadPluginRegistry } from "../services/plugins.js";
+import type { LoadedPlugin } from "../services/plugins.js";
 import { buildSubagentIsolationContract, formatAgentListHuman, formatAgentMergeHuman, formatAgentMergeRestoreHuman, formatAgentRunHuman, inspectAgentRun, listAgentRuns, mergeAgentRun, restoreAgentMerge, runAgentTeamFromFile } from "../services/agentTeams.js";
 import { resolveRunForReadOnlyCommand } from './coreCommandSupport.js';
 
 function printMcpServers(options: { json?: boolean; status?: boolean }): void {
   const servers = readMcpServers();
+  const summaries = summarizeMcpServersForDiagnostics(servers);
   const payload = {
     status: "ok",
     config_path: getMcpServersConfigPath(),
     count: Object.keys(servers).length,
-    servers,
+    args_redacted: true,
+    servers: summaries,
   };
 
   if (options.json) {
@@ -35,11 +39,27 @@ function printMcpServers(options: { json?: boolean; status?: boolean }): void {
     options.status ? "MCP registry status:" : "Configured MCP servers:",
   );
   console.log(`Config: ${payload.config_path}`);
-  for (const [name, server] of Object.entries(servers)) {
+  for (const [name, server] of Object.entries(summaries)) {
     console.log(
-      `  ${name.padEnd(16)} ${server.command} ${server.args.join(" ")}`.trimEnd(),
+      `  ${name.padEnd(16)} ${server.command} [${server.arg_count} arg(s), redacted]`.trimEnd(),
     );
   }
+}
+
+function redactPluginForDiagnostics(plugin: LoadedPlugin): Record<string, unknown> {
+  return {
+    ...plugin,
+    manifest: {
+      ...plugin.manifest,
+      mcp_servers: plugin.manifest.mcp_servers.map((server) => ({
+        name: server.name,
+        command: server.command,
+        args: server.args.map(() => "[REDACTED]"),
+        arg_count: server.args.length,
+        args_redacted: true,
+      })),
+    },
+  };
 }
 
 export function registerCoreExtensionCommands(program: Command): void {
@@ -258,13 +278,16 @@ mcpCommand
     .option("--json", "Emit structured JSON only")
     .action((options: { json?: boolean }) => {
       const servers = readMcpServers();
+      const summaries = summarizeMcpServersForDiagnostics(servers);
       const payload = {
         status: "ok",
         config_path: getMcpServersConfigPath(),
         server_count: Object.keys(servers).length,
-        servers,
+        args_redacted: true,
+        servers: summaries,
         transport_policy: {
           supported: ["stdio"],
+          framing: "newline-delimited-json",
           http_oauth: "not_enabled",
         },
         auth_policy: {
@@ -351,7 +374,8 @@ mcpCommand
             action: "upsert",
             name,
             config_path: getMcpServersConfigPath(),
-            server: servers[name],
+            args_redacted: true,
+            server: summarizeMcpServerForDiagnostics(servers[name]!),
           };
           if (options.json) {
             process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
@@ -555,7 +579,10 @@ pluginsCommand
     .action((options: { json?: boolean }) => {
       const registry = loadPluginRegistry();
       printJsonOrHuman(
-        registry,
+        {
+          ...registry,
+          plugins: registry.plugins.map(redactPluginForDiagnostics),
+        },
         formatPluginListHuman(registry),
         options.json === true,
       );
@@ -568,7 +595,10 @@ pluginsCommand
     .action((options: { json?: boolean }) => {
       const registry = loadPluginRegistry();
       printJsonOrHuman(
-        registry,
+        {
+          ...registry,
+          plugins: registry.plugins.map(redactPluginForDiagnostics),
+        },
         formatPluginDoctorHuman(registry),
         options.json === true,
       );
@@ -589,7 +619,7 @@ pluginsCommand
         printJsonErrorAndExit(`Plugin not found: ${id}`, options.json === true);
       }
       printJsonOrHuman(
-        plugin,
+        redactPluginForDiagnostics(plugin),
         formatPluginInspectHuman(plugin),
         options.json === true,
       );
@@ -599,10 +629,15 @@ pluginsCommand
     .command("enable")
     .description("Enable a plugin id in local plugin config")
     .argument("<id>", "Plugin id")
+    .option("--allow-trust <level>", "Explicitly allow the plugin's declared trust level")
+    .option("--allow-mcp-launch", "Consent to launching the plugin's declared MCP executables")
     .option("--json", "Emit structured JSON only")
-    .action((id: string, options: { json?: boolean }) => {
+    .action((id: string, options: { json?: boolean; allowTrust?: string; allowMcpLaunch?: boolean }) => {
       try {
-        const config = enablePlugin(id);
+        const config = enablePlugin(id, {
+          ...(options.allowTrust ? { allowTrust: options.allowTrust as never } : {}),
+          ...(options.allowMcpLaunch ? { allowMcpLaunch: true } : {}),
+        });
         printJsonOrHuman(
           { status: "ok", config },
           `Enabled plugin ${id}`,

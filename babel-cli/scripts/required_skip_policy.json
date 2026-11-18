@@ -736,6 +736,25 @@
           "dirty target detection refuses tracked user changes"
         ]
       }
+    },
+    {
+      "id": "campaign-register-not-merged",
+      "platforms": [
+        "linux",
+        "win32"
+      ],
+      "reasons": [
+        "campaign finding register is not present on this branch (proposed PR not merged)"
+      ],
+      "rationale": "The canonical 100-ID finding register ships with proposed PR #536, which is not merged. Until it lands there is no register to validate, so the uniqueness/count test reports a visible reviewed skip; it activates automatically when the register file appears. The test is not deleted or conditionally hidden, and the skip is bound to this exact file, test name and reason on both unit platforms.",
+      "suites": [
+        "unit"
+      ],
+      "files": {
+        "src/executor/architectureConformance.test.ts": [
+          "proposed finding register assigns all 100 IDs to declared workstreams"
+        ]
+      }
     }
   ]
 }

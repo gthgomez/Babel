@@ -26,6 +26,31 @@ function stableCellId(turnId: number, role: 'user' | 'assistant'): string {
 }
 
 /**
+ * Keep the outcome card readable in a short conversation pane.
+ *
+ * At 44x16 the pane is about nine rows. The full card (coverage, cost and
+ * next-action lines) wraps to fill all of them and hides the answer it
+ * describes. Short panes get a single truncated headline; medium panes keep a
+ * few lines; tall panes keep the complete card.
+ *
+ * @param text - ANSI-stripped card text.
+ * @param viewportHeight - Rows last requested by the frame (0 before first paint).
+ * @param maxWidth - Usable conversation width in columns.
+ * @returns The card text to render.
+ */
+export function compactOutcomeNote(text: string, viewportHeight: number, maxWidth = 80): string {
+  if (viewportHeight <= 0 || viewportHeight >= 14) return text;
+  const lines = text.split('\n');
+  const width = Math.max(8, maxWidth - 2);
+  const truncate = (line: string): string =>
+    line.length <= width ? line : `${line.slice(0, Math.max(0, width - 1))}…`;
+  const maxLines = Math.max(2, Math.min(3, viewportHeight - 5));
+  if (lines.length <= maxLines && lines.every((line) => line.length <= width)) return text;
+  const kept = lines.slice(0, Math.max(1, maxLines - 1)).map(truncate);
+  return [...kept, '…'].join('\n');
+}
+
+/**
  * Presentation-only bridge from canonical Chat events to the existing
  * history-cell/store/viewport stack. It owns no persistence or authorization
  * decisions; durable records are only supplied to ShellConversationStore
@@ -277,7 +302,8 @@ export class ShellRuntimeBinding {
       return;
     }
     const epoch = this.store.epoch;
-    this.transcript.appendCommitted(createPlainCell(cleaned.split('\n'), {
+    const noteRows = compactOutcomeNote(cleaned, this.viewport.renderHeight, this.viewport.terminalWidth).split('\n');
+    this.transcript.appendCommitted(createPlainCell(noteRows, {
       cell_id: `interactive-note:${this.currentTurnId}:${this.nextNoteId++}`,
       turn_id: this.currentTurnId,
       ...(this.store.threadId !== undefined ? { thread_id: this.store.threadId } : {}),
@@ -286,6 +312,29 @@ export class ShellRuntimeBinding {
       [...(this.currentUserRecord ? [this.currentUserRecord] : []), ...this.transcript.getAllRecords()],
       epoch,
     );
+    this.syncViewport();
+  }
+
+  /**
+   * Append command output as a settled notice cell.
+   *
+   * Slash commands print outside the shell's frame; routing their captured
+   * output here keeps it visible in the conversation pane and lets the next
+   * repaint draw a complete frame instead of a partially overwritten one.
+   */
+  appendNotice(text: string): void {
+    const cleaned = stripAnsi(text).replace(/\r/g, '').trim();
+    if (!cleaned) return;
+    if (this.currentTurnId !== undefined) {
+      this.appendNote(cleaned);
+      return;
+    }
+    const epoch = this.store.epoch;
+    const record = createPlainCell(cleaned.split('\n'), {
+      cell_id: `interactive-notice:${this.nextNoteId++}`,
+      ...(this.store.threadId !== undefined ? { thread_id: this.store.threadId } : {}),
+    }).toRecord();
+    if (!this.store.appendCommittedRecord(record, epoch)) return;
     this.syncViewport();
   }
 

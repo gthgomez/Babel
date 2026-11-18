@@ -192,7 +192,10 @@ test('exact GLM route overrides phase model settings instead of substituting pro
 test('exact GLM route refuses a generic DeepSeek failover decision', async () => {
   const previousOffline = process.env['BABEL_OFFLINE'];
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-glm-failover-'));
-  process.env['BABEL_OFFLINE'] = '1';
+  // Offline mode now refuses a remote route before construction (PV-01), so
+  // this route-level fallback test runs online and never dispatches: the exact
+  // GLM guard must terminate before any DeepSeek runner is created.
+  delete process.env['BABEL_OFFLINE'];
   try {
     const engine = new ChatEngine({
       task: 't',
