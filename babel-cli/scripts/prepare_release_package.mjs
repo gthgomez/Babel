@@ -5,7 +5,6 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFile
 import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadPayloadInventory, payloadManifest } from './release_artifact_inventory.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(root, '..')
@@ -41,6 +40,10 @@ const sourceSha = command('git', ['rev-parse', 'HEAD']).trim()
 const sourceTreeSha = command('git', ['rev-parse', 'HEAD^{tree}']).trim()
 assert.match(sourceSha, /^[a-f0-9]{40}$/)
 assert.match(sourceTreeSha, /^[a-f0-9]{40}$/)
+// Load payload qualification only after build and pack succeed: earlier gates
+// (source provenance, dependency/advisory review) must stop the flow without
+// depending on the inventory tooling.
+const { loadPayloadInventory, payloadManifest } = await import('./release_artifact_inventory.mjs')
 const inventory = loadPayloadInventory(repoRoot)
 const payload = payloadManifest({ inventory, packageJson, files: pack.files })
 // Compare the actual archive contents to staged distribution bytes, including ignored dist/.
