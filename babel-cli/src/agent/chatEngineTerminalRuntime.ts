@@ -82,7 +82,10 @@ import type {
   FinalizeParityTurnExtras,
   FinalizeParityTurnResult,
 } from './chatEngineParityBridge.js'
-import { classifyChatTaskIntent } from './chatEngineTaskIntent.js'
+import {
+  classifyChatTaskIntent,
+  isConversationalTurnText,
+} from './chatEngineTaskIntent.js'
 import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
 import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
@@ -153,6 +156,43 @@ function appendCriterionEvidenceSummary(
 }
 
 /** Make the terminal answer agree with the host completion decision without changing that decision. */
+function knownRedVerifierReceipt(
+  receipt: BoundChatVerifierReceipt | null | undefined,
+): receipt is BoundChatVerifierReceipt {
+  return (
+    receipt != null &&
+    receipt.stale !== true &&
+    Number.isInteger(receipt.exit_code) &&
+    receipt.exit_code !== 0 &&
+    typeof receipt.command === 'string' &&
+    receipt.command.trim().length > 0
+  )
+}
+
+/**
+ * A later provider/network failure must not erase a known red check from the
+ * terminal explanation. The terminal cause remains the later failure; this is
+ * retained evidence, not a new success claim (TF-14).
+ */
+export function failureExplanationWithKnownVerifierState(
+  answer: string,
+  receipt: BoundChatVerifierReceipt | null | undefined,
+): string {
+  if (!knownRedVerifierReceipt(receipt)) return answer
+  const command = singleLineEvidence(receipt.command, 160)
+  if (answer.includes(command)) return answer
+  const summary =
+    typeof receipt.summary === 'string' && receipt.summary.trim().length > 0
+      ? `: ${singleLineEvidence(receipt.summary, 240)}`
+      : ''
+  return [
+    answer,
+    '',
+    `Known verification state at failure: "${command}" exited ${receipt.exit_code}${summary}.`,
+    'This earlier red check remains part of the run evidence; the later failure does not turn it green.',
+  ].join('\n')
+}
+
 function formatTerminalAnswerForOutcome(input: {
   answer: string
   outcome: TerminalOutcome
@@ -160,6 +200,7 @@ function formatTerminalAnswerForOutcome(input: {
   hasMutation: boolean
   task: string
   toolCallLog: ChatTerminalSnapshot['evidence']['observability']['toolCallLog']
+  verifierReceipt?: BoundChatVerifierReceipt | null | undefined
   preservedUnverifiedCandidate?: {
     candidate: string
     artifactRefs: readonly string[]
@@ -172,6 +213,9 @@ function formatTerminalAnswerForOutcome(input: {
   const decisionDeferral = input.outcome === 'NEEDS_HUMAN_DECISION'
   if (!input.answer.trim() || satisfiesRequestedBareJsonAnswer(input.answer, input.task)) {
     return input.answer
+  }
+  if (input.status === 'failed') {
+    return failureExplanationWithKnownVerifierState(input.answer, input.verifierReceipt)
   }
   if (decisionDeferral) {
     return input.acceptanceEvidence?.length
@@ -350,18 +394,67 @@ export type ChatStreamDoneExtra = {
   }
 }
 
+/** A recorded, successful source read (detail text is not required here). */
+function hasSuccessfulSourceRead(
+  log: ChatTerminalSnapshot['evidence']['observability']['toolCallLog'],
+): boolean {
+  return log.some(
+    (entry) =>
+      (entry.tool === 'read_file' || entry.tool === 'read_range') &&
+      !entry.error &&
+      (entry.exit_code === undefined || entry.exit_code === 0),
+  )
+}
+
+/**
+ * A repository question that produced no source observation is not a grounded
+ * informational answer. Task text only selects the requirement; evidence is
+ * still the successful tool log.
+ */
+function taskRequiresRepositoryInspection(task: string): boolean {
+  if (isConversationalTurnText(task)) return false
+  // Only explanatory/informational requests claim repository understanding.
+  // A raw read attempt that failed is handled by the completion gate, not
+  // turned into a second, text-only success claim.
+  if (
+    !/\b(explain|describe|summari[sz]e|review|audit|analy[sz]e|overview|what|how|why|tell\s+me\s+about)\b/i.test(
+      task,
+    )
+  ) {
+    return false
+  }
+  return /\b(repo(?:sitory)?|codebase|project|source|files?|modules?|packages?|readme|architecture|implementation|functions?|classes?|tests?|workspace)\b/i.test(task)
+}
+
 /** Inspection can prove no change is needed; zero writes alone cannot. */
-function normalizeInspectedNoChange(snapshot: ChatTerminalSnapshot, outcome: TerminalOutcome): TerminalOutcome {
+export function normalizeInspectedNoChange(
+  snapshot: ChatTerminalSnapshot,
+  outcome: TerminalOutcome,
+): TerminalOutcome {
   const implementation = snapshot.context.acceptedOperation !== undefined
     ? snapshot.context.acceptedOperation !== 'READ_ONLY'
     : classifyChatTaskIntent(snapshot.context.options.task) === 'execute'
   if (outcome === 'NO_CHANGE_REQUIRED' && implementation && snapshot.context.options.projectRoot)
     refreshChatVerifierReceiptStalenessSync(snapshot.context.options.projectRoot, snapshot.outcome.lastVerifierReceipt)
   const verifier = snapshot.outcome.lastVerifierReceipt
-  return outcome === 'NO_CHANGE_REQUIRED' && implementation &&
-    !hasInspectedNoChangeEvidence(snapshot.evidence.observability.toolCallLog) &&
-    !(verifier?.authority === true && verifier.exit_code === 0 && verifier.stale === false)
-    ? 'AGENT_FAILURE' : outcome
+  const greenCurrentVerifier = verifier?.authority === true && verifier.exit_code === 0 && verifier.stale === false
+  if (outcome !== 'NO_CHANGE_REQUIRED') return outcome
+  if (implementation) {
+    return !hasInspectedNoChangeEvidence(snapshot.evidence.observability.toolCallLog) && !greenCurrentVerifier
+      ? 'AGENT_FAILURE' : outcome
+  }
+  // TF-11: an informational repository answer still needs at least one
+  // successful source observation. Without it the result is an unverified
+  // inspection, not a successful explanation.
+  if (
+    snapshot.context.options.projectRoot !== undefined &&
+    taskRequiresRepositoryInspection(snapshot.context.options.task) &&
+    !hasSuccessfulSourceRead(snapshot.evidence.observability.toolCallLog) &&
+    !greenCurrentVerifier
+  ) {
+    return 'UNVERIFIED_PATCH'
+  }
+  return outcome
 }
 
 /** Finalize a completed stream through the kernel decision and durable parity owner. */
@@ -565,7 +658,10 @@ export function failChatStream(
   presentationError?: string,
 ): ChatEvent {
   const { snapshot, effects } = input
-  const displayError = presentationError ?? error
+  const displayError = failureExplanationWithKnownVerifierState(
+    presentationError ?? error,
+    snapshot.outcome.lastVerifierReceipt,
+  )
   effects.settleActiveExecution()
   const providerOutputLimit = isProviderOutputLimitText(error)
   if (providerOutputLimit && snapshot.outcome.terminatingLimiter == null) {
@@ -1024,6 +1120,7 @@ export function assembleChatResult(
         hasMutation,
         task: snapshot.context.options.task,
         toolCallLog: snapshot.evidence.observability.toolCallLog,
+        verifierReceipt: snapshot.outcome.lastVerifierReceipt,
         ...(kernelDecision?.acceptanceEvidence
           ? { acceptanceEvidence: kernelDecision.acceptanceEvidence }
           : {}),

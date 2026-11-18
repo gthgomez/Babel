@@ -64,6 +64,7 @@ import {
 import type { RuntimeCoordinator, RuntimeExecution } from '../../runtime/contracts.js';
 import { TurnPersistence } from './turnPersistence.js';
 import { buildAskResultPayload } from '../../cli/structuredOutput.js';
+import { exitCodeFromOutcome } from '../../cli/userFacingStatus.js';
 import { runGitCommandAsync } from '../../utils/gitExec.js';
 import { loadProjectSessionIdentity } from '../identity.js';
 import { isChatStreamingEnabled, resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
@@ -1806,6 +1807,18 @@ export async function runCliChatTask(input: {
 
   return {
     payload,
-    exitCode: result.status === 'completed' ? 0 : 1,
+    exitCode: exitCodeForChatResult(result),
   };
+}
+
+/**
+ * Shell exit code for a completed Chat turn. The terminal outcome is
+ * authoritative when present; the legacy status is the fallback for fixtures
+ * that predate outcomes. A completed `UNVERIFIED_PATCH` turn is not exit 0.
+ */
+export function exitCodeForChatResult(
+  result: Pick<ChatResult, 'status' | 'outcome'>,
+): number {
+  if (result.outcome !== undefined) return exitCodeFromOutcome(result.outcome);
+  return result.status === 'completed' ? 0 : 1;
 }

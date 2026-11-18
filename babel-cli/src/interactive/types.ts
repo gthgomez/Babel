@@ -21,7 +21,7 @@ export interface SessionState {
   router: 'v9';
   compactMode?: 'on' | 'off';
   thinkingCollapsed?: boolean;
-  lastRunUserStatus?: 'ready' | 'complete' | 'blocked' | 'failed' | 'cancelled' | 'budget_exhausted';
+  lastRunUserStatus?: 'ready' | 'complete' | 'not_verified' | 'blocked' | 'failed' | 'cancelled' | 'budget_exhausted';
   lastRunTargetRoot?: string | null;
   projectRoot?: string;
   lastTask?: string;
