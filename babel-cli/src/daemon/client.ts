@@ -110,6 +110,7 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
   if (logFd !== undefined) { try { closeSync(logFd); } catch { /* owned by the child now */ } }
 
   ownedDaemon = child;
+  let spawnError = '';
   child.once('exit', () => { if (ownedDaemon === child) ownedDaemon = null; });
 
   if (interactive) {
@@ -120,8 +121,11 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
     });
   } else {
     // The daemon is intentionally detached: it outlives this CLI, owns no
-    // inherited pipes, and cannot hold the foreground process open.
-    child.on('error', () => { /* readiness polling reports the failure below */ });
+    // inherited pipes, and cannot hold the foreground process open. Its output
+    // is retained in the daemon directory instead of the caller's stdout.
+    child.on('error', (err) => {
+      spawnError = `[daemon] Failed to spawn daemon process: ${err.message}`;
+    });
     child.unref();
   }
 
@@ -131,6 +135,11 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
 
   while (Date.now() < deadline) {
     await sleep(DAEMON_POLL_INTERVAL_MS);
+
+    if (spawnError) {
+      if (ownedDaemon === child) ownedDaemon = null;
+      throw new Error(startupDiagnostics.failureMessage(spawnError));
+    }
 
     // Check if child process died
     if (child.exitCode !== null) {
