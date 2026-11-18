@@ -11,6 +11,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { resolveIsolationBrokerFlags } from './chatEngineIsolationFlags.js';
 import { runWithTaskMutationWorkspace } from './executionContext.js';
 import {
@@ -19,15 +20,16 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
+  rmSync,
   statSync,
+  lstatSync,
+  writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
-import {
-  createWorktree,
-  removeWorktree,
-  type WorktreeInfo,
-} from '../services/worktreeIsolation.js';
+import { createWorktree, removeWorktree, type WorktreeInfo } from '../services/worktreeIsolation.js';
+import { isCredentialTargetPath } from '../authority/protectedPath.js';
 import { runWithProjectRoot, type ToolContext } from '../localTools.js';
 import type { ToolExecutor } from './toolExecutor.js';
 import {
@@ -71,6 +73,12 @@ export interface ImplementWorktreeAgentOptions {
   baseRef?: string;
   /** When true, remove the worktree after the run (default false — leave for merge/review). */
   cleanupWorktree?: boolean;
+  /**
+   * Explicitly discard unadopted child changes during cleanup. Without this,
+   * a worktree that contains changes is retained and reported, so a child
+   * patch is never silently dropped.
+   */
+  discardChildChanges?: boolean;
   abortSignal?: AbortSignal;
   executor?: ToolExecutor;
   /** Validated controller constraints; never infer an OS sandbox from a Git worktree. */
@@ -103,6 +111,8 @@ export interface ImplementWorktreeAgentResult {
   error: string | null;
   mutation: MutationAgentLoopResult;
   diagnostics: Array<{ code: string; message: string }>;
+  /** Durable manifest the parent uses for governed adoption. */
+  adoptionManifestPath?: string;
   inheritedBudgetExceeded?: boolean;
   inheritedBudgetLimiter?: ChildBudgetLimiter;
 }
@@ -502,18 +512,58 @@ export async function runImplementWorktreeAgent(
     }
   }
 
+  // Durable handoff for governed parent adoption. A child patch must remain
+  // recoverable after the child process returns (and even when the worktree is
+  // later pruned), so the recorded base and per-path hashes live beside the run.
+  const adoptionManifestPath = join(runDir, 'child-adoption-manifest.json');
+  try {
+    mkdirSync(runDir, { recursive: true });
+    const manifest: ChildAdoptionManifestV1 = {
+      schema_version: 1,
+      artifact_type: 'babel_child_adoption_manifest',
+      created_at: new Date().toISOString(),
+      agent_id: spec.id,
+      worktree_name: worktree.name,
+      worktree_path: worktree.path,
+      base_sha: baseSha ?? null,
+      write_scope: [...scopeValidation.normalizedScope],
+      changed_files: mutation.changedFiles.map((file) => ({
+        path: file.path,
+        before_hash: file.before_hash,
+        after_hash: file.after_hash === MISSING_PATH_DIGEST ? null : file.after_hash,
+      })),
+    };
+    writeFileSync(adoptionManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
+  } catch (err) {
+    diagnostics.push({
+      code: 'adoption_manifest_write_failed',
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  const hasUnadoptedChanges = mutation.changedFiles.length > 0;
   if (
     options.cleanupWorktree &&
     !options.abortSignal?.aborted &&
     !mutation.inheritedBudgetExceeded
   ) {
-    try {
-      removeWorktree(name, { projectRoot, force: true });
-    } catch (err) {
+    if (hasUnadoptedChanges && options.discardChildChanges !== true) {
+      // Removing the worktree here would silently discard the child patch.
+      // Retain it until the parent adopts the recorded changes (or an operator
+      // explicitly opts into discarding them).
       diagnostics.push({
-        code: 'worktree_cleanup_failed',
-        message: err instanceof Error ? err.message : String(err),
+        code: 'worktree_retained_unadopted_changes',
+        message: `Worktree retained: ${mutation.changedFiles.length} unadopted change(s). Adopt from ${adoptionManifestPath} or pass discardChildChanges to remove it.`,
       });
+    } else {
+      try {
+        removeWorktree(name, { projectRoot, force: true });
+      } catch (err) {
+        diagnostics.push({
+          code: 'worktree_cleanup_failed',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 
@@ -560,6 +610,7 @@ export async function runImplementWorktreeAgent(
     error: success ? null : (mutation.error ?? diagnostics.map((d) => d.message).join('; ')),
     mutation,
     diagnostics,
+    adoptionManifestPath,
     ...(mutation.inheritedBudgetExceeded
       ? {
           inheritedBudgetExceeded: true,
@@ -702,6 +753,59 @@ export function worktreePathExists(worktreePath: string, relativePath: string): 
 
 export type ImplementPromoteMode = 'copy' | 'dry_run';
 
+/** One recorded child change. A null hash means the path was absent on that side. */
+export interface ChildChangeRecord {
+  path: string;
+  before_hash: string | null;
+  after_hash: string | null;
+}
+
+/** Durable handoff manifest written beside the child run. */
+export interface ChildAdoptionManifestV1 {
+  schema_version: 1;
+  artifact_type: 'babel_child_adoption_manifest';
+  created_at: string;
+  agent_id: string;
+  worktree_name: string;
+  worktree_path: string;
+  base_sha: string | null;
+  write_scope: string[];
+  changed_files: ChildChangeRecord[];
+}
+
+export type AdoptionConflictCode =
+  | 'invalid_path'
+  | 'foreign_worktree'
+  | 'outside_write_scope'
+  | 'credential_path'
+  | 'unsafe_symlink'
+  | 'stale_child_base'
+  | 'child_postimage_missing'
+  | 'child_postimage_mismatch'
+  | 'parent_preimage_conflict'
+  | 'duplicate_change'
+  | 'apply_failed';
+
+export interface AdoptionConflict {
+  path: string;
+  code: AdoptionConflictCode;
+  message: string;
+}
+
+export interface AdoptionVerificationContext {
+  projectRoot: string;
+  adoptedPaths: string[];
+  deletedPaths: string[];
+}
+
+export interface AdoptionVerificationResult {
+  ok: boolean;
+  summary: string;
+  diagnostics?: Array<{ code: string; message: string }>;
+}
+
+export type AdoptionStatus = 'adopted' | 'dry_run' | 'refused' | 'noop' | 'verification_failed';
+
 export interface PromoteImplementWorktreeInput {
   /** Parent project root (receives promoted files). */
   projectRoot: string;
@@ -725,19 +829,125 @@ export interface PromoteImplementWorktreeInput {
   cleanupWorktree?: boolean;
   /** Worktree name for removeWorktree (defaults to basename of worktreePath). */
   worktreeName?: string;
+  /** Base commit recorded by the child result; enables stale-base refusal. */
+  baseSha?: string;
+  /**
+   * Exact child changes recorded by the child result. When present, adoption is
+   * all-or-nothing and verifies both the child postimage and parent preimage.
+   */
+  expectedChanges?: ChildChangeRecord[];
+  /** Explicit operator override for a parent that advanced past the child base. */
+  allowAdvancedBase?: boolean;
+  /** Parent-side reverification after adoption. */
+  verify?: (context: AdoptionVerificationContext) => AdoptionVerificationResult;
 }
 
 export interface PromoteImplementWorktreeResult {
   success: boolean;
+  status: AdoptionStatus;
   mode: ImplementPromoteMode;
   promotedPaths: string[];
+  adoptedPaths: string[];
+  deletedPaths: string[];
   skippedPaths: Array<{ path: string; reason: string }>;
+  conflicts: AdoptionConflict[];
   diagnostics: Array<{ code: string; message: string }>;
   parentStatusBefore: string;
   parentStatusAfter: string;
+  parentHeadSha: string | null;
+  childBaseSha: string | null;
+  verification: AdoptionVerificationResult | null;
   worktreeRemoved: boolean;
   summary: string;
   error: string | null;
+}
+
+const MISSING_PATH_DIGEST = createHash('sha256')
+  .update('babel://workspace-transactions/missing-path/v1')
+  .digest('hex');
+
+function hashBuffer(content: Buffer): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+/** Hash a file's bytes, the missing-path digest when absent, or null when unreadable. */
+function hashWorkspacePath(path: string): string | null {
+  try {
+    return hashBuffer(readFileSync(path));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return MISSING_PATH_DIGEST;
+    return null;
+  }
+}
+
+function gitHeadSha(root: string): string | null {
+  const result = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf-8' });
+  if (result.status !== 0) return null;
+  const sha = (result.stdout ?? '').trim();
+  return /^[0-9a-f]{40,64}$/i.test(sha) ? sha : null;
+}
+
+/** Resolve the repository identity shared by a parent checkout and its worktree. */
+function gitCommonDir(root: string): string | null {
+  const result = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+    cwd: root,
+    encoding: 'utf-8',
+  });
+  if (result.status !== 0) return null;
+  const value = (result.stdout ?? '').trim();
+  return value.length > 0 ? resolve(value) : null;
+}
+
+/** Reject a path that escapes the root through `..`, a drive letter or a symlink. */
+function adoptionPathSafety(root: string, relativePath: string): AdoptionConflict | null {
+  const normalized = normalizeWriteScopeEntry(relativePath);
+  if (
+    !normalized ||
+    normalized.startsWith('/') ||
+    /^[A-Za-z]:/.test(normalized) ||
+    normalized.split('/').includes('..') ||
+    normalized.split('/').includes('.git')
+  ) {
+    return { path: relativePath, code: 'invalid_path', message: `Path "${relativePath}" is not a safe project-relative path.` };
+  }
+  const target = resolve(root, normalized);
+  const rel = relative(root, target);
+  if (rel === '..' || rel.startsWith(`..${sep}`) || rel.startsWith('../') || rel.startsWith('/')) {
+    return { path: relativePath, code: 'invalid_path', message: `Path "${relativePath}" resolves outside the project root.` };
+  }
+  if (isCredentialTargetPath(normalized)) {
+    return { path: relativePath, code: 'credential_path', message: `Path "${relativePath}" is a credential/protected path.` };
+  }
+  // Existing symlink components can redirect a write outside the project.
+  let cursor = target;
+  while (cursor !== root && cursor.startsWith(root)) {
+    if (existsSync(cursor)) {
+      try {
+        const stats = lstatSync(cursor);
+        if (stats.isSymbolicLink()) {
+          return { path: relativePath, code: 'unsafe_symlink', message: `Path "${relativePath}" traverses a symlink.` };
+        }
+      } catch {
+        return { path: relativePath, code: 'invalid_path', message: `Path "${relativePath}" could not be inspected.` };
+      }
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  return null;
+}
+
+/** Write bytes atomically (same-directory temp file + rename). */
+function writeFileAtomic(path: string, content: Buffer): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.babel-adopt-${process.pid}-${Date.now().toString(36)}`;
+  try {
+    writeFileSync(temporary, content);
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 
 /**
@@ -839,22 +1049,45 @@ export function promoteImplementWorktree(
   const requireParentPathClean = input.requireParentPathClean !== false;
   const diagnostics: Array<{ code: string; message: string }> = [];
   const skippedPaths: Array<{ path: string; reason: string }> = [];
+  const conflicts: AdoptionConflict[] = [];
   const promotedPaths: string[] = [];
+  const adoptedPaths: string[] = [];
+  const deletedPaths: string[] = [];
+  const parentHeadSha = existsSync(projectRoot) ? gitHeadSha(projectRoot) : null;
+  const childBaseSha = input.baseSha
+    ?? (existsSync(worktreePath) ? gitHeadSha(worktreePath) : null);
+  const parentStatusBefore = existsSync(projectRoot) ? gitPorcelainStatus(projectRoot) : '';
+
+  const buildResult = (
+    overrides: Partial<PromoteImplementWorktreeResult>,
+  ): PromoteImplementWorktreeResult => ({
+    success: false,
+    status: 'refused',
+    mode,
+    promotedPaths,
+    adoptedPaths,
+    deletedPaths,
+    skippedPaths,
+    conflicts,
+    diagnostics,
+    parentStatusBefore,
+    parentStatusAfter: parentStatusBefore,
+    parentHeadSha,
+    childBaseSha,
+    verification: null,
+    worktreeRemoved: false,
+    summary: '',
+    error: null,
+    ...overrides,
+  });
 
   const scopeValidation = validateImplementWriteScope(input.writeScope, projectRoot);
   if (!scopeValidation.ok) {
-    return {
-      success: false,
-      mode,
-      promotedPaths: [],
-      skippedPaths: [],
-      diagnostics: scopeValidation.diagnostics.map((d) => ({ code: d.code, message: d.message })),
-      parentStatusBefore: '',
-      parentStatusAfter: '',
-      worktreeRemoved: false,
+    diagnostics.push(...scopeValidation.diagnostics.map((d) => ({ code: d.code, message: d.message })));
+    return buildResult({
       summary: 'Promote rejected: invalid write_scope',
       error: 'invalid write_scope',
-    };
+    });
   }
 
   if (!existsSync(worktreePath)) {
@@ -862,33 +1095,233 @@ export function promoteImplementWorktree(
       code: 'worktree_missing',
       message: `Worktree path does not exist: ${worktreePath}`,
     });
-    return {
-      success: false,
-      mode,
-      promotedPaths: [],
-      skippedPaths: [],
-      diagnostics,
-      parentStatusBefore: '',
-      parentStatusAfter: '',
-      worktreeRemoved: false,
+    return buildResult({
       summary: 'Promote rejected: worktree missing',
       error: 'worktree missing',
-    };
+    });
   }
 
-  const parentStatusBefore = gitPorcelainStatus(projectRoot);
+  const parentCommonDir = gitCommonDir(projectRoot);
+  const worktreeCommonDir = gitCommonDir(worktreePath);
+  if (
+    parentCommonDir === null ||
+    worktreeCommonDir === null ||
+    parentCommonDir !== worktreeCommonDir
+  ) {
+    conflicts.push({
+      path: '(repository)',
+      code: 'foreign_worktree',
+      message: 'The worktree does not belong to the parent repository; refusing a cross-project adoption.',
+    });
+  }
+
+  if (
+    input.baseSha !== undefined &&
+    parentHeadSha !== null &&
+    parentHeadSha !== input.baseSha &&
+    input.allowAdvancedBase !== true
+  ) {
+    conflicts.push({
+      path: '(repository)',
+      code: 'stale_child_base',
+      message: `Parent HEAD ${parentHeadSha} advanced past the child base ${input.baseSha}; adopt from a fresh child or explicitly allow an advanced base.`,
+    });
+  }
+
+  if (conflicts.length > 0) {
+    return buildResult({
+      summary: `Adoption refused: ${conflicts.length} conflict(s); no parent bytes were written.`,
+      error: conflicts.map((conflict) => `${conflict.code}: ${conflict.message}`).join('; '),
+    });
+  }
+
+  if (input.expectedChanges) {
+    const records: ChildChangeRecord[] = [];
+    const seen = new Set<string>();
+    for (const raw of input.expectedChanges) {
+      const path = normalizeWriteScopeEntry(raw.path);
+      if (seen.has(path)) {
+        conflicts.push({ path, code: 'duplicate_change', message: `Path "${path}" is listed more than once.` });
+        continue;
+      }
+      seen.add(path);
+      const unsafe = adoptionPathSafety(projectRoot, path);
+      if (unsafe) {
+        conflicts.push(unsafe);
+        continue;
+      }
+      if (!isPathInWriteScope(path, scopeValidation.normalizedScope, projectRoot)) {
+        conflicts.push({
+          path,
+          code: 'outside_write_scope',
+          message: `Path "${path}" is outside the declared write_scope.`,
+        });
+        continue;
+      }
+      const record: ChildChangeRecord = {
+        path,
+        before_hash: raw.before_hash ?? null,
+        after_hash: raw.after_hash ?? null,
+      };
+      records.push(record);
+
+      const expectedChild = record.after_hash ?? MISSING_PATH_DIGEST;
+      const childHash = hashWorkspacePath(join(worktreePath, path));
+      if (childHash !== expectedChild) {
+        conflicts.push({
+          path,
+          code: record.after_hash === null ? 'child_postimage_mismatch' : childHash === MISSING_PATH_DIGEST ? 'child_postimage_missing' : 'child_postimage_mismatch',
+          message: record.after_hash === null
+            ? `Child was recorded as deleting "${path}" but the worktree still has different bytes there.`
+            : `Child postimage for "${path}" no longer matches the recorded hash.`,
+        });
+      }
+
+      const expectedParent = record.before_hash ?? MISSING_PATH_DIGEST;
+      const parentHash = hashWorkspacePath(join(projectRoot, path));
+      if (parentHash !== expectedParent) {
+        conflicts.push({
+          path,
+          code: 'parent_preimage_conflict',
+          message: `Parent bytes for "${path}" differ from the child's recorded preimage.`,
+        });
+      }
+    }
+
+    const active = records.filter((record) => record.before_hash !== record.after_hash);
+    if (active.length === 0 && conflicts.length === 0) {
+      return buildResult({
+        success: true,
+        status: 'noop',
+        summary: 'Adoption no-op: the child recorded no effective change.',
+      });
+    }
+
+    if (conflicts.length > 0) {
+      return buildResult({
+        summary: `Adoption refused: ${conflicts.length} conflict(s); no parent bytes were written.`,
+        error: conflicts.map((conflict) => `${conflict.code}: ${conflict.message}`).join('; '),
+      });
+    }
+
+    if (mode === 'dry_run') {
+      promotedPaths.push(...active.map((record) => record.path));
+      return buildResult({
+        success: true,
+        status: 'dry_run',
+        summary: `Adoption dry run: ${active.length} path(s) would be adopted.`,
+      });
+    }
+
+    const snapshots: Array<{ path: string; bytes: Buffer | null }> = active.map((record) => {
+      const parentPath = join(projectRoot, record.path);
+      return {
+        path: parentPath,
+        bytes: existsSync(parentPath) ? readFileSync(parentPath) : null,
+      };
+    });
+    const rollback = (): void => {
+      for (const snapshot of snapshots.reverse()) {
+        try {
+          if (snapshot.bytes === null) rmSync(snapshot.path, { force: true });
+          else writeFileAtomic(snapshot.path, snapshot.bytes);
+        } catch {
+          // Best-effort rollback; the conflict report below remains authoritative.
+        }
+      }
+    };
+
+    try {
+      for (const record of active) {
+        const parentPath = join(projectRoot, record.path);
+        const expectedParent = record.before_hash ?? MISSING_PATH_DIGEST;
+        if (hashWorkspacePath(parentPath) !== expectedParent) {
+          conflicts.push({
+            path: record.path,
+            code: 'parent_preimage_conflict',
+            message: `Parent bytes for "${record.path}" changed while adoption was running.`,
+          });
+          throw new Error('parent preimage changed during adoption');
+        }
+        if (record.after_hash === null) {
+          rmSync(parentPath, { force: true });
+          deletedPaths.push(record.path);
+        } else {
+          writeFileAtomic(parentPath, readFileSync(join(worktreePath, record.path)));
+          adoptedPaths.push(record.path);
+        }
+      }
+
+      for (const record of active) {
+        const expectedChild = record.after_hash ?? MISSING_PATH_DIGEST;
+        if (hashWorkspacePath(join(projectRoot, record.path)) !== expectedChild) {
+          conflicts.push({
+            path: record.path,
+            code: 'apply_failed',
+            message: `Parent postimage for "${record.path}" does not match the child hash after writing.`,
+          });
+          throw new Error('parent postimage verification failed');
+        }
+      }
+    } catch (error) {
+      rollback();
+      promotedPaths.length = 0;
+      adoptedPaths.length = 0;
+      deletedPaths.length = 0;
+      diagnostics.push({
+        code: 'adoption_rolled_back',
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return buildResult({
+        summary: 'Adoption failed and was rolled back; the child worktree is unchanged.',
+        error: conflicts.map((conflict) => conflict.message).join('; ') || 'apply failed',
+      });
+    }
+
+    promotedPaths.push(...adoptedPaths, ...deletedPaths);
+    let verification: AdoptionVerificationResult | null = null;
+    if (input.verify) {
+      try {
+        verification = input.verify({ projectRoot, adoptedPaths: [...adoptedPaths], deletedPaths: [...deletedPaths] });
+      } catch (error) {
+        verification = {
+          ok: false,
+          summary: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+    if (verification && !verification.ok) {
+      return buildResult({
+        success: false,
+        status: 'verification_failed',
+        verification,
+        summary: `Adoption applied ${adoptedPaths.length + deletedPaths.length} path(s) but parent verification failed: ${verification.summary}`,
+        error: verification.summary,
+      });
+    }
+
+    return buildResult({
+      success: true,
+      status: 'adopted',
+      verification,
+      summary: `Adopted ${adoptedPaths.length} file(s) and ${deletedPaths.length} deletion(s) from the child worktree.`,
+    });
+  }
+
+  // Legacy discovery path: no recorded child hashes. Each candidate is still
+  // scope- and path-checked; anything skipped is reported, never silently lost.
   const candidates =
     input.paths && input.paths.length > 0
       ? input.paths.map(normalizeWriteScopeEntry)
       : listWorktreeScopedChanges(worktreePath, scopeValidation.normalizedScope, projectRoot);
 
-  // Filter candidates to write_scope
   const inScope = candidates.filter((p) =>
     isPathInWriteScope(p, scopeValidation.normalizedScope, projectRoot),
   );
   for (const p of candidates) {
     if (!isPathInWriteScope(p, scopeValidation.normalizedScope, projectRoot)) {
       skippedPaths.push({ path: p, reason: 'outside write_scope' });
+      conflicts.push({ path: p, code: 'outside_write_scope', message: `Path "${p}" is outside the declared write_scope.` });
     }
   }
 
@@ -897,14 +1330,25 @@ export function promoteImplementWorktree(
   for (const rel of files) {
     if (!isPathInWriteScope(rel, scopeValidation.normalizedScope, projectRoot)) {
       skippedPaths.push({ path: rel, reason: 'outside write_scope' });
+      conflicts.push({ path: rel, code: 'outside_write_scope', message: `Path "${rel}" is outside the declared write_scope.` });
+      continue;
+    }
+    const unsafe = adoptionPathSafety(projectRoot, rel);
+    if (unsafe) {
+      conflicts.push(unsafe);
+      skippedPaths.push({ path: rel, reason: unsafe.message });
       continue;
     }
     const src = join(worktreePath, rel);
     const dest = join(projectRoot, rel);
 
     if (!existsSync(src)) {
-      // Deletion promote is opt-in later — skip with reason
-      skippedPaths.push({ path: rel, reason: 'missing in worktree (deletes not auto-promoted)' });
+      // Without recorded hashes a deletion cannot be verified. Keep it visible.
+      skippedPaths.push({ path: rel, reason: 'deletion requires recorded child hashes (missing in worktree)' });
+      diagnostics.push({
+        code: 'deletion_not_promoted',
+        message: `"${rel}" is deleted in the worktree; adopt with the child manifest to verify and apply the deletion.`,
+      });
       continue;
     }
     if (statSync(src).isDirectory()) {
@@ -929,6 +1373,11 @@ export function promoteImplementWorktree(
           skippedPaths.push({
             path: rel,
             reason: 'parent path has local modifications (set requireParentPathClean=false to overwrite)',
+          });
+          conflicts.push({
+            path: rel,
+            code: 'parent_preimage_conflict',
+            message: `Parent bytes for "${rel}" have local modifications.`,
           });
           continue;
         }
@@ -960,13 +1409,34 @@ export function promoteImplementWorktree(
     }
   }
 
+  const hardFail = diagnostics.some(
+    (d) => d.code === 'worktree_missing' || d.code === 'promote_copy_failed' || d.code === 'adoption_rolled_back',
+  );
+  const onlyIdentical = skippedPaths.every((s) => s.reason === 'already identical');
+  const success = !hardFail && (mode === 'dry_run' || promotedPaths.length > 0 || onlyIdentical);
+  const status: AdoptionStatus = success
+    ? promotedPaths.length > 0 || mode === 'dry_run'
+      ? mode === 'dry_run' ? 'dry_run' : 'adopted'
+      : 'noop'
+    : 'refused';
+
   let worktreeRemoved = false;
-  if (mode === 'copy' && input.cleanupWorktree && diagnostics.every((d) => d.code !== 'promote_copy_failed')) {
+  if (mode === 'copy' && input.cleanupWorktree) {
+    const cleanupSafe =
+      success &&
+      conflicts.length === 0 &&
+      diagnostics.every((d) => d.code !== 'promote_copy_failed') &&
+      skippedPaths.every((s) => s.reason === 'already identical');
     const name =
       input.worktreeName ??
       worktreePath.split(/[\\/]/).filter(Boolean).pop() ??
       '';
-    if (name) {
+    if (!cleanupSafe || !name) {
+      diagnostics.push({
+        code: 'worktree_retained_unadopted_changes',
+        message: 'Worktree retained because not every child change was adopted; inspect the report before removing it.',
+      });
+    } else {
       try {
         removeWorktree(name, { projectRoot, force: true });
         worktreeRemoved = true;
@@ -980,25 +1450,14 @@ export function promoteImplementWorktree(
   }
 
   const parentStatusAfter = gitPorcelainStatus(projectRoot);
-  const hardFail = diagnostics.some(
-    (d) => d.code === 'worktree_missing' || d.code === 'promote_copy_failed',
-  );
-  const success =
-    !hardFail &&
-    (promotedPaths.length > 0 || skippedPaths.every((s) => s.reason === 'already identical'));
-
-  return {
+  return buildResult({
     success,
-    mode,
-    promotedPaths,
-    skippedPaths,
-    diagnostics,
-    parentStatusBefore,
+    status,
     parentStatusAfter,
     worktreeRemoved,
     summary: success
       ? `Promote ${mode}: ${promotedPaths.length} path(s)${worktreeRemoved ? ' (worktree removed)' : ''}`
-      : `Promote failed or empty: ${diagnostics.map((d) => d.message).join('; ') || 'no paths promoted'}`,
+      : `Promote failed: ${diagnostics.map((d) => d.message).join('; ') || 'no paths promoted'}`,
     error: success ? null : diagnostics.map((d) => d.message).join('; ') || 'no paths promoted',
-  };
+  });
 }
