@@ -248,18 +248,20 @@ export function renderErrorBox(
   width: number = 80,
 ): string[] {
   const boxWidth = Math.min(width, 78);
-  const top = `┌${'─'.repeat(boxWidth - 2)}┐`;
-  const bottom = `└${'─'.repeat(boxWidth - 2)}┘`;
+  const top = `┌${'─'.repeat(Math.max(0, boxWidth - 2))}┐`;
+  const bottom = `└${'─'.repeat(Math.max(0, boxWidth - 2))}┘`;
 
   const lines: string[] = [top];
 
   // Header
-  lines.push(`│ ${error('✖ Error')}${' '.repeat(boxWidth - 11)}│`);
+  lines.push(`│ ${error('✖ Error')}${' '.repeat(Math.max(0, boxWidth - 11))}│`);
 
   // Message (word-wrapped to fit using visible-length-aware wrapping)
-  const wrappedLines = wrapText(message, boxWidth - 4);
+  const wrappedLines = wrapText(message, Math.max(1, boxWidth - 5));
   for (const wrappedLine of wrappedLines) {
-    const pad = boxWidth - 5 - visibleLength(wrappedLine);
+    // Narrow terminals (for example 44 columns) can wrap to exactly boxWidth-4
+    // visible cells; the old arithmetic then produced repeat(-1) and threw.
+    const pad = Math.max(0, boxWidth - 5 - visibleLength(wrappedLine));
     lines.push(`│ ${dim('│')} ${wrappedLine}${' '.repeat(pad)}│`);
   }
 
@@ -269,7 +271,7 @@ export function renderErrorBox(
   // Tool call failure: show exit code + stderr hint
   if (errObj?.exitCode !== undefined || /exit code|command failed|shell.*fail/i.test(message)) {
     if (errObj?.exitCode !== undefined) {
-      lines.push(`│ ${dim('Exit code:')} ${warning(String(errObj.exitCode))}${' '.repeat(boxWidth - 15 - String(errObj.exitCode).length)}│`);
+      lines.push(`│ ${dim('Exit code:')} ${warning(String(errObj.exitCode))}${' '.repeat(Math.max(0, boxWidth - 15 - String(errObj.exitCode).length))}│`);
     }
     if (errObj?.stderr) {
       const stderrSnippet = String(errObj.stderr).slice(0, 60);
@@ -285,8 +287,8 @@ export function renderErrorBox(
   }
 
   // Dismiss hint
-  lines.push(`│${' '.repeat(boxWidth - 2)}│`);
-  lines.push(`│ ${dim('Press Enter to continue')}${' '.repeat(boxWidth - 25)}│`);
+  lines.push(`│${' '.repeat(Math.max(0, boxWidth - 2))}│`);
+  lines.push(`│ ${dim('Press Enter to continue')}${' '.repeat(Math.max(0, boxWidth - 25))}│`);
   lines.push(bottom);
 
   return lines;
