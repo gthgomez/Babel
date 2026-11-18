@@ -158,3 +158,19 @@ test('an unavailable desktop advisory review blocks promotion', () => {
     rmSync(emptyRoot, { recursive: true, force: true })
   }
 })
+
+test('the recorded desktop review must belong to the trusted workflow checkout', () => {
+  const { dir, sha } = linuxOnlyFixture()
+  try {
+    const base = { distDir: dir, version, sourceSha: source, platforms: ['linux-x64'], appImageEvidence: evidence(dir, sha), requireAppImageLaunch: true }
+    const first = verifyReleaseDist(base)
+    assert.equal(first.status, 'PASS', JSON.stringify(first.problems))
+    assert.match(first.advisoryReview.reviewedCheckoutSha, /^[a-f0-9]{40}$/)
+    assert.equal(first.advisoryReview.sourceSha, source)
+    const matched = verifyReleaseDist({ ...base, expectedReviewCheckoutSha: first.advisoryReview.reviewedCheckoutSha })
+    assert.equal(matched.status, 'PASS', JSON.stringify(matched.problems))
+    const mismatched = verifyReleaseDist({ ...base, expectedReviewCheckoutSha: '0'.repeat(40) })
+    assert.equal(mismatched.status, 'FAIL')
+    assert.match(mismatched.problems.join('\n'), /desktop advisory review checkout does not match the trusted workflow commit/)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

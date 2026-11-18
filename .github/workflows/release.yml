@@ -464,6 +464,7 @@ jobs:
         env:
           RELEASE_SOURCE: ${{ needs.build-portable.outputs.source_sha }}
           RELEASE_VERSION: ${{ steps.tag.outputs.version }}
+          REVIEWED_CHECKOUT_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           node tools/verify-release-bytes.mjs \
@@ -474,6 +475,7 @@ jobs:
             --appimage-evidence release-linux-smoke/result.json \
             --result "$RUNNER_TEMP/release-qualification.json"
       - name: Retain the release qualification record
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-qualification

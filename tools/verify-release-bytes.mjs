@@ -36,9 +36,9 @@ export function parseChecksums(text) {
  * and the Windows file inventory is only required for Windows releases.
  * The desktop advisory review is always recorded; a deferred advisory is an
  * owner decision, not a hidden promotion failure.
- * @param {{distDir: string, version: string, sourceSha: string, platforms?: string[], npmCandidateDir?: string|null, appImageEvidence?: string|null, requireAppImageLaunch?: boolean, repoRoot?: string}} input
+ * @param {{distDir: string, version: string, sourceSha: string, platforms?: string[], npmCandidateDir?: string|null, appImageEvidence?: string|null, requireAppImageLaunch?: boolean, repoRoot?: string, expectedReviewCheckoutSha?: string|null}} input
  */
-export function verifyReleaseDist({ distDir, version, sourceSha, platforms = ['win32-x64', 'linux-x64'], npmCandidateDir = null, appImageEvidence = null, requireAppImageLaunch = false, repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..') }) {
+export function verifyReleaseDist({ distDir, version, sourceSha, platforms = ['win32-x64', 'linux-x64'], npmCandidateDir = null, appImageEvidence = null, requireAppImageLaunch = false, repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'), expectedReviewCheckoutSha = null }) {
   assert.match(version, /^\d+\.\d+\.\d+(?:-preview\.\d{8})?$/, 'Release version is invalid')
   assert.match(sourceSha, /^[a-f0-9]{40}$/, 'Release source SHA is invalid')
   assert.ok(existsSync(distDir), 'Release directory is missing')
@@ -139,6 +139,7 @@ export function verifyReleaseDist({ distDir, version, sourceSha, platforms = ['w
     const checkout = spawnSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' })
     advisoryReview = {
       scope: 'desktop',
+      sourceSha,
       reviewedCheckoutSha: checkout.status === 0 ? checkout.stdout.trim() : null,
       status: review.status,
       review: review.review,
@@ -148,6 +149,11 @@ export function verifyReleaseDist({ distDir, version, sourceSha, platforms = ['w
         .filter(entry => entry.scopeAffected && (entry.decision === 'deferred' || entry.decision === 'accepted_risk'))
         .map(entry => ({ id: entry.id, package: entry.package, decision: entry.decision, installed: entry.installed })),
       blockers: review.problems,
+    }
+    // The draft job reviews the trusted workflow checkout; bind it explicitly so
+    // a manually dispatched run cannot claim a different tree's review.
+    if (expectedReviewCheckoutSha && advisoryReview.reviewedCheckoutSha !== expectedReviewCheckoutSha) {
+      problems.push('desktop advisory review checkout does not match the trusted workflow commit')
     }
   } catch (error) {
     problems.push(`desktop advisory review outcome unavailable: ${error.message}`)
@@ -172,6 +178,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       npmCandidateDir: values['npm-candidate'] ? resolve(values['npm-candidate']) : null,
       appImageEvidence: values['appimage-evidence'] ? resolve(values['appimage-evidence']) : null,
       requireAppImageLaunch: values.platforms ? values.platforms.includes('linux-x64') : true,
+      expectedReviewCheckoutSha: process.env.REVIEWED_CHECKOUT_SHA || null,
     })
     const rendered = JSON.stringify(result, null, 2) + '\n'
     if (values.result) writeFileSync(resolve(values.result), rendered)
