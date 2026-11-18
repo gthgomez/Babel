@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "source": "GitHub Advisory Database via gh api /advisories/<GHSA>",
+  "reviewedAt": "2026-11-18",
+  "reviewer": "W13 reliability campaign (offline advisory inventory, not a publication approval)",
+  "locks": [
+    {
+      "path": "babel-cli/package-lock.json",
+      "sha256": "33187ebfda79b684d384bd01c99ff8b43854eb2cc945fe0b0ec5b83529c649cc"
+    },
+    {
+      "path": "babel-desktop/package-lock.json",
+      "sha256": "81f76be91b1c61f6d4ebed4243675dc80a32176b3e7c1048f1a85e961125c6a6"
+    }
+  ],
+  "advisories": [
+    {
+      "id": "GHSA-mrhx-c7xc-m3w5",
+      "aliases": ["CVE-2023-54404"],
+      "severity": "high",
+      "cvss": 7.5,
+      "package": "zod",
+      "ranges": ["< 4.6.6"],
+      "fixedVersions": ["4.6.6"],
+      "artifactScopes": ["npm"],
+      "summary": "Zod can exhaust memory while validating oversized constrained collections",
+      "exposure": "The CLI validates provider responses, manifests and local configuration with Zod. A hostile or malformed input could exhaust memory in the CLI process. Exploitability requires control of validated input; no remote code execution was demonstrated.",
+      "decision": "remediated",
+      "rationale": "The consumer lock installs Zod 4.6.7, outside the affected range; the package range stays compatible with every dependent (^4.x).",
+      "verifiedAt": "2026-11-18",
+      "references": [
+        "https://github.com/advisories/GHSA-mrhx-c7xc-m3w5",
+        "https://nvd.nist.gov/vuln/detail/CVE-2023-54404"
+      ]
+    },
+    {
+      "id": "GHSA-jr5w-w6x2-84p9",
+      "aliases": ["CVE-2026-115570"],
+      "severity": "high",
+      "cvss": 7.4,
+      "package": "electron",
+      "ranges": [">= 44.0.0-alpha.1, < 44.9.1"],
+      "fixedVersions": ["44.9.1"],
+      "artifactScopes": ["desktop"],
+      "summary": "Electron: Mitigation for compromised eMudhra intermediate certificates",
+      "exposure": "The Windows ZIP/Setup and Linux AppImage embed Electron 44.5.1. Exposure depends on a compromised certificate chain presented to the packaged browser runtime; no Babel-specific exploit was demonstrated.",
+      "decision": "deferred",
+      "rationale": "Electron 44.5.1 is pinned in babel-desktop packaging scripts, both package locks and the release workflows. Moving to 44.9.1 requires a Desktop build plus Windows install/repair/upgrade qualification that this Linux-only lane cannot execute, so no Desktop artifact is qualified for promotion.",
+      "releaseImpact": "Desktop artifacts (Windows ZIP, Setup.exe, Linux AppImage) remain unqualified; the npm tarball is unaffected because Electron is not a CLI dependency.",
+      "verifiedAt": "2026-11-18",
+      "references": [
+        "https://github.com/advisories/GHSA-jr5w-w6x2-84p9",
+        "https://github.com/electron/electron/pull/55127"
+      ]
+    }
+  ]
+}
