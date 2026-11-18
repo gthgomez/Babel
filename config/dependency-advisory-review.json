@@ -6,7 +6,7 @@
   "locks": [
     {
       "path": "babel-cli/package-lock.json",
-      "sha256": "0c07aa28eed80326da466b52e008b1dacb4bbcc9c039ef04d41742e6b3116c1c"
+      "sha256": "60c5eac3f4520c6392fa019caf606abde07b4c71d4a7f64c54ee52a65c5bea90"
     },
     {
       "path": "babel-desktop/package-lock.json",
