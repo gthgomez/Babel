@@ -15,6 +15,9 @@ last_verified: 2026-08-05
 | [HARNESS_HARDENING_ROADMAP_V1.md](./HARNESS_HARDENING_ROADMAP_V1.md) | **Canonical implementation roadmap** under harness-v1: H0–H7 sequencing and exit gates. |
 | [HARNESS_OVERVIEW.md](./HARNESS_OVERVIEW.md) | **Explanatory** short map — defers to V1. |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | **Prompt OS + system architecture**: six layers, catalog, V9 router, kernel headline. |
+| [SOURCE_OWNERSHIP.md](./SOURCE_OWNERSHIP.md) | Durable source-tree ownership map, hot-path boundaries and dead/duplicate source rules (machine-checked by `config/architecture-ownership.json`). |
+| [AUDIT_RECONCILIATION.md](./AUDIT_RECONCILIATION.md) | Six-audit evidence vocabulary and per-workstream disposition structure. Not contributor policy. |
+| [MAINTAINABILITY_REVIEW_2026-11.md](./MAINTAINABILITY_REVIEW_2026-11.md) | W14 current-head measurements and dispositions for AR-01…AR-05. |
 | [../CHAT_MODE.md](../CHAT_MODE.md) | Default daily ChatEngine product path. |
 | [../guides/PORTABLE_AGENT_WORKFLOW_PLAN.md](../guides/PORTABLE_AGENT_WORKFLOW_PLAN.md) | Proposed portable workflow contract; non-normative and subordinate to `harness-v1`. |
 | [../adr/ADR-012-canonical-harness-architecture-v1.md](../adr/ADR-012-canonical-harness-architecture-v1.md) | Decision record for harness-v1 freeze. |

@@ -667,3 +667,284 @@ test("canonical kernel requires coverage for all required verifiers in multi-ver
   assert.equal(decision.finalOutcome, "UNVERIFIED_PATCH");
   assert.match(decision.reason, /verifier_scope|verifier_missing/);
 });
+
+// ── Source ownership and audit reconciliation (W14) ────────────────────────
+
+interface OwnershipComponent {
+  id: string;
+  responsibility: string;
+  paths: string[];
+}
+
+interface OwnershipManifest {
+  schemaVersion: number;
+  components: OwnershipComponent[];
+}
+
+interface ReconciliationWorkstream {
+  id: string;
+  issue: string;
+  scope: string;
+  findingCount: number;
+  dispositionFile: string;
+}
+
+interface ReconciliationManifest {
+  schemaVersion: number;
+  register: { path: string; ownerIssue: string; disposition: string };
+  statusVocabulary: string[];
+  requiredEvidence: Record<string, string[]>;
+  workstreams: ReconciliationWorkstream[];
+}
+
+const OWNERSHIP_PATH = "config/architecture-ownership.json";
+const RECONCILIATION_PATH = "config/audit-reconciliation.json";
+const CAMPAIGN_DOCS = "docs/campaigns/babel-reliability-2026-11";
+const DISPOSITION_HEADER = [
+  "finding_id",
+  "stream",
+  "disposition",
+  "head_sha",
+  "evidence",
+  "reviewed_head_sha",
+  "branch",
+  "commit_sha",
+  "merged_sha",
+  "artifact_kind",
+  "artifact_digest",
+  "test_evidence",
+  "closed_on",
+] as const;
+
+function topLevelSourceEntries(): string[] {
+  const srcDir = path.join(BABEL_CLI, "src");
+  const entries: string[] = [];
+  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
+    const rel = `babel-cli/src/${entry.name}`;
+    if (entry.isDirectory()) {
+      entries.push(rel);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (!/\.(ts|js|mjs)$/.test(entry.name)) continue;
+    if (/\.(test|spec)\.(ts|js|mjs)$/.test(entry.name)) continue;
+    if (entry.name.endsWith(".d.ts")) continue;
+    entries.push(rel);
+  }
+  return entries.sort();
+}
+
+function walkSourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walkSourceFiles(full));
+    else if (entry.isFile()) out.push(full);
+  }
+  return out;
+}
+
+/** Minimal RFC 4180 parser for the disposition/register ledgers (no embedded newlines). */
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          quoted = false;
+        }
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === ",") {
+      row.push(field);
+      field = "";
+    } else if (ch === "\n") {
+      row.push(field);
+      field = "";
+      if (row.some((value) => value.length > 0)) rows.push(row);
+      row = [];
+    } else if (ch !== "\r") {
+      field += ch;
+    }
+  }
+  row.push(field);
+  if (row.some((value) => value.length > 0)) rows.push(row);
+  return rows;
+}
+
+test("source trees do not ship a legacy .js twin for a TypeScript module", () => {
+  const srcDir = path.join(BABEL_CLI, "src");
+  const shadowed: string[] = [];
+  for (const file of walkSourceFiles(srcDir)) {
+    if (!file.endsWith(".js")) continue;
+    const tsTwin = `${file.slice(0, -3)}.ts`;
+    if (existsSync(tsTwin)) {
+      shadowed.push(path.relative(REPO_ROOT, file).replace(/\\/g, "/"));
+    }
+  }
+  assert.deepEqual(
+    shadowed.sort(),
+    [],
+    "remove legacy .js twins; TypeScript is the only compiled source (see docs/architecture/SOURCE_OWNERSHIP.md)",
+  );
+});
+
+test("architecture ownership assigns every top-level source entry exactly once", () => {
+  const manifest = readJson<OwnershipManifest>(OWNERSHIP_PATH);
+  assert.equal(manifest.schemaVersion, 1);
+  const seen = new Map<string, string>();
+  const ids = new Set<string>();
+  for (const component of manifest.components) {
+    assert.ok(component.responsibility.trim().length > 0, `${component.id} lacks a responsibility`);
+    assert.ok(!ids.has(component.id), `duplicate ownership component ${component.id}`);
+    ids.add(component.id);
+    assert.ok(component.paths.length > 0, `${component.id} has no paths`);
+    for (const rel of component.paths) {
+      assert.ok(existsSync(path.join(REPO_ROOT, rel)), `${component.id} lists missing path ${rel}`);
+      const prior = seen.get(rel);
+      assert.equal(prior, undefined, `${rel} is owned twice (${prior} and ${component.id})`);
+      seen.set(rel, component.id);
+    }
+  }
+  const unowned = topLevelSourceEntries().filter((rel) => !seen.has(rel));
+  assert.deepEqual(unowned, [], "top-level source entries without an ownership component");
+});
+
+test("audit reconciliation declares all fourteen workstreams exactly once", () => {
+  const manifest = readJson<ReconciliationManifest>(RECONCILIATION_PATH);
+  assert.equal(manifest.schemaVersion, 1);
+  const expected = Array.from({ length: 14 }, (_, i) => `W${String(i + 1).padStart(2, "0")}`);
+  assert.deepEqual(manifest.workstreams.map((w) => w.id), expected);
+  const issues = new Set<string>();
+  const files = new Set<string>();
+  for (const workstream of manifest.workstreams) {
+    assert.match(workstream.issue, /^#\d+$/, `${workstream.id} issue must be a GitHub reference`);
+    assert.ok(!issues.has(workstream.issue), `duplicate issue ${workstream.issue}`);
+    issues.add(workstream.issue);
+    assert.ok(workstream.scope.trim().length > 0, `${workstream.id} lacks a scope`);
+    assert.ok(Number.isInteger(workstream.findingCount) && workstream.findingCount >= 0);
+    assert.match(
+      workstream.dispositionFile,
+      new RegExp(`^${CAMPAIGN_DOCS}/dispositions/${workstream.id}\\.csv$`),
+    );
+    assert.ok(!files.has(workstream.dispositionFile), `duplicate disposition file ${workstream.dispositionFile}`);
+    files.add(workstream.dispositionFile);
+  }
+  assert.equal(
+    manifest.workstreams.reduce((sum, workstream) => sum + workstream.findingCount, 0),
+    100,
+    "workstream finding counts must add up to the 100-item register",
+  );
+});
+
+test("audit reconciliation vocabulary separates merged code from qualified artifacts", () => {
+  const manifest = readJson<ReconciliationManifest>(RECONCILIATION_PATH);
+  assert.deepEqual(manifest.statusVocabulary, [
+    "audited",
+    "reproduced_on_head",
+    "historical",
+    "disproven",
+    "coded",
+    "reviewed",
+    "merged",
+    "package_qualified",
+    "closed",
+  ]);
+  const merged = manifest.requiredEvidence.merged ?? [];
+  const qualified = manifest.requiredEvidence.package_qualified ?? [];
+  const closed = manifest.requiredEvidence.closed ?? [];
+  assert.ok(!merged.includes("artifact_digest"), "merged must not imply an artifact was qualified");
+  assert.ok(qualified.includes("artifact_digest"));
+  assert.ok(qualified.includes("artifact_kind"));
+  assert.ok(closed.includes("artifact_digest"));
+  assert.ok(closed.includes("test_evidence"));
+  for (const status of manifest.statusVocabulary) {
+    assert.ok(Array.isArray(manifest.requiredEvidence[status]), `missing evidence rules for ${status}`);
+  }
+  const doc = readFileSync(path.join(REPO_ROOT, "docs/architecture/AUDIT_RECONCILIATION.md"), "utf8");
+  for (const status of manifest.statusVocabulary) {
+    assert.ok(doc.includes(`\`${status}\``), `AUDIT_RECONCILIATION.md must define ${status}`);
+  }
+  assert.ok(doc.includes("FINDINGS_INDEX.csv"), "reconciliation doc must point at the canonical register");
+  assert.ok(doc.includes("AGENTS.md"), "reconciliation doc must defer contributor policy to AGENTS.md");
+});
+
+test("ownership doc references the manifest and the hot-path boundaries", () => {
+  const doc = readFileSync(path.join(REPO_ROOT, "docs/architecture/SOURCE_OWNERSHIP.md"), "utf8");
+  assert.ok(doc.includes(OWNERSHIP_PATH));
+  for (const hotPath of [
+    "babel-cli/src/agent/chatEngine.ts",
+    "babel-cli/src/pipeline.ts",
+    "babel-cli/src/executor/kernel.ts",
+    "babel-cli/src/ui/waterfall.ts",
+  ]) {
+    assert.ok(doc.includes(hotPath), `SOURCE_OWNERSHIP.md must name ${hotPath}`);
+  }
+});
+
+test("W14 disposition ledger uses the shared vocabulary and evidence rules", () => {
+  const manifest = readJson<ReconciliationManifest>(RECONCILIATION_PATH);
+  const w14 = manifest.workstreams.find((workstream) => workstream.id === "W14");
+  assert.ok(w14, "W14 must be declared");
+  const rows = parseCsv(readFileSync(path.join(REPO_ROOT, w14.dispositionFile), "utf8"));
+  assert.deepEqual(rows[0], [...DISPOSITION_HEADER], "disposition ledger header drifted");
+  const records = rows.slice(1).map((values) =>
+    Object.fromEntries(DISPOSITION_HEADER.map((header, index) => [header, values[index] ?? ""])),
+  );
+  assert.ok(records.length > 0, "W14 must record its five assigned findings");
+  for (const record of records) {
+    assert.match(record.finding_id!, /^AR-0[1-5]$/);
+    assert.equal(record.stream, "W14");
+    assert.ok(manifest.statusVocabulary.includes(record.disposition!),
+      `${record.finding_id} has unknown disposition ${record.disposition}`);
+    for (const field of manifest.requiredEvidence[record.disposition!] ?? []) {
+      assert.ok(record[field]?.trim().length, `${record.finding_id} (${record.disposition}) missing ${field}`);
+    }
+  }
+  const ids = records.map((record) => record.finding_id).sort();
+  assert.deepEqual(ids, ["AR-01", "AR-02", "AR-03", "AR-04", "AR-05"]);
+});
+
+test("proposed finding register assigns all 100 IDs to declared workstreams", (t) => {
+  const manifest = readJson<ReconciliationManifest>(RECONCILIATION_PATH);
+  const registerPath = path.join(REPO_ROOT, manifest.register.path);
+  if (!existsSync(registerPath)) {
+    t.skip(`register not present at ${manifest.register.path} (proposed PR #536)`);
+    return;
+  }
+  const rows = parseCsv(readFileSync(registerPath, "utf8"));
+  const header = rows[0]!;
+  const idColumn = header.indexOf("ID");
+  const ownerColumn = header.indexOf("Primary workstream");
+  assert.ok(idColumn >= 0 && ownerColumn >= 0, "register header must expose ID and Primary workstream");
+  const ids = new Set<string>();
+  const counts = new Map<string, number>();
+  for (const row of rows.slice(1)) {
+    const id = row[idColumn]!;
+    const owner = row[ownerColumn]!;
+    assert.ok(!ids.has(id), `duplicate register ID ${id}`);
+    ids.add(id);
+    const workstream = manifest.workstreams.find((candidate) => candidate.id === owner);
+    assert.ok(workstream, `${id} assigned to undeclared workstream ${owner}`);
+    counts.set(owner, (counts.get(owner) ?? 0) + 1);
+  }
+  assert.equal(ids.size, 100, "register must keep 100 unique IDs");
+  for (const workstream of manifest.workstreams) {
+    assert.equal(
+      counts.get(workstream.id) ?? 0,
+      workstream.findingCount,
+      `${workstream.id} count disagrees with the reconciliation manifest`,
+    );
+  }
+});

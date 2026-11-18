@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Durable ownership map for the CLI source tree. The architecture conformance suite requires every top-level source entry to appear in exactly one component; new modules need an explicit owner, not an implicit one. This file records architecture responsibility, not release approval or contributor policy (AGENTS.md owns policy).",
+  "verifiedAgainst": "90583d97",
+  "components": [
+    {
+      "id": "entrypoints",
+      "responsibility": "Process entry, argument dispatch, command registration, daemon and lite startup. Owns the executable boundary; no domain decisions.",
+      "paths": [
+        "babel-cli/src/index.ts",
+        "babel-cli/src/cliEntryDispatch.ts",
+        "babel-cli/src/cliMain.ts",
+        "babel-cli/src/liteCli.ts",
+        "babel-cli/src/daemon.ts",
+        "babel-cli/src/cli",
+        "babel-cli/src/commands",
+        "babel-cli/src/daemon",
+        "babel-cli/src/lite"
+      ]
+    },
+    {
+      "id": "agent-runtime",
+      "responsibility": "ChatEngine loop, task admission, tool proposal/execution glue and completion-gate policy. Cross-cutting: admission (W01), completion (W02), context (W05) and tool contracts (W06) all meet here, so edits need the owning issue.",
+      "paths": [
+        "babel-cli/src/agent",
+        "babel-cli/src/taskCompletion.ts"
+      ]
+    },
+    {
+      "id": "completion-kernel",
+      "responsibility": "Mode-neutral executor contracts, completion decision, effect classification, verifier stages and criterion authority. Normative behavior lives in docs/architecture/HARNESS_ARCHITECTURE_V1.md.",
+      "paths": [
+        "babel-cli/src/executor",
+        "babel-cli/src/stages",
+        "babel-cli/src/authority"
+      ]
+    },
+    {
+      "id": "orchestration",
+      "responsibility": "Governed deep pipeline, stage sequencing, checkpoint/rollback and orchestrator routing. Hot path: pipeline.ts stays a coordination surface, not a second tool catalog.",
+      "paths": [
+        "babel-cli/src/pipeline.ts",
+        "babel-cli/src/pipelineHaltStatus.ts",
+        "babel-cli/src/pipeline",
+        "babel-cli/src/orchestrator"
+      ]
+    },
+    {
+      "id": "runtime-state",
+      "responsibility": "Run control, event projection, recovery/restore reports and evidence recording. Terminal honesty decisions stay with completion-kernel.",
+      "paths": [
+        "babel-cli/src/runtime",
+        "babel-cli/src/protocol",
+        "babel-cli/src/evidence",
+        "babel-cli/src/evidence.ts"
+      ]
+    },
+    {
+      "id": "tool-surface",
+      "responsibility": "Tool catalog, adapters, MCP bridge, local tools and shell output normalization. Mode/approval restrictions are contract owners' decisions; adapters must not widen them.",
+      "paths": [
+        "babel-cli/src/tools",
+        "babel-cli/src/mcp",
+        "babel-cli/src/bridge",
+        "babel-cli/src/localTools.ts",
+        "babel-cli/src/shellOutputNormalize.ts"
+      ]
+    },
+    {
+      "id": "sandbox-process",
+      "responsibility": "Sandbox profiles, container lifecycle, file-write boundaries, process-tree termination and portable workflow execution.",
+      "paths": [
+        "babel-cli/src/sandbox.ts",
+        "babel-cli/src/sandboxCommands.ts",
+        "babel-cli/src/sandboxContainerLifecycle.ts",
+        "babel-cli/src/sandboxFileWrites.ts",
+        "babel-cli/src/sandboxProcessTermination.ts",
+        "babel-cli/src/sandboxSpawnCommandAsync.ts",
+        "babel-cli/src/sandboxSupervisorTermination.ts",
+        "babel-cli/src/processTree.ts",
+        "babel-cli/src/portable"
+      ]
+    },
+    {
+      "id": "interaction-ui",
+      "responsibility": "TUI rendering, input ownership, REPL/session UX and transcript presentation. rendererSupport.ts and conversationalRenderer.ts own the live output path; raw stdout is boundary-registered, not ad hoc.",
+      "paths": [
+        "babel-cli/src/ui",
+        "babel-cli/src/interactive.ts",
+        "babel-cli/src/interactive"
+      ]
+    },
+    {
+      "id": "prompt-stack",
+      "responsibility": "Resolver/compiler, catalog parsing, routing, model policy, research and search ingestion. prompt_catalog.yaml owns routes; runtime contracts stay in completion-kernel.",
+      "paths": [
+        "babel-cli/src/compiler.ts",
+        "babel-cli/src/routingEngine.ts",
+        "babel-cli/src/modelPolicy.ts",
+        "babel-cli/src/injectionTypes.ts",
+        "babel-cli/src/control-plane",
+        "babel-cli/src/intelligence",
+        "babel-cli/src/runIntelligence",
+        "babel-cli/src/research",
+        "babel-cli/src/search"
+      ]
+    },
+    {
+      "id": "domain-services",
+      "responsibility": "Shared service layer: reviews, readiness, workspace transactions, verifier contracts, cost/telemetry-adjacent services and operator maintenance audits.",
+      "paths": [
+        "babel-cli/src/services"
+      ]
+    },
+    {
+      "id": "execution-eval",
+      "responsibility": "Execute-mode entry, evaluation harnesses, budgets, calibration and acceptance fixtures. Owns scoring and measurement, not runtime completion authority.",
+      "paths": [
+        "babel-cli/src/execute.ts",
+        "babel-cli/src/execute",
+        "babel-cli/src/eval",
+        "babel-cli/src/evals",
+        "babel-cli/src/acceptance",
+        "babel-cli/src/fixtures",
+        "babel-cli/src/budgetPolicy.ts",
+        "babel-cli/src/calibrationTypes.ts",
+        "babel-cli/src/confidenceGate.ts"
+      ]
+    },
+    {
+      "id": "diagnostics",
+      "responsibility": "Doctor/installed-doctor checks, diagnostic streams, BDNS observation and repository audit reports. Diagnostics observe; they do not certify completion.",
+      "paths": [
+        "babel-cli/src/doctor.ts",
+        "babel-cli/src/installedDoctor.ts",
+        "babel-cli/src/diagnostics",
+        "babel-cli/src/audit",
+        "babel-cli/src/inspect"
+      ]
+    },
+    {
+      "id": "providers",
+      "responsibility": "Provider adapters and request/response translation. Offline fixtures and capability facts are owned here; credential custody stays in the sandbox/security boundary.",
+      "paths": [
+        "babel-cli/src/runners",
+        "babel-cli/src/claude-babel-astra-lab"
+      ]
+    },
+    {
+      "id": "telemetry",
+      "responsibility": "OpenTelemetry tracing and span schema. Emission is subordinate to runtime authority and must not leak prompt or credential payloads.",
+      "paths": [
+        "babel-cli/src/telemetry",
+        "babel-cli/src/voice"
+      ]
+    },
+    {
+      "id": "config-schemas",
+      "responsibility": "Runtime configuration resolution and shared schemas. Schema changes co-evolve with their consumer contract and need serialized integration review.",
+      "paths": [
+        "babel-cli/src/config",
+        "babel-cli/src/schemas"
+      ]
+    },
+    {
+      "id": "shared-utils",
+      "responsibility": "Small dependency-free helpers shared across components. Not a home for new domain logic.",
+      "paths": [
+        "babel-cli/src/utils"
+      ]
+    },
+    {
+      "id": "test-infrastructure",
+      "responsibility": "Test harness, ambient-inference isolation, fixtures and tracing helpers. Product behavior belongs to the component under test.",
+      "paths": [
+        "babel-cli/src/testinfra",
+        "babel-cli/src/testUtils",
+        "babel-cli/src/test-helpers",
+        "babel-cli/src/testing"
+      ]
+    }
+  ]
+}
