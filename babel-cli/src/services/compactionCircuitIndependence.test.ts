@@ -67,6 +67,37 @@ test('a failure increments only the supplied run state', async () => {
   assert.equal((await autoCompactIfNeeded('history', 9, logEntries(8), undefined, undefined, healthy)).compacted, true);
 });
 
+test('interleaved failures in one run leave a concurrent sibling free to compact', async () => {
+  const failing = createCompactionCircuitState();
+  const healthy = createCompactionCircuitState();
+  const hostile = [{
+    step: 1,
+    tool: 'read_file',
+    target: 'src/broken.ts',
+    exit_code: 0,
+    get stdout(): string {
+      throw new Error('synthetic read failure');
+    },
+    stderr: '',
+    read_only: true,
+  }, ...logEntries(6).slice(1)] as unknown as ToolCallLog[];
+
+  const [failedRun, healthyRun] = await Promise.all([
+    (async () => {
+      for (let i = 0; i < 3; i++) {
+        await autoCompactIfNeeded('history', 9, hostile, undefined, undefined, failing);
+      }
+      return autoCompactIfNeeded('history', 9, logEntries(8), undefined, undefined, failing);
+    })(),
+    autoCompactIfNeeded('history', 9, logEntries(8), undefined, undefined, healthy),
+  ]);
+
+  assert.equal(failing.consecutiveFailures, 3);
+  assert.equal(failedRun.compacted, false);
+  assert.equal(healthy.consecutiveFailures, 0);
+  assert.equal(healthyRun.compacted, true);
+});
+
 test('reset clears only the targeted run state', async () => {
   const first = createCompactionCircuitState();
   const second = createCompactionCircuitState();
