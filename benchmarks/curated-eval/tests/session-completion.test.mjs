@@ -245,6 +245,14 @@ test('a missing diff cannot certify a policy-clean verified success', () => {
     assert.equal(missing.outcome, 'task_failure')
   }
 
+  const flagged = scoreAttempt(task, {
+    ...attempt('completed', 'VERIFIED_COMPLETE'),
+    diff_collected: false,
+  })
+  assert.equal(flagged.diff_collected, false)
+  assert.equal(flagged.policy_clean, false)
+  assert.equal(flagged.outcome, 'task_failure')
+
   const missing = scoreAttempt(task, {
     ...attempt('completed', 'VERIFIED_COMPLETE'),
     diff: undefined,

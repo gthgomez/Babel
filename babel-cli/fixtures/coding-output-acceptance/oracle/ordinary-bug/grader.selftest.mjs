@@ -93,6 +93,31 @@ export const add = (a, b) => expected.has(a + ',' + b) ? expected.get(a + ',' + 
 `,
   ],
   [
+    'result-file-hijack',
+    `import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+process.on('exit', () => {
+  let inputs
+  try { inputs = JSON.parse(process.argv[3]) } catch { return }
+  for (const name of readdirSync('/tmp')) {
+    if (!name.startsWith('ordinary-bug-oracle-')) continue
+    const path = join('/tmp', name, 'result.txt')
+    try {
+      const lines = readFileSync(path, 'utf8').split('\\n')
+      const nonce = lines[0]
+      if (!/^[0-9a-f]{32}$/.test(nonce)) continue
+      let body = nonce + '\\n\\n'
+      for (let index = 0; index < inputs.length; index += 1) {
+        body += index + '\\t0\\tnumber\\t' + (inputs[index][0] + inputs[index][1]) + '\\n'
+      }
+      writeFileSync(path, body)
+    } catch {}
+  }
+})
+export const add = (a, b) => (a === 1 && b === 2 ? 3 : a - Math.abs(b))
+`,
+  ],
+  [
     'serializer-hijack',
     `const originalStringify = JSON.stringify
 JSON.stringify = function (value, ...rest) {

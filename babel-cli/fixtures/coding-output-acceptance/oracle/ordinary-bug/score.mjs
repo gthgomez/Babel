@@ -11,12 +11,22 @@
  *
  * Expected values are computed only in the parent at scoring time. The child
  * receives inputs only, so reading the oracle source or argv cannot reveal an
- * expected table. Results return through a parent-generated nonce result file;
- * the child writes a plain delimited text report using primitives captured
- * before candidate import, never JSON or a mutable serializer.
+ * expected table. Results return through a one-shot write-only pipe frame using
+ * primitives captured before candidate import, never JSON or a mutable
+ * serializer. The parent accepts the first complete valid nonce frame and
+ * ignores all later data; a candidate cannot forge a valid frame before the
+ * genuine one because it never learns the nonce.
+ *
+ * Independence limits: arbitrary in-process candidate code can still attempt to
+ * overwrite any result channel it can discover. The first-valid-frame protocol
+ * bounds that to frames ordered after the genuine one, and forging content
+ * requires the nonce that only the genuine frame carries. /proc/<ppid>/mem and
+ * OS-level debugging remain theoretical channels. A candidate that reads the
+ * inputs and implements add correctly is right, not a spoof; the oracle proves
+ * behavior, not authorship.
  */
 import { createHash, randomBytes, randomInt } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -62,12 +72,12 @@ function gradedCases() {
 const cases = [...visibleCases, ...gradedCases()];
 
 const probe = `
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 // Capture every primitive the result channel uses before candidate import.
 const readInput = readFileSync
-const writeResult = writeFileSync.bind(null)
+const writeFrame = writeSync.bind(null)
 const parseJson = JSON.parse
 const push = Array.prototype.push
 const stringOf = String
@@ -117,7 +127,10 @@ for (let index = 0; index < inputs.length; index += 1) {
   push.call(observations, observation)
 }
 
-let body = control.nonce + '\\n' + (moduleError === null ? '' : encode(moduleError)) + '\\n'
+const frameCount = numberToString.call(observations.length, 10)
+let body = 'W04FRAME ' + control.nonce + ' ' + frameCount + ' '
+body += moduleError === null ? '-' : encode(moduleError)
+body += '\\n'
 for (let index = 0; index < observations.length; index += 1) {
   const observation = observations[index]
   body += numberToString.call(observation.index, 10) + '\\t'
@@ -126,31 +139,36 @@ for (let index = 0; index < observations.length; index += 1) {
   body += observation.type === 'number' ? observation.number : observation.encoded
   body += '\\n'
 }
-writeResult(control.resultPath, body, { flag: 'wx' })
+body += 'W04END ' + control.nonce + '\\n'
+writeFrame(3, body)
 `;
 
-const probeDir = mkdtempSync(join(tmpdir(), 'ordinary-bug-oracle-'));
+// Unpredictable probe directory: no stable prefix for a candidate to scan.
+const probeDir = mkdtempSync(join(tmpdir(), randomBytes(8).toString('hex')));
 const probePath = join(probeDir, 'probe.mjs');
-const resultPath = join(probeDir, 'result.txt');
 const nonce = randomBytes(16).toString('hex');
-let stderr = '';
 try {
   writeFileSync(probePath, probe, 'utf8');
-  execFileSync(process.execPath, [probePath, join(workspace, 'src/math.js'), JSON.stringify(cases.map(([a, b]) => [a, b]))], {
-    cwd: workspace,
-    input: JSON.stringify({ nonce, resultPath }),
-    encoding: 'utf8',
-    timeout: 30_000,
-    windowsHide: true,
-    stdio: ['pipe', 'ignore', 'pipe'],
-  });
 } catch (error) {
-  stderr =
-    error && typeof error === 'object' && 'stderr' in error
-      ? String(error.stderr || error.message)
-      : String(error);
-  console.error(`FAILED: independent behavioral probe could not run: ${stderr.slice(0, 2000)}`);
   rmSync(probeDir, { recursive: true, force: true });
+  console.error(`FAILED: independent behavioral probe could not be prepared: ${String(error)}`);
+  process.exit(1);
+}
+
+const child = spawnSync(process.execPath, [probePath, join(workspace, 'src/math.js'), JSON.stringify(cases.map(([a, b]) => [a, b]))], {
+  cwd: workspace,
+  input: JSON.stringify({ nonce }),
+  encoding: 'utf8',
+  timeout: 30_000,
+  windowsHide: true,
+  stdio: ['pipe', 'ignore', 'pipe', 'pipe'],
+  maxBuffer: 4 * 1024 * 1024,
+});
+rmSync(probeDir, { recursive: true, force: true });
+
+if (child.error || child.status === null) {
+  const detail = child.error?.message ?? child.output?.[2] ?? 'probe did not exit';
+  console.error(`FAILED: independent behavioral probe could not run: ${String(detail).slice(0, 2000)}`);
   process.exit(1);
 }
 
@@ -158,31 +176,35 @@ function decode(value) {
   return Buffer.from(value, 'base64').toString('utf8');
 }
 
-let report;
-try {
-  report = readFileSync(resultPath, 'utf8');
-} catch {
-  console.error('FAILED: independent behavioral probe produced no valid result file.');
-  rmSync(probeDir, { recursive: true, force: true });
-  process.exit(1);
-}
-rmSync(probeDir, { recursive: true, force: true });
-
 function invalid(detail) {
   console.error(`FAILED: invalid independent behavioral report: ${detail}`);
   process.exit(1);
 }
 
-const lines = report.split('\n');
-if (lines[lines.length - 1] === '') lines.pop();
-if (lines[0] !== nonce) invalid('nonce mismatch');
-if (lines.length < 2) invalid('missing header');
-const moduleError = lines[1] === '' ? null : decode(lines[1]);
-if (moduleError !== null) invalid(`candidate module error: ${String(moduleError).slice(0, 1000)}`);
-const observationLines = lines.slice(2);
-if (observationLines.length !== cases.length) {
-  invalid(`expected ${cases.length} observations, got ${observationLines.length}`);
+// First complete valid frame wins; every later byte is ignored. A forged frame
+// can only arrive after the genuine one because the nonce is never exposed.
+const frameText = String(child.output?.[3] ?? '');
+const frameLines = frameText.split('\n');
+let frame = null;
+for (let lineIndex = 0; lineIndex < frameLines.length; lineIndex += 1) {
+  const header = frameLines[lineIndex].match(/^W04FRAME ([0-9a-f]{32}) (\d+) ([A-Za-z0-9+/=]+|-)$/);
+  if (!header || header[1] !== nonce) continue;
+  const count = Number(header[2]);
+  if (count !== cases.length) continue;
+  const observations = frameLines.slice(lineIndex + 1, lineIndex + 1 + count);
+  const end = frameLines[lineIndex + 1 + count];
+  if (end !== `W04END ${nonce}`) break;
+  frame = { moduleError: header[3] === '-' ? null : decode(header[3]), observations };
+  break;
 }
+if (frame === null) {
+  console.error('FAILED: independent behavioral probe produced no complete valid nonce frame.');
+  process.exit(1);
+}
+if (frame.moduleError !== null) {
+  invalid(`candidate module error: ${String(frame.moduleError).slice(0, 1000)}`);
+}
+const observationLines = frame.observations;
 
 let failures = 0;
 for (let index = 0; index < cases.length; index += 1) {
