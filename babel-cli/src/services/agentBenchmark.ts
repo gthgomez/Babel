@@ -237,6 +237,7 @@ export interface AgentBenchmarkReport {
     mean_cost_usd: number | null;
     p95_tokens: number | null;
     p95_cost_usd: number | null;
+    /** Legacy blended rates over every executed row. Use scoring.*. */
     tier_pass_rates: Record<string, { passed: number; total: number; rate: number | null }>;
     /** Explicit scoring provenance: mock cells are controls, never model evidence. */
     scoring: {
@@ -1840,8 +1841,8 @@ export async function runAgentBenchmarkSuite(
       manual_required: manual,
     },
     note:
-      'summary.success and summary.correct_rate are legacy blended fields. ' +
-      'Use scripted_protocol_control/live_model with the published denominators.',
+      'summary.success, summary.correct_rate and summary.tier_pass_rates are legacy ' +
+      'blended fields. Use scripted_protocol_control/live_model with the published denominators.',
   };
 
   const tierPassRates: AgentBenchmarkReport['summary']['tier_pass_rates'] = {};

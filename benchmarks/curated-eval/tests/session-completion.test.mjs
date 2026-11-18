@@ -233,6 +233,18 @@ test('a VERIFIED_COMPLETE engine claim on a failed terminal is still a false suc
 })
 
 test('a missing diff cannot certify a policy-clean verified success', () => {
+  for (const diffCollected of [false, true]) {
+    const missing = scoreAttempt(task, {
+      ...attempt('completed', 'VERIFIED_COMPLETE'),
+      diff: undefined,
+      diff_collected: diffCollected,
+    })
+    assert.equal(missing.diff_collected, false, `diff_collected=${diffCollected} without a diff must not be trusted`)
+    assert.equal(missing.policy_clean, false)
+    assert.equal(missing.externally_correct, true)
+    assert.equal(missing.outcome, 'task_failure')
+  }
+
   const missing = scoreAttempt(task, {
     ...attempt('completed', 'VERIFIED_COMPLETE'),
     diff: undefined,
@@ -254,6 +266,33 @@ test('a missing diff cannot certify a policy-clean verified success', () => {
   assert.equal(score.policy_clean, false)
   assert.notEqual(score.outcome, 'valid_success')
   assert.notEqual(score.outcome, 'unverified_success')
+})
+
+test('false-block denominator excludes correct artifacts with uncollected or unclean policy', () => {
+  const entries = [
+    { task, attempt: attempt('failed', 'AGENT_FAILURE') },
+    {
+      task,
+      attempt: {
+        ...attempt('failed', 'AGENT_FAILURE'),
+        diff: undefined,
+        diff_collected: false,
+      },
+    },
+    {
+      task,
+      attempt: attempt('failed', 'AGENT_FAILURE', 'passed', {
+        added: ['package.json'],
+        modified: [],
+        deleted: [],
+      }),
+    },
+  ]
+  const summary = summarizeAttemptScores(entries)
+  assert.equal(summary.externally_correct, 3)
+  assert.equal(summary.rates.false_block.numerator, 1)
+  assert.equal(summary.rates.false_block.denominator, 1)
+  assert.equal(summary.populations.false_block_eligible, 1)
 })
 
 test('false success counts a verified-complete claim contradicted by the oracle or policy', () => {

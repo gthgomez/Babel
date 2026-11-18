@@ -365,8 +365,7 @@ export function normalizeAttempt(raw) {
     verifier: raw.verifier ?? { status: 'not_run', assertions: null, errors: [] },
     diff: raw.diff ?? { added: [], modified: [], deleted: [] },
     diff_collected:
-      raw.diff_collected === true ||
-      (raw.diff_collected === undefined && raw.diff !== undefined && raw.diff !== null),
+      raw.diff !== undefined && raw.diff !== null && raw.diff_collected !== false,
     exposure: raw.exposure ?? { oracle_visible: false, reference_visible: false, unexpected_reads: [] },
     usage: {
       input_tokens: Number.isFinite(raw.usage?.input_tokens) ? raw.usage.input_tokens : null,
@@ -396,9 +395,8 @@ export function normalizeAttempt(raw) {
 export function scoreAttempt(task, attempt) {
   const outcome = classifyTerminal(attempt.terminal_status, attempt.error_class)
   const completed = sessionCompleted(attempt)
-  const diffCollected =
-    attempt.diff_collected === true ||
-    (attempt.diff_collected === undefined && attempt.diff !== undefined && attempt.diff !== null)
+  const hasDiff = attempt.diff !== undefined && attempt.diff !== null
+  const diffCollected = hasDiff && attempt.diff_collected !== false
   const diff = attempt.diff ?? { added: [], modified: [], deleted: [] }
   const allChanges = [...diff.added, ...diff.modified, ...diff.deleted]
   const unauthorizedChanges = [...new Set(allChanges.filter((file) => isProtected(task, file) || !isAllowed(task, file)))].sort()
@@ -476,6 +474,9 @@ export function summarizeAttemptScores(entries) {
   const unverified = scores.filter((score) => score.outcome === 'unverified_success')
   const falseSuccesses = scores.filter((score) => score.false_success)
   const falseBlocks = scores.filter((score) => score.false_block)
+  const falseBlockEligible = scores.filter(
+    (score) => score.externally_correct && score.policy_clean,
+  )
   const harnessVerified = scores.filter((score) => score.harness_verified)
   return {
     scheduled: scores.length,
@@ -501,6 +502,7 @@ export function summarizeAttemptScores(entries) {
       oracle_graded: oracleGraded.length,
       claims: claims.length,
       externally_correct: external.length,
+      false_block_eligible: falseBlockEligible.length,
     },
     rates: {
       // Conditional on an independent oracle verdict.
@@ -513,8 +515,9 @@ export function summarizeAttemptScores(entries) {
       unverified_success: metric(unverified.length, scores.length),
       // Conditional on an engine/completion claim.
       false_success: metric(falseSuccesses.length, claims.length),
-      // Conditional on an externally correct artifact.
-      false_block: metric(falseBlocks.length, external.length),
+      // Conditional on a correct artifact whose change set was actually
+      // collected and policy-clean; policy-unclean rows cannot be false blocks.
+      false_block: metric(falseBlocks.length, falseBlockEligible.length),
     },
     outcomes: scores.reduce((counts, score) => {
       counts[score.outcome] = (counts[score.outcome] ?? 0) + 1
