@@ -138,6 +138,7 @@ test('a Windows-only release binds Setup through its sidecar and records the des
     assert.equal(result.artifacts.zip.checksumBinding, 'sha256sums')
     assert.equal(result.artifacts.appImage, undefined)
     assert.equal(result.advisoryReview.scope, 'desktop')
+    assert.match(result.advisoryReview.reviewedCheckoutSha, /^[a-f0-9]{40}$/)
     assert.equal(result.advisoryReview.status, 'FAIL')
     assert.equal(result.advisoryReview.ownerDecisionRequired, true)
     assert.equal(result.advisoryReview.deferred[0].id, 'GHSA-jr5w-w6x2-84p9')

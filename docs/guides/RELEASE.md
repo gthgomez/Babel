@@ -99,8 +99,8 @@ install a version outside its recorded ranges, and a `deferred` or
 `accepted_risk` entry blocks only the artifact scopes it names. The npm
 candidate gate runs the `npm` scope. The draft step runs the `desktop` scope,
 writes the outcome (including the exact deferred GHSA and installed version) to
-`release-qualification.json`, and fails only when that review outcome is
-unavailable. A deferred Desktop advisory therefore keeps Desktop artifacts
+`release-qualification.json` with the reviewed checkout SHA, and fails only
+when that review outcome is unavailable. A deferred Desktop advisory therefore keeps Desktop artifacts
 unqualified and requires an explicit owner decision before publication; it does
 not silently block building or drafting, and it never weakens the npm gate.
 

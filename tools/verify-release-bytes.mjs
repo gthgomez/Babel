@@ -1,6 +1,7 @@
 // License: Apache-2.0 - see LICENSE
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -135,8 +136,10 @@ export function verifyReleaseDist({ distDir, version, sourceSha, platforms = ['w
   let advisoryReview = null
   try {
     const review = verifyAdvisoryReview({ repoRoot, scope: 'desktop' })
+    const checkout = spawnSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' })
     advisoryReview = {
       scope: 'desktop',
+      reviewedCheckoutSha: checkout.status === 0 ? checkout.stdout.trim() : null,
       status: review.status,
       review: review.review,
       reviewSha256: review.reviewSha256,
