@@ -66,11 +66,13 @@ export function runInstalledDoctor(options: {
   const platform = options.platform ?? process.platform
   const isolationDecision: GovernedIsolationDecision = !requiresDocker
     ? { kind: 'host_profile', profile: profile.name }
-    : dockerReady && imageReady
-      ? { kind: 'docker' }
-      : isHostIsolationEscalationAllowed(env)
-        ? { kind: 'host_escalated', profile: profile.name, reason: 'container isolation explicitly waived' }
-        : { kind: 'fail_closed', profile: profile.name, reason: 'container isolation unavailable' }
+    : unsafeDockerArgs
+      ? { kind: 'fail_closed', profile: profile.name, reason: 'unsafe Docker isolation arguments' }
+      : dockerReady && imageReady
+        ? { kind: 'docker' }
+        : isHostIsolationEscalationAllowed(env)
+          ? { kind: 'host_escalated', profile: profile.name, reason: 'container isolation explicitly waived' }
+          : { kind: 'fail_closed', profile: profile.name, reason: 'container isolation unavailable' }
   const boundary = resolveEffectiveExecutionBoundary({ profile: profile.name, env, decision: isolationDecision })
   const envFile = join(paths.userConfigRoot, '.env')
   const checks: Check[] = [

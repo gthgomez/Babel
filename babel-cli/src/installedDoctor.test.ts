@@ -48,7 +48,7 @@ it('reports the effective OS boundary instead of claiming Docker is the default'
     }
   }
 
-  const unsafeArgs=runInstalledDoctor({env:{BABEL_BENCHMARK_DOCKER_EXTRA_ARGS:'--network host'},executionProfile:'safe_repo',dockerProbe:()=>true,imageProbe:()=>true})
+  const unsafeArgs=runInstalledDoctor({env:{BABEL_BENCHMARK_DOCKER_EXTRA_ARGS:'--network host',BABEL_ALLOW_HOST_FALLBACK:'1'},executionProfile:'safe_repo',dockerProbe:()=>true,imageProbe:()=>true})
   assert.equal(unsafeArgs.checks.find(check=>check.id==='execution_boundary')?.status,'fail')
   assert.match(unsafeArgs.checks.find(check=>check.id==='execution_boundary')?.message ?? '',/fail closed/i)
 })
