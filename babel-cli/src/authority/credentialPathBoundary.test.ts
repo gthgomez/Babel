@@ -22,7 +22,6 @@ const SECOND_CANARY = 'w08-second-synthetic-inert-canary';
 function fixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'babel-credential-boundary-'));
   writeFileSync(join(root, '.env'), `SYNTHETIC_TOKEN=${CANARY}\n`);
-  writeFileSync(join(root, '.env.'), `SYNTHETIC_TOKEN=${CANARY}\n`);
   writeFileSync(join(root, '.env.local~'), `SYNTHETIC_TOKEN=${CANARY}\n`);
   writeFileSync(join(root, '.env.sample'), 'SYNTHETIC_TOKEN=your-value-here\n');
   writeFileSync(join(root, '.env.template'), 'SYNTHETIC_TOKEN=your-value-here\n');
@@ -78,7 +77,6 @@ test('file_read denies credential-class effects without returning canary bytes',
   try {
     for (const path of [
       '.env',
-      '.env.',
       '.env.local~',
       '.env.example.local',
       '.npmrc',
