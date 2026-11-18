@@ -9,6 +9,7 @@ import {
   FINAL_REVISION_CONTRACT_VERSION,
   evaluateFinalRevisionWitness,
   hashFinalRevisionFile,
+  chatFinalRevisionRequired,
   untestedPathsAfterLastGreenVerifier,
 } from './finalRevision.js'
 
@@ -392,4 +393,138 @@ test('a later red required verifier is never certified by an earlier green', () 
   } finally {
     cleanup()
   }
+})
+
+// ── Round-4 review regressions ──────────────────────────────────────────────
+
+const G = { tool: 'test_run', target: 'npm test', exit_code: 0 }
+
+function witnessFor(command: string) {
+  return evaluateFinalRevisionWitness({
+    projectRoot: '/tmp',
+    toolCallLog: [G, { tool: 'run_command', target: command, exit_code: 0 }],
+    requiredVerifierCommands: ['npm test'],
+  })
+}
+
+test('option-level writes of allowlisted binaries are mutations', () => {
+  for (const command of [
+    'rg --pre=./pre.sh pattern s.txt',
+    'git diff --output=diff-out.txt',
+    'git log --output=x',
+    'git show --output=x',
+    'find . -fprint0 out.txt',
+    'find . -fprintf out.txt %p',
+    'tree -o out.txt',
+    'sort -oout.txt',
+    'file -C -m magic',
+  ]) {
+    assert.equal(witnessFor(command).status, 'stale', command)
+  }
+})
+
+test('shell substitution and unsafe separators are mutations', () => {
+  for (const command of [
+    'cat $(rm out.txt)',
+    'cat `rm out.txt`',
+    'cat <(rm out.txt)',
+    'cat a & rm b',
+    'cat a\nrm b',
+  ]) {
+    assert.equal(witnessFor(command).status, 'stale', command)
+  }
+})
+
+test('adversarial read-only options stay read-only', () => {
+  for (const command of [
+    'grep -o x src/app.ts',
+    'grep -f pat src/app.ts',
+    'rg --json pattern',
+    'cat -A src/app.ts',
+    'wc -l src/app.ts',
+    'sed -n 1,10p src/app.ts',
+    'head -20 src/app.ts',
+    'tail -20 src/app.ts',
+    'uniq -f 2 src/app.ts',
+  ]) {
+    assert.equal(witnessFor(command).status, 'verified', command)
+  }
+})
+
+test('common read-only inspection shapes certify after a green verifier', () => {
+  for (const command of [
+    'git rev-parse HEAD',
+    'git branch --show-current',
+    'git describe --tags',
+    'git blame src/app.ts',
+    'git grep TODO',
+    'git config --get user.name',
+    'git stash list',
+    'git worktree list',
+    'git tag -l',
+    'find . -name "*.ts" | xargs grep TODO',
+    'find . -name "*.ts" | xargs wc -l',
+    'cat src/app.ts | sed -n 1,10p',
+    'cat src/app.ts | less',
+    'node --version',
+  ]) {
+    assert.equal(witnessFor(command).status, 'verified', command)
+  }
+})
+
+test('git write forms remain mutations', () => {
+  for (const command of [
+    'git config --set user.name x',
+    'git config user.name x',
+    'git stash push',
+    'git tag v1',
+    'git branch new-branch',
+    'git diff --output=src/app.ts',
+    'sed -i s/a/b/ src/app.ts',
+    'node script.js',
+  ]) {
+    assert.equal(witnessFor(command).status, 'stale', command)
+  }
+})
+
+test('cross-form gradle and gradlew requirements recognize each other', () => {
+  for (const [required, actual] of [
+    ['gradle test', './gradlew test'],
+    ['./gradlew test', 'gradle test'],
+  ] as const) {
+    const witness = evaluateFinalRevisionWitness({
+      projectRoot: '/tmp',
+      toolCallLog: [{ tool: 'shell_exec', target: actual, exit_code: 0 }],
+      requiredVerifierCommands: [required],
+    })
+    assert.equal(witness.status, 'verified', `${required} <- ${actual}`)
+  }
+  const unrelated = evaluateFinalRevisionWitness({
+    projectRoot: '/tmp',
+    toolCallLog: [{ tool: 'shell_exec', target: 'echo hi', exit_code: 0 }],
+    requiredVerifierCommands: ['gradle test'],
+  })
+  assert.equal(unrelated.status, 'unverified')
+  assert.equal(unrelated.reason, 'required_verifier_missing')
+})
+
+test('oversized inspected bytes report unproven, not changed', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-final-revision-oversize-'))
+  try {
+    writeFileSync(join(root, 'large.bin'), Buffer.alloc(16 * 1024 * 1024 + 1, 0x61))
+    const witness = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [{ tool: 'read_file', target: 'large.bin', exit_code: 0, read_revision_hash: 'a'.repeat(64) }],
+    })
+    assert.equal(witness.status, 'unavailable')
+    assert.equal(witness.reason, 'inspected_bytes_unproven')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('chat final-revision requirement opts out only for ambient read-only', () => {
+  assert.equal(chatFinalRevisionRequired({ ambientReadOnly: false, hasProjectRoot: true }), true)
+  assert.equal(chatFinalRevisionRequired({ ambientReadOnly: true, hasProjectRoot: true }), false)
+  assert.equal(chatFinalRevisionRequired({ ambientReadOnly: false, hasProjectRoot: false }), false)
 })

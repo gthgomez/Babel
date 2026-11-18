@@ -1673,21 +1673,12 @@ export function planCompletionGateReject(opts: {
   // Interactive inspection-only no-change: nothing to verify, no patch claim.
   if (!opts.hasWrites) return { kind: 'soft_allow', gateStrikesAfter: 0 };
 
-  if (opts.gateStrikes < opts.maxGateStrikes) {
-    return {
-      kind: 'reject_continue',
-      gateStrikesAfter: opts.gateStrikes + 1,
-      useGreenMessage: true,
-    };
-  }
-
-  // Writes at/after the budget already blocked above; no soft-allow path remains.
+  // Writes at/after the budget already blocked above; this is the bounded
+  // reject-continue window before that block.
   return {
-    kind: 'blocked',
-    reason: [
-      `Gate blocked after ${opts.gateStrikes + 1} consecutive completion rejections.`,
-      'No bounded recovery path remains for a mutating completion without a verifier.',
-    ].join(' '),
+    kind: 'reject_continue',
+    gateStrikesAfter: opts.gateStrikes + 1,
+    useGreenMessage: true,
   };
 }
 

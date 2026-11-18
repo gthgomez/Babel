@@ -107,11 +107,9 @@ const READ_ONLY_BASES = new Set([
   'basename', 'dirname', 'realpath', 'readlink', 'md5sum', 'sha256sum',
   'shasum', 'cmp', 'diff', 'comm', 'cut', 'find', 'sort', 'uniq', 'echo',
   'printf', 'test', 'true', 'false', 'sleep', 'date', 'whoami', 'id',
-  'uname', 'hostname', 'printenv', 'ls-files',
+  'uname', 'hostname', 'printenv', 'ls-files', 'less', 'more', 'sed',
 ])
 
-const FIND_WRITE_FLAGS = /(?:^|\s)-(?:delete|exec|execdir|ok|okdir|fprint|fprintf|fls)(?:\s|$)/
-const SORT_OUTPUT_FLAGS = /(?:^|\s)(?:-o|--output)(?:=|\s|$)/
 
 function normalizeExecutionBase(value: string | undefined): string {
   return String(value ?? '').replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd|bat)$/i, '').toLowerCase()
@@ -160,14 +158,21 @@ function safeRealTarget(projectRoot: string, value: string): { realRoot: string;
 }
 
 /** Stat one in-root regular file for the bounded inspection proof. */
-function finalRevisionFileSize(projectRoot: string, value: string): number | null {
+function finalRevisionFileSize(projectRoot: string, value: string):
+  | { kind: 'ok'; size: number }
+  | { kind: 'missing' }
+  | { kind: 'unsupported' } {
   const target = safeRealTarget(projectRoot, value)
-  if (!target) return null
+  if (!target) return { kind: 'unsupported' }
   try {
     const stats = statSync(target.realTarget)
-    return stats.isFile() && stats.size <= MAX_WITNESS_FILE_BYTES ? stats.size : null
-  } catch {
-    return null
+    return stats.isFile() && stats.size <= MAX_WITNESS_FILE_BYTES
+      ? { kind: 'ok', size: stats.size }
+      : { kind: 'unsupported' }
+  } catch (error) {
+    return error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT'
+      ? { kind: 'missing' }
+      : { kind: 'unsupported' }
   }
 }
 
@@ -314,40 +319,190 @@ function splitPipes(segment: string): string[] {
   return parts
 }
 
+const GIT_READ_ONLY_SUBCOMMANDS = new Set([
+  'status', 'diff', 'log', 'show', 'blame', 'grep', 'describe', 'rev-parse',
+  'rev-list', 'ls-files', 'ls-tree', 'cat-file', 'shortlog', 'reflog',
+  'whatchanged', 'merge-base', 'name-rev', 'check-ignore', 'check-attr',
+  'var', 'show-ref', 'for-each-ref', 'count-objects', 'fsck', 'version',
+  'help', 'cherry', 'range-diff',
+])
+const GIT_WRITE_FLAGS = /^(?:--output(?:=|$)|--ext-diff$|--no-index$)/
+
+/** True when a shell string executes or separates in a way we cannot prove read-only. */
+function hasExecutingOrUnsafeShellSyntax(command: string): boolean {
+  let quote: "'" | '"' | null = null
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index]!
+    if (quote === "'") {
+      if (char === "'") quote = null
+      continue
+    }
+    if (quote === '"') {
+      if (char === '\\') { index += 1; continue }
+      if (char === '"') { quote = null; continue }
+      if (char === '`') return true
+      if (char === '$' && command[index + 1] === '(') return true
+      continue
+    }
+    if (char === "'" || char === '"') { quote = char; continue }
+    if (char === '\\') { index += 1; continue }
+    if (char === '\n' || char === '\r') return true
+    if (char === '`') return true
+    if (char === '$' && command[index + 1] === '(') return true
+    if ((char === '<' || char === '>') && command[index + 1] === '(') return true
+    if (char === '&') {
+      const previous = command[index - 1] ?? ''
+      const next = command[index + 1] ?? ''
+      if (next === '&' || next === '>' || previous === '>' || previous === '<') continue
+      return true
+    }
+  }
+  return false
+}
+
+function stripGitGlobalOptions(tokens: readonly string[]): string[] {
+  let index = 1
+  while (index < tokens.length) {
+    const token = tokens[index]!
+    if (token === '-C' || token === '-c' || token === '--git-dir' || token === '--work-tree' ||
+        token === '--exec-path' || token === '--namespace') {
+      index += 2
+      continue
+    }
+    if (token.startsWith('--git-dir=') || token.startsWith('--work-tree=') ||
+        token.startsWith('--exec-path=') || token.startsWith('-c=') ||
+        token === '--no-pager' || token === '--paginate' || token === '-p' ||
+        token === '--bare' || token === '--no-optional-locks' || token === '--literal-pathspecs') {
+      index += 1
+      continue
+    }
+    break
+  }
+  return tokens.slice(index)
+}
+
+function gitSegmentReadOnly(tokens: readonly string[]): boolean {
+  const rest = stripGitGlobalOptions(tokens)
+  const sub = rest[0]?.toLowerCase()
+  if (!sub) return false
+  const args = rest.slice(1)
+  if (args.some(arg => GIT_WRITE_FLAGS.test(arg))) return false
+  if (GIT_READ_ONLY_SUBCOMMANDS.has(sub)) return true
+  if (sub === 'branch') {
+    if (args.some(arg => /^(?:-d|-D|--delete|-m|-M|--move|-c|-C|--copy|-f|--force|-u|--set-upstream-to|--unset-upstream|--edit-description)$/.test(arg))) return false
+    const valueFlags = new Set(['--contains', '--no-contains', '--points-at', '--merged', '--no-merged', '--sort', '--format'])
+    let operands = 0
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index]!
+      if (arg.startsWith('-')) {
+        if (valueFlags.has(arg)) index += 1
+        continue
+      }
+      operands += 1
+    }
+    return operands === 0
+  }
+  if (sub === 'tag') {
+    if (args.some(arg => /^(?:-d|--delete|-a|--annotate|-s|--sign|-u|--local-user|-f|--force|-m|-F|--file)$/.test(arg))) return false
+    if (args.some(arg => arg === '-l' || arg === '--list')) return true
+    return args.length === 0
+  }
+  if (sub === 'stash') return args[0]?.toLowerCase() === 'list' || args[0]?.toLowerCase() === 'show'
+  if (sub === 'worktree') return args[0]?.toLowerCase() === 'list'
+  if (sub === 'remote') {
+    const verb = args[0]?.toLowerCase()
+    if (!verb || verb === '-v' || verb === '--verbose' || verb === 'show' || verb === 'get-url') return true
+    return false
+  }
+  if (sub === 'submodule') return args[0]?.toLowerCase() === 'status' || args[0]?.toLowerCase() === 'summary'
+  if (sub === 'config') {
+    if (args.some(arg => /^(?:--set|--unset|--unset-all|--add|--replace-all|--rename-section|--remove-section|-e|--edit)$/.test(arg))) return false
+    if (args.some(arg => /^(?:--get|--get-all|--get-regexp|--list|-l|--show-origin|--show-scope|--name-only)$/.test(arg))) return true
+    const operands = args.filter(arg => !arg.startsWith('-'))
+    return operands.length <= 1
+  }
+  if (sub === 'notes') return args[0]?.toLowerCase() === 'list' || args[0]?.toLowerCase() === 'show'
+  return false
+}
+
+function xargsCommandTokens(tokens: readonly string[]): string[] | null {
+  const command: string[] = []
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index]!
+    if (token === '--') { command.push(...tokens.slice(index + 1)); break }
+    if (token === '-n' || token === '-I' || token === '-P' || token === '-s' ||
+        token === '-d' || token === '-E' || token === '-L') { index += 1; continue }
+    if (/^-(?:n|I|P|s|d|E|L).+/.test(token) || /^--(?:max-args|replace|max-procs|max-chars|delimiter|eof|max-lines)=/.test(token) ||
+        token === '-0' || token === '--null' || token === '-r' || token === '--no-run-if-empty' ||
+        token === '-t' || token === '--verbose' || token === '-x' || token === '--exit') continue
+    command.push(token)
+  }
+  return command.length > 0 ? command : null
+}
+
 function segmentIsReadOnly(segment: string): boolean {
   const trimmed = segment.trim()
-  if (!trimmed || shellHasFileRedirect(trimmed)) return false
-  let tokens: string[]
-  try { tokens = tokenize(trimmed) } catch { return false }
+  if (!trimmed || hasExecutingOrUnsafeShellSyntax(trimmed) || shellHasFileRedirect(trimmed)) return false
+  const tokens = tokenize(trimmed)
   if (tokens.length === 0) return false
   const base = normalizeExecutionBase(tokens[0])
-  if (base === 'git' || base === 'gh') {
+  if (base === 'git') return gitSegmentReadOnly(tokens)
+  if (base === 'gh') {
     try { return decodeCommand(trimmed).semantic === 'read_local' } catch { return false }
+  }
+  if (base === 'xargs') {
+    const command = xargsCommandTokens(tokens)
+    return command !== null && segmentIsReadOnly(command.join(' '))
+  }
+  if (base === 'node' || base === 'nodejs' || base === 'npm' || base === 'pnpm' || base === 'yarn') {
+    const rest = tokens.slice(1)
+    return rest.length === 1 && ['--version', '-v', '--help', '-h'].includes(rest[0]!)
   }
   if (!READ_ONLY_BASES.has(base)) return false
   const rest = tokens.slice(1)
-  if (base === 'find' && rest.some(token => FIND_WRITE_FLAGS.test(` ${token}`))) return false
-  if (base === 'sort' && rest.some(token => SORT_OUTPUT_FLAGS.test(` ${token}`))) return false
-  if (base === 'uniq' && rest.filter(token => !token.startsWith('-')).length > 1) return false
+  if (base === 'find') {
+    const writeFlags = new Set([
+      '-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprint0',
+      '-fprintf', '-fls',
+    ])
+    if (rest.some(token => writeFlags.has(token))) return false
+  }
+  if (base === 'sort' && rest.some(token => token === '-o' || token.startsWith('-o') || /^--output(?:=|$)/.test(token))) return false
+  if (base === 'tree' && rest.some(token => token === '-o' || /^-o.+/.test(token) || /^--output(?:=|$)/.test(token))) return false
+  if (base === 'file' && rest.some(token => token === '-C' || /^--compile(?:=|$)/.test(token))) return false
+  if (base === 'rg' && rest.some(token => token === '--pre' || /^--pre(?:=|$)/.test(token))) return false
+  if (base === 'sed') {
+    if (rest.some(token => token === '-i' || /^-i.+/.test(token) || /^--in-place(?:=|$)/.test(token))) return false
+    const script = rest.find(token => !token.startsWith('-')) ?? ''
+    if (/(?:^|[;\n])\s*[wW](?:\s|$)/.test(script) ||
+        /\/[a-zA-Z0-9]*[wWe][a-zA-Z0-9]*\s*(?:;|$)/.test(script)) return false
+  }
+  if (base === 'uniq') {
+    const valueFlags = new Set(['-f', '--skip-fields', '-s', '--skip-chars', '-w', '--check-chars'])
+    let operands = 0
+    for (let index = 0; index < rest.length; index += 1) {
+      const token = rest[index]!
+      if (valueFlags.has(token)) { index += 1; continue }
+      if (token.startsWith('-')) continue
+      operands += 1
+    }
+    if (operands > 1) return false
+  }
   return true
 }
 
 /** True only when every chained/pipe segment is a provable read-only shape. */
 function shellIsReadOnly(command: string): boolean {
-  try {
-    const segments = splitChains(command)
-    if (segments.length === 0) return false
-    return segments.every(segment => splitPipes(segment).every(part => segmentIsReadOnly(part)))
-  } catch {
-    return false
-  }
+  if (hasExecutingOrUnsafeShellSyntax(command)) return false
+  const segments = splitChains(command)
+  if (segments.length === 0) return false
+  return segments.every(segment => splitPipes(segment).every(part => segmentIsReadOnly(part)))
 }
 
 /** Best-effort paths named by a shell write, for disclosure only. */
 function shellWitnessPaths(command: string): string[] {
   const paths = new Set<string>()
-  let tokens: string[]
-  try { tokens = tokenize(command) } catch { return [] }
+  const tokens = tokenize(command)
   const base = normalizeExecutionBase(tokens[0])
   if (base === 'tee' || base === 'rm' || base === 'rmdir' || base === 'touch' ||
       base === 'mkdir' || base === 'truncate' || base === 'unlink') {
@@ -383,19 +538,22 @@ function shellWitnessPaths(command: string): string[] {
   return [...paths].slice(0, MAX_SHELL_WITNESS_PATHS)
 }
 
-function isVerifierEntry(entry: FinalRevisionToolEntry, boundCommands?: readonly string[]): boolean {
+function isVerifierEntry(entry: FinalRevisionToolEntry, requirements?: readonly string[]): boolean {
   if (!SHELL_TOOLS.has(entry.tool)) return false
   if (entry.verifierExecuted === true) return true
-  return isAuthoritativeVerifierCommand(entry.target, boundCommands)
+  // Same requirement-satisfaction predicate the plan gate uses, so
+  // `gradle test` and `./gradlew test` recognize each other.
+  if (requirements?.some(required => satisfiesVerifierRequirement(required, entry.target))) return true
+  return isAuthoritativeVerifierCommand(entry.target, requirements)
 }
 
-function isGreenVerifierEntry(entry: FinalRevisionToolEntry, boundCommands?: readonly string[]): boolean {
-  return isVerifierEntry(entry, boundCommands) && entry.exit_code === 0 &&
+function isGreenVerifierEntry(entry: FinalRevisionToolEntry, requirements?: readonly string[]): boolean {
+  return isVerifierEntry(entry, requirements) && entry.exit_code === 0 &&
     !entry.error && entry.preDispatchNoEffect !== true && entry.stale !== true &&
     entry.simulated !== true && entry.processExecuted !== false && entry.processCompleted !== false
 }
 
-function isMutationEntry(entry: FinalRevisionToolEntry, boundCommands?: readonly string[]): boolean {
+function isMutationEntry(entry: FinalRevisionToolEntry, requirements?: readonly string[]): boolean {
   // Policy/approval denials never dispatched: they cannot have changed bytes.
   if (entry.preDispatchNoEffect === true || entry.error === 'blocked') return false
   const paths = entry.mutation_paths ?? []
@@ -411,7 +569,7 @@ function isMutationEntry(entry: FinalRevisionToolEntry, boundCommands?: readonly
   }
   if (entry.tool === 'await_command') return true
   if (!SHELL_TOOLS.has(entry.tool)) return false
-  if (isVerifierEntry(entry, boundCommands)) return false
+  if (isVerifierEntry(entry, requirements)) return false
   return !shellIsReadOnly(entry.target)
 }
 
@@ -474,6 +632,18 @@ export function unavailableFinalRevisionWitness(reason: string): FinalRevisionWi
 }
 
 /**
+ * Whether a Chat no-change conclusion must carry a current byte witness.
+ * Only ambient read-only chat (`BABEL_READ_ONLY`) is exempt: it makes no
+ * worktree claim. A project-scoped READ_ONLY task still requires proof.
+ */
+export function chatFinalRevisionRequired(input: {
+  ambientReadOnly: boolean
+  hasProjectRoot: boolean
+}): boolean {
+  return input.hasProjectRoot && !input.ambientReadOnly
+}
+
+/**
  * Evaluate whether the turn's proof still describes the bytes on disk.
  *
  * Conservative rules:
@@ -496,9 +666,8 @@ export function evaluateFinalRevisionWitness(input: {
   verifierBoundRevision?: FinalRevisionCandidateV1 | null
 }): FinalRevisionWitnessV1 {
   const required = identityCommands(input.requiredVerifierCommands ?? [])
-  const bounds = required.length > 0 ? required : undefined
   const log = input.toolCallLog
-  const mutations = log.filter(entry => isMutationEntry(entry, bounds))
+  const mutations = log.filter(entry => isMutationEntry(entry, required))
   const mutatedPaths = [...new Set(mutations.flatMap(mutationPaths))]
   const changedForWitness = mutatedPaths.length > 0 ? mutatedPaths : inspectionReads(log).map(read => read.path)
 
@@ -539,12 +708,15 @@ export function evaluateFinalRevisionWitness(input: {
       const stale: string[] = []
       let remainingBytes = MAX_INSPECTION_PROOF_BYTES
       for (const read of reads) {
-        const size = finalRevisionFileSize(input.projectRoot, read.path)
-        if (size === null) {
+        const state = finalRevisionFileSize(input.projectRoot, read.path)
+        if (state.kind === 'unsupported') {
+          return base('unavailable', 'inspected_bytes_unproven', null)
+        }
+        if (state.kind === 'missing') {
           stale.push(read.path)
           continue
         }
-        remainingBytes -= size
+        remainingBytes -= state.size
         if (remainingBytes < 0) return base('unavailable', 'final_revision_proof_budget_exceeded', null)
         const current = hashFinalRevisionFile(input.projectRoot, read.path)
         if (current !== read.sha256) stale.push(read.path)
@@ -561,10 +733,10 @@ export function evaluateFinalRevisionWitness(input: {
     let last = -1
     let lastAttempt = -1
     for (const [index, entry] of log.entries()) {
-      if (!isVerifierEntry(entry, bounds) || entry.simulated === true) continue
+      if (!isVerifierEntry(entry, required) || entry.simulated === true) continue
       if (!satisfiesVerifierRequirement(requirement, entry.target)) continue
       lastAttempt = index
-      if (isGreenVerifierEntry(entry, bounds)) last = index
+      if (isGreenVerifierEntry(entry, required)) last = index
     }
     if (last < 0) {
       const attempt = lastAttempt >= 0 ? log[lastAttempt] : undefined
@@ -581,7 +753,7 @@ export function evaluateFinalRevisionWitness(input: {
     lastGreenByRequirement.push(last)
   }
   const verifiedIndex = Math.min(...lastGreenByRequirement)
-  const after = log.slice(verifiedIndex + 1).filter(entry => isMutationEntry(entry, bounds))
+  const after = log.slice(verifiedIndex + 1).filter(entry => isMutationEntry(entry, required))
   if (after.length > 0) {
     const stale = [...new Set(after.flatMap(mutationPaths))].sort()
     return base('stale', 'mutation_after_required_verifier', null, stale, stale)

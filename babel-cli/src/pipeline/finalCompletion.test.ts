@@ -243,3 +243,45 @@ test('a red verifier after green blocks completion with the failed-verifier stat
     cleanup()
   }
 })
+
+test('read-only pipeline statuses do not publish success without a byte witness', () => {
+  const { root, cleanup } = fixture()
+  try {
+    for (const status of ['READ_ONLY_NO_MODIFICATION', 'COMPLETE_NO_MODIFICATION'] as const) {
+      const result = decidePipelineFinalCompletion({
+        mode: 'chat',
+        status,
+        projectRoot: root,
+        requiredVerifierCommands: [],
+        toolCallLog: [
+          { step: 1, tool: 'grep' as const, target: 'TODO', exit_code: 0, stdout: 'match', stderr: '', verified: true },
+        ],
+      })
+      assert.equal(result.status, 'EXECUTOR_HALTED', status)
+      assert.equal(result.finalRevision.status, 'unverified')
+      assert.match(result.condition ?? '', /unproven|stale/)
+    }
+  } finally {
+    cleanup()
+  }
+})
+
+test('read-only pipeline statuses with a current byte witness still succeed', () => {
+  const { root, cleanup } = fixture()
+  try {
+    const log = [{ step: 1, tool: 'file_read' as const, target: 'app.ts', exit_code: 0, stdout: 'v1\n', stderr: '', verified: true, read_revision_hash: hash('v1\n') }]
+    for (const status of ['READ_ONLY_NO_MODIFICATION', 'COMPLETE_NO_MODIFICATION'] as const) {
+      const result = decidePipelineFinalCompletion({
+        mode: 'chat',
+        status,
+        projectRoot: root,
+        requiredVerifierCommands: [],
+        toolCallLog: log,
+      })
+      assert.equal(result.status, status)
+      assert.equal(result.finalRevision.status, 'verified')
+    }
+  } finally {
+    cleanup()
+  }
+})

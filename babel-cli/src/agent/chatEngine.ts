@@ -433,7 +433,7 @@ import {
 import {restoreTurnRuntime} from './restoreTurnRuntime.js';
 import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjectiveSubmission,type ObjectiveAdmissionHost,type ObjectiveAdmissionResult} from './chatEngineObjectiveAdmission.js';
 import type { CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
-import { evaluateFinalRevisionWitness, unavailableFinalRevisionWitness } from '../authority/finalRevision.js';
+import { evaluateFinalRevisionWitness, unavailableFinalRevisionWitness, chatFinalRevisionRequired } from '../authority/finalRevision.js';
 import {requiresObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog} from './taskObjectiveLifecycle.js';
 
 import { admitProjectContentRead, isReadOnlyChat } from "./chatReadOnly.js";
@@ -2722,9 +2722,10 @@ export class ChatEngine {
       toolCallLog: toGateToolLog(this.toolCallLog),
       acceptance: this.criterionCompletion?.currentRequest(),
       ...(finalRevision ? { finalRevision } : {}),
-      finalRevisionRequired: Boolean(this.options.projectRoot) &&
-        (this.lastTurnRuntime?.effectiveOperation === 'MUTATING' ||
-          this.lastTurnRuntime?.effectiveOperation === 'HYBRID'),
+      finalRevisionRequired: chatFinalRevisionRequired({
+        ambientReadOnly: isReadOnlyChat(),
+        hasProjectRoot: Boolean(this.options.projectRoot),
+      }),
       ...(this.lastVerifierReceipt?.boundRevision
         ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
         : {}),

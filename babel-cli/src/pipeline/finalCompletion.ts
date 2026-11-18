@@ -53,6 +53,21 @@ export function decidePipelineFinalCompletion(
     toolCallLog: input.toolCallLog,
     requiredVerifierCommands: input.requiredVerifierCommands,
   })
+  const readOnlyStatus = input.status === 'READ_ONLY_NO_MODIFICATION' ||
+    input.status === 'COMPLETE_NO_MODIFICATION'
+  if (SUCCESS_STATUSES.has(input.status) && readOnlyStatus && finalRevision.status !== 'verified') {
+    return {
+      status: 'EXECUTOR_HALTED',
+      decision: null,
+      finalRevision,
+      condition: finalRevision.status === 'stale'
+        ? `Final-revision proof is stale: ${finalRevision.reason ?? 'bytes changed after the accepted proof'}. ` +
+          `Changed after the accepted proof: ${finalRevision.stale_paths.join(', ') || '(workspace)'}. ` +
+          'The inspected conclusion is no longer current; rerun the check. Worktree changes are retained.'
+        : `Read-only completion is unproven: ${finalRevision.reason ?? 'no inspected bytes were re-hashed'}. ` +
+          'No successful no-change result is published without a current byte witness.',
+    }
+  }
   if (input.mode !== 'deep' || !SUCCESS_STATUSES.has(input.status)) {
     if (SUCCESS_STATUSES.has(input.status) && finalRevision.status === 'stale') {
       return {

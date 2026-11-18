@@ -473,7 +473,9 @@ describe('R0-A: streaming terminal authority', () => {
     const done = doneEvent(events);
 
     assert.equal(done.status, 'completed', 'a repairable failure is not terminal blocking');
-    assert.equal(done.outcome, 'NO_CHANGE_REQUIRED');
+    // Project-scoped READ_ONLY without a re-hashed byte witness is not a
+    // certified no-change conclusion; the answer is retained as unverified.
+    assert.equal(done.outcome, 'UNVERIFIED_PATCH');
     assert.equal(done.blockedReport ?? null, null);
     assert.equal(done.reason_code, undefined);
     assert.equal(done.cause_class, undefined);
