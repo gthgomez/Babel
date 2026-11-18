@@ -20,6 +20,9 @@ test('review docs promise only reachable audit triggers', () => {
   assert.doesNotMatch(guide, /re-runs its merge audit when the\s+repository owner comments/i)
   assert.match(guide, /does \*\*not\*\* start, cancel, or rerun any\s+workflow/i)
   assert.match(guide, /do not promise or retry a\s+comment-triggered rerun/i)
+  assert.match(guide, /successful\*\*\s+`Public Release Gate` `pull_request` run completes \(`conclusion == 'success'`/i)
+  assert.match(workflow.jobs['merge-audit-after-release-gate'].if, /workflow_run\.conclusion == 'success'/)
+  assert.match(workflow.jobs['merge-audit-after-release-gate'].if, /workflow_run\.event == 'pull_request'/)
 })
 
 test('the unreachable comment-only job cannot be silently re-enabled', () => {

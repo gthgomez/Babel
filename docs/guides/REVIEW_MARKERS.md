@@ -11,8 +11,10 @@ workflow: the audit is intentionally not subscribed to comments, so an
 owner comment cannot restart privileged jobs. The audit reads markers on its
 next lifecycle run: `pull_request_target` events `opened`, `synchronize`,
 `reopened`, `ready_for_review`, `converted_to_draft`, `labeled` or
-`unlabeled`, or the `workflow_run` listener when Public Release Gate
-completes. To obtain a fresh audit after posting evidence, use one of those
+`unlabeled`, or the `workflow_run` listener when a **successful**
+`Public Release Gate` `pull_request` run completes (`conclusion == 'success'`;
+failed or cancelled product runs do not resume it). To obtain a fresh audit
+after posting evidence, use one of those
 events (for example, push the remediation commit); do not promise or retry a
 comment-triggered rerun. Marker bodies start with one of:
 
@@ -35,8 +37,9 @@ components and invokes `scripts/agent-pr-gate.ps1`. Its
 default invocation takes one current snapshot and reports pending checks.
 `-CheckWaitSeconds <0..1800>` explicitly requests a bounded wait with backoff;
 cheap review and identity blockers are checked first. The `workflow_run`
-listener resumes the trusted audit when product CI completes. Marker comments
-provide review evidence and do not restart product checks.
+listener resumes the trusted audit only after a successful Public Release Gate
+`pull_request` run; failed or cancelled runs do not. Marker comments provide
+review evidence and do not restart product checks.
 
 ## Required CI scope
 

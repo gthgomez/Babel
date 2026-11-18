@@ -24,7 +24,8 @@ test('local-only daemon lane is not broadened into the npm test chain', () => {
   assert.equal(pkg.scripts['test:daemon'].includes('src/daemon/**/*.test.ts'), true)
 })
 
-test('materialized regression source remains non-empty when the dependency is merged', () => {
+test('selected regression source exists and is non-empty', () => {
   const file = new URL('babel-cli/' + selection, root)
-  if (existsSync(file)) assert.ok(statSync(file).size > 0, 'selected regression file must not be empty')
+  assert.ok(existsSync(file), 'PR #539 must merge first; this branch intentionally selects the post-#539 file')
+  assert.ok(statSync(file).size > 0, 'selected regression file must not be empty')
 })

@@ -5,10 +5,13 @@ import test from 'node:test'
 import { createRequire } from 'node:module'
 
 const root = new URL('../../', import.meta.url)
+const cliPackage = JSON.parse(readFileSync(new URL('babel-cli/package.json', root), 'utf8'))
 const { load } = createRequire(new URL('babel-cli/package.json', root))('js-yaml')
 const workflow = load(readFileSync(new URL('.github/workflows/typecheck.yml', root), 'utf8'))
 
 function assertDeadCodeGate(candidate) {
+  assert.equal(cliPackage.scripts['check:dead-code'], 'node scripts/check_dead_code.mjs',
+    'PR #537 must provide the check:dead-code script targeted by the workflow')
   const job = candidate.jobs['architecture-regressions']
   assert.ok(job, 'architecture-regressions owns architecture and dead-code gates')
   const step = job.steps.find(item => item.run === 'npm run check:dead-code')
