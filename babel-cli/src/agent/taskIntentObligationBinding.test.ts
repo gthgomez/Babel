@@ -399,3 +399,154 @@ test('P1 over-tightening: const and computed expected values still bind', t => {
     assert.equal(goal?.verification.verifier_id, 'verifier:npm', `literal idiom ${index}`)
   }
 })
+
+test('P1 let reassignment is not resolved as a const literal', t => {
+  const root = parserProject({
+    testFile: 'parser.test.mjs',
+    testSource: [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { parseSum } from "../src/parser.js";',
+      'let five = 5;',
+      'five = 6;',
+      'test("reassigned", () => assert.equal(parseSum(2, 3), five));',
+      '',
+    ].join('\n'),
+  })
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const goal = resolveLiveSessionAuthority({
+    mode: 'chat', task: TASK, projectRoot: root, projectTestCommands: ['npm test'],
+  }).taskContract.acceptance.find(item => item.description === TASK)
+  assert.ok(goal?.verification.verifier_id.startsWith('meaning:'),
+    'a mutable let must stay unbound rather than resolve its stale declaration')
+})
+
+test('P2 live synchronous iteration callback still binds', t => {
+  const root = parserProject({
+    testFile: 'parser.test.mjs',
+    testSource: [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { parseSum } from "../src/parser.js";',
+      'test("live", () => {',
+      '  [1].forEach(value => assert.equal(parseSum(2, 3), 5));',
+      '});',
+      '',
+    ].join('\n'),
+  })
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const goal = resolveLiveSessionAuthority({
+    mode: 'chat', task: TASK, projectRoot: root, projectTestCommands: ['npm test'],
+  }).taskContract.acceptance.find(item => item.description === TASK)
+  assert.equal(goal?.verification.verifier_id, 'verifier:npm')
+})
+
+test('P2 an un-invoked callback stays unbound', t => {
+  const root = parserProject({
+    testFile: 'parser.test.mjs',
+    testSource: [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { parseSum } from "../src/parser.js";',
+      'test("dead", () => {',
+      '  const never = () => assert.equal(parseSum(2, 3), 5);',
+      '  assert.ok(true);',
+      '});',
+      '',
+    ].join('\n'),
+  })
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const goal = resolveLiveSessionAuthority({
+    mode: 'chat', task: TASK, projectRoot: root, projectTestCommands: ['npm test'],
+  }).taskContract.acceptance.find(item => item.description === TASK)
+  assert.ok(goal?.verification.verifier_id.startsWith('meaning:'))
+})
+
+test('P2 no-call goal requires the target module symbol in the assertion', t => {
+  const htmlGoal = 'Fix parser.js so output is <pre>A  B</pre>.'
+  const root = parserProject({
+    testFile: 'parser.test.mjs',
+    testSource: [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { render } from "../src/parser.js";',
+      'const other = "<pre>A  B</pre>";',
+      'test("unrelated operand", () => assert.equal(other, "<pre>A  B</pre>"));',
+      '',
+    ].join('\n'),
+  })
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const goal = resolveLiveSessionAuthority({
+    mode: 'chat', task: htmlGoal, projectRoot: root, projectTestCommands: ['npm test'],
+  }).taskContract.acceptance.find(item => item.description === htmlGoal)
+  assert.ok(goal?.verification.verifier_id.startsWith('meaning:'),
+    'an unrelated value equal to the fragment cannot bind a no-call goal')
+})
+
+test('P2 scope-aware consts resolve transitive and do not leak across tests', t => {
+  const transitive = parserProject({
+    testFile: 'parser.test.mjs',
+    testSource: [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { parseSum } from "../src/parser.js";',
+      'test("sum", () => {',
+      '  const base = 4;',
+      '  const expected = base + 1;',
+      '  assert.equal(parseSum(2, 3), expected);',
+      '});',
+      '',
+    ].join('\n'),
+  })
+  t.after(() => rmSync(transitive, { recursive: true, force: true }))
+  const bound = resolveLiveSessionAuthority({
+    mode: 'chat', task: TASK, projectRoot: transitive, projectTestCommands: ['npm test'],
+  }).taskContract.acceptance.find(item => item.description === TASK)
+  assert.equal(bound?.verification.verifier_id, 'verifier:npm')
+
+  const shadowed = parserProject({
+    testFile: 'parser.test.mjs',
+    testSource: [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { parseSum } from "../src/parser.js";',
+      'test("wrong five", () => {',
+      '  const five = 6;',
+      '  assert.equal(parseSum(2, 3), five);',
+      '});',
+      'test("right five but no assertion", () => {',
+      '  const five = 5;',
+      '  assert.ok(five === 5);',
+      '});',
+      '',
+    ].join('\n'),
+  })
+  t.after(() => rmSync(shadowed, { recursive: true, force: true }))
+  const unbound = resolveLiveSessionAuthority({
+    mode: 'chat', task: TASK, projectRoot: shadowed, projectTestCommands: ['npm test'],
+  }).taskContract.acceptance.find(item => item.description === TASK)
+  assert.ok(unbound?.verification.verifier_id.startsWith('meaning:'),
+    'a later test const cannot rewrite an earlier assertion operand')
+})
+
+test('P3 NaN, bigint zero, void 0 and negative zero guards are dead', t => {
+  for (const guard of ['if (NaN)', 'if (0n)', 'if (void 0)', 'if (-0)']) {
+    const root = parserProject({
+      testFile: 'parser.test.mjs',
+      testSource: [
+        'import assert from "node:assert/strict";',
+        'import test from "node:test";',
+        'import { parseSum } from "../src/parser.js";',
+        'test("dead guard", () => {',
+        `  ${guard} { assert.equal(parseSum(2, 3), 5); }`,
+        '});',
+        '',
+      ].join('\n'),
+    })
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    const goal = resolveLiveSessionAuthority({
+      mode: 'chat', task: TASK, projectRoot: root, projectTestCommands: ['npm test'],
+    }).taskContract.acceptance.find(item => item.description === TASK)
+    assert.ok(goal?.verification.verifier_id.startsWith('meaning:'), guard)
+  }
+})

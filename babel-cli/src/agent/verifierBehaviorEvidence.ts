@@ -137,7 +137,7 @@ export function stripSkippedRegistrations(source: string): string {
 export function stripDeadLiteralGuards(source: string): string {
   let out = ''
   let consumed = 0
-  const guard = /\b(?:if|while)\s*\(\s*(?:false|0|''|""|``|null|undefined)\s*\)/g
+  const guard = /\b(?:if|while)\s*\(\s*(?:false|0n|-0|0|NaN|''|""|``|null|undefined|void\s+0)\s*\)/g
   for (const match of source.matchAll(guard)) {
     if (match.index! < consumed) continue
     let cursor = match.index! + match[0].length
@@ -266,11 +266,23 @@ function numericExpression(value: string): number | null {
   return result !== null && index === tokens.length ? result : null
 }
 
-function localConstants(code: string): Map<string, string> {
+/** Const-only, scoped to the current test (or file prefix for scripts). */
+function localConstants(
+  code: string,
+  scopeStart: number,
+  beforeIndex: number,
+): Map<string, string> {
   const constants = new Map<string, string>()
-  for (const match of code.matchAll(/\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)/g)) {
-    const value = evaluateOperand(match[2]!, constants)
-    if (value !== null) constants.set(match[1]!, value)
+  const scopes = scopeStart > 0
+    ? [code.slice(0, scopeStart), code.slice(scopeStart, beforeIndex)]
+    : [code.slice(0, beforeIndex)]
+  for (const scope of scopes) {
+    for (const match of scope.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)/g)) {
+      // let/var are deliberately absent: their value can change before the
+      // assertion, so resolving the declaration would certify a stale value.
+      const value = evaluateOperand(match[2]!, constants)
+      if (value !== null) constants.set(match[1]!, value)
+    }
   }
   return constants
 }
@@ -289,6 +301,9 @@ function evaluateOperand(raw: string, constants: ReadonlyMap<string, string>): s
       if (strings) return evaluated.join('')
       const sum = numericExpression(value)
       if (sum !== null) return String(sum)
+      if (evaluated.every(part => Number.isFinite(Number(part)))) {
+        return String(evaluated.reduce((total, part) => total + Number(part), 0))
+      }
     }
   }
   const numeric = numericExpression(value)
@@ -347,45 +362,62 @@ function assertionCandidates(code: string): AssertionCandidate[] {
   return candidates
 }
 
+function liveNestingAllowed(prefix: string): boolean {
+  let headerEnd = 0
+  const arrow = prefix.indexOf('=>')
+  if (arrow >= 0) {
+    headerEnd = arrow + 2
+  } else {
+    const declared = prefix.match(/\bfunction\b[^{]*\{/)
+    if (declared) headerEnd = declared.index! + declared[0].length
+  }
+  const body = prefix.slice(headerEnd)
+  const extraArrows = (body.match(/=>/g) ?? []).length
+  const extraFunctions = (body.match(/\bfunction\b/g) ?? []).length
+  const sync = '(?:forEach|map|filter|some|every|reduce|flatMap|find|findIndex|reduceRight)'
+  const allowed = (body.match(new RegExp('\\.\\s*' + sync + '\\s*\\(\\s*(?:function\\b[^()]*|[^()]{0,140}?=>)', 'g')) ?? []).length
+  // One synchronous iteration callback is live. Deeper nesting, an unrelated
+  // callback (then/finally/dead helper) or a stored un-invoked arrow is not.
+  return extraArrows + extraFunctions <= allowed && extraArrows + extraFunctions <= 1
+}
+
 /**
  * The goal's expected result must be an operand of a real assertion in a live
  * test (or a top-level executable script), and a call goal must put its exact
- * call in that same assertion. File-local `const` literals and simple literal
- * arithmetic are resolved. Comments, skipped registrations, name-only tests,
- * unrelated arithmetic, negated assertions and literal falsy guards are not
- * evidence.
+ * call in that same assertion. File-local immutable const literals and simple
+ * literal arithmetic are resolved. Comments, skipped registrations, dead
+ * literal guards, name-only tests, unrelated arithmetic and negated assertions
+ * are not evidence.
  */
 export function assertionEvidenceMatches(
   content: string,
   callPattern: RegExp | null,
   fragment: string,
+  options: { requiredSymbols?: readonly string[] } = {},
 ): boolean {
   if (fragment.length === 0) return false
   const code = stripDeadLiteralGuards(stripSkippedRegistrations(stripJsComments(content)))
-  const constants = localConstants(code)
   const spans = executableTestSpans(code)
   const hasRegistrations = spans.length > 0
   for (const candidate of assertionCandidates(code)) {
     if (hasRegistrations && !spans.some(span => candidate.index >= span.start && candidate.index <= span.end)) continue
-    // An assertion nested in another callback inside the test body is not
-    // guaranteed to run (a dead helper/arrow). The test's own callback is the
-    // only function boundary admitted by this lexer.
     const span = spans.find(item => candidate.index >= item.start && candidate.index <= item.end)
-    if (span) {
-      const prefix = code.slice(span.start, candidate.index)
-      if ((prefix.match(/=>/g) ?? []).length > 1) continue
-      if ((prefix.match(/\bfunction\b/g) ?? []).length > 1) continue
-    }
+    if (span && !liveNestingAllowed(code.slice(span.start, candidate.index))) continue
+    const constants = localConstants(code, span ? span.start : 0, candidate.index)
     if (callPattern) {
       const leftCall = callPattern.test(candidate.left)
       const rightCall = callPattern.test(candidate.right)
       if (!leftCall && !rightCall) continue
       const expected = leftCall ? candidate.right : candidate.left
       if (valuesEqual(evaluateOperand(expected, constants), fragment)) return true
-    } else if (valuesEqual(evaluateOperand(candidate.left, constants), fragment) ||
-      valuesEqual(evaluateOperand(candidate.right, constants), fragment)) {
-      return true
+      continue
     }
+    const symbols = options.requiredSymbols ?? []
+    if (symbols.length === 0) continue
+    const referencesSymbol = (operand: string) => symbols.some(symbol =>
+      new RegExp(`\\b${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(operand))
+    if (referencesSymbol(candidate.left) && valuesEqual(evaluateOperand(candidate.right, constants), fragment)) return true
+    if (referencesSymbol(candidate.right) && valuesEqual(evaluateOperand(candidate.left, constants), fragment)) return true
   }
   return false
 }

@@ -4,9 +4,10 @@
  * "Do not change public APIs" is a preservation obligation, not a read-only
  * task and not just a classification hint. Admission freezes a digest of the
  * project's exported surface in contract provenance; completion recomputes it
- * and refuses certification when an export on a frozen file changed. Deletions,
- * renames and (strictly) additions to a frozen file are violations. New files
- * and files without exports at admission are not observed by this freeze.
+ * and refuses certification when an export on a frozen file changed. The freeze
+ * compares export NAMES only; declaration signatures and bodies are not
+ * compared. Deletions, renames and (strictly) additions to a frozen file are
+ * violations. New files and files without exports at admission are not observed.
  */
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { join, posix } from 'node:path'

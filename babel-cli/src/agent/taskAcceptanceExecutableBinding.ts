@@ -517,6 +517,43 @@ function referencedExistingPaths(
   return [...resolved]
 }
 
+/** Local bindings imported from a module that provides the goal's target file. */
+function importedSymbolsForTarget(
+  content: string,
+  inputFile: string,
+  targetPaths: readonly string[],
+): string[] {
+  const symbols = new Set<string>()
+  const matchesTarget = (specifier: string): boolean => {
+    if (!specifier.startsWith('.')) return false
+    const resolved = normalizeProjectPath(`${dirname(inputFile)}/${specifier}`)
+    return targetPaths.some(target => resolved === target || resolved.endsWith(`/${target}`))
+  }
+  for (const match of content.matchAll(/import\s+([\s\S]*?)\s+from\s+["']([^"']+)["']/g)) {
+    if (!matchesTarget(match[2]!)) continue
+    const clause = match[1]!.trim()
+    const namespace = clause.match(/\*\s+as\s+([A-Za-z_$][\w$]*)/)?.[1]
+    if (namespace) symbols.add(namespace)
+    const named = clause.match(/\{([^}]*)\}/)?.[1]
+    if (named) {
+      for (const item of named.split(',')) {
+        const binding = item.trim().split(/\s+as\s+/).at(-1)?.trim()
+        if (binding && /^[A-Za-z_$][\w$]*$/.test(binding)) symbols.add(binding)
+      }
+    }
+    const defaultBinding = clause.replace(/\{[^}]*\}/g, '').replace(/\*\s+as\s+[A-Za-z_$][\w$]*/g, '').trim().replace(/,$/, '').trim()
+    if (/^[A-Za-z_$][\w$]*$/.test(defaultBinding)) symbols.add(defaultBinding)
+  }
+  for (const match of content.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*["']([^"']+)["']\s*\)/g)) {
+    if (!matchesTarget(match[2]!)) continue
+    for (const item of match[1]!.split(',')) {
+      const binding = item.trim().split(':').at(-1)?.trim()
+      if (binding && /^[A-Za-z_$][\w$]*$/.test(binding)) symbols.add(binding)
+    }
+  }
+  return [...symbols]
+}
+
 function specMatchesContent(input: {
   projectRoot: string
   inputFile: string
@@ -539,10 +576,20 @@ function specMatchesContent(input: {
       )
   if (!pathMatched) return false
   // The expected result must be an operand of a real assertion. With a call
-  // goal the exact call must share that assertion; without a call the fragment
-  // alone is checked (a title or an unrelated keyword is never enough).
+  // goal the exact call must share that assertion. Without a call, the
+  // assertion must also use a binding imported from the goal's target module;
+  // an unrelated value that happens to equal the fragment is not evidence.
   if (input.spec.fragment === null) return false
-  return assertionEvidenceMatches(code, input.spec.callPattern, input.spec.fragment)
+  const requiredSymbols = input.spec.callPattern
+    ? []
+    : importedSymbolsForTarget(code, input.inputFile, input.spec.targetPaths)
+  if (!input.spec.callPattern && requiredSymbols.length === 0) return false
+  return assertionEvidenceMatches(
+    code,
+    input.spec.callPattern,
+    input.spec.fragment,
+    { requiredSymbols },
+  )
 }
 
 function relevantTrustedCommands(input: {
