@@ -21,6 +21,20 @@ function lockedVersion(lock, name) {
   return typeof entry?.version === 'string' ? entry.version : null
 }
 
+/**
+ * Reviewed locks are content, not checkout bytes. The repository's canonical
+ * manifest convention normalizes CRLF to LF (`POLICY_MANIFEST.json`
+ * `normalization: utf8_crlf_to_lf`; tools/policy-integrity-manifest.mjs), so a
+ * Windows checkout of `*.json text` files does not invalidate an LF review.
+ */
+function reviewedText(bytes) {
+  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+}
+
+function reviewedDigest(bytes) {
+  return createHash('sha256').update(reviewedText(bytes).replace(/\r\n/g, '\n'), 'utf8').digest('hex')
+}
+
 /** Advisory ranges are published with ", " as AND; semver expects whitespace. */
 function satisfiesRange(version, range) {
   return semver.satisfies(version, String(range).replace(/\s*,\s*/g, ' '), { includePrerelease: true })
@@ -50,9 +64,9 @@ export function verifyAdvisoryReview({ repoRoot, scope = 'npm', reviewPath = 'co
     const path = requireText(declared.path, 'lock path')
     const absolute = resolve(repoRoot, path)
     const lockBytes = readFileSync(absolute)
-    const digest = createHash('sha256').update(lockBytes).digest('hex')
+    const digest = reviewedDigest(lockBytes)
     if (digest !== declared.sha256) problems.push(`stale advisory review: ${path} digest ${digest} does not match reviewed ${declared.sha256}`)
-    locks.set(path, JSON.parse(lockBytes))
+    locks.set(path, JSON.parse(reviewedText(lockBytes)))
   }
 
   const advisories = []

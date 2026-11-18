@@ -7,17 +7,19 @@ import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { verifyAdvisoryReview } from './check_dependency_advisories.mjs'
 
-function fixture({ installed = '4.4.3', ranges = ['< 4.6.6'], decision = 'remediated', scopes = ['npm'], lockDigest } = {}) {
+function fixture({ installed = '4.4.3', ranges = ['< 4.6.6'], decision = 'remediated', scopes = ['npm'], lockDigest, lineEndings = 'lf' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'babel-advisory-'))
   mkdirSync(join(root, 'config'), { recursive: true })
   mkdirSync(join(root, 'pkg'), { recursive: true })
   const lock = { lockfileVersion: 3, packages: { '': {}, 'node_modules/zod': { version: installed } } }
-  const bytes = JSON.stringify(lock)
+  const lf = JSON.stringify(lock)
+  const bytes = lineEndings === 'crlf' ? lf.replace(/\n/g, '\r\n') : lf
   writeFileSync(join(root, 'pkg/package-lock.json'), bytes)
+  const reviewed = createHash('sha256').update(lf.replace(/\r\n/g, '\n'), 'utf8').digest('hex')
   const review = {
     schemaVersion: 1,
     reviewedAt: '2026-11-18',
-    locks: [{ path: 'pkg/package-lock.json', sha256: lockDigest ?? createHash('sha256').update(bytes).digest('hex') }],
+    locks: [{ path: 'pkg/package-lock.json', sha256: lockDigest ?? reviewed }],
     advisories: [{
       id: 'GHSA-fixture-0000-0001', severity: 'high', package: 'zod', ranges, fixedVersions: ['4.6.6'],
       artifactScopes: scopes, summary: 'fixture', exposure: 'fixture exposure', decision, rationale: 'fixture rationale',
@@ -46,6 +48,25 @@ test('real review keeps the deferred Electron advisory out of the npm qualificat
 test('a changed lock makes the review stale', () => {
   const root = fixture({ lockDigest: '0'.repeat(64) })
   try {
+    const result = verifyAdvisoryReview({ repoRoot: root, scope: 'npm' })
+    assert.equal(result.status, 'FAIL')
+    assert.match(result.problems[0], /stale advisory review/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('a CRLF checkout does not invalidate an LF-reviewed lock', () => {
+  const root = fixture({ installed: '4.6.6', ranges: ['< 4.6.6'], lineEndings: 'crlf' })
+  try {
+    const result = verifyAdvisoryReview({ repoRoot: root, scope: 'npm' })
+    assert.equal(result.status, 'PASS', JSON.stringify(result.problems))
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('a CRLF checkout still detects changed lock content', () => {
+  const root = fixture({ installed: '4.6.6', ranges: ['< 4.6.6'], lineEndings: 'crlf' })
+  try {
+    const lockPath = join(root, 'pkg/package-lock.json')
+    writeFileSync(lockPath, readFileSync(lockPath, 'utf8').replace('"4.6.6"', '"4.6.5"'))
     const result = verifyAdvisoryReview({ repoRoot: root, scope: 'npm' })
     assert.equal(result.status, 'FAIL')
     assert.match(result.problems[0], /stale advisory review/)
