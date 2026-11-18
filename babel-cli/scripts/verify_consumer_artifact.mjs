@@ -262,6 +262,11 @@ try {
   assert.ok(existsSync(claudeSdkPin), 'Claude SDK pin shipped in consumer tarball')
   assert.ok(existsSync(claudeResolveWorker), 'Claude isolated resolve worker shipped in consumer tarball')
   assert.equal(JSON.parse(readFileSync(claudeSdkPin, 'utf8')).sdkVersion, '0.3.304')
+  // toolManifest.ts reads this beside the compiled module. Without it the
+  // installed tool_catalog fails and Deep advertises a different schema.
+  const installedToolManifest = join(installed, 'dist/tools/tool-manifest.json')
+  assert.ok(existsSync(installedToolManifest), 'Executor tool manifest shipped in consumer tarball')
+  assert.ok(Array.isArray(JSON.parse(readFileSync(installedToolManifest, 'utf8')).tools), 'Executor tool manifest is readable')
   const bridgePackagingProbe = join(scratch, 'bridge-packaging-probe.mjs')
   writeFileSync(bridgePackagingProbe, `
     import assert from 'node:assert/strict';

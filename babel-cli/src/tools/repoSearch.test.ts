@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -12,6 +12,7 @@ import {
   searchSymbols,
   handleWorkspaceSymbolSearch,
   handleGrepTool,
+  getApprovedReadRoots,
 } from './repoSearch.js';
 import { resetRipgrepDetection } from './ripgrep.js';
 
@@ -166,3 +167,58 @@ test('searchSymbols finds code symbols across multiple languages', async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('semicolon-separated approved roots accept absolute nested scopes', async () => {
+  const project = mkdtempSync(join(tmpdir(), 'babel-grep-approved-project-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'babel-grep-approved-workspace-'));
+  const other = mkdtempSync(join(tmpdir(), 'babel-grep-approved-other-'));
+  const outside = mkdtempSync(join(tmpdir(), 'babel-grep-approved-outside-'));
+  const previousRoots = process.env['BABEL_OPENCLAW_APPROVED_ROOTS'];
+  const previousAllowed = process.env['BABEL_ALLOWED_ROOTS'];
+  try {
+    const nested = join(workspace, 'suite', 'repo');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, 'nested.ts'), 'export const nested = 1;\n', 'utf-8');
+    writeFileSync(join(project, 'local.ts'), 'export const local = 1;\n', 'utf-8');
+    writeFileSync(join(outside, 'secret.ts'), 'export const secret = 1;\n', 'utf-8');
+    // workspaceManager documents semicolon-separated roots; grep must parse the same list.
+    process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] = `${other};${workspace}`;
+    delete process.env['BABEL_ALLOWED_ROOTS'];
+
+    const roots = getApprovedReadRoots(project);
+    assert.deepEqual(roots, [resolveReal(other), resolveReal(workspace)]);
+
+    const absolute = await grepContent(
+      project,
+      'export const nested',
+      { path: join(nested, 'nested.ts') },
+      roots,
+    );
+    assert.equal(absolute.matches.length, 1);
+
+    const dotRelative = await grepContent(project, 'export const local', { path: './local.ts' }, roots);
+    assert.equal(dotRelative.matches.length, 1);
+
+    await assert.rejects(
+      grepContent(project, 'export const', { path: join(outside, 'secret.ts') }, roots),
+      /outside approved read roots/,
+    );
+  } finally {
+    if (previousRoots === undefined) delete process.env['BABEL_OPENCLAW_APPROVED_ROOTS'];
+    else process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] = previousRoots;
+    if (previousAllowed === undefined) delete process.env['BABEL_ALLOWED_ROOTS'];
+    else process.env['BABEL_ALLOWED_ROOTS'] = previousAllowed;
+    rmSync(project, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+    rmSync(other, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+function resolveReal(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}

@@ -4,6 +4,7 @@ import {
 import { getToolCapabilityRegistrySnapshot } from '../config/toolCapabilities.js';
 import { getAllowedShellCommands } from '../sandbox.js';
 import type { ExecutorToolSnapshot } from './executorRegistry.js';
+import { DEEP_EXECUTOR_TOOL_NAMES } from './toolContracts.js';
 
 export type ToolCatalogEntryKind = 'executor_tool' | 'capability';
 export type ToolCatalogPolicyStatus = 'allowed' | 'disabled' | 'advisory';
@@ -24,6 +25,23 @@ export interface ToolCatalogEntry {
   profiles: string[];
   command_bases: string[];
   requirements: string[];
+  /** True when the Deep text-loop executor can emit this tool name. */
+  deep_executor: boolean;
+  /** Why a reachable tool is intentionally absent from the Deep prompt/shape surface. */
+  surface_restrictions: string[];
+}
+
+function deepStageRestrictions(name: string, category: string): string[] {
+  if (!DEEP_EXECUTOR_TOOL_NAMES.includes(name as never)) {
+    return [`${name} is intentionally restricted from the Deep executor surface; it is reachable from Chat only.`];
+  }
+  if (name === 'tool_catalog') {
+    return ['Omitted from Deep prompt shapes to avoid self-referential catalog expansion.'];
+  }
+  if (category === 'mode') {
+    return ['Omitted from Deep prompt shapes because mode switching is host-driven.'];
+  }
+  return [];
 }
 
 export interface ToolCatalogOptions {
@@ -84,6 +102,8 @@ function executorToolCatalogEntry(
     profiles: ['all'],
     command_bases: [],
     requirements: [],
+    deep_executor: DEEP_EXECUTOR_TOOL_NAMES.includes(tool.name as never),
+    surface_restrictions: deepStageRestrictions(tool.name, tool.category),
   };
 }
 
@@ -120,6 +140,8 @@ function capabilityCatalogEntries(options: ToolCatalogOptions): ToolCatalogEntry
       profiles: [...capability.profiles],
       command_bases: [...capability.blockedCommandBases],
       requirements,
+      deep_executor: false,
+      surface_restrictions: ['Capability rewrite; not an executor tool name.'],
     };
   });
 }
