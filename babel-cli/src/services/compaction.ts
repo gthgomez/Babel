@@ -21,6 +21,7 @@ export interface CompactionCircuitState {
   consecutiveFailures: number;
 }
 
+/** Create one independent breaker state for a governed run. */
 export function createCompactionCircuitState(): CompactionCircuitState {
   return { consecutiveFailures: 0 };
 }
