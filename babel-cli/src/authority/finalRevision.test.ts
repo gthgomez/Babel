@@ -860,7 +860,6 @@ test('pager-capable subcommands require the pager guard', () => {
     'git --no-pager branch -a',
     'git --no-pager tag -l',
     'git --no-pager shortlog',
-    'git -c core.fsmonitor=false --no-pager range-diff --no-ext-diff --no-textconv A...B A...C',
   ]
   for (const command of guarded) {
     assert.equal(witnessFor(command).status, 'verified', command)
@@ -883,11 +882,13 @@ test('every capable hardening recipe is admitted by its own flag spec', () => {
   }
 })
 
-test('range-diff plain is soft-unverified and the fully hardened form verifies end-to-end', () => {
-  const plain = witnessFor('git range-diff A...B A...C')
-  assert.equal(plain.status, 'unverified')
-  assert.match(plain.reason ?? '', /^effect_unproven:/)
-  const hardenedCommand = 'git -c core.fsmonitor=false --no-pager range-diff --no-ext-diff --no-textconv A...B A...C'
-  assert.equal(gitConfigEffectUnproven(hardenedCommand), false)
-  assert.equal(witnessFor(hardenedCommand).status, 'verified')
+test('range-diff has no sound hardening recipe: plain and flag-bearing forms are soft', () => {
+  for (const command of [
+    'git range-diff A...B A...C',
+    'git -c core.fsmonitor=false --no-pager range-diff --no-ext-diff --no-textconv A...B A...C',
+  ]) {
+    const witness = witnessFor(command)
+    assert.equal(witness.status, 'unverified', command)
+    assert.match(witness.reason ?? '', /^effect_unproven:/, command)
+  }
 })

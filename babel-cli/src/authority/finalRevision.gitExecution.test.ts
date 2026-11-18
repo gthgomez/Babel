@@ -383,3 +383,47 @@ test('git blame --contents really prints arbitrary file contents and is denied',
     cleanup()
   }
 })
+
+test('range-diff textconv marker executes even with --no-textconv; no sound recipe', () => {
+  const { root, cleanup } = repo()
+  try {
+    const env = gitEnv(root)
+    const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, env, encoding: 'utf8' }).trim()
+    execFileSync('git', ['checkout', '-q', '-B', 'old', base], { cwd: root, env, windowsHide: true })
+    writeFileSync(join(root, 'file.bin'), 'old\n')
+    execFileSync('git', ['commit', '-qam', 'old'], { cwd: root, env, windowsHide: true })
+    execFileSync('git', ['checkout', '-q', '-B', 'new', base], { cwd: root, env, windowsHide: true })
+    writeFileSync(join(root, 'file.bin'), 'new\n')
+    execFileSync('git', ['commit', '-qam', 'new'], { cwd: root, env, windowsHide: true })
+    const marker = join(root, 'RANGE_DIFF_TEXTCONV_RAN')
+    const converter = join(root, 'range-textconv.sh')
+    writeFileSync(converter, `#!/bin/sh\n: > "${marker}"\ncat\n`)
+    chmodSync(converter, 0o755)
+    execFileSync('git', ['config', 'diff.custom.textconv', converter], { cwd: root, env, windowsHide: true })
+    execFileSync('git', ['range-diff', `${base}..old`, `${base}..new`], { cwd: root, env, stdio: 'ignore', windowsHide: true })
+    assert.equal(existsSync(marker), true, 'plain range-diff must apply textconv')
+    const plainCommand = `git range-diff ${base}..old ${base}..new`
+    const plain = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: plainCommand, exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(plain.status, 'unverified')
+    assert.equal(plain.reason, 'effect_unproven:config_capable_git')
+    rmSync(marker, { force: true })
+    const hardenedCommand = `git -c core.fsmonitor=false --no-pager range-diff --no-ext-diff --no-textconv ${base}..old ${base}..new`
+    execFileSync('git', ['-c', 'core.fsmonitor=false', '--no-pager', 'range-diff', '--no-ext-diff', '--no-textconv', `${base}..old`, `${base}..new`], {
+      cwd: root, env, stdio: 'ignore', windowsHide: true,
+    })
+    assert.equal(existsSync(marker), true, 'measured: git range-diff still applies textconv despite --no-textconv')
+    const hardened = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: hardenedCommand, exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(hardened.status, 'unverified')
+    assert.equal(hardened.reason, 'effect_unproven:config_capable_git')
+  } finally {
+    cleanup()
+  }
+})

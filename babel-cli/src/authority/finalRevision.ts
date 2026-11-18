@@ -488,7 +488,7 @@ export type GitConfigCapability = 'mechanical' | 'config_capable'
 export function gitHardeningFlags(subcommand: string): readonly string[] {
   const sub = subcommand.toLowerCase()
   if (sub === 'blame') return ['--no-textconv']
-  if (['diff', 'log', 'show', 'whatchanged', 'range-diff'].includes(sub)) {
+  if (['diff', 'log', 'show', 'whatchanged'].includes(sub)) {
     return ['--no-ext-diff', '--no-textconv']
   }
   return []
@@ -583,15 +583,20 @@ function gitHardeningSatisfied(parsed: ParsedGitRead): boolean {
   const pager = parsed.noPager || parsed.config.has('core.pager=cat')
   // %G atoms invoke gpg even when every other hardening flag is present.
   const gpgFormat = gitFormatValues(parsed.args).some(value => value.includes('%G'))
+  // Single source of truth: the same helper the invariant test consumes.
+  const localFlagsSatisfied = gitHardeningFlags(parsed.sub).every(flag => has(flag))
   if (parsed.sub === 'status') return fsmonitor
   if (parsed.sub === 'grep') return fsmonitor && pager
   if (parsed.sub === 'branch' || parsed.sub === 'tag' || parsed.sub === 'shortlog') return pager
-  if (parsed.sub === 'blame') return pager && fsmonitor && has('--no-textconv')
+  if (parsed.sub === 'blame') return pager && fsmonitor && localFlagsSatisfied
   if (parsed.sub === 'reflog') return pager && !gpgFormat
-  if (['diff', 'log', 'show', 'whatchanged', 'range-diff'].includes(parsed.sub)) {
-    return pager && !gpgFormat && fsmonitor && has('--no-ext-diff') && has('--no-textconv')
+  // Measured: `git range-diff --no-textconv` still applies textconv, so no
+  // sound hardening recipe exists; the command is always effect-unproven.
+  if (parsed.sub === 'range-diff') return false
+  if (['diff', 'log', 'show', 'whatchanged'].includes(parsed.sub)) {
+    return pager && !gpgFormat && fsmonitor && localFlagsSatisfied
   }
-  return true
+  return localFlagsSatisfied
 }
 
 /** True when a config-capable read cannot attest no post-verifier effect. */

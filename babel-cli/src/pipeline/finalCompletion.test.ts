@@ -286,7 +286,7 @@ test('read-only pipeline statuses with a current byte witness still succeed', ()
   }
 })
 
-test('fully hardened range-diff reaches VERIFIED_COMPLETE; plain form is soft-unverified', () => {
+test('range-diff cannot harden: flag-bearing and plain forms are both soft', () => {
   const { root, cleanup } = fixture()
   try {
     const base = [
@@ -301,7 +301,8 @@ test('fully hardened range-diff reaches VERIFIED_COMPLETE; plain form is soft-un
       ],
     })
     assert.equal(hardened.status, 'COMPLETE')
-    assert.equal(hardened.decision?.finalOutcome, 'VERIFIED_COMPLETE')
+    assert.equal(hardened.decision?.finalOutcome, 'UNVERIFIED_PATCH')
+    assert.match(hardened.condition ?? '', /effect-unproven/)
     const plain = decidePipelineFinalCompletion({
       mode: 'deep', status: 'COMPLETE', projectRoot: root, requiredVerifierCommands: ['npm test'],
       toolCallLog: [
