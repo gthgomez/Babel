@@ -52,11 +52,49 @@ export function collectWorkspaceChanges(cwd: string): WorkspaceChangeSnapshot {
     }))
     .filter((file) => file.path.length > 0);
 
-  const diff = runGit(cwd, ['diff', '--no-color', '--', '.']);
+  // The file list comes from porcelain (tracked modifications, staged work and
+  // untracked paths). The diff must cover the same truth: `git diff` alone only
+  // shows unstaged tracked edits, which lets a remote advertise changes while
+  // returning an empty diff (RT-09).
+  const parts: string[] = [];
+  const reasons: string[] = [];
+  const unstaged = runGit(cwd, ['diff', '--no-color', '--', '.']);
+  if (unstaged.ok && unstaged.stdout.trim()) parts.push(unstaged.stdout.trim());
+  else if (!unstaged.ok) reasons.push('unstaged diff unavailable');
+  const staged = runGit(cwd, ['diff', '--cached', '--no-color', '--', '.']);
+  if (staged.ok && staged.stdout.trim()) parts.push(staged.stdout.trim());
+  else if (!staged.ok) reasons.push('staged diff unavailable');
+
+  const untracked = runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z']);
+  if (untracked.ok) {
+    for (const path of untracked.stdout.split('\0').filter(Boolean)) {
+      const fileDiff = runGit(cwd, [
+        'diff',
+        '--no-index',
+        '--no-color',
+        '--',
+        '/dev/null',
+        path,
+      ]);
+      // `--no-index` exits 1 when the files differ; that is a successful diff.
+      if ((fileDiff.ok || fileDiff.stdout.trim()) && fileDiff.stdout.trim()) {
+        parts.push(`# Untracked file: ${JSON.stringify(path)}\n${fileDiff.stdout.trim()}`);
+      } else if (!fileDiff.ok && !fileDiff.stdout.trim()) {
+        reasons.push(`untracked diff unavailable for ${path}`);
+      }
+    }
+  } else {
+    reasons.push('untracked file listing unavailable');
+  }
+
+  const reason =
+    reasons.length > 0
+      ? `${reasons.join('; ')}; showing the diff that is available`
+      : undefined;
   return {
     available: true,
     files,
-    diff: diff.ok ? diff.stdout : status.stdout,
-    ...(diff.ok ? {} : { reason: 'git diff unavailable; showing status only' }),
+    diff: parts.join('\n\n'),
+    ...(reason !== undefined ? { reason } : {}),
   };
 }
