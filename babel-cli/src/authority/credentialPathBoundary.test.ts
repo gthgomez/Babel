@@ -99,15 +99,25 @@ test('shell execution denies credential-class effects before a process starts', 
     }
 
     // Positive controls: documentation template and ordinary files still run.
-    const example = await executor.shellExecAsync('cat .env.example', root, 10_000);
-    assert.equal(example.exit_code, 0);
+    // Retry only *allowed* commands: a loaded CI host can reject a spawn for
+    // reasons unrelated to policy, while a policy denial is deterministic.
+    const runAllowed = async (command: string) => {
+      let result = await executor.shellExecAsync(command, root, 10_000);
+      for (let attempt = 0; attempt < 2 && result.exit_code !== 0 && !result.denial; attempt++) {
+        result = await executor.shellExecAsync(command, root, 10_000);
+      }
+      return result;
+    };
+    const example = await runAllowed('cat .env.example');
+    assert.equal(example.denial?.reason_code, undefined);
+    assert.equal(example.exit_code, 0, example.stderr);
     assert.equal(example.process_started, true);
-    const ordinary = await executor.shellExecAsync('cat normal.txt', root, 10_000);
-    assert.equal(ordinary.exit_code, 0);
+    const ordinary = await runAllowed('cat normal.txt');
+    assert.equal(ordinary.exit_code, 0, ordinary.stderr);
     assert.match(ordinary.stdout, /ordinary fixture content/);
 
     // Not every path-looking test operand is a credential effect.
-    const testOperand = await executor.shellExecAsync('node --test --test-name-pattern=fixture .env.test.mjs', root, 10_000);
+    const testOperand = await runAllowed('node --test --test-name-pattern=fixture .env.test.mjs');
     assert.notEqual(testOperand.denial?.reason_code, 'credential_read_denied');
   } finally {
     if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
