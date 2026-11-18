@@ -412,12 +412,13 @@ function resolveVaguenessWorkspaceRoot(
   manifest: VaguenessRepoManifest,
 ): string {
   const declared = options.workspaceRoot ?? manifest.workspace_root;
-  // An empty or "." manifest value is checkout-relative: use this repository,
-  // never a machine-specific absolute path such as /workspace.
-  if (declared === undefined || declared.trim() === '' || declared.trim() === '.') {
+  const normalized = declared?.trim().replace(/^(\.\/)+/, '');
+  // An empty, ".", or "./" manifest value is checkout-relative: use this
+  // repository, never a machine-specific absolute path such as /workspace.
+  if (normalized === undefined || normalized === '' || normalized === '.') {
     return BABEL_ROOT;
   }
-  return resolve(declared);
+  return resolve(normalized);
 }
 
 /** Resolve repo targets portably; backslash fixture paths are normalized. */

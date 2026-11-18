@@ -187,6 +187,15 @@ test('vagueness repo targets are checkout-relative and portable', () => {
   assert.equal(core.projectRoot, BABEL_ROOT);
   assert.ok(existsSync(core.projectRoot), 'the default repo target must exist on this checkout');
 
+  for (const relative of ['.', './', '././']) {
+    const relativeTargets = resolveVaguenessRepoTargets({ workspaceRoot: relative });
+    assert.equal(
+      relativeTargets.find((target) => target.repoId === 'babel_core')?.projectRoot,
+      BABEL_ROOT,
+      `workspace root ${relative} must resolve to this checkout`,
+    );
+  }
+
   const override = mkdtempSync(join(tmpdir(), 'vagueness-portable-'));
   try {
     const overridden = resolveVaguenessRepoTargets({ workspaceRoot: override });

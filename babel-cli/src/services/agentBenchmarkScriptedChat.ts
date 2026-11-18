@@ -51,9 +51,14 @@ function expectedReads(task: ParityCorpusTaskFixture): string[] {
   return [...new Set([task.target_file, ...Object.keys(task.files ?? {})])];
 }
 
-function buildScriptedRunner(task: ParityCorpusTaskFixture, verifierCommand: string) {
+function buildScriptedRunner(task: ParityCorpusTaskFixture, _verifierCommand: string, projectRoot: string) {
   const writes = expectedWrites(task);
   const reads = expectedReads(task);
+  // A second independent read (the visible test file when the fixture has one)
+  // keeps the control at three or more real tool calls without depending on
+  // the engine's command-approval path. The host verifier is authoritative.
+  const visibleTest = join(projectRoot, 'src', 'math.test.js');
+  if (existsSync(visibleTest) && !reads.includes('src/math.test.js')) reads.push('src/math.test.js');
   const readOnly = resolveParityCorpusRepoKind(task) === 'read_only_review';
   let turn = 0;
   return {
@@ -78,12 +83,15 @@ function buildScriptedRunner(task: ParityCorpusTaskFixture, verifierCommand: str
         yield { type: 'done' as const, finishReason: 'tool_calls' };
         return;
       }
-      if (current === 2 && !readOnly) {
+      if (current === 2 && !readOnly && writes.length > 0) {
+        // Observe the written bytes before finishing. This is the same
+        // read-after-write order a coding agent uses and keeps the completion
+        // gate from treating the final tool call as an unverified claim.
         yield {
           type: 'tool_use' as const,
-          id: 'scripted-verify',
-          name: 'test_run',
-          input: { command: verifierCommand },
+          id: 'scripted-post-write-read',
+          name: 'read_file',
+          input: { path: writes[0]!.path },
         };
         yield { type: 'done' as const, finishReason: 'tool_calls' };
         return;
@@ -119,6 +127,36 @@ function readIfPresent(root: string, relative: string): string | null {
   return existsSync(file) ? readFileSync(file, 'utf8') : null;
 }
 
+const SCRIPTED_SUCCESS_OUTCOMES = new Set([
+  'VERIFIED_COMPLETE',
+  'UNVERIFIED_PATCH',
+  'NO_CHANGE_REQUIRED',
+]);
+
+/**
+ * A scripted control succeeds only when the real ChatEngine reached a
+ * non-failure terminal, made real tool calls and the host-owned verifier and
+ * expected artifact checks agree. The engine status/outcome is asserted
+ * directly; it is never inferred from free-text notes.
+ */
+export function isScriptedControlSuccess(input: {
+  engineStatus: string | null;
+  engineOutcome: string | null;
+  toolCallCount: number;
+  verifierOk: boolean;
+  expectedChangesApplied: boolean;
+  changedFileCount: number;
+  readOnly: boolean;
+}): boolean {
+  if (input.engineStatus !== 'completed') return false;
+  if (input.engineOutcome === null || !SCRIPTED_SUCCESS_OUTCOMES.has(input.engineOutcome)) return false;
+  if (input.toolCallCount < 3) return false;
+  if (!input.verifierOk) return false;
+  return input.readOnly
+    ? input.changedFileCount === 0
+    : input.expectedChangesApplied && input.changedFileCount > 0;
+}
+
 /** Run one parity cell through ChatEngine with a deterministic host runner. */
 export async function runScriptedParityChatCell(input: {
   task: AgentBenchmarkTask;
@@ -126,6 +164,12 @@ export async function runScriptedParityChatCell(input: {
   surface: AgentBenchmarkSurface;
   evidenceDir: string;
   runId: string;
+  /** Test seam: override the host runner while keeping the real ChatEngine. */
+  runnerFactory?: (
+    task: ParityCorpusTaskFixture,
+    verifierCommand: string,
+    projectRoot: string,
+  ) => unknown;
 }): Promise<ScriptedParityChatCell> {
   const corpusTask = readParityCorpusTask(input.parityTaskId);
   const runMode = resolveParityCorpusRunMode(corpusTask);
@@ -141,6 +185,7 @@ export async function runScriptedParityChatCell(input: {
   let engineOutcome: string | null = null;
   let verifierReceipt: { command: string; exit_code: number; summary: string } | null = null;
   let runDir: string | null = null;
+  let controlError: string | null = null;
 
   // This control executes real local tools in a disposable fixture. Scope the
   // host-native profile and benchmark auto-approval to this cell only; no
@@ -152,7 +197,11 @@ export async function runScriptedParityChatCell(input: {
   try {
     const { ChatEngine } = await import('../agent/chatEngine.js');
     const { calibrationPolicy } = await import('../eval/native-chat-calibration.js');
-    const runner = buildScriptedRunner(corpusTask, corpusTask.verifier_command);
+    const runner = (input.runnerFactory ?? buildScriptedRunner)(
+      corpusTask,
+      corpusTask.verifier_command,
+      projectRoot,
+    );
     const engine = new ChatEngine({
       task: corpusTask.task,
       projectRoot,
@@ -188,7 +237,12 @@ export async function runScriptedParityChatCell(input: {
       }
     }
   } catch (error) {
-    answer = `scripted_control_failed: ${error instanceof Error ? error.message : String(error)}`;
+    controlError = error instanceof Error ? error.message : String(error);
+    answer = `scripted_control_failed: ${controlError}`;
+    // Fail closed: an exception never leaves the cell looking like a clean
+    // completed run.
+    engineStatus = 'failed';
+    engineOutcome = 'AGENT_FAILURE';
   } finally {
     if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
     else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
@@ -208,15 +262,21 @@ export async function runScriptedParityChatCell(input: {
         : corpusTask.files?.[relative]?.broken ?? null;
     return actual !== null && original !== null && actual !== (original.endsWith('\n') ? original : `${original}\n`);
   });
-  const hasToolEvidence = toolCalls.length > 0;
-  const noMutation = changedFiles.length === 0;
-  const success =
-    hasToolEvidence &&
-    verifierOk &&
-    (runMode === 'ask' ? noMutation : expectedChangesApplied && changedFiles.length > 0);
+  const readOnly = runMode === 'ask';
+  const success = isScriptedControlSuccess({
+    engineStatus,
+    engineOutcome,
+    toolCallCount: toolCalls.length,
+    verifierOk,
+    expectedChangesApplied,
+    changedFileCount: changedFiles.length,
+    readOnly,
+  });
+  // An engine verification claim is a claim even if the terminal failed or was
+  // blocked; count it against the independently observed artifact.
   const falseComplete =
-    (engineOutcome === 'VERIFIED_COMPLETE') &&
-    (!verifierOk || (runMode === 'ask' ? !noMutation : !expectedChangesApplied));
+    engineOutcome === 'VERIFIED_COMPLETE' &&
+    (!verifierOk || (readOnly ? changedFiles.length > 0 : !expectedChangesApplied));
 
   const evidencePath = join(input.evidenceDir, `${input.task.task_id}-scripted.json`);
   writeFileSync(
@@ -232,6 +292,9 @@ export async function runScriptedParityChatCell(input: {
         engine_outcome: engineOutcome,
         verifier_ok: verifierOk,
         expected_changes_applied: expectedChangesApplied,
+        control_error: controlError,
+        verifier_receipt: verifierReceipt,
+        run_dir: runDir,
         changed_files: changedFiles,
         tool_calls: toolCalls,
         answer,
@@ -261,6 +324,7 @@ export async function runScriptedParityChatCell(input: {
         'agent-benchmark surface=chat provider=mock execution=scripted_chat_engine',
         'scripted provider control: not model-performance evidence',
         `status=${String(engineStatus)} outcome=${String(engineOutcome)} verifier=${verifierOk ? 'pass' : 'fail'} tool_calls=${toolCalls.length} expected_changes=${expectedChangesApplied}`,
+        ...(controlError !== null ? [`control_error=${controlError}`] : []),
       ],
     },
     engineStatus,
