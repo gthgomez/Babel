@@ -276,6 +276,12 @@ export interface ResolvedModelPolicy {
   baseUrl?: string;
   policyPath: string;
   family: string;
+  /** Exact model or family the caller requested, before alias resolution. */
+  requestedModelId?: string;
+  /** Set when a vendor compatibility alias changed the transport identity. */
+  aliasResolvedFrom?: string;
+  aliasResolvedTo?: string;
+  aliasNotice?: string;
   selectedTier: ModelPolicyTier;
   requestedStage?: ModelPolicyStage;
   tierSelectionReason?: string;
@@ -892,6 +898,13 @@ export function resolveModelByKey(options: {
       `Approximate per-run cost $${approximateCostPerRunUsd.toFixed(4)} meets or exceeds warning threshold $${warnThreshold.toFixed(2)}.`,
     );
   }
+  const aliasApplied = modelKey !== candidateKey && getVendorAlias(config.vendor_aliases, candidateKey) !== undefined;
+  if (aliasApplied) {
+    warnings.push(
+      `Requested model "${requestedKey}" is a compatibility alias: it resolves to ` +
+        `${resolvedBackend.provider}/${resolvedBackend.providerModelId}, not a ${requestedKey} provider model.`,
+    );
+  }
 
   const stagePolicies =
     options.bindStagesToSelectedModel === true || modelKey === LIVE_OPENROUTER_BACKEND_KEY
@@ -908,6 +921,12 @@ export function resolveModelByKey(options: {
   return {
     policyPath,
     family: modelKey, // using key as family for legacy compatibility
+    requestedModelId: requestedKey,
+    ...(aliasApplied ? {
+      aliasResolvedFrom: requestedKey,
+      aliasResolvedTo: `${resolvedBackend.provider}/${resolvedBackend.providerModelId}`,
+      aliasNotice: warnings[warnings.length - 1],
+    } : {}),
     selectedTier: resolvedBackend.tier,
     resolvedBackendKey: modelKey,
     provider: resolvedBackend.provider,
@@ -950,6 +969,31 @@ export function resolveModelByKey(options: {
       ? { capabilities: resolvedBackend.capabilities }
       : {}),
   };
+}
+
+/** Vendor family names that do not imply their vendor transport in this policy. */
+const FAMILY_VENDOR_HINTS: Readonly<Record<string, string>> = {
+  claude: 'anthropic',
+  anthropic: 'anthropic',
+  gemini: 'gemini',
+  codex: 'openai',
+  openai: 'openai',
+  deepseek: 'deepseek',
+  ollama: 'ollama',
+}
+
+/**
+ * Disclose a family alias that routes to a different vendor's model.
+ * Gateways (OpenRouter/Command Code/OpenCode) legitimately serve a vendor's
+ * exact model ID; only a different upstream model identity is a compatibility
+ * substitution worth warning about.
+ */
+function familyTransportMismatchNotice(family: string, provider: string, modelId: string): string | null {
+  const hinted = FAMILY_VENDOR_HINTS[family.trim().toLowerCase()]
+  if (!hinted || hinted === provider) return null
+  const gateway = ['openrouter', 'command-code', 'opencode', 'opencode-go', 'openai-compatible'].includes(provider)
+  if (gateway && modelId.toLowerCase().includes(hinted)) return null
+  return `Requested family "${family}" is a compatibility route: it resolves to ${provider}/${modelId}, not a "${hinted}" model.`
 }
 
 export function resolveFamilyModelPolicy(options: {
@@ -1032,6 +1076,8 @@ export function resolveFamilyModelPolicy(options: {
       `Approximate per-run cost $${approximateCostPerRunUsd.toFixed(4)} meets or exceeds warning threshold $${warnThreshold.toFixed(2)}.`,
     );
   }
+  const familyNotice = familyTransportMismatchNotice(options.family, resolvedBackend.provider, resolvedBackend.providerModelId);
+  if (familyNotice) warnings.push(familyNotice);
 
   const maxThreshold = config.policy?.max_estimated_cost_per_run_usd;
   if (typeof maxThreshold === 'number' && approximateCostPerRunUsd > maxThreshold) {
@@ -1086,9 +1132,18 @@ export function resolveFamilyModelPolicy(options: {
 
   const stagePolicies = resolveStagePolicies(config, hardFail, options.liveOnly === true);
 
+  const familyResolved =
+    options.family.trim().toLowerCase() !== resolvedBackend.provider &&
+    FAMILY_VENDOR_HINTS[options.family.trim().toLowerCase()] !== undefined
   return {
     policyPath,
     family: options.family,
+    requestedModelId: options.family,
+    ...(familyResolved ? {
+      aliasResolvedFrom: options.family,
+      aliasResolvedTo: `${resolvedBackend.provider}/${resolvedBackend.providerModelId}`,
+      ...(familyNotice ? { aliasNotice: familyNotice } : {}),
+    } : {}),
     selectedTier: effectiveTier,
     ...(requestedStage !== undefined ? { requestedStage } : {}),
     ...(config.selection_policy?.[effectiveTier]?.selection_reason !== undefined

@@ -90,15 +90,18 @@ test('exec --background --json keeps daemon notices off stdout, exits promptly, 
   }
 })
 
-test('deep --json rejects quarantined daemon execution as parseable JSON without spawning a daemon', { timeout: 90_000 }, async () => {
+test('deep --json with a daemon request stays parseable JSON and never spawns a daemon', { timeout: 90_000 }, async () => {
   const fixtureRoot = fixture()
   try {
     const child = runCli(['deep', 'Inspect a.js', '--project-root', fixtureRoot.root, '--json'], fixtureRoot.root, fixtureRoot.env)
     assert.equal(child.error, undefined)
     assert.equal(child.status, 1)
     const payload = JSON.parse(String(child.stdout))
-    assert.equal(payload.status, 'EXECUTOR_HALTED')
-    assert.match(String(payload.error), /UNSUPPORTED_OPERATION.*quarantined/)
+    // Offline deep without an explicit local model now fails at the W10
+    // onboarding preflight before any daemon or pipeline work.
+    assert.equal(payload.status, 'error')
+    assert.match(String(payload.message), /OFFLINE_MODEL_REQUIRED/)
+    assert.doesNotMatch(String(child.stdout), /\[daemon\]/)
     assert.equal(existsSync(fixtureRoot.pidFile), false, 'the daemon path must be rejected before spawn')
   } finally {
     await stopDaemon(fixtureRoot.pidFile)

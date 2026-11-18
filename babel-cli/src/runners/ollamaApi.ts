@@ -27,10 +27,12 @@ function resolveOllamaTokens(): number {
 }
 
 export class OllamaApiRunner extends OpenAiCompatibleRunner {
+  private readonly configuredBaseUrl: string | undefined;
+
   protected override get apiUrl(): string {
     const base = process.env['BABEL_DESKTOP_PROVIDER']
       ? 'http://127.0.0.1:11434/v1'
-      : process.env['BABEL_OLLAMA_BASE_URL'] ?? 'http://localhost:11434/v1';
+      : this.configuredBaseUrl ?? process.env['BABEL_OLLAMA_BASE_URL'] ?? 'http://localhost:11434/v1';
     return `${base.replace(/\/$/, '')}/chat/completions`;
   }
 
@@ -39,8 +41,14 @@ export class OllamaApiRunner extends OpenAiCompatibleRunner {
       model,
       'OLLAMA_API_KEY',
       { maxTokens: options.maxTokens ?? resolveOllamaTokens(), temperature: options.temperature ?? 0 },
-      { provider: 'ollama', explicitCredential: 'ollama-no-auth', ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}) },
+      {
+        provider: 'ollama',
+        explicitCredential: 'ollama-no-auth',
+        ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}),
+        ...(options.env ? { env: options.env } : {}),
+      },
     );
+    this.configuredBaseUrl = options.baseUrl;
   }
 
   protected override getAuthenticationHeaders(): Record<string, string> { return {} }

@@ -44,7 +44,8 @@ test('completed user setup is independent of command history', () => withProfile
 
 // ─── showOnboarding ──────────────────────────────────────────────────────────
 
-test('showOnboarding writes Babel logo to stdout', () => {
+test('showOnboarding writes Babel logo to stdout', () => withProfile(() => {
+  updateUserSettings({ setup: { completed: true } });
   // Capture stdout
   const chunks: string[] = [];
   const origWrite = process.stdout.write.bind(process.stdout);
@@ -75,9 +76,10 @@ test('showOnboarding writes Babel logo to stdout', () => {
   } finally {
     process.stdout.write = origWrite;
   }
-});
+}));
 
-test('showOnboarding output includes rule separator', () => {
+test('showOnboarding output includes rule separator', () => withProfile(() => {
+  updateUserSettings({ setup: { completed: true } });
   const chunks: string[] = [];
   const origWrite = process.stdout.write.bind(process.stdout);
   process.stdout.write = (chunk: string | Uint8Array): boolean => {
@@ -93,9 +95,10 @@ test('showOnboarding output includes rule separator', () => {
   } finally {
     process.stdout.write = origWrite;
   }
-});
+}));
 
-test('narrow onboarding uses a compact brand and explicit model command', () => {
+test('narrow onboarding uses a compact brand and explicit model command', () => withProfile(() => {
+  updateUserSettings({ setup: { completed: true } });
   const previousColumns = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
   const previousWrite = process.stdout.write;
   const chunks: string[] = [];
@@ -112,4 +115,19 @@ test('narrow onboarding uses a compact brand and explicit model command', () => 
     if (previousColumns) Object.defineProperty(process.stdout, 'columns', previousColumns);
     else Reflect.deleteProperty(process.stdout, 'columns');
   }
-});
+}));
+
+test('first-run onboarding announces setup instead of implying a ready agent', () => withProfile(() => {
+  const chunks: string[] = [];
+  const origWrite = process.stdout.write;
+  process.stdout.write = ((chunk: string) => { chunks.push(String(chunk)); return true; }) as typeof process.stdout.write;
+  try {
+    showOnboarding();
+    const plain = stripAnsi(chunks.join(''));
+    assert.match(plain, /Setup runs next/);
+    assert.match(plain, /sends no model requests/);
+    assert.doesNotMatch(plain, /Type a task to get started/);
+  } finally {
+    process.stdout.write = origWrite;
+  }
+}));
