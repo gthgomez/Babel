@@ -52,6 +52,8 @@ function prune(dir) {
   }
 }
 prune(resolve(packageRoot, 'dist'))
+// Test-only support has no runtime importer; shipping it would misstate the artifact inventory.
+for (const dir of ['testUtils', 'testing', 'test-helpers']) rmSync(resolve(packageRoot, 'dist', dir), { recursive: true, force: true })
 // These test-only loaders/builders are not runtime or package-qualification support.
 // Keep fixture-named runtime and benchmark modules, including required testSupport helpers.
 for (const file of [

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const TRUSTED_WORKFLOW = 'typecheck.yml'
@@ -14,14 +14,42 @@ export function readCandidateManifest(candidateDir) {
   const manifestPath = join(candidateDir, 'manifest.json')
   assert.ok(existsSync(manifestPath), 'Qualified candidate manifest is missing')
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-  assert.equal(manifest.schemaVersion, 1, 'Unexpected candidate manifest schema')
+  assert.equal(manifest.schemaVersion, 2, 'Unexpected candidate manifest schema; rebuild the qualified candidate')
   assert.match(manifest.sourceSha, /^[a-f0-9]{40}$/, 'Candidate sourceSha is invalid')
+  assert.match(manifest.sourceTreeSha, /^[a-f0-9]{40}$/, 'Candidate sourceTreeSha is invalid')
   assert.match(manifest.sha256, /^[a-f0-9]{64}$/, 'Candidate sha256 is invalid')
   assert.ok(typeof manifest.tarball === 'string' && manifest.tarball.length > 0, 'Candidate tarball name missing')
   return manifest
 }
 
-export function verifyQualifiedCandidate({candidateDir, expectedSourceSha, expectedVersion}) {
+/** Bind the immutable candidate metadata back to the checked-out frozen source. */
+export function verifyManifestBinding({manifest, sourceRoot}) {
+  const packageRoot = join(sourceRoot, 'babel-cli')
+  const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
+  const read = path => readFileSync(join(sourceRoot, path))
+  const digest = path => createHash('sha256').update(read(path)).digest('hex')
+  if (manifest.version !== pkg.version) throw new Error('Candidate version differs from the frozen source package')
+  const bins = Object.entries(pkg.bin ?? {}).map(([alias, target]) => ({alias, target})).sort((a, b) => a.alias.localeCompare(b.alias))
+  assert.deepEqual([...(manifest.inventory?.bin ?? [])].sort((a, b) => a.alias.localeCompare(b.alias)), bins, 'Candidate bin aliases differ from the frozen source package')
+  if (manifest.inventory?.testOnlyShipped !== false) throw new Error('Candidate inventory does not exclude test-only payload')
+  if (!Number.isInteger(manifest.inventory?.files) || manifest.inventory.files < 1) throw new Error('Candidate inventory file count is missing')
+  const files = manifest.manifest ?? []
+  if (files.length !== manifest.inventory.files) throw new Error('Candidate inventory count differs from the packed file list')
+  for (const entry of manifest.inventory.bin) {
+    if (!files.some(file => file.path === entry.target)) throw new Error(`Candidate bin target ${entry.target} is absent from the packed file list`)
+  }
+  for (const asset of manifest.inventory.requiredAssets ?? []) {
+    if (!files.some(file => file.path === asset)) throw new Error(`Candidate required asset ${asset} is absent from the packed file list`)
+  }
+  if (manifest.advisories?.status !== 'PASS' || manifest.advisories?.scope !== 'npm') throw new Error('Candidate advisory review did not pass the npm artifact scope')
+  if (manifest.advisories.lockSha256 !== digest('babel-cli/package-lock.json')) throw new Error('Candidate advisory review does not cover the frozen dependency lock')
+  if (manifest.advisories.reviewSha256 !== digest('config/dependency-advisory-review.json')) throw new Error('Candidate advisory review record differs from the frozen source')
+  if (manifest.provenance?.recordSha256 !== digest('babel-cli/source-provenance.json')) throw new Error('Candidate source provenance record differs from the frozen source')
+  if (manifest.publisherAuthenticity?.signed !== false || manifest.publisherAuthenticity?.checksumsOnly !== true) throw new Error('Candidate publisher authenticity claims are not recorded accurately')
+  return {packageVersion: pkg.version, binAliases: bins.map(entry => entry.alias)}
+}
+
+export function verifyQualifiedCandidate({candidateDir, expectedSourceSha, expectedVersion, sourceRoot}) {
   const manifest = readCandidateManifest(candidateDir)
   if (expectedSourceSha && manifest.sourceSha !== expectedSourceSha) {
     throw new Error('Qualified candidate sourceSha does not match frozen release source')
@@ -45,11 +73,12 @@ export function verifyQualifiedCandidate({candidateDir, expectedSourceSha, expec
   if (manifest.integrity && manifest.integrity !== integrity) {
     throw new Error('Qualified candidate integrity does not match archive bytes')
   }
+  if (sourceRoot) verifyManifestBinding({manifest, sourceRoot})
   return {manifest, archive, digest, integrity}
 }
 
-export function stagePromotionCandidate({candidateDir, outputDir, expectedSourceSha, expectedVersion, expectedRunId = null}) {
-  const verified = verifyQualifiedCandidate({candidateDir, expectedSourceSha, expectedVersion})
+export function stagePromotionCandidate({candidateDir, outputDir, expectedSourceSha, expectedVersion, expectedRunId = null, sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')}) {
+  const verified = verifyQualifiedCandidate({candidateDir, expectedSourceSha, expectedVersion, sourceRoot})
   if (expectedRunId && String(verified.manifest.runId) !== String(expectedRunId)) {
     throw new Error('Qualified candidate producer run does not match downloaded artifact')
   }
@@ -97,7 +126,9 @@ export async function downloadAndExtractTrustedCandidate({repository, sourceSha,
   const unzip = spawnSync('unzip', ['-qo', zipPath, '-d', outputDir], {encoding: 'utf8'})
   rmSync(zipPath, {force: true})
   if (unzip.status !== 0) throw new Error(unzip.stderr || 'Unable to extract qualified consumer artifact')
-  return meta
+  // The downloaded artifact must still bind its own archive bytes and source.
+  const verified = verifyQualifiedCandidate({candidateDir: outputDir, expectedSourceSha: sourceSha})
+  return {...meta, archive: verified.archive, sha256: verified.digest}
 }
 
 function parseArgs(argv) {
