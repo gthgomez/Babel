@@ -834,7 +834,7 @@ test('chat probe (4) CSV escaping positive: already-correct summary with green v
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
-        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'node --test verify.mjs' } },
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } },
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
@@ -861,41 +861,45 @@ test('chat probe (3) partial: relevant green node verify.mjs without criterion g
     writeFileSync(join(root, 'src', 'source.js'), 'export const value = 2;\n')
     writeFileSync(join(root, 'verify.mjs'), [
       "import assert from 'node:assert/strict';",
-      "import { readFileSync } from 'node:fs';",
-      "assert.match(readFileSync('src/source.js', 'utf8'), /value = 2/);",
+      "import { value } from './src/source.js';",
+      'assert.equal(value, 2);',
+      "console.log('TAP version 13');",
+      "console.log('ok 1 - exported value');",
+      "console.log('# tests 1');",
+      "console.log('# suites 0');",
+      "console.log('# pass 1');",
+      "console.log('# fail 0');",
+      "console.log('# cancelled 0');",
+      "console.log('# skipped 0');",
+      "console.log('# todo 0');",
     ].join('\n') + '\n')
     writeFileSync(join(root, 'package.json'), JSON.stringify({
       name: 'value-fixture', private: true,
-      scripts: { test: 'node --test --test-reporter=tap verify.mjs' },
+      scripts: { test: 'node verify.mjs' },
     }))
     initGitFixture(root)
-    const task = [
-      'Fix source.js so the exported value is 2.',
-      'Requirements:',
-      '- `node --test verify.mjs` must pass.',
-    ].join('\n')
+    const task = 'Fix source.js so the exported value is 2.'
     const o = await driveChat(root, task, [
       [
         { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'src/source.js' } },
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
-        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'node --test verify.mjs' } },
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } },
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
-        { type: 'text_delta', text: 'The exported value is already 2; node --test verify.mjs passed.' },
+        { type: 'text_delta', text: 'The exported value is already 2; npm test passed.' },
         { type: 'done', finishReason: 'stop' },
       ],
     ])
     const verifier = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
-      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'node --test verify.mjs')
-    assert.equal(verifier?.exit_code, 0, 'required bound verifier must actually run green')
+      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'npm test')
+    assert.equal(verifier?.exit_code, 0, 'the discovered project verifier must actually run green')
     assert.notEqual(o.outcome, 'VERIFIED_COMPLETE', o.result.answer.slice(0, 240))
-    assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED',
-      'dual semantic + command criteria must not publish no-change on command evidence alone')
-    assert.equal(o.outcome, 'UNVERIFIED_PATCH',
-      'partial coverage: grounded verify execution without closing the behavioral criterion')
+    assert.equal(o.outcome, 'NO_CHANGE_REQUIRED',
+      'the no-call module goal is bound to the exact green verifier and the tree already satisfies it')
+    assert.equal(o.durableOutcome, 'NO_CHANGE_REQUIRED')
     assert.equal(readFileSync(join(root, 'src', 'source.js'), 'utf8'), 'export const value = 2;\n')
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -910,30 +914,37 @@ test('chat probe (3) positive: already-correct CSV with relevant bound verifier 
     writeFileSync(join(root, 'verify.mjs'), [
       "import assert from 'node:assert/strict';",
       "import { readFileSync } from 'node:fs';",
-      "assert.match(readFileSync('data/metric.txt', 'utf8'), /answer=42/);",
+      "const text = readFileSync('data/metric.txt', 'utf8').trim();",
+      "assert.equal(text.split('=')[1], '42');",
+      "console.log('TAP version 13');",
+      "console.log('ok 1 - metric');",
+      "console.log('# tests 1');",
+      "console.log('# suites 0');",
+      "console.log('# pass 1');",
+      "console.log('# fail 0');",
+      "console.log('# cancelled 0');",
+      "console.log('# skipped 0');",
+      "console.log('# todo 0');",
     ].join('\n') + '\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'metric-fixture', private: true, type: 'module', scripts: { test: 'node verify.mjs' } }))
     initGitFixture(root)
-    const task = [
-      'Fix data/metric.txt so answer=42.',
-      'Requirements:',
-      '- `node --test verify.mjs` must pass.',
-    ].join('\n')
+    const task = 'Fix data/metric.txt so answer=42.'
     const o = await driveChat(root, task, [
       [
         { type: 'tool_use', id: 'r1', name: 'read_file', input: { path: 'data/metric.txt' } },
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
-        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'node --test verify.mjs' } },
+        { type: 'tool_use', id: 'v1', name: 'run_command', input: { command: 'npm test' } },
         { type: 'done', finishReason: 'tool_calls' },
       ],
       [
-        { type: 'text_delta', text: 'metric.txt already has answer=42; node --test verify.mjs passed.' },
+        { type: 'text_delta', text: 'metric.txt already has answer=42; npm test passed.' },
         { type: 'done', finishReason: 'stop' },
       ],
     ])
     const verify = (o.engine as unknown as { toolCallLog: Array<{ tool: string; target: string; exit_code?: number }> })
-      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'node --test verify.mjs')
+      .toolCallLog.find((e) => e.tool === 'run_command' && e.target === 'npm test')
     assert.equal(verify?.exit_code, 0)
     // Honest outcome for a mutating task with a green bound verifier but no
     // criterion-graph closure: we cannot certify the change was made, but the

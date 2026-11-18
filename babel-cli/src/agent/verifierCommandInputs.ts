@@ -31,7 +31,7 @@ const DEFAULT_FS: Required<VerifierCommandInputFs> = {
   },
 }
 
-const TEST_FILE_TOKEN_RE = /[\w@./\\-]+\.(?:test|spec)\.[cm]?[jt]sx?\b/g
+const TEST_FILE_TOKEN_RE = /[\w@./\\-]+\.(?:[cm]?[jt]sx?|py|rb|go|rs|sh)\b/g
 const PACKAGE_JSON = 'package.json'
 
 function resolveInputs(

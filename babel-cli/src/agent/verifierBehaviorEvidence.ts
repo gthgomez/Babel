@@ -137,7 +137,7 @@ export function stripSkippedRegistrations(source: string): string {
 export function stripDeadLiteralGuards(source: string): string {
   let out = ''
   let consumed = 0
-  const guard = /\b(?:if|while)\s*\(\s*(?:false|0n|-0|0|NaN|''|""|``|null|undefined|void\s+0)\s*\)/g
+  const guard = /\b(?:if|while)\s*\(\s*(?:false|\+0|0x0|0b0|0\.0|0n|-0|0|NaN|''|""|``|null|undefined|void\s+0)\s*\)/g
   for (const match of source.matchAll(guard)) {
     if (match.index! < consumed) continue
     let cursor = match.index! + match[0].length
@@ -266,23 +266,54 @@ function numericExpression(value: string): number | null {
   return result !== null && index === tokens.length ? result : null
 }
 
-/** Const-only, scoped to the current test (or file prefix for scripts). */
+function applyDeclarations(scope: string, constants: Map<string, string>): void {
+  for (const match of scope.matchAll(/\b(const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)/g)) {
+    const kind = match[1]!
+    const name = match[2]!
+    if (kind !== 'const') {
+      // A mutable local shadows any outer const; resolving the declaration
+      // would certify a possibly stale value. Never fall back to the outer map.
+      constants.delete(name)
+      continue
+    }
+    const value = evaluateOperand(match[3]!, constants)
+    if (value === null) constants.delete(name)
+    else constants.set(name, value)
+  }
+}
+
+function blankTestSpans(code: string, spans: ReadonlyArray<{ start: number; end: number }>): string {
+  let out = ''
+  let consumed = 0
+  for (const span of [...spans].sort((left, right) => left.start - right.start)) {
+    if (span.start < consumed) continue
+    out += code.slice(consumed, span.start) + ' '.repeat(span.end - span.start + 1)
+    consumed = span.end + 1
+  }
+  return out + code.slice(consumed)
+}
+
+/**
+ * Const-only resolution with lexical shadowing.
+ *
+ * - Top-level declarations are visible to every test (callbacks run after module
+ *   initialization), including a const written after the test.
+ * - Declarations inside other test callbacks are removed from the file scope.
+ * - A same-name const/let/var in the current test shadows the outer binding; a
+ *   mutable shadow drops the binding rather than falling back to the outer value.
+ */
 function localConstants(
   code: string,
-  scopeStart: number,
-  beforeIndex: number,
+  candidateIndex: number,
+  span: { start: number; end: number } | undefined,
+  spans: ReadonlyArray<{ start: number; end: number }>,
 ): Map<string, string> {
   const constants = new Map<string, string>()
-  const scopes = scopeStart > 0
-    ? [code.slice(0, scopeStart), code.slice(scopeStart, beforeIndex)]
-    : [code.slice(0, beforeIndex)]
-  for (const scope of scopes) {
-    for (const match of scope.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+)/g)) {
-      // let/var are deliberately absent: their value can change before the
-      // assertion, so resolving the declaration would certify a stale value.
-      const value = evaluateOperand(match[2]!, constants)
-      if (value !== null) constants.set(match[1]!, value)
-    }
+  if (span) {
+    applyDeclarations(blankTestSpans(code, spans), constants)
+    applyDeclarations(code.slice(span.start, candidateIndex), constants)
+  } else {
+    applyDeclarations(code.slice(0, candidateIndex), constants)
   }
   return constants
 }
@@ -372,10 +403,12 @@ function liveNestingAllowed(prefix: string): boolean {
     if (declared) headerEnd = declared.index! + declared[0].length
   }
   const body = prefix.slice(headerEnd)
+  const syncNames = '(?:forEach|map|filter|some|every|reduce|flatMap|find|findIndex|reduceRight)'
+  // An iteration over a literal empty array never invokes its callback.
+  if (new RegExp('\\[\\s*\\]\\s*\\.\\s*' + syncNames + '\\s*\\(').test(body)) return false
   const extraArrows = (body.match(/=>/g) ?? []).length
   const extraFunctions = (body.match(/\bfunction\b/g) ?? []).length
-  const sync = '(?:forEach|map|filter|some|every|reduce|flatMap|find|findIndex|reduceRight)'
-  const allowed = (body.match(new RegExp('\\.\\s*' + sync + '\\s*\\(\\s*(?:function\\b[^()]*|[^()]{0,140}?=>)', 'g')) ?? []).length
+  const allowed = (body.match(new RegExp('\\.\\s*' + syncNames + '\\s*\\(\\s*(?:function\\b[^()]*|[^()]{0,140}?=>)', 'g')) ?? []).length
   // One synchronous iteration callback is live. Deeper nesting, an unrelated
   // callback (then/finally/dead helper) or a stored un-invoked arrow is not.
   return extraArrows + extraFunctions <= allowed && extraArrows + extraFunctions <= 1
@@ -403,7 +436,7 @@ export function assertionEvidenceMatches(
     if (hasRegistrations && !spans.some(span => candidate.index >= span.start && candidate.index <= span.end)) continue
     const span = spans.find(item => candidate.index >= item.start && candidate.index <= item.end)
     if (span && !liveNestingAllowed(code.slice(span.start, candidate.index))) continue
-    const constants = localConstants(code, span ? span.start : 0, candidate.index)
+    const constants = localConstants(code, candidate.index, span, spans)
     if (callPattern) {
       const leftCall = callPattern.test(candidate.left)
       const rightCall = callPattern.test(candidate.right)

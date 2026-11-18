@@ -580,9 +580,14 @@ function specMatchesContent(input: {
   // assertion must also use a binding imported from the goal's target module;
   // an unrelated value that happens to equal the fragment is not evidence.
   if (input.spec.fragment === null) return false
+  const codeTargets = input.spec.targetPaths.filter(path => RELEVANT_PATH_EXTENSION.test(path) && /\.(?:[cm]?[jt]sx?)$/i.test(path))
+  const dataTargets = input.spec.targetPaths.filter(path => !codeTargets.includes(path))
   const requiredSymbols = input.spec.callPattern
     ? []
-    : importedSymbolsForTarget(code, input.inputFile, input.spec.targetPaths)
+    : [
+        ...importedSymbolsForTarget(code, input.inputFile, codeTargets),
+        ...dataTargets.flatMap(path => [path, posix.basename(path)]),
+      ]
   if (!input.spec.callPattern && requiredSymbols.length === 0) return false
   return assertionEvidenceMatches(
     code,

@@ -10,15 +10,18 @@ After W02 #544 merges and this branch is rebased:
 
 - `babel-cli/src/agent/chatEngine.ts`, `ChatEngine.decideCompletion` (the
   `this.executorKernel.completion.decide({...})` call, currently ~2713-2736):
-  - Keep the ambient opt-out exactly as produced by
-    `noChangeFinalRevisionScope({ ambientReadOnly: isReadOnlyChat() })`:
-    `finalRevisionRequired: false` only when `requestedOutcome === 'NO_CHANGE_REQUIRED'`
-    **and** `isReadOnlyChat()` is true.
+  - Replace the local forward projection with W02's real producer/helper from
+    `babel-cli/src/authority/finalRevision.ts`:
+    `finalRevisionRequired = chatFinalRevisionRequired({ ambientReadOnly: isReadOnlyChat(), hasProjectRoot: Boolean(this.options.projectRoot) })`.
+    Keep `finalRevisionRequired: false` only when that helper returns false
+    (ambient read-only, or no project root).
   - For the project-scoped accepted no-change path (`isAcceptedReadOnlyTerminal()` true,
-    `isReadOnlyChat()` false), do **not** set `finalRevisionRequired: false`.
-    Pass W02's `finalRevision` witness for the current receipt/workspace revision
-    (`verifierInput.currentWorkspaceRevisionHash` and/or the current
-    `lastVerifierReceipt.boundRevision`, using W02's exact field name/contract).
+    `chatFinalRevisionRequired(...)` true), pass W02's `FinalRevisionWitnessV1`
+    `finalRevision` produced by `evaluateFinalRevisionWitness({ projectRoot,
+    toolCallLog: toGateToolLog(this.toolCallLog), requiredVerifierCommands:
+    verifierInput.requiredVerifierCommands })`. If no witness can be produced, pass
+    `unavailableFinalRevisionWitness(reason)` (this correctly downgrades); never
+    fabricate a `verified` witness.
   - Mutating/VERIFIED paths keep their existing fields; no final-revision option.
 - `ChatEngine.buildResult` readOnly projection (~4640) calls the same predicate; it emits
   `NO_CHANGE_REQUIRED` through `decideCompletion`, so it inherits the same scoping.
@@ -48,6 +51,11 @@ The existing forward pin is
 (`src/agent/taskAcceptanceEvidenceCompletion.test.ts`). It asserts the ambient helper and
 passes the spread through `createExecutorKernel('chat').completion.decide`; it fails if
 W02's kernel ignores or rejects the ambient opt-out.
+
+Use W02's exported helpers directly in the rebase-time test:
+`chatFinalRevisionRequired`, `evaluateFinalRevisionWitness`,
+`unavailableFinalRevisionWitness`, and the `FinalRevisionWitnessV1` type, all from
+`src/authority/finalRevision.ts`. Do not hand-build witness objects.
 
 ## 3. Ambient control after rebase
 
