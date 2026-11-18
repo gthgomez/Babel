@@ -58,6 +58,42 @@ function mockDeepSeekAskResponse(): void {
               }, init)) as typeof fetch;
 }
 
+/** Empty structured answer: the parse boundary must demote it to ASK_FAILED (TF-10). */
+function mockDeepSeekEmptyAskResponse(): void {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  process.env['OPENROUTER_API_KEY'] = 'sk-or-test-key';
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+    openRouterMockResponse({
+                schema_version: 1,
+                status: 'ANSWER_READY',
+                summary: '',
+                answer: '',
+                facts: [],
+                assumptions: [],
+                evidence: [],
+                next: [],
+              }, init)) as typeof fetch;
+}
+
+/** Structured answer that responsibly requests more context instead of guessing. */
+function mockDeepSeekNeedsContextAskResponse(): void {
+  process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
+  process.env['DEEPINFRA_API_KEY'] = 'test-key';
+  process.env['OPENROUTER_API_KEY'] = 'sk-or-test-key';
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+    openRouterMockResponse({
+                schema_version: 1,
+                status: 'NEEDS_MORE_CONTEXT',
+                summary: 'The target file was not named.',
+                answer: 'Name the file that should be inspected to answer this question.',
+                facts: [],
+                assumptions: [],
+                evidence: [],
+                next: ['Re-run babel ask with the target file name.'],
+              }, init)) as typeof fetch;
+}
+
 function mockDeepSeekPlanResponse(): void {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
@@ -162,6 +198,58 @@ describe('AgentSession', { concurrency: false }, () => {
       assert.equal(payload.status, 'ANSWER_READY');
       assert.equal(payload.command, 'ask');
       assert.ok(payload.answer?.summary);
+    } finally {
+      restoreDeepSeekMock();
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('exits nonzero when the ask answer fails closed as ASK_FAILED (TF-10)', { concurrency: false }, async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'babel-session-ask-failed-'));
+    try {
+      const { writeFileSync } = await import('node:fs');
+      writeFileSync(join(repo, 'README.md'), '# Demo\n\nLocal demo project.\n', 'utf-8');
+      mockDeepSeekEmptyAskResponse();
+      const session = new AgentSession({ model: 'deepseek-v4-flash-openrouter',
+        task: 'what is this project?',
+        verb: 'ask',
+        projectRoot: repo,
+      });
+      const result = await session.run();
+      const payload = result.payload as {
+        status?: string;
+        user_status?: string;
+        answer?: { answer?: string; summary?: string };
+      };
+      assert.equal(payload.status, 'ASK_FAILED');
+      assert.equal(payload.user_status, 'failed');
+      assert.notEqual(result.exitCode, 0);
+      // Truthful failure text, never a fabricated answer.
+      assert.ok(payload.answer?.answer);
+      assert.ok((payload.answer?.answer ?? '').length > 0);
+    } finally {
+      restoreDeepSeekMock();
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps NEEDS_MORE_CONTEXT on the nonzero ask exit lane', { concurrency: false }, async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'babel-session-ask-context-'));
+    try {
+      mockDeepSeekNeedsContextAskResponse();
+      const session = new AgentSession({ model: 'deepseek-v4-flash-openrouter',
+        task: 'what is this project?',
+        verb: 'ask',
+        projectRoot: repo,
+      });
+      const result = await session.run();
+      const payload = result.payload as {
+        status?: string;
+        user_status?: string;
+      };
+      assert.equal(payload.status, 'NEEDS_MORE_CONTEXT');
+      assert.equal(payload.user_status, 'blocked');
+      assert.equal(result.exitCode, 1);
     } finally {
       restoreDeepSeekMock();
       rmSync(repo, { recursive: true, force: true });
