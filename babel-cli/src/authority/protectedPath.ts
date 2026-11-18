@@ -82,14 +82,16 @@ function stripAssignment(token: string): string {
 
 /**
  * Strip revision prefixes Git uses before a path:
- * `HEAD:.env`, `origin/main:.env`, `refs/heads/main:.env`, index `:.env`,
- * staged `:0:.env`, and the `@:` HEAD synonym.
+ * `HEAD:.env`, `origin/main:.env`, `refs/heads/main:.env`, single-character
+ * branches (`a:.env`), `HEAD~1:.env`, index `:.env`, staged `:0:.env`, and
+ * the `@:` HEAD synonym.
  *
- * A Windows drive path (`C:\\Users\\x\\.env`) and a URL (`https://...`) are
- * not revisions: the full token is classified unchanged. More than one colon
- * is never split outside the leading index form.
+ * The rule classifies WHAT IS READ, not whether the prefix proves a valid ref:
+ * after excluding URLs and absolute Windows drive paths, a token with exactly
+ * one colon contributes its suffix. That covers refs whose characters are not
+ * in Git's common subset (`foo+bar`, `foo%bar`) without weakening negatives.
+ * A Windows drive-relative path (`C:.env`) contributes the same `.env` suffix.
  */
-const GIT_REVISION_PREFIX_RE = /^[A-Za-z0-9._@/~^{}-]+$/;
 const WINDOWS_DRIVE_ABSOLUTE_RE = /^[A-Za-z]:[\\/]/;
 const URL_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 
@@ -111,15 +113,8 @@ function revisionSuffixes(token: string): string[] {
   ) {
     return candidates;
   }
-  const prefix = withoutAssignment.slice(0, firstColon);
   const suffix = withoutAssignment.slice(firstColon + 1);
-  // `@` is the HEAD synonym; other prefixes may be branch/tag/revision text.
-  if (
-    suffix.length > 0 &&
-    (prefix === '@' || (prefix.length > 1 && GIT_REVISION_PREFIX_RE.test(prefix)))
-  ) {
-    candidates.push(suffix);
-  }
+  if (suffix.length > 0) candidates.push(suffix);
   return candidates;
 }
 
