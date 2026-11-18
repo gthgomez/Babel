@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -7,9 +7,11 @@ import test from 'node:test';
 import {
   readVaguenessRepos,
   readVaguenessScenarios,
+  resolveVaguenessRepoTargets,
   runVaguenessBenchmark,
   scoreVaguenessScenario,
 } from './liteVaguenessBenchmark.js';
+import { BABEL_ROOT } from '../cli/constants.js';
 
 test('vagueness fixtures load with expected schema', () => {
   const scenarios = readVaguenessScenarios();
@@ -170,5 +172,27 @@ test('runVaguenessBenchmark skips optional missing repos without failing gate', 
     rmSync(manifestDir, { recursive: true, force: true });
     rmSync(scenariosPath, { recursive: true, force: true });
     rmSync(evidenceDir, { recursive: true, force: true });
+  }
+});
+
+test('vagueness repo targets are checkout-relative and portable', () => {
+  const repos = readVaguenessRepos();
+  assert.equal(repos.workspace_root, '.');
+  assert.ok(repos.repos.every((repo) => !repo.path.includes('\\')), 'fixture paths must use forward slashes');
+  assert.ok(repos.repos.every((repo) => !repo.path.startsWith('/')), 'fixture paths must not be absolute');
+
+  const targets = resolveVaguenessRepoTargets();
+  const core = targets.find((target) => target.repoId === 'babel_core');
+  assert.ok(core);
+  assert.equal(core.projectRoot, BABEL_ROOT);
+  assert.ok(existsSync(core.projectRoot), 'the default repo target must exist on this checkout');
+
+  const override = mkdtempSync(join(tmpdir(), 'vagueness-portable-'));
+  try {
+    const overridden = resolveVaguenessRepoTargets({ workspaceRoot: override });
+    const overriddenCore = overridden.find((target) => target.repoId === 'babel_core');
+    assert.equal(overriddenCore?.projectRoot, override);
+  } finally {
+    rmSync(override, { recursive: true, force: true });
   }
 });
