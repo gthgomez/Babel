@@ -218,12 +218,19 @@ export async function withSavedPlanApplication<T>(id: string, options: {
   const fd = openSync(lock, 'wx', 0o600)
   try {
     const plan = loadSavedPlan(id, env)
-    admit(plan)
-    // A prompt is an unbounded window; prove no plan identity changed while it
-    // was open. The under-lock admit above rechecks source and project state.
-    if (options.preflight && JSON.stringify(plan) !== JSON.stringify(preflightPlan)) {
-      throw new Error('Plan source or project changed during Apply admission; inspect the retained plan and create a fresh plan.')
+    // A prompt is an unbounded window; prove no plan identity, project state or
+    // source changed while it was open. This comparison must run before the
+    // generic admission checks so the specific admission-window contract stays
+    // observable to callers and tests.
+    if (options.preflight) {
+      const currentSource = plan.sourceRunId ? loadPlanHandoff({ repoPath: plan.projectRoot, task: plan.task, planRunId: plan.sourceRunId }) : null
+      if (JSON.stringify(plan) !== JSON.stringify(preflightPlan) ||
+          projectFingerprint(plan.projectRoot, env) !== preflightPlan.fingerprint ||
+          !currentSource || !currentSource.contract || handoffIdentity(currentSource).digest !== preflightPlan.sourceDigest) {
+        throw new Error('Plan source or project changed during Apply admission; inspect the retained plan and create a fresh plan.')
+      }
     }
+    admit(plan)
     const attempt: SavedPlan = { ...plan, state: 'applying', attemptId: randomUUID(), attemptStartedAt: new Date().toISOString() }
     atomicPlanWrite(path, attempt)
     try {

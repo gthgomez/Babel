@@ -3169,7 +3169,7 @@ Notes:
   program
     .command('resume')
     .argument('[run]', 'latest or a run directory to inspect for resume')
-    .description('Inspect resume evidence; action-taking resume is temporarily unavailable')
+    .description('Inspect resume evidence; saved-run action resume is unavailable, legacy --run/--plan remains explicit')
     .option('--run <run_dir>', 'Legacy manual-bridge run directory')
     .option('--project <name>', 'Use latest run pointer for this project when --run is omitted')
     .option(
@@ -3188,7 +3188,7 @@ Examples:
   $ bl resume latest
 
 Important:
-  - Action-taking resume is temporarily unavailable until task identity, settlement, and verifier authority are qualified.
+  - Saved-run action resume is temporarily unavailable until task identity, settlement, and verifier authority are qualified.
   - babel continue latest --inspect-only inspects saved runs without taking an action.
   - Legacy manual Plan resume remains available explicitly through
     resume --run <run_dir> --plan <path>; retained artifacts are never

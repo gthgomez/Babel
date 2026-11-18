@@ -212,13 +212,16 @@ test('tool policy inspection reports and evaluates the same environment profile'
   }
 });
 
-test('resume help truthfully describes the temporary action quarantine', () => {
+test('resume help truthfully separates the saved-run quarantine from the legacy manual lane', () => {
   const program = new Command();
   registerWorkflowCommands(program);
   const resume = program.commands.find(command => command.name() === 'resume');
   assert.ok(resume);
   const help = resume.helpInformation();
-  assert.match(help, /action-taking resume is temporarily unavailable/i);
+  assert.match(help, /saved-run action resume is unavailable/i);
+  assert.doesNotMatch(help, /action-taking resume is temporarily unavailable/i);
+  assert.match(help, /Legacy manual-bridge run directory/);
+  assert.match(help, /Legacy manual Plan path/);
   assert.doesNotMatch(help, /resume latest retries actionable saved runs/i);
   const continueCommand = program.commands.find(command => command.name() === 'continue');
   assert.ok(continueCommand);
