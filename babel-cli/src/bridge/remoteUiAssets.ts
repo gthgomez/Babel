@@ -19,11 +19,30 @@ const CONTENT_TYPES: Record<string, string> = {
 
 export function resolveRemoteUiDir(): string {
   const here = dirname(fileURLToPath(import.meta.url));
-  const nextToModule = join(here, 'remote-ui');
-  if (existsSync(join(nextToModule, 'index.html'))) return nextToModule;
-  const fromSrc = join(here, '..', '..', 'src', 'bridge', 'remote-ui');
-  if (existsSync(join(fromSrc, 'index.html'))) return fromSrc;
-  throw new Error('Remote UI assets not found next to the bridge module or under src/bridge/remote-ui');
+  const packageRoot = join(here, '..', '..');
+  const candidates = [
+    // Compiled/runtime layout: dist/bridge/remote-ui (build copies assets here).
+    join(here, 'remote-ui'),
+    // Installed package layout: staged runtime resources.
+    join(packageRoot, 'resources', 'bridge', 'remote-ui'),
+    // Source checkout without a staging step (tsx and vitest).
+    join(here, '..', '..', 'src', 'bridge', 'remote-ui'),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(join(candidate, 'index.html'))) return candidate;
+  }
+  throw new Error(
+    'Remote UI assets are missing from this installation (expected dist/bridge/remote-ui or resources/bridge/remote-ui). Reinstall the package or omit the remote UI surface.',
+  );
+}
+
+export function remoteUiDirAvailable(): boolean {
+  try {
+    resolveRemoteUiDir();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function remoteUiFileForPath(pathname: string): { file: string; contentType: string } | null {
@@ -45,9 +64,22 @@ export function remoteUiFileForPath(pathname: string): { file: string; contentTy
 }
 
 export function writeRemoteUiResponse(pathname: string, res: ServerResponse): boolean {
-  const resolved = remoteUiFileForPath(pathname);
+  let resolved: { file: string; contentType: string } | null;
+  try {
+    resolved = remoteUiFileForPath(pathname);
+  } catch {
+    // A packaged install without staged shell assets must degrade to 404, not
+    // a 500 that makes the bridge look unhealthy to the PWA and to /health
+    // consumers reading the same process.
+    return false;
+  }
   if (!resolved) return false;
-  const body = readFileSync(resolved.file);
+  let body: Buffer;
+  try {
+    body = readFileSync(resolved.file);
+  } catch {
+    return false;
+  }
   const headers: Record<string, string> = {
     'Content-Type': resolved.contentType,
     'Cache-Control': 'no-store',
