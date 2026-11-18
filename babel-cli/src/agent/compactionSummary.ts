@@ -46,7 +46,7 @@ export function summarizeDroppedTurns(dropped: ChatMessage[]): string {
         toolFacts.push(`- ${firstLine}`);
       }
     } else if (m.role === 'user' && m.content) {
-      facts.push(`- User turn (preserve these constraints):\n${formatCompactedUserTurn(m.content)}`);
+      facts.push(`- ${formatCompactedUserTurn(m.content)}`);
     }
   }
   if (facts.length === 0) {

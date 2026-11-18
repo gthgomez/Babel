@@ -18,7 +18,6 @@ import {
 } from './chatEngineSupport.js';
 import type { ChatMessage } from './chatToolDefinitions.js';
 import { commitCompaction } from './compactionCommit.js';
-import { HeuristicTruncationStrategy } from './chatCompaction.js';
 import {
   createThreadEventLog,
   rebuildProviderMessagesFromEvents,
@@ -132,11 +131,13 @@ test('a retained window without a user turn still carries the dropped constraint
     message('system', 'system policy'),
     message('user', INITIAL_TASK),
     message('assistant', 'Acknowledged.'),
-    message('tool', 'tool output\nsecond line'),
+    message('tool', `tool line a\n${'detail '.repeat(60)}`),
+    message('user', 'Additional detail for the same task.'),
+    message('tool', `tool line b\n${'detail '.repeat(60)}`),
     message('assistant', 'Next step.'),
-    message('tool', 'more output\nsecond line'),
+    message('tool', `tool line c\n${'detail '.repeat(60)}`),
     message('assistant', 'Checking.'),
-    message('tool', 'final output\nsecond line'),
+    message('tool', `tool line d\n${'detail '.repeat(60)}`),
   ];
   const state = heuristicState(conversation);
   state.maxConversationMessages = 4;
@@ -144,27 +145,6 @@ test('a retained window without a user turn still carries the dropped constraint
 
   assert.ok(state.conversation.some((entry) => entry.role === 'user'));
   assert.match(JSON.stringify(state.conversation), /\(4\) Do not add new dependencies/);
-});
-
-test('the compaction strategy fallback retains dropped user constraints', async () => {
-  const strategy = new HeuristicTruncationStrategy(3);
-  const messages: ChatMessage[] = [
-    message('system', 'system policy'),
-    message('user', INITIAL_TASK),
-    message('assistant', 'Working.'),
-    message('user', LATER_CONSTRAINT),
-    message('assistant', 'Continuing.'),
-    message('user', 'Most recent request: finish the report.'),
-  ];
-
-  const compacted = await strategy.compact(messages, { model: 'test', maxTokens: 100 });
-  const text = JSON.stringify(compacted);
-
-  assert.match(text, /\(1\) Never modify src\/legacy/, 'fallback compaction erased the initial task constraints');
-  assert.match(text, /\(4\) Do not add new dependencies/, 'fallback compaction erased later constraints');
-  assert.match(text, /keep the smoke fixture under 2 seconds/, 'fallback compaction erased a mid-task constraint');
-  assert.ok(compacted.some((entry) => entry.name === 'compaction_summary'));
-  assert.equal(compacted[0]!.role, 'system');
 });
 
 test('cold-resume projection keeps the full original task after a heuristic commit', async () => {

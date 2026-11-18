@@ -895,12 +895,11 @@ describe('CompactionManager integration', () => {
     // Should use heuristic (didn't call LLM)
     assert.ok(result.length <= msgs.length);
     assert.strictEqual(result[0]!.role, 'system');
-    // No LLM-produced summary. The deterministic heuristic summary is allowed
-    // (it retains dropped user constraints without a provider call).
+    // No compaction summary from LLM
     const summaryMsgs = result.filter(
       (m) => m.name === 'compaction_summary',
     );
-    assert.ok(summaryMsgs.every((m) => m.provenance !== 'model'));
+    assert.strictEqual(summaryMsgs.length, 0);
   });
 });
 

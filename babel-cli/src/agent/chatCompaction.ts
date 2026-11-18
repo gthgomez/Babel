@@ -30,8 +30,6 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 
-import { summarizeDroppedTurns } from './compactionSummary.js';
-
 import { dispatchRunOperation, RunStoppedError } from '../runtime/run-control.js';
 import { prepareProviderRequest } from '../runners/preparedProviderRequest.js';
 import { CampaignBudgetDeniedError, CampaignRouteUnsupportedError } from '../runners/campaignDispatchGate.js';
@@ -342,25 +340,9 @@ export class HeuristicTruncationStrategy implements CompactionStrategy {
         (m.name === 'working_state' ||
           (typeof m.content === 'string' && m.content.includes('<!-- BABEL_WORKING_STATE -->'))),
     );
-    // Dropped history is summarized, not silently erased. In particular every
-    // user turn's constraints remain visible to later turns and cold resume.
-    const dropped = messages
-      .slice(systemIdx >= 0 ? systemIdx + 1 : 0, startIdx)
-      .filter((m) => !working.includes(m));
-    const summaryMessage: ChatMessage | null = dropped.some(
-      (m) => m.role === 'user' || m.role === 'tool',
-    )
-      ? {
-          role: 'assistant',
-          content: summarizeDroppedTurns(dropped),
-          name: 'compaction_summary',
-          provenance: 'controller',
-          authoritative: false,
-        }
-      : null;
     const result = systemMsg
-      ? [systemMsg, ...working, ...(summaryMessage ? [summaryMessage] : []), ...kept]
-      : [...working, ...(summaryMessage ? [summaryMessage] : []), ...kept];
+      ? [systemMsg, ...working, ...kept]
+      : [...working, ...kept];
 
     return result;
   }
