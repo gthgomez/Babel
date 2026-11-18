@@ -506,6 +506,14 @@ const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your|this|that)\\s+)?(?:' +
   '(?:existing\\s+)?(?:(?:regression|hidden)\\s+)?tests?(?:\\s+file)?|test\\s+suite|package\\s+scripts?|' +
   'scripts?(?:\\s+or\\s+data)?|data|(?:third[- ]party\\s+)?dependencies|' +
   'permissions?|verification\\s+gates?|provider\\s+accounting|(?:unrelated|other)\\s+(?:files?|code)|' +
+  // A preservation clause about the published surface ("do not change public
+  // APIs") is scoped to that surface; it must not be read as a global no-edit
+  // directive that erases the requested repair. The same applies to a named
+  // sibling behavior the user wants untouched.
+  '(?:public|exported)\\s+(?:apis?|interfaces?|surface|contracts?|exports?)|' +
+  '(?:the\\s+|its\\s+|this\\s+|our\\s+)?api\\s+surface|' +
+  'behavior\\s+of\\s+(?:the\\s+|its\\s+|this\\s+)?[A-Za-z_$][\\w$.-]*(?:\\s+[A-Za-z_$][\\w$.-]*){0,3}|' +
+  '[A-Za-z_$][\\w$.-]*[\\u0027’]s\\s+(?:public\\s+)?behaviou?r|' +
   '[`"\\\']?[\\w./\\\\-]+\\.[A-Za-z0-9_-]{1,12}[`"\\\']?)';
 const PROTECTED_EDIT_OBJECT_LIST = new RegExp(
   `^${PROTECTED_EDIT_OBJECT}(?:${COORD_SEPARATOR}(?:${READ_ONLY_VERB_SOURCE}\\s+)?${PROTECTED_EDIT_OBJECT})*$`, 'i',
