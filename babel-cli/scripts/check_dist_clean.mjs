@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 function inventory(directory, prefix = '') {
   return readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).flatMap(entry => {
     const path = join(directory, entry.name), relative = prefix + entry.name
-    if (entry.isDirectory()) return ['__snapshots__', 'testinfra'].includes(entry.name) ? [] : inventory(path, relative + '/')
+    if (entry.isDirectory()) return ['__snapshots__', 'testinfra', 'testUtils', 'testing', 'test-helpers'].includes(entry.name) ? [] : inventory(path, relative + '/')
     if (/\.test\.[cm]?js$|\.map$|\.d\.[cm]?ts$|\.tsbuildinfo$/.test(entry.name)) return []
     assert.ok(entry.isFile(), 'Unexpected dist file type')
     return [[relative, createHash('sha256').update(readFileSync(path)).digest('hex')]]
