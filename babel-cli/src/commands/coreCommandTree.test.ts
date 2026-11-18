@@ -107,11 +107,20 @@ test('core registration preserves the complete existing command contract', () =>
   assert.equal(sandbox.description, 'Prepare the Linux sandbox image used for project commands');
   assert.deepEqual(sandbox.children.map(child => child.name), ['prepare']);
   assert.equal(sandbox.children[0]?.description, 'Download the pinned image, check shell and Git, and save it for this user');
+  assert.deepEqual(
+    contract.children
+      .find(child => child.name === 'plugins')
+      ?.children.find(child => child.name === 'enable')
+      ?.options.map(option => option.flags),
+    ['--allow-trust <level>', '--allow-mcp-launch', '--json'],
+    'plugin enable exposes explicit trust and MCP launch consent',
+  );
   const legacy = withoutIntentionalCommandExtensions(contract);
   const digest = createHash('sha256').update(JSON.stringify(legacy)).digest('hex');
-  // W11: the legacy apply-plan directory route now fails closed and advertises
-  // the saved-Plan-id apply path instead of executing an unguarded run.
-  assert.equal(digest, 'f357fd2b3943a15bf56aeb763e7cc3e8e2344ce796d019c51c3f5e3145f37dfd');
+  // W09: plugin enable exposes explicit trust and MCP launch consent.
+  // W11: the legacy apply-plan directory route fails closed and advertises the
+  // saved-Plan-id apply path instead of executing an unguarded run.
+  assert.equal(digest, '4f5480e507e9030d45cc280d4e06aabb2f5a345603b025d21b69d1a26b4112e2');
   assert.deepEqual(replay[0], {
     name: 'replay', aliases: [], description: 'Render the replay transcript of persisted action/observation evidence for a conversation',
     args: [{ name: 'conversation-id', required: true, variadic: false, description: '' }],

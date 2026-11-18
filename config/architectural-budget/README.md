@@ -14,6 +14,14 @@ output. Each grant identifies its role, reason, and maximum executable call
 count. New calls in approved files still fail. Ordinary CLI text output is
 outside the live renderer boundary; raw writes under `src/ui/` require a grant.
 
+`unused-modules.json` is the baseline for a separate dead-code ratchet, run
+with `npm --prefix babel-cli run check:dead-code`. It lists modules that the
+configured knip report cannot reach from any CLI, daemon, worker, test or
+script entry. The check fails on a new unreachable module and on a stale
+baseline entry. Membership is recorded debt, not approval; remove an entry only
+after proving it is unreachable through static imports, dynamic path strings
+and test/script consumers.
+
 The syntax-aware scan recognizes direct, optional, computed literal, imported,
 and local aliases. Unknown computed process methods fail closed. Comments and
 string literals are not executable host calls. Embedded child programs and

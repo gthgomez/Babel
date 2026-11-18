@@ -3,6 +3,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { resolveRuntimePaths } from '../config/runtimePaths.js';
+import {
+  frameJsonRpcMessage,
+  McpFrameLimitError,
+  parseFramedMessages,
+} from './framing.js';
 
 import { inspectCatalog } from '../control-plane/stackResolver.js';
 import { previewInstructionStackResolution } from '../control-plane/stackResolver.js';
@@ -271,8 +276,20 @@ const EXPLICITLY_DISALLOWED_TOOLS = new Set([
 
 function writeMessage(message: Record<string, unknown>): void {
   const body = JSON.stringify(message);
-  const payload = `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`;
-  process.stdout.write(payload);
+  try {
+    process.stdout.write(frameJsonRpcMessage(body));
+  } catch (error) {
+    if (!(error instanceof McpFrameLimitError)) throw error;
+    const fallback = JSON.stringify({
+      jsonrpc: '2.0',
+      id: message['id'] ?? null,
+      error: {
+        code: -32603,
+        message: '[MCP_FRAME_LIMIT] Response exceeds the configured MCP frame ceiling.',
+      },
+    });
+    process.stdout.write(frameJsonRpcMessage(fallback));
+  }
 }
 
 function writeResult(id: string | number, result: Record<string, unknown>): void {
@@ -492,41 +509,47 @@ async function handleRequest(request: Record<string, unknown>): Promise<void> {
 export async function runBabelMcpServer(): Promise<void> {
   process.stdin.resume();
   let buffer = Buffer.alloc(0);
+  let frameFailure = false;
+  let processing: Promise<void> = Promise.resolve();
 
-  process.stdin.on('data', async (chunk) => {
+  async function processChunk(chunk: Buffer | string): Promise<void> {
+    if (frameFailure) return;
     const chunkBuffer = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
     buffer = Buffer.concat([buffer, chunkBuffer]);
 
-    while (true) {
-      const headerEnd = buffer.indexOf('\r\n\r\n');
-      if (headerEnd === -1) {
-        return;
+    try {
+      const parsed = parseFramedMessages(buffer);
+      buffer = Buffer.from(parsed.remainder);
+      for (const parseError of parsed.parseErrors) {
+        writeError(null, -32700, `Parse error: ${parseError}`);
       }
-
-      const headerText = buffer.subarray(0, headerEnd).toString('utf8');
-      const contentLengthMatch = /Content-Length:\s*(\d+)/i.exec(headerText);
-      if (!contentLengthMatch) {
-        buffer = Buffer.alloc(0);
-        return;
-      }
-
-      const contentLength = Number.parseInt(contentLengthMatch[1]!, 10);
-      const messageStart = headerEnd + 4;
-      const messageEnd = messageStart + contentLength;
-      if (buffer.length < messageEnd) {
-        return;
-      }
-
-      const payload = buffer.subarray(messageStart, messageEnd).toString('utf8');
-      buffer = buffer.subarray(messageEnd);
-
-      try {
-        const request = JSON.parse(payload) as Record<string, unknown>;
+      for (const request of parsed.messages) {
         await handleRequest(request);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        writeError(null, -32700, `Parse error: ${message}`);
       }
+    } catch (error) {
+      if (error instanceof McpFrameLimitError) {
+        writeError(null, -32700, `[MCP_FRAME_LIMIT] ${error.message}`);
+        frameFailure = true;
+        buffer = Buffer.alloc(0);
+        process.stdin.removeAllListeners('data');
+        process.stdin.pause();
+        process.stdin.destroy();
+        process.exitCode = 1;
+        return;
+      }
+      // Malformed framing is reported without retaining attacker-controlled bytes.
+      writeError(
+        null,
+        -32700,
+        `Parse error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      buffer = Buffer.alloc(0);
     }
+  }
+
+  process.stdin.on('data', (chunk: Buffer | string) => {
+    processing = processing
+      .then(() => processChunk(chunk))
+      .catch(() => undefined);
   });
 }
