@@ -234,12 +234,33 @@ async function main(): Promise<void> {
     ...(options.output ? { outputPath: resolve(options.output) } : {}),
   });
 
+  // Gate the scripted control. A mock run is deterministic and must not
+  // report a false 0/N from an unwired provider; a control failure is a real
+  // benchmark/protocol regression and exits non-zero.
+  if (options.provider === 'mock') {
+    const control = report.summary.scoring.scripted_protocol_control;
+    if (control.total > 0 && control.passed !== control.total) {
+      process.stderr.write(
+        `[benchmark] scripted ChatEngine control failed: ${control.passed}/${control.total} ` +
+          `cells passed. This run is protocol evidence only; it is not a model score.\n`,
+      );
+      process.exitCode = 1;
+    }
+  }
+
   if (!options.json) {
     process.stdout.write(`Report: ${report.artifact_path}\n`);
     process.stdout.write(
       `Summary: ${report.summary.success}/${report.summary.runnable} runnable passed; ` +
         `${report.summary.manual_required} manual/external; ` +
         `${report.summary.false_complete} false-complete\n`,
+    );
+    const source = report.summary.scoring;
+    process.stdout.write(
+      `Scoring source: ${source.provider_mode}` +
+        (source.model_performance_claim ? ' (live model evidence)' : ' (scripted protocol control; not model-performance evidence)') +
+        `; scripted=${source.scripted_protocol_control.passed}/${source.scripted_protocol_control.total}` +
+        `; live=${source.live_model.passed}/${source.live_model.total}\n`,
     );
     if (report.summary.total_cost_usd !== null) {
       process.stdout.write(
