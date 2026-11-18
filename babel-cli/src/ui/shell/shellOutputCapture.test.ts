@@ -27,7 +27,7 @@ describe('shellOutputCapture', () => {
   });
 
   it('only captures print-only slash commands', () => {
-    for (const command of ['status', 'help', 'cost', 'stats', 'permissions', 'runs']) {
+    for (const command of ['status', 'help', 'cost', 'stats', 'permissions', 'runs', 'chain', 'agents', 'target', 'evidence', 'thinking']) {
       assert.equal(capturesShellCommandOutput(command), true, command);
     }
     // Interactive pickers and terminal-owning commands stay uncaptured.

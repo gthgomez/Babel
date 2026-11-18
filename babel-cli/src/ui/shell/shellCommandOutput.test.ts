@@ -91,7 +91,19 @@ describe('shellCommandOutput', () => {
   });
 
   it('only claims print-only slash commands', () => {
-    for (const command of ['status', 'help', 'cost', 'stats', 'permissions', 'runs']) {
+    for (const command of [
+      'status',
+      'help',
+      'cost',
+      'stats',
+      'permissions',
+      'runs',
+      'chain',
+      'agents',
+      'target',
+      'evidence',
+      'thinking',
+    ]) {
       assert.equal(capturesShellCommandOutput(command), true, command);
     }
     // `model`, `m` and `provider` open interactive pickers; capturing them

@@ -33,6 +33,12 @@ const PRINT_ONLY_COMMANDS = new Set([
   'whystopped',
   'why',
   'doctor',
+  'chain',
+  'agents',
+  'target',
+  'evidence',
+  'thinking',
+  'think',
 ]);
 
 /**
