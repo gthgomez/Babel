@@ -50,6 +50,73 @@ test('failed worker-chain mutation is not replayed without settlement identity',
   }
 });
 
+test('a resumed unverified completion banners not_verified instead of failed', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-worker-resume-unverified-'));
+  const sessionRunDir = join(root, 'runs', 'babel-lite', '20260605T130000Z-do-unverified');
+  mkdirSync(sessionRunDir, { recursive: true });
+  const originalRun = AgentSession.prototype.run;
+  let calls = 0;
+  try {
+    // A failed chain whose next step is a read-only verb is CONTINUE_READY,
+    // so the resume path below really drives the (stubbed) session verb.
+    // (A failed 'fix' step is deliberately CONTINUE_BLOCKED — mutation
+    // resumes require settlement identity the manifest cannot prove.)
+    writeWorkerChainManifest(sessionRunDir, {
+      schema_version: 1, artifact_type: 'babel_lite_worker_chain', session_run_id: '20260605T130000Z-do-unverified',
+      session_run_dir: sessionRunDir, task: 'Only edit src/math.js. Run npm test before completing.', project: null,
+      project_root: root, provider: 'mock', chain_status: 'failed', steps: [], next_verb: 'propose', failed_step: 'propose', updated_at: '2026-11-07T00:00:00.000Z',
+    });
+    const resumedStub = async () => {
+      calls++;
+      return {
+        payload: {
+          status: 'UNVERIFIED_PATCH',
+          terminal_outcome: 'UNVERIFIED_PATCH',
+          user_status: 'not_verified',
+          run_dir: sessionRunDir,
+        },
+        exitCode: 6,
+        humanText: '',
+      };
+    };
+    AgentSession.prototype.run = resumedStub as unknown as typeof AgentSession.prototype.run;
+    const ctx = {
+      state: {},
+      lastRunDir: null,
+      resolveCurrentTarget: () => ({ targetRoot: root }),
+    } as unknown as ReplContext;
+    const previousLog = console.log;
+    try {
+      console.log = () => {};
+      await handleContinue(ctx, []);
+    } finally {
+      console.log = previousLog;
+    }
+    assert.equal(calls, 1);
+    assert.equal(ctx.state.lastRunUserStatus, 'not_verified');
+    // Control: a genuine failure exit still banners failed.
+    AgentSession.prototype.run = (async () => {
+      calls++;
+      return { payload: { status: 'PROPOSAL_FAILED', user_status: 'failed', run_dir: sessionRunDir }, exitCode: 1, humanText: '' };
+    }) as unknown as typeof AgentSession.prototype.run;
+    const ctxFailure = {
+      state: {},
+      lastRunDir: null,
+      resolveCurrentTarget: () => ({ targetRoot: root }),
+    } as unknown as ReplContext;
+    try {
+      console.log = () => {};
+      await handleContinue(ctxFailure, []);
+    } finally {
+      console.log = previousLog;
+    }
+    assert.equal(ctxFailure.state.lastRunUserStatus, 'failed');
+  } finally {
+    AgentSession.prototype.run = originalRun;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('buildLiteContinueAssessment resumes linked worker chain from manifest', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-lite-recovery-'));
   try {
