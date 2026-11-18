@@ -349,6 +349,29 @@ describe('governed child worktree adoption', () => {
     assert.ok(credential.conflicts.some((c) => c.code === 'credential_path'), JSON.stringify(credential));
   });
 
+  it('removes the worktree only after a fully adopted and verified change', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-cleanup');
+    const change = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
+
+    const adopted = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      worktreeName: child.worktree.name,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [change],
+      mode: 'copy',
+      cleanupWorktree: true,
+      verify: () => ({ ok: true, summary: 'readback matched' }),
+    });
+
+    assert.equal(adopted.status, 'adopted', JSON.stringify(adopted, null, 2));
+    assert.equal(adopted.worktreeRemoved, true);
+    assert.equal(existsSync(child.worktree.path), false);
+    assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 2;\n');
+  });
+
   it('retains the worktree when cleanup is requested but changes are unadopted', async () => {
     const root = createGitProject();
     const child = await childWorktree(root, 'adopt-retain', { cleanupWorktree: true });

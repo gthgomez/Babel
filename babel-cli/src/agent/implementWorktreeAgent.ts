@@ -1301,10 +1301,30 @@ export function promoteImplementWorktree(
       });
     }
 
+    let worktreeRemoved = false;
+    if (mode === 'copy' && input.cleanupWorktree) {
+      const name =
+        input.worktreeName ??
+        worktreePath.split(/[\\/]/).filter(Boolean).pop() ??
+        '';
+      if (name) {
+        try {
+          removeWorktree(name, { projectRoot, force: true });
+          worktreeRemoved = true;
+        } catch (err) {
+          diagnostics.push({
+            code: 'worktree_cleanup_failed',
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
     return buildResult({
       success: true,
       status: 'adopted',
       verification,
+      worktreeRemoved,
       summary: `Adopted ${adoptedPaths.length} file(s) and ${deletedPaths.length} deletion(s) from the child worktree.`,
     });
   }
