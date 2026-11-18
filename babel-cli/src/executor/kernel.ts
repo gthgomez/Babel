@@ -208,11 +208,12 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
   const acceptance = input.requestedOutcome === 'VERIFIED_COMPLETE'
     ? evaluateCriterionCompletionV1(input.acceptance) : undefined;
   const finalRevisionStale = finalRevision?.status === 'stale';
+  const effectUnproven = finalRevision?.reason?.startsWith('effect_unproven') === true;
   const noChangeRequested = input.requestedOutcome === 'NO_CHANGE_REQUIRED';
   const noChangeProofRequired = noChangeRequested && input.finalRevisionRequired !== false;
   const noChangeUnproven = noChangeProofRequired && finalRevision?.status !== 'verified';
   const verified = input.proof?.compliant === true && gate.allow && acceptance?.verified === true &&
-    !finalRevisionStale && !noChangeUnproven;
+    !finalRevisionStale && !effectUnproven && !noChangeUnproven;
   const finalOutcome: TerminalOutcome =
     input.requestedOutcome === "VERIFIED_COMPLETE" && verified
       ? "VERIFIED_COMPLETE"
@@ -233,6 +234,8 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
       : input.requestedOutcome !== "VERIFIED_COMPLETE" || verified,
     reason: verified
       ? "proof_carrying_completion_accepted"
+      : effectUnproven
+        ? finalRevision?.reason ?? 'effect_unproven:config_capable_git'
       : noChangeUnproven || finalRevisionStale
         ? finalRevisionReason
         : input.requestedOutcome === "VERIFIED_COMPLETE"
@@ -260,6 +263,7 @@ function decideFinalRevisionCompletion(
   input: FinalRevisionCompletionInput,
 ): CompletionDecision {
   const stale = input.finalRevision.status === 'stale';
+  const effectUnproven = input.finalRevision.reason?.startsWith('effect_unproven') === true;
   const verified = input.finalRevision.status === 'verified';
   const requestedOutcome: TerminalOutcome = input.verifiedClaim ? 'VERIFIED_COMPLETE' : 'UNVERIFIED_PATCH';
   const finalOutcome: TerminalOutcome =
@@ -270,13 +274,15 @@ function decideFinalRevisionCompletion(
         : requestedOutcome;
   const reason = verified && !stale
     ? 'final_revision_verified'
-    : stale
-      ? `final_revision_stale:${input.finalRevision.reason ?? 'changed_bytes'}`
-      : `final_revision_${input.finalRevision.status}:${input.finalRevision.reason ?? 'unproven'}`;
+    : effectUnproven
+      ? input.finalRevision.reason ?? 'effect_unproven:config_capable_git'
+      : stale
+        ? `final_revision_stale:${input.finalRevision.reason ?? 'changed_bytes'}`
+        : `final_revision_${input.finalRevision.status}:${input.finalRevision.reason ?? 'unproven'}`;
   return {
     requestedOutcome,
     finalOutcome,
-    allowed: requestedOutcome !== 'VERIFIED_COMPLETE' || (verified && !stale),
+    allowed: requestedOutcome !== 'VERIFIED_COMPLETE' || (verified && !stale) || effectUnproven,
     reason,
     finalRevision: input.finalRevision,
     ...(input.finalRevision.stale_paths.length ? { stalePaths: [...input.finalRevision.stale_paths] } : {}),

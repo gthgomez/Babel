@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 import { evaluateFinalRevisionWitness } from './finalRevision.js'
+import { decidePipelineFinalCompletion } from '../pipeline/finalCompletion.js'
 
 function gitEnv(root: string): NodeJS.ProcessEnv {
   return {
@@ -100,6 +101,103 @@ test('git cat-file --filters executes the configured filter and the witness is s
       requiredVerifierCommands: ['npm test'],
     })
     assert.equal(witness.status, 'stale')
+  } finally {
+    cleanup()
+  }
+})
+
+
+test('repo-configured diff.external escapes argv and downgrades to effect-unproven', () => {
+  const { root, cleanup } = repo()
+  try {
+    writeFileSync(join(root, 'file.txt'), 'changed\n')
+    const marker = join(root, 'DIFF_EXTERNAL_RAN')
+    const external = join(root, 'external-diff.sh')
+    writeFileSync(external, `#!/bin/sh\n: > "${marker}"\nexit 0\n`)
+    chmodSync(external, 0o755)
+    const env = gitEnv(root)
+    execFileSync('git', ['config', 'diff.external', external], { cwd: root, env, windowsHide: true })
+    execFileSync('git', ['diff'], { cwd: root, env, stdio: 'ignore', windowsHide: true })
+    assert.equal(existsSync(marker), true, 'configured diff.external must execute')
+    const witness = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [
+        { tool: 'shell_exec', target: `git config diff.external ${external}`, exit_code: 0 },
+        GREEN,
+        { tool: 'shell_exec', target: 'git diff', exit_code: 0 },
+      ],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(witness.status, 'unverified')
+    assert.equal(witness.reason, 'effect_unproven:config_capable_git')
+    const final = decidePipelineFinalCompletion({
+      mode: 'deep', status: 'COMPLETE', projectRoot: root, requiredVerifierCommands: ['npm test'],
+      toolCallLog: [
+        { step: 1, tool: 'shell_exec', target: `git config diff.external ${external}`, exit_code: 0, stdout: '', stderr: '', verified: true },
+        { step: 2, tool: 'test_run', target: 'npm test', exit_code: 0, stdout: 'ok', stderr: '', verified: true },
+        { step: 3, tool: 'shell_exec', target: 'git diff', exit_code: 0, stdout: '', stderr: '', verified: true },
+      ],
+    })
+    assert.equal(final.status, 'COMPLETE')
+    assert.equal(final.decision?.finalOutcome, 'UNVERIFIED_PATCH')
+    assert.match(final.condition ?? '', /effect-unproven/)
+  } finally {
+    cleanup()
+  }
+})
+
+test('hardened diff invocation disables diff.external and stays verified', () => {
+  const { root, cleanup } = repo()
+  try {
+    writeFileSync(join(root, 'file.txt'), 'changed\n')
+    const marker = join(root, 'DIFF_EXTERNAL_RAN')
+    const external = join(root, 'external-diff.sh')
+    writeFileSync(external, `#!/bin/sh\n: > "${marker}"\nexit 0\n`)
+    chmodSync(external, 0o755)
+    const env = gitEnv(root)
+    execFileSync('git', ['config', 'diff.external', external], { cwd: root, env, windowsHide: true })
+    execFileSync('git', ['-c', 'core.fsmonitor=false', 'diff', '--no-ext-diff', '--no-textconv'], {
+      cwd: root, env, stdio: 'ignore', windowsHide: true,
+    })
+    assert.equal(existsSync(marker), false, '--no-ext-diff must forbid the configured driver')
+    const witness = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git -c core.fsmonitor=false diff --no-ext-diff --no-textconv', exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(witness.status, 'verified')
+  } finally {
+    cleanup()
+  }
+})
+
+test('repo-configured fsmonitor executes on git status; hardening disables it', () => {
+  const { root, cleanup } = repo()
+  try {
+    const marker = join(root, 'FSMONITOR_RAN')
+    const hook = join(root, 'fsmonitor.sh')
+    writeFileSync(hook, `#!/bin/sh\n: > "${marker}"\nprintf '{}'\n`)
+    chmodSync(hook, 0o755)
+    const env = gitEnv(root)
+    execFileSync('git', ['config', 'core.fsmonitor', hook], { cwd: root, env, windowsHide: true })
+    execFileSync('git', ['status'], { cwd: root, env, stdio: 'ignore', windowsHide: true })
+    assert.equal(existsSync(marker), true, 'configured fsmonitor must execute')
+    const plain = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git status', exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(plain.status, 'unverified')
+    assert.equal(plain.reason, 'effect_unproven:config_capable_git')
+    rmSync(marker, { force: true })
+    execFileSync('git', ['-c', 'core.fsmonitor=false', 'status'], { cwd: root, env, stdio: 'ignore', windowsHide: true })
+    assert.equal(existsSync(marker), false, '-c core.fsmonitor=false must disable the hook')
+    const hardened = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git -c core.fsmonitor=false status', exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(hardened.status, 'verified')
   } finally {
     cleanup()
   }

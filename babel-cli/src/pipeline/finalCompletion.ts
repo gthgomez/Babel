@@ -99,6 +99,14 @@ export function decidePipelineFinalCompletion(
         'The inspected conclusion is no longer current; rerun the check. Worktree changes are retained.',
     }
   }
+  if (finalRevision.reason?.startsWith('effect_unproven') === true) {
+    return {
+      status: input.status,
+      decision,
+      finalRevision,
+      condition: 'Post-verifier git inspection is effect-unproven: repository config can execute diff/textconv/fsmonitor programs that are invisible in argv. Completion is published as UNVERIFIED_PATCH; use --no-ext-diff --no-textconv and -c core.fsmonitor=false to harden.',
+    }
+  }
   if (!verifiedClaim || decision.finalOutcome === 'VERIFIED_COMPLETE') {
     return { status: input.status, decision, finalRevision, condition: null }
   }

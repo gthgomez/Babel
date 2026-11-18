@@ -7,7 +7,13 @@ import { join } from 'node:path'
 
 import {
   FINAL_REVISION_CONTRACT_VERSION,
+  GIT_CONFIG_CAPABLE_SUBCOMMANDS,
+  GIT_EXEC_WRITE_DENIALS,
+  GIT_EXEC_WRITE_DENIAL_PROBES,
   GIT_READ_ONLY_SUBCOMMANDS,
+  gitCommandProofReadOnly,
+  gitConfigCapability,
+  gitConfigEffectUnproven,
   evaluateFinalRevisionWitness,
   hashFinalRevisionFile,
   chatFinalRevisionRequired,
@@ -99,7 +105,7 @@ test('read-only shell inspection after the verifier does not fake a late write',
   try {
     const log = [
       { tool: 'shell_exec', target: 'npm test', exit_code: 0 },
-      { tool: 'shell_exec', target: 'git diff', exit_code: 0 },
+      { tool: 'shell_exec', target: 'git rev-parse HEAD', exit_code: 0 },
     ]
     const witness = evaluateFinalRevisionWitness({
       projectRoot: root,
@@ -220,7 +226,6 @@ test('ordinary read-only shell commands after a green verifier still certify', (
       'grep -n x src/app.ts',
       'head -20 src/app.ts',
       'find . -name "*.ts"',
-      'git diff 2>/dev/null',
       'cat src/app.ts | head',
     ]) {
       const witness = evaluateFinalRevisionWitness({
@@ -458,8 +463,9 @@ test('common read-only inspection shapes certify after a green verifier', () => 
     'git branch --show-current',
     'git describe --tags',
     'git blame src/app.ts',
-    'git grep TODO',
+    'git --no-pager grep TODO',
     'git config --get user.name',
+    'git config --file .git/config --get user.name',
     'git stash list',
     'git worktree list',
     'git tag -l',
@@ -477,6 +483,8 @@ test('git write forms remain mutations', () => {
   for (const command of [
     'git config --set user.name x',
     'git config user.name x',
+    'git help status',
+    'git blame --contents=/tmp/read-exposure file',
     'git stash push',
     'git tag v1',
     'git branch new-branch',
@@ -591,13 +599,9 @@ test('sed write and execute families classify as mutations', () => {
 
 test('common read flags and read-only options still certify', () => {
   for (const command of [
-    'git log --oneline --graph --stat -n 5',
-    'git log -20',
-    'git show -s',
-    'git status -sb',
-    'git status -uno',
+    'git -c core.fsmonitor=false status -sb',
+    'git -c core.fsmonitor=false status -uno',
     'git branch -av',
-    'git diff --stat',
     'git tag -n5',
     'git config --get user.name',
     'grep -o x src/app.ts',
@@ -614,15 +618,111 @@ test('common read flags and read-only options still certify', () => {
   }
 })
 
-test('proof table keeps the decoder read set for existing git reads and gh inspection', async () => {
-  const { decodeCommand } = await import('./commandDecoder.js')
+
+// ── Round-6 config-capability and false-block regressions ───────────────────
+
+const GIT_PROBES: Readonly<Record<string, string>> = {
+  status: 'git status', diff: 'git diff', log: 'git log', show: 'git show',
+  blame: 'git blame file', grep: 'git grep TODO', 'cat-file': 'git cat-file -p HEAD:file',
+  'rev-parse': 'git rev-parse HEAD', 'rev-list': 'git rev-list HEAD',
+  'ls-files': 'git ls-files', 'ls-tree': 'git ls-tree HEAD', shortlog: 'git shortlog',
+  reflog: 'git reflog show', whatchanged: 'git whatchanged', 'merge-base': 'git merge-base HEAD HEAD',
+  'name-rev': 'git name-rev HEAD', 'check-ignore': 'git check-ignore file',
+  'check-attr': 'git check-attr x file', var: 'git var GIT_AUTHOR_IDENT',
+  'show-ref': 'git show-ref', 'for-each-ref': 'git for-each-ref',
+  'count-objects': 'git count-objects', fsck: 'git fsck', version: 'git version',
+  cherry: 'git cherry', 'range-diff': 'git range-diff A...B A...C',
+  branch: 'git branch --show-current', tag: 'git tag -l', stash: 'git stash list',
+  worktree: 'git worktree list', remote: 'git remote -v', submodule: 'git submodule status',
+  config: 'git config --get user.name', notes: 'git notes list', describe: 'git describe --tags',
+}
+
+test('denial corpus is derived from the exported denial structure', () => {
+  const probes = GIT_EXEC_WRITE_DENIAL_PROBES.filter(probe =>
+    GIT_EXEC_WRITE_DENIALS.some(pattern => pattern.test(probe)))
+  assert.equal(probes.length, GIT_EXEC_WRITE_DENIAL_PROBES.length)
+  for (const pattern of GIT_EXEC_WRITE_DENIALS) {
+    assert.ok(GIT_EXEC_WRITE_DENIAL_PROBES.some(probe => pattern.test(probe)), String(pattern))
+  }
   for (const subcommand of GIT_READ_ONLY_SUBCOMMANDS) {
-    const command = `git ${subcommand}`
-    if (decodeCommand(command).semantic !== 'read_local') continue
+    for (const denial of probes) {
+      const command = `git ${subcommand} ${denial}`
+      assert.equal(witnessFor(command).status, 'stale', command)
+    }
+  }
+})
+
+test('config-capability corpus covers every proof-table subcommand', () => {
+  assert.deepEqual([...GIT_CONFIG_CAPABLE_SUBCOMMANDS].sort(), ['diff', 'grep', 'log', 'range-diff', 'show', 'status', 'whatchanged'])
+  for (const subcommand of GIT_READ_ONLY_SUBCOMMANDS) {
+    const probe = GIT_PROBES[subcommand]
+    assert.ok(probe, `missing probe for ${subcommand}`)
+    assert.equal(gitCommandProofReadOnly(probe), true, probe)
+    const capability = gitConfigCapability(subcommand)
+    if (capability === 'config_capable') {
+      assert.equal(gitConfigEffectUnproven(probe), true, probe)
+      const witness = witnessFor(probe)
+      assert.equal(witness.status, 'unverified', probe)
+      assert.match(witness.reason ?? '', /^effect_unproven:config_capable_git/, probe)
+    } else {
+      assert.equal(gitConfigEffectUnproven(probe), false, probe)
+      assert.equal(witnessFor(probe).status, 'verified', probe)
+    }
+  }
+})
+
+test('hardened config-capable invocations restore verified proof', () => {
+  for (const command of [
+    'git -c core.fsmonitor=false --no-pager diff --no-ext-diff --no-textconv',
+    'git -c core.fsmonitor=false --no-pager log --no-ext-diff --no-textconv',
+    'git -c core.fsmonitor=false --no-pager show --no-ext-diff --no-textconv',
+    'git -c core.fsmonitor=false --no-pager whatchanged --no-ext-diff --no-textconv',
+    'git -c core.fsmonitor=false --no-pager status',
+    'git --no-pager grep TODO',
+  ]) {
+    assert.equal(gitConfigEffectUnproven(command), false, command)
     assert.equal(witnessFor(command).status, 'verified', command)
   }
-  for (const command of ['gh pr view 1', 'gh run list']) {
-    assert.equal(decodeCommand(command).semantic, 'read_local', command)
+})
+
+test('inverted table false-block shapes are admitted as unverified, not stale', () => {
+  for (const command of [
+    'git diff --no-renames --text -Sfoo --patience --histogram --summary --minimal --ignore-submodules --compact-summary --dirstat',
+    'git log -U3 --unified=3 -w --ignore-all-space',
+    'git grep -A3 -B3 -C3 -m1 -q -o -h TODO',
+  ]) {
+    const witness = witnessFor(command)
+    assert.equal(witness.status, 'unverified', command)
+    assert.match(witness.reason ?? '', /^effect_unproven:/, command)
+  }
+  for (const command of [
+    'git blame -w -M -C -e -f file',
+    'sed "y/a/b/" file',
+    "sed '1a text' file",
+    "sed -n '/start/,/end/p' file",
+  ]) {
     assert.equal(witnessFor(command).status, 'verified', command)
+  }
+})
+
+test('two-way decoder cross-check for proof-table reads', async () => {
+  const { decodeCommand } = await import('./commandDecoder.js')
+  const documentedWriteDivergence = new Set(['branch', 'config', 'stash', 'worktree'])
+  for (const subcommand of GIT_READ_ONLY_SUBCOMMANDS) {
+    const probe = GIT_PROBES[subcommand]
+    if (!probe) continue
+    const tableRead = gitCommandProofReadOnly(probe)
+    const semantic = decodeCommand(probe).semantic
+    assert.equal(tableRead, true, probe)
+    if (gitConfigCapability(subcommand) === 'mechanical') {
+      assert.equal(witnessFor(probe).status, 'verified', probe)
+    }
+    if (semantic === 'read_local') assert.equal(tableRead, true, probe)
+    if (semantic === 'write_local_reversible' || semantic === 'infrastructure_mutation') {
+      assert.ok(documentedWriteDivergence.has(subcommand), `${subcommand}: ${semantic}`)
+    }
+    if (documentedWriteDivergence.has(subcommand)) {
+      assert.ok(semantic === 'write_local_reversible' || semantic === 'infrastructure_mutation', subcommand)
+    }
   }
 })

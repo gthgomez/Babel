@@ -326,3 +326,27 @@ test('policyVersion names the final-revision contract only when a witness is use
   })
   assert.equal(withWitness.policyVersion, 'executor-contract-v1+final-revision-v1')
 })
+
+test('effect-unproven config-capable git is a soft downgrade, not a false block', () => {
+  const effectWitness = {
+    ...revisionWitness('unverified'),
+    reason: 'effect_unproven:config_capable_git',
+  }
+  const deep = createExecutorKernel('deep').completion.decideFinalRevision({
+    verifiedClaim: true,
+    finalRevision: effectWitness,
+  })
+  assert.equal(deep.finalOutcome, 'UNVERIFIED_PATCH')
+  assert.equal(deep.allowed, true)
+  assert.match(deep.reason, /^effect_unproven:/)
+
+  const noChange = createExecutorKernel('chat').completion.decide({
+    mode: 'chat', requestedOutcome: 'NO_CHANGE_REQUIRED', hasWrite: false,
+    verificationPolicy: 'required', finalRevisionRequired: true,
+    finalRevision: effectWitness,
+    toolCallLog: [{ tool: 'read_file', target: 'a.ts', exit_code: 0 }],
+  })
+  assert.equal(noChange.finalOutcome, 'UNVERIFIED_PATCH')
+  assert.equal(noChange.allowed, false)
+  assert.match(noChange.reason, /^effect_unproven/)
+})
