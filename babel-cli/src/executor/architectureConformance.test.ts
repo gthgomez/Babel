@@ -929,7 +929,7 @@ test("proposed finding register assigns all 100 IDs to declared workstreams", (t
   const manifest = readJson<ReconciliationManifest>(RECONCILIATION_PATH);
   const registerPath = path.join(REPO_ROOT, manifest.register.path);
   if (!existsSync(registerPath)) {
-    t.skip(`register not present at ${manifest.register.path} (proposed PR #536)`);
+    t.skip("campaign finding register is not present on this branch (proposed PR not merged)");
     return;
   }
   const rows = parseCsv(readFileSync(registerPath, "utf8"));
