@@ -186,3 +186,21 @@ test('an unsettled verifier process cannot certify completion', () => {
     cleanup()
   }
 })
+
+test('a confirmed child mutation after the verifier is stale', () => {
+  const { root, cleanup } = fixture()
+  try {
+    const witness = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [
+        { tool: 'test_run', target: 'npm test', exit_code: 0 },
+        { tool: 'sub_agent', target: 'child', effect_status: 'confirmed_change', mutation_paths: ['app.ts'] },
+      ],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(witness.status, 'stale')
+    assert.deepEqual(witness.stale_paths, ['app.ts'])
+  } finally {
+    cleanup()
+  }
+})

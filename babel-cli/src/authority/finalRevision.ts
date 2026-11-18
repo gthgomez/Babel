@@ -214,6 +214,11 @@ function isMutationEntry(entry: FinalRevisionToolEntry): boolean {
   if (!isSuccessful(entry) || entry.stale === true) return false
   // A host-proven no-op changed no bytes and cannot invalidate proof.
   if (entry.effect_status === 'confirmed_no_change') return false
+  if (entry.tool === 'sub_agent') {
+    // A child effect invalidates proof only when the host confirmed a change or
+    // recorded mutation paths; an unsettled child stays conservative.
+    return entry.effect_status === 'confirmed_change' || Boolean(entry.mutation_paths?.length)
+  }
   if (MUTATION_TOOLS.has(entry.tool)) return true
   if (!['shell_exec', 'run_command', 'test_run'].includes(entry.tool) || isVerifierEntry(entry)) return false
   // Proven read-only or test-only commands leave worktree bytes untouched.
