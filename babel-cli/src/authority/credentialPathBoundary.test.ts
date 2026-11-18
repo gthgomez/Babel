@@ -67,6 +67,32 @@ test('credential path classification is one registry shared by file effects and 
   assert.equal(isCredentialPathReference('git show HEAD:.env'), true);
   assert.equal(isCredentialPathReference('git show :.env'), true);
   assert.equal(isCredentialPathReference('git show :0:.env'), true);
+  for (const command of [
+    'git show origin/main:.env',
+    'git show refs/heads/main:.env',
+    'git cat-file -p refs/heads/main:.env',
+    'git diff origin/main:.env',
+    'git log -p -- refs/heads/main:.env',
+    'git show "origin/main:.env"',
+    "git show 'refs/heads/main:.env'",
+  ]) {
+    assert.equal(isCredentialPathReference(command), true, command);
+    assert.equal(decodeCommand(command).capability, 'expose_credentials', command);
+  }
+  // Slash-capable refs stay bounded: non-credential paths, Windows drives,
+  // URLs and multi-colon forms are not revision-stripped into a false match.
+  for (const command of [
+    'git show origin/main:src/app.ts',
+    'git diff origin/main:src/app.ts',
+    'git show HEAD:foo:bar',
+    'cat C:\\Users\\x\\app.ts',
+    'cat https://host/x',
+  ]) {
+    assert.equal(isCredentialPathReference(command), false, command);
+  }
+  assert.equal(isCredentialTargetPath('C:\\Users\\x\\app.ts'), false);
+  assert.equal(isCredentialTargetPath('C:\\Users\\x\\.env'), true);
+  assert.equal(isCredentialTargetPath('https://host/x'), false);
   assert.equal(isCredentialPathReference('rg TOKEN .npmrc'), true);
   assert.equal(isCredentialPathReference('npm test -- .env.test'), true, 'path classifier is conservative; command gate stays shape-aware');
 });
@@ -124,6 +150,15 @@ test('shell execution denies decoded credential-class effects before a process s
       'git show :0:.env',
       'git diff .env',
       'git log -p -- .env',
+      'git show origin/main:.env',
+      'git show refs/heads/main:.env',
+      'git cat-file -p refs/heads/main:.env',
+      'git diff origin/main:.env',
+      'git diff refs/heads/main:.env',
+      'git log -p -- origin/main:.env',
+      'git log -p -- refs/heads/main:.env',
+      'git show "origin/main:.env"',
+      "git show 'refs/heads/main:.env'",
     ]) {
       const result = await executor.shellExecAsync(command, root, 10_000);
       assert.equal(result.exit_code, 1, command);
@@ -170,6 +205,11 @@ test('decoded credential effects cover registry, transfer and Git inspection var
     'git show :.env',
     'git cat-file -p :.env',
     'git show :0:.env',
+    'git show origin/main:.env',
+    'git show refs/heads/main:.env',
+    'git cat-file -p refs/heads/main:.env',
+    'git diff origin/main:.env',
+    'git log -p -- refs/heads/main:.env',
     'git diff .env',
     'git log -p -- .env',
     'findstr TOKEN .env',
@@ -184,6 +224,7 @@ test('decoded credential effects cover registry, transfer and Git inspection var
     'cat .env.template',
     'cat normal.txt',
     'git status .env',
+    'git show origin/main:src/app.ts',
     'git commit -m "docs: describe .env handling"',
     'npm test -- .env.test',
     'curl https://example.invalid/readme',

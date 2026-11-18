@@ -82,17 +82,44 @@ function stripAssignment(token: string): string {
 
 /**
  * Strip revision prefixes Git uses before a path:
- * `HEAD:.env`, `origin/main:.env`, index `:.env`, and staged `:0:.env`.
+ * `HEAD:.env`, `origin/main:.env`, `refs/heads/main:.env`, index `:.env`,
+ * staged `:0:.env`, and the `@:` HEAD synonym.
+ *
+ * A Windows drive path (`C:\\Users\\x\\.env`) and a URL (`https://...`) are
+ * not revisions: the full token is classified unchanged. More than one colon
+ * is never split outside the leading index form.
  */
+const GIT_REVISION_PREFIX_RE = /^[A-Za-z0-9._@/~^{}-]+$/;
+const WINDOWS_DRIVE_ABSOLUTE_RE = /^[A-Za-z]:[\\/]/;
+const URL_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
+
 function revisionSuffixes(token: string): string[] {
   const withoutAssignment = stripAssignment(token);
   const candidates = [withoutAssignment];
   if (withoutAssignment.startsWith(':')) {
     const stagedIndex = /^:(?:\d+)?:(.+)$/.exec(withoutAssignment);
     candidates.push(stagedIndex?.[1] ?? withoutAssignment.slice(1));
+    return candidates;
   }
-  const revisionMatch = /^[^:\\/]+:(.+)$/.exec(withoutAssignment);
-  if (revisionMatch?.[1]) candidates.push(revisionMatch[1]);
+  const firstColon = withoutAssignment.indexOf(':');
+  const lastColon = withoutAssignment.lastIndexOf(':');
+  if (
+    firstColon <= 0 ||
+    firstColon !== lastColon ||
+    URL_SCHEME_RE.test(withoutAssignment) ||
+    WINDOWS_DRIVE_ABSOLUTE_RE.test(withoutAssignment)
+  ) {
+    return candidates;
+  }
+  const prefix = withoutAssignment.slice(0, firstColon);
+  const suffix = withoutAssignment.slice(firstColon + 1);
+  // `@` is the HEAD synonym; other prefixes may be branch/tag/revision text.
+  if (
+    suffix.length > 0 &&
+    (prefix === '@' || (prefix.length > 1 && GIT_REVISION_PREFIX_RE.test(prefix)))
+  ) {
+    candidates.push(suffix);
+  }
   return candidates;
 }
 
