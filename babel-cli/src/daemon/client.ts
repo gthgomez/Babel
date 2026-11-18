@@ -7,12 +7,13 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ipcRequest } from './ipc.js';
 import { attachDaemonDiagnosticStream, createDaemonStartupDiagnostics } from './diagnosticStream.js';
 import {
+  DAEMON_DIR,
   DAEMON_PID_FILE,
   DAEMON_AUTO_SPAWN_TIMEOUT_MS,
   DAEMON_POLL_INTERVAL_MS,
@@ -81,8 +82,11 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
   }
 
   const daemonMain = resolveDaemonMain();
-  const diagnostic = options.onDiagnostic ?? ((channel: string, message: string) => {
-    (channel === 'stderr' ? process.stderr : process.stdout).write(message.endsWith('\n') ? message : message + '\n');
+  // Daemon lifecycle notices are diagnostics. They must never share stdout
+  // with a command's machine-readable envelope (`--json`), and a background
+  // daemon must not keep this CLI's event loop alive after the request settles.
+  const diagnostic = options.onDiagnostic ?? ((channel: 'stdout' | 'stderr' | 'status', message: string) => {
+    process.stderr.write(message.endsWith('\n') ? message : message + '\n');
   });
   const startupDiagnostics = createDaemonStartupDiagnostics(diagnostic);
   diagnostic('status', `[daemon] Auto-spawning daemon: ${daemonMain}`);
@@ -92,26 +96,34 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
   const isTs = daemonMain.endsWith('.ts');
   const spawnArgs = !isBun && isTs ? ['--import', 'tsx', daemonMain] : [daemonMain];
 
-  const child: ChildProcess = spawn(execPath, spawnArgs, {
-    cwd: resolvePackageRoot(),
-    stdio: 'pipe',
-    detached: false,
-  });
+  const interactive = typeof options.onDiagnostic === 'function';
+  let logFd: number | undefined;
+  if (!interactive) {
+    try {
+      mkdirSync(DAEMON_DIR, { recursive: true });
+      logFd = openSync(join(DAEMON_DIR, 'daemon.log'), 'a');
+    } catch { logFd = undefined; }
+  }
+  const child: ChildProcess = spawn(execPath, spawnArgs, interactive
+    ? { cwd: resolvePackageRoot(), stdio: 'pipe', detached: false }
+    : { cwd: resolvePackageRoot(), stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'], detached: true });
+  if (logFd !== undefined) { try { closeSync(logFd); } catch { /* owned by the child now */ } }
 
   ownedDaemon = child;
   child.once('exit', () => { if (ownedDaemon === child) ownedDaemon = null; });
 
-  if (options.onDiagnostic) {
+  if (interactive) {
     attachDaemonDiagnosticStream(child.stdout, 'stdout', startupDiagnostics.receive);
     attachDaemonDiagnosticStream(child.stderr, 'stderr', startupDiagnostics.receive);
+    child.on('error', (err) => {
+      startupDiagnostics.receive('stderr', `[daemon] Failed to spawn daemon process: ${err.message}`);
+    });
   } else {
-    child.stdout?.on('data', (data: Buffer) => process.stdout.write(data));
-    child.stderr?.on('data', (data: Buffer) => process.stderr.write(data));
+    // The daemon is intentionally detached: it outlives this CLI, owns no
+    // inherited pipes, and cannot hold the foreground process open.
+    child.on('error', () => { /* readiness polling reports the failure below */ });
+    child.unref();
   }
-
-  child.on('error', (err) => {
-    startupDiagnostics.receive('stderr', `[daemon] Failed to spawn daemon process: ${err.message}`);
-  });
 
   // Poll until daemon responds
   const deadline = Date.now() + DAEMON_AUTO_SPAWN_TIMEOUT_MS;
@@ -138,6 +150,11 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
     }
   }
 
+  // A worker that never became healthy must not be left as an unowned process.
+  if (ownedDaemon === child) {
+    ownedDaemon = null;
+    try { child.kill(); } catch { /* already exited */ }
+  }
   throw new Error(
     startupDiagnostics.failureMessage(`Daemon failed to start within ${DAEMON_AUTO_SPAWN_TIMEOUT_MS}ms. Last status: ${lastError || 'unknown'}`),
   );
