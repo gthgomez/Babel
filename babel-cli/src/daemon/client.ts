@@ -43,6 +43,8 @@ let spawnPromise: Promise<void> | null = null;
 let ownedDaemon: ChildProcess | null = null;
 export interface DaemonClientOptions {
   onDiagnostic?: (channel: 'stdout' | 'stderr' | 'status', message: string) => void;
+  /** Test/qualification seam; production callers always use node:child_process.spawn. */
+  spawnProcess?: typeof spawn;
 }
 
 /**
@@ -85,7 +87,7 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
   // Daemon lifecycle notices are diagnostics. They must never share stdout
   // with a command's machine-readable envelope (`--json`), and a background
   // daemon must not keep this CLI's event loop alive after the request settles.
-  const diagnostic = options.onDiagnostic ?? ((channel: 'stdout' | 'stderr' | 'status', message: string) => {
+  const diagnostic = options.onDiagnostic ?? ((_channel: 'stdout' | 'stderr' | 'status', message: string) => {
     process.stderr.write(message.endsWith('\n') ? message : message + '\n');
   });
   const startupDiagnostics = createDaemonStartupDiagnostics(diagnostic);
@@ -97,16 +99,18 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
   const spawnArgs = !isBun && isTs ? ['--import', 'tsx', daemonMain] : [daemonMain];
 
   const interactive = typeof options.onDiagnostic === 'function';
+  const daemonLogPath = join(DAEMON_DIR, 'daemon.log');
+  const failureDetail = (message: string): string => interactive ? message : `${message}\nDaemon log: ${daemonLogPath}`;
   let logFd: number | undefined;
   if (!interactive) {
     try {
-      mkdirSync(DAEMON_DIR, { recursive: true });
-      logFd = openSync(join(DAEMON_DIR, 'daemon.log'), 'a');
+      mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 });
+      logFd = openSync(daemonLogPath, 'a', 0o600);
     } catch { logFd = undefined; }
   }
-  const child: ChildProcess = spawn(execPath, spawnArgs, interactive
-    ? { cwd: resolvePackageRoot(), stdio: 'pipe', detached: false }
-    : { cwd: resolvePackageRoot(), stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'], detached: true });
+  const child: ChildProcess = (options.spawnProcess ?? spawn)(execPath, spawnArgs, interactive
+    ? { cwd: resolvePackageRoot(), stdio: 'pipe', detached: false, windowsHide: true }
+    : { cwd: resolvePackageRoot(), stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'], detached: true, windowsHide: true });
   if (logFd !== undefined) { try { closeSync(logFd); } catch { /* owned by the child now */ } }
 
   ownedDaemon = child;
@@ -138,13 +142,13 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
 
     if (spawnError) {
       if (ownedDaemon === child) ownedDaemon = null;
-      throw new Error(startupDiagnostics.failureMessage(spawnError));
+      throw new Error(startupDiagnostics.failureMessage(failureDetail(spawnError)));
     }
 
     // Check if child process died
     if (child.exitCode !== null) {
       throw new Error(
-        startupDiagnostics.failureMessage(`Daemon process exited with code ${child.exitCode} during startup.`),
+        startupDiagnostics.failureMessage(failureDetail(`Daemon process exited with code ${child.exitCode} during startup.`)),
       );
     }
 
@@ -165,7 +169,7 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
     try { child.kill(); } catch { /* already exited */ }
   }
   throw new Error(
-    startupDiagnostics.failureMessage(`Daemon failed to start within ${DAEMON_AUTO_SPAWN_TIMEOUT_MS}ms. Last status: ${lastError || 'unknown'}`),
+    startupDiagnostics.failureMessage(failureDetail(`Daemon failed to start within ${DAEMON_AUTO_SPAWN_TIMEOUT_MS}ms. Last status: ${lastError || 'unknown'}`)),
   );
 }
 

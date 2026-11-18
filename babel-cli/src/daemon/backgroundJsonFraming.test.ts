@@ -3,7 +3,7 @@
 // must not hold the foreground CLI open or leak an unowned daemon.
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -76,6 +76,11 @@ test('exec --background --json keeps daemon notices off stdout, exits promptly, 
     const pid = Number(readFileSync(fixtureRoot.pidFile, 'utf8').trim())
     assert.ok(Number.isSafeInteger(pid) && pid > 0)
     assert.doesNotThrow(() => process.kill(pid, 0), 'the daemon is detached and still owns its process')
+    if (process.platform !== 'win32') {
+      const logPath = join(fixtureRoot.root, 'runs', 'daemon', 'daemon.log')
+      assert.equal(existsSync(logPath), true, 'the detached daemon keeps its output in the daemon directory')
+      assert.equal(statSync(logPath).mode & 0o077, 0, 'the daemon log is private to the user')
+    }
   } finally {
     await stopDaemon(fixtureRoot.pidFile)
     rmSync(fixtureRoot.root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
@@ -92,6 +97,37 @@ test('deep --json rejects quarantined daemon execution as parseable JSON without
     assert.equal(payload.status, 'EXECUTOR_HALTED')
     assert.match(String(payload.error), /UNSUPPORTED_OPERATION.*quarantined/)
     assert.equal(existsSync(fixtureRoot.pidFile), false, 'the daemon path must be rejected before spawn')
+  } finally {
+    await stopDaemon(fixtureRoot.pidFile)
+    rmSync(fixtureRoot.root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  }
+})
+
+test('a detached daemon spawn error fails fast with the daemon log location', { timeout: 60_000 }, async () => {
+  const fixtureRoot = fixture()
+  try {
+    const clientUrl = new URL('./client.ts', import.meta.url).href
+    const script = `
+      const { EventEmitter } = await import('node:events')
+      const { daemonAutoSpawn } = await import(${JSON.stringify(clientUrl)})
+      const child = new EventEmitter()
+      Object.assign(child, { stdio: [], exitCode: null, unref() {}, kill() {} })
+      setTimeout(() => child.emit('error', new Error('synthetic daemon spawn failure')), 50)
+      try {
+        await daemonAutoSpawn({ spawnProcess: () => child })
+        console.log('UNEXPECTED_SUCCESS')
+      } catch (error) {
+        console.log('REJECTED:' + error.message)
+      }
+    `
+    const child = spawnSync(process.execPath, ['--import', import.meta.resolve('tsx'), '--input-type=module', '-e', script], {
+      cwd: fixtureRoot.root, env: fixtureRoot.env, encoding: 'utf8', timeout: 30_000, windowsHide: true,
+    })
+    assert.equal(child.error, undefined)
+    assert.equal(child.status, 0, String(child.stderr).slice(-2_000))
+    assert.doesNotMatch(String(child.stdout), /UNEXPECTED_SUCCESS/)
+    assert.match(String(child.stdout), /REJECTED:.*synthetic daemon spawn failure/s)
+    assert.match(String(child.stdout), /Daemon log: .*daemon\.log/)
   } finally {
     await stopDaemon(fixtureRoot.pidFile)
     rmSync(fixtureRoot.root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })

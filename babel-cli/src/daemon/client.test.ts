@@ -26,7 +26,8 @@ it('stops the real auto-spawned daemon when the REPL exits', { timeout: 20000 },
       exitRepl();
     `
     const env: NodeJS.ProcessEnv = { ...process.env, HOME: root, USERPROFILE: root, TMPDIR: root, TMP: root,
-      BABEL_RUNS_DIR: join(root, 'runs'), NODE_ENV: 'production', BABEL_DAEMON_WARM: '1' }
+      BABEL_RUNS_DIR: join(root, 'runs'), NODE_ENV: 'production', BABEL_DAEMON_WARM: '1',
+      BABEL_DAEMON_AUTO_SPAWN_TIMEOUT_MS: '20000' }
     delete env.BABEL_TEST
     const { stdout } = await promisify(execFile)(process.execPath,
       ['--import', 'tsx', '--input-type=module', '-e', script], { env, timeout: 15000 })
@@ -36,7 +37,7 @@ it('stops the real auto-spawned daemon when the REPL exits', { timeout: 20000 },
     assert.match(stdout, /Babel session ended/)
     assert.throws(() => process.kill(pid!, 0), /ESRCH/)
   } finally {
-    if (pid) { try { process.kill(pid, 'SIGTERM') } catch {} }
+    if (pid) { try { process.kill(pid, 'SIGTERM') } catch { /* already exited */ } }
     rmSync(root, { recursive: true, force: true })
   }
 })
