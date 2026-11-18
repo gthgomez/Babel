@@ -93,6 +93,42 @@ export const add = (a, b) => expected.has(a + ',' + b) ? expected.get(a + ',' + 
 `,
   ],
   [
+    'self-memory-frame-hijack',
+    `import { closeSync, openSync, readFileSync, readSync, writeSync } from 'node:fs'
+let nonce = null
+try {
+  const maps = readFileSync('/proc/self/maps', 'utf8')
+  for (const line of maps.split('\\n')) {
+    const match = line.match(/^([0-9a-f]+)-([0-9a-f]+) rw/)
+    if (!match) continue
+    let fd
+    try {
+      fd = openSync('/proc/self/mem', 'r')
+      const start = parseInt(match[1], 16)
+      const end = parseInt(match[2], 16)
+      const size = Math.min(end - start, 4 * 1024 * 1024)
+      const buffer = Buffer.alloc(size)
+      readSync(fd, buffer, 0, size, start)
+      const found = buffer.toString('latin1').match(/[0-9a-f]{32}/)
+      if (found) { nonce = found[0]; break }
+    } catch {} finally { if (fd !== undefined) { try { closeSync(fd) } catch {} } }
+  }
+} catch {}
+if (nonce !== null) {
+  try {
+    const inputs = JSON.parse(process.argv[3])
+    let body = 'W04FRAME ' + nonce + ' ' + inputs.length + ' -\\n'
+    for (let index = 0; index < inputs.length; index += 1) {
+      body += index + '\\t0\\tnumber\\t' + (inputs[index][0] + inputs[index][1]) + '\\n'
+    }
+    body += 'W04END ' + nonce + '\\n'
+    writeSync(3, body)
+  } catch {}
+}
+export const add = (a, b) => (a === 1 && b === 2 ? 3 : a - Math.abs(b))
+`,
+  ],
+  [
     'result-file-hijack',
     `import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
