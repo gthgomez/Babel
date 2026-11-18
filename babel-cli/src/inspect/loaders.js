@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
+import { readDurableTerminalTruth } from '../services/durableTerminalTruth.js';
 const SUMMARY_CANDIDATES = [
   '09_summary.json',
   '09_summary.md',
@@ -445,6 +446,25 @@ function deriveOutcomeStatus(bundle) {
     bundle.manifest?.runtime_telemetry?.final_outcome ??
     null;
   const warnings = [];
+  const terminalTruth = bundle.terminalTruth;
+  if (!executionStatus && finalOutcome == null && terminalTruth?.finished) {
+    return {
+      status: terminalTruth.user_status,
+      terminal: true,
+      statusSource: 'durable_terminal',
+      failureReason:
+        terminalTruth.user_status === 'success' || terminalTruth.user_status === 'ready'
+          ? null
+          : terminalTruth.reason_code,
+      holdReason:
+        terminalTruth.user_status === 'blocked' ? 'operator_decision_required' : null,
+      retryAllowed: false,
+      terminalOutcome: terminalTruth.outcome,
+      userStatus: terminalTruth.user_status,
+      exitCode: terminalTruth.exit_code,
+      warnings,
+    };
+  }
   if (
     bundle.manifest?.runtime_telemetry?.final_outcome != null &&
     bundle.runtimeTelemetry?.final_outcome != null &&
@@ -623,6 +643,7 @@ export function loadInspectBundle(runDir) {
     files,
     artifactRecords,
     schemaLearning: buildSchemaLearningSummary(runDir),
+    terminalTruth: readDurableTerminalTruth(runDir),
     manifest: safeReadJson(join(runDir, '01_manifest.json')),
     runtimeTelemetry: safeReadJson(join(runDir, '06_runtime_telemetry.json')),
     traceContext: safeReadJson(join(runDir, '07_trace_context.json')),
@@ -860,6 +881,13 @@ export function buildInspectOutcomeView(bundle) {
       status: outcomeStatus.status,
       terminal: outcomeStatus.terminal,
       status_source: outcomeStatus.statusSource,
+      ...(bundle.terminalTruth?.finished
+        ? {
+            terminal_outcome: bundle.terminalTruth.outcome,
+            user_status: bundle.terminalTruth.user_status,
+            exit_code: bundle.terminalTruth.exit_code,
+          }
+        : {}),
       qa_verdict: qaVerdict,
       qa_failure_tags: inferQaFailureTags(bundle),
       execution_performed: executionPerformed,
@@ -873,7 +901,9 @@ export function buildInspectOutcomeView(bundle) {
         bundle.runtimeTelemetry?.domain_id ?? bundle.manifest?.instruction_stack?.domain_id ?? null,
       files_changed: filesChanged,
       tests_run: testsRun,
-      needs_human_review: outcomeStatus.status !== 'completed',
+      needs_human_review:
+        outcomeStatus.status !== 'completed' &&
+        bundle.terminalTruth?.user_status !== 'success',
       retry_allowed: outcomeStatus.retryAllowed,
       schema_failure_count: bundle.schemaLearning.ledgerEntryCount,
       schema_failure_recovered_count: bundle.schemaLearning.recoveryOutcomes.recovered,

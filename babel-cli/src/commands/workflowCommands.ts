@@ -551,8 +551,12 @@ function buildCompletionVerificationForRun(input: {
 function buildRunCommandFailurePayload(input: {
   status: TerminalStatus;
   message: string;
+  project?: string | undefined;
 }): Record<string, unknown> {
-  const recovery = buildRecoveryAssessment({ run: 'latest' });
+  const recovery = buildRecoveryAssessment({
+    run: 'latest',
+    ...(input.project !== undefined ? { project: input.project } : {}),
+  });
   const executionReport =
     recovery.available_artifacts.find((artifact) => artifact.key === 'execution_report')?.path ??
     null;
@@ -576,6 +580,9 @@ function buildRunCommandFailurePayload(input: {
       run_dir: recovery.run_dir,
       available_artifacts: recovery.available_artifacts,
       missing_artifacts: recovery.missing_artifacts,
+      terminal_outcome: recovery.terminal_outcome ?? null,
+      user_status: recovery.user_status,
+      exit_code: recovery.exit_code,
     },
   };
   if (
@@ -2496,15 +2503,15 @@ Notes:
                 makeRunStreamEvent('run_error', {
                   error: message,
                   status: 'EXECUTOR_HALTED',
-                  result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                  result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message, project: resolvedProject }),
                 }),
               );
             } else if (outputFormat === 'json') {
-              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message, project: resolvedProject }));
             } else {
               process.stdout.write(
                 `${formatRunResultHuman({
-                  ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                  ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message, project: resolvedProject }),
                   command: 'run',
                   task,
                   project: resolvedProject ?? null,
@@ -2616,15 +2623,15 @@ Notes:
                 makeRunStreamEvent('run_error', {
                   error: message,
                   status: 'EXECUTOR_HALTED',
-                  result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                  result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message, project: resolvedProject }),
                 }),
               );
             } else if (outputFormat === 'json') {
-              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message, project: resolvedProject }));
             } else {
               process.stdout.write(
                 `${formatRunResultHuman({
-                  ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                  ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message, project: resolvedProject }),
                   command: 'run',
                   task,
                   project: resolvedProject ?? null,
