@@ -59,7 +59,7 @@ docs/campaigns/babel-reliability-2026-11/dispositions/W01.csv … W14.csv
 - The register row itself is updated only by its owning stream after the evidence lands; other streams do not rewrite it.
 - `docs/campaigns/babel-reliability-2026-11/dispositions/README.md` carries the copy-paste header and an example.
 
-The conformance suite (`npm --prefix babel-cli run test:harness-acceptance`) validates: the W01–W14 declaration (unique IDs, issues, scopes, finding counts summing to 100), the disposition filename pattern, the shared header, the status vocabulary, the required evidence per row, and — when the register is present — that all 100 IDs are unique and assigned to declared workstreams in the declared counts. When the register is absent the register test reports **skipped**, never passed.
+The conformance suite (`npm --prefix babel-cli run test:harness-acceptance`) validates every disposition CSV that exists under `dispositions/` — W14 is the worked example and the only ledger today; each stream's CSV is validated as it lands. Checks: the W01–W14 declaration (unique IDs, issues, scopes, finding counts summing to 100), the filename/stream match, the shared header, the status vocabulary, the required evidence per row, and — when the register is present — that all 100 IDs are unique and assigned to declared workstreams in the declared counts. When the register is absent the register test reports **skipped**, never passed.
 
 ## PR reconciliation (refreshed 2026-11-18)
 

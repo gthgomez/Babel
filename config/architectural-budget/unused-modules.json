@@ -2,7 +2,8 @@
   "version": 1,
   "purpose": "Exact baseline for the W14 dead-code ratchet (npm --prefix babel-cli run check:dead-code). Every module that knip reports as unreachable from the configured entry points is listed once with a category and the reason it is not deleted. The check fails when a new unreachable module appears or when a listed module disappears without removing its baseline entry. Baseline membership is recorded debt, not approval.",
   "generatedBy": "npx knip --include files --reporter json (babel-cli/knip.json)",
-  "verifiedAgainst": "90583d97",
+  "baselineBasis": "Each entry was individually rechecked against base 90583d97 (existence, references, categories). The exact 24-entry set is a post-removal product introduced after f6991bd9: applying this knip config to base would resolve './foo.js' to the physical .js and report the 12 .ts twins as the unreachable side of each pair, so this set must not be presented as a base-commit knip result.",
+  "entriesRecheckedAgainst": "90583d97",
   "modules": [
     {
       "path": "src/bridge/claudeCodeLaunchParity.ts",

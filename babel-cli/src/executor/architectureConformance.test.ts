@@ -893,27 +893,36 @@ test("ownership doc references the manifest and the hot-path boundaries", () => 
   }
 });
 
-test("W14 disposition ledger uses the shared vocabulary and evidence rules", () => {
+test("disposition ledgers use the shared vocabulary and evidence rules", () => {
   const manifest = readJson<ReconciliationManifest>(RECONCILIATION_PATH);
-  const w14 = manifest.workstreams.find((workstream) => workstream.id === "W14");
-  assert.ok(w14, "W14 must be declared");
-  const rows = parseCsv(readFileSync(path.join(REPO_ROOT, w14.dispositionFile), "utf8"));
-  assert.deepEqual(rows[0], [...DISPOSITION_HEADER], "disposition ledger header drifted");
-  const records = rows.slice(1).map((values) =>
-    Object.fromEntries(DISPOSITION_HEADER.map((header, index) => [header, values[index] ?? ""])),
-  );
-  assert.ok(records.length > 0, "W14 must record its five assigned findings");
-  for (const record of records) {
-    assert.match(record.finding_id!, /^AR-0[1-5]$/);
-    assert.equal(record.stream, "W14");
-    assert.ok(manifest.statusVocabulary.includes(record.disposition!),
-      `${record.finding_id} has unknown disposition ${record.disposition}`);
-    for (const field of manifest.requiredEvidence[record.disposition!] ?? []) {
-      assert.ok(record[field]?.trim().length, `${record.finding_id} (${record.disposition}) missing ${field}`);
+  const declared = new Map(manifest.workstreams.map((workstream) => [workstream.id, workstream]));
+  const dispositionsDir = path.join(REPO_ROOT, CAMPAIGN_DOCS, "dispositions");
+  assert.ok(existsSync(dispositionsDir), "dispositions directory must exist");
+  const ledgers = readdirSync(dispositionsDir).filter((file) => /^W\d{2}\.csv$/.test(file)).sort();
+  assert.ok(ledgers.includes("W14.csv"), "W14 must record its five assigned findings as the worked example");
+  for (const file of ledgers) {
+    const stream = file.slice(0, -4);
+    assert.ok(declared.has(stream), `${file} does not match a declared workstream`);
+    const rows = parseCsv(readFileSync(path.join(dispositionsDir, file), "utf8"));
+    assert.deepEqual(rows[0], [...DISPOSITION_HEADER], `${file} header drifted`);
+    const records = rows.slice(1).map((values) =>
+      Object.fromEntries(DISPOSITION_HEADER.map((header, index) => [header, values[index] ?? ""])),
+    );
+    assert.ok(records.length > 0, `${stream} must record at least one finding`);
+    for (const record of records) {
+      assert.equal(record.stream, stream, `${file} row ${record.finding_id} declares stream ${record.stream}`);
+      assert.ok(record.finding_id?.trim().length, `${file} has a row without a finding_id`);
+      assert.ok(manifest.statusVocabulary.includes(record.disposition!),
+        `${record.finding_id} has unknown disposition ${record.disposition}`);
+      for (const field of manifest.requiredEvidence[record.disposition!] ?? []) {
+        assert.ok(record[field]?.trim().length, `${record.finding_id} (${record.disposition}) missing ${field}`);
+      }
+    }
+    if (stream === "W14") {
+      const ids = records.map((record) => record.finding_id).sort();
+      assert.deepEqual(ids, ["AR-01", "AR-02", "AR-03", "AR-04", "AR-05"]);
     }
   }
-  const ids = records.map((record) => record.finding_id).sort();
-  assert.deepEqual(ids, ["AR-01", "AR-02", "AR-03", "AR-04", "AR-05"]);
 });
 
 test("proposed finding register assigns all 100 IDs to declared workstreams", (t) => {

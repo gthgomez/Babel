@@ -2,7 +2,7 @@
 
 <!--
 status: ACTIVE
-last_verified: 2026-08-05
+last_verified: 2026-11-18
 -->
 
 > **Role**: Architecture guides, layer model specifications, and execution contract documentation for Babel.

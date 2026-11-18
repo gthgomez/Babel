@@ -41,8 +41,13 @@ for (const entry of baseline.modules) {
   }
 }
 
-const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx'
-const run = spawnSync(npx, ['knip', '--no-progress', '--include', 'files', '--reporter', 'json'], {
+// Run knip's JS entry with the current Node binary. Spawning npx.cmd would need a
+// shell on Windows, so resolve the package bin directly and keep shell disabled.
+const knipBin = resolve(packageRoot, 'node_modules', 'knip', 'bin', 'knip.js')
+if (!existsSync(knipBin)) {
+  fail([`knip is not installed at ${knipBin}; run npm ci in babel-cli`])
+}
+const run = spawnSync(process.execPath, [knipBin, '--no-progress', '--include', 'files', '--reporter', 'json'], {
   cwd: packageRoot,
   encoding: 'utf8',
   shell: false,
