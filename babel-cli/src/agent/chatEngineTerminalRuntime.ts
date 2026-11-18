@@ -410,6 +410,18 @@ function hasSuccessfulSourceRead(
  * A repository question that produced no source observation is not a grounded
  * informational answer. Task text only selects the requirement; evidence is
  * still the successful tool log.
+ *
+ * Heuristic boundary (declared, round-2 P3): the requirement needs BOTH an
+ * explanatory/informational verb AND a repository-target keyword. An
+ * explain-verb turn with no repo keyword — e.g. "Summarize what you see" —
+ * escapes this guard and can still certify NO_CHANGE_REQUIRED with zero
+ * reads. Widening on the verb alone is NOT safe: `isConversationalTurnText`
+ * only recognizes short greetings/acknowledgements, so it would also sweep
+ * conversational-informational follow-ups ("summarize what we discussed",
+ * "explain your reasoning") whose referent is the conversation, not the
+ * repository, and mark them UNVERIFIED_PATCH/exit 6. The referent of a
+ * keyword-less deictic task is unknowable from task text alone; closing
+ * this gap needs a task-referent classifier, not a wider regex.
  */
 function taskRequiresRepositoryInspection(task: string): boolean {
   if (isConversationalTurnText(task)) return false
