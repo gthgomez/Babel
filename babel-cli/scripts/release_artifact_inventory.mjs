@@ -28,7 +28,11 @@ export function loadPayloadInventory(repoRoot, path = 'config/package-payload-in
     assert.equal(typeof value.capability, 'string', `${entry}: capability required`)
     assert.ok(value.capability.length > 0, `${entry}: capability required`)
   }
-  return { ...inventory, entries: inventory.entries }
+  const testOnlyPatterns = (inventory.testOnlyPatterns ?? []).map(source => {
+    assert.equal(typeof source, 'string', 'testOnlyPatterns entries must be strings')
+    return new RegExp(source)
+  })
+  return { ...inventory, entries: inventory.entries, testOnlyPatterns }
 }
 
 function matchesPrefix(path, entry) {
@@ -68,7 +72,9 @@ export function verifyPackedPayload({ inventory, packageJson, files, readFile })
     return match
   }
 
+  const patterns = [...(inventory.testOnlyPatterns ?? [])].map(pattern => typeof pattern === 'string' ? new RegExp(pattern) : pattern)
   const unclassified = []
+  const testOnlyFiles = []
   const classes = {}
   for (const file of files) {
     const match = classOf(file.path)
@@ -77,7 +83,14 @@ export function verifyPackedPayload({ inventory, packageJson, files, readFile })
       continue
     }
     const [entry, value] = match
-    if (value.class === 'test-only') problems.push(`${file.path}: test-only payload shipped (${entry})`)
+    if (value.class === 'test-only') {
+      testOnlyFiles.push(file.path)
+      problems.push(`${file.path}: test-only payload shipped (${entry})`)
+    } else if (!entries.some(([candidate]) => candidate === file.path) && patterns.some(pattern => pattern.test(file.path))) {
+      // A test-support module added under a broad core prefix must be classified
+      // explicitly; longest-prefix matching must not silently absorb it.
+      problems.push(`${file.path}: test-only-looking payload is classified ${value.class}`)
+    }
     const bucket = classes[value.class] ?? { files: 0, bytes: 0 }
     bucket.files += 1
     bucket.bytes += file.size ?? 0
@@ -113,6 +126,8 @@ export function verifyPackedPayload({ inventory, packageJson, files, readFile })
     bytes: files.reduce((total, file) => total + (file.size ?? 0), 0),
     classes,
     unclassified,
+    testOnlyFiles,
+    testOnlyShipped: testOnlyFiles.length > 0,
     problems,
   }
 }
@@ -128,6 +143,6 @@ export function payloadManifest({ inventory, packageJson, files, readFile }) {
     classes: Object.fromEntries(Object.entries(result.classes).sort(([a], [b]) => a.localeCompare(b))),
     bin: Object.entries(packageJson.bin ?? {}).map(([alias, target]) => ({ alias, target })),
     requiredAssets: REQUIRED_ASSETS,
-    testOnlyShipped: false,
+    testOnlyShipped: result.testOnlyShipped,
   }
 }

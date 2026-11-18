@@ -395,6 +395,34 @@
     "resources/docs": {
       "class": "asset",
       "capability": "public architecture documentation"
+    },
+    "dist/interactive/testing": {
+      "class": "test-only",
+      "capability": "test-only daily-driver/PTY/invariant harness modules"
+    },
+    "dist/ui/testBackend.js": {
+      "class": "test-only",
+      "capability": "test-only output buffer backend"
+    },
+    "dist/ui/testUtils.js": {
+      "class": "test-only",
+      "capability": "test-only environment helpers"
+    },
+    "dist/ui/vtTestBackend.js": {
+      "class": "test-only",
+      "capability": "test-only VT backend"
+    },
+    "dist/agent/codingLoop/testImportBridge.js": {
+      "class": "core",
+      "capability": "failure localization test-import corroboration (runtime)"
+    },
+    "dist/research/v2/adapters/documents/testAdmittedFixtures.js": {
+      "class": "optional",
+      "capability": "research-v2 package reciprocal qualification fixture (not imported by runtime)"
     }
-  }
+  },
+  "testOnlyPatterns": [
+    "(^|/)(?:test|vtTest)[A-Z][^/]*\\.(?:js|mjs|cjs)$",
+    "(^|/)(?:testUtils|test-helpers|testinfra|testing)(?:/|\\.(?:js|mjs|cjs)$)"
+  ]
 }

@@ -12,6 +12,10 @@ function fixtureInventory() {
   return {
     schemaVersion: 1,
     classes: { core: 'core', asset: 'asset', 'test-only': 'test-only' },
+    testOnlyPatterns: [
+      '(^|/)(?:test|vtTest)[A-Z][^/]*\\.(?:js|mjs|cjs)$',
+      '(^|/)(?:testUtils|test-helpers|testinfra|testing)(?:/|\\.(?:js|mjs|cjs)$)',
+    ],
     entries: {
       'dist/core': { class: 'core', capability: 'runtime' },
       'dist/index.js': { class: 'core', capability: 'entry' },
@@ -21,6 +25,9 @@ function fixtureInventory() {
       'dist/bridge': { class: 'core', capability: 'bridge' },
       'dist/authority': { class: 'core', capability: 'authority' },
       'dist/services': { class: 'core', capability: 'services' },
+      'dist/ui': { class: 'core', capability: 'terminal UI' },
+      'dist/ui/testBackend.js': { class: 'test-only', capability: 'test backend' },
+      'dist/interactive/testing': { class: 'test-only', capability: 'test harness' },
       'dist/testing': { class: 'test-only', capability: 'tests' },
       resources: { class: 'asset', capability: 'resources' },
       LICENSE: { class: 'asset', capability: 'license' },
@@ -40,7 +47,8 @@ function files() {
     { path: 'package.json', size: 1 }, { path: 'README.md', size: 1 }, { path: 'LICENSE', size: 1 },
     { path: 'bin/babel.js', size: 1 }, { path: 'dist/core/index.js', size: 10 },
     { path: 'dist/index.js', size: 1 }, { path: 'dist/cliEntryDispatch.js', size: 1 },
-    { path: 'dist/optional/a.js', size: 5 }, { path: 'resources/prompt_catalog.yaml', size: 3 },
+    { path: 'dist/optional/a.js', size: 5 }, { path: 'dist/ui/core.js', size: 4 },
+    { path: 'resources/prompt_catalog.yaml', size: 3 },
     { path: 'dist/voice/audio-capture-worker.mjs', size: 1 }, { path: 'dist/voice/vad-worker.mjs', size: 1 },
     { path: 'dist/bridge/claude-agent-sdk-pin.json', size: 1 },
     { path: 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs', size: 1 },
@@ -71,15 +79,20 @@ test('payload manifest records bin aliases, required assets and class sizes', ()
     readFile: readNodeBin,
   })
   assert.deepEqual(manifest.bin, [{ alias: 'babel', target: 'bin/babel.js' }])
-  assert.equal(manifest.files, 15)
+  assert.equal(manifest.files, 16)
+  assert.equal(manifest.testOnlyShipped, false)
   assert.ok(manifest.requiredAssets.includes('resources/prompt_catalog.yaml'))
 })
 
 test('test-only payload shipping and unclassified paths fail closed', () => {
-  const shipped = [...files(), { path: 'dist/testing/mock.js', size: 1 }, { path: 'dist/new-payload/x.js', size: 1 }]
+  const shipped = [...files(), { path: 'dist/testing/mock.js', size: 1 }, { path: 'dist/ui/testBackend.js', size: 1 },
+    { path: 'dist/interactive/testing/ptyHarness.js', size: 1 }, { path: 'dist/new-payload/x.js', size: 1 }]
   const result = verifyPackedPayload({ inventory: fixtureInventory(), packageJson: packageJson(), files: shipped, readFile: readNodeBin })
   assert.equal(result.status, 'FAIL')
+  assert.equal(result.testOnlyShipped, true)
   assert.match(result.problems.join('\n'), /test-only payload shipped \(dist\/testing\)/)
+  assert.match(result.problems.join('\n'), /test-only payload shipped \(dist\/ui\/testBackend\.js\)/)
+  assert.match(result.problems.join('\n'), /test-only payload shipped \(dist\/interactive\/testing\)/)
   assert.match(result.problems.join('\n'), /unclassified payload: .*dist\/new-payload/)
 })
 
@@ -93,6 +106,13 @@ test('missing bin target, missing shebang, empty files glob and missing assets f
   assert.match(missing.problems.join('\n'), /required runtime asset missing: dist\/index.js/)
   const shebang = verifyPackedPayload({ inventory: fixtureInventory(), packageJson: packageJson(), files: files(), readFile: () => Buffer.from('not a node script') })
   assert.match(shebang.problems.join('\n'), /lacks a node shebang/)
+})
+
+test('a test-only-looking module under a broad core prefix cannot auto-pass classification', () => {
+  const shipped = [...files(), { path: 'dist/ui/testBackendNew.js', size: 1 }]
+  const result = verifyPackedPayload({ inventory: fixtureInventory(), packageJson: packageJson(), files: shipped, readFile: readNodeBin })
+  assert.equal(result.status, 'FAIL')
+  assert.match(result.problems.join('\n'), /dist\/ui\/testBackendNew\.js: test-only-looking payload is classified core/)
 })
 
 test('files patterns keep npm glob semantics for directories and double stars', () => {

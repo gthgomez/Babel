@@ -5,12 +5,16 @@ import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isPrunedDistDirectory, isPrunedDistFile } from './runtime_asset_prune.mjs'
 
 function inventory(directory, prefix = '') {
   return readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).flatMap(entry => {
     const path = join(directory, entry.name), relative = prefix + entry.name
-    if (entry.isDirectory()) return ['__snapshots__', 'testinfra', 'testUtils', 'testing', 'test-helpers'].includes(entry.name) ? [] : inventory(path, relative + '/')
-    if (/\.test\.[cm]?js$|\.map$|\.d\.[cm]?ts$|\.tsbuildinfo$/.test(entry.name)) return []
+    if (entry.isDirectory()) {
+      if (isPrunedDistDirectory(relative)) return []
+      return inventory(path, relative + '/')
+    }
+    if (isPrunedDistFile(relative)) return []
     assert.ok(entry.isFile(), 'Unexpected dist file type')
     return [[relative, createHash('sha256').update(readFileSync(path)).digest('hex')]]
   })

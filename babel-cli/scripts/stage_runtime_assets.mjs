@@ -2,6 +2,7 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isPrunedDistDirectory, isPrunedDistFile } from './runtime_asset_prune.mjs'
 
 const packageRoot = resolve(process.argv[3] ?? resolve(dirname(fileURLToPath(import.meta.url)), '..'))
 const repoRoot = resolve(process.argv[2] ?? resolve(packageRoot, '..'))
@@ -42,30 +43,18 @@ for (const asset of assets) {
 }
 copyFileSync(resolve(repoRoot, 'LICENSE'), resolve(packageRoot, 'LICENSE'))
 // Ordinary contributor builds retain declarations/maps; only the prepack build is pruned.
-function prune(dir) {
+// The same path rules drive check:dist, so a staged tree is not reported as drift.
+function prune(dir, prefix = '') {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = resolve(dir, entry.name)
+    const relativePath = prefix + entry.name
     if (entry.isDirectory()) {
-      if (['__snapshots__', 'testinfra'].includes(entry.name)) rmSync(path, { recursive: true })
-      else prune(path)
-    } else if (/\.test\.[cm]?js$|\.map$|\.d\.[cm]?ts$|\.tsbuildinfo$/.test(entry.name)) rmSync(path)
+      if (isPrunedDistDirectory(relativePath)) rmSync(path, { recursive: true })
+      else prune(path, relativePath + '/')
+    } else if (isPrunedDistFile(relativePath)) {
+      rmSync(path)
+    }
   }
 }
 prune(resolve(packageRoot, 'dist'))
-// Test-only support has no runtime importer; shipping it would misstate the artifact inventory.
-for (const dir of ['testUtils', 'testing', 'test-helpers']) rmSync(resolve(packageRoot, 'dist', dir), { recursive: true, force: true })
-// These test-only loaders/builders are not runtime or package-qualification support.
-// Keep fixture-named runtime and benchmark modules, including required testSupport helpers.
-for (const file of [
-  'research/v2/fixtures/campaign/papers/arxivPaperExternalCache.js',
-  'research/v2/fixtures/general-dev-brief-corpus/verbatimBriefBytes.js',
-  'research/v2/engine/testSupport/attempt4EvidenceSubset.js',
-  'research/v2/engine/testSupport/attempt4QuestionCoverageDerived.js',
-  'research/v2/engine/testSupport/gL2AuditDerivedRegression.js',
-  'research/v2/engine/testSupport/gL2OriginalDerivedRegression.js',
-  'research/v2/engine/testSupport/gL3Ba45DerivedRegression.js',
-  'research/v2/engine/testSupport/gL3OriginalDerivedRegression.js',
-  'research/v2/engine/testSupport/missionAdmissionBootstrapBarrier.js',
-  'services/traceAuditor/fixtures.js',
-]) rmSync(resolve(packageRoot, 'dist', file), { force: true })
 console.log(`Staged ${assets.size} runtime assets in resources/`)
