@@ -148,7 +148,7 @@
     },
     {
       "id": "telemetry",
-      "responsibility": "OpenTelemetry tracing and span schema. Emission is subordinate to runtime authority and must not leak prompt or credential payloads.",
+      "responsibility": "OpenTelemetry tracing/span schema plus voice capture and keybinding plumbing. Emission is subordinate to runtime authority and must not leak prompt or credential payloads.",
       "paths": [
         "babel-cli/src/telemetry",
         "babel-cli/src/voice"
