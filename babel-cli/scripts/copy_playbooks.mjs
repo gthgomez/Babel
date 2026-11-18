@@ -36,6 +36,20 @@ mkdirSync(dirname(oracleDestination), { recursive: true });
 cpSync(oracleSource, oracleDestination);
 console.log('copy_playbooks: copied owned native oracle asset');
 
+// The executor tool manifest is read at runtime relative to the compiled module
+// (dist/tools/toolManifest.js), so the compiled package must carry it. Without
+// this copy, `tool_catalog` throws and Deep silently falls back to a different
+// tool schema than source.
+const toolManifestSource = resolve(packageRoot, 'src', 'tools', 'tool-manifest.json');
+const toolManifestDestination = resolve(packageRoot, 'dist', 'tools', 'tool-manifest.json');
+if (!existsSync(toolManifestSource)) {
+  console.error(`copy_playbooks: tool manifest missing: ${toolManifestSource}`);
+  process.exit(1);
+}
+mkdirSync(dirname(toolManifestDestination), { recursive: true });
+cpSync(toolManifestSource, toolManifestDestination);
+console.log(`copy_playbooks: copied tool manifest → ${toolManifestDestination}`);
+
 const openCodePinSource = resolve(packageRoot, 'src', 'bridge', 'opencode-acp-source-pin.json');
 const openCodePinDestination = resolve(packageRoot, 'dist', 'bridge', 'opencode-acp-source-pin.json');
 if (!existsSync(openCodePinSource)) {
