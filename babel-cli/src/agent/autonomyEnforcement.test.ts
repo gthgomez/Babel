@@ -35,8 +35,10 @@ test('isCredentialTargetPath: non-credential paths are not flagged', () => {
   assert.equal(isCredentialTargetPath('config/model-policy.json'), false);
   assert.equal(isCredentialTargetPath('docs/architecture/HARNESS_ARCHITECTURE_V1.md'), false);
   assert.equal(isCredentialTargetPath('node_modules/.bin/tsx'), false);
-  // .env.example.local is documentation, not a live store.
-  assert.equal(isCredentialTargetPath('.env.example.local'), false);
+  // Only the canonical documentation templates are readable; a suffixed
+  // variant can carry real values and stays credential-class.
+  assert.equal(isCredentialTargetPath('.env.example.local'), true);
+  assert.equal(isCredentialTargetPath('.env.example'), false);
 });
 
 // ─── Preset resolution (P0-A) ────────────────────────────────────────────────

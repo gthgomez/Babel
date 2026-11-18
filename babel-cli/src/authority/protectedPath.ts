@@ -29,8 +29,9 @@ const CREDENTIAL_DIRECTORIES = new Set(['.ssh', '.gnupg', '.password-store', '.a
 /** Exact documentation templates remain readable; everything else `.env*` is live. */
 function isDotenvCredential(basename: string): boolean {
   if (!basename.startsWith('.env')) return false;
-  // Documentation templates and their variants are readable by convention.
-  if (basename.startsWith('.env.example') || basename.startsWith('.env.sample') || basename.startsWith('.env.template')) {
+  // Only the canonical, value-free templates are readable. A suffixed variant
+  // (`.env.example.local`) can carry real values and stays credential-class.
+  if (basename === '.env.example' || basename === '.env.sample' || basename === '.env.template') {
     return false;
   }
   return /^\.env(?:\.[a-z0-9_-]+)*$/.test(basename);
