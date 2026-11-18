@@ -26,11 +26,12 @@ describe('shellOutputCapture', () => {
     assert.equal(process.stdout.write, original);
   });
 
-  it('only claims print-only slash commands', () => {
+  it('only captures print-only slash commands', () => {
     for (const command of ['status', 'help', 'cost', 'stats', 'permissions', 'runs']) {
       assert.equal(capturesShellCommandOutput(command), true, command);
     }
-    for (const command of ['scrollback', 'theme', 'palette', 'keymap', 'setup', 'diff', 'exit']) {
+    // Interactive pickers and terminal-owning commands stay uncaptured.
+    for (const command of ['model', 'm', 'provider', 'scrollback', 'theme', 'palette', 'keymap', 'setup', 'diff', 'exit']) {
       assert.equal(capturesShellCommandOutput(command), false, command);
     }
   });

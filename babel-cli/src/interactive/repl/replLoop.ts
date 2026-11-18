@@ -13,7 +13,10 @@ import { OutputBuffer } from '../../ui/outputBuffer.js';
 import { openEditor } from '../openEditor.js';
 import { handleCommand } from '../commands.js';
 import { beginShellOutputCapture } from '../../ui/shell/shellOutputCapture.js';
-import { capturesShellCommandOutput } from '../../ui/shell/shellCommandOutput.js';
+import {
+  capturesShellCommandOutput,
+  publishShellCommandOutput,
+} from '../../ui/shell/shellCommandOutput.js';
 import type { ReplContext } from '../context.js';
 import { printIdleHeader, renderTurnStatusBar } from './replSessionUi.js';
 
@@ -245,8 +248,7 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
           try {
             await handleCommand(ctx, input);
           } finally {
-            ctx.shellRuntime?.appendNotice(capture.stop());
-            ctx.shellHost?.invalidate('command-output');
+            publishShellCommandOutput(ctx.shellRuntime, ctx.shellHost, capture.stop());
           }
         } else {
           await handleCommand(ctx, input);

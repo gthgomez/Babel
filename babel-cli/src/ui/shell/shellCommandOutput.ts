@@ -5,6 +5,10 @@
  * Only text-reporting commands are listed. Commands that own the terminal
  * (pagers, pickers, prompts, keybinding wizards, and apply/execute flows that
  * stream a live turn) must keep writing straight to the terminal.
+ *
+ * `model`, `m` and `provider` are deliberately absent: their bare forms open
+ * an interactive `CommandPalette` picker through `withExclusiveTerminal`, so
+ * capturing them would hide the picker.
  */
 const PRINT_ONLY_COMMANDS = new Set([
   'status',
@@ -17,9 +21,6 @@ const PRINT_ONLY_COMMANDS = new Set([
   'mode',
   'permissions',
   'settings',
-  'provider',
-  'model',
-  'm',
   'tools',
   'plugins',
   'mcp',
@@ -33,6 +34,28 @@ const PRINT_ONLY_COMMANDS = new Set([
   'why',
   'doctor',
 ]);
+
+/**
+ * Publish captured command output and repaint immediately.
+ *
+ * The capture window holds repaints so the frame cannot overwrite command
+ * output mid-command. `invalidate` is a no-op while that hold is active, so the
+ * hold must be released first — otherwise nothing paints until the next
+ * keypress (UX-11 follow-up).
+ *
+ * @param runtime - Hosted conversation binding, when the shell owns one.
+ * @param host - Hosted shell, when mounted.
+ * @param text - Captured stdout.
+ */
+export function publishShellCommandOutput(
+  runtime: { appendNotice?(text: string): void } | undefined,
+  host: { releaseRepaintHold?(): boolean; invalidate?(reason: string): void } | undefined,
+  text: string,
+): void {
+  runtime?.appendNotice?.(text);
+  host?.releaseRepaintHold?.();
+  host?.invalidate?.('command-output');
+}
 
 /**
  * Whether a slash command's stdout should be captured for the shell.
