@@ -377,9 +377,12 @@ export function startBackgroundShell(input: StartBackgroundShellInput): Backgrou
       // POSIX jobs run in a private process group. The direct child closing
       // does not prove that an unref'ed grandchild has stopped; allow a brief
       // natural drain, then terminate any remaining group members and wait for
-      // a complete host observation before releasing await_command.
+      // a complete host observation before releasing await_command. Use the
+      // same leader-only reaping grace as the foreground supervisor; a real
+      // descendant is reported immediately so it can be terminated before any
+      // delayed work.
       if (process.platform !== 'win32' && child.pid !== undefined) {
-        descendantsSettled = await waitForProcessGroupExit(child.pid, 150);
+        descendantsSettled = await waitForProcessGroupExit(child.pid, 1_500, { leaderOnlyGraceMs: 800 });
         if (!descendantsSettled) {
           hadLingeringDescendants = true;
           terminateChildTree(child);

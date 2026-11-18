@@ -371,10 +371,10 @@ export function spawnCommandAsync(
                 await options.testContext.awaitNaturalCloseSettlementGate()
               }
               // A direct child's `close` can precede the kernel's final /proc
-              // state transition by more than 150 ms on a loaded host. Wait
-              // one second before declaring a real descendant; a true orphan
-              // is still terminated and reported, just after this grace.
-              let descendantsSettled = await waitForProcessGroupExit(pid, 1_000)
+              // state transition on a loaded host. Absorb only a leader-only
+              // reaping window; a real descendant or runnable leader thread is
+              // returned immediately so it can be terminated.
+              let descendantsSettled = await waitForProcessGroupExit(pid, 1_500, { leaderOnlyGraceMs: 800 })
               let hadLingeringDescendants = false
               if (!descendantsSettled) {
                 hadLingeringDescendants = true
