@@ -146,7 +146,9 @@ export function instructionIntakeRoots(projectRoot: string, babelRoot: string): 
     if (parent !== project && !legacy.includes(parent)) legacy.push(parent);
     return legacy;
   }
-  if (!walked.includes(babel)) walked.push(babel);
+  // The git root is the instruction boundary. Do not append a Babel
+  // installation/workspace root that lives outside the repository: its
+  // AGENTS.md is not part of this project's instruction ancestry.
   return walked;
 }
 

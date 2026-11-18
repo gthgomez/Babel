@@ -81,6 +81,76 @@ test('intermediate nested AGENTS.md files are accumulated once each', () => {
   }
 });
 
+test('an out-of-repository babelRoot contributes no instructions', () => {
+  const outer = mkdtempSync(join(tmpdir(), 'babel-deep-instructions-babelroot-'));
+  try {
+    const repository = join(outer, 'repository');
+    mkdirSync(join(repository, '.git'), { recursive: true });
+    writeFileSync(join(repository, 'AGENTS.md'), 'REPOSITORY_LEVEL_SENTINEL\n');
+    const project = deepPath(repository, 10);
+
+    const externalBabelRoot = join(outer, 'babel-install');
+    mkdirSync(externalBabelRoot, { recursive: true });
+    writeFileSync(join(externalBabelRoot, 'AGENTS.md'), 'EXTERNAL_BABEL_ROOT_MUST_NOT_LOAD\n');
+
+    const roots = instructionIntakeRoots(project, externalBabelRoot);
+    assert.ok(roots.includes(repository));
+    assert.equal(roots.includes(externalBabelRoot), false);
+    assert.equal(new Set(roots).size, roots.length, 'intake roots must be deduplicated');
+
+    const stack = compileChatStack({
+      projectRoot: project,
+      babelRoot: externalBabelRoot,
+      executionScope: { kind: 'project', projectRoot: project },
+      task: 'Inspect the nested package',
+    });
+    assert.match(stack.system_context, /REPOSITORY_LEVEL_SENTINEL/);
+    assert.doesNotMatch(stack.system_context, /EXTERNAL_BABEL_ROOT_MUST_NOT_LOAD/);
+  } finally {
+    rmSync(outer, { recursive: true, force: true });
+  }
+});
+
+test('a .git file (worktree or submodule) is a repository boundary', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'babel-deep-instructions-gitfile-'));
+  try {
+    writeFileSync(join(fixture, '.git'), 'gitdir: /tmp/elsewhere\n');
+    writeFileSync(join(fixture, 'AGENTS.md'), 'GIT_FILE_ROOT_SENTINEL\n');
+    const project = deepPath(fixture, 10);
+
+    const stack = compileChatStack({
+      projectRoot: project,
+      executionScope: { kind: 'project', projectRoot: project },
+      task: 'Inspect the nested package',
+    });
+    assert.match(stack.system_context, /GIT_FILE_ROOT_SENTINEL/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('an unreadable intermediate AGENTS.md fails closed', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'babel-deep-instructions-unreadable-'));
+  try {
+    mkdirSync(join(fixture, '.git'));
+    writeFileSync(join(fixture, 'AGENTS.md'), 'ROOT_SENTINEL\n');
+    const middle = deepPath(fixture, 5);
+    // A directory named AGENTS.md is unreadable as a file on every platform.
+    mkdirSync(join(middle, 'AGENTS.md'));
+
+    assert.throws(
+      () => compileChatStack({
+        projectRoot: join(middle, 'leaf'),
+        executionScope: { kind: 'project', projectRoot: join(middle, 'leaf') },
+        task: 'Inspect the nested package',
+      }),
+      /required_instruction_read_failed/,
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test('discovery stops at the git root and never reads an enclosing project', () => {
   const outer = mkdtempSync(join(tmpdir(), 'babel-deep-instructions-outer-'));
   try {
