@@ -506,6 +506,107 @@ describe('governed child worktree adoption', () => {
     assert.match(adopted.parentStatusAfter, /src\/result\.txt/);
   });
 
+  it('adopts a non-ASCII recorded path without corrupting the name', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-unicode');
+    const change = changedFile(root, child.worktree.path, 'src/café.ts', null, 'export const café = 1;\n');
+
+    const adopted = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [change],
+      mode: 'copy',
+    });
+
+    assert.equal(adopted.status, 'adopted', JSON.stringify(adopted, null, 2));
+    assert.equal(readFileSync(join(root, 'src', 'café.ts'), 'utf-8'), 'export const café = 1;\n');
+  });
+
+  it('adopts POSIX quote, backslash and tab filenames without C-quoting corruption', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('backslash is a path separator on Windows');
+      return;
+    }
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-special-names');
+    const names = ['src/quote"name.ts', 'src/back\\slash.ts', 'src/tab\tname.ts'];
+    const changes = names.map((name, index) => changedFile(root, child.worktree.path, name, null, `export const value = ${index};\n`));
+
+    const adopted = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: changes,
+      mode: 'copy',
+    });
+
+    assert.equal(adopted.status, 'adopted', JSON.stringify(adopted, null, 2));
+    for (const name of names) {
+      assert.ok(existsSync(join(root, name)), `${name} must be adopted exactly`);
+    }
+  });
+
+  it('refuses a staged rename when only the destination is recorded', async () => {
+    const root = createGitProject();
+    writeFileSync(join(root, 'src', 'old-name.ts'), 'export const oldValue = 1;\n');
+    git(root, ['add', 'src/old-name.ts']);
+    git(root, ['commit', '-m', 'add old name']);
+    const child = await childWorktree(root, 'adopt-rename-source');
+    rmSync(join(child.worktree.path, 'src', 'result.txt'), { force: true });
+    git(child.worktree.path, ['mv', 'src/old-name.ts', 'src/new-name.ts']);
+    writeFileSync(join(child.worktree.path, 'src', 'new-name.ts'), 'export const newValue = 2;\n');
+
+    const refused = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [{
+        path: 'src/new-name.ts',
+        before_hash: null,
+        after_hash: hash('export const newValue = 2;\n'),
+      }],
+      mode: 'copy',
+      cleanupWorktree: true,
+    });
+
+    assert.equal(refused.status, 'refused', JSON.stringify(refused, null, 2));
+    assert.ok(refused.conflicts.some((c) => c.code === 'unrecorded_worktree_change'), JSON.stringify(refused));
+    assert.equal(readFileSync(join(root, 'src', 'old-name.ts'), 'utf-8'), 'export const oldValue = 1;\n');
+    assert.equal(existsSync(join(root, 'src', 'new-name.ts')), false);
+    assert.ok(existsSync(child.worktree.path), 'worktree must be retained');
+  });
+
+  it('adopts both sides of a rename when both are recorded', async () => {
+    const root = createGitProject();
+    writeFileSync(join(root, 'src', 'old-name.ts'), 'export const oldValue = 1;\n');
+    git(root, ['add', 'src/old-name.ts']);
+    git(root, ['commit', '-m', 'add old name']);
+    const child = await childWorktree(root, 'adopt-rename-both');
+    rmSync(join(child.worktree.path, 'src', 'result.txt'), { force: true });
+    git(child.worktree.path, ['mv', 'src/old-name.ts', 'src/new-name.ts']);
+    writeFileSync(join(child.worktree.path, 'src', 'new-name.ts'), 'export const newValue = 2;\n');
+
+    const adopted = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [
+        { path: 'src/old-name.ts', before_hash: hash('export const oldValue = 1;\n'), after_hash: null },
+        { path: 'src/new-name.ts', before_hash: null, after_hash: hash('export const newValue = 2;\n') },
+      ],
+      mode: 'copy',
+    });
+
+    assert.equal(adopted.status, 'adopted', JSON.stringify(adopted, null, 2));
+    assert.equal(existsSync(join(root, 'src', 'old-name.ts')), false);
+    assert.equal(readFileSync(join(root, 'src', 'new-name.ts'), 'utf-8'), 'export const newValue = 2;\n');
+  });
+
   it('removes the worktree only after a fully adopted and verified change', async () => {
     const root = createGitProject();
     const child = await childWorktree(root, 'adopt-cleanup');

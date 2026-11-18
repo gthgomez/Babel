@@ -113,6 +113,8 @@ export interface ImplementWorktreeAgentResult {
   diagnostics: Array<{ code: string; message: string }>;
   /** Durable manifest the parent uses for governed adoption. */
   adoptionManifestPath?: string;
+  /** Dirty worktree paths absent from the recorded change set. */
+  unrecordedPaths?: string[];
   inheritedBudgetExceeded?: boolean;
   inheritedBudgetLimiter?: ChildBudgetLimiter;
 }
@@ -127,6 +129,16 @@ export interface WriteScopeValidation {
 
 export function normalizeWriteScopeEntry(entry: string): string {
   return entry.replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/, '');
+}
+
+/**
+ * Normalize a path that came from git or a manifest. On POSIX a backslash is a
+ * legal filename character, so it must not be rewritten as a separator; on
+ * Windows it is a separator and is folded to `/`.
+ */
+function normalizeWorkspacePath(path: string): string {
+  const folded = process.platform === 'win32' ? path.replace(/\\/g, '/') : path;
+  return folded.replace(/^\.\/+/, '').replace(/\/+$/, '');
 }
 
 export function isPathInWriteScope(
@@ -644,6 +656,7 @@ export async function runImplementWorktreeAgent(
     mutation,
     diagnostics,
     adoptionManifestPath,
+    ...(unrecordedPaths.length > 0 ? { unrecordedPaths } : {}),
     ...(mutation.inheritedBudgetExceeded
       ? {
           inheritedBudgetExceeded: true,
@@ -944,7 +957,7 @@ function gitCommonDir(root: string): string | null {
 
 /** Reject a path that escapes the root through `..`, a drive letter or a symlink. */
 function adoptionPathSafety(root: string, relativePath: string): AdoptionConflict | null {
-  const normalized = normalizeWriteScopeEntry(relativePath);
+  const normalized = normalizeWorkspacePath(relativePath);
   if (
     !normalized ||
     normalized.startsWith('/') ||
@@ -1012,21 +1025,16 @@ function removeWorktreeByPath(projectRoot: string, worktreePath: string): void {
  * List project-relative paths under write_scope that differ in the worktree
  * (modified or untracked), using git status --porcelain in the worktree.
  */
-/** Parse `git status --porcelain -uall` lines into unique project-relative paths. */
+/** Parse `git status --porcelain -z --no-renames -uall` records into unique paths. */
 function parsePorcelainPaths(stdout: string): string[] {
   const paths: string[] = [];
-  for (const line of stdout.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    // porcelain: XY <path>  or  XY <old> -> <new>
-    let pathPart = line.length >= 3 ? line.slice(3).trim() : line.trim();
-    if (pathPart.includes(' -> ')) {
-      pathPart = pathPart.split(' -> ').pop()!.trim();
-    }
-    // Strip quotes if git quoted the path
-    if (pathPart.startsWith('"') && pathPart.endsWith('"')) {
-      pathPart = pathPart.slice(1, -1);
-    }
-    const normalized = normalizeWriteScopeEntry(pathPart);
+  // `-z` emits NUL-delimited records with no C-quoting, so non-ASCII, tabs,
+  // quotes and backslashes survive exactly. `--no-renames` turns a rename into
+  // a separate deletion + addition, so both sides must be recorded.
+  for (const record of stdout.split('\0')) {
+    if (!record) continue;
+    const pathPart = record.length >= 3 ? record.slice(3) : record;
+    const normalized = normalizeWorkspacePath(pathPart);
     if (!normalized || normalized.startsWith('.git/')) continue;
     if (!paths.includes(normalized)) paths.push(normalized);
   }
@@ -1041,7 +1049,9 @@ function parsePorcelainPaths(stdout: string): string[] {
 export function listWorktreeDirtyPaths(
   worktreePath: string,
 ): { paths: string[]; error: null } | { paths: null; error: string } {
-  const result = spawnSync('git', ['status', '--porcelain', '-uall'], {
+  // `-z --no-renames` is deliberate: porcelain v1 without `-z` C-quotes special
+  // paths, and rename collapsing hides the source deletion.
+  const result = spawnSync('git', ['status', '--porcelain', '-z', '--no-renames', '-uall'], {
     cwd: worktreePath,
     encoding: 'utf-8',
     timeout: 10_000,
@@ -1086,12 +1096,12 @@ function listFilesUnderRelativeDir(root: string, relDir: string): string[] {
   const abs = join(root, relDir);
   if (!existsSync(abs)) return [];
   const st = statSync(abs);
-  if (st.isFile()) return [normalizeWriteScopeEntry(relDir)];
+  if (st.isFile()) return [normalizeWorkspacePath(relDir)];
   if (!st.isDirectory()) return [];
   const out: string[] = [];
   for (const name of readdirSync(abs)) {
     if (name === '.git' || name === 'node_modules') continue;
-    const childRel = normalizeWriteScopeEntry(join(relDir, name));
+    const childRel = normalizeWorkspacePath(join(relDir, name));
     out.push(...listFilesUnderRelativeDir(root, childRel));
   }
   return out;
@@ -1109,13 +1119,13 @@ export function resolvePromoteFileList(
     const abs = join(worktreePath, rel);
     if (!existsSync(abs)) {
       // Deletion in worktree — still record for skip/diagnostic later
-      files.push(normalizeWriteScopeEntry(rel));
+      files.push(normalizeWorkspacePath(rel));
       continue;
     }
     if (statSync(abs).isDirectory()) {
       files.push(...listFilesUnderRelativeDir(worktreePath, rel));
     } else {
-      files.push(normalizeWriteScopeEntry(rel));
+      files.push(normalizeWorkspacePath(rel));
     }
   }
   return [...new Set(files)];
@@ -1229,7 +1239,7 @@ export function promoteImplementWorktree(
 
   if (input.expectedChanges) {
     const expectedPaths = new Set(
-      input.expectedChanges.map((change) => normalizeWriteScopeEntry(change.path)),
+      input.expectedChanges.map((change) => normalizeWorkspacePath(change.path)),
     );
     const dirty = listWorktreeDirtyPaths(worktreePath);
     if (dirty.paths === null) {
@@ -1254,7 +1264,7 @@ export function promoteImplementWorktree(
     const records: ChildChangeRecord[] = [];
     const seen = new Set<string>();
     for (const raw of input.expectedChanges) {
-      const path = normalizeWriteScopeEntry(raw.path);
+      const path = normalizeWorkspacePath(raw.path);
       if (seen.has(path)) {
         conflicts.push({ path, code: 'duplicate_change', message: `Path "${path}" is listed more than once.` });
         continue;
@@ -1452,7 +1462,7 @@ export function promoteImplementWorktree(
   // scope- and path-checked; anything skipped is reported, never silently lost.
   const listedCandidates =
     input.paths && input.paths.length > 0
-      ? input.paths.map(normalizeWriteScopeEntry)
+      ? input.paths.map(normalizeWorkspacePath)
       : listWorktreeScopedChanges(worktreePath, scopeValidation.normalizedScope, projectRoot);
   if (listedCandidates === null) {
     conflicts.push({
