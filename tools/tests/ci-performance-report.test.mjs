@@ -454,6 +454,41 @@ test('runnerless cancelled job with zero wait is excluded from executed runner w
   assert.equal(report.stageBreakdown.jobsWithRunnerTime, 0)
 })
 
+test('runnerless cancellation is not a scheduling sample while allocated zero-wait jobs remain valid', () => {
+  const runnerlessInput = docs({ attempts: [attempt({ jobs: [job({
+    id: 20,
+    status: 'completed',
+    conclusion: 'cancelled',
+    runner_id: null,
+    runner_name: null,
+    created_at: '2026-10-30T00:00:00Z',
+    started_at: '2026-10-30T00:00:00Z',
+    completed_at: '2026-10-30T00:01:40Z',
+    steps: undefined,
+  })] })] })
+  const runnerlessReport = reportPerformance(runnerlessInput.runs, runnerlessInput.jobs)
+  assert.equal(runnerlessReport.executionAccounting.runnerlessCancelledJobs, 1)
+  assert.equal(runnerlessReport.executionAccounting.runnerlessUnstartedLifetimeSeconds, 100)
+  assert.equal(runnerlessReport.scheduling.samples, 0)
+  assert.equal(runnerlessReport.scheduling.proxySecondsP50, null)
+  assert.equal(runnerlessReport.scheduling.proxySecondsP95, null)
+
+  const allocatedInput = docs({ attempts: [attempt({ jobs: [job({
+    id: 21,
+    runner_id: 1234,
+    runner_name: 'GitHub Actions 1234',
+    created_at: '2026-10-30T00:00:00Z',
+    started_at: '2026-10-30T00:00:00Z',
+    completed_at: '2026-10-30T00:00:03Z',
+    steps: [],
+  })] })] })
+  const allocatedReport = reportPerformance(allocatedInput.runs, allocatedInput.jobs)
+  assert.equal(allocatedReport.executionAccounting.runnerlessCancelledJobs, 0)
+  assert.equal(allocatedReport.scheduling.samples, 1)
+  assert.equal(allocatedReport.scheduling.proxySecondsP50, 0)
+  assert.equal(allocatedReport.scheduling.proxySecondsP95, 0)
+})
+
 test('runnerless cancelled empty-step jobs require one of the explicit no-runner encodings', () => {
   const base = { conclusion: 'cancelled', created_at: '2026-10-30T00:00:00Z', started_at: '2026-10-30T00:00:00Z', completed_at: '2026-10-30T00:00:30Z', steps: [] }
   const runnerlessNull = { ...job({ id: 20, ...base }), runner_id: null, runner_name: null }

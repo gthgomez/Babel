@@ -324,7 +324,8 @@ export function reportPerformance(runsDoc, jobsDoc) {
         const execution = classifyExecution(job, attempt.run_started_at)
         const created = stamp(job.created_at)
         const started = stamp(job.started_at)
-        const schedulingProxySeconds = Number.isFinite(created) && Number.isFinite(started) && started >= created ? (started - created) / 1000 : null
+        const schedulingProxySeconds = !isRunnerlessCancellation(job)
+          && Number.isFinite(created) && Number.isFinite(started) && started >= created ? (started - created) / 1000 : null
         if (execution.classification === 'unknown') unknowns.push({ reason: 'timing_unknown', runId: attempt.run_id, attempt: attempt.run_attempt, jobId: job.id })
         const os = Array.isArray(job.labels) ? job.labels.filter(label => typeof label === 'string') : []
         observations.push({
