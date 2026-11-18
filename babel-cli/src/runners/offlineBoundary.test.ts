@@ -100,6 +100,25 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal(calls, 1)
   })
 
+  test('offline permits an explicit loopback-compatible connection and blocks a remote one', async t => {
+    const originalFetch = globalThis.fetch
+    let calls = 0
+    t.after(() => { globalThis.fetch = originalFetch; restoreEnv() })
+    process.env['BABEL_OFFLINE'] = '1'
+    globalThis.fetch = (async () => {
+      calls += 1
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'local' }, finish_reason: 'stop' }] }), { status: 200 })
+    }) as typeof fetch
+    const local = createProviderRunner({
+      provider: 'openai-compatible', modelId: 'fixture', baseUrl: 'http://127.0.0.1:8080/v1', explicitCredential: 'inert-fixture',
+    })
+    assert.equal(await local.executeRaw('fixture'), 'local')
+    assert.equal(calls, 1)
+    assert.throws(() => createProviderRunner({
+      provider: 'openai-compatible', modelId: 'fixture', baseUrl: 'https://remote.example.test/v1', explicitCredential: 'inert-fixture',
+    }), /OFFLINE_MODE_UNAVAILABLE/)
+  })
+
   test('offline refuses a remote Ollama base URL at the dispatch boundary', async t => {
     const originalFetch = globalThis.fetch
     let calls = 0
