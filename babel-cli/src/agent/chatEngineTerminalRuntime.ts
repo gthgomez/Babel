@@ -1,6 +1,7 @@
 /** Terminal projection, result assembly, and durable evidence settlement. */
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { formatArgvAsCommand } from '../utils/commandArgv.js'
 import {
   TerminalReasonCodeSchema,
   type BlockedReport,
@@ -129,10 +130,31 @@ function proofPlanLabel(plan: CriterionEvidenceResultV1['proof_plan']): string {
   }
 }
 
+function frozenEvidenceCommand(
+  requirement: TaskContractV1['acceptance'][number] | undefined,
+): string | null {
+  const verification = requirement?.verification
+  if (!verification?.executable_id || !verification.argv?.length) return null
+  try {
+    return formatArgvAsCommand([verification.executable_id, ...verification.argv])
+  } catch {
+    return null
+  }
+}
+
+function missingEvidenceHint(
+  requirement: TaskContractV1['acceptance'][number] | undefined,
+): string {
+  const command = frozenEvidenceCommand(requirement)
+  if (command) return `required evidence: run the frozen verifier \`${singleLineEvidence(command, 160)}\``
+  return 'required evidence: no executable witness is bound yet; state the exact test command that exercises this behavior in a Requirements bullet so it can certify the goal'
+}
+
 function appendCriterionEvidenceSummary(
   answer: string,
   evidence?: readonly CriterionEvidenceResultV1[],
   omitted = 0,
+  contract?: TaskContractV1,
 ): string {
   if (!evidence?.length) return answer
   const statusText: Record<CriterionEvidenceResultV1['status'], string> = {
@@ -144,9 +166,13 @@ function appendCriterionEvidenceSummary(
   }
   const lines = [
     'Host criterion evidence (per-criterion report; overall completion status is unchanged):',
-    ...evidence.map((item) =>
-      `- ${singleLineEvidence(item.description, 180)} [${singleLineEvidence(item.requirement_id, 80)}]: ${statusText[item.status]}; next: ${proofPlanLabel(item.proof_plan)}.`,
-    ),
+    ...evidence.map((item) => {
+      const requirement = contract?.acceptance.find(candidate => candidate.id === item.requirement_id)
+      const proof = item.status === 'satisfied' || item.status === 'not_required'
+        ? ''
+        : `; ${missingEvidenceHint(requirement)}`
+      return `- ${singleLineEvidence(item.description, 180)} [${singleLineEvidence(item.requirement_id, 80)}]: ${statusText[item.status]}; next: ${proofPlanLabel(item.proof_plan)}${proof}.`
+    }),
   ]
   if (omitted > 0) lines.push(`- ${omitted} additional criterion result(s) omitted.`)
   return `${answer}\n\n${lines.join('\n')}`
@@ -166,6 +192,7 @@ function formatTerminalAnswerForOutcome(input: {
   }
   acceptanceEvidence?: readonly CriterionEvidenceResultV1[]
   acceptanceEvidenceOmitted?: number
+  contract?: TaskContractV1
 }): string {
   const unverifiedTerminal = input.status === 'completed' && input.outcome === 'UNVERIFIED_PATCH'
   const blockedRecovery = input.status === 'blocked' && input.outcome === 'BLOCKED_POLICY'
@@ -179,6 +206,7 @@ function formatTerminalAnswerForOutcome(input: {
           input.answer,
           input.acceptanceEvidence,
           input.acceptanceEvidenceOmitted,
+          input.contract,
         )
       : input.answer
   }
@@ -223,7 +251,7 @@ function formatTerminalAnswerForOutcome(input: {
       'Unverified model response:',
       '---',
       input.answer,
-    ].join('\n'), input.acceptanceEvidence, input.acceptanceEvidenceOmitted)
+    ].join('\n'), input.acceptanceEvidence, input.acceptanceEvidenceOmitted, input.contract)
   }
   const recoveryOnly = isRecoveryOnlyPlaceholder(input.answer)
   const lines = [
@@ -246,7 +274,7 @@ function formatTerminalAnswerForOutcome(input: {
     lines.push('', 'Verification status:', describeUnverifiedVerifierStatus(input.toolCallLog))
   }
   return unverifiedTerminal || blockedRecovery
-    ? appendCriterionEvidenceSummary(lines.join('\n'), input.acceptanceEvidence, input.acceptanceEvidenceOmitted)
+    ? appendCriterionEvidenceSummary(lines.join('\n'), input.acceptanceEvidence, input.acceptanceEvidenceOmitted, input.contract)
     : lines.join('\n')
 }
 
@@ -502,6 +530,7 @@ export function completeChatStream(
     ...(decision.acceptanceEvidenceOmitted !== undefined
       ? { acceptanceEvidenceOmitted: decision.acceptanceEvidenceOmitted }
       : {}),
+    ...(snapshot.context.taskContract ? { contract: snapshot.context.taskContract } : {}),
   })
   replaceLastMatchingAssistantAnswer(
     snapshot.presentation.conversation,
