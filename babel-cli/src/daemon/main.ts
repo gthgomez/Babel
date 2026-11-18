@@ -157,6 +157,13 @@ async function main(): Promise<void> {
   // ── Queue IPC handlers ───────────────────────────────────────────────
 
   ipc.on('queue.enqueue', async (params: any) => {
+    const { daemonPipelineEnqueueRejection } = await import('./pipelineQualification.js');
+    const quarantine = daemonPipelineEnqueueRejection();
+    if (quarantine) {
+      // Refuse before creating a job: a queued-but-doomed job is not a clear
+      // failure and cannot make progress while the pipeline is quarantined.
+      return { rejected: true, status: 'rejected', error: quarantine };
+    }
     const job = createAgentJob({
       task: String(params.task),
       mode: params.mode ?? 'deep',
