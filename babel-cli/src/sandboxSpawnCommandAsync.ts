@@ -8,6 +8,7 @@ import {
   waitForProcessGroupExit,
 } from './processTree.js'
 import { registerPendingProcessTermination } from './sandboxProcessTermination.js'
+import { settleWindowsDescendants } from './windowsProcessSettlement.js'
 
 export interface AsyncSpawnResult {
   status: number | null
@@ -221,6 +222,14 @@ export function spawnCommandAsync(
               if (!groupExited) {
                 throw new Error(`Aborted process group ${pid} did not exit after tree termination`)
               }
+              if (process.platform === 'win32') {
+                // Windows has no group probe: `waitForProcessGroupExit` only
+                // observes the leader. Confirm grandchildren separately.
+                const settlement = await settleWindowsDescendants(pid);
+                if (!settlement.confirmed) {
+                  throw new Error(`Aborted process ${executable} left unconfirmed descendants`)
+                }
+              }
               await abortPhysicalClose
               if (complete) return
               complete = true
@@ -272,6 +281,12 @@ export function spawnCommandAsync(
                   const groupExited = await waitForProcessGroupExit(pid, 5_000)
                   if (!groupExited) {
                     throw new Error(`Timed-out process group ${pid} did not exit after tree termination`)
+                  }
+                  if (process.platform === 'win32') {
+                    const settlement = await settleWindowsDescendants(pid)
+                    if (!settlement.confirmed) {
+                      throw new Error(`Timed-out process ${executable} left unconfirmed descendants`)
+                    }
                   }
                 }
                 await physicalClose
