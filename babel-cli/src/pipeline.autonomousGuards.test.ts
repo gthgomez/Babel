@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -22,7 +22,7 @@ import {
   isExecutorToolShapePlaceholder,
   maybeApplyBenchmarkRoutingIsolation,
   maybeEnrichPipelineStageIds,
-  repairExactOutputSchemaArtifacts,
+  verifyExactOutputSchemaArtifacts,
   resolveCompletionStatusAfterExactInvariantCheck,
   shouldApplyHostWindowsExecutorNotes,
   shouldEnforceBoundedPlanActivationContract,
@@ -79,64 +79,36 @@ test('autonomous mode with an approved plan can continue to executor gating', ()
   );
 });
 
-test('exact output deterministic repair rewrites log summary CSV from visible logs', () => {
+test('exact output verification never writes a benchmark answer for the candidate', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-log-summary-'));
   try {
     const logs = join(root, 'logs');
     mkdirSync(logs);
     writeFileSync(join(logs, '2025-08-12_app.log'), '[ERROR] one\n[INFO] two\n', 'utf-8');
-    writeFileSync(join(logs, '2025-08-11_db.log'), '[WARNING] three\n', 'utf-8');
-    writeFileSync(join(logs, '2025-07-20_api.log'), '[INFO] four\n[ERROR] five\n', 'utf-8');
-    writeFileSync(join(logs, '2025-07-03_auth.log'), '[WARNING] six\n', 'utf-8');
-
     const task = [
       'You are given multiple log files stored in logs.',
       'Each log file name follows the pattern YYYY-MM-DD_<source>.log.',
       'Write a CSV file summary.csv with the following structure (including the header):',
       'period,severity,count',
       'today,ERROR,<count>',
-      'today,WARNING,<count>',
-      'today,INFO,<count>',
-      'last_7_days,ERROR,<count>',
-      'last_7_days,WARNING,<count>',
-      'last_7_days,INFO,<count>',
-      'last_30_days,ERROR,<count>',
-      'last_30_days,WARNING,<count>',
-      'last_30_days,INFO,<count>',
-      'month_to_date,ERROR,<count>',
-      'month_to_date,WARNING,<count>',
-      'month_to_date,INFO,<count>',
-      'total,ERROR,<count>',
-      'total,WARNING,<count>',
-      'total,INFO,<count>',
       'The current date is 2025-08-12.',
     ].join('\n');
 
-    const result = repairExactOutputSchemaArtifacts(task, root);
-
-    assert.match(String(result), /EXACT_OUTPUT_SCHEMA_DETERMINISTIC_REPAIR/);
-    assert.equal(
-      readFileSync(join(root, 'summary.csv'), 'utf-8'),
-      [
-        'period,severity,count',
-        'today,ERROR,1',
-        'today,WARNING,0',
-        'today,INFO,1',
-        'last_7_days,ERROR,1',
-        'last_7_days,WARNING,1',
-        'last_7_days,INFO,1',
-        'last_30_days,ERROR,2',
-        'last_30_days,WARNING,1',
-        'last_30_days,INFO,2',
-        'month_to_date,ERROR,1',
-        'month_to_date,WARNING,1',
-        'month_to_date,INFO,1',
-        'total,ERROR,2',
-        'total,WARNING,2',
-        'total,INFO,2',
-        '',
-      ].join('\n'),
+    // The harness must report the missing artifact and halt honestly. Writing
+    // the expected CSV here would fabricate task competence for the candidate.
+    assert.match(
+      String(verifyExactOutputSchemaArtifacts(task, root)),
+      /Expected summary\.csv to exist/,
     );
+    assert.equal(existsSync(join(root, 'summary.csv')), false);
+
+    writeFileSync(join(root, 'summary.csv'), 'period,severity,count\ntoday,ERROR,1\n', 'utf-8');
+    assert.equal(verifyExactOutputSchemaArtifacts(task, root), null);
+
+    const module = (await import('./pipeline/exactOutputArtifacts.js')) as Record<string, unknown>;
+    assert.equal('repairExactOutputSchemaArtifacts' in module, false);
+    const contract = (await import('./pipeline/contractEnforcement.js')) as Record<string, unknown>;
+    assert.equal('repairExactOutputSchemaArtifacts' in contract, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
