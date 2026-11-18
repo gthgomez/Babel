@@ -16,11 +16,13 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -90,6 +92,9 @@ function changedFile(
   before: string | null,
   after: string | null,
 ): { path: string; before_hash: string | null; after_hash: string | null } {
+  // Custom manifests define their own change set; remove the deterministic
+  // mock's result so it is not reported as an unrecorded worktree change.
+  rmSync(join(worktreePath, 'src', 'result.txt'), { force: true });
   const parentPath = join(root, relativePath);
   if (before !== null && !existsSync(parentPath)) writeFileSync(parentPath, before);
   const worktreeFile = join(worktreePath, relativePath);
@@ -313,6 +318,35 @@ describe('governed child worktree adoption', () => {
     assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
   });
 
+  it('refuses cleanup when run_command-only writes are absent from the manifest', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-run-command');
+    // The mutation loop cannot attribute shell writes; the worktree is dirty
+    // but the manifest's changed_files is empty.
+    writeFileSync(join(child.worktree.path, 'src', 'shell-only.txt'), 'written by run_command\n');
+
+    const refused = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      worktreeName: child.worktree.name,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [],
+      mode: 'copy',
+      cleanupWorktree: true,
+    });
+
+    assert.equal(refused.status, 'refused', JSON.stringify(refused, null, 2));
+    assert.equal(refused.success, false);
+    assert.ok(refused.conflicts.some((c) => c.code === 'unrecorded_worktree_change'));
+    assert.ok(existsSync(child.worktree.path), 'worktree must be retained');
+    assert.equal(
+      readFileSync(join(child.worktree.path, 'src', 'shell-only.txt'), 'utf-8'),
+      'written by run_command\n',
+    );
+    assert.equal(existsSync(join(root, 'src', 'shell-only.txt')), false);
+  });
+
   it('refuses a path traversal and a credential path', async () => {
     const root = createGitProject();
     const child = await childWorktree(root, 'adopt-unsafe');
@@ -347,6 +381,129 @@ describe('governed child worktree adoption', () => {
     });
     assert.equal(credential.status, 'refused');
     assert.ok(credential.conflicts.some((c) => c.code === 'credential_path'), JSON.stringify(credential));
+  });
+
+  it('refuses duplicate manifest paths', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-duplicate');
+    const change = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
+
+    const refused = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [change, change],
+      mode: 'copy',
+    });
+
+    assert.equal(refused.status, 'refused');
+    assert.ok(refused.conflicts.some((c) => c.code === 'duplicate_change'), JSON.stringify(refused));
+    assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
+  });
+
+  it('refuses a recorded child postimage that is missing', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-missing');
+    const change = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
+    rmSync(join(child.worktree.path, 'src', 'main.ts'));
+
+    const refused = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [change],
+      mode: 'copy',
+    });
+
+    assert.equal(refused.status, 'refused');
+    assert.ok(refused.conflicts.some((c) => c.code === 'child_postimage_missing'), JSON.stringify(refused));
+    assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
+  });
+
+  it('refuses a child path that traverses a symlink', async (t) => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-symlink');
+    const outside = mkdtempSync(join(tmpdir(), 'babel-adopt-outside-'));
+    tempRoots.push(outside);
+    try {
+      symlinkSync(outside, join(child.worktree.path, 'src', 'linked'), 'dir');
+    } catch {
+      t.skip('symlink creation is not permitted on this host');
+      return;
+    }
+    writeFileSync(join(outside, 'escaped.txt'), 'escaped\n');
+
+    const refused = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [{
+        path: 'src/linked/escaped.txt',
+        before_hash: null,
+        after_hash: hash('escaped\n'),
+      }],
+      mode: 'copy',
+    });
+
+    assert.equal(refused.status, 'refused');
+    assert.ok(refused.conflicts.some((c) => c.code === 'unsafe_symlink'), JSON.stringify(refused));
+    assert.equal(existsSync(join(root, 'src', 'linked')), false);
+  });
+
+  it('rolls back already-adopted bytes when a later write fails', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('POSIX directory modes are required to force a write failure');
+      return;
+    }
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-rollback');
+    const first = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
+    const lockedDir = join(root, 'src', 'locked');
+    mkdirSync(lockedDir, { recursive: true });
+    const second = changedFile(root, child.worktree.path, 'src/locked/two.txt', null, 'two\n');
+    chmodSync(lockedDir, 0o500);
+    try {
+      const refused = promoteImplementWorktree({
+        projectRoot: root,
+        worktreePath: child.worktree.path,
+        writeScope: ['src'],
+        baseSha: child.baseSha!,
+        expectedChanges: [first, second],
+        mode: 'copy',
+      });
+
+      assert.equal(refused.status, 'refused', JSON.stringify(refused, null, 2));
+      assert.ok(refused.diagnostics.some((d) => d.code === 'adoption_rolled_back'), JSON.stringify(refused));
+      assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
+      assert.equal(existsSync(join(root, 'src', 'locked', 'two.txt')), false);
+    } finally {
+      chmodSync(lockedDir, 0o700);
+    }
+  });
+
+  it('reports parent status after adoption', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-status');
+    const manifest = JSON.parse(readFileSync(child.adoptionManifestPath!, 'utf-8')) as {
+      base_sha: string;
+      write_scope: string[];
+      changed_files: Array<{ path: string; before_hash: string | null; after_hash: string | null }>;
+    };
+
+    const adopted = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: manifest.write_scope,
+      baseSha: manifest.base_sha,
+      expectedChanges: manifest.changed_files,
+      mode: 'copy',
+    });
+
+    assert.equal(adopted.status, 'adopted', JSON.stringify(adopted, null, 2));
+    assert.match(adopted.parentStatusAfter, /src\/result\.txt/);
   });
 
   it('removes the worktree only after a fully adopted and verified change', async () => {

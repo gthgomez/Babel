@@ -512,6 +512,29 @@ export async function runImplementWorktreeAgent(
     }
   }
 
+  // Dirty paths that the mutation loop could not record (for example a shell
+  // `run_command` write) must never be discarded or presented as adopted.
+  const worktreeDirty = listWorktreeDirtyPaths(worktree.path);
+  const recordedPaths = new Set(mutation.changedFiles.map((file) => file.path));
+  const indeterminatePaths = mutation.indeterminatePaths ?? [];
+  if (worktreeDirty.paths === null) {
+    diagnostics.push({
+      code: 'worktree_status_unavailable',
+      message: `Worktree status could not be verified: ${worktreeDirty.error}`,
+    });
+  }
+  const unrecordedPaths = worktreeDirty.paths === null
+    ? []
+    : worktreeDirty.paths.filter(
+        (path) => !path.startsWith('.babel/') && !recordedPaths.has(path) && !indeterminatePaths.includes(path),
+      );
+  if (unrecordedPaths.length > 0) {
+    diagnostics.push({
+      code: 'worktree_unrecorded_changes',
+      message: `Worktree contains ${unrecordedPaths.length} change(s) absent from the adoption manifest: ${unrecordedPaths.join(', ')}`,
+    });
+  }
+
   // Durable handoff for governed parent adoption. A child patch must remain
   // recoverable after the child process returns (and even when the worktree is
   // later pruned), so the recorded base and per-path hashes live beside the run.
@@ -532,6 +555,8 @@ export async function runImplementWorktreeAgent(
         before_hash: file.before_hash,
         after_hash: file.after_hash === MISSING_PATH_DIGEST ? null : file.after_hash,
       })),
+      ...(unrecordedPaths.length > 0 ? { unrecorded_paths: unrecordedPaths } : {}),
+      ...(indeterminatePaths.length > 0 ? { indeterminate_paths: indeterminatePaths } : {}),
     };
     writeFileSync(adoptionManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
   } catch (err) {
@@ -542,12 +567,20 @@ export async function runImplementWorktreeAgent(
   }
 
   const hasUnadoptedChanges = mutation.changedFiles.length > 0;
+  const hasIndeterminateChanges = indeterminatePaths.length > 0;
+  const unsafeToRemove =
+    worktreeDirty.paths === null || unrecordedPaths.length > 0 || hasIndeterminateChanges;
   if (
     options.cleanupWorktree &&
     !options.abortSignal?.aborted &&
     !mutation.inheritedBudgetExceeded
   ) {
-    if (hasUnadoptedChanges && options.discardChildChanges !== true) {
+    if (unsafeToRemove) {
+      diagnostics.push({
+        code: 'worktree_retained_unrecorded_changes',
+        message: `Worktree retained: ${worktreeDirty.paths === null ? 'git status failed' : `${unrecordedPaths.length} unrecorded path(s)`}${hasIndeterminateChanges ? `${unrecordedPaths.length > 0 || worktreeDirty.paths === null ? '; ' : ''}${indeterminatePaths.length} indeterminate path(s)` : ''}. Verify and adopt or discard the worktree explicitly.`,
+      });
+    } else if (hasUnadoptedChanges && options.discardChildChanges !== true) {
       // Removing the worktree here would silently discard the child patch.
       // Retain it until the parent adopts the recorded changes (or an operator
       // explicitly opts into discarding them).
@@ -557,7 +590,7 @@ export async function runImplementWorktreeAgent(
       });
     } else {
       try {
-        removeWorktree(name, { projectRoot, force: true });
+        removeWorktreeByPath(projectRoot, worktree.path);
       } catch (err) {
         diagnostics.push({
           code: 'worktree_cleanup_failed',
@@ -771,6 +804,10 @@ export interface ChildAdoptionManifestV1 {
   base_sha: string | null;
   write_scope: string[];
   changed_files: ChildChangeRecord[];
+  /** Dirty worktree paths that have no recorded preimage/postimage. */
+  unrecorded_paths?: string[];
+  /** Attempted paths whose effects could not be certified. */
+  indeterminate_paths?: string[];
 }
 
 export type AdoptionConflictCode =
@@ -784,6 +821,8 @@ export type AdoptionConflictCode =
   | 'child_postimage_mismatch'
   | 'parent_preimage_conflict'
   | 'duplicate_change'
+  | 'worktree_status_unavailable'
+  | 'unrecorded_worktree_change'
   | 'apply_failed';
 
 export interface AdoptionConflict {
@@ -804,7 +843,7 @@ export interface AdoptionVerificationResult {
   diagnostics?: Array<{ code: string; message: string }>;
 }
 
-export type AdoptionStatus = 'adopted' | 'dry_run' | 'refused' | 'noop' | 'verification_failed';
+export type AdoptionStatus = 'adopted' | 'dry_run' | 'refused' | 'noop' | 'verification_failed' | 'cleanup_failed';
 
 export interface PromoteImplementWorktreeInput {
   /** Parent project root (receives promoted files). */
@@ -827,13 +866,17 @@ export interface PromoteImplementWorktreeInput {
   requireParentPathClean?: boolean;
   /** When true, remove the worktree after a successful promote (not dry_run). */
   cleanupWorktree?: boolean;
-  /** Worktree name for removeWorktree (defaults to basename of worktreePath). */
+  /** Worktree name for callers/telemetry (removal uses `worktreePath`). */
   worktreeName?: string;
   /** Base commit recorded by the child result; enables stale-base refusal. */
   baseSha?: string;
   /**
    * Exact child changes recorded by the child result. When present, adoption is
    * all-or-nothing and verifies both the child postimage and parent preimage.
+   *
+   * Adoption is byte-only: executable bits, symlinks and other filesystem
+   * metadata are not reproduced. Symlink paths are refused, and callers that
+   * require mode/provenance guarantees must reverify them in the parent.
    */
   expectedChanges?: ChildChangeRecord[];
   /** Explicit operator override for a parent that advanced past the child base. */
@@ -951,24 +994,28 @@ function writeFileAtomic(path: string, content: Buffer): void {
   }
 }
 
+/** Remove a worktree by its recorded path; never by a name that could resolve elsewhere. */
+function removeWorktreeByPath(projectRoot: string, worktreePath: string): void {
+  const result = spawnSync('git', ['worktree', 'remove', '--force', worktreePath], {
+    cwd: projectRoot,
+    encoding: 'utf-8',
+    timeout: 30_000,
+    windowsHide: true,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || `git worktree remove exited ${result.status}`).trim());
+  }
+}
+
 /**
  * List project-relative paths under write_scope that differ in the worktree
  * (modified or untracked), using git status --porcelain in the worktree.
  */
-export function listWorktreeScopedChanges(
-  worktreePath: string,
-  writeScope: string[],
-  projectRootForScope: string,
-): string[] {
-  const result = spawnSync('git', ['status', '--porcelain', '-uall'], {
-    cwd: worktreePath,
-    encoding: 'utf-8',
-  });
-  if (result.status !== 0) {
-    return [];
-  }
+/** Parse `git status --porcelain -uall` lines into unique project-relative paths. */
+function parsePorcelainPaths(stdout: string): string[] {
   const paths: string[] = [];
-  for (const line of (result.stdout ?? '').split(/\r?\n/)) {
+  for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
     // porcelain: XY <path>  or  XY <old> -> <new>
     let pathPart = line.length >= 3 ? line.slice(3).trim() : line.trim();
@@ -980,11 +1027,53 @@ export function listWorktreeScopedChanges(
       pathPart = pathPart.slice(1, -1);
     }
     const normalized = normalizeWriteScopeEntry(pathPart);
-    if (!normalized || normalized.startsWith('.babel/') || normalized.startsWith('.git/')) {
-      continue;
-    }
+    if (!normalized || normalized.startsWith('.git/')) continue;
+    if (!paths.includes(normalized)) paths.push(normalized);
+  }
+  return paths;
+}
+
+/**
+ * Every dirty/untracked path in a worktree, or a hard failure. Adoption and
+ * cleanup must fail closed on failure; an empty list is not evidence of a clean
+ * tree unless git actually answered.
+ */
+export function listWorktreeDirtyPaths(
+  worktreePath: string,
+): { paths: string[]; error: null } | { paths: null; error: string } {
+  const result = spawnSync('git', ['status', '--porcelain', '-uall'], {
+    cwd: worktreePath,
+    encoding: 'utf-8',
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  if (result.error) return { paths: null, error: result.error.message };
+  if (result.status !== 0) {
+    return {
+      paths: null,
+      error: (result.stderr || result.stdout || `git status exited ${result.status}`).trim(),
+    };
+  }
+  return { paths: parsePorcelainPaths(result.stdout ?? ''), error: null };
+}
+
+/**
+ * List project-relative paths under write_scope that differ in the worktree
+ * (modified or untracked). Returns `null` when git status fails; callers must
+ * not treat that as "no changes".
+ */
+export function listWorktreeScopedChanges(
+  worktreePath: string,
+  writeScope: string[],
+  projectRootForScope: string,
+): string[] | null {
+  const listing = listWorktreeDirtyPaths(worktreePath);
+  if (listing.paths === null) return null;
+  const paths: string[] = [];
+  for (const normalized of listing.paths) {
+    if (normalized.startsWith('.babel/')) continue;
     if (isPathInWriteScope(normalized, writeScope, projectRootForScope)) {
-      if (!paths.includes(normalized)) paths.push(normalized);
+      paths.push(normalized);
     }
   }
   return paths;
@@ -1139,6 +1228,29 @@ export function promoteImplementWorktree(
   }
 
   if (input.expectedChanges) {
+    const expectedPaths = new Set(
+      input.expectedChanges.map((change) => normalizeWriteScopeEntry(change.path)),
+    );
+    const dirty = listWorktreeDirtyPaths(worktreePath);
+    if (dirty.paths === null) {
+      conflicts.push({
+        path: '(worktree)',
+        code: 'worktree_status_unavailable',
+        message: `Worktree status could not be verified: ${dirty.error}`,
+      });
+    } else {
+      const unrecorded = dirty.paths.filter(
+        (path) => !expectedPaths.has(path) && !path.startsWith('.babel/'),
+      );
+      if (unrecorded.length > 0) {
+        conflicts.push({
+          path: '(worktree)',
+          code: 'unrecorded_worktree_change',
+          message: `Worktree has ${unrecorded.length} change(s) absent from the manifest: ${unrecorded.join(', ')}`,
+        });
+      }
+    }
+
     const records: ChildChangeRecord[] = [];
     const seen = new Set<string>();
     for (const raw of input.expectedChanges) {
@@ -1151,6 +1263,11 @@ export function promoteImplementWorktree(
       const unsafe = adoptionPathSafety(projectRoot, path);
       if (unsafe) {
         conflicts.push(unsafe);
+        continue;
+      }
+      const unsafeChild = adoptionPathSafety(worktreePath, path);
+      if (unsafeChild) {
+        conflicts.push({ ...unsafeChild, message: `Child ${unsafeChild.message}` });
         continue;
       }
       if (!isPathInWriteScope(path, scopeValidation.normalizedScope, projectRoot)) {
@@ -1305,40 +1422,50 @@ export function promoteImplementWorktree(
     }
 
     let worktreeRemoved = false;
+    let cleanupFailed = false;
     if (mode === 'copy' && input.cleanupWorktree) {
-      const name =
-        input.worktreeName ??
-        worktreePath.split(/[\\/]/).filter(Boolean).pop() ??
-        '';
-      if (name) {
-        try {
-          removeWorktree(name, { projectRoot, force: true });
-          worktreeRemoved = true;
-        } catch (err) {
-          diagnostics.push({
-            code: 'worktree_cleanup_failed',
-            message: err instanceof Error ? err.message : String(err),
-          });
-        }
+      try {
+        removeWorktreeByPath(projectRoot, worktreePath);
+        worktreeRemoved = true;
+      } catch (err) {
+        cleanupFailed = true;
+        diagnostics.push({
+          code: 'worktree_cleanup_failed',
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 
     return buildResult({
-      success: true,
-      status: 'adopted',
+      success: !cleanupFailed,
+      status: cleanupFailed ? 'cleanup_failed' : 'adopted',
       verification,
       worktreeRemoved,
       parentStatusAfter: gitPorcelainStatus(projectRoot),
-      summary: `Adopted ${adoptedPaths.length} file(s) and ${deletedPaths.length} deletion(s) from the child worktree.`,
+      summary: cleanupFailed
+        ? `Adopted ${adoptedPaths.length} file(s) and ${deletedPaths.length} deletion(s), but worktree cleanup failed: ${diagnostics.filter((d) => d.code === 'worktree_cleanup_failed').map((d) => d.message).join('; ')}`
+        : `Adopted ${adoptedPaths.length} file(s) and ${deletedPaths.length} deletion(s) from the child worktree.`,
     });
   }
 
   // Legacy discovery path: no recorded child hashes. Each candidate is still
   // scope- and path-checked; anything skipped is reported, never silently lost.
-  const candidates =
+  const listedCandidates =
     input.paths && input.paths.length > 0
       ? input.paths.map(normalizeWriteScopeEntry)
       : listWorktreeScopedChanges(worktreePath, scopeValidation.normalizedScope, projectRoot);
+  if (listedCandidates === null) {
+    conflicts.push({
+      path: '(worktree)',
+      code: 'worktree_status_unavailable',
+      message: 'Worktree status could not be verified; refusing to treat the tree as unchanged.',
+    });
+    return buildResult({
+      summary: 'Promote rejected: worktree status unavailable',
+      error: conflicts.map((conflict) => conflict.message).join('; '),
+    });
+  }
+  const candidates = listedCandidates;
 
   const inScope = candidates.filter((p) =>
     isPathInWriteScope(p, scopeValidation.normalizedScope, projectRoot),
@@ -1446,26 +1573,33 @@ export function promoteImplementWorktree(
     : 'refused';
 
   let worktreeRemoved = false;
+  let cleanupFailed = false;
   if (mode === 'copy' && input.cleanupWorktree) {
+    const remainingDirty = listWorktreeDirtyPaths(worktreePath);
+    const allDirtyPromoted =
+      remainingDirty.paths !== null &&
+      remainingDirty.paths.every(
+        (path) => promotedPaths.includes(path) || path.startsWith('.babel/'),
+      );
     const cleanupSafe =
       success &&
       conflicts.length === 0 &&
+      allDirtyPromoted &&
       diagnostics.every((d) => d.code !== 'promote_copy_failed') &&
       skippedPaths.every((s) => s.reason === 'already identical');
-    const name =
-      input.worktreeName ??
-      worktreePath.split(/[\\/]/).filter(Boolean).pop() ??
-      '';
-    if (!cleanupSafe || !name) {
+    if (!cleanupSafe) {
       diagnostics.push({
         code: 'worktree_retained_unadopted_changes',
-        message: 'Worktree retained because not every child change was adopted; inspect the report before removing it.',
+        message: remainingDirty.paths === null
+          ? `Worktree retained because status could not be verified: ${remainingDirty.error}`
+          : 'Worktree retained because not every child change was adopted; inspect the report before removing it.',
       });
     } else {
       try {
-        removeWorktree(name, { projectRoot, force: true });
+        removeWorktreeByPath(projectRoot, worktreePath);
         worktreeRemoved = true;
       } catch (err) {
+        cleanupFailed = true;
         diagnostics.push({
           code: 'worktree_cleanup_failed',
           message: err instanceof Error ? err.message : String(err),
@@ -1475,14 +1609,16 @@ export function promoteImplementWorktree(
   }
 
   const parentStatusAfter = gitPorcelainStatus(projectRoot);
+  const finalSuccess = success && !cleanupFailed;
+  const finalStatus: AdoptionStatus = cleanupFailed ? 'cleanup_failed' : status;
   return buildResult({
-    success,
-    status,
+    success: finalSuccess,
+    status: finalStatus,
     parentStatusAfter,
     worktreeRemoved,
-    summary: success
+    summary: finalSuccess
       ? `Promote ${mode}: ${promotedPaths.length} path(s)${worktreeRemoved ? ' (worktree removed)' : ''}`
       : `Promote failed: ${diagnostics.map((d) => d.message).join('; ') || 'no paths promoted'}`,
-    error: success ? null : diagnostics.map((d) => d.message).join('; ') || 'no paths promoted',
+    error: finalSuccess ? null : diagnostics.map((d) => d.message).join('; ') || 'no paths promoted',
   });
 }

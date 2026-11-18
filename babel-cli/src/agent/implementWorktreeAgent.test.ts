@@ -21,6 +21,7 @@ import { afterEach, describe, it } from 'node:test';
 
 import {
   isPathInWriteScope,
+  listWorktreeDirtyPaths,
   listWorktreeScopedChanges,
   promoteImplementWorktree,
   runImplementWorktreeAgent,
@@ -30,6 +31,7 @@ import {
   validateImplementWriteScope,
   worktreePathExists,
 } from './implementWorktreeAgent.js';
+import { createToolExecutor } from './toolExecutor.js';
 
 const tempRoots: string[] = [];
 
@@ -320,8 +322,61 @@ describe('promoteImplementWorktree (W2.1 merge)', () => {
     });
   });
 
-  it('listWorktreeScopedChanges only returns in-scope paths', async () => {
+  it('listWorktreeScopedChanges returns null when git status fails', () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-impl-not-git-list-'));
+    tempRoots.push(root);
+    mkdirSync(join(root, 'src'), { recursive: true });
+    assert.equal(listWorktreeScopedChanges(root, ['src'], root), null);
+    assert.equal(listWorktreeDirtyPaths(root).paths, null);
+  });
+
+  it('retains the worktree when a child writes outside recorded mutation tools', async () => {
     const root = createGitProject();
+    let sideEffectWritten = false;
+    const executor = createToolExecutor({
+      executeTool: async (req, context) => {
+        const projectRoot = context.projectRoot;
+        if (!projectRoot) throw new Error('test executor requires a project root');
+        if (!sideEffectWritten) {
+          sideEffectWritten = true;
+          writeFileSync(join(projectRoot, 'src', 'shell-only.txt'), 'shell write\n');
+        }
+        if (req.tool === 'file_write' && 'path' in req && typeof req.path === 'string') {
+          writeFileSync(join(projectRoot, req.path), String(req.content ?? ''));
+          return { exit_code: 0, stdout: `written ${req.path}`, stderr: '' };
+        }
+        return { exit_code: 0, stdout: '', stderr: '' };
+      },
+    });
+
+    const result = await runImplementWorktreeAgent(
+      { id: 'unrecorded-shell', task: 'Write under src', writeScope: ['src'], maxRounds: 3 },
+      {
+        projectRoot: root,
+        useDeterministicMock: true,
+        executor,
+        cleanupWorktree: true,
+        discardChildChanges: true,
+      },
+    );
+
+    assert.equal(result.success, true, result.summary);
+    assert.ok(existsSync(result.worktree.path), 'unrecorded shell writes must block removal');
+    assert.ok(
+      result.diagnostics.some((d) => d.code === 'worktree_unrecorded_changes'),
+      JSON.stringify(result.diagnostics),
+    );
+    assert.ok(
+      result.diagnostics.some((d) => d.code === 'worktree_retained_unrecorded_changes'),
+      JSON.stringify(result.diagnostics),
+    );
+    const manifest = JSON.parse(readFileSync(result.adoptionManifestPath!, 'utf-8')) as {
+      unrecorded_paths?: string[];
+    };
+    assert.ok(manifest.unrecorded_paths?.includes('src/shell-only.txt'));
+  });
+
+  it('listWorktreeScopedChanges only returns in-scope paths', async () => {    const root = createGitProject();
     const impl = await runImplementWorktreeAgent(
       {
         id: 'list-scoped',
@@ -336,6 +391,7 @@ describe('promoteImplementWorktree (W2.1 merge)', () => {
       },
     );
     const listed = listWorktreeScopedChanges(impl.worktree.path, ['src'], root);
+    assert.ok(listed !== null);
     assert.ok(listed.every((p) => p.startsWith('src') || p.includes('src/')));
     spawnSync('git', ['worktree', 'remove', '--force', impl.worktree.path], {
       cwd: root,
