@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -969,4 +970,65 @@ test('typed context preparation failure survives terminal persistence and stream
   assert.equal(event.cause_class, 'harness')
   assert.equal(persisted[0], 'BLOCKED_POLICY')
   assert.deepEqual(persisted[2], { code: 'context_preparation_failed', cause_class: 'harness', detail: 'workspace_revision' })
+})
+
+test('a non-Git external save after inspection revokes read-only no-change success', t => {
+  const input = terminalInput(t)
+  const root = input.snapshot.context.engineRunDir
+  writeFileSync(join(root, 'app.ts'), 'v1\n')
+  const deliveredHash = createHash('sha256').update('v1\n', 'utf8').digest('hex')
+  input.snapshot.outcome.readOnly = true
+  input.snapshot.outcome.hasMutation = false
+  input.snapshot.context.options.task = 'Inspect app.ts and report whether it needs changes.'
+  input.snapshot.context.acceptedOperation = 'READ_ONLY'
+  input.snapshot.evidence.observability.toolCallLog = [
+    { tool: 'read_file', target: 'app.ts', detail: 'read 1 line', index: 0, exit_code: 0, read_revision_hash: deliveredHash },
+  ]
+  // The external editor saves after inspection but before publication.
+  writeFileSync(join(root, 'app.ts'), 'v2\n')
+  const kernel = createExecutorKernel('chat')
+  input.effects.decideCompletion = (requested, hasMutation, finalRevision) => kernel.completion.decide({
+    mode: 'chat',
+    requestedOutcome: requested,
+    hasWrite: hasMutation,
+    verificationPolicy: 'required',
+    toolCallLog: input.snapshot.evidence.observability.toolCallLog,
+    ...(finalRevision ? { finalRevision } : {}),
+  })
+  const event = completeChatStream(input, 'No change is required; app.ts already satisfies the request.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'UNVERIFIED_PATCH')
+  assert.match(event.answer, /UNVERIFIED_PATCH/)
+  assert.match(event.answer, /app\.ts/)
+})
+
+test('an unverified terminal discloses files written after the last green verifier', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.context.acceptedOperation = 'MUTATING'
+  input.snapshot.context.options.task = 'Fix the parser and run the project tests.'
+  input.snapshot.evidence.observability.toolCallLog = [
+    { tool: 'write_file', target: 'src/parser.ts', detail: 'written', index: 0, exit_code: 0,
+      effect_status: 'confirmed_change', mutation_paths: ['src/parser.ts'] },
+    { tool: 'test_run', target: 'npm test', detail: 'green', index: 1, exit_code: 0, verifierExecuted: true, effect_status: 'confirmed_no_change' },
+    { tool: 'write_file', target: 'src/parser.ts', detail: 'late edit', index: 2, exit_code: 0,
+      effect_status: 'confirmed_change', mutation_paths: ['src/parser.ts'] },
+  ]
+  input.effects.decideCompletion = requested => ({
+    requestedOutcome: requested,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'verifier_stale',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+  })
+  const event = completeChatStream(input, 'Parser fixed and tests pass.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'UNVERIFIED_PATCH')
+  assert.match(event.answer, /Modified after the last passing verifier/)
+  assert.match(event.answer, /src\/parser\.ts/)
+  assert.match(event.answer, /retained, not deleted/)
 })

@@ -433,6 +433,7 @@ import {
 import {restoreTurnRuntime} from './restoreTurnRuntime.js';
 import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjectiveSubmission,type ObjectiveAdmissionHost,type ObjectiveAdmissionResult} from './chatEngineObjectiveAdmission.js';
 import type { CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
+import { evaluateFinalRevisionWitness } from '../authority/finalRevision.js';
 import {requiresObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog} from './taskObjectiveLifecycle.js';
 
 import { admitProjectContentRead, isReadOnlyChat } from "./chatReadOnly.js";
@@ -2676,9 +2677,24 @@ export class ChatEngine {
   private decideCompletion(
     requestedOutcome: TerminalOutcome | "PLAN_COMPLETE",
     hasMutation: boolean,
+    publicationRevision?: import('../authority/finalRevision.js').FinalRevisionWitnessV1,
   ) {
     refreshChatCompletionVerifierCurrency(this.options, hasMutation, this.lastVerifierReceipt, this.executedVerifierLedger);
     const verifierInput = this.buildVerifierInput();
+    const gateLog = toGateToolLog(this.toolCallLog);
+    const finalRevision = publicationRevision ?? (() => {
+      try {
+        return evaluateFinalRevisionWitness({
+          projectRoot: requireProjectRoot(this.options),
+          toolCallLog: gateLog,
+          requiredVerifierCommands: verifierInput.requiredVerifierCommands,
+        });
+      } catch {
+        // A missing project root or unreadable evidence stays unavailable; the
+        // kernel treats it as unproven, never as verified.
+        return undefined;
+      }
+    })();
     const evidenceProof = requestedOutcome === "VERIFIED_COMPLETE" || hasMutation
       ? this.buildCompletionProof(hasMutation) : { compliant: false, errors: ["no mutation-bound verifier evidence is available"] };
     if (this.criterionCompletion && (requestedOutcome === 'VERIFIED_COMPLETE' || hasMutation)) {
@@ -2705,6 +2721,7 @@ export class ChatEngine {
         ...(verifierInput.currentWorkspaceRevisionHash ? { currentWorkspaceRevisionHash: verifierInput.currentWorkspaceRevisionHash } : {}),
       toolCallLog: toGateToolLog(this.toolCallLog),
       acceptance: this.criterionCompletion?.currentRequest(),
+      ...(finalRevision ? { finalRevision } : {}),
       ...(this.lastVerifierReceipt?.boundRevision
         ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
         : {}),
@@ -4642,8 +4659,8 @@ export class ChatEngine {
         },
       },
       effects: {
-        decideCompletion: (requested, hasMutation) =>
-          this.decideCompletion(requested, hasMutation),
+        decideCompletion: (requested, hasMutation, finalRevision) =>
+          this.decideCompletion(requested, hasMutation, finalRevision),
         settleActiveExecution: () => this.settleActiveExecutionForTerminal(),
         finalizeTurn: (outcome, status, reason, response, extras) =>
           finalizeParityTurnSync(

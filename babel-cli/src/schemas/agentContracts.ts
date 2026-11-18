@@ -1379,6 +1379,8 @@ export const ToolCallLogSchema = z.object({
   fingerprint: z.string().optional(),
   retry_forbidden: z.boolean().optional(),
   mutation_paths: z.array(z.string().min(1)).optional(),
+  /** `final-revision-v1`: content hash of the bytes a read delivered. */
+  read_revision_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 export type ToolCallLog = z.infer<typeof ToolCallLogSchema>;
 

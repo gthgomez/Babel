@@ -828,6 +828,8 @@ export interface ChatEngineStreamingLoopHost {
     mutation_paths?: string[]
     effect_status?: MutationEffectStatus
     effect_scope?: import('./mutationTools.js').MutationEffectScope
+    /** `final-revision-v1`: content hash of the bytes this read delivered. */
+    read_revision_hash?: string
   }[]
   toolsWithoutWrite: number
   readonly trackRunnerUsage: (
@@ -951,6 +953,8 @@ export interface ChatEngineActionExecutorHost {
     mutation_paths?: string[]
     effect_status?: MutationEffectStatus
     effect_scope?: import('./mutationTools.js').MutationEffectScope
+    /** `final-revision-v1`: content hash of the bytes this read delivered. */
+    read_revision_hash?: string
   }[]
   verifierReceiptCache: Map<
     string,

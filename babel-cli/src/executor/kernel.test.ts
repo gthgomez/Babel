@@ -169,3 +169,99 @@ test("executor kernel downgrades verified completion when verifierEvidenceErrors
   assert.equal(decision.finalOutcome, "UNVERIFIED_PATCH");
   assert.match(decision.reason, /verifier_receipt_invalid/);
 });
+
+test('shared final-revision authority certifies a current witness', () => {
+  const kernel = createExecutorKernel('deep')
+  const decision = kernel.completion.decideFinalRevision({
+    mode: 'deep',
+    verifiedClaim: true,
+    hasWrite: true,
+    requiredVerifierCommands: ['npm test'],
+    finalRevision: {
+      schema_version: 1,
+      contract: 'final-revision-v1',
+      status: 'verified',
+      candidate: null,
+      verified_against: 'required_verifier',
+      stale_paths: [],
+      unverified_paths: [],
+      reason: null,
+    },
+  })
+  assert.equal(decision.finalOutcome, 'VERIFIED_COMPLETE')
+  assert.equal(decision.allowed, true)
+  assert.equal(decision.reason, 'final_revision_verified')
+})
+
+test('shared final-revision authority downgrades a stale witness with paths', () => {
+  const kernel = createExecutorKernel('deep')
+  const decision = kernel.completion.decideFinalRevision({
+    mode: 'deep',
+    verifiedClaim: true,
+    hasWrite: true,
+    requiredVerifierCommands: ['npm test'],
+    finalRevision: {
+      schema_version: 1,
+      contract: 'final-revision-v1',
+      status: 'stale',
+      candidate: null,
+      verified_against: null,
+      stale_paths: ['src/app.ts'],
+      unverified_paths: ['src/app.ts'],
+      reason: 'mutation_after_required_verifier',
+    },
+  })
+  assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
+  assert.equal(decision.allowed, false)
+  assert.deepEqual(decision.stalePaths, ['src/app.ts'])
+  assert.match(decision.reason, /final_revision_stale/)
+})
+
+test('a stale witness forbids read-only no-change success', () => {
+  const kernel = createExecutorKernel('chat')
+  const decision = kernel.completion.decide({
+    mode: 'chat',
+    requestedOutcome: 'NO_CHANGE_REQUIRED',
+    hasWrite: false,
+    verificationPolicy: 'required',
+    toolCallLog: [{ tool: 'read_file', target: 'a.ts', exit_code: 0 }],
+    finalRevision: {
+      schema_version: 1,
+      contract: 'final-revision-v1',
+      status: 'stale',
+      candidate: null,
+      verified_against: null,
+      stale_paths: ['a.ts'],
+      unverified_paths: [],
+      reason: 'inspected_bytes_changed_before_publication',
+    },
+  })
+  assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
+  assert.equal(decision.allowed, false)
+  assert.equal(decision.reason, 'final_revision_stale')
+})
+
+test('a stale witness cannot certify VERIFIED_COMPLETE even with a green receipt and proof', () => {
+  const kernel = createExecutorKernel('chat')
+  const decision = kernel.completion.decide({
+    ...kernelVerifierFixture(),
+    mode: 'chat',
+    requestedOutcome: 'VERIFIED_COMPLETE',
+    hasWrite: true,
+    verificationPolicy: 'none',
+    toolCallLog: [],
+    proof: { compliant: true },
+    finalRevision: {
+      schema_version: 1,
+      contract: 'final-revision-v1',
+      status: 'stale',
+      candidate: null,
+      verified_against: null,
+      stale_paths: ['a.ts'],
+      unverified_paths: [],
+      reason: 'mutation_after_required_verifier',
+    },
+  })
+  assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
+  assert.equal(decision.allowed, false)
+})

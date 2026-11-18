@@ -684,6 +684,8 @@ export class ChatEngineActionExecutor {
         this.host.workingState.recoveryGate?.binding && sameRecoveryBinding(recoveryReadBindingBefore, this.host.workingState.recoveryGate.binding) &&
         !this.host.workingState.recoveryGate.readRecords?.slice(-8).some(record => record.tool === 'read_file' && record.target === recoveryReadTarget);
       let fileReadCacheHash: string | undefined;
+      /** Bytes the model was shown for a read-only inspection (`final-revision-v1`). */
+      let readRevisionHash: string | undefined;
       if (action.type === "read_file" || action.type === "read_range") {
         const requestedPath =
           action.type === "read_file" ? action.path : action.file_path;
@@ -706,6 +708,17 @@ export class ChatEngineActionExecutor {
             index: meta.index,
             observation: `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n${detail}\n\`\`\``,
           };
+        }
+      }
+      if (action.type === "read_range") {
+        readRevisionHash = await this.host.hashFilePath(action.file_path);
+        if (!this.host.isSubmissionCurrent(ownerGeneration)) {
+          return this.host.settleStaleActionResult(
+            tool,
+            target,
+            meta.index,
+            "parent submission superseded before the action settled",
+          );
         }
       }
       if (action.type === "read_file") {
@@ -743,6 +756,7 @@ export class ChatEngineActionExecutor {
           };
         }
         fileReadCacheHash = await this.host.hashFilePath(action.path);
+        readRevisionHash = fileReadCacheHash;
         // R0-8: hashing is a suspension point; a superseded submission must not
         // append its read result (or advance its caches) for the new task.
         if (!this.host.isSubmissionCurrent(ownerGeneration)) {
@@ -1626,6 +1640,10 @@ export class ChatEngineActionExecutor {
             lastResult.process_termination === 'exited',
         } : {}),
         ...(verifierSemanticSignature ? { verifierSemanticSignature } : {}),
+        ...(readRevisionHash && !result.policyBlocked && result.results.length > 0 &&
+          result.results.every(entry => entry.exit_code === 0 && !entry.denial) && !toolError
+          ? { read_revision_hash: readRevisionHash }
+          : {}),
         detail,
         index: meta.index,
         ...((action.type === 'run_command' || action.type === 'test_run') ? {
