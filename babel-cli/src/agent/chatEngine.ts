@@ -4111,10 +4111,7 @@ export class ChatEngine {
     this.compactionConsecutiveFailures = state.compactionConsecutiveFailures;
   }
 
-  private summarizeDroppedTurns(
-    dropped: ChatMessage[],
-    options?: import('./compactionSummary.js').DroppedTurnSummaryOptions,
-  ): string {
+  private summarizeDroppedTurns(dropped: ChatMessage[], options?: import('./compactionSummary.js').DroppedTurnSummaryOptions): string {
     return summarizeDroppedTurnsFn(dropped, options);
   }
   private parseChatTurnLenient(rawText: string): ChatTurn {
