@@ -500,6 +500,39 @@ export function gitSubcommandAllowsFlags(subcommand: string, flags: readonly str
   return spec !== undefined && flags.every(flag => spec.flags.has(flag))
 }
 
+/**
+ * Mechanism requirement for a capable subcommand. `gpg` means "forbid %G
+ * format atoms"; `unproven` means no sound argv recipe exists (range-diff).
+ */
+export type GitHardeningMechanism =
+  | 'pager+fsmonitor+gpg'
+  | 'pager+fsmonitor'
+  | 'pager+gpg'
+  | 'fsmonitor'
+  | 'pager'
+  | 'none'
+  | 'unproven'
+
+const GIT_HARDENING_MECHANISMS: Readonly<Record<string, GitHardeningMechanism>> = {
+  diff: 'pager+fsmonitor+gpg',
+  log: 'pager+fsmonitor+gpg',
+  show: 'pager+fsmonitor+gpg',
+  whatchanged: 'pager+fsmonitor+gpg',
+  blame: 'pager+fsmonitor',
+  reflog: 'pager+gpg',
+  grep: 'pager+fsmonitor',
+  status: 'fsmonitor',
+  branch: 'pager',
+  tag: 'pager',
+  shortlog: 'pager',
+  'range-diff': 'unproven',
+}
+
+/** Exported mechanism requirement; null means the census is missing a recipe. */
+export function gitHardeningMechanisms(subcommand: string): GitHardeningMechanism | null {
+  return GIT_HARDENING_MECHANISMS[subcommand.toLowerCase()] ?? null
+}
+
 /** Capability for one proof-table subcommand. */
 export function gitConfigCapability(subcommand: string): GitConfigCapability {
   return GIT_CONFIG_CAPABLE_SUBCOMMANDS.has(subcommand.toLowerCase())
@@ -578,24 +611,17 @@ function gitFormatValues(args: readonly string[]): string[] {
 }
 
 function gitHardeningSatisfied(parsed: ParsedGitRead): boolean {
+  const mechanism = gitHardeningMechanisms(parsed.sub)
+  // Fail closed: a capable subcommand with no mechanism entry is unproven.
+  if (mechanism === null || mechanism === 'unproven') return false
   const has = (flag: string) => parsed.args.includes(flag)
   const fsmonitor = parsed.config.has('core.fsmonitor=false')
   const pager = parsed.noPager || parsed.config.has('core.pager=cat')
-  // %G atoms invoke gpg even when every other hardening flag is present.
   const gpgFormat = gitFormatValues(parsed.args).some(value => value.includes('%G'))
-  // Single source of truth: the same helper the invariant test consumes.
   const localFlagsSatisfied = gitHardeningFlags(parsed.sub).every(flag => has(flag))
-  if (parsed.sub === 'status') return fsmonitor
-  if (parsed.sub === 'grep') return fsmonitor && pager
-  if (parsed.sub === 'branch' || parsed.sub === 'tag' || parsed.sub === 'shortlog') return pager
-  if (parsed.sub === 'blame') return pager && fsmonitor && localFlagsSatisfied
-  if (parsed.sub === 'reflog') return pager && !gpgFormat
-  // Measured: `git range-diff --no-textconv` still applies textconv, so no
-  // sound hardening recipe exists; the command is always effect-unproven.
-  if (parsed.sub === 'range-diff') return false
-  if (['diff', 'log', 'show', 'whatchanged'].includes(parsed.sub)) {
-    return pager && !gpgFormat && fsmonitor && localFlagsSatisfied
-  }
+  if (mechanism.includes('pager') && !pager) return false
+  if (mechanism.includes('fsmonitor') && !fsmonitor) return false
+  if (mechanism.includes('gpg') && gpgFormat) return false
   return localFlagsSatisfied
 }
 

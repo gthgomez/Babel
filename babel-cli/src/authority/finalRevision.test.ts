@@ -15,6 +15,7 @@ import {
   gitConfigCapability,
   gitConfigEffectUnproven,
   gitHardeningFlags,
+  gitHardeningMechanisms,
   gitSubcommandAllowsFlags,
   evaluateFinalRevisionWitness,
   hashFinalRevisionFile,
@@ -891,4 +892,106 @@ test('range-diff has no sound hardening recipe: plain and flag-bearing forms are
     assert.equal(witness.status, 'unverified', command)
     assert.match(witness.reason ?? '', /^effect_unproven:/, command)
   }
+})
+
+test('every capable subcommand has a hardening mechanism and every plain probe is unproven', () => {
+  for (const subcommand of GIT_CONFIG_CAPABLE_SUBCOMMANDS) {
+    const mechanism = gitHardeningMechanisms(subcommand)
+    assert.notEqual(mechanism, null, `missing mechanism for ${subcommand}`)
+    assert.equal(gitSubcommandAllowsFlags(subcommand, []), true, `missing spec for ${subcommand}`)
+    const probe = GIT_PROBES[subcommand]
+    assert.ok(probe, `missing probe for ${subcommand}`)
+    const witness = witnessFor(probe)
+    assert.equal(witness.status, 'unverified', `${subcommand}: ${probe}`)
+    assert.match(witness.reason ?? '', /^effect_unproven:/, subcommand)
+  }
+})
+
+test('classification matrix totals remain representation-equivalent', () => {
+  const hardened = [
+    'git -c core.fsmonitor=false --no-pager diff --no-ext-diff --no-textconv',
+    'git -c core.fsmonitor=false --no-pager log --no-ext-diff --no-textconv',
+    'git -c core.fsmonitor=false --no-pager show --no-ext-diff --no-textconv',
+    'git -c core.fsmonitor=false --no-pager whatchanged --no-ext-diff --no-textconv',
+    'git -c core.fsmonitor=false --no-pager status',
+    'git -c core.fsmonitor=false --no-pager grep TODO',
+    'git -c core.fsmonitor=false --no-pager blame --no-textconv file',
+    'git --no-pager reflog show',
+    'git --no-pager branch -a',
+    'git --no-pager tag -l',
+    'git --no-pager shortlog',
+  ]
+  assert.equal(hardened.length, 11)
+  for (const command of hardened) assert.equal(witnessFor(command).status, 'verified', command)
+
+  const soft = [
+    'git diff',
+    'git log',
+    'git show',
+    'git whatchanged',
+    'git blame file',
+    'git reflog show',
+    'git grep TODO',
+    'git status',
+    'git branch -a',
+    'git tag -l',
+    'git shortlog',
+    'git range-diff A...B A...C',
+  ]
+  assert.equal(soft.length, 12)
+  for (const command of soft) {
+    const witness = witnessFor(command)
+    assert.equal(witness.status, 'unverified', command)
+    assert.match(witness.reason ?? '', /^effect_unproven:/, command)
+  }
+
+  const mechanical = [
+    'git rev-parse HEAD',
+    'git rev-list HEAD',
+    'git ls-files',
+    'git ls-tree HEAD',
+    'git cat-file -p HEAD:file',
+    'git config --get user.name',
+    'git describe --tags',
+    'git stash list',
+    'git worktree list',
+    'git remote -v',
+    'git notes list',
+    'git for-each-ref',
+    'git show-ref',
+    'git merge-base HEAD HEAD',
+    'git name-rev HEAD',
+    'git count-objects',
+    'git fsck',
+    'git var GIT_AUTHOR_IDENT',
+    'git check-ignore file',
+    'git check-attr x file',
+  ]
+  assert.equal(mechanical.length, 20)
+  for (const command of mechanical) assert.equal(witnessFor(command).status, 'verified', command)
+
+  const denials = [
+    'rg --pre=./pre.sh pattern s.txt',
+    'git diff --output=diff-out.txt',
+    'git log --output=x',
+    'git show --output=x',
+    'find . -fprint0 out.txt',
+    'tree -o out.txt',
+    'sort -oout.txt',
+    'file -C -m magic',
+    'cat $(rm out.txt)',
+    'cat `rm out.txt`',
+    'cat <(rm out.txt)',
+    'cat a & rm b',
+    'cat a\nrm b',
+    'git grep -O./pager.sh -- needle',
+    'git cat-file --filters HEAD:file.txt',
+    'git show --textconv HEAD',
+    'git diff --textconv',
+    'git log --textconv',
+    'git -c diff.external=./x status',
+  ]
+  assert.equal(denials.length, 19)
+  for (const command of denials) assert.equal(witnessFor(command).status, 'stale', command)
+  assert.equal(witnessFor('git log --format=%GG').status, 'unverified')
 })
