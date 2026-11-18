@@ -88,7 +88,9 @@ class McpClient {
     return this.stderrChunks.join('');
   }
 
-  private async nextMessage(timeoutMs = 10_000): Promise<JsonRpcMessage> {
+  // Serialized heavy CI can delay a cold CLI handshake; keep a generous but
+  // bounded budget so the adapter probe fails only on a real stalled peer.
+  private async nextMessage(timeoutMs = 30_000): Promise<JsonRpcMessage> {
     const queued = this.messages.shift();
     if (queued) {
       return queued;
