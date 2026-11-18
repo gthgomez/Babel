@@ -20,6 +20,9 @@ System typography follows Cascadia Code / Cascadia Mono / Consolas / Liberation 
 
 ## Validation discipline
 
+Use the [engineering QA checklist](ENGINEERING-QA-CHECKLIST.md) to bind the
+checkout, runner and artifact and to classify the evidence from each lane.
+
 The optional native Windows folder-picker journey uses the actual installed
 Electron dialog and a controller restricted to its process ID. From a qualified
 checkout whose source matches the installed artifact:
@@ -51,7 +54,7 @@ Evidence kinds are distinct:
 - **Source/fixture tests** (`native_ui_test.py`, renderer unit tests) use a native API double or fixtures; they do not prove a real installed Electron session.
 - **Packaged-native acceptance** launches the installed `Babel Desktop.exe` with Node Playwright `_electron.launch({ executablePath })` after silent NSIS install (`installer-lifecycle` step 3b). The harness asserts on-disk `BUILD.json`/executable identity, `window.babelDesktop.getInfo()` packaged engine truth (not a falsely “ready” connection), collects renderer `pageerror`/console errors, and uploads JSON plus screenshots as CI artifacts. It is not satisfied by bootstrap file probes, CLI `--version` smoke, or installer-only regex guards.
 - **Installer lifecycle probes** (silent `/S`, registry state, upgrade/rollback/uninstall) validate packaging mechanics but do not replace the Electron GUI acceptance above.
-- The packaged lane seeds fixture project/history under an isolated profile, then exercises history paging, ollama route-only provider configuration, and project tree IPC without `babel:run` or credentials. Interactive NSIS failure dialogs are not automated in the Electron harness.
+- The packaged lane seeds a synthetic Git repair project and history under an isolated profile. It submits a read-only task and a repair through the renderer using a test-owned Ollama-compatible loopback provider, then independently checks the behavior and scoped diff. The listener must exclusively bind the fixed local port before launching Desktop, or the lane fails. It preauthorizes the disposable project and does not test the trust dialog. These are intended checks, not evidence until run against the exact installed artifact. Interactive NSIS failure dialogs are not automated in the Electron harness.
 - **Live-provider** journeys require separately authorized credentials and are out of scope for ordinary CI qualification.
 
 The screenshots in `artifacts/` are actual Chromium renders of this implementation. The whole reference is never used as the application's background: text, controls, cards, rows, and panels are real DOM elements. Only the logo crop is a raster image.
