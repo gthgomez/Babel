@@ -7,6 +7,7 @@ import { join } from 'node:path'
 
 import {
   FINAL_REVISION_CONTRACT_VERSION,
+  GIT_READ_ONLY_SUBCOMMANDS,
   evaluateFinalRevisionWitness,
   hashFinalRevisionFile,
   chatFinalRevisionRequired,
@@ -527,4 +528,101 @@ test('chat final-revision requirement opts out only for ambient read-only', () =
   assert.equal(chatFinalRevisionRequired({ ambientReadOnly: false, hasProjectRoot: true }), true)
   assert.equal(chatFinalRevisionRequired({ ambientReadOnly: true, hasProjectRoot: true }), false)
   assert.equal(chatFinalRevisionRequired({ ambientReadOnly: false, hasProjectRoot: false }), false)
+})
+
+// ── Round-5 adversarial corpus and proven execution vectors ─────────────────
+
+const GIT_DENIALS = [
+  '-O./pager.sh',
+  '--open-files-in-pager=./pager.sh',
+  '--textconv',
+  '--filters',
+  '--ext-diff',
+  '--output=out.txt',
+  '--show-signature',
+  '--paginate',
+  '--exec-path=/tmp',
+]
+
+test('every read subcommand × exec/write denial classifies as a mutation', () => {
+  for (const subcommand of GIT_READ_ONLY_SUBCOMMANDS) {
+    for (const denial of GIT_DENIALS) {
+      const command = `git ${subcommand} ${denial}`
+      assert.equal(witnessFor(command).status, 'stale', command)
+    }
+  }
+})
+
+test('git forbidden globals and inline config deny even before the subcommand', () => {
+  for (const command of [
+    'git -c diff.external=./x status',
+    'git --paginate log',
+    'git --exec-path=/tmp status',
+    'git --git-dir=.git status',
+  ]) {
+    assert.equal(witnessFor(command).status, 'stale', command)
+  }
+})
+
+test('proven host execution vectors classify as mutations', () => {
+  for (const command of [
+    'git grep -O./pager.sh -- needle',
+    'git cat-file --filters HEAD:file.txt',
+    'git show --textconv HEAD',
+    'git diff --textconv',
+    'git log --textconv',
+  ]) {
+    assert.equal(witnessFor(command).status, 'stale', command)
+  }
+})
+
+test('sed write and execute families classify as mutations', () => {
+  for (const command of [
+    "sed '1w out' file",
+    "sed '1,2w out' file",
+    "sed 's/a/b/w out' file",
+    "sed -e '1w out' file",
+    'sed -f script.sed file',
+    "sed '1e touch out' file",
+  ]) {
+    assert.equal(witnessFor(command).status, 'stale', command)
+  }
+})
+
+test('common read flags and read-only options still certify', () => {
+  for (const command of [
+    'git log --oneline --graph --stat -n 5',
+    'git log -20',
+    'git show -s',
+    'git status -sb',
+    'git status -uno',
+    'git branch -av',
+    'git diff --stat',
+    'git tag -n5',
+    'git config --get user.name',
+    'grep -o x src/app.ts',
+    'rg --json pattern',
+    'cat -A src/app.ts',
+    'wc -l src/app.ts',
+    'head -20 src/app.ts',
+    'tail -20 src/app.ts',
+    'uniq -f 2 src/app.ts',
+    'sed -n 1,10p src/app.ts',
+    'sed -n "s/a/b/g" src/app.ts',
+  ]) {
+    assert.equal(witnessFor(command).status, 'verified', command)
+  }
+})
+
+test('proof table keeps the decoder read set for existing git reads and gh inspection', async () => {
+  const { decodeCommand } = await import('./commandDecoder.js')
+  for (const subcommand of GIT_READ_ONLY_SUBCOMMANDS) {
+    const command = `git ${subcommand}`
+    if (decodeCommand(command).semantic !== 'read_local') continue
+    assert.equal(witnessFor(command).status, 'verified', command)
+  }
+  for (const command of ['gh pr view 1', 'gh run list']) {
+    assert.equal(decodeCommand(command).semantic, 'read_local', command)
+    assert.equal(witnessFor(command).status, 'verified', command)
+  }
 })

@@ -319,15 +319,6 @@ function splitPipes(segment: string): string[] {
   return parts
 }
 
-const GIT_READ_ONLY_SUBCOMMANDS = new Set([
-  'status', 'diff', 'log', 'show', 'blame', 'grep', 'describe', 'rev-parse',
-  'rev-list', 'ls-files', 'ls-tree', 'cat-file', 'shortlog', 'reflog',
-  'whatchanged', 'merge-base', 'name-rev', 'check-ignore', 'check-attr',
-  'var', 'show-ref', 'for-each-ref', 'count-objects', 'fsck', 'version',
-  'help', 'cherry', 'range-diff',
-])
-const GIT_WRITE_FLAGS = /^(?:--output(?:=|$)|--ext-diff$|--no-index$)/
-
 /** True when a shell string executes or separates in a way we cannot prove read-only. */
 function hasExecutingOrUnsafeShellSyntax(command: string): boolean {
   let quote: "'" | '"' | null = null
@@ -360,71 +351,183 @@ function hasExecutingOrUnsafeShellSyntax(command: string): boolean {
   return false
 }
 
-function stripGitGlobalOptions(tokens: readonly string[]): string[] {
-  let index = 1
-  while (index < tokens.length) {
-    const token = tokens[index]!
-    if (token === '-C' || token === '-c' || token === '--git-dir' || token === '--work-tree' ||
-        token === '--exec-path' || token === '--namespace') {
-      index += 2
+/**
+ * Proof-safety table: only a known-safe flag set keeps a command read-only.
+ * Unknown options fail to the mutation path. This is intentionally stricter
+ * than the capability decoder: proof safety, not authorization.
+ */
+const gitFlagSet = (...values: string[]): ReadonlySet<string> => new Set(values)
+
+interface GitProofSpec {
+  flags: ReadonlySet<string>
+  valueFlags?: ReadonlySet<string>
+  attachedValueFlags?: readonly string[]
+  positionals: 'none' | 'any' | 'max1'
+  verbs?: ReadonlySet<string>
+  requiresListForPositionals?: boolean
+  allowNumericShorthand?: boolean
+  denied?: ReadonlySet<string>
+}
+
+/** Options that execute external programs or write files under git. */
+export const GIT_EXEC_WRITE_DENIALS: readonly RegExp[] = [
+  /^-O/,
+  /^--open-files-in-pager(?:=|$)/,
+  /^--textconv(?:=|$)/,
+  /^--filters(?:=|$)/,
+  /^--ext-diff(?:=|$)/,
+  /^--output(?:=|$)/,
+  /^--show-signature(?:=|$)/,
+  /^--paginate(?:=|$)/,
+  /^--exec-path(?:=|$)/,
+]
+
+const LOG_SAFE_FLAGS = gitFlagSet(
+  '--oneline', '--graph', '--stat', '--numstat', '--shortstat', '--name-only',
+  '--name-status', '--pretty', '--format', '--abbrev-commit', '--no-abbrev-commit',
+  '--decorate', '--no-decorate', '--date', '--max-count', '-n', '--skip', '-S', '-G',
+  '-p', '-u', '--patch', '--no-patch', '-s', '--first-parent', '--merges', '--no-merges',
+  '--since', '--until', '--after', '--before', '--author', '--committer', '--grep',
+  '--all', '--branches', '--tags', '--remotes', '--reverse', '--follow', '--no-renames',
+  '--diff-filter', '--binary', '--color', '--no-color', '--notes', '--no-notes',
+  '--show-notes', '--no-show-notes', '--mailmap', '--use-mailmap', '--topo-order',
+  '--date-order', '--left-right', '--cherry-pick', '--cherry-mark', '--raw',
+  '--simplify-by-decoration', '--full-history', '--dense', '--sparse', '--remove-empty',
+  '--source', '--relative-date', '--abbrev', '--no-abbrev', '--parents', '--children',
+  '--boundary', '--walk-reflogs', '--grep-reflog', '-L', '--no-renames', '--submodule',
+)
+const LOG_VALUE_FLAGS = gitFlagSet(
+  '--pretty', '--format', '--date', '--max-count', '-n', '--skip', '-S', '-G', '--since',
+  '--until', '--after', '--before', '--author', '--committer', '--grep', '--diff-filter',
+  '--abbrev', '--grep-reflog', '-L',
+)
+
+const DIFF_SAFE_FLAGS = gitFlagSet(
+  '--stat', '--numstat', '--shortstat', '--name-only', '--name-status', '--oneline',
+  '--graph', '--patch', '-p', '-u', '--no-patch', '-s', '--cached', '--staged',
+  '--merge-base', '--quiet', '--exit-code', '--no-ext-diff', '--no-textconv', '--binary',
+  '--full-index', '--abbrev', '--color', '--no-color', '--find-renames', '-M',
+  '--find-copies', '-C', '--find-copies-harder', '--diff-filter', '--ignore-space-at-eol',
+  '--ignore-cr-at-eol', '--ignore-all-space', '-w', '--ignore-blank-lines',
+  '--function-context', '-W', '--src-prefix', '--dst-prefix', '--word-diff',
+  '--word-diff-regex', '--color-words', '--color-moved', '--no-color-moved', '--raw',
+  '--patch-with-raw', '--patch-with-stat', '--submodule', '--no-submodule',
+  '--ita-invisible-in-index', '--relative', '--no-relative', '--unified', '-U',
+)
+
+const TABULAR_FLAGS = gitFlagSet('--stat', '--numstat', '--shortstat', '--name-only', '--name-status', '--patch', '-p', '--no-patch', '--oneline', '--graph', '--color', '--no-color')
+
+const GIT_PROOF_SPECS: Readonly<Record<string, GitProofSpec>> = {
+  status: { flags: gitFlagSet('--short', '-s', '--porcelain', '--long', '--branch', '-b', '--verbose', '-v', '--untracked-files', '-u', '--ignored', '--show-stash', '--ahead-behind', '--no-ahead-behind', '--renames', '--no-renames', '--find-renames', '--column', '--no-column', '--null', '-z', '--no-optional-locks'), valueFlags: gitFlagSet('--untracked-files', '-u', '--find-renames', '--column'), attachedValueFlags: ['-u'], positionals: 'none' },
+  diff: { flags: DIFF_SAFE_FLAGS, valueFlags: gitFlagSet('--diff-filter', '--find-renames', '--find-copies', '--unified', '-U', '--src-prefix', '--dst-prefix', '--word-diff-regex', '--color-words', '--abbrev', '--inter-hunk-context'), attachedValueFlags: ['-U', '-M', '-C'], positionals: 'any', denied: gitFlagSet('--no-index') },
+  log: { flags: LOG_SAFE_FLAGS, valueFlags: LOG_VALUE_FLAGS, attachedValueFlags: ['-n', '-S', '-G', '-L'], positionals: 'any', allowNumericShorthand: true },
+  show: { flags: LOG_SAFE_FLAGS, valueFlags: LOG_VALUE_FLAGS, attachedValueFlags: ['-n', '-S', '-G', '-L'], positionals: 'any', allowNumericShorthand: true },
+  blame: { flags: gitFlagSet('-L', '--line-porcelain', '--porcelain', '-p', '--incremental', '--root', '--show-name', '--show-number', '-n', '--date', '--abbrev', '--contents', '--encoding', '--ignore-rev', '--ignore-revs-file', '--reverse', '--first-parent', '--since', '--progress', '--score-debug', '--show-stats', '-s'), valueFlags: gitFlagSet('-L', '--date', '--abbrev', '--contents', '--encoding', '--ignore-rev', '--ignore-revs-file', '--since'), attachedValueFlags: ['-L'], positionals: 'any' },
+  grep: { flags: gitFlagSet('-n', '--line-number', '-i', '--ignore-case', '-w', '--word-regexp', '-v', '--invert-match', '-l', '--files-with-matches', '-L', '--files-without-match', '-c', '--count', '--column', '--color', '--no-color', '--heading', '--no-heading', '--break', '--full-name', '--no-full-name', '--null', '-z', '--cached', '--untracked', '--no-index', '--recursive', '-r', '--no-recursive', '-E', '--extended-regexp', '-G', '--basic-regexp', '-F', '--fixed-strings', '-P', '--perl-regexp', '-e', '-f', '--and', '--or', '--not', '--all-match', '--max-depth', '--threads', '-p', '--show-function', '--function-context', '-W', '-I', '--text'), valueFlags: gitFlagSet('-e', '-f', '--max-depth', '--threads'), attachedValueFlags: ['-e', '-f'], positionals: 'any' },
+  'cat-file': { flags: gitFlagSet('-t', '-s', '-e', '-p', '--batch', '--batch-check', '--batch-all-objects', '--buffer', '--follow-symlinks', '--unordered', '--allow-unknown-type'), positionals: 'any' },
+  'rev-parse': { flags: gitFlagSet('--verify', '--short', '--abbrev-ref', '--symbolic', '--symbolic-full-name', '--all', '--branches', '--tags', '--remotes', '--default', '--sq', '--local-env-vars', '--show-toplevel', '--git-dir', '--absolute-git-dir', '--is-inside-work-tree', '--is-inside-git-dir', '--is-bare-repository', '--is-shallow-repository', '--show-cdup', '--show-prefix', '--show-superproject-working-tree', '--shared-index-path', '--resolve-git-dir', '--path-format', '--disambiguate', '--end-of-options', '--revs-only', '--no-revs', '--flags', '--no-flags', '--not'), valueFlags: gitFlagSet('--default', '--path-format', '--resolve-git-dir'), positionals: 'any' },
+  'rev-list': { flags: gitFlagSet('--count', '--max-count', '-n', '--skip', '--since', '--until', '--after', '--before', '--all', '--branches', '--tags', '--remotes', '--objects', '--object-names', '--no-object-names', '--parents', '--children', '--reverse', '--first-parent', '--merges', '--no-merges', '--topo-order', '--date-order', '--author', '--grep', '--left-right'), valueFlags: gitFlagSet('--max-count', '-n', '--skip', '--since', '--until', '--after', '--before', '--author', '--grep'), attachedValueFlags: ['-n'], positionals: 'any', allowNumericShorthand: true },
+  'ls-files': { flags: gitFlagSet('-t', '-s', '-u', '-z', '--stage', '--unmerged', '--debug', '--eol', '--cached', '-c', '--deleted', '-d', '--modified', '-m', '--others', '-o', '--ignored', '-i', '--exclude-standard', '--error-unmatch', '--full-name', '--abbrev', '--format', '--deduplicate', '--sparse', '--no-empty-directory'), valueFlags: gitFlagSet('--abbrev', '--format'), positionals: 'any' },
+  'ls-tree': { flags: gitFlagSet('-r', '-t', '-d', '-l', '-z', '--name-only', '--name-status', '--full-name', '--full-tree', '--abbrev', '--format', '--long'), valueFlags: gitFlagSet('--abbrev', '--format'), positionals: 'any' },
+  shortlog: { flags: gitFlagSet('-s', '-n', '-e', '--email', '--format', '--group', '--summary', '--numbered', '--no-merges', '--merges'), valueFlags: gitFlagSet('--format', '--group'), attachedValueFlags: ['-n'], positionals: 'any', allowNumericShorthand: true },
+  reflog: { flags: gitFlagSet('--all', '--date', '--format', '--no-abbrev', '--abbrev', '--oneline', '-n'), valueFlags: gitFlagSet('--date', '--format', '--abbrev', '-n'), attachedValueFlags: ['-n'], positionals: 'any', verbs: gitFlagSet('show', 'list') },
+  whatchanged: { flags: LOG_SAFE_FLAGS, valueFlags: LOG_VALUE_FLAGS, attachedValueFlags: ['-n', '-S', '-G', '-L'], positionals: 'any', allowNumericShorthand: true },
+  describe: { flags: gitFlagSet('--tags', '--all', '--long', '--abbrev', '--always', '--dirty', '--broken', '--match', '--exclude', '--contains', '--first-parent', '--debug', '--candidates', '--exact-match'), valueFlags: gitFlagSet('--abbrev', '--match', '--exclude', '--contains', '--candidates'), positionals: 'max1' },
+  'merge-base': { flags: gitFlagSet('--all', '--octopus', '--independent', '--is-ancestor', '--fork-point'), positionals: 'any' },
+  'name-rev': { flags: gitFlagSet('--name-only', '--tags', '--refs', '--exclude', '--always', '--undefined'), valueFlags: gitFlagSet('--refs', '--exclude'), positionals: 'any' },
+  'check-ignore': { flags: gitFlagSet('-v', '--verbose', '-n', '--non-matching', '-q', '--quiet', '--stdin', '-z'), positionals: 'any' },
+  'check-attr': { flags: gitFlagSet('-a', '--all', '-l', '--stdin', '-z'), positionals: 'any' },
+  var: { flags: gitFlagSet('-l', '--list'), positionals: 'max1' },
+  'show-ref': { flags: gitFlagSet('--head', '--heads', '--tags', '--dereference', '-d', '--verify', '--hash', '-s', '--abbrev', '--quiet', '-q'), valueFlags: gitFlagSet('--abbrev'), positionals: 'any' },
+  'for-each-ref': { flags: gitFlagSet('--format', '--sort', '--count', '--shell', '--python', '--perl', '--tcl', '--points-at', '--merged', '--no-merged', '--contains', '--no-contains'), valueFlags: gitFlagSet('--format', '--sort', '--count', '--points-at', '--merged', '--no-merged', '--contains', '--no-contains'), positionals: 'any' },
+  'count-objects': { flags: gitFlagSet('-v', '--verbose', '-H', '--human-readable'), positionals: 'none' },
+  fsck: { flags: gitFlagSet('--unreachable', '--dangling', '--no-dangling', '--root', '--tags', '--cache', '--no-reflogs', '--connectivity-only', '--strict', '--verbose'), positionals: 'any' },
+  version: { flags: gitFlagSet('--build-options'), positionals: 'none' },
+  help: { flags: gitFlagSet('-a', '--all', '-g', '--guides', '-c', '--config', '-m', '--man', '-i', '--info', '-w', '--web'), positionals: 'any' },
+  cherry: { flags: gitFlagSet('-v', '--verbose'), positionals: 'any' },
+  'range-diff': { flags: gitFlagSet('--stat', '--no-dual-color', '--creation-factor', '--notes', '--no-notes'), valueFlags: gitFlagSet('--creation-factor'), positionals: 'any' },
+  branch: { flags: gitFlagSet('--show-current', '--list', '-l', '-a', '--all', '-r', '--remotes', '-v', '-vv', '--verbose', '--contains', '--no-contains', '--points-at', '--merged', '--no-merged', '--sort', '--format', '--column', '--no-column', '--no-color', '--color', '--abbrev', '--no-abbrev', '-i', '--ignore-case'), valueFlags: gitFlagSet('--contains', '--no-contains', '--points-at', '--merged', '--no-merged', '--sort', '--format', '--abbrev'), positionals: 'any', requiresListForPositionals: true, denied: gitFlagSet('-d', '-D', '--delete', '-m', '-M', '--move', '-c', '-C', '--copy', '-f', '--force', '-u', '--set-upstream-to', '--unset-upstream', '--edit-description') },
+  tag: { flags: gitFlagSet('-l', '--list', '-n', '--contains', '--no-contains', '--points-at', '--merged', '--no-merged', '--sort', '--format', '--column', '--no-column', '-i', '--ignore-case'), valueFlags: gitFlagSet('--contains', '--no-contains', '--points-at', '--merged', '--no-merged', '--sort', '--format'), attachedValueFlags: ['-n'], positionals: 'any', requiresListForPositionals: true, denied: gitFlagSet('-d', '--delete', '-a', '--annotate', '-s', '--sign', '-u', '--local-user', '-f', '--force', '-m', '-F', '--file', '-e', '--edit') },
+  stash: { flags: gitFlagSet('--oneline', '--stat', '--patch', '-p', '-n', '--name-only', '--format'), valueFlags: gitFlagSet('--format', '-n'), attachedValueFlags: ['-n'], positionals: 'any', verbs: gitFlagSet('list', 'show') },
+  worktree: { flags: gitFlagSet('--porcelain', '-z'), positionals: 'any', verbs: gitFlagSet('list') },
+  remote: { flags: gitFlagSet('-v', '--verbose', '--all', '--push', '--no-push'), positionals: 'any', verbs: gitFlagSet('-v', '--verbose', 'show', 'get-url') },
+  submodule: { flags: gitFlagSet('--cached', '--recursive', '--quiet'), positionals: 'any', verbs: gitFlagSet('status', 'summary') },
+  config: { flags: gitFlagSet('--get', '--get-all', '--get-regexp', '--list', '-l', '--show-origin', '--show-scope', '--name-only', '--null', '-z', '--type', '--bool', '--int', '--path', '--global', '--local', '--system', '--file', '-f'), valueFlags: gitFlagSet('--type', '--file', '-f'), positionals: 'max1' },
+  notes: { flags: gitFlagSet('--ref', '--format'), valueFlags: gitFlagSet('--ref', '--format'), positionals: 'any', verbs: gitFlagSet('list', 'show') },
+}
+
+/** Exported for the adversarial corpus that pins every subcommand/denial pair. */
+export const GIT_READ_ONLY_SUBCOMMANDS: readonly string[] = Object.keys(GIT_PROOF_SPECS)
+
+function gitArgsProofSafe(args: readonly string[], spec: GitProofSpec): boolean {
+  let positionals = 0
+  let listFlag = false
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!
+    if (GIT_EXEC_WRITE_DENIALS.some(pattern => pattern.test(token))) return false
+    if (spec.denied?.has(token)) return false
+    if (token === '--') {
+      positionals += args.length - index - 1
+      break
+    }
+    if (token.startsWith('-') && token !== '-') {
+      if (token === '-l' || token === '--list') listFlag = true
+      if (spec.allowNumericShorthand === true && /^-\d+$/.test(token)) continue
+      if (spec.attachedValueFlags?.some(prefix => token.startsWith(prefix) && token.length > prefix.length)) continue
+      const equals = token.indexOf('=')
+      const flag = equals >= 0 ? token.slice(0, equals) : token
+      if (!spec.flags.has(flag)) {
+        // Combined short flags (`-sb`, `-vv`) are safe only if every letter is.
+        if (/^-[A-Za-z]{2,}$/.test(token) &&
+            [...token.slice(1)].every(letter => spec.flags.has(`-${letter}`))) continue
+        return false
+      }
+      if (spec.valueFlags?.has(flag) && equals < 0) {
+        index += 1
+        if (index >= args.length) return false
+      }
       continue
     }
-    if (token.startsWith('--git-dir=') || token.startsWith('--work-tree=') ||
-        token.startsWith('--exec-path=') || token.startsWith('-c=') ||
-        token === '--no-pager' || token === '--paginate' || token === '-p' ||
-        token === '--bare' || token === '--no-optional-locks' || token === '--literal-pathspecs') {
-      index += 1
-      continue
-    }
-    break
+    positionals += 1
+    if (spec.positionals === 'none') return false
+    if (spec.positionals === 'max1' && positionals > 1) return false
+    if (spec.verbs && positionals === 1 && !spec.verbs.has(token)) return false
   }
-  return tokens.slice(index)
+  if (spec.requiresListForPositionals === true && positionals > 0 && !listFlag) return false
+  return true
 }
 
 function gitSegmentReadOnly(tokens: readonly string[]): boolean {
-  const rest = stripGitGlobalOptions(tokens)
-  const sub = rest[0]?.toLowerCase()
-  if (!sub) return false
-  const args = rest.slice(1)
-  if (args.some(arg => GIT_WRITE_FLAGS.test(arg))) return false
-  if (GIT_READ_ONLY_SUBCOMMANDS.has(sub)) return true
-  if (sub === 'branch') {
-    if (args.some(arg => /^(?:-d|-D|--delete|-m|-M|--move|-c|-C|--copy|-f|--force|-u|--set-upstream-to|--unset-upstream|--edit-description)$/.test(arg))) return false
-    const valueFlags = new Set(['--contains', '--no-contains', '--points-at', '--merged', '--no-merged', '--sort', '--format'])
-    let operands = 0
-    for (let index = 0; index < args.length; index += 1) {
-      const arg = args[index]!
-      if (arg.startsWith('-')) {
-        if (valueFlags.has(arg)) index += 1
-        continue
-      }
-      operands += 1
+  if (tokens[1] === '--version' || tokens[1] === '--help' || tokens[1] === '-v' || tokens[1] === '-h') return true
+  let index = 1
+  while (index < tokens.length) {
+    const token = tokens[index]!
+    if (token === '-C') {
+      index += 2
+      if (index > tokens.length) return false
+      continue
     }
-    return operands === 0
+    // Inline config, alternate exec paths and pagers change behavior or execute.
+    if (token === '--exec-path' || token.startsWith('--exec-path=') ||
+        token === '--paginate' || token === '-p' || token === '--git-dir' ||
+        token.startsWith('--git-dir=') || token === '--work-tree' ||
+        token.startsWith('--work-tree=') || token === '--namespace' ||
+        token === '--bare' || (token.startsWith('-c') && !token.startsWith('--'))) {
+      return false
+    }
+    if (token === '--no-pager' || token === '--no-optional-locks' || token === '--literal-pathspecs') {
+      index += 1
+      continue
+    }
+    if (token.startsWith('-')) return false
+    break
   }
-  if (sub === 'tag') {
-    if (args.some(arg => /^(?:-d|--delete|-a|--annotate|-s|--sign|-u|--local-user|-f|--force|-m|-F|--file)$/.test(arg))) return false
-    if (args.some(arg => arg === '-l' || arg === '--list')) return true
-    return args.length === 0
-  }
-  if (sub === 'stash') return args[0]?.toLowerCase() === 'list' || args[0]?.toLowerCase() === 'show'
-  if (sub === 'worktree') return args[0]?.toLowerCase() === 'list'
-  if (sub === 'remote') {
-    const verb = args[0]?.toLowerCase()
-    if (!verb || verb === '-v' || verb === '--verbose' || verb === 'show' || verb === 'get-url') return true
-    return false
-  }
-  if (sub === 'submodule') return args[0]?.toLowerCase() === 'status' || args[0]?.toLowerCase() === 'summary'
-  if (sub === 'config') {
-    if (args.some(arg => /^(?:--set|--unset|--unset-all|--add|--replace-all|--rename-section|--remove-section|-e|--edit)$/.test(arg))) return false
-    if (args.some(arg => /^(?:--get|--get-all|--get-regexp|--list|-l|--show-origin|--show-scope|--name-only)$/.test(arg))) return true
-    const operands = args.filter(arg => !arg.startsWith('-'))
-    return operands.length <= 1
-  }
-  if (sub === 'notes') return args[0]?.toLowerCase() === 'list' || args[0]?.toLowerCase() === 'show'
-  return false
+  const sub = tokens[index]?.toLowerCase()
+  if (!sub) return false
+  const spec = GIT_PROOF_SPECS[sub]
+  if (!spec) return false
+  return gitArgsProofSafe(tokens.slice(index + 1), spec)
 }
-
 function xargsCommandTokens(tokens: readonly string[]): string[] | null {
   const command: string[] = []
   for (let index = 1; index < tokens.length; index += 1) {
@@ -438,6 +541,82 @@ function xargsCommandTokens(tokens: readonly string[]): string[] | null {
     command.push(token)
   }
   return command.length > 0 ? command : null
+}
+
+function splitSedScript(script: string): string[] {
+  const parts: string[] = []
+  let current = ''
+  let escaped = false
+  for (const char of script) {
+    if (escaped) { current += char; escaped = false; continue }
+    if (char === '\\') { current += char; escaped = true; continue }
+    if (char === ';' || char === '\n') { parts.push(current); current = ''; continue }
+    current += char
+  }
+  parts.push(current)
+  return parts
+}
+
+/** Strict sed subset: print/delete/quit and plain substitutions without w/W/e/r. */
+function sedScriptProofSafe(script: string): boolean {
+  for (const raw of splitSedScript(script)) {
+    let command = raw.trim()
+    if (!command) continue
+    const address = /^(?:(?:\d+|\$)(?:,(?:\d+|\$))?|\/(?:\\.|[^/])*\/)\s*/.exec(command)
+    if (address) command = command.slice(address[0].length)
+    if (!command) return false
+    const verb = command[0]
+    if (verb === 'p' || verb === 'd' || verb === 'q' || verb === '=') {
+      if (command.slice(1).trim().length > 0) return false
+      continue
+    }
+    if (verb !== 's') return false
+    const delimiter = command[1]
+    if (!delimiter || /[A-Za-z0-9\\\s]/.test(delimiter)) return false
+    let index = 2
+    let delimiters = 0
+    while (index < command.length && delimiters < 2) {
+      if (command[index] === '\\') { index += 2; continue }
+      if (command[index] === delimiter) { delimiters += 1; index += 1; continue }
+      index += 1
+    }
+    if (delimiters < 2) return false
+    if (!/^[gpiImM0-9]*$/.test(command.slice(index).trim())) return false
+  }
+  return true
+}
+
+function sedArgsProofSafe(rest: readonly string[]): boolean {
+  const scripts: string[] = []
+  let expressionSeen = false
+  for (let index = 0; index < rest.length; index += 1) {
+    const token = rest[index]!
+    if (token === '-e' || token === '--expression') {
+      const script = rest[index + 1]
+      if (script === undefined) return false
+      scripts.push(script)
+      expressionSeen = true
+      index += 1
+      continue
+    }
+    if (token.startsWith('--expression=')) {
+      scripts.push(token.slice('--expression='.length))
+      expressionSeen = true
+      continue
+    }
+    if (token === '-f' || token === '--file' || token.startsWith('--file=') ||
+        /^-[a-zA-Z]*f/.test(token) || token === '-i' || token.startsWith('--in-place') ||
+        /^-[a-zA-Z]*i/.test(token)) return false
+    if (token === '-l' || token === '--line-length') { index += 1; continue }
+    if (token.startsWith('-')) {
+      if (/^-[nErusuz]+$/.test(token) || token === '--quiet' || token === '--silent' ||
+          token === '--unbuffered' || token === '--posix' || token === '--null-data' ||
+          token === '--separate' || token === '--debug' || token === '--sandbox') continue
+      return false
+    }
+    if (!expressionSeen && scripts.length === 0) scripts.push(token)
+  }
+  return scripts.length > 0 && scripts.every(sedScriptProofSafe)
 }
 
 function segmentIsReadOnly(segment: string): boolean {
@@ -471,12 +650,7 @@ function segmentIsReadOnly(segment: string): boolean {
   if (base === 'tree' && rest.some(token => token === '-o' || /^-o.+/.test(token) || /^--output(?:=|$)/.test(token))) return false
   if (base === 'file' && rest.some(token => token === '-C' || /^--compile(?:=|$)/.test(token))) return false
   if (base === 'rg' && rest.some(token => token === '--pre' || /^--pre(?:=|$)/.test(token))) return false
-  if (base === 'sed') {
-    if (rest.some(token => token === '-i' || /^-i.+/.test(token) || /^--in-place(?:=|$)/.test(token))) return false
-    const script = rest.find(token => !token.startsWith('-')) ?? ''
-    if (/(?:^|[;\n])\s*[wW](?:\s|$)/.test(script) ||
-        /\/[a-zA-Z0-9]*[wWe][a-zA-Z0-9]*\s*(?:;|$)/.test(script)) return false
-  }
+  if (base === 'sed') return sedArgsProofSafe(rest)
   if (base === 'uniq') {
     const valueFlags = new Set(['-f', '--skip-fields', '-s', '--skip-chars', '-w', '--check-chars'])
     let operands = 0
