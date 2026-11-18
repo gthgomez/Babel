@@ -1037,9 +1037,11 @@ export function resolvePromoteFileList(
  *
  * Safety:
  * - Only paths inside write_scope are copied
+ * - With `expectedChanges`, adoption is all-or-nothing and verifies the
+ *   recorded child base, child postimage and parent preimage before writing
  * - Default refuses when parent path is dirty and differs from worktree
  * - dry_run reports without writing
- * - Optional cleanup removes worktree after success
+ * - Optional cleanup removes worktree only after a fully adopted/verified result
  */
 export function promoteImplementWorktree(
   input: PromoteImplementWorktreeInput,
