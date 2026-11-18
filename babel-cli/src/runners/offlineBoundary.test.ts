@@ -117,6 +117,9 @@ if (!isSyntheticProviderFixtureReady()) {
     t.after(restoreEnv)
     process.env['BABEL_OFFLINE'] = '1'
     assert.throws(() => resolveChatModelPolicy({}), /OFFLINE_MODEL_REQUIRED/)
+    // A bare local model name without a saved local connection is still a
+    // setup requirement, not a cloud policy failure.
+    assert.throws(() => resolveChatModelPolicy({ model: 'llama3:8b' }), /OFFLINE_MODEL_REQUIRED/)
   })
 
   test('a saved loopback Ollama connection resolves offline without setup errors', t => {

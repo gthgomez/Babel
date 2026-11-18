@@ -126,29 +126,37 @@ export function resolveChatModelPolicy(options: ChatModelPolicyOptions): {
     requestedBackendKey === `${requestedBackendEntry.provider}/${requestedBackendEntry.model_id}` &&
     getProviderSpec(requestedBackendEntry.provider).authorityConformance === 'certified' &&
     providerSupportsOperation(requestedBackendEntry.provider, 'native_tool_stream');
-  const policy = requestedModelIsBackendKey
-    ? resolveModelByKey({
-        key: requestedBackendKey!,
-        bindStagesToSelectedModel: true,
-        ...(explicitOpenCodeRequest ||
-        explicitCommandCodeRequest ||
-        explicitSavedManualRoute ||
-        explicitGoRequest ||
-        directLegacyKey !== undefined ||
-        desktopProvider === 'deepseek' ||
-        desktopProvider === 'deepinfra' ||
-        explicitDesktopRoute
-          ? {}
-          : { liveOnly: !offline }),
-        ...policyRootOptions,
-      })
-    : resolveFamilyModelPolicy({
-      family: offline ? 'Ollama' : (selectedModel ?? 'DeepSeek'),
-        ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
-        ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
-        liveOnly: !offline && desktopProvider !== 'deepseek',
-        ...policyRootOptions,
-      });
+  let policy: ResolvedModelPolicy;
+  try {
+    policy = requestedModelIsBackendKey
+      ? resolveModelByKey({
+          key: requestedBackendKey!,
+          bindStagesToSelectedModel: true,
+          ...(explicitOpenCodeRequest ||
+          explicitCommandCodeRequest ||
+          explicitSavedManualRoute ||
+          explicitGoRequest ||
+          directLegacyKey !== undefined ||
+          desktopProvider === 'deepseek' ||
+          desktopProvider === 'deepinfra' ||
+          explicitDesktopRoute
+            ? {}
+            : { liveOnly: !offline }),
+          ...policyRootOptions,
+        })
+      : resolveFamilyModelPolicy({
+        family: selectedModel ?? 'DeepSeek',
+          ...(options.modelTier !== undefined ? { requestedTier: options.modelTier } : {}),
+          ...(options.allowExpensive === true ? { allowExpensive: true } : {}),
+          liveOnly: !offline && desktopProvider !== 'deepseek',
+          ...policyRootOptions,
+        });
+  } catch (error) {
+    // Offline has no cloud family fallback. An unknown local model name means
+    // no supported local route exists, not a cloud policy configuration bug.
+    if (offline) throw offlineModelRequired();
+    throw error;
+  }
 
   assertSelectedProvider(policy.provider);
   // Offline is a hard boundary, not a preference: never hand a remote route to
