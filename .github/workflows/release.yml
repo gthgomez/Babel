@@ -397,6 +397,8 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - name: Install advisory review dependencies
+        run: npm --prefix babel-cli ci --ignore-scripts
       - name: Revalidate tag object and source before promotion
         id: tag
         env:
@@ -463,7 +465,15 @@ jobs:
             --version "$RELEASE_VERSION" \
             --source "$RELEASE_SOURCE" \
             --npm-candidate "$RUNNER_TEMP/npm-candidate" \
-            --appimage-evidence release-linux-smoke/result.json
+            --appimage-evidence release-linux-smoke/result.json \
+            --result "$RUNNER_TEMP/release-qualification.json"
+      - name: Retain the release qualification record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-qualification
+          path: ${{ runner.temp }}/release-qualification.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Create draft GitHub release with artifacts
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:

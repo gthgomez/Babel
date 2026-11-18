@@ -6,6 +6,7 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, read
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadPayloadInventory, verifyPackedPayload } from '../babel-cli/scripts/release_artifact_inventory.mjs'
 
 const TRUSTED_WORKFLOW = 'typecheck.yml'
 const ARTIFACT_NAME = 'consumer-candidate'
@@ -35,6 +36,14 @@ export function verifyManifestBinding({manifest, sourceRoot}) {
   if (!Number.isInteger(manifest.inventory?.files) || manifest.inventory.files < 1) throw new Error('Candidate inventory file count is missing')
   const files = manifest.manifest ?? []
   if (files.length !== manifest.inventory.files) throw new Error('Candidate inventory count differs from the packed file list')
+  // Re-derive the payload qualification from the frozen source inventory so a
+  // stale or hand-edited manifest cannot self-certify its own file list.
+  const payload = verifyPackedPayload({ inventory: loadPayloadInventory(sourceRoot), packageJson: pkg, files })
+  if (payload.status !== 'PASS') throw new Error(`Candidate payload does not match the frozen source inventory: ${payload.problems.join('; ')}`)
+  if (payload.testOnlyShipped) throw new Error(`Candidate ships classified test-only payload: ${payload.testOnlyFiles.join(', ')}`)
+  if (manifest.inventory.files !== payload.files || manifest.inventory.unpackedBytes !== payload.bytes) {
+    throw new Error('Candidate inventory summary differs from the packed file list')
+  }
   for (const entry of manifest.inventory.bin) {
     if (!files.some(file => file.path === entry.target)) throw new Error(`Candidate bin target ${entry.target} is absent from the packed file list`)
   }
@@ -45,8 +54,12 @@ export function verifyManifestBinding({manifest, sourceRoot}) {
   if (manifest.advisories.lockSha256 !== digest('babel-cli/package-lock.json')) throw new Error('Candidate advisory review does not cover the frozen dependency lock')
   if (manifest.advisories.reviewSha256 !== digest('config/dependency-advisory-review.json')) throw new Error('Candidate advisory review record differs from the frozen source')
   if (manifest.provenance?.recordSha256 !== digest('babel-cli/source-provenance.json')) throw new Error('Candidate source provenance record differs from the frozen source')
+  if (manifest.provenance?.dirty !== false) throw new Error('Candidate source provenance does not record a clean tree')
+  const tree = spawnSync('git', ['-C', sourceRoot, 'rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' })
+  if (tree.status !== 0) throw new Error(tree.stderr || 'Unable to read the frozen source tree')
+  if (manifest.sourceTreeSha !== tree.stdout.trim()) throw new Error('Candidate sourceTreeSha does not match the checked-out frozen source tree')
   if (manifest.publisherAuthenticity?.signed !== false || manifest.publisherAuthenticity?.checksumsOnly !== true) throw new Error('Candidate publisher authenticity claims are not recorded accurately')
-  return {packageVersion: pkg.version, binAliases: bins.map(entry => entry.alias)}
+  return {packageVersion: pkg.version, binAliases: bins.map(entry => entry.alias), payloadFiles: payload.files}
 }
 
 export function verifyQualifiedCandidate({candidateDir, expectedSourceSha, expectedVersion, sourceRoot}) {
@@ -78,6 +91,8 @@ export function verifyQualifiedCandidate({candidateDir, expectedSourceSha, expec
 }
 
 export function stagePromotionCandidate({candidateDir, outputDir, expectedSourceSha, expectedVersion, expectedRunId = null, sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')}) {
+  assert.match(expectedSourceSha ?? '', /^[a-f0-9]{40}$/, 'Promotion requires the frozen source SHA')
+  assert.ok(typeof expectedVersion === 'string' && expectedVersion.length > 0, 'Promotion requires the frozen release version')
   const verified = verifyQualifiedCandidate({candidateDir, expectedSourceSha, expectedVersion, sourceRoot})
   if (expectedRunId && String(verified.manifest.runId) !== String(expectedRunId)) {
     throw new Error('Qualified candidate producer run does not match downloaded artifact')
@@ -87,6 +102,19 @@ export function stagePromotionCandidate({candidateDir, outputDir, expectedSource
     copyFileSync(join(candidateDir, name), join(outputDir, name))
   }
   return verified
+}
+
+/** Windows ships bsdtar; POSIX keeps unzip. No new Windows package dependency. */
+export function extractCommand({ archive, outputDir, platform = process.platform }) {
+  return platform === 'win32'
+    ? { binary: 'tar.exe', args: ['-xf', archive, '-C', outputDir] }
+    : { binary: 'unzip', args: ['-qo', archive, '-d', outputDir] }
+}
+
+/** Extract a GitHub artifact ZIP without adding an unqualified Windows dependency. */
+export function extractArtifact({ archive, outputDir, platform = process.platform }) {
+  const { binary, args } = extractCommand({ archive, outputDir, platform })
+  return spawnSync(binary, args, {encoding: 'utf8'})
 }
 
 export async function downloadTrustedCandidate({repository, sourceSha, token, fetchImpl = globalThis.fetch}) {
@@ -123,9 +151,9 @@ export async function downloadAndExtractTrustedCandidate({repository, sourceSha,
   const zipPath = join(tmpdir(), `consumer-candidate-${meta.artifactId}.zip`)
   writeFileSync(zipPath, zipBytes)
   mkdirSync(outputDir, {recursive: true})
-  const unzip = spawnSync('unzip', ['-qo', zipPath, '-d', outputDir], {encoding: 'utf8'})
+  const extraction = extractArtifact({archive: zipPath, outputDir})
   rmSync(zipPath, {force: true})
-  if (unzip.status !== 0) throw new Error(unzip.stderr || 'Unable to extract qualified consumer artifact')
+  if (extraction.status !== 0) throw new Error(extraction.stderr || 'Unable to extract qualified consumer artifact')
   // The downloaded artifact must still bind its own archive bytes and source.
   const verified = verifyQualifiedCandidate({candidateDir: outputDir, expectedSourceSha: sourceSha})
   return {...meta, archive: verified.archive, sha256: verified.digest}

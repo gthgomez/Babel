@@ -219,6 +219,7 @@
     "eslint": "^10.6.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.7.0",
+    "js-yaml": "^4.3.0",
     "knip": "^6.17.1",
     "playwright": "^1.61.1",
     "prettier": "^3.8.5",

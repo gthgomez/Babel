@@ -111,6 +111,11 @@ test('release promotion exercises the exact AppImage bytes and the npm/GitHub ch
   assert.match(run, /tools\/verify-release-bytes\.mjs/)
   assert.match(run, /--npm-candidate "\$RUNNER_TEMP\/npm-candidate"/)
   assert.match(run, /--appimage-evidence release-linux-smoke\/result\.json/)
+  assert.match(run, /--result "\$RUNNER_TEMP\/release-qualification\.json"/)
+  const install = draft.steps.findIndex(step => step.name === 'Install advisory review dependencies')
+  assert.ok(install >= 0 && install < verify, 'advisory tooling deps must exist before verification')
+  assert.match(draft.steps[install].run, /npm --prefix babel-cli ci --ignore-scripts/)
+  assert.ok(draft.steps.some(step => step.uses?.startsWith('actions/upload-artifact@') && step.with?.name === 'release-qualification'))
   const combine = draft.steps.find(step => step.name === 'Combine checksums and stage the draft').run
   assert.match(combine, /sha256sum \.\/\*\.tgz/)
   assert.match(combine, /sha256sum -c SHA256SUMS/)

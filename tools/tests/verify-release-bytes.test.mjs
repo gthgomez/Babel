@@ -99,3 +99,61 @@ test('unexpected staged files and unbound checksums fail closed', () => {
     assert.match(result.problems.join('\n'), /unexpected staged release files: .*notes.txt/)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+function linuxOnlyFixture() {
+  const dir = mkdtempSync(join(tmpdir(), 'babel-release-linux-'))
+  const sha = body => createHash('sha256').update(body).digest('hex')
+  const appImage = `Babel-Desktop-${version}-linux-x64.AppImage`, tgz = `babel-harness-${version}.tgz`
+  writeFileSync(join(dir, appImage), 'appimage-bytes')
+  writeFileSync(join(dir, tgz), 'cli-bytes')
+  writeFileSync(join(dir, `${appImage}.build.json`), JSON.stringify({ sourceSha: source, version, signed: false, updateChannel: null, cliArchiveSha256: sha('cli-bytes') }))
+  writeFileSync(join(dir, 'manifest-linux-x64.json'), JSON.stringify([{ path: 'babel-desktop', bytes: 1, sha256: '0'.repeat(64) }]))
+  writeFileSync(join(dir, 'SHA256SUMS'), `${sha('cli-bytes')}  ${tgz}\n${sha('appimage-bytes')}  ${appImage}\n`)
+  return { dir, appImage, sha: sha('appimage-bytes') }
+}
+
+test('a Linux-only release does not require the Windows inventory', () => {
+  const { dir, sha } = linuxOnlyFixture()
+  try {
+    const result = verifyReleaseDist({ distDir: dir, version, sourceSha: source, platforms: ['linux-x64'], appImageEvidence: evidence(dir, sha), requireAppImageLaunch: true })
+    assert.equal(result.status, 'PASS', JSON.stringify(result.problems))
+    assert.equal(result.artifacts.zip, undefined)
+    assert.equal(result.artifacts.setup, undefined)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('a Windows-only release binds Setup through its sidecar and records the desktop advisory', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'babel-release-windows-'))
+  const sha = body => createHash('sha256').update(body).digest('hex')
+  const zip = `Babel-Desktop-${version}-win-x64.zip`, setup = `Babel-Desktop-Setup-${version}-win-x64.exe`, tgz = `babel-harness-${version}.tgz`
+  try {
+    writeFileSync(join(dir, zip), 'zip-bytes'); writeFileSync(join(dir, setup), 'setup-bytes'); writeFileSync(join(dir, tgz), 'cli-bytes')
+    writeFileSync(join(dir, `${setup}.sha256`), sha('setup-bytes') + '\n')
+    writeFileSync(join(dir, `${setup}.build.json`), JSON.stringify({ installerSourceSha: source, payloadSourceSha: source, payloadVersion: version, payloadSha256: sha('zip-bytes'), signed: false }))
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify([{ path: 'Babel Desktop.exe', bytes: 1, sha256: '0'.repeat(64) }]))
+    writeFileSync(join(dir, 'SHA256SUMS'), `${sha('zip-bytes')}  ${zip}\n${sha('cli-bytes')}  ${tgz}\n`)
+    const result = verifyReleaseDist({ distDir: dir, version, sourceSha: source, platforms: ['win32-x64'] })
+    assert.equal(result.status, 'PASS', JSON.stringify(result.problems))
+    assert.equal(result.artifacts.setup.checksumBinding, 'sidecar')
+    assert.equal(result.artifacts.zip.checksumBinding, 'sha256sums')
+    assert.equal(result.artifacts.appImage, undefined)
+    assert.equal(result.advisoryReview.scope, 'desktop')
+    assert.equal(result.advisoryReview.status, 'FAIL')
+    assert.equal(result.advisoryReview.ownerDecisionRequired, true)
+    assert.equal(result.advisoryReview.deferred[0].id, 'GHSA-jr5w-w6x2-84p9')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('an unavailable desktop advisory review blocks promotion', () => {
+  const { dir, sha } = linuxOnlyFixture()
+  const emptyRoot = mkdtempSync(join(tmpdir(), 'babel-release-noreview-'))
+  try {
+    const result = verifyReleaseDist({ distDir: dir, version, sourceSha: source, platforms: ['linux-x64'], appImageEvidence: evidence(dir, sha), requireAppImageLaunch: true, repoRoot: emptyRoot })
+    assert.equal(result.status, 'FAIL')
+    assert.match(result.problems.join('\n'), /desktop advisory review outcome unavailable/)
+    assert.equal(result.advisoryReview, null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(emptyRoot, { recursive: true, force: true })
+  }
+})
