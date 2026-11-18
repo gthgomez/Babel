@@ -787,6 +787,7 @@ export class ChatEngineActionExecutor {
             detail: "cached",
             index: meta.index,
             exit_code: 0,
+            ...(fileReadCacheHash ? { read_revision_hash: fileReadCacheHash } : {}),
           });
           callbacks?.onToolComplete?.(toolId, "cached", undefined, 0);
           return {
