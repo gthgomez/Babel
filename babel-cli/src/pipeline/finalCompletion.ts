@@ -92,8 +92,9 @@ export function decidePipelineFinalCompletion(
       `Changed after the accepted proof: ${finalRevision.stale_paths.join(', ') || '(workspace)'}. ` +
       'The worktree changes are retained; rerun the required verifier before claiming completion.'
     : `Final-revision proof is not current: ${finalRevision.reason ?? 'required verifier evidence is missing'}.`
+  const redAfterGreen = finalRevision.reason?.startsWith('required_verifier_red') === true
   return {
-    status: 'REQUIRED_VERIFIER_MISSING',
+    status: redAfterGreen ? 'REQUIRED_VERIFIER_FAILED' : 'REQUIRED_VERIFIER_MISSING',
     decision,
     finalRevision,
     condition: reason,

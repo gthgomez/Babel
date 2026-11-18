@@ -375,3 +375,21 @@ test('a simulated verifier is not green proof', () => {
     cleanup()
   }
 })
+
+test('a later red required verifier is never certified by an earlier green', () => {
+  const { root, cleanup } = fixture()
+  try {
+    const witness = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [
+        { tool: 'test_run', target: 'npm test', exit_code: 0 },
+        { tool: 'test_run', target: 'npm test', exit_code: 1 },
+      ],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(witness.status, 'unverified')
+    assert.equal(witness.reason, 'required_verifier_red_after_green')
+  } finally {
+    cleanup()
+  }
+})

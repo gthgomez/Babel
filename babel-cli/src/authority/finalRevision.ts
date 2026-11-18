@@ -555,12 +555,25 @@ export function evaluateFinalRevisionWitness(input: {
   const lastGreenByRequirement: number[] = []
   for (const requirement of required) {
     let last = -1
+    let lastAttempt = -1
     for (const [index, entry] of log.entries()) {
-      if (isGreenVerifierEntry(entry, bounds) && satisfiesVerifierRequirement(requirement, entry.target)) {
-        last = index
-      }
+      if (!isVerifierEntry(entry, bounds) || entry.simulated === true) continue
+      if (!satisfiesVerifierRequirement(requirement, entry.target)) continue
+      lastAttempt = index
+      if (isGreenVerifierEntry(entry, bounds)) last = index
     }
-    if (last < 0) return base('unverified', 'required_verifier_missing', null, [], mutatedPaths)
+    if (last < 0) {
+      const attempt = lastAttempt >= 0 ? log[lastAttempt] : undefined
+      const settledRed = attempt !== undefined && attempt.exit_code !== undefined && attempt.exit_code !== 0 &&
+        attempt.error !== 'blocked' && attempt.preDispatchNoEffect !== true
+      return base('unverified', settledRed ? 'required_verifier_red' : 'required_verifier_missing', null, [], mutatedPaths)
+    }
+    if (lastAttempt > last) {
+      const attempt = log[lastAttempt]
+      const settledRed = attempt !== undefined && attempt.exit_code !== undefined && attempt.exit_code !== 0
+      return base('unverified', settledRed ? 'required_verifier_red_after_green' : 'required_verifier_unsettled',
+        null, [], mutatedPaths)
+    }
     lastGreenByRequirement.push(last)
   }
   const verifiedIndex = Math.min(...lastGreenByRequirement)

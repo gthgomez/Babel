@@ -221,3 +221,25 @@ test('Deep writes without a required verifier stay explicitly unverified, not ve
     cleanup()
   }
 })
+
+test('a red verifier after green blocks completion with the failed-verifier status', () => {
+  const { root, cleanup } = fixture()
+  try {
+    const result = decidePipelineFinalCompletion({
+      mode: 'deep',
+      status: 'COMPLETE',
+      projectRoot: root,
+      requiredVerifierCommands: ['npm test'],
+      toolCallLog: [
+        { step: 1, tool: 'file_write' as const, target: 'app.ts', exit_code: 0, stdout: '', stderr: '', verified: true },
+        { step: 2, tool: 'test_run' as const, target: 'npm test', exit_code: 0, stdout: 'ok', stderr: '', verified: true },
+        { step: 3, tool: 'test_run' as const, target: 'npm test', exit_code: 1, stdout: 'fail', stderr: '', verified: false },
+      ],
+    })
+    assert.equal(result.status, 'REQUIRED_VERIFIER_FAILED')
+    assert.equal(result.decision?.finalOutcome, 'UNVERIFIED_PATCH')
+    assert.match(result.condition ?? '', /not current/)
+  } finally {
+    cleanup()
+  }
+})
