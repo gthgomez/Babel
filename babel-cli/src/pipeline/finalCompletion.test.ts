@@ -160,3 +160,64 @@ test('Chat pipeline read-only no-change is revoked by an external save', () => {
     cleanup()
   }
 })
+
+test('READ_ONLY_NO_MODIFICATION cannot preserve a stale witness', () => {
+  const { root, cleanup } = fixture()
+  try {
+    const log = [{ step: 1, tool: 'file_read' as const, target: 'app.ts', exit_code: 0, stdout: 'v1\n', stderr: '', verified: true, read_revision_hash: hash('v1\n') }]
+    writeFileSync(join(root, 'app.ts'), 'v2\n')
+    const result = decidePipelineFinalCompletion({
+      mode: 'deep',
+      status: 'READ_ONLY_NO_MODIFICATION',
+      projectRoot: root,
+      requiredVerifierCommands: [],
+      toolCallLog: log,
+    })
+    assert.equal(result.status, 'EXECUTOR_HALTED')
+    assert.equal(result.finalRevision.status, 'stale')
+  } finally {
+    cleanup()
+  }
+})
+
+test('bound session verifier (gradle test) agrees with a satisfied plan summary', () => {
+  const { root, cleanup } = fixture()
+  try {
+    const result = decidePipelineFinalCompletion({
+      mode: 'deep',
+      status: 'COMPLETE',
+      projectRoot: root,
+      requiredVerifierCommands: ['gradle test'],
+      toolCallLog: [
+        { step: 1, tool: 'file_write' as const, target: 'app.ts', exit_code: 0, stdout: '', stderr: '', verified: true },
+        { step: 2, tool: 'shell_exec' as const, target: 'gradle test', exit_code: 0, stdout: 'BUILD SUCCESSFUL', stderr: '', verified: true, processExecuted: true, processCompleted: true },
+      ],
+    })
+    assert.equal(result.status, 'COMPLETE')
+    assert.equal(result.finalRevision.status, 'verified')
+    assert.equal(result.decision?.finalOutcome, 'VERIFIED_COMPLETE')
+  } finally {
+    cleanup()
+  }
+})
+
+test('Deep writes without a required verifier stay explicitly unverified, not verified', () => {
+  const { root, cleanup } = fixture()
+  try {
+    const result = decidePipelineFinalCompletion({
+      mode: 'deep',
+      status: 'COMPLETE',
+      projectRoot: root,
+      requiredVerifierCommands: [],
+      toolCallLog: [
+        { step: 1, tool: 'file_write' as const, target: 'app.ts', exit_code: 0, stdout: '', stderr: '', verified: true },
+      ],
+    })
+    assert.equal(result.status, 'COMPLETE')
+    assert.equal(result.finalRevision.status, 'unverified')
+    assert.equal(result.decision?.finalOutcome, 'UNVERIFIED_PATCH')
+    assert.equal(result.decision?.allowed, true)
+  } finally {
+    cleanup()
+  }
+})

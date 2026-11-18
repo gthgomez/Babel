@@ -141,8 +141,9 @@ export type ToolCallLogEntry = {
   effect_status?: MutationEffectStatus;
   effect_scope?: import('./mutationTools.js').MutationEffectScope;
   mutation_paths?: string[];
-  /** `final-revision-v1`: content hash of the bytes this read delivered. */
+  /** `final-revision-v1`: raw-byte hash of the content this read delivered. */
   read_revision_hash?: string;
+  simulated?: boolean;
 };
 
 /** Payload shape shared with ChatEvent done/failed (exactOptionalPropertyTypes-safe). */

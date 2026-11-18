@@ -173,10 +173,7 @@ test("executor kernel downgrades verified completion when verifierEvidenceErrors
 test('shared final-revision authority certifies a current witness', () => {
   const kernel = createExecutorKernel('deep')
   const decision = kernel.completion.decideFinalRevision({
-    mode: 'deep',
     verifiedClaim: true,
-    hasWrite: true,
-    requiredVerifierCommands: ['npm test'],
     finalRevision: {
       schema_version: 1,
       contract: 'final-revision-v1',
@@ -196,10 +193,7 @@ test('shared final-revision authority certifies a current witness', () => {
 test('shared final-revision authority downgrades a stale witness with paths', () => {
   const kernel = createExecutorKernel('deep')
   const decision = kernel.completion.decideFinalRevision({
-    mode: 'deep',
     verifiedClaim: true,
-    hasWrite: true,
-    requiredVerifierCommands: ['npm test'],
     finalRevision: {
       schema_version: 1,
       contract: 'final-revision-v1',
@@ -224,6 +218,7 @@ test('a stale witness forbids read-only no-change success', () => {
     requestedOutcome: 'NO_CHANGE_REQUIRED',
     hasWrite: false,
     verificationPolicy: 'required',
+    finalRevisionRequired: true,
     toolCallLog: [{ tool: 'read_file', target: 'a.ts', exit_code: 0 }],
     finalRevision: {
       schema_version: 1,
@@ -238,7 +233,7 @@ test('a stale witness forbids read-only no-change success', () => {
   })
   assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
   assert.equal(decision.allowed, false)
-  assert.equal(decision.reason, 'final_revision_stale')
+  assert.match(decision.reason, /^final_revision_stale/)
 })
 
 test('a stale witness cannot certify VERIFIED_COMPLETE even with a green receipt and proof', () => {
@@ -264,4 +259,70 @@ test('a stale witness cannot certify VERIFIED_COMPLETE even with a green receipt
   })
   assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
   assert.equal(decision.allowed, false)
+})
+
+const revisionWitness = (status: 'verified' | 'unverified' | 'stale' | 'unavailable', stalePaths: string[] = []) => ({
+  schema_version: 1 as const,
+  contract: 'final-revision-v1' as const,
+  status,
+  candidate: null,
+  verified_against: status === 'verified' ? 'inspection_reads' as const : null,
+  stale_paths: stalePaths,
+  unverified_paths: [],
+  reason: status === 'verified' ? null : `synthetic_${status}`,
+})
+
+test('NO_CHANGE requires a verified witness when a project-scoped proof is required', () => {
+  const kernel = createExecutorKernel('chat')
+  const unproven = kernel.completion.decide({
+    mode: 'chat',
+    requestedOutcome: 'NO_CHANGE_REQUIRED',
+    hasWrite: false,
+    verificationPolicy: 'required',
+    finalRevisionRequired: true,
+    finalRevision: revisionWitness('unverified'),
+    toolCallLog: [{ tool: 'grep', target: 'TODO', exit_code: 0 }],
+  })
+  assert.equal(unproven.finalOutcome, 'UNVERIFIED_PATCH')
+  assert.equal(unproven.allowed, false)
+  assert.match(unproven.reason, /^final_revision_unverified/)
+
+  const verified = kernel.completion.decide({
+    mode: 'chat',
+    requestedOutcome: 'NO_CHANGE_REQUIRED',
+    hasWrite: false,
+    verificationPolicy: 'required',
+    finalRevisionRequired: true,
+    finalRevision: revisionWitness('verified'),
+    toolCallLog: [{ tool: 'read_file', target: 'a.ts', exit_code: 0 }],
+  })
+  assert.equal(verified.finalOutcome, 'NO_CHANGE_REQUIRED')
+  assert.equal(verified.allowed, true)
+})
+
+test('NO_CHANGE defaults fail-closed when no witness is supplied', () => {
+  const kernel = createExecutorKernel('chat')
+  const decision = kernel.completion.decide({
+    mode: 'chat', requestedOutcome: 'NO_CHANGE_REQUIRED', hasWrite: false,
+    verificationPolicy: 'required',
+    toolCallLog: [{ tool: 'grep', target: 'TODO', exit_code: 0 }],
+  })
+  assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH')
+  assert.equal(decision.allowed, false)
+  assert.match(decision.reason, /^final_revision_unavailable/)
+})
+
+test('policyVersion names the final-revision contract only when a witness is used', () => {
+  const kernel = createExecutorKernel('chat')
+  const without = kernel.completion.decide({
+    mode: 'chat', requestedOutcome: 'UNVERIFIED_PATCH', hasWrite: false,
+    verificationPolicy: 'none', toolCallLog: [],
+  })
+  assert.equal(without.policyVersion, 'executor-contract-v1')
+  const withWitness = kernel.completion.decide({
+    mode: 'chat', requestedOutcome: 'NO_CHANGE_REQUIRED', hasWrite: false,
+    verificationPolicy: 'none', finalRevisionRequired: true,
+    finalRevision: revisionWitness('verified'), toolCallLog: [],
+  })
+  assert.equal(withWitness.policyVersion, 'executor-contract-v1+final-revision-v1')
 })

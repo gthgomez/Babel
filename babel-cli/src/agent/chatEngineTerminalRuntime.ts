@@ -38,7 +38,11 @@ import {
   type TaskContractV1,
 } from './taskContract.js'
 import type { FinalRevisionWitnessV1 } from '../authority/finalRevision.js'
-import { evaluateFinalRevisionWitness, untestedPathsAfterLastGreenVerifier } from '../authority/finalRevision.js'
+import {
+  evaluateFinalRevisionWitness,
+  unavailableFinalRevisionWitness,
+  untestedPathsAfterLastGreenVerifier,
+} from '../authority/finalRevision.js'
 import {
   terminalReasonFromClassification,
   terminalReasonFromFailureText,
@@ -113,7 +117,7 @@ function publicationRevisionWitness(
       requiredVerifierCommands: [],
     })
   } catch {
-    return undefined
+    return unavailableFinalRevisionWitness('final_revision_unavailable')
   }
 }
 
@@ -193,11 +197,13 @@ function formatTerminalAnswerForOutcome(input: {
   if (!input.answer.trim() || satisfiesRequestedBareJsonAnswer(input.answer, input.task)) {
     return input.answer
   }
-  if (input.finalRevision?.status === 'stale' && input.finalRevision.stale_paths.length > 0) {
+  if (input.finalRevision?.status === 'stale') {
     return [
       UNVERIFIED_COMPLETION_MARKER,
-      'Inspected files changed after the accepted proof and before publication; the previous conclusion is stale and task completion is not certified.',
-      `Changed after the accepted proof: ${input.finalRevision.stale_paths.slice(0, 20).join(', ')}.`,
+      'The accepted proof is stale: inspected files changed after the check and before publication, so task completion is not certified.',
+      input.finalRevision.stale_paths.length > 0
+        ? `Changed after the accepted proof: ${input.finalRevision.stale_paths.slice(0, 20).join(', ')}.`
+        : 'Changed after the accepted proof: workspace bytes could not be attributed to a specific path.',
       'These are user-owned worktree bytes; inspect them and rerun the required verifier before treating the result as current.',
       '',
       'Model response (retained as an unverified report):',
@@ -457,6 +463,16 @@ export function completeChatStream(
     decision.finalOutcome === 'PLAN_COMPLETE'
       ? 'UNVERIFIED_PATCH'
       : decision.finalOutcome
+  if (decision.finalRevision) {
+    try {
+      writeFileSync(
+        join(snapshot.context.engineRunDir, 'final_revision.json'),
+        `${JSON.stringify(decision.finalRevision, null, 2)}\n`,
+      )
+    } catch {
+      /* terminal evidence remains available in the completion decision */
+    }
+  }
   const terminalReason = resolveChatTerminalReason(
     input,
     decisionOutcome,
@@ -987,6 +1003,16 @@ export function assembleChatResult(
       : planCompletion
         ? 'UNVERIFIED_PATCH'
         : outcome
+  if (kernelDecision?.finalRevision) {
+    try {
+      writeFileSync(
+        join(snapshot.context.engineRunDir, 'final_revision.json'),
+        `${JSON.stringify(kernelDecision.finalRevision, null, 2)}\n`,
+      )
+    } catch {
+      /* terminal evidence remains available in the completion decision */
+    }
+  }
   const terminalReason =
     finalStatus === 'cancelled'
       ? ({

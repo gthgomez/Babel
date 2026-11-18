@@ -4,23 +4,34 @@ import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { isCredentialTargetPath } from '../agent/autonomyEnforcement.js'
 import { isAuthoritativeVerifierCommand } from '../agent/completionGatePolicy.js'
-import { decodeCommand } from './commandDecoder.js'
+import { decodeCommand, splitChains, tokenize } from './commandDecoder.js'
 import { satisfiesVerifierRequirement } from '../services/verifierIdentity.js'
 
 /**
  * Shared final-revision verification contract (`final-revision-v1`).
  *
- * Chat and Deep completion both consume this module. The contract answers one
- * question: does the proof the turn relies on describe the bytes that are on
- * disk at completion time? A later write, an external editor save, a canceled
- * check or an unsettled command invalidates the proof instead of preserving a
- * stale success.
+ * What this contract proves, exactly:
+ * - A required verifier's last green invocation is not followed by any logged
+ *   local effect that may have changed worktree bytes. Logged effects include
+ *   direct mutation tools, confirmation-bearing child/await effects, and shell
+ *   commands that are not provably read-only.
+ * - A read-only no-change conclusion is still current only when every inspected
+ *   path was re-hashed from its raw bytes at publication.
+ * - A host-supplied `verifierBoundRevision` still matches the current bytes of
+ *   its own file scope.
+ *
+ * What it does not prove: an external process that wrote to a file Babel never
+ * observed. Shell classification is conservative (unknown write shapes are
+ * effects); read-only shapes are an explicit allowlist, not a decoder guess.
  */
 
 /** Version of the persisted final-revision witness contract. */
 export const FINAL_REVISION_CONTRACT_VERSION = 'final-revision-v1' as const
 
 const MAX_WITNESS_PATHS = 256
+const MAX_INSPECTION_WITNESSES = 64
+const MAX_INSPECTION_PROOF_BYTES = 64 * 1024 * 1024
+const MAX_SHELL_WITNESS_PATHS = 32
 const MAX_WITNESS_FILE_BYTES = 16 * 1024 * 1024
 
 /** One path whose bytes the host observed. `deleted` records a confirmed absence. */
@@ -37,7 +48,6 @@ export interface FinalRevisionCandidateV1 {
   git_commit_hash: string | null
   composite_tree_hash: string
   captured_at: number
-  snapshot_complete: boolean
 }
 
 /** Truthful state of the final-revision proof. Never promotes stale to current. */
@@ -69,6 +79,10 @@ export interface FinalRevisionToolEntry {
   mutation_paths?: string[] | undefined
   effect_status?: string | undefined
   read_revision_hash?: string | undefined
+  verifierExecuted?: boolean | undefined
+  processExecuted?: boolean | undefined
+  processCompleted?: boolean | undefined
+  simulated?: boolean | undefined
 }
 
 const MUTATION_TOOLS = new Set([
@@ -77,17 +91,36 @@ const MUTATION_TOOLS = new Set([
   'str_replace',
   'apply_patch',
   'edit_file',
+  'file_delete',
 ])
 
 const READ_TOOLS = new Set(['read_file', 'read_range', 'file_read'])
+const SHELL_TOOLS = new Set(['shell_exec', 'run_command', 'test_run'])
+
+/**
+ * Commands whose ordinary invocation only reads bytes or prints those bytes.
+ * Anything not listed is treated as a possible worktree write.
+ */
+const READ_ONLY_BASES = new Set([
+  'cat', 'ls', 'dir', 'pwd', 'rg', 'grep', 'egrep', 'fgrep', 'head', 'tail',
+  'wc', 'stat', 'file', 'du', 'df', 'tree', 'which', 'where', 'type',
+  'basename', 'dirname', 'realpath', 'readlink', 'md5sum', 'sha256sum',
+  'shasum', 'cmp', 'diff', 'comm', 'cut', 'find', 'sort', 'uniq', 'echo',
+  'printf', 'test', 'true', 'false', 'sleep', 'date', 'whoami', 'id',
+  'uname', 'hostname', 'printenv', 'ls-files',
+])
+
+const FIND_WRITE_FLAGS = /(?:^|\s)-(?:delete|exec|execdir|ok|okdir|fprint|fprintf|fls)(?:\s|$)/
+const SORT_OUTPUT_FLAGS = /(?:^|\s)(?:-o|--output)(?:=|\s|$)/
+
+function normalizeExecutionBase(value: string | undefined): string {
+  return String(value ?? '').replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd|bat)$/i, '').toLowerCase()
+}
 
 function normalizeProjectPath(projectRoot: string, value: unknown): string | null {
   if (typeof value !== 'string' || value.trim().length === 0) return null
-  const slash = value.replaceAll('\\', '/')
-  if (/^(?:[A-Za-z]:|\/)/.test(slash)) return null
-  const normalized = slash.replace(/^\.\//, '')
   const root = resolve(projectRoot)
-  const target = resolve(root, normalized)
+  const target = isAbsolute(value) ? resolve(value) : resolve(root, value)
   const rel = relative(root, target)
   if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return null
   const posix = rel.split(sep).join('/')
@@ -110,18 +143,47 @@ export function finalRevisionCompositeHash(files: readonly FinalRevisionFileV1[]
     .digest('hex')
 }
 
-/** Hash one project-relative file at completion time; null when absent or unsafe. */
-export function hashFinalRevisionFile(projectRoot: string, value: string): string | null {
+function safeRealTarget(projectRoot: string, value: string): { realRoot: string; realTarget: string } | null {
   const safe = normalizeProjectPath(projectRoot, value)
   if (!safe) return null
   try {
-    const root = realpathSync.native(projectRoot)
-    const target = resolve(root, safe)
-    const rel = relative(root, target)
+    const realRoot = realpathSync.native(projectRoot)
+    const realTarget = realpathSync.native(resolve(realRoot, safe))
+    const rel = relative(realRoot, realTarget)
     if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return null
-    const stats = statSync(target)
+    const posix = rel.split(sep).join('/')
+    if (isCredentialTargetPath(posix)) return null
+    return { realRoot, realTarget }
+  } catch {
+    return null
+  }
+}
+
+/** Stat one in-root regular file for the bounded inspection proof. */
+function finalRevisionFileSize(projectRoot: string, value: string): number | null {
+  const target = safeRealTarget(projectRoot, value)
+  if (!target) return null
+  try {
+    const stats = statSync(target.realTarget)
+    return stats.isFile() && stats.size <= MAX_WITNESS_FILE_BYTES ? stats.size : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Hash one in-root file from its raw bytes at completion time.
+ * Returns null when absent, outside the real project root, credential-shaped,
+ * a non-regular file, or over the 16 MB witness cap. Callers treat null as
+ * unproven, never as unchanged.
+ */
+export function hashFinalRevisionFile(projectRoot: string, value: string): string | null {
+  const target = safeRealTarget(projectRoot, value)
+  if (!target) return null
+  try {
+    const stats = statSync(target.realTarget)
     if (!stats.isFile() || stats.size > MAX_WITNESS_FILE_BYTES) return null
-    const bytes = readFileSync(target)
+    const bytes = readFileSync(target.realTarget)
     if (bytes.byteLength > MAX_WITNESS_FILE_BYTES) return null
     return createHash('sha256').update(bytes).digest('hex')
   } catch {
@@ -173,19 +235,12 @@ export function captureFinalRevisionCandidate(
       git_commit_hash: readGitHead(projectRoot),
       composite_tree_hash: finalRevisionCompositeHash([]),
       captured_at: Date.now(),
-      snapshot_complete: false,
     }
   }
   const files: FinalRevisionFileV1[] = []
-  let complete = true
   for (const path of safe) {
     const hash = hashFinalRevisionFile(projectRoot, path)
-    if (hash === null) {
-      complete = false
-      files.push({ path, sha256: 'deleted' })
-    } else {
-      files.push({ path, sha256: hash })
-    }
+    files.push({ path, sha256: hash ?? 'deleted' })
   }
   return {
     schema_version: 1,
@@ -194,47 +249,173 @@ export function captureFinalRevisionCandidate(
     git_commit_hash: readGitHead(projectRoot),
     composite_tree_hash: finalRevisionCompositeHash(files),
     captured_at: Date.now(),
-    snapshot_complete: complete,
   }
 }
 
-function isSuccessful(entry: FinalRevisionToolEntry): boolean {
-  if (entry.preDispatchNoEffect === true || entry.error) return false
-  // A process without a settled exit status is not evidence. Reads may omit it.
-  if (['shell_exec', 'run_command', 'test_run'].includes(entry.tool)) return entry.exit_code === 0
-  return entry.exit_code === undefined || entry.exit_code === 0
+function shellHasFileRedirect(segment: string): boolean {
+  let quote: "'" | '"' | null = null
+  for (let index = 0; index < segment.length; index += 1) {
+    const char = segment[index]!
+    if (quote !== null) {
+      if (char === '\\' && quote === '"') { index += 1; continue }
+      if (char === quote) quote = null
+      continue
+    }
+    if (char === "'" || char === '"') { quote = char; continue }
+    if (char === '\\') { index += 1; continue }
+    if (char !== '>') continue
+    // `2>&1` duplicates a descriptor; it does not open a worktree file.
+    if (segment[index + 1] === '&') continue
+    let cursor = index + 1
+    while (segment[cursor] === ' ') cursor += 1
+    let target = ''
+    let targetQuote: "'" | '"' | null = null
+    for (; cursor < segment.length; cursor += 1) {
+      const value = segment[cursor]!
+      if (targetQuote !== null) {
+        if (value === targetQuote) { targetQuote = null; continue }
+        target += value
+        continue
+      }
+      if (value === "'" || value === '"') { targetQuote = value; continue }
+      if (/\s|[;|&]/.test(value)) break
+      target += value
+    }
+    const normalized = target.toLowerCase()
+    if (normalized === '/dev/null' || normalized === 'nul') continue
+    return true
+  }
+  return false
 }
 
-function isVerifierEntry(entry: FinalRevisionToolEntry): boolean {
-  return ['test_run', 'run_command', 'shell_exec'].includes(entry.tool) &&
-    isAuthoritativeVerifierCommand(entry.target)
+function splitPipes(segment: string): string[] {
+  const parts: string[] = []
+  let current = ''
+  let quote: "'" | '"' | null = null
+  for (let index = 0; index < segment.length; index += 1) {
+    const char = segment[index]!
+    if (quote !== null) {
+      current += char
+      if (char === '\\' && quote === '"') { current += segment[++index] ?? ''; continue }
+      if (char === quote) quote = null
+      continue
+    }
+    if (char === "'" || char === '"') { quote = char; current += char; continue }
+    if (char === '\\') { current += char; current += segment[++index] ?? ''; continue }
+    if (char === '|') {
+      if (segment[index + 1] === '|') { current += '||'; index += 1; continue }
+      parts.push(current)
+      current = ''
+      continue
+    }
+    current += char
+  }
+  parts.push(current)
+  return parts
 }
 
-function isMutationEntry(entry: FinalRevisionToolEntry): boolean {
-  if (!isSuccessful(entry) || entry.stale === true) return false
-  // A host-proven no-op changed no bytes and cannot invalidate proof.
-  if (entry.effect_status === 'confirmed_no_change') return false
-  if (entry.tool === 'sub_agent') {
-    // A child effect invalidates proof only when the host confirmed a change or
-    // recorded mutation paths; an unsettled child stays conservative.
-    return entry.effect_status === 'confirmed_change' || Boolean(entry.mutation_paths?.length)
+function segmentIsReadOnly(segment: string): boolean {
+  const trimmed = segment.trim()
+  if (!trimmed || shellHasFileRedirect(trimmed)) return false
+  let tokens: string[]
+  try { tokens = tokenize(trimmed) } catch { return false }
+  if (tokens.length === 0) return false
+  const base = normalizeExecutionBase(tokens[0])
+  if (base === 'git' || base === 'gh') {
+    try { return decodeCommand(trimmed).semantic === 'read_local' } catch { return false }
   }
-  if (MUTATION_TOOLS.has(entry.tool)) return true
-  if (!['shell_exec', 'run_command', 'test_run'].includes(entry.tool) || isVerifierEntry(entry)) return false
-  // Proven read-only or test-only commands leave worktree bytes untouched.
-  try {
-    const semantic = decodeCommand(entry.target).semantic
-    if (semantic === 'read_local' || semantic === 'test_local' || semantic === 'network_read' ||
-        semantic === 'git_commit') return false
-  } catch {
-    // Undecoded commands remain conservative mutations.
-  }
+  if (!READ_ONLY_BASES.has(base)) return false
+  const rest = tokens.slice(1)
+  if (base === 'find' && rest.some(token => FIND_WRITE_FLAGS.test(` ${token}`))) return false
+  if (base === 'sort' && rest.some(token => SORT_OUTPUT_FLAGS.test(` ${token}`))) return false
+  if (base === 'uniq' && rest.filter(token => !token.startsWith('-')).length > 1) return false
   return true
+}
+
+/** True only when every chained/pipe segment is a provable read-only shape. */
+function shellIsReadOnly(command: string): boolean {
+  const segments = splitChains(command)
+  if (segments.length === 0) return false
+  return segments.every(segment => splitPipes(segment).every(part => segmentIsReadOnly(part)))
+}
+
+/** Best-effort paths named by a shell write, for disclosure only. */
+function shellWitnessPaths(command: string): string[] {
+  const paths = new Set<string>()
+  let tokens: string[]
+  try { tokens = tokenize(command) } catch { return [] }
+  const base = normalizeExecutionBase(tokens[0])
+  if (base === 'tee' || base === 'rm' || base === 'rmdir' || base === 'touch' ||
+      base === 'mkdir' || base === 'truncate' || base === 'unlink') {
+    for (const token of tokens.slice(1)) {
+      if (!token.startsWith('-')) paths.add(token)
+    }
+  }
+  if (base === 'cp' || base === 'mv' || base === 'install') {
+    const operands = tokens.slice(1).filter(token => !token.startsWith('-'))
+    if (operands.length >= 2) paths.add(operands.at(-1)!)
+  }
+  // Redirection targets are the most common late-write shape.
+  let quote: "'" | '"' | null = null
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index]!
+    if (quote !== null) {
+      if (char === '\\' && quote === '"') { index += 1; continue }
+      if (char === quote) quote = null
+      continue
+    }
+    if (char === "'" || char === '"') { quote = char; continue }
+    if (char === '\\') { index += 1; continue }
+    if (char !== '>' || command[index + 1] === '&') continue
+    let cursor = index + 1
+    while (command[cursor] === ' ') cursor += 1
+    let target = ''
+    while (cursor < command.length && !/[\s;|&]/.test(command[cursor]!)) {
+      target += command[cursor]!
+      cursor += 1
+    }
+    if (target && target.toLowerCase() !== '/dev/null' && target.toLowerCase() !== 'nul') paths.add(target)
+  }
+  return [...paths].slice(0, MAX_SHELL_WITNESS_PATHS)
+}
+
+function isVerifierEntry(entry: FinalRevisionToolEntry, boundCommands?: readonly string[]): boolean {
+  if (!SHELL_TOOLS.has(entry.tool)) return false
+  if (entry.verifierExecuted === true) return true
+  return isAuthoritativeVerifierCommand(entry.target, boundCommands)
+}
+
+function isGreenVerifierEntry(entry: FinalRevisionToolEntry, boundCommands?: readonly string[]): boolean {
+  return isVerifierEntry(entry, boundCommands) && entry.exit_code === 0 &&
+    !entry.error && entry.preDispatchNoEffect !== true && entry.stale !== true &&
+    entry.simulated !== true && entry.processExecuted !== false && entry.processCompleted !== false
+}
+
+function isMutationEntry(entry: FinalRevisionToolEntry, boundCommands?: readonly string[]): boolean {
+  // Policy/approval denials never dispatched: they cannot have changed bytes.
+  if (entry.preDispatchNoEffect === true || entry.error === 'blocked') return false
+  const paths = entry.mutation_paths ?? []
+  // A host-proven byte-identical effect changed nothing.
+  if (entry.effect_status === 'confirmed_no_change' && paths.length === 0) return false
+  // Paths on a failed, timed-out or unsettled call are a possible partial write.
+  if (paths.length > 0) return true
+  if (MUTATION_TOOLS.has(entry.tool)) return true
+  if (entry.tool === 'sub_agent') {
+    // Errored or unsettled children are conservative even without paths.
+    return entry.effect_status === 'confirmed_change' || Boolean(entry.error) ||
+      entry.effect_status === 'indeterminate'
+  }
+  if (entry.tool === 'await_command') return true
+  if (!SHELL_TOOLS.has(entry.tool)) return false
+  if (isVerifierEntry(entry, boundCommands)) return false
+  return !shellIsReadOnly(entry.target)
 }
 
 function mutationPaths(entry: FinalRevisionToolEntry): string[] {
   if (entry.mutation_paths?.length) return [...entry.mutation_paths]
-  return MUTATION_TOOLS.has(entry.tool) ? [entry.target] : []
+  if (MUTATION_TOOLS.has(entry.tool)) return [entry.target]
+  if (SHELL_TOOLS.has(entry.tool) || entry.tool === 'await_command') return shellWitnessPaths(entry.target)
+  return []
 }
 
 function identityCommands(commands: readonly string[]): string[] {
@@ -244,15 +425,16 @@ function identityCommands(commands: readonly string[]): string[] {
 /** Tool-log paths changed after the last passing authoritative verifier. */
 export function untestedPathsAfterLastGreenVerifier(
   toolCallLog: readonly FinalRevisionToolEntry[],
+  boundCommands?: readonly string[],
 ): string[] {
   let lastGreen = -1
   for (const [index, entry] of toolCallLog.entries()) {
-    if (isVerifierEntry(entry) && isSuccessful(entry)) lastGreen = index
+    if (isGreenVerifierEntry(entry, boundCommands)) lastGreen = index
   }
   if (lastGreen < 0) return []
   const paths = new Set<string>()
   for (const entry of toolCallLog.slice(lastGreen + 1)) {
-    if (!isMutationEntry(entry)) continue
+    if (!isMutationEntry(entry, boundCommands)) continue
     for (const path of mutationPaths(entry)) paths.add(path)
   }
   return [...paths].sort()
@@ -261,32 +443,58 @@ export function untestedPathsAfterLastGreenVerifier(
 function inspectionReads(toolCallLog: readonly FinalRevisionToolEntry[]): { path: string; sha256: string }[] {
   const reads = new Map<string, string>()
   for (const entry of toolCallLog) {
-    if (!READ_TOOLS.has(entry.tool) || !isSuccessful(entry) || !entry.read_revision_hash) continue
+    if (!READ_TOOLS.has(entry.tool) || entry.preDispatchNoEffect === true ||
+        entry.error || !entry.read_revision_hash) continue
+    if (entry.exit_code !== undefined && entry.exit_code !== 0) continue
+    reads.delete(entry.target)
     reads.set(entry.target, entry.read_revision_hash)
   }
-  return [...reads.entries()].map(([path, sha256]) => ({ path, sha256 })).sort((a, b) => a.path.localeCompare(b.path))
+  // Completion re-hashing is bounded: only the most recent inspection witnesses.
+  return [...reads.entries()].slice(-MAX_INSPECTION_WITNESSES)
+    .map(([path, sha256]) => ({ path, sha256 }))
+    .sort((a, b) => a.path.localeCompare(b.path))
+}
+
+/** Explicit unproven witness for a project-scoped completion. */
+export function unavailableFinalRevisionWitness(reason: string): FinalRevisionWitnessV1 {
+  return {
+    schema_version: 1,
+    contract: FINAL_REVISION_CONTRACT_VERSION,
+    status: 'unavailable',
+    candidate: null,
+    verified_against: null,
+    stale_paths: [],
+    unverified_paths: [],
+    reason,
+  }
 }
 
 /**
  * Evaluate whether the turn's proof still describes the bytes on disk.
  *
- * Rules are intentionally conservative:
- * - A required verifier that never passed is `unverified`, never `verified`.
- * - A mutation after the last accepted green verifier is `stale`.
+ * Conservative rules:
+ * - A required verifier must have a green, settled, non-simulated invocation.
+ * - Any logged mutation-capable effect after that invocation is `stale`.
  * - Read-only no-change needs per-path inspection witnesses; a later external
- *   save invalidates it.
- * - Without a verifier or inspection witness the state is `unverified`.
+ *   save invalidates it. No witness means `unverified`, never `verified`.
+ * - A host-bound revision mismatch is `stale`.
  */
 export function evaluateFinalRevisionWitness(input: {
   projectRoot: string
   toolCallLog: readonly FinalRevisionToolEntry[]
   requiredVerifierCommands?: readonly string[]
-  /** Host-bound revision the verifier ran against, when available. */
+  /**
+   * Host-supplied revision the verifier ran against. This is an optional
+   * integration hook; the current pipeline has no production caller, and the
+   * required-verifier path proves only logged-effect ordering. Consumers that
+   * bind a verifier revision can pass it here to reject changed bytes.
+   */
   verifierBoundRevision?: FinalRevisionCandidateV1 | null
 }): FinalRevisionWitnessV1 {
   const required = identityCommands(input.requiredVerifierCommands ?? [])
+  const bounds = required.length > 0 ? required : undefined
   const log = input.toolCallLog
-  const mutations = log.filter(isMutationEntry)
+  const mutations = log.filter(entry => isMutationEntry(entry, bounds))
   const mutatedPaths = [...new Set(mutations.flatMap(mutationPaths))]
   const changedForWitness = mutatedPaths.length > 0 ? mutatedPaths : inspectionReads(log).map(read => read.path)
 
@@ -325,7 +533,15 @@ export function evaluateFinalRevisionWitness(input: {
       const reads = inspectionReads(log)
       if (reads.length === 0) return base('unverified', 'no_inspection_witness', null)
       const stale: string[] = []
+      let remainingBytes = MAX_INSPECTION_PROOF_BYTES
       for (const read of reads) {
+        const size = finalRevisionFileSize(input.projectRoot, read.path)
+        if (size === null) {
+          stale.push(read.path)
+          continue
+        }
+        remainingBytes -= size
+        if (remainingBytes < 0) return base('unavailable', 'final_revision_proof_budget_exceeded', null)
         const current = hashFinalRevisionFile(input.projectRoot, read.path)
         if (current !== read.sha256) stale.push(read.path)
       }
@@ -340,7 +556,7 @@ export function evaluateFinalRevisionWitness(input: {
   for (const requirement of required) {
     let last = -1
     for (const [index, entry] of log.entries()) {
-      if (isVerifierEntry(entry) && isSuccessful(entry) && satisfiesVerifierRequirement(requirement, entry.target)) {
+      if (isGreenVerifierEntry(entry, bounds) && satisfiesVerifierRequirement(requirement, entry.target)) {
         last = index
       }
     }
@@ -348,7 +564,7 @@ export function evaluateFinalRevisionWitness(input: {
     lastGreenByRequirement.push(last)
   }
   const verifiedIndex = Math.min(...lastGreenByRequirement)
-  const after = log.slice(verifiedIndex + 1).filter(isMutationEntry)
+  const after = log.slice(verifiedIndex + 1).filter(entry => isMutationEntry(entry, bounds))
   if (after.length > 0) {
     const stale = [...new Set(after.flatMap(mutationPaths))].sort()
     return base('stale', 'mutation_after_required_verifier', null, stale, stale)

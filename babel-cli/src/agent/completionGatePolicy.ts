@@ -542,8 +542,11 @@ export type GateToolLogEntry = {
   mutation_paths?: string[];
   effect_status?: MutationEffectStatus;
   effect_scope?: import('./mutationTools.js').MutationEffectScope;
-  /** `final-revision-v1`: content hash of the bytes this read delivered. */
+  /** `final-revision-v1`: raw-byte hash of the content this read delivered. */
   read_revision_hash?: string;
+  processExecuted?: boolean;
+  processCompleted?: boolean;
+  simulated?: boolean;
 };
 
 /** Recorded inspection can support a no-change conclusion, never patch certification. */
@@ -1575,7 +1578,9 @@ export function buildCompletionEvidenceBlockedReport(reason: string): {
  * - `hardGate` is true when BABEL_HEADLESS=1, CI=1, or non-TTY.
  * - Under hardGate, both `strict` and `required` policies reject-continue then
  *   hard-BLOCK after max strikes (no soft-allow of missing authoritative verifier).
- * - Interactive (hardGate false): `required` may soft-allow; `strict` still enforces.
+ * - Interactive (hardGate false): `required` with writes blocks after the bounded
+ *   budget exactly like headless; only a verified inspection-only no-change may
+ *   soft-allow because it carries no verifier obligation. `strict` always enforces.
  */
 export type GateRejectPlan =
   | { kind: 'reject_continue'; gateStrikesAfter: number; useGreenMessage: boolean }
@@ -1676,8 +1681,14 @@ export function planCompletionGateReject(opts: {
     };
   }
 
-  // Interactive inspection-only no-change after max strikes: nothing to verify.
-  return { kind: 'soft_allow', gateStrikesAfter: 0 };
+  // Writes at/after the budget already blocked above; no soft-allow path remains.
+  return {
+    kind: 'blocked',
+    reason: [
+      `Gate blocked after ${opts.gateStrikes + 1} consecutive completion rejections.`,
+      'No bounded recovery path remains for a mutating completion without a verifier.',
+    ].join(' '),
+  };
 }
 
 /** Full evaluateCompletionGate for ChatEngine (execute + verification policy). */

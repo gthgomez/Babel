@@ -186,6 +186,11 @@ export async function runChatExecutorLoop(
       verified: result.exit_code === 0,
       ...(result.denial ? { denial: result.denial } : {}),
       ...(readRevisionHash && result.exit_code === 0 ? { read_revision_hash: readRevisionHash } : {}),
+      ...(result.simulated === true ? { simulated: true as const } : {}),
+      ...(result.process_started !== undefined ? { processExecuted: result.process_started } : {}),
+      ...(result.process_termination !== undefined
+        ? { processCompleted: result.process_termination === 'exited' }
+        : {}),
     };
     toolCallLog.push(entry);
 

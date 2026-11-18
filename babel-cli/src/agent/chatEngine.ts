@@ -433,7 +433,7 @@ import {
 import {restoreTurnRuntime} from './restoreTurnRuntime.js';
 import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjectiveSubmission,type ObjectiveAdmissionHost,type ObjectiveAdmissionResult} from './chatEngineObjectiveAdmission.js';
 import type { CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
-import { evaluateFinalRevisionWitness } from '../authority/finalRevision.js';
+import { evaluateFinalRevisionWitness, unavailableFinalRevisionWitness } from '../authority/finalRevision.js';
 import {requiresObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog} from './taskObjectiveLifecycle.js';
 
 import { admitProjectContentRead, isReadOnlyChat } from "./chatReadOnly.js";
@@ -2683,6 +2683,7 @@ export class ChatEngine {
     const verifierInput = this.buildVerifierInput();
     const gateLog = toGateToolLog(this.toolCallLog);
     const finalRevision = publicationRevision ?? (() => {
+      if (!this.options.projectRoot) return undefined
       try {
         return evaluateFinalRevisionWitness({
           projectRoot: requireProjectRoot(this.options),
@@ -2690,9 +2691,8 @@ export class ChatEngine {
           requiredVerifierCommands: verifierInput.requiredVerifierCommands,
         });
       } catch {
-        // A missing project root or unreadable evidence stays unavailable; the
-        // kernel treats it as unproven, never as verified.
-        return undefined;
+        // A project-scoped completion with unreadable evidence is unproven.
+        return unavailableFinalRevisionWitness('final_revision_unavailable');
       }
     })();
     const evidenceProof = requestedOutcome === "VERIFIED_COMPLETE" || hasMutation
@@ -2722,6 +2722,9 @@ export class ChatEngine {
       toolCallLog: toGateToolLog(this.toolCallLog),
       acceptance: this.criterionCompletion?.currentRequest(),
       ...(finalRevision ? { finalRevision } : {}),
+      finalRevisionRequired: Boolean(this.options.projectRoot) &&
+        (this.lastTurnRuntime?.effectiveOperation === 'MUTATING' ||
+          this.lastTurnRuntime?.effectiveOperation === 'HYBRID'),
       ...(this.lastVerifierReceipt?.boundRevision
         ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
         : {}),

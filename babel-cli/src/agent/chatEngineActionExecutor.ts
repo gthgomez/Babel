@@ -4,6 +4,7 @@ import { failedVerifierContextKey } from './codingLoop/failedVerifierExecution.j
 import { attestedFailedVerifierExecution, matchesFailedVerifierReplay } from './codingLoop/failedVerifierExecution.js';
 import { formatRecoveryReadReference } from './codingLoop/workingState.js';
 import { resolveClassCGateDecision } from "./autonomyEnforcement.js";
+import { hashFinalRevisionFile } from '../authority/finalRevision.js';
 import {requireProjectRoot,denyConversationAction} from './chatToolScopeAdmission.js';
 import { evaluatePlanThenExecuteGate } from "./planThenExecute.js";
 import { evaluateHardPlanModeGate } from "./planExecuteMode.js";
@@ -710,17 +711,6 @@ export class ChatEngineActionExecutor {
           };
         }
       }
-      if (action.type === "read_range") {
-        readRevisionHash = await this.host.hashFilePath(action.file_path);
-        if (!this.host.isSubmissionCurrent(ownerGeneration)) {
-          return this.host.settleStaleActionResult(
-            tool,
-            target,
-            meta.index,
-            "parent submission superseded before the action settled",
-          );
-        }
-      }
       if (action.type === "read_file") {
         if (isReadOnlyChat())
           resolveChatRangePath(requireProjectRoot(this.host.options), action.path);
@@ -756,7 +746,8 @@ export class ChatEngineActionExecutor {
           };
         }
         fileReadCacheHash = await this.host.hashFilePath(action.path);
-        readRevisionHash = fileReadCacheHash;
+        // The published witness binds raw bytes, not the cache's text digest.
+        readRevisionHash = hashFinalRevisionFile(requireProjectRoot(this.host.options), action.path) ?? undefined;
         // R0-8: hashing is a suspension point; a superseded submission must not
         // append its read result (or advance its caches) for the new task.
         if (!this.host.isSubmissionCurrent(ownerGeneration)) {
@@ -787,7 +778,7 @@ export class ChatEngineActionExecutor {
             detail: "cached",
             index: meta.index,
             exit_code: 0,
-            ...(fileReadCacheHash ? { read_revision_hash: fileReadCacheHash } : {}),
+            ...(readRevisionHash ? { read_revision_hash: readRevisionHash } : {}),
           });
           callbacks?.onToolComplete?.(toolId, "cached", undefined, 0);
           return {
@@ -1657,6 +1648,7 @@ export class ChatEngineActionExecutor {
               exit_code: lastResult.exit_code,
               stdout: lastResult.stdout,
               stderr: lastResult.stderr,
+              ...(lastResult.simulated === true ? { simulated: true as const } : {}),
             }
           : {}),
         ...(toolError ? { error: toolError } : {}),

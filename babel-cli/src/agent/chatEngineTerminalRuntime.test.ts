@@ -992,6 +992,7 @@ test('a non-Git external save after inspection revokes read-only no-change succe
     requestedOutcome: requested,
     hasWrite: hasMutation,
     verificationPolicy: 'required',
+    finalRevisionRequired: true,
     toolCallLog: input.snapshot.evidence.observability.toolCallLog,
     ...(finalRevision ? { finalRevision } : {}),
   })
@@ -1031,4 +1032,88 @@ test('an unverified terminal discloses files written after the last green verifi
   assert.match(event.answer, /Modified after the last passing verifier/)
   assert.match(event.answer, /src\/parser\.ts/)
   assert.match(event.answer, /retained, not deleted/)
+})
+
+test('a no-change conclusion without byte witnesses is not certified', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.readOnly = true
+  input.snapshot.outcome.hasMutation = false
+  input.snapshot.context.options.task = 'Inspect the source and report whether it needs changes.'
+  input.snapshot.context.acceptedOperation = 'READ_ONLY'
+  input.snapshot.evidence.observability.toolCallLog = [
+    { tool: 'grep', target: 'TODO', detail: '1 match', index: 0, exit_code: 0 },
+  ]
+  const kernel = createExecutorKernel('chat')
+  input.effects.decideCompletion = (requested, hasMutation, finalRevision) => kernel.completion.decide({
+    mode: 'chat',
+    requestedOutcome: requested,
+    hasWrite: hasMutation,
+    verificationPolicy: 'required',
+    finalRevisionRequired: true,
+    toolCallLog: input.snapshot.evidence.observability.toolCallLog,
+    ...(finalRevision ? { finalRevision } : {}),
+  })
+  const event = completeChatStream(input, 'No change is required.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'UNVERIFIED_PATCH')
+})
+
+test('a read with a current byte witness still certifies no-change', t => {
+  const input = terminalInput(t)
+  const root = input.snapshot.context.engineRunDir
+  writeFileSync(join(root, 'app.ts'), 'v1\n')
+  input.snapshot.outcome.readOnly = true
+  input.snapshot.outcome.hasMutation = false
+  input.snapshot.context.options.task = 'Inspect app.ts and report whether it needs changes.'
+  input.snapshot.context.acceptedOperation = 'READ_ONLY'
+  input.snapshot.evidence.observability.toolCallLog = [
+    { tool: 'read_file', target: 'app.ts', detail: 'read 1 line', index: 0, exit_code: 0,
+      read_revision_hash: createHash('sha256').update('v1\n').digest('hex') },
+  ]
+  const kernel = createExecutorKernel('chat')
+  input.effects.decideCompletion = (requested, hasMutation, finalRevision) => kernel.completion.decide({
+    mode: 'chat',
+    requestedOutcome: requested,
+    hasWrite: hasMutation,
+    verificationPolicy: 'required',
+    finalRevisionRequired: true,
+    toolCallLog: input.snapshot.evidence.observability.toolCallLog,
+    ...(finalRevision ? { finalRevision } : {}),
+  })
+  const event = completeChatStream(input, 'No change is required.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'NO_CHANGE_REQUIRED')
+  assert.equal(existsSync(join(root, 'final_revision.json')), true)
+})
+
+test('a stale witness with no attributable path still discloses the stale banner', t => {
+  const input = terminalInput(t)
+  input.snapshot.outcome.readOnly = false
+  input.snapshot.outcome.hasMutation = true
+  input.snapshot.context.acceptedOperation = 'MUTATING'
+  input.effects.decideCompletion = requested => ({
+    requestedOutcome: requested,
+    finalOutcome: 'UNVERIFIED_PATCH',
+    allowed: false,
+    reason: 'final_revision_stale:mutation_after_required_verifier',
+    evidenceRefs: [],
+    policyVersion: 'fixture',
+    finalRevision: {
+      schema_version: 1,
+      contract: 'final-revision-v1',
+      status: 'stale',
+      candidate: null,
+      verified_against: null,
+      stale_paths: [],
+      unverified_paths: [],
+      reason: 'mutation_after_required_verifier',
+    },
+  })
+  const event = completeChatStream(input, 'Done.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'UNVERIFIED_PATCH')
+  assert.match(event.answer, /workspace bytes could not be attributed/)
 })

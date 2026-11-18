@@ -2636,6 +2636,11 @@ export async function runExecutorLoop(
       ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
       ...(toolResult.directory_page ? { directory_page: toolResult.directory_page } : {}),
       verified: toolResult.exit_code === 0,
+      ...(toolResult.simulated === true ? { simulated: true as const } : {}),
+      ...(toolResult.process_started !== undefined ? { processExecuted: toolResult.process_started } : {}),
+      ...(toolResult.process_termination !== undefined
+        ? { processCompleted: toolResult.process_termination === 'exited' }
+        : {}),
     };
     appendExecutorToolLog(toolCallLog, entry, episodeSink);
 

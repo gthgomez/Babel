@@ -8,7 +8,11 @@ import {
 } from '../authority/finalRevision.js'
 
 /** Success statuses that a stale final-revision witness must be able to revoke. */
-const SUCCESS_STATUSES = new Set<TerminalStatus>(['COMPLETE', 'COMPLETE_NO_MODIFICATION'])
+const SUCCESS_STATUSES = new Set<TerminalStatus>([
+  'COMPLETE',
+  'COMPLETE_NO_MODIFICATION',
+  'READ_ONLY_NO_MODIFICATION',
+])
 
 export interface PipelineFinalCompletionInput {
   mode: 'chat' | 'plan' | 'deep'
@@ -34,7 +38,12 @@ export interface PipelineFinalCompletionResult {
  * A verified status is preserved only when the required verifier evidence still
  * covers the final tree. A late write or changed bytes revoke the claim to
  * `REQUIRED_VERIFIER_MISSING` while leaving every user file untouched. Chat and
- * Plan keep their existing terminal mapping; the witness is still published.
+ * Plan keep their existing terminal mapping; any stale witness still revokes a
+ * success status, including `READ_ONLY_NO_MODIFICATION`.
+ *
+ * Explicit residual: a Deep task with local writes but no host/plan-required
+ * verifier remains `COMPLETE` with an `UNVERIFIED_PATCH` decision. Babel does
+ * not claim verification it cannot establish; consumers must read the decision.
  */
 export function decidePipelineFinalCompletion(
   input: PipelineFinalCompletionInput,
@@ -58,14 +67,8 @@ export function decidePipelineFinalCompletion(
     return { status: input.status, decision: null, finalRevision, condition: null }
   }
   const verifiedClaim = input.requiredVerifierCommands.length > 0
-  const hasWrite = input.toolCallLog.some(entry =>
-    ['write_file', 'file_write', 'str_replace', 'apply_patch', 'edit_file'].includes(entry.tool) &&
-    !(entry as { error?: string }).error && (entry.exit_code === undefined || entry.exit_code === 0))
   const decision = createExecutorKernel('deep').completion.decideFinalRevision({
-    mode: 'deep',
     verifiedClaim,
-    hasWrite,
-    requiredVerifierCommands: input.requiredVerifierCommands,
     finalRevision,
   })
   if (!verifiedClaim && finalRevision.status !== 'stale') {

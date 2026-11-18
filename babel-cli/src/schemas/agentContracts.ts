@@ -1379,8 +1379,12 @@ export const ToolCallLogSchema = z.object({
   fingerprint: z.string().optional(),
   retry_forbidden: z.boolean().optional(),
   mutation_paths: z.array(z.string().min(1)).optional(),
-  /** `final-revision-v1`: content hash of the bytes a read delivered. */
+  /** `final-revision-v1`: raw-byte hash of the content a read delivered. */
   read_revision_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  /** Host-origin: a dry-run/simulated command did not execute. */
+  simulated: z.boolean().optional(),
+  processExecuted: z.boolean().optional(),
+  processCompleted: z.boolean().optional(),
 });
 export type ToolCallLog = z.infer<typeof ToolCallLogSchema>;
 

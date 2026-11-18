@@ -46,11 +46,8 @@ export type { ExecutorCompletionInput };
 
 /** Kernel input for the shared final-revision (`final-revision-v1`) decision. */
 export interface FinalRevisionCompletionInput {
-  mode: BabelMode;
   /** True when the turn claims the final tree is verified. */
   verifiedClaim: boolean;
-  hasWrite: boolean;
-  requiredVerifierCommands: readonly string[];
   finalRevision: FinalRevisionWitnessV1;
 }
 
@@ -211,26 +208,33 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
   const acceptance = input.requestedOutcome === 'VERIFIED_COMPLETE'
     ? evaluateCriterionCompletionV1(input.acceptance) : undefined;
   const finalRevisionStale = finalRevision?.status === 'stale';
-  const verified = input.proof?.compliant === true && gate.allow && acceptance?.verified === true && !finalRevisionStale;
+  const noChangeRequested = input.requestedOutcome === 'NO_CHANGE_REQUIRED';
+  const noChangeProofRequired = noChangeRequested && input.finalRevisionRequired !== false;
+  const noChangeUnproven = noChangeProofRequired && finalRevision?.status !== 'verified';
+  const verified = input.proof?.compliant === true && gate.allow && acceptance?.verified === true &&
+    !finalRevisionStale && !noChangeUnproven;
   const finalOutcome: TerminalOutcome =
     input.requestedOutcome === "VERIFIED_COMPLETE" && verified
       ? "VERIFIED_COMPLETE"
       : input.requestedOutcome === "VERIFIED_COMPLETE"
         ? "UNVERIFIED_PATCH"
-        : input.requestedOutcome === "NO_CHANGE_REQUIRED" && finalRevisionStale
+        : noChangeUnproven
           ? "UNVERIFIED_PATCH"
           : input.requestedOutcome;
+  const finalRevisionReason = noChangeUnproven
+    ? `final_revision_${finalRevision?.status ?? 'unavailable'}:${finalRevision?.reason ?? 'no_current_bytes_proof'}`
+    : "final_revision_stale";
 
   return {
     requestedOutcome: input.requestedOutcome,
     finalOutcome,
-    allowed: finalRevisionStale
-      ? input.requestedOutcome !== "NO_CHANGE_REQUIRED" && input.requestedOutcome !== "VERIFIED_COMPLETE"
+    allowed: noChangeUnproven || finalRevisionStale
+      ? false
       : input.requestedOutcome !== "VERIFIED_COMPLETE" || verified,
     reason: verified
       ? "proof_carrying_completion_accepted"
-      : finalRevisionStale
-        ? "final_revision_stale"
+      : noChangeUnproven || finalRevisionStale
+        ? finalRevisionReason
         : input.requestedOutcome === "VERIFIED_COMPLETE"
         ? `completion_downgraded:${input.proof && !input.proof.compliant ? "evidence_incomplete" : !gate.allow ? rejectionReason(gate.reason) : `acceptance_${acceptance?.status.toLowerCase() ?? 'unknown'}`}`
         : "non_verified_terminal_preserved",
@@ -240,14 +244,17 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
     ...(finalRevision ? { finalRevision } : {}),
     ...(finalRevision?.stale_paths.length ? { stalePaths: [...finalRevision.stale_paths] } : {}),
     evidenceRefs,
-    policyVersion: EXECUTOR_CONTRACT_VERSION,
+    policyVersion: finalRevision
+      ? `${EXECUTOR_CONTRACT_VERSION}+${FINAL_REVISION_CONTRACT_VERSION}`
+      : EXECUTOR_CONTRACT_VERSION,
   };
 }
 
 /**
- * Shared final-revision decision consumed by Chat no-change publication and
- * Deep finalization. A verified claim needs a verified witness; a stale witness
- * downgrades it to `UNVERIFIED_PATCH` with the changed paths retained.
+ * Revision-only decision for a host that has already derived the verifier
+ * obligation. Deep finalization consumes it; Chat no-change publication uses
+ * `decide()` with the same witness. A verified claim needs a verified witness;
+ * every other claim remains explicitly `UNVERIFIED_PATCH` (never certified).
  */
 function decideFinalRevisionCompletion(
   input: FinalRevisionCompletionInput,
