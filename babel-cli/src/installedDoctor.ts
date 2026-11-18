@@ -10,6 +10,7 @@ import { dockerCheckMessage, formatManualProviderEnvExample, sandboxImageCheckMe
 import { inspectRunningProduct, runningProduct, type RunningProduct } from './services/runningProduct.js'
 import { resolveExecutionProfile, type ExecutionProfileName } from './config/executionProfiles.js'
 import { isHostIsolationEscalationAllowed, type GovernedIsolationDecision } from './config/benchmarkContainer.js'
+import { validateDockerIsolationArgs } from './config/dockerIsolationArgs.js'
 import { ORDINARY_CHAT_EXECUTION_PROFILE, resolveEffectiveExecutionBoundary } from './config/effectiveExecutionBoundary.js'
 
 type Check = { id: string; status: 'ok' | 'warn' | 'fail' | 'not_required'; message: string }
@@ -53,7 +54,9 @@ export function runInstalledDoctor(options: {
   const spec = connection ? getProviderSpec(connection.provider) : null
   const keyName = connection?.apiKeyEnvVar ?? spec?.credentialEnvVar
   const configured = Boolean(connection && effective.model.value && (connection.authentication === 'none' || !spec?.requiresCredential || (keyName && env[keyName]?.trim())))
-  const dockerReady = requiresDocker && (options.dockerProbe ? options.dockerProbe() :
+  const dockerDisabled = env['BABEL_DOCKER_DISABLE'] === 'true'
+  const unsafeDockerArgs = !validateDockerIsolationArgs(env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']).ok
+  const dockerReady = requiresDocker && !dockerDisabled && !unsafeDockerArgs && (options.dockerProbe ? options.dockerProbe() :
     spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 3000, stdio: 'ignore', env }).status === 0)
   const image=env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim()
   const imageReady=Boolean(dockerReady&&image&&(options.imageProbe?options.imageProbe(image):probeInstalledSandboxImage(image,{

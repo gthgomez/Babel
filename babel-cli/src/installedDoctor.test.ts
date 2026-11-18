@@ -39,9 +39,18 @@ it('reports the effective OS boundary instead of claiming Docker is the default'
   assert.equal(unavailable.checks.find(check=>check.id==='execution_boundary')?.status,'fail')
   assert.match(unavailable.checks.find(check=>check.id==='execution_boundary')?.message ?? '',/fail closed/i)
 
-  const escalated=runInstalledDoctor({env:{BABEL_ALLOW_HOST_FALLBACK:'1'},executionProfile:'safe_repo',dockerProbe:()=>false})
-  assert.equal(escalated.checks.find(check=>check.id==='execution_boundary')?.status,'warn')
-  assert.match(escalated.checks.find(check=>check.id==='execution_boundary')?.message ?? '',/explicitly waived/i)
+  for (const env of [{BABEL_ALLOW_HOST_FALLBACK:'1'},{BABEL_DOCKER_DISABLE:'true'}]) {
+    const escalated=runInstalledDoctor({env,executionProfile:'safe_repo',dockerProbe:()=>true})
+    assert.equal(escalated.checks.find(check=>check.id==='execution_boundary')?.status,'warn',JSON.stringify(env))
+    assert.match(escalated.checks.find(check=>check.id==='execution_boundary')?.message ?? '',/explicitly waived/i)
+    if (env.BABEL_DOCKER_DISABLE === 'true') {
+      assert.equal(escalated.checks.find(check=>check.id==='docker')?.status,'fail')
+    }
+  }
+
+  const unsafeArgs=runInstalledDoctor({env:{BABEL_BENCHMARK_DOCKER_EXTRA_ARGS:'--network host'},executionProfile:'safe_repo',dockerProbe:()=>true,imageProbe:()=>true})
+  assert.equal(unsafeArgs.checks.find(check=>check.id==='execution_boundary')?.status,'fail')
+  assert.match(unsafeArgs.checks.find(check=>check.id==='execution_boundary')?.message ?? '',/fail closed/i)
 })
 
 it('requires unflagged WASM support and the Node 24 Unicode deletion fix', () => {
