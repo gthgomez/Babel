@@ -12,12 +12,13 @@ import { ChatEngine, type ChatEngineOptions } from '../../agent/chatEngine.js';
 import { ConversationalRenderer } from '../../ui/waterfall.js';
 import { globalCostTracker, usageDelta } from '../../services/costTracker.js';
 
-import { error, muted } from '../../ui/theme.js';
+import { error, muted, warning } from '../../ui/theme.js';
 import { updateConversationMemory } from '../turns.js';
 import { alert } from '../../ui/dialog.js';
 import { resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
 import { resolveExecutionPolicyChoice } from '../../config/executionPolicySelection.js';
 import { constrainNewSessionPolicy } from '../../config/sessionExecutionPolicy.js';
+import { resolveEffectiveExecutionBoundary } from '../../config/effectiveExecutionBoundary.js';
 import {
   analyzeTaskShape,
   describeInteractiveCodingProfile,
@@ -178,12 +179,17 @@ export async function executeChatTask(
       if (operatorModeImpliesDryRun(operatorMode)) {
         process.env['BABEL_DRY_RUN'] = '1';
       }
+      const executionPolicy = constrainNewSessionPolicy(resolveExecutionPolicyChoice({
+        ...(process.env['BABEL_EXECUTION_PROFILE'] !== undefined ? { environmentProfile: process.env['BABEL_EXECUTION_PROFILE'] } : {}),
+        defaultProfile: 'host_native',
+      }));
+      // Disclose the OS-enforced boundary, not just the profile name, before
+      // the first command can run. Escalation is never silent.
+      const boundary = resolveEffectiveExecutionBoundary({ profile: executionPolicy.profile });
+      console.log(boundary.escalation ? warning(`  ! ${boundary.disclosure}`) : muted(`  ${boundary.disclosure}`));
       const engineOptions: ChatEngineOptions = {
         task,
-        executionPolicy: constrainNewSessionPolicy(resolveExecutionPolicyChoice({
-          ...(process.env['BABEL_EXECUTION_PROFILE'] !== undefined ? { environmentProfile: process.env['BABEL_EXECUTION_PROFILE'] } : {}),
-          defaultProfile: 'host_native',
-        })),
+        executionPolicy,
         projectRoot: target.targetRoot,
         ...(systemContext ? { systemContext } : {}),
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),

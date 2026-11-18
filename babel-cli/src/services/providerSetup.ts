@@ -89,7 +89,7 @@ export async function runProviderSetup(options: {
     const budget = budgetRaw === 'unlimited' ? budgetRaw : Number(budgetRaw)
     if (budget !== 'unlimited' && (!Number.isFinite(budget) || budget <= 0)) throw new Error('Choose a positive budget or unlimited. Setup progress was saved.')
     write(`Connection: ${id} (${selected}); model: ${model}; budget: ${budget === 'unlimited' ? 'unlimited' : `$${budget} per task`}.\n`)
-    write('Plan is read-only by default. Execution uses the active permission policy and safe_repo sandbox; Docker and a usable sandbox image are required for sandboxed commands.\n')
+    write("Plan is read-only by default. Ordinary Chat execution defaults to host_native, which runs eligible commands with your OS user's authority and is not an OS sandbox. Selecting a container profile such as safe_repo requires Docker and a usable sandbox image.\n")
     if (!/^(?:y|yes)$/i.test((await ask('Save this connection and budget as your user default? [y/N]: ')).trim())) {
       write(`Connection saved; your default selection was not changed. Resume with ${CLI_COMMAND} setup.\n`)
       return getSetupStatus(env)

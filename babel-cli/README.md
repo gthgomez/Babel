@@ -62,9 +62,12 @@ A local Ollama route needs its service and selected model available.
 
 Read-only help, context preview, and stack resolution need no provider. The
 **default `host_native` profile runs eligible project commands on the host with
-the current OS user's authority**; it is not an OS sandbox. An explicit
-`safe_repo` selection requires Docker and fails closed when it is unavailable;
-doctor reports missing Docker and never enables host fallback. Contributor
+the current OS user's authority**; it is not an OS sandbox. File tools and
+decoded commands deny credential-class paths, but host-native code you authorize
+can still read files your OS user can read, including credential stores. An
+explicit `safe_repo` selection requires Docker and fails closed when it is
+unavailable; doctor reports the effective boundary and never enables host
+fallback. Contributor
 `learn`, `skill`, `benchmark`, `smoke`, `test`, and `audit` utilities require a source
 checkout because they manage source-library artifacts. Use
 `setup --contributor` and `doctor --contributor` for contributor diagnostics.
@@ -441,7 +444,7 @@ node dist/index.js run "Solve benchmark task" --execution-profile benchmark_cont
 node dist/index.js run "Audit this repo" --execution-profile read_only_audit
 ```
 
-- `host_native` is the implicit default (`dockerSandbox: false`): eligible project commands run with the current OS user's authority, which is not an OS sandbox.
+- `host_native` is the implicit default (`dockerSandbox: false`): eligible project commands run with the current OS user's authority, which is not an OS sandbox. Credential-path effects are denied by file tools and by decoded shell commands, but arbitrary code the agent runs can still read what your OS user can read. Select `safe_repo` when an enforced file boundary matters.
 - `safe_repo` is the explicit guarded profile (`dockerSandbox: true`). It **fail-closes** without Docker daemon + image (`BABEL_BENCHMARK_DOCKER_IMAGE`) unless you escalate with `BABEL_ALLOW_HOST_FALLBACK=1` or `BABEL_DOCKER_DISABLE=true`.
 - `dev_local` is host-friendly (`dockerSandbox: false`); permits common local build tools such as pnpm, yarn, cargo, go, gcc, make, uv, and dotnet while keeping shell wrappers and destructive commands rejected. Prefer this for host-only day-to-day work. It runs tools directly on your host — do not point it at untrusted repositories or unreviewed code.
 - You can also set `BABEL_EXECUTION_PROFILE=dev_local` instead of the CLI flag.

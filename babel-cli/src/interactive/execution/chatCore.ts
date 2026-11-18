@@ -2,6 +2,7 @@ import { isReadOnlyChat } from '../../agent/chatReadOnly.js';
 import { currentInvocationSettings } from '../../config/invocationSettings.js';
 import { getActiveExecutionPolicyChoice, getScopedExecutionProfile, resolveExecutionPolicyChoice, withExecutionPolicyChoice, type ExecutionPolicyChoice } from '../../config/executionPolicySelection.js';
 import { constrainNewSessionPolicy, recordNewSessionPolicy } from '../../config/sessionExecutionPolicy.js';
+import { resolveEffectiveExecutionBoundary } from '../../config/effectiveExecutionBoundary.js';
 import { acquireSessionPolicyLease, type SessionPolicyLease } from '../../config/sessionPolicyLease.js';
 import { chatInspectionCoverage } from '../../agent/chatInspectionCoverage.js';
 import { terminalReasonGuidance } from '../../agent/chatTerminalReason.js';
@@ -1748,6 +1749,11 @@ export async function runCliChatTask(input: {
       throw new Error('Invalid execution profile selection or environment. Select a valid execution profile.');
     }
   })());
+  if (executionPolicy && outputFormat === 'text' && process.stderr.isTTY) {
+    // Human-facing, before actions; structured stdout stays untouched.
+    const boundary = resolveEffectiveExecutionBoundary({ profile: executionPolicy.profile });
+    process.stderr.write(`${boundary.escalation ? '! ' : ''}${boundary.disclosure}\n`);
+  }
   const resumedEngine = input.sessionId
     ? await openResumedChatEngine(input.sessionId, {
         task: input.task,
