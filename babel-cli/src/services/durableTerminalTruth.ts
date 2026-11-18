@@ -6,6 +6,12 @@
  * module derives a single outcome/user-status pair from durable evidence only
  * (no filesystem mutation, no model inference) so those surfaces cannot report
  * a verified terminal as three different classifications (RT-10).
+ *
+ * A summary that claims success loses to a later durable `turn_ended` that
+ * records a non-success terminal: the event log is append-only and carries
+ * the newest turn, so a stale success summary must not project success/exit 0
+ * (the dangerous direction). The arbitration exposes `disagreement` and is
+ * otherwise one-directional by design.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -42,8 +48,20 @@ export interface DurableTerminalTruth {
   finished: boolean;
   reason_code: string | null;
   changed_files: string[];
+  /**
+   * True when a stale success summary was overridden by a later durable
+   * `turn_ended` event recording a non-success terminal. The projection
+   * prefers the failure in that one direction; every other disagreement
+   * keeps the summary's conservative classification.
+   */
+  disagreement: boolean;
 }
 
+// W02 canonical-guard handoff debt: this local membership list mirrors the
+// canonical `TerminalOutcome` union in schemas/agentContracts.ts (a pure TS
+// type cannot be enumerated at runtime). W02 owns that file; when they land a
+// canonical runtime guard (e.g. a zod `TerminalOutcomeSchema`), import it
+// here and delete this copy so the two definitions cannot drift.
 const TERMINAL_OUTCOMES: ReadonlySet<string> = new Set([
   'VERIFIED_COMPLETE',
   'UNVERIFIED_PATCH',
@@ -224,15 +242,18 @@ function classifiedUserStatus(truth: {
   return 'ready';
 }
 
+function isSuccessOutcome(outcome: TerminalOutcome | null): boolean {
+  return outcome === 'VERIFIED_COMPLETE' || outcome === 'NO_CHANGE_REQUIRED';
+}
+
 /** Derive one terminal truth from the durable run artifacts. */
 export function readDurableTerminalTruth(
   runDir: string,
   expectedSessionId?: string,
 ): DurableTerminalTruth {
+  const summary = fromTerminalSummary(runDir);
   const found =
-    fromTerminalSummary(runDir) ??
-    fromSessionEvents(runDir, expectedSessionId) ??
-    fromThreadEvents(runDir);
+    summary ?? fromSessionEvents(runDir, expectedSessionId) ?? fromThreadEvents(runDir);
   if (!found) {
     return {
       outcome: null,
@@ -244,19 +265,47 @@ export function readDurableTerminalTruth(
       finished: false,
       reason_code: null,
       changed_files: [],
+      disagreement: false,
     };
   }
-  const outcome = found.outcome ?? terminalOutcomeFromLegacyStatus(found.status, found.changed_files);
-  const userStatus = classifiedUserStatus({ outcome, status: found.status });
+  let resolved = found;
+  let disagreement = false;
+  // A SUCCESS summary must not win wholesale over a later durable
+  // `turn_ended` that records a non-success terminal: the summary is a
+  // derived artifact, while the append-only event log carries the newest
+  // durable turn. Arbitration is deliberately one-directional — a stale
+  // success claim is the dangerous direction; a stale failure claim keeps
+  // the summary's conservative classification. Absent event evidence
+  // (invalid/missing log) leaves the summary unchanged, matching the
+  // fail-closed absent-source behavior.
+  const summaryOutcome =
+    summary?.outcome ?? terminalOutcomeFromLegacyStatus(summary?.status ?? null, summary?.changed_files ?? []);
+  if (summary !== null && isSuccessOutcome(summaryOutcome)) {
+    const eventTerminal =
+      fromSessionEvents(runDir, expectedSessionId) ?? fromThreadEvents(runDir);
+    if (eventTerminal !== null) {
+      const eventOutcome =
+        eventTerminal.outcome ??
+        terminalOutcomeFromLegacyStatus(eventTerminal.status, eventTerminal.changed_files);
+      if (eventOutcome !== null && !isSuccessOutcome(eventOutcome)) {
+        resolved = { ...eventTerminal, changed_files: summary.changed_files };
+        disagreement = true;
+      }
+    }
+  }
+  const outcome =
+    resolved.outcome ?? terminalOutcomeFromLegacyStatus(resolved.status, resolved.changed_files);
+  const userStatus = classifiedUserStatus({ outcome, status: resolved.status });
   return {
     outcome,
-    status: found.status,
-    source: found.source,
+    status: resolved.status,
+    source: resolved.source,
     user_status: userStatus,
     exit_code: outcome ? terminalOutcomeExitCode(outcome) : userStatus === 'ready' ? null : 1,
     success: outcome === 'VERIFIED_COMPLETE' || outcome === 'NO_CHANGE_REQUIRED',
     finished: outcome !== null,
-    reason_code: found.reason_code,
-    changed_files: found.changed_files,
+    reason_code: resolved.reason_code,
+    changed_files: resolved.changed_files,
+    disagreement,
   };
 }

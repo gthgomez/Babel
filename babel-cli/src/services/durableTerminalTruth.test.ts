@@ -99,6 +99,70 @@ test('RT-10: a failed durable terminal keeps its failure classification', () => 
   }
 });
 
+test('a stale success summary loses to a later turn_ended failure', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-disagreement-'));
+  try {
+    const runDir = terminalRun(root, 'stale-success-summary', 'AGENT_FAILURE', 'failed');
+    // The stale summary claims verified success; the durable event log's last
+    // turn_ended records AGENT_FAILURE. The summary must not win wholesale.
+    writeFileSync(
+      join(runDir, 'terminal_status_summary.json'),
+      `${JSON.stringify({
+        schema_version: 1,
+        artifact_type: 'babel_terminal_status_summary',
+        status: 'COMPLETE',
+        terminal_outcome: 'VERIFIED_COMPLETE',
+        changed_files: ['src/example.ts'],
+      })}\n`,
+    );
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.source, 'session_events');
+    assert.equal(truth.outcome, 'AGENT_FAILURE');
+    assert.equal(truth.status, 'failed');
+    assert.equal(truth.user_status, 'failed');
+    assert.equal(truth.success, false);
+    assert.equal(truth.exit_code, 1);
+    assert.equal(truth.disagreement, true);
+    // The summary's changed-files record is retained for recovery display.
+    assert.deepEqual(truth.changed_files, ['src/example.ts']);
+
+    const recovery = buildRecoveryAssessment({ run: runDir, runsDir: root });
+    assert.equal(recovery.terminal_outcome, 'AGENT_FAILURE');
+    assert.equal(recovery.user_status, 'failed');
+    assert.equal(recovery.exit_code, 1);
+    const inspect = buildInspectOutcomeView(loadInspectBundle(runDir));
+    assert.equal(inspect.runOutcome.status, 'failed');
+    assert.equal(inspect.runOutcome.terminal_outcome, 'AGENT_FAILURE');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an agreeing success summary keeps the summary source without disagreement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-agreeing-'));
+  try {
+    const runDir = terminalRun(root, 'agreeing-run', 'VERIFIED_COMPLETE', 'completed');
+    writeFileSync(
+      join(runDir, 'terminal_status_summary.json'),
+      `${JSON.stringify({
+        schema_version: 1,
+        artifact_type: 'babel_terminal_status_summary',
+        status: 'COMPLETE',
+        terminal_outcome: 'VERIFIED_COMPLETE',
+        changed_files: [],
+      })}\n`,
+    );
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.source, 'terminal_status_summary');
+    assert.equal(truth.outcome, 'VERIFIED_COMPLETE');
+    assert.equal(truth.success, true);
+    assert.equal(truth.exit_code, 0);
+    assert.equal(truth.disagreement, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('UX-09: project-scoped recovery never falls back to another project run', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-recovery-scope-'));
   try {
