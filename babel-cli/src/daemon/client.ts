@@ -6,7 +6,7 @@
  * starts it as a child process and polls until ready.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { closeSync, existsSync, fchmodSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -114,9 +114,15 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
       logReady = true;
     } catch { logFd = undefined; logReady = false; }
   }
-  const child: ChildProcess = (options.spawnProcess ?? spawn)(execPath, spawnArgs, interactive
+  const spawnOptions: SpawnOptions = interactive
     ? { cwd: resolvePackageRoot(), stdio: 'pipe', detached: false, windowsHide: true }
-    : { cwd: resolvePackageRoot(), stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'], detached: true, windowsHide: true });
+    : { cwd: resolvePackageRoot(), stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'], detached: true, windowsHide: true };
+  // The production default is a real child-process spawn; the seam only
+  // substitutes a fake in qualification tests. Keep the direct spawn call
+  // visible to the host-process surface checker.
+  const child: ChildProcess = options.spawnProcess
+    ? options.spawnProcess(execPath, spawnArgs, spawnOptions)
+    : spawn(execPath, spawnArgs, spawnOptions);
   if (logFd !== undefined) { try { closeSync(logFd); } catch { /* owned by the child now */ } }
 
   ownedDaemon = child;
