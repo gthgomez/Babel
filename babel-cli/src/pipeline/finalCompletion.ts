@@ -45,6 +45,16 @@ export function decidePipelineFinalCompletion(
     requiredVerifierCommands: input.requiredVerifierCommands,
   })
   if (input.mode !== 'deep' || !SUCCESS_STATUSES.has(input.status)) {
+    if (SUCCESS_STATUSES.has(input.status) && finalRevision.status === 'stale') {
+      return {
+        status: 'EXECUTOR_HALTED',
+        decision: null,
+        finalRevision,
+        condition: `Final-revision proof is stale: ${finalRevision.reason ?? 'bytes changed after the accepted proof'}. ` +
+          `Changed after the accepted proof: ${finalRevision.stale_paths.join(', ') || '(workspace)'}. ` +
+          'The inspected conclusion is no longer current; rerun the check. Worktree changes are retained.',
+      }
+    }
     return { status: input.status, decision: null, finalRevision, condition: null }
   }
   const verifiedClaim = input.requiredVerifierCommands.length > 0

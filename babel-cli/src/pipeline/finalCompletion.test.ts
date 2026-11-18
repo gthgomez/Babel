@@ -140,3 +140,23 @@ test('pipeline final verifier contract downgrades a post-test write and keeps th
   })
   assert.equal(controlState.status, 'COMPLETE')
 })
+
+test('Chat pipeline read-only no-change is revoked by an external save', () => {
+  const { root, cleanup } = fixture()
+  try {
+    const log = [{ step: 1, tool: 'file_read' as const, target: 'app.ts', exit_code: 0, stdout: 'v1\n', stderr: '', verified: true, read_revision_hash: hash('v1\n') }]
+    writeFileSync(join(root, 'app.ts'), 'v2\n')
+    const result = decidePipelineFinalCompletion({
+      mode: 'chat',
+      status: 'COMPLETE_NO_MODIFICATION',
+      projectRoot: root,
+      requiredVerifierCommands: [],
+      toolCallLog: log,
+    })
+    assert.equal(result.status, 'EXECUTOR_HALTED')
+    assert.equal(result.finalRevision.status, 'stale')
+    assert.deepEqual(result.finalRevision.stale_paths, ['app.ts'])
+  } finally {
+    cleanup()
+  }
+})
