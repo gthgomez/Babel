@@ -889,13 +889,14 @@ function gitHeadSha(root: string): string | null {
 
 /** Resolve the repository identity shared by a parent checkout and its worktree. */
 function gitCommonDir(root: string): string | null {
-  const result = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+  const result = spawnSync('git', ['rev-parse', '--git-common-dir'], {
     cwd: root,
     encoding: 'utf-8',
   });
   if (result.status !== 0) return null;
   const value = (result.stdout ?? '').trim();
-  return value.length > 0 ? resolve(value) : null;
+  // Older Git prints a relative path; resolve it against the queried checkout.
+  return value.length > 0 ? resolve(root, value) : null;
 }
 
 /** Reject a path that escapes the root through `..`, a drive letter or a symlink. */
