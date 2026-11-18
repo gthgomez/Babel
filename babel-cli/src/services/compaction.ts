@@ -11,11 +11,10 @@ import { countTextTokens } from './tokenCounter.js';
 /**
  * Run-scoped compaction circuit state.
  *
- * The failure counter used to be module-level mutable state. In a resident
- * process that serves several sessions (daemon, Desktop, concurrent pipelines)
- * one session's failures tripped the breaker for every other session. Callers
- * now own one state object per run; only legacy callers that omit it share the
- * compatibility default below.
+ * The failure counter used to be module-level mutable state. Governed callers
+ * now own one state object per run. A module-level `legacyCompactionCircuitState`
+ * remains as the defaulted fallback for direct callers that omit a state; it is
+ * not used by the governed executor loop (`runExecutorLoop`).
  */
 export interface CompactionCircuitState {
   consecutiveFailures: number;

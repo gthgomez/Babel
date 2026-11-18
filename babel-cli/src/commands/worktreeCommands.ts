@@ -107,7 +107,7 @@ export function registerWorktreeCommands(program: Command): void {
         .option('--apply', 'Write the adopted changes into the parent (default: dry run)')
         .option('--allow-advanced-base', 'Allow adoption when the parent advanced past the child base')
         .option('--verify <command>', 'Parent-side verification command (shell) run after adoption')
-        .option('--cleanup', 'Remove the worktree only after a fully adopted and verified result')
+        .option('--cleanup', 'Remove the worktree only after a fully adopted result (and verification when supplied)')
         .action(async (name, options) => {
           const { readFileSync } = await import('node:fs');
           const { spawnSync } = await import('node:child_process');
