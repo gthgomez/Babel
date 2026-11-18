@@ -419,11 +419,6 @@ const PATH_CANDIDATE_RE =
   /(?:^|[\s`"'(])((?:\.{1,2}\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)*\.[A-Za-z0-9]{1,12})(?=$|[\s`"'),;:])/g
 const CALL_EXPRESSION_RE =
   /\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(([^()\n]{0,160})\)/
-const STOPWORDS = new Set([
-  'the', 'and', 'for', 'with', 'that', 'this', 'must', 'should', 'will', 'from',
-  'returns', 'return', 'equals', 'equal', 'becomes', 'produces', 'outputs',
-  'when', 'then', 'into', 'have', 'has', 'are', 'its', 'all', 'any', 'not',
-])
 const REGEX_SPECIALS = /[.*+?^${}()|[\]\\]/g
 
 function escapeRegex(value: string): string {
@@ -433,9 +428,6 @@ function escapeRegex(value: string): string {
 interface RelevanceSpec {
   targetPaths: string[]
   callPattern: RegExp | null
-  keywords: string[]
-  /** Observable values stated in the goal; the witness must contain them. */
-  literals: string[]
   /** Exact expected result phrase (whitespace-sensitive) from the goal. */
   fragment: string | null
 }
@@ -476,18 +468,6 @@ function relevanceSpec(description: string): RelevanceSpec | null {
       callPattern = new RegExp(`\\b${symbol}\\s*\\(`)
     }
   }
-  // The expected observable value ("so ... is safe", "answer=42").
-  const expectation = description.match(/\bso\b([\s\S]{1,200})$/i)?.[1] ?? ''
-  const keywords = [...new Set(
-    expectation
-      .split(/[^A-Za-z0-9_$.-]+/)
-      .map(token => token.trim())
-      .filter(token => token.length >= 2 && !STOPWORDS.has(token.toLowerCase())),
-  )]
-  const literals = [...new Set([
-    ...[...expectation.matchAll(/[\"'`]([^\"'`\n]{1,120})[\"'`]/g)].map(match => match[1]!),
-    ...[...expectation.matchAll(/\b\d+(?:\.\d+)?\b/g)].map(match => match[0]),
-  ])]
   const resultVerb = /\b(?:returns?|equals?|is|becomes?|outputs?|produces?)\b/gi
   const verbMatches = [...description.matchAll(resultVerb)]
   const lastVerb = verbMatches.at(-1)
@@ -501,7 +481,7 @@ function relevanceSpec(description: string): RelevanceSpec | null {
       ? assignmentTail.replace(/^[\`\"']/, '').replace(/[\`\"']$/, '')
       : null
   if (!targetPaths.length && !callPattern) return null
-  return { targetPaths, callPattern, keywords, literals, fragment }
+  return { targetPaths, callPattern, fragment }
 }
 
 /** References inside a verifier input that resolve to an existing project file. */
