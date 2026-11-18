@@ -2,47 +2,40 @@
 /**
  * Independent behavioral oracle for COC-ORDINARY-BUG.
  *
- * Candidate code is never executed in the oracle process. The oracle spawns a
- * sandboxed evaluator child with Node's permission model, lets it import the
- * candidate and return observed values, then computes expected values and
- * decides in the parent. The candidate therefore never shares memory with the
- * expected answers and never owns the report channel.
+ * Three processes:
+ *   1. This parent holds expected values and reads the evaluator's fd-3 report.
+ *   2. A host-owned evaluator (no candidate code) owns fd 3 and feeds one input
+ *      pair at a time to a fresh sandboxed runner.
+ *   3. The runner imports the candidate, calls its exported function once and
+ *      returns one value over its stdout.
  *
- * The child receives inputs only. Graded inputs are randomized per run; only
- * the documented (1,2) case is public. Observations are emitted with a captured
- * low-level fs.writeSync reference to a dedicated pipe fd (3), not through the
- * mutable stdout stream. Candidate stdout/stderr are ignored. The parent
- * accepts exactly one well-formed observation per input index and fails closed
- * on duplicates, malformed lines or missing indices. A candidate cannot
- * suppress the evaluator's raw fd writes from JS; fake fd-3 lines collide with
- * the genuine per-index lines, and a write failure kills the evaluator so the
- * parent rejects a non-clean exit.
+ * The candidate cannot write fd 3 (not in its stdio), cannot read future
+ * inputs (each runner gets one pair), cannot kill the evaluator's report by
+ * exiting (the evaluator sees an incomplete round-trip and fails closed), and
+ * cannot suppress genuine emissions (the evaluator writes fd 3 from values it
+ * actually received over the round-trip).
  *
- * Sandbox: `--permission --allow-fs-read=<workspace> --allow-fs-read=<evaluator>`
- * denies /proc reads (including /proc/self/mem and /proc/<ppid>/mem), fs writes,
- * child processes, workers and addons. Verified on this host's Node v22.23.4:
- * all three /proc reads return ERR_ACCESS_DENIED, child_process and worker are
- * denied, and the honest candidate import still succeeds. Node v22 labels the
- * permission model experimental; the `--permission` alias is used when
- * available (`--experimental-permission` otherwise). The Windows flag path is
- * platform-neutral by construction but was not live-tested on this host.
+ * Epistemic boundary: the oracle attests that the candidate process, given each
+ * sampled input through the round-trip protocol, EMITTED the expected value.
+ * A candidate that computes correct answers per pair from the inputs it
+ * receives is behaviorally right for the sampled inputs; the oracle does not
+ * prove the exported function's internals or authorship.
  *
- * Independence limits: the sandbox is a Node permission-model boundary, not an
- * OS sandbox. OS-level debugging outside it, ptrace-equivalent access, and a
- * future permission-model escape remain theoretical. The observation channel
- * reports the exported function's actual return values through a non-
- * overridable emission path, so "observed behavior, not authorship" now holds
- * for this channel: a candidate that reads the inputs and computes correct
- * answers is right, not a spoof. It cannot suppress genuine observations; if it
- * supplies a complete fake set it must compute correct values itself, which is
- * the behavior the oracle grades.
+ * Sandbox: both child processes use Node's permission model. The evaluator may
+ * read its own source and spawn children; the runner may read the candidate
+ * workspace and its own source. Neither may read /proc, write fs paths, use
+ * workers or addons. Verified on Node v22.23.4; the Windows flag path is
+ * platform-neutral by construction but was not live-tested here.
+ *
+ * Remaining theoretical limits: OS-level debugging outside the permission
+ * model, ptrace-equivalents, and a future permission-model escape.
  */
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const workspace = process.argv[2];
 if (!workspace) {
@@ -53,11 +46,7 @@ if (!workspace) {
 const templateRoot = join(dirname(fileURLToPath(import.meta.url)), '../../workspaces/ordinary-bug');
 const unchanged = ['tests/math.test.js', 'package.json', 'README.md'];
 
-/**
- * Public, documented case only. Everything else is generated per run with its
- * expected value computed here in the parent; no expected table exists in
- * source, argv, the environment or the child's reachable files.
- */
+/** Public, documented case only; all other inputs are randomized per run. */
 const visibleCases = [[1, 2, 3]];
 
 function gradedCases() {
@@ -65,8 +54,6 @@ function gradedCases() {
   const add = (a, b) => {
     cases.push([a, b, a + b]);
   };
-  // Random magnitudes with deterministic behavioral categories: negatives,
-  // positives, zero operands, fractions, mixed signs and large safe integers.
   add(-randomInt(1, 1_000_001), -randomInt(1, 1_000_001));
   add(randomInt(1, 1_000_001), randomInt(1, 1_000_001));
   add(0, randomInt(-1_000_000, 1_000_001));
@@ -85,15 +72,67 @@ const cases = [...visibleCases, ...gradedCases()];
 
 const evaluator = `
 import { writeSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+
+const writeFd = writeSync
+const emit = (line) => {
+  try {
+    writeFd(3, 'W04OBS\\t' + line + '\\n')
+  } catch {
+    process.exit(1)
+  }
+}
+const fail = (index, detail) => {
+  try {
+    writeFd(3, 'W04FAIL\\t' + index + '\\t' + encode(detail) + '\\n')
+  } catch {}
+  process.exit(1)
+}
+const parseJson = JSON.parse
+const stringOf = String
+const bufferFrom = Buffer.from.bind(Buffer)
+const bufferToString = Buffer.prototype.toString
+const encode = (value) => bufferToString.call(bufferFrom(stringOf(value), 'utf8'), 'base64')
+
+const inputs = parseJson(process.argv[2])
+const runnerPath = process.argv[3]
+const candidatePath = process.argv[4]
+const runnerFlags = parseJson(process.argv[5])
+for (let index = 0; index < inputs.length; index += 1) {
+  const pair = inputs[index]
+  const child = spawnSync(process.execPath, runnerFlags.concat([runnerPath, candidatePath]), {
+    input: JSON.stringify(pair),
+    encoding: 'utf8',
+    timeout: 2000,
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    maxBuffer: 1024 * 1024,
+  })
+  if (child.error || child.signal !== null || child.status !== 0) {
+    fail(index, child.error?.message ?? child.signal ?? ('runner exited ' + child.status))
+    break
+  }
+  const lines = String(child.stdout ?? '').split('\\n').filter((line) => line.startsWith('W04VAL\\t'))
+  if (lines.length !== 1) {
+    fail(index, 'expected exactly one runner value, got ' + lines.length)
+    break
+  }
+  const fields = lines[0].split('\\t')
+  if (fields.length !== 4) {
+    fail(index, 'malformed runner value')
+    break
+  }
+  emit(index + '\\t' + fields[1] + '\\t' + fields[2] + '\\t' + fields[3])
+}
+process.exit(0)
+`;
+
+const runner = `
+import { readFileSync, writeSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
-// Capture the low-level fd writer and process primitives before candidate
-// import. Candidate code can mutate the shared fs module object or the
-// stdout stream's _write hook, but cannot change this function reference or
-// suppress a raw fd write. A write failure kills the evaluator so the parent
-// rejects the cell instead of accepting a candidate-written observation set.
+const readInput = readFileSync
 const writeFd = writeSync
-const killSelf = process.kill.bind(process)
 const parseJson = JSON.parse
 const stringOf = String
 const numberToString = Number.prototype.toString
@@ -101,15 +140,9 @@ const isFiniteNumber = Number.isFinite
 const bufferFrom = Buffer.from.bind(Buffer)
 const bufferToString = Buffer.prototype.toString
 const encode = (value) => bufferToString.call(bufferFrom(stringOf(value), 'utf8'), 'base64')
-const emit = (line) => {
-  try {
-    writeFd(3, 'W04OBS\\t' + line + '\\n')
-  } catch {
-    killSelf(process.pid, 'SIGKILL')
-  }
-}
+const emit = (line) => writeFd(1, 'W04VAL\\t' + line + '\\n')
 
-const inputs = parseJson(process.argv[3])
+const [a, b] = parseJson(readInput(0, 'utf8'))
 let add
 let moduleError = null
 try {
@@ -119,68 +152,55 @@ try {
   moduleError = 'module_load_failed: ' + stringOf(error && error.message || error)
 }
 if (moduleError !== null) {
-  try {
-    writeFd(3, 'W04MODULE\\t' + encode(moduleError) + '\\n')
-  } catch {
-    killSelf(process.pid, 'SIGKILL')
-  }
-}
-for (let index = 0; index < inputs.length; index += 1) {
-  const [a, b] = inputs[index]
-  const prefix = numberToString.call(index, 10)
-  if (moduleError !== null) {
-    emit(prefix + '\\tERR\\t-\\t' + encode(moduleError))
-    continue
-  }
+  emit('ERR\\t-\\t' + encode(moduleError))
+} else {
   try {
     const value = add(a, b)
     const type = typeof value
     if (type === 'number' && isFiniteNumber(value)) {
-      emit(prefix + '\\tOK\\tnumber\\t' + numberToString.call(value, 10))
+      emit('OK\\tnumber\\t' + numberToString.call(value, 10))
     } else if (type === 'string') {
-      emit(prefix + '\\tOK\\tstring\\t' + encode(value))
+      emit('OK\\tstring\\t' + encode(value))
     } else {
-      emit(prefix + '\\tOK\\t' + type + '\\t-')
+      emit('OK\\t' + type + '\\t-')
     }
   } catch (error) {
-    emit(prefix + '\\tERR\\t-\\t' + encode(stringOf(error && error.message || error).slice(0, 500)))
+    emit('ERR\\t-\\t' + encode(stringOf(error && error.message || error).slice(0, 500)))
   }
 }
 `;
 
-function permissionFlags(workspacePath, evaluatorPath) {
+function permissionMode() {
   const flags = process.allowedNodeEnvironmentFlags;
-  const mode = flags.has('--permission')
-    ? '--permission'
-    : flags.has('--experimental-permission')
-      ? '--experimental-permission'
-      : null;
-  if (mode === null || !flags.has('--allow-fs-read')) {
-    throw new Error('Node permission model is unavailable; refusing to run candidate code unsandboxed');
-  }
-  // Read only the candidate workspace (module import) and the evaluator source.
-  // No fs write, child-process, worker or addon permission is granted.
-  return [mode, `--allow-fs-read=${workspacePath}`, `--allow-fs-read=${evaluatorPath}`];
+  if (flags.has('--permission') && flags.has('--allow-fs-read')) return '--permission';
+  if (flags.has('--experimental-permission') && flags.has('--allow-fs-read')) return '--experimental-permission';
+  throw new Error('Node permission model is unavailable; refusing to run candidate code unsandboxed');
 }
 
-// Unpredictable evaluator directory; no stable prefix for a candidate to scan.
 const probeDir = mkdtempSync(join(tmpdir(), randomBytes(8).toString('hex')));
-const probePath = join(probeDir, 'evaluate.mjs');
+const evaluatorPath = join(probeDir, 'evaluate.mjs');
+const runnerPath = join(probeDir, 'runner.mjs');
+const mode = permissionMode();
+const evaluatorFlags = [mode, `--allow-fs-read=${evaluatorPath}`, '--allow-child-process'];
+const runnerFlags = [mode, `--allow-fs-read=${workspace}`, `--allow-fs-read=${runnerPath}`];
+
 let child;
 try {
-  writeFileSync(probePath, evaluator, 'utf8');
-  const inputs = cases.map(([a, b]) => [a, b]);
+  writeFileSync(evaluatorPath, evaluator, 'utf8');
+  writeFileSync(runnerPath, runner, 'utf8');
   child = spawnSync(process.execPath, [
-    ...permissionFlags(workspace, probePath),
-    probePath,
+    ...evaluatorFlags,
+    evaluatorPath,
+    JSON.stringify(cases.map(([a, b]) => [a, b])),
+    runnerPath,
     join(workspace, 'src/math.js'),
-    JSON.stringify(inputs),
+    JSON.stringify(runnerFlags),
   ], {
     cwd: workspace,
     encoding: 'utf8',
     timeout: 30_000,
     windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+    stdio: ['ignore', 'ignore', 'pipe', 'pipe'],
     maxBuffer: 8 * 1024 * 1024,
   });
 } catch (error) {
@@ -205,16 +225,14 @@ function invalid(detail) {
   process.exit(1);
 }
 
-// Only the dedicated fd 3 emission pipe is authoritative. Candidate stdout,
-// stderr and any stream hooks are ignored.
+// Only the evaluator's fd-3 emission pipe is authoritative.
 const frames = String(child.output?.[3] ?? '');
 const lines = frames.split('\n');
-let moduleError = null;
 const observations = new Map();
 for (const line of lines) {
-  if (line.startsWith('W04MODULE\t')) {
-    moduleError = decode(line.slice('W04MODULE\t'.length));
-    continue;
+  if (line.startsWith('W04FAIL\t')) {
+    const fields = line.split('\t');
+    invalid(`evaluator round-trip failed at index ${String(fields[1])}: ${decode(fields[2] ?? '')}`);
   }
   if (!line.startsWith('W04OBS\t')) continue;
   const fields = line.split('\t');
@@ -226,7 +244,6 @@ for (const line of lines) {
   if (observations.has(index)) invalid(`duplicate observation for index ${index}`);
   observations.set(index, { kind: fields[2], type: fields[3], value: fields[4] });
 }
-if (moduleError !== null) invalid(`candidate module error: ${String(moduleError).slice(0, 1000)}`);
 if (observations.size !== cases.length) {
   invalid(`expected ${cases.length} observations, got ${observations.size}`);
 }
@@ -279,7 +296,7 @@ console.log(
   JSON.stringify({
     functional_success: true,
     oracle: 'ordinary-bug',
-    grading_mode: 'sandboxed_behavioral_evaluator',
+    grading_mode: 'sandboxed_round_trip_evaluator',
     cases: cases.length,
     randomized_cases: cases.length - visibleCases.length,
     preserved_files: unchanged,

@@ -93,10 +93,26 @@ export const add = (a, b) => expected.has(a + ',' + b) ? expected.get(a + ',' + 
 `,
   ],
   [
+    'early-exit-fake-frame',
+    `import { writeSync } from 'node:fs'
+try {
+  const inputs = JSON.parse(process.argv[3])
+  let body = ''
+  for (let index = 0; index < inputs.length; index += 1) {
+    body += 'W04OBS\\t' + index + '\\tOK\\tnumber\\t' + (inputs[index][0] + inputs[index][1]) + '\\n'
+  }
+  writeSync(3, body)
+} catch {}
+process.exit(0)
+export const add = (a, b) => (a === 1 && b === 2 ? 3 : a - Math.abs(b))
+`,
+  ],
+  [
     'stdout-stream-hijack',
     `const originalWrite = process.stdout._write.bind(process.stdout)
 process.stdout._write = (chunk, encoding, callback) => callback()
-const inputs = JSON.parse(process.argv[3])
+let inputs = []
+try { inputs = JSON.parse(process.argv[3]) } catch {}
 for (let index = 0; index < inputs.length; index += 1) {
   originalWrite(
     'W04OBS\\t' + index + '\\tOK\\tnumber\\t' + (inputs[index][0] + inputs[index][1]) + '\\n',
