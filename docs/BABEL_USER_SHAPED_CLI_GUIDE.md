@@ -59,7 +59,7 @@ Removed surface tokens (`lite`, `l`, `full`, `bl`, `babel-lite`, `daily`) **exit
 
 Fresh clone and first-run (source checkout; not an npm registry package):
 
-`dev_local` executes approved tools directly on your host with no container isolation. Use it only for repositories you own and code you have reviewed. For untrusted repositories or unreviewed code, stay on the isolated `safe_repo` profile (the default).
+`dev_local` executes approved tools directly on your host with no container isolation. Use it only for repositories you own and code you have reviewed. For untrusted repositories or unreviewed code, select the isolated `safe_repo` profile explicitly. Ordinary Chat defaults to `host_native`, which is not an OS sandbox.
 
 ```powershell
 git clone <repo-url>

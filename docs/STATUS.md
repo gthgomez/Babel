@@ -25,7 +25,7 @@ Exact commands: [START_HERE.md](../START_HERE.md) and [CLI_QUICKSTART.md](./CLI_
 ## Environment-dependent
 
 - **A provider key** has to be written into `~/.babel/config/.env` or the environment. `setup` on 0.2.0 does not collect it for you. The checklist names DeepInfra, DeepSeek, OpenCode Go, OpenRouter, Command Code, and local Ollama.
-- **Docker plus an image** for the default `safe_repo` profile. There is no Babel image in this repo. Desktop Setup on Windows pulls a pinned `node:24-bookworm` image. That image is not a Python or Java toolchain.
+- **Docker plus an image** when you select the `safe_repo` profile; Ordinary Chat defaults to `host_native` and does not require Docker. There is no Babel image in this repo. Desktop Setup on Windows pulls a pinned `node:24-bookworm` image. That image is not a Python or Java toolchain.
 - **`deep`** is a separate, heavier command. Route availability is not a reliability claim.
 
 ## Known limitations

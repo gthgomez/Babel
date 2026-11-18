@@ -155,12 +155,12 @@ of warning.
 Runtime modes (chat / plan / deep) are separate from **execution profiles**, which
 control tool posture and whether shell work expects Docker isolation.
 
-Default profile is **`safe_repo`**. After H13, profiles with `dockerSandbox: true`
+Ordinary Chat defaults to **`host_native`**; the shared generic resolver default remains **`safe_repo`** for governed pipeline admission. After H13, profiles with `dockerSandbox: true`
 **fail closed** when isolation cannot run — no silent host fallback.
 
 | Control | Meaning |
 |---------|---------|
-| **`safe_repo` (default)** | Isolation required. Needs Docker daemon + configured image (`BABEL_BENCHMARK_DOCKER_IMAGE`). Without them, governed isolation **fail-closes** unless host escalation env is set. |
+| **`safe_repo`** | Isolation required. Needs Docker daemon + configured image (`BABEL_BENCHMARK_DOCKER_IMAGE`). Without them, governed isolation **fail-closes** unless host escalation env is set. |
 | **`dev_local`** | Host-friendly local coding (`dockerSandbox: false`). Prefer for everyday host work without a sandbox image. |
 | **`BABEL_ALLOW_HOST_FALLBACK=1`** | Preferred explicit host escalation when keeping an isolation profile. |
 | **`BABEL_DOCKER_DISABLE=true`** | Legacy isolation opt-out; also treated as host escalation under H13. |
