@@ -81,7 +81,9 @@ test('ChatEngine submitMessageStream runs one qualified native turn under campai
   const priorOffline = process.env['BABEL_OFFLINE']
   const priorMaxCost = process.env['BABEL_CHAT_MAX_COST']
   const priorCompaction = process.env['BABEL_COMPACTION']
-  process.env['BABEL_OFFLINE'] = '1'
+  // The campaign transport is stubbed; offline mode is a hard routing boundary
+  // and would (correctly) refuse a remote OpenRouter dispatch before fetch.
+  delete process.env['BABEL_OFFLINE']
   process.env['BABEL_CHAT_MAX_COST'] = 'unlimited'
   process.env['BABEL_COMPACTION'] = 'off'
   t.after(() => {
