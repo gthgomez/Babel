@@ -35,7 +35,7 @@
     },
     "completion_claimed": { "type": "boolean" },
     "completion_claim_evidence": { "$ref": "#/$defs/stringOrNull" },
-    "outcome": { "enum": ["valid_success", "task_failure", "infrastructure_error", "budget_truncated", "cancelled", "unknown"] },
+    "outcome": { "enum": ["valid_success", "unverified_success", "task_failure", "infrastructure_error", "budget_truncated", "cancelled", "unknown"] },
     "error_class": { "$ref": "#/$defs/stringOrNull" },
     "errors": { "type": "array", "items": { "type": "string" } },
     "verifier": {

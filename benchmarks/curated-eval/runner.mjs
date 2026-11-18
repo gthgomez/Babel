@@ -381,28 +381,109 @@ export function normalizeAttempt(raw) {
   return result
 }
 
-/** Keep independent oracle correctness separate from terminal completion and change policy. */
+/**
+ * Keep independent oracle correctness, verifier receipt, final harness
+ * verification and change policy as separate facts.
+ *
+ * A correct artifact with only `UNVERIFIED_PATCH` is reported as
+ * `unverified_success`, never as `valid_success`. Legacy success rates that
+ * counted it as a verified outcome inflated numerator and denominator
+ * differently from the false-complete rate.
+ */
 export function scoreAttempt(task, attempt) {
   const outcome = classifyTerminal(attempt.terminal_status, attempt.error_class)
   const completed = sessionCompleted(attempt)
   const diff = attempt.diff ?? { added: [], modified: [], deleted: [] }
   const allChanges = [...diff.added, ...diff.modified, ...diff.deleted]
   const unauthorizedChanges = [...new Set(allChanges.filter((file) => isProtected(task, file) || !isAllowed(task, file)))].sort()
-  const verifierPassed = attempt.verifier?.status === 'passed'
-  const patchCorrect = verifierPassed ? true : attempt.verifier?.status === 'failed' ? false : null
-  const falseComplete = attempt.completion_claimed === true && (patchCorrect === false || completed === false || unauthorizedChanges.length > 0)
-  const succeeded = completed === true && verifierPassed && unauthorizedChanges.length === 0
-  return {
-    outcome: outcome !== 'task_failure'
+  const receiptPassed = attempt.verifier?.status === 'passed'
+  const patchCorrect = receiptPassed ? true : attempt.verifier?.status === 'failed' ? false : null
+  const externallyCorrect = patchCorrect === true && unauthorizedChanges.length === 0
+  const harnessVerified =
+    completed === true && attempt.engine_terminal_outcome === 'VERIFIED_COMPLETE'
+  const claimed = attempt.completion_claimed === true
+  const falseSuccess =
+    (claimed || harnessVerified) &&
+    (patchCorrect === false || completed === false || unauthorizedChanges.length > 0)
+  const falseBlock = externallyCorrect && completed !== true && outcome !== 'infrastructure_error'
+  const validSuccess = harnessVerified && receiptPassed && externallyCorrect
+  const unverifiedSuccess = completed === true && !harnessVerified && externallyCorrect
+  const classification =
+    outcome !== 'task_failure'
       ? outcome
       : attempt.verifier?.status === 'infrastructure_error'
         ? 'infrastructure_error'
-        : succeeded ? 'valid_success' : 'task_failure',
-    false_complete: falseComplete,
+        : validSuccess
+          ? 'valid_success'
+          : unverifiedSuccess
+            ? 'unverified_success'
+            : 'task_failure'
+  return {
+    outcome: classification,
+    false_success: falseSuccess,
+    false_block: falseBlock,
+    // Deprecated alias retained for existing report consumers. Prefer false_success.
+    false_complete: falseSuccess,
     unauthorized_changes: unauthorizedChanges,
-    verifier_passed: verifierPassed,
+    externally_correct: externallyCorrect,
+    receipt_passed: receiptPassed,
+    harness_verified: harnessVerified,
+    completion_claimed: claimed,
+    verifier_passed: receiptPassed,
     patch_correct: patchCorrect,
     session_completed: completed,
+  }
+}
+
+function metric(numerator, denominator) {
+  return {
+    numerator,
+    denominator,
+    rate: denominator === 0 ? null : numerator / denominator,
+  }
+}
+
+/**
+ * Aggregate attempt scores with explicit numerators and denominators.
+ * Infrastructure and unknown rows stay in `scheduled` but not in `scored`.
+ */
+export function summarizeAttemptScores(entries) {
+  const scores = entries.map(({ task, attempt }) => scoreAttempt(task, attempt))
+  const scored = scores.filter((score) => score.outcome !== 'infrastructure_error' && score.outcome !== 'unknown')
+  const oracleGraded = scores.filter((score) => score.patch_correct !== null)
+  const external = scores.filter((score) => score.externally_correct)
+  const claims = scores.filter((score) => score.completion_claimed || score.harness_verified)
+  const verified = scores.filter((score) => score.outcome === 'valid_success')
+  const unverified = scores.filter((score) => score.outcome === 'unverified_success')
+  const falseSuccesses = scores.filter((score) => score.false_success)
+  const falseBlocks = scores.filter((score) => score.false_block)
+  return {
+    scheduled: scores.length,
+    scored: scored.length,
+    oracle_graded: oracleGraded.length,
+    oracle_unavailable: scores.length - oracleGraded.length,
+    claims: claims.length,
+    externally_correct: external.length,
+    receipt_passed: scores.filter((score) => score.receipt_passed).length,
+    final_harness_verified: scores.filter((score) => score.harness_verified).length,
+    verified_success: verified.length,
+    unverified_success: unverified.length,
+    false_success: falseSuccesses.length,
+    false_block: falseBlocks.length,
+    rates: {
+      externally_correct: metric(external.length, oracleGraded.length),
+      receipt_passed: metric(scores.filter((score) => score.receipt_passed).length, oracleGraded.length),
+      final_harness_verified: metric(scores.filter((score) => score.harness_verified).length, scored.length),
+      verified_success: metric(verified.length, scored.length),
+      unverified_success: metric(unverified.length, scored.length),
+      false_success: metric(falseSuccesses.length, claims.length),
+      false_block: metric(falseBlocks.length, external.length),
+    },
+    outcomes: scores.reduce((counts, score) => {
+      counts[score.outcome] = (counts[score.outcome] ?? 0) + 1
+      return counts
+    }, {}),
+    scores,
   }
 }
 

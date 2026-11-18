@@ -4,7 +4,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { adaptChatEngineResult } from '../adapters/chat-engine-result.mjs'
-import { loadCatalog, scoreAttempt } from '../runner.mjs'
+import { loadCatalog, scoreAttempt, summarizeAttemptScores } from '../runner.mjs'
 
 const root = path.resolve(import.meta.dirname, '..')
 const catalog = await loadCatalog(root)
@@ -42,12 +42,14 @@ test('engine completion and patch correctness remain independent', () => {
 
   const noOp = attempt('completed', 'NO_CHANGE_REQUIRED')
   assert.equal(noOp.session_completed, true)
-  assert.equal(scoreAttempt(task, noOp).outcome, 'valid_success')
+  assert.equal(scoreAttempt(task, noOp).outcome, 'unverified_success')
 
   const unverifiedPatch = attempt('completed', 'UNVERIFIED_PATCH')
   assert.equal(unverifiedPatch.session_completed, true)
   assert.equal(scoreAttempt(task, unverifiedPatch).patch_correct, true)
-  assert.equal(scoreAttempt(task, unverifiedPatch).outcome, 'valid_success')
+  assert.equal(scoreAttempt(task, unverifiedPatch).externally_correct, true)
+  assert.equal(scoreAttempt(task, unverifiedPatch).harness_verified, false)
+  assert.equal(scoreAttempt(task, unverifiedPatch).outcome, 'unverified_success')
 })
 
 test('missing engine outcome and missing verifier evidence stay unknown', () => {
@@ -132,4 +134,55 @@ test('session completion schema permits an unknown value', async () => {
   const schema = JSON.parse(await readFile(path.join(root, 'report.schema.json'), 'utf8'))
   assert.ok(schema.required.includes('session_completed'))
   assert.deepEqual(schema.properties.session_completed.type, ['boolean', 'null'])
+})
+
+test('aggregate metrics keep verified, unverified and false-block denominators separate', () => {
+  const entries = [
+    { task, attempt: attempt('completed', 'VERIFIED_COMPLETE') },
+    { task, attempt: attempt('completed', 'UNVERIFIED_PATCH') },
+    { task, attempt: attempt('completed', 'VERIFIED_COMPLETE', 'failed') },
+    { task, attempt: attempt('failed', 'AGENT_FAILURE') },
+    { task, attempt: attempt('completed', 'VERIFIED_COMPLETE', 'infrastructure_error') },
+  ]
+  const summary = summarizeAttemptScores(entries)
+  assert.equal(summary.scheduled, 5)
+  assert.equal(summary.scored, 4)
+  assert.equal(summary.oracle_graded, 4)
+  assert.equal(summary.oracle_unavailable, 1)
+  assert.equal(summary.externally_correct, 3)
+  assert.equal(summary.receipt_passed, 3)
+  assert.equal(summary.final_harness_verified, 3)
+  assert.equal(summary.verified_success, 1)
+  assert.equal(summary.unverified_success, 1)
+  assert.equal(summary.false_success, 1)
+  assert.equal(summary.false_block, 1)
+  for (const [name, value] of Object.entries(summary.rates)) {
+    assert.equal(typeof value.numerator, 'number', name)
+    assert.equal(typeof value.denominator, 'number', name)
+    assert.ok(value.denominator > 0, `${name} must expose a non-zero denominator`)
+  }
+  assert.equal(summary.rates.verified_success.numerator, 1)
+  assert.equal(summary.rates.verified_success.denominator, 4)
+  assert.equal(summary.rates.false_block.numerator, 1)
+  assert.equal(summary.rates.false_block.denominator, 3)
+})
+
+test('false success counts a verified-complete claim contradicted by the oracle or policy', () => {
+  const wrongArtifact = scoreAttempt(task, {
+    ...attempt('completed', 'VERIFIED_COMPLETE', 'failed'),
+    completion_claimed: true,
+  })
+  assert.equal(wrongArtifact.harness_verified, true)
+  assert.equal(wrongArtifact.externally_correct, false)
+  assert.equal(wrongArtifact.outcome, 'task_failure')
+  assert.equal(wrongArtifact.false_success, true)
+  assert.equal(wrongArtifact.false_complete, true)
+
+  const unauthorized = scoreAttempt(task, {
+    ...attempt('completed', 'VERIFIED_COMPLETE'),
+    completion_claimed: true,
+    diff: { added: [], modified: ['package.json'], deleted: [] },
+  })
+  assert.equal(unauthorized.false_success, true)
+  assert.equal(unauthorized.outcome, 'task_failure')
 })
