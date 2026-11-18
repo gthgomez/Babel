@@ -319,11 +319,11 @@ export function splitCommandParts(segment: string): { base: string; rest: string
 
 /** Merged read tools: #86 (strings, sed) + #87 (cat..printf) + gaps (rg, grep, Select-String). */
 const CREDENTIAL_DUMP_TOOLS =
-  /^\s*(?:cat|type|get-content|more|less|head|tail|bat|printf|strings|sed|rg|grep|select-string)\s+/i;
+  /^\s*(?:cat|type|get-content|more|less|head|tail|bat|printf|strings|sed|rg|grep|findstr|select-string)\s+/i;
 const CREDENTIAL_VAR_ECHO = /(?:echo|printenv|env|set)\s+[^\s]*(?:API[_]?KEY|TOKEN|SECRET|PASSWORD)/i;
 const PICKAXE_LOG = /\bgit\s+log\s+--all\s+--pickaxe\b/i;
 const CREDENTIAL_TRANSFER_TOOLS =
-  /^\s*(?:cp|mv|scp|rsync|copy-item|tar|zip|7z|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage\s+blob\s+copy)\s+/i;
+  /^\s*(?:cp|mv|scp|rsync|copy-item|tar|zip|7z|curl|wget|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage\s+blob\s+copy)\s+/i;
 const CREDENTIAL_CODE_EVAL =
   /^\s*(?:python|python3|node|tsx|deno|ruby|perl)\s+(?:-[a-z]+\s+)*(?:-c|-e|--eval)\s+/i;
 
@@ -704,6 +704,11 @@ function decodeGit(tokens: string[], repoRoot?: string): DecodedCommand {
     case 'diff':
     case 'log': {
       if (args.some((a) => a.includes('--pickaxe'))) {
+        return cmd('expose_credentials', 'credential_access');
+      }
+      // `git diff .env` and `git log -p -- .env` print file contents, including
+      // index/staged forms. Status does not, so it stays inspection.
+      if ((verb === 'diff' || verb === 'log') && isCredentialPathReference(args.join(' '))) {
         return cmd('expose_credentials', 'credential_access');
       }
       return cmd('inspect_repository', 'read_local');

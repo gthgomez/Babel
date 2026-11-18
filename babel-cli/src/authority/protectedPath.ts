@@ -26,15 +26,16 @@ const CREDENTIAL_BASENAMES = new Set([
 
 const CREDENTIAL_DIRECTORIES = new Set(['.ssh', '.gnupg', '.password-store', '.aws', 'secrets']);
 
-/** Exact documentation templates remain readable; everything else `.env*` is live. */
+/**
+ * `.env` and every `.env.*` suffix are live credential material, including
+ * non-alphanumeric tails such as `.env.local~` and a bare `.env.`. Only the
+ * three canonical value-free templates are readable.
+ */
 function isDotenvCredential(basename: string): boolean {
-  if (!basename.startsWith('.env')) return false;
-  // Only the canonical, value-free templates are readable. A suffixed variant
-  // (`.env.example.local`) can carry real values and stays credential-class.
   if (basename === '.env.example' || basename === '.env.sample' || basename === '.env.template') {
     return false;
   }
-  return /^\.env(?:\.[a-z0-9_-]+)*$/.test(basename);
+  return basename === '.env' || basename.startsWith('.env.');
 }
 
 function isCredentialBasename(basename: string): boolean {
@@ -50,9 +51,10 @@ function isCredentialBasename(basename: string): boolean {
 /**
  * True when a path names a live credential store.
  *
- * Covers: dotenv files (excluding documentation templates), private keys and
- * certificate stores, cloud/registry credential stores, SSH/GPG agent stores,
- * and `secrets` directories. Synthetic-test friendly: pure path inspection,
+ * Covers: `.env` plus every `.env.*` suffix except `.env.example`,
+ * `.env.sample` and `.env.template`; private keys and certificate stores;
+ * cloud/registry credential stores; SSH/GPG agent stores; and `secrets`
+ * directories. Synthetic-test friendly: pure path inspection,
  * never reads contents.
  */
 export function isCredentialTargetPath(path: string): boolean {
@@ -78,17 +80,24 @@ function stripAssignment(token: string): string {
   return assignment ? (assignment[1] ?? '') : token;
 }
 
-/** Strip revision prefixes Git uses before a path (`HEAD:.env`, `origin/main:.env`). */
+/**
+ * Strip revision prefixes Git uses before a path:
+ * `HEAD:.env`, `origin/main:.env`, index `:.env`, and staged `:0:.env`.
+ */
 function revisionSuffixes(token: string): string[] {
   const withoutAssignment = stripAssignment(token);
   const candidates = [withoutAssignment];
+  if (withoutAssignment.startsWith(':')) {
+    const stagedIndex = /^:(?:\d+)?:(.+)$/.exec(withoutAssignment);
+    candidates.push(stagedIndex?.[1] ?? withoutAssignment.slice(1));
+  }
   const revisionMatch = /^[^:\\/]+:(.+)$/.exec(withoutAssignment);
   if (revisionMatch?.[1]) candidates.push(revisionMatch[1]);
   return candidates;
 }
 
 function trimArgumentPunctuation(token: string): string {
-  return token.replace(/^[("'`<\s]+/, '').replace(/[)"'`>,\s]+$/, '');
+  return token.replace(/^[("'`<@\s]+/, '').replace(/[)"'`>,\s]+$/, '');
 }
 
 /**

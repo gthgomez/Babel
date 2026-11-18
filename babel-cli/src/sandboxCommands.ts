@@ -338,8 +338,9 @@ export function validateExecutorShellCommand(
     return {
       reason_code: 'credential_read_denied',
       message:
-        'Command rejected — credential-class file access is denied for every execution profile. ' +
-        'Read .env.example, or inspect required variable names without loading secret values.',
+        'Command rejected — this decoded command would read or transfer credential-class material. ' +
+        'Host-native interpreter scripts and filesystem symlinks are outside this command check; ' +
+        'select a container profile for an enforced boundary, or read .env.example instead.',
       evidence: [command, decoded.semantic],
       command_base: cmdBase,
     };
