@@ -6,6 +6,7 @@ import { getDependencyInstallApprovalDecision, isDependencyInstallApproved, requ
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
 import { CommandArgvParseError, parseCommandArgv } from './utils/commandArgv.js';
 import { classifyExecutionRisk } from './authority/commandSpec.js';
+import { decodeCommand } from './authority/commandDecoder.js';
 
 export interface ShellCommandValidationIssue {
   reason_code: string;
@@ -324,6 +325,22 @@ export function validateExecutorShellCommand(
       reason_code: 'unclassified_executable',
       message: `Command rejected — ${classified.reason ?? 'unclassified executable'}: "${trimmed}"`,
       evidence: [command],
+      command_base: cmdBase,
+    };
+  }
+
+  // Credential reads are an *effect* denial, not a command-spelling rule.
+  // The decoder resolves the path vocabulary shared with file_read so
+  // `cat .env`, `git show HEAD:.env`, `rg X .npmrc` and archive/transfer
+  // variants all fail before a process is started.
+  const decoded = decodeCommand(trimmed);
+  if (decoded.capability === 'expose_credentials') {
+    return {
+      reason_code: 'credential_read_denied',
+      message:
+        'Command rejected — credential-class file access is denied for every execution profile. ' +
+        'Read .env.example, or inspect required variable names without loading secret values.',
+      evidence: [command, decoded.semantic],
       command_base: cmdBase,
     };
   }
