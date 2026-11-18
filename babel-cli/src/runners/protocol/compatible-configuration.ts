@@ -15,6 +15,8 @@ export class CompatibleConfiguration {
   protected readonly executionEnvelope: ResolvedExecutionEnvelope | undefined;
   protected readonly maxTokens: number | null;
   protected readonly temperature: number;
+  /** Explicit caller environment; process-wide offline authority still applies. */
+  protected readonly transportEnvironment: NodeJS.ProcessEnv | undefined;
 
   /** Override in subclasses for alternate OpenAI-compatible providers. */
   protected get apiUrl(): string {
@@ -42,6 +44,7 @@ export class CompatibleConfiguration {
     this.providerId = provider;
     this.executionEnvelope = credential.executionEnvelope;
     this.contextWindowTokens = credential.contextWindowTokens;
+    this.transportEnvironment = credential.env;
     if (this.executionEnvelope && this.executionEnvelope.provider.gateway !== provider) {
       throw new Error(
         `[${this.providerId}] execution envelope gateway ${this.executionEnvelope.provider.gateway} does not match ${provider}.`,

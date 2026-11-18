@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { compensatePatchWrites } from './patchCompensation.js';
 import { recordEffectIntent, recordEffectTerminal } from '../executor/effectLedger.js';
-import { captureEffectParentIdentity } from '../executor/effectPathIdentity.js';
+import { captureEffectFileIdentity, captureEffectParentIdentity } from '../executor/effectPathIdentity.js';
 import { WorkspaceTransactionManager } from '../services/workspaceTransactions.js';
 
 test('compensation removes a host-attested full create when durable effect evidence matches', async () => {
@@ -14,7 +14,9 @@ test('compensation removes a host-attested full create when durable effect evide
   const full = 'created by this dispatch\n';
   try {
     writeFileSync(path, full);
-    const st = statSync(path);
+    // Exact BigInt identity: Windows Number stat rounds the NTFS MFT sequence
+    // bits above 2^53, while durable evidence compares exact strings.
+    const identity = captureEffectFileIdentity(path);
     const original = recordEffectIntent({
       runDir: root, sessionId: 'session', mutationBatchId: 'batch',
       effectClass: 'reconcilable_mutation', toolName: 'write_file', targetPaths: [path],
@@ -25,11 +27,7 @@ test('compensation removes a host-attested full create when durable effect evide
     const result = await compensatePatchWrites([path], new Map(), new Set([path]),
       new Map([[path, full]]), new Map([[path, original]]),
       { runDir: root, runId: 'session', agentId: 'test', babelRoot: root }, undefined,
-      new Map([[path, {
-        device: st.dev.toString(),
-        inode: st.ino.toString(),
-        expectedContent: full,
-      }]]));
+      new Map([[path, { ...identity, expectedContent: full }]]));
     assert.equal(result.rolledBack.length, 1);
     assert.equal(existsSync(path), false);
   } finally { rmSync(root, { recursive: true, force: true }); }

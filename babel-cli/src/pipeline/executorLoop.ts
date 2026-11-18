@@ -2640,6 +2640,7 @@ export async function runExecutorLoop(
       ...(toolResult.mcp_lifecycle ? { mcp_lifecycle: toolResult.mcp_lifecycle } : {}),
       ...(toolResult.checkpoint_ids ? { checkpoint_ids: toolResult.checkpoint_ids } : {}),
       ...(toolResult.directory_page ? { directory_page: toolResult.directory_page } : {}),
+      ...(toolResult.glob_result ? { glob_result: toolResult.glob_result } : {}),
       verified: toolResult.exit_code === 0,
     };
     appendExecutorToolLog(toolCallLog, entry, episodeSink);

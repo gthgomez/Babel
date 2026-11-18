@@ -12,6 +12,7 @@ import { resolveExecutionPolicyChoice } from '../config/executionPolicySelection
 // Generic doctor project examples intentionally update its option description.
 // Profile-aware installed doctor adds one separately checked option.
 // Budget help distinguishes compiled instruction capacity from cumulative goal usage.
+// Project help names workspace-scanner targets instead of maintainer example repos.
 type CommandContract = {
   name: string; aliases: string[]; description: string;
   args: Array<{ name: string; required: boolean; variadic: boolean; description: string }>;
@@ -107,9 +108,22 @@ test('core registration preserves the complete existing command contract', () =>
   assert.equal(sandbox.description, 'Prepare the Linux sandbox image used for project commands');
   assert.deepEqual(sandbox.children.map(child => child.name), ['prepare']);
   assert.equal(sandbox.children[0]?.description, 'Download the pinned image, check shell and Git, and save it for this user');
+  assert.equal(
+    contract.children.find(child => child.name === 'shadow-diff')?.options.find(option => option.flags === '-p, --project <name>')?.description,
+    'Target project name resolved by the workspace scanner',
+    'project help does not enumerate maintainer example repositories',
+  );
+  assert.deepEqual(
+    contract.children
+      .find(child => child.name === 'plugins')
+      ?.children.find(child => child.name === 'enable')
+      ?.options.map(option => option.flags),
+    ['--allow-trust <level>', '--allow-mcp-launch', '--json'],
+    'plugin enable exposes explicit trust and MCP launch consent',
+  );
   const legacy = withoutIntentionalCommandExtensions(contract);
   const digest = createHash('sha256').update(JSON.stringify(legacy)).digest('hex');
-  assert.equal(digest, '5a7149653f90ac455439e49e107a93853b16c738aa04bf07674c23ceb0fa6541');
+  assert.equal(digest, 'dd2db1dba2679e67ee5f905a0530225b6613e9c983b975070136209bcd7c288d');
   assert.deepEqual(replay[0], {
     name: 'replay', aliases: [], description: 'Render the replay transcript of persisted action/observation evidence for a conversation',
     args: [{ name: 'conversation-id', required: true, variadic: false, description: '' }],

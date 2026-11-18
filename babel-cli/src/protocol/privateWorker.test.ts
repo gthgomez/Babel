@@ -242,7 +242,8 @@ function fakeHost(execute: (engine: ChatEngine) => void) {
         projectRoot: descriptor.projectRoot, executionProfile: 'chat' });
       engine.assignRunId(descriptor.threadId);
       engine.getProviderSelectionStatus = () => ({ provider: descriptor.provider, connection: null,
-        requestedModel: 'fixture-model', sentModel: null, observedModel: null });
+        requestedModel: 'fixture-model', requestedSelection: 'fixture-model', resolvedModel: 'fixture-model', alias: null,
+        sentModel: null, observedModel: null, capabilities: null, offline: false, budgetUsd: 'unlimited' });
       execute(engine);
       return engine;
     },

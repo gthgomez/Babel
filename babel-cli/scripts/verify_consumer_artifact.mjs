@@ -262,6 +262,11 @@ try {
   assert.ok(existsSync(claudeSdkPin), 'Claude SDK pin shipped in consumer tarball')
   assert.ok(existsSync(claudeResolveWorker), 'Claude isolated resolve worker shipped in consumer tarball')
   assert.equal(JSON.parse(readFileSync(claudeSdkPin, 'utf8')).sdkVersion, '0.3.304')
+  // toolManifest.ts reads this beside the compiled module. Without it the
+  // installed tool_catalog fails and Deep advertises a different schema.
+  const installedToolManifest = join(installed, 'dist/tools/tool-manifest.json')
+  assert.ok(existsSync(installedToolManifest), 'Executor tool manifest shipped in consumer tarball')
+  assert.ok(Array.isArray(JSON.parse(readFileSync(installedToolManifest, 'utf8')).tools), 'Executor tool manifest is readable')
   const bridgePackagingProbe = join(scratch, 'bridge-packaging-probe.mjs')
   writeFileSync(bridgePackagingProbe, `
     import assert from 'node:assert/strict';
@@ -335,12 +340,15 @@ try {
   assert.equal(team.status, 'no_changes', JSON.stringify(team))
   assert.ok(team.agents.every(agent => agent.status === 'success' && agent.changed_files.length === 0))
   assert.ok(existsSync(join(env.BABEL_STATE_DIR, 'runs/agents')))
+  // MCP stdio is newline-delimited JSON; send the same shape real SDK clients send.
   const mcpRequest = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
     name: 'babel_catalog_inspect', arguments: {} } })
-  const framed = `Content-Length: ${Buffer.byteLength(mcpRequest)}\r\n\r\n${mcpRequest}`
-  const mcpOutput = cli(['mcp', 'serve'], { input: framed }).stdout
-  assert.match(mcpOutput, /^Content-Length: \d+\r\n\r\n/)
-  const catalogReply = JSON.parse(mcpOutput.slice(mcpOutput.indexOf('\r\n\r\n') + 4))
+  const mcpOutput = cli(['mcp', 'serve'], { input: `${mcpRequest}\n` }).stdout
+  const mcpLines = mcpOutput.split(/\r?\n/).filter(line => line.trim() !== '')
+  assert.ok(mcpLines.length > 0, `mcp serve emitted no frame: ${mcpOutput.slice(0, 200)}`)
+  assert.doesNotMatch(mcpOutput, /^Content-Length:/m, 'mcp serve must emit newline-delimited JSON')
+  const catalogReply = JSON.parse(mcpLines.at(-1))
+  assert.equal(catalogReply.jsonrpc, '2.0')
   assert.ok(catalogReply.result && !catalogReply.result.isError, JSON.stringify(catalogReply))
   const missing = cli(['run', '--mode', 'chat-headless', 'Explain this synthetic project', '--json'], { codes: [1] })
   assert.match(missing.stdout + missing.stderr, /credential|API.key|provider|model/i)

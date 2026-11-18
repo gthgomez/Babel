@@ -22,6 +22,7 @@ export const LITE_FAILURE_CODES = [
   'PROVIDER_UNKNOWN',
   'ARTIFACT_WRITE_FAILED',
   'PATCH_AUTO_APPLY_REFUSED',
+  'OFFLINE_MODEL_REQUIRED',
 ] as const;
 export type LiteErrorCode = (typeof LITE_FAILURE_CODES)[number];
 
@@ -261,14 +262,20 @@ export function selectLiteProviderConfig(
     return provider;
   }
 
-  // Offline mode: prefer local Ollama, then fall through to cloud
+  // Offline mode: local providers only. A configured cloud key is never a
+  // reason to leave the machine.
   const isOffline =
     process.env['BABEL_OFFLINE'] === '1' || process.env['BABEL_OFFLINE'] === 'true';
-  const cloudOrder = isOffline
-    ? (['ollama', 'deepseek', 'deepinfra'] as const)
-    : (['deepseek', 'deepinfra'] as const);
-
-  for (const providerId of cloudOrder) {
+  if (isOffline) {
+    const local = config.providers['ollama'];
+    if (local?.configured) return local;
+    throw new LiteError(
+      'OFFLINE_MODEL_REQUIRED',
+      'Offline mode uses local models only and no local Ollama provider is configured. Start Ollama or run online with an explicit provider.',
+      { envKeyNames: ['BABEL_OLLAMA_BASE_URL'] },
+    );
+  }
+  for (const providerId of ['deepseek', 'deepinfra'] as const) {
     const provider = config.providers[providerId];
     if (provider.configured) {
       return provider;

@@ -838,7 +838,9 @@ const HOST_PROCESS_SURFACE = new Set([
   'services/workspaceDepPreflight.ts',
   'services/worktreeIsolation.ts',
   'services/worktreeSafety.ts',
-  'tools/auditUiTool.ts',
+  // Shared external-helper runner: caller argv is resolved by the owning adapter; bounded
+  // stdout/stderr, single settlement, timeout tree kill, and no shell interpretation.
+  'tools/externalAdapterBudget.ts',
   'tools/mcpTransport.ts',
   'tools/ripgrep.ts',
   // Repository-map indexing worker: fixed module path and --max-old-space flag; no caller argv,
