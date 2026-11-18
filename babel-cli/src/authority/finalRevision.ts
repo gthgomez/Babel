@@ -199,8 +199,10 @@ export function captureFinalRevisionCandidate(
 }
 
 function isSuccessful(entry: FinalRevisionToolEntry): boolean {
-  return entry.preDispatchNoEffect !== true && !entry.error &&
-    (entry.exit_code === undefined || entry.exit_code === 0)
+  if (entry.preDispatchNoEffect === true || entry.error) return false
+  // A process without a settled exit status is not evidence. Reads may omit it.
+  if (['shell_exec', 'run_command', 'test_run'].includes(entry.tool)) return entry.exit_code === 0
+  return entry.exit_code === undefined || entry.exit_code === 0
 }
 
 function isVerifierEntry(entry: FinalRevisionToolEntry): boolean {

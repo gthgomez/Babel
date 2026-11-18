@@ -168,3 +168,21 @@ test('a host-proven no-op write after the verifier does not invalidate proof', (
     cleanup()
   }
 })
+
+test('an unsettled verifier process cannot certify completion', () => {
+  const { root, cleanup } = fixture()
+  try {
+    const witness = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [
+        { tool: 'file_write', target: 'app.ts', exit_code: 0 },
+        { tool: 'test_run', target: 'npm test' },
+      ],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(witness.status, 'unverified')
+    assert.equal(witness.reason, 'required_verifier_missing')
+  } finally {
+    cleanup()
+  }
+})
