@@ -80,3 +80,38 @@ test('dry run and publication share validation, exact bytes and a registry integ
   assert.match(steps.find(s => s.name === 'Verify publication').run, /EXPECTED_INTEGRITY/)
   assert.equal(workflow.permissions['actions'], 'read')
 })
+
+test('release promotion exercises the exact AppImage bytes and the npm/GitHub channel identity', () => {
+  const workflow = load(readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8'))
+  assert.equal(workflow.permissions.actions, 'read')
+  for (const jobName of ['build-portable', 'build-linux']) {
+    const job = workflow.jobs[jobName]
+    const download = job.steps.find(step => step.name === 'Download the npm-qualified CLI candidate')
+    assert.ok(download, `${jobName} must download the qualified candidate`)
+    assert.match(download.run, /qualified-consumer-promotion\.mjs/)
+    assert.match(download.run, /--source-sha "\$env:RELEASE_SOURCE"|--source-sha "\$RELEASE_SOURCE"/)
+    const build = job.steps.find(step => step.name.startsWith('Build'))
+    assert.match(build.run, /--cli-archive/)
+  }
+  const linux = workflow.jobs['build-linux']
+  const smoke = linux.steps.findIndex(step => step.name === 'Launch the packaged AppImage on the released bytes')
+  const stage = linux.steps.findIndex(step => step.name === 'Stage Linux release files')
+  const sums = linux.steps.findIndex(step => step.name === 'Re-verify SHA256SUMS')
+  assert.ok(sums >= 0 && sums < smoke && smoke < stage)
+  assert.match(linux.steps[smoke].run, /smoke-linux-appimage\.mjs/)
+  assert.match(linux.steps[smoke].run, /release-linux-out/)
+  assert.ok(linux.steps.some(step => step.uses?.startsWith('actions/upload-artifact@') && step.with?.name === 'release-linux-smoke'))
+
+  const draft = workflow.jobs['draft-release']
+  assert.equal(draft.permissions.actions, 'read')
+  const verify = draft.steps.findIndex(step => step.name === 'Verify exact staged release bytes before promotion')
+  const promote = draft.steps.findIndex(step => step.name.startsWith('Create draft'))
+  assert.ok(verify >= 0 && verify < promote)
+  const run = draft.steps[verify].run
+  assert.match(run, /tools\/verify-release-bytes\.mjs/)
+  assert.match(run, /--npm-candidate "\$RUNNER_TEMP\/npm-candidate"/)
+  assert.match(run, /--appimage-evidence release-linux-smoke\/result\.json/)
+  const combine = draft.steps.find(step => step.name === 'Combine checksums and stage the draft').run
+  assert.match(combine, /sha256sum \.\/\*\.tgz/)
+  assert.match(combine, /sha256sum -c SHA256SUMS/)
+})
