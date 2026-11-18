@@ -20,6 +20,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -945,14 +946,68 @@ function gitHeadSha(root: string): string | null {
 
 /** Resolve the repository identity shared by a parent checkout and its worktree. */
 function gitCommonDir(root: string): string | null {
-  const result = spawnSync('git', ['rev-parse', '--git-common-dir'], {
+  // Prefer an absolute answer; older Git lacks --path-format and falls back to
+  // resolving the printed path against the queried checkout.
+  const absolute = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
     cwd: root,
     encoding: 'utf-8',
   });
-  if (result.status !== 0) return null;
-  const value = (result.stdout ?? '').trim();
-  // Older Git prints a relative path; resolve it against the queried checkout.
-  return value.length > 0 ? resolve(root, value) : null;
+  const relative = absolute.status === 0
+    ? null
+    : spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf-8' });
+  const value = (absolute.status === 0 ? absolute.stdout : relative?.stdout ?? '').trim();
+  if (value.length === 0) return null;
+  const resolved = resolve(root, value);
+  try {
+    // Canonicalize junctions/short paths and (on Windows) drive-letter case.
+    return realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+/** True when `worktreePath` is registered with `projectRoot`'s repository. */
+function worktreeIsRegistered(projectRoot: string, worktreePath: string): boolean {
+  const result = spawnSync('git', ['worktree', 'list', '--porcelain'], {
+    cwd: projectRoot,
+    encoding: 'utf-8',
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  if (result.status !== 0) return false;
+  const expected = (() => {
+    try {
+      return realpathSync.native(worktreePath);
+    } catch {
+      return resolve(worktreePath);
+    }
+  })();
+  for (const line of (result.stdout ?? '').split(/\r?\n/)) {
+    if (!line.startsWith('worktree ')) continue;
+    const listed = line.slice('worktree '.length).trim();
+    if (listed.length === 0) continue;
+    const canonical = (() => {
+      try {
+        return realpathSync.native(listed);
+      } catch {
+        return resolve(listed);
+      }
+    })();
+    if (process.platform === 'win32'
+      ? canonical.toLowerCase() === expected.toLowerCase()
+      : canonical === expected) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Compare repository identity paths with Windows case/insensitivity applied. */
+function sameRepositoryPath(left: string | null, right: string | null): boolean {
+  if (left === null || right === null) return false;
+  return process.platform === 'win32'
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
 }
 
 /** Reject a path that escapes the root through `..`, a drive letter or a symlink. */
@@ -1031,8 +1086,9 @@ function parsePorcelainPaths(stdout: string): string[] {
   // `-z` emits NUL-delimited records with no C-quoting, so non-ASCII, tabs,
   // quotes and backslashes survive exactly. `--no-renames` turns a rename into
   // a separate deletion + addition, so both sides must be recorded.
-  for (const record of stdout.split('\0')) {
-    if (!record) continue;
+  for (const rawRecord of stdout.split('\0')) {
+    if (!rawRecord) continue;
+    const record = rawRecord.endsWith('\r') ? rawRecord.slice(0, -1) : rawRecord;
     const pathPart = record.length >= 3 ? record.slice(3) : record;
     const normalized = normalizeWorkspacePath(pathPart);
     if (!normalized || normalized.startsWith('.git/')) continue;
@@ -1206,9 +1262,8 @@ export function promoteImplementWorktree(
   const parentCommonDir = gitCommonDir(projectRoot);
   const worktreeCommonDir = gitCommonDir(worktreePath);
   if (
-    parentCommonDir === null ||
-    worktreeCommonDir === null ||
-    parentCommonDir !== worktreeCommonDir
+    !sameRepositoryPath(parentCommonDir, worktreeCommonDir) &&
+    !worktreeIsRegistered(projectRoot, worktreePath)
   ) {
     conflicts.push({
       path: '(repository)',
