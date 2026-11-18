@@ -334,9 +334,13 @@ function segmentIsReadOnly(segment: string): boolean {
 
 /** True only when every chained/pipe segment is a provable read-only shape. */
 function shellIsReadOnly(command: string): boolean {
-  const segments = splitChains(command)
-  if (segments.length === 0) return false
-  return segments.every(segment => splitPipes(segment).every(part => segmentIsReadOnly(part)))
+  try {
+    const segments = splitChains(command)
+    if (segments.length === 0) return false
+    return segments.every(segment => splitPipes(segment).every(part => segmentIsReadOnly(part)))
+  } catch {
+    return false
+  }
 }
 
 /** Best-effort paths named by a shell write, for disclosure only. */
