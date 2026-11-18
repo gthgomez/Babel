@@ -1,12 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { isVersionProbe } from './cliEntryDispatch.js';
-
-const dispatch = fileURLToPath(new URL('./cliEntryDispatch.ts', import.meta.url));
 
 test('only a bare --version/-V probes the version', () => {
   assert.equal(isVersionProbe(['node', 'babel.js', '--version']), true);
@@ -16,7 +12,7 @@ test('only a bare --version/-V probes the version', () => {
   assert.equal(isVersionProbe(['node', 'babel.js', '--help']), false);
 });
 
-test('a version probe loads no command modules', { skip: !existsSync(dispatch) }, () => {
+test('a version probe loads no command modules', () => {
   // UX-19: the probe used to import the whole command graph (~4.5k modules).
   const probe = `let modules = 0;
     import { registerHooks } from 'node:module';

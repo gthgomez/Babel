@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  pickRemoteUiDir,
+  remoteUiCandidates,
   remoteUiDirAvailable,
   remoteUiFileForPath,
   resolveRemoteUiDir,
   writeRemoteUiResponse,
 } from './remoteUiAssets.js';
-
-const distShell = fileURLToPath(new URL('../../dist/bridge/remote-ui/index.html', import.meta.url));
 
 test('the source checkout resolves the Remote UI shell', () => {
   const dir = resolveRemoteUiDir().replace(/\\/g, '/');
@@ -47,13 +48,34 @@ test('a missing shell resolves to a not-found response instead of throwing', () 
   assert.ok(body && body.length > 0);
 });
 
-test('the build stages the Remote UI shell next to the compiled bridge', { skip: !existsSync(distShell) }, () => {
-  // UX-04: an npm-packed install 500ed on /ui because tsc never emitted the
-  // HTML/CSS/manifest assets. The build step must place them in dist.
-  for (const asset of ['index.html', 'app.js', 'styles.css', 'manifest.webmanifest', 'sw.js']) {
-    assert.ok(
-      existsSync(fileURLToPath(new URL(`../../dist/bridge/remote-ui/${asset}`, import.meta.url))),
-      `missing staged asset dist/bridge/remote-ui/${asset}`,
-    );
+test('the resolver prefers the compiled shell, then staged resources, then source', () => {
+  // UX-04: tsc never emits the HTML/CSS/manifest assets, so a built or
+  // installed package must resolve them from dist/bridge/remote-ui or the
+  // staged resources/bridge/remote-ui. This fixture is self-contained so the
+  // test runs without a build step.
+  const root = mkdtempSync(join(tmpdir(), 'babel-remote-ui-resolve-'));
+  try {
+    const packageRoot = join(root, 'babel-cli');
+    const moduleDir = join(packageRoot, 'dist', 'bridge');
+    const distShell = join(moduleDir, 'remote-ui');
+    const resourcesShell = join(packageRoot, 'resources', 'bridge', 'remote-ui');
+    const srcShell = join(packageRoot, 'src', 'bridge', 'remote-ui');
+    for (const dir of [distShell, resourcesShell, srcShell]) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'index.html'), '<!doctype html>');
+    }
+    assert.deepEqual(remoteUiCandidates(moduleDir), [distShell, resourcesShell, srcShell]);
+    assert.equal(pickRemoteUiDir(remoteUiCandidates(moduleDir)), distShell);
+
+    // A built package that lost the compiled copy still serves staged resources.
+    rmSync(distShell, { recursive: true, force: true });
+    assert.equal(pickRemoteUiDir(remoteUiCandidates(moduleDir)), resourcesShell);
+
+    // An install without staged assets fails closed with an actionable message.
+    rmSync(resourcesShell, { recursive: true, force: true });
+    rmSync(srcShell, { recursive: true, force: true });
+    assert.throws(() => pickRemoteUiDir(remoteUiCandidates(moduleDir)), /Remote UI assets are missing/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

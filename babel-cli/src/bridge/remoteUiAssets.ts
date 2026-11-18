@@ -17,23 +17,41 @@ const CONTENT_TYPES: Record<string, string> = {
   '.svg': 'image/svg+xml',
 };
 
-export function resolveRemoteUiDir(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const packageRoot = join(here, '..', '..');
-  const candidates = [
+/**
+ * Candidate directories for the Remote UI shell, most specific first.
+ *
+ * @param moduleDir - Directory containing the compiled (or source) bridge module.
+ * @returns Absolute candidate directories.
+ */
+export function remoteUiCandidates(moduleDir: string): string[] {
+  const packageRoot = join(moduleDir, '..', '..');
+  return [
     // Compiled/runtime layout: dist/bridge/remote-ui (build copies assets here).
-    join(here, 'remote-ui'),
+    join(moduleDir, 'remote-ui'),
     // Installed package layout: staged runtime resources.
     join(packageRoot, 'resources', 'bridge', 'remote-ui'),
     // Source checkout without a staging step (tsx and vitest).
-    join(here, '..', '..', 'src', 'bridge', 'remote-ui'),
+    join(moduleDir, '..', '..', 'src', 'bridge', 'remote-ui'),
   ];
+}
+
+/**
+ * Pick the first candidate that actually carries the shell entry point.
+ *
+ * @param candidates - Candidate directories, most specific first.
+ * @returns The resolved directory.
+ */
+export function pickRemoteUiDir(candidates: readonly string[]): string {
   for (const candidate of candidates) {
     if (existsSync(join(candidate, 'index.html'))) return candidate;
   }
   throw new Error(
     'Remote UI assets are missing from this installation (expected dist/bridge/remote-ui or resources/bridge/remote-ui). Reinstall the package or omit the remote UI surface.',
   );
+}
+
+export function resolveRemoteUiDir(): string {
+  return pickRemoteUiDir(remoteUiCandidates(dirname(fileURLToPath(import.meta.url))));
 }
 
 export function remoteUiDirAvailable(): boolean {
