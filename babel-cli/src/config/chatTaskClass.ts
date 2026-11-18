@@ -512,8 +512,8 @@ const PROTECTED_EDIT_OBJECT = '(?:(?:the|any|our|your|this|that)\\s+)?(?:' +
   // sibling behavior the user wants untouched.
   '(?:public|exported)\\s+(?:apis?|interfaces?|surface|contracts?|exports?)|' +
   '(?:the\\s+|its\\s+|this\\s+|our\\s+)?api\\s+surface|' +
-  'behavior\\s+of\\s+(?:the\\s+|its\\s+|this\\s+)?[A-Za-z_$][\\w$.-]*(?:\\s+[A-Za-z_$][\\w$.-]*){0,3}|' +
-  '[A-Za-z_$][\\w$.-]*[\\u0027’]s\\s+(?:public\\s+)?behaviou?r|' +
+  'behavior\\s+of\\s+(?!\\s*(?:the|its|this)?\\s*(?:entire|whole)?\\s*(?:application|app|system|service|project|codebase|repository|program|platform|product)\\b)(?:the\\s+|its\\s+|this\\s+)?[A-Za-z_$][\\w$.-]*(?:\\s+[A-Za-z_$][\\w$.-]*){0,3}|' +
+  '(?!\\s*(?:the|its|this)?\\s*(?:entire|whole)?\\s*(?:application|app|system|service|project|codebase|repository|program|platform|product)\\b)[A-Za-z_$][\\w$.-]*[\\u0027’]s\\s+(?:public\\s+)?behaviou?r|' +
   '[`"\\\']?[\\w./\\\\-]+\\.[A-Za-z0-9_-]{1,12}[`"\\\']?)';
 const PROTECTED_EDIT_OBJECT_LIST = new RegExp(
   `^${PROTECTED_EDIT_OBJECT}(?:${COORD_SEPARATOR}(?:${READ_ONLY_VERB_SOURCE}\\s+)?${PROTECTED_EDIT_OBJECT})*$`, 'i',

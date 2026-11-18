@@ -25,6 +25,11 @@ import {
   relevanceBoundVerifierInputFiles,
 } from './taskAcceptanceExecutableBinding.js';
 import { designatedWitnessProtectedInputs, existingNodeVerifierInputFiles } from './taskAcceptanceProtectedInputs.js';
+import {
+  computePublicApiSurface,
+  hasPublicApiPreservationClause,
+  publicApiFreezeRef,
+} from './publicApiPreservation.js';
 import { join } from 'node:path';
 import {
   buildInstructionManifestV1,
@@ -370,6 +375,12 @@ export function resolveLiveSessionAuthority(input: {
     ...(input.verifierRequirements ?? []),
     ...relevanceBoundVerifierCommands(meaning),
   ])];
+  const publicApiRecords = input.projectRoot && hasPublicApiPreservationClause(input.task)
+    ? (() => {
+        const surface = computePublicApiSurface(input.projectRoot!)
+        return surface ? [{ kind: 'derived_acceptance' as const, ref: publicApiFreezeRef(surface) }] : []
+      })()
+    : [];
   const contract = freezeTaskContract(
     buildTaskContractV1({
       mode: input.mode,
@@ -392,7 +403,7 @@ export function resolveLiveSessionAuthority(input: {
               'non_idempotent_local_effect',
             ],
       source: 'liveSessionBridge.resolveLiveSessionAuthority',
-      provenance:[...meaning.provenance,...(input.objectiveLifecycle?[{kind:'risk_analysis' as const,ref:OBJECTIVE_LIFECYCLE_REF}]:[])],
+      provenance:[...meaning.provenance,...publicApiRecords,...(input.objectiveLifecycle?[{kind:'risk_analysis' as const,ref:OBJECTIVE_LIFECYCLE_REF}]:[])],
     }),
   );
 

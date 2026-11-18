@@ -412,6 +412,8 @@ import {
   hashContent as hashContentFn,
 } from "./chatEngineVerifierSession.js";
 import { resolveAcceptedReadOnlyTerminal } from "./chatEngineMutatingNoChangeTerminal.js";
+import { advisoryDocsViolations } from "./advisoryDocsGoal.js";
+import { publicApiPreservationViolation } from "./publicApiPreservation.js";
 import { contractMeaningCommands, seedChatVerifierDependencyHashes } from "./verifierDependencyAdmission.js";
 import { admitVerifierCustodyViolation } from "./verifierCustodyAdmission.js";
 import { RepetitionDetector } from "./repetitionDetector.js";
@@ -1411,6 +1413,22 @@ export class ChatEngine {
    * Build the synchronous proof summary passed to the shared completion
    * authority. Uses SessionEventV1 + bound receipts, then kernel evaluateEvidenceSync.
    */
+  /** Mechanically checked preservation/documentation obligations, if admitted. */
+  private contractPreservationErrors(): string[] {
+    const contract = this.parity.liveAuthority?.taskContract;
+    if (!contract || !this.options.projectRoot) return [];
+    const errors = advisoryDocsViolations({
+      acceptance: contract.acceptance,
+      projectRoot: this.options.projectRoot,
+    });
+    const publicApi = publicApiPreservationViolation({
+      records: contract.provenance.records,
+      projectRoot: this.options.projectRoot,
+    });
+    if (publicApi) errors.push(publicApi);
+    return errors;
+  }
+
   private buildCompletionProof(hasMutation: boolean): {
     compliant: boolean;
     errors?: string[];
@@ -1427,6 +1445,7 @@ export class ChatEngine {
     const errors = [...selected.proofSelection.evidenceErrors, ...selected.proofSelection.integrityFindings,
       ...proofs.flatMap(proof => proof.errors ?? [])];
     if (!proofs.length || selected.proofSelection.missingRequirements.length || selected.proofSelection.unresolvedRelevantFailures.length) errors.push('missing current covering green proof');
+    errors.push(...this.contractPreservationErrors());
     return { compliant: errors.length === 0, ...(errors.length ? { errors } : {}) };
   }
 
@@ -2656,6 +2675,7 @@ export class ChatEngine {
   }
 
   private isAcceptedReadOnlyTerminal(): boolean {
+    if (this.contractPreservationErrors().length > 0) return false;
     return resolveAcceptedReadOnlyTerminal({
       effectiveOperation: this.lastTurnRuntime?.effectiveOperation,
       ambientReadOnly: isReadOnlyChat(),

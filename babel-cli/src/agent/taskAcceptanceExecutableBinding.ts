@@ -10,6 +10,12 @@ import {
 import type { AcceptanceRequirementV1, AcceptanceRequirementType, VerificationSpecV1 } from './taskContract.js'
 import type { AcceptanceMeaningSource, TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
+import { assertionEvidenceMatches, stripJsComments } from './verifierBehaviorEvidence.js'
+import { markAdvisoryDocsGoals } from './advisoryDocsGoal.js'
+import {
+  isPublicApiPreservationStatement,
+  PUBLIC_API_PRESERVATION_STRATEGY,
+} from './publicApiPreservation.js'
 import {
   readVerifierCommandInput,
   verifierCommandInputFiles,
@@ -535,10 +541,12 @@ function specMatchesContent(input: {
   spec: RelevanceSpec
   fs: VerifierCommandInputOverrides
 }): boolean {
+  // Comments and skipped registrations are never executable evidence.
+  const code = stripJsComments(input.content)
   const references = referencedExistingPaths(
     input.projectRoot,
     input.inputFile,
-    input.content,
+    code,
     input.fs,
   )
   const pathMatched = input.spec.targetPaths.length === 0
@@ -547,20 +555,19 @@ function specMatchesContent(input: {
         references.some(reference => reference === target || reference.endsWith(`/${target}`)),
       )
   if (!pathMatched) return false
-  if (input.spec.callPattern && !input.spec.callPattern.test(input.content)) return false
-  if (input.spec.fragment !== null) {
-    // Whitespace-sensitive literals (HTML <pre>, quoted strings) must match the
-    // goal's own bytes; a nearby single-space witness is not the same behavior.
-    if (!input.content.includes(input.spec.fragment)) return false
-    return true
+  if (input.spec.callPattern) {
+    // The exact call and the goal's expected result must share one real
+    // assertion. A comment, a name-only test, an unrelated arithmetic
+    // assertion or a negated assertion does not exercise the behavior.
+    if (input.spec.fragment === null) return false
+    return assertionEvidenceMatches(code, input.spec.callPattern, input.spec.fragment)
   }
   if (input.spec.literals.length > 0 &&
-    input.spec.literals.some(literal => !input.content.includes(literal))) return false
-  if (input.spec.callPattern) return true
+    input.spec.literals.some(literal => !code.includes(literal))) return false
   // No call expression: require an observable token from the stated expectation.
   if (input.spec.keywords.length === 0) return true
   return input.spec.keywords.some(keyword =>
-    new RegExp(`(?:^|[^A-Za-z0-9_$])${escapeRegex(keyword)}(?:$|[^A-Za-z0-9_$])`).test(input.content),
+    new RegExp(`(?:^|[^A-Za-z0-9_$])${escapeRegex(keyword)}(?:$|[^A-Za-z0-9_$])`).test(code),
   )
 }
 
@@ -808,6 +815,30 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
         }).slice(0, 32)}`,
       })
     }
+  }
+
+  if (input.projectRoot && input.meaning.interpretation_version >= 3) {
+    const advisory = markAdvisoryDocsGoals({
+      criteria,
+      sources: input.meaning.sources,
+      projectRoot: input.projectRoot,
+    })
+    if (advisory.criteria !== criteria) {
+      criteria = advisory.criteria
+      for (const ref of advisory.refs) {
+        bindingProvenance.push({ kind: 'derived_acceptance', ref })
+      }
+    }
+  }
+
+  // The preservation sentence is enforced by the frozen export surface at
+  // completion; it must not also become an unsatisfiable prose requirement.
+  if (input.projectRoot && criteria.some(criterion => criterion.required &&
+    isPublicApiPreservationStatement(criterion.description))) {
+    criteria = criteria.map(criterion => criterion.required &&
+      isPublicApiPreservationStatement(criterion.description)
+      ? { ...criterion, required: false, verification_strategy: PUBLIC_API_PRESERVATION_STRATEGY }
+      : criterion)
   }
 
   if (!bindingProvenance.length) return input.meaning

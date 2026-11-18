@@ -20,6 +20,7 @@ import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import { createCriterionCompletionServiceV1 } from '../authority/criterionCompletion.js'
 import { resolveAcceptedReadOnlyTerminal } from './chatEngineMutatingNoChangeTerminal.js'
 import type { GateToolLogEntry } from './completionGatePolicy.js'
+import { publicApiPreservationViolation } from './publicApiPreservation.js'
 
 const MODEL = 'deepseek-v4-flash'
 const NATIVE_RESERVED = 4_096
@@ -231,8 +232,7 @@ test('TF-07 journey: scoped preservation constraint cannot turn an untested repa
     [{ type: 'text_delta', text: 'parseSum is already implemented; no change is required.' },
       { type: 'done', finishReason: 'stop' }],
   ])
-  assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED')
-  assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+  assert.equal(o.outcome, 'BLOCKED_POLICY', o.answer.slice(0, 400))
   assert.equal(readFileSync(join(root, 'src', 'parser.js'), 'utf8'),
     'export function parseSum(a, b) { return a - b; }\n',
     'the wrong behavior stays on disk because it was never proven correct')
@@ -317,4 +317,91 @@ test('TF-16 journey: unverified patch names the missing evidence and a next acti
     'the unverified report says which evidence would complete certification')
   assert.match(o.answer, /exact test command|frozen verifier/,
     'the next action is concrete, not just "not verified"')
+})
+
+test('P1-1 journey: a weak non-exercising test never certifies a wrong patch', async t => {
+  const weak = [
+    'import assert from "node:assert/strict";',
+    'import test from "node:test";',
+    'import { parseSum } from "../src/parser.js";',
+    '// TODO: parseSum(2, 3) should return 5',
+    'test("unrelated arithmetic", () => assert.equal(2 + 3, 5));',
+    '',
+  ].join('\n')
+  const root = parserFixture({ parser: 'export function parseSum(a, b) { return 0; }\n', test: weak })
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const o = await driveChat(root, GOAL, [
+    [{ type: 'tool_use', id: 'r0', name: 'read_file', input: { path: 'src/parser.js' } },
+      { type: 'done', finishReason: 'tool_calls' }],
+    [{ type: 'tool_use', id: 't1', name: 'str_replace', input: {
+      file_path: 'src/parser.js',
+      old_str: 'export function parseSum(a, b) { return 0; }',
+      new_str: 'export function parseSum(a, b) { return a * b; }',
+    } }, { type: 'done', finishReason: 'tool_calls' }],
+    [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: VERIFIER } },
+      { type: 'done', finishReason: 'tool_calls' }],
+    [{ type: 'text_delta', text: 'Fixed parser; tests pass.' }, { type: 'done', finishReason: 'stop' }],
+  ], { requiredVerifierCommands: [VERIFIER] })
+  assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+  assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED')
+  assert.equal(readFileSync(join(root, 'src', 'parser.js'), 'utf8'),
+    'export function parseSum(a, b) { return a * b; }\n')
+})
+
+test('P1-2 journey: a public-surface rename is recorded as a preservation violation', async t => {
+  const root = parserFixture({
+    parser: 'export function parseSum(a, b) { return a - b; }\nexport function parseMinus(a, b) { return a - b; }\n',
+    test: RELEVANT_TEST,
+  })
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const task = [
+    GOAL,
+    'Do not change public APIs.',
+    'Requirements:',
+    `- \`${VERIFIER}\` must pass.`,
+  ].join('\n')
+  const o = await driveChat(root, task, [
+    [{ type: 'tool_use', id: 'r0', name: 'read_file', input: { path: 'src/parser.js' } },
+      { type: 'done', finishReason: 'tool_calls' }],
+    [{ type: 'tool_use', id: 't1', name: 'str_replace', input: {
+      file_path: 'src/parser.js',
+      old_str: 'export function parseMinus(a, b) { return a - b; }',
+      new_str: 'export function subtract(a, b) { return a - b; }',
+    } }, { type: 'done', finishReason: 'tool_calls' }],
+    [{ type: 'tool_use', id: 'v1', name: 'run_command', input: { command: VERIFIER } },
+      { type: 'done', finishReason: 'tool_calls' }],
+    [{ type: 'text_delta', text: 'Refactored the parser and tests pass.' }, { type: 'done', finishReason: 'stop' }],
+  ], { requiredVerifierCommands: [VERIFIER] })
+  const contract = (o.engine as unknown as {
+    parity?: { liveAuthority?: { taskContract?: { provenance: { records: Parameters<typeof publicApiPreservationViolation>[0]['records'] } } } }
+  }).parity?.liveAuthority?.taskContract
+  assert.ok(contract)
+  assert.match(publicApiPreservationViolation({ records: contract.provenance.records, projectRoot: root }) ?? '',
+    /public API surface changed/)
+  assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
+  assert.notEqual(o.outcome, 'NO_CHANGE_REQUIRED')
+})
+
+test('P3-3 journey: a relevance-bound verifier input cannot be rewritten', async t => {
+  const root = parserFixture({
+    parser: 'export function parseSum(a, b) { return a + b; }\n',
+    test: RELEVANT_TEST,
+  })
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const o = await driveChat(root, GOAL, [
+    [{ type: 'tool_use', id: 'r0', name: 'read_file', input: { path: 'src/parser.js' } },
+      { type: 'done', finishReason: 'tool_calls' }],
+    [{ type: 'tool_use', id: 'e1', name: 'str_replace', input: {
+      file_path: 'test/parser.test.mjs',
+      old_str: 'assert.equal(parseSum(2, 3), 5)',
+      new_str: 'assert.equal(parseSum(2, 3), -1)',
+    } }, { type: 'done', finishReason: 'tool_calls' }],
+    [{ type: 'text_delta', text: 'Adjusted the test.' }, { type: 'done', finishReason: 'stop' }],
+  ], { requiredVerifierCommands: [VERIFIER] })
+  const edit = (o.engine as unknown as {
+    toolCallLog: Array<{ tool: string; target: string; error?: string; effect_status?: string }>
+  }).toolCallLog.find(entry => entry.tool === 'str_replace' && entry.target === 'test/parser.test.mjs')
+  assert.equal(edit?.error, 'blocked')
+  assert.equal(readFileSync(join(root, 'test', 'parser.test.mjs'), 'utf8'), RELEVANT_TEST)
+  assert.notEqual(o.outcome, 'VERIFIED_COMPLETE')
 })

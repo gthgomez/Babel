@@ -9,6 +9,7 @@ import {
   explicitCriterionVerifierCommands,
 } from './taskAcceptanceExecutableBinding.js';
 import { initializeVerifierDependencyHashes } from './chatEngineVerifierSession.js';
+import { verifierCommandInputFiles } from './verifierCommandInputs.js';
 import type { AcceptanceRequirementV1 } from './taskContract.js';
 
 /** Commands frozen by executable acceptance criteria already admitted to the contract. */
@@ -67,8 +68,15 @@ export function seedChatVerifierDependencyHashes(input: {
     input.hashes,
     commands,
   );
-  // A verifier that bound a requirement must have a non-empty frozen input set:
-  // otherwise its inputs cannot be watched for tamper and it must not certify.
-  if ((input.meaningVerifierCommands?.length ?? 0) > 0 && input.hashes.size === 0) return true;
+  // A verifier that bound a requirement must freeze its actual inputs. The
+  // global size check is insufficient because package.json is always hashed;
+  // a glob script's executed test file would otherwise be neither watched nor
+  // protected. Fail closed per admitted command.
+  for (const command of input.meaningVerifierCommands ?? []) {
+    const files = verifierCommandInputFiles(input.projectRoot, command)
+      .filter(file => file !== 'package.json');
+    if (files.length === 0) return true;
+    if (files.some(file => !input.hashes.has(file))) return true;
+  }
   return unfrozen.length > 0;
 }

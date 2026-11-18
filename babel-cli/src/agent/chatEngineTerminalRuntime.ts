@@ -147,7 +147,7 @@ function missingEvidenceHint(
 ): string {
   const command = frozenEvidenceCommand(requirement)
   if (command) return `required evidence: run the frozen verifier \`${singleLineEvidence(command, 160)}\``
-  return 'required evidence: no executable witness is bound yet; state the exact test command that exercises this behavior in a Requirements bullet so it can certify the goal'
+  return 'required evidence: no executable witness is bound yet; restate this behavior as a concretely checkable requirement (an exact test command, or a named file/path with the expected content)'
 }
 
 function appendCriterionEvidenceSummary(

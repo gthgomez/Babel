@@ -198,3 +198,111 @@ test('TF-03 dispatch: only the bound command receipt covers the inferred goal', 
   assert.equal(chatReceiptMatchesRequirement(unrelated, goal), false,
     'a different green command cannot dispatch to the behavioral requirement')
 })
+
+test('P1-1: weak inputs never bind the behavioral goal', t => {
+  const weakSources = [
+    [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { parseSum } from "../src/parser.js";',
+      '// TODO: parseSum(2, 3) should return 5',
+      'test("unrelated arithmetic", () => assert.equal(2 + 3, 5));',
+    ].join('\n') + '\n',
+    [
+      'import test from "node:test";',
+      'test.skip("parseSum(2, 3) returns 5", () => {',
+      '  // parseSum(2, 3) returns 5',
+      '});',
+    ].join('\n') + '\n',
+    [
+      'import test from "node:test";',
+      'describe.skip("parser", () => {',
+      '  test("sum", () => assert.equal(parseSum(2, 3), 5));',
+      '});',
+    ].join('\n') + '\n',
+    [
+      'import test from "node:test";',
+      'test("negated", () => assert.notEqual(parseSum(2, 3), 5));',
+    ].join('\n') + '\n',
+    [
+      'import test from "node:test";',
+      'test("parseSum(2, 3) returns 5", () => { assert.ok(true); });',
+    ].join('\n') + '\n',
+    [
+      'import test from "node:test";',
+      '// assert.equal(parseSum(2, 3), 5);',
+      'test("comment only", () => {});',
+    ].join('\n') + '\n',
+    [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'const dead = () => assert.equal(parseSum(2, 3), 5);',
+      'test("does not exercise the goal", () => assert.ok(true));',
+    ].join('\n') + '\n',
+  ]
+  for (const [index, testSource] of weakSources.entries()) {
+    const root = parserProject({ testFile: 'parser.test.mjs', testSource })
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    const contract = resolveLiveSessionAuthority({
+      mode: 'chat',
+      task: TASK,
+      projectRoot: root,
+      projectTestCommands: ['npm test'],
+    }).taskContract
+    const goal = contract.acceptance.find(item => item.description === TASK)
+    assert.ok(goal?.verification.verifier_id.startsWith('meaning:'),
+      `weak evidence case ${index} must not bind the goal`)
+  }
+})
+
+test('P1-1: a real assertion still binds the behavioral goal', t => {
+  const root = parserProject({ testFile: 'parser.test.mjs', testSource: RELEVANT_TEST })
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const contract = resolveLiveSessionAuthority({
+    mode: 'chat',
+    task: TASK,
+    projectRoot: root,
+    projectTestCommands: ['npm test'],
+  }).taskContract
+  const goal = contract.acceptance.find(item => item.description === TASK)
+  assert.equal(goal?.verification.verifier_id, 'verifier:npm')
+})
+
+test('P3-1: a bound verifier whose inputs cannot be frozen fails closed', t => {
+  const root = parserProject({ testFile: 'parser.test.mjs', testSource: RELEVANT_TEST })
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const packagePath = join(root, 'package.json')
+  writeFileSync(packagePath, JSON.stringify({
+    name: 'w01-relevance',
+    private: true,
+    type: 'module',
+    scripts: { test: 'node --test test/*.test.mjs' },
+  }))
+  const hashes = new Map<string, string>()
+  const unfrozen = seedChatVerifierDependencyHashes({
+    task: TASK,
+    projectRoot: root,
+    hashes,
+    resolvedVerifierCommands: [],
+    discoveredTestCommands: [],
+    meaningVerifierCommands: ['npm test'],
+  })
+  assert.equal(unfrozen, true,
+    'a glob script hides the executed test file and must not certify')
+  assert.equal(hashes.has('test/parser.test.mjs'), false)
+  assert.equal(hashes.has('package.json'), true, 'package.json alone is not sufficient evidence')
+
+  const explicit = parserProject({ testFile: 'parser.test.mjs', testSource: RELEVANT_TEST })
+  t.after(() => rmSync(explicit, { recursive: true, force: true }))
+  const command = 'node --test test/parser.test.mjs'
+  const frozen = new Map<string, string>()
+  assert.equal(seedChatVerifierDependencyHashes({
+    task: TASK,
+    projectRoot: explicit,
+    hashes: frozen,
+    resolvedVerifierCommands: [],
+    discoveredTestCommands: [],
+    meaningVerifierCommands: [command],
+  }), false)
+  assert.equal(frozen.has('test/parser.test.mjs'), true)
+})

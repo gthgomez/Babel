@@ -78,6 +78,7 @@ function preserveBehavioralGoal(
   let plainExclusion = false
   let plainExample = false
   let behavioral = false
+  const seenCandidate = new Set<string>()
   const candidates: { text: string; start: number; end: number }[] = []
   for (const raw of lines) {
     const line = raw.replace(/\r$/, '')
@@ -135,7 +136,11 @@ function preserveBehavioralGoal(
     if (line.trim() && headingDepth === undefined) {
       if (BEHAVIORAL_GOAL_LINE.test(line)) behavioral = true
       if (OPERATIVE_GOAL_LINE.test(line)) {
-        candidates.push({ text: line.trim(), start: offset, end: offset + line.length })
+        const text = line.trim()
+        if (!seenCandidate.has(text)) {
+          seenCandidate.add(text)
+          candidates.push({ text, start: offset, end: offset + line.length })
+        }
       }
     }
     offset += raw.length + 1

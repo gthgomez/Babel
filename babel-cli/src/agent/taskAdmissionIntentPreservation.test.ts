@@ -101,3 +101,28 @@ test('TF-02 control: unrelated-file and test protections keep mutation intent', 
     assert.equal(classifyChatTaskIntent(task), 'execute', task)
   }
 })
+
+test('P2-1: duplicate goal lines collapse instead of bricking admission', () => {
+  const goal = 'Fix parser.js so parseSum(2, 3) returns 5.'
+  const meaning = inferTaskAcceptanceV3([
+    goal,
+    goal,
+    'Requirements:',
+    '- `npm test` must pass.',
+  ].join('\n'))
+  assert.deepEqual(meaning.criteria.map(item => item.description), [goal, '`npm test` must pass.'])
+  assert.equal(new Set(meaning.criteria.map(item => item.id)).size, meaning.criteria.length)
+})
+
+test('P1-2 control: global behavior/system directives stay read-only', () => {
+  for (const task of [
+    'Do not change the behavior of the application.',
+    'Never modify the whole system behavior.',
+    "Do not change the platform's behavior.",
+    'Do not change the behavior of the entire application.',
+  ]) {
+    assert.equal(hasExplicitEditDenial(task), true, task)
+    assert.equal(classifyChatTaskIntent(task), 'explain', task)
+  }
+  assert.equal(hasExplicitEditDenial('Fix parser.js so parseSum(2, 3) returns 5.\nDo not change behavior of parseMinus.'), false)
+})
