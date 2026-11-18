@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { buildRecoveryAssessment, formatRecoveryAssessmentHuman } from './recovery.js';
+import { buildRecoveryAssessment, formatRecoveryAssessmentHuman, buildRecoverySummary, resolveRecoveryRunDir } from './recovery.js';
 import { resumeExecution } from './resumeExecution.js';
 
 const originalFetch = globalThis.fetch;
@@ -543,6 +543,48 @@ test('recovery classifies approval-required execution failures', () => {
     assert.equal(assessment.classification, 'requires_user_decision');
     assert.equal(assessment.next_command, 'babel approvals list --status pending');
     assert.equal(assessment.failure_code, 'APPROVAL_REQUIRED');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('exported recovery summary resolution never crosses projects for scoped latest', () => {
+  const root = makeRoot();
+  try {
+    const otherRun = makeRun(root, '20260601_040404_other_project_run');
+    writeJson(join(root, '.latest.json'), {
+      run_dir: otherRun,
+      project: 'other-project',
+      created_at: '2026-06-01T04:04:04.000Z',
+    });
+
+    // Project-scoped latest must not adopt the other project's pointer…
+    assert.equal(resolveRecoveryRunDir('latest', { project: 'my-project', runsDir: root }), null);
+    const scoped = buildRecoverySummary('latest', { project: 'my-project', runsDir: root });
+    assert.equal(scoped.status, 'NO_LATEST_RUN');
+    assert.equal(scoped.run_dir, null);
+    assert.equal(scoped.terminal_outcome, null);
+    assert.equal(scoped.exit_code, null);
+
+    // …while the unscoped path keeps the global pointer behavior.
+    const unscoped = buildRecoverySummary('latest', { runsDir: root });
+    assert.equal(unscoped.status, 'CONTINUE_READY');
+    assert.equal(unscoped.run_dir, otherRun);
+
+    // A matching scoped pointer resolves normally.
+    const myRun = makeRun(root, '20260601_050505_my_project_run');
+    writeJson(join(root, '.latest.my-project.json'), {
+      run_dir: myRun,
+      project: 'my-project',
+      created_at: '2026-06-01T05:05:05.000Z',
+    });
+    assert.equal(resolveRecoveryRunDir('latest', { project: 'my-project', runsDir: root }), myRun);
+    const resolved = buildRecoverySummary('latest', { project: 'my-project', runsDir: root });
+    assert.equal(resolved.status, 'CONTINUE_READY');
+    assert.equal(resolved.run_dir, myRun);
+
+    // Explicit references are untouched by the scoped guard.
+    assert.equal(resolveRecoveryRunDir(myRun, { project: 'my-project', runsDir: root }), myRun);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

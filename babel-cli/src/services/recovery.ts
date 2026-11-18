@@ -2,7 +2,6 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
-import { readLatestRunPointer } from '../cli/helpers.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import type { UserFacingStatus } from '../cli/userFacingStatus.js';
 import { readDurableTerminalTruth } from './durableTerminalTruth.js';
@@ -147,9 +146,29 @@ function readLatestPointerFromRunsDir(runsDir: string, project?: string): string
   return null;
 }
 
-export function resolveRecoveryRunDir(reference: string, project?: string): string | null {
+export interface RecoveryRunReferenceOptions {
+  /** Restrict `latest` resolution to one project's pointer; never cross-project. */
+  project?: string;
+  /** Runs directory to read pointers from (defaults to BABEL_RUNS_DIR). */
+  runsDir?: string;
+}
+
+export function resolveRecoveryRunDir(
+  reference: string,
+  options: RecoveryRunReferenceOptions = {},
+): string | null {
   if (reference === 'latest') {
-    return readLatestRunPointer(project)?.run_dir ?? resolveLatestByMtime();
+    const runsDir = options.runsDir ?? BABEL_RUNS_DIR;
+    const pointer = readLatestPointerFromRunsDir(runsDir, options.project);
+    if (pointer) return pointer;
+    // A project-scoped request has no "latest" when its pointer is missing
+    // or points at another project: the global pointer and the machine-wide
+    // mtime fallback span every project and are not safe evidence for it
+    // (UX-09 parity with resolveAssessmentRunDir). These exports have no
+    // production callers today; the guard keeps them from reintroducing
+    // the cross-project fallback if one is added.
+    if (options.project) return null;
+    return options.runsDir ? null : resolveLatestByMtime();
   }
   return isAbsolute(reference) ? reference : resolve(reference);
 }
@@ -625,9 +644,9 @@ export function formatRecoveryAssessmentHuman(assessment: RecoveryAssessment): s
 
 export function buildRecoverySummary(
   reference = 'latest',
-  options: { project?: string } = {},
+  options: RecoveryRunReferenceOptions = {},
 ): RecoverySummary {
-  const runDir = resolveRecoveryRunDir(reference, options.project);
+  const runDir = resolveRecoveryRunDir(reference, options);
   if (!runDir) {
     return {
       status: 'NO_LATEST_RUN',
