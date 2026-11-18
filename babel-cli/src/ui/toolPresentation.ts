@@ -21,6 +21,7 @@ import {
   stripAnsi,
   wrapText,
 } from "./theme.js";
+import { sanitizeUntrustedTerminalField } from './sanitize.js';
 import {
   classifyToolPresentation,
   type ToolPresentationStatus,
@@ -136,17 +137,22 @@ function formatExpandedItem(
   termWidth: number,
 ): string {
   const cls = classifySummary(item);
+  // Tool names, paths, command output snippets and error text are
+  // model/command-originated. They are display data, never terminal protocol.
+  const tool = sanitizeUntrustedTerminalField(item.tool);
+  const target = sanitizeUntrustedTerminalField(item.target);
+  const detail = sanitizeUntrustedTerminalField(item.detail);
+  const detailError = sanitizeUntrustedTerminalField(item.error);
   let icon: string;
   let statusText: string;
 
   if (cls.isBlocked) {
-    const reason =
-      item.detail && item.detail !== "blocked" ? item.detail : "blocked";
+    const reason = detail && detail !== "blocked" ? detail : "blocked";
     icon = warning("⏸");
     statusText = warning(reason);
   } else if (cls.availability === "unavailable") {
     icon = warning("⏸");
-    statusText = warning(item.detail ?? "unavailable");
+    statusText = warning(detail || "unavailable");
   } else if (cls.isFailure) {
     icon = error("✖");
     statusText = error(`failed (exit ${item.exitCode ?? 1})`);
@@ -158,8 +164,8 @@ function formatExpandedItem(
     statusText = muted("unverified");
   }
 
-  const errSuffix = cls.isFailure && item.error ? ` (${item.error})` : "";
-  const rawLine = `  ${icon} ${dim(item.tool)} ${primary(item.target)} — ${statusText}${errSuffix}`;
+  const errSuffix = cls.isFailure && detailError ? ` (${detailError})` : "";
+  const rawLine = `  ${icon} ${dim(tool)} ${primary(target)} — ${statusText}${errSuffix}`;
   const preserveEvidence =
     cls.isFailure || cls.isBlocked || cls.availability === "unavailable";
 
@@ -170,7 +176,7 @@ function formatExpandedItem(
 
   if (visibleLength(rawLine) > termWidth) {
     const staticLen = visibleLength(
-      `  ${icon} ${dim(item.tool)}  — ${statusText}${errSuffix}`,
+      `  ${icon} ${dim(tool)}  — ${statusText}${errSuffix}`,
     );
     const budget = Math.max(4, termWidth - staticLen);
     const truncatedTarget = truncate(item.target, budget);
@@ -224,8 +230,8 @@ export function formatToolGroupSummary(
       break;
     default:
       line = group.hasUnknowns
-        ? `  ${info("○")} ${dim(`${group.items[0]?.tool ?? "tool"} (${group.count}) (unverified)`)}`
-        : `  ${info("○")} ${dim(`${group.items[0]?.tool ?? "tool"} (${group.count})`)}`;
+        ? `  ${info("○")} ${dim(`${sanitizeUntrustedTerminalField(group.items[0]?.tool ?? "tool")} (${group.count}) (unverified)`)}`
+        : `  ${info("○")} ${dim(`${sanitizeUntrustedTerminalField(group.items[0]?.tool ?? "tool")} (${group.count})`)}`;
       break;
   }
 

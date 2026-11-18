@@ -85,3 +85,22 @@ export function sanitizeLlmOutput(text: string): string {
 export function sanitizeCodeLine(line: string): string {
   return stripControlSequences(line);
 }
+
+/**
+ * Sanitize one untrusted terminal *field* (tool name, path, command, error).
+ * All control sequences are removed and line/paragraph separators collapse to
+ * a single space so a value cannot rewrite neighbouring terminal state.
+ */
+export function sanitizeUntrustedTerminalField(text: string | null | undefined): string {
+  if (text === null || text === undefined) return '';
+  return stripControlSequences(String(text)).replace(/[\r\n\t\u000b\u000c\u0085\u2028\u2029]+/g, ' ').trim();
+}
+
+/**
+ * Sanitize an untrusted multi-line block. Control sequences are removed and
+ * CRLF/CR normalize to LF; line structure is preserved for transcripts.
+ */
+export function sanitizeUntrustedTerminalBlock(text: string | null | undefined): string {
+  if (text === null || text === undefined) return '';
+  return stripControlSequences(String(text)).replace(/\r\n?/g, '\n');
+}
