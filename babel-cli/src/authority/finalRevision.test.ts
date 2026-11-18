@@ -726,3 +726,67 @@ test('two-way decoder cross-check for proof-table reads', async () => {
     }
   }
 })
+
+test('round-4/5/6 probe equivalence: 20 execution vectors stale, 27 read shapes never stale', () => {
+  const staleVectors = [
+    'rg --pre=./pre.sh pattern s.txt',
+    'git diff --output=diff-out.txt',
+    'git log --output=x',
+    'git show --output=x',
+    'find . -fprint0 out.txt',
+    'tree -o out.txt',
+    'sort -oout.txt',
+    'file -C -m magic',
+    'cat $(rm out.txt)',
+    'cat `rm out.txt`',
+    'cat <(rm out.txt)',
+    'cat a & rm b',
+    'cat a\nrm b',
+    'git grep -O./pager.sh -- needle',
+    'git cat-file --filters HEAD:file.txt',
+    'git show --textconv HEAD',
+    'git diff --textconv',
+    'git log --textconv',
+    'git -c diff.external=./x status',
+    'git --paginate log',
+  ]
+  assert.equal(staleVectors.length, 20)
+  for (const command of staleVectors) {
+    assert.equal(witnessFor(command).status, 'stale', command)
+  }
+
+  const readShapes = [
+    'git rev-parse HEAD',
+    'git branch --show-current',
+    'git describe --tags',
+    'git blame src/app.ts',
+    'git --no-pager grep TODO',
+    'git config --get user.name',
+    'git stash list',
+    'git worktree list',
+    'git tag -l',
+    'find . -name "*.ts" | xargs grep TODO',
+    'find . -name "*.ts" | xargs wc -l',
+    'cat src/app.ts | sed -n 1,10p',
+    'cat src/app.ts | less',
+    'node --version',
+    'git log --oneline --graph --stat -n 5',
+    'git log -20',
+    'git show -s',
+    'git status -sb',
+    'git status -uno',
+    'git branch -av',
+    'git diff --stat',
+    'git tag -n5',
+    'git diff --no-renames --text -Sfoo --patience --histogram --summary --minimal --ignore-submodules --compact-summary --dirstat',
+    'git log -U3 --unified=3 -w --ignore-all-space',
+    'git blame -w -M -C -e -f src/app.ts',
+    'git grep -A3 -B3 -C3 -m1 -q -o -h TODO',
+    'sed "y/a/b/" file',
+  ]
+  assert.equal(readShapes.length, 27)
+  for (const command of readShapes) {
+    const status = witnessFor(command).status
+    assert.notEqual(status, 'stale', command)
+  }
+})

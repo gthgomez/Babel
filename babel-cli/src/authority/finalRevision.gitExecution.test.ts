@@ -166,6 +166,16 @@ test('hardened diff invocation disables diff.external and stays verified', () =>
       requiredVerifierCommands: ['npm test'],
     })
     assert.equal(witness.status, 'verified')
+    const final = decidePipelineFinalCompletion({
+      mode: 'deep', status: 'COMPLETE', projectRoot: root, requiredVerifierCommands: ['npm test'],
+      toolCallLog: [
+        { step: 1, tool: 'file_write', target: 'file.txt', exit_code: 0, stdout: '', stderr: '', verified: true },
+        { step: 2, tool: 'test_run', target: 'npm test', exit_code: 0, stdout: 'ok', stderr: '', verified: true },
+        { step: 3, tool: 'shell_exec', target: 'git -c core.fsmonitor=false diff --no-ext-diff --no-textconv', exit_code: 0, stdout: '', stderr: '', verified: true },
+      ],
+    })
+    assert.equal(final.status, 'COMPLETE')
+    assert.equal(final.decision?.finalOutcome, 'VERIFIED_COMPLETE')
   } finally {
     cleanup()
   }
