@@ -38,7 +38,7 @@ function runCli(
 test('MCP diagnostic summaries omit all argument values', () => {
   const summary = summarizeMcpServerForDiagnostics({
     command: 'node',
-    args: ['--api-key', 'SYNTHETIC_W09_ARG', 'server.js'],
+    args: ['--example-setting', 'SYNTHETIC_W09_SENTINEL_ALPHA', 'server.js'],
   })
   assert.deepEqual(summary, {
     command: 'node',
@@ -57,7 +57,7 @@ test('MCP diagnostic summaries preserve plugin provenance without local paths', 
       origin: {
         kind: 'plugin',
         plugin_id: 'sample-plugin',
-        manifest_path: '/home/example/plugin.json',
+        manifest_path: 'tests/fixtures/plugin-proofs/example/plugin.json',
         manifest_sha256: 'a'.repeat(64),
       },
     },
@@ -67,7 +67,10 @@ test('MCP diagnostic summaries preserve plugin provenance without local paths', 
     plugin_id: 'sample-plugin',
     manifest_sha256: 'a'.repeat(64),
   })
-  assert.doesNotMatch(JSON.stringify(summary), /SYNTHETIC_W09_TOKEN|\/home\/example/)
+  assert.doesNotMatch(
+    JSON.stringify(summary),
+    /SYNTHETIC_W09_TOKEN|plugin-proofs/,
+  )
 })
 
 test('removing the last server through the CLI survives a fresh process', () => {
@@ -111,7 +114,7 @@ test('mcp doctor --json and mcp list --json do not reveal configured arguments',
           command: 'node',
           args: [
             'server.js',
-            '--api-key',
+            '--example-setting',
             sentinels[0],
             '--db',
             `postgresql://user:${sentinels[1]}@localhost/db`,
