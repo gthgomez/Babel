@@ -32,7 +32,7 @@ test('a vendor family name routed to another transport is disclosed', () => {
   const policy = resolveFamilyModelPolicy({ family: 'Claude' })
   assert.equal(policy.provider, 'deepseek')
   assert.match(policy.aliasNotice ?? '', /Requested family "Claude" is a compatibility route/)
-  assert.ok(policy.warnings.some(warning => warning.includes('not "anthropic"')))
+  assert.ok(policy.warnings.some(warning => warning.includes(`not a "anthropic" model`)))
 })
 
 test('a matching family transport carries no compatibility warning', () => {

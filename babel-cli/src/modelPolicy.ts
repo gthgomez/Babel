@@ -982,11 +982,18 @@ const FAMILY_VENDOR_HINTS: Readonly<Record<string, string>> = {
   ollama: 'ollama',
 }
 
-/** Disclose a family alias that routes to a different provider transport. */
-function familyTransportMismatchNotice(family: string, provider: string): string | null {
+/**
+ * Disclose a family alias that routes to a different vendor's model.
+ * Gateways (OpenRouter/Command Code/OpenCode) legitimately serve a vendor's
+ * exact model ID; only a different upstream model identity is a compatibility
+ * substitution worth warning about.
+ */
+function familyTransportMismatchNotice(family: string, provider: string, modelId: string): string | null {
   const hinted = FAMILY_VENDOR_HINTS[family.trim().toLowerCase()]
   if (!hinted || hinted === provider) return null
-  return `Requested family "${family}" is a compatibility route: it resolves to provider "${provider}", not "${hinted}".`
+  const gateway = ['openrouter', 'command-code', 'opencode', 'opencode-go', 'openai-compatible'].includes(provider)
+  if (gateway && modelId.toLowerCase().includes(hinted)) return null
+  return `Requested family "${family}" is a compatibility route: it resolves to ${provider}/${modelId}, not a "${hinted}" model.`
 }
 
 export function resolveFamilyModelPolicy(options: {
@@ -1069,7 +1076,7 @@ export function resolveFamilyModelPolicy(options: {
       `Approximate per-run cost $${approximateCostPerRunUsd.toFixed(4)} meets or exceeds warning threshold $${warnThreshold.toFixed(2)}.`,
     );
   }
-  const familyNotice = familyTransportMismatchNotice(options.family, resolvedBackend.provider);
+  const familyNotice = familyTransportMismatchNotice(options.family, resolvedBackend.provider, resolvedBackend.providerModelId);
   if (familyNotice) warnings.push(familyNotice);
 
   const maxThreshold = config.policy?.max_estimated_cost_per_run_usd;
