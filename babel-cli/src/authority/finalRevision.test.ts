@@ -14,6 +14,8 @@ import {
   gitCommandProofReadOnly,
   gitConfigCapability,
   gitConfigEffectUnproven,
+  gitHardeningFlags,
+  gitSubcommandAllowsFlags,
   evaluateFinalRevisionWitness,
   hashFinalRevisionFile,
   chatFinalRevisionRequired,
@@ -840,6 +842,7 @@ test('pager-capable subcommands require the pager guard', () => {
     'git branch -a',
     'git tag -l',
     'git shortlog',
+    'git range-diff A...B A...C',
   ]
   for (const command of unguarded) {
     const witness = witnessFor(command)
@@ -857,6 +860,7 @@ test('pager-capable subcommands require the pager guard', () => {
     'git --no-pager branch -a',
     'git --no-pager tag -l',
     'git --no-pager shortlog',
+    'git -c core.fsmonitor=false --no-pager range-diff --no-ext-diff --no-textconv A...B A...C',
   ]
   for (const command of guarded) {
     assert.equal(witnessFor(command).status, 'verified', command)
@@ -870,4 +874,20 @@ test('git help startup options are denied rather than aliased to version', () =>
   for (const command of ['git --version', 'git -v', 'git version']) {
     assert.equal(witnessFor(command).status, 'verified', command)
   }
+})
+
+test('every capable hardening recipe is admitted by its own flag spec', () => {
+  for (const subcommand of GIT_CONFIG_CAPABLE_SUBCOMMANDS) {
+    const required = gitHardeningFlags(subcommand)
+    assert.ok(gitSubcommandAllowsFlags(subcommand, required), `${subcommand}: ${required.join(' ')}`)
+  }
+})
+
+test('range-diff plain is soft-unverified and the fully hardened form verifies end-to-end', () => {
+  const plain = witnessFor('git range-diff A...B A...C')
+  assert.equal(plain.status, 'unverified')
+  assert.match(plain.reason ?? '', /^effect_unproven:/)
+  const hardenedCommand = 'git -c core.fsmonitor=false --no-pager range-diff --no-ext-diff --no-textconv A...B A...C'
+  assert.equal(gitConfigEffectUnproven(hardenedCommand), false)
+  assert.equal(witnessFor(hardenedCommand).status, 'verified')
 })

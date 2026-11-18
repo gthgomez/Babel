@@ -285,3 +285,34 @@ test('read-only pipeline statuses with a current byte witness still succeed', ()
     cleanup()
   }
 })
+
+test('fully hardened range-diff reaches VERIFIED_COMPLETE; plain form is soft-unverified', () => {
+  const { root, cleanup } = fixture()
+  try {
+    const base = [
+      { step: 1, tool: 'file_write' as const, target: 'app.ts', exit_code: 0, stdout: '', stderr: '', verified: true },
+      { step: 2, tool: 'test_run' as const, target: 'npm test', exit_code: 0, stdout: 'ok', stderr: '', verified: true },
+    ]
+    const hardened = decidePipelineFinalCompletion({
+      mode: 'deep', status: 'COMPLETE', projectRoot: root, requiredVerifierCommands: ['npm test'],
+      toolCallLog: [
+        ...base,
+        { step: 3, tool: 'shell_exec' as const, target: 'git -c core.fsmonitor=false --no-pager range-diff --no-ext-diff --no-textconv A...B A...C', exit_code: 0, stdout: '', stderr: '', verified: true },
+      ],
+    })
+    assert.equal(hardened.status, 'COMPLETE')
+    assert.equal(hardened.decision?.finalOutcome, 'VERIFIED_COMPLETE')
+    const plain = decidePipelineFinalCompletion({
+      mode: 'deep', status: 'COMPLETE', projectRoot: root, requiredVerifierCommands: ['npm test'],
+      toolCallLog: [
+        ...base,
+        { step: 3, tool: 'shell_exec' as const, target: 'git range-diff A...B A...C', exit_code: 0, stdout: '', stderr: '', verified: true },
+      ],
+    })
+    assert.equal(plain.status, 'COMPLETE')
+    assert.equal(plain.decision?.finalOutcome, 'UNVERIFIED_PATCH')
+    assert.match(plain.condition ?? '', /effect-unproven/)
+  } finally {
+    cleanup()
+  }
+})

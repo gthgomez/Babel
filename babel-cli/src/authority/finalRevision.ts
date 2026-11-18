@@ -444,7 +444,7 @@ const GIT_PROOF_SPECS: Readonly<Record<string, GitProofSpec>> = {
   fsck: { flags: gitFlagSet('--unreachable', '--dangling', '--no-dangling', '--root', '--tags', '--cache', '--no-reflogs', '--connectivity-only', '--strict', '--verbose'), positionals: 'any' },
   version: { flags: gitFlagSet('--build-options'), positionals: 'none' },
   cherry: { flags: gitFlagSet('-v', '--verbose'), positionals: 'any' },
-  'range-diff': { flags: gitFlagSet('--stat', '--no-dual-color', '--creation-factor', '--notes', '--no-notes'), valueFlags: gitFlagSet('--creation-factor'), positionals: 'any' },
+  'range-diff': { flags: gitFlagSet('--stat', '--no-dual-color', '--creation-factor', '--notes', '--no-notes', '--no-ext-diff', '--no-textconv'), valueFlags: gitFlagSet('--creation-factor'), positionals: 'any' },
   branch: { flags: gitFlagSet('--show-current', '--list', '-l', '-a', '--all', '-r', '--remotes', '-v', '-vv', '--verbose', '--contains', '--no-contains', '--points-at', '--merged', '--no-merged', '--sort', '--format', '--column', '--no-column', '--no-color', '--color', '--abbrev', '--no-abbrev', '-i', '--ignore-case'), valueFlags: gitFlagSet('--contains', '--no-contains', '--points-at', '--merged', '--no-merged', '--sort', '--format', '--abbrev'), positionals: 'any', requiresListForPositionals: true, denied: gitFlagSet('-d', '-D', '--delete', '-m', '-M', '--move', '-c', '-C', '--copy', '-f', '--force', '-u', '--set-upstream-to', '--unset-upstream', '--edit-description') },
   tag: { flags: gitFlagSet('-l', '--list', '-n', '--contains', '--no-contains', '--points-at', '--merged', '--no-merged', '--sort', '--format', '--column', '--no-column', '-i', '--ignore-case'), valueFlags: gitFlagSet('--contains', '--no-contains', '--points-at', '--merged', '--no-merged', '--sort', '--format'), attachedValueFlags: ['-n'], positionals: 'any', requiresListForPositionals: true, denied: gitFlagSet('-d', '--delete', '-a', '--annotate', '-s', '--sign', '-u', '--local-user', '-f', '--force', '-m', '-F', '--file', '-e', '--edit') },
   stash: { flags: gitFlagSet('--oneline', '--stat', '--patch', '-p', '-n', '--name-only', '--format'), valueFlags: gitFlagSet('--format', '-n'), attachedValueFlags: ['-n'], positionals: 'any', verbs: gitFlagSet('list', 'show') },
@@ -483,6 +483,22 @@ export const GIT_CONFIG_CAPABLE_SUBCOMMANDS: ReadonlySet<string> = new Set([
 ])
 
 export type GitConfigCapability = 'mechanical' | 'config_capable'
+
+/** Subcommand-local flags a hardening recipe requires, for spec ⊆ predicate checks. */
+export function gitHardeningFlags(subcommand: string): readonly string[] {
+  const sub = subcommand.toLowerCase()
+  if (sub === 'blame') return ['--no-textconv']
+  if (['diff', 'log', 'show', 'whatchanged', 'range-diff'].includes(sub)) {
+    return ['--no-ext-diff', '--no-textconv']
+  }
+  return []
+}
+
+/** Whether a proof-table subcommand admits every supplied flag. */
+export function gitSubcommandAllowsFlags(subcommand: string, flags: readonly string[]): boolean {
+  const spec = GIT_PROOF_SPECS[subcommand.toLowerCase()]
+  return spec !== undefined && flags.every(flag => spec.flags.has(flag))
+}
 
 /** Capability for one proof-table subcommand. */
 export function gitConfigCapability(subcommand: string): GitConfigCapability {
