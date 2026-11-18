@@ -462,8 +462,8 @@ test('common read-only inspection shapes certify after a green verifier', () => 
     'git rev-parse HEAD',
     'git branch --show-current',
     'git describe --tags',
-    'git blame src/app.ts',
-    'git --no-pager grep TODO',
+    'git -c core.fsmonitor=false blame --no-textconv src/app.ts',
+    'git -c core.fsmonitor=false --no-pager grep TODO',
     'git config --get user.name',
     'git config --file .git/config --get user.name',
     'git stash list',
@@ -653,19 +653,19 @@ test('denial corpus is derived from the exported denial structure', () => {
 })
 
 test('config-capability corpus covers every proof-table subcommand', () => {
-  assert.deepEqual([...GIT_CONFIG_CAPABLE_SUBCOMMANDS].sort(), ['diff', 'grep', 'log', 'range-diff', 'show', 'status', 'whatchanged'])
+  assert.deepEqual([...GIT_CONFIG_CAPABLE_SUBCOMMANDS].sort(), ['blame', 'diff', 'grep', 'log', 'range-diff', 'reflog', 'show', 'status', 'whatchanged'])
   for (const subcommand of GIT_READ_ONLY_SUBCOMMANDS) {
     const probe = GIT_PROBES[subcommand]
     assert.ok(probe, `missing probe for ${subcommand}`)
     assert.equal(gitCommandProofReadOnly(probe), true, probe)
     const capability = gitConfigCapability(subcommand)
-    if (capability === 'config_capable') {
-      assert.equal(gitConfigEffectUnproven(probe), true, probe)
+    const unproven = gitConfigEffectUnproven(probe)
+    if (unproven) {
+      assert.equal(capability, 'config_capable', probe)
       const witness = witnessFor(probe)
       assert.equal(witness.status, 'unverified', probe)
       assert.match(witness.reason ?? '', /^effect_unproven:config_capable_git/, probe)
     } else {
-      assert.equal(gitConfigEffectUnproven(probe), false, probe)
       assert.equal(witnessFor(probe).status, 'verified', probe)
     }
   }
@@ -678,9 +678,30 @@ test('hardened config-capable invocations restore verified proof', () => {
     'git -c core.fsmonitor=false --no-pager show --no-ext-diff --no-textconv',
     'git -c core.fsmonitor=false --no-pager whatchanged --no-ext-diff --no-textconv',
     'git -c core.fsmonitor=false --no-pager status',
-    'git --no-pager grep TODO',
+    'git -c core.fsmonitor=false --no-pager grep TODO',
+    'git -c core.fsmonitor=false blame --no-textconv file',
+    'git reflog show --format=%H',
   ]) {
     assert.equal(gitConfigEffectUnproven(command), false, command)
+    assert.equal(witnessFor(command).status, 'verified', command)
+  }
+})
+
+test('gpg format atoms and incomplete grep hardening stay effect-unproven', () => {
+  for (const command of [
+    'git reflog --format=%GG',
+    'git log --format=%GG',
+    'git -c core.fsmonitor=false --no-pager log --no-ext-diff --no-textconv --format=%GG',
+    'git --no-pager grep TODO',
+  ]) {
+    const witness = witnessFor(command)
+    assert.equal(witness.status, 'unverified', command)
+    assert.match(witness.reason ?? '', /^effect_unproven:/, command)
+  }
+  for (const command of [
+    'git -c core.fsmonitor=false --no-pager log --no-ext-diff --no-textconv --format=%H',
+    'git -c core.fsmonitor=false --no-pager grep TODO',
+  ]) {
     assert.equal(witnessFor(command).status, 'verified', command)
   }
 })
@@ -690,13 +711,13 @@ test('inverted table false-block shapes are admitted as unverified, not stale', 
     'git diff --no-renames --text -Sfoo --patience --histogram --summary --minimal --ignore-submodules --compact-summary --dirstat',
     'git log -U3 --unified=3 -w --ignore-all-space',
     'git grep -A3 -B3 -C3 -m1 -q -o -h TODO',
+    'git blame -w -M -C -e -f file',
   ]) {
     const witness = witnessFor(command)
     assert.equal(witness.status, 'unverified', command)
     assert.match(witness.reason ?? '', /^effect_unproven:/, command)
   }
   for (const command of [
-    'git blame -w -M -C -e -f file',
     'sed "y/a/b/" file',
     "sed '1a text' file",
     "sed -n '/start/,/end/p' file",
@@ -759,8 +780,8 @@ test('round-4/5/6 probe equivalence: 20 execution vectors stale, 27 read shapes 
     'git rev-parse HEAD',
     'git branch --show-current',
     'git describe --tags',
-    'git blame src/app.ts',
-    'git --no-pager grep TODO',
+    'git -c core.fsmonitor=false blame --no-textconv src/app.ts',
+    'git -c core.fsmonitor=false --no-pager grep TODO',
     'git config --get user.name',
     'git stash list',
     'git worktree list',
@@ -788,5 +809,18 @@ test('round-4/5/6 probe equivalence: 20 execution vectors stale, 27 read shapes 
   for (const command of readShapes) {
     const status = witnessFor(command).status
     assert.notEqual(status, 'stale', command)
+  }
+})
+
+test('invalid attached -c forms and remote show cannot verify', () => {
+  for (const command of [
+    'git -c=core.fsmonitor=false status',
+    'git -ccore.fsmonitor=false status',
+    'git remote show origin',
+  ]) {
+    assert.equal(witnessFor(command).status, 'stale', command)
+  }
+  for (const command of ['git remote -v', 'git remote get-url origin']) {
+    assert.equal(witnessFor(command).status, 'verified', command)
   }
 })

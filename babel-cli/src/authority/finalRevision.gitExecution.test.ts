@@ -212,3 +212,155 @@ test('repo-configured fsmonitor executes on git status; hardening disables it', 
     cleanup()
   }
 })
+
+test('plain blame runs textconv; hardened blame does not, and verifies', () => {
+  const { root, cleanup } = repo()
+  try {
+    const marker = join(root, 'BLAME_TEXTCONV_RAN')
+    const converter = join(root, 'blame-textconv.sh')
+    writeFileSync(converter, `#!/bin/sh\n: > "${marker}"\ncat\n`)
+    chmodSync(converter, 0o755)
+    const env = gitEnv(root)
+    execFileSync('git', ['config', 'diff.custom.textconv', converter], { cwd: root, env, windowsHide: true })
+    execFileSync('git', ['blame', 'file.bin'], { cwd: root, env, stdio: 'ignore', windowsHide: true })
+    assert.equal(existsSync(marker), true, 'plain blame must apply textconv')
+    const plain = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git blame file.bin', exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(plain.status, 'unverified')
+    assert.equal(plain.reason, 'effect_unproven:config_capable_git')
+    rmSync(marker, { force: true })
+    execFileSync('git', ['-c', 'core.fsmonitor=false', 'blame', '--no-textconv', 'file.bin'], {
+      cwd: root, env, stdio: 'ignore', windowsHide: true,
+    })
+    assert.equal(existsSync(marker), false, '--no-textconv must disable the driver')
+    const hardened = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git -c core.fsmonitor=false blame --no-textconv file.bin', exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(hardened.status, 'verified')
+  } finally {
+    cleanup()
+  }
+})
+
+test('plain grep runs fsmonitor; the full hardening recipe does not', () => {
+  const { root, cleanup } = repo()
+  try {
+    const marker = join(root, 'GREP_FSMONITOR_RAN')
+    const hook = join(root, 'grep-fsmonitor.sh')
+    writeFileSync(hook, `#!/bin/sh\n: > "${marker}"\nprintf '{}'\n`)
+    chmodSync(hook, 0o755)
+    const env = gitEnv(root)
+    execFileSync('git', ['config', 'core.fsmonitor', hook], { cwd: root, env, windowsHide: true })
+    execFileSync('git', ['--no-pager', 'grep', 'needle'], { cwd: root, env, stdio: 'ignore', windowsHide: true })
+    assert.equal(existsSync(marker), true, 'grep must consult fsmonitor')
+    const partial = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git --no-pager grep needle', exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(partial.status, 'unverified')
+    rmSync(marker, { force: true })
+    execFileSync('git', ['-c', 'core.fsmonitor=false', '--no-pager', 'grep', 'needle'], {
+      cwd: root, env, stdio: 'ignore', windowsHide: true,
+    })
+    assert.equal(existsSync(marker), false, '-c core.fsmonitor=false must disable the hook')
+    const hardened = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git -c core.fsmonitor=false --no-pager grep needle', exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(hardened.status, 'verified')
+  } finally {
+    cleanup()
+  }
+})
+
+test('remote show executes core.sshCommand and is denied by the proof table', () => {
+  const { root, cleanup } = repo()
+  try {
+    const marker = join(root, 'SSH_COMMAND_RAN')
+    const ssh = join(root, 'ssh-command.sh')
+    writeFileSync(ssh, `#!/bin/sh\n: > "${marker}"\nexit 1\n`)
+    chmodSync(ssh, 0o755)
+    const env = gitEnv(root)
+    execFileSync('git', ['remote', 'add', 'origin', 'ssh://example.invalid/repo'], { cwd: root, env, windowsHide: true })
+    execFileSync('git', ['config', 'core.sshCommand', ssh], { cwd: root, env, windowsHide: true })
+    try {
+      execFileSync('git', ['remote', 'show', 'origin'], { cwd: root, env, stdio: 'ignore', windowsHide: true })
+    } catch {
+      /* the bogus remote fails after the ssh command runs */
+    }
+    assert.equal(existsSync(marker), true, 'remote show must execute core.sshCommand')
+    assert.equal(evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git remote show origin', exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    }).status, 'stale')
+    assert.equal(evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git remote -v', exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    }).status, 'verified')
+  } finally {
+    cleanup()
+  }
+})
+
+function addFakeSignedCommit(root: string): void {
+  const env = gitEnv(root)
+  const parent = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, env, encoding: 'utf8' }).trim()
+  const tree = execFileSync('git', ['write-tree'], { cwd: root, env, encoding: 'utf8' }).trim()
+  const branch = execFileSync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: root, env, encoding: 'utf8' }).trim()
+  const body = `tree ${tree}\nparent ${parent}\nauthor Fixture <fixture@example.test> 1700000000 +0000\ncommitter Fixture <fixture@example.test> 1700000000 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n fake\n -----END PGP SIGNATURE-----\n\nsigned\n`
+  const commit = execFileSync('git', ['hash-object', '-t', 'commit', '-w', '--stdin', '--literally'], {
+    cwd: root, env, input: body, encoding: 'utf8',
+  }).trim()
+  execFileSync('git', ['update-ref', `refs/heads/${branch}`, commit], { cwd: root, env, windowsHide: true })
+}
+
+test('%G format atoms execute gpg even with hardened diff flags', () => {
+  const { root, cleanup } = repo()
+  try {
+    addFakeSignedCommit(root)
+    const marker = join(root, 'GPG_RAN')
+    const gpg = join(root, 'gpg.sh')
+    writeFileSync(gpg, `#!/bin/sh\n: > "${marker}"\ncat >/dev/null\n`)
+    chmodSync(gpg, 0o755)
+    const env = gitEnv(root)
+    execFileSync('git', ['config', 'gpg.program', gpg], { cwd: root, env, windowsHide: true })
+    execFileSync('git', ['-c', 'core.fsmonitor=false', 'log', '--no-ext-diff', '--no-textconv', '--format=%GG'], {
+      cwd: root, env, stdio: 'ignore', windowsHide: true,
+    })
+    assert.equal(existsSync(marker), true, '%GG must invoke gpg despite hardening')
+    for (const command of [
+      'git -c core.fsmonitor=false --no-pager log --no-ext-diff --no-textconv --format=%GG',
+      'git reflog --format=%GG',
+    ]) {
+      const witness = evaluateFinalRevisionWitness({
+        projectRoot: root,
+        toolCallLog: [GREEN, { tool: 'shell_exec', target: command, exit_code: 0 }],
+        requiredVerifierCommands: ['npm test'],
+      })
+      assert.equal(witness.status, 'unverified', command)
+      assert.match(witness.reason ?? '', /^effect_unproven:/, command)
+    }
+    rmSync(marker, { force: true })
+    execFileSync('git', ['-c', 'core.fsmonitor=false', 'log', '--no-ext-diff', '--no-textconv', '--format=%H'], {
+      cwd: root, env, stdio: 'ignore', windowsHide: true,
+    })
+    assert.equal(existsSync(marker), false)
+    const plain = evaluateFinalRevisionWitness({
+      projectRoot: root,
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: 'git -c core.fsmonitor=false --no-pager log --no-ext-diff --no-textconv --format=%H', exit_code: 0 }],
+      requiredVerifierCommands: ['npm test'],
+    })
+    assert.equal(plain.status, 'verified')
+  } finally {
+    cleanup()
+  }
+})

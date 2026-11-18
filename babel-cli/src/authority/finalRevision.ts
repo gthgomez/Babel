@@ -422,7 +422,7 @@ const GIT_PROOF_SPECS: Readonly<Record<string, GitProofSpec>> = {
   diff: { flags: DIFF_SAFE_FLAGS, valueFlags: gitFlagSet('--diff-filter', '--find-renames', '--find-copies', '--unified', '-U', '--src-prefix', '--dst-prefix', '--word-diff-regex', '--color-words', '--abbrev', '--inter-hunk-context', '-S', '--ignore-submodules', '--dirstat'), attachedValueFlags: ['-U', '-M', '-C', '-S'], positionals: 'any', denied: gitFlagSet('--no-index') },
   log: { flags: LOG_SAFE_FLAGS, valueFlags: LOG_VALUE_FLAGS, attachedValueFlags: ['-n', '-S', '-G', '-L', '-U'], positionals: 'any', allowNumericShorthand: true },
   show: { flags: LOG_SAFE_FLAGS, valueFlags: LOG_VALUE_FLAGS, attachedValueFlags: ['-n', '-S', '-G', '-L', '-U'], positionals: 'any', allowNumericShorthand: true },
-  blame: { flags: gitFlagSet('-L', '--line-porcelain', '--porcelain', '-p', '--incremental', '--root', '--show-name', '--show-number', '-n', '--date', '--abbrev', '--encoding', '--ignore-rev', '--ignore-revs-file', '--reverse', '--first-parent', '--since', '--progress', '--score-debug', '--show-stats', '-s', '-w', '--ignore-all-space', '-M', '--find-renames', '-C', '--find-copies', '-e', '--show-email', '-f'), valueFlags: gitFlagSet('-L', '--date', '--abbrev', '--encoding', '--ignore-rev', '--ignore-revs-file', '--since'), attachedValueFlags: ['-L'], positionals: 'any' },
+  blame: { flags: gitFlagSet('-L', '--line-porcelain', '--porcelain', '-p', '--incremental', '--root', '--show-name', '--show-number', '-n', '--date', '--abbrev', '--encoding', '--ignore-rev', '--ignore-revs-file', '--reverse', '--first-parent', '--since', '--progress', '--score-debug', '--show-stats', '-s', '-w', '--ignore-all-space', '--no-textconv', '-M', '--find-renames', '-C', '--find-copies', '-e', '--show-email', '-f'), valueFlags: gitFlagSet('-L', '--date', '--abbrev', '--encoding', '--ignore-rev', '--ignore-revs-file', '--since'), attachedValueFlags: ['-L'], positionals: 'any' },
   grep: { flags: gitFlagSet('-n', '--line-number', '-i', '--ignore-case', '-w', '--word-regexp', '-v', '--invert-match', '-l', '--files-with-matches', '-L', '--files-without-match', '-c', '--count', '--column', '--color', '--no-color', '--heading', '--no-heading', '--break', '--full-name', '--no-full-name', '--null', '-z', '--cached', '--untracked', '--no-index', '--recursive', '-r', '--no-recursive', '-E', '--extended-regexp', '-G', '--basic-regexp', '-F', '--fixed-strings', '-P', '--perl-regexp', '-e', '-f', '--and', '--or', '--not', '--all-match', '--max-depth', '--threads', '-p', '--show-function', '--function-context', '-W', '-I', '--text', '-A', '-B', '-C', '-m', '-q', '--quiet', '-o', '--only-matching', '-h', '--no-filename'), valueFlags: gitFlagSet('-e', '-f', '--max-depth', '--threads', '-A', '-B', '-C', '-m'), attachedValueFlags: ['-e', '-f', '-A', '-B', '-C', '-m'], positionals: 'any' },
   'cat-file': { flags: gitFlagSet('-t', '-s', '-e', '-p', '--batch', '--batch-check', '--batch-all-objects', '--buffer', '--follow-symlinks', '--unordered', '--allow-unknown-type'), positionals: 'any' },
   'rev-parse': { flags: gitFlagSet('--verify', '--short', '--abbrev-ref', '--symbolic', '--symbolic-full-name', '--all', '--branches', '--tags', '--remotes', '--default', '--sq', '--local-env-vars', '--show-toplevel', '--git-dir', '--absolute-git-dir', '--is-inside-work-tree', '--is-inside-git-dir', '--is-bare-repository', '--is-shallow-repository', '--show-cdup', '--show-prefix', '--show-superproject-working-tree', '--shared-index-path', '--resolve-git-dir', '--path-format', '--disambiguate', '--end-of-options', '--revs-only', '--no-revs', '--flags', '--no-flags', '--not'), valueFlags: gitFlagSet('--default', '--path-format', '--resolve-git-dir'), positionals: 'any' },
@@ -449,7 +449,7 @@ const GIT_PROOF_SPECS: Readonly<Record<string, GitProofSpec>> = {
   tag: { flags: gitFlagSet('-l', '--list', '-n', '--contains', '--no-contains', '--points-at', '--merged', '--no-merged', '--sort', '--format', '--column', '--no-column', '-i', '--ignore-case'), valueFlags: gitFlagSet('--contains', '--no-contains', '--points-at', '--merged', '--no-merged', '--sort', '--format'), attachedValueFlags: ['-n'], positionals: 'any', requiresListForPositionals: true, denied: gitFlagSet('-d', '--delete', '-a', '--annotate', '-s', '--sign', '-u', '--local-user', '-f', '--force', '-m', '-F', '--file', '-e', '--edit') },
   stash: { flags: gitFlagSet('--oneline', '--stat', '--patch', '-p', '-n', '--name-only', '--format'), valueFlags: gitFlagSet('--format', '-n'), attachedValueFlags: ['-n'], positionals: 'any', verbs: gitFlagSet('list', 'show') },
   worktree: { flags: gitFlagSet('--porcelain', '-z'), positionals: 'any', verbs: gitFlagSet('list') },
-  remote: { flags: gitFlagSet('-v', '--verbose', '--all', '--push', '--no-push'), positionals: 'any', verbs: gitFlagSet('-v', '--verbose', 'show', 'get-url') },
+  remote: { flags: gitFlagSet('-v', '--verbose', '--all', '--push', '--no-push'), positionals: 'any', verbs: gitFlagSet('-v', '--verbose', 'get-url') },
   submodule: { flags: gitFlagSet('--cached', '--recursive', '--quiet'), positionals: 'any', verbs: gitFlagSet('status', 'summary') },
   config: { flags: gitFlagSet('--get', '--get-all', '--get-regexp', '--list', '-l', '--show-origin', '--show-scope', '--name-only', '--null', '-z', '--type', '--bool', '--int', '--path', '--global', '--local', '--system', '--file', '-f'), valueFlags: gitFlagSet('--type', '--file', '-f'), positionals: 'max1' },
   notes: { flags: gitFlagSet('--ref', '--format'), valueFlags: gitFlagSet('--ref', '--format'), positionals: 'any', verbs: gitFlagSet('list', 'show') },
@@ -478,7 +478,7 @@ export const GIT_EXEC_WRITE_DENIAL_PROBES: readonly string[] = [
  * Everything else in the proof table is mechanical for worktree bytes.
  */
 export const GIT_CONFIG_CAPABLE_SUBCOMMANDS: ReadonlySet<string> = new Set([
-  'status', 'diff', 'log', 'show', 'grep', 'whatchanged', 'range-diff',
+  'status', 'diff', 'log', 'show', 'grep', 'whatchanged', 'range-diff', 'blame', 'reflog',
 ])
 
 export type GitConfigCapability = 'mechanical' | 'config_capable'
@@ -520,13 +520,6 @@ function parseGitRead(tokens: readonly string[]): ParsedGitRead | null {
       index += 2
       continue
     }
-    if (token.startsWith('-c=') || (token.startsWith('-c') && !token.startsWith('--'))) {
-      const value = token.startsWith('-c=') ? token.slice(3) : token.slice(2)
-      if (!SAFE_GIT_CONFIG.has(value)) return null
-      config.add(value)
-      index += 1
-      continue
-    }
     if (token === '--no-pager') { noPager = true; index += 1; continue }
     if (token === '--exec-path' || token.startsWith('--exec-path=') ||
         token === '--paginate' || token === '-p' || token === '--git-dir' ||
@@ -552,14 +545,33 @@ export function gitCommandProofReadOnly(command: string): boolean {
   return normalizeExecutionBase(tokens[0]) === 'git' && parseGitRead(tokens) !== null
 }
 
+function gitFormatValues(args: readonly string[]): string[] {
+  const values: string[] = []
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!
+    if (token === '--format' || token === '--pretty') {
+      const next = args[index + 1]
+      if (next !== undefined) { values.push(next); index += 1 }
+      continue
+    }
+    if (token.startsWith('--format=')) values.push(token.slice('--format='.length))
+    if (token.startsWith('--pretty=')) values.push(token.slice('--pretty='.length))
+  }
+  return values
+}
+
 function gitHardeningSatisfied(parsed: ParsedGitRead): boolean {
   const has = (flag: string) => parsed.args.includes(flag)
   const fsmonitor = parsed.config.has('core.fsmonitor=false')
   const pager = parsed.noPager || parsed.config.has('core.pager=cat')
+  // %G atoms invoke gpg even when every other hardening flag is present.
+  const gpgFormat = gitFormatValues(parsed.args).some(value => value.includes('%G'))
   if (parsed.sub === 'status') return fsmonitor
-  if (parsed.sub === 'grep') return pager
+  if (parsed.sub === 'grep') return fsmonitor && pager
+  if (parsed.sub === 'blame') return fsmonitor && has('--no-textconv')
+  if (parsed.sub === 'reflog') return !gpgFormat
   if (['diff', 'log', 'show', 'whatchanged', 'range-diff'].includes(parsed.sub)) {
-    return fsmonitor && has('--no-ext-diff') && has('--no-textconv')
+    return !gpgFormat && fsmonitor && has('--no-ext-diff') && has('--no-textconv')
   }
   return true
 }
