@@ -36,7 +36,7 @@ fail: sandbox_image — Sandbox image unavailable or unusable. In Desktop Setup 
 
 `doctor` exited 1. It did not call a model.
 
-Docker is how the default `safe_repo` profile runs project commands in a container. Read-only commands such as `context preview` can still run. A model task that needs tests or other project commands will not get those commands until Docker and an image are ready.
+On the 0.2.0 release, Docker was how the default `safe_repo` profile ran project commands in a container. Current source defaults Ordinary Chat to `host_native`, which does not require Docker. Selecting `safe_repo` (or another container profile) requires Docker and a usable `BABEL_BENCHMARK_DOCKER_IMAGE`; that profile fails closed when Docker, the image, or the isolation arguments are unavailable or unsafe. Read-only commands such as `context preview` can still run either way.
 
 **Desktop Setup is a Windows app button.** It is not a command on Linux or macOS.
 

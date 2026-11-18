@@ -34,6 +34,11 @@ it('reports the effective OS boundary instead of claiming Docker is the default'
   assert.equal(safe.checks.find(check=>check.id==='execution_boundary')?.status,'ok')
   assert.match(safe.checks.find(check=>check.id==='execution_boundary')?.message ?? '',/container \(Docker\)/)
 
+  const imageMissing=runInstalledDoctor({env:{BABEL_BENCHMARK_DOCKER_IMAGE:'synthetic.invalid/image:test'},executionProfile:'safe_repo',dockerProbe:()=>true,imageProbe:()=>false})
+  assert.equal(imageMissing.checks.find(check=>check.id==='docker')?.status,'ok')
+  assert.equal(imageMissing.checks.find(check=>check.id==='sandbox_image')?.status,'fail')
+  assert.equal(imageMissing.checks.find(check=>check.id==='execution_boundary')?.status,'fail')
+
   const unavailable=runInstalledDoctor({env:{},executionProfile:'safe_repo',dockerProbe:()=>false})
   assert.equal(unavailable.status,'fail')
   assert.equal(unavailable.checks.find(check=>check.id==='execution_boundary')?.status,'fail')
