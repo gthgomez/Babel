@@ -495,3 +495,53 @@ test('does persist plugin config and discover plugins inside user overrides', ()
     else process.env['BABEL_PLUGINS_CONFIG'] = previousPluginConfig;
   }
 });
+
+test('plugin tool output honors the external adapter byte budget', async () => {
+  const root = createTempBabelRoot();
+  writePlugin(root, 'sample-large', {
+    schema_version: 1,
+    id: 'sample-large',
+    name: 'Sample Large',
+    version: '0.1.0',
+    trust_level: 'read_only',
+    tools: [
+      {
+        kind: 'static_json',
+        name: 'large_payload',
+        description: 'Return a large payload.',
+        payload: { blob: 'x'.repeat(5_000) },
+      },
+      {
+        kind: 'static_text',
+        name: 'large_text',
+        description: 'Return large text.',
+        text: 'y'.repeat(5_000),
+      },
+    ],
+    slash_commands: [],
+    prompt_skills: [],
+    mcp_servers: [],
+  });
+  enablePlugin('sample-large', { babelRoot: root });
+  const previous = process.env['BABEL_EXTERNAL_TOOL_MAX_BYTES'];
+  process.env['BABEL_EXTERNAL_TOOL_MAX_BYTES'] = '1024';
+  try {
+    const json = await handlePluginTool(
+      { tool: 'plugin_tool', plugin: 'sample-large', name: 'large_payload' },
+      { babelRoot: root },
+    );
+    assert.equal(json.exit_code, 1);
+    assert.match(json.stderr, /plugin_output_too_large/);
+
+    const text = await handlePluginTool(
+      { tool: 'plugin_tool', plugin: 'sample-large', name: 'large_text' },
+      { babelRoot: root },
+    );
+    assert.equal(text.exit_code, 0);
+    assert.match(text.stdout, /truncated at 1024 bytes/)
+    assert.ok(Buffer.byteLength(text.stdout, 'utf8') <= 1_024 + 64);
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_EXTERNAL_TOOL_MAX_BYTES'];
+    else process.env['BABEL_EXTERNAL_TOOL_MAX_BYTES'] = previous;
+  }
+});

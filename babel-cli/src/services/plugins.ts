@@ -23,6 +23,10 @@ import {
 } from '../config/enterprisePolicy.js';
 import type { McpServerConfig } from '../config/mcpServers.js';
 import type { ToolResult } from '../sandbox.js';
+import {
+  boundExternalText,
+  resolveExternalToolMaxOutputBytes,
+} from '../tools/externalAdapterBudget.js';
 
 const PluginIdSchema = z
   .string()
@@ -575,27 +579,41 @@ export async function handlePluginTool(
     );
   }
 
+  const maxBytes = resolveExternalToolMaxOutputBytes();
   if (tool.kind === 'static_text') {
+    const bounded = boundExternalText(renderTemplate(tool.text, []), maxBytes);
     return {
       exit_code: 0,
-      stdout: renderTemplate(tool.text, []),
+      stdout: bounded.truncated
+        ? `${bounded.text}\n...[plugin output truncated at ${maxBytes} bytes]`
+        : bounded.text,
       stderr: '',
     };
   }
 
+  const payload = JSON.stringify(
+    {
+      status: 'success',
+      plugin_id: plugin.manifest.id,
+      tool: tool.name,
+      input: req.input ?? {},
+      output: tool.payload ?? null,
+    },
+    null,
+    2,
+  );
+  const bounded = boundExternalText(payload, maxBytes);
+  if (bounded.truncated) {
+    return pluginErrorResult(
+      'plugin_output_too_large',
+      `Plugin tool "${tool.name}" produced ${bounded.bytes} bytes, over the ${maxBytes}-byte external tool budget.`,
+      plugin.manifest.id,
+    );
+  }
+
   return {
     exit_code: 0,
-    stdout: JSON.stringify(
-      {
-        status: 'success',
-        plugin_id: plugin.manifest.id,
-        tool: tool.name,
-        input: req.input ?? {},
-        output: tool.payload ?? null,
-      },
-      null,
-      2,
-    ),
+    stdout: payload,
     stderr: '',
   };
 }
