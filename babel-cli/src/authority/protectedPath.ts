@@ -24,12 +24,13 @@ const CREDENTIAL_BASENAMES = new Set([
   'cookies.json',
 ]);
 
-const CREDENTIAL_DIRECTORIES = new Set(['.ssh', '.gnupg', '.password-store', 'secrets']);
+const CREDENTIAL_DIRECTORIES = new Set(['.ssh', '.gnupg', '.password-store', '.aws', 'secrets']);
 
 /** Exact documentation templates remain readable; everything else `.env*` is live. */
 function isDotenvCredential(basename: string): boolean {
   if (!basename.startsWith('.env')) return false;
-  if (basename === '.env.example' || basename === '.env.sample' || basename === '.env.template') {
+  // Documentation templates and their variants are readable by convention.
+  if (basename.startsWith('.env.example') || basename.startsWith('.env.sample') || basename.startsWith('.env.template')) {
     return false;
   }
   return /^\.env(?:\.[a-z0-9_-]+)*$/.test(basename);
@@ -89,13 +90,37 @@ function trimArgumentPunctuation(token: string): string {
   return token.replace(/^[("'`<\s]+/, '').replace(/[)"'`>,\s]+$/, '');
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Raw-text fallback built from the same vocabulary, for paths embedded inside
+ * quoted interpreter code (`python -c "...open('.env')..."`). Kept in this
+ * module so the token and substring checks cannot drift apart.
+ */
+const CREDENTIAL_RAW_PATH_RE = new RegExp(
+  [
+    `(?:^|[\\s"'\`\\/:(=,])${'(?:'}` +
+      `\\.env(?!(?:\\.(?:example|sample|template))(?:[./\\\\]|$))(?:\\.[a-z0-9_-]+)*` +
+      `|\\.envrc(?:\\.[a-z0-9_-]+)*` +
+      `|(?:${[...CREDENTIAL_BASENAMES].sort((a, b) => b.length - a.length).map(escapeRegExp).join('|')})` +
+      `|(?:id_rsa|id_ed25519|id_dsa|id_ecdsa)` +
+      `|(?:[a-z0-9_.-]+\\.(?:pem|p12|pfx|key|jks|keystore))` +
+      ')(?=$|[\\s"\'`\\/:),;])',
+    `|(?:^|[\\s"'\`\\/:(])${[...CREDENTIAL_DIRECTORIES].map(escapeRegExp).join('|')}(?:[\\/]|$)` +
+      '|(?:^|[\\s"\'`\\/:(])\\.config[\\/]gh[\\/]',
+  ].join(''),
+  'i',
+);
+
 /**
  * True when a command line mentions a credential-class path.
  *
- * Conservative: tokens are split on whitespace only, so Windows drive paths
- * and quoted fragments keep their shape. This is intentionally a *path*
- * classifier, not a command allowlist: callers keep their own execution
- * policy, and this only identifies the credential effect.
+ * Conservative: tokens are split on whitespace so Windows drive paths keep
+ * their shape, with a fallback for paths quoted inside interpreter code. This
+ * is intentionally a *path* classifier, not a command allowlist: callers keep
+ * their own execution policy, and this only identifies the credential effect.
  */
 export function isCredentialPathReference(command: string): boolean {
   if (!command) return false;
@@ -106,5 +131,5 @@ export function isCredentialPathReference(command: string): boolean {
       if (isCredentialTargetPath(trimArgumentPunctuation(candidate))) return true;
     }
   }
-  return false;
+  return CREDENTIAL_RAW_PATH_RE.test(command);
 }
