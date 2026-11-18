@@ -1296,6 +1296,7 @@ export function promoteImplementWorktree(
         success: false,
         status: 'verification_failed',
         verification,
+        parentStatusAfter: gitPorcelainStatus(projectRoot),
         summary: `Adoption applied ${adoptedPaths.length + deletedPaths.length} path(s) but parent verification failed: ${verification.summary}`,
         error: verification.summary,
       });
@@ -1325,6 +1326,7 @@ export function promoteImplementWorktree(
       status: 'adopted',
       verification,
       worktreeRemoved,
+      parentStatusAfter: gitPorcelainStatus(projectRoot),
       summary: `Adopted ${adoptedPaths.length} file(s) and ${deletedPaths.length} deletion(s) from the child worktree.`,
     });
   }
