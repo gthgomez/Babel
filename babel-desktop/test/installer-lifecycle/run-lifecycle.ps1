@@ -22,6 +22,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'cleanup-receipt.ps1')
 
 $desktop = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $repo = (Resolve-Path (Join-Path $desktop '..')).Path
@@ -31,6 +32,8 @@ $shortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Ba
 $registryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Babel Desktop'
 
 $script:failures = New-Object System.Collections.Generic.List[string]
+$script:guiAttempted = $false
+$guiReceiptPath = Join-Path $desktop 'artifacts/packaged-electron/packaged-electron-acceptance.json'
 function Assert-That {
   param([Parameter(Mandatory = $true)][string]$Description, [Parameter(Mandatory = $true)][scriptblock]$Condition)
   $ok = & $Condition
@@ -83,7 +86,9 @@ function Invoke-Cleanup {
     if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $shortcutPath) { Remove-Item -LiteralPath $shortcutPath -Force -ErrorAction SilentlyContinue }
   }
-  Wait-For -What 'cleanup' -TimeoutSeconds 60 -Condition { -not (Test-Path -LiteralPath $registryPath) }
+  Wait-For -What 'cleanup' -TimeoutSeconds 60 -Condition {
+    -not (Test-Path -LiteralPath $registryPath) -and -not (Test-Path -LiteralPath $installRoot) -and -not (Test-Path -LiteralPath $shortcutPath)
+  }
 }
 
 Write-Host "== Installer lifecycle qualification =="
@@ -102,6 +107,22 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "setup build failed with exit $LASTEXITCODE" }
   $setupV1 = Get-ChildItem -Path $out1 -Filter '*.exe' | Select-Object -First 1 -ExpandProperty FullName
   if (-not $setupV1) { throw 'no Setup.exe produced' }
+  # Keep the exact verified payload and installer identities with GUI evidence.
+  $evidenceDir = Join-Path $desktop 'artifacts/packaged-electron'
+  New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
+  $setupMetadata = Get-ChildItem -Path $out1 -Filter '*.build.json' | Select-Object -First 1 -ExpandProperty FullName
+  if (-not $setupMetadata -or -not (Test-Path -LiteralPath "$setupV1.sha256" -PathType Leaf)) { throw 'setup artifact identity is unavailable' }
+  $buildIdentity = Get-Content -LiteralPath $setupMetadata -Raw | ConvertFrom-Json
+  $checkoutSha = (git -C $repo rev-parse HEAD).Trim()
+  $setupSha = (Get-FileHash -LiteralPath $setupV1 -Algorithm SHA256).Hash.ToLowerInvariant()
+  $payloadSha = (Get-FileHash -LiteralPath $PayloadZip -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($setupSha -ne (Get-Content -LiteralPath "$setupV1.sha256" -Raw).Trim().ToLowerInvariant() -or
+      $payloadSha -ne [string]$buildIdentity.payloadSha256 -or
+      $checkoutSha -ne [string]$buildIdentity.installerSourceSha -or
+      $checkoutSha -ne [string]$buildIdentity.payloadSourceSha) { throw 'setup artifact identity does not match the candidate' }
+  Copy-Item -LiteralPath $setupMetadata -Destination (Join-Path $evidenceDir 'installer-build.json')
+  Copy-Item -LiteralPath "$setupV1.sha256" -Destination (Join-Path $evidenceDir 'installer.sha256')
+  Copy-Item -LiteralPath $Sha256Sums -Destination (Join-Path $evidenceDir 'payload-SHA256SUMS')
 
   # --- 2. Silent install ---------------------------------------------------------
   Write-Host "[2/8] Silent install (/S)"
@@ -129,9 +150,19 @@ try {
   Write-Host "[3b/8] Packaged Electron GUI acceptance"
   $sourceSha = ''
   try { $sourceSha = (git -C $repo rev-parse HEAD).Trim() } catch { }
+  node --test (Join-Path $PSScriptRoot 'cleanup-receipt.test.mjs')
+  if ($LASTEXITCODE -ne 0) { throw 'GUI cleanup receipt control failed' }
+  # Invalidate any previous report before starting the GUI wrapper.
+  [ordered]@{passed=0; failure=@{stage='harness-start'; reason='GUI receipt pending'};
+    journeys=@{cleanup=@{state='unknown'}}} | ConvertTo-Json -Depth 8 |
+      Set-Content -LiteralPath $guiReceiptPath -Encoding utf8
+  $script:guiAttempted = $true
   & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $desktop 'test/packaged-electron-acceptance/run-packaged-gui.ps1') `
     -InstallRoot $installRoot -SourceSha $sourceSha
-  if ($LASTEXITCODE -ne 0) { throw "packaged Electron GUI acceptance failed with exit $LASTEXITCODE" }
+  $guiExit = $LASTEXITCODE
+  $guiCleanup = Get-PackagedCleanupState -ReportPath $guiReceiptPath
+  if ($guiExit -ne 0) { throw "packaged Electron GUI acceptance failed with exit $guiExit" }
+  if ($guiCleanup -ne 'terminated') { throw "packaged Electron GUI cleanup is $guiCleanup" }
 
   # --- 4. Bundled CLI smoke ----------------------------------------------------------
   if (-not $SkipCliSmoke) {
@@ -225,7 +256,14 @@ try {
   Assert-That 'reinstall exits 0 and produces a consistent install' { ($exitCode3 -eq 0) -and $reinstalled }
 } finally {
   Write-Host "== Cleanup =="
-  Invoke-Cleanup
+  $cleanupState = if ($script:guiAttempted) { Get-PackagedCleanupState -ReportPath $guiReceiptPath } else { 'not-started' }
+  if (-not (Test-PackagedCleanupAllowed -GuiAttempted $script:guiAttempted -ReportPath $guiReceiptPath)) {
+    Write-Host "LIFECYCLE CLEANUP BLOCKED: GUI process ownership is $cleanupState; install retained."
+    $script:failures.Add('GUI process ownership unresolved; install retained')
+  } elseif (-not (Invoke-Cleanup)) {
+    Write-Host 'LIFECYCLE CLEANUP FAILED: install, registry or shortcut remains.'
+    $script:failures.Add('install cleanup did not complete')
+  }
   Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
