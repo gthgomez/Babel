@@ -26,6 +26,10 @@ test('ordinary-bug qualification oracle accepts equivalent correct implementatio
     'wrong-on-negative',
     'hardcoded-only-visible-case',
     'returns-string',
+    'table-reading-spoof',
+    'empty-stdout-report',
+    'exits-during-import',
+    'forged-stdout-report',
   ]) {
     assert.ok(report.rejected?.includes(name), `${name} must be rejected`);
   }

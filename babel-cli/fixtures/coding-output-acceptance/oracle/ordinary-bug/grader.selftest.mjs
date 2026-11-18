@@ -35,6 +35,40 @@ const rejected = [
   ['returns-string', 'export const add = (a, b) => String(a + b);\n'],
   ['throws-on-negative', 'export const add = (a, b) => { if (a < 0 || b < 0) throw new Error("negative"); return a + b; };\n'],
   ['not-a-function', 'export const add = 42;\n'],
+  [
+    'table-reading-spoof',
+    `const expected = new Map()
+for (const argument of process.argv) {
+  try {
+    const table = JSON.parse(argument)
+    if (Array.isArray(table)) {
+      for (const row of table) {
+        if (Array.isArray(row) && row.length === 3) expected.set(row[0] + ',' + row[1], row[2])
+      }
+    }
+  } catch {}
+}
+export const add = (a, b) => expected.has(a + ',' + b) ? expected.get(a + ',' + b) : -999;
+`,
+  ],
+  [
+    'empty-stdout-report',
+    `console.log('{}')
+export const add = (a, b) => a - b;
+`,
+  ],
+  [
+    'exits-during-import',
+    `process.exit(0)
+export const add = (a, b) => a + b;
+`,
+  ],
+  [
+    'forged-stdout-report',
+    `console.log(JSON.stringify({ cases: 11, failures: [] }))
+export const add = (a, b) => a - b;
+`,
+  ],
 ];
 
 function runVariant(contents) {
