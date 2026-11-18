@@ -22,6 +22,7 @@ import {
   buildStructuredOutputError,
 } from './base.js';
 import { hardProviderProtocolIssues, mapProviderMessagesToWire } from './providerMessages.js';
+import { createInvocationDeadline, invocationNowMs } from './providerResponsePolicy.js';
 import {
   assertPreparedProviderRequestAdmissible,
   prepareProviderRequest,
@@ -232,7 +233,7 @@ function readStreamWithLimits(
       return;
     }
     opts.signal?.addEventListener('abort', onAbort, { once: true });
-    const remainingDeadline = opts.deadlineAt - Date.now();
+    const remainingDeadline = opts.deadlineAt - invocationNowMs();
     if (remainingDeadline <= 0) {
       finish(() => {
         reader.cancel().catch(() => {});
@@ -1398,7 +1399,7 @@ export class DeepSeekApiRunner implements LlmRunner {
     let lastError: Error | null = null;
     let retryAttempt: number | null = null;
     let retryAttemptId: string | null = null;
-    let attemptDeadlineAt = Date.now() + requestTimeoutMs;
+    let attemptDeadlineAt = createInvocationDeadline(requestTimeoutMs);
     const settleRetry = (outcome: 'succeeded' | 'failed' | 'cancelled'): void => {
       if (retryAttempt === null) return;
       callbacks?.onRetrySettled?.({
@@ -1413,7 +1414,7 @@ export class DeepSeekApiRunner implements LlmRunner {
 
     for (let attempt = 1; attempt <= requestMaxRetries; attempt += 1) {
       lastAttempt = attempt;
-      attemptDeadlineAt = Date.now() + requestTimeoutMs;
+      attemptDeadlineAt = createInvocationDeadline(requestTimeoutMs);
       const controller = new AbortController();
       if (signal) {
         signal.addEventListener('abort', () => controller.abort(), { once: true });

@@ -8,7 +8,7 @@ import { prepareProviderRequest, assertPreparedProviderRequestAdmissible } from 
 import { CampaignPhysicalFetchSession } from '../providerCampaignPhysicalFetch.js'
 import { buildInvocationMetadata } from '../providerResponseMetadata.js'
 import { buildProviderFailureReceipt, providerRequestIdFromResponse } from '../providerFailureReceipt.js'
-import { getRequestTimeoutMs, getRequestMaxRetries, linkExternalAbortSignal, retryDelayMs, sleep } from '../providerResponsePolicy.js'
+import { createInvocationDeadline, getRequestTimeoutMs, getRequestMaxRetries, linkExternalAbortSignal, retryDelayMs, sleep } from '../providerResponsePolicy.js'
 import { getStreamIdleTimeoutMs, readStreamWithLimits } from '../providerResponseStream.js'
 import { isRetryableStatus } from '../providerNormalize.js'
 import { ProviderHttpError } from '../providerHttpError.js'
@@ -120,7 +120,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
     const unlink = linkExternalAbortSignal(controller, signal)
     const controlUnlink = linkExternalAbortSignal(controller, callbacks?.runControl?.signal)
     const timeout = getRequestTimeoutMs()
-    const deadline = Date.now() + timeout
+    const deadline = createInvocationDeadline(timeout)
     const timer = setTimeout(() => controller.abort(), timeout)
     const state: NativeStreamState = { model: null, finishReason: null, inputTokens: null, outputTokens: null, complete: false, parts: [], outputMaterial: '', calls: new Map() }
     const attempts = Math.max(1, getRequestMaxRetries())
