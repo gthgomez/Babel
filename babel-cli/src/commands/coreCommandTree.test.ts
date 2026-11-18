@@ -113,9 +113,17 @@ test('core registration preserves the complete existing command contract', () =>
     'Target project name resolved by the workspace scanner',
     'project help does not enumerate maintainer example repositories',
   );
+  assert.deepEqual(
+    contract.children
+      .find(child => child.name === 'plugins')
+      ?.children.find(child => child.name === 'enable')
+      ?.options.map(option => option.flags),
+    ['--allow-trust <level>', '--allow-mcp-launch', '--json'],
+    'plugin enable exposes explicit trust and MCP launch consent',
+  );
   const legacy = withoutIntentionalCommandExtensions(contract);
   const digest = createHash('sha256').update(JSON.stringify(legacy)).digest('hex');
-  assert.equal(digest, '329263fe08a32ddae3db30223a2ca6717bd2333313d4d57bc2fa86c3da7260ae');
+  assert.equal(digest, 'dd2db1dba2679e67ee5f905a0530225b6613e9c983b975070136209bcd7c288d');
   assert.deepEqual(replay[0], {
     name: 'replay', aliases: [], description: 'Render the replay transcript of persisted action/observation evidence for a conversation',
     args: [{ name: 'conversation-id', required: true, variadic: false, description: '' }],

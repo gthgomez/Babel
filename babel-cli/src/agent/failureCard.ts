@@ -7,6 +7,13 @@ import type { PolicyEvent } from './policyEventLog.js';
 import type { TurnRoutingReceipt } from './turnRoutingReceipt.js';
 import type { ObservationTailEntry } from './observationTails.js';
 import type { TurnSummary } from './turnSummaryScheduler.js';
+import { formatBudgetUsd } from './chatEngineCriticBudget.js';
+
+/** Keep the card's four-decimal contract without turning a real amount into $0.0000. */
+function formatInteractiveCost(value: number): string {
+  const rendered = value.toFixed(4)
+  return value !== 0 && Number(rendered) === 0 ? `$${value.toExponential(2)}` : `$${rendered}`
+}
 
 export interface FailureCardInput {
   taskLabel: string;
@@ -39,7 +46,7 @@ export function renderFailureCard(input: FailureCardInput): string {
       : input.status;
   lines.push(`# ${input.taskLabel} — ${statusLabel}`);
   lines.push('');
-  lines.push(`- **Cost**: $${input.costUsd.toFixed(2)} | **Turns**: ${input.turns} | **Patch**: ${input.patchBytes === 0 ? '0 B' : `${input.patchBytes} B`}`);
+  lines.push(`- **Cost**: ${formatBudgetUsd(input.costUsd)} | **Turns**: ${input.turns} | **Patch**: ${input.patchBytes === 0 ? '0 B' : `${input.patchBytes} B`}`);
 
   if (input.envBlocked || input.status === 'ENV_BLOCKED') {
     lines.push(
@@ -176,7 +183,7 @@ export function buildInteractiveCard(input: InteractiveCardInput): string {
   const label = input.status.toUpperCase();
   lines.push(`── ${label} ──`);
   if (input.costUsd !== undefined) {
-    lines.push(`  Cost: $${input.costUsd.toFixed(4)}`);
+    lines.push(`  Cost: ${formatInteractiveCost(input.costUsd)}`);
   }
   if (input.lastTools && input.lastTools.length > 0) {
     lines.push(formatSessionToolTimeline(input.lastTools));
@@ -191,7 +198,7 @@ export function renderSuccessCard(input: FailureCardInput): string {
   const lines: string[] = [];
   lines.push(`# ${input.taskLabel} — PASSED ✓`);
   lines.push('');
-  lines.push(`- **Cost**: $${input.costUsd.toFixed(2)} | **Turns**: ${input.turns} | **Patch**: ${input.patchBytes} B`);
+  lines.push(`- **Cost**: ${formatBudgetUsd(input.costUsd)} | **Turns**: ${input.turns} | **Patch**: ${input.patchBytes} B`);
   lines.push(`- **Models**: ${input.modelsUsed.join(', ')}`);
 
   if (input.runDir) {

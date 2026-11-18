@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "purpose": "Exact baseline for the W14 dead-code ratchet (npm --prefix babel-cli run check:dead-code). Every module that knip reports as unreachable from the configured entry points is listed once with a category and the reason it is not deleted. The check fails when a new unreachable module appears or when a listed module disappears without removing its baseline entry. Baseline membership is recorded debt, not approval.",
+  "generatedBy": "npx knip --include files --reporter json (babel-cli/knip.json)",
+  "baselineBasis": "Each entry was individually rechecked against base 90583d97 (existence, references, categories). The exact 24-entry set is a post-removal product introduced after f6991bd9: applying this knip config to base would resolve './foo.js' to the physical .js and report the 12 .ts twins as the unreachable side of each pair, so this set must not be presented as a base-commit knip result.",
+  "entriesRecheckedAgainst": "90583d97",
+  "modules": [
+    {
+      "path": "src/bridge/claudeCodeLaunchParity.ts",
+      "category": "unverified",
+      "note": "No static importer found; parity helper. Needs reachability proof before deletion."
+    },
+    {
+      "path": "src/bridge/messaging.ts",
+      "category": "unverified",
+      "note": "No static importer found; bridge messaging helper."
+    },
+    {
+      "path": "src/bridge/remoteUi.ts",
+      "category": "unverified",
+      "note": "No static importer found; remote UI helper. Check against remoteUiAssets/remoteUiCachePolicy before removal."
+    },
+    {
+      "path": "src/cli/sharedOptions.ts",
+      "category": "unverified",
+      "note": "No static importer found; option helpers likely superseded by command modules."
+    },
+    {
+      "path": "src/eval/diagnostics/budget.ts",
+      "category": "unverified",
+      "note": "Diagnostics helper without a static importer."
+    },
+    {
+      "path": "src/eval/diagnostics/policy.ts",
+      "category": "unverified",
+      "note": "Diagnostics helper without a static importer."
+    },
+    {
+      "path": "src/pipeline/swePlanNormalization.ts",
+      "category": "unverified",
+      "note": "Pipeline helper without a static importer."
+    },
+    {
+      "path": "src/pipeline/workspaceLocks.ts",
+      "category": "unverified",
+      "note": "Pipeline helper without a static importer."
+    },
+    {
+      "path": "src/research/v2/access/exaLiteSearchCredentials.ts",
+      "category": "unverified",
+      "note": "Credential-shaped helper; do not touch without the security owner. Only names are recorded here."
+    },
+    {
+      "path": "src/runners/apiFallback.ts",
+      "category": "test_support",
+      "note": "Enumerated as a transport-conformance fixture by src/runners/transportConformance.test.ts."
+    },
+    {
+      "path": "src/runners/claudeCli.ts",
+      "category": "test_support",
+      "note": "Enumerated as a transport-conformance fixture by src/runners/transportConformance.test.ts."
+    },
+    {
+      "path": "src/services/modelSuccessTracker.ts",
+      "category": "candidate_dead",
+      "note": "No references in src, scripts or tests."
+    },
+    {
+      "path": "src/services/reviewTrustedAuthority.ts",
+      "category": "test_support",
+      "note": "Read as source text by src/services/reviewCustody.test.ts; keep as a reviewed construction wrapper."
+    },
+    {
+      "path": "src/services/semanticContext.ts",
+      "category": "candidate_dead",
+      "note": "No references in src, scripts or tests."
+    },
+    {
+      "path": "src/services/systemMonitor.ts",
+      "category": "candidate_dead",
+      "note": "No references in src, scripts or tests."
+    },
+    {
+      "path": "src/stages/autoVerifierDiscovery.ts",
+      "category": "candidate_dead",
+      "note": "No references in src, scripts or tests; verifier plans are built by requiredVerifierContract."
+    },
+    {
+      "path": "src/testUtils/tempRunsDir.ts",
+      "category": "test_support",
+      "note": "Test helper; keep until its remaining caller is verified on every test entry path."
+    },
+    {
+      "path": "src/tools/_generated/toolNames.generated.ts",
+      "category": "generated",
+      "note": "Generated registry; deletion needs the generator/consumer review, not a dead-code guess."
+    },
+    {
+      "path": "src/ui/agentTranscript.ts",
+      "category": "candidate_dead",
+      "note": "No references in src, scripts or tests."
+    },
+    {
+      "path": "src/ui/frameStats.ts",
+      "category": "candidate_dead",
+      "note": "No references in src, scripts or tests."
+    },
+    {
+      "path": "src/ui/rendererPaneAdapter.ts",
+      "category": "candidate_dead",
+      "note": "No references in src, scripts or tests."
+    },
+    {
+      "path": "src/ui/terminalBuffer.ts",
+      "category": "candidate_dead",
+      "note": "No references in src, scripts or tests."
+    },
+    {
+      "path": "src/ui/terminalDetection.ts",
+      "category": "boundary_registry",
+      "note": "Holds a reviewed terminal-probe grant in config/architectural-budget/process-boundaries.json; removal must update that registry."
+    },
+    {
+      "path": "src/utils/cacheAwarePromptBuilder.ts",
+      "category": "candidate_dead",
+      "note": "No references in src, scripts or tests."
+    }
+  ]
+}

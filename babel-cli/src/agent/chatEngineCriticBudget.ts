@@ -116,6 +116,61 @@ export function currentTurnHasMutation(
   );
 }
 
+/** Show a nonzero USD amount without rounding it to a false $0.00. */
+export function formatBudgetUsd(value: number): string {
+  if (!Number.isFinite(value)) return 'unlimited'
+  if (value === 0) return '$0.00'
+  const absolute = Math.abs(value)
+  if (absolute >= 1) return `$${value.toFixed(2)}`
+  const digits = absolute >= 0.01 ? 4 : 6
+  const rendered = value.toFixed(digits).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')
+  // Never turn a real nonzero amount into a false zero.
+  return Number(rendered) === 0 ? `$${value.toExponential(2)}` : `$${rendered}`
+}
+
+/**
+ * Conservative preauthorization for one physical request.
+ *
+ * Unknown pricing yields `undefined` (caller must not claim a hard ceiling for
+ * that request); a known estimate must fit in the remaining allowance before
+ * dispatch, so a tiny cap cannot be exceeded by one request.
+ */
+export function estimateRequestCostUsd(input: {
+  inputTokens: number | null | undefined;
+  outputTokens: number | null | undefined;
+  inputCostPer1M: number | null | undefined;
+  outputCostPer1M: number | null | undefined;
+}): number | undefined {
+  const inputPrice = input.inputCostPer1M;
+  const outputPrice = input.outputCostPer1M;
+  if (typeof inputPrice !== 'number' || !Number.isFinite(inputPrice) ||
+    typeof outputPrice !== 'number' || !Number.isFinite(outputPrice)) return undefined
+  const inputTokens = Math.max(1, Math.floor(input.inputTokens ?? 0))
+  const outputTokens = Math.max(1, Math.floor(input.outputTokens ?? 0))
+  return (inputTokens * inputPrice + outputTokens * outputPrice) / 1_000_000
+}
+
+/** Refuse a finite-cap dispatch when the next request cannot fit inside it. */
+export function checkCostPreauthorization(input: {
+  totalCostUsd: number;
+  maxCostUsd: number;
+  estimatedNextRequestCostUsd?: number | null;
+}): { ok: boolean; reason?: string } {
+  const estimate = input.estimatedNextRequestCostUsd
+  if (!Number.isFinite(input.maxCostUsd) || typeof estimate !== 'number' || !Number.isFinite(estimate) || estimate <= 0) {
+    return { ok: true }
+  }
+  const remaining = Math.max(0, input.maxCostUsd - input.totalCostUsd)
+  if (remaining + 1e-12 >= estimate) return { ok: true }
+  return {
+    ok: false,
+    reason:
+      `Cost budget preauthorization denied: remaining ${formatBudgetUsd(remaining)} of ` +
+      `${formatBudgetUsd(input.maxCostUsd)} cannot cover the estimated next request ` +
+      `${formatBudgetUsd(estimate)}. Babel made no paid request.`,
+  }
+}
+
 export function checkCostWallBudgets(input: {
   totalCostUsd: number;
   maxCostUsd: number;
@@ -125,6 +180,7 @@ export function checkCostWallBudgets(input: {
   declaredWallMs?: number;
   postWriteRepairWallCapMs?: number | null;
   criticRepairCostCapUsd?: number | null;
+  estimatedNextRequestCostUsd?: number | null;
   nowMs?: number;
 }): { ok: boolean; reason?: string; limiter?: ChatRunLimiter } {
   if (Number.isFinite(input.maxCostUsd) && input.totalCostUsd >= input.maxCostUsd) {
@@ -135,7 +191,15 @@ export function checkCostWallBudgets(input: {
     return {
       ok: false,
       limiter,
-      reason: `Cost budget exceeded ($${input.totalCostUsd.toFixed(2)} of $${input.maxCostUsd.toFixed(2)}) [${limiter}].`,
+      reason: `Cost budget exceeded (${formatBudgetUsd(input.totalCostUsd)} of ${formatBudgetUsd(input.maxCostUsd)}) [${limiter}].`,
+    };
+  }
+  const preauthorization = checkCostPreauthorization(input)
+  if (!preauthorization.ok) {
+    return {
+      ok: false,
+      limiter: 'cost',
+      ...(preauthorization.reason !== undefined ? { reason: preauthorization.reason } : {}),
     };
   }
   if (input.sessionStartTime > 0) {

@@ -190,7 +190,9 @@ describe('PR185 residual Chat runtime repairs', () => {
         task: 'fresh scoped task',
         projectRoot,
         model: 'deepseek-v4-flash',
-        maxCostUsd: 0.01,
+        maxCostUsd: 0.02,
+        // Keep the conservative per-request reserve below the $0.02 test cap.
+        maxTokensPerRound: 1_000,
       });
       const first = engine.applyUserSubmission({ userInput: 'fresh scoped task' });
       const state = engine as unknown as {
@@ -237,7 +239,9 @@ describe('PR185 residual Chat runtime repairs', () => {
         runId,
         resumeExisting: true,
         model: 'deepseek-v4-flash',
-        maxCostUsd: 0.01,
+        maxCostUsd: 0.02,
+        // Keep the conservative per-request reserve below the $0.02 test cap.
+        maxTokensPerRound: 1_000,
       });
       const continued = resumed.applyUserSubmission({
         userInput: 'continue the independent scoped task',
@@ -275,7 +279,9 @@ describe('PR185 residual Chat runtime repairs', () => {
         task: 'restart-safe scoped task',
         projectRoot,
         model: 'deepseek-v4-flash',
-        maxCostUsd: 0.01,
+        maxCostUsd: 0.02,
+        // Keep the conservative per-request reserve below the $0.02 test cap.
+        maxTokensPerRound: 1_000,
       });
       engine.applyUserSubmission({ userInput: 'restart-safe scoped task' });
       const metadata: RunnerInvocationMetadata = {
@@ -305,6 +311,7 @@ describe('PR185 residual Chat runtime repairs', () => {
         projectRoot,
         model: 'deepseek-v4-flash',
         maxCostUsd: 0.02,
+        maxTokensPerRound: 1_000,
       });
       resumed.assignRunId(engine.getEngineRunId());
       const resumedState = resumed as unknown as {

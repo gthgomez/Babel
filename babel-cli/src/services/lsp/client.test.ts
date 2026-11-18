@@ -6,12 +6,22 @@ import { describe, test, afterEach } from 'node:test';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createLspClient } from './client.js';
+import { createLspClient, type LspClient } from './client.js';
+import { LSP_MAX_HEADER_BYTES } from './framing.js';
 
-describe('LSP Client', () => {
+describe('LSP Client', { timeout: 45_000 }, () => {
   let tempDir: string | null = null;
+  const clients: LspClient[] = [];
 
-  afterEach(() => {
+  function makeClient(name: string): LspClient {
+    const client = createLspClient(name);
+    clients.push(client);
+    return client;
+  }
+
+  afterEach(async () => {
+    await Promise.allSettled(clients.map((client) => client.stop()));
+    clients.length = 0;
     if (tempDir) {
       try {
         rmSync(tempDir, { recursive: true, force: true });
@@ -186,7 +196,7 @@ stdin.on('end', () => {
 
   test('start and initialize successfully', async () => {
     const scriptPath = createMockScript();
-    const client = createLspClient('mock-test');
+    const client = makeClient('mock-test');
 
     await client.start(process.execPath, [scriptPath]);
 
@@ -209,7 +219,7 @@ stdin.on('end', () => {
   test('strips unknown inherited and per-server environment variables', async () => {
     const scriptPath = createMockScript(true);
     const capturePath = join(tempDir!, 'captured-env.txt');
-    const client = createLspClient('mock-safe-env');
+    const client = makeClient('mock-safe-env');
     const previousSecret = process.env.CODEX_TEST_SECRET;
     process.env.CODEX_TEST_SECRET = 'synthetic-parent-secret';
 
@@ -232,7 +242,7 @@ stdin.on('end', () => {
 
   test('send hover request and receive response', async () => {
     const scriptPath = createMockScript();
-    const client = createLspClient('mock-hover');
+    const client = makeClient('mock-hover');
 
     await client.start(process.execPath, [scriptPath]);
     await client.initialize({
@@ -257,7 +267,7 @@ stdin.on('end', () => {
 
   test('send textDocument/didOpen notification', async () => {
     const scriptPath = createMockScript();
-    const client = createLspClient('mock-didopen');
+    const client = makeClient('mock-didopen');
 
     await client.start(process.execPath, [scriptPath]);
     await client.initialize({
@@ -293,7 +303,7 @@ stdin.on('end', () => {
 
   test('shutdown stops the server gracefully', async () => {
     const scriptPath = createMockScript();
-    const client = createLspClient('mock-shutdown');
+    const client = makeClient('mock-shutdown');
 
     await client.start(process.execPath, [scriptPath]);
     await client.initialize({
@@ -310,7 +320,7 @@ stdin.on('end', () => {
 
   test('sendRequest throws when client is not initialized', async () => {
     const scriptPath = createMockScript();
-    const client = createLspClient('mock-not-init');
+    const client = makeClient('mock-not-init');
 
     await client.start(process.execPath, [scriptPath]);
 
@@ -323,4 +333,53 @@ stdin.on('end', () => {
 
     await client.stop();
   });
+  test('oversized garbage frame resets the bounded read buffer', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'lsp-test-poison-'));
+    const scriptPath = join(tempDir, 'mock-server.mjs');
+    writeFileSync(
+      scriptPath,
+      `
+import { stdin, stdout } from 'node:process';
+let poisoned = false;
+function writeMessage(msg) {
+  const body = JSON.stringify(msg);
+  stdout.write('Content-Length: ' + Buffer.byteLength(body, 'utf8') + '\\r\\n\\r\\n' + body);
+}
+stdin.on('data', (chunk) => {
+  const text = chunk.toString();
+  if (poisoned) {
+    if (text.includes('shutdown')) {
+      const shutdownId = text.match(/"id":(\\d+)/);
+      if (shutdownId) writeMessage({ jsonrpc: '2.0', id: Number(shutdownId[1]), result: null });
+    } else if (text.includes('exit')) {
+      process.exit(0);
+    }
+    return;
+  }
+  poisoned = true;
+  const idMatch = text.match(/"id":(\\d+)/);
+  const id = idMatch ? Number(idMatch[1]) : 1;
+  stdout.write('x'.repeat(${LSP_MAX_HEADER_BYTES + 4096}));
+  setTimeout(() => {
+    writeMessage({
+      jsonrpc: '2.0',
+      id,
+      result: { capabilities: {}, serverInfo: { name: 'mock-lsp', version: '1.0.0' } },
+    });
+  }, 100);
+});
+`,
+      'utf-8',
+    );
+
+    const client = makeClient('mock-poison');
+    await client.start(process.execPath, [scriptPath]);
+    const result = await client.initialize({
+      processId: process.pid,
+      rootUri: 'file:///project',
+      capabilities: {},
+    });
+    assert.equal(result.serverInfo?.name, 'mock-lsp');
+  });
+
 });

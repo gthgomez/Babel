@@ -212,7 +212,8 @@ async function runDeepCommand(taskParts: string[], options: DeepCommandOptions):
   if (!options.model) {
     const selected = selectedConnectionModel({}, options.projectRoot ?? process.cwd());
     if (selected) options = { ...options, model: selected };
-    else if (process.env['BABEL_OFFLINE'] !== '1' && process.env['BABEL_OFFLINE'] !== 'true') throw new Error('SETUP_REQUIRED: Run babel-harness setup before starting model-backed work.');
+    else if (process.env['BABEL_OFFLINE'] === '1' || process.env['BABEL_OFFLINE'] === 'true') throw new Error('OFFLINE_MODEL_REQUIRED: Offline mode needs an explicit local model. Save and select an Ollama connection or pass --model with a local connection; no provider request was made.');
+    else throw new Error('SETUP_REQUIRED: Run babel-harness setup before starting model-backed work.');
   }
   const task = normalizeLiteTask(taskParts);
   if (!task) {
