@@ -370,6 +370,7 @@ describe('promoteImplementWorktree (W2.1 merge)', () => {
       result.diagnostics.some((d) => d.code === 'worktree_retained_unrecorded_changes'),
       JSON.stringify(result.diagnostics),
     );
+    assert.deepEqual(result.unrecordedPaths, ['src/shell-only.txt']);
     const manifest = JSON.parse(readFileSync(result.adoptionManifestPath!, 'utf-8')) as {
       unrecorded_paths?: string[];
     };

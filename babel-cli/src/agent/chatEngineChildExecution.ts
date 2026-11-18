@@ -584,6 +584,7 @@ export async function executeSubAgentAction(
               `parent_tree_clean: ${implResult.parentTreeClean}`,
               `steps: ${implResult.stepsExecuted}`,
               `changed_files: ${implResult.changedFiles.map((f) => f.path).join(", ") || "none"}`,
+              `unrecorded_paths: ${implResult.unrecordedPaths?.join(", ") || "none"}`,
               `indeterminate_paths: ${implResult.indeterminatePaths?.join(", ") || "none"}`,
               implResult.summary,
             ].join("\n");
