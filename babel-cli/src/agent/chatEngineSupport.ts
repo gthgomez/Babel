@@ -24,6 +24,8 @@ import { normalizeModelToolName } from './canonicalToolMapping.js';
 import { invalidateReadCacheForPath } from './codingLoop/index.js';
 import type { ChatEngineActionExecutorHost } from './chatEngineContracts.js';
 
+export { summarizeDroppedTurns } from './compactionSummary.js';
+
 /** Drop read evidence for observed paths, or all reads for an unknown shell footprint. */
 export function invalidateChatPathReads(
   host: Pick<ChatEngineActionExecutorHost, 'readCache' | 'fullReadCounts' | 'readCacheKey'>,
@@ -341,25 +343,6 @@ export async function runPostEditStaticCheck(
   } catch {
     return null;
   }
-}
-
-/** Lightweight text summary of dropped conversation turns (no LLM). */
-export function summarizeDroppedTurns(dropped: ChatMessage[]): string {
-  const facts: string[] = [];
-  for (const m of dropped) {
-    if (m.role === 'tool' && m.content) {
-      const firstLine = m.content.split('\n')[0]?.trim();
-      if (firstLine && firstLine.length > 10 && firstLine.length < 200) {
-        facts.push(`- ${firstLine}`);
-      }
-    } else if (m.role === 'user' && m.content) {
-      facts.push(`- User asked: "${m.content.slice(0, 120)}"`);
-    }
-  }
-  if (facts.length > 0) {
-    return `[Compacted ${dropped.length} messages. Key context:\n${facts.slice(0, 8).join('\n')}]`;
-  }
-  return `[${dropped.length} earlier messages compacted for length]`;
 }
 
 export type BlockedToolLogEntry = {
