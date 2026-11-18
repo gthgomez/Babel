@@ -428,6 +428,7 @@ export function explicitNodeTestFileArgs(command: string): string[] | null {
   const valueFlags = new Set([
     '--test-name-pattern', '--test-reporter', '--test-reporter-destination',
     '--test-shard', '--test-timeout', '--test-concurrency',
+    '--experimental-test-isolation', '--test-isolation',
   ]);
   const booleanFlags = new Set(['--test-only', '--test-force-exit', '--experimental-test-coverage']);
   for (let index = 0; index < args.length; index++) {

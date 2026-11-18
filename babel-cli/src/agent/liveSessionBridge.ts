@@ -21,6 +21,8 @@ import {inferTaskAcceptanceV3} from './taskAcceptanceMeaning.js';
 import {
   bindExecutableVerifiersToTaskAcceptance,
   mergeTrustedVerifierCommands,
+  relevanceBoundVerifierCommands,
+  relevanceBoundVerifierInputFiles,
 } from './taskAcceptanceExecutableBinding.js';
 import { designatedWitnessProtectedInputs, existingNodeVerifierInputFiles } from './taskAcceptanceProtectedInputs.js';
 import { join } from 'node:path';
@@ -344,17 +346,30 @@ export function resolveLiveSessionAuthority(input: {
     meaning: inferredMeaning,
     trustedVerifierCommands,
     existingVerifierInputFiles,
-    ...(input.projectRoot ? { defaultWorkingDirectory: '.' } : {}),
+    ...(input.projectRoot ? { defaultWorkingDirectory: '.', projectRoot: input.projectRoot } : {}),
   });
   // A designated regression witness makes the already-present tests and their
   // script definitions protected inputs, enforced by the execution gate from
-  // admission through completion. Ordinary tasks keep the default set.
+  // admission through completion. A relevance-bound inferred goal freezes the
+  // verifier inputs that establish its relevance. Ordinary tasks keep the
+  // default set.
   const protectedPaths = new Set(input.protectedPaths ?? ['.env', '.git']);
   if (input.projectRoot) {
-    for (const path of [...designatedWitnessProtectedInputs(input.projectRoot, meaning), ...existingVerifierInputFiles]) {
+    for (const path of [
+      ...designatedWitnessProtectedInputs(input.projectRoot, meaning),
+      ...relevanceBoundVerifierInputFiles(input.projectRoot, meaning),
+      ...existingVerifierInputFiles,
+    ]) {
       protectedPaths.add(path);
     }
   }
+  // A relevance-bound witness is a required verifier for this objective, not
+  // only descriptive evidence: completion must cover it with a current green
+  // receipt.
+  const requiredVerifierCommands = [...new Set([
+    ...(input.verifierRequirements ?? []),
+    ...relevanceBoundVerifierCommands(meaning),
+  ])];
   const contract = freezeTaskContract(
     buildTaskContractV1({
       mode: input.mode,
@@ -365,7 +380,7 @@ export function resolveLiveSessionAuthority(input: {
       acceptance: meaning.criteria,
       non_goals: ['Do not expand scope beyond the user request'],
       protected_paths: [...protectedPaths],
-      verifier_requirements: input.verifierRequirements ?? [],
+      verifier_requirements: requiredVerifierCommands,
       ...(input.maxTurns !== undefined ? { max_turns: input.maxTurns } : {}),
       allowed_effects:
         scope.kind==='conversation' ? [] : input.mode === 'plan'

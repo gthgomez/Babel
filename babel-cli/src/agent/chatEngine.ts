@@ -412,7 +412,7 @@ import {
   hashContent as hashContentFn,
 } from "./chatEngineVerifierSession.js";
 import { resolveAcceptedReadOnlyTerminal } from "./chatEngineMutatingNoChangeTerminal.js";
-import { seedChatVerifierDependencyHashes } from "./verifierDependencyAdmission.js";
+import { contractMeaningCommands, seedChatVerifierDependencyHashes } from "./verifierDependencyAdmission.js";
 import { admitVerifierCustodyViolation } from "./verifierCustodyAdmission.js";
 import { RepetitionDetector } from "./repetitionDetector.js";
 import { captureThought } from "./thoughtCapture.js";
@@ -4400,6 +4400,7 @@ export class ChatEngine {
       hashes: this.verifierDependencyHashes,
       resolvedVerifierCommands: this.getResolvedRequiredVerifiers(),
       discoveredTestCommands: this.discoveredTestCommands.map((entry) => entry.command),
+      meaningVerifierCommands: contractMeaningCommands(this.parity.liveAuthority?.taskContract.acceptance),
     });
   }
 

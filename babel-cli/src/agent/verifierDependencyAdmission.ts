@@ -3,18 +3,45 @@
  * dependency hash seed list without changing verifierIntegrity resolution (#507).
  */
 import { inferTaskAcceptanceV3 } from './taskAcceptanceMeaning.js';
-import { explicitCriterionVerifierCommands } from './taskAcceptanceExecutableBinding.js';
+import {
+  canonicalCommandFromFrozenVerification,
+  contractMeaningVerifierCommands,
+  explicitCriterionVerifierCommands,
+} from './taskAcceptanceExecutableBinding.js';
 import { initializeVerifierDependencyHashes } from './chatEngineVerifierSession.js';
+import type { AcceptanceRequirementV1 } from './taskContract.js';
+
+/** Commands frozen by executable acceptance criteria already admitted to the contract. */
+export function contractVerifierCommands(
+  acceptance: readonly AcceptanceRequirementV1[] | undefined,
+): string[] {
+  const commands: string[] = [];
+  for (const requirement of acceptance ?? []) {
+    const command = canonicalCommandFromFrozenVerification(requirement.verification);
+    if (command) commands.push(command);
+  }
+  return [...new Set(commands)];
+}
+
+/** Meaning-derived executable criteria only; used for the tamper fail-closed check. */
+export function contractMeaningCommands(
+  acceptance: readonly AcceptanceRequirementV1[] | undefined,
+): string[] {
+  return contractMeaningVerifierCommands(acceptance ?? []);
+}
 
 export function admissionVerifierFreezeCommands(input: {
   task: string;
   resolvedVerifierCommands: readonly string[];
   discoveredTestCommands: readonly string[];
+  /** Meaning-derived executable criteria already frozen by admission (witness/relevance). */
+  meaningVerifierCommands?: readonly string[];
 }): string[] {
   const meaning = inferTaskAcceptanceV3(input.task);
   return [...new Set([
     ...input.resolvedVerifierCommands,
     ...explicitCriterionVerifierCommands(meaning),
+    ...(input.meaningVerifierCommands ?? []),
     ...input.discoveredTestCommands.map((command) => command.trim()).filter(Boolean),
   ])];
 }
@@ -26,16 +53,22 @@ export function seedChatVerifierDependencyHashes(input: {
   hashes: Map<string, string>;
   resolvedVerifierCommands: readonly string[];
   discoveredTestCommands: readonly string[];
+  meaningVerifierCommands?: readonly string[];
 }): boolean {
   const commands = admissionVerifierFreezeCommands({
     task: input.task,
     resolvedVerifierCommands: input.resolvedVerifierCommands,
     discoveredTestCommands: input.discoveredTestCommands,
+    ...(input.meaningVerifierCommands ? { meaningVerifierCommands: input.meaningVerifierCommands } : {}),
   });
-  return initializeVerifierDependencyHashes(
+  const unfrozen = initializeVerifierDependencyHashes(
     input.task,
     input.projectRoot,
     input.hashes,
     commands,
-  ).length > 0;
+  );
+  // A verifier that bound a requirement must have a non-empty frozen input set:
+  // otherwise its inputs cannot be watched for tamper and it must not certify.
+  if ((input.meaningVerifierCommands?.length ?? 0) > 0 && input.hashes.size === 0) return true;
+  return unfrozen.length > 0;
 }

@@ -1,3 +1,5 @@
+import { existsSync, statSync } from 'node:fs'
+import { dirname, join, posix } from 'node:path'
 import { canonicalJson, sha256Canonical } from '../acceptance/canonical.js'
 import { formatArgvAsCommand, parseCommandArgv } from '../utils/commandArgv.js'
 import {
@@ -8,6 +10,11 @@ import {
 import type { AcceptanceRequirementV1, AcceptanceRequirementType, VerificationSpecV1 } from './taskContract.js'
 import type { AcceptanceMeaningSource, TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
+import {
+  readVerifierCommandInput,
+  verifierCommandInputFiles,
+  type VerifierCommandInputOverrides,
+} from './verifierCommandInputs.js'
 
 function isUnresolvedCriterion(criterion: AcceptanceRequirementV1): boolean {
   return (
@@ -397,6 +404,255 @@ function bindDesignatedWitnessToCriterion(
   }
 }
 
+export const ACCEPTANCE_RELEVANCE_BINDING_REF = 'babel:acceptance-relevance-bind:v1'
+const RELEVANCE_WITNESS_MARKER = 'relevance-matched executable witness'
+
+const RELEVANT_PATH_EXTENSION =
+  /\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|swift|php|cs|txt|csv|tsv|json|ya?ml|toml|ini|cfg|conf|md|sh|sql|html|css)$/i
+const PATH_CANDIDATE_RE =
+  /(?:^|[\s`"'(])((?:\.{1,2}\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)*\.[A-Za-z0-9]{1,12})(?=$|[\s`"'),;:])/g
+const CALL_EXPRESSION_RE =
+  /\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(([^()\n]{0,160})\)/
+const STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'must', 'should', 'will', 'from',
+  'returns', 'return', 'equals', 'equal', 'becomes', 'produces', 'outputs',
+  'when', 'then', 'into', 'have', 'has', 'are', 'its', 'all', 'any', 'not',
+])
+const REGEX_SPECIALS = /[.*+?^${}()|[\]\\]/g
+
+function escapeRegex(value: string): string {
+  return value.replace(REGEX_SPECIALS, '\\$&')
+}
+
+interface RelevanceSpec {
+  targetPaths: string[]
+  callPattern: RegExp | null
+  keywords: string[]
+  /** Observable values stated in the goal; the witness must contain them. */
+  literals: string[]
+  /** Exact expected result phrase (whitespace-sensitive) from the goal. */
+  fragment: string | null
+}
+
+function normalizeProjectPath(value: string): string {
+  const normalized = posix.normalize(value.replace(/\\/g, '/'))
+  return normalized.replace(/^\.\//, '').replace(/\/+/g, '/')
+}
+
+function pathTokenCandidates(description: string): string[] {
+  const candidates = new Set<string>()
+  for (const match of description.matchAll(PATH_CANDIDATE_RE)) {
+    const token = match[1]!
+    if (/^https?:/i.test(token) || token.includes('://')) continue
+    if (!RELEVANT_PATH_EXTENSION.test(token)) continue
+    candidates.add(normalizeProjectPath(token))
+  }
+  return [...candidates]
+}
+
+function relevanceSpec(description: string): RelevanceSpec | null {
+  const targetPaths = pathTokenCandidates(description)
+  const call = CALL_EXPRESSION_RE.exec(description)
+  let callPattern: RegExp | null = null
+  if (call) {
+    const symbol = escapeRegex(call[1]!)
+    const args = call[2]!.trim()
+    if (args) {
+      const tokens = args
+        .split(/[^A-Za-z0-9_$.-]+/)
+        .map(token => token.trim())
+        .filter(token => token.length > 0)
+        .map(escapeRegex)
+      callPattern = tokens.length
+        ? new RegExp(`\\b${symbol}\\s*\\(\\s*${tokens.join('\\s*,\\s*')}\\s*\\)`)
+        : new RegExp(`\\b${symbol}\\s*\\(`)
+    } else {
+      callPattern = new RegExp(`\\b${symbol}\\s*\\(`)
+    }
+  }
+  // The expected observable value ("so ... is safe", "answer=42").
+  const expectation = description.match(/\bso\b([\s\S]{1,200})$/i)?.[1] ?? ''
+  const keywords = [...new Set(
+    expectation
+      .split(/[^A-Za-z0-9_$.-]+/)
+      .map(token => token.trim())
+      .filter(token => token.length >= 2 && !STOPWORDS.has(token.toLowerCase())),
+  )]
+  const literals = [...new Set([
+    ...[...expectation.matchAll(/[\"'`]([^\"'`\n]{1,120})[\"'`]/g)].map(match => match[1]!),
+    ...[...expectation.matchAll(/\b\d+(?:\.\d+)?\b/g)].map(match => match[0]),
+  ])]
+  const resultVerb = /\b(?:returns?|equals?|is|becomes?|outputs?|produces?)\b/gi
+  const verbMatches = [...description.matchAll(resultVerb)]
+  const lastVerb = verbMatches.at(-1)
+  const resultTail = lastVerb && description.length - (lastVerb.index! + lastVerb[0].length) <= 200
+    ? description.slice(lastVerb.index! + lastVerb[0].length).trim().replace(/[.;]+$/, '').trim()
+    : undefined
+  const fragment = resultTail
+    ? resultTail.replace(/^[\`\"']/, '').replace(/[\`\"']$/, '')
+    : null
+  if (!targetPaths.length && !callPattern) return null
+  return { targetPaths, callPattern, keywords, literals, fragment }
+}
+
+/** References inside a verifier input that resolve to an existing project file. */
+function referencedExistingPaths(
+  projectRoot: string,
+  inputFile: string,
+  content: string,
+  fs: VerifierCommandInputOverrides,
+): string[] {
+  const resolved = new Set<string>()
+  // Quoted strings can carry imports or data-file reads without an extension
+  // boundary that the generic tokenizer sees.
+  const quoted = [...content.matchAll(/["'`]([^"'`\n]{1,200})["'`]/g)].map(match => match[1]!)
+  const tokens = [
+    ...[...content.matchAll(PATH_CANDIDATE_RE)].map(match => match[1]!),
+    ...quoted,
+  ]
+  for (const token of tokens) {
+    if (!RELEVANT_PATH_EXTENSION.test(token) || token.includes('://')) continue
+    const lexical = token.replace(/\\/g, '/')
+    const bases = lexical.startsWith('.') ? [dirname(inputFile)] : [dirname(inputFile), '']
+    for (const base of bases) {
+      const relative = normalizeProjectPath(base ? `${base}/${lexical}` : lexical)
+      if (relative.startsWith('../') || relative.includes('/../') || /^[A-Za-z]:|^\//.test(relative)) continue
+      const absolute = join(projectRoot, relative)
+      const exists = fs.exists ?? existsSync
+      const isFile = fs.isFile ?? ((value: string) => {
+        try { return statSync(value).isFile() } catch { return false }
+      })
+      if (exists(absolute) && isFile(absolute)) resolved.add(relative)
+    }
+  }
+  return [...resolved]
+}
+
+function specMatchesContent(input: {
+  projectRoot: string
+  inputFile: string
+  content: string
+  spec: RelevanceSpec
+  fs: VerifierCommandInputOverrides
+}): boolean {
+  const references = referencedExistingPaths(
+    input.projectRoot,
+    input.inputFile,
+    input.content,
+    input.fs,
+  )
+  const pathMatched = input.spec.targetPaths.length === 0
+    ? true
+    : input.spec.targetPaths.some(target =>
+        references.some(reference => reference === target || reference.endsWith(`/${target}`)),
+      )
+  if (!pathMatched) return false
+  if (input.spec.callPattern && !input.spec.callPattern.test(input.content)) return false
+  if (input.spec.fragment !== null) {
+    // Whitespace-sensitive literals (HTML <pre>, quoted strings) must match the
+    // goal's own bytes; a nearby single-space witness is not the same behavior.
+    if (!input.content.includes(input.spec.fragment)) return false
+    return true
+  }
+  if (input.spec.literals.length > 0 &&
+    input.spec.literals.some(literal => !input.content.includes(literal))) return false
+  if (input.spec.callPattern) return true
+  // No call expression: require an observable token from the stated expectation.
+  if (input.spec.keywords.length === 0) return true
+  return input.spec.keywords.some(keyword =>
+    new RegExp(`(?:^|[^A-Za-z0-9_$])${escapeRegex(keyword)}(?:$|[^A-Za-z0-9_$])`).test(input.content),
+  )
+}
+
+function relevantTrustedCommands(input: {
+  criterion: AcceptanceRequirementV1
+  trusted: readonly string[]
+  projectRoot: string
+  fs: VerifierCommandInputOverrides
+}): string[] {
+  if (isUnresolvedCriterion(input.criterion)) return []
+  if (!input.criterion.verification.verifier_id.startsWith('meaning:')) return []
+  const spec = relevanceSpec(input.criterion.description)
+  if (!spec) return []
+  return input.trusted.filter(command => {
+    const inputFiles = verifierCommandInputFiles(input.projectRoot, command, input.fs)
+      .filter(file => file !== 'package.json')
+    if (inputFiles.length === 0) return false
+    return inputFiles.some(file => {
+      const content = readVerifierCommandInput(input.projectRoot, file, input.fs)
+      return content !== null && specMatchesContent({
+        projectRoot: input.projectRoot,
+        inputFile: file,
+        content,
+        spec,
+        fs: input.fs,
+      })
+    })
+  })
+}
+
+function bindRelevanceWitness(
+  criterion: AcceptanceRequirementV1,
+  command: string,
+  defaultWorkingDirectory?: string,
+  existingVerifierInputFiles?: readonly string[],
+): AcceptanceRequirementV1 {
+  const verification = materializeExecutableVerification(
+    command,
+    defaultWorkingDirectory,
+    existingVerifierInputFiles,
+  )
+  if (!verification) return criterion
+  return {
+    ...criterion,
+    type: requirementTypeForCommand(command),
+    verification_strategy: `The task names an observable behavior and its frozen verifier input exercises that same target; this is the ${RELEVANCE_WITNESS_MARKER} for the requirement.`,
+    verification,
+  }
+}
+
+/** Meaning-derived (inferred) executable criteria, e.g. relevance or witness bindings. */
+export function contractMeaningVerifierCommands(
+  acceptance: readonly AcceptanceRequirementV1[],
+): string[] {
+  const commands = new Set<string>()
+  for (const requirement of acceptance) {
+    const strategy = requirement.verification_strategy
+    if (!strategy.includes(RELEVANCE_WITNESS_MARKER) &&
+      !strategy.includes(WITNESS_STRATEGY_MARKER)) continue
+    const command = canonicalCommandFromFrozenVerification(requirement.verification)
+    if (command) commands.add(command)
+  }
+  return [...commands].sort()
+}
+
+/** Commands frozen for relevance-bound inferred goals. */
+export function relevanceBoundVerifierCommands(meaning: TaskAcceptanceMeaning): string[] {
+  const commands = new Set<string>()
+  for (const criterion of meaning.criteria) {
+    if (!criterion.verification_strategy.includes(RELEVANCE_WITNESS_MARKER)) continue
+    const command = canonicalCommandFromFrozenVerification(criterion.verification)
+    if (command) commands.add(command)
+  }
+  return [...commands].sort()
+}
+
+/** Protected inputs contributed by relevance-bound inferred goals. */
+export function relevanceBoundVerifierInputFiles(
+  projectRoot: string,
+  meaning: TaskAcceptanceMeaning,
+  fs: VerifierCommandInputOverrides = {},
+): string[] {
+  const files = new Set<string>()
+  for (const criterion of meaning.criteria) {
+    if (!criterion.verification_strategy.includes(RELEVANCE_WITNESS_MARKER)) continue
+    const command = canonicalCommandFromFrozenVerification(criterion.verification)
+    if (!command) continue
+    for (const file of verifierCommandInputFiles(projectRoot, command, fs)) files.add(file)
+  }
+  return [...files].sort()
+}
+
 /**
  * Bind session-trusted verifier commands onto explicit observable criteria before freeze.
  * A preservation criterion whose own text designates the regression witness may then
@@ -409,6 +665,14 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   defaultWorkingDirectory?: string
   /** Existing test input paths frozen at session admission; new tests cannot self-certify. */
   existingVerifierInputFiles?: readonly string[]
+  /**
+   * Live project root. When present, an inferred behavioral goal may bind a
+   * trusted verifier only if that verifier's frozen inputs actually exercise
+   * the goal's named target/behavior. Replay/amendment callers omit it, so the
+   * binding stays deterministic from recorded contract data alone.
+   */
+  projectRoot?: string
+  relevanceFs?: VerifierCommandInputOverrides
 }): TaskAcceptanceMeaning {
   const trusted = [
     ...new Set(
@@ -490,6 +754,36 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     }
   }
 
+  // Relevance pass: an inferred behavioral goal may bind a trusted verifier
+  // only when its frozen input actually exercises the goal's named target and
+  // observable call. A live project root is required; replay/amendment callers
+  // omit it and stay deterministic from recorded contract data.
+  let relevanceBound = explicitBound
+  if (input.projectRoot && input.meaning.interpretation_version >= 3) {
+    const projectRoot = input.projectRoot
+    const fs = input.relevanceFs ?? {}
+    relevanceBound = explicitBound.map((criterion) => {
+      const matches = relevantTrustedCommands({ criterion, trusted, projectRoot, fs })
+      if (matches.length !== 1) return criterion
+      const command = matches[0]!
+      const bound = bindRelevanceWitness(
+        criterion,
+        command,
+        input.defaultWorkingDirectory,
+        input.existingVerifierInputFiles,
+      )
+      if (bound.verification.verifier_id === criterion.verification.verifier_id) return criterion
+      bindingProvenance.push({
+        kind: 'derived_acceptance',
+        ref: `${ACCEPTANCE_RELEVANCE_BINDING_REF}:${sha256Canonical({
+          criterion_id: criterion.id,
+          command,
+        }).slice(0, 32)}`,
+      })
+      return bound
+    })
+  }
+
   // Second pass sees the frozen explicit commands, so a witness can only
   // re-freeze what the first pass already froze — never a new command. Each
   // inferred criterion resolves from its own designated command; a criterion
@@ -497,12 +791,12 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   const witnessEligible =
     input.meaning.structurallyComplete &&
     extractDesignatedRegressionWitness(input.meaning.activeProse) !== null
-  let criteria = explicitBound
+  let criteria = relevanceBound
   if (witnessEligible) {
-    const witnessed = explicitBound.map((criterion) =>
+    const witnessed = relevanceBound.map((criterion) =>
       bindDesignatedWitnessToCriterion(criterion, input.meaning.sources, explicitBound),
     )
-    criteria = explicitBound.map((criterion, index) => witnessed[index] ?? criterion)
+    criteria = relevanceBound.map((criterion, index) => witnessed[index] ?? criterion)
     for (const [index, bound] of witnessed.entries()) {
       if (!bound) continue
       const designated = criterionDesignatedCommand(input.meaning.criteria[index]!.description)
