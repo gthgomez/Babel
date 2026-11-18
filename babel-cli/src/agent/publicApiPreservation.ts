@@ -8,6 +8,9 @@
  * compares export NAMES only; declaration signatures and bodies are not
  * compared. Deletions, renames and (strictly) additions to a frozen file are
  * violations. New files and files without exports at admission are not observed.
+ * The scan is capped at 800 files (max 2 MB each) using a deterministic bounded
+ * DFS that skips `node_modules`, `.git`, `dist`, `build`, `coverage`, `runs`,
+ * `artifacts`, `runtime`, `vendor` and dot directories, then sorts paths.
  */
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { join, posix } from 'node:path'
