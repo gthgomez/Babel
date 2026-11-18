@@ -306,3 +306,88 @@ test('P3-1: a bound verifier whose inputs cannot be frozen fails closed', t => {
   }), false)
   assert.equal(frozen.has('test/parser.test.mjs'), true)
 })
+
+test('P1 no-call goal: HTML result must match the exact literal in an assertion', t => {
+  const htmlGoal = 'Fix parser.js so output is <pre>A  B</pre>.'
+  const matching = parserProject({
+    testFile: 'parser.test.mjs',
+    testSource: [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { render } from "../src/parser.js";',
+      'test("render preserves pre content", () => assert.equal(render("A  B"), "<pre>A  B</pre>"));',
+      '',
+    ].join('\n'),
+  })
+  t.after(() => rmSync(matching, { recursive: true, force: true }))
+  const bound = resolveLiveSessionAuthority({
+    mode: 'chat', task: htmlGoal, projectRoot: matching, projectTestCommands: ['npm test'],
+  }).taskContract.acceptance.find(item => item.description === htmlGoal)
+  assert.equal(bound?.verification.verifier_id, 'verifier:npm')
+
+  const singleSpace = parserProject({
+    testFile: 'parser.test.mjs',
+    testSource: [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { render } from "../src/parser.js";',
+      'test("render preserves pre content", () => assert.equal(render("A B"), "<pre>A B</pre>"));',
+      '',
+    ].join('\n'),
+  })
+  t.after(() => rmSync(singleSpace, { recursive: true, force: true }))
+  const unbound = resolveLiveSessionAuthority({
+    mode: 'chat', task: htmlGoal, projectRoot: singleSpace, projectTestCommands: ['npm test'],
+  }).taskContract.acceptance.find(item => item.description === htmlGoal)
+  assert.ok(unbound?.verification.verifier_id.startsWith('meaning:'),
+    'a single-space witness or a title containing "pre" cannot bind a double-space goal')
+})
+
+test('P1 dead guard: a falsy literal block is not assertion evidence', t => {
+  for (const guard of ['if (false)', 'if (0)', 'while (false)']) {
+    const root = parserProject({
+      testFile: 'parser.test.mjs',
+      testSource: [
+        'import assert from "node:assert/strict";',
+        'import test from "node:test";',
+        'test("looks like a check", () => {',
+        `  ${guard} { assert.equal(parseSum(2, 3), 5); }`,
+        '});',
+        '',
+      ].join('\n'),
+    })
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    const goal = resolveLiveSessionAuthority({
+      mode: 'chat', task: TASK, projectRoot: root, projectTestCommands: ['npm test'],
+    }).taskContract.acceptance.find(item => item.description === TASK)
+    assert.ok(goal?.verification.verifier_id.startsWith('meaning:'), guard)
+  }
+})
+
+test('P1 over-tightening: const and computed expected values still bind', t => {
+  const sources = [
+    [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { parseSum } from "../src/parser.js";',
+      'const five = 5;',
+      'test("sum", () => assert.equal(parseSum(2, 3), five));',
+      '',
+    ].join('\n'),
+    [
+      'import assert from "node:assert/strict";',
+      'import test from "node:test";',
+      'import { parseSum } from "../src/parser.js";',
+      'test("sum", () => assert.equal(parseSum(2, 3), 2 + 3));',
+      '',
+    ].join('\n'),
+  ]
+  for (const [index, testSource] of sources.entries()) {
+    const root = parserProject({ testFile: 'parser.test.mjs', testSource })
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    const goal = resolveLiveSessionAuthority({
+      mode: 'chat', task: TASK, projectRoot: root, projectTestCommands: ['npm test'],
+    }).taskContract.acceptance.find(item => item.description === TASK)
+    assert.equal(goal?.verification.verifier_id, 'verifier:npm', `literal idiom ${index}`)
+  }
+})

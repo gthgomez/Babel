@@ -12,12 +12,14 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import { createCriterionCompletionServiceV1 } from '../authority/criterionCompletion.js'
+import { noChangeFinalRevisionScope } from './chatNoChangeFinalRevision.js'
 import { createExecutorKernel } from '../executor/kernel.js'
 import { captureChatVerifierReceipt, prepareKernelVerifierInput } from './chatEngineVerifierAdapter.js'
 import { resolveGovernedCriterionCandidateRevisionSha } from '../evidence/chatRevisionBinding.js'
 import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js'
 import type { ExecutorVerifierReceipt } from '../executor/contracts.js'
 import {
+  ADVISORY_DOC_STRATEGY,
   advisoryDocsViolations,
   hasAdvisoryDocsGoal,
 } from './advisoryDocsGoal.js'
@@ -254,4 +256,46 @@ test('P1-2: the same constraint without a Requirements section is not unsatisfia
   assert.ok(constraint, 'the constraint stays recorded')
   assert.equal(constraint.required, false, 'it is enforced by the frozen surface, not by prose')
   assert.equal(publicApiPreservationViolation({ records: contract.provenance.records, projectRoot: root }), null)
+})
+
+test('P1 sequencing: ambient NO_CHANGE opts out of final-revision proof explicitly', () => {
+  const ambient = noChangeFinalRevisionScope({ ambientReadOnly: true })
+  assert.equal(ambient.finalRevisionRequired, false)
+  const project = noChangeFinalRevisionScope({ ambientReadOnly: false })
+  assert.equal('finalRevisionRequired' in project, false,
+    'project-scoped no-change keeps the witness requirement')
+
+  const decision = createExecutorKernel('chat').completion.decide({
+    mode: 'chat',
+    requestedOutcome: 'NO_CHANGE_REQUIRED',
+    hasWrite: false,
+    verificationPolicy: 'required',
+    toolCallLog: [{ tool: 'read_file', target: 'src/parser.js', exit_code: 0 }],
+    ...ambient,
+  })
+  assert.equal(decision.allowed, true, JSON.stringify(decision))
+  assert.equal(decision.finalOutcome, 'NO_CHANGE_REQUIRED', JSON.stringify(decision))
+})
+
+test('P2 containment: an outside documentation path is never admitted or read', t => {
+  const task = [GOAL, 'Update ../outside.md so the example shows parseSum usage.'].join('\n')
+  const { root, contract } = fixture(task)
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const outside = contract.acceptance.find(item => /outside\.md/.test(item.description))
+  assert.ok(outside)
+  assert.equal(outside.required, true, 'an escaping target stays a required (non-advisory) obligation')
+
+  const crafted = {
+    ...outside,
+    required: false,
+    verification_strategy: ADVISORY_DOC_STRATEGY,
+  }
+  let reads = 0
+  const violations = advisoryDocsViolations({
+    acceptance: [crafted],
+    projectRoot: root,
+    readFile: () => { reads += 1; return 'parseSum' },
+  })
+  assert.match(violations.join('\n'), /escapes the project root/)
+  assert.equal(reads, 0, 'an outside path is rejected before any read')
 })

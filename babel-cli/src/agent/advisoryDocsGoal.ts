@@ -9,8 +9,8 @@
  * revision and contains a distinctive token from the goal. Absence is still a
  * failure - the goal is never silently dropped.
  */
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { dirname, join, posix } from 'node:path'
+import { readFileSync, realpathSync } from 'node:fs'
+import { join, posix } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
 import type { AcceptanceRequirementV1 } from './taskContract.js'
 
@@ -87,9 +87,7 @@ export function markAdvisoryDocsGoals(input: {
   criteria: readonly AcceptanceRequirementV1[]
   sources: readonly { criterion_id: string; status: string }[]
   projectRoot: string
-  exists?: (path: string) => boolean
 }): { criteria: AcceptanceRequirementV1[]; refs: string[] } {
-  const exists = input.exists ?? existsSync
   let changed = false
   const refs: string[] = []
   const criteria = input.criteria.map(criterion => {
@@ -100,7 +98,7 @@ export function markAdvisoryDocsGoals(input: {
     const goal = advisoryDocsGoal(criterion.description)
     if (!goal) return criterion
     const lexicalPath = goal.path
-    if (!lexicallyContained(lexicalPath) && !exists(join(input.projectRoot, lexicalPath))) return criterion
+    if (!lexicallyContained(lexicalPath)) return criterion
     changed = true
     refs.push(`${ADVISORY_DOC_REF_PREFIX}${sha256Canonical({
       criterion_id: criterion.id,
@@ -132,7 +130,15 @@ export function advisoryDocsViolations(input: {
       violations.push(`${criterion.id}: advisory documentation goal has no checkable target`)
       continue
     }
-    const lexical = contained(input.projectRoot, goal.path) ?? goal.path
+    if (!lexicallyContained(goal.path)) {
+      violations.push(`${criterion.id}: documentation target ${goal.path} escapes the project root`)
+      continue
+    }
+    const lexical = contained(input.projectRoot, goal.path)
+    if (!lexical) {
+      violations.push(`${criterion.id}: documentation target ${goal.path} is missing or unsafe`)
+      continue
+    }
     const content = read(join(input.projectRoot, lexical))
     if (content === null) {
       violations.push(`${criterion.id}: documentation target ${goal.path} is missing`)
@@ -150,13 +156,4 @@ export function hasAdvisoryDocsGoal(acceptance: readonly AcceptanceRequirementV1
   return acceptance.some(criterion =>
     !criterion.required && criterion.verification_strategy === ADVISORY_DOC_STRATEGY,
   )
-}
-
-function isDirectory(path: string): boolean {
-  try { return statSync(path).isDirectory() } catch { return false }
-}
-
-/** Documentation targets are only inspected inside a real project directory. */
-export function isProjectDirectory(projectRoot: string): boolean {
-  return isDirectory(projectRoot) && existsSync(dirname(projectRoot))
 }

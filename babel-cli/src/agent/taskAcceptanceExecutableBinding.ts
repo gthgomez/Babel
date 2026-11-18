@@ -494,9 +494,12 @@ function relevanceSpec(description: string): RelevanceSpec | null {
   const resultTail = lastVerb && description.length - (lastVerb.index! + lastVerb[0].length) <= 200
     ? description.slice(lastVerb.index! + lastVerb[0].length).trim().replace(/[.;]+$/, '').trim()
     : undefined
+  const assignmentTail = description.match(/=\s*([^.;\n]{1,120})/)?.[1]?.trim()
   const fragment = resultTail
     ? resultTail.replace(/^[\`\"']/, '').replace(/[\`\"']$/, '')
-    : null
+    : assignmentTail
+      ? assignmentTail.replace(/^[\`\"']/, '').replace(/[\`\"']$/, '')
+      : null
   if (!targetPaths.length && !callPattern) return null
   return { targetPaths, callPattern, keywords, literals, fragment }
 }
@@ -555,20 +558,11 @@ function specMatchesContent(input: {
         references.some(reference => reference === target || reference.endsWith(`/${target}`)),
       )
   if (!pathMatched) return false
-  if (input.spec.callPattern) {
-    // The exact call and the goal's expected result must share one real
-    // assertion. A comment, a name-only test, an unrelated arithmetic
-    // assertion or a negated assertion does not exercise the behavior.
-    if (input.spec.fragment === null) return false
-    return assertionEvidenceMatches(code, input.spec.callPattern, input.spec.fragment)
-  }
-  if (input.spec.literals.length > 0 &&
-    input.spec.literals.some(literal => !code.includes(literal))) return false
-  // No call expression: require an observable token from the stated expectation.
-  if (input.spec.keywords.length === 0) return true
-  return input.spec.keywords.some(keyword =>
-    new RegExp(`(?:^|[^A-Za-z0-9_$])${escapeRegex(keyword)}(?:$|[^A-Za-z0-9_$])`).test(code),
-  )
+  // The expected result must be an operand of a real assertion. With a call
+  // goal the exact call must share that assertion; without a call the fragment
+  // alone is checked (a title or an unrelated keyword is never enough).
+  if (input.spec.fragment === null) return false
+  return assertionEvidenceMatches(code, input.spec.callPattern, input.spec.fragment)
 }
 
 function relevantTrustedCommands(input: {

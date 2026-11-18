@@ -414,6 +414,7 @@ import {
 import { resolveAcceptedReadOnlyTerminal } from "./chatEngineMutatingNoChangeTerminal.js";
 import { advisoryDocsViolations } from "./advisoryDocsGoal.js";
 import { publicApiPreservationViolation } from "./publicApiPreservation.js";
+import { noChangeFinalRevisionScope } from "./chatNoChangeFinalRevision.js";
 import { contractMeaningCommands, seedChatVerifierDependencyHashes } from "./verifierDependencyAdmission.js";
 import { admitVerifierCustodyViolation } from "./verifierCustodyAdmission.js";
 import { RepetitionDetector } from "./repetitionDetector.js";
@@ -1413,7 +1414,12 @@ export class ChatEngine {
    * Build the synchronous proof summary passed to the shared completion
    * authority. Uses SessionEventV1 + bound receipts, then kernel evaluateEvidenceSync.
    */
-  /** Mechanically checked preservation/documentation obligations, if admitted. */
+  /**
+   * Mechanically checked preservation/documentation obligations, if admitted.
+   * Called from the completion proof and the no-change guard; both checks are
+   * cheap when no clause was admitted (no docs criteria, no freeze record) and
+   * are intentionally not cached because the candidate tree changes per turn.
+   */
   private contractPreservationErrors(): string[] {
     const contract = this.parity.liveAuthority?.taskContract;
     if (!contract || !this.options.projectRoot) return [];
@@ -2725,6 +2731,9 @@ export class ChatEngine {
         ...(verifierInput.currentWorkspaceRevisionHash ? { currentWorkspaceRevisionHash: verifierInput.currentWorkspaceRevisionHash } : {}),
       toolCallLog: toGateToolLog(this.toolCallLog),
       acceptance: this.criterionCompletion?.currentRequest(),
+      ...(requestedOutcome === 'NO_CHANGE_REQUIRED'
+        ? noChangeFinalRevisionScope({ ambientReadOnly: isReadOnlyChat() })
+        : {}),
       ...(this.lastVerifierReceipt?.boundRevision
         ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
         : {}),

@@ -4,8 +4,9 @@
  * "Do not change public APIs" is a preservation obligation, not a read-only
  * task and not just a classification hint. Admission freezes a digest of the
  * project's exported surface in contract provenance; completion recomputes it
- * and refuses certification when an existing export disappeared or changed.
- * Deletions and renames are violations; additions remain allowed.
+ * and refuses certification when an export on a frozen file changed. Deletions,
+ * renames and (strictly) additions to a frozen file are violations. New files
+ * and files without exports at admission are not observed by this freeze.
  */
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { join, posix } from 'node:path'
@@ -141,8 +142,8 @@ function digestForPaths(projectRoot: string, paths: readonly string[]): string |
 }
 
 /**
- * Completion check: a frozen public surface must still be present byte-for-byte
- * in its export names. Additions are allowed; removals/renames are not.
+ * Completion check: the export list of every frozen file must be unchanged.
+ * The comparison is strict per frozen file; new files are ignored.
  */
 export function publicApiPreservationViolation(input: {
   records: readonly TaskContractProvenanceRecord[]
