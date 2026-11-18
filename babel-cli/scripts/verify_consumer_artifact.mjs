@@ -304,8 +304,14 @@ try {
       ? command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${shim.path}" --version"`], { env: guardedEnv, windowsVerbatimArguments: true })
       : command(shim.path, ['--version'], { env: guardedEnv })
     assert.equal(shimVersion.stdout.trim(), pkg.version)
-    // POSIX npm links keep the invoked alias in argv[1], so help must name it.
-    if (process.platform !== 'win32') assert.match(command(shim.path, ['--help'], { env: guardedEnv }).stdout, new RegExp(`^Usage: ${shim.alias}\\b`), `${shim.alias} --help must report the invoked alias`)
+    // POSIX npm links keep the invoked alias in argv[1]. Windows .cmd shims
+    // invoke bin/babel.js, whose basename strips to the canonical babel alias.
+    if (process.platform === 'win32') {
+      const help = command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${shim.path}" --help"`], { env: guardedEnv, windowsVerbatimArguments: true })
+      assert.match(help.stdout, /^Usage: babel\b/, `${shim.alias} --help must report the Windows shim alias`)
+    } else {
+      assert.match(command(shim.path, ['--help'], { env: guardedEnv }).stdout, new RegExp(`^Usage: ${shim.alias}\\b`), `${shim.alias} --help must report the invoked alias`)
+    }
   }
   assert.deepEqual(shims.map(shim => shim.alias).sort(), ['babel', 'babel-agent', 'babel-harness'])
   records.push({

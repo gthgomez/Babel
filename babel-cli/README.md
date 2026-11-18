@@ -32,9 +32,11 @@ babel-harness setup
 babel-harness doctor --json
 ```
 
-The package also installs the compatible `babel-agent` and `babel` aliases; the
-help output reports the alias you invoked. If an unrelated BabelJS `babel`
-executable is earlier on `PATH`, use `babel-harness` explicitly. With a local prefix, run
+The package also installs the compatible `babel-agent` and `babel` aliases. On
+macOS and Linux the help usage line reports the alias you invoked; Windows npm
+shims invoke `bin/babel.js`, so usage reports `babel` for every alias while
+`--version` stays identical. If an unrelated BabelJS `babel` executable is
+earlier on `PATH`, use `babel-harness` explicitly. With a local prefix, run
 `<prefix>/node_modules/.bin/babel-harness` on macOS/Linux or
 `<prefix>\node_modules\.bin\babel-harness.cmd` on Windows. Target files resolve
 from the current directory or explicit project arguments. Node **22.19.0+ in the 22.x line, or 24.13.1+ in the 24.x line**, is
