@@ -4,7 +4,7 @@
 **Updated:** 2026-11-03 from the public tree and the `babel-harness@0.2.0` package. This is not a delivery schedule.
 
 
-> **November 18, 2026 reliability campaign:** The six independent audits have been consolidated into the [Babel Reliability 2026-11 roadmap](./campaigns/babel-reliability-2026-11/README.md) and [issue #521](https://github.com/gthgomez/Babel/issues/521). Its 100 distinct tracking findings and 14 agent workstreams are proposed engineering assignments, not delivered fixes or release guarantees. Follow their current-head evidence/PR status rather than treating this older roadmap snapshot as a certificate.
+> **November 18, 2026 reliability campaign:** The six independent audits have been consolidated into the [Babel Reliability 2026-11 roadmap](./campaigns/babel-reliability-2026-11/README.md) and [issue #521](https://github.com/gthgomez/Babel/issues/521). Its 100 distinct tracking findings and 14 agent workstreams are proposed engineering assignments, not delivered fixes or evidence of release readiness. Follow their current-head evidence/PR status rather than treating this older roadmap snapshot as a certificate.
 
 Buckets match [STATUS.md](./STATUS.md):
 

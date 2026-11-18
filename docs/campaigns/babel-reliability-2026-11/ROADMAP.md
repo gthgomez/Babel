@@ -1,6 +1,6 @@
 # Parallel reliability roadmap — 2026-11
 
-This is one coordinated engineering campaign **using many reviewable PRs**, not one giant code PR. Every finding has a single W01–W14 primary owner in [FINDINGS_INDEX.csv](FINDINGS_INDEX.csv). Audit claims are pinned to public source `198193b1`; agents must prove current-head behavior before modifying a code path.
+This is one coordinated engineering campaign **using many reviewable PRs**, not one giant code PR. Every finding has a single W01–W14 primary owner in [FINDINGS_INDEX.csv](FINDINGS_INDEX.csv). Audit claims are pinned to public source `198193b1`; agents must independently establish current-head behavior before changing a code path; the earlier audit alone is not current proof.
 
 ## Critical dependencies
 
