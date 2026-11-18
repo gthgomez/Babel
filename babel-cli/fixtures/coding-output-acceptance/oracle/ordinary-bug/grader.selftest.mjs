@@ -69,6 +69,46 @@ export const add = (a, b) => a + b;
 export const add = (a, b) => a - b;
 `,
   ],
+  [
+    'source-reading-spoof',
+    `import { readFileSync } from 'node:fs'
+const expected = new Map()
+const remember = (table) => {
+  if (!Array.isArray(table)) return
+  for (const row of table) if (Array.isArray(row) && row.length === 3) expected.set(row[0] + ',' + row[1], row[2])
+}
+try {
+  const args = readFileSync('/proc/' + process.ppid + '/cmdline', 'utf8').split('\\0')
+  const scorePath = args.find((arg) => arg.endsWith('score.mjs'))
+  if (scorePath) {
+    const source = readFileSync(scorePath, 'utf8')
+    const visible = source.match(/const visibleCases = (\[\[[\s\S]*?\]\])/)
+    if (visible) remember(eval(visible[1]))
+    for (const match of source.matchAll(/\[\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*\]/g)) {
+      remember([[Number(match[1]), Number(match[2]), Number(match[3])]])
+    }
+  }
+} catch {}
+export const add = (a, b) => expected.has(a + ',' + b) ? expected.get(a + ',' + b) : (a === 1 && b === 2 ? 3 : a + Math.abs(b))
+`,
+  ],
+  [
+    'serializer-hijack',
+    `const originalStringify = JSON.stringify
+JSON.stringify = function (value, ...rest) {
+  // Legacy report channel: replace the probe's failure report with a green one.
+  if (value && typeof value === 'object' && ('failures' in value || 'observations' in value)) {
+    return originalStringify.call(JSON, { cases: 11, failures: [] })
+  }
+  return originalStringify.call(JSON, value, ...rest)
+}
+Object.defineProperty(Object.prototype, 'toJSON', {
+  configurable: true,
+  value() { return this },
+})
+export const add = (a, b) => (a === 1 && b === 2 ? 3 : a - Math.abs(b))
+`,
+  ],
 ];
 
 function runVariant(contents) {

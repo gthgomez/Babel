@@ -4,18 +4,18 @@
  *
  * The candidate's own tests are agent-visible and must not be the authority.
  * This oracle imports the exported `add` function in a separate process and
- * checks behavioral equivalence on positive, negative, zero and fractional
+ * checks behavioral equivalence on the visible case plus per-run randomized
  * inputs. It never executes candidate test files or compares source text, so
  * any behaviorally equivalent implementation is accepted and every wrong
  * implementation observed by the cases is rejected.
  *
- * The child receives only inputs, never expected values. Results are returned
- * through a parent-generated nonce file rather than candidate-writable stdout,
- * and the parent validates the complete report shape before accepting it. A
- * candidate that reads argv, prints a fake `{}`, or exits during import fails
- * closed.
+ * Expected values are computed only in the parent at scoring time. The child
+ * receives inputs only, so reading the oracle source or argv cannot reveal an
+ * expected table. Results return through a parent-generated nonce result file;
+ * the child writes a plain delimited text report using primitives captured
+ * before candidate import, never JSON or a mutable serializer.
  */
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -31,64 +31,107 @@ if (!workspace) {
 const templateRoot = join(dirname(fileURLToPath(import.meta.url)), '../../workspaces/ordinary-bug');
 const unchanged = ['tests/math.test.js', 'package.json', 'README.md'];
 
-// Behavior is the contract. Expected values stay in this parent process and
-// are never serialized into the child's argv, environment or working tree.
-const cases = [
-  [1, 2, 3],
-  [2, 3, 5],
-  [0, 0, 0],
-  [-2, 5, 3],
-  [2, -5, -3],
-  [-3, -4, -7],
-  [0.5, 0.25, 0.75],
-  [-1.5, 0.5, -1],
-  [1e9, 1, 1_000_000_001],
-  [Number.MAX_SAFE_INTEGER, 0, Number.MAX_SAFE_INTEGER],
-  [-0, -0, 0],
-];
+/**
+ * Public, documented case only. Everything else is generated per run with its
+ * expected value computed here in the parent; no expected table exists in
+ * source, argv, the environment or the child's reachable files.
+ */
+const visibleCases = [[1, 2, 3]];
+
+function gradedCases() {
+  const cases = [];
+  const add = (a, b) => {
+    cases.push([a, b, a + b]);
+  };
+  // Random magnitudes with deterministic behavioral categories: negatives,
+  // positives, zero operands, fractions, mixed signs and large safe integers.
+  add(-randomInt(1, 1_000_001), -randomInt(1, 1_000_001));
+  add(randomInt(1, 1_000_001), randomInt(1, 1_000_001));
+  add(0, randomInt(-1_000_000, 1_000_001));
+  add(randomInt(-1_000_000, 1_000_001), 0);
+  add(randomInt(1, 100_000) / 100, randomInt(1, 100_000) / 100);
+  add(-randomInt(1, 100_000) / 100, randomInt(1, 100_000) / 100);
+  add(randomInt(1, 1_000_000_000), randomInt(-1_000_000_000, 1_000_000_001));
+  add(Number.MAX_SAFE_INTEGER - randomInt(0, 1000), 0);
+  add(randomInt(-1_000_000, 0), randomInt(0, 1_000_001));
+  add(randomInt(1, 1000) / 1000, randomInt(1, 1000) / 1000);
+  add(randomInt(-1_000, 1_001), randomInt(-1_000, 1_001));
+  return cases;
+}
+
+const cases = [...visibleCases, ...gradedCases()];
 
 const probe = `
 import { readFileSync, writeFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
-// Consume the control channel before importing candidate code. The nonce and
-// result path are never placed in argv or the environment.
-const control = JSON.parse(readFileSync(0, 'utf8'))
+// Capture every primitive the result channel uses before candidate import.
+const readInput = readFileSync
 const writeResult = writeFileSync.bind(null)
+const parseJson = JSON.parse
+const push = Array.prototype.push
+const stringOf = String
+const numberToString = Number.prototype.toString
+const isFiniteNumber = Number.isFinite
+const bufferFrom = Buffer.from.bind(Buffer)
+const bufferToString = Buffer.prototype.toString
+const encode = (value) => bufferToString.call(bufferFrom(stringOf(value), 'utf8'), 'base64')
+
+const control = parseJson(readInput(0, 'utf8'))
+const inputs = parseJson(process.argv[3])
 const observations = []
 let moduleError = null
-const inputs = JSON.parse(process.argv[3])
 let add
 try {
   ({ add } = await import(pathToFileURL(process.argv[2]).href))
   if (typeof add !== 'function') moduleError = 'add_not_exported_as_function'
 } catch (error) {
-  moduleError = 'module_load_failed: ' + String(error && error.message || error)
+  moduleError = 'module_load_failed: ' + stringOf(error && error.message || error)
 }
 for (let index = 0; index < inputs.length; index += 1) {
   const [a, b] = inputs[index]
+  const observation = { index, threw: 1, type: '', number: '', encoded: '' }
   if (moduleError !== null) {
-    observations.push({ index, threw: true, threwMessage: moduleError })
+    observation.encoded = encode(moduleError)
+    push.call(observations, observation)
     continue
   }
   try {
     const value = add(a, b)
-    const valueType = typeof value
-    if ((valueType === 'number' && Number.isFinite(value)) || valueType === 'string') {
-      observations.push({ index, threw: false, valueType, value })
+    const type = typeof value
+    if (type === 'number' && isFiniteNumber(value)) {
+      observation.threw = 0
+      observation.type = 'number'
+      observation.number = numberToString.call(value, 10)
+    } else if (type === 'string') {
+      observation.threw = 0
+      observation.type = 'string'
+      observation.encoded = encode(value)
     } else {
-      observations.push({ index, threw: false, valueType })
+      observation.threw = 0
+      observation.type = type
     }
   } catch (error) {
-    observations.push({ index, threw: true, threwMessage: String(error && error.message || error).slice(0, 500) })
+    observation.encoded = encode(stringOf(error && error.message || error).slice(0, 500))
   }
+  push.call(observations, observation)
 }
-writeResult(control.resultPath, JSON.stringify({ nonce: control.nonce, moduleError, observations }), { flag: 'wx' })
+
+let body = control.nonce + '\\n' + (moduleError === null ? '' : encode(moduleError)) + '\\n'
+for (let index = 0; index < observations.length; index += 1) {
+  const observation = observations[index]
+  body += numberToString.call(observation.index, 10) + '\\t'
+  body += observation.threw === 0 ? '0' : '1'
+  body += '\\t' + observation.type + '\\t'
+  body += observation.type === 'number' ? observation.number : observation.encoded
+  body += '\\n'
+}
+writeResult(control.resultPath, body, { flag: 'wx' })
 `;
 
 const probeDir = mkdtempSync(join(tmpdir(), 'ordinary-bug-oracle-'));
 const probePath = join(probeDir, 'probe.mjs');
-const resultPath = join(probeDir, 'result.json');
+const resultPath = join(probeDir, 'result.txt');
 const nonce = randomBytes(16).toString('hex');
 let stderr = '';
 try {
@@ -111,9 +154,13 @@ try {
   process.exit(1);
 }
 
+function decode(value) {
+  return Buffer.from(value, 'base64').toString('utf8');
+}
+
 let report;
 try {
-  report = JSON.parse(readFileSync(resultPath, 'utf8'));
+  report = readFileSync(resultPath, 'utf8');
 } catch {
   console.error('FAILED: independent behavioral probe produced no valid result file.');
   rmSync(probeDir, { recursive: true, force: true });
@@ -126,41 +173,45 @@ function invalid(detail) {
   process.exit(1);
 }
 
-if (!report || typeof report !== 'object' || report.nonce !== nonce) invalid('nonce mismatch');
-if (report.moduleError !== null) invalid(`candidate module error: ${String(report.moduleError).slice(0, 1000)}`);
-if (!Array.isArray(report.observations)) invalid('observations is not an array');
-if (report.observations.length !== cases.length) {
-  invalid(`expected ${cases.length} observations, got ${report.observations.length}`);
+const lines = report.split('\n');
+if (lines[lines.length - 1] === '') lines.pop();
+if (lines[0] !== nonce) invalid('nonce mismatch');
+if (lines.length < 2) invalid('missing header');
+const moduleError = lines[1] === '' ? null : decode(lines[1]);
+if (moduleError !== null) invalid(`candidate module error: ${String(moduleError).slice(0, 1000)}`);
+const observationLines = lines.slice(2);
+if (observationLines.length !== cases.length) {
+  invalid(`expected ${cases.length} observations, got ${observationLines.length}`);
 }
 
 let failures = 0;
 for (let index = 0; index < cases.length; index += 1) {
   const [a, b, expected] = cases[index];
-  const observation = report.observations[index];
-  if (
-    !observation ||
-    typeof observation !== 'object' ||
-    observation.index !== index ||
-    typeof observation.threw !== 'boolean'
-  ) {
-    invalid(`observation ${index} is missing required fields`);
-  }
-  if (observation.threw) {
+  const fields = observationLines[index].split('\t');
+  if (fields.length !== 4) invalid(`observation ${index} must have four fields`);
+  if (fields[0] !== String(index)) invalid(`observation ${index} is out of order`);
+  if (fields[1] !== '0' && fields[1] !== '1') invalid(`observation ${index} has an invalid threw flag`);
+  if (fields[1] === '1') {
     failures += 1;
-    console.error(`FAILED: add(${String(a)}, ${String(b)}) threw: ${String(observation.threwMessage ?? 'unknown error')}`);
+    console.error(`FAILED: add(${String(a)}, ${String(b)}) threw: ${decode(fields[3]) || 'unknown error'}`);
     continue;
   }
-  if (typeof observation.valueType !== 'string') invalid(`observation ${index} is missing valueType`);
-  const ok =
-    observation.valueType === 'number' &&
-    typeof observation.value === 'number' &&
-    Number.isFinite(observation.value) &&
-    observation.value === expected;
-  if (!ok) {
+  if (fields[2] !== 'number') {
     failures += 1;
     console.error(
       `FAILED: add(${String(a)}, ${String(b)}) expected a finite number ${String(expected)}; ` +
-        `got ${String(observation.value ?? `<${observation.valueType}>`)} (${observation.valueType})`,
+        `got a value of type ${String(fields[2] || 'unknown')}`,
+    );
+    continue;
+  }
+  if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(fields[3])) {
+    invalid(`observation ${index} has a non-numeric value`);
+  }
+  const actual = Number(fields[3]);
+  if (!Number.isFinite(actual) || actual !== expected) {
+    failures += 1;
+    console.error(
+      `FAILED: add(${String(a)}, ${String(b)}) expected a finite number ${String(expected)}; got ${String(fields[3])}`,
     );
   }
 }
@@ -184,6 +235,7 @@ console.log(
     oracle: 'ordinary-bug',
     grading_mode: 'independent_behavioral_probe',
     cases: cases.length,
+    randomized_cases: cases.length - visibleCases.length,
     preserved_files: unchanged,
   }),
 );

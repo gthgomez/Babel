@@ -30,6 +30,8 @@ test('ordinary-bug qualification oracle accepts equivalent correct implementatio
     'empty-stdout-report',
     'exits-during-import',
     'forged-stdout-report',
+    'source-reading-spoof',
+    'serializer-hijack',
   ]) {
     assert.ok(report.rejected?.includes(name), `${name} must be rejected`);
   }
