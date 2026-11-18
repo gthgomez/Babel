@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createLspClient, type LspClient } from './client.js';
+import { LSP_MAX_HEADER_BYTES } from './framing.js';
 
 describe('LSP Client', { timeout: 45_000 }, () => {
   let tempDir: string | null = null;
@@ -332,4 +333,53 @@ stdin.on('end', () => {
 
     await client.stop();
   });
+  test('oversized garbage frame resets the bounded read buffer', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'lsp-test-poison-'));
+    const scriptPath = join(tempDir, 'mock-server.mjs');
+    writeFileSync(
+      scriptPath,
+      `
+import { stdin, stdout } from 'node:process';
+let poisoned = false;
+function writeMessage(msg) {
+  const body = JSON.stringify(msg);
+  stdout.write('Content-Length: ' + Buffer.byteLength(body, 'utf8') + '\\r\\n\\r\\n' + body);
+}
+stdin.on('data', (chunk) => {
+  const text = chunk.toString();
+  if (poisoned) {
+    if (text.includes('shutdown')) {
+      const shutdownId = text.match(/"id":(\\d+)/);
+      if (shutdownId) writeMessage({ jsonrpc: '2.0', id: Number(shutdownId[1]), result: null });
+    } else if (text.includes('exit')) {
+      process.exit(0);
+    }
+    return;
+  }
+  poisoned = true;
+  const idMatch = text.match(/"id":(\\d+)/);
+  const id = idMatch ? Number(idMatch[1]) : 1;
+  stdout.write('x'.repeat(${LSP_MAX_HEADER_BYTES + 4096}));
+  setTimeout(() => {
+    writeMessage({
+      jsonrpc: '2.0',
+      id,
+      result: { capabilities: {}, serverInfo: { name: 'mock-lsp', version: '1.0.0' } },
+    });
+  }, 100);
+});
+`,
+      'utf-8',
+    );
+
+    const client = makeClient('mock-poison');
+    await client.start(process.execPath, [scriptPath]);
+    const result = await client.initialize({
+      processId: process.pid,
+      rootUri: 'file:///project',
+      capabilities: {},
+    });
+    assert.equal(result.serverInfo?.name, 'mock-lsp');
+  });
+
 });

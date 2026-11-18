@@ -2,7 +2,8 @@
  * LSP Client — JSON-RPC 2.0 over stdio with Content-Length header framing.
  *
  * Manages communication with an LSP server process via spawn + stdin/stdout.
- * Reuses Content-Length framing patterns from ../tools/mcpTransport.ts.
+ * Uses the LSP-owned Content-Length codec in ./framing.ts; it intentionally
+ * does not share MCP's newline-delimited framing.
  *
  * Each server process gets one LspClient instance. The client handles:
  *   - Process lifecycle (spawn, kill)
@@ -177,7 +178,12 @@ export function createLspClient(
         }
       }
     } catch {
-      // Parsing errors are logged but don't crash the client
+      // Never retain a poisoned/oversized prefix: reset the bounded read buffer
+      // so a malformed or oversized frame cannot grow client memory without
+      // limit (including LspFrameLimitError). Request timeouts remain the
+      // fail-closed backstop; parsing errors are swallowed so the client does
+      // not crash.
+      readBuffer = Buffer.alloc(0)
     }
   }
 
