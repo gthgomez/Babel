@@ -21,7 +21,7 @@ const COMPACTED_TOOL_FACT_LIMIT = 24;
 
 /** Preserve a whole user constraint turn, or both ends with a visible marker. */
 function formatCompactedUserTurn(content: string): string {
-  const normalized = content.trim();
+  const normalized = content;
   if (normalized.length <= COMPACTED_USER_TURN_LIMIT) return normalized;
   const head = normalized.slice(0, COMPACTED_USER_TURN_HEAD);
   const tail = normalized.slice(normalized.length - (COMPACTED_USER_TURN_LIMIT - COMPACTED_USER_TURN_HEAD));
