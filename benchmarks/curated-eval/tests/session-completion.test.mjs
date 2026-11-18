@@ -10,11 +10,17 @@ const root = path.resolve(import.meta.dirname, '..')
 const catalog = await loadCatalog(root)
 const task = catalog.tasks.find((entry) => entry.id === 'csv-rollup-cli')
 
-function attempt(status, outcome, verifierStatus = 'passed') {
+function attempt(
+  status,
+  outcome,
+  verifierStatus = 'passed',
+  diff = { added: ['output/summary.csv'], modified: [], deleted: [] },
+) {
   return adaptChatEngineResult({
     taskId: task.id,
     result: { status, outcome, answer: 'Synthetic terminal control', usage: {} },
     verifier: { status: verifierStatus, assertions: null, errors: [] },
+    ...(diff === undefined ? {} : { diff }),
     scriptedProvider: true,
   })
 }
@@ -162,9 +168,92 @@ test('aggregate metrics keep verified, unverified and false-block denominators s
     assert.ok(value.denominator > 0, `${name} must expose a non-zero denominator`)
   }
   assert.equal(summary.rates.verified_success.numerator, 1)
-  assert.equal(summary.rates.verified_success.denominator, 4)
+  assert.equal(summary.rates.verified_success.denominator, 5)
+  assert.equal(summary.rates.unverified_success.denominator, 5)
+  assert.equal(summary.rates.final_harness_verified.numerator, 3)
+  assert.equal(summary.rates.final_harness_verified.denominator, 5)
   assert.equal(summary.rates.false_block.numerator, 1)
   assert.equal(summary.rates.false_block.denominator, 3)
+})
+
+test('rates never exceed 100% when oracle-unavailable rows are present', () => {
+  // Reviewer reproduction: one graded success plus nine completed
+  // VERIFIED_COMPLETE rows whose oracle infrastructure failed.
+  const entries = [{ task, attempt: attempt('completed', 'VERIFIED_COMPLETE') }]
+  for (let index = 0; index < 9; index += 1) {
+    entries.push({
+      task,
+      attempt: attempt('completed', 'VERIFIED_COMPLETE', 'infrastructure_error'),
+    })
+  }
+  const summary = summarizeAttemptScores(entries)
+  assert.equal(summary.scheduled, 10)
+  assert.equal(summary.scored, 1)
+  assert.equal(summary.oracle_graded, 1)
+  assert.equal(summary.oracle_unavailable, 9)
+  assert.equal(summary.oracle_unavailable_harness_verified, 9)
+  assert.equal(summary.verified_success, 1)
+  assert.equal(summary.rates.verified_success.numerator, 1)
+  assert.equal(summary.rates.verified_success.denominator, 10)
+  assert.equal(summary.rates.verified_success.rate, 0.1)
+  assert.equal(summary.rates.final_harness_verified.numerator, 10)
+  assert.equal(summary.rates.final_harness_verified.denominator, 10)
+  assert.equal(summary.rates.final_harness_verified.rate, 1)
+  for (const [name, value] of Object.entries(summary.rates)) {
+    assert.ok(value.numerator <= value.denominator, `${name} numerator must not exceed denominator`)
+    assert.equal(
+      value.rate,
+      value.denominator === 0 ? null : value.numerator / value.denominator,
+      `${name} rate must match its published population`,
+    )
+    if (value.rate !== null) {
+      assert.ok(value.rate >= 0 && value.rate <= 1, `${name} rate must stay within [0,1]`)
+    }
+  }
+})
+
+test('a VERIFIED_COMPLETE engine claim on a failed terminal is still a false success', () => {
+  for (const terminal of ['failed', 'blocked']) {
+    const score = scoreAttempt(task, {
+      ...attempt(terminal, 'VERIFIED_COMPLETE', 'failed'),
+      completion_claimed: false,
+    })
+    assert.equal(score.engine_claim, true, terminal)
+    assert.equal(score.harness_verified, false, terminal)
+    assert.equal(score.externally_correct, false, terminal)
+    assert.equal(score.false_success, true, terminal)
+    assert.equal(score.outcome, 'task_failure', terminal)
+  }
+  const summary = summarizeAttemptScores([
+    { task, attempt: { ...attempt('blocked', 'VERIFIED_COMPLETE', 'failed'), completion_claimed: false } },
+  ])
+  assert.equal(summary.claims, 1)
+  assert.equal(summary.false_success, 1)
+  assert.equal(summary.rates.false_success.denominator, 1)
+})
+
+test('a missing diff cannot certify a policy-clean verified success', () => {
+  const missing = scoreAttempt(task, {
+    ...attempt('completed', 'VERIFIED_COMPLETE'),
+    diff: undefined,
+    diff_collected: false,
+  })
+  assert.equal(missing.diff_collected, false)
+  assert.equal(missing.policy_clean, false)
+  assert.equal(missing.externally_correct, true)
+  assert.equal(missing.outcome, 'task_failure')
+
+  const report = adaptChatEngineResult({
+    taskId: task.id,
+    result: { status: 'completed', outcome: 'VERIFIED_COMPLETE', answer: 'no diff supplied', usage: {} },
+    verifier: { status: 'passed', assertions: 1, errors: [] },
+    scriptedProvider: true,
+  })
+  assert.equal(report.diff_collected, false)
+  const score = scoreAttempt(task, report)
+  assert.equal(score.policy_clean, false)
+  assert.notEqual(score.outcome, 'valid_success')
+  assert.notEqual(score.outcome, 'unverified_success')
 })
 
 test('false success counts a verified-complete claim contradicted by the oracle or policy', () => {

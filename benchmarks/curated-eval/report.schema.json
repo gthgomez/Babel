@@ -8,7 +8,7 @@
   "required": [
     "schema_version", "task_id", "attempt_id", "harness_build", "adapter", "task_image", "task_revision",
     "requested_model", "sent_model", "observed_model", "terminal_status", "engine_terminal_outcome",
-    "session_completed", "completion_claimed", "completion_claim_evidence", "outcome", "error_class", "errors", "verifier", "diff",
+    "session_completed", "completion_claimed", "completion_claim_evidence", "outcome", "error_class", "errors", "verifier", "diff", "diff_collected",
     "exposure", "usage", "started_at", "completed_at", "scripted_provider", "model_performance_claim", "model_routing"
   ],
   "properties": {
@@ -35,7 +35,10 @@
     },
     "completion_claimed": { "type": "boolean" },
     "completion_claim_evidence": { "$ref": "#/$defs/stringOrNull" },
-    "outcome": { "enum": ["valid_success", "unverified_success", "task_failure", "infrastructure_error", "budget_truncated", "cancelled", "unknown"] },
+    "outcome": {
+      "enum": ["valid_success", "unverified_success", "task_failure", "infrastructure_error", "budget_truncated", "cancelled", "unknown"],
+      "description": "Attempt-report outcome from terminal classification. unverified_success is a score-level value produced by scoreAttempt; normalizeAttempt/classifyTerminal never emit it."
+    },
     "error_class": { "$ref": "#/$defs/stringOrNull" },
     "errors": { "type": "array", "items": { "type": "string" } },
     "verifier": {
@@ -46,6 +49,10 @@
         "assertions": { "type": ["integer", "null"], "minimum": 0 },
         "errors": { "type": "array", "items": { "type": "string" } }
       }
+    },
+    "diff_collected": {
+      "type": "boolean",
+      "description": "True only when the attempt actually supplied a diff. Missing diffs fail closed for verified success."
     },
     "diff": {
       "type": "object",

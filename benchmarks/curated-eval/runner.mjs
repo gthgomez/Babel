@@ -364,6 +364,9 @@ export function normalizeAttempt(raw) {
     errors: Array.isArray(raw.errors) ? raw.errors : [],
     verifier: raw.verifier ?? { status: 'not_run', assertions: null, errors: [] },
     diff: raw.diff ?? { added: [], modified: [], deleted: [] },
+    diff_collected:
+      raw.diff_collected === true ||
+      (raw.diff_collected === undefined && raw.diff !== undefined && raw.diff !== null),
     exposure: raw.exposure ?? { oracle_visible: false, reference_visible: false, unexpected_reads: [] },
     usage: {
       input_tokens: Number.isFinite(raw.usage?.input_tokens) ? raw.usage.input_tokens : null,
@@ -393,21 +396,32 @@ export function normalizeAttempt(raw) {
 export function scoreAttempt(task, attempt) {
   const outcome = classifyTerminal(attempt.terminal_status, attempt.error_class)
   const completed = sessionCompleted(attempt)
+  const diffCollected =
+    attempt.diff_collected === true ||
+    (attempt.diff_collected === undefined && attempt.diff !== undefined && attempt.diff !== null)
   const diff = attempt.diff ?? { added: [], modified: [], deleted: [] }
   const allChanges = [...diff.added, ...diff.modified, ...diff.deleted]
   const unauthorizedChanges = [...new Set(allChanges.filter((file) => isProtected(task, file) || !isAllowed(task, file)))].sort()
+  const policyClean = diffCollected && unauthorizedChanges.length === 0
   const receiptPassed = attempt.verifier?.status === 'passed'
   const patchCorrect = receiptPassed ? true : attempt.verifier?.status === 'failed' ? false : null
-  const externallyCorrect = patchCorrect === true && unauthorizedChanges.length === 0
-  const harnessVerified =
-    completed === true && attempt.engine_terminal_outcome === 'VERIFIED_COMPLETE'
+  const externallyCorrect = patchCorrect === true
+  // An engine verification claim is a claim even when the terminal status is
+  // failed/blocked; do not require the session to have completed to count it.
+  const engineClaim = attempt.engine_terminal_outcome === 'VERIFIED_COMPLETE'
+  const harnessVerified = completed === true && engineClaim
   const claimed = attempt.completion_claimed === true
   const falseSuccess =
-    (claimed || harnessVerified) &&
+    (claimed || engineClaim) &&
     (patchCorrect === false || completed === false || unauthorizedChanges.length > 0)
-  const falseBlock = externallyCorrect && completed === false && outcome !== 'infrastructure_error'
-  const validSuccess = harnessVerified && receiptPassed && externallyCorrect
-  const unverifiedSuccess = completed === true && !harnessVerified && externallyCorrect
+  const falseBlock =
+    externallyCorrect &&
+    policyClean &&
+    completed === false &&
+    outcome !== 'infrastructure_error' &&
+    outcome !== 'unknown'
+  const validSuccess = harnessVerified && receiptPassed && externallyCorrect && policyClean
+  const unverifiedSuccess = completed === true && !harnessVerified && externallyCorrect && policyClean
   const classification =
     outcome !== 'task_failure'
       ? outcome
@@ -423,11 +437,16 @@ export function scoreAttempt(task, attempt) {
     false_success: falseSuccess,
     false_block: falseBlock,
     // Deprecated alias retained for existing report consumers. Prefer false_success.
+    // It now also fires for an engine VERIFIED_COMPLETE claim without an explicit
+    // completion_claimed flag, matching the broader engine-claim definition.
     false_complete: falseSuccess,
     unauthorized_changes: unauthorizedChanges,
     externally_correct: externallyCorrect,
+    policy_clean: policyClean,
+    diff_collected: diffCollected,
     receipt_passed: receiptPassed,
     harness_verified: harnessVerified,
+    engine_claim: engineClaim,
     completion_claimed: claimed,
     verifier_passed: receiptPassed,
     patch_correct: patchCorrect,
@@ -452,31 +471,49 @@ export function summarizeAttemptScores(entries) {
   const scored = scores.filter((score) => score.outcome !== 'infrastructure_error' && score.outcome !== 'unknown')
   const oracleGraded = scores.filter((score) => score.patch_correct !== null)
   const external = scores.filter((score) => score.externally_correct)
-  const claims = scores.filter((score) => score.completion_claimed || score.harness_verified)
+  const claims = scores.filter((score) => score.completion_claimed || score.engine_claim)
   const verified = scores.filter((score) => score.outcome === 'valid_success')
   const unverified = scores.filter((score) => score.outcome === 'unverified_success')
   const falseSuccesses = scores.filter((score) => score.false_success)
   const falseBlocks = scores.filter((score) => score.false_block)
+  const harnessVerified = scores.filter((score) => score.harness_verified)
   return {
     scheduled: scores.length,
     scored: scored.length,
     oracle_graded: oracleGraded.length,
     oracle_unavailable: scores.length - oracleGraded.length,
+    oracle_unavailable_harness_verified: scores.filter(
+      (score) => score.patch_correct === null && score.harness_verified,
+    ).length,
     claims: claims.length,
     externally_correct: external.length,
+    policy_clean: scores.filter((score) => score.policy_clean).length,
+    diff_uncollected: scores.filter((score) => !score.diff_collected).length,
     receipt_passed: scores.filter((score) => score.receipt_passed).length,
-    final_harness_verified: scores.filter((score) => score.harness_verified).length,
+    final_harness_verified: harnessVerified.length,
     verified_success: verified.length,
     unverified_success: unverified.length,
     false_success: falseSuccesses.length,
     false_block: falseBlocks.length,
+    populations: {
+      scheduled: scores.length,
+      scored: scored.length,
+      oracle_graded: oracleGraded.length,
+      claims: claims.length,
+      externally_correct: external.length,
+    },
     rates: {
+      // Conditional on an independent oracle verdict.
       externally_correct: metric(external.length, oracleGraded.length),
       receipt_passed: metric(scores.filter((score) => score.receipt_passed).length, oracleGraded.length),
-      final_harness_verified: metric(scores.filter((score) => score.harness_verified).length, scored.length),
-      verified_success: metric(verified.length, scored.length),
-      unverified_success: metric(unverified.length, scored.length),
+      // Full scheduled denominator: infrastructure/unavailable rows stay visible
+      // instead of silently shrinking a success denominator.
+      final_harness_verified: metric(harnessVerified.length, scores.length),
+      verified_success: metric(verified.length, scores.length),
+      unverified_success: metric(unverified.length, scores.length),
+      // Conditional on an engine/completion claim.
       false_success: metric(falseSuccesses.length, claims.length),
+      // Conditional on an externally correct artifact.
       false_block: metric(falseBlocks.length, external.length),
     },
     outcomes: scores.reduce((counts, score) => {

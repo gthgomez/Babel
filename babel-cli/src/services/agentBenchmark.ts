@@ -222,12 +222,14 @@ export interface AgentBenchmarkReport {
     tasks_selected: number;
     runnable: number;
     manual_required: number;
+    /** Legacy blended count over every executed row, scripted or live. Prefer scoring.*. */
     success: number;
     failure: number;
     false_complete: number;
     /** Fraction of scored cells with empty_patch (KPI alongside correct_rate). */
     empty_patch_rate: number | null;
     empty_patches: number;
+    /** Legacy blended rate over every executed row. Use scoring.scripted_protocol_control/live_model. */
     correct_rate: number | null;
     mean_latency_ms: number | null;
     total_cost_usd: number | null;
@@ -243,6 +245,8 @@ export interface AgentBenchmarkReport {
       scripted_protocol_control: { passed: number; total: number; rate: number | null };
       live_model: { passed: number; total: number; rate: number | null };
       denominators: { selected: number; executed: number; manual_required: number };
+      /** success/correct_rate above are legacy blended fields; use this block. */
+      note: string;
     };
   };
   results: AgentBenchmarkCellResult[];
@@ -1835,6 +1839,9 @@ export async function runAgentBenchmarkSuite(
       executed: scored.length,
       manual_required: manual,
     },
+    note:
+      'summary.success and summary.correct_rate are legacy blended fields. ' +
+      'Use scripted_protocol_control/live_model with the published denominators.',
   };
 
   const tierPassRates: AgentBenchmarkReport['summary']['tier_pass_rates'] = {};
