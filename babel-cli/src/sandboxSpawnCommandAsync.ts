@@ -370,7 +370,11 @@ export function spawnCommandAsync(
               if (options.testContext?.awaitNaturalCloseSettlementGate) {
                 await options.testContext.awaitNaturalCloseSettlementGate()
               }
-              let descendantsSettled = await waitForProcessGroupExit(pid, 150)
+              // A direct child's `close` can precede the kernel's final /proc
+              // state transition by more than 150 ms on a loaded host. Wait
+              // one second before declaring a real descendant; a true orphan
+              // is still terminated and reported, just after this grace.
+              let descendantsSettled = await waitForProcessGroupExit(pid, 1_000)
               let hadLingeringDescendants = false
               if (!descendantsSettled) {
                 hadLingeringDescendants = true
