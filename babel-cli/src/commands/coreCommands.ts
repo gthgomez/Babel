@@ -36,7 +36,7 @@ Start:
   ${CLI_COMMAND}                               Open the interactive coding session
   ${CLI_COMMAND} work "Explain this project"    Inspect or implement within current permissions
   ${CLI_COMMAND} plan "Design this change"      Produce a read-only plan
-  ${CLI_COMMAND} apply --plan <id>              Apply a saved plan after scope checks
+  ${CLI_COMMAND} apply --plan <id>              Apply a saved plan after scope checks and confirmation
   ${CLI_COMMAND} work --review thorough "..."   Use governed planning, review and execution
 
 Settings:

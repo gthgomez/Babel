@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Command } from "commander";
 import { runBabelPipeline } from "../pipeline.js";
+import { PLAN_APPLY_UNAVAILABLE_REASON } from "../agent/planHandoff.js";
 
 
 
@@ -199,7 +200,7 @@ historyCommand
           console.log(`Manual prompt: ${result.manualPromptPath}`);
         }
         console.log(
-          `\nNext: review the plan, then run "babel apply-plan ${result.runDir}" to execute.`,
+          `\nNext: save and review the plan, then run "babel apply --plan <saved-plan-id>" to apply it with confirmation.`,
         );
       } catch (error: any) {
         console.error(`Plan creation failed: ${error.message}`);
@@ -240,7 +241,7 @@ program
           console.log(`\nOut of scope: ${allowed.join(", ")}`);
         }
         console.log(
-          `\nReview the plan above, then use "babel apply-plan ${planDir}" to execute.`,
+          `\nReview the plan above, then use "babel apply --plan <saved-plan-id>" to apply it with confirmation.`,
         );
       } catch (error: any) {
         console.error(`Plan review failed: ${error.message}`);
@@ -250,23 +251,15 @@ program
 
 program
     .command("apply-plan")
-    .description("Execute a saved plan in verified mode")
-    .argument("<plan-dir>", "Plan run directory path")
-    .option("--lock <files>", "Comma-separated locked files")
-    .action(async (planDir: string, options: { lock?: string }) => {
-      try {
-        const { runBabelPipeline } = await import("../pipeline.js");
-        const pipelineOptions: Parameters<typeof runBabelPipeline>[1] = { mode: "deep" };
-        if (options.lock)
-          pipelineOptions["lockedFiles"] = options.lock
-            .split(",")
-            .map((f) => f.trim());
-        const result = await runBabelPipeline(planDir, pipelineOptions);
-        console.log(`Plan applied. Status: ${result.status}`);
-        console.log(`Run directory: ${result.runDir}`);
-      } catch (error: any) {
-        console.error(`Plan application failed: ${error.message}`);
-        process.exit(1);
-      }
+    .description("Legacy Plan-directory application; unavailable — use apply --plan <saved-id>")
+    .argument("<plan-dir>", "Legacy Plan run directory path (retained for inspection)")
+    .option("--lock <files>", "Ignored; retained for compatibility")
+    .action(async (_planDir: string, _options: { lock?: string }) => {
+      // A bare directory is not a source-bound saved Plan. Applying it would
+      // bypass the saved Plan source, fingerprint and confirmation contract
+      // that TUI, CLI and Desktop advertise, so this legacy route fails closed.
+      console.error(`UNSUPPORTED_OPERATION: ${PLAN_APPLY_UNAVAILABLE_REASON}`);
+      console.error('Use "babel apply --plan <saved-plan-id>" after reviewing a saved Plan.');
+      process.exit(1);
     });
 }

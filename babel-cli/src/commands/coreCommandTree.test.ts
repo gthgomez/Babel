@@ -109,7 +109,9 @@ test('core registration preserves the complete existing command contract', () =>
   assert.equal(sandbox.children[0]?.description, 'Download the pinned image, check shell and Git, and save it for this user');
   const legacy = withoutIntentionalCommandExtensions(contract);
   const digest = createHash('sha256').update(JSON.stringify(legacy)).digest('hex');
-  assert.equal(digest, '5a7149653f90ac455439e49e107a93853b16c738aa04bf07674c23ceb0fa6541');
+  // W11: the legacy apply-plan directory route now fails closed and advertises
+  // the saved-Plan-id apply path instead of executing an unguarded run.
+  assert.equal(digest, 'f357fd2b3943a15bf56aeb763e7cc3e8e2344ce796d019c51c3f5e3145f37dfd');
   assert.deepEqual(replay[0], {
     name: 'replay', aliases: [], description: 'Render the replay transcript of persisted action/observation evidence for a conversation',
     args: [{ name: 'conversation-id', required: true, variadic: false, description: '' }],

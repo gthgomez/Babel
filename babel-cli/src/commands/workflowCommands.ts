@@ -81,6 +81,7 @@ import {
 } from '../cli/structuredOutput.js';
 import { writeChatStreamLine } from '../cli/chatStreamNdjson.js';
 import { exitCodeFromOutcome } from '../cli/userFacingStatus.js';
+import { invokedCliName } from '../cli/commandName.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { validateRuntimeEnvForCommand } from './coreCommands.js';
 import { applyRunCommandEnvFlags } from './runCommandEnv.js';
@@ -172,7 +173,7 @@ async function applySavedPlanDeep(plan: SavedPlan, options: DeepCommandOptions):
 
 async function promptPlanApproval(task: string, autoApprove = false): Promise<boolean> {
   if (autoApprove) {
-    process.stderr.write(`Auto-approved via --approve: ${task}\n`);
+    process.stderr.write(`Auto-approved via --yes: ${task}\n`);
     return true;
   }
   if (!process.stdin.isTTY || !process.stderr.isTTY) {
@@ -1394,9 +1395,20 @@ async function runLiteCommand(
     payloadRecord['user_status'] = savedPlanId ? 'complete' : 'blocked';
     payloadRecord['apply_available'] = false;
     payloadRecord['apply_unavailable_reason'] = PLAN_APPLY_UNAVAILABLE_REASON;
-    if (savedPlanId) payloadRecord['plan_id'] = savedPlanId;
+    // Automatic application and an explicit saved Plan apply are different
+    // capabilities. Neither surface may advertise the explicit route unless a
+    // canonical saved Plan id exists; that route rechecks source scope and asks
+    // for confirmation before any mutation.
+    payloadRecord['explicit_apply_available'] = savedPlanId !== null;
+    payloadRecord['apply_requires_confirmation'] = savedPlanId !== null;
+    const command = invokedCliName();
+    if (savedPlanId) {
+      payloadRecord['plan_id'] = savedPlanId;
+      payloadRecord['apply_command'] = `${command} apply --plan ${savedPlanId}`;
+    }
     humanText = [humanText,
       savedPlanId ? `Plan saved as ${savedPlanId}.` : 'The Plan is retained in its run evidence; canonical saving is unavailable.',
+      savedPlanId ? `Apply: ${payloadRecord['apply_command']} (asks for confirmation; source scope is rechecked).` : null,
       PLAN_APPLY_UNAVAILABLE_REASON].filter(Boolean).join('\n');
     if (!savedPlanId) process.exitCode = 1;
   }
@@ -2964,7 +2976,7 @@ Notes:
             if (!saved) return;
             const effective = resolveEffectiveSettings({ projectRoot: saved.projectRoot });
             if (!shouldAutoApplyPlan(saved.task, effective.autoApply.value, options.shadow === true || options.planOnly === true || options.json === true || options.finalOnly === true)) {
-              if (!options.json) process.stderr.write(`Plan saved as ${saved.id}. No project files were changed. Apply: babel-harness apply --plan ${saved.id}\n`);
+              if (!options.json) process.stderr.write(`Plan saved as ${saved.id}. No project files were changed. Apply: ${invokedCliName()} apply --plan ${saved.id} (asks for confirmation)\n`);
               return;
             }
             process.stderr.write(`Automatic application enabled by ${effective.autoApply.source} preference. Checking eligibility for ${saved.id}.\n`);
@@ -3195,18 +3207,31 @@ Important:
       '--plan <path>',
       'Saved Plan ID; legacy manual Plan paths are unavailable',
     )
+    .option('--yes', 'Confirm applying the saved Plan without an interactive prompt')
     .addHelpText(
       'after',
       `
 Notes:
   - Use --plan <saved-plan-id>. Legacy manual Plan execution is unavailable; retained artifacts remain inspectable.
+  - Applying asks for confirmation on an interactive terminal. Non-interactive
+    callers must pass --yes explicitly.
+  - The saved Plan source, project identity, fingerprint, permissions and
+    read-only mode are rechecked before any mutation.
 `,
     )
-    .action(async (options: { run?: string; plan?: string; project?: string }) => {
+    .action(async (options: { run?: string; plan?: string; project?: string; yes?: boolean }) => {
       if (options.plan?.startsWith('plan_')) {
         const projectRoot = options.project ? resolveProjectRoot(options.project) : process.cwd();
         if (!projectRoot) throw new Error('Unknown target project.');
-        await withSavedPlanApplication(options.plan, { projectRoot, execute: async plan => applySavedPlanDeep(plan, {}) });
+        await withSavedPlanApplication(options.plan, {
+          projectRoot,
+          preflight: async plan => {
+            if (!(await promptPlanApproval(plan.task, options.yes === true))) {
+              throw new Error('Plan application was not confirmed; no files were changed.');
+            }
+          },
+          execute: async plan => applySavedPlanDeep(plan, {}),
+        });
         return;
       }
       await handleResumeCommand(options);
