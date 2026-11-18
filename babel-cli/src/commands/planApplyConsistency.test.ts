@@ -100,7 +100,8 @@ test('explicit apply capability is suppressed under read-only permissions', asyn
   }
 })
 
-test('explicit --yes clears the confirmation gate and reaches guarded execution', async () => {  const fixture = prepareSyntheticProviderFixture()
+test('explicit --yes clears the confirmation gate and reaches guarded execution', async () => {
+  const fixture = prepareSyntheticProviderFixture()
   try {
     const env = { ...fixture.env, BABEL_STATE_DIR: join(fixture.root, 'state'), BABEL_CONFIG_DIR: join(fixture.root, 'config'), BABEL_LIVE: '1' }
     const plan = await saveFixturePlan(fixture, env)

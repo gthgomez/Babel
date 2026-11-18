@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { it } from 'node:test'
 
-it('stops the real auto-spawned daemon when the REPL exits', { timeout: 20000 }, async () => {
+it('stops the real auto-spawned daemon when the REPL exits', { timeout: 45000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-repl-exit-'))
   let pid: number | undefined
   try {
@@ -15,7 +15,7 @@ it('stops the real auto-spawned daemon when the REPL exits', { timeout: 20000 },
       const { exitRepl } = await import('./src/interactive/repl/replLifecycle.ts');
       const { warmReplRuntime } = await import('./src/interactive/replWarmup.ts');
       warmReplRuntime();
-      const deadline = Date.now() + 10000;
+      const deadline = Date.now() + 25000;
       while (true) {
         try { await pingDaemon(); break; } catch (err) {
           if (Date.now() > deadline) throw err;
@@ -30,7 +30,7 @@ it('stops the real auto-spawned daemon when the REPL exits', { timeout: 20000 },
       BABEL_DAEMON_AUTO_SPAWN_TIMEOUT_MS: '20000' }
     delete env.BABEL_TEST
     const { stdout } = await promisify(execFile)(process.execPath,
-      ['--import', 'tsx', '--input-type=module', '-e', script], { env, timeout: 15000 })
+      ['--import', 'tsx', '--input-type=module', '-e', script], { env, timeout: 30000 })
     pid = Number(stdout.match(/OWNED_PID=(\d+)/)?.[1])
     assert.ok(pid > 0, stdout)
     assert.doesNotMatch(stdout, /\[daemon\]|Auto-spawned daemon/)

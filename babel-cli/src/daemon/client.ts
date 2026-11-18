@@ -7,7 +7,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, fchmodSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ipcRequest } from './ipc.js';
@@ -100,13 +100,19 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
 
   const interactive = typeof options.onDiagnostic === 'function';
   const daemonLogPath = join(DAEMON_DIR, 'daemon.log');
-  const failureDetail = (message: string): string => interactive ? message : `${message}\nDaemon log: ${daemonLogPath}`;
+  let logReady = false;
+  const failureDetail = (message: string): string => interactive || !logReady ? message : `${message}\nDaemon log: ${daemonLogPath}`;
   let logFd: number | undefined;
   if (!interactive) {
     try {
+      // The directory mode applies only when this call creates it; the daemon
+      // directory may already exist. The log is tightened after opening so an
+      // older round-created file is not left group/world readable.
       mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 });
       logFd = openSync(daemonLogPath, 'a', 0o600);
-    } catch { logFd = undefined; }
+      try { fchmodSync(logFd, 0o600); } catch { /* Windows has no POSIX mode */ }
+      logReady = true;
+    } catch { logFd = undefined; logReady = false; }
   }
   const child: ChildProcess = (options.spawnProcess ?? spawn)(execPath, spawnArgs, interactive
     ? { cwd: resolvePackageRoot(), stdio: 'pipe', detached: false, windowsHide: true }

@@ -63,6 +63,9 @@ function runCli(args: string[], cwd: string, env: NodeJS.ProcessEnv) {
 test('exec --background --json keeps daemon notices off stdout, exits promptly, and leaves one owned daemon', { timeout: 90_000 }, async () => {
   const fixtureRoot = fixture()
   try {
+    // A log left by an earlier round must not keep broad permissions.
+    mkdirSync(join(fixtureRoot.root, 'runs', 'daemon'), { recursive: true })
+    writeFileSync(join(fixtureRoot.root, 'runs', 'daemon', 'daemon.log'), 'previous daemon output\n', { mode: 0o644 })
     const started = Date.now()
     const child = runCli(['exec', 'Inspect a.js', '--background', '--json'], fixtureRoot.root, fixtureRoot.env)
     const elapsed = Date.now() - started
