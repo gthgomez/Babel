@@ -193,10 +193,11 @@ and forced fallback tests. Non-PR metadata qualification records explicit
 non-applicability. Desktop discovery checks its independent six-file floor
 before running the test glob.
 
-Unit shards partition the canonical inventory with duration-weighted balancing.
-Files whose exact paths are also selected by a required TAP suite are delegated
-to that suite instead of running twice; delegation is recorded with source
-hashes in `selection.json` and is only valid because both lanes install the same
+Unit shards partition the executable unit inventory (the canonical inventory
+minus exact required-suite matches) with duration-weighted balancing. Files
+whose exact paths are also selected by a required TAP suite are delegated to
+that suite instead of running twice; delegation is recorded with source hashes
+in `selection.json` and is only valid because both lanes install the same
 dependencies on the same Linux/Windows matrix and the delegated files do not
 require a dist build. Required TAP summaries
 reject TODOs, truncated runs, unexplained skips and empty/all-skipped runs.
