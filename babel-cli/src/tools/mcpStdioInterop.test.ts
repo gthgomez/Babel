@@ -9,9 +9,9 @@ import test from 'node:test'
 import { executeMcpMethod } from './mcpTransport.js'
 import { MCP_MAX_FRAME_BYTES } from '../mcp/framing.js'
 
-// The official MCP SDK is present in the locked developer tooling graph
-// (@anthropic-ai/claude-agent-sdk -> @modelcontextprotocol/sdk 1.29.0). These
-// tests use that independent implementation; no runtime dependency is added.
+// The official MCP SDK is an explicit devDependency used only by these tests.
+// These tests exercise an independent implementation; no runtime dependency is
+// added to the shipped CLI.
 
 const CLI_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const REPO_ROOT = resolve(CLI_ROOT, '..')

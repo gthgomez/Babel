@@ -97,6 +97,29 @@ function mcpOriginEvidence(config: McpServerConfig): string[] {
   ];
 }
 
+/** Typed failure when an outbound frame exceeds the local MCP frame ceiling. */
+function frameLimitMcpResult(server: string, method: string, error: unknown): ToolResult {
+  const detail = error instanceof Error ? error.message : String(error);
+  return {
+    ...buildMcpResult(
+      server,
+      'write_request',
+      'failure',
+      1,
+      '',
+      `[MCP_FRAME_LIMIT] ${detail}`,
+      'invalid_request_payload',
+      [`method:${method}`],
+    ),
+    render_intent: 'tool_failure',
+    failure: {
+      code: 'mcp_frame_limit',
+      category: 'input_contract',
+      tool: 'mcp:' + method,
+    },
+  };
+}
+
 const JSON_RPC_ID_SCHEMA = z.union([z.number(), z.string(), z.null()]);
 const McpExternalContentPolicySchema = z.object({
   untrusted_external_content: z.literal(true),
@@ -518,7 +541,6 @@ function serializeValidatedJsonRpcMessage(
   return serialized;
 }
 
-export { frameJsonRpcMessage, parseFramedMessages };
 
 interface McpToolAnnotations {
   readOnlyHint?: boolean;
@@ -872,9 +894,13 @@ async function executeMcpMethodImpl(
         }
         responseState = 'await_method';
         if (child.stdin) {
-          child.stdin.write(frameJsonRpcMessage(initializedPayload), 'utf8');
-          child.stdin.write(frameJsonRpcMessage(requestPayload), 'utf8');
-          child.stdin.end();
+          try {
+            child.stdin.write(frameJsonRpcMessage(initializedPayload), 'utf8');
+            child.stdin.write(frameJsonRpcMessage(requestPayload), 'utf8');
+            child.stdin.end();
+          } catch (error) {
+            settle(frameLimitMcpResult(server, method, error));
+          }
         }
         return;
       }
@@ -955,23 +981,27 @@ async function executeMcpMethodImpl(
     });
 
     if (child.stdin) {
-      child.stdin.write(frameJsonRpcMessage(initializePayload), 'utf8', (err?: Error | null) => {
-        if (err && !settled) {
-          settle(
-            buildMcpResult(
-              server,
-              'write_request',
-              'failure',
-              1,
-              '',
-              `[MCP_WRITE_ERROR] Could not write to '${server}' stdin: ${err.message}`,
-              'write_error',
-              [`command:${config.command}`, `method:${method}`, ...mcpOriginEvidence(config)],
-            ),
-          );
-          return;
-        }
-      });
+      try {
+        child.stdin.write(frameJsonRpcMessage(initializePayload), 'utf8', (err?: Error | null) => {
+          if (err && !settled) {
+            settle(
+              buildMcpResult(
+                server,
+                'write_request',
+                'failure',
+                1,
+                '',
+                `[MCP_WRITE_ERROR] Could not write to '${server}' stdin: ${err.message}`,
+                'write_error',
+                [`command:${config.command}`, `method:${method}`, ...mcpOriginEvidence(config)],
+              ),
+            );
+            return;
+          }
+        });
+      } catch (error) {
+        settle(frameLimitMcpResult(server, 'initialize', error));
+      }
     }
   });
 }
@@ -1414,8 +1444,12 @@ export async function handleMcpRequest(
 
         responseState = 'await_tool_call';
         if (child.stdin) {
-          child.stdin.write(frameJsonRpcMessage(toolCallPayload), 'utf8');
-          child.stdin.end();
+          try {
+            child.stdin.write(frameJsonRpcMessage(toolCallPayload), 'utf8');
+            child.stdin.end();
+          } catch (error) {
+            settle(frameLimitMcpResult(req.server, 'tools/call', error));
+          }
         }
         return;
       }
@@ -1492,22 +1526,26 @@ export async function handleMcpRequest(
     });
 
     if (child.stdin) {
-      child.stdin.write(frameJsonRpcMessage(initializePayload), 'utf8', (err?: Error | null) => {
-        if (err && !settled) {
-          settle(
-            buildMcpResult(
-              req.server,
-              'write_request',
-              'failure',
-              1,
-              '',
-              `[MCP_WRITE_ERROR] Could not write to '${req.server}' stdin: ` + `${err.message}`,
-              'write_error',
-              [`command:${config.command}`, ...mcpOriginEvidence(config)],
-            ),
-          );
-        }
-      });
+      try {
+        child.stdin.write(frameJsonRpcMessage(initializePayload), 'utf8', (err?: Error | null) => {
+          if (err && !settled) {
+            settle(
+              buildMcpResult(
+                req.server,
+                'write_request',
+                'failure',
+                1,
+                '',
+                `[MCP_WRITE_ERROR] Could not write to '${req.server}' stdin: ` + `${err.message}`,
+                'write_error',
+                [`command:${config.command}`, ...mcpOriginEvidence(config)],
+              ),
+            );
+          }
+        });
+      } catch (error) {
+        settle(frameLimitMcpResult(req.server, 'initialize', error));
+      }
     }
   });
 }

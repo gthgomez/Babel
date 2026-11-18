@@ -5,6 +5,7 @@ import {
   frameJsonRpcMessage,
   McpFrameLimitError,
   MCP_MAX_FRAME_BYTES,
+  MCP_MAX_HEADER_BYTES,
   parseFramedMessages,
 } from '../mcp/framing.js'
 
@@ -80,6 +81,18 @@ test('parseFramedMessages enforces frame and header memory ceilings', () => {
 
   const oversizedHeader = Buffer.from(`Content-Length: ${MCP_MAX_FRAME_BYTES + 1}\r\n\r\n`, 'utf8')
   assert.throws(() => parseFramedMessages(oversizedHeader), McpFrameLimitError)
+
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: null })
+  const paddedHeader = Buffer.from(
+    `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n` +
+      `X-Pad: ${'a'.repeat(MCP_MAX_HEADER_BYTES)}\r\n\r\n${body}`,
+    'utf8',
+  )
+  assert.throws(
+    () => parseFramedMessages(paddedHeader),
+    McpFrameLimitError,
+    'a complete oversized header block is rejected',
+  )
 })
 
 test('frameJsonRpcMessage refuses to emit an oversized frame', () => {

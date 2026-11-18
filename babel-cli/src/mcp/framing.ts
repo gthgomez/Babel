@@ -113,6 +113,9 @@ export function parseFramedMessages(buffer: Uint8Array): ParsedMcpFrames {
         }
         break
       }
+      if (headerEnd - offset + 4 > MCP_MAX_HEADER_BYTES) {
+        throw new McpFrameLimitError(`MCP header exceeds the ${MCP_MAX_HEADER_BYTES}-byte limit.`)
+      }
       const headerText = input.subarray(offset, headerEnd).toString('utf8')
       const contentLengthMatch = /content-length:\s*(\d+)/iu.exec(headerText)
       if (!contentLengthMatch) {
