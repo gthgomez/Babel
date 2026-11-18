@@ -39,6 +39,8 @@ export function resolveConnectionModelPolicy(
     ...(contextWindow ? { contextWindow } : {}), ...(maxOutputTokens ? { maxOutputTokens } : {}),
     ...(metadata?.native_tool_use !== undefined && metadata.native_tool_use_unverified !== true ? { nativeToolUse: metadata.native_tool_use } : {}),
     ...(metadata?.native_tool_use_unverified === true ? { nativeToolUseUnverified: true } : {}),
+    ...(metadata?.estimated_cost_per_1m_input !== undefined ? { estimatedCostPer1MInput: metadata.estimated_cost_per_1m_input } : {}),
+    ...(metadata?.estimated_cost_per_1m_output !== undefined ? { estimatedCostPer1MOutput: metadata.estimated_cost_per_1m_output } : {}),
   }
   return {
     connectionId: connection.id,
@@ -51,6 +53,8 @@ export function resolveConnectionModelPolicy(
     expensive: false, enabled: true, experimental: false, blockedWithoutExplicitOptIn: false,
     selectionReason: `Explicit connection ${connection.id}; no automatic provider fallback.`,
     approximateInputTokens: 0, approximateOutputTokens: 0, warnings: [], waterfall: [entry],
+    ...(metadata?.estimated_cost_per_1m_input !== undefined ? { estimatedCostPer1MInput: metadata.estimated_cost_per_1m_input } : {}),
+    ...(metadata?.estimated_cost_per_1m_output !== undefined ? { estimatedCostPer1MOutput: metadata.estimated_cost_per_1m_output } : {}),
     stagePolicies: MODEL_POLICY_STAGES.map(stage => ({ stage, primaryBackendKey: key,
       primaryProvider: connection.provider, primaryProviderModelId: model, orderedBackends: [entry] })),
     ...(contextWindow ? { contextWindow } : {}), ...(maxOutputTokens ? { maxOutputTokens } : {}),

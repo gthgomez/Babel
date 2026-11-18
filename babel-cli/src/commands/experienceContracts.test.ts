@@ -82,6 +82,9 @@ test('saving a connection with no model clears the previous account model', asyn
 }))
 
 test('finite budgets stop unmetered lanes before inference', async () => fixture(async () => {
+  // The fixture's offline flag is a network guard, not a user offline run.
+  // A remote route with a finite cap cannot preauthorize it and must reject.
+  delete process.env['BABEL_OFFLINE']
   const { assertFiniteBudgetSupported } = await import('../config/laneBudget.js')
   const { runPlanLane } = await import('../agent/lanes/planLane.js')
   updateUserSettings({ defaults: { budgetUsd: 2 } })
@@ -99,6 +102,11 @@ test('finite budgets stop unmetered lanes before inference', async () => fixture
     inheritedAllowance: { taskOwnerId: 'fixture-child', parentTaskOwnerId: 'fixture-parent', remainingCostUsd: 2, costBaselineUsd: 0, maxRounds: 1, deadlineAtMs: null } })
   assert.equal((await capture(['work', '--review', 'standard', 'Explain this project'])).mode, 'chat')
   updateUserSettings({ defaults: { budgetUsd: 'unlimited' } })
+  assert.doesNotThrow(() => assertFiniteBudgetSupported('Plan'))
+  // Offline/local-only execution cannot spend remote money, so the same finite
+  // preference is not rejected when it can never be exceeded remotely.
+  updateUserSettings({ defaults: { budgetUsd: 2 } })
+  process.env['BABEL_OFFLINE'] = '1'
   assert.doesNotThrow(() => assertFiniteBudgetSupported('Plan'))
 }))
 
@@ -135,6 +143,7 @@ test('plain presentation does not change approval flags or select an animated re
 })
 
 test('selected connection header and status retain exact model spelling', async () => fixture(async () => {
+  delete process.env['BABEL_OFFLINE']
   const { printIdleHeader, renderTurnStatusBar } = await import('../interactive/repl/replSessionUi.js')
   const { OutputBuffer } = await import('../ui/outputBuffer.js')
   updateUserSettings({ connections: { a: { id: 'a', provider: 'openai', model: 'Vendor/Exact-Case_v1.2' } } })
@@ -151,6 +160,7 @@ test('selected connection header and status retain exact model spelling', async 
 }))
 
 test('retained fast Ask session rejects a finite cap before transport dispatch', async () => fixture(async () => {
+  delete process.env['BABEL_OFFLINE']
   const { AgentSession } = await import('../agent/session.js')
   const prior = globalThis.fetch; let dispatched = 0
   globalThis.fetch = async () => { dispatched++; throw new Error('unexpected fixture dispatch') }
