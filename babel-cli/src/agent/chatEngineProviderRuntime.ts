@@ -1,5 +1,5 @@
 import { createProviderRunner, ProviderEngine } from '../runners/providerEngine.js'
-import { isProviderId } from '../runners/providerRegistry.js'
+import { chatToolTransportForProvider, isProviderId } from '../runners/providerRegistry.js'
 import type { ChatLlmRunner } from '../runners/base.js'
 /** Provider selection and inference orchestration; accounting remains owner-scoped. */
 import { OllamaApiRunner } from '../runners/ollamaApi.js'
@@ -209,11 +209,21 @@ export async function executeChatRunnerWithTimeout(
   }
 }
 
-/** Choose the existing tool delivery profile for this provider and environment. */
+/** Best-effort provider identity from the runner that will execute the turn. */
+function runnerChatProvider(runner: ChatProviderRunner): string | null {
+  const declared = (runner as { provider?: unknown }).provider
+  if (typeof declared === 'string') return declared
+  if (runner instanceof OllamaApiRunner) return 'ollama'
+  return null
+}
+
+/**
+ * Choose the tool delivery profile the provider registry advertises.
+ * `native` requires an actual native tool-stream implementation; unknown
+ * runners keep the previous capability-based behavior.
+ */
 export function shouldUseChatNativeTools(runner: ChatProviderRunner): boolean {
-  // Ollama models generally don't support native OpenAI tool calling.
-  // The legacy JSON path handles tool use via prompt formatting instead.
-  if (runner instanceof OllamaApiRunner || (runner instanceof ProviderEngine && runner.provider === 'ollama')) return false
+  if (chatToolTransportForProvider(runnerChatProvider(runner)) === 'text') return false
   return (
     process.env['BABEL_NATIVE_TOOLS'] !== 'disabled' &&
     typeof runner.executeWithToolsStream === 'function'
@@ -227,8 +237,7 @@ export function shouldUseChatTextTools(
   if (process.env['BABEL_TOOL_PROFILE'] === 'legacy') return false
   if (process.env['BABEL_TOOL_PROFILE'] === 'text') return true
   if (process.env['BABEL_TOOL_PROFILE'] === 'native') return false
-  const runner = resolveRunner()
-  return runner instanceof OllamaApiRunner || (runner instanceof ProviderEngine && runner.provider === 'ollama')
+  return chatToolTransportForProvider(runnerChatProvider(resolveRunner())) === 'text'
 }
 
 export interface ChatDeliberationInput {

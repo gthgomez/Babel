@@ -46,6 +46,20 @@ export type ProviderOperation =
  */
 export type AuthorityConformanceStatus = 'certified' | 'untested'
 
+/**
+ * The tool protocol Chat actually uses for this provider.
+ *
+ * - `native`: send provider-native tool schemas and stream `tool_calls`.
+ * - `text`: prompt-embedded `[TOOL:name]` text tools (used when a provider
+ *   cannot be relied on to emit OpenAI-style native tool calls).
+ *
+ * `operations` describes transport capability; this field describes the
+ * delivery the Chat controller selects. They must agree: advertising
+ * `native_tool_stream` while Chat never sends native tool arrays is the
+ * contradiction this field removes.
+ */
+export type ChatToolTransport = 'native' | 'text'
+
 export interface ProviderSpec {
   id: ProviderId
   credentialEnvVar: string | null
@@ -54,6 +68,8 @@ export interface ProviderSpec {
   operations: readonly ProviderOperation[]
   /** P0-E: authority-conformance certification gate for live activation. */
   authorityConformance: AuthorityConformanceStatus
+  /** Tool protocol Chat selects for this provider (single source of truth). */
+  chatToolTransport: ChatToolTransport
 }
 
 const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze({
@@ -65,6 +81,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
     authorityConformance: 'certified',
+    chatToolTransport: 'native',
   },
   deepseek: {
     id: 'deepseek',
@@ -73,6 +90,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
     authorityConformance: 'certified',
+    chatToolTransport: 'native',
   },
   ollama: {
     id: 'ollama',
@@ -81,6 +99,9 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     requiresCredential: false,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
     authorityConformance: 'certified',
+    // Ollama models are not reliably trained on OpenAI-style native tool arrays.
+    // Chat deliberately uses the text-tool protocol; see shouldUseChatNativeTools.
+    chatToolTransport: 'text',
   },
   openrouter: {
     id: 'openrouter',
@@ -89,6 +110,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
     authorityConformance: 'certified',
+    chatToolTransport: 'native',
   },
   'command-code': {
     id: 'command-code',
@@ -99,6 +121,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     // Shared executor conformance plus actual Chat denial/result-delivery tests.
     // This does not certify live task quality or all models in the vendor catalog.
     authorityConformance: 'certified',
+    chatToolTransport: 'native',
   },
   // Dormant / legacy transports — NOT authority-certified. They must pass the
   // authority-conformance suite before being revived into a live lane.
@@ -109,6 +132,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
     authorityConformance: 'untested',
+    chatToolTransport: 'native',
   },
   // Explicit Go transport; authority checks do not establish native budget/platform readiness.
   'opencode-go': {
@@ -120,6 +144,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     // Central authority suite plus Chat native-tool denial/delivery regressions.
     // Certification does not qualify model quality, budget durability or other modes.
     authorityConformance: 'certified',
+    chatToolTransport: 'native',
   },
   // Native Chat denial/result delivery: directProviderAuthority.test.ts; wire: directProviderTools.test.ts.
   openai: {
@@ -129,6 +154,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
     authorityConformance: 'certified',
+    chatToolTransport: 'native',
   },
   anthropic: {
     id: 'anthropic',
@@ -137,6 +163,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
     authorityConformance: 'certified',
+    chatToolTransport: 'native',
   },
   gemini: {
     id: 'gemini',
@@ -145,6 +172,7 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     requiresCredential: true,
     operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
     authorityConformance: 'certified',
+    chatToolTransport: 'native',
   },
   groq: {
     id: 'groq',
@@ -153,11 +181,13 @@ const PROVIDER_SPECS: Readonly<Record<ProviderId, ProviderSpec>> = Object.freeze
     requiresCredential: true,
     operations: ['structured'],
     authorityConformance: 'untested',
+    chatToolTransport: 'native',
   },
   'openai-compatible': {
     id: 'openai-compatible', credentialEnvVar: 'BABEL_COMPATIBLE_API_KEY', protocol: 'openai_compatible',
     requiresCredential: true, operations: ['structured', 'raw', 'raw_stream', 'native_tool_stream'],
     authorityConformance: 'certified',
+    chatToolTransport: 'native',
   },
 })
 
@@ -181,4 +211,15 @@ export function providerSupportsOperation(
   operation: ProviderOperation,
 ): boolean {
   return PROVIDER_SPECS[provider].operations.includes(operation)
+}
+
+/**
+ * Resolve the Chat tool protocol for a provider id.
+ *
+ * Unknown/legacy runner identities return null so callers keep their previous
+ * capability-based behavior instead of guessing a transport.
+ */
+export function chatToolTransportForProvider(provider: string | null | undefined): ChatToolTransport | null {
+  if (!provider || !isProviderId(provider)) return null
+  return PROVIDER_SPECS[provider].chatToolTransport
 }
