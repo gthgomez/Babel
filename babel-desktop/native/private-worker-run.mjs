@@ -129,8 +129,11 @@ export class PrivateWorkerRun {
   #busy = false
   #closing = false
   #runId = null
+  #runGeneration = 0
   #threadId = null
   #turnId = null
+  #pendingTurnEvents = null
+  #pendingTurnBytes = 0
   #onPacket = null
   #idleCallbacks = []
   #approvals = new Map()
@@ -187,13 +190,26 @@ export class PrivateWorkerRun {
     else waiter.resolve(packet.result)
   }
 
-  #notification(packet) {
+  #deliverTurnEvent(params) {
+    if (!this.#busy || params.thread_id !== this.#threadId || this.#turnId === null || params.turn_id !== this.#turnId) return
+    if (params.preview_truncated === true && TERMINALS.has(params.event?.type)) this.#unverified = true
+    this.#onEvent(params.event)
+  }
+
+  #notification(packet, frameBytes) {
     if (packet.method === 'turn.event') {
       const params = packet.params ?? {}
-      if (params.thread_id !== this.#threadId) return
-      if (this.#turnId !== null && params.turn_id !== undefined && params.turn_id !== this.#turnId) return
-      if (params.preview_truncated === true && TERMINALS.has(params.event?.type)) this.#unverified = true
-      this.#onEvent(params.event)
+      if (!this.#busy || params.thread_id !== this.#threadId) return
+      if (this.#pendingTurnEvents !== null) {
+        this.#pendingTurnBytes += frameBytes
+        if (this.#pendingTurnBytes > MAX_FRAME || this.#pendingTurnEvents.length >= 4096) {
+          this.#workerFailed(this.#child, 'The Babel worker sent too many events before turn admission.')
+          return
+        }
+        this.#pendingTurnEvents.push(params)
+        return
+      }
+      this.#deliverTurnEvent(params)
       return
     }
     if (packet.method === 'worker.preview_truncated') {
@@ -214,7 +230,7 @@ export class PrivateWorkerRun {
       let packet
       try { packet = JSON.parse(line) } catch { continue }
       if (packet && Object.hasOwn(packet, 'id') && (packet.result !== undefined || packet.error !== undefined)) this.#settle(packet.id, packet)
-      else if (packet?.method) this.#notification(packet)
+      else if (packet?.method) this.#notification(packet, Buffer.byteLength(line, 'utf8'))
     }
     if (this.#buffer.length > MAX_FRAME) this.#fail('The Babel worker emitted an oversized frame.')
   }
@@ -239,6 +255,8 @@ export class PrivateWorkerRun {
     this.#pendingApprovals.clear()
     this.#approvals.clear()
     this.#turnId = null
+    this.#pendingTurnEvents = null
+    this.#pendingTurnBytes = 0
     this.#cancelRequested = false
     this.#emit({ kind: 'exit', code, signal: null, diagnosticAvailable: this.#stderr.length > 0, displayLimited: false })
     this.#runId = null
@@ -334,6 +352,7 @@ export class PrivateWorkerRun {
     this.#output = null
     this.#started = false
     this.#exited = true
+    for (const [id, waiter] of this.#pending) { clearTimeout(waiter.timer); waiter.reject(new Error('The Babel worker exited')); this.#pending.delete(id) }
     try { child.stdio[3]?.destroy() } catch { /* already closed */ }
     try { child.stdio[4]?.destroy() } catch { /* already closed */ }
     try { child.kill() } catch { /* already exited */ }
@@ -346,10 +365,11 @@ export class PrivateWorkerRun {
     this.#fail(message)
   }
 
-  async #ensureThread(request) {
+  async #ensureThread(request, generation) {
     if (typeof request.sessionId === 'string' && request.sessionId) {
       if (request.sessionId !== this.#threadId) {
         await this.#request('thread.resume', { thread_id: request.sessionId })
+        if (!this.#busy || this.#runGeneration !== generation) throw new Error('The worker turn was superseded')
         this.#threadId = request.sessionId
       }
       return this.#threadId
@@ -357,6 +377,7 @@ export class PrivateWorkerRun {
     // No session id means a new conversation; never silently append a fresh
     // Desktop conversation to the previous thread.
     const created = await this.#request('thread.create', { task: String(request.task ?? '') })
+    if (!this.#busy || this.#runGeneration !== generation) throw new Error('The worker turn was superseded')
     if (!created || typeof created.thread_id !== 'string') throw new Error('The Babel worker did not create a thread')
     this.#threadId = created.thread_id
     return this.#threadId
@@ -367,20 +388,39 @@ export class PrivateWorkerRun {
     if (!request || typeof request.runId !== 'string' || !isSafeId(request.runId)) throw new TypeError('Invalid run ID')
     if (typeof request.task !== 'string' || !request.task.trim()) throw new TypeError('Invalid task text')
     this.#busy = true
+    const generation = ++this.#runGeneration
     this.#runId = request.runId
     this.#onPacket = onPacket
     this.#unverified = false
     this.#pendingApprovals.clear()
     this.#cancelRequested = false
+    this.#turnId = null
+    this.#pendingTurnEvents = null
+    this.#pendingTurnBytes = 0
     try {
       await this.#ensureStarted()
-      const threadId = await this.#ensureThread(request)
+      if (!this.#busy || this.#runGeneration !== generation) return
+      const threadId = await this.#ensureThread(request, generation)
+      if (!this.#busy || this.#runGeneration !== generation) return
+      this.#pendingTurnEvents = []
       const submitted = await this.#request('turn.submit', {
         thread_id: threadId, message: request.task, command_id: request.runId,
         ...(request.executionScope?.kind === 'project' ? { repo_identity_confirmed: true } : {}),
       })
-      if (!submitted || !Number.isSafeInteger(submitted.turn_id)) throw new Error('The Babel worker did not admit the turn')
+      if (!this.#busy || this.#runGeneration !== generation) return
+      if (!submitted || submitted.thread_id !== threadId || !Number.isSafeInteger(submitted.turn_id)) {
+        this.#destroyChild(this.#child)
+        throw new Error('The Babel worker did not admit the turn')
+      }
       this.#turnId = submitted.turn_id
+      const pending = this.#pendingTurnEvents ?? []
+      this.#pendingTurnEvents = null
+      this.#pendingTurnBytes = 0
+      for (const params of pending) {
+        if (!this.#busy || this.#runGeneration !== generation) break
+        this.#deliverTurnEvent(params)
+      }
+      if (!this.#busy || this.#runGeneration !== generation) return
       if (this.#cancelRequested) this.#sendCancel()
       this.#startApprovalPolling()
       this.#terminalGuard = setTimeout(() => {
@@ -388,6 +428,7 @@ export class PrivateWorkerRun {
       }, 30 * 60_000)
       this.#terminalGuard.unref?.()
     } catch (error) {
+      if (!this.#busy || this.#runGeneration !== generation) return
       const message = error instanceof Error ? error.message : 'The Babel worker could not start this turn.'
       this.#emit({ kind: 'event', event: { type: 'run_error', error: message } })
       this.#finish({ code: 1 })

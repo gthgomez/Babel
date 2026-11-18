@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 const TIMESTAMP = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/
 const CACHE = new Set(['hit', 'miss', 'unknown'])
+const AGGREGATE_FAILURE_JOB = /^(?:linux-validation|windows-portability)$/i
 
 const stamp = value => typeof value === 'string' && TIMESTAMP.test(value) ? Date.parse(value) : NaN
 
@@ -18,6 +19,12 @@ const stamp = value => typeof value === 'string' && TIMESTAMP.test(value) ? Date
 export function classifyExecution(job, attemptStartedAt) {
   const unknown = { classification: 'unknown', executedSeconds: null }
   if (!job || typeof job !== 'object') return unknown
+  if (job.conclusion === 'cancelled' && hasNoRunnerSteps(job)
+      && stamp(job.created_at) === stamp(job.started_at)) {
+    return isRunnerlessCancellation(job)
+      ? { classification: 'runnerless-cancelled', executedSeconds: null }
+      : unknown
+  }
   if (job.conclusion === 'skipped' || job.status === 'not_run') return { classification: 'not-executed', executedSeconds: 0 }
   const attempt = stamp(attemptStartedAt)
   const start = stamp(job.started_at)
@@ -147,6 +154,65 @@ function cacheState(job) {
   return typeof value === 'string' && CACHE.has(value) ? value : 'unknown'
 }
 
+function classifyStepStage(step) {
+  if (!step || typeof step.name !== 'string' || !step.name) return 'unknown'
+  const name = step.name.toLowerCase()
+  if (/^post(?:\s+run)?\s+actions\//.test(name) || /^post job cleanup\b/.test(name)
+      || /^complete job$/.test(name) || /^upload\b/.test(name) || /^stage .* tap$/.test(name)
+      || /^summarize .* tap/.test(name) || /^cleanup\b/.test(name)) return 'other'
+  if (/^set up job$/.test(name) || /^checkout$/.test(name) || /^set up node(?:\.js)?$/.test(name)
+      || /^run actions\/(?:checkout|setup-node|setup-python)@/.test(name)
+      || /^install\b/.test(name) || /^clean install\b/.test(name) || /^restore cache\b/.test(name)
+      || /^download\b/.test(name) || /^prepare .* prerequisite/.test(name)) return 'setup'
+  if (/^(?:build|run|test|check|validate|verify|qualify|lint|enforce|public (?:content|scrub|prevention)|retain source-build|capture .*selection|installed .*journey)\b/.test(name)) return 'task'
+  return 'unknown'
+}
+
+function hasNoRunnerSteps(job) {
+  return job?.steps == null || (Array.isArray(job.steps) && job.steps.length === 0)
+}
+
+function isRunnerlessCancellation(job) {
+  // GitHub uses two explicit encodings for a job that never received a runner.
+  const explicitNoRunner = (job.runner_id === 0 && job.runner_name === '')
+    || (job.runner_id === null && job.runner_name === null)
+  return job?.conclusion === 'cancelled' && job.status === 'completed' && hasNoRunnerSteps(job)
+    && explicitNoRunner
+    && Number.isFinite(stamp(job.created_at)) && Number.isFinite(stamp(job.started_at))
+    && stamp(job.created_at) === stamp(job.started_at)
+}
+
+function jobStageBreakdown(rows) {
+  const totals = { setup: 0, task: 0, other: 0, unknown: 0 }
+  const counts = { setup: 0, task: 0, other: 0, unknown: 0 }
+  let runnerSeconds = 0
+  let jobsWithRunnerTime = 0
+  let unattributedRunnerSeconds = 0
+  for (const row of rows) {
+    if (row.classification !== 'executed-this-attempt' || row.runnerlessCancellation) continue
+    const start = stamp(row.startedAt)
+    const end = stamp(row.completedAt)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) continue
+    const duration = (end - start) / 1000
+    runnerSeconds += duration
+    jobsWithRunnerTime++
+    let observed = 0
+    for (const step of row.steps ?? []) {
+      const measured = classifyPlatformStep(step)
+      if (measured.bucket !== 'executed' && measured.bucket !== 'partial-cancelled') continue
+      const seconds = measured.executionSeconds ?? measured.observedPartialSeconds
+      if (!Number.isFinite(seconds)) continue
+      const stage = classifyStepStage(step)
+      totals[stage] += seconds
+      counts[stage]++
+      observed += seconds
+    }
+    // Timing gaps, overlaps, and missing steps are not assigned to a stage.
+    unattributedRunnerSeconds += Math.max(0, duration - observed)
+  }
+  return { jobsWithRunnerTime, runnerSeconds, stages: Object.fromEntries(Object.keys(totals).map(stage => [stage, { observedSeconds: totals[stage], timedSteps: counts[stage] }])), unattributedRunnerSeconds }
+}
+
 function addGap(gaps, gap) {
   if (!gaps.some(item => JSON.stringify(item) === JSON.stringify(gap))) gaps.push(gap)
 }
@@ -258,7 +324,8 @@ export function reportPerformance(runsDoc, jobsDoc) {
         const execution = classifyExecution(job, attempt.run_started_at)
         const created = stamp(job.created_at)
         const started = stamp(job.started_at)
-        const schedulingProxySeconds = Number.isFinite(created) && Number.isFinite(started) && started >= created ? (started - created) / 1000 : null
+        const schedulingProxySeconds = !isRunnerlessCancellation(job)
+          && Number.isFinite(created) && Number.isFinite(started) && started >= created ? (started - created) / 1000 : null
         if (execution.classification === 'unknown') unknowns.push({ reason: 'timing_unknown', runId: attempt.run_id, attempt: attempt.run_attempt, jobId: job.id })
         const os = Array.isArray(job.labels) ? job.labels.filter(label => typeof label === 'string') : []
         observations.push({
@@ -270,16 +337,21 @@ export function reportPerformance(runsDoc, jobsDoc) {
           changeClass: typeof run?.changeClass === 'string' ? run.changeClass : 'unknown',
           os: os.length ? os.join(',') : 'unknown',
           outcome: typeof job.conclusion === 'string' ? job.conclusion : (typeof run?.conclusion === 'string' ? run.conclusion : 'unknown'),
+          jobOutcome: typeof job.conclusion === 'string' ? job.conclusion : 'unknown',
           runOutcome: typeof run?.conclusion === 'string' ? run.conclusion : 'unknown',
           cache: cacheState(job),
           status: job.status ?? null,
           name: typeof job.name === 'string' ? job.name : 'unknown',
+          createdAt: job.created_at ?? null,
+          startedAt: job.started_at ?? null,
+          completedAt: job.completed_at ?? null,
           classification: execution.classification,
           executedSeconds: execution.executedSeconds,
           historicalSeconds: execution.historicalSeconds ?? null,
           schedulingProxySeconds,
           dependencyDelaySeconds: null,
           steps: Array.isArray(job.steps) ? job.steps : null,
+          runnerlessCancellation: isRunnerlessCancellation(job),
         })
       }
     }
@@ -290,6 +362,47 @@ export function reportPerformance(runsDoc, jobsDoc) {
   const executed = observations.filter(row => row.classification === 'executed-this-attempt' && Number.isFinite(row.executedSeconds))
   const observedExecutedSeconds = executed.reduce((sum, row) => sum + row.executedSeconds, 0)
   const executedJobsFresh = executed.length
+  const stageBreakdown = jobStageBreakdown(observations)
+  const runnerlessCancelled = observations.filter(row => row.runnerlessCancellation)
+  const runnerlessUnstartedSeconds = runnerlessCancelled.map(row => {
+    const created = stamp(row.createdAt)
+    const completed = stamp(row.completedAt)
+    return Number.isFinite(created) && Number.isFinite(completed) && completed >= created
+      ? (completed - created) / 1000 : null
+  }).filter(Number.isFinite)
+
+  const runRows = rawRunRows.filter(row => row && Number.isInteger(row.id))
+  const runSummaries = runRows.map(current => {
+    const created = stamp(current.created_at)
+    const updated = stamp(current.updated_at)
+    const finished = current.status === 'completed' && Number.isFinite(created) && Number.isFinite(updated) && updated >= created
+    const currentBranch = current.head_branch ?? current.headBranch
+    const currentWorkflow = current.workflow_id ?? current.name
+    const candidates = runRows.filter(other => typeof currentBranch === 'string' && currentBranch.length > 0
+      && currentWorkflow !== undefined && currentWorkflow !== null
+      && other.id !== current.id
+      && other.event === current.event && (other.workflow_id ?? other.name) === (current.workflow_id ?? current.name)
+      && (other.head_branch ?? other.headBranch) === currentBranch
+      && Number.isFinite(stamp(other.created_at)) && Number.isFinite(created) && stamp(other.created_at) > created)
+    const laterDifferentHead = candidates.filter(other => typeof other.head_sha === 'string' && typeof current.head_sha === 'string' && other.head_sha !== current.head_sha)
+    const requiredCheckAt = stamp(current.required_check_completed_at ?? current.requiredCheckCompletedAt)
+    const requiredCheckCompleted = Number.isFinite(created) && Number.isFinite(requiredCheckAt) && requiredCheckAt >= created
+    return {
+      runId: current.id,
+      outcome: current.conclusion ?? 'unknown',
+      endToEndSeconds: finished ? (updated - created) / 1000 : null,
+      endToEndTimingStatus: finished ? 'observed' : 'unknown',
+      requiredCheckCompletionSeconds: requiredCheckCompleted ? (requiredCheckAt - created) / 1000 : null,
+      requiredCheckCompletionStatus: requiredCheckCompleted ? 'observed' : 'unknown',
+      potentiallySupersededByRunIds: current.conclusion === 'cancelled' ? laterDifferentHead.map(other => other.id) : [],
+      supersessionCausality: 'unknown',
+    }
+  })
+  const failedJobRows = observations.filter(row => row.jobOutcome === 'failure')
+  const failureByIdentity = new Map(failedJobRows.map(row => [`${row.runId}:${row.attempt}:${row.jobId}`, row]))
+  const uniqueFailedJobs = [...failureByIdentity.values()]
+  const rootFailureCandidates = uniqueFailedJobs.filter(row => !AGGREGATE_FAILURE_JOB.test(row.name.split(' (')[0]))
+  const aggregateFailureRows = uniqueFailedJobs.filter(row => AGGREGATE_FAILURE_JOB.test(row.name.split(' (')[0]))
 
   const groups = new Map()
   for (const row of observations) {
@@ -382,13 +495,36 @@ export function reportPerformance(runsDoc, jobsDoc) {
       executedSeconds: collectionCompleteFinal && timingComplete ? observedExecutedSeconds : null,
       observedExecutedSeconds,
       carriedForwardCountedAsNewExecution: false,
+      runnerlessCancelledJobs: runnerlessCancelled.length,
+      runnerlessUnstartedLifetimeSeconds: runnerlessUnstartedSeconds.length === runnerlessCancelled.length
+        ? runnerlessUnstartedSeconds.reduce((sum, value) => sum + value, 0) : null,
+      runnerlessLifetimeMeasurementStatus: runnerlessUnstartedSeconds.length === runnerlessCancelled.length ? 'observed' : 'unknown',
     },
+    stageBreakdown: {
+      ...stageBreakdown,
+      billingSeconds: null,
+      billingStatus: 'unknown',
+      cacheEvidence: 'unknown unless directly supplied per job',
+    },
+    workload: {
+      jobRows: observations.length,
+      failedJobRows: failedJobRows.length,
+      rootFailureCandidates: rootFailureCandidates.length,
+      aggregateFailureRowsExcluded: aggregateFailureRows.length,
+      duplicateFailedJobRowsExcluded: failedJobRows.length - uniqueFailedJobs.length,
+      rootFailureIdentity: 'unknown without dependency/failure-cause evidence; candidates are failed non-aggregate jobs, not proven roots',
+      duplicateWorkloadDeduplicated: false,
+    },
+    runSummaries,
     scheduling: {
       proxy: 'job.created_at to job.started_at',
       providerQueueIdentified: false,
       dependencyDelayObserved: false,
       samples: observations.filter(row => Number.isFinite(row.schedulingProxySeconds)).length,
       proxySecondsP50: percentile(observations.map(row => row.schedulingProxySeconds).filter(value => Number.isFinite(value)), 50),
+      proxySecondsP95: percentile(observations.map(row => row.schedulingProxySeconds).filter(value => Number.isFinite(value)), 95),
+      observedProxySeconds: observations.filter(row => Number.isFinite(row.schedulingProxySeconds)).reduce((sum, row) => sum + row.schedulingProxySeconds, 0),
+      waitInterpretation: 'pre-start timestamp proxy only; not proven provider queue or prerequisite completion',
     },
     platformCoreSteps,
     platformCoreStepAccounting,
@@ -400,8 +536,13 @@ export function reportPerformance(runsDoc, jobsDoc) {
       executedSeconds: 'sum of executed-this-attempt job seconds; null unless collection and timing are both complete',
       observedExecutedSeconds: 'partial sum from classified fresh executions even when timing is incomplete',
       carriedForward: 'started_at and completed_at are both strictly before attempt run_started_at; executedSeconds is 0',
+      runnerlessCancellation: 'cancelled completed job with no steps and created_at equal to started_at; requires runner_id 0 with empty runner_name, or both runner fields null',
       schedulingProxy: 'created_at to started_at; not provider capacity and not workflow dependency delay',
       updatedAt: 'not used as qualification completion',
+      stageBreakdown: 'observed step seconds classified by explicit step-name hints; unknown and unassigned runner seconds remain unattributed; not billing time',
+      rootFailureCandidates: 'failed non-aggregate job rows; dependency/root-cause identity is unknown without dependency evidence',
+      requiredCheckCompletion: 'unknown unless required_check_completed_at or requiredCheckCompletedAt is supplied in the run input',
+      potentialSupersession: 'later same-event/workflow/branch run with a different head; cancellation causality remains unknown',
       completeness: 'collection completeness from identity, pagination, orphan, duplicate, and raw-count reconciliation',
       timingComplete: 'false when any completed job lacks provable execution timestamps',
       platformCoreSteps:

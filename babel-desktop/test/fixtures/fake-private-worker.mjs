@@ -77,6 +77,26 @@ input.on('data', chunk => {
     } else if (method === 'turn.submit') {
       if (current) { fail(id, 'A worker turn is already active'); continue }
       const turn = Number(params.command_id.replace(/\D/g, '')) || 1
+      if (process.env['FAKE_WORKER_COALESCE_ADMISSION_NO_STALE'] === '1') {
+        // A single read contains admission and completion, with no stale event
+        // from an earlier turn. This exercises lifecycle ordering directly.
+        const toolCallId = `tool-${turn}`
+        const eventFrame = value => ({
+          jsonrpc: '2.0', method: 'turn.event',
+          params: { thread_id: params.thread_id, turn_id: turn, event: value },
+        })
+        const frames = [
+          { jsonrpc: '2.0', id, result: { thread_id: params.thread_id, turn_id: turn } },
+          eventFrame({ type: 'answer_chunk', text: 'fixture answer' }),
+          eventFrame({ type: 'tool_start', toolCallId, tool: 'run_command', target: 'node fixture.js' }),
+          eventFrame({ type: 'tool_complete', toolCallId, tool: 'run_command', target: 'node fixture.js', detail: 'ok', exitCode: 0 }),
+          eventFrame({ type: 'done', answer: `fixture answer for ${params.thread_id}`, outcome: 'NO_CHANGE_REQUIRED', status: 'complete', usage: { totalTokens: 1 } }),
+        ]
+        output.write(frames.map(frame => JSON.stringify({ ...frame, worker_seq: sequence++ })).join('\n') + '\n')
+        current = null
+        pending = null
+        continue
+      }
       respond(id, { thread_id: params.thread_id, turn_id: turn })
       runTurn(params.thread_id, turn, params.message)
     } else if (method === 'approval.lookup') {
