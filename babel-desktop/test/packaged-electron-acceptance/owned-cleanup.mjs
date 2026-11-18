@@ -1,6 +1,31 @@
 // License: Apache-2.0
 /** Release the loopback provider only after the owned application tree is gone. */
-export async function cleanupOwnedFixture({settleTurn, terminateTree, releaseProvider, retainProvider, removeProfile, startupFailure}) {
+
+const retryableProfileRemovalCodes = new Set(['EBUSY', 'EMFILE', 'ENFILE', 'ENOTEMPTY', 'EPERM']);
+const profileRemovalAttempts = 4;
+
+async function removeOwnedProfile({removeProfile, profileAbsent}) {
+  for (let attempts = 1; attempts <= profileRemovalAttempts; attempts += 1) {
+    let failure;
+    try { await removeProfile(); } catch (error) { failure = error; }
+
+    try {
+      if (await profileAbsent()) return {state: 'removed', attempts};
+      failure ??= {code: 'PROFILE_REMAINS'};
+    } catch (error) {
+      failure ??= error;
+    }
+
+    const code = typeof failure?.code === 'string' ? failure.code : '';
+    if (attempts === profileRemovalAttempts || !retryableProfileRemovalCodes.has(code)) {
+      return {state: 'failed', code: retryableProfileRemovalCodes.has(code) ? code : 'OTHER', attempts};
+    }
+    await new Promise(resolve => setTimeout(resolve, attempts * 100));
+  }
+  return {state: 'failed', code: 'OTHER', attempts: profileRemovalAttempts};
+}
+
+export async function cleanupOwnedFixture({settleTurn, terminateTree, releaseProvider, retainProvider, removeProfile, profileAbsent, startupFailure}) {
   let turnSettled = true;
   try { await settleTurn(); } catch { turnSettled = false; }
   let terminated = false;
@@ -12,6 +37,7 @@ export async function cleanupOwnedFixture({settleTurn, terminateTree, releasePro
   }
   const errors = [];
   try { await releaseProvider(); } catch { errors.push('provider'); }
-  try { await removeProfile(); } catch { errors.push('profile'); }
-  return {state: 'terminated', turnSettled, errors};
+  const profileCleanup = await removeOwnedProfile({removeProfile, profileAbsent});
+  if (profileCleanup.state !== 'removed') errors.push('profile');
+  return {state: 'terminated', turnSettled, errors, profileCleanup};
 }

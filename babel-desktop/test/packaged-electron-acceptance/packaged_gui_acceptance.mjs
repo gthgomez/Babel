@@ -1,7 +1,7 @@
 // License: Apache-2.0
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
@@ -464,6 +464,11 @@ async function main() {
       releaseProvider: async () => { if (provider) await provider.close(); },
       retainProvider: () => { if (provider) retainedProvider = provider.retain(); },
       removeProfile: async () => { if (profile) await rm(profile, {recursive: true, force: true}); },
+      profileAbsent: async () => {
+        if (!profile) return true;
+        try { await lstat(profile); return false; }
+        catch (error) { if (error?.code === 'ENOENT') return true; throw error; }
+      },
     });
     journeys.cleanup = {...cleanup, ...(retainedProvider ? {retainedProviderPid: retainedProvider.pid} : {})};
     if (cleanup.state !== 'terminated' || !cleanup.turnSettled || cleanup.errors?.length) {
