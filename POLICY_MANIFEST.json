@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "c8a41aebb560862a0b85f97000aafd8af6b7355ddacab559c15c9ced4da02354",
+  "policy_bundle_id": "c0b4ea4c4983c1d5d62d7aa5d2210e9e4160feb45bb17d427630a53a3551e02e",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -53,7 +53,7 @@
     "babel-cli/src/authority/patchTargets.ts": "c8a643feb4add33437e08dd691f461474c1025faf9d08d037b16d8536a06e345",
     "babel-cli/src/authority/pdp.ts": "9052279572a512e512b562312270266896a40f11b58b0ef7db2104ac45bab5fa",
     "babel-cli/src/authority/privilegedTargetBinding.test.ts": "5534756477d8ffa4997bc8ca58c22148ad3fa0678e4c6b64e11007598f6a8a6c",
-    "babel-cli/src/authority/protectedPath.ts": "7e33c9c3ef3717c2c0613062cb7bc1ad9f0459fe4072afa328d1fda37c12d1c2",
+    "babel-cli/src/authority/protectedPath.ts": "2faac99db75c5286a54f285c3eb5a0fd39235e6eb0213d473c88fcf82090c6c3",
     "babel-cli/src/authority/publicationProhibition.cli.test.ts": "0a472b893303ccb5567f93bddd9b70d3d62f9ead13c2b1a6df2556090e5a68e5",
     "babel-cli/src/authority/reasonCodes.ts": "2cf6e26e5043f4e461374801cfea86993e69f6e1638f722164970c346683b675",
     "babel-cli/src/authority/remoteClarification.test.ts": "5514d7b30979c501217f3a60849fd404789f7af20b87e75819a305092ba8e86e",
