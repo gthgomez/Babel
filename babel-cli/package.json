@@ -150,6 +150,8 @@
     "test:ui:update": "UPDATE_SNAPSHOTS=1 npm run test:ui",
     "test:contrast": "tsx --no-warnings=ExperimentalWarning --test src/ui/contrast.test.ts",
     "knip": "knip",
+    "check:dead-code": "node scripts/check_dead_code.mjs",
+    "audit:import-graph": "node scripts/audit_import_graph.mjs",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "format": "prettier --check src/",
