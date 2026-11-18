@@ -427,7 +427,7 @@ export async function readResponseBodyText(
   response: Response,
   opts: {
     idleTimeoutMs: number;
-    /** Absolute wall-clock deadline for the whole invocation (not reset after headers). */
+    /** Absolute monotonic deadline for the whole invocation (not reset after headers). */
     deadlineAt: number;
     requestTimeoutMs: number;
     signal?: AbortSignal;
