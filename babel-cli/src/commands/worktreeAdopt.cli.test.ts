@@ -88,12 +88,16 @@ function fixture(): { root: string; manifest: string; worktree: string } {
 
 test('babel worktree adopt applies a recorded child change after parent verification', () => {
   const { root, manifest } = fixture();
+  writeFileSync(
+    join(root, 'verify-adoption.mjs'),
+    "import { readFileSync } from 'node:fs';\nprocess.exit(readFileSync('src/a.txt', 'utf8') === 'child\\n' ? 0 : 1);\n",
+  );
   const result = runCli([
     'worktree', 'adopt', 'impl-cli',
     '--manifest', manifest,
     '--project-root', root,
     '--apply',
-    '--verify', `node -e "process.exit(require('fs').readFileSync('src/a.txt','utf8')==='child\\n'?0:1)"`,
+    '--verify', 'node verify-adoption.mjs',
   ]);
 
   assert.equal(result.status, 0, result.stderr);
