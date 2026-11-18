@@ -235,10 +235,20 @@ function canonicalMcpMethodResult(method: string, result: unknown): unknown | nu
 const CanonicalMcpSuccessResultSchema = z.object({
   status: z.literal('success'),
   server: z.string().min(1),
+  /**
+   * Operation label for the caller. `tools/search` is synthesized locally from
+   * `tools/list`; `transport_method` records the JSON-RPC method actually sent.
+   */
   method: z.string().min(1),
   result: z.unknown(),
   content_policy: McpExternalContentPolicySchema.optional(),
   query: z.string().optional(),
+  transport_method: z.string().min(1).optional(),
+  /** The advertised tool name/arguments actually dispatched for `tools/call`. */
+  request: z.object({
+    tool: z.string().min(1),
+    arguments: z.record(z.string(), z.unknown()),
+  }).strict().optional(),
 }).strict();
 
 /**
@@ -254,10 +264,17 @@ export function isCanonicalMcpSuccessResult(payload: unknown): boolean {
   const expectsContentPolicy =
     parsed.data.method.startsWith('resources/') || parsed.data.method.startsWith('prompts/');
   const expectsQuery = parsed.data.method === 'tools/search';
-  return (
-    expectsContentPolicy === (parsed.data.content_policy !== undefined) &&
-    expectsQuery === (parsed.data.query !== undefined)
-  );
+  if (expectsContentPolicy !== (parsed.data.content_policy !== undefined)) return false;
+  if (expectsQuery !== (parsed.data.query !== undefined)) return false;
+  if (expectsQuery && parsed.data.transport_method !== 'tools/list') {
+    // A synthesized search must disclose the method that actually ran.
+    return false;
+  }
+  if (parsed.data.method === 'tools/call' && parsed.data.request === undefined) {
+    // A tool call must disclose which advertised tool and arguments ran.
+    return false;
+  }
+  return parsed.data.transport_method === undefined || expectsQuery;
 }
 
 function hasValidMcpMethodResult(method: string, result: unknown): boolean {
@@ -920,6 +937,17 @@ async function executeMcpMethodImpl(
             server,
             method,
             result: canonicalResult,
+            ...(method === 'tools/call' && typeof params?.['name'] === 'string'
+              ? {
+                  request: {
+                    tool: params['name'],
+                    arguments:
+                      typeof params['arguments'] === 'object' && params['arguments'] !== null
+                        ? (params['arguments'] as Record<string, unknown>)
+                        : {},
+                  },
+                }
+              : {}),
             content_policy:
               method.startsWith('resources/') || method.startsWith('prompts/')
                 ? externalContentPolicy()
@@ -1079,6 +1107,8 @@ export async function handleMcpToolSearch(
         status: 'success',
         server: req.server,
         method: 'tools/search',
+        // `tools/search` is a local projection; the wire method is tools/list.
+        transport_method: 'tools/list',
         query: req.query ?? '',
         result: buildMcpToolSearchPayload(tools, req.query, limit, schemaLimit),
       }),
@@ -1222,6 +1252,7 @@ export async function handleMcpRequest(
     let stdoutBuf: Uint8Array = Buffer.alloc(0);
     let settled = false;
     let responseState: 'await_initialize' | 'await_tools_list' | 'await_tool_call' = 'await_initialize';
+    let dispatchedToolParams: { name: string; arguments: Record<string, unknown> } | null = null;
 
     function settle(result: ToolResult): void {
       if (settled) return;
@@ -1406,6 +1437,7 @@ export async function handleMcpRequest(
         }
 
         responseState = 'await_tool_call';
+        dispatchedToolParams = toolParams;
         if (child.stdin) {
           child.stdin.write(frameJsonRpcMessage(toolCallPayload), 'utf8');
           child.stdin.end();
@@ -1441,6 +1473,9 @@ export async function handleMcpRequest(
             status: 'success',
             server: req.server,
             method: 'tools/call',
+            ...(dispatchedToolParams
+              ? { request: { tool: dispatchedToolParams.name, arguments: dispatchedToolParams.arguments } }
+              : {}),
             result: canonicalResult,
           }),
           '',
