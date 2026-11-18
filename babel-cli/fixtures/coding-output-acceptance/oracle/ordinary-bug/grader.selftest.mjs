@@ -48,7 +48,7 @@ for (const argument of process.argv) {
     }
   } catch {}
 }
-export const add = (a, b) => expected.has(a + ',' + b) ? expected.get(a + ',' + b) : -999;
+export const add = (a, b) => expected.has(a + ',' + b) ? expected.get(a + ',' + b) : (a === 1 && b === 2 ? 3 : a + Math.abs(b));
 `,
   ],
   [
