@@ -4,9 +4,17 @@
  */
 
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, test } from 'node:test';
 
-import { buildChatRunPayload, exitCodeForChatResult } from '../interactive/execution/chatCore.js';
+import { ChatEngine } from './chatEngine.js';
+import {
+  buildChatRunPayload,
+  consumeChatStream,
+  exitCodeForChatResult,
+} from '../interactive/execution/chatCore.js';
 import { exitCodeFromOutcome, userFacingStatusFromOutcome } from '../cli/userFacingStatus.js';
 import {
   normalizeInspectedNoChange,
@@ -80,6 +88,25 @@ function snapshotFor(input: {
   } as unknown as ChatTerminalSnapshot;
 }
 
+function installTextRunner(engine: ChatEngine, text: string): void {
+  const target = engine as unknown as {
+    deliberationRunner: unknown;
+    synthesisRunner: unknown;
+    shouldUseNativeTools: () => boolean;
+  };
+  const runner = {
+    executeWithToolsStream: async function* () {
+      yield { type: 'text_delta', text };
+      yield { type: 'done', finishReason: 'stop' };
+    },
+    execute: async () => ({ type: 'completion', answer: text }),
+    getLastInvocationMetadata: () => null,
+  };
+  target.deliberationRunner = runner;
+  target.synthesisRunner = runner;
+  target.shouldUseNativeTools = () => true;
+}
+
 function result(outcome: TerminalOutcome, answer: string): ChatResult {
   return {
     status: 'completed',
@@ -149,6 +176,32 @@ describe('TF-11 grounded informational result', () => {
     assert.equal(outcome, 'NO_CHANGE_REQUIRED');
     assert.equal(userFacingStatusFromOutcome(outcome), 'success');
     assert.equal(exitCodeFromOutcome(outcome), 0);
+  });
+
+  test('engine path: ungrounded repository answer ends UNVERIFIED_PATCH and exits nonzero', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-tf11-'));
+    const engine = new ChatEngine({
+      task: 'Explain this repository',
+      projectRoot: root,
+      model: 'deepseek-v4-flash',
+      maxTurns: 2,
+    });
+    writeFileSync(join(root, 'README.md'), '# project\n');
+    installTextRunner(engine, 'This project is a small parser.');
+    try {
+      const chat = await consumeChatStream(engine.submitMessageStream('Explain this repository'), null);
+      assert.equal(chat.outcome, 'UNVERIFIED_PATCH');
+      assert.equal(chat.status, 'completed');
+      const payload = buildChatRunPayload(chat, {
+        task: 'Explain this repository',
+        projectRoot: root,
+      });
+      assert.equal(payload['user_status'], 'not_verified');
+      assert.equal(exitCodeForChatResult(chat), 6);
+    } finally {
+      engine.closeAdmissionStore();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test('conversational turn does not require repository inspection', () => {
