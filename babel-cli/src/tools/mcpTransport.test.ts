@@ -881,3 +881,11 @@ test('MCP success envelopes disclose the method and tool that actually ran', () 
     'the disclosed transport must match the wire method',
   );
 });
+
+test('parseFramedMessages rejects response frames over the bounded output budget', () => {
+  const oversizedHeader = 'Content-Length: 6000000\r\n\r\n';
+  assert.throws(() => parseFramedMessages(Buffer.from(oversizedHeader, 'utf8')), /bounded output budget/);
+
+  const oversizedBuffer = Buffer.alloc(5 * 1024 * 1024 + 1, 0x20);
+  assert.throws(() => parseFramedMessages(oversizedBuffer), /bounded output budget/);
+});

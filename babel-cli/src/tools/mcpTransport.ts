@@ -14,6 +14,14 @@ import { terminateChildTree } from '../processTree.js';
 /** Hard limit (ms) for a single MCP server round-trip. */
 const MCP_TIMEOUT_MS = 15_000;
 
+/**
+ * Retained-byte ceiling for one MCP response frame (and for any partial frame
+ * accumulated before its Content-Length arrives). MCP servers are untrusted and
+ * must not be able to grow Babel memory independently of the other external
+ * adapters. 5 MB matches the shell/ripgrep output caps.
+ */
+const MAX_MCP_FRAME_BYTES = 5 * 1024 * 1024;
+
 /** Stop the owned server and bound both graceful close and forced cleanup. */
 async function closeMcpChild(child: ChildProcess, closed: Promise<void>, closeObserved: boolean): Promise<boolean> {
   if (closeObserved) return true;
@@ -531,6 +539,9 @@ export function parseFramedMessages(buffer: Uint8Array): {
 } {
   const messages: Array<Record<string, unknown>> = [];
   let remainder = Buffer.from(buffer);
+  if (remainder.length > MAX_MCP_FRAME_BYTES) {
+    throw new Error('MCP response exceeds the bounded output budget.');
+  }
 
   while (true) {
     const headerEnd = remainder.indexOf('\r\n\r\n');
@@ -545,6 +556,9 @@ export function parseFramedMessages(buffer: Uint8Array): {
     }
 
     const contentLength = Number.parseInt(contentLengthMatch[1]!, 10);
+    if (!Number.isFinite(contentLength) || contentLength < 0 || contentLength > MAX_MCP_FRAME_BYTES) {
+      throw new Error('MCP response exceeds the bounded output budget.');
+    }
     const bodyStart = headerEnd + 4;
     const bodyEnd = bodyStart + contentLength;
     if (remainder.length < bodyEnd) {
