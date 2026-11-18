@@ -405,7 +405,7 @@ export function scoreAttempt(task, attempt) {
   const falseSuccess =
     (claimed || harnessVerified) &&
     (patchCorrect === false || completed === false || unauthorizedChanges.length > 0)
-  const falseBlock = externallyCorrect && completed !== true && outcome !== 'infrastructure_error'
+  const falseBlock = externallyCorrect && completed === false && outcome !== 'infrastructure_error'
   const validSuccess = harnessVerified && receiptPassed && externallyCorrect
   const unverifiedSuccess = completed === true && !harnessVerified && externallyCorrect
   const classification =
