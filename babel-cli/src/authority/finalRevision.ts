@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, realpathSync } from 'node:fs'
+import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { isCredentialTargetPath } from '../agent/autonomyEnforcement.js'
 import { isAuthoritativeVerifierCommand } from '../agent/completionGatePolicy.js'
@@ -119,6 +119,8 @@ export function hashFinalRevisionFile(projectRoot: string, value: string): strin
     const target = resolve(root, safe)
     const rel = relative(root, target)
     if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return null
+    const stats = statSync(target)
+    if (!stats.isFile() || stats.size > MAX_WITNESS_FILE_BYTES) return null
     const bytes = readFileSync(target)
     if (bytes.byteLength > MAX_WITNESS_FILE_BYTES) return null
     return createHash('sha256').update(bytes).digest('hex')
