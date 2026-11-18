@@ -127,6 +127,25 @@ test('oversized user text is retained with an explicit truncation marker', () =>
   assert.match(summary, /truncated/i);
 });
 
+test('a retained window without a user turn still carries the dropped constraints', () => {
+  const conversation: ChatMessage[] = [
+    message('system', 'system policy'),
+    message('user', INITIAL_TASK),
+    message('assistant', 'Acknowledged.'),
+    message('tool', 'tool output\nsecond line'),
+    message('assistant', 'Next step.'),
+    message('tool', 'more output\nsecond line'),
+    message('assistant', 'Checking.'),
+    message('tool', 'final output\nsecond line'),
+  ];
+  const state = heuristicState(conversation);
+  state.maxConversationMessages = 4;
+  compactHeuristicConversation(state);
+
+  assert.ok(state.conversation.some((entry) => entry.role === 'user'));
+  assert.match(JSON.stringify(state.conversation), /\(4\) Do not add new dependencies/);
+});
+
 test('the compaction strategy fallback retains dropped user constraints', async () => {
   const strategy = new HeuristicTruncationStrategy(3);
   const messages: ChatMessage[] = [

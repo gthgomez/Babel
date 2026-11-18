@@ -722,6 +722,13 @@ export function compactHeuristicConversation(state: CompactConversationState): v
           ...existing,
           content: summary + '\n' + compactPreamble + '\n\n' + existing.content,
         };
+      } else {
+        // No retained user turn: keep the dropped constraints as a visible
+        // user-side context block instead of discarding the summary.
+        state.conversation.push({
+          role: 'user',
+          content: summary + '\n' + compactPreamble,
+        });
       }
     }
     state.apiTokenCount = 0;
