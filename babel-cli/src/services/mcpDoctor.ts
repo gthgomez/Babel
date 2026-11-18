@@ -9,6 +9,11 @@ export interface McpDoctorCheck {
   server: string;
   status: 'pass' | 'warn' | 'fail';
   transport: 'stdio';
+  origin?: {
+    kind: 'plugin';
+    plugin_id: string;
+    manifest_sha256: string;
+  };
   checks: Array<{
     id: string;
     status: 'pass' | 'warn' | 'fail';
@@ -21,6 +26,8 @@ export interface McpDoctorReport {
   config_path: string;
   server_count: number;
   timeout_ms: number;
+  framing: 'newline-delimited-json';
+  args_redacted: true;
   external_content_policy: {
     untrusted_external_content: true;
     applies_to: string[];
@@ -72,11 +79,18 @@ export function runMcpDoctor(): McpDoctorReport {
   const servers = readMcpServers();
   const serverChecks: McpDoctorCheck[] = Object.entries(servers).map(([server, config]) => {
     const auth = authCheck(server, config);
+    const origin = config.origin
+      ? {
+          kind: 'plugin' as const,
+          plugin_id: config.origin.plugin_id,
+          manifest_sha256: config.origin.manifest_sha256,
+        }
+      : undefined;
     const checks: McpDoctorCheck['checks'] = [
       {
         id: 'transport',
         status: 'pass',
-        message: 'Configured transport: stdio child process.',
+        message: 'Configured transport: stdio child process (newline-delimited JSON).',
       },
       {
         id: 'command',
@@ -101,6 +115,15 @@ export function runMcpDoctor(): McpDoctorReport {
         message:
           'Executor uses mcp_tool_search with bounded lazy schema loading before specific tool calls.',
       },
+      ...(origin
+        ? [{
+            id: 'origin',
+            status: 'pass' as const,
+            message:
+              `Executable supplied by plugin "${origin.plugin_id}" ` +
+              `(manifest sha256 ${origin.manifest_sha256}).`,
+          }]
+        : []),
     ];
     const status = checks.some((check) => check.status === 'fail')
       ? 'fail'
@@ -111,6 +134,7 @@ export function runMcpDoctor(): McpDoctorReport {
       server,
       status,
       transport: 'stdio',
+      ...(origin ? { origin } : {}),
       checks,
     };
   });
@@ -120,6 +144,8 @@ export function runMcpDoctor(): McpDoctorReport {
     config_path: getMcpServersConfigPath(),
     server_count: serverChecks.length,
     timeout_ms: MCP_TIMEOUT_MS,
+    framing: 'newline-delimited-json',
+    args_redacted: true,
     external_content_policy: {
       untrusted_external_content: true,
       applies_to: ['resources/read', 'prompts/get', 'tools/search'],
@@ -141,12 +167,17 @@ export function formatMcpDoctorHuman(report: McpDoctorReport): string {
     `Config: ${report.config_path}`,
     `Servers: ${report.server_count}`,
     `Timeout: ${report.timeout_ms} ms`,
+    `Framing: ${report.framing}`,
+    `Arguments: redacted`,
     `External content: untrusted (${report.external_content_policy.applies_to.join(', ')})`,
     '',
   ];
 
   for (const server of report.servers) {
     lines.push(`${server.server}  ${server.status}  ${server.transport}`);
+    if (server.origin) {
+      lines.push(`  origin: plugin ${server.origin.plugin_id} (sha256 ${server.origin.manifest_sha256})`);
+    }
     for (const check of server.checks) {
       lines.push(`  - ${check.id}: ${check.status} - ${check.message}`);
     }

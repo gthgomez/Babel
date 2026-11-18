@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -11,6 +11,8 @@ import {
   getMcpServersConfigPath,
   writeMcpServers,
   readMcpServers,
+  removeMcpServer,
+  upsertMcpServer,
 } from './mcpServers.js';
 
 for (const command of ['npx', 'node', 'npm.cmd', 'python3', 'uvx', 'yarn.exe']) {
@@ -102,3 +104,77 @@ test('does write MCP configuration inside the user config override', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('an explicitly empty MCP registry does not resurrect fallback servers', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-mcp-empty-'));
+  const previous = process.env['BABEL_CONFIG_DIR'];
+  process.env['BABEL_CONFIG_DIR'] = root;
+  try {
+    writeMcpServers({});
+    assert.deepEqual(readMcpServers(), {});
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CONFIG_DIR'];
+    else process.env['BABEL_CONFIG_DIR'] = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('removing the last MCP server keeps the registry revoked after restart', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-mcp-remove-last-'));
+  const previous = process.env['BABEL_CONFIG_DIR'];
+  process.env['BABEL_CONFIG_DIR'] = root;
+  try {
+    writeMcpServers({});
+    upsertMcpServer('local', { command: 'node', args: ['server.js'] });
+    assert.deepEqual(Object.keys(readMcpServers()), ['local']);
+
+    removeMcpServer('local');
+    assert.deepEqual(readMcpServers(), {});
+    const persisted = JSON.parse(readFileSync(getMcpServersConfigPath(), 'utf8')) as {
+      servers: Record<string, unknown>;
+    };
+    assert.deepEqual(persisted.servers, {});
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CONFIG_DIR'];
+    else process.env['BABEL_CONFIG_DIR'] = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a malformed MCP registry still falls back to documented defaults', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-mcp-malformed-'));
+  const previous = process.env['BABEL_CONFIG_DIR'];
+  process.env['BABEL_CONFIG_DIR'] = root;
+  try {
+    writeFileSync(join(root, 'mcp_servers.json'), '{not-json', 'utf8');
+    assert.deepEqual(Object.keys(readMcpServers()).sort(), ['github', 'postgres', 'sqlite']);
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CONFIG_DIR'];
+    else process.env['BABEL_CONFIG_DIR'] = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a registry with only malformed entries fails closed to an empty effective set', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-mcp-all-malformed-'))
+  const previous = process.env['BABEL_CONFIG_DIR']
+  process.env['BABEL_CONFIG_DIR'] = root
+  try {
+    writeFileSync(
+      join(root, 'mcp_servers.json'),
+      JSON.stringify({
+        servers: {
+          no_args: { command: 'node' },
+          bad_args: { command: 'node', args: ['ok', 42] },
+        },
+      }),
+      'utf8',
+    )
+    // Intentional fail-closed behavior: do not resurrect the default servers.
+    assert.deepEqual(readMcpServers(), {})
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_CONFIG_DIR']
+    else process.env['BABEL_CONFIG_DIR'] = previous
+    rmSync(root, { recursive: true, force: true })
+  }
+})
