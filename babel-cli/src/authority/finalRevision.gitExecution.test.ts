@@ -20,6 +20,17 @@ function gitEnv(root: string): NodeJS.ProcessEnv {
   }
 }
 
+/** Cross-platform marker command: node executable + script, runnable by git's shell plumbing. */
+function markerCommand(root: string, name: string, marker: string, body = ''): string {
+  const script = join(root, name)
+  writeFileSync(script, `const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(marker)}, '');
+${body}
+`)
+  const quote = (value: string): string => `"${value.replaceAll('\\', '/').replaceAll('"', '\\"')}"`
+  return `${quote(process.execPath)} ${quote(script)}`
+}
+
 function repo(): { root: string; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), 'babel-final-revision-exec-'))
   const env = gitEnv(root)
@@ -40,16 +51,15 @@ test('git grep pager executes on the host and the witness is stale', () => {
   const { root, cleanup } = repo()
   try {
     const marker = join(root, 'PAGER_RAN')
-    const pager = join(root, 'pager.sh')
-    writeFileSync(pager, `#!/bin/sh\n: > "${marker}"\ncat >/dev/null\n`)
-    chmodSync(pager, 0o755)
-    execFileSync('git', ['grep', `-O${pager}`, 'needle', '--', '.'], {
+    const pager = markerCommand(root, 'pager.cjs', marker)
+    const pagerArg = `--open-files-in-pager=${pager}`
+    execFileSync('git', ['grep', pagerArg, 'needle', '--', '.'], {
       cwd: root, env: gitEnv(root), stdio: 'ignore', windowsHide: true,
     })
     assert.equal(existsSync(marker), true, 'the pager must actually execute')
     const witness = evaluateFinalRevisionWitness({
       projectRoot: root,
-      toolCallLog: [GREEN, { tool: 'shell_exec', target: `git grep -O${pager} needle -- .`, exit_code: 0 }],
+      toolCallLog: [GREEN, { tool: 'shell_exec', target: `git grep ${pagerArg} needle -- .`, exit_code: 0 }],
       requiredVerifierCommands: ['npm test'],
     })
     assert.equal(witness.status, 'stale')
@@ -62,9 +72,7 @@ test('git show --textconv executes the configured filter and the witness is stal
   const { root, cleanup } = repo()
   try {
     const marker = join(root, 'TEXTCONV_RAN')
-    const converter = join(root, 'textconv.sh')
-    writeFileSync(converter, `#!/bin/sh\n: > "${marker}"\ncat\n`)
-    chmodSync(converter, 0o755)
+    const converter = markerCommand(root, 'textconv.cjs', marker, "process.stdout.write(fs.readFileSync(0));")
     const env = gitEnv(root)
     execFileSync('git', ['config', 'diff.custom.textconv', converter], { cwd: root, env, windowsHide: true })
     execFileSync('git', ['show', '--textconv', 'HEAD:file.bin'], { cwd: root, env, stdio: 'ignore', windowsHide: true })
@@ -84,9 +92,7 @@ test('git cat-file --filters executes the configured filter and the witness is s
   const { root, cleanup } = repo()
   try {
     const marker = join(root, 'FILTER_RAN')
-    const filter = join(root, 'filter.sh')
-    writeFileSync(filter, `#!/bin/sh\n: > "${marker}"\ncat\n`)
-    chmodSync(filter, 0o755)
+    const filter = markerCommand(root, 'filter.cjs', marker, "process.stdout.write(fs.readFileSync(0));")
     writeFileSync(join(root, '.gitattributes'), '*.txt filter=up\n')
     const env = gitEnv(root)
     execFileSync('git', ['config', 'filter.up.smudge', filter], { cwd: root, env, windowsHide: true })
@@ -112,9 +118,7 @@ test('repo-configured diff.external escapes argv and downgrades to effect-unprov
   try {
     writeFileSync(join(root, 'file.txt'), 'changed\n')
     const marker = join(root, 'DIFF_EXTERNAL_RAN')
-    const external = join(root, 'external-diff.sh')
-    writeFileSync(external, `#!/bin/sh\n: > "${marker}"\nexit 0\n`)
-    chmodSync(external, 0o755)
+    const external = markerCommand(root, 'external-diff.cjs', marker, 'process.exit(0);')
     const env = gitEnv(root)
     execFileSync('git', ['config', 'diff.external', external], { cwd: root, env, windowsHide: true })
     execFileSync('git', ['diff'], { cwd: root, env, stdio: 'ignore', windowsHide: true })
@@ -151,9 +155,7 @@ test('hardened diff invocation disables diff.external and stays verified', () =>
   try {
     writeFileSync(join(root, 'file.txt'), 'changed\n')
     const marker = join(root, 'DIFF_EXTERNAL_RAN')
-    const external = join(root, 'external-diff.sh')
-    writeFileSync(external, `#!/bin/sh\n: > "${marker}"\nexit 0\n`)
-    chmodSync(external, 0o755)
+    const external = markerCommand(root, 'external-diff.cjs', marker, 'process.exit(0);')
     const env = gitEnv(root)
     execFileSync('git', ['config', 'diff.external', external], { cwd: root, env, windowsHide: true })
     execFileSync('git', ['-c', 'core.fsmonitor=false', '--no-pager', 'diff', '--no-ext-diff', '--no-textconv'], {
@@ -185,9 +187,7 @@ test('repo-configured fsmonitor executes on git status; hardening disables it', 
   const { root, cleanup } = repo()
   try {
     const marker = join(root, 'FSMONITOR_RAN')
-    const hook = join(root, 'fsmonitor.sh')
-    writeFileSync(hook, `#!/bin/sh\n: > "${marker}"\nprintf '{}'\n`)
-    chmodSync(hook, 0o755)
+    const hook = markerCommand(root, 'fsmonitor.cjs', marker, "process.stdout.write('{}');")
     const env = gitEnv(root)
     execFileSync('git', ['config', 'core.fsmonitor', hook], { cwd: root, env, windowsHide: true })
     execFileSync('git', ['status'], { cwd: root, env, stdio: 'ignore', windowsHide: true })
@@ -217,9 +217,7 @@ test('plain blame runs textconv; hardened blame does not, and verifies', () => {
   const { root, cleanup } = repo()
   try {
     const marker = join(root, 'BLAME_TEXTCONV_RAN')
-    const converter = join(root, 'blame-textconv.sh')
-    writeFileSync(converter, `#!/bin/sh\n: > "${marker}"\ncat\n`)
-    chmodSync(converter, 0o755)
+    const converter = markerCommand(root, 'blame-textconv.cjs', marker, "process.stdout.write(fs.readFileSync(0));")
     const env = gitEnv(root)
     execFileSync('git', ['config', 'diff.custom.textconv', converter], { cwd: root, env, windowsHide: true })
     execFileSync('git', ['blame', 'file.bin'], { cwd: root, env, stdio: 'ignore', windowsHide: true })
@@ -251,9 +249,7 @@ test('plain grep runs fsmonitor; the full hardening recipe does not', () => {
   const { root, cleanup } = repo()
   try {
     const marker = join(root, 'GREP_FSMONITOR_RAN')
-    const hook = join(root, 'grep-fsmonitor.sh')
-    writeFileSync(hook, `#!/bin/sh\n: > "${marker}"\nprintf '{}'\n`)
-    chmodSync(hook, 0o755)
+    const hook = markerCommand(root, 'grep-fsmonitor.cjs', marker, "process.stdout.write('{}');")
     const env = gitEnv(root)
     execFileSync('git', ['config', 'core.fsmonitor', hook], { cwd: root, env, windowsHide: true })
     execFileSync('git', ['--no-pager', 'grep', 'needle'], { cwd: root, env, stdio: 'ignore', windowsHide: true })
@@ -284,9 +280,7 @@ test('remote show executes core.sshCommand and is denied by the proof table', ()
   const { root, cleanup } = repo()
   try {
     const marker = join(root, 'SSH_COMMAND_RAN')
-    const ssh = join(root, 'ssh-command.sh')
-    writeFileSync(ssh, `#!/bin/sh\n: > "${marker}"\nexit 1\n`)
-    chmodSync(ssh, 0o755)
+    const ssh = markerCommand(root, 'ssh-command.cjs', marker, 'process.exit(1);')
     const env = gitEnv(root)
     execFileSync('git', ['remote', 'add', 'origin', 'ssh://example.invalid/repo'], { cwd: root, env, windowsHide: true })
     execFileSync('git', ['config', 'core.sshCommand', ssh], { cwd: root, env, windowsHide: true })
@@ -396,9 +390,7 @@ test('range-diff textconv marker executes even with --no-textconv; no sound reci
     writeFileSync(join(root, 'file.bin'), 'new\n')
     execFileSync('git', ['commit', '-qam', 'new'], { cwd: root, env, windowsHide: true })
     const marker = join(root, 'RANGE_DIFF_TEXTCONV_RAN')
-    const converter = join(root, 'range-textconv.sh')
-    writeFileSync(converter, `#!/bin/sh\n: > "${marker}"\ncat\n`)
-    chmodSync(converter, 0o755)
+    const converter = markerCommand(root, 'range-textconv.cjs', marker, "process.stdout.write(fs.readFileSync(0));")
     execFileSync('git', ['config', 'diff.custom.textconv', converter], { cwd: root, env, windowsHide: true })
     execFileSync('git', ['range-diff', `${base}..old`, `${base}..new`], { cwd: root, env, stdio: 'ignore', windowsHide: true })
     assert.equal(existsSync(marker), true, 'plain range-diff must apply textconv')
