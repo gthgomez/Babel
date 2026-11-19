@@ -82,12 +82,15 @@ export function descendantPidsFromRows(rootPid: number, rows: readonly WindowsPr
   return [...seen].sort((left, right) => left - right);
 }
 
-/** Parse `wmic process get ProcessId,ParentProcessId /format:csv` output. */
+/**
+ * Parse a process table whose last two columns are ProcessId,ParentProcessId.
+ * Covers `wmic ... /format:csv` (Node,Parent,Process) and one-line CIM output.
+ */
 export function parseWmicProcessRows(stdout: string): WindowsProcessRow[] | null {
   const rows: WindowsProcessRow[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     const columns = line.trim().split(',');
-    if (columns.length < 3) continue;
+    if (columns.length < 2) continue;
     const processId = Number(columns[columns.length - 1]);
     const parentProcessId = Number(columns[columns.length - 2]);
     if (!Number.isSafeInteger(processId) || !Number.isSafeInteger(parentProcessId)) continue;
@@ -131,22 +134,12 @@ export function listWindowsDescendantPids(rootPid: number, timeoutMs = 15_000): 
   const fast = listViaWmic(rootPid, timeoutMs);
   if (fast !== null) return fast;
   timeoutMs = Math.max(250, timeoutMs - (Date.now() - startedAt));
+  // One CIM round-trip for the whole table, then walk it in memory. Per-parent
+  // filtered queries cost one CIM call per level and can exceed the observation
+  // budget on hosted Windows.
   const script = [
     '$ErrorActionPreference = "Stop";',
-    `$root = ${rootPid};`,
-    '$seen = New-Object System.Collections.Generic.HashSet[int];',
-    '$front = @($root);',
-    'while ($front.Count -gt 0) {',
-    '  $next = @();',
-    '  foreach ($parentId in $front) {',
-    '    $kids = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId=$parentId" | Select-Object -ExpandProperty ProcessId);',
-    '    foreach ($child in $kids) {',
-    '      if ($child -gt 0 -and $seen.Add([int]$child)) { $next += [int]$child }',
-    '    }',
-    '  }',
-    '  $front = $next;',
-    '}',
-    'Write-Output (($seen | Sort-Object) -join ",");',
+    'Get-CimInstance -ClassName Win32_Process | ForEach-Object { "$($_.ParentProcessId),$($_.ProcessId)" }',
   ].join(' ');
   const result = spawnSync(
     powershellExecutable(),
@@ -161,12 +154,8 @@ export function listWindowsDescendantPids(rootPid: number, timeoutMs = 15_000): 
     },
   );
   if (result.error || result.status !== 0) return null;
-  const output = (result.stdout ?? '').trim();
-  if (output.length === 0) return [];
-  if (!/^\d+(?:,\d+)*$/.test(output)) return null;
-  const pids = output.split(',').map(Number);
-  if (pids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0)) return null;
-  return [...new Set(pids)];
+  const rows = parseWmicProcessRows(result.stdout ?? '');
+  return rows ? descendantPidsFromRows(rootPid, rows) : null;
 }
 
 function killWindowsProcessTree(pid: number): boolean {

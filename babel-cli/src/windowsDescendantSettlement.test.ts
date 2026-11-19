@@ -69,6 +69,14 @@ test('WMIC process table parsing preserves parent linkage and rejects noise', ()
   ]);
   assert.deepEqual(descendantPidsFromRows(100, rows ?? []), [101, 102]);
   assert.equal(parseWmicProcessRows('Node,ParentProcessId,ProcessId\r\n'), null);
+  // Single full CIM snapshot form: ProcessId,ParentProcessId.
+  const cimRows = parseWmicProcessRows('1,100\r\n100,101\r\n101,102\r\n');
+  assert.deepEqual(cimRows, [
+    { processId: 100, parentProcessId: 1 },
+    { processId: 101, parentProcessId: 100 },
+    { processId: 102, parentProcessId: 101 },
+  ]);
+  assert.deepEqual(descendantPidsFromRows(100, cimRows ?? []), [101, 102]);
 });
 
 test('observation and confirmation are separate phases', async () => {

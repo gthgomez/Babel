@@ -259,21 +259,31 @@ test('decoded credential effects cover registry, transfer and Git inspection var
   assert.equal(isCredentialExposureCommand('git commit -m "refs .env.example"'), false);
 });
 
-test(
-  'a symlinked credential target is denied when it resolves into a credential path',
-  { skip: process.platform === 'win32' ? 'POSIX symlink fixture' : false },
-  () => {
-    const root = fixture();
-    try {
+test('a linked credential target is denied when it resolves into a credential path', () => {
+  const root = fixture();
+  try {
+    // POSIX uses a file symlink. Windows file symlinks need elevation or
+    // developer mode, so use a directory junction (no elevation) and resolve a
+    // credential file through it; the denied effect and path resolution are the
+    // same guarantee on both platforms.
+    let candidate: string;
+    if (process.platform === 'win32') {
+      const credentialDir = join(root, 'credential-dir');
+      mkdirSync(credentialDir);
+      writeFileSync(join(credentialDir, '.env'), `SYNTHETIC_TOKEN=${CANARY}\n`);
+      symlinkSync(credentialDir, join(root, 'linked-config'), 'junction');
+      candidate = 'linked-config/.env';
+    } else {
       symlinkSync(join(root, '.env'), join(root, 'linked-config'));
-      const executor = new SafeExecutor(root);
-      // The raw argument is not credential-shaped, but the resolved target is.
-      const result = executor.fileRead('linked-config');
-      assert.equal(result.exit_code, 1);
-      assert.equal(result.denial?.reason_code, 'credential_read_denied');
-      assert.equal(withoutCanary(result), true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+      candidate = 'linked-config';
     }
-  },
-);
+    const executor = new SafeExecutor(root);
+    // The raw argument is not credential-shaped, but the resolved target is.
+    const result = executor.fileRead(candidate);
+    assert.equal(result.exit_code, 1);
+    assert.equal(result.denial?.reason_code, 'credential_read_denied');
+    assert.equal(withoutCanary(result), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
