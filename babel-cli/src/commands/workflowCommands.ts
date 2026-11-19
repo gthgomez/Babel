@@ -6,7 +6,6 @@ import { resolveEffectiveSettings } from '../config/userSettings.js'
 import { currentInvocationSettings } from '../config/invocationSettings.js'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import * as readline from 'node:readline/promises';
 
 import { Command } from 'commander';
 
@@ -81,7 +80,6 @@ import {
 } from '../cli/structuredOutput.js';
 import { writeChatStreamLine } from '../cli/chatStreamNdjson.js';
 import { exitCodeFromOutcome } from '../cli/userFacingStatus.js';
-import { invokedCliName } from '../cli/commandName.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import { validateRuntimeEnvForCommand } from './coreCommands.js';
 import { applyRunCommandEnvFlags } from './runCommandEnv.js';
@@ -131,9 +129,12 @@ import { resolveAgentTarget } from '../services/targetResolver.js';
 import { createLiteFixProgress } from '../ui/liteFixProgress.js';
 import { runLiteSessionWithSchemaRecovery } from '../services/liteSessionRunner.js';
 import { registerDogfoodCommands } from './dogfoodCommands.js';
-import { loadPlanHandoff, loadPlanHandoffGuarded, PLAN_APPLY_UNAVAILABLE_REASON } from '../agent/planHandoff.js';
-import { isReadOnlyChat } from '../agent/chatReadOnly.js';
-import { readRuntimeMode } from '../config/runtimeMode.js';
+import { loadPlanHandoff, loadPlanHandoffGuarded } from '../agent/planHandoff.js';
+import {
+  APPLY_DESCRIPTION, APPLY_HELP, APPLY_PLAN_OPTION, APPLY_PROJECT_OPTION, APPLY_RUN_OPTION, APPLY_YES_OPTION,
+  RESUME_DESCRIPTION, RESUME_HELP, RESUME_PLAN_OPTION, RESUME_RUN_OPTION,
+  annotatePlanApplyPayload, applySavedPlanWithConfirmation, planSavedApplyHint,
+} from './planApplySupport.js';
 import { runPlanReviewLane } from '../agent/lanes/planReviewLane.js';
 import { resolveFuzzyWorkspaceDirectory } from '../services/pathScanner.js';
 import { isCommandCodeChatSelection, preflightRequestedModelPolicy } from './workflowModelPolicy.js';
@@ -171,33 +172,6 @@ async function applySavedPlanDeep(plan: SavedPlan, options: DeepCommandOptions):
     { ...options, projectRoot: plan.projectRoot, planRunId: plan.sourceRunId });
   if (!result) throw new Error('Plan application did not produce an inspectable run; inspect the attempt before retrying.');
   return result;
-}
-
-async function promptPlanApproval(task: string, autoApprove = false): Promise<boolean> {
-  if (autoApprove) {
-    process.stderr.write(`Auto-approved via --yes: ${task}\n`);
-    return true;
-  }
-  if (!process.stdin.isTTY || !process.stderr.isTTY) {
-    return false;
-  }
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stderr,
-  });
-  try {
-    process.stderr.write('\n');
-    process.stderr.write('Approve this plan and apply it now? [y/N] ');
-    const answer = (await rl.question('')).trim().toLowerCase();
-    if (/^(?:y|yes|approve|approved|apply|go)$/i.test(answer)) {
-      process.stderr.write(`Applying approved task: ${task}\n`);
-      return true;
-    }
-    process.stderr.write('Kept as plan-only. No files were changed.\n');
-    return false;
-  } finally {
-    rl.close();
-  }
 }
 
 function resolveCommandPolicyChoice(explicitProfile: string | undefined): ExecutionPolicyChoice | null {
@@ -1099,14 +1073,7 @@ export function classifyDoTask(task: string): Exclude<LiteVerb, 'do'> {
   return 'plan';
 }
 
-/** Saved-Plan apply is advertised only when this profile could admit it. */
-export function planApplyCapability(savedPlanId: string | null, env: NodeJS.ProcessEnv = process.env): { available: boolean; reason: string | null } {
-  if (!savedPlanId) return { available: false, reason: null }
-  if (isReadOnlyChat(env) || /^(?:1|true)$/i.test(env['BABEL_DRY_RUN'] ?? '') || readRuntimeMode(env) === 'plan') {
-    return { available: false, reason: 'Current read-only permissions block plan application.' }
-  }
-  return { available: true, reason: null }
-}
+export { planApplyCapability } from './planApplySupport.js';
 
 async function runLiteCommand(
   verb: LiteVerb,
@@ -1406,27 +1373,7 @@ async function runLiteCommand(
     }
     payloadRecord['plan_saved'] = savedPlanId !== null;
     payloadRecord['user_status'] = savedPlanId ? 'complete' : 'blocked';
-    payloadRecord['apply_available'] = false;
-    payloadRecord['apply_unavailable_reason'] = PLAN_APPLY_UNAVAILABLE_REASON;
-    // Automatic application and an explicit saved Plan apply are different
-    // capabilities. Neither surface may advertise the explicit route unless a
-    // canonical saved Plan id exists and this profile could actually admit it;
-    // that route rechecks source scope and asks for confirmation before any
-    // mutation.
-    const applyCapability = planApplyCapability(savedPlanId);
-    payloadRecord['explicit_apply_available'] = applyCapability.available;
-    payloadRecord['apply_requires_confirmation'] = applyCapability.available;
-    const command = invokedCliName();
-    if (savedPlanId) payloadRecord['plan_id'] = savedPlanId;
-    if (applyCapability.reason) payloadRecord['explicit_apply_unavailable_reason'] = applyCapability.reason;
-    if (savedPlanId && applyCapability.available) {
-      payloadRecord['apply_command'] = `${command} apply --plan ${savedPlanId}`;
-    }
-    humanText = [humanText,
-      savedPlanId ? `Plan saved as ${savedPlanId}.` : 'The Plan is retained in its run evidence; canonical saving is unavailable.',
-      savedPlanId && applyCapability.available ? `Apply: ${payloadRecord['apply_command']} (asks for confirmation; source scope is rechecked).` : null,
-      savedPlanId && !applyCapability.available ? applyCapability.reason : null,
-      PLAN_APPLY_UNAVAILABLE_REASON].filter(Boolean).join('\n');
+    humanText = annotatePlanApplyPayload(payloadRecord, savedPlanId, humanText);
     if (!savedPlanId) process.exitCode = 1;
   }
   const progressTranscript =
@@ -2993,7 +2940,7 @@ Notes:
             if (!saved) return;
             const effective = resolveEffectiveSettings({ projectRoot: saved.projectRoot });
             if (!shouldAutoApplyPlan(saved.task, effective.autoApply.value, options.shadow === true || options.planOnly === true || options.json === true || options.finalOnly === true)) {
-              if (!options.json) process.stderr.write(`Plan saved as ${saved.id}. No project files were changed. Apply: ${invokedCliName()} apply --plan ${saved.id} (asks for confirmation)\n`);
+              if (!options.json) process.stderr.write(planSavedApplyHint(saved.id));
               return;
             }
             process.stderr.write(`Automatic application enabled by ${effective.autoApply.source} preference. Checking eligibility for ${saved.id}.\n`);
@@ -3170,32 +3117,18 @@ Notes:
   program
     .command('resume')
     .argument('[run]', 'latest or a run directory to inspect for resume')
-    .description('Inspect resume evidence; saved-run action resume is unavailable, legacy --run/--plan remains explicit')
-    .option('--run <run_dir>', 'Legacy manual-bridge run directory')
+    .description(RESUME_DESCRIPTION)
+    .option('--run <run_dir>', RESUME_RUN_OPTION)
     .option('--project <name>', 'Use latest run pointer for this project when --run is omitted')
     .option(
       '--plan <path>',
-      'Legacy manual Plan path (use - for stdin, clipboard for the clipboard)',
+      RESUME_PLAN_OPTION,
     )
     .option('-m, --model <model>', 'Override the model family for provider retries')
     .option('--model-tier <tier>', `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')}`)
     .option('--allow-expensive', 'Approve an expensive or policy-blocked model for this run')
     .option('--json', 'Emit structured JSON only')
-    .addHelpText(
-      'after',
-      `
-Examples:
-  $ babel-harness resume latest
-  $ bl resume latest
-
-Important:
-  - Saved-run action resume is temporarily unavailable until task identity, settlement, and verifier authority are qualified.
-  - babel continue latest --inspect-only inspects saved runs without taking an action.
-  - Legacy manual Plan resume remains available explicitly through
-    resume --run <run_dir> --plan <path>; retained artifacts are never
-    rewritten. It is a separate compatibility lane from a saved-Plan apply.
-`,
-    )
+    .addHelpText('after', RESUME_HELP)
     .action(
       async (
         run: string | undefined,
@@ -3219,39 +3152,22 @@ Important:
 
   program
     .command('apply')
-    .description('Apply a saved plan ID, or resume a legacy manual Plan through --run/--plan <path>')
-    .option('--run <run_dir>', 'Legacy manual-bridge run directory')
-    .option('--project <name>', 'Target project for the saved Plan or manual run')
+    .description(APPLY_DESCRIPTION)
+    .option('--run <run_dir>', APPLY_RUN_OPTION)
+    .option('--project <name>', APPLY_PROJECT_OPTION)
     .option(
       '--plan <path>',
-      'Saved Plan ID, or a legacy manual Plan path (use - for stdin, clipboard for the clipboard)',
+      APPLY_PLAN_OPTION,
     )
-    .option('--yes', 'Confirm applying the saved Plan without an interactive prompt')
-    .addHelpText(
-      'after',
-      `
-Notes:
-  - A saved Plan ID (plan_...) applies through the guarded route and asks for
-    confirmation on an interactive terminal. Non-interactive callers must pass
-    --yes explicitly.
-  - The saved Plan source, project identity, fingerprint, permissions and
-    read-only mode are rechecked before any mutation.
-  - --run and non-ID --plan values enter the separate legacy manual-bridge
-    lane. Its artifacts and admission checks are its own; it does not use the
-    saved-Plan confirmation.
-`,
-    )
+    .option('--yes', APPLY_YES_OPTION)
+    .addHelpText('after', APPLY_HELP)
     .action(async (options: { run?: string; plan?: string; project?: string; yes?: boolean }) => {
       if (options.plan?.startsWith('plan_')) {
         const projectRoot = options.project ? resolveProjectRoot(options.project) : process.cwd();
         if (!projectRoot) throw new Error('Unknown target project.');
-        await withSavedPlanApplication(options.plan, {
+        await applySavedPlanWithConfirmation(options.plan, {
           projectRoot,
-          preflight: async plan => {
-            if (!(await promptPlanApproval(plan.task, options.yes === true))) {
-              throw new Error('Plan application was not confirmed; no files were changed.');
-            }
-          },
+          yes: options.yes === true,
           execute: async plan => applySavedPlanDeep(plan, {}),
         });
         return;
