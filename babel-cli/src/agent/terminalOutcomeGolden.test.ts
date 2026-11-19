@@ -27,7 +27,7 @@ import {
 import { chatSessionDir } from '../cli/runsLayout.js';
 import { parityOnUserTurn, parityRecordToolBatch } from './chatEngineParityBridge.js';
 import { loadLiveSessionSnapshot } from './liveSessionBridge.js';
-import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import { terminalOutcomeExitCode, type TerminalOutcome } from '../schemas/agentContracts.js';
 import type { ToolStreamEvent } from '../runners/base.js';
 import { createEngineFromEventLog } from '../services/threadStore/conversationSync.js';
 
@@ -116,15 +116,16 @@ function assertCrossSurface(
     userFacingStatusFromOutcome(result.outcome!),
     `${label}: user_status from outcome`,
   );
-  assert.equal(
-    exitCodeFromOutcome(result.outcome!),
-    result.outcome === 'VERIFIED_COMPLETE' ||
-      result.outcome === 'UNVERIFIED_PATCH' ||
-      result.outcome === 'NO_CHANGE_REQUIRED'
+  const expectedExit =
+    result.outcome === 'VERIFIED_COMPLETE' || result.outcome === 'NO_CHANGE_REQUIRED'
       ? 0
-      : 1,
-    `${label}: exit code`,
-  );
+      : result.outcome === 'UNVERIFIED_PATCH'
+        ? terminalOutcomeExitCode('UNVERIFIED_PATCH')
+        : 1;
+  assert.equal(exitCodeFromOutcome(result.outcome!), expectedExit, `${label}: exit code`);
+  if (result.outcome === 'UNVERIFIED_PATCH') {
+    assert.notEqual(exitCodeFromOutcome(result.outcome), 0, `${label}: not_verified is not exit 0`);
+  }
 
   if (
     result.outcome === 'BLOCKED_EXTERNAL' ||

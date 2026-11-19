@@ -2,7 +2,9 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
-import { readLatestRunPointer } from '../cli/helpers.js';
+import type { TerminalOutcome } from '../schemas/agentContracts.js';
+import type { UserFacingStatus } from '../cli/userFacingStatus.js';
+import { readDurableTerminalTruth } from './durableTerminalTruth.js';
 import {
   SCHEMA_FAILURE_LEDGER_FILENAME,
   SCHEMA_LEARNING_DIR,
@@ -30,6 +32,9 @@ export interface RecoverySummary {
     execution_status: string | null;
     failure_capsule_id: string | null;
   };
+  terminal_outcome: TerminalOutcome | null;
+  user_status: UserFacingStatus | 'ready';
+  exit_code: number | null;
   next: string[];
 }
 
@@ -60,6 +65,10 @@ export interface RecoveryAssessment {
   failure_capsule: Record<string, unknown> | null;
   failure_code: string | null;
   failed_command: string | null;
+  /** Canonical durable terminal outcome shared by CLI/inspect/TUI surfaces. */
+  terminal_outcome: TerminalOutcome | null;
+  user_status: UserFacingStatus | 'ready';
+  exit_code: number | null;
 }
 
 export interface RecoveryAssessmentOptions {
@@ -126,16 +135,40 @@ function readLatestPointerFromRunsDir(runsDir: string, project?: string): string
   for (const candidate of candidates) {
     const parsed = readJson(candidate);
     const runDir = parsed?.['run_dir'];
-    if (typeof runDir === 'string' && runDir.length > 0) {
-      return runDir;
+    if (typeof runDir !== 'string' || runDir.length === 0) continue;
+    // A project-scoped recovery must not silently point at another project's
+    // run just because the global pointer is newer (UX-09).
+    if (project && typeof parsed?.['project'] === 'string' && parsed['project'] !== project) {
+      continue;
     }
+    return runDir;
   }
   return null;
 }
 
-export function resolveRecoveryRunDir(reference: string, project?: string): string | null {
+export interface RecoveryRunReferenceOptions {
+  /** Restrict `latest` resolution to one project's pointer; never cross-project. */
+  project?: string;
+  /** Runs directory to read pointers from (defaults to BABEL_RUNS_DIR). */
+  runsDir?: string;
+}
+
+export function resolveRecoveryRunDir(
+  reference: string,
+  options: RecoveryRunReferenceOptions = {},
+): string | null {
   if (reference === 'latest') {
-    return readLatestRunPointer(project)?.run_dir ?? resolveLatestByMtime();
+    const runsDir = options.runsDir ?? BABEL_RUNS_DIR;
+    const pointer = readLatestPointerFromRunsDir(runsDir, options.project);
+    if (pointer) return pointer;
+    // A project-scoped request has no "latest" when its pointer is missing
+    // or points at another project: the global pointer and the machine-wide
+    // mtime fallback span every project and are not safe evidence for it
+    // (UX-09 parity with resolveAssessmentRunDir). These exports have no
+    // production callers today; the guard keeps them from reintroducing
+    // the cross-project fallback if one is added.
+    if (options.project) return null;
+    return options.runsDir ? null : resolveLatestByMtime();
   }
   return isAbsolute(reference) ? reference : resolve(reference);
 }
@@ -262,7 +295,7 @@ function classifyRecovery(input: {
       classification: 'retry_with_schema_repair',
       reason: 'Provider output failed a structured schema before the task could finish.',
       retryable: capsuleRetryable ?? true,
-      nextCommand: 'babel continue latest',
+      nextCommand: 'babel continue "<run_dir>" --inspect-only',
     };
   }
   // (3) Network/provider timeouts and transient errors — keep narrow
@@ -278,7 +311,7 @@ function classifyRecovery(input: {
       reason:
         'The provider or network failed before the task could finish; retry the same command or choose another model tier.',
       retryable: capsuleRetryable ?? true,
-      nextCommand: 'babel continue latest',
+      nextCommand: 'babel continue "<run_dir>" --inspect-only',
     };
   }
   // (4) Manual bridge / plan continuation — match only terminal/manual fields
@@ -290,7 +323,7 @@ function classifyRecovery(input: {
       classification: 'continue_from_plan',
       reason: 'A plan artifact is available or the run paused for plan continuation.',
       retryable: true,
-      nextCommand: 'babel resume --run "<run_dir>"',
+      nextCommand: 'babel continue "<run_dir>" --inspect-only',
     };
   }
   // (5) Verifier failure — match verifier-specific fields only, not generic "test"
@@ -306,7 +339,7 @@ function classifyRecovery(input: {
       classification: 'rerun_verifier',
       reason: 'The run reached verification and needs the verifier result addressed or rerun.',
       retryable: capsuleRetryable ?? true,
-      nextCommand: 'babel continue latest',
+      nextCommand: 'babel continue "<run_dir>" --inspect-only',
     };
   }
   return {
@@ -314,7 +347,7 @@ function classifyRecovery(input: {
     reason:
       'No specialized recovery path was detected; retrying the same user command is the safest next action.',
     retryable: capsuleRetryable ?? true,
-    nextCommand: 'babel continue latest',
+    nextCommand: 'babel continue "<run_dir>" --inspect-only',
   };
 }
 
@@ -361,6 +394,9 @@ function resolveAssessmentRunDir(options: RecoveryAssessmentOptions): {
   if (latest) {
     return { runDir: latest, resolvedFrom: 'latest' };
   }
+  // A project-scoped request has no "latest" when its pointer is missing; the
+  // mtime fallback spans every project and is not safe evidence for it.
+  if (options.project) return { runDir: null, resolvedFrom: 'none' };
   const newest = options.runsDir ? null : resolveLatestByMtime();
   return { runDir: newest, resolvedFrom: newest ? 'latest' : 'none' };
 }
@@ -389,6 +425,9 @@ export function buildRecoveryAssessment(
       failure_capsule: null,
       failure_code: null,
       failed_command: null,
+      terminal_outcome: null,
+      user_status: 'ready',
+      exit_code: null,
     };
   }
   if (!existsSync(runDir)) {
@@ -408,6 +447,9 @@ export function buildRecoveryAssessment(
       failure_capsule: null,
       failure_code: null,
       failed_command: null,
+      terminal_outcome: null,
+      user_status: 'ready',
+      exit_code: null,
     };
   }
 
@@ -425,6 +467,23 @@ export function buildRecoveryAssessment(
   addOptionalArtifact(available, 'schema_shadow_hints', shadowHintsPath);
   const terminal = readJson(terminalPath);
   const execution = readJson(executionPath);
+  const terminalTruth = readDurableTerminalTruth(runDir);
+  // Chat runs may not write terminal_status_summary.json. The durable session
+  // event log is still authoritative terminal evidence, so recovery must not
+  // classify a finished chat run as "no terminal record" (RT-10).
+  const effectiveTerminal =
+    terminal ??
+    (terminalTruth.status !== null || terminalTruth.outcome !== null
+      ? {
+          status: terminalTruth.status ?? terminalTruth.outcome ?? 'UNKNOWN',
+          ...(terminalTruth.outcome !== null
+            ? { terminal_outcome: terminalTruth.outcome }
+            : {}),
+          ...(terminalTruth.reason_code !== null
+            ? { reason_category: terminalTruth.reason_code }
+            : {}),
+        }
+      : null);
   const capsulePath = findFailureCapsule(runDir, terminal);
   const capsule = unwrapFailureCapsule(capsulePath ? readJson(capsulePath) : null);
   if (capsulePath && capsule) {
@@ -434,12 +493,12 @@ export function buildRecoveryAssessment(
       path: capsulePath,
     });
   } else if (
-    (terminal !== null || execution !== null) &&
-    terminal?.['status'] !== 'COMPLETE' &&
-    terminal?.['status'] !== 'COMPLETE_NO_MODIFICATION' &&
-    terminal?.['status'] !== 'READ_ONLY_NO_MODIFICATION' &&
-    terminal?.['status'] !== 'ANSWER_READY' &&
-    terminal?.['status'] !== 'SMALL_FIX_COMPLETE'
+    (effectiveTerminal !== null || execution !== null) &&
+    effectiveTerminal?.['status'] !== 'COMPLETE' &&
+    effectiveTerminal?.['status'] !== 'COMPLETE_NO_MODIFICATION' &&
+    effectiveTerminal?.['status'] !== 'READ_ONLY_NO_MODIFICATION' &&
+    effectiveTerminal?.['status'] !== 'ANSWER_READY' &&
+    effectiveTerminal?.['status'] !== 'SMALL_FIX_COMPLETE'
   ) {
     missing.push({ key: 'failure_capsule', filename: 'failure capsule' });
   }
@@ -452,7 +511,7 @@ export function buildRecoveryAssessment(
   }
 
   const recovery = classifyRecovery({
-    terminal,
+    terminal: effectiveTerminal,
     execution,
     capsule,
     hasManualPlan: hasPlan,
@@ -465,12 +524,14 @@ export function buildRecoveryAssessment(
       : typeof capsule?.['failed_command'] === 'string'
         ? capsule['failed_command']
         : null;
+  const legacyCompleteStatus =
+    effectiveTerminal?.['status'] === 'COMPLETE' ||
+    effectiveTerminal?.['status'] === 'COMPLETE_NO_MODIFICATION' ||
+    effectiveTerminal?.['status'] === 'READ_ONLY_NO_MODIFICATION' ||
+    effectiveTerminal?.['status'] === 'ANSWER_READY' ||
+    effectiveTerminal?.['status'] === 'SMALL_FIX_COMPLETE';
   const completeStatus =
-    terminal?.['status'] === 'COMPLETE' ||
-    terminal?.['status'] === 'COMPLETE_NO_MODIFICATION' ||
-    terminal?.['status'] === 'READ_ONLY_NO_MODIFICATION' ||
-    terminal?.['status'] === 'ANSWER_READY' ||
-    terminal?.['status'] === 'SMALL_FIX_COMPLETE';
+    terminalTruth.success || (legacyCompleteStatus && !terminalTruth.finished);
   if (completeStatus) {
     return {
       status: 'CONTINUE_READY',
@@ -483,11 +544,43 @@ export function buildRecoveryAssessment(
       next_command: null,
       available_artifacts: available,
       missing_artifacts: missing,
-      terminal_status_summary: sanitizeTerminalSummary(terminal, null),
+      terminal_status_summary: sanitizeTerminalSummary(effectiveTerminal, null),
       execution_report: execution,
       failure_capsule: null,
       failure_code: null,
       failed_command: null,
+      terminal_outcome: terminalTruth.outcome,
+      user_status: terminalTruth.user_status,
+      exit_code: terminalTruth.exit_code,
+    };
+  }
+  if (
+    terminalTruth.outcome === 'UNVERIFIED_PATCH' &&
+    recovery.classification === 'retry_same_command' &&
+    capsule === null &&
+    failureCode === null &&
+    failedCommand === null
+  ) {
+    const inspectCommand = `babel continue "${runDir}" --inspect-only`;
+    return {
+      status: 'CONTINUE_READY',
+      run_dir: runDir,
+      resolved_from: resolvedFrom,
+      classification: null,
+      retryable: false,
+      reason: 'The latest run ended without authoritative verification.',
+      next_action: `Review the retained patch and verification evidence: ${inspectCommand}`,
+      next_command: inspectCommand,
+      available_artifacts: available,
+      missing_artifacts: missing,
+      terminal_status_summary: sanitizeTerminalSummary(effectiveTerminal, capsulePath && capsule ? capsulePath : null),
+      execution_report: execution,
+      failure_capsule: capsule,
+      failure_code: failureCode,
+      failed_command: failedCommand,
+      terminal_outcome: terminalTruth.outcome,
+      user_status: terminalTruth.user_status,
+      exit_code: terminalTruth.exit_code,
     };
   }
   const nextCommand = recovery.nextCommand.replace('<run_dir>', runDir);
@@ -514,7 +607,47 @@ export function buildRecoveryAssessment(
     failure_capsule: capsule,
     failure_code: failureCode,
     failed_command: failedCommand,
+    terminal_outcome: terminalTruth.outcome,
+    user_status: terminalTruth.user_status,
+    exit_code: terminalTruth.exit_code,
   };
+}
+
+/**
+ * Recovery block for run-command failure payload cards (RT-09/RT-10).
+ *
+ * Owns the W03 additions that used to live inline in
+ * `commands/workflowCommands.ts`: a project-scoped `latest` resolution
+ * (UX-09 — a scoped request never adopts another project's run) and the one
+ * durable terminal truth on the card (`terminal_outcome`, `user_status`,
+ * `exit_code`). Extracted so the over-budget run-command file does not grow.
+ */
+export function buildRunFailureRecoveryPayload(
+  options: RecoveryRunReferenceOptions = {},
+): {
+  assessment: RecoveryAssessment;
+  block: Record<string, unknown>;
+} {
+  const assessment = buildRecoveryAssessment({
+    run: 'latest',
+    ...(options.project !== undefined ? { project: options.project } : {}),
+    ...(options.runsDir !== undefined ? { runsDir: options.runsDir } : {}),
+  });
+  const block: Record<string, unknown> = {
+    status: assessment.status,
+    classification: assessment.classification,
+    retryable: assessment.retryable,
+    reason: assessment.reason,
+    next_action: assessment.next_action,
+    next_command: assessment.next_command,
+    run_dir: assessment.run_dir,
+    available_artifacts: assessment.available_artifacts,
+    missing_artifacts: assessment.missing_artifacts,
+    terminal_outcome: assessment.terminal_outcome ?? null,
+    user_status: assessment.user_status,
+    exit_code: assessment.exit_code,
+  };
+  return { assessment, block };
 }
 
 export function formatRecoveryAssessmentHuman(assessment: RecoveryAssessment): string {
@@ -548,9 +681,9 @@ export function formatRecoveryAssessmentHuman(assessment: RecoveryAssessment): s
 
 export function buildRecoverySummary(
   reference = 'latest',
-  options: { project?: string } = {},
+  options: RecoveryRunReferenceOptions = {},
 ): RecoverySummary {
-  const runDir = resolveRecoveryRunDir(reference, options.project);
+  const runDir = resolveRecoveryRunDir(reference, options);
   if (!runDir) {
     return {
       status: 'NO_LATEST_RUN',
@@ -566,6 +699,9 @@ export function buildRecoverySummary(
         'failure capsule',
       ],
       evidence: { terminal_status: null, execution_status: null, failure_capsule_id: null },
+      terminal_outcome: null,
+      user_status: 'ready',
+      exit_code: null,
       next: ['Run babel "<task>" or babel plan first, then retry babel continue latest.'],
     };
   }
@@ -580,6 +716,9 @@ export function buildRecoverySummary(
       available_artifacts: {},
       missing_artifacts: [runDir],
       evidence: { terminal_status: null, execution_status: null, failure_capsule_id: null },
+      terminal_outcome: null,
+      user_status: 'ready',
+      exit_code: null,
       next: ['Check the run path or use babel continue latest.'],
     };
   }
@@ -589,6 +728,7 @@ export function buildRecoverySummary(
   const manualPlanPath = join(runDir, 'manual', 'plan.json');
   const terminal = readJson(terminalPath);
   const execution = readJson(executionPath);
+  const terminalTruth = readDurableTerminalTruth(runDir);
   const capsulePath = findFailureCapsule(runDir, terminal);
   const capsule = unwrapFailureCapsule(capsulePath ? readJson(capsulePath) : null);
   const availableArtifacts: Record<string, string> = {};
@@ -640,6 +780,9 @@ export function buildRecoverySummary(
             ? capsule['capsule_id']
             : null,
     },
+    terminal_outcome: terminalTruth.outcome,
+    user_status: terminalTruth.user_status,
+    exit_code: terminalTruth.exit_code,
     next: [
       nextCommand,
       missingArtifacts.length > 0

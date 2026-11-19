@@ -2,6 +2,7 @@ import {
   isBlockedOutcome,
   isFailureOutcome,
   isPassingOutcome,
+  terminalOutcomeExitCode,
   type TerminalOutcome,
 } from '../schemas/agentContracts.js';
 
@@ -39,9 +40,16 @@ export function userFacingStatusFromOutcome(outcome: TerminalOutcome): UserFacin
   }
 }
 
-/** Process exit code from TerminalOutcome (0 only for passing outcomes). */
+/**
+ * Process exit code from TerminalOutcome for the chat/lite shell surface.
+ *
+ * Historically this surface used 0/1 only. TF-08 requires `UNVERIFIED_PATCH`
+ * to leave the success lane; otherwise legacy non-success outcomes keep their
+ * established exit 1 so existing shell scripts are not renumbered.
+ */
 export function exitCodeFromOutcome(outcome: TerminalOutcome): number {
-  return isPassingOutcome(outcome) ? 0 : 1;
+  if (outcome === 'UNVERIFIED_PATCH') return terminalOutcomeExitCode(outcome);
+  return outcome === 'VERIFIED_COMPLETE' || outcome === 'NO_CHANGE_REQUIRED' ? 0 : 1;
 }
 
 /** Maps runtime status + optional TerminalOutcome to a user-facing status label.

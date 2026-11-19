@@ -56,6 +56,7 @@ import { PagerOverlay } from '../../ui/pagerOverlay.js';
 import { getActiveRenderer } from '../../ui/waterfall.js';
 import type { ConversationalRenderer } from '../../ui/waterfall.js';
 import { runGitCommand } from '../../utils/gitExec.js';
+import { terminalOutcomeExitCode } from '../../schemas/agentContracts.js';
 import { loadInspectBundle, buildInspectRunView } from '../../inspect/loaders.js';
 import { accentBright, error, muted, primary, padRight } from '../../ui/theme.js';
 
@@ -203,7 +204,18 @@ export async function handleContinue(ctx: ReplContext, args: string[]): Promise<
       const payload = resumed.payload as Record<string, unknown>;
       const runDir = typeof payload['run_dir'] === 'string' ? payload['run_dir'] : null;
       ctx.lastRunDir = runDir;
-      ctx.state.lastRunUserStatus = resumed.exitCode === 0 ? 'complete' : payload['status'] === 'CONTINUE_BLOCKED' ? 'blocked' : 'failed';
+      // Exit 6 is the terminalOutcomeExitCode projection for
+      // UNVERIFIED_PATCH: a completed-but-unverified resume banners
+      // not_verified, not failed. Any other nonzero exit stays failed.
+      const unverifiedExit = resumed.exitCode === terminalOutcomeExitCode('UNVERIFIED_PATCH');
+      ctx.state.lastRunUserStatus =
+        resumed.exitCode === 0
+          ? 'complete'
+          : payload['status'] === 'CONTINUE_BLOCKED'
+            ? 'blocked'
+            : unverifiedExit
+              ? 'not_verified'
+              : 'failed';
       if (resumed.humanText) {
         console.log(`\n${resumed.humanText}\n`);
       }
@@ -212,7 +224,7 @@ export async function handleContinue(ctx: ReplContext, args: string[]): Promise<
       if (routeSummary) {
         console.log(muted(`  ${routeSummary}\n`));
       }
-      if (resumed.exitCode !== 0 && payload['status'] !== 'CONTINUE_BLOCKED') {
+      if (resumed.exitCode !== 0 && payload['status'] !== 'CONTINUE_BLOCKED' && !unverifiedExit) {
         ctx.state.lastRunUserStatus = 'failed';
       }
       return;

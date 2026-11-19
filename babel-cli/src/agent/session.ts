@@ -450,7 +450,12 @@ export class AgentSession {
     });
     return {
       payload: payload as unknown as LiteResultPayload,
-      exitCode: askResult.status === 'NEEDS_MORE_CONTEXT' ? 1 : 0,
+      // TF-10 exit contract: only a genuinely ready answer exits 0. The
+      // failed/blocked family (ASK_FAILED, BLOCKED, BUDGET_EXHAUSTED) and
+      // NEEDS_MORE_CONTEXT all exit nonzero so shell chaining can never
+      // treat a failed ask as success. This mirrors the run-command
+      // read-only ask path, which exits 1 for any non-ANSWER_READY status.
+      exitCode: askResult.status === 'ANSWER_READY' ? 0 : 1,
       humanText: formatAskResultHuman(payload),
     };
   }

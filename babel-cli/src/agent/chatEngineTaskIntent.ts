@@ -14,7 +14,8 @@ const PUNCTUATION_ONLY_TURN_RE = /^[\s\p{P}\p{S}\p{C}]*$/u
 const CONVERSATIONAL_TURN_RE =
   /^(?:(?:hi+|hello+|hey+|yo|sup|howdy|greetings|good\s*(?:morning|afternoon|evening|day)|hi\s+there|hello\s+there|thanks|thank\s*you|thankyou|thx|ty|ok(?:ay)?|cool|nice|great|awesome|perfect|got\s*it|sounds\s+good|bye|goodbye|see\s*ya)(?:[!,.?;:\s]+|$))+$/i
 
-function isConversationalTurnText(task: string): boolean {
+/** Pure greetings/acknowledgements: no repository inspection can be expected. */
+export function isConversationalTurnText(task: string): boolean {
   const t = task.trim()
   if (!t || t.length > 32) return false
   return PUNCTUATION_ONLY_TURN_RE.test(t) || CONVERSATIONAL_TURN_RE.test(t)
