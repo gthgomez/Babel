@@ -20,7 +20,6 @@ const CREDENTIAL_BASENAMES = new Set([
   '.envrc',
   'credentials.json',
   'credentials',
-  'auth.json',
   'cookies.json',
 ]);
 

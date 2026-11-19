@@ -78,7 +78,8 @@
         "babel-cli/src/sandboxSpawnCommandAsync.ts",
         "babel-cli/src/sandboxSupervisorTermination.ts",
         "babel-cli/src/processTree.ts",
-        "babel-cli/src/portable"
+        "babel-cli/src/portable",
+        "babel-cli/src/windowsProcessSettlement.ts"
       ]
     },
     {
