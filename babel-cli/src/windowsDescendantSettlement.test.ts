@@ -116,7 +116,7 @@ child.once('spawn', () => {
       const grandchildPid = Number(readFileSync(grandchildPidFile, 'utf8'));
       assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0);
       await parentExited;
-      const settlement = await settleWindowsDescendants(parent.pid!, { rounds: 2, roundDelayMs: 50 });
+      const settlement = await settleWindowsDescendants(parent.pid!, { rounds: 1, roundDelayMs: 50 });
       assert.equal(settlement.confirmed, true);
       assert.equal(settlement.remaining.length, 0);
       const census = listWindowsDescendantPids(parent.pid!);

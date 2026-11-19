@@ -56,22 +56,15 @@ export function listWindowsDescendantPids(rootPid: number): number[] | null {
   if (process.platform !== 'win32' || !Number.isSafeInteger(rootPid) || rootPid <= 0) return null;
   const script = [
     '$ErrorActionPreference = "Stop";',
-    '$rows = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId);',
-    '$kids = @{};',
-    'foreach ($row in $rows) {',
-    '  $parent = [int]$row.ParentProcessId;',
-    '  if (-not $kids.ContainsKey($parent)) { $kids[$parent] = New-Object System.Collections.ArrayList }',
-    '  [void]$kids[$parent].Add([int]$row.ProcessId);',
-    '}',
-    `$roots = @(${rootPid});`,
+    `$root = ${rootPid};`,
     '$seen = New-Object System.Collections.Generic.HashSet[int];',
-    '$front = @($roots);',
+    '$front = @($root);',
     'while ($front.Count -gt 0) {',
     '  $next = @();',
-    '  foreach ($pidValue in $front) {',
-    '    if (-not $kids.ContainsKey($pidValue)) { continue }',
-    '    foreach ($child in $kids[$pidValue]) {',
-    '      if ($child -gt 0 -and $seen.Add($child)) { $next += $child }',
+    '  foreach ($parentId in $front) {',
+    '    $kids = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId=$parentId" | Select-Object -ExpandProperty ProcessId);',
+    '    foreach ($child in $kids) {',
+    '      if ($child -gt 0 -and $seen.Add([int]$child)) { $next += [int]$child }',
     '    }',
     '  }',
     '  $front = $next;',
@@ -83,7 +76,7 @@ export function listWindowsDescendantPids(rootPid: number): number[] | null {
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
     {
       encoding: 'utf8',
-      timeout: 5_000,
+      timeout: 15_000,
       maxBuffer: MAX_CENSUS_OUTPUT_BYTES,
       windowsHide: true,
       shell: false,
@@ -132,7 +125,7 @@ export async function settleWindowsDescendants(
   options: WindowsSettlementOptions = {},
 ): Promise<WindowsDescendantSettlement> {
   const probe = options.probe ?? defaultProbe;
-  const rounds = Math.max(1, options.rounds ?? 2);
+  const rounds = Math.max(1, options.rounds ?? 1);
   const roundDelayMs = Math.max(0, options.roundDelayMs ?? 50);
   const wait = options.wait ?? ((ms: number) => new Promise<void>((resolveDelay) => { setTimeout(resolveDelay, ms); }));
   let killsAttempted = 0;

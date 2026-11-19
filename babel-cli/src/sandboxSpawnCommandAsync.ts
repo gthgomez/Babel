@@ -31,7 +31,7 @@ export interface AsyncSpawnResult {
  * deferred tree settlement it awaits. Windows adds a PowerShell/CIM census and
  * taskkill rounds, so it needs more headroom than a POSIX group probe.
  */
-const TERMINATION_SETTLEMENT_TIMEOUT_MS = process.platform === 'win32' ? 20_000 : 5_000
+const TERMINATION_SETTLEMENT_TIMEOUT_MS = process.platform === 'win32' ? 45_000 : 5_000
 
 function appendCappedChunk(
   chunks: Buffer[],
