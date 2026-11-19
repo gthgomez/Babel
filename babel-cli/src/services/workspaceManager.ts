@@ -4,6 +4,7 @@ import { dirname, relative, resolve, sep } from 'node:path';
 import { BABEL_ROOT } from '../cli/constants.js';
 import { isCredentialReadPath, SafeExecutor, type ToolResult } from '../sandbox.js';
 import { analyzeProjectRoot, type ProjectOnboardingReport } from './projectOnboarding.js';
+import { splitApprovedRoots } from '../utils/approvedRoots.js';
 
 export interface ApprovedWorkspaceRoot {
   readonly path: string;
@@ -77,10 +78,7 @@ function toPosixPath(path: string): string {
 }
 
 function splitRoots(raw: string): string[] {
-  return raw
-    .split(/[;\n]+/)
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
+  return splitApprovedRoots(raw);
 }
 
 export function getOpenClawApprovedRoots(): ApprovedWorkspaceRoot[] {

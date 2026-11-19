@@ -22,6 +22,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build-portable:
@@ -98,12 +99,29 @@ jobs:
       # The packager independently enforces the pinned SHA256 values for both
       # archives and refuses a dirty tree; it is the source of truth, not this
       # workflow.
+      - name: Download the npm-qualified CLI candidate
+        shell: pwsh
+        env:
+          RELEASE_SOURCE: ${{ steps.tag.outputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $trusted = Join-Path $env:RUNNER_TEMP 'trusted-tools'
+          New-Item -ItemType Directory -Force -Path (Join-Path $trusted 'tools'), (Join-Path $trusted 'babel-cli/scripts') | Out-Null
+          Copy-Item tools/qualified-consumer-promotion.mjs (Join-Path $trusted 'tools/qualified-consumer-promotion.mjs')
+          Copy-Item babel-cli/scripts/release_artifact_inventory.mjs (Join-Path $trusted 'babel-cli/scripts/release_artifact_inventory.mjs')
+          node (Join-Path $trusted 'tools/qualified-consumer-promotion.mjs') --download --repository "$env:GITHUB_REPOSITORY" --source-sha "$env:RELEASE_SOURCE" --output "$env:RUNNER_TEMP/cli-candidate"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $archives = @(Get-ChildItem "$env:RUNNER_TEMP/cli-candidate/*.tgz")
+          if ($archives.Count -ne 1) { throw 'Exactly one qualified CLI candidate archive is required' }
+          "CLI_CANDIDATE=$($archives[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build portable bundle
         shell: pwsh
         run: >
           npm --prefix babel-desktop run package:windows --
           "--node-archive=$env:RUNNER_TEMP/node-v24.13.1-win-x64.zip"
           "--electron-archive=$env:RUNNER_TEMP/electron-v44.5.1-win32-x64.zip"
+          "--cli-archive=$env:CLI_CANDIDATE"
           "--output=$env:RUNNER_TEMP/release-out"
 
       - name: Verify unique build provenance against frozen tag identity
@@ -268,6 +286,20 @@ jobs:
         run: npm --prefix babel-desktop ci --ignore-scripts
       - name: Install CLI dependencies
         run: npm --prefix babel-cli ci
+      - name: Download the npm-qualified CLI candidate
+        env:
+          RELEASE_SOURCE: ${{ steps.tag.outputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          trusted="$RUNNER_TEMP/trusted-tools"
+          mkdir -p "$trusted/tools" "$trusted/babel-cli/scripts"
+          cp tools/qualified-consumer-promotion.mjs "$trusted/tools/qualified-consumer-promotion.mjs"
+          cp babel-cli/scripts/release_artifact_inventory.mjs "$trusted/babel-cli/scripts/release_artifact_inventory.mjs"
+          node "$trusted/tools/qualified-consumer-promotion.mjs" --download --repository "$GITHUB_REPOSITORY" --source-sha "$RELEASE_SOURCE" --output "$RUNNER_TEMP/cli-candidate"
+          archives=$(find "$RUNNER_TEMP/cli-candidate" -maxdepth 1 -name '*.tgz' | wc -l)
+          test "$archives" = "1"
+          echo "CLI_CANDIDATE=$(find "$RUNNER_TEMP/cli-candidate" -maxdepth 1 -name '*.tgz')" >> "$GITHUB_ENV"
       - name: Download pinned Linux archives
         run: |
           set -euo pipefail
@@ -289,6 +321,7 @@ jobs:
             --electron-archive="$RUNNER_TEMP/linux-desktop-cache/electron-v44.5.1-linux-x64.zip" \
             --appimage-tool="$RUNNER_TEMP/linux-desktop-cache/appimagetool-x86_64.AppImage" \
             --runtime-archive="$RUNNER_TEMP/linux-desktop-cache/runtime-x86_64" \
+            --cli-archive="$CLI_CANDIDATE" \
             --output="$RUNNER_TEMP/release-linux-out"
       - name: Revalidate tag object and source before promotion
         env:
@@ -305,6 +338,30 @@ jobs:
           cd "$RUNNER_TEMP/release-linux-out"
           test "$(grep -cve '^$' SHA256SUMS)" = "1"
           sha256sum -c SHA256SUMS
+      - name: Install headless launch libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb x11-utils ffmpeg unzip libgtk-3-0 libgbm1 libnss3 libxss1 libxtst6 libx11-xcb1 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libpango-1.0-0 libcairo2 libxshmfence1 libcups2 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0
+          sudo apt-get install -y --no-install-recommends libfuse2t64 || sudo apt-get install -y --no-install-recommends libfuse2
+          sudo apt-get install -y --no-install-recommends libasound2t64 || sudo apt-get install -y --no-install-recommends libasound2
+      - name: Launch the packaged AppImage on the released bytes
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./babel-desktop/package.json').version")"
+          mkdir -p "$RUNNER_TEMP/release-linux-smoke"
+          xvfb-run -a -s '-screen 0 1600x1200x24' node babel-desktop/scripts/smoke-linux-appimage.mjs \
+            --appimage="$RUNNER_TEMP/release-linux-out/Babel-Desktop-${version}-linux-x64.AppImage" \
+            --screenshot="$RUNNER_TEMP/release-linux-smoke/window.png" \
+            --result="$RUNNER_TEMP/release-linux-smoke/result.json"
+      - name: Upload Linux launch evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-linux-smoke
+          path: ${{ runner.temp }}/release-linux-smoke/
+          if-no-files-found: error
+          retention-days: 14
       - name: Stage Linux release files
         run: |
           set -euo pipefail
@@ -339,12 +396,15 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      actions: read
     steps:
       - name: Check out trusted workflow source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - name: Install advisory review dependencies
+        run: npm --prefix babel-cli ci --ignore-scripts
       - name: Revalidate tag object and source before promotion
         id: tag
         env:
@@ -369,6 +429,18 @@ jobs:
         with:
           name: release-linux
           path: release-linux
+      - name: Download Linux launch evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-linux-smoke
+          path: release-linux-smoke
+      - name: Download the npm-qualified candidate for this source
+        env:
+          SOURCE: ${{ needs.build-portable.outputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node tools/qualified-consumer-promotion.mjs --download --repository "$GITHUB_REPOSITORY" --source-sha "$SOURCE" --output "$RUNNER_TEMP/npm-candidate"
       - name: Combine checksums and stage the draft
         run: |
           set -euo pipefail
@@ -384,8 +456,32 @@ jobs:
             grep -v '^$' release-linux/SHA256SUMS
           } | sort -k2 > release-dist/SHA256SUMS
           cd release-dist
+          sha256sum ./*.tgz | sed 's# ./\([^/]*\)$#  \1#' >> SHA256SUMS
+          sort -k2 -o SHA256SUMS SHA256SUMS
           sha256sum -c SHA256SUMS
           find . -maxdepth 1 -type f -printf 'draft: %f\n' | sort
+      - name: Verify exact staged release bytes before promotion
+        env:
+          RELEASE_SOURCE: ${{ needs.build-portable.outputs.source_sha }}
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
+          REVIEWED_CHECKOUT_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          node tools/verify-release-bytes.mjs \
+            --dist release-dist \
+            --version "$RELEASE_VERSION" \
+            --source "$RELEASE_SOURCE" \
+            --npm-candidate "$RUNNER_TEMP/npm-candidate" \
+            --appimage-evidence release-linux-smoke/result.json \
+            --result "$RUNNER_TEMP/release-qualification.json"
+      - name: Retain the release qualification record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-qualification
+          path: ${{ runner.temp }}/release-qualification.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Create draft GitHub release with artifacts
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:

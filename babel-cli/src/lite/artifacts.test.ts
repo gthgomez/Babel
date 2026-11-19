@@ -5,6 +5,41 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createLiteArtifactRun } from './artifacts.js';
 
+test('read-only lanes use private run state instead of the user project', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'babel-readonly-storage-'));
+  const previousState = process.env['BABEL_STATE_DIR'];
+  const previousRuns = process.env['BABEL_RUNS_DIR'];
+  try {
+    const state = join(fixture, 'state');
+    const target = join(fixture, 'target');
+    process.env['BABEL_STATE_DIR'] = state;
+    delete process.env['BABEL_RUNS_DIR'];
+
+    // UX-13 regression: `ask`/`review`/`report` used to write
+    // <project>/runs/babel-lite, leaving untracked artifacts in the user repo.
+    for (const command of ['ask', 'report', 'propose', 'diff', 'review', 'patch'] as const) {
+      const run = createLiteArtifactRun({ command, repoPath: target });
+      assert.equal(
+        run.runDir.startsWith(join(state, 'runs', 'babel-lite')),
+        true,
+        `${command} writes private evidence`,
+      );
+    }
+    assert.equal(existsSync(target), false, 'no project directory is created');
+
+    // Mutation lanes keep project-local evidence so undo/continue can find it.
+    const mutation = createLiteArtifactRun({ command: 'fix', repoPath: target });
+    assert.equal(mutation.runDir.startsWith(join(target, 'runs', 'babel-lite')), true);
+    assert.deepEqual(readdirSync(target), ['runs']);
+  } finally {
+    if (previousState === undefined) delete process.env['BABEL_STATE_DIR'];
+    else process.env['BABEL_STATE_DIR'] = previousState;
+    if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
+    else process.env['BABEL_RUNS_DIR'] = previousRuns;
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test('Plan honors private state and run overrides without creating target files', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'babel-plan-storage-'));
   const previousState = process.env['BABEL_STATE_DIR'];

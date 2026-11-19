@@ -51,11 +51,15 @@
         "required": [
           { "name": "path", "type": "string", "description": "Project-relative or /project/... path to list" }
         ],
-        "optional": []
+        "optional": [
+          { "name": "after", "type": "string", "description": "Continuation cursor returned by the previous page" },
+          { "name": "revision", "type": "string", "description": "Directory revision returned with the previous page; both after and revision are required for continuation" }
+        ]
       },
       "examples": [
         { "tool": "directory_list", "path": "src/" },
-        { "tool": "directory_list", "path": "/project/lib" }
+        { "tool": "directory_list", "path": "/project/lib" },
+        { "tool": "directory_list", "path": "src/", "after": "<next_after>", "revision": "<revision>" }
       ]
     },
     {
@@ -444,7 +448,8 @@
           { "name": "path", "type": "string", "description": "Subdirectory or file path to restrict search to" },
           { "name": "ignore_case", "type": "boolean", "description": "Case-insensitive search (default: false)" },
           { "name": "max_matches", "type": "integer", "description": "Maximum number of matches to return" },
-          { "name": "output_format", "type": "string", "enum": ["text", "json"], "description": "Output format (default: text)" }
+          { "name": "output_format", "type": "string", "enum": ["text", "json"], "description": "Output format (default: text)" },
+          { "name": "context_lines", "type": "integer", "description": "Surrounding context lines per match (0-10, default 2)" }
         ]
       },
       "examples": [

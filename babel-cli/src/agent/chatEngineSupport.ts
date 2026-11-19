@@ -24,6 +24,8 @@ import { normalizeModelToolName } from './canonicalToolMapping.js';
 import { invalidateReadCacheForPath } from './codingLoop/index.js';
 import type { ChatEngineActionExecutorHost } from './chatEngineContracts.js';
 
+export { summarizeDroppedTurns } from './compactionSummary.js';
+
 /** Drop read evidence for observed paths, or all reads for an unknown shell footprint. */
 export function invalidateChatPathReads(
   host: Pick<ChatEngineActionExecutorHost, 'readCache' | 'fullReadCounts' | 'readCacheKey'>,
@@ -343,25 +345,6 @@ export async function runPostEditStaticCheck(
   }
 }
 
-/** Lightweight text summary of dropped conversation turns (no LLM). */
-export function summarizeDroppedTurns(dropped: ChatMessage[]): string {
-  const facts: string[] = [];
-  for (const m of dropped) {
-    if (m.role === 'tool' && m.content) {
-      const firstLine = m.content.split('\n')[0]?.trim();
-      if (firstLine && firstLine.length > 10 && firstLine.length < 200) {
-        facts.push(`- ${firstLine}`);
-      }
-    } else if (m.role === 'user' && m.content) {
-      facts.push(`- User asked: "${m.content.slice(0, 120)}"`);
-    }
-  }
-  if (facts.length > 0) {
-    return `[Compacted ${dropped.length} messages. Key context:\n${facts.slice(0, 8).join('\n')}]`;
-  }
-  return `[${dropped.length} earlier messages compacted for length]`;
-}
-
 export type BlockedToolLogEntry = {
   tool: string;
   target: string;
@@ -661,7 +644,10 @@ export type CompactConversationState = {
   maxEstimatedTokens: number;
   compactionConsecutiveFailures: number;
   maxCompactionFailures: number;
-  summarizeDroppedTurns: (dropped: ChatMessage[]) => string;
+  summarizeDroppedTurns: (
+    dropped: ChatMessage[],
+    options?: import('./compactionSummary.js').DroppedTurnSummaryOptions,
+  ) => string;
 };
 
 /** Heuristic conversation compaction. Mutates state fields in place. */
@@ -724,7 +710,15 @@ export function compactHeuristicConversation(state: CompactConversationState): v
 
     const skippedCount = oldLen - state.conversation.length;
     if (skippedCount > 0) {
-      const summary = state.summarizeDroppedTurns(dropped);
+      const droppedChars = dropped.reduce((sum, message) => sum + message.content.length, 0);
+      // Never suppress a summary that represents dropped user turns. The budget
+      // trims tool noise first and reduces user text only with an explicit
+      // head+tail marker. A compact emergency window may therefore produce a
+      // summary that is not smaller than the dropped text; the commit path then
+      // fails closed and keeps the original conversation instead of losing it.
+      const summary = state.summarizeDroppedTurns(dropped, {
+        maxChars: Math.max(256, droppedChars),
+      });
       const compactPreamble = `[Session state: ${b3WriteCount} writes made, last verifier: ${b3VerifierInfo}, active todos: ${b3TodoInfo}, phase: ${b3PhaseInfo}]`;
       let lastUserIdx = -1;
       for (let i = state.conversation.length - 1; i >= 0; i--) {
@@ -739,6 +733,13 @@ export function compactHeuristicConversation(state: CompactConversationState): v
           ...existing,
           content: summary + '\n' + compactPreamble + '\n\n' + existing.content,
         };
+      } else {
+        // No retained user turn: keep the dropped constraints as a visible
+        // user-side context block instead of discarding the summary.
+        state.conversation.push({
+          role: 'user',
+          content: summary + '\n' + compactPreamble,
+        });
       }
     }
     state.apiTokenCount = 0;

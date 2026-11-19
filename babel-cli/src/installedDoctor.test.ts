@@ -74,6 +74,7 @@ it('diagnoses an installed user without contributor files or all provider creden
     const result = runInstalledDoctor({ paths, env: { OPENROUTER_API_KEY: 'doctor-secret-sentinel',BABEL_BENCHMARK_DOCKER_IMAGE:`sha256:${'a'.repeat(64)}` }, settings: { schemaVersion: 1, connections: { chosen: { id: 'chosen', provider: 'openrouter', model: 'fixture-model' } }, defaults: { connection: 'chosen' } }, dockerProbe: () => true,imageProbe:()=>true })
     assert.equal(result.status, 'ok')
     assert.equal(result.checks.find(c => c.id === 'provider')?.status, 'ok')
+    assert.match(result.checks.find(c => c.id === 'executable')?.message ?? '', /command babel-harness \(aliases babel and babel-agent\)/)
     assert.doesNotMatch(JSON.stringify(result), /doctor-secret-sentinel|workspace-map|pwsh|sibling/)
     const absent = runInstalledDoctor({ paths, env: {}, executionProfile: 'safe_repo', dockerProbe: () => false })
     assert.equal(absent.status, 'fail')

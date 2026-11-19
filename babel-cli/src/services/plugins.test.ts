@@ -6,10 +6,12 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
+  disablePlugin,
   enablePlugin,
   handlePluginTool,
   loadPluginRegistry,
   getPluginConfigPath,
+  readActivePluginMcpServers,
   readPluginConfig,
   writePluginConfig,
   runPluginCommand,
@@ -257,7 +259,7 @@ test('runtime plugins are discovered but inactive until explicitly enabled', asy
   assert.equal(disabledCommand.exit_code, 1);
   assert.match(disabledCommand.stderr, /plugin_not_active/);
 
-  enablePlugin('sample-readonly', { babelRoot: root });
+  enablePlugin('sample-readonly', { babelRoot: root, allowMcpLaunch: true });
   const enabledRegistry = loadPluginRegistry({ babelRoot: root });
   assert.equal(enabledRegistry.config.runtime_plugins_enabled, true);
   assert.equal(enabledRegistry.plugins[0]?.active, true);
@@ -429,7 +431,7 @@ test('enterprise plugin policy blocks disallowed trust levels and activation', (
       },
     },
     () => {
-      enablePlugin('sample-readonly', { babelRoot: root });
+      enablePlugin('sample-readonly', { babelRoot: root, allowMcpLaunch: true });
       assert.throws(
         () => enablePlugin('sample-format-hook', { babelRoot: root, allowTrust: 'local_mutating' }),
         /ENTERPRISE_POLICY/,
@@ -494,4 +496,153 @@ test('does persist plugin config and discover plugins inside user overrides', ()
     if (previousPluginConfig === undefined) delete process.env['BABEL_PLUGINS_CONFIG'];
     else process.env['BABEL_PLUGINS_CONFIG'] = previousPluginConfig;
   }
+});
+
+test('plugin tool output honors the external adapter byte budget', async () => {
+  const root = createTempBabelRoot();
+  writePlugin(root, 'sample-large', {
+    schema_version: 1,
+    id: 'sample-large',
+    name: 'Sample Large',
+    version: '0.1.0',
+    trust_level: 'read_only',
+    tools: [
+      {
+        kind: 'static_json',
+        name: 'large_payload',
+        description: 'Return a large payload.',
+        payload: { blob: 'x'.repeat(5_000) },
+      },
+      {
+        kind: 'static_text',
+        name: 'large_text',
+        description: 'Return large text.',
+        text: 'y'.repeat(5_000),
+      },
+    ],
+    slash_commands: [],
+    prompt_skills: [],
+    mcp_servers: [],
+  });
+  enablePlugin('sample-large', { babelRoot: root });
+  const previous = process.env['BABEL_EXTERNAL_TOOL_MAX_BYTES'];
+  process.env['BABEL_EXTERNAL_TOOL_MAX_BYTES'] = '1024';
+  try {
+    const json = await handlePluginTool(
+      { tool: 'plugin_tool', plugin: 'sample-large', name: 'large_payload' },
+      { babelRoot: root },
+    );
+    assert.equal(json.exit_code, 1);
+    assert.match(json.stderr, /plugin_output_too_large/);
+
+    const text = await handlePluginTool(
+      { tool: 'plugin_tool', plugin: 'sample-large', name: 'large_text' },
+      { babelRoot: root },
+    );
+    assert.equal(text.exit_code, 0);
+    assert.match(text.stdout, /truncated at 1024 bytes/)
+    assert.ok(Buffer.byteLength(text.stdout, 'utf8') <= 1_024 + 64);
+  } finally {
+    if (previous === undefined) delete process.env['BABEL_EXTERNAL_TOOL_MAX_BYTES'];
+    else process.env['BABEL_EXTERNAL_TOOL_MAX_BYTES'] = previous;
+  }
+});
+test('plugin MCP executables require explicit launch consent and carry provenance', () => {
+  const root = createTempBabelRoot();
+  writeReadonlyPlugin(root);
+
+  assert.throws(
+    () => enablePlugin('sample-readonly', { babelRoot: root }),
+    /--allow-mcp-launch/,
+  );
+  assert.deepEqual(readActivePluginMcpServers({ babelRoot: root }), {});
+
+  const enabled = enablePlugin('sample-readonly', {
+    babelRoot: root,
+    allowMcpLaunch: true,
+  });
+  assert.equal(enabled.mcp_server_launch_consent.length, 1)
+  assert.equal(enabled.mcp_server_launch_consent[0]?.plugin_id, 'sample-readonly')
+  assert.match(enabled.mcp_server_launch_consent[0]?.manifest_sha256 ?? '', /^[a-f0-9]{64}$/u);
+
+  const servers = readActivePluginMcpServers({ babelRoot: root });
+  assert.deepEqual(Object.keys(servers), ['sample-readonly_sample']);
+  const server = servers['sample-readonly_sample'];
+  assert.equal(server?.command, 'node');
+  assert.deepEqual(server?.args, ['server.js']);
+  assert.equal(server?.origin?.kind, 'plugin');
+  assert.equal(server?.origin?.plugin_id, 'sample-readonly');
+  assert.match(server?.origin?.manifest_sha256 ?? '', /^[a-f0-9]{64}$/u);
+});
+
+test('disabling a plugin revokes MCP launch consent and running-session discovery', () => {
+  const root = createTempBabelRoot();
+  writeReadonlyPlugin(root);
+  enablePlugin('sample-readonly', { babelRoot: root, allowMcpLaunch: true });
+  assert.equal(Object.keys(readActivePluginMcpServers({ babelRoot: root })).length, 1);
+
+  disablePlugin('sample-readonly', { babelRoot: root });
+  assert.deepEqual(readActivePluginMcpServers({ babelRoot: root }), {});
+  assert.deepEqual(readPluginConfig({ babelRoot: root }).mcp_server_launch_consent, []);
+
+  assert.throws(
+    () => enablePlugin('sample-readonly', { babelRoot: root }),
+    /--allow-mcp-launch/,
+  );
+});
+
+test('plugin MCP launch consent is bound to the reviewed manifest bytes', () => {
+  const root = createTempBabelRoot()
+  writeReadonlyPlugin(root)
+  enablePlugin('sample-readonly', { babelRoot: root, allowMcpLaunch: true })
+  assert.equal(Object.keys(readActivePluginMcpServers({ babelRoot: root })).length, 1)
+
+  const manifestPath = join(
+    root,
+    'babel-cli',
+    'plugins',
+    'sample-readonly',
+    'plugin.json',
+  )
+  writeFileSync(manifestPath, `${readFileSync(manifestPath, 'utf8')}\n`, 'utf8')
+
+  const registry = loadPluginRegistry({ babelRoot: root })
+  assert.equal(registry.plugins[0]?.mcp_launch_consented, false)
+  assert.deepEqual(readActivePluginMcpServers({ babelRoot: root }), {})
+  assert.equal(
+    registry.diagnostics.some(
+      (diagnostic) => diagnostic.code === 'plugin_mcp_launch_consent_required',
+    ),
+    true,
+  )
+  assert.throws(
+    () => enablePlugin('sample-readonly', { babelRoot: root }),
+    /--allow-mcp-launch/,
+  )
+})
+
+test('an active plugin without launch consent reports a bounded diagnostic', () => {
+  const root = createTempBabelRoot();
+  writeReadonlyPlugin(root);
+  writePluginConfig(
+    {
+      schema_version: 1,
+      runtime_plugins_enabled: true,
+      enabled_plugin_ids: ['sample-readonly'],
+      allowed_trust_levels: ['metadata', 'read_only'],
+      plugin_roots: [],
+      mcp_server_launch_consent: [],
+    },
+    { babelRoot: root },
+  );
+
+  const registry = loadPluginRegistry({ babelRoot: root });
+  assert.equal(registry.plugins[0]?.mcp_launch_consented, false);
+  assert.equal(
+    registry.diagnostics.some(
+      (diagnostic) => diagnostic.code === 'plugin_mcp_launch_consent_required',
+    ),
+    true,
+  );
+  assert.deepEqual(readActivePluginMcpServers({ babelRoot: root }), {});
 });

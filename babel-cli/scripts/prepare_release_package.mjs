@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const repoRoot = resolve(root, '..')
 const output = resolve(process.argv[2] || join(root, '../artifacts/consumer-candidate'))
 const npmCli = process.env.npm_execpath
 assert.ok(npmCli, 'Run with npm run package:release')
@@ -17,22 +18,34 @@ function command(binary, args) {
   assert.equal(r.status, 0, r.stderr || r.error?.message)
   return r.stdout
 }
+function sha256(bytes) { return createHash('sha256').update(bytes).digest('hex') }
 assert.equal(command('git', ['status', '--porcelain']).trim(), '', 'Release packaging requires a clean candidate')
 command(process.execPath, [npmCli, 'run', 'check:source-provenance'])
+// Advisory and dependency review run on the same lock the candidate will ship.
+const dependencies = JSON.parse(command(process.execPath, ['scripts/check_installed_dependencies.mjs']))
+assert.equal(dependencies.status, 'PASS', 'Installed dependencies drifted from the lock')
+const advisories = JSON.parse(command(process.execPath, ['scripts/check_dependency_advisories.mjs', '--scope=npm']))
+assert.equal(advisories.status, 'PASS', `Dependency advisories block npm qualification: ${advisories.problems.join('; ')}`)
 command(process.execPath, [npmCli, 'run', 'build'])
 command(process.execPath, ['scripts/stage_runtime_assets.mjs'])
 const rows = JSON.parse(command(process.execPath, [npmCli, 'pack', '--ignore-scripts', '--json', '--pack-destination', output]))
 assert.equal(rows.length, 1, 'Exactly one release package must be produced')
 const pack = rows[0]
+const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+assert.equal(pack.name, packageJson.name, 'Packed name must match the candidate package')
+assert.equal(pack.version, packageJson.version, 'Packed version must match the candidate package')
 const bytes = readFileSync(join(output, pack.filename))
-const sha256 = createHash('sha256').update(bytes).digest('hex')
+const sha = sha256(bytes)
 const sourceSha = command('git', ['rev-parse', 'HEAD']).trim()
+const sourceTreeSha = command('git', ['rev-parse', 'HEAD^{tree}']).trim()
 assert.match(sourceSha, /^[a-f0-9]{40}$/)
-const manifest = { schemaVersion: 1, sourceSha, candidateHead: process.env.CANDIDATE_HEAD || sourceSha,
-  workflowSha: process.env.RELEASE_WORKFLOW_SHA, runId: process.env.GITHUB_RUN_ID,
-  node: process.version, platform: process.platform, arch: process.arch,
-  name: pack.name, version: pack.version, tarball: pack.filename, sha256,
-  integrity: 'sha512-' + createHash('sha512').update(bytes).digest('base64'), manifest: pack.files }
+assert.match(sourceTreeSha, /^[a-f0-9]{40}$/)
+// Load payload qualification only after build and pack succeed: earlier gates
+// (source provenance, dependency/advisory review) must stop the flow without
+// depending on the inventory tooling.
+const { loadPayloadInventory, payloadManifest } = await import('./release_artifact_inventory.mjs')
+const inventory = loadPayloadInventory(repoRoot)
+const payload = payloadManifest({ inventory, packageJson, files: pack.files })
 // Compare the actual archive contents to staged distribution bytes, including ignored dist/.
 const listing = command('tar', ['-tzf', join(output, pack.filename)]).trim().split(/\r?\n/)
 const safeRelative = path => typeof path === 'string' && !/^[A-Za-z]:|^[\\/]|\\/.test(path) && !path.split('/').some(part => part === '..')
@@ -44,8 +57,69 @@ try {
     assert.ok(safeRelative(file.path), 'Unsafe package file path')
     assert.deepEqual(readFileSync(join(extracted, 'package', file.path)), readFileSync(join(root, file.path)), 'Package content differs from validated build: ' + file.path)
   }
+  // Re-run the advertised-payload proof against the extracted bytes, including bin shebangs.
+  const extractedPackage = JSON.parse(readFileSync(join(extracted, 'package', 'package.json'), 'utf8'))
+  const artifactPayload = payloadManifest({
+    inventory,
+    packageJson: extractedPackage,
+    files: pack.files,
+    readFile: path => readFileSync(join(extracted, 'package', path)),
+  })
+  assert.equal(artifactPayload.files, payload.files, 'Extracted payload inventory changed')
 } finally { rmSync(extracted, { recursive: true, force: true }) }
+const provenance = readFileSync(join(root, 'source-provenance.json'))
+const advisoryReview = readFileSync(resolve(repoRoot, 'config/dependency-advisory-review.json'))
+const manifest = {
+  schemaVersion: 2,
+  sourceSha,
+  sourceTreeSha,
+  candidateHead: process.env.CANDIDATE_HEAD || sourceSha,
+  workflowSha: process.env.RELEASE_WORKFLOW_SHA,
+  runId: process.env.GITHUB_RUN_ID,
+  node: process.version,
+  npm: process.env.npm_config_user_agent ?? null,
+  platform: process.platform,
+  arch: process.arch,
+  name: pack.name,
+  version: pack.version,
+  tarball: pack.filename,
+  sha256: sha,
+  integrity: 'sha512-' + createHash('sha512').update(bytes).digest('base64'),
+  manifest: pack.files,
+  inventory: payload,
+  dependencies: {
+    lockSha256: dependencies.lockSha256,
+    checked: dependencies.checked,
+    nodeVersion: dependencies.nodeVersion,
+  },
+  advisories: {
+    review: 'config/dependency-advisory-review.json',
+    reviewSha256: sha256(advisoryReview),
+    reviewedAt: JSON.parse(advisoryReview).reviewedAt,
+    scope: advisories.scope,
+    status: advisories.status,
+    lockSha256: createHash('sha256').update(readFileSync(join(root, 'package-lock.json'))).digest('hex'),
+    decisions: advisories.advisories.map(entry => ({
+      id: entry.id,
+      package: entry.package,
+      severity: entry.severity,
+      decision: entry.decision,
+      installed: entry.installed,
+      affected: entry.affected,
+    })),
+  },
+  provenance: {
+    record: 'babel-cli/source-provenance.json',
+    recordSha256: sha256(provenance),
+    dirty: false,
+  },
+  publisherAuthenticity: {
+    checksumsOnly: true,
+    signed: false,
+    reason: 'The npm tarball carries source provenance and checksums; npm provenance attestation is generated only by the authorized publish workflow. Windows Setup/ZIP Authenticode status is recorded by the Desktop build, which remains unsigned.',
+  },
+}
 writeFileSync(join(output, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
-writeFileSync(join(output, 'SHA256SUMS'), `${sha256}  ${pack.filename}\n`)
-if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `sha256=${sha256}\nsource_sha=${sourceSha}\narchive=${pack.filename}\nintegrity=${manifest.integrity}\n`)
+writeFileSync(join(output, 'SHA256SUMS'), `${sha}  ${pack.filename}\n`)
+if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `sha256=${sha}\nsource_sha=${sourceSha}\narchive=${pack.filename}\nintegrity=${manifest.integrity}\n`)
 console.log(JSON.stringify(manifest))
