@@ -132,8 +132,8 @@ export async function settleWindowsDescendants(
   options: WindowsSettlementOptions = {},
 ): Promise<WindowsDescendantSettlement> {
   const probe = options.probe ?? defaultProbe;
-  const rounds = Math.max(1, options.rounds ?? 3);
-  const roundDelayMs = Math.max(0, options.roundDelayMs ?? 100);
+  const rounds = Math.max(1, options.rounds ?? 2);
+  const roundDelayMs = Math.max(0, options.roundDelayMs ?? 50);
   const wait = options.wait ?? ((ms: number) => new Promise<void>((resolveDelay) => { setTimeout(resolveDelay, ms); }));
   let killsAttempted = 0;
 

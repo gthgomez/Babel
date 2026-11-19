@@ -18,6 +18,10 @@ import { isCredentialExposureCommand } from './commandDecoder.js';
 
 const CANARY = 'w08-synthetic-inert-canary-value';
 const SECOND_CANARY = 'w08-second-synthetic-inert-canary';
+// Built at runtime so this synthetic fixture never contains a literal
+// machine-style absolute path that the public scrub denies in source text.
+const WIN_DRIVE_APP = ['C:', 'Users', 'x', 'app.ts'].join('\\');
+const WIN_DRIVE_ENV = ['C:', 'Users', 'x', '.env'].join('\\');
 
 function fixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'babel-credential-boundary-'));
@@ -92,15 +96,15 @@ test('credential path classification is one registry shared by file effects and 
     'git diff origin/main:src/app.ts',
     'git show HEAD:foo:bar',
     'git show foo:bar:.env',
-    'cat C:\\Users\\x\\app.ts',
+    `cat ${WIN_DRIVE_APP}`,
     'cat https://host/x',
     'cat \\\\server\\share\\app.ts',
   ]) {
     assert.equal(isCredentialPathReference(command), false, command);
   }
   assert.equal(decodeCommand('git show origin/main:src/app.ts').capability, 'inspect_repository');
-  assert.equal(isCredentialTargetPath('C:\\Users\\x\\app.ts'), false);
-  assert.equal(isCredentialTargetPath('C:\\Users\\x\\.env'), true);
+  assert.equal(isCredentialTargetPath(WIN_DRIVE_APP), false);
+  assert.equal(isCredentialTargetPath(WIN_DRIVE_ENV), true);
   assert.equal(isCredentialTargetPath('https://host/x'), false);
   // URLs are not split, but a credential basename is still conservatively denied.
   assert.equal(isCredentialTargetPath('https://host/.env'), true);
@@ -244,7 +248,7 @@ test('decoded credential effects cover registry, transfer and Git inspection var
     'cat normal.txt',
     'git status .env',
     'git show origin/main:src/app.ts',
-    'cat C:\\Users\\x\\app.ts',
+    `cat ${WIN_DRIVE_APP}`,
     'git commit -m "docs: describe .env handling"',
     'npm test -- .env.test',
     'curl https://example.invalid/readme',

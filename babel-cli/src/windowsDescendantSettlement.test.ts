@@ -104,6 +104,9 @@ child.once('spawn', () => {
       stdio: 'ignore',
       windowsHide: true,
     });
+    // Attach before any await: a fast Windows exit would otherwise be missed
+    // and leave this promise pending with an empty event loop.
+    const parentExited = new Promise<void>((resolve) => parent.once('exit', () => resolve()));
     try {
       const deadline = Date.now() + 10_000;
       while (!existsSync(grandchildPidFile)) {
@@ -112,8 +115,8 @@ child.once('spawn', () => {
       }
       const grandchildPid = Number(readFileSync(grandchildPidFile, 'utf8'));
       assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0);
-      await new Promise<void>((resolve) => parent.once('exit', () => resolve()));
-      const settlement = await settleWindowsDescendants(parent.pid!, { rounds: 3, roundDelayMs: 100 });
+      await parentExited;
+      const settlement = await settleWindowsDescendants(parent.pid!, { rounds: 2, roundDelayMs: 50 });
       assert.equal(settlement.confirmed, true);
       assert.equal(settlement.remaining.length, 0);
       const census = listWindowsDescendantPids(parent.pid!);
