@@ -753,6 +753,10 @@ const HOST_PROCESS_SURFACE = new Set([
   'authority/finalRevision.ts',
   // Process-tree termination uses the fixed System32 taskkill executable on Windows.
   'processTree.ts',
+  // Windows descendant settlement resolves taskkill/PowerShell under SystemRoot
+  // (WINDIR fallback, then C:\Windows), with an integer-only script, a bounded
+  // timeout and the minimal child environment.
+  'windowsProcessSettlement.ts',
   // Compensation pins Windows directories with a fixed helper and encoded path data.
   'executor/effectDirectoryAnchors.ts',
   // Plan publication uses a fixed System32 PowerShell executable, encoded script, minimal

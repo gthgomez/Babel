@@ -122,6 +122,68 @@ export function isLinuxProcessGroupAliveInProc(groupLeaderPid: number, procRoot 
   return true;
 }
 
+interface LinuxGroupObservation {
+  /** Every /proc entry was readable; an incomplete census is never settled. */
+  complete: boolean;
+  /** No thread of any group member is runnable or merely sleeping. */
+  groupDead: boolean;
+  /** A member other than the owned leader has a non-dead thread. */
+  nonLeaderLive: boolean;
+  /** The owned leader has a runnable thread (a live worker, not reaping). */
+  leaderRunnable: boolean;
+  /** Only the owned leader remains, in S/D (kernel reaping/exit window). */
+  leaderOnlyLive: boolean;
+}
+
+/**
+ * Classify the remaining work in a Linux process group. Separates a genuine
+ * descendant or runnable leader thread from the direct child's brief /proc
+ * exit window, so settlement can absorb scheduler delay without granting a
+ * real descendant extra time.
+ */
+function observeLinuxProcessGroup(groupLeaderPid: number, procRoot = '/proc'): LinuxGroupObservation {
+  let processIds: string[];
+  try {
+    processIds = readdirSync(procRoot).filter(entry => /^\d+$/.test(entry));
+  } catch {
+    return { complete: false, groupDead: false, nonLeaderLive: false, leaderRunnable: false, leaderOnlyLive: false };
+  }
+  let complete = true;
+  let nonLeaderLive = false;
+  let leaderRunnable = false;
+  let leaderOnlyLive = false;
+  for (const pid of processIds) {
+    const processStat = processStatFields(join(procRoot, pid, 'stat'));
+    if (!processStat || processStat.state === 'gone') { complete = false; continue; }
+    if (processStat.processGroup !== groupLeaderPid) continue;
+    let threadIds: string[];
+    try { threadIds = readdirSync(join(procRoot, pid, 'task')).filter(entry => /^\d+$/.test(entry)); }
+    catch { complete = false; continue; }
+    if (threadIds.length === 0) { complete = false; continue; }
+    for (const tid of threadIds) {
+      const threadStat = processStatFields(join(procRoot, pid, 'task', tid, 'stat'));
+      if (!threadStat || threadStat.state === 'gone' || threadStat.processGroup !== groupLeaderPid) {
+        complete = false;
+        continue;
+      }
+      if (threadStat.state === 'Z' || threadStat.state === 'X' || threadStat.state === 'x') continue;
+      if (Number(pid) === groupLeaderPid) {
+        if (threadStat.state === 'R') leaderRunnable = true;
+        else leaderOnlyLive = true;
+      } else {
+        nonLeaderLive = true;
+      }
+    }
+  }
+  return {
+    complete,
+    groupDead: complete && !nonLeaderLive && !leaderRunnable && !leaderOnlyLive,
+    nonLeaderLive,
+    leaderRunnable,
+    leaderOnlyLive,
+  };
+}
+
 /**
  * Whether runnable work remains in the supervised group. POSIX normally uses
  * `kill(-pgid, 0)` so a dead leader with a live descendant stays visible. Linux
@@ -146,7 +208,11 @@ export function isProcessGroupAlive(groupLeaderPid: number): boolean {
   }
 }
 
-export async function waitForProcessGroupExit(groupLeaderPid: number, timeoutMs: number): Promise<boolean> {
+export async function waitForProcessGroupExit(
+  groupLeaderPid: number,
+  timeoutMs: number,
+  options: { leaderOnlyGraceMs?: number } = {},
+): Promise<boolean> {
   // Windows has no process-group signal semantics: libuv rejects negative PIDs
   // with EINVAL rather than ESRCH, so group probing would spin the full
   // timeout before the leader-only fallback ever fired. Probe the leader
@@ -160,6 +226,27 @@ export async function waitForProcessGroupExit(groupLeaderPid: number, timeoutMs:
     return !isProcessAlive(groupLeaderPid)
   }
   if (process.platform === 'linux') {
+    const grace = options.leaderOnlyGraceMs
+    if (grace !== undefined) {
+      const deadline = Date.now() + timeoutMs
+      let leaderOnlySince: number | undefined
+      while (Date.now() < deadline) {
+        const observation = observeLinuxProcessGroup(groupLeaderPid)
+        if (observation.groupDead) return true
+        // A real descendant or a runnable leader thread is settled by the
+        // caller's termination, not by waiting out the reaping window.
+        if (observation.nonLeaderLive || observation.leaderRunnable) return false
+        if (!observation.complete) { leaderOnlySince = undefined; }
+        else if (observation.leaderOnlyLive) {
+          leaderOnlySince ??= Date.now()
+          if (Date.now() - leaderOnlySince >= grace) return true
+        } else {
+          leaderOnlySince = undefined
+        }
+        await new Promise<void>((resolveDelay) => { setTimeout(resolveDelay, 10) })
+      }
+      return false
+    }
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
       if (!isProcessGroupAlive(groupLeaderPid)) return true

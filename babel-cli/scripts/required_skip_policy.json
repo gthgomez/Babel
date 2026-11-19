@@ -244,7 +244,8 @@
         "Actual Windows SQLite reservation contract",
         "Windows-only process qualification",
         "Windows helper diagnostic",
-        "Windows NTFS native boundary; other platforms remain unsupported"
+        "Windows NTFS native boundary; other platforms remain unsupported",
+        "Windows-only descendant fixture"
       ],
       "rationale": "The complementary Windows lane executes these native Windows contracts.",
       "suites": [
@@ -291,6 +292,9 @@
         "src/agent/windowsProcessQualification.test.ts": [
           "Windows foreground execution preserves spaced .exe, .cmd, and .bat argv and cwd",
           "Windows foreground shell preserves the same command identity for sync and async execution"
+        ],
+        "src/windowsDescendantSettlement.test.ts": [
+          "Windows cancel path observes a grandchild that the leader-only probe cannot see"
         ],
         "src/authority/ownedFileAssertionNative.test.ts": [
           "native boundary preserves literal, encoding, size, alias and malformed manifest refusals",

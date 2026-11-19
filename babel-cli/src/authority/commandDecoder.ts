@@ -20,7 +20,7 @@
 import { CAPABILITY_KINDS, type CapabilityId } from './capabilities.js';
 import { parseCommandArgv } from '../utils/commandArgv.js';
 import { literalSearchFileOperands } from './literalSearch.js';
-import { isCredentialTargetPath } from './protectedPath.js';
+import { isCredentialPathReference, isCredentialTargetPath } from './protectedPath.js';
 import { resolveAndClassifyCommand } from './commandResolver.js';
 import {
   classifyExecutionRisk,
@@ -312,16 +312,18 @@ export function splitCommandParts(segment: string): { base: string; rest: string
 }
 
 // ─── Credential detection ───────────────────────────────────────────────────
+//
+// The path vocabulary lives in `authority/protectedPath.ts` (one registry for
+// file effects, shell argv, Git inspection and receipts). These patterns only
+// decide which *command shapes* expose that vocabulary.
 
-const CREDENTIAL_PATH_RE =
-  /(?:^|[\s"'`\\/:])\.env(?![A-Za-z0-9._-]*\.example\b)(?:\.[A-Za-z0-9_-]+)?\b(?:\s|$|['"`\\/:])|(?:^|[\s"'`\\/:])(?:id_rsa|id_ed25519|id_dsa|credentials\.json|\.pem|\.p12|\.pfx)(?:\s|$|['"`\\/:])|\.ssh[\\/]|\.aws[\\/]credentials|\.git-credentials|secrets[\\/]/i;
 /** Merged read tools: #86 (strings, sed) + #87 (cat..printf) + gaps (rg, grep, Select-String). */
 const CREDENTIAL_DUMP_TOOLS =
-  /^\s*(?:cat|type|get-content|more|less|head|tail|bat|printf|strings|sed|rg|grep|select-string)\s+/i;
+  /^\s*(?:cat|type|get-content|more|less|head|tail|bat|printf|strings|sed|rg|grep|findstr|select-string)\s+/i;
 const CREDENTIAL_VAR_ECHO = /(?:echo|printenv|env|set)\s+[^\s]*(?:API[_]?KEY|TOKEN|SECRET|PASSWORD)/i;
 const PICKAXE_LOG = /\bgit\s+log\s+--all\s+--pickaxe\b/i;
 const CREDENTIAL_TRANSFER_TOOLS =
-  /^\s*(?:cp|mv|scp|rsync|copy-item|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage\s+blob\s+copy)\s+/i;
+  /^\s*(?:cp|mv|scp|rsync|copy-item|tar|zip|7z|curl|wget|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage\s+blob\s+copy)\s+/i;
 const CREDENTIAL_CODE_EVAL =
   /^\s*(?:python|python3|node|tsx|deno|ruby|perl)\s+(?:-[a-z]+\s+)*(?:-c|-e|--eval)\s+/i;
 
@@ -329,10 +331,12 @@ const CREDENTIAL_CODE_EVAL =
 export function isCredentialExposureCommand(command: string): boolean {
   if (PICKAXE_LOG.test(command)) return true;
   if (CREDENTIAL_VAR_ECHO.test(command)) return true;
-  if (CREDENTIAL_DUMP_TOOLS.test(command) && CREDENTIAL_PATH_RE.test(command)) return true;
-  if (CREDENTIAL_TRANSFER_TOOLS.test(command) && CREDENTIAL_PATH_RE.test(command)) return true;
-  if (CREDENTIAL_CODE_EVAL.test(command) && CREDENTIAL_PATH_RE.test(command)) return true;
-  return false;
+  if (!isCredentialPathReference(command)) return false;
+  return (
+    CREDENTIAL_DUMP_TOOLS.test(command) ||
+    CREDENTIAL_TRANSFER_TOOLS.test(command) ||
+    CREDENTIAL_CODE_EVAL.test(command)
+  );
 }
 
 // ─── High-consequence tool patterns ─────────────────────────────────────────
@@ -685,7 +689,7 @@ function decodeGit(tokens: string[], repoRoot?: string): DecodedCommand {
     case 'show':
     case 'cat-file': {
       const target = args.join(' ');
-      if (CREDENTIAL_PATH_RE.test(target)) {
+      if (isCredentialPathReference(target)) {
         return cmd('expose_credentials', 'credential_access');
       }
       return cmd('inspect_repository', 'read_local');
@@ -700,6 +704,11 @@ function decodeGit(tokens: string[], repoRoot?: string): DecodedCommand {
     case 'diff':
     case 'log': {
       if (args.some((a) => a.includes('--pickaxe'))) {
+        return cmd('expose_credentials', 'credential_access');
+      }
+      // `git diff .env` and `git log -p -- .env` print file contents, including
+      // index/staged forms. Status does not, so it stays inspection.
+      if ((verb === 'diff' || verb === 'log') && isCredentialPathReference(args.join(' '))) {
         return cmd('expose_credentials', 'credential_access');
       }
       return cmd('inspect_repository', 'read_local');
@@ -834,8 +843,7 @@ function decodeNonGit(tokens: string[], raw: string, original: string): DecodedC
   if (searchFiles) {
     if (searchFiles.some((path) =>
       isCredentialTargetPath(path) ||
-      path.replace(/\\/g, '/').toLowerCase().split('/').includes('.aws') ||
-      CREDENTIAL_PATH_RE.test(`rg ${path}`))) {
+      isCredentialPathReference(path))) {
       return cmd('expose_credentials', 'credential_access');
     }
     return cmd('run_local_command', 'unrecognized');
@@ -847,7 +855,7 @@ function decodeNonGit(tokens: string[], raw: string, original: string): DecodedC
   }
 
   // Credential transfers.
-  if (CREDENTIAL_TRANSFER_TOOLS.test(raw) && CREDENTIAL_PATH_RE.test(raw)) {
+  if (CREDENTIAL_TRANSFER_TOOLS.test(raw) && isCredentialPathReference(raw)) {
     return cmd('expose_credentials', 'credential_access');
   }
 

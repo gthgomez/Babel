@@ -198,11 +198,11 @@ Chat mode is defined by the REPL dispatch and ChatEngine. Key source files:
 
 ## Execution profile and isolation (H13)
 
-Chat uses the same default execution profile as other run paths: **`safe_repo`**. After H13, isolation profiles with `dockerSandbox: true` **fail closed** when Docker isolation cannot activate — they do not silently fall back to the host.
+Ordinary Chat defaults to **`host_native`**: eligible project commands run with the current OS user's authority, which is not an OS sandbox. An explicit `safe_repo` selection uses Docker isolation. After H13, isolation profiles with `dockerSandbox: true` **fail closed** when Docker isolation cannot activate — they do not silently fall back to the host, and any explicit host escalation is disclosed.
 
 | Profile / control | Behavior |
 |-------------------|----------|
-| **`safe_repo` (default)** | Docker isolation required when the profile is active. Proceeds only if Docker is available **and** a sandbox image is configured (`BABEL_BENCHMARK_DOCKER_IMAGE`). Without daemon/image, shell execution **fail-closes** unless host escalation env is set. |
+| **`safe_repo`** | Docker isolation required when the profile is active. Proceeds only if Docker is available **and** a sandbox image is configured (`BABEL_BENCHMARK_DOCKER_IMAGE`). Without daemon/image, shell execution **fail-closes** unless host escalation env is set. |
 | **`dev_local`** | Host-local profile (`dockerSandbox: false`). No Docker requirement. Permits supported intrinsic host inspection (`rg`, `git status`, `cat`); project-code test/build commands (npm/cargo/go/gradle, etc.) are **denied** without Docker isolation. Selecting it alone does not enable repository tests or builds. Trusted repositories only. |
 | **`BABEL_ALLOW_HOST_FALLBACK=1`** | Explicit host escalation (preferred). Allows host execution when isolation would otherwise fail closed. Also accepts `true` / `yes`. |
 | **`BABEL_DOCKER_DISABLE=true`** | Legacy isolation opt-out; also counts as explicit host escalation under H13. Disables Docker sandbox selection for the process. |

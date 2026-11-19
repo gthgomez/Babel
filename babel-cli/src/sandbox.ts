@@ -87,6 +87,7 @@ import {
   parseCommandArgv,
 } from './utils/commandArgv.js';
 import { classifyExecutionRisk, requiresDockerIsolation } from './authority/commandSpec.js';
+import { isCredentialTargetPath } from './authority/protectedPath.js';
 import { classifyResolvedCommand, commandControlledRoots, hostWindowsSystem32Directory, isCanonicalWindowsSystemShell, isResolvedCommandCurrent, resolveCommandExecutable, type ResolvedCommandExecutable } from './authority/commandResolver.js';
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
@@ -548,22 +549,15 @@ function policyDeniedResult(
   };
 }
 
-/** Return whether a path names credential-class material. */
+/**
+ * Return whether a path names credential-class material.
+ *
+ * Delegates to the single credential-path registry in `authority/protectedPath`
+ * so file effects, shell argv filtering, Git inspection and receipts cannot
+ * disagree about which files are secret.
+ */
 export function isCredentialReadPath(inputPath: string): boolean {
-  const normalized = inputPath.replace(/\\/g, '/').toLowerCase();
-  const segments = normalized.split('/').filter((segment) => segment.length > 0);
-  const name = basename(normalized);
-
-  if (name === '.env.example') return false;
-  if (name === '.env' || name.startsWith('.env.')) return true;
-  if (['id_rsa', 'id_ed25519', 'credentials.json'].includes(name)) return true;
-  if (/\.(pem|p12|pfx)$/.test(name)) return true;
-
-  return (
-    segments.includes('.ssh') ||
-    segments.includes('secrets') ||
-    segments.some((segment, index) => segment === '.aws' && segments[index + 1] === 'credentials')
-  );
+  return isCredentialTargetPath(inputPath);
 }
 function maybePolicyDeniedResult(
   err: unknown,

@@ -216,7 +216,7 @@ Chat may write `thread_events.json`, `session-events.jsonl`, and hash-linked `ep
 
 | Mechanism | Strength | Notes |
 |-----------|----------|-------|
-| Docker sandbox (`safe_repo` default) | Strong when active | `--network none`, cap-drop, no-new-privileges |
+| Docker sandbox (`safe_repo` when selected; Ordinary Chat defaults to `host_native`) | Strong when active | `--network none`, cap-drop, no-new-privileges; container profiles fail closed without Docker/image |
 | Host fallback | Controlled | Isolation profiles fail-close without Docker; escalate with `BABEL_ALLOW_HOST_FALLBACK=1` (H13) |
 | Child env allowlist | Strong | `getSafeEnv()` strips secrets by default |
 | File mutation batch | Strong for writes | Pre/post hashes, undo batch (`workspaceTransactions`) |

@@ -24,6 +24,14 @@ test('owned assertion parsing admits only the bounded literal manifest', () => {
   }
 })
 
+test('generic JSON output names remain admissible owned targets', () => {
+  // `auth.json` is a generic application filename, not a live credential store;
+  // the Windows native oracle race fixture uses it as an owned output. Path
+  // syntax still rejects dot-directory credential locations such as
+  // `.codex/auth.json` (dot segment) elsewhere in this suite.
+  assert.equal(parseOwnedFileAssertionV1(manifest('value', 'auth.json')).candidate_path, 'auth.json')
+})
+
 test('owned assertions reject ambiguous, credential and platform device paths', () => {
   for (const path of ['', '../output.txt', 'src/../output.txt', '/output.txt',
     'C:/output.txt', 'src\\output.txt', 'src//output.txt', 'src/output.txt/',
