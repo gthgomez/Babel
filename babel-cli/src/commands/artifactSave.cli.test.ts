@@ -94,7 +94,8 @@ for (const variant of ['save', 'worktree', 'explicit-read-only', 'inspect-only',
       const child = spawnSync(process.execPath, args, { cwd: fixture.cwd, env: { ...fixture.env, BABEL_EXECUTION_PROFILE: 'safe_repo' }, encoding: 'utf8', timeout: 120_000, windowsHide: true })
       assert.equal(child.error, undefined, 'native CLI must finish before watchdog')
       const diagnostic = (() => { try { const p = JSON.parse(child.stdout); return { status: p.status, outcome: p.terminal_outcome, markers: [...`${child.stdout}${child.stderr}`.matchAll(/CONTROL_[A-Z_]+/g)].map(x => x[0]) } } catch { return { parseable: false } } })()
-      assert.equal(child.status, 0, `native CLI must retain a useful answer: ${JSON.stringify(diagnostic)}`)
+      // UNVERIFIED_PATCH is useful delivery but not shell success (TF-08).
+      assert.equal(child.status, writable ? 6 : 0, `native CLI must retain a useful answer: ${JSON.stringify(diagnostic)}`)
       const payload = JSON.parse(child.stdout)
       assert.equal(readFileSync(join(fixture.cwd, 'meeting-notes.txt'), 'utf8'), notes)
       assert.equal(existsSync(join(fixture.cwd, 'brief.html')), writable)

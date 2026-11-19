@@ -57,6 +57,73 @@ for (const outcome of ['BUDGET_EXHAUSTED', 'BLOCKED_POLICY', 'BLOCKED_EXTERNAL',
   })
 }
 
+test('the exit-6 contract settles UNVERIFIED_PATCH for grading instead of throwing', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'babel-native-unverified-settled-'))
+  try {
+    const projectRoot = join(root, 'candidate')
+    const runsRoot = join(root, 'runs')
+    const runDir = join(runsRoot, 'fixture-session')
+    await mkdir(projectRoot)
+    await mkdir(join(root, 'babel-cli/dist'), { recursive: true })
+    await writeFile(join(root, 'babel-cli/package.json'), '{"type":"module"}')
+    const log = createSessionEventLog('unverified-fixture')
+    recordUserSubmitted(log, { turn_id: 'turn', task: 'edit the fixture' })
+    recordTurnEnded(log, { turn_id: 'turn', outcome: 'UNVERIFIED_PATCH', status: 'completed' })
+    assert.equal(flushSessionEventLog(runDir, log).error, undefined)
+    await writeFile(join(root, 'babel-cli/dist/index.js'), `console.log(JSON.stringify(${JSON.stringify({
+      terminal_outcome: 'UNVERIFIED_PATCH',
+      answer: 'The patch is retained but completion is not certified.',
+      run_dir: runDir,
+    })})); process.exitCode = 6`)
+    // Settles at the TF-08 exit-6 projection and reaches independent grading.
+    const result = runNativeCliTask({ root, projectRoot, runsRoot, prompt: 'edit the fixture' })
+    assert.equal(result.terminal.outcome, 'UNVERIFIED_PATCH')
+    assert.equal(result.terminal.status, 'completed')
+    const score = scoreNativeTask(result.terminal, 'pass', false)
+    // Graded as unverified — not accepted, and not regrouped as a failure claim.
+    assert.deepEqual(score, { outcome: 'FAIL', acceptedCompletion: false, falseCompletion: false })
+    const terminal = parseNativeCliPayload({ terminal_outcome: 'UNVERIFIED_PATCH', answer: 'retained', run_dir: 'run' })
+    assert.equal(nativeCliProcessSettled({ exitCode: 6 }, terminal), true)
+    assert.equal(nativeCliProcessSettled({ exitCode: 0 }, terminal), false)
+    assert.equal(nativeCliProcessSettled({ exitCode: 1 }, terminal), false)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a verified completion still settles only at exit 0', async () => {
+  const terminal = parseNativeCliPayload({ terminal_outcome: 'VERIFIED_COMPLETE', answer: 'Done and verified.', run_dir: 'run' })
+  assert.equal(terminal?.outcome, 'VERIFIED_COMPLETE')
+  assert.equal(nativeCliProcessSettled({ exitCode: 0 }, terminal), true)
+  // A genuinely wrong pairing: verified outcome riding the unverified exit lane.
+  assert.equal(nativeCliProcessSettled({ exitCode: 6 }, terminal), false)
+  assert.equal(nativeCliProcessSettled({ exitCode: 1 }, terminal), false)
+})
+
+test('a verified outcome printed with exit 6 is refused as unsettled evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'babel-native-wrong-exit-'))
+  try {
+    const projectRoot = join(root, 'candidate')
+    const runsRoot = join(root, 'runs')
+    const runDir = join(runsRoot, 'fixture-session')
+    await mkdir(projectRoot)
+    await mkdir(join(root, 'babel-cli/dist'), { recursive: true })
+    await writeFile(join(root, 'babel-cli/package.json'), '{"type":"module"}')
+    const log = createSessionEventLog('wrong-exit-fixture')
+    recordUserSubmitted(log, { turn_id: 'turn', task: 'edit the fixture' })
+    recordTurnEnded(log, { turn_id: 'turn', outcome: 'VERIFIED_COMPLETE', status: 'completed' })
+    assert.equal(flushSessionEventLog(runDir, log).error, undefined)
+    await writeFile(join(root, 'babel-cli/dist/index.js'), `console.log(JSON.stringify(${JSON.stringify({
+      terminal_outcome: 'VERIFIED_COMPLETE',
+      answer: 'Done and verified.',
+      run_dir: runDir,
+    })})); process.exitCode = 6`)
+    assert.throws(() => runNativeCliTask({ root, projectRoot, runsRoot, prompt: 'edit the fixture' }), /native_cli_process_failed:exit_6/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('an interrupted CLI cannot turn a printed failure card into settled task evidence', async () => {
   const root = await mkdtemp(join(tmpdir(), 'babel-native-interrupted-'))
   try {

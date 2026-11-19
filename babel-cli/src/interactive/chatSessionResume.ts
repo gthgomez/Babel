@@ -76,6 +76,20 @@ function savedRepoRootFromSessionEvents(log: SessionEventLog | null): string | n
 
 export type ResumeChatSessionOutcome = ResumeChatSessionResult | ResumeChatSessionFailure;
 
+/** Last durable terminal record, used to hydrate one recovered status. */
+function recoveredTerminalFromLog(
+  log: ReturnType<typeof loadThreadEventLogFromDir>,
+): { outcome?: string | null; status?: string | null } | undefined {
+  const ended = log
+    ? [...log.events].reverse().find((event) => event.kind === 'turn_ended')
+    : undefined;
+  if (!ended || ended.kind !== 'turn_ended') return undefined;
+  return {
+    ...(ended.outcome !== undefined ? { outcome: ended.outcome } : {}),
+    ...(ended.status !== undefined ? { status: ended.status } : {}),
+  };
+}
+
 export async function resumeChatSession(
   ctx: ReplContext,
   sessionId: string,
@@ -153,6 +167,7 @@ async function resumeChatSessionOwned(
       );
     }
     const eventLog = loadThreadEventLogFromDir(sessionDir);
+    const recoveredTerminal = recoveredTerminalFromLog(eventLog);
 
     // D04: verify physical repository identity BEFORE any engine or execution
     // context is admitted (event-log branch) or history is hydrated as safely
@@ -240,6 +255,7 @@ async function resumeChatSessionOwned(
         const { turnCount, exchangeCount } = hydrateReplTurnsFromCells(ctx, cells, {
           targetRoot: target.targetRoot,
           workspaceRoot: target.workspaceRoot ?? null,
+          terminal: recoveredTerminal,
         });
         ctx.saveSessionState();
         return {
@@ -256,6 +272,7 @@ async function resumeChatSessionOwned(
         transcriptPath: txPath,
         targetRoot: target.targetRoot,
         workspaceRoot: target.workspaceRoot ?? null,
+        terminal: recoveredTerminal,
       });
       ctx.saveSessionState();
       return {
@@ -277,6 +294,7 @@ async function resumeChatSessionOwned(
       const { turnCount, exchangeCount } = hydrateReplTurnsFromCells(ctx, cells, {
         targetRoot: target.targetRoot,
         workspaceRoot: target.workspaceRoot ?? null,
+        terminal: recoveredTerminal,
       });
       ctx.saveSessionState();
       return {
@@ -326,6 +344,7 @@ async function resumeChatSessionOwned(
       transcriptPath: txPath,
       targetRoot: target.targetRoot,
       workspaceRoot: target.workspaceRoot ?? null,
+      terminal: recoveredTerminal,
     });
     if (threadStoreExists(sessionId)) {
       hydrateResumedThreadToScreen(ctx, sessionId);

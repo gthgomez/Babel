@@ -382,7 +382,9 @@ test('executeChatTask calls appendTurn and updates conversation memory on succes
       assert.equal(appendTurnCalls, 1);
       assert.equal(ctx.lastAssistantAnswer, 'summary text');
       assert.equal(ctx.lastAssistantStatus, 'ANSWER_READY');
-      assert.equal(ctx.state.lastRunUserStatus, 'complete');
+      // Legacy done events without an engine outcome recompute as
+      // UNVERIFIED_PATCH, whose user status is not_verified (TF-08).
+      assert.equal(ctx.state.lastRunUserStatus, 'not_verified');
       assert.equal(ctx.turns.length, 1);
       assert.equal(ctx.turns[0]?.answer, 'summary text');
     });

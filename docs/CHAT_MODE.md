@@ -237,7 +237,7 @@ Chat does **not** treat a model “I’m done” answer as success by itself.
 2. Only **authoritative** verifier commands (project test runners, etc.) may green completion — package installs and ad-hoc `_verify*.py` do not.
 3. Verifier-dependency **tamper** detection (R9) can block after repeated edits to tracked verifier scripts/`package.json` scripts.
 4. Requested `VERIFIED_COMPLETE` can be **downgraded** to `UNVERIFIED_PATCH` by `executorKernel.completion.decide`.
-5. Honest outcomes live in `TerminalOutcome` (`agentContracts.ts`); exit 0 only for `VERIFIED_COMPLETE` | `UNVERIFIED_PATCH`.
+5. Honest outcomes live in `TerminalOutcome` (`agentContracts.ts`); exit 0 only for `VERIFIED_COMPLETE` | `NO_CHANGE_REQUIRED`. `UNVERIFIED_PATCH` is `not_verified` and exits nonzero (6) so shell chaining cannot mistake it for a verified run.
 
 Details and normative mode/completion rules: [architecture/HARNESS_ARCHITECTURE_V1.md](./architecture/HARNESS_ARCHITECTURE_V1.md).
 

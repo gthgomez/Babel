@@ -75,7 +75,8 @@ test(`ordinary CLI ${variant} retains only eligible unverified delivery`, (t) =>
       assert.notEqual(payload.terminal_outcome, 'INFRA_FAILURE', 'fixture must not manufacture the rejection through transport failure')
       return
     }
-    assert.equal(child.status, 0, `CONTROL_HONEST_DELIVERY: status=${payload.status}; outcome=${payload.terminal_outcome}; controls=${[...`${child.stdout}${child.stderr}`.matchAll(/CONTROL_[A-Z_]+/g)].map(x => x[0]).join(',')}`)
+    // Honest unverified delivery is preserved, but it is not shell success.
+    assert.equal(child.status, 6, `CONTROL_HONEST_DELIVERY: status=${payload.status}; outcome=${payload.terminal_outcome}; controls=${[...`${child.stdout}${child.stderr}`.matchAll(/CONTROL_[A-Z_]+/g)].map(x => x[0]).join(',')}`)
     assert.equal(payload.status, 'ANSWER_READY')
     assert.equal(payload.terminal_outcome, 'UNVERIFIED_PATCH')
     assert.match(JSON.stringify(payload), /Tests were NOT RUN/)

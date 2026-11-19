@@ -88,7 +88,11 @@ import type {
   FinalizeParityTurnExtras,
   FinalizeParityTurnResult,
 } from './chatEngineParityBridge.js'
-import { classifyChatTaskIntent } from './chatEngineTaskIntent.js'
+import {
+  classifyChatTaskIntent,
+  isConversationalTurnText,
+} from './chatEngineTaskIntent.js'
+import { hasExplicitEditDenial } from '../config/chatTaskClass.js'
 import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
 import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
@@ -176,6 +180,43 @@ function appendCriterionEvidenceSummary(
 }
 
 /** Make the terminal answer agree with the host completion decision without changing that decision. */
+function knownRedVerifierReceipt(
+  receipt: BoundChatVerifierReceipt | null | undefined,
+): receipt is BoundChatVerifierReceipt {
+  return (
+    receipt != null &&
+    receipt.stale !== true &&
+    Number.isInteger(receipt.exit_code) &&
+    receipt.exit_code !== 0 &&
+    typeof receipt.command === 'string' &&
+    receipt.command.trim().length > 0
+  )
+}
+
+/**
+ * A later provider/network failure must not erase a known red check from the
+ * terminal explanation. The terminal cause remains the later failure; this is
+ * retained evidence, not a new success claim (TF-14).
+ */
+export function failureExplanationWithKnownVerifierState(
+  answer: string,
+  receipt: BoundChatVerifierReceipt | null | undefined,
+): string {
+  if (!knownRedVerifierReceipt(receipt)) return answer
+  const command = singleLineEvidence(receipt.command, 160)
+  if (answer.includes(command)) return answer
+  const summary =
+    typeof receipt.summary === 'string' && receipt.summary.trim().length > 0
+      ? `: ${singleLineEvidence(receipt.summary, 240)}`
+      : ''
+  return [
+    answer,
+    '',
+    `Known verification state at failure: "${command}" exited ${receipt.exit_code}${summary}.`,
+    'This earlier red check remains part of the run evidence; the later failure does not turn it green.',
+  ].join('\n')
+}
+
 function formatTerminalAnswerForOutcome(input: {
   answer: string
   outcome: TerminalOutcome
@@ -183,6 +224,7 @@ function formatTerminalAnswerForOutcome(input: {
   hasMutation: boolean
   task: string
   toolCallLog: ChatTerminalSnapshot['evidence']['observability']['toolCallLog']
+  verifierReceipt?: BoundChatVerifierReceipt | null | undefined
   preservedUnverifiedCandidate?: {
     candidate: string
     artifactRefs: readonly string[]
@@ -197,6 +239,9 @@ function formatTerminalAnswerForOutcome(input: {
   if (!input.answer.trim() || satisfiesRequestedBareJsonAnswer(input.answer, input.task)) {
     return input.answer
   }
+  if (input.status === 'failed') {
+    return failureExplanationWithKnownVerifierState(input.answer, input.verifierReceipt)
+  }
   if (input.finalRevision?.status === 'stale') {
     return [
       UNVERIFIED_COMPLETION_MARKER,
@@ -210,6 +255,7 @@ function formatTerminalAnswerForOutcome(input: {
       '---',
       input.answer,
     ].join('\n')
+
   }
   if (decisionDeferral) {
     return input.acceptanceEvidence?.length
@@ -394,18 +440,113 @@ export type ChatStreamDoneExtra = {
   }
 }
 
+/** A recorded, successful source read (detail text is not required here). */
+function hasSuccessfulSourceRead(
+  log: ChatTerminalSnapshot['evidence']['observability']['toolCallLog'],
+): boolean {
+  return log.some(
+    (entry) =>
+      (entry.tool === 'read_file' || entry.tool === 'read_range') &&
+      !entry.error &&
+      (entry.exit_code === undefined || entry.exit_code === 0),
+  )
+}
+
+/**
+ * A repository question that produced no source observation is not a grounded
+ * informational answer. Task text only selects the requirement; evidence is
+ * still the successful tool log.
+ *
+ * Heuristic boundary (declared, round-2 P3): the requirement needs BOTH an
+ * explanatory/informational verb AND a repository-target keyword. An
+ * explain-verb turn with no repo keyword — e.g. "Summarize what you see" —
+ * escapes this guard and can still certify NO_CHANGE_REQUIRED with zero
+ * reads. Widening on the verb alone is NOT safe: `isConversationalTurnText`
+ * only recognizes short greetings/acknowledgements, so it would also sweep
+ * conversational-informational follow-ups ("summarize what we discussed",
+ * "explain your reasoning") whose referent is the conversation, not the
+ * repository, and mark them UNVERIFIED_PATCH/exit 6. The referent of a
+ * keyword-less deictic task is unknowable from task text alone; closing
+ * this gap needs a task-referent classifier, not a wider regex.
+ */
+function taskRequiresRepositoryInspection(task: string): boolean {
+  if (isConversationalTurnText(task)) return false
+  // Only explanatory/informational requests claim repository understanding.
+  // A raw read attempt that failed is handled by the completion gate, not
+  // turned into a second, text-only success claim.
+  if (
+    !/\b(explain|describe|summari[sz]e|review|audit|analy[sz]e|overview|what|how|why|tell\s+me\s+about)\b/i.test(
+      task,
+    )
+  ) {
+    return false
+  }
+  return /\b(repo(?:sitory)?|codebase|project|source|files?|modules?|packages?|readme|architecture|implementation|functions?|classes?|tests?|workspace)\b/i.test(task)
+}
+
 /** Inspection can prove no change is needed; zero writes alone cannot. */
-function normalizeInspectedNoChange(snapshot: ChatTerminalSnapshot, outcome: TerminalOutcome): TerminalOutcome {
+export function normalizeInspectedNoChange(
+  snapshot: ChatTerminalSnapshot,
+  outcome: TerminalOutcome,
+): TerminalOutcome {
   const implementation = snapshot.context.acceptedOperation !== undefined
     ? snapshot.context.acceptedOperation !== 'READ_ONLY'
     : classifyChatTaskIntent(snapshot.context.options.task) === 'execute'
   if (outcome === 'NO_CHANGE_REQUIRED' && implementation && snapshot.context.options.projectRoot)
     refreshChatVerifierReceiptStalenessSync(snapshot.context.options.projectRoot, snapshot.outcome.lastVerifierReceipt)
   const verifier = snapshot.outcome.lastVerifierReceipt
-  return outcome === 'NO_CHANGE_REQUIRED' && implementation &&
-    !hasInspectedNoChangeEvidence(snapshot.evidence.observability.toolCallLog) &&
-    !(verifier?.authority === true && verifier.exit_code === 0 && verifier.stale === false)
-    ? 'AGENT_FAILURE' : outcome
+  const greenCurrentVerifier = verifier?.authority === true && verifier.exit_code === 0 && verifier.stale === false
+  if (outcome !== 'NO_CHANGE_REQUIRED') return outcome
+  if (implementation) {
+    return !hasInspectedNoChangeEvidence(snapshot.evidence.observability.toolCallLog) && !greenCurrentVerifier
+      ? 'AGENT_FAILURE' : outcome
+  }
+  // TF-11: an informational repository answer still needs at least one
+  // successful source observation. Without it the result is an unverified
+  // inspection, not a successful explanation.
+  // Exception (landed ordinary-admission contract): when the operator's
+  // acceptance explicitly forbids edits AND the engine durably refused a
+  // native mutation attempt in this turn, the no-change terminal is
+  // engine-adjudicated — the recorded write denial plus zero mutations
+  // proves the no-change acceptance — so the turn completes
+  // NO_CHANGE_REQUIRED without demanding source reads. Either half alone
+  // keeps the demotion: a bare edit-denial with no engine-refused write
+  // still has the explanation as its deliverable, and a refused write
+  // without the operator's no-edit contract is not the admission flow.
+  if (
+    snapshot.context.options.projectRoot !== undefined &&
+    taskRequiresRepositoryInspection(snapshot.context.options.task) &&
+    !hasSuccessfulSourceRead(snapshot.evidence.observability.toolCallLog) &&
+    !greenCurrentVerifier &&
+    !engineAdjudicatedNoChangeAcceptance(snapshot)
+  ) {
+    return 'UNVERIFIED_PATCH'
+  }
+  return outcome
+}
+
+/**
+ * True when the operator's task acceptance explicitly forbids edits and the
+ * engine's durable tool log records a refused native mutation attempt for
+ * this turn. That combination is the engine-adjudicated no-change flow the
+ * ordinary read-only admission contract pins (an ordinary prepared no-change
+ * task whose native write proposal is denied completes NO_CHANGE_REQUIRED).
+ */
+function engineAdjudicatedNoChangeAcceptance(
+  snapshot: ChatTerminalSnapshot,
+): boolean {
+  const log = snapshot.evidence.observability.toolCallLog
+  const refusedMutation = log.some(
+    (entry) =>
+      entry.error === 'blocked' &&
+      (entry.tool === 'write_file' ||
+        entry.tool === 'str_replace' ||
+        entry.tool === 'apply_patch'),
+  )
+  return (
+    refusedMutation &&
+    hasExplicitEditDenial(snapshot.context.options.task)
+  )
 }
 
 /** Finalize a completed stream through the kernel decision and durable parity owner. */
@@ -623,7 +764,10 @@ export function failChatStream(
   presentationError?: string,
 ): ChatEvent {
   const { snapshot, effects } = input
-  const displayError = presentationError ?? error
+  const displayError = failureExplanationWithKnownVerifierState(
+    presentationError ?? error,
+    snapshot.outcome.lastVerifierReceipt,
+  )
   effects.settleActiveExecution()
   const providerOutputLimit = isProviderOutputLimitText(error)
   if (providerOutputLimit && snapshot.outcome.terminatingLimiter == null) {
@@ -1095,6 +1239,7 @@ export function assembleChatResult(
         hasMutation,
         task: snapshot.context.options.task,
         toolCallLog: snapshot.evidence.observability.toolCallLog,
+        verifierReceipt: snapshot.outcome.lastVerifierReceipt,
         ...(kernelDecision?.acceptanceEvidence
           ? { acceptanceEvidence: kernelDecision.acceptanceEvidence }
           : {}),
