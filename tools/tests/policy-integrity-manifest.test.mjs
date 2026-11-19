@@ -53,7 +53,7 @@ test('every tracked host-protected path has a manifest registration', () => {
 });
 test('credential-boundary regression suite is explicitly registered', () => {
   const root = fileURLToPath(new URL('../../', import.meta.url));
-  const path = 'babel-cli/src/authority/credentialPathBoundary.test.ts';
+  const path = 'babel-cli/src/authority/protectedPathBoundary.test.ts';
   assert.ok(coveredPaths.includes(path), 'coveredPaths must register the credential-boundary suite');
   const manifest = JSON.parse(readFileSync(join(root, 'POLICY_MANIFEST.json'), 'utf8'));
   assert.match(manifest.files[path], /^[a-f0-9]{64}$/);
@@ -112,7 +112,7 @@ const paths = [
   "babel-cli/src/authority/commandSpec.ts",
   "babel-cli/src/authority/convergence-integrity.regression-gate.test.ts",
   "babel-cli/src/authority/convergence-parser.regression-gate.test.ts",
-  "babel-cli/src/authority/credentialPathBoundary.test.ts",
+  "babel-cli/src/authority/protectedPathBoundary.test.ts",
   "babel-cli/src/authority/criterionCompletion.test.ts",
   "babel-cli/src/authority/criterionCompletion.ts",
   "babel-cli/src/authority/criterionExecutionPublisher.test.ts",
