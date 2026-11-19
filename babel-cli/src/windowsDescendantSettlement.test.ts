@@ -7,37 +7,28 @@
  * integration fixture (no-op child processes that exit immediately).
  */
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import childProcess, { execFileSync, spawn, type SpawnOptions } from 'node:child_process';
 import { isProcessAlive } from './processTree.js';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import test from 'node:test';
+import { basename, join } from 'node:path';
+import test, { type TestContext } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
+import { ProcessWitness } from './diagnostics/bdns/processWitness.js';
+import { awaitPendingProcessTerminations } from './sandboxProcessTermination.js';
+import { spawnCommandAsync } from './sandboxSpawnCommandAsync.js';
+import { getSafeEnv } from './utils/safeEnv.js';
 import {
   descendantPidsFromRows,
   confirmWindowsDescendants,
-  getLastWindowsCensusFailure,
   listWindowsDescendantPids,
   observeWindowsDescendants,
   parseWmicProcessRows,
   settleWindowsDescendants,
   type WindowsDescendantProbe,
 } from './windowsProcessSettlement.js';
-
-/** Generated parent fixture: spawn an unref'ed grandchild and publish its pid. */
-function buildParentFixture(root: string, grandchildPidFile: string): string {
-  return `import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
-child.once('spawn', () => {
-  writeFileSync(${JSON.stringify(grandchildPidFile)}, String(child.pid));
-  child.unref();
-  process.exit(0);
-});
-child.once('error', () => process.exit(1));
-`;
-}
 
 function scriptedProbe(rounds: number[][]): WindowsDescendantProbe & { killed: number[]; calls: number } {
   const state = {
@@ -182,96 +173,276 @@ test('the real census is unavailable off Windows and never fabricates an empty t
   assert.equal(listWindowsDescendantPids(process.pid), null);
 });
 
-test('generated descendant fixture publishes its grandchild pid', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-w08-fixture-'));
-  const grandchildPidFile = join(root, 'grandchild.pid');
-  writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n');
-  writeFileSync(join(root, 'parent.mjs'), buildParentFixture(root, grandchildPidFile));
-  let grandchildPid: number | undefined;
-  try {
-    const stderr: string[] = [];
-    const parent = spawn(process.execPath, [join(root, 'parent.mjs')], {
-      cwd: root,
-      stdio: ['ignore', 'ignore', 'pipe'],
-      windowsHide: true,
-    });
-    parent.stderr.setEncoding('utf8');
-    parent.stderr.on('data', (chunk: string) => stderr.push(chunk));
-    const exitCode = await new Promise<number | null>((resolve) => parent.once('exit', resolve));
-    assert.equal(exitCode, 0, stderr.join(''));
-    assert.equal(existsSync(grandchildPidFile), true, stderr.join(''));
-    grandchildPid = Number(readFileSync(grandchildPidFile, 'utf8'));
-    assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0);
-    // A just-spawned Windows process may not be queryable at the same instant
-    // the parent exits; allow a bounded settle before asserting survival.
-    let alive = false;
-    for (let attempt = 0; attempt < 40 && !alive; attempt++) {
-      alive = isProcessAlive(grandchildPid);
-      if (!alive) await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    assert.equal(alive, true, 'the fixture grandchild must survive its parent');
-  } finally {
-    if (grandchildPid !== undefined) {
-      try { process.kill(grandchildPid); } catch { /* already gone */ }
-    }
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+const windows = process.platform === 'win32'
+const windowsRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows'
+const fixtureEnv = getSafeEnv()
 
-test(
-  'Windows cancel path observes a grandchild that the leader-only probe cannot see',
-  { skip: process.platform !== 'win32' ? 'Windows-only descendant fixture' : false },
-  async () => {
-    const root = mkdtempSync(join(tmpdir(), 'babel-w08-win-tree-'));
-    const grandchildPidFile = join(root, 'grandchild.pid');
-    writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n');
-    writeFileSync(join(root, 'parent.mjs'), buildParentFixture(root, grandchildPidFile));
-    let parentStderr = '';
-    const parent = spawn(process.execPath, [join(root, 'parent.mjs')], {
-      cwd: root,
-      stdio: ['ignore', 'ignore', 'pipe'],
-      windowsHide: true,
-    });
-    parent.stderr.setEncoding('utf8');
-    parent.stderr.on('data', (chunk: string) => {
-      if (parentStderr.length < 4_000) parentStderr += chunk;
-    });
-    // Attach before any await: a fast Windows exit would otherwise be missed
-    // and leave this promise pending with an empty event loop.
-    const parentExited = new Promise<void>((resolve) => parent.once('exit', () => resolve()));
-    try {
-      const deadline = Date.now() + 20_000;
-      while (!existsSync(grandchildPidFile)) {
-        if (parent.exitCode !== null) break;
-        if (Date.now() > deadline) break;
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      if (!existsSync(grandchildPidFile)) {
-        throw new Error(`grandchild pid was never published (parent exit ${parent.exitCode ?? 'running'}): ${parentStderr.trim() || '<no stderr>'}`);
-      }
-      const grandchildPid = Number(readFileSync(grandchildPidFile, 'utf8'));
-      assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0);
-      await parentExited;
-      const settlement = await settleWindowsDescendants(parent.pid!, { rounds: 1, roundDelayMs: 50 });
-      assert.equal(settlement.confirmed, true);
-      assert.equal(settlement.remaining.length, 0);
-      const census = listWindowsDescendantPids(parent.pid!);
-      assert.deepEqual(census, [], `census failed: ${getLastWindowsCensusFailure() || 'no diagnostic'}`);
-      assert.equal(
-        (() => {
-          try {
-            process.kill(grandchildPid, 0);
-            return true;
-          } catch {
-            return false;
-          }
-        })(),
-        false,
-        'grandchild must not survive descendant settlement',
-      );
-    } finally {
-      parent.kill();
-      rmSync(root, { recursive: true, force: true });
+function writeFixture(root: string, detached: boolean, retainOutput: boolean): void {
+  writeFileSync(join(root, 'parent.mjs'), `
+import { spawn } from 'node:child_process'
+import { closeSync, existsSync, openSync } from 'node:fs'
+const stderr = openSync('grandchild.stderr', 'w')
+const child = spawn(process.execPath, ['grandchild.mjs'], {
+  detached: ${detached}, windowsHide: true,
+  stdio: ['ignore', ${retainOutput ? "'inherit'" : "'ignore'"}, stderr],
+})
+closeSync(stderr)
+child.once('error', error => {
+  console.error('fixture spawn failed:', error.code)
+  process.exit(1)
+})
+child.unref()
+setInterval(() => {
+  if (existsSync('exit-parent') || existsSync('stop')) process.exit(0)
+}, 20)
+`)
+  writeFileSync(join(root, 'grandchild.mjs'), `
+import { existsSync, renameSync, writeFileSync } from 'node:fs'
+const ready = JSON.stringify({ pid: process.pid, parentPid: process.ppid })
+function publish(name, data) {
+  writeFileSync(name + '.tmp', data)
+  renameSync(name + '.tmp', name)
+}
+setInterval(() => {
+  if (existsSync('stop')) {
+    publish('stopped', ready)
+    process.exit(0)
+  }
+  for (const phase of ['startup', 'survived']) {
+    if (existsSync(phase) && !existsSync(phase + '.ack')) publish(phase + '.ack', ready)
+  }
+}, 20)
+publish('ready', ready)
+`)
+}
+
+interface FixtureIdentity { pid: number; parentPid: number }
+
+async function waitFor<T>(read: () => T | undefined, message: string, timeoutMs = 8_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  do {
+    const value = read()
+    if (value !== undefined) return value
+    await sleep(25)
+  } while (Date.now() < deadline)
+  throw new Error(message)
+}
+
+function readFixtureIdentity(root: string, file: string): FixtureIdentity | undefined {
+  const path = join(root, file)
+  if (!existsSync(path)) return undefined
+  const identity = JSON.parse(readFileSync(path, 'utf8')) as FixtureIdentity
+  assert.ok(Number.isSafeInteger(identity.pid) && identity.pid > 0)
+  assert.ok(Number.isSafeInteger(identity.parentPid) && identity.parentPid > 0)
+  return identity
+}
+
+async function confirmFixtureReply(root: string, phase: string, expected: FixtureIdentity): Promise<void> {
+  writeFileSync(join(root, phase), '')
+  const reply = await waitFor(() => readFixtureIdentity(root, `${phase}.ack`), `grandchild did not acknowledge ${phase}`)
+  assert.deepEqual(reply, expected)
+}
+
+// Query individual kernel process records independently of WMIC/CIM and
+// process.kill(pid, 0). Creation ticks distinguish the original PID generation.
+function windowsFixtureProcessTimes({ pid, parentPid }: FixtureIdentity): (string | null)[] {
+  const script = `
+$ErrorActionPreference = 'Stop'
+foreach ($processId in ${parentPid}, ${pid}) {
+  try { $process = [Diagnostics.Process]::GetProcessById($processId) }
+  catch [ArgumentException] { 'gone'; continue }
+  try {
+    if ($process.HasExited) { 'gone' }
+    else { $process.StartTime.ToUniversalTime().Ticks.ToString() }
+  } finally { $process.Dispose() }
+}
+`
+  const powershell = join(windowsRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const output = execFileSync(powershell, [
+    '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'),
+  ], { encoding: 'utf8', env: fixtureEnv, windowsHide: true, timeout: 6_000 })
+  const records = output.trim().split(/\r?\n/)
+  assert.equal(records.length, 2, 'Windows process observer must return both records')
+  return records.map(record => {
+    if (record === 'gone') return null
+    assert.match(record, /^\d+$/, 'Windows process observer must report creation ticks')
+    return record
+  })
+}
+
+function fixtureStderr(root: string, parentStderr: string): { parentStderr: string; grandchildStderr: string } {
+  const sanitize = (value: string) => value.replaceAll(root, '<fixture>').replaceAll(process.execPath, '<node>')
+    .replace(/[^\x20-\x7e\r\n]/g, '').trim().slice(0, 500)
+  const file = join(root, 'grandchild.stderr')
+  return {
+    parentStderr: sanitize(parentStderr),
+    grandchildStderr: existsSync(file) ? sanitize(readFileSync(file, 'utf8')) : '',
+  }
+}
+
+async function checkFixtureWithoutBabel(t: TestContext, detached: boolean): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), 'babel-w08-fixture-'))
+  writeFixture(root, detached, false)
+  const parent = spawn(process.execPath, ['parent.mjs'], {
+    cwd: root, env: fixtureEnv, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
+  })
+  const exited = new Promise<number | null>((resolve, reject) => {
+    parent.once('close', resolve)
+    parent.once('error', reject)
+  })
+  void exited.catch(() => {})
+  let stderr = ''
+  parent.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk })
+  let identity: FixtureIdentity | undefined
+  let before: (string | null)[] | undefined
+  let after: (string | null)[] | undefined
+  try {
+    identity = await waitFor(() => readFixtureIdentity(root, 'ready'), 'fixture grandchild never reported ready')
+    assert.equal(identity.parentPid, parent.pid)
+    before = windows ? windowsFixtureProcessTimes(identity) : undefined
+    if (windows) assert.ok(before?.every(Boolean), 'both fixture processes must be present before parent exit')
+    await confirmFixtureReply(root, 'startup', identity)
+    writeFileSync(join(root, 'exit-parent'), '')
+    assert.equal(await exited, 0, 'fixture parent must exit normally')
+    if (windows) {
+      after = windowsFixtureProcessTimes(identity)
+      assert.deepEqual(after, [null, detached ? before![1] : null])
     }
-  },
-);
+    // A reply to a new request after parent exit is the no-cleanup control.
+    if (detached) await confirmFixtureReply(root, 'survived', identity)
+  } finally {
+    t.diagnostic(JSON.stringify({ detached, identity, before, after, parentExitCode: parent.exitCode, ...fixtureStderr(root, stderr) }))
+    writeFileSync(join(root, 'stop'), '')
+    await exited
+    if (windows && identity && before?.[1]) {
+      const owned = identity
+      await waitFor(() => windowsFixtureProcessTimes(owned)[1] !== before![1] ? true : undefined,
+        'owned control grandchild did not stop')
+    } else if (!windows && identity) {
+      await waitFor(() => readFixtureIdentity(root, 'stopped'), 'owned control grandchild did not stop')
+    }
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+test('generated descendant fixture publishes its grandchild pid', async t => {
+  if (windows) await checkFixtureWithoutBabel(t, false)
+  await checkFixtureWithoutBabel(t, true)
+})
+
+function refuseWindowsCensus(t: TestContext): void {
+  const launch = childProcess.spawn
+  t.mock.method(childProcess, 'spawn', (file: string, args: readonly string[], options: SpawnOptions) => {
+    const executable = basename(file).toLowerCase()
+    if (executable === 'wmic.exe' || executable === 'powershell.exe') {
+      return launch(process.execPath, ['-e', 'process.exit(7)'], options)
+    }
+    return launch(file, args, options)
+  })
+  syncBuiltinESMExports()
+}
+
+test('Windows cancel path observes a grandchild that the leader-only probe cannot see', {
+  skip: !windows ? 'Windows-only descendant fixture' : false,
+}, async t => {
+  for (const mode of ['cancel', 'timeout', 'unavailable census'] as const) {
+    await t.test(mode, async subtest => {
+      const root = mkdtempSync(join(tmpdir(), 'babel-w08-win-tree-'))
+      const owner = `windows-grandchild-${mode}`
+      // The detached fixture holds the real supervisor's output pipe open after
+      // its parent exits. The command stays pending until the grandchild exits.
+      writeFixture(root, true, true)
+      const controller = new AbortController()
+      const witness = new ProcessWitness()
+      let identity: FixtureIdentity | undefined
+      let parentExitCode: number | null | undefined
+      let parentPid: number | undefined
+      let atDeadline: (string | null)[] | undefined
+      let deadlineObservationError: unknown
+      const recordStart = witness.started.bind(witness)
+      witness.started = (input, id, pid) => {
+        parentPid = pid
+        recordStart(input, id, pid)
+      }
+      const recordExit = witness.exited.bind(witness)
+      witness.exited = (input, id, exit) => {
+        parentExitCode = exit.exitCode
+        recordExit(input, id, exit)
+      }
+      const recordTimeout = witness.timeout.bind(witness)
+      witness.timeout = (input, id) => {
+        recordTimeout(input, id)
+        // The actual deadline has fired, but the supervisor has yet to start its census.
+        try { if (identity) atDeadline = windowsFixtureProcessTimes(identity) }
+        catch (error) { deadlineObservationError = error }
+      }
+      const pending = spawnCommandAsync(process.execPath, ['parent.mjs'], {
+        cwd: root, env: fixtureEnv, signal: controller.signal, timeoutMs: mode === 'timeout' ? 10_000 : 0,
+        processWitness: witness, processContext: { sessionId: owner },
+      })
+      let result: Awaited<typeof pending> | undefined
+      void pending.then(value => { result = value })
+      let before: (string | null)[] | undefined
+      let after: (string | null)[] | undefined
+      let terminationError: unknown
+      try {
+        identity = await waitFor(() => readFixtureIdentity(root, 'ready'), 'fixture grandchild never reported ready')
+        assert.equal(identity.parentPid, parentPid, 'fixture grandchild must belong to the supervised parent')
+        const initial = windowsFixtureProcessTimes(identity)
+        assert.ok(initial.every(Boolean), 'both fixture processes must be present before parent exit')
+        await confirmFixtureReply(root, 'startup', identity)
+        if (mode === 'unavailable census') {
+          // Keep the leader alive so real taskkill can succeed even when each
+          // census executable fails. Taskkill alone cannot certify the tree.
+          before = initial
+          refuseWindowsCensus(subtest)
+        } else {
+          writeFileSync(join(root, 'exit-parent'), '')
+          const owned = identity
+          before = await waitFor(() => {
+            const records = windowsFixtureProcessTimes(owned)
+            return records[0] === null ? records : undefined
+          }, 'fixture parent did not exit')
+          assert.deepEqual(before, [null, initial[1]], 'the same grandchild must outlive its parent')
+        }
+        assert.equal(result, undefined, 'the real supervisor must still own the pending command')
+        if (mode !== 'timeout') controller.abort()
+        const completed = await waitFor(() => result, `${mode} did not return`, 35_000)
+        assert.equal(completed.aborted, mode !== 'timeout')
+        assert.equal(completed.timedOut, mode === 'timeout')
+        assert.equal(completed.processStarted, true)
+        assert.ok(completed.termination, 'the real supervisor must expose settlement')
+        try { await completed.termination } catch (error) { terminationError = error }
+        after = windowsFixtureProcessTimes(identity)
+        if (mode === 'timeout') {
+          assert.ifError(deadlineObservationError)
+          assert.deepEqual(atDeadline, before, 'the same grandchild must be alive at the actual deadline')
+        }
+        if (mode === 'unavailable census') {
+          assert.match(String(terminationError), /census.*unavailable/i)
+        } else {
+          assert.notEqual(after[1], before[1], 'the owned grandchild must be gone before test teardown')
+          assert.ifError(terminationError)
+          assert.equal(parentExitCode, 0)
+          assert.match(completed.error?.message ?? '', mode === 'timeout' ? /ETIMEDOUT/ : /aborted/)
+        }
+      } finally {
+        subtest.mock.restoreAll()
+        syncBuiltinESMExports()
+        // Only these fixtures read their private stop file. Never signal a PID
+        // from a stale fixture record, and never intervene before observation.
+        try {
+          if (after === undefined && identity) after = windowsFixtureProcessTimes(identity)
+        } finally {
+          writeFileSync(join(root, 'stop'), '')
+          await pending
+          try { await awaitPendingProcessTerminations(owner) } catch { /* observed above */ }
+          subtest.diagnostic(JSON.stringify({ mode, identity, before, atDeadline, after, parentExitCode,
+            termination: terminationError instanceof Error ? terminationError.message.replaceAll(process.execPath, '<node>') : undefined,
+            ...fixtureStderr(root, result?.stderr ?? '') }))
+          rmSync(root, { recursive: true, force: true })
+        }
+      }
+    })
+  }
+})
