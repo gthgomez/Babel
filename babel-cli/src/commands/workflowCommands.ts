@@ -96,7 +96,7 @@ import { writeTextRunPrelude } from '../ui/runPrelude.js';
 import { runCliChatTask } from '../interactive/execution/chatCore.js';
 import type { ChatStreamEvent } from '../interactive/execution/chatEventDispatch.js';
 import { runAskAnswerPath } from '../services/askAnswer.js';
-import { buildRecoveryAssessment, formatRecoveryAssessmentHuman } from '../services/recovery.js';
+import { buildRecoveryAssessment, buildRunFailureRecoveryPayload, formatRecoveryAssessmentHuman } from '../services/recovery.js';
 import {
   buildLiteContinueAssessment,
   formatLiteContinueAssessmentHuman,
@@ -554,10 +554,8 @@ function buildRunCommandFailurePayload(input: {
   message: string;
   project?: string | undefined;
 }): Record<string, unknown> {
-  const recovery = buildRecoveryAssessment({
-    run: 'latest',
-    ...(input.project !== undefined ? { project: input.project } : {}),
-  });
+  const { assessment: recovery, block: recoveryBlock } =
+    buildRunFailureRecoveryPayload(input.project !== undefined ? { project: input.project } : {});
   const executionReport =
     recovery.available_artifacts.find((artifact) => artifact.key === 'execution_report')?.path ??
     null;
@@ -571,20 +569,7 @@ function buildRunCommandFailurePayload(input: {
       status: input.status,
       condition: input.message,
     }),
-    recovery: {
-      status: recovery.status,
-      classification: recovery.classification,
-      retryable: recovery.retryable,
-      reason: recovery.reason,
-      next_action: recovery.next_action,
-      next_command: recovery.next_command,
-      run_dir: recovery.run_dir,
-      available_artifacts: recovery.available_artifacts,
-      missing_artifacts: recovery.missing_artifacts,
-      terminal_outcome: recovery.terminal_outcome ?? null,
-      user_status: recovery.user_status,
-      exit_code: recovery.exit_code,
-    },
+    recovery: recoveryBlock,
   };
   if (
     recovery.status === 'CONTINUE_READY' &&

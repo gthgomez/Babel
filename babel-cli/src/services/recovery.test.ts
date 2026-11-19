@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { buildRecoveryAssessment, formatRecoveryAssessmentHuman, buildRecoverySummary, resolveRecoveryRunDir } from './recovery.js';
+import { buildRecoveryAssessment, buildRecoverySummary, buildRunFailureRecoveryPayload, formatRecoveryAssessmentHuman, resolveRecoveryRunDir } from './recovery.js';
 import { resumeExecution } from './resumeExecution.js';
 
 const originalFetch = globalThis.fetch;
@@ -585,6 +585,68 @@ test('exported recovery summary resolution never crosses projects for scoped lat
 
     // Explicit references are untouched by the scoped guard.
     assert.equal(resolveRecoveryRunDir(myRun, { project: 'my-project', runsDir: root }), myRun);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('run failure recovery payload carries durable terminal truth and project scope', () => {
+  const root = makeRoot();
+  try {
+    const runDir = makeRun(root, '20260601_060606_failed_run');
+    writeJson(join(runDir, 'terminal_status_summary.json'), {
+      schema_version: 1,
+      artifact_type: 'babel_terminal_status_summary',
+      status: 'FAILED',
+      terminal_outcome: 'AGENT_FAILURE',
+      reason_category: 'agent_failure',
+      failed_command: null,
+      changed_files: [],
+      change_disposition: 'none',
+      rollback_mode: 'none',
+      failure_capsule_path: null,
+      next_recommended_operator_action: 'Inspect the run evidence.',
+      parseable_json_stdout_required: true,
+      attempt_safety_summary_path: null,
+      repair_attempt_timeline_path: null,
+      condition_summary: null,
+      verifier_contract: null,
+    });
+    writeJson(join(runDir, '04_execution_report.json'), {
+      status: 'EXECUTION_HALTED',
+      tool_call_log: [],
+    });
+    writeJson(join(root, '.latest.json'), {
+      run_dir: runDir,
+      project: 'other-project',
+      created_at: '2026-06-01T06:06:06.000Z',
+    });
+
+    // RT-09/RT-10: the failure card's recovery block is the one durable
+    // terminal truth — the extracted construction keeps every assessment
+    // field plus terminal_outcome/user_status/exit_code.
+    const unscoped = buildRunFailureRecoveryPayload({ runsDir: root });
+    assert.equal(unscoped.assessment.status, 'CONTINUE_READY');
+    assert.equal(unscoped.assessment.run_dir, runDir);
+    assert.equal(unscoped.block['status'], 'CONTINUE_READY');
+    assert.equal(unscoped.block['classification'], unscoped.assessment.classification);
+    assert.equal(unscoped.block['retryable'], unscoped.assessment.retryable);
+    assert.equal(unscoped.block['reason'], unscoped.assessment.reason);
+    assert.equal(unscoped.block['next_action'], unscoped.assessment.next_action);
+    assert.equal(unscoped.block['next_command'], unscoped.assessment.next_command);
+    assert.equal(unscoped.block['run_dir'], runDir);
+    assert.equal(unscoped.block['available_artifacts'], unscoped.assessment.available_artifacts);
+    assert.equal(unscoped.block['missing_artifacts'], unscoped.assessment.missing_artifacts);
+    assert.equal(unscoped.block['terminal_outcome'], 'AGENT_FAILURE');
+    assert.equal(unscoped.block['user_status'], 'failed');
+    assert.equal(unscoped.block['exit_code'], 1);
+
+    // UX-09: a project-scoped latest never adopts another project's pointer.
+    const scoped = buildRunFailureRecoveryPayload({ project: 'my-project', runsDir: root });
+    assert.equal(scoped.assessment.status, 'NO_LATEST_RUN');
+    assert.equal(scoped.block['run_dir'], null);
+    assert.equal(scoped.block['terminal_outcome'], null);
+    assert.equal(scoped.block['exit_code'], null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

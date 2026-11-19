@@ -613,6 +613,43 @@ export function buildRecoveryAssessment(
   };
 }
 
+/**
+ * Recovery block for run-command failure payload cards (RT-09/RT-10).
+ *
+ * Owns the W03 additions that used to live inline in
+ * `commands/workflowCommands.ts`: a project-scoped `latest` resolution
+ * (UX-09 — a scoped request never adopts another project's run) and the one
+ * durable terminal truth on the card (`terminal_outcome`, `user_status`,
+ * `exit_code`). Extracted so the over-budget run-command file does not grow.
+ */
+export function buildRunFailureRecoveryPayload(
+  options: RecoveryRunReferenceOptions = {},
+): {
+  assessment: RecoveryAssessment;
+  block: Record<string, unknown>;
+} {
+  const assessment = buildRecoveryAssessment({
+    run: 'latest',
+    ...(options.project !== undefined ? { project: options.project } : {}),
+    ...(options.runsDir !== undefined ? { runsDir: options.runsDir } : {}),
+  });
+  const block: Record<string, unknown> = {
+    status: assessment.status,
+    classification: assessment.classification,
+    retryable: assessment.retryable,
+    reason: assessment.reason,
+    next_action: assessment.next_action,
+    next_command: assessment.next_command,
+    run_dir: assessment.run_dir,
+    available_artifacts: assessment.available_artifacts,
+    missing_artifacts: assessment.missing_artifacts,
+    terminal_outcome: assessment.terminal_outcome ?? null,
+    user_status: assessment.user_status,
+    exit_code: assessment.exit_code,
+  };
+  return { assessment, block };
+}
+
 export function formatRecoveryAssessmentHuman(assessment: RecoveryAssessment): string {
   const lines = ['Babel Continue', `Status: ${assessment.status}`];
   if (assessment.run_dir) {
