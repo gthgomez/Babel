@@ -13,6 +13,7 @@ import { TurnRoutingReceiptLog } from './turnRoutingReceipt.js'
 import { ChatTurnTelemetryCollector } from './chatTurnTelemetry.js'
 import { buildTaskContractV1, freezeTaskContract } from './taskContract.js'
 import { createCriterionCompletionServiceV1 } from '../authority/criterionCompletion.js'
+import { chatFinalRevisionRequiredForChat } from '../authority/finalRevision.js'
 import { createExecutorKernel } from '../executor/kernel.js'
 import {
   cancelChatStream,
@@ -1116,4 +1117,34 @@ test('a stale witness with no attributable path still discloses the stale banner
   if (event.type !== 'done') return
   assert.equal(event.outcome, 'UNVERIFIED_PATCH')
   assert.match(event.answer, /workspace bytes could not be attributed/)
+})
+
+test('engine-adjudicated text-only no-change and byte-witness no-change remain disjoint', t => {
+  const input = terminalInput(t)
+  const root = input.snapshot.context.engineRunDir
+  input.snapshot.outcome.readOnly = true
+  input.snapshot.outcome.hasMutation = false
+  input.snapshot.context.acceptedOperation = 'READ_ONLY'
+  input.snapshot.context.options.task = 'Explain this file without changing it.'
+  input.snapshot.evidence.observability.toolCallLog = [
+    { tool: 'write_file', target: 'fixture.txt', detail: 'hard-plan-mode', error: 'blocked', index: 0, exit_code: 1 },
+  ]
+  const kernel = createExecutorKernel('chat')
+  input.effects.decideCompletion = (requested, hasMutation, finalRevision) => kernel.completion.decide({
+    mode: 'chat',
+    requestedOutcome: requested,
+    hasWrite: hasMutation,
+    verificationPolicy: 'required',
+    finalRevisionRequired: chatFinalRevisionRequiredForChat({
+      projectRoot: root,
+      ambientReadOnly: false,
+      toolCallLog: input.snapshot.evidence.observability.toolCallLog,
+    }),
+    toolCallLog: input.snapshot.evidence.observability.toolCallLog,
+    ...(finalRevision ? { finalRevision } : {}),
+  })
+  const event = completeChatStream(input, 'The file is a fixture and needs no change.')
+  assert.equal(event.type, 'done')
+  if (event.type !== 'done') return
+  assert.equal(event.outcome, 'NO_CHANGE_REQUIRED')
 })
