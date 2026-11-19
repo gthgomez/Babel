@@ -13,6 +13,7 @@ import {assertLinuxPackagingTools} from './lib/linux-package-preflight.mjs';
 import {installCanvasPlatformBinding} from '../../babel-cli/scripts/research-v2-canvas-platform-binding.mjs';
 import {isAllowlistedCanvasVendorNativeArtifact} from '../../babel-cli/scripts/research-v2-canvas-vendor-allowlist.mjs';
 import {containsPersonalBuildPath} from './lib/linux-package-paths.mjs';
+import {verifyCliCandidate} from './lib/cli-candidate.mjs';
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(desktop, '..');
@@ -65,7 +66,19 @@ command(process.execPath, [join(desktop, 'scripts', 'build.mjs')], repo, {captur
 const cliSource = join(repo, 'babel-cli');
 command(process.execPath, [npmCli, 'run', 'build'], cliSource, {capture: false, timeout: 600000});
 command(process.execPath, [join(cliSource, 'scripts', 'stage_runtime_assets.mjs')], repo, {capture: false, timeout: 300000});
-const pack = JSON.parse(command(process.execPath, [npmCli, 'pack', '--ignore-scripts', '--json', '--pack-destination', output], cliSource))[0];
+// Release promotion passes the exact npm-qualified candidate so the GitHub
+// tarball and the npm tarball cannot drift; a contributor build packs locally.
+const cliCandidate = option('cli-archive');
+let pack;
+if (cliCandidate) {
+  const sourcePackage = JSON.parse(readFileSync(join(cliSource, 'package.json'), 'utf8'));
+  const verified = verifyCliCandidate({archive: resolve(cliCandidate), expectedName: sourcePackage.name, expectedVersion: sourcePackage.version, tarCommand: 'tar'});
+  cpSync(verified.archive, join(output, verified.filename));
+  pack = {filename: verified.filename, version: verified.version};
+  console.log(`Embedding qualified CLI candidate ${verified.filename} (${verified.sha256})`);
+} else {
+  pack = JSON.parse(command(process.execPath, [npmCli, 'pack', '--ignore-scripts', '--json', '--pack-destination', output], cliSource))[0];
+}
 mkdirSync(bundle);
 command('unzip', ['-q', electronArchive, '-d', bundle], repo, {capture: false, timeout: 300000});
 if (readFileSync(join(bundle, 'version'), 'utf8').trim() !== electronVersion) throw new Error('Verified Electron archive has an unexpected runtime version');
