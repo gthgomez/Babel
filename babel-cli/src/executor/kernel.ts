@@ -37,8 +37,19 @@ import {
   type ModePolicy,
   modePolicyFor,
 } from "./contracts.js";
+import {
+  FINAL_REVISION_CONTRACT_VERSION,
+  type FinalRevisionWitnessV1,
+} from "../authority/finalRevision.js";
 
 export type { ExecutorCompletionInput };
+
+/** Kernel input for the shared final-revision (`final-revision-v1`) decision. */
+export interface FinalRevisionCompletionInput {
+  /** True when the turn claims the final tree is verified. */
+  verifiedClaim: boolean;
+  finalRevision: FinalRevisionWitnessV1;
+}
 
 /** Shared execution substrate consumed by Chat, Plan, Deep, and protocol adapters. */
 export interface ExecutorKernel {
@@ -48,6 +59,11 @@ export interface ExecutorKernel {
   readonly services: ChatEngineServices;
   readonly completion: {
     decide(input: ExecutorCompletionInput): CompletionDecision;
+    /**
+     * Shared final-revision authority for Chat and Deep. Never promotes a
+     * stale witness to success and never edits or deletes user bytes.
+     */
+    decideFinalRevision(input: FinalRevisionCompletionInput): CompletionDecision;
     evaluateEvidence(input: {
       contract: AcceptanceContract;
       graph: EvidenceGraph;
@@ -143,6 +159,7 @@ function requestToAgentAction(request: ToolCallRequest): AgentAction {
 
 function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
   const evidenceRefs = input.evidenceRefs ?? [];
+  const finalRevision = input.finalRevision ?? undefined;
 
   if (input.mode === "plan" || input.requestedOutcome === "PLAN_COMPLETE") {
     const planCompletion =
@@ -173,6 +190,9 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
 
   const gate = evaluateExecuteCompletionHonesty({
     hasWrite: input.hasWrite,
+    // A checked no-change conclusion is valid evidence only when it is not
+    // claiming a patch; inspectable completion never certifies a mutation.
+    ...(input.requestedOutcome !== 'VERIFIED_COMPLETE' ? { allowInspectedNoChange: true } : {}),
     policy: input.requestedOutcome === 'VERIFIED_COMPLETE' ? 'strict' : input.verificationPolicy,
     ...(input.requestedOutcome === 'VERIFIED_COMPLETE' || input.requiredVerifiers !== undefined
       ? { requiredVerifiers: input.requiredVerifiers ?? [] } : {}),
@@ -187,28 +207,87 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
   });
   const acceptance = input.requestedOutcome === 'VERIFIED_COMPLETE'
     ? evaluateCriterionCompletionV1(input.acceptance) : undefined;
-  const verified = input.proof?.compliant === true && gate.allow && acceptance?.verified === true;
+  const finalRevisionStale = finalRevision?.status === 'stale';
+  const effectUnproven = finalRevision?.reason?.startsWith('effect_unproven') === true;
+  const noChangeRequested = input.requestedOutcome === 'NO_CHANGE_REQUIRED';
+  const noChangeProofRequired = noChangeRequested && input.finalRevisionRequired !== false;
+  const noChangeUnproven = noChangeProofRequired && finalRevision?.status !== 'verified';
+  const verified = input.proof?.compliant === true && gate.allow && acceptance?.verified === true &&
+    !finalRevisionStale && !effectUnproven && !noChangeUnproven;
   const finalOutcome: TerminalOutcome =
     input.requestedOutcome === "VERIFIED_COMPLETE" && verified
       ? "VERIFIED_COMPLETE"
       : input.requestedOutcome === "VERIFIED_COMPLETE"
         ? "UNVERIFIED_PATCH"
-        : input.requestedOutcome;
+        : noChangeUnproven
+          ? "UNVERIFIED_PATCH"
+          : input.requestedOutcome;
+  const finalRevisionReason = noChangeUnproven
+    ? `final_revision_${finalRevision?.status ?? 'unavailable'}:${finalRevision?.reason ?? 'no_current_bytes_proof'}`
+    : "final_revision_stale";
 
   return {
     requestedOutcome: input.requestedOutcome,
     finalOutcome,
-    allowed: input.requestedOutcome !== "VERIFIED_COMPLETE" || verified,
+    allowed: noChangeUnproven || finalRevisionStale
+      ? false
+      : input.requestedOutcome !== "VERIFIED_COMPLETE" || verified,
     reason: verified
       ? "proof_carrying_completion_accepted"
-      : input.requestedOutcome === "VERIFIED_COMPLETE"
+      : effectUnproven
+        ? finalRevision?.reason ?? 'effect_unproven:config_capable_git'
+      : noChangeUnproven || finalRevisionStale
+        ? finalRevisionReason
+        : input.requestedOutcome === "VERIFIED_COMPLETE"
         ? `completion_downgraded:${input.proof && !input.proof.compliant ? "evidence_incomplete" : !gate.allow ? rejectionReason(gate.reason) : `acceptance_${acceptance?.status.toLowerCase() ?? 'unknown'}`}`
         : "non_verified_terminal_preserved",
     ...(input.workspaceRevision
       ? { workspaceRevision: input.workspaceRevision }
       : {}),
+    ...(finalRevision ? { finalRevision } : {}),
+    ...(finalRevision?.stale_paths.length ? { stalePaths: [...finalRevision.stale_paths] } : {}),
     evidenceRefs,
-    policyVersion: EXECUTOR_CONTRACT_VERSION,
+    policyVersion: finalRevision
+      ? `${EXECUTOR_CONTRACT_VERSION}+${FINAL_REVISION_CONTRACT_VERSION}`
+      : EXECUTOR_CONTRACT_VERSION,
+  };
+}
+
+/**
+ * Revision-only decision for a host that has already derived the verifier
+ * obligation. Deep finalization consumes it; Chat no-change publication uses
+ * `decide()` with the same witness. A verified claim needs a verified witness;
+ * every other claim remains explicitly `UNVERIFIED_PATCH` (never certified).
+ */
+function decideFinalRevisionCompletion(
+  input: FinalRevisionCompletionInput,
+): CompletionDecision {
+  const stale = input.finalRevision.status === 'stale';
+  const effectUnproven = input.finalRevision.reason?.startsWith('effect_unproven') === true;
+  const verified = input.finalRevision.status === 'verified';
+  const requestedOutcome: TerminalOutcome = input.verifiedClaim ? 'VERIFIED_COMPLETE' : 'UNVERIFIED_PATCH';
+  const finalOutcome: TerminalOutcome =
+    requestedOutcome === 'VERIFIED_COMPLETE' && verified && !stale
+      ? 'VERIFIED_COMPLETE'
+      : requestedOutcome === 'VERIFIED_COMPLETE'
+        ? 'UNVERIFIED_PATCH'
+        : requestedOutcome;
+  const reason = verified && !stale
+    ? 'final_revision_verified'
+    : effectUnproven
+      ? input.finalRevision.reason ?? 'effect_unproven:config_capable_git'
+      : stale
+        ? `final_revision_stale:${input.finalRevision.reason ?? 'changed_bytes'}`
+        : `final_revision_${input.finalRevision.status}:${input.finalRevision.reason ?? 'unproven'}`;
+  return {
+    requestedOutcome,
+    finalOutcome,
+    allowed: requestedOutcome !== 'VERIFIED_COMPLETE' || (verified && !stale) || effectUnproven,
+    reason,
+    finalRevision: input.finalRevision,
+    ...(input.finalRevision.stale_paths.length ? { stalePaths: [...input.finalRevision.stale_paths] } : {}),
+    evidenceRefs: [],
+    policyVersion: `${EXECUTOR_CONTRACT_VERSION}+${FINAL_REVISION_CONTRACT_VERSION}`,
   };
 }
 
@@ -231,6 +310,7 @@ export function createExecutorKernel(
     services,
     completion: {
       decide: decideCompletion,
+      decideFinalRevision: decideFinalRevisionCompletion,
       evaluateEvidence: evaluateCompletionEvidence,
       evaluateEvidenceSync: evaluateCompletionEvidenceSync,
     },

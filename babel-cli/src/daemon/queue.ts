@@ -15,11 +15,10 @@ import {
 } from '../services/agentJobPipeline.js';
 import { DAEMON_QUEUE_TICK_INTERVAL_MS } from './constants.js';
 import { writeDaemonJobResult, writeDaemonJobTelemetry } from './evidence.js';
-import { isDaemonPipelineQualified } from './pipelineQualification.js';
+import { isDaemonPipelineQualified, DAEMON_PIPELINE_QUARANTINE_MESSAGE } from './pipelineQualification.js';
 import { recommendModel } from './resourceOptimizer.js';
 
-export const DAEMON_PIPELINE_QUARANTINE_MESSAGE =
-  'UNSUPPORTED_OPERATION: Daemon pipeline execution is quarantined pending settlement and recovery qualification.';
+export { DAEMON_PIPELINE_QUARANTINE_MESSAGE };
 
 /**
  * Truthful queue wait: the wall time between the job record's creation and the

@@ -748,6 +748,9 @@ const HOST_PROCESS_SURFACE = new Set([
   'agent/codingLoop/recoveryIdentity.ts',
   // Verifier receipt capture uses bounded fixed-argument Git queries for unborn worktrees.
   'agent/chatEngineVerifierAdapter.ts',
+  // Final-revision witness binds the workspace with a fixed-argument `git rev-parse HEAD` query,
+  // cwd=project root, stdio ignored, bounded 10s timeout, no caller argv.
+  'authority/finalRevision.ts',
   // Process-tree termination uses the fixed System32 taskkill executable on Windows.
   'processTree.ts',
   // Windows descendant settlement resolves taskkill/PowerShell under SystemRoot

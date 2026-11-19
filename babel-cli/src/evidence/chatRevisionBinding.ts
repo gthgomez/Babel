@@ -529,6 +529,10 @@ export function toGateToolLog(
     ...(entry.effect_status !== undefined ? { effect_status: entry.effect_status } : {}),
     ...(entry.effect_scope !== undefined ? { effect_scope: entry.effect_scope } : {}),
     ...(entry.mutation_paths !== undefined ? { mutation_paths: [...entry.mutation_paths] } : {}),
+    ...(entry.read_revision_hash !== undefined ? { read_revision_hash: entry.read_revision_hash } : {}),
+    ...(entry.processExecuted !== undefined ? { processExecuted: entry.processExecuted } : {}),
+    ...(entry.processCompleted !== undefined ? { processCompleted: entry.processCompleted } : {}),
+    ...(entry.simulated !== undefined ? { simulated: entry.simulated } : {}),
   }));
 }
 

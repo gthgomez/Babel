@@ -172,7 +172,11 @@ export function formatRecoveryPlanRejection(state: WorkingState, reason?: string
   if (reason === 'missing_target_read') return 'missing_target_read: inspect each existing concrete edit target through a current authorized read_file/read_range, then reference its exact delivered-window handle. A read does not grant write permission.'
   if (reason === 'ambiguous_observation') return 'ambiguous_observation: this short handle names multiple records; it cannot authorize either reference.'
   if (reason === 'target_outside_failure_scope') return 'target_outside_failure_scope: repair only a target corroborated by the current failing assertion and fresh source read. Rerun the verifier before investigating another failure.'
-  if (reason === 'unsupported_observation') return 'unsupported_observation: copy only the exact current recovery_observation_keys into supportingObservationIds, without duplicates or invented IDs.'
+  if (reason === 'unsupported_observation') {
+    const valid = (state.recoveryGate?.readRecords ?? []).map(record => record.id).slice(-8)
+    return `unsupported_observation: copy only the exact current recovery_observation_keys into supportingObservationIds, without duplicates or invented IDs. ` +
+      `Current valid observation IDs: ${valid.length > 0 ? valid.join(', ') : '(none yet; read the failing assertion and the relevant source after the red verifier)'}.`
+  }
   if (reason === 'repeated_failed_edit' || reason === 'repeated_plan_or_edit') return `${reason}: repeating the same edit or changing hypothesis text does not establish a different repair.`
   return 'Submit a concrete write_file, str_replace or apply_patch with a scoped repair_plan supported by the current recovery_gate_ref and delivered observation IDs. Copy recovery_criterion_id exactly; shell commands and delegation cannot bypass this gate.'
 }

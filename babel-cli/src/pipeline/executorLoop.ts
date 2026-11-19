@@ -2532,10 +2532,7 @@ export async function runExecutorLoop(
       }
     }
 
-    const fileWriteProofHashBefore =
-      req.tool === 'file_write'
-        ? hashProjectFileForEvidence(getExecutorProjectRoot(), String(req.path ?? ''))
-        : null;
+    const fileWriteProofHashBefore = req.tool === 'file_write' ? hashProjectFileForEvidence(getExecutorProjectRoot(), String(req.path ?? '')) : null;
     throwIfRunAborted();
     const fastPathToolResult = maybeHandleNewFilePreflightFastPath(req, approvedPlan);
     if (fastPathToolResult) {
@@ -2563,6 +2560,12 @@ export async function runExecutorLoop(
       ...(toolResult.directory_page ? { directory_page: toolResult.directory_page } : {}),
       ...(toolResult.glob_result ? { glob_result: toolResult.glob_result } : {}),
       verified: toolResult.exit_code === 0,
+      ...(toolResult.simulated === true ? { simulated: true as const } : {}),
+      ...(toolResult.process_started !== undefined ? { processExecuted: toolResult.process_started } : {}),
+      ...(toolResult.process_termination !== undefined
+        ? { processCompleted: toolResult.process_termination === 'exited' }
+        : {}),
+      ...(req.tool === 'file_read' ? { read_revision_hash: hashProjectFileForEvidence(getExecutorProjectRoot(), String(req.path ?? '')) ?? '' } : {}),
     };
     appendExecutorToolLog(toolCallLog, entry, episodeSink);
 

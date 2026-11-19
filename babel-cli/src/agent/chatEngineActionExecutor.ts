@@ -4,6 +4,7 @@ import { failedVerifierContextKey } from './codingLoop/failedVerifierExecution.j
 import { attestedFailedVerifierExecution, matchesFailedVerifierReplay } from './codingLoop/failedVerifierExecution.js';
 import { formatRecoveryReadReference } from './codingLoop/workingState.js';
 import { resolveClassCGateDecision } from "./autonomyEnforcement.js";
+import { hashFinalRevisionFile } from '../authority/finalRevision.js';
 import {requireProjectRoot,denyConversationAction} from './chatToolScopeAdmission.js';
 import { evaluatePlanThenExecuteGate } from "./planThenExecute.js";
 import { evaluateHardPlanModeGate } from "./planExecuteMode.js";
@@ -684,6 +685,8 @@ export class ChatEngineActionExecutor {
         this.host.workingState.recoveryGate?.binding && sameRecoveryBinding(recoveryReadBindingBefore, this.host.workingState.recoveryGate.binding) &&
         !this.host.workingState.recoveryGate.readRecords?.slice(-8).some(record => record.tool === 'read_file' && record.target === recoveryReadTarget);
       let fileReadCacheHash: string | undefined;
+      /** Bytes the model was shown for a read-only inspection (`final-revision-v1`). */
+      let readRevisionHash: string | undefined;
       if (action.type === "read_file" || action.type === "read_range") {
         const requestedPath =
           action.type === "read_file" ? action.path : action.file_path;
@@ -743,6 +746,8 @@ export class ChatEngineActionExecutor {
           };
         }
         fileReadCacheHash = await this.host.hashFilePath(action.path);
+        // The published witness binds raw bytes, not the cache's text digest.
+        readRevisionHash = hashFinalRevisionFile(requireProjectRoot(this.host.options), action.path) ?? undefined;
         // R0-8: hashing is a suspension point; a superseded submission must not
         // append its read result (or advance its caches) for the new task.
         if (!this.host.isSubmissionCurrent(ownerGeneration)) {
@@ -773,6 +778,7 @@ export class ChatEngineActionExecutor {
             detail: "cached",
             index: meta.index,
             exit_code: 0,
+            ...(readRevisionHash ? { read_revision_hash: readRevisionHash } : {}),
           });
           callbacks?.onToolComplete?.(toolId, "cached", undefined, 0);
           return {
@@ -1626,6 +1632,10 @@ export class ChatEngineActionExecutor {
             lastResult.process_termination === 'exited',
         } : {}),
         ...(verifierSemanticSignature ? { verifierSemanticSignature } : {}),
+        ...(readRevisionHash && !result.policyBlocked && result.results.length > 0 &&
+          result.results.every(entry => entry.exit_code === 0 && !entry.denial) && !toolError
+          ? { read_revision_hash: readRevisionHash }
+          : {}),
         detail,
         index: meta.index,
         ...((action.type === 'run_command' || action.type === 'test_run') ? {
@@ -1638,6 +1648,7 @@ export class ChatEngineActionExecutor {
               exit_code: lastResult.exit_code,
               stdout: lastResult.stdout,
               stderr: lastResult.stderr,
+              ...(lastResult.simulated === true ? { simulated: true as const } : {}),
             }
           : {}),
         ...(toolError ? { error: toolError } : {}),

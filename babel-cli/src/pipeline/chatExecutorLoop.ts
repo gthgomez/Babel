@@ -21,6 +21,7 @@ import { createRunControl } from '../runtime/run-control.js';
 import { verifyChatCreatedOutputs } from './chatCompletion.js';
 import { getRequestedTargetContract } from '../stages/taskShape.js';
 import { createExecutorKernel } from '../executor/kernel.js';
+import { hashFinalRevisionFile } from '../authority/finalRevision.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -127,6 +128,12 @@ export async function runChatExecutorLoop(
       return finish(`Step ${step.step} (${step.tool} ${step.target}) is not supported by the Chat executor.`, step.step);
     }
 
+    // Bind the bytes this inspection will deliver so a later external save can
+    // invalidate a no-change conclusion (`final-revision-v1`).
+    const readRevisionHash = request.tool === 'file_read'
+      ? hashFinalRevisionFile(toolContext.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? BABEL_ROOT, String(request.path ?? ''))
+      : undefined;
+
     let result: ToolResult;
     // A tool may block on an operator approval dialog. Cancellation must settle
     // the loop even while that dialog is still pending; the tool re-checks its
@@ -178,6 +185,12 @@ export async function runChatExecutorLoop(
       stderr: result.stderr,
       verified: result.exit_code === 0,
       ...(result.denial ? { denial: result.denial } : {}),
+      ...(readRevisionHash && result.exit_code === 0 ? { read_revision_hash: readRevisionHash } : {}),
+      ...(result.simulated === true ? { simulated: true as const } : {}),
+      ...(result.process_started !== undefined ? { processExecuted: result.process_started } : {}),
+      ...(result.process_termination !== undefined
+        ? { processCompleted: result.process_termination === 'exited' }
+        : {}),
     };
     toolCallLog.push(entry);
 
