@@ -45,6 +45,16 @@ export interface WindowsSettlementOptions {
 }
 
 const MAX_CENSUS_OUTPUT_BYTES = 64 * 1024;
+let lastWindowsCensusFailure = '';
+
+/** Last census failure detail, for diagnostics when the probe returns null. */
+export function getLastWindowsCensusFailure(): string {
+  return lastWindowsCensusFailure;
+}
+
+function recordCensusFailure(message: string): void {
+  lastWindowsCensusFailure = message;
+}
 
 export interface WindowsProcessRow {
   processId: number;
@@ -119,17 +129,20 @@ function listViaWmic(rootPid: number, timeoutMs: number): number[] | null {
   return rows ? descendantPidsFromRows(rootPid, rows) : null;
 }
 
+interface AsyncTableResult { stdout: string | null; stderr: string }
+
 /** Bounded async process-table capture used by the observation phase. */
-async function runWindowsTableAsync(executable: string, args: string[], timeoutMs: number): Promise<string | null> {
+async function runWindowsTableAsync(executable: string, args: string[], timeoutMs: number): Promise<AsyncTableResult> {
   return new Promise((resolveResult) => {
     let stdout = '';
+    let stderr = '';
     let settled = false;
-    const child = spawn(executable, args, { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'ignore'], env: getSafeEnv() });
+    const child = spawn(executable, args, { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: getSafeEnv() });
     const finish = (value: string | null): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolveResult(value);
+      resolveResult({ stdout: value, stderr });
     };
     const timer = setTimeout(() => {
       try { child.kill('SIGKILL'); } catch { /* best effort */ }
@@ -143,7 +156,11 @@ async function runWindowsTableAsync(executable: string, args: string[], timeoutM
         finish(null);
       }
     });
-    child.once('error', () => finish(null));
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk: string) => {
+      if (stderr.length < 4_000) stderr += chunk;
+    });
+    child.once('error', (error) => { stderr += String(error); finish(null); });
     child.once('exit', (code) => finish(code === 0 ? stdout : null));
   });
 }
@@ -152,26 +169,45 @@ async function runWindowsTableAsync(executable: string, args: string[], timeoutM
 export async function startWindowsDescendantObservation(rootPid: number, timeoutMs = 20_000): Promise<number[] | null> {
   if (process.platform !== 'win32' || !Number.isSafeInteger(rootPid) || rootPid <= 0) return [];
   const startedAt = Date.now();
+  const errors: string[] = [];
   const systemRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows';
   const wmic = resolve(systemRoot, 'System32', 'wbem', 'wmic.exe');
   const fast = await runWindowsTableAsync(wmic, ['process', 'get', 'ProcessId,ParentProcessId', '/format:csv'], Math.min(5_000, timeoutMs));
-  if (fast !== null) {
-    const fastRows = parseWmicProcessRows(fast);
+  if (fast.stdout !== null) {
+    const fastRows = parseWmicProcessRows(fast.stdout);
     if (fastRows) return descendantPidsFromRows(rootPid, fastRows);
-  }
+  } else if (fast.stderr) errors.push(`wmic: ${fast.stderr.trim()}`);
   const remaining = Math.max(250, timeoutMs - (Date.now() - startedAt));
-  const script = [
+  const cimScript = [
     '$ErrorActionPreference = "Stop";',
+    '$env:PSModulePath = [IO.Path]::Combine($PSHOME, "Modules");',
     'Get-CimInstance -ClassName Win32_Process | ForEach-Object { "$($_.ParentProcessId),$($_.ProcessId)" }',
   ].join(' ');
-  const table = await runWindowsTableAsync(
+  const cim = await runWindowsTableAsync(
     powershellExecutable(),
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', cimScript],
     remaining,
   );
-  if (table === null) return null;
-  const rows = parseWmicProcessRows(table);
-  return rows ? descendantPidsFromRows(rootPid, rows) : null;
+  if (cim.stdout !== null) {
+    const rows = parseWmicProcessRows(cim.stdout);
+    if (rows) return descendantPidsFromRows(rootPid, rows);
+  } else if (cim.stderr) errors.push(`cim: ${cim.stderr.trim()}`);
+  const wmiScript = [
+    '$ErrorActionPreference = "Stop";',
+    '$env:PSModulePath = [IO.Path]::Combine($PSHOME, "Modules");',
+    'Get-WmiObject -Class Win32_Process | ForEach-Object { "$($_.ParentProcessId),$($_.ProcessId)" }',
+  ].join(' ');
+  const wmi = await runWindowsTableAsync(
+    powershellExecutable(),
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', wmiScript],
+    Math.max(250, timeoutMs - (Date.now() - startedAt)),
+  );
+  if (wmi.stdout !== null) {
+    const rows = parseWmicProcessRows(wmi.stdout);
+    if (rows) return descendantPidsFromRows(rootPid, rows);
+  } else if (wmi.stderr) errors.push(`wmi: ${wmi.stderr.trim()}`);
+  recordCensusFailure(errors.join(' | ') || 'census produced no process rows');
+  return null;
 }
 
 function powershellExecutable(): string {
@@ -180,37 +216,51 @@ function powershellExecutable(): string {
 }
 
 /**
- * Enumerate every descendant of `rootPid` in one CIM snapshot.
- * Returns null when the probe cannot run or its output is not a complete list.
+ * Synchronous descendant enumeration for the direct settlement API. Uses WMIC
+ * when present, then one full CIM snapshot, then the legacy WMI cmdlet. Records
+ * the mechanism error for diagnostics instead of returning a silent null.
  */
 export function listWindowsDescendantPids(rootPid: number, timeoutMs = 15_000): number[] | null {
   if (process.platform !== 'win32' || !Number.isSafeInteger(rootPid) || rootPid <= 0) return null;
   const startedAt = Date.now();
+  const errors: string[] = [];
   const fast = listViaWmic(rootPid, timeoutMs);
   if (fast !== null) return fast;
-  timeoutMs = Math.max(250, timeoutMs - (Date.now() - startedAt));
-  // One CIM round-trip for the whole table, then walk it in memory. Per-parent
-  // filtered queries cost one CIM call per level and can exceed the observation
-  // budget on hosted Windows.
-  const script = [
+  const remaining = () => Math.max(250, timeoutMs - (Date.now() - startedAt));
+  const run = (script: string): number[] | null => {
+    const result = spawnSync(
+      powershellExecutable(),
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      {
+        encoding: 'utf8',
+        timeout: remaining(),
+        maxBuffer: MAX_CENSUS_OUTPUT_BYTES,
+        windowsHide: true,
+        shell: false,
+        env: getSafeEnv(),
+      },
+    );
+    if (result.error || result.status !== 0) {
+      if (result.stderr) errors.push(String(result.stderr).trim());
+      return null;
+    }
+    const rows = parseWmicProcessRows(result.stdout ?? '');
+    return rows ? descendantPidsFromRows(rootPid, rows) : null;
+  };
+  const cim = run([
     '$ErrorActionPreference = "Stop";',
+    '$env:PSModulePath = [IO.Path]::Combine($PSHOME, "Modules");',
     'Get-CimInstance -ClassName Win32_Process | ForEach-Object { "$($_.ParentProcessId),$($_.ProcessId)" }',
-  ].join(' ');
-  const result = spawnSync(
-    powershellExecutable(),
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
-    {
-      encoding: 'utf8',
-      timeout: Math.max(250, timeoutMs),
-      maxBuffer: MAX_CENSUS_OUTPUT_BYTES,
-      windowsHide: true,
-      shell: false,
-      env: getSafeEnv(),
-    },
-  );
-  if (result.error || result.status !== 0) return null;
-  const rows = parseWmicProcessRows(result.stdout ?? '');
-  return rows ? descendantPidsFromRows(rootPid, rows) : null;
+  ].join(' '));
+  if (cim !== null) return cim;
+  const wmi = run([
+    '$ErrorActionPreference = "Stop";',
+    '$env:PSModulePath = [IO.Path]::Combine($PSHOME, "Modules");',
+    'Get-WmiObject -Class Win32_Process | ForEach-Object { "$($_.ParentProcessId),$($_.ProcessId)" }',
+  ].join(' '));
+  if (wmi !== null) return wmi;
+  recordCensusFailure(errors.join(' | ') || 'census produced no process rows');
+  return null;
 }
 
 function killWindowsProcessTree(pid: number): boolean {

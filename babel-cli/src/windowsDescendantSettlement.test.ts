@@ -17,6 +17,7 @@ import test from 'node:test';
 import {
   descendantPidsFromRows,
   confirmWindowsDescendants,
+  getLastWindowsCensusFailure,
   listWindowsDescendantPids,
   observeWindowsDescendants,
   parseWmicProcessRows,
@@ -29,9 +30,12 @@ function buildParentFixture(root: string, grandchildPidFile: string): string {
   return `import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
-child.unref();
-writeFileSync(${JSON.stringify(grandchildPidFile)}, String(child.pid));
-process.exit(0);
+child.once('spawn', () => {
+  writeFileSync(${JSON.stringify(grandchildPidFile)}, String(child.pid));
+  child.unref();
+  process.exit(0);
+});
+child.once('error', () => process.exit(1));
 `;
 }
 
@@ -198,7 +202,14 @@ test('generated descendant fixture publishes its grandchild pid', async () => {
     assert.equal(existsSync(grandchildPidFile), true, stderr.join(''));
     grandchildPid = Number(readFileSync(grandchildPidFile, 'utf8'));
     assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0);
-    assert.equal(isProcessAlive(grandchildPid), true, 'the fixture grandchild must survive its parent');
+    // A just-spawned Windows process may not be queryable at the same instant
+    // the parent exits; allow a bounded settle before asserting survival.
+    let alive = false;
+    for (let attempt = 0; attempt < 40 && !alive; attempt++) {
+      alive = isProcessAlive(grandchildPid);
+      if (!alive) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(alive, true, 'the fixture grandchild must survive its parent');
   } finally {
     if (grandchildPid !== undefined) {
       try { process.kill(grandchildPid); } catch { /* already gone */ }
@@ -245,7 +256,7 @@ test(
       assert.equal(settlement.confirmed, true);
       assert.equal(settlement.remaining.length, 0);
       const census = listWindowsDescendantPids(parent.pid!);
-      assert.deepEqual(census, []);
+      assert.deepEqual(census, [], `census failed: ${getLastWindowsCensusFailure() || 'no diagnostic'}`);
       assert.equal(
         (() => {
           try {
