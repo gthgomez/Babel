@@ -135,9 +135,7 @@ export function registerCoreExecutionCommands(program: Command): void {
               "../daemon/pipelineQualification.js"
             );
             const quarantine = daemonPipelineEnqueueRejection();
-            if (quarantine) {
-              throw new Error(`Cannot enqueue background task: ${quarantine} Run the task in the foreground (without --background) for now.`);
-            }
+            if (quarantine) console.error(`[daemon] ${quarantine}`);
             const { ensureDaemon, pingDaemon } =
               await import("../daemon/client.js");
             const { ipcRequest } = await import("../daemon/ipc.js");
@@ -159,15 +157,7 @@ export function registerCoreExecutionCommands(program: Command): void {
               task,
               mode: options.mode ?? "deep",
               projectRoot: options.project ?? null,
-            })) as {
-              job_id?: string;
-              status: string;
-              rejected?: boolean;
-              error?: string;
-            };
-            if (result.rejected || !result.job_id) {
-              throw new Error(`Cannot enqueue background task: ${result.error ?? "daemon rejected the job"}`);
-            }
+            })) as { job_id: string; status: string };
 
             if (options.json) {
               console.log(
@@ -176,6 +166,7 @@ export function registerCoreExecutionCommands(program: Command): void {
                     status: "queued",
                     job_id: result.job_id,
                     job_status: result.status,
+                    ...(quarantine ? { warning: quarantine } : {}),
                   },
                   null,
                   2,
