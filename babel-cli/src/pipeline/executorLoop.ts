@@ -189,10 +189,7 @@ import {
 } from './executorToolShape.js';
 import { writeValidatedExecutionReport } from './executionReports.js';
 import { evaluateExactInstructionInvariants } from './exactInstructionGuards.js';
-import {
-  repairExactOutputSchemaArtifacts,
-  verifyExactOutputSchemaArtifacts,
-} from './exactOutputArtifacts.js';
+import { verifyExactOutputSchemaArtifacts } from './exactOutputArtifacts.js';
 import { emitRuntimeEvent, log, logDetail } from './logging.js';
 import { hasMeaningfulRepairDiff, type RepairProofCapsuleArtifact } from './repairProof.js';
 import { TurnHistory, type TurnRecord } from './turnHistory.js';
@@ -409,10 +406,6 @@ async function handleExecutorCompletion(
     nextTurnPrompt: string,
     condition: string,
   ) => Promise<ExecutorLoopResult>,
-  completeAfterDeterministicExternalRepair: (
-    nextTurnPrompt: string,
-    reason: string,
-  ) => Promise<ExecutorLoopResult | null>,
   persistExecutorContext: (
     status: 'ready_for_next_turn' | 'after_tool_call' | 'terminal',
     nextTurnPrompt: string,
@@ -493,14 +486,6 @@ async function handleExecutorCompletion(
             nextTurnPrompt: nextTurnAfterPostcondition,
             condition: semanticFailure,
           };
-        }
-
-        const deterministicRepairCompletion = await completeAfterDeterministicExternalRepair(
-          turnPrompt,
-          semanticFailure,
-        );
-        if (deterministicRepairCompletion) {
-          return { kind: 'return', result: deterministicRepairCompletion };
         }
 
         const report = buildHaltReport(
@@ -650,16 +635,6 @@ async function handleExecutorCompletion(
       }
     }
 
-    if (executorTurn.status === 'EXECUTION_HALTED') {
-      const deterministicRepairCompletion = await completeAfterDeterministicExternalRepair(
-        turnPrompt,
-        executorTurn.condition,
-      );
-      if (deterministicRepairCompletion) {
-        return { kind: 'return', result: deterministicRepairCompletion };
-      }
-    }
-
     const report = buildTerminalReport(executorTurn, toolCallLog, evidence);
     await persistExecutorContext('terminal', turnPrompt, {
       terminalStatus: executorTurn.status,
@@ -754,10 +729,6 @@ async function handleToolFailure(
   reliabilityRepairProofEnabled: boolean,
   rawTask: string,
   approvedPlan: SwePlan,
-  completeAfterDeterministicExternalRepair: (
-    nextTurnPrompt: string,
-    reason: string,
-  ) => Promise<ExecutorLoopResult | null>,
   persistExecutorContext: (
     status: 'ready_for_next_turn' | 'after_tool_call' | 'terminal',
     nextTurnPrompt: string,
@@ -990,13 +961,6 @@ async function handleToolFailure(
         patchedTargetKeys: new Set(),
       };
       if (repairBudgetExhausted) {
-        const deterministicRepairCompletion = await completeAfterDeterministicExternalRepair(
-          turnPrompt,
-          `recoverable command failure budget exceeded at step ${stepNum}: ${toolResult.stderr.slice(0, 200)}`,
-        );
-        if (deterministicRepairCompletion) {
-          return { kind: 'return', result: deterministicRepairCompletion };
-        }
         const underlyingCondition = [
           `[REPAIR_MAX_ATTEMPTS_REACHED] Recoverable command failure budget exceeded at step ${stepNum}.`,
           repairDecision.condition ??
@@ -1816,39 +1780,6 @@ export async function runExecutorLoop(
     return completeRecordedPlan(nextTurnPrompt);
   };
 
-  const completeAfterDeterministicExternalRepair = async (
-    nextTurnPrompt: string,
-    reason: string,
-  ): Promise<ExecutorLoopResult | null> => {
-    if (requestedTargetContract.readOnly || !isExternalBenchmarkTask(rawTask)) {
-      return null;
-    }
-
-    const deterministicRepair = repairExactOutputSchemaArtifacts(rawTask, getExecutorProjectRoot());
-    if (!deterministicRepair) {
-      return null;
-    }
-
-    const warning = `${deterministicRepair} Trigger: ${reason}`;
-    reportWarnings.push(warning);
-    const completion = {
-      type: 'completion',
-      status: 'EXECUTION_COMPLETE',
-    } as const;
-    const report = buildTerminalReport(completion, toolCallLog, evidence);
-    await persistExecutorContext('terminal', nextTurnPrompt, {
-      terminalStatus: 'EXECUTION_COMPLETE',
-      condition: warning,
-    });
-    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-    log('  Executor: EXECUTION_COMPLETE after deterministic external benchmark repair');
-    logDetail(warning);
-    return {
-      toolCallLog,
-      terminalStatus: 'EXECUTION_COMPLETE',
-    };
-  };
-
   const directBoundedResult = await runDirectBoundedWritePlan(
     kernel,
     reliabilityRepairProofEnabled,
@@ -2203,18 +2134,9 @@ export async function runExecutorLoop(
         continue;
       }
 
-      // All tiers exhausted — try deterministic benchmark repair before halting.
       const exhaustedReason =
         `All runner tiers failed to produce a valid executor turn. ` +
         `Last error: ${err instanceof Error ? err.message : String(err)}`;
-      const deterministicRepairCompletion = await completeAfterDeterministicExternalRepair(
-        turnPrompt,
-        exhaustedReason,
-      );
-      if (deterministicRepairCompletion) {
-        return deterministicRepairCompletion;
-      }
-
       const exhaustedHaltTag = classifyRunnerExhaustionHaltTag(exhaustedReason);
       const report = buildHaltReport(
         toolCallLog,
@@ -2284,7 +2206,6 @@ export async function runExecutorLoop(
       peakBufferBytes,
       getMissingSuccessfulPlannedFileWrites,
       haltForIncompletePlan,
-      completeAfterDeterministicExternalRepair,
       persistExecutorContext,
       writeRepairAttemptTimeline,
     );
@@ -2743,7 +2664,6 @@ export async function runExecutorLoop(
       reliabilityRepairProofEnabled,
       rawTask,
       approvedPlan,
-      completeAfterDeterministicExternalRepair,
       persistExecutorContext,
       writeRepairAttemptTimeline,
       rollbackTouchedFilesForFailure,
@@ -2823,37 +2743,6 @@ export async function runExecutorLoop(
         return deterministicCompletion;
       }
     }
-  }
-
-  // Exceeded max turns without a terminal signal.
-  const deterministicRepair = requestedTargetContract.readOnly ? null : repairExactOutputSchemaArtifacts(rawTask, getExecutorProjectRoot());
-  if (deterministicRepair) {
-    reportWarnings.push(deterministicRepair);
-    const completion = {
-      type: 'completion',
-      status: 'EXECUTION_COMPLETE',
-    } as const;
-    const report = buildTerminalReport(completion, toolCallLog, evidence);
-    await persistExecutorContext(
-      'terminal',
-      buildExecutorTurnPromptLegacy(
-        baseContext,
-        executionHistory,
-        toolCallLog.length,
-        fileReadCache,
-      ),
-      {
-        terminalStatus: 'EXECUTION_COMPLETE',
-        condition: deterministicRepair,
-      },
-    );
-    writeValidatedExecutionReport(evidence, report, toolCallLog, reportWarnings);
-    log('  Executor: EXECUTION_COMPLETE after deterministic exact-output repair');
-    logDetail(deterministicRepair);
-    return {
-      toolCallLog,
-      terminalStatus: 'EXECUTION_COMPLETE',
-    };
   }
 
   const report = buildHaltReport(
