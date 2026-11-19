@@ -46,6 +46,8 @@ export interface ObjectiveAdmissionHost {
   currentP11Owner():
     | import('../runtime/contextCheckpoints.js').ContextCheckpointOwnerV1
     | null
+  /** Discovered project verifier commands, kept on the host for fresh admission. */
+  readonly discoveredTestCommands?: ReadonlyArray<{ command: string }>
   prepareUserSubmission(input: UserSubmissionInput): PreparedUserSubmission
   prepareSubmissionAllowance(
     prepared: PreparedUserSubmission,
@@ -152,7 +154,13 @@ export function admitObjectiveSubmission(
   }
   const authority = previous.liveAuthority
   if (!authority) throw new Error('OBJECTIVE_AUTHORITY_MISSING')
-  const options = { ...host.options, task: runtime.taskText }
+  const options = {
+    ...host.options,
+    task: runtime.taskText,
+    ...(host.discoveredTestCommands?.length
+      ? { projectTestCommands: host.discoveredTestCommands.map(entry => entry.command) }
+      : {}),
+  }
   const context = {
     parity: staged,
     options,
