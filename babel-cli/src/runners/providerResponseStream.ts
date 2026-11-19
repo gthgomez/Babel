@@ -1,7 +1,7 @@
 import { type ProviderMessage, type RunnerCallbacks, type RunnerInvocationMetadata } from './base.js';
 import { mapProviderMessagesToWire } from './providerMessages.js';
 import { type VcrRecorder } from '../services/streamingVcr.js';
-import { readPositiveIntEnv } from './providerResponsePolicy.js';
+import { createInvocationDeadline, invocationNowMs, readPositiveIntEnv } from './providerResponsePolicy.js';
 import { normalizeFinishReason } from './providerNormalize.js';
 import type { ProviderId } from './providerRegistry.js';
 import {
@@ -66,7 +66,7 @@ export function readStreamWithLimits(
       return;
     }
     opts.signal?.addEventListener('abort', onAbort, { once: true });
-    const remainingDeadline = opts.deadlineAt - Date.now();
+    const remainingDeadline = opts.deadlineAt - invocationNowMs();
     if (remainingDeadline <= 0) {
       finish(() => {
         reader.cancel().catch(() => {});
@@ -285,8 +285,8 @@ export async function readStreamingResponse(
   let buffer = '';
   let firstChunkReceived = false;
   let totalBytes = 0;
-  const deadlineAt = invocationDeadlineAt ?? startedAt + (requestTimeoutMs ?? 60_000);
-  const deadlineBudgetMs = requestTimeoutMs ?? Math.max(0, deadlineAt - startedAt);
+  const deadlineAt = invocationDeadlineAt ?? createInvocationDeadline(requestTimeoutMs ?? 60_000);
+  const deadlineBudgetMs = requestTimeoutMs ?? Math.max(0, deadlineAt - invocationNowMs());
 
   const completeStreamingRead = async (): Promise<string> => {
     assertExecuteRawStreamTerminal(state);
@@ -427,7 +427,7 @@ export async function readResponseBodyText(
   response: Response,
   opts: {
     idleTimeoutMs: number;
-    /** Absolute wall-clock deadline for the whole invocation (not reset after headers). */
+    /** Absolute monotonic deadline for the whole invocation (not reset after headers). */
     deadlineAt: number;
     requestTimeoutMs: number;
     signal?: AbortSignal;

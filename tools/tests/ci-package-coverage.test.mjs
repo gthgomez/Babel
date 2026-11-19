@@ -137,12 +137,23 @@ test('real protected-job dependency guards reject failure, cancellation, skipped
 });
 
 test('fast-lane guards accept skipped heavy jobs and still reject skipped policy checks', () => {
+  // Explicit contract: every always-required/policy dependency must be green.
+  // A fast lane may skip heavy qualification jobs, never these.
+  const alwaysRequired = [
+    'detect-scope',
+    'fast-validation',
+    'security',
+    'public-content-policy',
+    'public-release-validation',
+    'policy-integrity',
+    'public-pr-metadata-tests',
+  ];
   for (const name of ['linux-validation', 'windows-portability']) {
     const guard = workflow.jobs[name].steps[0];
     const needs = workflow.jobs[name].needs;
     assert.ok(needs.includes('detect-scope') && needs.includes('fast-validation'), name);
     const dependencies = Object.fromEntries(needs.map(dependency => [dependency, { result: 'skipped' }]));
-    for (const required of ['detect-scope', 'fast-validation', 'security', 'public-content-policy', 'policy-integrity', 'public-pr-metadata-tests']) {
+    for (const required of alwaysRequired) {
       if (dependencies[required]) dependencies[required] = { result: 'success' };
     }
     const fast = spawnSync('pwsh', ['-NoProfile', '-Command', guard.run], {
@@ -151,13 +162,16 @@ test('fast-lane guards accept skipped heavy jobs and still reject skipped policy
     });
     assert.ifError(fast.error);
     assert.equal(fast.status, 0, `${name} fast lane: ${fast.stderr}`);
-    dependencies.security = { result: 'skipped' };
-    const skippedPolicy = spawnSync('pwsh', ['-NoProfile', '-Command', guard.run], {
-      env: { ...process.env, NEEDS_JSON: JSON.stringify(dependencies), MERGE_LANE: 'fast' },
-      encoding: 'utf8', timeout: 15000,
-    });
-    assert.ifError(skippedPolicy.error);
-    assert.notEqual(skippedPolicy.status, 0, `${name}: fast lane must still reject a skipped policy check`);
+    for (const required of alwaysRequired.filter(item => dependencies[item])) {
+      dependencies[required] = { result: 'skipped' };
+      const skippedPolicy = spawnSync('pwsh', ['-NoProfile', '-Command', guard.run], {
+        env: { ...process.env, NEEDS_JSON: JSON.stringify(dependencies), MERGE_LANE: 'fast' },
+        encoding: 'utf8', timeout: 15000,
+      });
+      assert.ifError(skippedPolicy.error);
+      assert.notEqual(skippedPolicy.status, 0, `${name}: fast lane must reject skipped ${required}`);
+      dependencies[required] = { result: 'success' };
+    }
   }
 });
 

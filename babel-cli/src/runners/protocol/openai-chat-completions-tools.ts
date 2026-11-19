@@ -26,6 +26,7 @@ import {
 } from '../providerFailureReceipt.js';
 import {
   canDispatchPhysicalRequest,
+  createInvocationDeadline,
   invocationTimeoutMessage,
   isAbortError,
   isCallerCancelError,
@@ -285,7 +286,7 @@ async *executeWithToolsStream(
     let retryAttempt: number | null = null;
     let retryAttemptId: string | null = null;
     let physicalAttemptId = preparedRequest.attempt_id;
-    const invocationDeadlineAt = startedAt + requestTimeoutMs;
+    const invocationDeadlineAt = createInvocationDeadline(requestTimeoutMs);
     const errorBodyReadOpts = {
       idleTimeoutMs: streamIdleTimeoutMs,
       deadlineAt: invocationDeadlineAt,
