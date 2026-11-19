@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "97154e3323d00d56ac898e68ff3e04506dc65d659cbe5d93b09b6d49ebb61a8c",
+  "policy_bundle_id": "b8126904d4d3e3c0d1d60b92c052fa4b9e53677502e65a8fc1a8f9008c5825ca",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -25,6 +25,7 @@
     "babel-cli/src/authority/commandSpec.ts": "ab7723fff856f1b0faa7b6edefdfb72b2ab52000b698284571882146e3616d38",
     "babel-cli/src/authority/convergence-integrity.regression-gate.test.ts": "7c80ed633d94f05c006d18fe3195fe21caf863d97c0b6fef33eeeb6e1e4c06d4",
     "babel-cli/src/authority/convergence-parser.regression-gate.test.ts": "a8d9bceb53c55e23386c49f3a01d82951375119bec5a44793b6f4ff0e3f1fffd",
+    "babel-cli/src/authority/credentialPathBoundary.test.ts": "9a6a528884aff5aa116167592be5df544be6eebe9e853dd611ce165dd0aafeed",
     "babel-cli/src/authority/criterionCompletion.test.ts": "0d372f1eb54602b6fb131239783b9005ae6e4fe11a7300e768627d90d2020283",
     "babel-cli/src/authority/criterionCompletion.ts": "94bbaa143267a490e8164e33535b7b22e355957c6315480de33931a12e6c029c",
     "babel-cli/src/authority/criterionExecutionPublisher.test.ts": "b8e7f70e4d6de00723c4a677480dd608d7e477a79f79b3f1a8e92af52529d948",
@@ -157,7 +158,7 @@
     "tools/babel-pr-orchestrate-opencode.mts": "52b030c4ada9940ad8290872d453ef518bc5989475095787cc21ee579b62cf29",
     "tools/babel-pr-orchestrate.mts": "e2b8f541f807e5e7544534a3eb5804ec14395b05a6fc97a813c82269f7fc32a0",
     "tools/host-review-worker.mts": "751b80e69888ec098ff2e190bf487f1962bbb104ea87d7494b68e654009b336a",
-    "tools/policy-integrity-manifest.mjs": "e72da24f86c587d0003305372b018d381ba118554f92e0a4f4be070bad0e172c",
+    "tools/policy-integrity-manifest.mjs": "cd57427ca59c26a3ab32d56b7ce7b1400adbc7822113efb4eca7c9c714cb0478",
     "tools/resolve-release-tag.mjs": "6d43e1ef832bd1cf7308672151e873c1dee474ecf3b28801ca50dd959aa9d288"
   }
 }
