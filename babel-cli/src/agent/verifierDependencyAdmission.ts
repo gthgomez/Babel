@@ -10,7 +10,9 @@ import {
 } from './taskAcceptanceExecutableBinding.js';
 import { initializeVerifierDependencyHashes } from './chatEngineVerifierSession.js';
 import { verifierCommandInputFiles } from './verifierCommandInputs.js';
-import type { AcceptanceRequirementV1 } from './taskContract.js';
+import type { AcceptanceRequirementV1, TaskContractV1 } from './taskContract.js';
+import { advisoryDocsViolations } from './advisoryDocsGoal.js';
+import { publicApiPreservationViolation } from './publicApiPreservation.js';
 
 /** Commands frozen by executable acceptance criteria already admitted to the contract. */
 export function contractVerifierCommands(
@@ -79,4 +81,16 @@ export function seedChatVerifierDependencyHashes(input: {
     if (files.some(file => !input.hashes.has(file))) return true;
   }
   return unfrozen.length > 0;
+}
+
+/** Mechanically checked preservation/documentation obligations, if admitted. */
+export function contractPreservationErrors(
+  contract: TaskContractV1 | undefined,
+  projectRoot: string | null | undefined,
+): string[] {
+  if (!contract || !projectRoot) return [];
+  const errors = advisoryDocsViolations({ acceptance: contract.acceptance, projectRoot });
+  const publicApi = publicApiPreservationViolation({ records: contract.provenance.records, projectRoot });
+  if (publicApi) errors.push(publicApi);
+  return errors;
 }
