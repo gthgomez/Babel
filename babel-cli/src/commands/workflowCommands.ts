@@ -95,7 +95,7 @@ import { writeTextRunPrelude } from '../ui/runPrelude.js';
 import { runCliChatTask } from '../interactive/execution/chatCore.js';
 import type { ChatStreamEvent } from '../interactive/execution/chatEventDispatch.js';
 import { runAskAnswerPath } from '../services/askAnswer.js';
-import { buildRecoveryAssessment, formatRecoveryAssessmentHuman } from '../services/recovery.js';
+import { buildRecoveryAssessment, buildRunFailureRecoveryPayload, formatRecoveryAssessmentHuman } from '../services/recovery.js';
 import {
   buildLiteContinueAssessment,
   formatLiteContinueAssessmentHuman,
@@ -529,8 +529,10 @@ function buildCompletionVerificationForRun(input: {
 function buildRunCommandFailurePayload(input: {
   status: TerminalStatus;
   message: string;
+  project?: string | undefined;
 }): Record<string, unknown> {
-  const recovery = buildRecoveryAssessment({ run: 'latest' });
+  const { assessment: recovery, block: recoveryBlock } =
+    buildRunFailureRecoveryPayload(input.project !== undefined ? { project: input.project } : {});
   const executionReport =
     recovery.available_artifacts.find((artifact) => artifact.key === 'execution_report')?.path ??
     null;
@@ -544,17 +546,7 @@ function buildRunCommandFailurePayload(input: {
       status: input.status,
       condition: input.message,
     }),
-    recovery: {
-      status: recovery.status,
-      classification: recovery.classification,
-      retryable: recovery.retryable,
-      reason: recovery.reason,
-      next_action: recovery.next_action,
-      next_command: recovery.next_command,
-      run_dir: recovery.run_dir,
-      available_artifacts: recovery.available_artifacts,
-      missing_artifacts: recovery.missing_artifacts,
-    },
+    recovery: recoveryBlock,
   };
   if (
     recovery.status === 'CONTINUE_READY' &&
@@ -2472,15 +2464,15 @@ Notes:
                 makeRunStreamEvent('run_error', {
                   error: message,
                   status: 'EXECUTOR_HALTED',
-                  result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                  result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message, project: resolvedProject }),
                 }),
               );
             } else if (outputFormat === 'json') {
-              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message, project: resolvedProject }));
             } else {
               process.stdout.write(
                 `${formatRunResultHuman({
-                  ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                  ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message, project: resolvedProject }),
                   command: 'run',
                   task,
                   project: resolvedProject ?? null,
@@ -2592,15 +2584,15 @@ Notes:
                 makeRunStreamEvent('run_error', {
                   error: message,
                   status: 'EXECUTOR_HALTED',
-                  result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                  result: buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message, project: resolvedProject }),
                 }),
               );
             } else if (outputFormat === 'json') {
-              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }));
+              writeJson(buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message, project: resolvedProject }));
             } else {
               process.stdout.write(
                 `${formatRunResultHuman({
-                  ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message }),
+                  ...buildRunCommandFailurePayload({ status: 'EXECUTOR_HALTED', message, project: resolvedProject }),
                   command: 'run',
                   task,
                   project: resolvedProject ?? null,
