@@ -1,10 +1,15 @@
-import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import type { ToolResult } from '../sandbox.js';
 import type { ToolCallRequest } from '../localTools.js';
 import { isDryRunEnabled } from '../config/dryRun.js';
+import {
+  boundExternalText,
+  resolveExternalToolMaxOutputBytes,
+  resolveExternalToolTimeoutMs,
+  runBoundedExternalProcess,
+} from './externalAdapterBudget.js';
 
 /** example_web_audit project root - configure via EXAMPLE_WEB_AUDIT_ROOT env var. */
 const EXAMPLE_WEB_AUDIT_ROOT = process.env['EXAMPLE_WEB_AUDIT_ROOT'] ?? process.cwd();
@@ -110,68 +115,70 @@ export async function handleAuditUi(
     };
   }
 
-  return new Promise<ToolResult>((resolve) => {
-    let stdoutBuf = '';
-    let stderrBuf = '';
-    const invocation = buildSpawnInvocation('npx', [
-      'tsx',
-      'audit-frontend/tooling/orchestrator.ts',
-      req.url,
-      req.run_id,
-    ]);
-
-    const child = spawn(invocation.command, invocation.args, {
-      cwd: EXAMPLE_WEB_AUDIT_ROOT,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdoutBuf += chunk.toString('utf8');
-    });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderrBuf += chunk.toString('utf8');
-    });
-
-    child.on('error', (err: Error) => {
-      resolve({
-        exit_code: 1,
-        stdout: '',
-        stderr: `[AUDIT_UI_SPAWN_ERROR] Failed to start orchestrator: ${err.message}`,
-      });
-    });
-
-    child.on('close', (code: number | null) => {
-      if (code !== 0) {
-        resolve({
-          exit_code: code ?? 1,
-          stdout: stdoutBuf,
-          stderr:
-            `[AUDIT_UI_NONZERO] Orchestrator exited with code ${code ?? 'null'}. ` +
-            `stderr: ${stderrBuf}`,
-        });
-        return;
-      }
-
-      let reportContent: string;
-      try {
-        reportContent = readFileSync(reportPath, 'utf8');
-      } catch (err: unknown) {
-        resolve({
-          exit_code: 1,
-          stdout: '',
-          stderr:
-            `[AUDIT_UI_MISSING_REPORT] Orchestrator completed (exit 0) but ` +
-            `report not found at: ${reportPath}. ` +
-            `Error: ${err instanceof Error ? err.message : String(err)}`,
-        });
-        return;
-      }
-
-      resolve({
-        exit_code: 0,
-        stdout: reportContent,
-        stderr: '',
-      });
-    });
+  const invocation = buildSpawnInvocation('npx', [
+    'tsx',
+    'audit-frontend/tooling/orchestrator.ts',
+    req.url,
+    req.run_id,
+  ]);
+  const maxBytes = resolveExternalToolMaxOutputBytes();
+  const run = await runBoundedExternalProcess({
+    command: invocation.command,
+    args: invocation.args,
+    cwd: EXAMPLE_WEB_AUDIT_ROOT,
+    timeoutMs: resolveExternalToolTimeoutMs(),
+    maxBytes,
   });
+
+  if (run.timed_out) {
+    return {
+      exit_code: 1,
+      stdout: '',
+      stderr:
+        `[AUDIT_UI_TIMEOUT] Orchestrator timed out after ${resolveExternalToolTimeoutMs()}ms; ` +
+        'the owned process tree was terminated.',
+    };
+  }
+
+  if (run.exit_code !== 0) {
+    return {
+      exit_code: run.exit_code,
+      stdout: run.stdout,
+      stderr:
+        `[AUDIT_UI_NONZERO] Orchestrator exited with code ${run.exit_code}. ` +
+        `stderr: ${run.stderr}` +
+        (run.stdout_truncated || run.stderr_truncated ? ' (output truncated at the external tool budget)' : ''),
+    };
+  }
+
+  let reportContent: string;
+  try {
+    reportContent = readFileSync(reportPath, 'utf8');
+  } catch (err: unknown) {
+    return {
+      exit_code: 1,
+      stdout: '',
+      stderr:
+        `[AUDIT_UI_MISSING_REPORT] Orchestrator completed (exit 0) but ` +
+        `report not found at: ${reportPath}. ` +
+        `Error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  const bounded = boundExternalText(reportContent, maxBytes);
+  if (bounded.truncated) {
+    return {
+      exit_code: 1,
+      stdout: '',
+      stderr:
+        `[AUDIT_UI_REPORT_TOO_LARGE] Report is ${bounded.bytes} bytes, over the ` +
+        `${maxBytes}-byte external tool budget. Refusing to return a partial report.`,
+    };
+  }
+
+  return {
+    exit_code: 0,
+    stdout: reportContent,
+    stderr: '',
+  };
 }

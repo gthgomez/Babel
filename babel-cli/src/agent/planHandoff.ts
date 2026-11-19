@@ -28,12 +28,7 @@ export interface PlanHandoff {
   sourcePlanText?: string | null;
 }
 
-export const PLAN_APPLY_UNAVAILABLE_REASON = 'Plan application is temporarily unavailable until mutation and verifier effects are scoped; the Plan is retained.';
-
-/** Temporary admission gate until Plan-bound mutation and verifier effects are scoped. */
-export function assertPlanMutationQualified(): void {
-  throw new Error(`UNSUPPORTED_OPERATION: ${PLAN_APPLY_UNAVAILABLE_REASON}`);
-}
+export const PLAN_APPLY_UNAVAILABLE_REASON = 'Automatic Plan application is temporarily unavailable until mutation and verifier effects are scoped; the Plan is retained for an explicit, confirmed apply.';
 
 const PLAN_RUN_ID_RE = /\b(\d{8}T\d{6}Z-plan-[a-f0-9]+)\b/i;
 const PLAN_RUN_NAME_RE = /^\d{8}T\d{6}Z-plan-[a-f0-9]+$/i;

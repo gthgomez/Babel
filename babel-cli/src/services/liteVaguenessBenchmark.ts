@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { BABEL_RUNS_DIR } from '../cli/constants.js';
+import { BABEL_ROOT, BABEL_RUNS_DIR } from '../cli/constants.js';
 import { readParityCorpusTask, writeParityCorpusRepo } from './parityCorpus.js';
 import { resolveBabelCliEntry, runBabelCli } from './liteTrustDemo.js';
 import { buildOpenRouterDeepSeekLiveEnv } from '../modelPolicy.js';
@@ -407,7 +407,22 @@ function prepareSeededRoot(): string {
   return seededRoot;
 }
 
-function resolveRepoTargets(options: VaguenessBenchmarkOptions): Array<{
+function resolveVaguenessWorkspaceRoot(
+  options: VaguenessBenchmarkOptions,
+  manifest: VaguenessRepoManifest,
+): string {
+  const declared = options.workspaceRoot ?? manifest.workspace_root;
+  const normalized = declared?.trim().replace(/^(\.\/)+/, '');
+  // An empty, ".", or "./" manifest value is checkout-relative: use this
+  // repository, never a machine-specific absolute path such as /workspace.
+  if (normalized === undefined || normalized === '' || normalized === '.') {
+    return BABEL_ROOT;
+  }
+  return resolve(normalized);
+}
+
+/** Resolve repo targets portably; backslash fixture paths are normalized. */
+export function resolveVaguenessRepoTargets(options: VaguenessBenchmarkOptions = {}): Array<{
   repoId: string | null;
   projectRoot: string;
   required: boolean;
@@ -423,12 +438,15 @@ function resolveRepoTargets(options: VaguenessBenchmarkOptions): Array<{
   }
 
   const manifest = readVaguenessRepos(options.repoManifestPath);
-  const workspaceRoot = resolve(options.workspaceRoot ?? manifest.workspace_root);
-  return manifest.repos.map((repo) => ({
-    repoId: repo.id,
-    projectRoot: resolve(workspaceRoot, repo.path),
-    required: repo.required,
-  }));
+  const workspaceRoot = resolveVaguenessWorkspaceRoot(options, manifest);
+  return manifest.repos.map((repo) => {
+    const portablePath = repo.path.replaceAll('\\', '/');
+    return {
+      repoId: repo.id,
+      projectRoot: resolve(workspaceRoot, portablePath),
+      required: repo.required,
+    };
+  });
 }
 
 function scenarioAppliesToRepo(scenario: VaguenessScenario, repoId: string | null): boolean {
@@ -527,7 +545,7 @@ export function runVaguenessBenchmark(
   const provider = options.provider ?? 'mock';
   const minPassRate = options.minPassRate ?? (provider === 'mock' ? 0.85 : 0.7);
   const scenariosManifest = readVaguenessScenarios(options.scenariosPath);
-  const repoTargets = resolveRepoTargets(options);
+  const repoTargets = resolveVaguenessRepoTargets(options);
   const cliEntry = options.cliEntry ?? resolveBabelCliEntry();
   const timestamp = (options.now ?? new Date())
     .toISOString()
@@ -670,9 +688,7 @@ export function runVaguenessBenchmark(
     evidence_dir: evidenceDir,
     workspace_root: options.projectRoot
       ? null
-      : resolve(
-          options.workspaceRoot ?? readVaguenessRepos(options.repoManifestPath).workspace_root,
-        ),
+      : resolveVaguenessWorkspaceRoot(options, readVaguenessRepos(options.repoManifestPath)),
     project_root: options.projectRoot ? resolve(options.projectRoot) : null,
     min_pass_rate: minPassRate,
     gate_passed: gatePassed,

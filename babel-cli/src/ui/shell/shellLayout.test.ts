@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { planShellLayout } from './shellLayout.js'
+import { canHostResponsiveShell, planShellLayout } from './shellLayout.js'
 import type { Rect, ShellLayout } from './shellTypes.js'
 
 function assertInside(rect: Rect, cols: number, rows: number): void {
@@ -101,12 +101,37 @@ describe('planShellLayout', () => {
   })
 
   it('selects the compact linear host below minimum shell dimensions', () => {
-    const layout = planShellLayout({ cols: 40, rows: 16 })
+    const layout = planShellLayout({ cols: 43, rows: 16 })
 
     assert.equal(layout.mode, 'linear')
     assert.equal(layout.header, null)
     assert.equal(layout.center, null)
     assert.equal(layout.footer, null)
+  })
+
+  it('renders a usable narrow layout at the 44x16 qualification size', () => {
+    // Regression UX-02: 44 columns used to fall below the shell minimum, so the
+    // host mounted with every rectangle null and the viewport stayed blank.
+    const layout = planShellLayout({ cols: 44, rows: 16 })
+    assert.equal(layout.mode, 'narrow')
+    assert.deepEqual(layout.header, { x: 0, y: 0, width: 44, height: 2 })
+    assert.ok(layout.center && layout.center.width > 30)
+    assert.ok(layout.conversation && layout.conversation.height > 5)
+    assert.ok(layout.composer && layout.composer.height >= 3)
+    assert.deepEqual(layout.footer, { x: 0, y: 14, width: 44, height: 2 })
+    for (const rect of topLevelRects(layout)) assertInside(rect, 44, 16)
+  })
+
+  it('refuses to mount the responsive host when the grid has no drawable regions', () => {
+    assert.equal(canHostResponsiveShell({ cols: 43, rows: 16 }), false)
+    assert.equal(canHostResponsiveShell({ cols: 20, rows: 40 }), false)
+    assert.equal(canHostResponsiveShell({ cols: 120, rows: 15 }), false)
+    assert.equal(canHostResponsiveShell({ cols: 0, rows: 0 }), false)
+    // Positive controls: exactly at and above the minimum grid, plus 120x36.
+    assert.equal(canHostResponsiveShell({ cols: 44, rows: 16 }), true)
+    assert.equal(canHostResponsiveShell({ cols: 60, rows: 16 }), true)
+    assert.equal(canHostResponsiveShell({ cols: 120, rows: 36 }), true)
+    assert.equal(canHostResponsiveShell({ cols: 160, rows: 45 }), true)
   })
 
   it('uses effective writable columns for the plan bounds', () => {

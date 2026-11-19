@@ -15,6 +15,7 @@ import { ProviderHttpError } from '../providerHttpError.js'
 import { dispatchRunOperation, RunStoppedError } from '../../runtime/run-control.js'
 import { extractJson } from '../../utils/extractJson.js'
 import { validateProviderBaseUrl } from '../providerEndpoint.js'
+import { assertOfflineEndpointAllowed } from '../../config/offlineMode.js'
 
 export interface NativeRunnerOptions {
   explicitCredential?: string
@@ -51,6 +52,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
   protected readonly temperature: number | undefined
   protected readonly baseUrl: string | undefined
   private readonly contextWindowTokens: number | undefined
+  private readonly environment: NodeJS.ProcessEnv | undefined
   private metadata: RunnerInvocationMetadata | null = null
 
   constructor(protected readonly provider: 'gemini' | 'anthropic', defaultModel: string, options: NativeRunnerOptions = {}) {
@@ -62,6 +64,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
     this.temperature = options.temperature
     this.baseUrl = options.baseUrl
     this.contextWindowTokens = options.contextWindowTokens
+    this.environment = options.env
   }
 
   protected abstract endpoint(stream: boolean): string
@@ -163,7 +166,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
           response = await session.dispatchAdmittedFetch({ basePrepared: request, physicalAttemptId: attemptId, operationId: request.request_id,
             ...(callbacks?.runControl ? { runControl: callbacks.runControl } : {}),
             fetch: () => dispatchRunOperation(callbacks?.runControl, 'model', request.request_id, async () => {
-              try { phase('request_dispatched'); return await fetch(this.endpoint(stream), { method: 'POST', headers: this.headers(), body: request.body, signal: controller.signal, redirect: 'error' }) }
+              try { phase('request_dispatched'); assertOfflineEndpointAllowed(this.endpoint(stream), this.environment); return await fetch(this.endpoint(stream), { method: 'POST', headers: this.headers(), body: request.body, signal: controller.signal, redirect: 'error' }) }
               catch (error) { transportFailed = true; throw error }
             }) })
           if (response.ok || !isRetryableStatus(response.status) || attempt === attempts) break

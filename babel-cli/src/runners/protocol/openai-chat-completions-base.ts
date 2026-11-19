@@ -80,6 +80,7 @@ import {
   CampaignBudgetDeniedError,
   CampaignRouteUnsupportedError,
 } from '../campaignDispatchGate.js';
+import { assertOfflineEndpointAllowed } from '../../config/offlineMode.js';
 
 import { ssePayloadFromTrimmedLine } from './openai-chat-completions-sse.js';
 import type { PreparedProviderRequest } from '../preparedProviderRequest.js';
@@ -235,6 +236,7 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
 
   /** Dispatch unchanged by default; specialized transports may gate every request. */
   protected dispatchFetch(url: string, init: RequestInit, control?: RunControl, operationId = 'provider_fetch'): Promise<Response> {
+    assertOfflineEndpointAllowed(url, this.transportEnvironment)
     return dispatchRunOperation(control, 'model', operationId, () => fetch(url, init));
   }
 

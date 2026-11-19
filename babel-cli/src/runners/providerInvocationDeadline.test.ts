@@ -12,16 +12,41 @@ import {
 } from './providerResponsePolicy.js'
 
 describe('invocation deadline helpers', { concurrency: 1 }, () => {
-  it('sleepInvocationRetryBackoff caps wait then refuses further work past deadline', async () => {
-    const started = invocationNowMs()
-    const invocationDeadlineAt = createInvocationDeadline(25, started)
-    await assert.rejects(
-      () => sleepInvocationRetryBackoff(5_000, invocationDeadlineAt, 'fixture', 'model', 80),
-      /request timeout after 80ms/,
-    )
-    const elapsed = invocationNowMs() - started
-    assert.ok(elapsed < 200, `expected capped sleep, observed ${elapsed}ms`)
-    assert.ok(elapsed >= 10, `expected non-zero capped wait, observed ${elapsed}ms`)
+  it('sleepInvocationRetryBackoff caps wait then refuses further work past deadline', async (t) => {
+    // Deterministic timer and clock: a real 25ms timer can wake 1ms early,
+    // which left 1ms of budget and made this assertion order-dependent on CI
+    // load. The helper accepts the same monotonic clock for testing.
+    let now = 1_000_000
+    const clock = () => now
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const pending = sleepInvocationRetryBackoff(5_000, now + 25, 'fixture', 'model', 80, undefined, clock)
+    t.mock.timers.tick(25)
+    now += 25
+    await assert.rejects(pending, /request timeout after 80ms/)
+    assert.equal(now - 1_000_000, 25, 'the backoff must be capped to the remaining budget')
+  })
+
+  it('sleepInvocationRetryBackoff refuses a retry below the physical dispatch floor', async (t) => {
+    let now = 2_000_000
+    const clock = () => now
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const pending = sleepInvocationRetryBackoff(10, now + 15, 'fixture', 'model', 80, undefined, clock)
+    t.mock.timers.tick(10)
+    // 5ms remains: below PHYSICAL_DISPATCH_MIN_BUDGET_MS, so no physical
+    // dispatch could be admitted after this backoff.
+    now += 10
+    await assert.rejects(pending, /request timeout after 80ms/)
+  })
+
+  it('sleepInvocationRetryBackoff returns when usable dispatch budget remains', async (t) => {
+    let now = 3_000_000
+    const clock = () => now
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const pending = sleepInvocationRetryBackoff(10, now + 5_000, 'fixture', 'model', 80, undefined, clock)
+    t.mock.timers.tick(10)
+    now += 10
+    await pending
+    assert.equal(now - 3_000_000, 10)
   })
 
   it('sleepInvocationRetryBackoff rejects when budget is already exhausted', async () => {

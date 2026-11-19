@@ -92,18 +92,26 @@ export async function sleepInvocationRetryBackoff(
   model: string,
   requestTimeoutMs: number,
   signal?: AbortSignal,
+  now: () => number = invocationNowMs,
 ): Promise<void> {
-  assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs);
-  const capped = Math.min(backoffMs, remainingInvocationBudgetMs(invocationDeadlineAt));
+  assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs, now());
+  const capped = Math.min(backoffMs, remainingInvocationBudgetMs(invocationDeadlineAt, now()));
   if (capped <= 0) {
     // Retry-After: 0 (or sub-ms leftover) means an immediate retry, not an exhausted budget.
-    if (backoffMs === 0 && canDispatchPhysicalRequest(invocationDeadlineAt)) {
+    if (backoffMs === 0 && canDispatchPhysicalRequest(invocationDeadlineAt, now())) {
       return;
     }
     throw new Error(invocationTimeoutMessage(providerId, model, requestTimeoutMs));
   }
   await sleep(capped, signal);
-  assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs);
+  // A capped backoff ends at the deadline, but timer/clock granularity can wake
+  // a millisecond early. The caller will not admit another physical dispatch
+  // below PHYSICAL_DISPATCH_MIN_BUDGET_MS, so refuse here instead of returning
+  // a retry that can only fail the dispatch floor.
+  assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs, now());
+  if (!canDispatchPhysicalRequest(invocationDeadlineAt, now())) {
+    throw new Error(invocationTimeoutMessage(providerId, model, requestTimeoutMs));
+  }
 }
 
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {

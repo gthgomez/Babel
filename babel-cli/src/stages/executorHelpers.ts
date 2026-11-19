@@ -14,6 +14,7 @@ import type {
 import { ExecutorReportSchema, PipelineErrorSchema } from '../schemas/agentContracts.js';
 import { FILE_READ_MAX_LENGTH, truncateLogs } from '../utils/truncate.js';
 import { getManifestSnapshot, type ToolManifestSnapshot } from '../tools/toolManifest.js';
+import { DEEP_EXECUTOR_TOOL_NAMES } from '../tools/toolContracts.js';
 import { PRE_EXECUTION_FAILURE_CAPSULE_FILENAME } from '../services/pipelineFailureArtifacts.js';
 import { maxAttemptsForRepairMode } from '../services/repairGovernance.js';
 import type { AttemptSafetySummary, ProjectSafetySnapshot } from '../services/terminalStatus.js';
@@ -259,6 +260,8 @@ function buildToolShapeLine(tool: ToolManifestSnapshot): string {
   for (const field of tool.input.optional) {
     if (field.name === 'timeout_seconds') {
       parts.push(`"${field.name}": <int, default varies>`);
+    } else if (field.type === 'integer' || field.type === 'number') {
+      parts.push(`"${field.name}": <int>`);
     } else if (
       field.name === 'limit' ||
       field.name === 'max_results' ||
@@ -303,9 +306,12 @@ function buildDynamicToolShapes(compactFileOnly: boolean): string[] {
       return [...fileTools.map(buildToolShapeLine), ...completions];
     }
 
-    // Full mode: all tools except mode-switching and meta (tool_catalog is self-referential)
+    // Full mode: advertise only tools the Deep turn schema can actually execute
+    // (DEEP_EXECUTOR_TOOL_NAMES), minus host-driven mode switching and the
+    // self-referential catalog. Anything else would be advertised-but-unexecutable.
+    const deepTools = new Set<string>(DEEP_EXECUTOR_TOOL_NAMES);
     const executorTools = snapshot.filter(
-      (t) => t.category !== 'mode' && t.name !== 'tool_catalog',
+      (t) => deepTools.has(t.name) && t.category !== 'mode' && t.name !== 'tool_catalog',
     );
     return [...executorTools.map(buildToolShapeLine), ...completions];
   } catch {
@@ -432,6 +438,9 @@ export function formatHistoryEntry(entry: ToolCallLog): string {
     `Exit code: ${entry.exit_code}`,
     `Stdout: ${stdoutDisplay}`,
     `Stderr: ${truncateLogs(entry.stderr) || '(empty)'}`,
+    ...(entry.glob_result
+      ? [`Glob result: ${JSON.stringify(entry.glob_result)}`]
+      : []),
     ...(entry.denial ? [`Denial: ${formatDenialSummary(entry.denial)}`] : []),
     ...(entry.mcp_lifecycle
       ? [`MCP lifecycle: ${formatMcpLifecycleSummary(entry.mcp_lifecycle)}`]

@@ -46,13 +46,36 @@ export function resolvePlanArtifactRoot(): string {
   return join(resolveRuntimeRunsDir({ ...process.env, BABEL_STATE_DIR: resolveRuntimeUserStateRoot() }), 'babel-lite');
 }
 
+/**
+ * Read-only lanes must not leave operational artifacts inside the user's
+ * project (UX-13). Their evidence is private state, like Plan's, while
+ * mutation lanes keep their evidence beside the workspace they changed so
+ * undo/continue can find it.
+ */
+const PRIVATE_ARTIFACT_COMMANDS: ReadonlySet<LiteArtifactCommand> = new Set<LiteArtifactCommand>([
+  'ask',
+  'plan',
+  'report',
+  'propose',
+  'diff',
+  'review',
+  'patch',
+]);
+
+function usesPrivateArtifactRoot(command: LiteArtifactCommand): boolean {
+  return PRIVATE_ARTIFACT_COMMANDS.has(command);
+}
+
 function assertBabelLiteArtifactRoot(root: string, repoPath: string, command: LiteArtifactCommand): void {
   const expected = normalizeFsPath(join(resolve(repoPath), 'runs', 'babel-lite'));
   const actual = normalizeFsPath(root);
-  if (actual !== expected && !(command === 'plan' && actual === normalizeFsPath(resolvePlanArtifactRoot()))) {
+  if (
+    actual !== expected &&
+    !(usesPrivateArtifactRoot(command) && actual === normalizeFsPath(resolvePlanArtifactRoot()))
+  ) {
     throw new LiteError(
       'ARTIFACT_WRITE_FAILED',
-      `Babel Lite artifacts must use the repo-local runs/babel-lite directory${command === 'plan' ? ' or configured private Plan run directory' : ''}: ${root}`,
+      `Babel Lite artifacts must use the repo-local runs/babel-lite directory${usesPrivateArtifactRoot(command) ? ' or the private run directory for read-only lanes' : ''}: ${root}`,
     );
   }
 }
@@ -77,7 +100,10 @@ export function createLiteArtifactRun(options: {
   shortId?: string;
 }): LiteArtifactRun {
   const root = resolve(
-    options.artifactRoot ?? (options.command === 'plan' ? resolvePlanArtifactRoot() : join(resolve(options.repoPath), 'runs', 'babel-lite')),
+    options.artifactRoot ??
+      (usesPrivateArtifactRoot(options.command)
+        ? resolvePlanArtifactRoot()
+        : join(resolve(options.repoPath), 'runs', 'babel-lite')),
   );
   assertBabelLiteArtifactRoot(root, options.repoPath, options.command);
   const runId = `${timestampSlug(options.now ?? new Date())}-${options.command}-${safeSlug(options.shortId ?? shortId())}`;

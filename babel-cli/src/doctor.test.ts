@@ -574,8 +574,48 @@ test('doctor workspace warns when interactive transcript target differs from man
   assert.match(check?.message ?? '', /target drift/);
 });
 
-function makeDoctorWorkspace(options: { validCatalog: boolean; dist: boolean }): {
-  workspace: string;
+test('doctor treats a clean public checkout as its own workspace', async () => {
+  // UX-06 regression: this layout has no private sibling repositories and no
+  // maintainer repo-map.json, so the old checks reported five hard failures.
+  const workspace = mkdtempSync(join(tmpdir(), 'babel-doctor-standalone-'));
+  const root = join(workspace, 'Babel');
+  mkdirSync(join(root, 'tools'), { recursive: true });
+  mkdirSync(join(root, 'babel-cli', 'dist'), { recursive: true });
+  writeFileSync(join(root, 'prompt_catalog.yaml'), 'version: 1\nentries:\n  test: {}\n', 'utf8');
+  writeFileSync(join(root, 'babel-cli', 'dist', 'index.js'), 'console.log("ok");\n', 'utf8');
+  writeFileSync(join(root, 'babel-cli', 'package.json'), '{}\n', 'utf8');
+  writeFileSync(join(root, 'tools', 'resolve-local-stack.ps1'), 'Write-Output "{}"\n', 'utf8');
+  writeFileSync(join(root, 'tools', 'validate-public-release.ps1'), '# gate', 'utf8');
+  try {
+    const result = await runDoctor({
+      babelRoot: root,
+      strict: false,
+      verbose: true,
+      scope: 'all',
+      shellProbe: () => ({ exitCode: 0, stdout: '/bin/bash', stderr: '' }),
+      powerShellProbe: () => ({ exitCode: 0, stdout: '7.7.0', stderr: '' }),
+    });
+
+    assert.equal(result.workspaceRoot, root, 'the checkout is the workspace');
+    const status = (id: string) => result.checks.find((check) => check.id === id)?.status;
+    assert.equal(status('workspace.root.exists'), 'pass');
+    assert.equal(status('workspace.babel_core.exists'), 'pass');
+    assert.equal(status('workspace.babel_public.exists'), 'skip');
+    assert.equal(status('workspace.repo_map.exists'), 'skip');
+    assert.equal(status('resolution.example_projects'), 'skip');
+    assert.equal(status('runtime.package_json'), 'pass');
+    assert.equal(status('export.manifest.exists'), 'skip');
+    assert.equal(
+      result.checks.some((check) => check.status === 'fail' && check.section !== 'Environment'),
+      false,
+      JSON.stringify(result.checks.filter((check) => check.status === 'fail'), null, 2),
+    );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+function makeDoctorWorkspace(options: { validCatalog: boolean; dist: boolean }): {  workspace: string;
   root: string;
 } {
   const workspace = mkdtempSync(join(tmpdir(), 'babel-doctor-workspace-'));

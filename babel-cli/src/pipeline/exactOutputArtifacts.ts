@@ -1,7 +1,5 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getRequestedTargetContract } from '../stages/taskShape.js';
-import { throwIfRunAborted } from '../runtime/runCancellation.js';
 
 export function verifyExactOutputSchemaArtifacts(
   rawTask: string,
@@ -70,35 +68,6 @@ export function verifyExactOutputSchemaArtifacts(
   }
 
   return null;
-}
-
-export function repairExactOutputSchemaArtifacts(
-  rawTask: string,
-  projectRoot: string | null,
-): string | null {
-  throwIfRunAborted();
-  if (
-    getRequestedTargetContract(rawTask).readOnly ||
-    !projectRoot ||
-    !/\bsummary\.csv\b/i.test(rawTask) ||
-    !/period,severity,count/i.test(rawTask)
-  ) {
-    return null;
-  }
-
-  const expectedRows = getExpectedSummaryRowKeys(rawTask);
-  if (expectedRows.length === 0) {
-    return null;
-  }
-
-  const expectedCountRows = computeExpectedLogSummaryRows(rawTask, projectRoot, expectedRows);
-  if (!expectedCountRows) {
-    return null;
-  }
-
-  const summaryPath = join(projectRoot, 'summary.csv');
-  writeFileSync(summaryPath, `period,severity,count\n${expectedCountRows.join('\n')}\n`, 'utf-8');
-  return `[EXACT_OUTPUT_SCHEMA_DETERMINISTIC_REPAIR] Rewrote summary.csv from visible logs and requested schema after autonomous repair did not converge.`;
 }
 
 function getExpectedSummaryRowKeys(rawTask: string): string[] {

@@ -20,7 +20,9 @@ export function verifyConsumerArchive({ archive, manifest, expectedDigest, expec
 export function verifyConsumerContents(manifest) {
   const files = manifest.map(file => file.path)
   for (const path of files) {
-    assert.match(path, /^(?:package\.json|README\.md|LICENSE|bin\/babel\.js|bin\/check-node-engine\.mjs|dist\/.*\.js|dist\/authority\/ownedFileAssertion\.windows\.ps1|dist\/bridge\/opencode-acp-source-pin\.json|dist\/bridge\/claude-agent-sdk-pin\.json|dist\/bridge\/claudeCodeIsolatedResolveWorker\.mjs|dist\/voice\/(?:audio-capture|vad)-worker\.mjs|dist\/services\/playbooks\/.*\.json|resources\/.*)$/)
+    // The executor tool manifest is a runtime JSON asset: toolManifest.ts reads
+    // it beside the compiled module. Exact path only — do not open dist/**/*.json.
+    assert.match(path, /^(?:package\.json|README\.md|LICENSE|bin\/babel\.js|bin\/check-node-engine\.mjs|dist\/.*\.js|dist\/authority\/ownedFileAssertion\.windows\.ps1|dist\/bridge\/opencode-acp-source-pin\.json|dist\/bridge\/claude-agent-sdk-pin\.json|dist\/bridge\/claudeCodeIsolatedResolveWorker\.mjs|dist\/voice\/(?:audio-capture|vad)-worker\.mjs|dist\/services\/playbooks\/.*\.json|dist\/tools\/tool-manifest\.json|resources\/.*)$/)
     assert.doesNotMatch(path, /(?:^|\/)(?:\.env[^/]*|node_modules|runs|cache|logs|testinfra|__snapshots__)(?:\/|$)|\.test\.js$|\.(?:map|ts|sqlite|log|tgz)$/)
     assert.ok(!path.split('/').includes('..') && !path.includes('\\'), 'Unsafe package path')
   }

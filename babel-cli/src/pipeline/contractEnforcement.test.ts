@@ -6,32 +6,13 @@ import test from 'node:test';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { repairExactOutputSchemaArtifacts as repairExecutorArtifacts } from './exactOutputArtifacts.js';
-import { withRunCancellation } from '../runtime/runCancellation.js';
 
 import {
   collectBoundedContractViolations,
   assertBoundedPlanActivationContract,
   mergeLockedFiles,
   parseLockedFilesEnv,
-  repairExactOutputSchemaArtifacts,
 } from './contractEnforcement.js';
-
-test('direct artifact repair respects read-only intent while preserving authorized repair',()=>{
- const root=mkdtempSync(join(tmpdir(),'babel-readonly-repair-'));
- try{
-  mkdirSync(join(root,'logs'));
-  writeFileSync(join(root,'logs','2026-11-05_fixture.log'),'[ERROR] fixture\n');
-  const task='Terminal-Bench 2 task. Create summary.csv from logs named YYYY-MM-DD_<source>.log. The current date is 2026-11-05.\nperiod,severity,count\ntoday,ERROR,<count>';
-  for(const repair of [repairExactOutputSchemaArtifacts,repairExecutorArtifacts]){
-   writeFileSync(join(root,'summary.csv'),'preserved');
-   assert.equal(repair(task+'\nDo not modify any files.',root),null);
-   assert.equal(readFileSync(join(root,'summary.csv'),'utf8'),'preserved');
-   assert.notEqual(repair(task,root),null);
-   assert.equal(readFileSync(join(root,'summary.csv'),'utf8'),'period,severity,count\ntoday,ERROR,1\n');
-  }
- }finally{rmSync(root,{recursive:true,force:true});}
-});
 
 test('read-only task contracts reject writes to mentioned and unrelated paths before activation',()=>{
  for(const task of ['Inspect calc.js. Do not modify files.',
@@ -44,24 +25,6 @@ test('read-only task contracts reject writes to mentioned and unrelated paths be
  }
 });
 
-test('direct recovery cannot rewrite target artifacts after an awaited cancellation', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-cancel-recovery-'));
-  try {
-    mkdirSync(join(root, 'logs'));
-    writeFileSync(join(root, 'logs', '2026-11-05_fixture.log'), '[ERROR] fixture\n');
-    writeFileSync(join(root, 'summary.csv'), 'preserved');
-    const task = 'Create summary.csv from logs named YYYY-MM-DD_<source>.log. The current date is 2026-11-05.\nperiod,severity,count\ntoday,ERROR,<count>';
-    const controller = new AbortController();
-    await withRunCancellation(controller.signal, async () => {
-      await Promise.resolve();
-      controller.abort();
-      for (const repair of [repairExactOutputSchemaArtifacts, repairExecutorArtifacts]) {
-        assert.throws(() => repair(task, root), { name: 'AbortError' });
-        assert.equal(readFileSync(join(root, 'summary.csv'), 'utf8'), 'preserved');
-      }
-    });
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
 import type { SwePlan, QaVerdictReject } from '../schemas/agentContracts.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

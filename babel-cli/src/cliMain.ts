@@ -4,6 +4,8 @@ import { desktopCapabilities, isDesktopCapabilityProbe } from './config/desktopC
 import { withInvocationSettings } from './config/invocationSettings.js';
 import { Command } from 'commander';
 import { rewriteArgv } from './cli/argv.js';
+import { invokedCliName } from './cli/commandName.js';
+import { isWorkHelpRequest, workHelpText } from './cli/workHelp.js';
 import { isDeprecatedSurfaceCommand, printDeprecatedSurfaceAndExit } from './cli/deprecation.js';
 import {
   applyProgramMetadata,
@@ -13,6 +15,7 @@ import {
 import { registerProjectCommands } from './commands/projectCommands.js';
 import { registerRemoteCommands } from './commands/remoteCommands.js';
 import { registerWorkflowCommands } from './commands/workflowCommands.js';
+import { registerWorktreeCommands } from './commands/worktreeCommands.js';
 
 /** One registration graph for execution and command recognition. */
 export function createCliProgram(): Command {
@@ -21,6 +24,7 @@ export function createCliProgram(): Command {
   registerCoreCommands(program);
   registerProjectCommands(program);
   registerWorkflowCommands(program);
+  registerWorktreeCommands(program);
   registerRemoteCommands(program);
   applyUserFocusedHelpTiers(program);
 
@@ -43,6 +47,13 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
   }
 
   const program = createCliProgram();
+
+  // `work` is rewritten to `run --mode chat`; answer its help before the
+  // rewrite so users see the work entrypoint instead of advanced run options.
+  if (isWorkHelpRequest(argv)) {
+    process.stdout.write(`${workHelpText(invokedCliName(argv[1]))}\n`);
+    return;
+  }
 
   const registeredCommands = new Set(program.commands.flatMap(command => [command.name(), ...command.aliases()]));
   const rewrittenArgv = rewriteArgv(argv, registeredCommands);
