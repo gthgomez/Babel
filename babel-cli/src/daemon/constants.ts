@@ -24,7 +24,13 @@ export const DAEMON_DIR = join(BABEL_RUNS_DIR, 'daemon');
 export const DAEMON_PID_FILE = join(DAEMON_DIR, 'daemon.pid');
 
 /** How long the client waits for auto-spawned daemon to become responsive. */
-export const DAEMON_AUTO_SPAWN_TIMEOUT_MS = 5000;
+const DEFAULT_DAEMON_AUTO_SPAWN_TIMEOUT_MS = 5000;
+const CONFIGURED_DAEMON_AUTO_SPAWN_TIMEOUT_MS = Number(process.env['BABEL_DAEMON_AUTO_SPAWN_TIMEOUT_MS']);
+/** Slow hosts and source-mode (`tsx`) qualification may need a bounded larger budget. */
+export const DAEMON_AUTO_SPAWN_TIMEOUT_MS = Number.isSafeInteger(CONFIGURED_DAEMON_AUTO_SPAWN_TIMEOUT_MS) &&
+  CONFIGURED_DAEMON_AUTO_SPAWN_TIMEOUT_MS >= 1_000 && CONFIGURED_DAEMON_AUTO_SPAWN_TIMEOUT_MS <= 60_000
+  ? CONFIGURED_DAEMON_AUTO_SPAWN_TIMEOUT_MS
+  : DEFAULT_DAEMON_AUTO_SPAWN_TIMEOUT_MS;
 
 /** Poll interval during auto-spawn readiness check. */
 export const DAEMON_POLL_INTERVAL_MS = 100;

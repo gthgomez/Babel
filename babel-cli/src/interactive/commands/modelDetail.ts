@@ -334,6 +334,9 @@ export function renderModelWhy(input: ModelWhyInput = {}): string {
   if (reason) {
     lines.push(`    ${muted(padRight('Reason', 14))} ${muted(reason)}`);
   }
+  if (policy.aliasNotice) {
+    lines.push(`    ${muted(padRight('Alias', 14))} ${warning(policy.aliasNotice)}`);
+  }
   if (input.lastRoutingLabel) {
     lines.push(
       `    ${muted(padRight('Last turn', 14))} served by ${accentBright(input.lastRoutingLabel)}`,
@@ -490,6 +493,11 @@ export function renderModelHealthForSnapshot(
   lines.push(`  ${accentBright('Model Health')}`);
   const { policy } = snapshot;
   lines.push(`    ${muted(padRight('Backend', 14))} ${accentBright(policy.resolvedBackendKey)}`);
+  lines.push(
+    `    ${muted(padRight('Requested', 14))} ${policy.requestedModelId ?? policy.resolvedBackendKey} ${muted('→')} ` +
+      `${accentBright(`${policy.provider}/${policy.providerModelId}`)}`,
+  );
+  if (policy.aliasNotice) lines.push(`    ${muted(padRight('Alias', 14))} ${warning(policy.aliasNotice)}`);
   const flags: string[] = [policy.enabled ? 'enabled' : warning('disabled')];
   if (policy.experimental) flags.push(muted('experimental'));
   if (policy.blockedWithoutExplicitOptIn) flags.push(muted('opt-in required'));

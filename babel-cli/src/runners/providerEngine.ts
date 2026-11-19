@@ -30,6 +30,7 @@ import {
   type ProviderOperation,
 } from './providerRegistry.js'
 import type { ResolvedExecutionEnvelope } from '../intelligence/types.js'
+import { assertOfflineProviderAllowed } from '../config/offlineMode.js'
 
 interface RawLlmRunner extends LlmRunner {
   executeRaw?: (
@@ -72,6 +73,7 @@ export interface ProviderEngineOptions {
 }
 
 export function createProviderAdapter(options: ProviderEngineOptions): RawLlmRunner {
+  assertOfflineProviderAllowed(options.provider, options.baseUrl, options.env)
   const credential = {
     ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}),
     ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}),
@@ -145,7 +147,13 @@ export function createProviderAdapter(options: ProviderEngineOptions): RawLlmRun
     case 'gemini':
       return new GeminiApiRunner(runtimeOptions)
     case 'ollama':
-      return new OllamaApiRunner(options.modelId, { ...options.sampling, ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}) })
+      return new OllamaApiRunner(options.modelId, {
+        ...options.sampling,
+        ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}),
+        ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.authentication ? { authentication: options.authentication } : {}),
+      })
     case 'groq':
       return new GroqApiRunner(runtimeOptions) as RawLlmRunner
   }
@@ -156,10 +164,14 @@ export class ProviderEngine implements LlmRunner {
   readonly provider: ProviderId | BenchmarkProviderId
   readonly modelId: string
   private readonly adapter: RawLlmRunner
+  private readonly baseUrl: string | undefined
+  private readonly environment: NodeJS.ProcessEnv | undefined
 
   constructor(options: ProviderEngineOptions) {
     this.provider = options.provider
     this.modelId = options.modelId
+    this.baseUrl = options.baseUrl
+    this.environment = options.env
     this.adapter = createProviderAdapter(options)
   }
 
@@ -197,6 +209,7 @@ export class ProviderEngine implements LlmRunner {
     systemPrompt?: string,
     signal?: AbortSignal,
   ): Promise<T> {
+    assertOfflineProviderAllowed(this.provider, this.baseUrl, this.environment)
     return this.adapter.execute(prompt, schema, callbacks, systemPrompt, signal)
   }
 
@@ -206,6 +219,7 @@ export class ProviderEngine implements LlmRunner {
     systemPrompt?: string,
     signal?: AbortSignal,
   ): Promise<string> {
+    assertOfflineProviderAllowed(this.provider, this.baseUrl, this.environment)
     if (!this.adapter.executeRaw) {
       throw new Error(`[ProviderEngine] ${this.provider} does not support raw chat execution.`)
     }
@@ -218,6 +232,7 @@ export class ProviderEngine implements LlmRunner {
     signal?: AbortSignal,
     callbacks?: RunnerCallbacks,
   ): AsyncGenerator<string, void, undefined> {
+    assertOfflineProviderAllowed(this.provider, this.baseUrl, this.environment)
     if (!this.adapter.executeRawStream) {
       throw new Error(`[ProviderEngine] ${this.provider} does not support raw chat streaming.`)
     }
@@ -232,6 +247,7 @@ export class ProviderEngine implements LlmRunner {
     toolChoice?: 'auto' | 'required',
     callbacks?: RunnerCallbacks,
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
+    assertOfflineProviderAllowed(this.provider, this.baseUrl, this.environment)
     if (!this.adapter.executeWithToolsStream) {
       throw new Error(`[ProviderEngine] ${this.provider} does not support native tool streaming.`)
     }
@@ -258,6 +274,7 @@ export function createProviderRunner(options: ProviderEngineOptions): ProviderEn
 
 /** Compatibility for callers needing the concrete adapter's qualified conversation operations. */
 export function createChatProviderAdapter(options: ProviderEngineOptions): ChatLlmRunner {
+  assertOfflineProviderAllowed(options.provider, options.baseUrl, options.env)
   const adapter = createProviderAdapter(options)
   if (!adapter.executeRaw || !adapter.executeRawStream || !adapter.executeWithToolsStream || !adapter.getLastInvocationMetadata) {
     throw new Error(`[${options.provider}] Conversation inference is unsupported.`)

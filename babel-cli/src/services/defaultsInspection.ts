@@ -22,7 +22,7 @@ export function inspectDefaults(session: SelectionSession = {}, projectRoot = pr
     execution: { defaultProfile: DEFAULT_EXECUTION_PROFILE, permissions: readApprovalProfileStatus(),
       note: 'Workflow, review depth, display and permissions are independent. Tool execution still requires current authority and isolation.' },
     limits: { maxTurns: finite(limits.maxTurns), maxConversationMessages: limits.maxConversationMessages,
-      monetaryCapSupport: 'Standard Work uses its admitted task allowance. Plan, thorough Work, Apply and legacy unmetered lanes reject finite saved caps before inference; they require an explicit unlimited preference until qualified.',
+      monetaryCapSupport: 'Standard Work uses its admitted task allowance with conservative per-request preauthorization. Plan, thorough Work, Apply and legacy unmetered lanes reject a finite saved cap before inference because they cannot preauthorize it; offline/Ollama/loopback runs are exempt because they cannot spend remote money. Explicit unlimited remains available.',
       maxEstimatedTokens: limits.maxEstimatedTokens, maxCostUsd: finite(limits.maxCostUsd), maxWallMs: finite(limits.maxWallMs),
       stallTurns: limits.stallTurns, maxTokensPerRound: limits.maxTokensPerRound },
     taskClass: { value: taskClass, source: process.env['BABEL_CHAT_TASK_CLASS'] ? 'environment' : 'built-in', tune: getChatTaskTune(taskClass).limits },

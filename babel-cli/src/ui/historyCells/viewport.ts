@@ -92,6 +92,11 @@ export class HistoryCellViewport {
     return this.totalRows;
   }
 
+  /** Height used by the most recent visible-row request. */
+  get renderHeight(): number {
+    return this.lastViewportHeight;
+  }
+
   get scrollOffsetRows(): number {
     return this.scrollOffset;
   }

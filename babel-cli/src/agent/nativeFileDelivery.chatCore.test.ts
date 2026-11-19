@@ -74,7 +74,8 @@ if (!process.env['BABEL_SYNTHETIC_PROVIDER_FIXTURE_ROOT']) {
       assert.notEqual(outcome, 'VERIFIED_COMPLETE')
       if (delivered) {
         assert.equal(outcome, 'UNVERIFIED_PATCH')
-        assert.equal(result.exitCode, 0)
+        // Honest unverified delivery is not shell success (TF-08).
+        assert.equal(result.exitCode, 6)
         assert.equal(calls, 5, 'unavailable verification must not cause repeated inference')
         assert.match(JSON.stringify(result.payload['answer']), /UNVERIFIED/)
         assert.match(JSON.stringify(result.payload['answer']), /native readback/)

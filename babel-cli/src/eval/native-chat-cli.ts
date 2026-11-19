@@ -2,6 +2,7 @@
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { z } from 'zod'
 import { statusForOutcome } from '../agent/chatFailureClassification.js'
+import { exitCodeFromOutcome } from '../cli/userFacingStatus.js'
 import { inspectSessionEventLogFromDir } from '../agent/sessionEvents.js'
 import type { ChatResult } from '../agent/chatEngine.js'
 import { runBabelCli } from '../services/liteTrustDemo.js'
@@ -38,9 +39,20 @@ export function parseNativeCliPayload(payload: unknown): NativeTaskTerminal | nu
   }
 }
 
-/** A settled CLI exit must agree with its canonical terminal outcome. */
+/**
+ * A settled CLI exit must agree with the chat-headless exit contract.
+ *
+ * The chat-headless shell exits through `exitCodeFromOutcome`
+ * (cli/userFacingStatus.ts): success exits 0, `UNVERIFIED_PATCH` takes its
+ * nonzero projection from the exported `terminalOutcomeExitCode` mapping
+ * (TF-08: exit 6, so an unverified completion is graded instead of throwing
+ * `native_cli_process_failed`), and the legacy failure/blocked family keeps
+ * its established exit 1 — asserting raw `terminalOutcomeExitCode` there
+ * (3/4/5/130) would reject legitimate exit-1 settlements.
+ */
 export function nativeCliProcessSettled(process: { exitCode: number; signal?: string | null; processError?: boolean; timedOut?: boolean; failureCapsule?: unknown }, terminal: NativeTaskTerminal | null): boolean {
-  return terminal !== null && process.exitCode === (terminal.status === 'completed' ? 0 : 1) &&
+  return terminal !== null && terminal.outcome !== undefined &&
+    process.exitCode === exitCodeFromOutcome(terminal.outcome) &&
     process.signal == null && process.processError !== true && process.timedOut !== true && process.failureCapsule === undefined
 }
 

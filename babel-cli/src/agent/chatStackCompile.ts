@@ -125,7 +125,11 @@ export function instructionIntakeRoots(projectRoot: string, babelRoot: string): 
   const walked: string[] = [];
   let dir = project;
   let sawGit = false;
-  for (let i = 0; i < 8; i++) {
+  // Walk to the filesystem root looking for the repository boundary. A fixed
+  // eight-parent cap made a deeply nested package miss `.git` and silently
+  // fall back to the legacy project/parent set, dropping the repository
+  // AGENTS.md. The git root (not a depth count) is the instruction boundary.
+  for (;;) {
     if (!walked.includes(dir)) walked.push(dir);
     if (existsSync(join(dir, '.git'))) {
       sawGit = true;
@@ -142,7 +146,9 @@ export function instructionIntakeRoots(projectRoot: string, babelRoot: string): 
     if (parent !== project && !legacy.includes(parent)) legacy.push(parent);
     return legacy;
   }
-  if (!walked.includes(babel)) walked.push(babel);
+  // The git root is the instruction boundary. Do not append a Babel
+  // installation/workspace root that lives outside the repository: its
+  // AGENTS.md is not part of this project's instruction ancestry.
   return walked;
 }
 

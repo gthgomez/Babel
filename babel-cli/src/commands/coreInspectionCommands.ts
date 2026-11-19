@@ -18,6 +18,7 @@ import { readAcceptanceArtifacts } from "../acceptance/recording.js";
 import { readLatestRunPointer } from "../cli/helpers.js";
 import { detectContextFingerprintDrift, readExecutorSessionContext, summarizeExecutorSessionContext } from "../services/sessionContext.js";
 import { handleProofReport, resolveProofRunArg, resolveProofRunDir, resolveRunForReadOnlyCommand } from './coreCommandSupport.js';
+import { readDurableTerminalTruth } from '../services/durableTerminalTruth.js';
 
 function parseToolList(raw: string | undefined): string[] {
   return String(raw ?? "")
@@ -160,6 +161,9 @@ interface SessionSummary {
   project: string | null;
   task: string | null;
   status: string | null;
+  terminal_outcome: string | null;
+  user_status: string;
+  exit_code: number | null;
   updated_at: string | null;
 }
 
@@ -195,6 +199,7 @@ function readSessionSummary(runDir: string): SessionSummary {
     join(runDir, "04_execution_report.json"),
   );
   const stats = existsSync(runDir) ? statSync(runDir) : null;
+  const terminalTruth = readDurableTerminalTruth(runDir);
 
   return {
     run_dir: runDir,
@@ -205,7 +210,12 @@ function readSessionSummary(runDir: string): SessionSummary {
       getStringField(manifest, "user_request"),
     status:
       getStringField(runtimeTelemetry, "final_outcome") ??
-      getStringField(executionReport, "status"),
+      getStringField(executionReport, "status") ??
+      terminalTruth.status ??
+      terminalTruth.outcome,
+    terminal_outcome: terminalTruth.outcome,
+    user_status: terminalTruth.user_status,
+    exit_code: terminalTruth.exit_code,
     updated_at: stats ? stats.mtime.toISOString() : null,
   };
 }
@@ -221,7 +231,13 @@ function listSessionSummaries(options: {
   return readdirSync(BABEL_RUNS_DIR, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
     .map((entry) => join(BABEL_RUNS_DIR, entry.name))
-    .filter((runDir) => existsSync(join(runDir, "01_manifest.json")))
+    .filter(
+      (runDir) =>
+        existsSync(join(runDir, "01_manifest.json")) ||
+        existsSync(join(runDir, "session-events.jsonl")) ||
+        existsSync(join(runDir, "thread_events.json")) ||
+        existsSync(join(runDir, "terminal_status_summary.json")),
+    )
     .map(readSessionSummary)
     .sort((left, right) =>
       String(right.updated_at ?? "").localeCompare(

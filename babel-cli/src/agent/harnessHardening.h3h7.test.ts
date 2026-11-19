@@ -162,6 +162,10 @@ describe('H3 TaskContractV1 + outcomes + failure budgets', () => {
     const outcomes: TerminalOutcome[] = [
       'VERIFIED_COMPLETE',
       'NO_CHANGE_REQUIRED',
+      // UNVERIFIED_PATCH passes isPassingOutcome yet exits 6 (not_verified).
+      // Keep it in coverage so drift between the predicate and the exit
+      // projection is caught here, not in production.
+      'UNVERIFIED_PATCH',
       'INVALID_TASK',
       'NEEDS_HUMAN_DECISION',
       'AGENT_FAILURE',
@@ -176,10 +180,19 @@ describe('H3 TaskContractV1 + outcomes + failure budgets', () => {
       assert.strictEqual(a.exit_code, exitCodeFromOutcome(o));
       assert.strictEqual(a.process_exit_code, terminalOutcomeExitCode(o));
       assert.ok(typeof a.chat_status === 'string' && a.chat_status.length > 0);
-      // Live mappers: isPassingOutcome ⇒ exit 0
+      // Live mappers: isPassingOutcome covers UNVERIFIED_PATCH, but the exit
+      // projection deliberately diverges (TF-08) — a passing predicate does
+      // NOT imply exit 0. Only VERIFIED_COMPLETE/NO_CHANGE_REQUIRED stay in
+      // the success lane; UNVERIFIED_PATCH projects not_verified/exit 6.
       if (isPassingOutcome(o)) {
-        assert.strictEqual(a.exit_code, 0);
-        assert.strictEqual(a.chat_status, 'success');
+        if (o === 'UNVERIFIED_PATCH') {
+          assert.strictEqual(a.exit_code, terminalOutcomeExitCode('UNVERIFIED_PATCH'));
+          assert.strictEqual(a.exit_code, 6);
+          assert.strictEqual(a.chat_status, 'not_verified');
+        } else {
+          assert.strictEqual(a.exit_code, 0);
+          assert.strictEqual(a.chat_status, 'success');
+        }
       }
     }
   });

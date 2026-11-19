@@ -9,28 +9,23 @@ import { type CondensationFactChannel, prunedIndexesToRanges } from './condensat
 import { countTextTokens } from './tokenCounter.js';
 
 /**
- * Circuit breaker: consecutive compaction failures before disabling.
+ * Run-scoped compaction circuit state.
  *
- * WARNING: Module-level mutable state.
- * This counter is shared by ALL callers of `autoCompactIfNeeded` within the
- * same process. A failure in one session trips the circuit breaker for ALL
- * sessions. To mitigate this, call `resetCompactionCircuitBreaker()` during
- * session initialization (see AgentSession.runDispatch in session.ts) so that
- * each new session starts with a clean slate.
- *
- * This circuit breaker guards the `autoCompactIfNeeded` function below and is
- * used by the governed pipeline (pipeline.ts / executorLoop.ts). It tracks
- * failures of the step-level ToolCallLog[] stdout/stderr pruning logic.
- *
- * ChatEngine has a SEPARATE circuit breaker for its own inline conversation
- * compaction (`compactConversation()` in chatEngine.ts, lines 173-175) that
- * tracks failures of the ChatMessage[] conversation-dropping path. They are
- * intentionally independent because the two compaction mechanisms operate on
- * different data structures and serve different callers.
- *
- * @see ChatEngine.compactionConsecutiveFailures in chatEngine.ts
+ * The failure counter used to be module-level mutable state. Governed callers
+ * now own one state object per run. A module-level `legacyCompactionCircuitState`
+ * remains as the defaulted fallback for direct callers that omit a state; it is
+ * not used by the governed executor loop (`runExecutorLoop`).
  */
-let compactionConsecutiveFailures = 0;
+export interface CompactionCircuitState {
+  consecutiveFailures: number;
+}
+
+/** Create one independent breaker state for a governed run. */
+export function createCompactionCircuitState(): CompactionCircuitState {
+  return { consecutiveFailures: 0 };
+}
+
+const legacyCompactionCircuitState = createCompactionCircuitState();
 const MAX_COMPACTION_FAILURES = 3;
 
 export async function autoCompactIfNeeded(
@@ -45,6 +40,8 @@ export async function autoCompactIfNeeded(
    * unpaired — a visible fail-closed gap — and no completed fact is minted.
    */
   condensation?: CondensationFactChannel,
+  /** Run-scoped failure state. Omit only for legacy single-session callers. */
+  circuitState: CompactionCircuitState = legacyCompactionCircuitState,
 ): Promise<{
   compacted: boolean;
   newHistory: string;
@@ -67,7 +64,7 @@ export async function autoCompactIfNeeded(
     };
   }
 
-  if (compactionConsecutiveFailures >= MAX_COMPACTION_FAILURES) {
+  if (circuitState.consecutiveFailures >= MAX_COMPACTION_FAILURES) {
     console.warn('[compaction] Circuit breaker tripped — skipping compaction');
     return {
       compacted: false,
@@ -165,7 +162,7 @@ export async function autoCompactIfNeeded(
       // telemetry appended here. The debug file is the canonical record.
     }
 
-    compactionConsecutiveFailures = 0;
+    circuitState.consecutiveFailures = 0;
 
     // Packet A5: completed fact carries the real token counts and the pruned
     // step ranges derived from the actual pruning pass above.
@@ -189,9 +186,9 @@ export async function autoCompactIfNeeded(
       ...(condensationId !== undefined ? { condensationId } : {}),
     };
   } catch (err) {
-    compactionConsecutiveFailures++;
+    circuitState.consecutiveFailures++;
     console.warn(
-      `[compaction] Compaction failed (${compactionConsecutiveFailures}/${MAX_COMPACTION_FAILURES}): ${err instanceof Error ? err.message : String(err)}`,
+      `[compaction] Compaction failed (${circuitState.consecutiveFailures}/${MAX_COMPACTION_FAILURES}): ${err instanceof Error ? err.message : String(err)}`,
     );
     // Packet A5: the started fact (if emitted) intentionally has no completed
     // pair — `condensationId` surfaces the interrupted compaction to callers.
@@ -207,14 +204,18 @@ export async function autoCompactIfNeeded(
 }
 
 /**
- * Reset the module-level compaction circuit breaker.
+ * Reset one run's compaction circuit breaker.
  *
- * Resets `compactionConsecutiveFailures` to 0 so that `autoCompactIfNeeded`
- * will attempt compaction again. This resets ONLY the circuit breaker in this
- * module (which guards autoCompactIfNeeded's step-level pruning). ChatEngine's
- * separate circuit breaker (`compactConversation()` in chatEngine.ts) has its
- * own reset method — call ChatEngine.resetCompactionCircuitBreaker() for that.
+ * Resets the supplied state so that `autoCompactIfNeeded` will attempt
+ * compaction again. This resets ONLY the step-level pruning breaker in this
+ * module. ChatEngine's separate inline conversation breaker
+ * (`compactConversation()` in chatEngine.ts) has its own reset method — call
+ * ChatEngine.resetCompactionCircuitBreaker() for that.
+ *
+ * @param circuitState Run state to reset; defaults to the legacy shared state.
  */
-export function resetCompactionCircuitBreaker(): void {
-  compactionConsecutiveFailures = 0;
+export function resetCompactionCircuitBreaker(
+  circuitState: CompactionCircuitState = legacyCompactionCircuitState,
+): void {
+  circuitState.consecutiveFailures = 0;
 }

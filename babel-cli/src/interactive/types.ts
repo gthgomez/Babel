@@ -21,7 +21,7 @@ export interface SessionState {
   router: 'v9';
   compactMode?: 'on' | 'off';
   thinkingCollapsed?: boolean;
-  lastRunUserStatus?: 'ready' | 'complete' | 'blocked' | 'failed' | 'cancelled' | 'budget_exhausted';
+  lastRunUserStatus?: 'ready' | 'complete' | 'not_verified' | 'blocked' | 'failed' | 'cancelled' | 'budget_exhausted';
   lastRunTargetRoot?: string | null;
   projectRoot?: string;
   lastTask?: string;
@@ -130,7 +130,7 @@ export const INTERACTIVE_COMMAND_GROUPS = [
       ['/status', 'Show current session state'],
       ['/permissions [profile]', 'Show or set approval profile'],
       ['/mode work|plan', 'Work or plan; /mode work --review thorough selects governed execution'],
-      ['/apply <plan-id>', 'Apply a saved plan after project and permission checks'],
+      ['/apply <plan-id>', 'Apply a saved plan after explicit interactive confirmation, project and permission checks'],
       ['/why-stopped', 'Explain last run terminal (phase-gate / policy)'],
       ['/model list|use|show', 'List known models, select an exact ID, or inspect the active route'],
       ['/project [name]', 'Set project context or clear it'],
