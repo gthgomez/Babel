@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Command } from "commander";
-import { runBabelPipeline } from "../pipeline.js";
 
 
 
@@ -199,7 +198,7 @@ historyCommand
           console.log(`Manual prompt: ${result.manualPromptPath}`);
         }
         console.log(
-          `\nNext: review the plan, then run "babel apply-plan ${result.runDir}" to execute.`,
+          `\nNext: review the plan, then run "babel apply --run ${result.runDir}" for the legacy manual bridge.`,
         );
       } catch (error: any) {
         console.error(`Plan creation failed: ${error.message}`);
@@ -240,7 +239,7 @@ program
           console.log(`\nOut of scope: ${allowed.join(", ")}`);
         }
         console.log(
-          `\nReview the plan above, then use "babel apply-plan ${planDir}" to execute.`,
+          `\nReview the plan above, then use "babel apply --run ${planDir}" for the legacy manual bridge.`,
         );
       } catch (error: any) {
         console.error(`Plan review failed: ${error.message}`);
@@ -250,23 +249,16 @@ program
 
 program
     .command("apply-plan")
-    .description("Execute a saved plan in verified mode")
-    .argument("<plan-dir>", "Plan run directory path")
-    .option("--lock <files>", "Comma-separated locked files")
-    .action(async (planDir: string, options: { lock?: string }) => {
-      try {
-        const { runBabelPipeline } = await import("../pipeline.js");
-        const pipelineOptions: Parameters<typeof runBabelPipeline>[1] = { mode: "deep" };
-        if (options.lock)
-          pipelineOptions["lockedFiles"] = options.lock
-            .split(",")
-            .map((f) => f.trim());
-        const result = await runBabelPipeline(planDir, pipelineOptions);
-        console.log(`Plan applied. Status: ${result.status}`);
-        console.log(`Run directory: ${result.runDir}`);
-      } catch (error: any) {
-        console.error(`Plan application failed: ${error.message}`);
-        process.exit(1);
-      }
+    .description("Legacy Plan-directory application; unavailable — use apply --plan <saved-id>")
+    .argument("<plan-dir>", "Legacy Plan run directory path (retained for inspection)")
+    .option("--lock <files>", "Ignored; retained for compatibility")
+    .action(async (_planDir: string, _options: { lock?: string }) => {
+      // A bare directory cannot identify a saved Plan source or fingerprint.
+      // Applying it would bypass the saved-Plan source, project and confirmation
+      // contract, so this legacy route fails closed. The separate manual-bridge
+      // lane remains available explicitly through `apply --run/--plan <path>`.
+      console.error('UNSUPPORTED_OPERATION: A bare Plan directory cannot identify a saved Plan source; this legacy route is unavailable.');
+      console.error('Use "babel apply --plan <saved-plan-id>" for a saved Plan, or "babel apply --run <run-dir>" for the legacy manual bridge.');
+      process.exit(1);
     });
 }

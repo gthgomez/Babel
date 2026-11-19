@@ -147,7 +147,6 @@ import {
   parseLockedFilesEnv,
   mergeLockedFiles,
   verifyExactOutputSchemaArtifacts,
-  repairExactOutputSchemaArtifacts,
   assertBoundedPlanActivationContract,
 } from './pipeline/contractEnforcement.js';
 import {
@@ -314,7 +313,6 @@ export {
   parseLockedFilesEnv,
   mergeLockedFiles,
   verifyExactOutputSchemaArtifacts,
-  repairExactOutputSchemaArtifacts,
   assertBoundedPlanActivationContract,
 } from './pipeline/contractEnforcement.js';
 

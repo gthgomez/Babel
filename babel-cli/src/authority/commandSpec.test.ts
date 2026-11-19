@@ -727,6 +727,9 @@ const HOST_PROCESS_SURFACE = new Set([
   'claude-babel-astra-lab/telemetry.ts',
   'fixtures/claude-babel-astra-lab/fixtures.ts',
   'services/reviewServiceTransport.ts',
+  // Worktree adoption runs an operator-supplied --verify command with a bounded
+  // 300s timeout, cwd=projectRoot, no shell interpolation of internal data.
+  'commands/worktreeCommands.ts',
   'commands/independentReviewCommands.ts',
   'services/babelReviewChild.ts',
   'services/babelReviewQueue.ts',

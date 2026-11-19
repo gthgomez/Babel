@@ -189,10 +189,9 @@ export async function withSavedPlanApplication<T>(id: string, options: {
   if (options.operatorMode === 'hard_plan' || options.operatorMode === 'dry_run') throw new Error('Current read-only operator restriction blocks plan application.')
   assertFiniteBudgetSupported('Plan application', options.projectRoot, env)
   const path = planPath(id, env)
-  const lock = `${path}.lock`
-  const fd = openSync(lock, 'wx', 0o600)
-  try {
-    const plan = loadSavedPlan(id, env)
+
+  // Every side-effect-free admission check, identical before and inside the lock.
+  const admit = (plan: SavedPlan): void => {
     if (realpathSync(resolve(options.projectRoot)) !== plan.projectRoot) throw new Error('Plan belongs to another project; scope was not approved for this target.')
     if (plan.state !== 'ready') throw new Error('Plan has already started. Inspect or resume the associated run rather than applying it again.')
     if (projectFingerprint(plan.projectRoot, env) !== plan.fingerprint) throw new Error('Project changed after planning; create a fresh plan before application.')
@@ -206,14 +205,32 @@ export async function withSavedPlanApplication<T>(id: string, options: {
     const policy = loadEnterprisePolicy().policy
     const safetyPolicy = { ...policy, redaction: { ...policy.redaction, enabled: true } }
     if ([plan.body, plan.task].some(value => redactSecrets(value, safetyPolicy) !== value)) throw new Error('The saved plan contains credential-shaped content; inspect the retained artifact before creating a safe plan.')
-    await options.preflight?.(plan)
+  }
+
+  // Confirmation and admission run before the lock is created. A Ctrl-C or kill
+  // during an interactive prompt must not leave a stale lock that blocks every
+  // later apply. The plan is reloaded and re-admitted under the lock below.
+  const preflightPlan = loadSavedPlan(id, env)
+  admit(preflightPlan)
+  await options.preflight?.(preflightPlan)
+
+  const lock = `${path}.lock`
+  const fd = openSync(lock, 'wx', 0o600)
+  try {
+    const plan = loadSavedPlan(id, env)
+    // A prompt is an unbounded window; prove no plan identity, project state or
+    // source changed while it was open. This comparison must run before the
+    // generic admission checks so the specific admission-window contract stays
+    // observable to callers and tests.
     if (options.preflight) {
       const currentSource = plan.sourceRunId ? loadPlanHandoff({ repoPath: plan.projectRoot, task: plan.task, planRunId: plan.sourceRunId }) : null
-      const currentPlan = loadSavedPlan(id, env)
-      if (JSON.stringify(currentPlan) !== JSON.stringify(plan) || projectFingerprint(plan.projectRoot, env) !== plan.fingerprint || !currentSource || !currentSource.contract || handoffIdentity(currentSource).digest !== plan.sourceDigest) {
+      if (JSON.stringify(plan) !== JSON.stringify(preflightPlan) ||
+          projectFingerprint(plan.projectRoot, env) !== preflightPlan.fingerprint ||
+          !currentSource || !currentSource.contract || handoffIdentity(currentSource).digest !== preflightPlan.sourceDigest) {
         throw new Error('Plan source or project changed during Apply admission; inspect the retained plan and create a fresh plan.')
       }
     }
+    admit(plan)
     const attempt: SavedPlan = { ...plan, state: 'applying', attemptId: randomUUID(), attemptStartedAt: new Date().toISOString() }
     atomicPlanWrite(path, attempt)
     try {

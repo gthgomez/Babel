@@ -123,7 +123,12 @@ test('core registration preserves the complete existing command contract', () =>
   );
   const legacy = withoutIntentionalCommandExtensions(contract);
   const digest = createHash('sha256').update(JSON.stringify(legacy)).digest('hex');
-  assert.equal(digest, 'dd2db1dba2679e67ee5f905a0530225b6613e9c983b975070136209bcd7c288d');
+  // W09: plugin enable exposes explicit trust and MCP launch consent.
+  // W10: project help names workspace-scanner targets, not example repos.
+  // W11: the legacy apply-plan directory route fails closed and advertises the
+  // saved-Plan-id apply path instead of executing an unguarded run.
+  // One digest freezes the full merged command surface (W07+W09+W10+W11).
+  assert.equal(digest, '74c2c1e964a05b843cef936fae276590963e47de0e67d901f278c78b58cf56a5');
   assert.deepEqual(replay[0], {
     name: 'replay', aliases: [], description: 'Render the replay transcript of persisted action/observation evidence for a conversation',
     args: [{ name: 'conversation-id', required: true, variadic: false, description: '' }],
@@ -224,13 +229,16 @@ test('tool policy inspection reports and evaluates the same environment profile'
   }
 });
 
-test('resume help truthfully describes the temporary action quarantine', () => {
+test('resume help truthfully separates the saved-run quarantine from the legacy manual lane', () => {
   const program = new Command();
   registerWorkflowCommands(program);
   const resume = program.commands.find(command => command.name() === 'resume');
   assert.ok(resume);
   const help = resume.helpInformation();
-  assert.match(help, /action-taking resume is temporarily unavailable/i);
+  assert.match(help, /saved-run action resume is unavailable/i);
+  assert.doesNotMatch(help, /action-taking resume is temporarily unavailable/i);
+  assert.match(help, /Legacy manual-bridge run directory/);
+  assert.match(help, /Legacy manual Plan path/);
   assert.doesNotMatch(help, /resume latest retries actionable saved runs/i);
   const continueCommand = program.commands.find(command => command.name() === 'continue');
   assert.ok(continueCommand);

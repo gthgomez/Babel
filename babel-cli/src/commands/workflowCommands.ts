@@ -6,7 +6,6 @@ import { resolveEffectiveSettings } from '../config/userSettings.js'
 import { currentInvocationSettings } from '../config/invocationSettings.js'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import * as readline from 'node:readline/promises';
 
 import { Command } from 'commander';
 
@@ -130,7 +129,12 @@ import { resolveAgentTarget } from '../services/targetResolver.js';
 import { createLiteFixProgress } from '../ui/liteFixProgress.js';
 import { runLiteSessionWithSchemaRecovery } from '../services/liteSessionRunner.js';
 import { registerDogfoodCommands } from './dogfoodCommands.js';
-import { loadPlanHandoff, loadPlanHandoffGuarded, PLAN_APPLY_UNAVAILABLE_REASON } from '../agent/planHandoff.js';
+import { loadPlanHandoff, loadPlanHandoffGuarded } from '../agent/planHandoff.js';
+import {
+  APPLY_DESCRIPTION, APPLY_HELP, APPLY_PLAN_OPTION, APPLY_PROJECT_OPTION, APPLY_RUN_OPTION, APPLY_YES_OPTION,
+  RESUME_DESCRIPTION, RESUME_HELP, RESUME_PLAN_OPTION, RESUME_RUN_OPTION,
+  annotatePlanApplyPayload, applySavedPlanWithConfirmation, planSavedApplyHint,
+} from './planApplySupport.js';
 import { runPlanReviewLane } from '../agent/lanes/planReviewLane.js';
 import { resolveFuzzyWorkspaceDirectory } from '../services/pathScanner.js';
 import { isCommandCodeChatSelection, preflightRequestedModelPolicy } from './workflowModelPolicy.js';
@@ -168,33 +172,6 @@ async function applySavedPlanDeep(plan: SavedPlan, options: DeepCommandOptions):
     { ...options, projectRoot: plan.projectRoot, planRunId: plan.sourceRunId });
   if (!result) throw new Error('Plan application did not produce an inspectable run; inspect the attempt before retrying.');
   return result;
-}
-
-async function promptPlanApproval(task: string, autoApprove = false): Promise<boolean> {
-  if (autoApprove) {
-    process.stderr.write(`Auto-approved via --approve: ${task}\n`);
-    return true;
-  }
-  if (!process.stdin.isTTY || !process.stderr.isTTY) {
-    return false;
-  }
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stderr,
-  });
-  try {
-    process.stderr.write('\n');
-    process.stderr.write('Approve this plan and apply it now? [y/N] ');
-    const answer = (await rl.question('')).trim().toLowerCase();
-    if (/^(?:y|yes|approve|approved|apply|go)$/i.test(answer)) {
-      process.stderr.write(`Applying approved task: ${task}\n`);
-      return true;
-    }
-    process.stderr.write('Kept as plan-only. No files were changed.\n');
-    return false;
-  } finally {
-    rl.close();
-  }
 }
 
 function resolveCommandPolicyChoice(explicitProfile: string | undefined): ExecutionPolicyChoice | null {
@@ -865,15 +842,16 @@ async function runManualBridgeStart(
   }
 
   const clipboard = copyFileToClipboard(result.manualPromptPath);
+  const manualRun = result.runDir;
   const payload: Record<string, unknown> = {
     status: 'MANUAL_BRIDGE_REQUIRED',
     run_dir: result.runDir,
     prompt_path: result.manualPromptPath,
     next: [
-      'babel apply',
-      'If plan.json is not ready, apply opens editor at <run_dir>/manual/plan.json.',
-      'You can also run: babel apply --plan clipboard',
-      'Or paste via stdin: babel apply --plan -',
+      `babel apply --run ${manualRun}`,
+      'If plan.json is not ready, that command opens the editor at <run_dir>/manual/plan.json.',
+      `You can also run: babel apply --run ${manualRun} --plan clipboard`,
+      `Or paste via stdin: babel apply --run ${manualRun} --plan -`,
     ],
   };
   if (options.showModelPolicy === true && result.modelPolicy) {
@@ -1094,6 +1072,8 @@ export function classifyDoTask(task: string): Exclude<LiteVerb, 'do'> {
   }
   return 'plan';
 }
+
+export { planApplyCapability } from './planApplySupport.js';
 
 async function runLiteCommand(
   verb: LiteVerb,
@@ -1393,12 +1373,7 @@ async function runLiteCommand(
     }
     payloadRecord['plan_saved'] = savedPlanId !== null;
     payloadRecord['user_status'] = savedPlanId ? 'complete' : 'blocked';
-    payloadRecord['apply_available'] = false;
-    payloadRecord['apply_unavailable_reason'] = PLAN_APPLY_UNAVAILABLE_REASON;
-    if (savedPlanId) payloadRecord['plan_id'] = savedPlanId;
-    humanText = [humanText,
-      savedPlanId ? `Plan saved as ${savedPlanId}.` : 'The Plan is retained in its run evidence; canonical saving is unavailable.',
-      PLAN_APPLY_UNAVAILABLE_REASON].filter(Boolean).join('\n');
+    humanText = annotatePlanApplyPayload(payloadRecord, savedPlanId, humanText);
     if (!savedPlanId) process.exitCode = 1;
   }
   const progressTranscript =
@@ -2965,7 +2940,7 @@ Notes:
             if (!saved) return;
             const effective = resolveEffectiveSettings({ projectRoot: saved.projectRoot });
             if (!shouldAutoApplyPlan(saved.task, effective.autoApply.value, options.shadow === true || options.planOnly === true || options.json === true || options.finalOnly === true)) {
-              if (!options.json) process.stderr.write(`Plan saved as ${saved.id}. No project files were changed. Apply: babel-harness apply --plan ${saved.id}\n`);
+              if (!options.json) process.stderr.write(planSavedApplyHint(saved.id));
               return;
             }
             process.stderr.write(`Automatic application enabled by ${effective.autoApply.source} preference. Checking eligibility for ${saved.id}.\n`);
@@ -3142,30 +3117,18 @@ Notes:
   program
     .command('resume')
     .argument('[run]', 'latest or a run directory to inspect for resume')
-    .description('Inspect resume evidence; action-taking resume is temporarily unavailable')
-    .option('--run <run_dir>', 'Legacy manual-resume route (currently unavailable)')
+    .description(RESUME_DESCRIPTION)
+    .option('--run <run_dir>', RESUME_RUN_OPTION)
     .option('--project <name>', 'Use latest run pointer for this project when --run is omitted')
     .option(
       '--plan <path>',
-      'Legacy manual Plan input (currently unavailable)',
+      RESUME_PLAN_OPTION,
     )
     .option('-m, --model <model>', 'Override the model family for provider retries')
     .option('--model-tier <tier>', `Model policy tier: ${VALID_MODEL_TIERS.join(' | ')}`)
     .option('--allow-expensive', 'Approve an expensive or policy-blocked model for this run')
     .option('--json', 'Emit structured JSON only')
-    .addHelpText(
-      'after',
-      `
-Examples:
-  $ babel-harness resume latest
-  $ bl resume latest
-
-Important:
-  - Action-taking resume is temporarily unavailable until task identity, settlement, and verifier authority are qualified.
-  - babel continue latest --inspect-only inspects saved runs without taking an action.
-  - Legacy manual Plan resume is unavailable until source identity and approval are qualified; existing artifacts are retained.
-`,
-    )
+    .addHelpText('after', RESUME_HELP)
     .action(
       async (
         run: string | undefined,
@@ -3189,25 +3152,24 @@ Important:
 
   program
     .command('apply')
-    .description('Apply a saved plan ID; legacy manual Plan execution is unavailable')
-    .option('--run <run_dir>', 'Legacy manual-resume route (currently unavailable)')
-    .option('--project <name>', 'Target project for the saved Plan')
+    .description(APPLY_DESCRIPTION)
+    .option('--run <run_dir>', APPLY_RUN_OPTION)
+    .option('--project <name>', APPLY_PROJECT_OPTION)
     .option(
       '--plan <path>',
-      'Saved Plan ID; legacy manual Plan paths are unavailable',
+      APPLY_PLAN_OPTION,
     )
-    .addHelpText(
-      'after',
-      `
-Notes:
-  - Use --plan <saved-plan-id>. Legacy manual Plan execution is unavailable; retained artifacts remain inspectable.
-`,
-    )
-    .action(async (options: { run?: string; plan?: string; project?: string }) => {
+    .option('--yes', APPLY_YES_OPTION)
+    .addHelpText('after', APPLY_HELP)
+    .action(async (options: { run?: string; plan?: string; project?: string; yes?: boolean }) => {
       if (options.plan?.startsWith('plan_')) {
         const projectRoot = options.project ? resolveProjectRoot(options.project) : process.cwd();
         if (!projectRoot) throw new Error('Unknown target project.');
-        await withSavedPlanApplication(options.plan, { projectRoot, execute: async plan => applySavedPlanDeep(plan, {}) });
+        await applySavedPlanWithConfirmation(options.plan, {
+          projectRoot,
+          yes: options.yes === true,
+          execute: async plan => applySavedPlanDeep(plan, {}),
+        });
         return;
       }
       await handleResumeCommand(options);
@@ -3271,102 +3233,4 @@ Notes:
     });
 
   registerDogfoodCommands(program);
-
-  // ── Worktree isolation commands ───────────────────────────────────────
-  program
-    .command('worktree')
-    .description('Manage git worktree isolation for safe parallel work')
-    .addCommand(
-      new Command('create')
-        .description('Create an isolated git worktree')
-        .argument('<name>', 'Worktree name')
-        .option('--project-root <path>', 'Project root', process.cwd())
-        .option('--branch <name>', 'Branch name (default: babel-worktree-<name>)')
-        .option('--detach', 'Detach HEAD (no branch)')
-        .action(async (name, options) => {
-          const { createWorktree } = await import('../services/worktreeIsolation.js');
-          try {
-            const info = createWorktree(name, {
-              projectRoot: options.projectRoot,
-              branch: options.branch,
-              detach: options.detach,
-            });
-            console.log(JSON.stringify(info, null, 2));
-          } catch (error: any) {
-            console.error(`Worktree create failed: ${error.message}`);
-            process.exit(1);
-          }
-        }),
-    )
-    .addCommand(
-      new Command('enter')
-        .description('Enter an existing worktree (sets BABEL_WORKTREE_ROOT)')
-        .argument('<name>', 'Worktree name')
-        .option('--project-root <path>', 'Project root', process.cwd())
-        .action(async (name, options) => {
-          const { enterWorktree } = await import('../services/worktreeIsolation.js');
-          try {
-            enterWorktree(name, options.projectRoot);
-            const root = process.env['BABEL_WORKTREE_ROOT'];
-            console.log(`Entered worktree "${name}" at ${root}`);
-          } catch (error: any) {
-            console.error(`Worktree enter failed: ${error.message}`);
-            process.exit(1);
-          }
-        }),
-    )
-    .addCommand(
-      new Command('exit')
-        .description('Exit the active worktree (clears BABEL_WORKTREE_ROOT)')
-        .action(async () => {
-          const { exitWorktree, getActiveWorktreeRoot } =
-            await import('../services/worktreeIsolation.js');
-          const root = getActiveWorktreeRoot();
-          exitWorktree();
-          console.log(root ? `Exited worktree at ${root}` : 'No active worktree.');
-        }),
-    )
-    .addCommand(
-      new Command('list')
-        .description('List all git worktrees')
-        .option('--project-root <path>', 'Project root', process.cwd())
-        .action(async (options) => {
-          const { listWorktrees, getActiveWorktreeRoot } =
-            await import('../services/worktreeIsolation.js');
-          const entries = listWorktrees(options.projectRoot);
-          if (entries.length === 0) {
-            console.log('No worktrees found.');
-            return;
-          }
-          const active = getActiveWorktreeRoot();
-          for (const entry of entries) {
-            const marker = entry.active ? ' *' : '  ';
-            const head = entry.detached ? `(detached: ${entry.branch.slice(0, 8)})` : entry.branch;
-            console.log(`${marker} ${entry.name}  ${head}  ${entry.path}`);
-          }
-          if (!active) {
-            console.log('\n  No active worktree session.');
-          }
-        }),
-    )
-    .addCommand(
-      new Command('remove')
-        .description('Remove a worktree and its branch')
-        .argument('<name>', 'Worktree name')
-        .option('--project-root <path>', 'Project root', process.cwd())
-        .option('--force', 'Force removal of dirty worktree')
-        .action(async (name, options) => {
-          const { removeWorktree } = await import('../services/worktreeIsolation.js');
-          try {
-            removeWorktree(name, {
-              projectRoot: options.projectRoot,
-              force: options.force,
-            });
-            console.log(`Removed worktree "${name}".`);
-          } catch (error: any) {
-            console.error(`Worktree remove failed: ${error.message}`);
-            process.exit(1);
-          }
-        }),
-    );
 }
