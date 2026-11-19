@@ -156,7 +156,12 @@ export interface AgentBenchmarkCellResult extends ParityToolResult {
   external_ref: string;
   readiness: AgentBenchmarkReadiness;
   babel_surface: AgentBenchmarkSurface;
-  execution_path: 'chat_engine' | 'deep_pipeline' | 'external_harness' | 'parity_offline_demo';
+  execution_path:
+    | 'chat_engine'
+    | 'scripted_chat_engine'
+    | 'deep_pipeline'
+    | 'external_harness'
+    | 'parity_offline_demo';
   input_tokens: number | null;
   output_tokens: number | null;
   failure_class:
@@ -179,6 +184,11 @@ export interface AgentBenchmarkCellResult extends ParityToolResult {
    * null when not a blocked outcome or tokens unknown.
    */
   blocked_within_budget?: boolean | null;
+  /** A host-owned deterministic runner produced the tool calls, not a model. */
+  scripted_provider?: boolean;
+  /** True only when these bytes can support a model-performance claim. */
+  model_performance_claim?: boolean;
+  score_class?: 'scripted_protocol_control' | 'live_model';
 }
 
 /** Honest BLOCKED exits should complete under this token budget. */
@@ -212,12 +222,14 @@ export interface AgentBenchmarkReport {
     tasks_selected: number;
     runnable: number;
     manual_required: number;
+    /** Legacy blended count over every executed row, scripted or live. Prefer scoring.*. */
     success: number;
     failure: number;
     false_complete: number;
     /** Fraction of scored cells with empty_patch (KPI alongside correct_rate). */
     empty_patch_rate: number | null;
     empty_patches: number;
+    /** Legacy blended rate over every executed row. Use scoring.scripted_protocol_control/live_model. */
     correct_rate: number | null;
     mean_latency_ms: number | null;
     total_cost_usd: number | null;
@@ -225,7 +237,18 @@ export interface AgentBenchmarkReport {
     mean_cost_usd: number | null;
     p95_tokens: number | null;
     p95_cost_usd: number | null;
+    /** Legacy blended rates over every executed row. Use scoring.*. */
     tier_pass_rates: Record<string, { passed: number; total: number; rate: number | null }>;
+    /** Explicit scoring provenance: mock cells are controls, never model evidence. */
+    scoring: {
+      provider_mode: 'scripted_control' | 'live_model';
+      model_performance_claim: boolean;
+      scripted_protocol_control: { passed: number; total: number; rate: number | null };
+      live_model: { passed: number; total: number; rate: number | null };
+      denominators: { selected: number; executed: number; manual_required: number };
+      /** success/correct_rate above are legacy blended fields; use this block. */
+      note: string;
+    };
   };
   results: AgentBenchmarkCellResult[];
   improvement_actions: string[];
@@ -916,6 +939,35 @@ async function runParityAgentCell(
   const provider = options.provider ?? 'mock';
   const evidenceDir = resolve(options.evidenceDir ?? join(BABEL_RUNS_DIR, 'agent-benchmark'));
 
+  if (surface === 'chat' && provider === 'mock') {
+    // Mock chat must exercise the real ChatEngine tool protocol without a
+    // provider. The scripted control is explicitly not model-performance
+    // evidence, and it never fabricates a completion claim.
+    const { runScriptedParityChatCell } = await import('./agentBenchmarkScriptedChat.js');
+    const scripted = await runScriptedParityChatCell({
+      task,
+      parityTaskId,
+      surface,
+      evidenceDir,
+      runId: `scripted-parity-${task.task_id}-${Date.now()}`,
+    });
+    const cell = toAgentCellResult(task, scripted.parityResult, null);
+    return {
+      ...cell,
+      execution_path: 'scripted_chat_engine',
+      input_tokens: null,
+      output_tokens: null,
+      scripted_provider: true,
+      model_performance_claim: false,
+      score_class: 'scripted_protocol_control',
+      notes: [
+        ...cell.notes,
+        `scripted_engine_status=${String(scripted.engineStatus)} outcome=${String(scripted.engineOutcome)}`,
+        `scripted_tool_calls=${scripted.toolCallCount}`,
+      ],
+    };
+  }
+
   if (surface !== 'chat' && provider === 'mock') {
     const parityResult = await runParityBabelCell(parityTaskId, {
       provider: 'mock',
@@ -1542,7 +1594,7 @@ function toAgentCellResult(
   };
 }
 
-export async function runAgentBenchmarkTask(
+async function runAgentBenchmarkTaskInner(
   task: AgentBenchmarkTask,
   options: RunAgentBenchmarkOptions = {},
 ): Promise<AgentBenchmarkCellResult> {
@@ -1619,6 +1671,22 @@ export async function runAgentBenchmarkTask(
   }
 
   return externalManualCell(task, 'manual_required');
+}
+
+/** Run one cell and stamp explicit scoring provenance on every executed result. */
+export async function runAgentBenchmarkTask(
+  task: AgentBenchmarkTask,
+  options: RunAgentBenchmarkOptions = {},
+): Promise<AgentBenchmarkCellResult> {
+  const cell = await runAgentBenchmarkTaskInner(task, options);
+  if (cell.score_class !== undefined || cell.status === 'manual_required') return cell;
+  const scripted = cell.scripted_provider === true || options.provider !== 'live';
+  return {
+    ...cell,
+    scripted_provider: scripted,
+    model_performance_claim: !scripted && options.provider === 'live',
+    score_class: scripted ? 'scripted_protocol_control' : 'live_model',
+  };
 }
 
 function buildImprovementActions(
@@ -1750,6 +1818,33 @@ export async function runAgentBenchmarkSuite(
   const p95Tokens = tokens.length > 0 ? percentile(sortedTokens, 0.95) : null;
   const p95Cost = costs.length > 0 ? percentile(sortedCosts, 0.95) : null;
 
+  const scriptedRows = results.filter((row) => row.score_class === 'scripted_protocol_control');
+  const liveRows = results.filter((row) => row.score_class === 'live_model');
+  const scorePass = (row: AgentBenchmarkCellResult): boolean =>
+    row.status === 'success' && row.verifier === 'pass';
+  const scoring: AgentBenchmarkReport['summary']['scoring'] = {
+    provider_mode: (options.provider ?? 'mock') === 'mock' ? 'scripted_control' : 'live_model',
+    model_performance_claim: (options.provider ?? 'mock') === 'live',
+    scripted_protocol_control: {
+      passed: scriptedRows.filter(scorePass).length,
+      total: scriptedRows.length,
+      rate: scriptedRows.length > 0 ? scriptedRows.filter(scorePass).length / scriptedRows.length : null,
+    },
+    live_model: {
+      passed: liveRows.filter(scorePass).length,
+      total: liveRows.length,
+      rate: liveRows.length > 0 ? liveRows.filter(scorePass).length / liveRows.length : null,
+    },
+    denominators: {
+      selected: results.length,
+      executed: scored.length,
+      manual_required: manual,
+    },
+    note:
+      'summary.success, summary.correct_rate and summary.tier_pass_rates are legacy ' +
+      'blended fields. Use scripted_protocol_control/live_model with the published denominators.',
+  };
+
   const tierPassRates: AgentBenchmarkReport['summary']['tier_pass_rates'] = {};
   for (const tierId of new Set(results.map((row) => row.tier))) {
     const tierRows = results.filter((row) => row.tier === tierId && row.status !== 'manual_required');
@@ -1797,6 +1892,7 @@ export async function runAgentBenchmarkSuite(
       p95_tokens: p95Tokens,
       p95_cost_usd: p95Cost,
       tier_pass_rates: tierPassRates,
+      scoring,
     },
     results,
     improvement_actions: buildImprovementActions(results, readiness),

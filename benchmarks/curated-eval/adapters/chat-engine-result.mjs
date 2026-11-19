@@ -67,7 +67,9 @@ export function adaptChatEngineResult(input) {
     completion_claimed: completionClaimed,
     completion_claim_evidence: input.completionClaimEvidence ?? (completionClaimed ? result.answer ?? null : null),
     verifier: input.verifier ?? { status: 'not_run', assertions: null, errors: [] },
-    diff: input.diff ?? { added: [], modified: [], deleted: [] },
+    // Absence is preserved: normalizeAttempt records diff_collected=false so a
+    // missing diff can never be treated as a policy-clean change set.
+    diff: input.diff ?? null,
     exposure: input.exposure ?? { oracle_visible: false, reference_visible: false, unexpected_reads: [] },
     usage: {
       input_tokens: result.usage?.totalInputTokens,
