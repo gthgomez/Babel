@@ -27,6 +27,7 @@ const packedFiles = [
   { path: 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs' },
   { path: 'dist/authority/ownedFileAssertion.windows.ps1' },
   { path: 'dist/services/playbooks/single-file.json' },
+  { path: 'dist/tools/tool-manifest.json' },
 ].map(file => ({ ...file, size: 1 }))
 const tree = spawnSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' })
 const sourceTreeSha = tree.stdout.trim()
