@@ -414,7 +414,7 @@ import {
   hashContent as hashContentFn,
 } from "./chatEngineVerifierSession.js";
 import { resolveAcceptedReadOnlyTerminal } from "./chatEngineMutatingNoChangeTerminal.js";
-import { seedChatVerifierDependencyHashes } from "./verifierDependencyAdmission.js";
+import { contractMeaningCommands, contractPreservationErrors, seedChatVerifierDependencyHashes } from "./verifierDependencyAdmission.js";
 import { admitVerifierCustodyViolation } from "./verifierCustodyAdmission.js";
 import { RepetitionDetector } from "./repetitionDetector.js";
 import { captureThought } from "./thoughtCapture.js";
@@ -1428,7 +1428,7 @@ export class ChatEngine {
       isAuthoritativeCommand: isAuthoritativeVerifierCommand,
     }));
     const errors = [...selected.proofSelection.evidenceErrors, ...selected.proofSelection.integrityFindings,
-      ...proofs.flatMap(proof => proof.errors ?? [])];
+      ...proofs.flatMap(proof => proof.errors ?? []), ...contractPreservationErrors(this.parity.liveAuthority?.taskContract, this.options.projectRoot)];
     if (!proofs.length || selected.proofSelection.missingRequirements.length || selected.proofSelection.unresolvedRelevantFailures.length) errors.push('missing current covering green proof');
     return { compliant: errors.length === 0, ...(errors.length ? { errors } : {}) };
   }
@@ -2686,7 +2686,7 @@ export class ChatEngine {
   }
 
   private isAcceptedReadOnlyTerminal(): boolean {
-    return resolveAcceptedReadOnlyTerminal({
+    return contractPreservationErrors(this.parity.liveAuthority?.taskContract, this.options.projectRoot).length === 0 && resolveAcceptedReadOnlyTerminal({
       effectiveOperation: this.lastTurnRuntime?.effectiveOperation,
       ambientReadOnly: isReadOnlyChat(),
       hasAnyWrites: this.hasAnyWrites(),
@@ -4440,6 +4440,7 @@ export class ChatEngine {
       hashes: this.verifierDependencyHashes,
       resolvedVerifierCommands: this.getResolvedRequiredVerifiers(),
       discoveredTestCommands: this.discoveredTestCommands.map((entry) => entry.command),
+      meaningVerifierCommands: contractMeaningCommands(this.parity.liveAuthority?.taskContract.acceptance),
     });
   }
 

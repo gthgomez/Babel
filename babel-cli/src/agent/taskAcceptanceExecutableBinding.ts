@@ -1,3 +1,5 @@
+import { existsSync, statSync } from 'node:fs'
+import { dirname, join, posix } from 'node:path'
 import { canonicalJson, sha256Canonical } from '../acceptance/canonical.js'
 import { formatArgvAsCommand, parseCommandArgv } from '../utils/commandArgv.js'
 import {
@@ -8,6 +10,17 @@ import {
 import type { AcceptanceRequirementV1, AcceptanceRequirementType, VerificationSpecV1 } from './taskContract.js'
 import type { AcceptanceMeaningSource, TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
+import { assertionEvidenceMatches, stripJsComments } from './verifierBehaviorEvidence.js'
+import { markAdvisoryDocsGoals } from './advisoryDocsGoal.js'
+import {
+  isPublicApiPreservationStatement,
+  PUBLIC_API_PRESERVATION_STRATEGY,
+} from './publicApiPreservation.js'
+import {
+  readVerifierCommandInput,
+  verifierCommandInputFiles,
+  type VerifierCommandInputOverrides,
+} from './verifierCommandInputs.js'
 
 function isUnresolvedCriterion(criterion: AcceptanceRequirementV1): boolean {
   return (
@@ -397,6 +410,282 @@ function bindDesignatedWitnessToCriterion(
   }
 }
 
+export const ACCEPTANCE_RELEVANCE_BINDING_REF = 'babel:acceptance-relevance-bind:v1'
+const RELEVANCE_WITNESS_MARKER = 'relevance-matched executable witness'
+
+const RELEVANT_PATH_EXTENSION =
+  /\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|swift|php|cs|txt|csv|tsv|json|ya?ml|toml|ini|cfg|conf|md|sh|sql|html|css)$/i
+const PATH_CANDIDATE_RE =
+  /(?:^|[\s`"'(])((?:\.{1,2}\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)*\.[A-Za-z0-9]{1,12})(?=$|[\s`"'),;:])/g
+const CALL_EXPRESSION_RE =
+  /\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(([^()\n]{0,160})\)/
+const REGEX_SPECIALS = /[.*+?^${}()|[\]\\]/g
+
+function escapeRegex(value: string): string {
+  return value.replace(REGEX_SPECIALS, '\\$&')
+}
+
+interface RelevanceSpec {
+  targetPaths: string[]
+  callPattern: RegExp | null
+  /** Exact expected result phrase (whitespace-sensitive) from the goal. */
+  fragment: string | null
+}
+
+function normalizeProjectPath(value: string): string {
+  const normalized = posix.normalize(value.replace(/\\/g, '/'))
+  return normalized.replace(/^\.\//, '').replace(/\/+/g, '/')
+}
+
+function pathTokenCandidates(description: string): string[] {
+  const candidates = new Set<string>()
+  for (const match of description.matchAll(PATH_CANDIDATE_RE)) {
+    const token = match[1]!
+    if (/^https?:/i.test(token) || token.includes('://')) continue
+    if (!RELEVANT_PATH_EXTENSION.test(token)) continue
+    candidates.add(normalizeProjectPath(token))
+  }
+  return [...candidates]
+}
+
+function relevanceSpec(description: string): RelevanceSpec | null {
+  const targetPaths = pathTokenCandidates(description)
+  const call = CALL_EXPRESSION_RE.exec(description)
+  let callPattern: RegExp | null = null
+  if (call) {
+    const symbol = escapeRegex(call[1]!)
+    const args = call[2]!.trim()
+    if (args) {
+      const tokens = args
+        .split(/[^A-Za-z0-9_$.-]+/)
+        .map(token => token.trim())
+        .filter(token => token.length > 0)
+        .map(escapeRegex)
+      callPattern = tokens.length
+        ? new RegExp(`\\b${symbol}\\s*\\(\\s*${tokens.join('\\s*,\\s*')}\\s*\\)`)
+        : new RegExp(`\\b${symbol}\\s*\\(`)
+    } else {
+      callPattern = new RegExp(`\\b${symbol}\\s*\\(`)
+    }
+  }
+  const resultVerb = /\b(?:returns?|equals?|is|becomes?|outputs?|produces?)\b/gi
+  const verbMatches = [...description.matchAll(resultVerb)]
+  const lastVerb = verbMatches.at(-1)
+  const resultTail = lastVerb && description.length - (lastVerb.index! + lastVerb[0].length) <= 200
+    ? description.slice(lastVerb.index! + lastVerb[0].length).trim().replace(/[.;]+$/, '').trim()
+    : undefined
+  const assignmentTail = description.match(/=\s*([^.;\n]{1,120})/)?.[1]?.trim()
+  const fragment = resultTail
+    ? resultTail.replace(/^[\`\"']/, '').replace(/[\`\"']$/, '')
+    : assignmentTail
+      ? assignmentTail.replace(/^[\`\"']/, '').replace(/[\`\"']$/, '')
+      : null
+  if (!targetPaths.length && !callPattern) return null
+  return { targetPaths, callPattern, fragment }
+}
+
+/** References inside a verifier input that resolve to an existing project file. */
+function referencedExistingPaths(
+  projectRoot: string,
+  inputFile: string,
+  content: string,
+  fs: VerifierCommandInputOverrides,
+): string[] {
+  const resolved = new Set<string>()
+  // Quoted strings can carry imports or data-file reads without an extension
+  // boundary that the generic tokenizer sees.
+  const quoted = [...content.matchAll(/["'`]([^"'`\n]{1,200})["'`]/g)].map(match => match[1]!)
+  const tokens = [
+    ...[...content.matchAll(PATH_CANDIDATE_RE)].map(match => match[1]!),
+    ...quoted,
+  ]
+  for (const token of tokens) {
+    if (!RELEVANT_PATH_EXTENSION.test(token) || token.includes('://')) continue
+    const lexical = token.replace(/\\/g, '/')
+    const bases = lexical.startsWith('.') ? [dirname(inputFile)] : [dirname(inputFile), '']
+    for (const base of bases) {
+      const relative = normalizeProjectPath(base ? `${base}/${lexical}` : lexical)
+      if (relative.startsWith('../') || relative.includes('/../') || /^[A-Za-z]:|^\//.test(relative)) continue
+      const absolute = join(projectRoot, relative)
+      const exists = fs.exists ?? existsSync
+      const isFile = fs.isFile ?? ((value: string) => {
+        try { return statSync(value).isFile() } catch { return false }
+      })
+      if (exists(absolute) && isFile(absolute)) resolved.add(relative)
+    }
+  }
+  return [...resolved]
+}
+
+/** Local bindings imported from a module that provides the goal's target file. */
+function importedSymbolsForTarget(
+  content: string,
+  inputFile: string,
+  targetPaths: readonly string[],
+): string[] {
+  const symbols = new Set<string>()
+  const matchesTarget = (specifier: string): boolean => {
+    if (!specifier.startsWith('.')) return false
+    const resolved = normalizeProjectPath(`${dirname(inputFile)}/${specifier}`)
+    return targetPaths.some(target => resolved === target || resolved.endsWith(`/${target}`))
+  }
+  for (const match of content.matchAll(/import\s+([\s\S]*?)\s+from\s+["']([^"']+)["']/g)) {
+    if (!matchesTarget(match[2]!)) continue
+    const clause = match[1]!.trim()
+    const namespace = clause.match(/\*\s+as\s+([A-Za-z_$][\w$]*)/)?.[1]
+    if (namespace) symbols.add(namespace)
+    const named = clause.match(/\{([^}]*)\}/)?.[1]
+    if (named) {
+      for (const item of named.split(',')) {
+        const binding = item.trim().split(/\s+as\s+/).at(-1)?.trim()
+        if (binding && /^[A-Za-z_$][\w$]*$/.test(binding)) symbols.add(binding)
+      }
+    }
+    const defaultBinding = clause.replace(/\{[^}]*\}/g, '').replace(/\*\s+as\s+[A-Za-z_$][\w$]*/g, '').trim().replace(/,$/, '').trim()
+    if (/^[A-Za-z_$][\w$]*$/.test(defaultBinding)) symbols.add(defaultBinding)
+  }
+  for (const match of content.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*["']([^"']+)["']\s*\)/g)) {
+    if (!matchesTarget(match[2]!)) continue
+    for (const item of match[1]!.split(',')) {
+      const binding = item.trim().split(':').at(-1)?.trim()
+      if (binding && /^[A-Za-z_$][\w$]*$/.test(binding)) symbols.add(binding)
+    }
+  }
+  return [...symbols]
+}
+
+function specMatchesContent(input: {
+  projectRoot: string
+  inputFile: string
+  content: string
+  spec: RelevanceSpec
+  fs: VerifierCommandInputOverrides
+}): boolean {
+  // Comments and skipped registrations are never executable evidence.
+  const code = stripJsComments(input.content)
+  const references = referencedExistingPaths(
+    input.projectRoot,
+    input.inputFile,
+    code,
+    input.fs,
+  )
+  const pathMatched = input.spec.targetPaths.length === 0
+    ? true
+    : input.spec.targetPaths.some(target =>
+        references.some(reference => reference === target || reference.endsWith(`/${target}`)),
+      )
+  if (!pathMatched) return false
+  // The expected result must be an operand of a real assertion. With a call
+  // goal the exact call must share that assertion. Without a call, the
+  // assertion must also use a binding imported from the goal's target module;
+  // an unrelated value that happens to equal the fragment is not evidence.
+  if (input.spec.fragment === null) return false
+  const codeTargets = input.spec.targetPaths.filter(path => RELEVANT_PATH_EXTENSION.test(path) && /\.(?:[cm]?[jt]sx?)$/i.test(path))
+  const dataTargets = input.spec.targetPaths.filter(path => !codeTargets.includes(path))
+  const requiredSymbols = input.spec.callPattern
+    ? []
+    : [
+        ...importedSymbolsForTarget(code, input.inputFile, codeTargets),
+        ...dataTargets,
+      ]
+  if (!input.spec.callPattern && requiredSymbols.length === 0) return false
+  return assertionEvidenceMatches(
+    code,
+    input.spec.callPattern,
+    input.spec.fragment,
+    { requiredSymbols },
+  )
+}
+
+function relevantTrustedCommands(input: {
+  criterion: AcceptanceRequirementV1
+  trusted: readonly string[]
+  projectRoot: string
+  fs: VerifierCommandInputOverrides
+}): string[] {
+  if (isUnresolvedCriterion(input.criterion)) return []
+  if (!input.criterion.verification.verifier_id.startsWith('meaning:')) return []
+  const spec = relevanceSpec(input.criterion.description)
+  if (!spec) return []
+  return input.trusted.filter(command => {
+    const inputFiles = verifierCommandInputFiles(input.projectRoot, command, input.fs)
+      .filter(file => file !== 'package.json')
+    if (inputFiles.length === 0) return false
+    return inputFiles.some(file => {
+      const content = readVerifierCommandInput(input.projectRoot, file, input.fs)
+      return content !== null && specMatchesContent({
+        projectRoot: input.projectRoot,
+        inputFile: file,
+        content,
+        spec,
+        fs: input.fs,
+      })
+    })
+  })
+}
+
+function bindRelevanceWitness(
+  criterion: AcceptanceRequirementV1,
+  command: string,
+  defaultWorkingDirectory?: string,
+  existingVerifierInputFiles?: readonly string[],
+): AcceptanceRequirementV1 {
+  const verification = materializeExecutableVerification(
+    command,
+    defaultWorkingDirectory,
+    existingVerifierInputFiles,
+  )
+  if (!verification) return criterion
+  return {
+    ...criterion,
+    type: requirementTypeForCommand(command),
+    verification_strategy: `The task names an observable behavior and its frozen verifier input exercises that same target; this is the ${RELEVANCE_WITNESS_MARKER} for the requirement.`,
+    verification,
+  }
+}
+
+/** Meaning-derived (inferred) executable criteria, e.g. relevance or witness bindings. */
+export function contractMeaningVerifierCommands(
+  acceptance: readonly AcceptanceRequirementV1[],
+): string[] {
+  const commands = new Set<string>()
+  for (const requirement of acceptance) {
+    const strategy = requirement.verification_strategy
+    if (!strategy.includes(RELEVANCE_WITNESS_MARKER) &&
+      !strategy.includes(WITNESS_STRATEGY_MARKER)) continue
+    const command = canonicalCommandFromFrozenVerification(requirement.verification)
+    if (command) commands.add(command)
+  }
+  return [...commands].sort()
+}
+
+/** Commands frozen for relevance-bound inferred goals. */
+export function relevanceBoundVerifierCommands(meaning: TaskAcceptanceMeaning): string[] {
+  const commands = new Set<string>()
+  for (const criterion of meaning.criteria) {
+    if (!criterion.verification_strategy.includes(RELEVANCE_WITNESS_MARKER)) continue
+    const command = canonicalCommandFromFrozenVerification(criterion.verification)
+    if (command) commands.add(command)
+  }
+  return [...commands].sort()
+}
+
+/** Protected inputs contributed by relevance-bound inferred goals. */
+export function relevanceBoundVerifierInputFiles(
+  projectRoot: string,
+  meaning: TaskAcceptanceMeaning,
+  fs: VerifierCommandInputOverrides = {},
+): string[] {
+  const files = new Set<string>()
+  for (const criterion of meaning.criteria) {
+    if (!criterion.verification_strategy.includes(RELEVANCE_WITNESS_MARKER)) continue
+    const command = canonicalCommandFromFrozenVerification(criterion.verification)
+    if (!command) continue
+    for (const file of verifierCommandInputFiles(projectRoot, command, fs)) files.add(file)
+  }
+  return [...files].sort()
+}
+
 /**
  * Bind session-trusted verifier commands onto explicit observable criteria before freeze.
  * A preservation criterion whose own text designates the regression witness may then
@@ -409,6 +698,14 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   defaultWorkingDirectory?: string
   /** Existing test input paths frozen at session admission; new tests cannot self-certify. */
   existingVerifierInputFiles?: readonly string[]
+  /**
+   * Live project root. When present, an inferred behavioral goal may bind a
+   * trusted verifier only if that verifier's frozen inputs actually exercise
+   * the goal's named target/behavior. Replay/amendment callers omit it, so the
+   * binding stays deterministic from recorded contract data alone.
+   */
+  projectRoot?: string
+  relevanceFs?: VerifierCommandInputOverrides
 }): TaskAcceptanceMeaning {
   const trusted = [
     ...new Set(
@@ -490,6 +787,36 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     }
   }
 
+  // Relevance pass: an inferred behavioral goal may bind a trusted verifier
+  // only when its frozen input actually exercises the goal's named target and
+  // observable call. A live project root is required; replay/amendment callers
+  // omit it and stay deterministic from recorded contract data.
+  let relevanceBound = explicitBound
+  if (input.projectRoot && input.meaning.interpretation_version >= 3) {
+    const projectRoot = input.projectRoot
+    const fs = input.relevanceFs ?? {}
+    relevanceBound = explicitBound.map((criterion) => {
+      const matches = relevantTrustedCommands({ criterion, trusted, projectRoot, fs })
+      if (matches.length !== 1) return criterion
+      const command = matches[0]!
+      const bound = bindRelevanceWitness(
+        criterion,
+        command,
+        input.defaultWorkingDirectory,
+        input.existingVerifierInputFiles,
+      )
+      if (bound.verification.verifier_id === criterion.verification.verifier_id) return criterion
+      bindingProvenance.push({
+        kind: 'derived_acceptance',
+        ref: `${ACCEPTANCE_RELEVANCE_BINDING_REF}:${sha256Canonical({
+          criterion_id: criterion.id,
+          command,
+        }).slice(0, 32)}`,
+      })
+      return bound
+    })
+  }
+
   // Second pass sees the frozen explicit commands, so a witness can only
   // re-freeze what the first pass already froze — never a new command. Each
   // inferred criterion resolves from its own designated command; a criterion
@@ -497,12 +824,12 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   const witnessEligible =
     input.meaning.structurallyComplete &&
     extractDesignatedRegressionWitness(input.meaning.activeProse) !== null
-  let criteria = explicitBound
+  let criteria = relevanceBound
   if (witnessEligible) {
-    const witnessed = explicitBound.map((criterion) =>
+    const witnessed = relevanceBound.map((criterion) =>
       bindDesignatedWitnessToCriterion(criterion, input.meaning.sources, explicitBound),
     )
-    criteria = explicitBound.map((criterion, index) => witnessed[index] ?? criterion)
+    criteria = relevanceBound.map((criterion, index) => witnessed[index] ?? criterion)
     for (const [index, bound] of witnessed.entries()) {
       if (!bound) continue
       const designated = criterionDesignatedCommand(input.meaning.criteria[index]!.description)
@@ -514,6 +841,30 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
         }).slice(0, 32)}`,
       })
     }
+  }
+
+  if (input.projectRoot && input.meaning.interpretation_version >= 3) {
+    const advisory = markAdvisoryDocsGoals({
+      criteria,
+      sources: input.meaning.sources,
+      projectRoot: input.projectRoot,
+    })
+    if (advisory.criteria !== criteria) {
+      criteria = advisory.criteria
+      for (const ref of advisory.refs) {
+        bindingProvenance.push({ kind: 'derived_acceptance', ref })
+      }
+    }
+  }
+
+  // The preservation sentence is enforced by the frozen export surface at
+  // completion; it must not also become an unsatisfiable prose requirement.
+  if (input.projectRoot && criteria.some(criterion => criterion.required &&
+    isPublicApiPreservationStatement(criterion.description))) {
+    criteria = criteria.map(criterion => criterion.required &&
+      isPublicApiPreservationStatement(criterion.description)
+      ? { ...criterion, required: false, verification_strategy: PUBLIC_API_PRESERVATION_STRATEGY }
+      : criterion)
   }
 
   if (!bindingProvenance.length) return input.meaning

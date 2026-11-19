@@ -20,6 +20,10 @@ const RAW_PYTHON_TOP_LEVEL_CODE = /^\s{0,3}(?:async\s+)?(?:def|class)\s+[A-Za-z_
 // A concrete behavioral objective in the user's opening request must not be
 // displaced by a later, narrower command-only Requirements list.
 const BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:ACTION:\s*)?(?:please\s+)?(?:fix|repair|change|update|implement|make|ensure|support)\b.{1,240}\bso\b.{1,240}\b(?:returns?|return|equals?|equal|produces?|outputs?|becomes?|is)\b.{1,160}[.!]?\s*$/i
+// Additional operative goal lines in the same opening prose block. They are
+// only admitted when at least one sibling line states an observable behavioral
+// objective, so ordinary context or a lone vague instruction is unchanged.
+const OPERATIVE_GOAL_LINE = /^\s{0,3}(?:ACTION:\s*)?(?:please\s+)?(?:(?:also|additionally|and)\b[\s,:]*)?(?:fix|repair|change|update|implement|make|ensure|support|add|remove|delete|create|refactor|migrate|upgrade|replace|rename|improve|document|write|apply|extend|adjust)\b.{1,300}$/i
 export type AcceptanceMeaningStatus = 'explicit' | 'inferred' | 'unresolved'
 export interface AcceptanceMeaningSource {
   criterion_id: string
@@ -73,7 +77,9 @@ function preserveBehavioralGoal(
   let exampleDepth: number | undefined
   let plainExclusion = false
   let plainExample = false
-  let found: { text: string; start: number; end: number } | undefined
+  let behavioral = false
+  const seenCandidate = new Set<string>()
+  const candidates: { text: string; start: number; end: number }[] = []
   for (const raw of lines) {
     const line = raw.replace(/\r$/, '')
     // Markdown indented code may use four spaces or a tab. Keep it outside
@@ -124,28 +130,76 @@ function preserveBehavioralGoal(
       offset += raw.length + 1
       continue
     }
+    // Bullets are explicit acceptance criteria in the base interpretation;
+    // this bridge never reinterprets them as opening goals.
     if (/^\s{0,3}(?:[-*+•]|\d+[.)])\s+/.test(line)) break
-    if (line.trim() && !/^\s{0,3}#{1,6}\s+/.test(line) && BEHAVIORAL_GOAL_LINE.test(line)) {
-      found = { text: line.trim(), start: offset, end: offset + line.length }
-      break
+    if (line.trim() && headingDepth === undefined) {
+      if (BEHAVIORAL_GOAL_LINE.test(line)) behavioral = true
+      if (OPERATIVE_GOAL_LINE.test(line)) {
+        const text = line.trim()
+        if (!seenCandidate.has(text)) {
+          seenCandidate.add(text)
+          candidates.push({ text, start: offset, end: offset + line.length })
+        }
+      }
     }
     offset += raw.length + 1
   }
-  if (!found || meaning.criteria.some(item => item.description === found!.text)) return meaning
+  // A lone imperative or contextual sentence is not enough: preserve the block
+  // only when at least one line states a directly observable behavior.
+  if (!behavioral || candidates.length === 0) return meaning
 
-  // The parser already enforces this cap. If there is no room for the
-  // additional obligation, combine it with the final criterion as one
-  // unresolved requirement. The admitted contract therefore retains both
-  // obligations and cannot certify either from unrelated command evidence.
-  if (meaning.criteria.length >= MAX_CRITERIA) {
-    const lastCriterion = meaning.criteria[MAX_CRITERIA - 1]!
-    const lastSource = meaning.sources.find(source => source.criterion_id === lastCriterion.id)
-    const combinedDescription = `${found.text} Also, ${lastCriterion.description}`
+  const inputDigest = sha256Canonical(request)
+  const existing = new Set(meaning.criteria.map(item => item.description))
+  const preserved = candidates.filter(item => !existing.has(item.text))
+  if (!preserved.length) return meaning
+
+  const makeCriterion = (found: { text: string }): AcceptanceRequirementV1 => {
+    const id = `acceptance:${sha256Canonical({ description: found.text, status: 'inferred' }).slice(0, 32)}`
+    return {
+      id,
+      description: found.text,
+      type: 'custom',
+      required: true,
+      verification: { kind: 'custom', verifier_id: `meaning:${id}:${inputDigest.slice(0, 16)}` },
+      verification_strategy: 'The explicit behavioral goal remains a separate requirement; a command-only success does not prove it unless that exact behavior is covered by an authorized verifier.',
+    }
+  }
+
+  const room = Math.max(0, MAX_CRITERIA - meaning.criteria.length)
+  const admitted = preserved.slice(0, room)
+  const overflow = preserved.slice(admitted.length)
+  const admittedCriteria = admitted.map(makeCriterion)
+  const admittedSources: AcceptanceMeaningSource[] = admittedCriteria.map((item, index) => ({
+    criterion_id: item.id,
+    status: 'inferred',
+    input_digest: inputDigest,
+    start: admitted[index]!.start,
+    end: admitted[index]!.end,
+  }))
+  const admittedProvenance: TaskContractProvenanceRecord[] = admittedCriteria.map((item, index) => ({
+    kind: 'derived_acceptance',
+    ref: `${meaningRef}:inferred:${inputDigest}:${admitted[index]!.start}:${admitted[index]!.end}:${item.id}`,
+  }))
+
+  let criteria = [...admittedCriteria, ...meaning.criteria]
+  let sources = [...admittedSources, ...meaning.sources]
+  let provenance = [...admittedProvenance, ...meaning.provenance]
+  let unresolved = meaning.unresolved
+  let structurallyComplete = meaning.structurallyComplete
+
+  // The parser already enforces the cap. If there is no room for the
+  // additional obligation(s), combine them with the final criterion as one
+  // unresolved requirement. The admitted contract therefore retains every
+  // obligation and cannot certify any of them from unrelated command evidence.
+  if (overflow.length) {
+    const lastCriterion = criteria[MAX_CRITERIA - 1]!
+    const lastSource = sources.find(source => source.criterion_id === lastCriterion.id)
+    const combinedDescription = `${overflow.map(item => item.text).join(' Also, ')} Also, ${lastCriterion.description}`
     const description = combinedDescription.length <= MAX_CRITERION_CHARS
       ? combinedDescription
-      : 'Acceptance capture limit exceeded; the opening behavioral objective and displaced acceptance requirement remain unresolved and cannot be certified.'
+      : 'Acceptance capture limit exceeded; the opening behavioral objectives and displaced acceptance requirement remain unresolved and cannot be certified.'
     const id = `acceptance:${sha256Canonical({ description, status: 'unresolved' }).slice(0, 32)}`
-    const inputDigest = sha256Canonical(request)
     const combined: AcceptanceRequirementV1 = {
       id,
       description,
@@ -154,60 +208,29 @@ function preserveBehavioralGoal(
       verification: { kind: 'custom', verifier_id: `meaning:${id}:${inputDigest.slice(0, 16)}` },
       verification_strategy: 'Acceptance requirements exceeded the capture limit; both combined obligations require independent evidence before completion can be certified.',
     }
-    const criteria = [...meaning.criteria]
-    criteria[MAX_CRITERIA - 1] = combined
-    const sources = meaning.sources.filter(source => source.criterion_id !== lastCriterion.id)
-    sources.push({
+    criteria = [...criteria.slice(0, MAX_CRITERIA - 1), combined]
+    sources = [...sources.filter(source => source.criterion_id !== lastCriterion.id), {
       criterion_id: id,
       status: 'unresolved',
       input_digest: inputDigest,
-      start: found.start,
-      end: lastSource?.end ?? found.end,
-    })
-    return {
-      ...meaning,
-      criteria,
-      sources,
-      unresolved: true,
-      structurallyComplete: false,
-      provenance: [
-        {
-          kind: 'derived_acceptance',
-          ref: `${meaningRef}:unresolved:${inputDigest}:${found.start}:${lastSource?.end ?? found.end}:${id}`,
-        },
-        ...meaning.provenance,
-      ],
-    }
+      start: overflow[0]!.start,
+      end: lastSource?.end ?? overflow.at(-1)!.end,
+    }]
+    provenance = [{
+      kind: 'derived_acceptance',
+      ref: `${meaningRef}:unresolved:${inputDigest}:${overflow[0]!.start}:${lastSource?.end ?? overflow.at(-1)!.end}:${id}`,
+    }, ...provenance]
+    unresolved = true
+    structurallyComplete = false
   }
 
-  const inputDigest = sha256Canonical(request)
-  const id = `acceptance:${sha256Canonical({ description: found.text, status: 'inferred' }).slice(0, 32)}`
-  const goal: AcceptanceRequirementV1 = {
-    id,
-    description: found.text,
-    type: 'custom',
-    required: true,
-    verification: { kind: 'custom', verifier_id: `meaning:${id}:${inputDigest.slice(0, 16)}` },
-    verification_strategy: 'The explicit behavioral goal remains a separate requirement; a command-only success does not prove it unless that exact behavior is covered by an authorized verifier.',
-  }
-  const source: AcceptanceMeaningSource = {
-    criterion_id: id,
-    status: 'inferred',
-    input_digest: inputDigest,
-    start: found.start,
-    end: found.end,
-  }
   return {
     ...meaning,
-    criteria: [goal, ...meaning.criteria],
-    sources: [source, ...meaning.sources],
-    provenance: [
-      {
-        kind: 'derived_acceptance',
-        ref: `${meaningRef}:inferred:${inputDigest}:${found.start}:${found.end}:${id}`,
-      },
-      ...meaning.provenance,
-    ],
+    criteria,
+    sources,
+    provenance,
+    unresolved,
+    structurallyComplete,
   }
 }
 
