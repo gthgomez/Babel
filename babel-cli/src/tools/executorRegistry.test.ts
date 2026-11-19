@@ -188,6 +188,7 @@ describe('executor tool registry', () => {
       assert.equal(result.render_intent, 'mcp_result');
       const payload = JSON.parse(result.stdout) as Record<string, unknown>;
       assert.equal(payload['method'], 'tools/search');
+      assert.equal(payload['transport_method'], 'tools/list');
       assert.equal(payload['query'], 'lookup');
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true });

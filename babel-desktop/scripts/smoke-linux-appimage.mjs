@@ -3,6 +3,8 @@
 // Tries the default sandbox first. If that process exits before a window
 // appears, retries with extract-and-run and, if needed, --no-sandbox.
 import {spawn, spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
 import {mkdtempSync, mkdirSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
@@ -99,13 +101,15 @@ async function main() {
     console.error('xwininfo could not read the X root window. Install x11-utils and use a real DISPLAY.');
     return 1;
   }
+  // Bind the launch evidence to the exact AppImage bytes that were promoted.
+  const appimageSha256 = createHash('sha256').update(readFileSync(appimage)).digest('hex');
   const modes = [
     {name: 'default-sandbox', env: {}, args: ['--disable-gpu', '--disable-dev-shm-usage']},
     {name: 'extract-and-run', env: {APPIMAGE_EXTRACT_AND_RUN: '1'}, args: ['--disable-gpu', '--disable-dev-shm-usage']},
     {name: 'extract-and-run-no-sandbox', env: {APPIMAGE_EXTRACT_AND_RUN: '1'}, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage']},
   ];
   const attempts = [];
-  let outcome = {ok: false, mode: null, screenshot: null, screen: {width, height}, attempts};
+  let outcome = {status: 'fail', ok: false, window_visible: false, appimage_sha256: appimageSha256, mode: null, screenshot: null, screen: {width, height}, attempts};
   for (const mode of modes) {
     const result = await attempt(appimage, mode);
     attempts.push({mode: mode.name, windowSeen: result.seen, exitCode: result.exited});
@@ -114,7 +118,7 @@ async function main() {
       continue;
     }
     const captured = await capture(result.child, screenshot, width, height);
-    outcome = {ok: captured, mode: mode.name, screenshot: captured ? screenshot : null, screen: {width, height}, attempts};
+    outcome = {status: captured ? 'pass' : 'fail', ok: captured, window_visible: captured, appimage_sha256: appimageSha256, mode: mode.name, screenshot: captured ? screenshot : null, screen: {width, height}, attempts};
     break;
   }
   if (resultPath) writeFileSync(resultPath, JSON.stringify(outcome, null, 2) + '\n');
