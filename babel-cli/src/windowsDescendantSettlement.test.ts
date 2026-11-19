@@ -8,13 +8,18 @@
  */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { isProcessAlive } from './processTree.js';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  descendantPidsFromRows,
+  confirmWindowsDescendants,
   listWindowsDescendantPids,
+  observeWindowsDescendants,
+  parseWmicProcessRows,
   settleWindowsDescendants,
   type WindowsDescendantProbe,
 } from './windowsProcessSettlement.js';
@@ -35,6 +40,86 @@ function scriptedProbe(rounds: number[][]): WindowsDescendantProbe & { killed: n
   };
   return state;
 }
+
+test('descendant walk follows the full parent chain from a dead leader', () => {
+  const rows = [
+    { processId: 1, parentProcessId: 0 },
+    { processId: 100, parentProcessId: 1 },
+    { processId: 101, parentProcessId: 100 },
+    { processId: 102, parentProcessId: 101 },
+    { processId: 200, parentProcessId: 1 },
+  ];
+  assert.deepEqual(descendantPidsFromRows(100, rows), [101, 102]);
+  assert.deepEqual(descendantPidsFromRows(200, rows), []);
+});
+
+test('WMIC process table parsing preserves parent linkage and rejects noise', () => {
+  const rows = parseWmicProcessRows([
+    'Node,ParentProcessId,ProcessId',
+    'RUNNER,1,100',
+    'RUNNER,100,101',
+    'RUNNER,101,102',
+    'noise without commas',
+    '',
+  ].join('\r\n'));
+  assert.deepEqual(rows, [
+    { processId: 100, parentProcessId: 1 },
+    { processId: 101, parentProcessId: 100 },
+    { processId: 102, parentProcessId: 101 },
+  ]);
+  assert.deepEqual(descendantPidsFromRows(100, rows ?? []), [101, 102]);
+  assert.equal(parseWmicProcessRows('Node,ParentProcessId,ProcessId\r\n'), null);
+});
+
+test('observation and confirmation are separate phases', async () => {
+  const observed = await observeWindowsDescendants(4242, {
+    probe: { listDescendants: () => [101, 102], kill: () => true },
+  });
+  assert.deepEqual(observed, [101, 102]);
+  assert.equal(await observeWindowsDescendants(4242, {
+    probe: { listDescendants: () => null, kill: () => true },
+  }), null, 'incomplete observation must stay null');
+});
+
+test(
+  'confirmation reaps observed survivors by pid without another census',
+  { skip: process.platform === 'win32' ? 'POSIX signal fixture' : false },
+  async () => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    try {
+      await new Promise<void>((resolve) => child.once('spawn', () => resolve()));
+      const result = await confirmWindowsDescendants([child.pid!], {
+        kill: (pid) => { try { process.kill(pid, 'SIGKILL'); return true; } catch { return false; } },
+        timeoutMs: 1_000,
+      });
+      assert.equal(result.confirmed, true);
+      assert.deepEqual(result.remaining, []);
+      assert.equal(isProcessAlive(child.pid!), false);
+    } finally {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    }
+  },
+);
+
+test(
+  'confirmation reports survivors when the kill is refused',
+  { skip: process.platform === 'win32' ? 'POSIX signal fixture' : false },
+  async () => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    try {
+      await new Promise<void>((resolve) => child.once('spawn', () => resolve()));
+      const result = await confirmWindowsDescendants([child.pid!], {
+        kill: () => false,
+        timeoutMs: 250,
+        wait: async () => undefined,
+      });
+      assert.equal(result.confirmed, false);
+      assert.deepEqual(result.remaining, [child.pid!]);
+    } finally {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    }
+  },
+);
 
 test('a complete census with no descendants confirms settlement without kills', async () => {
   const probe = scriptedProbe([[]]);
@@ -90,6 +175,7 @@ test(
     writeFileSync(
       join(root, 'parent.mjs'),
       `import { spawn } from 'node:child_process';
+import { isProcessAlive } from './processTree.js';
 import { writeFileSync } from 'node:fs';
 const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
 child.unref();

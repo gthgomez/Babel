@@ -8,7 +8,7 @@ import {
   waitForProcessGroupExit,
 } from './processTree.js'
 import { registerPendingProcessTermination } from './sandboxProcessTermination.js'
-import { settleWindowsDescendants } from './windowsProcessSettlement.js'
+import { confirmWindowsDescendants, observeWindowsDescendants } from './windowsProcessSettlement.js'
 
 export interface AsyncSpawnResult {
   status: number | null
@@ -221,6 +221,15 @@ export function spawnCommandAsync(
               if (!pid) {
                 throw new Error(`Aborted spawn missing child pid for ${executable}`)
               }
+              // Observation precedes taskkill: a live chain lets the census see
+              // grandchildren the leader-only probe cannot. Incomplete census
+              // fails closed before we claim settlement.
+              const observed = process.platform === 'win32'
+                ? await observeWindowsDescendants(pid, { budgetMs: 20_000 })
+                : [];
+              if (process.platform === 'win32' && observed === null) {
+                throw new Error(`Aborted process ${executable} descendant census was incomplete`)
+              }
               const terminationAttempt = terminateChildTree(child)
               if (process.platform === 'win32' && !terminationAttempt.treeKillAccepted) {
                 throw new Error('Windows process-tree termination was not confirmed by taskkill')
@@ -229,14 +238,9 @@ export function spawnCommandAsync(
               if (!groupExited) {
                 throw new Error(`Aborted process group ${pid} did not exit after tree termination`)
               }
-              if (process.platform === 'win32') {
-                // Windows has no group probe: `waitForProcessGroupExit` only
-                // observes the leader. Confirm grandchildren separately.
-                // taskkill /T /F is already accepted above. Give a fast census a
-                // bounded chance to detect survivors; a slow/unavailable WMI
-                // probe must not turn a cancelled command into a false failure.
-                const settlement = await settleWindowsDescendants(pid, { rounds: 1, budgetMs: 1_000 });
-                if (!settlement.confirmed && !settlement.probeUnavailable) {
+              if (process.platform === 'win32' && observed && observed.length > 0) {
+                const confirmation = await confirmWindowsDescendants(observed, { timeoutMs: 2_000 })
+                if (!confirmation.confirmed) {
                   throw new Error(`Aborted process ${executable} left unconfirmed descendants`)
                 }
               }
@@ -281,6 +285,12 @@ export function spawnCommandAsync(
             void (async () => {
               try {
                 const pid = child.pid
+                const observed = process.platform === 'win32' && pid
+                  ? await observeWindowsDescendants(pid, { budgetMs: 20_000 })
+                  : [];
+                if (process.platform === 'win32' && pid && observed === null) {
+                  throw new Error(`Timed-out process ${executable} descendant census was incomplete`)
+                }
                 const terminationAttempt = terminateChildTree(child)
                 if (process.platform === 'win32' && pid && !terminationAttempt.treeKillAccepted) {
                   throw new Error('Windows process-tree termination was not confirmed by taskkill')
@@ -292,9 +302,9 @@ export function spawnCommandAsync(
                   if (!groupExited) {
                     throw new Error(`Timed-out process group ${pid} did not exit after tree termination`)
                   }
-                  if (process.platform === 'win32') {
-                    const settlement = await settleWindowsDescendants(pid, { rounds: 1, budgetMs: 1_000 })
-                    if (!settlement.confirmed && !settlement.probeUnavailable) {
+                  if (process.platform === 'win32' && observed && observed.length > 0) {
+                    const confirmation = await confirmWindowsDescendants(observed, { timeoutMs: 2_000 })
+                    if (!confirmation.confirmed) {
                       throw new Error(`Timed-out process ${executable} left unconfirmed descendants`)
                     }
                   }
