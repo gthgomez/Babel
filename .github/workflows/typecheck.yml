@@ -68,6 +68,30 @@ jobs:
         run: node tools/check-campaign-status.mjs
       - name: Public policy runtime matrix
         run: pwsh -NoProfile -ExecutionPolicy Bypass -Command "& './tools/tests/test-public-content-policy-runtime.ps1'"
+  public-release-validation:
+    name: public-release-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      # The strict maintainer bundle (tools/validate-public-release.ps1 -Strict)
+      # also runs typecheck, scrub and policy steps already enforced by required
+      # jobs. Only its independent validations run here: catalog integrity,
+      # front-door identity vocabulary, and deterministic resolver smoke.
+      - name: Validate prompt catalog
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/validate-catalog.ps1
+      - name: Check public identity vocabulary
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check-public-identity.ps1 -RepoRoot .
+      - name: Resolver smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tools/resolve-local-stack.ps1 -TaskCategory backend -Project example_saas_backend -Model codex -PipelineMode deep -Format json | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tools/resolve-local-stack.ps1 -TaskCategory mobile -Project example_mobile_suite -Model codex -Format json | Out-Null
+          exit $LASTEXITCODE
   policy-integrity:
     name: policy-integrity
     strategy:
@@ -237,7 +261,7 @@ jobs:
           node --test --test-reporter=tap tools/tests/qualified-consumer-promotion.test.mjs tools/tests/package-metadata-drift.test.mjs tools/tests/architectural-boundaries.test.mjs
           tools/tests/architectural-budget.test.mjs tools/tests/ci-package-coverage.test.mjs
           tools/tests/ci-hosted-parallel.test.mjs tools/tests/ci-performance-report.test.mjs tools/tests/ci-record-script-timing.test.mjs tools/tests/journey-qualification-ci.test.mjs tools/tests/ci-unit-sharding.test.mjs tools/tests/ci-workflow-coverage.test.mjs
-          tools/tests/package-scripts-and-tests.test.mjs tools/tests/hook-redaction.test.mjs tools/tests/push-candidates.test.mjs tools/tests/push-preflight.test.mjs tools/tests/public-content-worker.test.mjs tools/tests/pre-commit-batch.test.mjs tools/tests/logged-tap-child.test.mjs tools/tests/installed-dependencies.test.mjs tools/tests/unit-scheduling.test.mjs tools/tests/committed-content-policy.test.mjs tools/tests/consumer-environment.test.mjs tools/tests/native-rg-setup.test.mjs tools/tests/required-tap-coverage.test.mjs tools/tests/required-skip-policy.test.mjs tools/tests/required-tap-reporter.test.mjs tools/tests/consumer-archive.test.mjs tools/tests/dist-content.test.mjs tools/tests/review-summary.test.mjs tools/tests/release-package-validation.test.mjs tools/tests/release-tag-identity.test.mjs tools/tests/release-workflow-contract.test.mjs 2>&1 | Tee-Object
+          tools/tests/package-scripts-and-tests.test.mjs tools/tests/hook-redaction.test.mjs tools/tests/push-candidates.test.mjs tools/tests/push-preflight.test.mjs tools/tests/public-content-worker.test.mjs tools/tests/pre-commit-batch.test.mjs tools/tests/logged-tap-child.test.mjs tools/tests/installed-dependencies.test.mjs tools/tests/unit-scheduling.test.mjs tools/tests/committed-content-policy.test.mjs tools/tests/consumer-environment.test.mjs tools/tests/native-rg-setup.test.mjs tools/tests/required-tap-coverage.test.mjs tools/tests/required-skip-policy.test.mjs tools/tests/required-tap-reporter.test.mjs tools/tests/consumer-archive.test.mjs tools/tests/dist-content.test.mjs tools/tests/review-summary.test.mjs tools/tests/review-marker-reachability.test.mjs tools/tests/ci-release-validation.test.mjs tools/tests/ci-dead-code-gate.test.mjs tools/tests/ci-daemon-json-framing-gate.test.mjs tools/tests/release-package-validation.test.mjs tools/tests/release-tag-identity.test.mjs tools/tests/release-workflow-contract.test.mjs 2>&1 | Tee-Object
           artifacts/architecture-regressions/full.tap
 
           exit $LASTEXITCODE
@@ -245,6 +269,13 @@ jobs:
         run: pwsh -NoProfile -File tools/tests/test-architectural-budget-allowlist.ps1
       - name: Enforce full combined architecture budget
         run: pwsh -NoProfile -File tools/check-architectural-budget.ps1
+      # Merge-order dependency: PR #537 adds check_dead_code.mjs, knip.json and
+      # the check:dead-code script. This required gate intentionally has no
+      # skip; sequencing must put #537 first.
+      - name: Enforce dead-code ratchet
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run check:dead-code
+        working-directory: babel-cli
       - name: Upload architecture regression evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -404,6 +435,7 @@ jobs:
       - fast-validation
       - security
       - public-content-policy
+      - public-release-validation
       - architecture-regressions
       - package-components
       - desktop-tests
@@ -432,7 +464,7 @@ jobs:
           if ($dependencies.Count -eq 0) { throw 'Required CI dependencies are missing' }
           $fastLane = $env:MERGE_LANE -eq 'fast'
           $installerOptional = $env:INSTALLER_OPTIONAL -eq 'true'
-          $always = @('detect-scope', 'fast-validation', 'security', 'public-content-policy', 'policy-integrity', 'public-pr-metadata-tests')
+          $always = @('detect-scope', 'fast-validation', 'security', 'public-content-policy', 'public-release-validation', 'policy-integrity', 'public-pr-metadata-tests')
           foreach ($dependency in $dependencies) {
             $result = [string]$dependency.Value.result
             if ($dependency.Value.result -ne 'success') {
@@ -537,6 +569,7 @@ jobs:
       - fast-validation
       - security
       - public-content-policy
+      - public-release-validation
       - architecture-regressions
       - package-components
       - desktop-tests
@@ -566,7 +599,7 @@ jobs:
           if ($dependencies.Count -eq 0) { throw 'Required CI dependencies are missing' }
           $fastLane = $env:MERGE_LANE -eq 'fast'
           $installerOptional = $env:INSTALLER_OPTIONAL -eq 'true'
-          $always = @('detect-scope', 'fast-validation', 'security', 'public-content-policy', 'policy-integrity', 'public-pr-metadata-tests')
+          $always = @('detect-scope', 'fast-validation', 'security', 'public-content-policy', 'public-release-validation', 'policy-integrity', 'public-pr-metadata-tests')
           foreach ($dependency in $dependencies) {
             $result = [string]$dependency.Value.result
             if ($dependency.Value.result -ne 'success') {

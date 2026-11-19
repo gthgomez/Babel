@@ -22,7 +22,8 @@ const RETRY_BASE_DELAY_MS = 200;
  * (request retries, stream-idle physical retries).
  *
  * This is an intentional transport margin, not a second timeout:
- * - `invocationDeadlineAt` is the hard wall clock; sleeps are capped to remaining budget.
+ * - `invocationDeadlineAt` is the hard deadline on the monotonic clock; sleeps are
+ *   capped to remaining budget.
  * - Sub-millisecond leftovers after capped backoff used to schedule `abort(0)` fetches
  *   that still bill as a physical attempt on some providers.
  * - Requiring >= 10ms remaining rejects those edge dispatches while leaving normal retries
@@ -32,16 +33,31 @@ const RETRY_BASE_DELAY_MS = 200;
  */
 export const PHYSICAL_DISPATCH_MIN_BUDGET_MS = 10;
 
-export function remainingInvocationBudgetMs(invocationDeadlineAt: number, now = Date.now()): number {
+/**
+ * Single clock for invocation deadlines. `performance.now()` is monotonic, so a
+ * wall-clock adjustment cannot lengthen a budget and timer wake-up skew is
+ * measured on the same timeline that scheduled the wait.
+ */
+export function invocationNowMs(): number {
+  return performance.now();
+}
+
+/** Create an absolute deadline on the {@link invocationNowMs} timeline. */
+export function createInvocationDeadline(timeoutMs: number, now = invocationNowMs()): number {
+  return now + timeoutMs;
+}
+
+export function remainingInvocationBudgetMs(invocationDeadlineAt: number, now = invocationNowMs()): number {
   return Math.max(0, invocationDeadlineAt - now);
 }
 
-export function canDispatchPhysicalRequest(invocationDeadlineAt: number, now = Date.now()): boolean {
+export function canDispatchPhysicalRequest(invocationDeadlineAt: number, now = invocationNowMs()): boolean {
   return remainingInvocationBudgetMs(invocationDeadlineAt, now) >= PHYSICAL_DISPATCH_MIN_BUDGET_MS;
 }
 
-export function invocationDeadlineExpired(invocationDeadlineAt: number, now = Date.now()): boolean {
-  return remainingInvocationBudgetMs(invocationDeadlineAt, now) === 0;
+/** A budget with less than one dispatch margin is not usable retry budget. */
+export function invocationDeadlineExpired(invocationDeadlineAt: number, now = invocationNowMs()): boolean {
+  return !canDispatchPhysicalRequest(invocationDeadlineAt, now);
 }
 
 export function invocationTimeoutMessage(
@@ -61,8 +77,9 @@ export function assertInvocationBudgetRemaining(
   providerId: string,
   model: string,
   requestTimeoutMs: number,
+  now = invocationNowMs(),
 ): void {
-  if (invocationDeadlineExpired(invocationDeadlineAt)) {
+  if (invocationDeadlineExpired(invocationDeadlineAt, now)) {
     throw new Error(invocationTimeoutMessage(providerId, model, requestTimeoutMs));
   }
 }
@@ -75,23 +92,24 @@ export async function sleepInvocationRetryBackoff(
   model: string,
   requestTimeoutMs: number,
   signal?: AbortSignal,
+  now: () => number = invocationNowMs,
 ): Promise<void> {
-  assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs);
-  const capped = Math.min(backoffMs, remainingInvocationBudgetMs(invocationDeadlineAt));
+  assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs, now());
+  const capped = Math.min(backoffMs, remainingInvocationBudgetMs(invocationDeadlineAt, now()));
   if (capped <= 0) {
     // Retry-After: 0 (or sub-ms leftover) means an immediate retry, not an exhausted budget.
-    if (backoffMs === 0 && canDispatchPhysicalRequest(invocationDeadlineAt)) {
+    if (backoffMs === 0 && canDispatchPhysicalRequest(invocationDeadlineAt, now())) {
       return;
     }
     throw new Error(invocationTimeoutMessage(providerId, model, requestTimeoutMs));
   }
   await sleep(capped, signal);
-  assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs);
   // A capped backoff ends at the deadline, but timer/clock granularity can wake
   // a millisecond early. The caller will not admit another physical dispatch
   // below PHYSICAL_DISPATCH_MIN_BUDGET_MS, so refuse here instead of returning
   // a retry that can only fail the dispatch floor.
-  if (!canDispatchPhysicalRequest(invocationDeadlineAt)) {
+  assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs, now());
+  if (!canDispatchPhysicalRequest(invocationDeadlineAt, now())) {
     throw new Error(invocationTimeoutMessage(providerId, model, requestTimeoutMs));
   }
 }
