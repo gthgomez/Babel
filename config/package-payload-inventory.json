@@ -5,7 +5,7 @@
     "core": "Reachable from the default coding journey (chat, plan, deep, doctor, setup, provider/model/settings, MCP, sandbox, sessions).",
     "optional": "Reachable only from documented opt-in commands or capabilities; shipped deliberately, not pruned.",
     "test-only": "Test harness support with no runtime importer; the prepack stage must remove it.",
-    "asset": "Non-JavaScript runtime resources staged into the package."
+    "asset": "Non-compiled runtime resources staged into the package (including browser shell assets)."
   },
   "entries": {
     "dist/acceptance": {
@@ -395,6 +395,10 @@
     "resources/docs": {
       "class": "asset",
       "capability": "public architecture documentation"
+    },
+    "resources/bridge/remote-ui": {
+      "class": "asset",
+      "capability": "installed Remote UI browser shell (HTML, CSS, client JS, service worker)"
     },
     "dist/interactive/testing": {
       "class": "test-only",
