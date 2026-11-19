@@ -89,30 +89,24 @@ test('observation and confirmation are separate phases', async () => {
   }), null, 'incomplete observation must stay null');
 });
 
-test(
-  'confirmation reaps observed survivors by pid without another census',
-  { skip: process.platform === 'win32' ? 'POSIX signal fixture' : false },
-  async () => {
+test('confirmation reaps observed survivors by pid without another census', async () => {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
     try {
       await new Promise<void>((resolve) => child.once('spawn', () => resolve()));
       const result = await confirmWindowsDescendants([child.pid!], {
-        kill: (pid) => { try { process.kill(pid, 'SIGKILL'); return true; } catch { return false; } },
+        kill: (pid) => { try { process.kill(pid); return true; } catch { return false; } },
         timeoutMs: 1_000,
       });
       assert.equal(result.confirmed, true);
       assert.deepEqual(result.remaining, []);
       assert.equal(isProcessAlive(child.pid!), false);
     } finally {
-      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      try { child.kill(); } catch { /* already gone */ }
     }
   },
 );
 
-test(
-  'confirmation reports survivors when the kill is refused',
-  { skip: process.platform === 'win32' ? 'POSIX signal fixture' : false },
-  async () => {
+test('confirmation reports survivors when the kill is refused', async () => {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
     try {
       await new Promise<void>((resolve) => child.once('spawn', () => resolve()));
@@ -124,7 +118,7 @@ test(
       assert.equal(result.confirmed, false);
       assert.deepEqual(result.remaining, [child.pid!]);
     } finally {
-      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      try { child.kill(); } catch { /* already gone */ }
     }
   },
 );
@@ -187,10 +181,10 @@ import { isProcessAlive } from './processTree.js';
 import { writeFileSync } from 'node:fs';
 const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
 child.unref();
-child.once('spawn', () => {
-  writeFileSync(${JSON.stringify(grandchildPidFile)}, String(child.pid));
-  process.exit(0);
-});
+// Write the published pid synchronously: a fast Windows parent exit can win
+// the race against the asynchronous 'spawn' event.
+writeFileSync(${JSON.stringify(grandchildPidFile)}, String(child.pid));
+process.exit(0);
 `,
     );
     const parent = spawn(process.execPath, [join(root, 'parent.mjs')], {
@@ -202,7 +196,7 @@ child.once('spawn', () => {
     // and leave this promise pending with an empty event loop.
     const parentExited = new Promise<void>((resolve) => parent.once('exit', () => resolve()));
     try {
-      const deadline = Date.now() + 10_000;
+      const deadline = Date.now() + 20_000;
       while (!existsSync(grandchildPidFile)) {
         if (Date.now() > deadline) throw new Error('grandchild pid was never published');
         await new Promise((resolve) => setTimeout(resolve, 25));

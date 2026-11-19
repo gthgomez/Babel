@@ -10,7 +10,7 @@
  *
  * Pure helpers with injectable probes keep the contract testable off Windows.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
 import { getSafeEnv } from './utils/safeEnv.js';
@@ -116,6 +116,61 @@ function listViaWmic(rootPid: number, timeoutMs: number): number[] | null {
   });
   if (result.error || result.status !== 0) return null;
   const rows = parseWmicProcessRows(result.stdout ?? '');
+  return rows ? descendantPidsFromRows(rootPid, rows) : null;
+}
+
+/** Bounded async process-table capture used by the observation phase. */
+async function runWindowsTableAsync(executable: string, args: string[], timeoutMs: number): Promise<string | null> {
+  return new Promise((resolveResult) => {
+    let stdout = '';
+    let settled = false;
+    const child = spawn(executable, args, { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'ignore'], env: getSafeEnv() });
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult(value);
+    };
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* best effort */ }
+      finish(null);
+    }, Math.max(250, timeoutMs));
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk;
+      if (stdout.length > MAX_CENSUS_OUTPUT_BYTES) {
+        try { child.kill('SIGKILL'); } catch { /* best effort */ }
+        finish(null);
+      }
+    });
+    child.once('error', () => finish(null));
+    child.once('exit', (code) => finish(code === 0 ? stdout : null));
+  });
+}
+
+/** Async observation: started before taskkill so the snapshot can see live descendants. */
+export async function startWindowsDescendantObservation(rootPid: number, timeoutMs = 20_000): Promise<number[] | null> {
+  if (process.platform !== 'win32' || !Number.isSafeInteger(rootPid) || rootPid <= 0) return [];
+  const startedAt = Date.now();
+  const systemRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows';
+  const wmic = resolve(systemRoot, 'System32', 'wbem', 'wmic.exe');
+  const fast = await runWindowsTableAsync(wmic, ['process', 'get', 'ProcessId,ParentProcessId', '/format:csv'], Math.min(5_000, timeoutMs));
+  if (fast !== null) {
+    const fastRows = parseWmicProcessRows(fast);
+    if (fastRows) return descendantPidsFromRows(rootPid, fastRows);
+  }
+  const remaining = Math.max(250, timeoutMs - (Date.now() - startedAt));
+  const script = [
+    '$ErrorActionPreference = "Stop";',
+    'Get-CimInstance -ClassName Win32_Process | ForEach-Object { "$($_.ParentProcessId),$($_.ProcessId)" }',
+  ].join(' ');
+  const table = await runWindowsTableAsync(
+    powershellExecutable(),
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    remaining,
+  );
+  if (table === null) return null;
+  const rows = parseWmicProcessRows(table);
   return rows ? descendantPidsFromRows(rootPid, rows) : null;
 }
 

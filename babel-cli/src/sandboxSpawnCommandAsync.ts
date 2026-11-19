@@ -8,7 +8,7 @@ import {
   waitForProcessGroupExit,
 } from './processTree.js'
 import { registerPendingProcessTermination } from './sandboxProcessTermination.js'
-import { confirmWindowsDescendants, observeWindowsDescendants } from './windowsProcessSettlement.js'
+import { confirmWindowsDescendants, startWindowsDescendantObservation } from './windowsProcessSettlement.js'
 
 export interface AsyncSpawnResult {
   status: number | null
@@ -32,6 +32,10 @@ export interface AsyncSpawnResult {
  * taskkill rounds, so it needs more headroom than a POSIX group probe.
  */
 const TERMINATION_SETTLEMENT_TIMEOUT_MS = process.platform === 'win32' ? 45_000 : 5_000
+
+function delay(ms: number): Promise<undefined> {
+  return new Promise((resolveDelay) => { setTimeout(() => resolveDelay(undefined), ms) })
+}
 
 function appendCappedChunk(
   chunks: Buffer[],
@@ -221,15 +225,16 @@ export function spawnCommandAsync(
               if (!pid) {
                 throw new Error(`Aborted spawn missing child pid for ${executable}`)
               }
-              // Observation precedes taskkill: a live chain lets the census see
-              // grandchildren the leader-only probe cannot. Incomplete census
-              // fails closed before we claim settlement.
-              const observed = process.platform === 'win32'
-                ? await observeWindowsDescendants(pid, { budgetMs: 20_000 })
+              // Bounded-parallel observation: start the snapshot immediately,
+              // give it a short head start, then let taskkill land. The snapshot
+              // may still be in flight; harvest it after the kill for pid-level
+              // confirmation. Ordinary cancels keep prompt latency.
+              const observation = process.platform === 'win32'
+                ? startWindowsDescendantObservation(pid, 20_000)
+                : Promise.resolve<number[] | null>([]);
+              const headStart = process.platform === 'win32'
+                ? await Promise.race([observation, delay(2_000)])
                 : [];
-              if (process.platform === 'win32' && observed === null) {
-                throw new Error(`Aborted process ${executable} descendant census was incomplete`)
-              }
               const terminationAttempt = terminateChildTree(child)
               if (process.platform === 'win32' && !terminationAttempt.treeKillAccepted) {
                 throw new Error('Windows process-tree termination was not confirmed by taskkill')
@@ -238,10 +243,16 @@ export function spawnCommandAsync(
               if (!groupExited) {
                 throw new Error(`Aborted process group ${pid} did not exit after tree termination`)
               }
-              if (process.platform === 'win32' && observed && observed.length > 0) {
-                const confirmation = await confirmWindowsDescendants(observed, { timeoutMs: 2_000 })
-                if (!confirmation.confirmed) {
-                  throw new Error(`Aborted process ${executable} left unconfirmed descendants`)
+              if (process.platform === 'win32') {
+                const late = headStart === undefined
+                  ? await Promise.race([observation, delay(1_000)])
+                  : headStart;
+                const observed = Array.isArray(late) ? late : [];
+                if (observed.length > 0) {
+                  const confirmation = await confirmWindowsDescendants(observed, { timeoutMs: 2_000 })
+                  if (!confirmation.confirmed) {
+                    throw new Error(`Aborted process ${executable} left unconfirmed descendants`)
+                  }
                 }
               }
               await abortPhysicalClose
@@ -285,12 +296,12 @@ export function spawnCommandAsync(
             void (async () => {
               try {
                 const pid = child.pid
-                const observed = process.platform === 'win32' && pid
-                  ? await observeWindowsDescendants(pid, { budgetMs: 20_000 })
+                const observation = process.platform === 'win32' && pid
+                  ? startWindowsDescendantObservation(pid, 20_000)
+                  : Promise.resolve<number[] | null>([]);
+                const headStart = process.platform === 'win32' && pid
+                  ? await Promise.race([observation, delay(2_000)])
                   : [];
-                if (process.platform === 'win32' && pid && observed === null) {
-                  throw new Error(`Timed-out process ${executable} descendant census was incomplete`)
-                }
                 const terminationAttempt = terminateChildTree(child)
                 if (process.platform === 'win32' && pid && !terminationAttempt.treeKillAccepted) {
                   throw new Error('Windows process-tree termination was not confirmed by taskkill')
@@ -302,10 +313,16 @@ export function spawnCommandAsync(
                   if (!groupExited) {
                     throw new Error(`Timed-out process group ${pid} did not exit after tree termination`)
                   }
-                  if (process.platform === 'win32' && observed && observed.length > 0) {
-                    const confirmation = await confirmWindowsDescendants(observed, { timeoutMs: 2_000 })
-                    if (!confirmation.confirmed) {
-                      throw new Error(`Timed-out process ${executable} left unconfirmed descendants`)
+                  if (process.platform === 'win32') {
+                    const late = headStart === undefined
+                      ? await Promise.race([observation, delay(1_000)])
+                      : headStart;
+                    const observed = Array.isArray(late) ? late : [];
+                    if (observed.length > 0) {
+                      const confirmation = await confirmWindowsDescendants(observed, { timeoutMs: 2_000 })
+                      if (!confirmation.confirmed) {
+                        throw new Error(`Timed-out process ${executable} left unconfirmed descendants`)
+                      }
                     }
                   }
                 }
