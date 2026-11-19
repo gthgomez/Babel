@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "10d497faa4fe9c2fe925b492157e24dd2a808d36e7b48c61476f34a8145ee96f",
+  "policy_bundle_id": "0da07dbcf8dbb5673e835cdbbf6d0f0f4324d5b487b9c3a196a73bfc5a80ed12",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -34,7 +34,7 @@
     "babel-cli/src/authority/filesystemPathListVerifier.ts": "8234d06821e9642fcc84c099dbe4942c822ca5a2c468d8a9bdb258e41d9de3c0",
     "babel-cli/src/authority/finalRevision.gitExecution.test.ts": "75548505faf34daecb61e37b6ef40b9859156cf9eae55f1102792b4a782fa2de",
     "babel-cli/src/authority/finalRevision.test.ts": "1d392c31edc76601a847f1f6a4ec32d8b1d509f3be6e481649abc80c91a316d1",
-    "babel-cli/src/authority/finalRevision.ts": "334cec4f3f61733b8000211edfe154cf527a9d9c632c24ea86f56c68ca0c8efe",
+    "babel-cli/src/authority/finalRevision.ts": "9fc4bcb091be1a2a586254806d9372a6e9a191a42e442b3075079d296281e5da",
     "babel-cli/src/authority/gitCommand.ts": "36ca808e4b8c4b3f7e7dc0caf422ffef8c6c4263a045eaf3eb954929cfd1aa81",
     "babel-cli/src/authority/gitGovernance.ts": "901abeee81d382c10f0d43dda7da68588f0c6815d26529334ffda93ab6ed5081",
     "babel-cli/src/authority/gitGovernanceBinding.test.ts": "4665e2d6a2bcd582d0c3560b0ead66981d5bc6d198a6def14525f68a07d83667",
