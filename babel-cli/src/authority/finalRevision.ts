@@ -959,6 +959,36 @@ export function unavailableFinalRevisionWitness(reason: string): FinalRevisionWi
   }
 }
 
+/** Compute the Chat publication witness without growing chatEngine.ts. */
+export function chatFinalRevisionWitness(
+  projectRoot: string | null | undefined,
+  toolCallLog: readonly FinalRevisionToolEntry[],
+  requiredVerifierCommands?: readonly string[],
+): FinalRevisionWitnessV1 | undefined {
+  if (!projectRoot) return undefined
+  try {
+    return evaluateFinalRevisionWitness({ projectRoot, toolCallLog, ...(requiredVerifierCommands ? { requiredVerifierCommands } : {}) })
+  } catch {
+    return unavailableFinalRevisionWitness('final_revision_unavailable')
+  }
+}
+
+/** Whether a Chat no-change conclusion rests on recorded file-byte inspection. */
+export function chatFinalRevisionRequiredForChat(input: {
+  projectRoot?: string | null | undefined
+  ambientReadOnly: boolean
+  toolCallLog: readonly FinalRevisionToolEntry[]
+}): boolean {
+  const inspected = input.toolCallLog.some(entry =>
+    ['read_file', 'read_range', 'file_read'].includes(entry.tool) &&
+    !entry.error && (entry.exit_code === undefined || entry.exit_code === 0))
+  return chatFinalRevisionRequired({
+    ambientReadOnly: input.ambientReadOnly,
+    hasProjectRoot: Boolean(input.projectRoot),
+    hasInspectionEvidence: inspected,
+  })
+}
+
 /**
  * Whether a Chat no-change conclusion must carry a current byte witness.
  * Only ambient read-only chat (`BABEL_READ_ONLY`) is exempt: it makes no

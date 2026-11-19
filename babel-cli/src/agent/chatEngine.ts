@@ -435,7 +435,7 @@ import {
 import {restoreTurnRuntime} from './restoreTurnRuntime.js';
 import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjectiveSubmission,type ObjectiveAdmissionHost,type ObjectiveAdmissionResult} from './chatEngineObjectiveAdmission.js';
 import type { CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
-import { evaluateFinalRevisionWitness, unavailableFinalRevisionWitness, chatFinalRevisionRequired } from '../authority/finalRevision.js';
+import { chatFinalRevisionWitness, chatFinalRevisionRequiredForChat } from '../authority/finalRevision.js';
 import {requiresObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog} from './taskObjectiveLifecycle.js';
 
 import { admitProjectContentRead, isReadOnlyChat } from "./chatReadOnly.js";
@@ -2710,22 +2710,8 @@ export class ChatEngine {
   ) {
     refreshChatCompletionVerifierCurrency(this.options, hasMutation, this.lastVerifierReceipt, this.executedVerifierLedger);
     const verifierInput = this.buildVerifierInput();
-    const gateLog = toGateToolLog(this.toolCallLog);
-    const finalRevision = publicationRevision ?? (() => {
-      if (!this.options.projectRoot) return undefined
-      try {
-        return evaluateFinalRevisionWitness({
-          projectRoot: requireProjectRoot(this.options),
-          toolCallLog: gateLog,
-          requiredVerifierCommands: verifierInput.requiredVerifierCommands,
-        });
-      } catch {
-        // A project-scoped completion with unreadable evidence is unproven.
-        return unavailableFinalRevisionWitness('final_revision_unavailable');
-      }
-    })();
-    const evidenceProof = requestedOutcome === "VERIFIED_COMPLETE" || hasMutation
-      ? this.buildCompletionProof(hasMutation) : { compliant: false, errors: ["no mutation-bound verifier evidence is available"] };
+    const finalRevision = publicationRevision ?? chatFinalRevisionWitness(this.options.projectRoot, toGateToolLog(this.toolCallLog), verifierInput.requiredVerifierCommands);
+    const evidenceProof = requestedOutcome === "VERIFIED_COMPLETE" || hasMutation ? this.buildCompletionProof(hasMutation) : { compliant: false, errors: ["no mutation-bound verifier evidence is available"] };
     if (this.criterionCompletion && (requestedOutcome === 'VERIFIED_COMPLETE' || hasMutation)) {
       this.criterionCompletion.refreshPrivateEvidence({
         proof: evidenceProof,
@@ -2751,13 +2737,7 @@ export class ChatEngine {
       toolCallLog: toGateToolLog(this.toolCallLog),
       acceptance: this.criterionCompletion?.currentRequest(),
       ...(finalRevision ? { finalRevision } : {}),
-      finalRevisionRequired: chatFinalRevisionRequired({
-        ambientReadOnly: isReadOnlyChat(),
-        hasProjectRoot: Boolean(this.options.projectRoot),
-        hasInspectionEvidence: gateLog.some(entry =>
-          ['read_file', 'read_range', 'file_read'].includes(entry.tool) &&
-          !entry.error && (entry.exit_code === undefined || entry.exit_code === 0)),
-      }),
+      finalRevisionRequired: chatFinalRevisionRequiredForChat({ projectRoot: this.options.projectRoot, ambientReadOnly: isReadOnlyChat(), toolCallLog: toGateToolLog(this.toolCallLog) }),
       ...(this.lastVerifierReceipt?.boundRevision
         ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
         : {}),
@@ -2786,10 +2766,7 @@ export class ChatEngine {
     return failChatStream(this.terminalRuntimeInput(), error, reason, presentationError);
   }
   private streamCancelled(): ChatEvent {
-    return cancelledChatStream(
-      () => this.terminalRuntimeInput(),
-      this.runControl,
-    );
+    return cancelledChatStream(() => this.terminalRuntimeInput(), this.runControl);
   }
   private streamStopped(stop: StopRequest): ChatEvent {
     return stoppedChatStream(() => this.terminalRuntimeInput(), stop);
@@ -4705,8 +4682,7 @@ export class ChatEngine {
         },
       },
       effects: {
-        decideCompletion: (requested, hasMutation, finalRevision) =>
-          this.decideCompletion(requested, hasMutation, finalRevision),
+        decideCompletion: (requested, hasMutation, finalRevision) => this.decideCompletion(requested, hasMutation, finalRevision),
         settleActiveExecution: () => this.settleActiveExecutionForTerminal(),
         finalizeTurn: (outcome, status, reason, response, extras) =>
           finalizeParityTurnSync(

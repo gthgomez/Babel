@@ -136,13 +136,7 @@ export function registerCoreExecutionCommands(program: Command): void {
             );
             const quarantine = daemonPipelineEnqueueRejection();
             if (quarantine) {
-              // Keep the protective quarantine; refuse clearly instead of
-              // spawning a daemon that would immediately fail the queued job.
-              console.error(`Cannot enqueue background task: ${quarantine}`);
-              console.error(
-                "  Run the task in the foreground (without --background) for now.",
-              );
-              process.exit(1);
+              throw new Error(`Cannot enqueue background task: ${quarantine} Run the task in the foreground (without --background) for now.`);
             }
             const { ensureDaemon, pingDaemon } =
               await import("../daemon/client.js");
@@ -172,10 +166,7 @@ export function registerCoreExecutionCommands(program: Command): void {
               error?: string;
             };
             if (result.rejected || !result.job_id) {
-              console.error(
-                `Cannot enqueue background task: ${result.error ?? "daemon rejected the job"}`,
-              );
-              process.exit(1);
+              throw new Error(`Cannot enqueue background task: ${result.error ?? "daemon rejected the job"}`);
             }
 
             if (options.json) {
