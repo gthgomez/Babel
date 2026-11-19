@@ -212,6 +212,65 @@ describe('TF-11 grounded informational result', () => {
     assert.equal(outcome, 'NO_CHANGE_REQUIRED');
   });
 
+  test('an engine-adjudicated no-change acceptance keeps NO_CHANGE_REQUIRED without reads', () => {
+    // Landed ordinary-admission contract: the operator's acceptance forbids
+    // edits and the engine durably refused the model's native write, so the
+    // no-change terminal is engine-owned (denial + zero mutations), not a
+    // model-claimed explanation.
+    const outcome = normalizeInspectedNoChange(
+      snapshotFor({
+        task: 'Explain this file without changing it.',
+        projectRoot: '/tmp/project',
+        toolCallLog: [
+          {
+            tool: 'write_file',
+            target: 'fixture.txt',
+            detail: 'hard-plan-mode',
+            error: 'blocked',
+            exit_code: 1,
+          },
+        ],
+      }),
+      'NO_CHANGE_REQUIRED',
+    );
+    assert.equal(outcome, 'NO_CHANGE_REQUIRED');
+    assert.equal(exitCodeFromOutcome(outcome), 0);
+  });
+
+  test('an edit-denial task with no refused write still needs a source read', () => {
+    // Either half alone keeps the TF-11 demotion: a bare edit-denial whose
+    // model answered with text only still has the explanation as its
+    // deliverable, and an ungrounded answer must not certify success.
+    const outcome = normalizeInspectedNoChange(
+      snapshotFor({ task: 'Explain this file without changing it.', projectRoot: '/tmp/project', toolCallLog: [] }),
+      'NO_CHANGE_REQUIRED',
+    );
+    assert.equal(outcome, 'UNVERIFIED_PATCH');
+    assert.equal(exitCodeFromOutcome(outcome), 6);
+  });
+
+  test('a refused write without the operator no-edit contract is not the admission flow', () => {
+    // The refused mutation alone cannot lift the informational demotion when
+    // the task acceptance never forbade edits.
+    const outcome = normalizeInspectedNoChange(
+      snapshotFor({
+        task: 'Explain this repository',
+        projectRoot: '/tmp/project',
+        toolCallLog: [
+          {
+            tool: 'write_file',
+            target: 'README.md',
+            detail: 'hard-plan-mode',
+            error: 'blocked',
+            exit_code: 1,
+          },
+        ],
+      }),
+      'NO_CHANGE_REQUIRED',
+    );
+    assert.equal(outcome, 'UNVERIFIED_PATCH');
+  });
+
   test('implementation no-change without inspection evidence still fails closed', () => {
     const snapshot = snapshotFor({
       task: 'fix the failing test',

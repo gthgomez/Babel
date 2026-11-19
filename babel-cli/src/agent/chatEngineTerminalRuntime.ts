@@ -86,6 +86,7 @@ import {
   classifyChatTaskIntent,
   isConversationalTurnText,
 } from './chatEngineTaskIntent.js'
+import { hasExplicitEditDenial } from '../config/chatTaskClass.js'
 import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
 import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
@@ -458,15 +459,49 @@ export function normalizeInspectedNoChange(
   // TF-11: an informational repository answer still needs at least one
   // successful source observation. Without it the result is an unverified
   // inspection, not a successful explanation.
+  // Exception (landed ordinary-admission contract): when the operator's
+  // acceptance explicitly forbids edits AND the engine durably refused a
+  // native mutation attempt in this turn, the no-change terminal is
+  // engine-adjudicated — the recorded write denial plus zero mutations
+  // proves the no-change acceptance — so the turn completes
+  // NO_CHANGE_REQUIRED without demanding source reads. Either half alone
+  // keeps the demotion: a bare edit-denial with no engine-refused write
+  // still has the explanation as its deliverable, and a refused write
+  // without the operator's no-edit contract is not the admission flow.
   if (
     snapshot.context.options.projectRoot !== undefined &&
     taskRequiresRepositoryInspection(snapshot.context.options.task) &&
     !hasSuccessfulSourceRead(snapshot.evidence.observability.toolCallLog) &&
-    !greenCurrentVerifier
+    !greenCurrentVerifier &&
+    !engineAdjudicatedNoChangeAcceptance(snapshot)
   ) {
     return 'UNVERIFIED_PATCH'
   }
   return outcome
+}
+
+/**
+ * True when the operator's task acceptance explicitly forbids edits and the
+ * engine's durable tool log records a refused native mutation attempt for
+ * this turn. That combination is the engine-adjudicated no-change flow the
+ * ordinary read-only admission contract pins (an ordinary prepared no-change
+ * task whose native write proposal is denied completes NO_CHANGE_REQUIRED).
+ */
+function engineAdjudicatedNoChangeAcceptance(
+  snapshot: ChatTerminalSnapshot,
+): boolean {
+  const log = snapshot.evidence.observability.toolCallLog
+  const refusedMutation = log.some(
+    (entry) =>
+      entry.error === 'blocked' &&
+      (entry.tool === 'write_file' ||
+        entry.tool === 'str_replace' ||
+        entry.tool === 'apply_patch'),
+  )
+  return (
+    refusedMutation &&
+    hasExplicitEditDenial(snapshot.context.options.task)
+  )
 }
 
 /** Finalize a completed stream through the kernel decision and durable parity owner. */
