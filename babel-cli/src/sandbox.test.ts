@@ -811,6 +811,41 @@ test('dev_local execution profile allows common local build tools', () => {
   assert.equal(validateExecutorShellCommand('go test ./...', process.platform, 'dev_local'), null);
 });
 
+test('modern toolchains stay scoped to explicitly eligible execution profiles', () => {
+  const modernToolchainCommands = [
+    'pnpm test',
+    'cargo test',
+    'go test ./...',
+    'dotnet test',
+    'bun test',
+  ];
+  for (const profile of [
+    'host_native',
+    'dev_local',
+    'benchmark_container',
+    'scaffold',
+    'workspace_manager',
+    'bench_local',
+  ] as const) {
+    for (const command of modernToolchainCommands) {
+      assert.equal(
+        validateExecutorShellCommand(command, process.platform, profile),
+        null,
+        `${command} must remain allowed for the explicitly eligible ${profile} profile`,
+      );
+    }
+  }
+  for (const profile of ['safe_repo', 'read_only_audit', 'babel_research'] as const) {
+    for (const command of modernToolchainCommands) {
+      assert.equal(
+        validateExecutorShellCommand(command, process.platform, profile)?.reason_code,
+        'command_allowlist_rejected',
+        `${command} must stay outside the ${profile} policy`,
+      );
+    }
+  }
+});
+
 test('benchmark_container profile allows Linux container commands and explicit project executables', () => {
   assert.equal(
     validateExecutorShellCommand('chmod +x cli_tool', 'win32', 'benchmark_container'),
@@ -867,6 +902,29 @@ test('benchmark_container allows shell syntax only when docker-backed execution 
 test('safe_repo execution profile keeps expanded local build tools rejected', () => {
   const issue = validateExecutorShellCommand('pnpm test', process.platform, 'safe_repo');
   assert.equal(issue?.reason_code, 'command_allowlist_rejected');
+});
+
+test('Windows accepts quoted regex operators but still rejects executable pipes', () => {
+  for (const command of [
+    'grep "error|warn" src/app.log',
+    'findstr "error|warn" src\\app.log',
+    'rg "a|b" src',
+  ]) {
+    assert.equal(
+      validateExecutorShellCommand(command, 'win32', 'dev_local'),
+      null,
+      `${command} should be accepted as a quoted regex argument`,
+    );
+  }
+
+  for (const command of [
+    'grep error|warn src/app.log',
+    'grep "error|warn" src/app.log | more',
+    'npm test | cat',
+  ]) {
+    const issue = validateExecutorShellCommand(command, 'win32', 'dev_local');
+    assert.equal(issue?.reason_code, 'shell_operator_rejected', `${command} must stay denied`);
+  }
 });
 
 // ── interpreter eval-flag blocking ──────────────────────────────────────────
@@ -1758,4 +1816,39 @@ test('shell results distinguish a started process from denial and pre-abort', as
     const denied = await executor.testRunAsync('node --test ../outside.test.cjs', '..', 15000);
     assert.notEqual(denied.process_started, true);
   } finally { fixture.cleanup(); }
+});
+
+test('approved read roots accept absolute nested paths equivalently to dot-relative paths', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'babel-approved-nested-ws-'));
+  const projectRoot = join(workspace, 'suite', 'repo');
+  const previousRoots = process.env['BABEL_OPENCLAW_APPROVED_ROOTS'];
+  try {
+    mkdirSync(projectRoot, { recursive: true });
+    writeFileSync(join(projectRoot, 'note.txt'), 'nested read\n', 'utf-8');
+    process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] = workspace;
+    const executor = new SafeExecutor(projectRoot);
+    assert.match(
+      executor.fileRead(join(projectRoot, 'note.txt')).stdout,
+      /nested read/,
+      'absolute nested path inside the approved workspace must be readable',
+    );
+    assert.match(
+      executor.fileRead('./note.txt').stdout,
+      /nested read/,
+      'the dot-relative equivalent must stay readable',
+    );
+    assert.equal(
+      (await executor.listDirectoryGuarded(join(workspace, 'suite'))).exit_code,
+      0,
+      'absolute nested directory inside the approved workspace must be listable',
+    );
+    expectPolicyDenial(
+      executor.fileRead(join(workspace, '..', 'outside.txt')),
+      'path_jail_rejected',
+    );
+  } finally {
+    if (previousRoots === undefined) delete process.env['BABEL_OPENCLAW_APPROVED_ROOTS'];
+    else process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] = previousRoots;
+    rmSync(workspace, { recursive: true, force: true });
+  }
 });

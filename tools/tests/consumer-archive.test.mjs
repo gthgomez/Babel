@@ -27,9 +27,13 @@ test('consumer inventory preserves required assets and rejects development or pr
   const { verifyConsumerContents } = await import('../../babel-cli/scripts/consumer_archive.mjs')
   const files = ['package.json', 'README.md', 'LICENSE', 'bin/babel.js', 'bin/check-node-engine.mjs', 'resources/prompt_catalog.yaml',
     'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs',
-    'dist/bridge/claude-agent-sdk-pin.json', 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs'].map(path => ({path}))
+    'dist/bridge/claude-agent-sdk-pin.json', 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs',
+    // Runtime JSON asset read by dist/tools/toolManifest.js.
+    'dist/tools/tool-manifest.json'].map(path => ({path}))
   verifyConsumerContents(files)
-  for (const path of ['resources/.env.local', 'dist/example.test.js', 'dist/source.ts', 'resources/../outside', 'resources/logs/private.log']) {
+  for (const path of ['resources/.env.local', 'dist/example.test.js', 'dist/source.ts', 'resources/../outside', 'resources/logs/private.log',
+    // The allowlist admits the one required manifest, not arbitrary dist JSON.
+    'dist/tools/other-config.json', 'dist/services/playbooks/../../private.json']) {
     assert.throws(() => verifyConsumerContents([...files, {path}]), undefined, path)
   }
   for (const required of ['resources/prompt_catalog.yaml', 'LICENSE', 'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs']) {

@@ -87,6 +87,13 @@ export async function sleepInvocationRetryBackoff(
   }
   await sleep(capped, signal);
   assertInvocationBudgetRemaining(invocationDeadlineAt, providerId, model, requestTimeoutMs);
+  // A capped backoff ends at the deadline, but timer/clock granularity can wake
+  // a millisecond early. The caller will not admit another physical dispatch
+  // below PHYSICAL_DISPATCH_MIN_BUDGET_MS, so refuse here instead of returning
+  // a retry that can only fail the dispatch floor.
+  if (!canDispatchPhysicalRequest(invocationDeadlineAt)) {
+    throw new Error(invocationTimeoutMessage(providerId, model, requestTimeoutMs));
+  }
 }
 
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {

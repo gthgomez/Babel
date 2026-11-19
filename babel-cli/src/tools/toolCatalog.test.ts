@@ -49,3 +49,34 @@ test('tool catalog can include profile-scoped capabilities', () => {
   assert.deepEqual(capability?.requirements, ['git']);
   assert.match(formatToolCatalogHuman(catalog), /inspect\.git_bundle/);
 });
+
+test('tool catalog distinguishes Deep-reachable tools from intentional restrictions', () => {
+  const catalog = buildToolCatalog([
+    {
+      name: 'grep',
+      category: 'search',
+      description: 'Search text.',
+      mutating: false,
+      dryRunBehavior: 'live',
+      policyTags: ['read'],
+      input: { required: ['pattern'], optional: [] },
+    },
+    {
+      name: 'lsp',
+      category: 'search',
+      description: 'Query a language server.',
+      mutating: false,
+      dryRunBehavior: 'live',
+      policyTags: ['read', 'lsp'],
+      input: { required: ['operation', 'filePath'], optional: [] },
+    },
+  ]);
+
+  assert.equal(catalog.find(entry => entry.name === 'grep')?.deep_executor, true);
+  assert.deepEqual(catalog.find(entry => entry.name === 'grep')?.surface_restrictions, []);
+  assert.equal(catalog.find(entry => entry.name === 'lsp')?.deep_executor, false);
+  assert.match(
+    catalog.find(entry => entry.name === 'lsp')?.surface_restrictions.join(' ') ?? '',
+    /Chat only/,
+  );
+});

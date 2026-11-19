@@ -246,6 +246,7 @@
     "dist/voice/audio-capture-worker.mjs",
     "dist/voice/vad-worker.mjs",
     "dist/services/playbooks/*.json",
+    "dist/tools/tool-manifest.json",
     "resources/",
     "LICENSE"
   ]
