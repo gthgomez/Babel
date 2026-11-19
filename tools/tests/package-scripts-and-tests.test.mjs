@@ -423,6 +423,7 @@ export const SPECIALIZED_LANES = {
   },
   'daemon-integration': {
     files: [
+      'src/daemon/backgroundJsonFraming.test.ts',
       'src/daemon/client.test.ts',
       'src/daemon/evidenceTruthfulness.test.ts',
       'src/daemon/integration.test.ts',
@@ -868,7 +869,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   }
 
   const totalSpecializedFiles = Object.values(SPECIALIZED_LANES).reduce((acc, l) => acc + l.files.length, 0);
-  assert.equal(totalSpecializedFiles, 25, `Expected exactly 25 specialized test files, found ${totalSpecializedFiles}`);
+  assert.equal(totalSpecializedFiles, 26, `Expected exactly 26 specialized test files, found ${totalSpecializedFiles}`);
 
   const { errors, specializedSet, unclassified, overlap } = validateTestClassification(
     allTests,
@@ -879,7 +880,7 @@ test('every discovered source test belongs to canonical unit lane or an explicit
   );
 
   assert.equal(errors.length, 0, `Test classification errors:\n${errors.join('\n')}`);
-  assert.equal(specializedSet.size, 25);
+  assert.equal(specializedSet.size, 26);
   assert.equal(unclassified.length, 0);
   assert.equal(overlap.length, 0);
   const classified = [...unitInventory, ...specializedSet].sort();

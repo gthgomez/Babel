@@ -6,13 +6,14 @@
  * starts it as a child process and polls until ready.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { closeSync, existsSync, fchmodSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ipcRequest } from './ipc.js';
 import { attachDaemonDiagnosticStream, createDaemonStartupDiagnostics } from './diagnosticStream.js';
 import {
+  DAEMON_DIR,
   DAEMON_PID_FILE,
   DAEMON_AUTO_SPAWN_TIMEOUT_MS,
   DAEMON_POLL_INTERVAL_MS,
@@ -42,6 +43,8 @@ let spawnPromise: Promise<void> | null = null;
 let ownedDaemon: ChildProcess | null = null;
 export interface DaemonClientOptions {
   onDiagnostic?: (channel: 'stdout' | 'stderr' | 'status', message: string) => void;
+  /** Test/qualification seam; production callers always use node:child_process.spawn. */
+  spawnProcess?: typeof spawn;
 }
 
 /**
@@ -81,8 +84,11 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
   }
 
   const daemonMain = resolveDaemonMain();
-  const diagnostic = options.onDiagnostic ?? ((channel: string, message: string) => {
-    (channel === 'stderr' ? process.stderr : process.stdout).write(message.endsWith('\n') ? message : message + '\n');
+  // Daemon lifecycle notices are diagnostics. They must never share stdout
+  // with a command's machine-readable envelope (`--json`), and a background
+  // daemon must not keep this CLI's event loop alive after the request settles.
+  const diagnostic = options.onDiagnostic ?? ((_channel: 'stdout' | 'stderr' | 'status', message: string) => {
+    process.stderr.write(message.endsWith('\n') ? message : message + '\n');
   });
   const startupDiagnostics = createDaemonStartupDiagnostics(diagnostic);
   diagnostic('status', `[daemon] Auto-spawning daemon: ${daemonMain}`);
@@ -92,26 +98,52 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
   const isTs = daemonMain.endsWith('.ts');
   const spawnArgs = !isBun && isTs ? ['--import', 'tsx', daemonMain] : [daemonMain];
 
-  const child: ChildProcess = spawn(execPath, spawnArgs, {
-    cwd: resolvePackageRoot(),
-    stdio: 'pipe',
-    detached: false,
-  });
+  const interactive = typeof options.onDiagnostic === 'function';
+  const daemonLogPath = join(DAEMON_DIR, 'daemon.log');
+  let logReady = false;
+  const failureDetail = (message: string): string => interactive || !logReady ? message : `${message}\nDaemon log: ${daemonLogPath}`;
+  let logFd: number | undefined;
+  if (!interactive) {
+    try {
+      // The directory mode applies only when this call creates it; the daemon
+      // directory may already exist. The log is tightened after opening so an
+      // older round-created file is not left group/world readable.
+      mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 });
+      logFd = openSync(daemonLogPath, 'a', 0o600);
+      try { fchmodSync(logFd, 0o600); } catch { /* Windows has no POSIX mode */ }
+      logReady = true;
+    } catch { logFd = undefined; logReady = false; }
+  }
+  const spawnOptions: SpawnOptions = interactive
+    ? { cwd: resolvePackageRoot(), stdio: 'pipe', detached: false, windowsHide: true }
+    : { cwd: resolvePackageRoot(), stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'], detached: true, windowsHide: true };
+  // The production default is a real child-process spawn; the seam only
+  // substitutes a fake in qualification tests. Keep the direct spawn call
+  // visible to the host-process surface checker.
+  const child: ChildProcess = options.spawnProcess
+    ? options.spawnProcess(execPath, spawnArgs, spawnOptions)
+    : spawn(execPath, spawnArgs, spawnOptions);
+  if (logFd !== undefined) { try { closeSync(logFd); } catch { /* owned by the child now */ } }
 
   ownedDaemon = child;
+  let spawnError = '';
   child.once('exit', () => { if (ownedDaemon === child) ownedDaemon = null; });
 
-  if (options.onDiagnostic) {
+  if (interactive) {
     attachDaemonDiagnosticStream(child.stdout, 'stdout', startupDiagnostics.receive);
     attachDaemonDiagnosticStream(child.stderr, 'stderr', startupDiagnostics.receive);
+    child.on('error', (err) => {
+      startupDiagnostics.receive('stderr', `[daemon] Failed to spawn daemon process: ${err.message}`);
+    });
   } else {
-    child.stdout?.on('data', (data: Buffer) => process.stdout.write(data));
-    child.stderr?.on('data', (data: Buffer) => process.stderr.write(data));
+    // The daemon is intentionally detached: it outlives this CLI, owns no
+    // inherited pipes, and cannot hold the foreground process open. Its output
+    // is retained in the daemon directory instead of the caller's stdout.
+    child.on('error', (err) => {
+      spawnError = `[daemon] Failed to spawn daemon process: ${err.message}`;
+    });
+    child.unref();
   }
-
-  child.on('error', (err) => {
-    startupDiagnostics.receive('stderr', `[daemon] Failed to spawn daemon process: ${err.message}`);
-  });
 
   // Poll until daemon responds
   const deadline = Date.now() + DAEMON_AUTO_SPAWN_TIMEOUT_MS;
@@ -120,10 +152,15 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
   while (Date.now() < deadline) {
     await sleep(DAEMON_POLL_INTERVAL_MS);
 
+    if (spawnError) {
+      if (ownedDaemon === child) ownedDaemon = null;
+      throw new Error(startupDiagnostics.failureMessage(failureDetail(spawnError)));
+    }
+
     // Check if child process died
     if (child.exitCode !== null) {
       throw new Error(
-        startupDiagnostics.failureMessage(`Daemon process exited with code ${child.exitCode} during startup.`),
+        startupDiagnostics.failureMessage(failureDetail(`Daemon process exited with code ${child.exitCode} during startup.`)),
       );
     }
 
@@ -138,8 +175,13 @@ export async function daemonAutoSpawn(options: DaemonClientOptions = {}): Promis
     }
   }
 
+  // A worker that never became healthy must not be left as an unowned process.
+  if (ownedDaemon === child) {
+    ownedDaemon = null;
+    try { child.kill(); } catch { /* already exited */ }
+  }
   throw new Error(
-    startupDiagnostics.failureMessage(`Daemon failed to start within ${DAEMON_AUTO_SPAWN_TIMEOUT_MS}ms. Last status: ${lastError || 'unknown'}`),
+    startupDiagnostics.failureMessage(failureDetail(`Daemon failed to start within ${DAEMON_AUTO_SPAWN_TIMEOUT_MS}ms. Last status: ${lastError || 'unknown'}`)),
   );
 }
 
