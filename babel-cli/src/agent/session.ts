@@ -41,7 +41,6 @@ import type {
 } from './contracts.js';
 import { isProposalVerb } from './contracts.js';
 import { executionProfileForPreset, presetForVerb } from './policy.js';
-import { resetCompactionCircuitBreaker } from '../services/compaction.js';
 import { runPlanLane } from './lanes/planLane.js';
 import { runReportLane } from './lanes/reportLane.js';
 import { runMutationAgentLoop } from './lanes/runMutationAgentLoop.js';
@@ -366,9 +365,8 @@ export class AgentSession {
   }
 
   private async runDispatch(): Promise<AgentSessionResult> {
-    // New runtimes initialize their own run-scoped counters. Another session
-    // must not erase live owners' denial state or verifier certification.
-    resetCompactionCircuitBreaker();
+    // Compaction circuit state is owned by each governed executor run. This
+    // session entry point must not reset another live run's failure state.
 
     // Ensure resolveToolBudget is exercised so the executionProfiles plumbing is validated.
     // DEFAULT_TOOL_BUDGET is the effective fallback in executeActionWithPolicy for now.

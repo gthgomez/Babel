@@ -572,7 +572,9 @@ export async function executeSubAgentAction(
               `status: ${clean ? (attribution === "child_noop" ? "noop" : "success") : "failed"}`,
               `attribution: ${attribution}`,
               `isolation: git_worktree`,
-              `incorporation: not_applied_to_parent`,
+              `incorporation: requires_explicit_adoption`,
+              `adoption_manifest: ${implResult.adoptionManifestPath ?? '(manifest unavailable)'}`,
+              `adoption_command: babel worktree adopt ${implResult.worktree.name} --manifest ${implResult.adoptionManifestPath ?? '<manifest>'} --apply`,
               `parent_dispatch_revision: ${dispatchRevisionHash}`,
               `child_base_sha: ${implResult.baseSha ?? 'unknown'}`,
               `candidate_postimages: ${JSON.stringify(implResult.changedFiles.map(file => ({ path: file.path, before_hash: file.before_hash, after_hash: file.after_hash })))}`,
@@ -582,6 +584,8 @@ export async function executeSubAgentAction(
               `parent_tree_clean: ${implResult.parentTreeClean}`,
               `steps: ${implResult.stepsExecuted}`,
               `changed_files: ${implResult.changedFiles.map((f) => f.path).join(", ") || "none"}`,
+              `unrecorded_paths: ${implResult.unrecordedPaths?.join(", ") || "none"}`,
+              `indeterminate_paths: ${implResult.indeterminatePaths?.join(", ") || "none"}`,
               implResult.summary,
             ].join("\n");
             return {

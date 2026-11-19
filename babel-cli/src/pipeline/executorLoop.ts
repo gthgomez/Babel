@@ -33,7 +33,7 @@ import {
   type PermissionAction,
 } from '../ui/inputCoordinator.js';
 import { getActiveRenderer } from '../ui/waterfall.js';
-import { autoCompactIfNeeded } from '../services/compaction.js';
+import { autoCompactIfNeeded, createCompactionCircuitState } from '../services/compaction.js';
 import { verifyAndRepairFileWrite } from './executorPostWriteVerification.js';
 import type {
   AutonomousRepairProofAttemptEvidence,
@@ -1295,6 +1295,9 @@ export async function runExecutorLoop(
   let totalStreamPauseDurationMs = 0;
   let totalLockWaitMs = 0;
   let peakBufferBytes = 0;
+  // One governed executor run owns its compaction breaker. A sibling session's
+  // failures must not disable pruning here, or vice versa.
+  const compactionCircuitState = createCompactionCircuitState();
 
   const reliabilityRepairProofEnabled = isReliabilityRepairProofEnabled(rawTask);
   const requestedTargetContract = getRequestedTargetContract(rawTask);
@@ -1838,6 +1841,8 @@ export async function runExecutorLoop(
       turn,
       toolCallLog,
       evidence,
+      undefined,
+      compactionCircuitState,
     );
     if (compactionResult.compacted) {
       executionHistory = compactionResult.newHistory;
