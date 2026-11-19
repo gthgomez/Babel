@@ -4,17 +4,23 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { adaptChatEngineResult } from '../adapters/chat-engine-result.mjs'
-import { loadCatalog, scoreAttempt } from '../runner.mjs'
+import { loadCatalog, scoreAttempt, summarizeAttemptScores } from '../runner.mjs'
 
 const root = path.resolve(import.meta.dirname, '..')
 const catalog = await loadCatalog(root)
 const task = catalog.tasks.find((entry) => entry.id === 'csv-rollup-cli')
 
-function attempt(status, outcome, verifierStatus = 'passed') {
+function attempt(
+  status,
+  outcome,
+  verifierStatus = 'passed',
+  diff = { added: ['output/summary.csv'], modified: [], deleted: [] },
+) {
   return adaptChatEngineResult({
     taskId: task.id,
     result: { status, outcome, answer: 'Synthetic terminal control', usage: {} },
     verifier: { status: verifierStatus, assertions: null, errors: [] },
+    ...(diff === undefined ? {} : { diff }),
     scriptedProvider: true,
   })
 }
@@ -42,12 +48,14 @@ test('engine completion and patch correctness remain independent', () => {
 
   const noOp = attempt('completed', 'NO_CHANGE_REQUIRED')
   assert.equal(noOp.session_completed, true)
-  assert.equal(scoreAttempt(task, noOp).outcome, 'valid_success')
+  assert.equal(scoreAttempt(task, noOp).outcome, 'unverified_success')
 
   const unverifiedPatch = attempt('completed', 'UNVERIFIED_PATCH')
   assert.equal(unverifiedPatch.session_completed, true)
   assert.equal(scoreAttempt(task, unverifiedPatch).patch_correct, true)
-  assert.equal(scoreAttempt(task, unverifiedPatch).outcome, 'valid_success')
+  assert.equal(scoreAttempt(task, unverifiedPatch).externally_correct, true)
+  assert.equal(scoreAttempt(task, unverifiedPatch).harness_verified, false)
+  assert.equal(scoreAttempt(task, unverifiedPatch).outcome, 'unverified_success')
 })
 
 test('missing engine outcome and missing verifier evidence stay unknown', () => {
@@ -132,4 +140,185 @@ test('session completion schema permits an unknown value', async () => {
   const schema = JSON.parse(await readFile(path.join(root, 'report.schema.json'), 'utf8'))
   assert.ok(schema.required.includes('session_completed'))
   assert.deepEqual(schema.properties.session_completed.type, ['boolean', 'null'])
+})
+
+test('aggregate metrics keep verified, unverified and false-block denominators separate', () => {
+  const entries = [
+    { task, attempt: attempt('completed', 'VERIFIED_COMPLETE') },
+    { task, attempt: attempt('completed', 'UNVERIFIED_PATCH') },
+    { task, attempt: attempt('completed', 'VERIFIED_COMPLETE', 'failed') },
+    { task, attempt: attempt('failed', 'AGENT_FAILURE') },
+    { task, attempt: attempt('completed', 'VERIFIED_COMPLETE', 'infrastructure_error') },
+  ]
+  const summary = summarizeAttemptScores(entries)
+  assert.equal(summary.scheduled, 5)
+  assert.equal(summary.scored, 4)
+  assert.equal(summary.oracle_graded, 4)
+  assert.equal(summary.oracle_unavailable, 1)
+  assert.equal(summary.externally_correct, 3)
+  assert.equal(summary.receipt_passed, 3)
+  assert.equal(summary.final_harness_verified, 3)
+  assert.equal(summary.verified_success, 1)
+  assert.equal(summary.unverified_success, 1)
+  assert.equal(summary.false_success, 1)
+  assert.equal(summary.false_block, 1)
+  for (const [name, value] of Object.entries(summary.rates)) {
+    assert.equal(typeof value.numerator, 'number', name)
+    assert.equal(typeof value.denominator, 'number', name)
+    assert.ok(value.denominator > 0, `${name} must expose a non-zero denominator`)
+  }
+  assert.equal(summary.rates.verified_success.numerator, 1)
+  assert.equal(summary.rates.verified_success.denominator, 5)
+  assert.equal(summary.rates.unverified_success.denominator, 5)
+  assert.equal(summary.rates.final_harness_verified.numerator, 3)
+  assert.equal(summary.rates.final_harness_verified.denominator, 5)
+  assert.equal(summary.rates.false_block.numerator, 1)
+  assert.equal(summary.rates.false_block.denominator, 3)
+})
+
+test('rates never exceed 100% when oracle-unavailable rows are present', () => {
+  // Reviewer reproduction: one graded success plus nine completed
+  // VERIFIED_COMPLETE rows whose oracle infrastructure failed.
+  const entries = [{ task, attempt: attempt('completed', 'VERIFIED_COMPLETE') }]
+  for (let index = 0; index < 9; index += 1) {
+    entries.push({
+      task,
+      attempt: attempt('completed', 'VERIFIED_COMPLETE', 'infrastructure_error'),
+    })
+  }
+  const summary = summarizeAttemptScores(entries)
+  assert.equal(summary.scheduled, 10)
+  assert.equal(summary.scored, 1)
+  assert.equal(summary.oracle_graded, 1)
+  assert.equal(summary.oracle_unavailable, 9)
+  assert.equal(summary.oracle_unavailable_harness_verified, 9)
+  assert.equal(summary.verified_success, 1)
+  assert.equal(summary.rates.verified_success.numerator, 1)
+  assert.equal(summary.rates.verified_success.denominator, 10)
+  assert.equal(summary.rates.verified_success.rate, 0.1)
+  assert.equal(summary.rates.final_harness_verified.numerator, 10)
+  assert.equal(summary.rates.final_harness_verified.denominator, 10)
+  assert.equal(summary.rates.final_harness_verified.rate, 1)
+  for (const [name, value] of Object.entries(summary.rates)) {
+    assert.ok(value.numerator <= value.denominator, `${name} numerator must not exceed denominator`)
+    assert.equal(
+      value.rate,
+      value.denominator === 0 ? null : value.numerator / value.denominator,
+      `${name} rate must match its published population`,
+    )
+    if (value.rate !== null) {
+      assert.ok(value.rate >= 0 && value.rate <= 1, `${name} rate must stay within [0,1]`)
+    }
+  }
+})
+
+test('a VERIFIED_COMPLETE engine claim on a failed terminal is still a false success', () => {
+  for (const terminal of ['failed', 'blocked']) {
+    const score = scoreAttempt(task, {
+      ...attempt(terminal, 'VERIFIED_COMPLETE', 'failed'),
+      completion_claimed: false,
+    })
+    assert.equal(score.engine_claim, true, terminal)
+    assert.equal(score.harness_verified, false, terminal)
+    assert.equal(score.externally_correct, false, terminal)
+    assert.equal(score.false_success, true, terminal)
+    assert.equal(score.outcome, 'task_failure', terminal)
+  }
+  const summary = summarizeAttemptScores([
+    { task, attempt: { ...attempt('blocked', 'VERIFIED_COMPLETE', 'failed'), completion_claimed: false } },
+  ])
+  assert.equal(summary.claims, 1)
+  assert.equal(summary.false_success, 1)
+  assert.equal(summary.rates.false_success.denominator, 1)
+})
+
+test('a missing diff cannot certify a policy-clean verified success', () => {
+  for (const diffCollected of [false, true]) {
+    const missing = scoreAttempt(task, {
+      ...attempt('completed', 'VERIFIED_COMPLETE'),
+      diff: undefined,
+      diff_collected: diffCollected,
+    })
+    assert.equal(missing.diff_collected, false, `diff_collected=${diffCollected} without a diff must not be trusted`)
+    assert.equal(missing.policy_clean, false)
+    assert.equal(missing.externally_correct, true)
+    assert.equal(missing.outcome, 'task_failure')
+  }
+
+  const flagged = scoreAttempt(task, {
+    ...attempt('completed', 'VERIFIED_COMPLETE'),
+    diff_collected: false,
+  })
+  assert.equal(flagged.diff_collected, false)
+  assert.equal(flagged.policy_clean, false)
+  assert.equal(flagged.outcome, 'task_failure')
+
+  const missing = scoreAttempt(task, {
+    ...attempt('completed', 'VERIFIED_COMPLETE'),
+    diff: undefined,
+    diff_collected: false,
+  })
+  assert.equal(missing.diff_collected, false)
+  assert.equal(missing.policy_clean, false)
+  assert.equal(missing.externally_correct, true)
+  assert.equal(missing.outcome, 'task_failure')
+
+  const report = adaptChatEngineResult({
+    taskId: task.id,
+    result: { status: 'completed', outcome: 'VERIFIED_COMPLETE', answer: 'no diff supplied', usage: {} },
+    verifier: { status: 'passed', assertions: 1, errors: [] },
+    scriptedProvider: true,
+  })
+  assert.equal(report.diff_collected, false)
+  const score = scoreAttempt(task, report)
+  assert.equal(score.policy_clean, false)
+  assert.notEqual(score.outcome, 'valid_success')
+  assert.notEqual(score.outcome, 'unverified_success')
+})
+
+test('false-block denominator excludes correct artifacts with uncollected or unclean policy', () => {
+  const entries = [
+    { task, attempt: attempt('failed', 'AGENT_FAILURE') },
+    {
+      task,
+      attempt: {
+        ...attempt('failed', 'AGENT_FAILURE'),
+        diff: undefined,
+        diff_collected: false,
+      },
+    },
+    {
+      task,
+      attempt: attempt('failed', 'AGENT_FAILURE', 'passed', {
+        added: ['package.json'],
+        modified: [],
+        deleted: [],
+      }),
+    },
+  ]
+  const summary = summarizeAttemptScores(entries)
+  assert.equal(summary.externally_correct, 3)
+  assert.equal(summary.rates.false_block.numerator, 1)
+  assert.equal(summary.rates.false_block.denominator, 1)
+  assert.equal(summary.populations.false_block_eligible, 1)
+})
+
+test('false success counts a verified-complete claim contradicted by the oracle or policy', () => {
+  const wrongArtifact = scoreAttempt(task, {
+    ...attempt('completed', 'VERIFIED_COMPLETE', 'failed'),
+    completion_claimed: true,
+  })
+  assert.equal(wrongArtifact.harness_verified, true)
+  assert.equal(wrongArtifact.externally_correct, false)
+  assert.equal(wrongArtifact.outcome, 'task_failure')
+  assert.equal(wrongArtifact.false_success, true)
+  assert.equal(wrongArtifact.false_complete, true)
+
+  const unauthorized = scoreAttempt(task, {
+    ...attempt('completed', 'VERIFIED_COMPLETE'),
+    completion_claimed: true,
+    diff: { added: [], modified: ['package.json'], deleted: [] },
+  })
+  assert.equal(unauthorized.false_success, true)
+  assert.equal(unauthorized.outcome, 'task_failure')
 })
