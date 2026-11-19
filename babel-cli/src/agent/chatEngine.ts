@@ -2754,6 +2754,9 @@ export class ChatEngine {
       finalRevisionRequired: chatFinalRevisionRequired({
         ambientReadOnly: isReadOnlyChat(),
         hasProjectRoot: Boolean(this.options.projectRoot),
+        hasInspectionEvidence: gateLog.some(entry =>
+          ['read_file', 'read_range', 'file_read'].includes(entry.tool) &&
+          !entry.error && (entry.exit_code === undefined || entry.exit_code === 0)),
       }),
       ...(this.lastVerifierReceipt?.boundRevision
         ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }

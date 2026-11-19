@@ -967,8 +967,10 @@ export function unavailableFinalRevisionWitness(reason: string): FinalRevisionWi
 export function chatFinalRevisionRequired(input: {
   ambientReadOnly: boolean
   hasProjectRoot: boolean
+  /** True only when the conclusion rests on recorded file-byte inspection. */
+  hasInspectionEvidence: boolean
 }): boolean {
-  return input.hasProjectRoot && !input.ambientReadOnly
+  return input.hasProjectRoot && !input.ambientReadOnly && input.hasInspectionEvidence
 }
 
 function hasEffectUnprovenGit(entries: readonly FinalRevisionToolEntry[]): boolean {

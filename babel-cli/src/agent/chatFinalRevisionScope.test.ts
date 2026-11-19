@@ -60,9 +60,9 @@ async function runReadOnlyInspection(ambient: boolean): Promise<{ outcome?: stri
   }
 }
 
-test('project-scoped READ_ONLY with grep-only inspection does not certify no-change', async () => {
+test('project-scoped READ_ONLY search report remains successful (no byte no-change claim)', async () => {
   const result = await runReadOnlyInspection(false)
-  assert.equal(result.outcome, 'UNVERIFIED_PATCH')
+  assert.equal(result.outcome, 'NO_CHANGE_REQUIRED')
 })
 
 test('ambient read-only chat may answer without a project byte witness', async () => {

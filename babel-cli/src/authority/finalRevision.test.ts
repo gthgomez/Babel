@@ -536,9 +536,10 @@ test('oversized inspected bytes report unproven, not changed', () => {
 })
 
 test('chat final-revision requirement opts out only for ambient read-only', () => {
-  assert.equal(chatFinalRevisionRequired({ ambientReadOnly: false, hasProjectRoot: true }), true)
-  assert.equal(chatFinalRevisionRequired({ ambientReadOnly: true, hasProjectRoot: true }), false)
-  assert.equal(chatFinalRevisionRequired({ ambientReadOnly: false, hasProjectRoot: false }), false)
+  assert.equal(chatFinalRevisionRequired({ ambientReadOnly: false, hasProjectRoot: true, hasInspectionEvidence: true }), true)
+  assert.equal(chatFinalRevisionRequired({ ambientReadOnly: true, hasProjectRoot: true, hasInspectionEvidence: true }), false)
+  assert.equal(chatFinalRevisionRequired({ ambientReadOnly: false, hasProjectRoot: false, hasInspectionEvidence: true }), false)
+  assert.equal(chatFinalRevisionRequired({ ambientReadOnly: false, hasProjectRoot: true, hasInspectionEvidence: false }), false)
 })
 
 // ── Round-5 adversarial corpus and proven execution vectors ─────────────────
