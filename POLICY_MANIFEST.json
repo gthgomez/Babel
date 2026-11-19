@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "13d87e74094abb5ca5aed2d8b1ea4b4b001190bb7ebce75f1df071488e9a21e9",
+  "policy_bundle_id": "eb301fa6556a743110438d22b615bfa6770863f614648b9751b56dd0f7951919",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -25,7 +25,7 @@
     "babel-cli/src/authority/commandSpec.ts": "ab7723fff856f1b0faa7b6edefdfb72b2ab52000b698284571882146e3616d38",
     "babel-cli/src/authority/convergence-integrity.regression-gate.test.ts": "7c80ed633d94f05c006d18fe3195fe21caf863d97c0b6fef33eeeb6e1e4c06d4",
     "babel-cli/src/authority/convergence-parser.regression-gate.test.ts": "a8d9bceb53c55e23386c49f3a01d82951375119bec5a44793b6f4ff0e3f1fffd",
-    "babel-cli/src/authority/credentialPathBoundary.test.ts": "9a6a528884aff5aa116167592be5df544be6eebe9e853dd611ce165dd0aafeed",
+    "babel-cli/src/authority/credentialPathBoundary.test.ts": "a0502a3f8334c6b32e8d912237817eba181dea8bb21101352df8e3c0d393d404",
     "babel-cli/src/authority/criterionCompletion.test.ts": "0d372f1eb54602b6fb131239783b9005ae6e4fe11a7300e768627d90d2020283",
     "babel-cli/src/authority/criterionCompletion.ts": "94bbaa143267a490e8164e33535b7b22e355957c6315480de33931a12e6c029c",
     "babel-cli/src/authority/criterionExecutionPublisher.test.ts": "b8e7f70e4d6de00723c4a677480dd608d7e477a79f79b3f1a8e92af52529d948",
