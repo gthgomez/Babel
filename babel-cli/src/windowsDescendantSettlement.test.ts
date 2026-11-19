@@ -345,10 +345,12 @@ function refuseWindowsCensus(t: TestContext): void {
 test('Windows cancel path observes a grandchild that the leader-only probe cannot see', {
   skip: !windows ? 'Windows-only descendant fixture' : false,
 }, async t => {
-  for (const mode of ['cancel', 'timeout', 'unavailable census'] as const) {
+  for (const mode of ['cancel', 'timeout', 'unavailable census', 'timeout with unavailable census'] as const) {
     await t.test(mode, async subtest => {
       const root = mkdtempSync(join(tmpdir(), 'babel-w08-win-tree-'))
       const owner = `windows-grandchild-${mode}`
+      const hasDeadline = mode.startsWith('timeout')
+      const censusUnavailable = mode.includes('unavailable census')
       // The detached fixture holds the real supervisor's output pipe open after
       // its parent exits. The command stays pending until the grandchild exits.
       writeFixture(root, true, true)
@@ -377,7 +379,7 @@ test('Windows cancel path observes a grandchild that the leader-only probe canno
         catch (error) { deadlineObservationError = error }
       }
       const pending = spawnCommandAsync(process.execPath, ['parent.mjs'], {
-        cwd: root, env: fixtureEnv, signal: controller.signal, timeoutMs: mode === 'timeout' ? 10_000 : 0,
+        cwd: root, env: fixtureEnv, signal: controller.signal, timeoutMs: hasDeadline ? 10_000 : 0,
         processWitness: witness, processContext: { sessionId: owner },
       })
       let result: Awaited<typeof pending> | undefined
@@ -395,7 +397,6 @@ test('Windows cancel path observes a grandchild that the leader-only probe canno
           // Keep the leader alive so real taskkill can succeed even when each
           // census executable fails. Taskkill alone cannot certify the tree.
           before = initial
-          refuseWindowsCensus(subtest)
         } else {
           writeFileSync(join(root, 'exit-parent'), '')
           const owned = identity
@@ -406,25 +407,30 @@ test('Windows cancel path observes a grandchild that the leader-only probe canno
           assert.deepEqual(before, [null, initial[1]], 'the same grandchild must outlive its parent')
         }
         assert.equal(result, undefined, 'the real supervisor must still own the pending command')
-        if (mode !== 'timeout') controller.abort()
+        if (censusUnavailable) refuseWindowsCensus(subtest)
+        if (!hasDeadline) controller.abort()
         const completed = await waitFor(() => result, `${mode} did not return`, 35_000)
-        assert.equal(completed.aborted, mode !== 'timeout')
-        assert.equal(completed.timedOut, mode === 'timeout')
+        assert.equal(completed.aborted, !hasDeadline)
+        assert.equal(completed.timedOut, hasDeadline)
         assert.equal(completed.processStarted, true)
         assert.ok(completed.termination, 'the real supervisor must expose settlement')
         try { await completed.termination } catch (error) { terminationError = error }
         after = windowsFixtureProcessTimes(identity)
-        if (mode === 'timeout') {
+        if (hasDeadline) {
           assert.ifError(deadlineObservationError)
           assert.deepEqual(atDeadline, before, 'the same grandchild must be alive at the actual deadline')
         }
-        if (mode === 'unavailable census') {
+        if (censusUnavailable) {
           assert.match(String(terminationError), /census.*unavailable/i)
+          if (hasDeadline) {
+            assert.match(completed.error?.message ?? '', /census.*unavailable/i)
+            assert.deepEqual(after, before, 'the detached survivor must remain alive without a census')
+          }
         } else {
           assert.notEqual(after[1], before[1], 'the owned grandchild must be gone before test teardown')
           assert.ifError(terminationError)
           assert.equal(parentExitCode, 0)
-          assert.match(completed.error?.message ?? '', mode === 'timeout' ? /ETIMEDOUT/ : /aborted/)
+          assert.match(completed.error?.message ?? '', hasDeadline ? /ETIMEDOUT/ : /aborted/)
         }
       } finally {
         subtest.mock.restoreAll()
@@ -437,6 +443,11 @@ test('Windows cancel path observes a grandchild that the leader-only probe canno
           writeFileSync(join(root, 'stop'), '')
           await pending
           try { await awaitPendingProcessTerminations(owner) } catch { /* observed above */ }
+          if (identity && before?.[1] && after?.[1] === before[1]) {
+            const owned = identity
+            await waitFor(() => windowsFixtureProcessTimes(owned)[1] !== before![1] ? true : undefined,
+              'owned supervisor fixture did not stop after observation')
+          }
           subtest.diagnostic(JSON.stringify({ mode, identity, before, atDeadline, after, parentExitCode,
             termination: terminationError instanceof Error ? terminationError.message.replaceAll(process.execPath, '<node>') : undefined,
             ...fixtureStderr(root, result?.stderr ?? '') }))
