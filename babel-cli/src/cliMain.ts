@@ -15,6 +15,7 @@ import {
 import { registerProjectCommands } from './commands/projectCommands.js';
 import { registerRemoteCommands } from './commands/remoteCommands.js';
 import { registerWorkflowCommands } from './commands/workflowCommands.js';
+import { registerWorktreeCommands } from './commands/worktreeCommands.js';
 
 /** One registration graph for execution and command recognition. */
 export function createCliProgram(): Command {
@@ -23,6 +24,7 @@ export function createCliProgram(): Command {
   registerCoreCommands(program);
   registerProjectCommands(program);
   registerWorkflowCommands(program);
+  registerWorktreeCommands(program);
   registerRemoteCommands(program);
   applyUserFocusedHelpTiers(program);
 
