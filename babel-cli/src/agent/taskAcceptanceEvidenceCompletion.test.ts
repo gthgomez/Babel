@@ -12,7 +12,11 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import { createCriterionCompletionServiceV1 } from '../authority/criterionCompletion.js'
-import { noChangeFinalRevisionScope } from './chatNoChangeFinalRevision.js'
+import {
+  chatFinalRevisionRequiredForChat,
+  chatFinalRevisionWitness,
+  hashFinalRevisionFile,
+} from '../authority/finalRevision.js'
 import { createExecutorKernel } from '../executor/kernel.js'
 import { captureChatVerifierReceipt, prepareKernelVerifierInput } from './chatEngineVerifierAdapter.js'
 import { resolveGovernedCriterionCandidateRevisionSha } from '../evidence/chatRevisionBinding.js'
@@ -258,23 +262,60 @@ test('P1-2: the same constraint without a Requirements section is not unsatisfia
   assert.equal(publicApiPreservationViolation({ records: contract.provenance.records, projectRoot: root }), null)
 })
 
-test('P1 sequencing: ambient NO_CHANGE opts out of final-revision proof explicitly', () => {
-  const ambient = noChangeFinalRevisionScope({ ambientReadOnly: true })
-  assert.equal(ambient.finalRevisionRequired, false)
-  const project = noChangeFinalRevisionScope({ ambientReadOnly: false })
-  assert.equal('finalRevisionRequired' in project, false,
-    'project-scoped no-change keeps the witness requirement')
+test('final revision: byte-inspected no-change requires a current witness', t => {
+  const { root } = fixture(GOAL)
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const hash = hashFinalRevisionFile(root, 'src/parser.js')
+  assert.ok(hash)
+  const inspection = {
+    tool: 'read_file',
+    target: 'src/parser.js',
+    exit_code: 0,
+    read_revision_hash: hash,
+  }
+  const toolCallLog = [inspection]
 
-  const decision = createExecutorKernel('chat').completion.decide({
+  assert.equal(chatFinalRevisionRequiredForChat({
+    projectRoot: root, ambientReadOnly: false, toolCallLog,
+  }), true)
+  assert.equal(chatFinalRevisionRequiredForChat({
+    projectRoot: root, ambientReadOnly: true, toolCallLog,
+  }), false, 'ambient read-only keeps its approved opt-out')
+  assert.equal(chatFinalRevisionRequiredForChat({
+    projectRoot: root, ambientReadOnly: false, toolCallLog: [],
+  }), false, 'text-only turns do not require byte-witness proof')
+
+  const witness = chatFinalRevisionWitness(root, toolCallLog)
+  assert.ok(witness)
+  assert.equal(witness.status, 'verified')
+  const current = createExecutorKernel('chat').completion.decide({
     mode: 'chat',
     requestedOutcome: 'NO_CHANGE_REQUIRED',
     hasWrite: false,
     verificationPolicy: 'required',
-    toolCallLog: [{ tool: 'read_file', target: 'src/parser.js', exit_code: 0 }],
-    ...ambient,
+    toolCallLog,
+    finalRevision: witness,
+    finalRevisionRequired: true,
   })
-  assert.equal(decision.allowed, true, JSON.stringify(decision))
-  assert.equal(decision.finalOutcome, 'NO_CHANGE_REQUIRED', JSON.stringify(decision))
+  assert.equal(current.allowed, true, JSON.stringify(current))
+  assert.equal(current.finalOutcome, 'NO_CHANGE_REQUIRED', JSON.stringify(current))
+
+  writeFileSync(join(root, 'src', 'parser.js'),
+    'export function parseSum(a, b) { return a * b; }\nexport function parseMinus(a, b) { return a - b; }\n')
+  const stale = chatFinalRevisionWitness(root, toolCallLog)
+  assert.ok(stale)
+  assert.equal(stale.status, 'stale')
+  const downgraded = createExecutorKernel('chat').completion.decide({
+    mode: 'chat',
+    requestedOutcome: 'NO_CHANGE_REQUIRED',
+    hasWrite: false,
+    verificationPolicy: 'required',
+    toolCallLog,
+    finalRevision: stale,
+    finalRevisionRequired: true,
+  })
+  assert.equal(downgraded.allowed, false, JSON.stringify(downgraded))
+  assert.equal(downgraded.finalOutcome, 'UNVERIFIED_PATCH', JSON.stringify(downgraded))
 })
 
 test('P2 containment: an outside documentation path is never admitted or read', t => {
