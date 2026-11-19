@@ -24,6 +24,17 @@ import {
   type WindowsDescendantProbe,
 } from './windowsProcessSettlement.js';
 
+/** Generated parent fixture: spawn an unref'ed grandchild and publish its pid. */
+function buildParentFixture(root: string, grandchildPidFile: string): string {
+  return `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
+child.unref();
+writeFileSync(${JSON.stringify(grandchildPidFile)}, String(child.pid));
+process.exit(0);
+`;
+}
+
 function scriptedProbe(rounds: number[][]): WindowsDescendantProbe & { killed: number[]; calls: number } {
   const state = {
     killed: [] as number[],
@@ -167,6 +178,35 @@ test('the real census is unavailable off Windows and never fabricates an empty t
   assert.equal(listWindowsDescendantPids(process.pid), null);
 });
 
+test('generated descendant fixture publishes its grandchild pid', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-w08-fixture-'));
+  const grandchildPidFile = join(root, 'grandchild.pid');
+  writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n');
+  writeFileSync(join(root, 'parent.mjs'), buildParentFixture(root, grandchildPidFile));
+  let grandchildPid: number | undefined;
+  try {
+    const stderr: string[] = [];
+    const parent = spawn(process.execPath, [join(root, 'parent.mjs')], {
+      cwd: root,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+    });
+    parent.stderr.setEncoding('utf8');
+    parent.stderr.on('data', (chunk: string) => stderr.push(chunk));
+    const exitCode = await new Promise<number | null>((resolve) => parent.once('exit', resolve));
+    assert.equal(exitCode, 0, stderr.join(''));
+    assert.equal(existsSync(grandchildPidFile), true, stderr.join(''));
+    grandchildPid = Number(readFileSync(grandchildPidFile, 'utf8'));
+    assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0);
+    assert.equal(isProcessAlive(grandchildPid), true, 'the fixture grandchild must survive its parent');
+  } finally {
+    if (grandchildPid !== undefined) {
+      try { process.kill(grandchildPid); } catch { /* already gone */ }
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test(
   'Windows cancel path observes a grandchild that the leader-only probe cannot see',
   { skip: process.platform !== 'win32' ? 'Windows-only descendant fixture' : false },
@@ -174,23 +214,16 @@ test(
     const root = mkdtempSync(join(tmpdir(), 'babel-w08-win-tree-'));
     const grandchildPidFile = join(root, 'grandchild.pid');
     writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n');
-    writeFileSync(
-      join(root, 'parent.mjs'),
-      `import { spawn } from 'node:child_process';
-import { isProcessAlive } from './processTree.js';
-import { writeFileSync } from 'node:fs';
-const child = spawn(process.execPath, ['grandchild.mjs'], { cwd: ${JSON.stringify(root)}, stdio: 'ignore' });
-child.unref();
-// Write the published pid synchronously: a fast Windows parent exit can win
-// the race against the asynchronous 'spawn' event.
-writeFileSync(${JSON.stringify(grandchildPidFile)}, String(child.pid));
-process.exit(0);
-`,
-    );
+    writeFileSync(join(root, 'parent.mjs'), buildParentFixture(root, grandchildPidFile));
+    let parentStderr = '';
     const parent = spawn(process.execPath, [join(root, 'parent.mjs')], {
       cwd: root,
-      stdio: 'ignore',
+      stdio: ['ignore', 'ignore', 'pipe'],
       windowsHide: true,
+    });
+    parent.stderr.setEncoding('utf8');
+    parent.stderr.on('data', (chunk: string) => {
+      if (parentStderr.length < 4_000) parentStderr += chunk;
     });
     // Attach before any await: a fast Windows exit would otherwise be missed
     // and leave this promise pending with an empty event loop.
@@ -198,8 +231,12 @@ process.exit(0);
     try {
       const deadline = Date.now() + 20_000;
       while (!existsSync(grandchildPidFile)) {
-        if (Date.now() > deadline) throw new Error('grandchild pid was never published');
+        if (parent.exitCode !== null) break;
+        if (Date.now() > deadline) break;
         await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (!existsSync(grandchildPidFile)) {
+        throw new Error(`grandchild pid was never published (parent exit ${parent.exitCode ?? 'running'}): ${parentStderr.trim() || '<no stderr>'}`);
       }
       const grandchildPid = Number(readFileSync(grandchildPidFile, 'utf8'));
       assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 0);
