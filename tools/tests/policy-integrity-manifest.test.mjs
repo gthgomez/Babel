@@ -112,6 +112,7 @@ const paths = [
   "babel-cli/src/authority/commandSpec.ts",
   "babel-cli/src/authority/convergence-integrity.regression-gate.test.ts",
   "babel-cli/src/authority/convergence-parser.regression-gate.test.ts",
+  "babel-cli/src/authority/credentialPathBoundary.test.ts",
   "babel-cli/src/authority/criterionCompletion.test.ts",
   "babel-cli/src/authority/criterionCompletion.ts",
   "babel-cli/src/authority/criterionExecutionPublisher.test.ts",
