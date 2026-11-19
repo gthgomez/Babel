@@ -17,7 +17,7 @@ import { getSafeEnv } from './utils/safeEnv.js';
 
 export interface WindowsDescendantProbe {
   /** Descendant process ids, or null when the census could not be confirmed. */
-  listDescendants: (rootPid: number) => number[] | null;
+  listDescendants: (rootPid: number, timeoutMs?: number) => number[] | null;
   /** Best-effort kill of one process and its visible tree. */
   kill: (pid: number) => boolean;
 }
@@ -36,6 +36,8 @@ export interface WindowsSettlementOptions {
   probe?: WindowsDescendantProbe;
   /** Bounded kill rounds; each round re-censuses. */
   rounds?: number;
+  /** Total census budget. A slow/unavailable probe reports `probeUnavailable`. */
+  budgetMs?: number;
   /** Delay between rounds (ms). */
   roundDelayMs?: number;
   wait?: (ms: number) => Promise<void>;
@@ -52,7 +54,7 @@ function powershellExecutable(): string {
  * Enumerate every descendant of `rootPid` in one CIM snapshot.
  * Returns null when the probe cannot run or its output is not a complete list.
  */
-export function listWindowsDescendantPids(rootPid: number): number[] | null {
+export function listWindowsDescendantPids(rootPid: number, timeoutMs = 15_000): number[] | null {
   if (process.platform !== 'win32' || !Number.isSafeInteger(rootPid) || rootPid <= 0) return null;
   const script = [
     '$ErrorActionPreference = "Stop";',
@@ -76,7 +78,7 @@ export function listWindowsDescendantPids(rootPid: number): number[] | null {
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
     {
       encoding: 'utf8',
-      timeout: 15_000,
+      timeout: Math.max(250, timeoutMs),
       maxBuffer: MAX_CENSUS_OUTPUT_BYTES,
       windowsHide: true,
       shell: false,
@@ -127,11 +129,14 @@ export async function settleWindowsDescendants(
   const probe = options.probe ?? defaultProbe;
   const rounds = Math.max(1, options.rounds ?? 1);
   const roundDelayMs = Math.max(0, options.roundDelayMs ?? 50);
+  const deadline = Date.now() + Math.max(250, options.budgetMs ?? 20_000);
+  const probeOnce = (): number[] | null =>
+    probe.listDescendants(rootPid, Math.max(250, deadline - Date.now()));
   const wait = options.wait ?? ((ms: number) => new Promise<void>((resolveDelay) => { setTimeout(resolveDelay, ms); }));
   let killsAttempted = 0;
 
   for (let round = 0; round < rounds; round++) {
-    const descendants = probe.listDescendants(rootPid);
+    const descendants = probeOnce();
     if (descendants === null) {
       return { confirmed: false, remaining: [], probeUnavailable: true, killsAttempted };
     }
@@ -145,7 +150,7 @@ export async function settleWindowsDescendants(
     if (round + 1 < rounds && roundDelayMs > 0) await wait(roundDelayMs);
   }
 
-  const remainder = probe.listDescendants(rootPid);
+  const remainder = probeOnce();
   if (remainder === null) {
     return { confirmed: false, remaining: [], probeUnavailable: true, killsAttempted };
   }

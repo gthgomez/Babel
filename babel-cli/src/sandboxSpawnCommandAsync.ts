@@ -232,8 +232,11 @@ export function spawnCommandAsync(
               if (process.platform === 'win32') {
                 // Windows has no group probe: `waitForProcessGroupExit` only
                 // observes the leader. Confirm grandchildren separately.
-                const settlement = await settleWindowsDescendants(pid);
-                if (!settlement.confirmed) {
+                // taskkill /T /F is already accepted above. Give a fast census a
+                // bounded chance to detect survivors; a slow/unavailable WMI
+                // probe must not turn a cancelled command into a false failure.
+                const settlement = await settleWindowsDescendants(pid, { rounds: 1, budgetMs: 1_000 });
+                if (!settlement.confirmed && !settlement.probeUnavailable) {
                   throw new Error(`Aborted process ${executable} left unconfirmed descendants`)
                 }
               }
@@ -290,8 +293,8 @@ export function spawnCommandAsync(
                     throw new Error(`Timed-out process group ${pid} did not exit after tree termination`)
                   }
                   if (process.platform === 'win32') {
-                    const settlement = await settleWindowsDescendants(pid)
-                    if (!settlement.confirmed) {
+                    const settlement = await settleWindowsDescendants(pid, { rounds: 1, budgetMs: 1_000 })
+                    if (!settlement.confirmed && !settlement.probeUnavailable) {
                       throw new Error(`Timed-out process ${executable} left unconfirmed descendants`)
                     }
                   }
