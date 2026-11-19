@@ -16,7 +16,6 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -422,17 +421,13 @@ describe('governed child worktree adoption', () => {
     assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
   });
 
-  it('refuses a child path that traverses a symlink', async (t) => {
+  it('refuses a child path that traverses a symlink', async () => {
     const root = createGitProject();
     const child = await childWorktree(root, 'adopt-symlink');
     const outside = mkdtempSync(join(tmpdir(), 'babel-adopt-outside-'));
     tempRoots.push(outside);
-    try {
-      symlinkSync(outside, join(child.worktree.path, 'src', 'linked'), 'dir');
-    } catch {
-      t.skip('symlink creation is not permitted on this host');
-      return;
-    }
+    // Directory junctions need no elevation on Windows; POSIX uses a normal dir symlink.
+    symlinkSync(outside, join(child.worktree.path, 'src', 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
     writeFileSync(join(outside, 'escaped.txt'), 'escaped\n');
 
     const refused = promoteImplementWorktree({
@@ -453,35 +448,31 @@ describe('governed child worktree adoption', () => {
     assert.equal(existsSync(join(root, 'src', 'linked')), false);
   });
 
-  it('rolls back already-adopted bytes when a later write fails', async (t) => {
-    if (process.platform === 'win32') {
-      t.skip('POSIX directory modes are required to force a write failure');
-      return;
-    }
+  it('rolls back already-adopted bytes when a later write fails', async () => {
     const root = createGitProject();
     const child = await childWorktree(root, 'adopt-rollback');
     const first = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
-    const lockedDir = join(root, 'src', 'locked');
-    mkdirSync(lockedDir, { recursive: true });
     const second = changedFile(root, child.worktree.path, 'src/locked/two.txt', null, 'two\n');
-    chmodSync(lockedDir, 0o500);
-    try {
-      const refused = promoteImplementWorktree({
-        projectRoot: root,
-        worktreePath: child.worktree.path,
-        writeScope: ['src'],
-        baseSha: child.baseSha!,
-        expectedChanges: [first, second],
-        mode: 'copy',
-      });
 
-      assert.equal(refused.status, 'refused', JSON.stringify(refused, null, 2));
-      assert.ok(refused.diagnostics.some((d) => d.code === 'adoption_rolled_back'), JSON.stringify(refused));
-      assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
-      assert.equal(existsSync(join(root, 'src', 'locked', 'two.txt')), false);
-    } finally {
-      chmodSync(lockedDir, 0o700);
-    }
+    const refused = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [first, second],
+      mode: 'copy',
+      testHooks: {
+        writeFile: (path, content) => {
+          if (path.endsWith('two.txt')) throw new Error('synthetic later-write failure');
+          writeFileSync(path, content);
+        },
+      },
+    });
+
+    assert.equal(refused.status, 'refused', JSON.stringify(refused, null, 2));
+    assert.ok(refused.diagnostics.some((d) => d.code === 'adoption_rolled_back'), JSON.stringify(refused));
+    assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
+    assert.equal(existsSync(join(root, 'src', 'locked', 'two.txt')), false);
   });
 
   it('reports parent status after adoption', async () => {
@@ -524,14 +515,15 @@ describe('governed child worktree adoption', () => {
     assert.equal(readFileSync(join(root, 'src', 'café.ts'), 'utf-8'), 'export const café = 1;\n');
   });
 
-  it('adopts POSIX quote, backslash and tab filenames without C-quoting corruption', async (t) => {
-    if (process.platform === 'win32') {
-      t.skip('backslash is a path separator on Windows');
-      return;
-    }
+  it('adopts special-character filenames without quoting or separator corruption', async () => {
     const root = createGitProject();
     const child = await childWorktree(root, 'adopt-special-names');
-    const names = ['src/quote"name.ts', 'src/back\\slash.ts', 'src/tab\tname.ts'];
+    // Windows forbids quote, backslash and control characters; the portable
+    // subset still exercises special-character and separator-decoding paths.
+    const names = ['src/space name.ts', 'src/hash#name.ts', 'src/percent%name.ts', "src/apostrophe'name.ts"];
+    if (process.platform !== 'win32') {
+      names.push('src/quote"name.ts', 'src/back\\slash.ts', 'src/tab\tname.ts');
+    }
     const changes = names.map((name, index) => changedFile(root, child.worktree.path, name, null, `export const value = ${index};\n`));
 
     const adopted = promoteImplementWorktree({
@@ -630,35 +622,29 @@ describe('governed child worktree adoption', () => {
     assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 2;\n');
   });
 
-  it('reports cleanup failure as a failed adoption result', async (t) => {
-    if (process.platform === 'win32') {
-      t.skip('POSIX directory modes are required to force worktree removal failure');
-      return;
-    }
+  it('reports cleanup failure as a failed adoption result', async () => {
     const root = createGitProject();
     const child = await childWorktree(root, 'adopt-cleanup-fail');
     const change = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
-    const adminRoot = join(root, '.git', 'worktrees');
-    chmodSync(adminRoot, 0o500);
-    try {
-      const result = promoteImplementWorktree({
-        projectRoot: root,
-        worktreePath: child.worktree.path,
-        writeScope: ['src'],
-        baseSha: child.baseSha!,
-        expectedChanges: [change],
-        mode: 'copy',
-        cleanupWorktree: true,
-        verify: () => ({ ok: true, summary: 'readback matched' }),
-      });
 
-      assert.equal(result.status, 'cleanup_failed', JSON.stringify(result, null, 2));
-      assert.equal(result.success, false);
-      assert.ok(result.diagnostics.some((d) => d.code === 'worktree_cleanup_failed'));
-      assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 2;\n');
-    } finally {
-      chmodSync(adminRoot, 0o700);
-    }
+    const result = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [change],
+      mode: 'copy',
+      cleanupWorktree: true,
+      testHooks: {
+        removeWorktree: () => { throw new Error('synthetic worktree removal failure'); },
+      },
+      verify: () => ({ ok: true, summary: 'readback matched' }),
+    });
+
+    assert.equal(result.status, 'cleanup_failed', JSON.stringify(result, null, 2));
+    assert.equal(result.success, false);
+    assert.ok(result.diagnostics.some((d) => d.code === 'worktree_cleanup_failed'));
+    assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 2;\n');
   });
 
   it('retains the worktree when cleanup is requested but changes are unadopted', async () => {

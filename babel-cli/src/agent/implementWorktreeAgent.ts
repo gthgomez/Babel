@@ -897,6 +897,14 @@ export interface PromoteImplementWorktreeInput {
   allowAdvancedBase?: boolean;
   /** Parent-side reverification after adoption. */
   verify?: (context: AdoptionVerificationContext) => AdoptionVerificationResult;
+  /**
+   * Internal test seam for deterministic platform-independent failure injection.
+   * Production callers omit it; the real filesystem/git path is the default.
+   */
+  testHooks?: {
+    writeFile?: (path: string, content: Buffer) => void;
+    removeWorktree?: (worktreePath: string) => void;
+  };
 }
 
 export interface PromoteImplementWorktreeResult {
@@ -1432,7 +1440,9 @@ export function promoteImplementWorktree(
           rmSync(parentPath, { force: true });
           deletedPaths.push(record.path);
         } else {
-          writeFileAtomic(parentPath, readFileSync(join(worktreePath, record.path)));
+          const bytes = readFileSync(join(worktreePath, record.path));
+          if (input.testHooks?.writeFile) input.testHooks.writeFile(parentPath, bytes);
+          else writeFileAtomic(parentPath, bytes);
           adoptedPaths.push(record.path);
         }
       }
@@ -1490,7 +1500,8 @@ export function promoteImplementWorktree(
     let cleanupFailed = false;
     if (mode === 'copy' && input.cleanupWorktree) {
       try {
-        removeWorktreeByPath(projectRoot, worktreePath);
+        if (input.testHooks?.removeWorktree) input.testHooks.removeWorktree(worktreePath);
+        else removeWorktreeByPath(projectRoot, worktreePath);
         worktreeRemoved = true;
       } catch (err) {
         cleanupFailed = true;
