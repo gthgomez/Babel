@@ -255,6 +255,10 @@ function firstSentence(text: string): string {
   return sentence.length > 200 ? `${sentence.slice(0, 197)}...` : sentence;
 }
 
+/** Text used when a structured Ask answer carries no substantive answer. */
+export const EMPTY_ASK_ANSWER_MESSAGE =
+  'Provider returned no usable answer text; the request did not produce a substantive answer.';
+
 function normalizeAskAnswer(value: unknown): unknown {
   const unwrapped = unwrapSingleObjectArray(value);
   if (unwrapped === null || typeof unwrapped !== 'object' || Array.isArray(unwrapped)) {
@@ -288,6 +292,15 @@ function normalizeAskAnswer(value: unknown): unknown {
     record['answer'] = summary;
   } else if (answer.length === 0) {
     record['answer'] = '';
+  }
+  // A structured answer with no text is never ANSWER_READY. Fail closed at the
+  // parse boundary so no surface can report success with an empty answer
+  // (TF-10). An explicitly non-success status keeps its own meaning, but still
+  // receives a truthful explanatory text.
+  if (summary.length === 0 && answer.length === 0) {
+    if (record['status'] === 'ANSWER_READY') record['status'] = 'ASK_FAILED';
+    record['summary'] = EMPTY_ASK_ANSWER_MESSAGE;
+    record['answer'] = EMPTY_ASK_ANSWER_MESSAGE;
   }
   if (Array.isArray(record['evidence'])) {
     record['evidence'] = record['evidence'].map((entry) => {
@@ -1120,13 +1133,21 @@ export function terminalOutcomeLabel(o: TerminalOutcome): string {
   }
 }
 
-/** Process exit code mapping for cross-surface agreement (H3). */
+/**
+ * Process exit code mapping for cross-surface agreement (H3).
+ *
+ * Exit 0 is reserved for outcomes that established success without a
+ * verification debt. `UNVERIFIED_PATCH` deliberately exits nonzero: its
+ * `user_status` is `not_verified`, so shell chaining must not treat it as a
+ * completed, verified run (TF-08).
+ */
 export function terminalOutcomeExitCode(o: TerminalOutcome): number {
   switch (o) {
     case 'VERIFIED_COMPLETE':
-    case 'UNVERIFIED_PATCH':
     case 'NO_CHANGE_REQUIRED':
       return 0;
+    case 'UNVERIFIED_PATCH':
+      return 6;
     case 'INVALID_TASK':
       return 2;
     case 'NEEDS_HUMAN_DECISION':

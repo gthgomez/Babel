@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { summarizeRequiredTap } from '../../babel-cli/scripts/summarize_required_tap.mjs';
 import {
@@ -88,6 +90,93 @@ test('unexpected runner and shell expressions fail rather than change the canoni
     assert.throws(() => prepareUnitShard(root, 0, 1), /canonical|pattern|command/i);
   }
 });
+
+test('unit shards delegate exact required-suite inventories without losing coverage', async t => {
+  const { prepareUnitShard } = await api();
+  const root = fixture(t, ['src/a.test.ts', 'src/b.test.ts', 'src/agent/c.test.ts', 'src/agent/d.test.ts'], ['src/*.test.ts', 'src/agent/*.test.ts']);
+  const raw = prefix + 'src/a.test.ts src/agent/c.test.ts';
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: {
+    'test:unit': prefix + 'src/*.test.ts src/agent/*.test.ts',
+    'test:chat-truth:raw': raw,
+    'test:harness-runtime:raw': raw,
+  } }));
+  const shards = Array.from({ length: 2 }, (_, index) => prepareUnitShard(root, index, 2));
+  assert.deepEqual(shards[0].inventory, ['src/a.test.ts', 'src/agent/c.test.ts', 'src/agent/d.test.ts', 'src/b.test.ts']);
+  assert.deepEqual(shards[0].delegated.map(entry => entry.path), ['src/a.test.ts', 'src/agent/c.test.ts']);
+  assert.deepEqual(shards[0].delegated.map(entry => entry.suites), [['chat-truth', 'harness-runtime'], ['chat-truth', 'harness-runtime']]);
+  assert.deepEqual(shards[0].shardInventory, ['src/agent/d.test.ts', 'src/b.test.ts']);
+  assert.deepEqual(shards.flatMap(shard => shard.selected).sort(), ['src/agent/d.test.ts', 'src/b.test.ts']);
+  assert.equal(shards[0].scheduling.shardInventoryCount + shards[0].delegated.length, shards[0].inventory.length);
+})
+
+test('stale duration hints only affect weights, never selection or coverage', async t => {
+  const { prepareUnitShard } = await api();
+  const root = fixture(t, ['src/a.test.ts', 'src/b.test.ts'], ['src/*.test.ts']);
+  const path = 'src/a.test.ts';
+  const sha256 = source => createHash('sha256').update(source).digest('hex');
+  mkdirSync(join(root, 'config'), { recursive: true });
+  writeFileSync(join(root, 'config/ci-unit-durations.json'), JSON.stringify({ schemaVersion: 1, platforms: { win32: {
+    [path]: { sha256: sha256(readFileSync(join(root, path))), durationMs: 9000 },
+  } } }));
+  const measured = prepareUnitShard(root, 0, 1, { platform: 'win32' });
+  assert.equal(measured.scheduling.measuredShardFiles, 1);
+  assert.equal(measured.scheduling.estimatedMs, 10000);
+  assert.deepEqual(measured.selected, measured.shardInventory);
+  writeFileSync(join(root, path), '// changed source identity\n');
+  const stale = prepareUnitShard(root, 0, 1, { platform: 'win32' });
+  assert.equal(stale.scheduling.measuredShardFiles, 0);
+  assert.equal(stale.scheduling.hintCoverage, 0);
+  assert.deepEqual(stale.selected, stale.shardInventory, 'a stale hint must never remove selected work');
+})
+
+test('a required suite cannot silently delegate no canonical unit file', async t => {
+  const { prepareUnitShard } = await api();
+  const root = fixture(t, ['src/a.test.ts'], ['src/*.test.ts']);
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: {
+    'test:unit': prefix + 'src/*.test.ts',
+    'test:chat-truth:raw': prefix + 'src/nested/elsewhere.test.ts',
+  } }));
+  mkdirSync(join(root, 'src/nested'), { recursive: true });
+  writeFileSync(join(root, 'src/nested/elsewhere.test.ts'), '// outside canonical unit inventory\n');
+  assert.throws(() => prepareUnitShard(root, 0, 1), /delegates no canonical unit files/);
+})
+
+test('delegated required suites retain the unit no-ambient bootstrap', async () => {
+  const { DELEGATED_UNIT_SUITES } = await api();
+  const pkg = JSON.parse(readFileSync(new URL('../../babel-cli/package.json', import.meta.url), 'utf8'));
+  const loader = './src/testinfra/register-no-ambient-inference.mjs';
+  for (const script of ['test:unit', ...DELEGATED_UNIT_SUITES.map(suite => `test:${suite}:raw`)]) {
+    const tokens = pkg.scripts[script].trim().split(/\s+/);
+    const imports = tokens.flatMap((token, index) => token === '--import' ? [tokens[index + 1]] : []);
+    assert.deepEqual(imports, [loader], `${script} must declare the same bootstrap import`);
+  }
+});
+
+test('a delegated suite that drops the unit bootstrap fails instead of silently changing conditions', async t => {
+  const { prepareUnitShard } = await api();
+  const root = fixture(t, ['src/a.test.ts'], ['src/*.test.ts']);
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: {
+    'test:unit': prefix + 'src/*.test.ts',
+    'test:chat-truth:raw': 'tsx --no-warnings=ExperimentalWarning --test src/a.test.ts',
+  } }));
+  assert.throws(() => prepareUnitShard(root, 0, 1), /must retain the unit no-ambient bootstrap/);
+})
+
+test('real host shard inventory is a deterministic exhaustive partition after delegation', async t => {
+  const { prepareUnitShard } = await api();
+  const packageRoot = fileURLToPath(new URL('../../babel-cli/', import.meta.url));
+  for (const platform of ['linux', 'win32']) {
+    const shards = Array.from({ length: 4 }, (_, index) => prepareUnitShard(packageRoot, index, 4, { platform }));
+    assert.deepEqual(shards.map(shard => shard.selected.length).reduce((sum, count) => sum + count, 0), shards[0].shardInventory.length);
+    assert.deepEqual(shards.flatMap(shard => shard.selected).sort(), [...shards[0].shardInventory].sort());
+    assert.equal(new Set(shards.flatMap(shard => shard.selected)).size, shards[0].shardInventory.length);
+    assert.ok(shards[0].delegated.length > 0, 'required suites must cover part of the canonical inventory');
+    assert.ok(shards[0].scheduling.estimatedImbalanceRatio < 1.01, 'balanced estimates must stay within one percent');
+    assert.equal(shards[0].scheduling.hintCoverage, shards[0].scheduling.measuredShardFiles / shards[0].scheduling.shardInventoryCount);
+    assert.equal(shards[0].scheduling.shardInventoryCount + shards[0].delegated.length, shards[0].inventory.length);
+    assert.deepEqual(shards[0].selected, prepareUnitShard(packageRoot, 0, 4, { platform }).selected);
+  }
+})
 
 test('inventory and selected manifests are stable and differ when the canonical inventory grows', async t => {
   const { prepareUnitShard } = await api();

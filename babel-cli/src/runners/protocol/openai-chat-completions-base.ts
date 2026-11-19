@@ -39,6 +39,7 @@ import {
   isCallerCancelError,
   invocationDeadlineExpired,
   canDispatchPhysicalRequest,
+  createInvocationDeadline,
   invocationTimeoutMessage,
   isInvocationTimeoutError,
   linkExternalAbortSignal,
@@ -266,7 +267,7 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
     const isStreaming = !!callbacks?.onChunk;
     const requestMaxRetries = Math.max(1, this.getRequestMaxRetries());
     const requestTimeoutMs = this.getRequestTimeoutMs();
-    const invocationDeadlineAt = startedAt + requestTimeoutMs;
+    const invocationDeadlineAt = createInvocationDeadline(requestTimeoutMs);
     const errorBodyReadOpts = {
       idleTimeoutMs: getStreamIdleTimeoutMs(),
       deadlineAt: invocationDeadlineAt,

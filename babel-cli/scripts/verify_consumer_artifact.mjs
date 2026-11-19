@@ -221,7 +221,10 @@ async function tui(configured = false) {
     assert.equal(code, 0, transcript)
     assert.ok(sent, 'TUI advertised startup before exit was sent')
     assert.match(transcript, /session ended/i)
-    assert.match(transcript, /Docker is (?:running|not available)/)
+    // The installed doctor must report either the container status (when a
+    // container profile is selected) or the truthful host-native boundary.
+    assert.match(transcript, /Docker is (?:running|not available)|not_required: docker — Docker is not required for the selected execution profile/)
+    assert.match(transcript, /execution_boundary — Execution boundary:/, 'doctor must disclose the effective boundary')
     assert.doesNotMatch(transcript, /Auto-spawn(?:ing|ed) daemon|\[preamble-budget\]/,
       'Startup diagnostics must not enter the conversation')
     const diagnostics = readFileSync(join(tuiEnv.BABEL_STATE_DIR, 'diagnostics', `interactive-${child.pid}.jsonl`), 'utf8')

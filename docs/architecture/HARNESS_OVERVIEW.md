@@ -178,7 +178,7 @@ Defined in `babel-cli/src/schemas/agentContracts.ts`:
 | `INFRA_FAILURE` | Provider / infrastructure |
 | `AGENT_FAILURE` | Agent crash / unrecoverable logic |
 
-Passing outcomes for exit code 0: `VERIFIED_COMPLETE` | `UNVERIFIED_PATCH` only.
+Outcomes for exit code 0: `VERIFIED_COMPLETE` | `NO_CHANGE_REQUIRED` only. `UNVERIFIED_PATCH` is `not_verified` and exits 6.
 
 Do not treat `ChatResult.status === 'completed'` as verified success.
 
