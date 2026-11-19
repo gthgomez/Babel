@@ -542,6 +542,11 @@ export type GateToolLogEntry = {
   mutation_paths?: string[];
   effect_status?: MutationEffectStatus;
   effect_scope?: import('./mutationTools.js').MutationEffectScope;
+  /** `final-revision-v1`: raw-byte hash of the content this read delivered. */
+  read_revision_hash?: string;
+  processExecuted?: boolean;
+  processCompleted?: boolean;
+  simulated?: boolean;
 };
 
 /** Recorded inspection can support a no-change conclusion, never patch certification. */
@@ -1573,7 +1578,9 @@ export function buildCompletionEvidenceBlockedReport(reason: string): {
  * - `hardGate` is true when BABEL_HEADLESS=1, CI=1, or non-TTY.
  * - Under hardGate, both `strict` and `required` policies reject-continue then
  *   hard-BLOCK after max strikes (no soft-allow of missing authoritative verifier).
- * - Interactive (hardGate false): `required` may soft-allow; `strict` still enforces.
+ * - Interactive (hardGate false): `required` with writes blocks after the bounded
+ *   budget exactly like headless; only a verified inspection-only no-change may
+ *   soft-allow because it carries no verifier obligation. `strict` always enforces.
  */
 export type GateRejectPlan =
   | { kind: 'reject_continue'; gateStrikesAfter: number; useGreenMessage: boolean }
@@ -1640,21 +1647,39 @@ export function planCompletionGateReject(opts: {
     };
   }
 
-  if (enforceHard || opts.gateStrikes < opts.maxGateStrikes) {
-    const next = opts.gateStrikes + 1;
-    if (enforceHard || opts.hardGate) {
-      return {
-        kind: 'reject_continue',
-        gateStrikesAfter: next,
-        useGreenMessage: true,
-      };
-    }
-    // Interactive + required (not hard-enforced): soft-allow so humans can finish
-    return { kind: 'soft_allow', gateStrikesAfter: 0 };
+  // Interactive `required` with writes is not a human-authority exception:
+  // after the bounded recovery budget it blocks exactly like headless. A
+  // soft-allow here would keep a stale unverified patch user-visible as the
+  // turn's terminal answer.
+  if (opts.hasWrites && opts.gateStrikes >= opts.maxGateStrikes) {
+    return {
+      kind: 'blocked',
+      reason: [
+        `Gate blocked after ${opts.gateStrikes + 1} consecutive completion rejections.`,
+        'The authoritative verifier was missing or failed each time.',
+        'Interactive required-verification policy blocks after the bounded recovery budget; rerun the required verifier to finish.',
+      ].join(' '),
+    };
   }
 
-  // Interactive non-strict after max strikes: allow through
-  return { kind: 'soft_allow', gateStrikesAfter: 0 };
+  if (enforceHard || opts.hardGate) {
+    return {
+      kind: 'reject_continue',
+      gateStrikesAfter: opts.gateStrikes + 1,
+      useGreenMessage: true,
+    };
+  }
+
+  // Interactive inspection-only no-change: nothing to verify, no patch claim.
+  if (!opts.hasWrites) return { kind: 'soft_allow', gateStrikesAfter: 0 };
+
+  // Writes at/after the budget already blocked above; this is the bounded
+  // reject-continue window before that block.
+  return {
+    kind: 'reject_continue',
+    gateStrikesAfter: opts.gateStrikes + 1,
+    useGreenMessage: true,
+  };
 }
 
 /** Full evaluateCompletionGate for ChatEngine (execute + verification policy). */

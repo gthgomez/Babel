@@ -34,11 +34,16 @@ export function buildPipelineFinalTerminalState(input: {
   resultStatus: string;
   terminalContext: PipelineTerminalContext;
   verifierContractSummary: VerifierContractSummary;
+  /** Host final-revision witness attached to the terminal summary. */
+  finalRevision?: import('../authority/finalRevision.js').FinalRevisionWitnessV1 | null;
+  /** Stale/authority condition that must be visible even without a tool failure. */
+  condition?: string | null;
 }): PipelineFinalTerminalState {
   const rollbackMode =
     input.terminalContext.rollbackSummary?.status ??
     input.terminalContext.attemptSafetySummary?.rollback_mode ??
     'none';
+  const condition = input.condition !== undefined ? input.condition : input.terminalContext.condition;
   const contractStatus =
     (input.resultStatus === 'COMPLETE' || input.resultStatus === 'COMPLETE_NO_MODIFICATION') &&
     !input.verifierContractSummary.verifierCompletionSatisfied
@@ -46,7 +51,7 @@ export function buildPipelineFinalTerminalState(input: {
       : input.resultStatus;
   const status = resolveTerminalStatus({
     status: contractStatus,
-    condition: input.terminalContext.condition,
+    condition,
     toolCallLog: input.terminalContext.toolCallLog,
     failureCapsulePath: input.terminalContext.failureCapsulePath,
     rollbackMode,
@@ -56,7 +61,7 @@ export function buildPipelineFinalTerminalState(input: {
   });
   const terminalSummary = buildTerminalStatusSummary({
     status,
-    condition: input.terminalContext.condition,
+    condition,
     toolCallLog: input.terminalContext.toolCallLog,
     failureCapsulePath: input.terminalContext.failureCapsulePath,
     rollbackMode,
@@ -66,6 +71,7 @@ export function buildPipelineFinalTerminalState(input: {
     worktreeSafetySummaryPath: input.terminalContext.worktreeSafetySummaryPath,
     targetDirtyConflicts: input.terminalContext.worktreeSafetySummary?.target_dirty_conflicts ?? [],
     verifierContractSummary: input.verifierContractSummary,
+    ...(input.finalRevision !== undefined ? { finalRevision: input.finalRevision } : {}),
   });
 
   return {

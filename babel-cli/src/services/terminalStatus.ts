@@ -153,6 +153,8 @@ export interface TerminalStatusSummary {
   repair_attempt_timeline_path: string | null;
   condition_summary: string | null;
   verifier_contract: VerifierContractSummary | null;
+  /** `final-revision-v1` witness for the bytes on disk at publication. */
+  final_revision?: import('../authority/finalRevision.js').FinalRevisionWitnessV1 | null;
 }
 
 export interface TerminalStatusInput {
@@ -169,6 +171,7 @@ export interface TerminalStatusInput {
   attemptSafetySummaryPath?: string | null;
   repairAttemptTimelinePath?: string | null;
   verifierContractSummary?: VerifierContractSummary | null;
+  finalRevision?: import('../authority/finalRevision.js').FinalRevisionWitnessV1 | null;
 }
 
 export function isReadOnlyNoModificationRequest(input: {
@@ -460,6 +463,7 @@ export function buildTerminalStatusSummary(input: TerminalStatusInput): Terminal
     repair_attempt_timeline_path: input.repairAttemptTimelinePath ?? null,
     condition_summary: summarizeCondition(input.condition),
     verifier_contract: input.verifierContractSummary ?? null,
+    ...(input.finalRevision !== undefined ? { final_revision: input.finalRevision } : {}),
   };
 }
 

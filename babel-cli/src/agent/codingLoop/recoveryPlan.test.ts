@@ -107,6 +107,8 @@ test('rejected recovery fields identify their exact mismatch without consuming t
     assert.match(formatRecoveryPlanRejection(state,reason,changedEdit),new RegExp(reason))
   }
   assert.match(formatRecoveryPlanRejection(state,'target_identity_mismatch',changedEdit),/target_identities_expected=\["src\/parser.ts"\]/)
+  assert.match(formatRecoveryPlanRejection(state,'unsupported_observation'),new RegExp(state.recoveryGate!.readRecords![0]!.id))
+  assert.match(formatRecoveryPlanRejection(state,'unsupported_observation'),/Current valid observation IDs:/)
   assert.match(formatRecoveryPlanRejection({...state,recoveryGate:{...state.recoveryGate!,permitConsumed:true}}),/Rerun the verifier/)
 })
 

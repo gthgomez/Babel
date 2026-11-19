@@ -37,6 +37,12 @@ import {
   applyHonestTaskOutcomeToCompletion,
   type TaskContractV1,
 } from './taskContract.js'
+import type { FinalRevisionWitnessV1 } from '../authority/finalRevision.js'
+import {
+  evaluateFinalRevisionWitness,
+  unavailableFinalRevisionWitness,
+  untestedPathsAfterLastGreenVerifier,
+} from '../authority/finalRevision.js'
 import {
   terminalReasonFromClassification,
   terminalReasonFromFailureText,
@@ -101,6 +107,23 @@ export const SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE =
   'session event persistence failed before terminal evidence could be durably recorded'
 
 const UNVERIFIED_COMPLETION_MARKER = 'Completion status: UNVERIFIED_PATCH.'
+
+/** Publication-time no-change proof; absent roots stay absent, never inferred. */
+function publicationRevisionWitness(
+  snapshot: ChatTerminalSnapshot,
+  requested: TerminalOutcome | 'PLAN_COMPLETE',
+): FinalRevisionWitnessV1 | undefined {
+  if (requested !== 'NO_CHANGE_REQUIRED' || !snapshot.context.options.projectRoot) return undefined
+  try {
+    return evaluateFinalRevisionWitness({
+      projectRoot: snapshot.context.options.projectRoot,
+      toolCallLog: snapshot.evidence.observability.toolCallLog,
+      requiredVerifierCommands: [],
+    })
+  } catch {
+    return unavailableFinalRevisionWitness('final_revision_unavailable')
+  }
+}
 
 function singleLineEvidence(value: string, maxLength = 240): string {
   return value.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength)
@@ -208,6 +231,7 @@ function formatTerminalAnswerForOutcome(input: {
   }
   acceptanceEvidence?: readonly CriterionEvidenceResultV1[]
   acceptanceEvidenceOmitted?: number
+  finalRevision?: FinalRevisionWitnessV1
 }): string {
   const unverifiedTerminal = input.status === 'completed' && input.outcome === 'UNVERIFIED_PATCH'
   const blockedRecovery = input.status === 'blocked' && input.outcome === 'BLOCKED_POLICY'
@@ -217,6 +241,21 @@ function formatTerminalAnswerForOutcome(input: {
   }
   if (input.status === 'failed') {
     return failureExplanationWithKnownVerifierState(input.answer, input.verifierReceipt)
+  }
+  if (input.finalRevision?.status === 'stale') {
+    return [
+      UNVERIFIED_COMPLETION_MARKER,
+      'The accepted proof is stale: inspected files changed after the check and before publication, so task completion is not certified.',
+      input.finalRevision.stale_paths.length > 0
+        ? `Changed after the accepted proof: ${input.finalRevision.stale_paths.slice(0, 20).join(', ')}.`
+        : 'Changed after the accepted proof: workspace bytes could not be attributed to a specific path.',
+      'These are user-owned worktree bytes; inspect them and rerun the required verifier before treating the result as current.',
+      '',
+      'Model response (retained as an unverified report):',
+      '---',
+      input.answer,
+    ].join('\n')
+
   }
   if (decisionDeferral) {
     return input.acceptanceEvidence?.length
@@ -280,6 +319,10 @@ function formatTerminalAnswerForOutcome(input: {
   if (artifactRefs.length > 0) {
     const shown = artifactRefs.slice(0, 20)
     lines.push('', `Paths with recorded confirmed mutations (final workspace state not re-checked): ${shown.map(path => JSON.stringify(singleLineEvidence(path))).join(', ')}${artifactRefs.length > shown.length ? `, and ${artifactRefs.length - shown.length} more` : ''}`)
+  }
+  const untested = untestedPathsAfterLastGreenVerifier(input.toolCallLog)
+  if (unverifiedTerminal && untested.length > 0) {
+    lines.push('', `Modified after the last passing verifier (not covered by that result): ${untested.slice(0, 20).map(path => JSON.stringify(singleLineEvidence(path))).join(', ')}. These worktree changes are retained, not deleted; rerun the verifier to cover them.`)
   }
   if (recoveryOnly) {
     lines.push('', 'Host-grounded delivery summary:',
@@ -359,6 +402,8 @@ export interface ChatTerminalEffects {
   decideCompletion: (
     requested: TerminalOutcome | 'PLAN_COMPLETE',
     hasMutation: boolean,
+    /** Publication-time final-revision witness for no-change/read-only claims. */
+    finalRevision?: FinalRevisionWitnessV1,
   ) => ReturnType<ExecutorKernel['completion']['decide']>
   settleActiveExecution: () => void
   finalizeTurn: (
@@ -553,11 +598,22 @@ export function completeChatStream(
   const decision = effects.decideCompletion(
     planCompletion ? 'PLAN_COMPLETE' : requestedOutcome,
     hasMutation,
+    publicationRevisionWitness(snapshot, planCompletion ? 'PLAN_COMPLETE' : requestedOutcome),
   )
   const decisionOutcome =
     decision.finalOutcome === 'PLAN_COMPLETE'
       ? 'UNVERIFIED_PATCH'
       : decision.finalOutcome
+  if (decision.finalRevision) {
+    try {
+      writeFileSync(
+        join(snapshot.context.engineRunDir, 'final_revision.json'),
+        `${JSON.stringify(decision.finalRevision, null, 2)}\n`,
+      )
+    } catch {
+      /* terminal evidence remains available in the completion decision */
+    }
+  }
   const terminalReason = resolveChatTerminalReason(
     input,
     decisionOutcome,
@@ -586,6 +642,8 @@ export function completeChatStream(
     reason: decision.reason,
     evidenceRefs: decision.evidenceRefs,
     policyVersion: decision.policyVersion,
+    ...(decision.finalRevision ? { finalRevision: decision.finalRevision } : {}),
+    ...(decision.stalePaths?.length ? { stalePaths: [...decision.stalePaths] } : {}),
     ...(decision.acceptanceEvidence ? { acceptanceEvidence: decision.acceptanceEvidence } : {}),
     ...(decision.acceptanceEvidenceOmitted !== undefined
       ? { acceptanceEvidenceOmitted: decision.acceptanceEvidenceOmitted }
@@ -642,6 +700,7 @@ export function completeChatStream(
     ...(decision.acceptanceEvidenceOmitted !== undefined
       ? { acceptanceEvidenceOmitted: decision.acceptanceEvidenceOmitted }
       : {}),
+    ...(decision.finalRevision ? { finalRevision: decision.finalRevision } : {}),
   })
   replaceLastMatchingAssistantAnswer(
     snapshot.presentation.conversation,
@@ -1079,6 +1138,7 @@ export function assembleChatResult(
       ? effects.decideCompletion(
           planCompletion ? 'PLAN_COMPLETE' : outcome,
           hasMutation,
+          publicationRevisionWitness(snapshot, planCompletion ? 'PLAN_COMPLETE' : outcome),
         )
       : null
   const authoritativeOutcome: TerminalOutcome | undefined =
@@ -1087,6 +1147,16 @@ export function assembleChatResult(
       : planCompletion
         ? 'UNVERIFIED_PATCH'
         : outcome
+  if (kernelDecision?.finalRevision) {
+    try {
+      writeFileSync(
+        join(snapshot.context.engineRunDir, 'final_revision.json'),
+        `${JSON.stringify(kernelDecision.finalRevision, null, 2)}\n`,
+      )
+    } catch {
+      /* terminal evidence remains available in the completion decision */
+    }
+  }
   const terminalReason =
     finalStatus === 'cancelled'
       ? ({
@@ -1115,6 +1185,8 @@ export function assembleChatResult(
           reason: kernelDecision.reason,
           evidenceRefs: kernelDecision.evidenceRefs,
           policyVersion: kernelDecision.policyVersion,
+          ...(kernelDecision.finalRevision ? { finalRevision: kernelDecision.finalRevision } : {}),
+          ...(kernelDecision.stalePaths?.length ? { stalePaths: [...kernelDecision.stalePaths] } : {}),
           ...(kernelDecision.acceptanceEvidence
             ? { acceptanceEvidence: kernelDecision.acceptanceEvidence }
             : {}),
@@ -1174,6 +1246,7 @@ export function assembleChatResult(
         ...(kernelDecision?.acceptanceEvidenceOmitted !== undefined
           ? { acceptanceEvidenceOmitted: kernelDecision.acceptanceEvidenceOmitted }
           : {}),
+        ...(kernelDecision?.finalRevision ? { finalRevision: kernelDecision.finalRevision } : {}),
       })
   if (!superseded && answer !== undefined && deliveredAnswer !== undefined) {
     replaceLastMatchingAssistantAnswer(
