@@ -19,6 +19,7 @@ import { buildChatEngineExecutionContext, type ChatExecutionContextHost } from '
  * Compaction: chatCompaction.ts. Critic/budget: chatEngineCriticBudget.ts.
  */
 
+import { providerSupportsOperation } from "../runners/providerRegistry.js";
 import {
   completeChatStream,
   failChatStream,
@@ -390,6 +391,7 @@ import {
   buildGateRejectionMessage,
   checkCostWallBudgets,
   currentTurnHasMutation as turnHasMutation,
+  estimateRequestCostUsd,
   formatBudgetKillAnswer,
   hasAnyWrites as sessionHasAnyWrites,
   isDiffCriticEnabled,
@@ -1555,6 +1557,31 @@ export class ChatEngine {
     };
   }
 
+  /**
+   * Conservative one-request estimate for finite-cap preauthorization.
+   * Uses the last observed charge (same request shape) or policy pricing plus
+   * the effective output reserve. Unknown pricing stays unknown; Babel then
+   * keeps its existing incomplete-accounting refusal instead of inventing zero.
+   */
+  private estimateNextRequestCostUsd(maxCostUsd: number): number | undefined {
+    if (!Number.isFinite(maxCostUsd)) return undefined;
+    const metadata = this.deliberationRunner?.getLastInvocationMetadata?.() ?? null;
+    const lastCharge = metadata?.estimated_cost_usd;
+    if (typeof lastCharge === 'number' && Number.isFinite(lastCharge) && lastCharge > 0) return lastCharge;
+    const policy = this.modelPolicy;
+    if (!policy || policy.estimatedCostPer1MInput === undefined || policy.estimatedCostPer1MOutput === undefined) return undefined;
+    const outputReserve = Math.min(
+      this.limits.maxTokensPerRound,
+      policy.requestedOutputTokens ?? policy.maxOutputTokens ?? 8_000,
+    );
+    return estimateRequestCostUsd({
+      inputTokens: metadata?.prompt_tokens ?? policy.approximateInputTokens,
+      outputTokens: outputReserve,
+      inputCostPer1M: policy.estimatedCostPer1MInput,
+      outputCostPer1M: policy.estimatedCostPer1MOutput,
+    });
+  }
+
   private checkBudgets(skipTurnLimit = false): {
     ok: boolean;
     reason?: string;
@@ -1599,6 +1626,7 @@ export class ChatEngine {
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: "cost" };
     }
+    const estimatedNext = this.estimateNextRequestCostUsd(maxCostUsd);
     const maxWallMs = this.effectiveWallCapMs();
     const result = checkCostWallBudgets({
       totalCostUsd: taskCost,
@@ -1611,6 +1639,7 @@ export class ChatEngine {
         this.limits.wallBudget?.requestedMs ?? this.limits.maxWallMs,
       postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
       criticRepairCostCapUsd: this.criticRepairCostCapUsd,
+      ...(estimatedNext !== undefined ? { estimatedNextRequestCostUsd: estimatedNext } : {}),
     });
     if (!result.ok) {
       this.terminatingLimiter = result.limiter ?? "cost";
@@ -2880,9 +2909,19 @@ export class ChatEngine {
   /** Last primary invocation evidence; configuration alone never supplies observed identity. */
   getProviderSelectionStatus() {
     const metadata = this.deliberationRunner?.getLastInvocationMetadata() ?? null;
-    return { provider: this.modelPolicy?.provider ?? null, connection: this.modelPolicy?.connectionId ?? null,
-      requestedModel: this.modelPolicy?.providerModelId ?? null, sentModel: metadata?.sent_model_id ?? null,
-      observedModel: metadata?.observed_model_id ?? null };
+    const policy = this.modelPolicy;
+    return { provider: policy?.provider ?? null, connection: policy?.connectionId ?? null,
+      requestedModel: policy?.providerModelId ?? null,
+      requestedSelection: policy?.requestedModelId ?? policy?.providerModelId ?? null,
+      resolvedModel: policy?.providerModelId ?? null, alias: policy?.aliasNotice ?? null,
+      sentModel: metadata?.sent_model_id ?? null,
+      observedModel: metadata?.observed_model_id ?? null,
+      capabilities: policy ? {
+        structured: providerSupportsOperation(policy.provider as never, 'structured'),
+        native_tool_stream: providerSupportsOperation(policy.provider as never, 'native_tool_stream'),
+      } : null,
+      offline: isOfflineChatMode(),
+      budgetUsd: Number.isFinite(this.limits.maxCostUsd) ? this.limits.maxCostUsd : 'unlimited' };
   }
 
   getProviderConversation(): ProviderMessage[] {

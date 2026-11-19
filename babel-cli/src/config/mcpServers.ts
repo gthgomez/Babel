@@ -17,11 +17,21 @@ import { resolveRuntimePaths } from './runtimePaths.js';
 import { readActivePluginMcpServers } from '../services/plugins.js';
 import { evaluateMcpServerPolicy, formatEnterprisePolicyDecision } from './enterprisePolicy.js';
 
+export interface McpServerOrigin {
+  /** Only plugin-provided executables have a non-user origin today. */
+  kind: 'plugin';
+  plugin_id: string;
+  manifest_path: string;
+  manifest_sha256: string;
+}
+
 export interface McpServerConfig {
   /** The executable to spawn. Must be an approved command name resolved from PATH. */
   command: string;
   /** Arguments passed to the command, including the server-specific flags. */
   args: string[];
+  /** Provenance for executables supplied by a third-party extension. */
+  origin?: McpServerOrigin;
 }
 
 // ─── Fallback defaults (used when config/mcp_servers.json is missing) ─────────
@@ -92,6 +102,7 @@ export function filterAllowedMcpServers(
     allowed[name] = {
       command: config.command.trim(),
       args: [...config.args],
+      ...(config.origin ? { origin: config.origin } : {}),
     };
   }
   return allowed;
@@ -114,53 +125,71 @@ export function filterEnterpriseMcpServers(
   return allowed;
 }
 
-export function readMcpServers(): Record<string, McpServerConfig> {
+/**
+ * Read the configured user/package registry without plugin overlays or policy
+ * filtering. Mutation commands use this view so a plugin-provided executable is
+ * never copied into the user's config and an explicitly empty registry stays
+ * empty.
+ */
+function readConfiguredMcpServers(): Record<string, McpServerConfig> {
   const paths = resolveRuntimePaths();
   const userPath = getMcpServersConfigPath();
   const configPath = paths.isInstalled && !existsSync(userPath)
     ? resolve(paths.resourceRoot, 'babel-cli', 'config', 'mcp_servers.json')
     : userPath;
-  let servers: Record<string, McpServerConfig>;
   if (!existsSync(configPath)) {
-    servers = FALLBACK_SERVERS;
-  } else {
-    try {
-      const raw = readFileSync(configPath, 'utf8');
-      const parsed = JSON.parse(raw) as McpServersJson;
-
-      if (
-        typeof parsed !== 'object' ||
-        parsed === null ||
-        typeof parsed.servers !== 'object' ||
-        parsed.servers === null
-      ) {
-        process.stderr.write(`[babel] mcp_servers.json: unexpected shape, using defaults\n`);
-        servers = FALLBACK_SERVERS;
-      } else {
-        const parsedServers: Record<string, McpServerConfig> = {};
-        for (const [name, cfg] of Object.entries(parsed.servers)) {
-          if (
-            typeof cfg.command === 'string' &&
-            Array.isArray(cfg.args) &&
-            cfg.args.every((a) => typeof a === 'string')
-          ) {
-            parsedServers[name] = { command: cfg.command, args: cfg.args };
-          } else {
-            process.stderr.write(`[babel] mcp_servers.json: skipping malformed entry "${name}"\n`);
-          }
-        }
-
-        servers = Object.keys(parsedServers).length > 0 ? parsedServers : FALLBACK_SERVERS;
-      }
-    } catch {
-      process.stderr.write(`[babel] mcp_servers.json: failed to parse, using defaults\n`);
-      servers = FALLBACK_SERVERS;
-    }
+    return { ...FALLBACK_SERVERS };
   }
 
+  try {
+    const raw = readFileSync(configPath, 'utf8');
+    const parsed = JSON.parse(raw) as McpServersJson;
+
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      typeof parsed.servers !== 'object' ||
+      parsed.servers === null ||
+      Array.isArray(parsed.servers)
+    ) {
+      process.stderr.write(`[babel] mcp_servers.json: unexpected shape, using defaults\n`);
+      return { ...FALLBACK_SERVERS };
+    }
+
+    const parsedServers: Record<string, McpServerConfig> = {};
+    for (const [name, rawConfig] of Object.entries(parsed.servers)) {
+      const cfg = rawConfig as unknown as Record<string, unknown> | null;
+      if (
+        cfg !== null &&
+        typeof cfg === 'object' &&
+        typeof cfg['command'] === 'string' &&
+        Array.isArray(cfg['args']) &&
+        cfg['args'].every((a) => typeof a === 'string')
+      ) {
+        parsedServers[name] = {
+          command: cfg['command'],
+          args: cfg['args'] as string[],
+        };
+      } else {
+        process.stderr.write(`[babel] mcp_servers.json: skipping malformed entry "${name}"\n`);
+      }
+    }
+    // An explicitly present `servers` object is authoritative even when empty.
+    // Falling back here would silently re-enable GitHub/Postgres/SQLite after
+    // the operator removed the last server. A registry whose entries are all
+    // malformed is also fail-closed to an empty registry (the warnings above
+    // identify each rejected entry) rather than silently restoring defaults.
+    return parsedServers;
+  } catch {
+    process.stderr.write(`[babel] mcp_servers.json: failed to parse, using defaults\n`);
+    return { ...FALLBACK_SERVERS };
+  }
+}
+
+export function readMcpServers(): Record<string, McpServerConfig> {
   return filterEnterpriseMcpServers(
     filterAllowedMcpServers({
-      ...servers,
+      ...readConfiguredMcpServers(),
       ...readActivePluginMcpServers(),
     }),
   );
@@ -175,11 +204,16 @@ function assertValidMcpServerName(name: string): void {
 export function writeMcpServers(servers: Record<string, McpServerConfig>): void {
   const configPath = getMcpServersConfigPath();
   mkdirSync(dirname(configPath), { recursive: true });
+  const userServers: Record<string, McpServerConfig> = {};
+  for (const [name, config] of Object.entries(servers)) {
+    // Provenance belongs to the live plugin registry, not the user config file.
+    userServers[name] = { command: config.command, args: [...config.args] };
+  }
   const payload: McpServersJson = {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
     description:
       'MCP server registry. Add entries here to make new servers available to the Babel executor without code changes. Each key is the logical server name used in mcp_request.server.',
-    servers,
+    servers: userServers,
   };
   writeFileSync(configPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8');
 }
@@ -193,7 +227,7 @@ export function upsertMcpServer(
     throw new Error(`MCP server command "${config.command}" is not allowlisted.`);
   }
   const servers = {
-    ...readMcpServers(),
+    ...readConfiguredMcpServers(),
     [name]: {
       command: config.command.trim(),
       args: config.args,
@@ -205,7 +239,7 @@ export function upsertMcpServer(
 
 export function removeMcpServer(name: string): Record<string, McpServerConfig> {
   assertValidMcpServerName(name);
-  const servers = readMcpServers();
+  const servers = readConfiguredMcpServers();
   if (!servers[name]) {
     throw new Error(`MCP server "${name}" is not configured.`);
   }

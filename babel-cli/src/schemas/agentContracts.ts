@@ -1374,6 +1374,8 @@ export const ToolCallLogSchema = z.object({
   mcp_lifecycle: McpLifecycleSchema.optional(),
   checkpoint_ids: z.array(z.string().min(1)).optional(),
   directory_page: z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/), after: z.string().max(4096).nullable(), next_after: z.string().max(4096).nullable() }).optional(),
+  /** Structured glob data kept separate from the human-readable stdout rows. */
+  glob_result: z.object({ paths: z.array(z.string()), returned_count: z.number().int().nonnegative(), truncated: z.boolean() }).optional(),
   verified: z.boolean(), // Did the step's verification check pass?
   status: z.string().optional(),
   fingerprint: z.string().optional(),
@@ -1527,12 +1529,28 @@ export const ExecutorTurnToolCallSchema = z.object({
     'find_code_definition',
     'find_code_references',
     'load_skill_manifest',
+    'kg_trace_path',
+    'kg_search_graph',
+    'kg_impact_analysis',
+    'kg_architecture',
+    'kg_index_status',
   ]),
   // directory_list / file_read / file_write
   path: z.string().max(4096).optional(),
   after: z.string().min(1).max(4096).optional(),
   revision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   content: z.string().max(10_485_760).optional(),
+  // grep / glob / workspace search
+  pattern: z.string().max(4096).optional(),
+  ignore_case: z.boolean().optional(),
+  context_lines: z.number().int().min(0).max(10).optional(),
+  max_paths: z.number().int().optional(),
+  max_depth: z.number().int().optional(),
+  max_files: z.number().int().optional(),
+  symbol: z.string().max(1024).optional(),
+  skill_id: z.string().max(1024).optional(),
+  // workspace_map / directory/workspace paging output shapes
+  output_format: z.enum(['text', 'json']).optional(),
   // shell_exec / test_run
   command: z.string().max(10_240).optional(),
   working_directory: z.string().max(4096).optional(),
@@ -1566,6 +1584,20 @@ export const ExecutorTurnToolCallSchema = z.object({
   category: z.string().max(256).optional(),
   mutating: z.boolean().optional(),
   format: z.string().max(256).optional(),
+  max_lines: z.number().int().optional(),
+  // git_reset / git_push
+  target: z.string().max(4096).optional(),
+  hard: z.boolean().optional(),
+  remote: z.string().max(1024).optional(),
+  branch: z.string().max(1024).optional(),
+  force: z.boolean().optional(),
+  // knowledge graph
+  direction: z.enum(['inbound', 'outbound', 'both']).optional(),
+  kind: z.string().max(256).optional(),
+  files: z.array(z.string().max(4096)).optional(),
+  depth: z.number().int().min(1).max(10).optional(),
+  scope: z.string().max(1024).optional(),
+  detail: z.enum(['summary', 'full']).optional(),
 });
 export type ExecutorTurnToolCall = z.infer<typeof ExecutorTurnToolCallSchema>;
 

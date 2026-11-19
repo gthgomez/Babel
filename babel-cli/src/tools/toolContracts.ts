@@ -44,6 +44,58 @@ export const EXECUTOR_TOOL_NAMES = [
 
 export type ExecutorToolName = (typeof EXECUTOR_TOOL_NAMES)[number];
 
+/**
+ * Tools the Deep text-loop executor may emit as `ExecutorTurnToolCall.tool`.
+ *
+ * This mirrors `ExecutorTurnToolCallSchema.tool` exactly (a parity test enforces
+ * it) and excludes `lsp`: LSP servers are spawned only from Chat's native tool
+ * surface, so advertising `lsp` to Deep would produce an advertised-but-
+ * unexecutable tool. Every other registered executor tool is reachable from
+ * Deep because the handler registry and the strict request schema accept it.
+ */
+export const DEEP_EXECUTOR_TOOL_NAMES = [
+  'directory_list',
+  'file_read',
+  'file_write',
+  'file_delete',
+  'git_reset',
+  'git_push',
+  'shell_exec',
+  'test_run',
+  'mcp_request',
+  'mcp_resource_list',
+  'mcp_resource_read',
+  'mcp_prompt_list',
+  'mcp_prompt_get',
+  'mcp_tool_search',
+  'web_search',
+  'web_fetch',
+  'plugin_tool',
+  'audit_ui',
+  'memory_store',
+  'memory_query',
+  'enter_plan_mode',
+  'exit_plan_mode',
+  'semantic_search',
+  'grep',
+  'glob',
+  'workspace_symbol_search',
+  'workspace_map',
+  'git_context',
+  'acquire_lock',
+  'release_lock',
+  'tool_catalog',
+  'get_code_outline',
+  'find_code_definition',
+  'find_code_references',
+  'load_skill_manifest',
+  'kg_trace_path',
+  'kg_search_graph',
+  'kg_impact_analysis',
+  'kg_architecture',
+  'kg_index_status',
+] as const satisfies readonly ExecutorToolName[];
+
 export const MUTATING_EXECUTOR_TOOL_NAMES = [
   'file_write',
   'file_delete',

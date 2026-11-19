@@ -8,6 +8,7 @@ import {
   mintDesktopControllerProofKey,
 } from '../bridge/desktopControllerAuth.js';
 import { BridgeServer } from '../bridge/sessionServer.js';
+import { remoteUiDirAvailable } from '../bridge/remoteUiAssets.js';
 import {
   REMOTE_UI_FIXTURE_SCENARIOS,
   startRemoteUiFixtureServer,
@@ -72,6 +73,13 @@ export function registerRemoteCommands(program: Command): void {
         process.env['BABEL_BRIDGE_DESKTOP_CLIENT_ID'] = desktopControllerClientId;
         process.env['BABEL_BRIDGE_DESKTOP_PROOF_KEY'] = desktopControllerProofKey;
         process.env['BABEL_BRIDGE_SHARED_SESSION'] = '1';
+      }
+      if (!remoteUiDirAvailable()) {
+        // Truthful degraded mode: the JSON-RPC gateway still works, but the
+        // packaged shell is absent and /ui will answer 404 instead of 500.
+        console.error(
+          'Remote UI shell assets are missing from this installation; /ui and /pair will answer 404. Reinstall the package to restore them.',
+        );
       }
       const server = new BridgeServer({
         port,

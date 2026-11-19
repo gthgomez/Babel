@@ -64,6 +64,32 @@ describe('safe commands', () => {
     assert.equal(result.safe, true);
   });
 
+  it('allows a quoted pipe in a legitimate regex argument', () => {
+    for (const command of [
+      'grep "error|warn" src/app.log',
+      'findstr "error|warn" src\\app.log',
+      'rg "a|b" src',
+      'node tool.js --pattern "foo|bar"',
+    ]) {
+      const result = tokenizeCmdCommand(command);
+      assert.equal(result.safe, true, `${command} must be safe: ${result.reason ?? ''}`);
+    }
+  });
+
+  it('allows a quoted pipe when the command has a cd prefix', () => {
+    const result = tokenizeCmdCommand('cd C:\\work && grep "a|b" src\\app.log');
+    assert.equal(result.safe, true, result.reason);
+    assert.equal(
+      contextAwareOperatorCheck('cd C:\\work && grep "a|b" src\\app.log', 'win32').verdict,
+      'explicitly_safe',
+    );
+  });
+
+  it('rejects a pipe outside quotes and a pipe after the quoted segment closes', () => {
+    assert.equal(tokenizeCmdCommand('grep a|b src/app.log').safe, false);
+    assert.equal(tokenizeCmdCommand('grep "a|b" src/app.log | more').safe, false);
+  });
+
   it('allows redirect inside quotes: echo "a > b"', () => {
     const result = tokenizeCmdCommand('echo "a > b"');
     assert.equal(result.safe, true);
@@ -310,7 +336,7 @@ describe('cd / chdir / pushd prefix with &&', () => {
       'cd C:\\project && npm test | findstr FAIL',
     );
     assert.equal(result.safe, false);
-    assert.ok(result.reason?.includes('always dangerous'));
+    assert.ok(result.reason?.toLowerCase().includes('pipe'));
   });
 
   it('rejects cd && with dangerous chars in right side', () => {

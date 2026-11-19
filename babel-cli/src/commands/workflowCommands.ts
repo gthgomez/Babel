@@ -212,7 +212,8 @@ async function runDeepCommand(taskParts: string[], options: DeepCommandOptions):
   if (!options.model) {
     const selected = selectedConnectionModel({}, options.projectRoot ?? process.cwd());
     if (selected) options = { ...options, model: selected };
-    else if (process.env['BABEL_OFFLINE'] !== '1' && process.env['BABEL_OFFLINE'] !== 'true') throw new Error('SETUP_REQUIRED: Run babel-harness setup before starting model-backed work.');
+    else if (process.env['BABEL_OFFLINE'] === '1' || process.env['BABEL_OFFLINE'] === 'true') throw new Error('OFFLINE_MODEL_REQUIRED: Offline mode needs an explicit local model. Save and select an Ollama connection or pass --model with a local connection; no provider request was made.');
+    else throw new Error('SETUP_REQUIRED: Run babel-harness setup before starting model-backed work.');
   }
   const task = normalizeLiteTask(taskParts);
   if (!task) {
@@ -1453,7 +1454,7 @@ async function handleResumeCommand(options: {
         `${JSON.stringify(
           {
             status: 'NO_LATEST_RUN',
-            how_to: ['babel plan example_llm_router "..."', 'babel run --project example_llm_router "..."'],
+            how_to: ['babel plan "..."', 'babel run --project my-app "..."'],
           },
           null,
           2,
@@ -1850,7 +1851,7 @@ export function registerWorkflowCommands(program: Command): void {
       `
 Examples:
   $ babel-harness deep "Harden the implementation plan for this repo-wide migration"
-  $ babel-harness deep "Apply the bounded migration and verify it" --project-root /tmp/example_game_suite\\MyGame
+  $ babel-harness deep "Apply the bounded migration and verify it" --project-root /tmp/my-repo
 
 Notes:
   - babel deep runs the governed pipeline with planning, review, execution, and verification.
@@ -1870,8 +1871,8 @@ Notes:
         `
 Examples:
   $ babel-harness undo
-  $ babel-harness undo --project example_saas_backend
   $ babel-harness undo --project-root /tmp/my-repo
+  $ babel-harness undo --project my-app
 
 Notes:
   - Restores files captured before the last mutating Babel run.
@@ -1942,7 +1943,7 @@ Notes:
     )
     .option(
       '-p, --project <name>',
-      'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | example_game_workspace | example_mobile_reference)',
+      'Target project name resolved by the workspace scanner',
     )
     .option('--mode <mode>', `Pipeline mode: ${VALID_MODES.join(' | ')}`, 'chat')
     .option('--review <depth>', 'Review depth: standard or thorough; defaults to private preferences')
@@ -2035,7 +2036,7 @@ Examples:
   $ babel-harness run "Fix lint" --output-format stream-json
   $ babel-harness run "Audit only" --allowed-tools directory_list,file_read,semantic_search
   $ babel-harness run "Fix tests" --execution-profile dev_local
-  $ babel-harness run "Fix tests" --execution-profile workspace_manager --project-root /tmp/example_game_suite\\MyGame
+  $ babel-harness run "Fix tests" --execution-profile workspace_manager --project-root /tmp/my-repo
   $ babel-harness run "Solve task" --execution-profile benchmark_container --mode deep
 
 Notes:
@@ -2877,7 +2878,7 @@ Notes:
 
   program
     .command('plan')
-    .description('Produce a read-only plan; use apply --plan <id> for implementation')
+    .description('Produce a read-only plan; apply a saved plan ID later with apply --plan <id>')
     .argument('<intent...>', 'Task text, or legacy: <project> <task...>')
     .option('-p, --project <name>', 'Target project for the user-facing plan lane')
     .option(
@@ -2918,8 +2919,8 @@ Notes:
 Examples:
   $ babel-harness plan "Prepare rollout plan"
   $ babel-harness plan "Compare the implementation options"
-  $ babel-harness plan example_saas_backend "Prepare rollout plan"
-  $ babel-harness plan example_llm_router "Draft migration plan" --model deepseek --model-tier standard --show-model-policy
+  $ babel-harness plan "Prepare rollout plan" --project-root /tmp/my-repo
+  $ babel-harness plan "Draft migration plan" --model deepseek --model-tier standard --show-model-policy
 
 Notes:
   - babel-harness plan stops after the read-only plan unless a saved plans.autoApply preference enables application.
@@ -3219,13 +3220,13 @@ Notes:
     )
     .requiredOption(
       '--project <name>',
-      'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | example_game_workspace | example_mobile_reference)',
+      'Target project name resolved by the workspace scanner',
     )
     .addHelpText(
       'after',
       `
 Examples:
-  $ babel-harness smoke --project example_saas_backend
+  $ babel-harness smoke --project my-app
 
 Notes:
   - This is a diagnostic harness for Manual Bridge executor behavior, not a normal product test runner.
@@ -3240,7 +3241,7 @@ Notes:
     .description('Legacy alias for smoke diagnostic; not a general project test runner')
     .option(
       '--project <name>',
-      'Target project (example_saas_backend | example_llm_router | example_web_audit | example_mobile_suite | example_game_suite | example_game_workspace | example_mobile_reference)',
+      'Target project name resolved by the workspace scanner',
     )
     .argument('[project]', 'Target project')
     .addHelpText(

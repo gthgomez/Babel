@@ -1,25 +1,13 @@
 {
   "version": 1,
-  "purpose": "Track source files that remain JavaScript because no TypeScript source existed in the repo snapshot during package normalization.",
+  "purpose": "Track source files that remain JavaScript because no TypeScript source existed in the repo snapshot during package normalization. A listed file must not have a TypeScript twin; TypeScript is the only compiled source and the architecture conformance suite rejects shadowed modules.",
   "allowed_js_source_files": [
     "src/inspect/loaders.js",
     "src/runners/groqApi.js",
-    "src/taskCompletion.js",
     "src/bridge/remote-ui/app.js",
     "src/bridge/remote-ui/pair.js",
     "src/bridge/remote-ui/render.js",
     "src/bridge/remote-ui/state.js",
-    "src/bridge/remote-ui/sw.js",
-    "src/ui/badges.js",
-    "src/ui/inspection.js",
-    "src/ui/progress.js",
-    "src/ui/renderers.js",
-    "src/ui/sections.js",
-    "src/ui/statusLine.js",
-    "src/ui/tables.js",
-    "src/ui/theme.js",
-    "src/ui/timeline.js",
-    "src/ui/tokens.js",
-    "src/ui/waterfall.js"
+    "src/bridge/remote-ui/sw.js"
   ]
 }

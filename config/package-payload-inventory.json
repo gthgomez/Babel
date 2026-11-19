@@ -1,0 +1,432 @@
+{
+  "schemaVersion": 1,
+  "scope": "babel-cli npm tarball top-level dist payload, bin targets and staged runtime assets",
+  "classes": {
+    "core": "Reachable from the default coding journey (chat, plan, deep, doctor, setup, provider/model/settings, MCP, sandbox, sessions).",
+    "optional": "Reachable only from documented opt-in commands or capabilities; shipped deliberately, not pruned.",
+    "test-only": "Test harness support with no runtime importer; the prepack stage must remove it.",
+    "asset": "Non-compiled runtime resources staged into the package (including browser shell assets)."
+  },
+  "entries": {
+    "dist/acceptance": {
+      "class": "optional",
+      "capability": "acceptance record/inspect commands"
+    },
+    "dist/agent": {
+      "class": "core",
+      "capability": "agent loop, chat engine and tool policy"
+    },
+    "dist/audit": {
+      "class": "core",
+      "capability": "audit and evidence inspection commands"
+    },
+    "dist/authority": {
+      "class": "core",
+      "capability": "criterion authority and owned-file oracle"
+    },
+    "dist/bridge": {
+      "class": "core",
+      "capability": "ACP/Claude bridge and remote UI"
+    },
+    "dist/budgetPolicy.js": {
+      "class": "core",
+      "capability": "budget admission"
+    },
+    "dist/calibrationTypes.js": {
+      "class": "core",
+      "capability": "shared calibration contracts"
+    },
+    "dist/claude-babel-astra-lab": {
+      "class": "optional",
+      "capability": "comparison lab benchmark commands"
+    },
+    "dist/cli": {
+      "class": "core",
+      "capability": "CLI dispatch, help and command naming"
+    },
+    "dist/cliEntryDispatch.js": {
+      "class": "core",
+      "capability": "installed entry dispatch"
+    },
+    "dist/cliMain.js": {
+      "class": "core",
+      "capability": "CLI main wiring"
+    },
+    "dist/commands": {
+      "class": "core",
+      "capability": "registered CLI commands"
+    },
+    "dist/compiler.js": {
+      "class": "core",
+      "capability": "prompt stack compiler"
+    },
+    "dist/confidenceGate.js": {
+      "class": "core",
+      "capability": "confidence gate"
+    },
+    "dist/config": {
+      "class": "core",
+      "capability": "execution profiles and user settings"
+    },
+    "dist/control-plane": {
+      "class": "core",
+      "capability": "control-plane commands"
+    },
+    "dist/daemon": {
+      "class": "core",
+      "capability": "resident daemon"
+    },
+    "dist/daemon.js": {
+      "class": "core",
+      "capability": "daemon entry"
+    },
+    "dist/diagnostics": {
+      "class": "core",
+      "capability": "doctor and BDNS diagnostics"
+    },
+    "dist/doctor.js": {
+      "class": "core",
+      "capability": "doctor command"
+    },
+    "dist/eval": {
+      "class": "optional",
+      "capability": "eval and benchmark commands"
+    },
+    "dist/evals": {
+      "class": "optional",
+      "capability": "benchmark prompt fixtures"
+    },
+    "dist/evidence": {
+      "class": "core",
+      "capability": "evidence ledger and receipts"
+    },
+    "dist/evidence.js": {
+      "class": "core",
+      "capability": "evidence entry"
+    },
+    "dist/execute": {
+      "class": "core",
+      "capability": "execute command"
+    },
+    "dist/execute.js": {
+      "class": "core",
+      "capability": "execute entry"
+    },
+    "dist/executor": {
+      "class": "core",
+      "capability": "executor kernel and completion authority"
+    },
+    "dist/fixtures": {
+      "class": "optional",
+      "capability": "fixture data imported by optional research and comparison capabilities"
+    },
+    "dist/index.js": {
+      "class": "core",
+      "capability": "package entry"
+    },
+    "dist/injectionTypes.js": {
+      "class": "core",
+      "capability": "shared injection contracts"
+    },
+    "dist/inspect": {
+      "class": "core",
+      "capability": "run/project inspection commands"
+    },
+    "dist/installedDoctor.js": {
+      "class": "core",
+      "capability": "installed doctor"
+    },
+    "dist/intelligence": {
+      "class": "core",
+      "capability": "model intelligence"
+    },
+    "dist/interactive": {
+      "class": "core",
+      "capability": "TUI and session state"
+    },
+    "dist/interactive.js": {
+      "class": "core",
+      "capability": "interactive entry"
+    },
+    "dist/lite": {
+      "class": "core",
+      "capability": "lite lane"
+    },
+    "dist/liteCli.js": {
+      "class": "core",
+      "capability": "lite CLI entry"
+    },
+    "dist/localTools.js": {
+      "class": "core",
+      "capability": "local tool access"
+    },
+    "dist/mcp": {
+      "class": "core",
+      "capability": "MCP client/server"
+    },
+    "dist/modelPolicy.js": {
+      "class": "core",
+      "capability": "model policy"
+    },
+    "dist/orchestrator": {
+      "class": "core",
+      "capability": "v9 orchestrator"
+    },
+    "dist/pipeline": {
+      "class": "core",
+      "capability": "pipeline executor loop"
+    },
+    "dist/pipeline.js": {
+      "class": "core",
+      "capability": "pipeline entry"
+    },
+    "dist/pipelineHaltStatus.js": {
+      "class": "core",
+      "capability": "pipeline halt status"
+    },
+    "dist/portable": {
+      "class": "core",
+      "capability": "portable workflow"
+    },
+    "dist/processTree.js": {
+      "class": "core",
+      "capability": "process tree settlement"
+    },
+    "dist/protocol": {
+      "class": "core",
+      "capability": "remote protocol and resume"
+    },
+    "dist/research": {
+      "class": "optional",
+      "capability": "research v2 commands"
+    },
+    "dist/routingEngine.js": {
+      "class": "core",
+      "capability": "routing engine"
+    },
+    "dist/runIntelligence": {
+      "class": "optional",
+      "capability": "run intelligence inspection commands"
+    },
+    "dist/runners": {
+      "class": "core",
+      "capability": "provider runners"
+    },
+    "dist/runtime": {
+      "class": "core",
+      "capability": "runtime control and checkpoints"
+    },
+    "dist/sandbox.js": {
+      "class": "core",
+      "capability": "sandbox entry"
+    },
+    "dist/sandboxCommands.js": {
+      "class": "core",
+      "capability": "sandbox commands"
+    },
+    "dist/sandboxContainerLifecycle.js": {
+      "class": "core",
+      "capability": "sandbox container lifecycle"
+    },
+    "dist/sandboxFileWrites.js": {
+      "class": "core",
+      "capability": "sandbox file writes"
+    },
+    "dist/sandboxProcessTermination.js": {
+      "class": "core",
+      "capability": "sandbox process termination"
+    },
+    "dist/sandboxSpawnCommandAsync.js": {
+      "class": "core",
+      "capability": "sandbox async spawn"
+    },
+    "dist/sandboxSupervisorTermination.js": {
+      "class": "core",
+      "capability": "sandbox supervisor termination"
+    },
+    "dist/schemas": {
+      "class": "core",
+      "capability": "runtime schemas"
+    },
+    "dist/search": {
+      "class": "core",
+      "capability": "search index"
+    },
+    "dist/services": {
+      "class": "core",
+      "capability": "services (checkpoints, memory, tokens, playbooks)"
+    },
+    "dist/shellOutputNormalize.js": {
+      "class": "core",
+      "capability": "shell output normalization"
+    },
+    "dist/stages": {
+      "class": "core",
+      "capability": "pipeline stages"
+    },
+    "dist/taskCompletion.js": {
+      "class": "core",
+      "capability": "task completion contracts"
+    },
+    "dist/telemetry": {
+      "class": "core",
+      "capability": "OTel tracing"
+    },
+    "dist/test-helpers": {
+      "class": "test-only",
+      "capability": "test-only API key check"
+    },
+    "dist/testUtils": {
+      "class": "test-only",
+      "capability": "test-only admission fixtures"
+    },
+    "dist/testing": {
+      "class": "test-only",
+      "capability": "test-only mock executor runtime"
+    },
+    "dist/tools": {
+      "class": "core",
+      "capability": "tool implementations"
+    },
+    "dist/ui": {
+      "class": "core",
+      "capability": "terminal UI"
+    },
+    "dist/utils": {
+      "class": "core",
+      "capability": "shared utilities"
+    },
+    "dist/voice": {
+      "class": "optional",
+      "capability": "voice input capability"
+    },
+    "resources/prompt_catalog.yaml": {
+      "class": "asset",
+      "capability": "prompt catalog"
+    },
+    "resources/07_Pipeline_Stages": {
+      "class": "asset",
+      "capability": "pipeline stage prompts"
+    },
+    "resources/prompts": {
+      "class": "asset",
+      "capability": "standalone prompts"
+    },
+    "resources/LLM_COLLABORATION_SYSTEM": {
+      "class": "asset",
+      "capability": "collaboration rules"
+    },
+    "resources/config": {
+      "class": "asset",
+      "capability": "public runtime configuration"
+    },
+    "resources/babel-cli/config": {
+      "class": "asset",
+      "capability": "public CLI configuration"
+    },
+    "resources/INTEGRATION.md": {
+      "class": "asset",
+      "capability": "integration reference"
+    },
+    "resources/PROJECT_CONTEXT.md": {
+      "class": "asset",
+      "capability": "project context"
+    },
+    "resources/docs/architecture/HARNESS_ARCHITECTURE_V1.md": {
+      "class": "asset",
+      "capability": "normative harness architecture"
+    },
+    "resources/02_Skills": {
+      "class": "asset",
+      "capability": "skill prompts"
+    },
+    "resources/04_Meta_Tools": {
+      "class": "asset",
+      "capability": "meta-tool prompts"
+    },
+    "resources/05_Project_Overlays": {
+      "class": "asset",
+      "capability": "project overlay prompts"
+    },
+    "LICENSE": {
+      "class": "asset",
+      "capability": "license"
+    },
+    "bin/babel.js": {
+      "class": "core",
+      "capability": "advertised executable"
+    },
+    "bin/check-node-engine.mjs": {
+      "class": "core",
+      "capability": "Node engine preinstall check"
+    },
+    "README.md": {
+      "class": "asset",
+      "capability": "package README"
+    },
+    "package.json": {
+      "class": "core",
+      "capability": "package manifest"
+    },
+    "resources/00_System_Router": {
+      "class": "asset",
+      "capability": "system router prompts"
+    },
+    "resources/01_Behavioral_OS": {
+      "class": "asset",
+      "capability": "behavioral OS rules"
+    },
+    "resources/02_Domain_Architects": {
+      "class": "asset",
+      "capability": "domain architect prompts"
+    },
+    "resources/03_Model_Adapters": {
+      "class": "asset",
+      "capability": "model adapter prompts"
+    },
+    "resources/06_Task_Overlays": {
+      "class": "asset",
+      "capability": "task overlay prompts"
+    },
+    "resources/skills": {
+      "class": "asset",
+      "capability": "installable skill definitions"
+    },
+    "resources/docs": {
+      "class": "asset",
+      "capability": "public architecture documentation"
+    },
+    "resources/bridge/remote-ui": {
+      "class": "asset",
+      "capability": "installed Remote UI browser shell (HTML, CSS, client JS, service worker)"
+    },
+    "dist/interactive/testing": {
+      "class": "test-only",
+      "capability": "test-only daily-driver/PTY/invariant harness modules"
+    },
+    "dist/ui/testBackend.js": {
+      "class": "test-only",
+      "capability": "test-only output buffer backend"
+    },
+    "dist/ui/testUtils.js": {
+      "class": "test-only",
+      "capability": "test-only environment helpers"
+    },
+    "dist/ui/vtTestBackend.js": {
+      "class": "test-only",
+      "capability": "test-only VT backend"
+    },
+    "dist/agent/codingLoop/testImportBridge.js": {
+      "class": "core",
+      "capability": "failure localization test-import corroboration (runtime)"
+    },
+    "dist/research/v2/adapters/documents/testAdmittedFixtures.js": {
+      "class": "optional",
+      "capability": "research-v2 package reciprocal qualification fixture (not imported by runtime)"
+    }
+  },
+  "testOnlyPatterns": [
+    "(^|/)(?:test|vtTest)[A-Z][^/]*\\.(?:js|mjs|cjs)$",
+    "(^|/)(?:testUtils|test-helpers|testinfra|testing)(?:/|\\.(?:js|mjs|cjs)$)"
+  ]
+}
