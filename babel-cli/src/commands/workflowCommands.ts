@@ -2550,6 +2550,7 @@ Notes:
                         : {}),
                       ...(effectiveAllowExpensive === true ? { allowExpensive: true } : {}),
                       ...(options.showModelPolicy === true ? { showModelPolicy: true } : {}),
+                      ...(lockedFiles.length > 0 ? { lockedFiles } : {}),
                       ...(executionPolicy ? { executionPolicy } : {}),
                       outputFormat: isStructuredOutput
                         ? (outputFormat as 'json' | 'stream-json')

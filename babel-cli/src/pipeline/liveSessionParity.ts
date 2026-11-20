@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import type { BabelMode, ToolEffectClass } from '../executor/contracts.js';
 import { buildInstructionManifestV1 } from '../agent/instructionManifest.js';
 import {
+  DEFAULT_PROTECTED_PATHS,
   persistLiveSessionAuthority,
   persistLiveSessionSnapshot,
   projectFromDurableSession,
@@ -123,7 +124,7 @@ export function initializeV9LiveSession(input: InitializeV9LiveSessionInput): V9
       acceptance_criteria: [input.task],
       non_goals: ['Do not expand scope beyond the user request'],
       allowed_paths: [input.projectRoot],
-      protected_paths: ['.env', '.git'],
+      protected_paths: [...DEFAULT_PROTECTED_PATHS],
       baseline_reproduction: 'git rev-parse HEAD',
       ...(workspaceRevision
         ? { baseline_verifier_state: { command: 'git rev-parse HEAD', exit_code: 0, summary: workspaceRevision } }

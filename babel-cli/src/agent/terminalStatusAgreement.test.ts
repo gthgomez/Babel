@@ -212,14 +212,36 @@ describe('TF-11 grounded informational result', () => {
     assert.equal(outcome, 'NO_CHANGE_REQUIRED');
   });
 
-  test('an engine-adjudicated no-change acceptance keeps NO_CHANGE_REQUIRED without reads', () => {
-    // Landed ordinary-admission contract: the operator's acceptance forbids
-    // edits and the engine durably refused the model's native write, so the
-    // no-change terminal is engine-owned (denial + zero mutations), not a
-    // model-claimed explanation.
+  test('an informational answer with a refused write still needs a source read', () => {
+    // A denied write is not the deliverable for a question: without a source
+    // observation the explanation remains unverified even though the engine
+    // refused the model's native write.
     const outcome = normalizeInspectedNoChange(
       snapshotFor({
         task: 'Explain this file without changing it.',
+        projectRoot: '/tmp/project',
+        toolCallLog: [
+          {
+            tool: 'write_file',
+            target: 'fixture.txt',
+            detail: 'hard-plan-mode',
+            error: 'blocked',
+            exit_code: 1,
+          },
+        ],
+      }),
+      'NO_CHANGE_REQUIRED',
+    );
+    assert.equal(outcome, 'UNVERIFIED_PATCH');
+    assert.equal(exitCodeFromOutcome(outcome), 6);
+  });
+
+  test('an edit request with a refused write is the engine-adjudicated no-change', () => {
+    // The operator asked for an edit and forbade it; refusing the write settles
+    // the request with no bytes changed, so no-change is engine-owned.
+    const outcome = normalizeInspectedNoChange(
+      snapshotFor({
+        task: 'Fix this file without changing it.',
         projectRoot: '/tmp/project',
         toolCallLog: [
           {

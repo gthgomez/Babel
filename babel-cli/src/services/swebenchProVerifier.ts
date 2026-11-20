@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { parseSweStringList } from './agentBenchmarkHarness.js';
 import { type CampaignPhase, type SwebenchProInstanceRow } from './swebenchProCampaign.js';
 
-/** How campaign `status=pass` is decided (default gold for continuity). */
+/** How campaign `status=pass` is decided (default ftp: behavioral result primary). */
 export type SweProPassMode = 'gold' | 'ftp' | 'both';
 
 /** W1 D: host fail_to_pass outcome class (not just ok/false). */
@@ -191,13 +191,14 @@ function slug(s: string): string {
 /**
  * W1.3: pass_mode for live_pass / cell.status only.
  * Capability primary remains host fail_to_pass; gold is diagnostic (multi-file PR ref).
- * Default `gold` keeps historical scoreboard; canaries force `both`.
- * Set BABEL_SWE_PRO_PASS_MODE=ftp|both|gold to change cell.status aggregation.
+ * The default is `ftp`: a gold-looking patch cannot override an observed
+ * behavioral failure or an unavailable grader. Set BABEL_SWE_PRO_PASS_MODE=gold
+ * or both only to reproduce an explicitly labeled historical scoreboard.
  */
 export function resolveSweProPassMode(
   env: NodeJS.ProcessEnv = process.env,
 ): SweProPassMode {
-  const raw = (env['BABEL_SWE_PRO_PASS_MODE'] ?? 'gold').trim().toLowerCase();
+  const raw = (env['BABEL_SWE_PRO_PASS_MODE'] ?? 'ftp').trim().toLowerCase();
   if (raw === 'ftp' || raw === 'fail_to_pass') return 'ftp';
   if (raw === 'both' || raw === 'gold+ftp') return 'both';
   return 'gold';

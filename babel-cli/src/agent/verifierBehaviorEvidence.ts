@@ -166,6 +166,99 @@ function executableTestSpans(code: string): Array<{ start: number; end: number }
   return spans
 }
 
+/** Nearest unmatched `{` before `index`, ignoring string/template contents. */
+function enclosingBrace(code: string, index: number): number | null {
+  const stack: number[] = []
+  let quote = ''
+  for (let cursor = 0; cursor < index; cursor += 1) {
+    const char = code[cursor]!
+    if (quote) {
+      if (char === '\\') cursor += 1
+      else if (char === quote) quote = ''
+      continue
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char
+      continue
+    }
+    if (char === '{') stack.push(cursor)
+    else if (char === '}') stack.pop()
+  }
+  return stack.at(-1) ?? null
+}
+
+/**
+ * True when the enclosing block already returned/threw/exited unconditionally
+ * before this position. Only statements at the block's own nesting level count:
+ * a `return` inside a nested `if` or callback stays conditional.
+ */
+function unconditionallyTerminatedBefore(code: string, index: number): boolean {
+  const open = enclosingBrace(code, index)
+  if (open === null) return false
+  const prefix = code.slice(open + 1, index)
+  let depth = 0
+  let statementStart = 0
+  let quote = ''
+  const terminated = (statement: string): boolean =>
+    /^(?:return\b|throw\b|process\s*\.\s*exit\s*\(|Deno\s*\.\s*exit\s*\()/.test(statement.trim())
+  for (let cursor = 0; cursor < prefix.length; cursor += 1) {
+    const char = prefix[cursor]!
+    if (quote) {
+      if (char === '\\') cursor += 1
+      else if (char === quote) quote = ''
+      continue
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char
+      continue
+    }
+    if (char === '(' || char === '[' || char === '{') depth += 1
+    else if (char === ')' || char === ']' || char === '}') depth -= 1
+    if (depth === 0 && (char === ';' || char === '}')) {
+      if (terminated(prefix.slice(statementStart, cursor))) return true
+      statementStart = cursor + 1
+    }
+  }
+  return terminated(prefix.slice(statementStart))
+}
+
+/** A `try` whose `catch` neither rethrows nor fails the test swallows it. */
+function insideSwallowingTry(code: string, index: number): boolean {
+  for (const match of code.matchAll(/\btry\s*\{/g)) {
+    const open = code.indexOf('{', match.index!)
+    if (open < 0) continue
+    const close = closingBrace(code, open)
+    if (close === null || index < open || index > close) continue
+    let cursor = close + 1
+    while (cursor < code.length && /\s/.test(code[cursor]!)) cursor += 1
+    if (!code.startsWith('catch', cursor)) continue
+    cursor += 'catch'.length
+    while (cursor < code.length && /\s/.test(code[cursor]!)) cursor += 1
+    if (code[cursor] === '(') {
+      const paramsEnd = closingParen(code, cursor)
+      if (paramsEnd === null) return true
+      cursor = paramsEnd + 1
+    }
+    while (cursor < code.length && /\s/.test(code[cursor]!)) cursor += 1
+    if (code[cursor] !== '{') return true
+    const catchEnd = closingBrace(code, cursor)
+    if (catchEnd === null) return true
+    const body = code.slice(cursor + 1, catchEnd)
+    const propagates = /\bthrow\b/.test(body) ||
+      /\bassert\s*\.\s*fail\s*\(/.test(body) ||
+      /\bassert\s*\.\s*ok\s*\(\s*false\b/.test(body) ||
+      /\bfail\s*\(/.test(body)
+    if (!propagates) return true
+  }
+  return false
+}
+
+/** A comma sequence discards every value except the last. */
+function discardsSequenceValue(operand: string): boolean {
+  const parts = splitTopLevel(stripOuterParens(operand), ',')
+  return parts !== null && parts.length > 1
+}
+
 function unquote(value: string): string | null {
   const trimmed = value.trim()
   if (trimmed.length < 2) return null
@@ -468,16 +561,23 @@ export function assertionEvidenceMatches(
     const span = spans.find(item => candidate.index >= item.start && candidate.index <= item.end)
     const constants = localConstants(code, candidate.index, span, spans)
     if (span && !liveNestingAllowed(code.slice(span.start, candidate.index), emptyArrays)) continue
+    // An assertion that cannot execute (unconditional return) or whose failure
+    // is swallowed (a catch without rethrow/fail) never observes the behavior.
+    if (unconditionallyTerminatedBefore(code, candidate.index)) continue
+    if (insideSwallowingTry(code, candidate.index)) continue
     if (callPattern) {
       const leftCall = callPattern.test(candidate.left)
       const rightCall = callPattern.test(candidate.right)
       if (!leftCall && !rightCall) continue
+      const callOperand = leftCall ? candidate.left : candidate.right
+      if (discardsSequenceValue(callOperand)) continue
       const expected = leftCall ? candidate.right : candidate.left
       if (valuesEqual(evaluateOperand(expected, constants), fragment)) return true
       continue
     }
     const symbols = options.requiredSymbols ?? []
     if (symbols.length === 0) continue
+    if (discardsSequenceValue(candidate.left) || discardsSequenceValue(candidate.right)) continue
     const resolveOperand = (operand: string) => operand.replace(/\b[A-Za-z_$][\w$]*\b/g,
       token => constants.get(token) ?? token)
     const referencesSymbol = (operand: string) => {

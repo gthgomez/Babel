@@ -93,7 +93,12 @@ import {
   classifyChatTaskIntent,
   isConversationalTurnText,
 } from './chatEngineTaskIntent.js'
-import { hasExplicitEditDenial } from '../config/chatTaskClass.js'
+import {
+  hasExplicitEditDenial,
+  isReadOnlyTaskFrame,
+  stripFencedCodeBodies,
+  stripTaskRequestPrefix,
+} from '../config/chatTaskClass.js'
 import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
 import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
@@ -559,7 +564,24 @@ export function normalizeInspectedNoChange(
  * this turn. That combination is the engine-adjudicated no-change flow the
  * ordinary read-only admission contract pins (an ordinary prepared no-change
  * task whose native write proposal is denied completes NO_CHANGE_REQUIRED).
+ * An informational question is excluded: its deliverable is the grounded
+ * answer, which a denied write does not provide.
  */
+function taskRequestsEdit(task: string): boolean {
+  const text = stripFencedCodeBodies(task)
+  // Only the part before an edit-denial clause can request an edit. An
+  // incidental edit verb later in an explanation ("how the update flow works")
+  // does not make the task an edit request.
+  const denial = text.search(
+    /\b(?:without|do\s+not|don'?t|must\s+not|never|no)\b[^.\n]{0,40}\b(?:edit|editing|modify|modifying|change|changing|write|writing|touch|touching)\b/i,
+  )
+  const scope = stripTaskRequestPrefix(denial > 0 ? text.slice(0, denial) : text)
+  if (isReadOnlyTaskFrame(scope)) return false
+  return /(?:^|[.!?;\n,]\s*|\band\s+)(?:fix|repair|change|update|implement|make|ensure|add|remove|delete|create|refactor|migrate|upgrade|replace|rename|apply|extend|adjust|write|edit|modify)\b/i.test(
+    scope,
+  )
+}
+
 function engineAdjudicatedNoChangeAcceptance(
   snapshot: ChatTerminalSnapshot,
 ): boolean {
@@ -573,7 +595,8 @@ function engineAdjudicatedNoChangeAcceptance(
   )
   return (
     refusedMutation &&
-    hasExplicitEditDenial(snapshot.context.options.task)
+    hasExplicitEditDenial(snapshot.context.options.task) &&
+    taskRequestsEdit(snapshot.context.options.task)
   )
 }
 

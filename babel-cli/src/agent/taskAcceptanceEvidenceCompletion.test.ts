@@ -144,13 +144,13 @@ test('P2-3 positive: a relevance-bound witness certifies VERIFIED_COMPLETE', asy
   assert.equal(decision.finalOutcome, 'VERIFIED_COMPLETE', JSON.stringify(decision))
 })
 
-test('P1-3: a documentation goal is advisory but mechanically checked', t => {
+test('P1-3: a documentation goal stays mandatory and is mechanically checked', t => {
   const { root, contract } = fixture([GOAL, DOC_GOAL, 'Requirements:', `- \`${VERIFIER}\` must pass.`].join('\n'), {
     readme: '# Parser\n\nUsage: parseSum adds two numbers.\n',
   })
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const docs = contract.acceptance.find(item => item.description === DOC_GOAL)!
-  assert.equal(docs.required, false, 'non-executable docs goal must not block every other obligation')
+  assert.equal(docs.required, true, 'a requested documentation artifact is not silently optional')
   assert.equal(hasAdvisoryDocsGoal(contract.acceptance), true)
   assert.deepEqual(advisoryDocsViolations({ acceptance: contract.acceptance, projectRoot: root }), [],
     'the written README satisfies the recorded goal')
@@ -190,12 +190,12 @@ test('P1-2 control: no freeze is recorded without the preservation clause', t =>
   assert.equal(publicApiPreservationViolation({ records: contract.provenance.records, projectRoot: root }), null)
 })
 
-test('P1-3 positive: multi-goal task with a written docs obligation certifies', async t => {
+test('P1-3: an unverified documentation obligation keeps the result partial', async t => {
   const task = [GOAL, DOC_GOAL, 'Requirements:', `- \`${VERIFIER}\` must pass.`].join('\n')
   const { root, contract } = fixture(task, { readme: '# Parser\n\nUsage: parseSum adds two numbers.\n' })
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const docs = contract.acceptance.find(item => item.description === DOC_GOAL)
-  assert.equal(docs?.required, false)
+  assert.equal(docs?.required, true)
   assert.deepEqual(advisoryDocsViolations({ acceptance: contract.acceptance, projectRoot: root }), [])
 
   const sessionId = 'round2-multigoal'
@@ -248,8 +248,8 @@ test('P1-3 positive: multi-goal task with a written docs obligation certifies', 
     currentReceiptRevisionHashes: kernelReceipt.receiptId ? { [kernelReceipt.receiptId]: candidate } : {},
     currentWorkspaceRevisionHash: candidate,
   })
-  assert.equal(decision.allowed, true, JSON.stringify(decision))
-  assert.equal(decision.finalOutcome, 'VERIFIED_COMPLETE', JSON.stringify(decision))
+  assert.equal(decision.allowed, false, JSON.stringify(decision))
+  assert.equal(decision.finalOutcome, 'UNVERIFIED_PATCH', JSON.stringify(decision))
 })
 
 test('P1-2: the same constraint without a Requirements section is not unsatisfiable prose', t => {

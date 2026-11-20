@@ -29,6 +29,7 @@ import {
   computePublicApiSurface,
   hasPublicApiPreservationClause,
   publicApiFreezeRef,
+  publicApiPreservationMode,
 } from './publicApiPreservation.js';
 import { join } from 'node:path';
 import {
@@ -260,6 +261,9 @@ function identityFragmentPrecedence(fragment: IdentityDeliveredFragment): Instru
   }
 }
 
+/** Project-relative paths protected when a caller supplies no explicit set. */
+export const DEFAULT_PROTECTED_PATHS = ['.env', '.git'] as const
+
 export function resolveLiveSessionAuthority(input: {
   mode: BabelMode;
   taskId?: string;
@@ -358,7 +362,7 @@ export function resolveLiveSessionAuthority(input: {
   // admission through completion. A relevance-bound inferred goal freezes the
   // verifier inputs that establish its relevance. Ordinary tasks keep the
   // default set.
-  const protectedPaths = new Set(input.protectedPaths ?? ['.env', '.git']);
+  const protectedPaths = new Set(input.protectedPaths ?? DEFAULT_PROTECTED_PATHS);
   if (input.projectRoot) {
     for (const path of [
       ...designatedWitnessProtectedInputs(input.projectRoot, meaning),
@@ -378,7 +382,9 @@ export function resolveLiveSessionAuthority(input: {
   const publicApiRecords = input.projectRoot && hasPublicApiPreservationClause(input.task)
     ? (() => {
         const surface = computePublicApiSurface(input.projectRoot!)
-        return surface ? [{ kind: 'derived_acceptance' as const, ref: publicApiFreezeRef(surface) }] : []
+        return surface ? [{ kind: 'derived_acceptance' as const, ref: publicApiFreezeRef(surface, {
+          mode: publicApiPreservationMode(input.task),
+        }) }] : []
       })()
     : [];
   const contract = freezeTaskContract(

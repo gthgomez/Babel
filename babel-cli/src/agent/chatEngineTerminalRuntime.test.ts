@@ -1119,32 +1119,49 @@ test('a stale witness with no attributable path still discloses the stale banner
   assert.match(event.answer, /workspace bytes could not be attributed/)
 })
 
-test('engine-adjudicated text-only no-change and byte-witness no-change remain disjoint', t => {
-  const input = terminalInput(t)
-  const root = input.snapshot.context.engineRunDir
-  input.snapshot.outcome.readOnly = true
-  input.snapshot.outcome.hasMutation = false
-  input.snapshot.context.acceptedOperation = 'READ_ONLY'
-  input.snapshot.context.options.task = 'Explain this file without changing it.'
-  input.snapshot.evidence.observability.toolCallLog = [
-    { tool: 'write_file', target: 'fixture.txt', detail: 'hard-plan-mode', error: 'blocked', index: 0, exit_code: 1 },
-  ]
-  const kernel = createExecutorKernel('chat')
-  input.effects.decideCompletion = (requested, hasMutation, finalRevision) => kernel.completion.decide({
-    mode: 'chat',
-    requestedOutcome: requested,
-    hasWrite: hasMutation,
-    verificationPolicy: 'required',
-    finalRevisionRequired: chatFinalRevisionRequiredForChat({
-      projectRoot: root,
-      ambientReadOnly: false,
+test('engine-adjudicated no-change requires an edit request, not an informational answer', t => {
+  const refusedWrite = { tool: 'write_file', target: 'fixture.txt', detail: 'hard-plan-mode', error: 'blocked', index: 0, exit_code: 1 }
+  const decide = (input: ReturnType<typeof terminalInput>) => {
+    const kernel = createExecutorKernel('chat')
+    input.effects.decideCompletion = (requested, hasMutation, finalRevision) => kernel.completion.decide({
+      mode: 'chat',
+      requestedOutcome: requested,
+      hasWrite: hasMutation,
+      verificationPolicy: 'required',
+      finalRevisionRequired: chatFinalRevisionRequiredForChat({
+        projectRoot: input.snapshot.context.engineRunDir,
+        ambientReadOnly: false,
+        toolCallLog: input.snapshot.evidence.observability.toolCallLog,
+      }),
       toolCallLog: input.snapshot.evidence.observability.toolCallLog,
-    }),
-    toolCallLog: input.snapshot.evidence.observability.toolCallLog,
-    ...(finalRevision ? { finalRevision } : {}),
-  })
-  const event = completeChatStream(input, 'The file is a fixture and needs no change.')
-  assert.equal(event.type, 'done')
-  if (event.type !== 'done') return
-  assert.equal(event.outcome, 'NO_CHANGE_REQUIRED')
+      ...(finalRevision ? { finalRevision } : {}),
+    })
+  }
+
+  // An edit request denied by policy is the engine-adjudicated no-change flow.
+  const editInput = terminalInput(t)
+  editInput.snapshot.outcome.readOnly = true
+  editInput.snapshot.outcome.hasMutation = false
+  editInput.snapshot.context.acceptedOperation = 'READ_ONLY'
+  editInput.snapshot.context.options.task = 'Fix this file without changing it.'
+  editInput.snapshot.evidence.observability.toolCallLog = [refusedWrite]
+  decide(editInput)
+  const editEvent = completeChatStream(editInput, 'The requested change is not permitted; no edits were made.')
+  assert.equal(editEvent.type, 'done')
+  if (editEvent.type !== 'done') return
+  assert.equal(editEvent.outcome, 'NO_CHANGE_REQUIRED')
+
+  // An informational answer has no edit request to adjudicate, and a denied
+  // write does not ground it: without a source read it stays unverified.
+  const explainInput = terminalInput(t)
+  explainInput.snapshot.outcome.readOnly = true
+  explainInput.snapshot.outcome.hasMutation = false
+  explainInput.snapshot.context.acceptedOperation = 'READ_ONLY'
+  explainInput.snapshot.context.options.task = 'Explain how the update flow works without editing the repository.'
+  explainInput.snapshot.evidence.observability.toolCallLog = [refusedWrite]
+  decide(explainInput)
+  const explainEvent = completeChatStream(explainInput, 'The file is a fixture and needs no change.')
+  assert.equal(explainEvent.type, 'done')
+  if (explainEvent.type !== 'done') return
+  assert.equal(explainEvent.outcome, 'UNVERIFIED_PATCH')
 })

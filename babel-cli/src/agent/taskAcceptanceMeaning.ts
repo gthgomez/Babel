@@ -19,7 +19,11 @@ const RAW_PYTHON_FUNCTION_DEFINITION = /^\s{0,3}(?:async\s+)?def\s+[A-Za-z_]\w*\
 const RAW_PYTHON_TOP_LEVEL_CODE = /^\s{0,3}(?:async\s+)?(?:def|class)\s+[A-Za-z_]\w*\b|^\s{0,3}@\w/
 // A concrete behavioral objective in the user's opening request must not be
 // displaced by a later, narrower command-only Requirements list.
-const BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:ACTION:\s*)?(?:please\s+)?(?:fix|repair|change|update|implement|make|ensure|support)\b.{1,240}\bso\b.{1,240}\b(?:returns?|return|equals?|equal|produces?|outputs?|becomes?|is)\b.{1,160}[.!]?\s*$/i
+const BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:ACTION:\s*)?(?:please\s+)?(?:fix|repair|change|update|implement|make|ensure|support)\b.{1,240}\bso\b.{1,240}\b(?:returns?|return|equals?|equal|produces?|outputs?|becomes?|is|exports?)\b.{1,160}[.!]?\s*$/i
+// A quantified outcome ("include every record") is directly observable even
+// without a "so ... is" clause and must not be displaced by a command-only
+// Requirements list.
+const QUANTIFIED_BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:please\s+)?(?:fix|repair|change|update|implement|make|ensure|support|add|extend)\b.{1,240}\b(?:include|includes|excluding|exclude|excludes|return|returns|export|exports|cover|covers|handle|handles|preserve|preserves|keep)\b.{1,200}\b(?:every|all|each|any|none|only)\b.{0,120}[.!]?\s*$/i
 // Additional operative goal lines in the same opening prose block. They are
 // only admitted when at least one sibling line states an observable behavioral
 // objective, so ordinary context or a lone vague instruction is unchanged.
@@ -134,7 +138,7 @@ function preserveBehavioralGoal(
     // this bridge never reinterprets them as opening goals.
     if (/^\s{0,3}(?:[-*+•]|\d+[.)])\s+/.test(line)) break
     if (line.trim() && headingDepth === undefined) {
-      if (BEHAVIORAL_GOAL_LINE.test(line)) behavioral = true
+      if (BEHAVIORAL_GOAL_LINE.test(line) || QUANTIFIED_BEHAVIORAL_GOAL_LINE.test(line)) behavioral = true
       if (OPERATIVE_GOAL_LINE.test(line)) {
         const text = line.trim()
         if (!seenCandidate.has(text)) {

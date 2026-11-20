@@ -209,6 +209,8 @@ export interface ChatEngineOptions {
   maxCostUsd?: number
   allowExpensive?: boolean
   workspaceRoot?: string | null
+  /** Operator-declared project-relative paths the engine must never write. */
+  lockedFiles?: readonly string[]
   fallbackModel?: string
   /** C1: Structured intent plan user message injected at session start
    *  for execute tasks when the intent compiler is enabled. */
