@@ -853,13 +853,16 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
         continue
       }
       split.push({ ...criterion, description: parts.behavior })
-      const derivedId = `${criterion.id}:api-preservation`
-      if (!ids.has(derivedId)) {
+      for (const [index, preservation] of parts.preservations.entries()) {
+        const derivedId = index === 0
+          ? `${criterion.id}:api-preservation`
+          : `${criterion.id}:api-preservation:${index + 1}`
+        if (ids.has(derivedId)) continue
         ids.add(derivedId)
         split.push({
           ...criterion,
           id: derivedId,
-          description: parts.preservation,
+          description: preservation,
           required: false,
           verification_strategy: PUBLIC_API_PRESERVATION_STRATEGY,
         })
@@ -910,13 +913,16 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
       bindDesignatedWitnessToCriterion(criterion, input.meaning.sources, explicitCriteria),
     )
     criteria = relevanceBound.map((criterion, index) => witnessed[index] ?? criterion)
-    for (const [index, bound] of witnessed.entries()) {
+    const originalById = new Map(input.meaning.criteria.map(criterion => [criterion.id, criterion]))
+    for (const bound of witnessed) {
       if (!bound) continue
-      const designated = criterionDesignatedCommand(input.meaning.criteria[index]!.description)
+      const original = originalById.get(bound.id)
+      if (!original) continue
+      const designated = criterionDesignatedCommand(original.description)
       bindingProvenance.push({
         kind: 'derived_acceptance',
         ref: `${ACCEPTANCE_EXECUTABLE_BINDING_REF}:witness:${sha256Canonical({
-          criterion_id: input.meaning.criteria[index]!.id,
+          criterion_id: original.id,
           command: designated ?? '',
         }).slice(0, 32)}`,
       })

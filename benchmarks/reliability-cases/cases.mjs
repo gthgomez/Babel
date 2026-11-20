@@ -292,6 +292,63 @@ export const CASES = [
     expected: { behavior: 'pass', requireCompletion: true },
   },
   {
+    id: 'L01-comma-result-preserved',
+    task: [
+      "Fix src/message.mjs so format() returns 'a, b'. Do not change public APIs.",
+      'Requirements:',
+      '- `npm test` must pass.',
+    ].join('\n'),
+    files: {
+      'package.json': JSON.stringify({
+        name: 'l01-message',
+        private: true,
+        type: 'module',
+        scripts: { test: 'node --test test/message.test.mjs' },
+      }) + '\n',
+      'src/message.mjs': "export function format() { return 'a b' }\n",
+      'test/message.test.mjs': [
+        "import test from 'node:test'",
+        "import assert from 'node:assert/strict'",
+        "import { format } from '../src/message.mjs'",
+        '',
+        "test('format', () => {",
+        "  assert.equal(format(), 'a, b')",
+        '})',
+        '',
+      ].join('\n'),
+    },
+    script: [
+      [
+        { type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src/message.mjs' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'write-1', name: 'str_replace', input: {
+          file_path: 'src/message.mjs',
+          old_str: "return 'a b'",
+          new_str: "return 'a, b'",
+        } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'verify-1', name: 'run_command', input: { command: 'npm test' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: "Fixed format() to return 'a, b'; npm test passed." },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ],
+    oracle: {
+      code: [
+        "import { format } from './src/message.mjs'",
+        "if (format() !== 'a, b') process.exit(7)",
+      ].join('\n'),
+    },
+    // The comma is part of the stated result and must survive the split.
+    expected: { behavior: 'pass', requireCompletion: true },
+  },
+  {
     id: 'L02-docs-token-without-example',
     task: [
       'Fix src/value.mjs so value is 2.',

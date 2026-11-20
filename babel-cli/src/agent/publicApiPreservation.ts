@@ -168,14 +168,40 @@ export function requestedExportNames(rawTaskText: string): string[] {
 }
 
 /**
- * Split a criterion that states a behavior and a separate preservation
- * clause. The behavioral remainder stays mandatory; only the preservation
- * clause becomes a non-required invariant. Text that cannot be attributed to
- * exactly one clause (two preservation clauses) stays whole and mandatory.
+ * Split a criterion that states a behavior and one or more preservation
+ * clauses. The behavioral remainder stays mandatory; each preservation clause
+ * becomes a non-required invariant. Only the clause boundary is normalized, so
+ * punctuation inside the user's goal survives.
  */
 export interface PublicApiPreservationSplit {
   behavior: string | null
-  preservation: string
+  preservations: string[]
+}
+
+const COORDINATOR = String.raw`(?:and|but|while|yet|also|then)`
+
+/** Remove clause-boundary separators without rewriting the goal's own text. */
+function trimBeforeClause(value: string): string {
+  const cleaned = value
+    .replace(/[\s,;:]+$/, '')
+    .replace(new RegExp(String.raw`\b${COORDINATOR}\s*$`, 'i'), '')
+    .replace(/[\s,;:]+$/, '')
+    .replace(/^(?:please|kindly)\s+/i, '')
+    .trim()
+  return /^(?:please|kindly|and|but|while|yet|also|then)?$/i.test(cleaned) ? '' : cleaned
+}
+
+function trimAfterClause(value: string): string {
+  return value
+    .replace(/^[\s.;:!?]+/, '')
+    .replace(new RegExp(String.raw`^(?:${COORDINATOR}|please|kindly)\b\s*`, 'i'), '')
+    .trim()
+}
+
+function clauseText(sentence: string, match: { start: number; end: number }): string {
+  const after = sentence.slice(match.end)
+  const terminal = /^\s*[.!?]\s*$/.test(after) ? after.trim() : ''
+  return `${sentence.slice(match.start, match.end).trim()}${terminal}`
 }
 
 export function splitPublicApiPreservationStatement(
@@ -187,31 +213,39 @@ export function splitPublicApiPreservationStatement(
     .filter(sentence => sentence.length > 0)
   const matched = sentences.map(sentence => preservationMatch(sentence))
   const indexes = matched.flatMap((match, index) => match ? [index] : [])
-  if (indexes.length !== 1) return null
+  if (indexes.length === 0) return null
+  const preservations = indexes.map(index => clauseText(sentences[index]!, matched[index]!))
+  if (indexes.length > 1) {
+    // Multiple clauses: keep every behavioral sentence and derive one invariant
+    // per clause. A sentence that carries only a clause contributes no behavior.
+    const clauseIndexes = new Set(indexes)
+    const behavior = sentences
+      .filter((_, position) => !clauseIndexes.has(position))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    return { behavior: behavior.length > 0 && /[A-Za-z]/.test(behavior) ? behavior : null, preservations }
+  }
   const index = indexes[0]!
   const sentence = sentences[index]!
   const match = matched[index]!
   const behavior = [
     ...sentences.slice(0, index),
-    sentence.slice(0, match.start),
-    sentence.slice(match.end),
+    trimBeforeClause(sentence.slice(0, match.start)),
+    trimAfterClause(sentence.slice(match.end)),
     ...sentences.slice(index + 1),
   ]
+    .map(part => part.trim())
+    .filter(part => part.length > 0)
     .join(' ')
-    .replace(/[\s,;:!?]+/g, ' ')
-    .replace(/[.!?]+\s*$/, '')
-    .replace(/^(?:and|but|while|yet|also|then|please|kindly)\b/i, '')
-    .replace(/\b(?:and|but|while|yet|also|then|please|kindly)\s*$/i, '')
     .replace(/\s+/g, ' ')
+    .replace(/^(?:and|but|while|yet|also|then|please|kindly)\b\s*/i, '')
     .trim()
-  const afterMatch = sentence.slice(match.end)
-  const terminal = /^\s*[.!?]\s*$/.test(afterMatch) ? afterMatch.trim() : ''
-  const preservation = `${sentence.slice(match.start, match.end).trim()}${terminal}`
   if (behavior.length === 0 || !/[A-Za-z0-9]/.test(behavior)) {
-    return { behavior: null, preservation }
+    return { behavior: null, preservations }
   }
   if (!/[A-Za-z]/.test(behavior)) return null
-  return { behavior, preservation }
+  return { behavior, preservations }
 }
 
 export function publicApiFreezeRef(

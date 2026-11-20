@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // License: Apache-2.0 - see LICENSE
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runLoggedTapChild } from './run_logged_tap_child.mjs'
 import { captureRequiredTapSelection } from './capture_required_tap_selection.mjs'
 import { requiredTapSuiteGate } from './required_tap_suite_gate.mjs'
-import { requiredTapTimeoutArgs } from './required_tap_timeout_args.mjs'
+import { requiredTapCommand, requiredTapTimeoutArgs } from './required_tap_timeout_args.mjs'
 
 export { requiredTapSuiteGate } from './required_tap_suite_gate.mjs'
 
@@ -37,27 +37,22 @@ const tapEnv = {
   ...process.env,
   BABEL_TAP_EXECUTION_PATH: executionPath,
 }
-const npmCli = process.env.npm_execpath
 
 async function captureTap(command, args) {
   return runLoggedTapChild(command, args, { cwd: cliRoot, env: tapEnv, tapPath, label: suite })
 }
 
-const result =
-  process.platform === 'win32'
-    ? await (async () => {
-        if (!npmCli || !existsSync(npmCli)) {
-          return {
-            stdout: '',
-            stderr: 'Required TAP runner needs npm_execpath on Windows (invoke via npm run).\n',
-            status: 1,
-            error: undefined,
-            signal: null,
-          }
-        }
-        return captureTap(process.execPath, [npmCli, 'run', '--silent', rawScript, '--', ...timeoutArgs])
-      })()
-    : await captureTap('npm', ['run', '--silent', rawScript, '--', ...timeoutArgs])
+// Run the canonical raw script with the requested per-test timeout inserted
+// before `--test`. Passing it after the test files makes Node ignore it.
+const packageScripts = JSON.parse(readFileSync(resolve(cliRoot, 'package.json'), 'utf8')).scripts
+const rawCommand = requiredTapCommand(packageScripts[rawScript] ?? '', timeoutArgs)
+if (!rawCommand) {
+  console.error(`Required TAP runner cannot resolve ${rawScript}`)
+  process.exit(2)
+}
+const shellCommand = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : '/bin/sh'
+const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', rawCommand] : ['-c', rawCommand]
+const result = await captureTap(shellCommand, shellArgs)
 
 const gate = requiredTapSuiteGate(suite, result.stdout, {
   error: result.error,

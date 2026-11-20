@@ -46,33 +46,56 @@ test('explicitly requested additive exports are extracted', () => {
 test('a clean preservation sentence splits from a behavioral sentence', () => {
   assert.deepEqual(
     splitPublicApiPreservationStatement('Fix src/value.mjs so value is 2. Do not change public APIs.'),
-    { behavior: 'Fix src/value.mjs so value is 2.', preservation: 'Do not change public APIs.' },
+    { behavior: 'Fix src/value.mjs so value is 2.', preservations: ['Do not change public APIs.'] },
   )
   assert.deepEqual(
     splitPublicApiPreservationStatement('Do not change public APIs.'),
-    { behavior: null, preservation: 'Do not change public APIs.' },
+    { behavior: null, preservations: ['Do not change public APIs.'] },
   )
 })
 
-test('an embedded clause splits at the clause boundary', () => {
+test('an embedded clause splits at the clause boundary without rewriting the goal', () => {
   assert.deepEqual(
     splitPublicApiPreservationStatement('Fix src/value.mjs so value is 2 and do not change public APIs.'),
-    { behavior: 'Fix src/value.mjs so value is 2', preservation: 'do not change public APIs.' },
+    { behavior: 'Fix src/value.mjs so value is 2', preservations: ['do not change public APIs.'] },
   )
   assert.deepEqual(
     splitPublicApiPreservationStatement('Do not change public APIs; keep the CLI working.'),
-    { behavior: 'keep the CLI working', preservation: 'Do not change public APIs' },
+    { behavior: 'keep the CLI working.', preservations: ['Do not change public APIs'] },
   )
   assert.deepEqual(
     splitPublicApiPreservationStatement('Please do not change public APIs.'),
-    { behavior: null, preservation: 'do not change public APIs.' },
+    { behavior: null, preservations: ['do not change public APIs.'] },
   )
 })
 
-test('two preservation clauses stay whole and mandatory', () => {
-  assert.equal(
+test('punctuation inside the stated result survives the split', () => {
+  assert.deepEqual(
+    splitPublicApiPreservationStatement("Fix src/message.mjs so format() returns 'a, b'. Do not change public APIs."),
+    { behavior: "Fix src/message.mjs so format() returns 'a, b'.", preservations: ['Do not change public APIs.'] },
+  )
+  assert.deepEqual(
+    splitPublicApiPreservationStatement("Fix src/message.mjs so format() returns 'a, b' and do not change public APIs."),
+    { behavior: "Fix src/message.mjs so format() returns 'a, b'", preservations: ['do not change public APIs.'] },
+  )
+})
+
+test('each of two preservation clauses becomes a separate invariant', () => {
+  assert.deepEqual(
     splitPublicApiPreservationStatement('Do not change public APIs. Never rename exported APIs.'),
-    null,
+    {
+      behavior: null,
+      preservations: ['Do not change public APIs.', 'Never rename exported APIs.'],
+    },
+  )
+  assert.deepEqual(
+    splitPublicApiPreservationStatement(
+      'Fix src/value.mjs so value is 2. Do not change public APIs. Never rename exported APIs.',
+    ),
+    {
+      behavior: 'Fix src/value.mjs so value is 2.',
+      preservations: ['Do not change public APIs.', 'Never rename exported APIs.'],
+    },
   )
 })
 
