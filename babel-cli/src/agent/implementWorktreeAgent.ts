@@ -601,7 +601,9 @@ export async function runImplementWorktreeAgent(
       // explicitly opts into discarding them).
       diagnostics.push({
         code: 'worktree_retained_unadopted_changes',
-        message: `Worktree retained: ${mutation.changedFiles.length} unadopted change(s). Adopt from ${adoptionManifestPath} or pass discardChildChanges to remove it.`,
+        message: adoptionManifestPublished
+          ? `Worktree retained: ${mutation.changedFiles.length} unadopted change(s). Adopt from ${adoptionManifestPath} or pass discardChildChanges to remove it.`
+          : `Worktree retained: ${mutation.changedFiles.length} unadopted change(s). The adoption manifest could not be published; inspect the child worktree directly or pass discardChildChanges to remove it.`,
       });
     } else {
       try {
@@ -659,7 +661,7 @@ export async function runImplementWorktreeAgent(
     error: success ? null : (mutation.error ?? diagnostics.map((d) => d.message).join('; ')),
     mutation,
     diagnostics,
-    adoptionManifestPath,
+    ...(adoptionManifestPublished ? { adoptionManifestPath } : {}),
     ...(unrecordedPaths.length > 0 ? { unrecordedPaths } : {}),
     ...(mutation.inheritedBudgetExceeded
       ? {
@@ -836,6 +838,7 @@ export type AdoptionConflictCode =
   | 'stale_child_base'
   | 'child_postimage_missing'
   | 'child_postimage_mismatch'
+  | 'child_postimage_conflict'
   | 'parent_preimage_conflict'
   | 'duplicate_change'
   | 'worktree_status_unavailable'
@@ -931,7 +934,11 @@ export interface PromoteImplementWorktreeResult {
   rollbackResidualPaths: string[];
   /** Owned paths whose preimage could not be restored. */
   rollbackErrors: string[];
-  /** True when every owned operation was compensated (or none was applied). */
+  /**
+   * True only when every operation this run applied was compensated and no
+   * residual or restore error was observed. Directories created for an adopted
+   * file may remain; completion is file-level, not a filesystem snapshot.
+   */
   rollbackComplete: boolean;
   summary: string;
   error: string | null;
@@ -1492,13 +1499,32 @@ export function promoteImplementWorktree(
           deletedPaths.push(record.path);
         } else {
           const bytes = readFileSync(join(worktreePath, record.path));
-          if (input.testHooks?.writeFile) input.testHooks.writeFile(parentPath, bytes);
-          else writeFileAtomic(parentPath, bytes);
+          const bytesHash = hashBuffer(bytes);
+          if (bytesHash !== record.after_hash) {
+            conflicts.push({
+              path: record.path,
+              code: 'child_postimage_conflict',
+              message: `Child bytes for "${record.path}" changed after preflight; refusing to write unverified content.`,
+            });
+            diagnostics.push({
+              code: 'adoption_child_postimage_conflict',
+              message: `Child bytes for "${record.path}" changed after preflight; no parent bytes were written for this path.`,
+            });
+            throw new Error('child postimage changed during adoption');
+          }
+          if (input.testHooks?.writeFile) {
+            // Match writeFileAtomic's parent-directory creation so the test
+            // seam exercises the same create-a-directory path as production.
+            mkdirSync(dirname(parentPath), { recursive: true });
+            input.testHooks.writeFile(parentPath, bytes);
+          } else {
+            writeFileAtomic(parentPath, bytes);
+          }
           applied.push({
             path: record.path,
             absolutePath: parentPath,
             preimage,
-            postimage: record.after_hash,
+            postimage: bytesHash,
           });
           adoptedPaths.push(record.path);
         }
@@ -1532,7 +1558,7 @@ export function promoteImplementWorktree(
         rollbackComplete,
         parentStatusAfter: gitPorcelainStatus(projectRoot),
         summary: rollbackComplete
-          ? 'Adoption failed and owned writes were rolled back; the child worktree is unchanged.'
+          ? 'Adoption failed; owned file writes were rolled back. Created parent directories may remain; the child worktree is unchanged.'
           : `Adoption failed and rollback was incomplete; newer bytes were preserved for ${[...residual, ...errors].join(', ')}. The child worktree is unchanged.`,
         error: conflicts.map((conflict) => conflict.message).join('; ') || 'apply failed',
       });

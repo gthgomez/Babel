@@ -580,7 +580,7 @@ describe('governed child worktree adoption', () => {
   it('compensates only the created and deleted paths it actually applied', async () => {
     const root = createGitProject();
     const child = await childWorktree(root, 'adopt-created-deleted');
-    const created = changedFile(root, child.worktree.path, 'src/created.txt', null, 'created\n');
+    const created = changedFile(root, child.worktree.path, 'src/newdir/deeper/created.txt', null, 'created\n');
     const deleted = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', null);
     const failing = changedFile(root, child.worktree.path, 'src/later.txt', null, 'later\n');
 
@@ -601,9 +601,41 @@ describe('governed child worktree adoption', () => {
 
     assert.equal(result.status, 'refused', JSON.stringify(result, null, 2));
     assert.equal(result.rollbackComplete, true);
-    assert.equal(existsSync(join(root, 'src', 'created.txt')), false);
+    assert.equal(existsSync(join(root, 'src', 'newdir', 'deeper', 'created.txt')), false);
     assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
     assert.equal(existsSync(join(root, 'src', 'later.txt')), false);
+  });
+
+  it('refuses child bytes that changed after preflight and leaves newer parent work intact', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-child-drift');
+    const first = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
+    const second = changedFile(root, child.worktree.path, 'src/second.txt', null, 'recorded\n');
+    const secondWorktreeFile = join(child.worktree.path, 'src/second.txt');
+
+    const result = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [first, second],
+      mode: 'copy',
+      testHooks: {
+        writeFile: (path, content) => {
+          writeFileSync(path, content);
+          if (path.endsWith('main.ts')) {
+            writeFileSync(secondWorktreeFile, 'drifted after preflight\n');
+          }
+        },
+      },
+    });
+
+    assert.equal(result.status, 'refused', JSON.stringify(result, null, 2));
+    assert.equal(result.success, false);
+    assert.ok(result.diagnostics.some((d) => d.code === 'adoption_child_postimage_conflict'));
+    assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
+    assert.equal(existsSync(join(root, 'src', 'second.txt')), false);
+    assert.equal(readFileSync(secondWorktreeFile, 'utf-8'), 'drifted after preflight\n');
   });
 
   it('fails the child result when the adoption manifest cannot be published', async () => {
@@ -627,6 +659,7 @@ describe('governed child worktree adoption', () => {
       assert.equal(result.success, false, JSON.stringify(result, null, 2));
       assert.ok(result.diagnostics.some((d) => d.code === 'adoption_manifest_write_failed'));
       assert.equal(result.attribution, 'child_environment_failure');
+      assert.equal(result.adoptionManifestPath, undefined);
       assert.ok(existsSync(result.worktree.path), 'the child worktree must be preserved');
     } finally {
       chmodSync(manifestPath, 0o666);
