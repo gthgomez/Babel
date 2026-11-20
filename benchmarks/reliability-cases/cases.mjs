@@ -349,6 +349,50 @@ export const CASES = [
     expected: { behavior: 'pass', requireCompletion: true },
   },
   {
+    id: 'L01-multi-clause-wrong-value',
+    task: [
+      'Fix src/value.mjs so value is 2 and do not change public APIs. Also keep existing exports unchanged.',
+      'Requirements:',
+      '- `npm test` must pass.',
+    ].join('\n'),
+    files: {
+      'package.json': PACKAGE_TEST_VALUE,
+      'src/value.mjs': VALUE_MODULE,
+      'test/value.test.mjs': WEAK_VALUE_TEST,
+    },
+    script: repairScript({
+      path: 'src/value.mjs',
+      from: 'export const value = 1',
+      to: 'export const value = 9',
+      claim: 'Fixed src/value.mjs to return value 2; npm test passed.',
+    }),
+    oracle: { code: VALUE_ORACLE },
+    // Two preservation clauses must not demote the behavioral goal.
+    expected: { behavior: 'fail', mayClaimSuccess: false },
+  },
+  {
+    id: 'L01-multi-clause-correct-value',
+    task: [
+      'Fix src/value.mjs so value is 2; do not change public APIs; keep existing exports unchanged.',
+      'Requirements:',
+      '- `npm test` must pass.',
+    ].join('\n'),
+    files: {
+      'package.json': PACKAGE_TEST_VALUE,
+      'src/value.mjs': VALUE_MODULE,
+      'test/value.test.mjs': relevantValueTest(),
+    },
+    script: repairScript({
+      path: 'src/value.mjs',
+      from: 'export const value = 1',
+      to: 'export const value = 2',
+      claim: 'Fixed src/value.mjs to return value 2; npm test passed.',
+    }),
+    oracle: { code: VALUE_ORACLE },
+    // Clause residue must not corrupt the goal text or block a correct patch.
+    expected: { behavior: 'pass', requireCompletion: true },
+  },
+  {
     id: 'L02-docs-token-without-example',
     task: [
       'Fix src/value.mjs so value is 2.',

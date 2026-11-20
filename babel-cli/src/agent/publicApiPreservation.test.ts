@@ -46,37 +46,43 @@ test('explicitly requested additive exports are extracted', () => {
 test('a clean preservation sentence splits from a behavioral sentence', () => {
   assert.deepEqual(
     splitPublicApiPreservationStatement('Fix src/value.mjs so value is 2. Do not change public APIs.'),
-    { behavior: 'Fix src/value.mjs so value is 2.', preservations: ['Do not change public APIs.'] },
+    { behaviors: ['Fix src/value.mjs so value is 2.'], preservations: ['Do not change public APIs.'] },
   )
   assert.deepEqual(
     splitPublicApiPreservationStatement('Do not change public APIs.'),
-    { behavior: null, preservations: ['Do not change public APIs.'] },
+    { behaviors: [], preservations: ['Do not change public APIs.'] },
   )
 })
 
 test('an embedded clause splits at the clause boundary without rewriting the goal', () => {
   assert.deepEqual(
     splitPublicApiPreservationStatement('Fix src/value.mjs so value is 2 and do not change public APIs.'),
-    { behavior: 'Fix src/value.mjs so value is 2', preservations: ['do not change public APIs.'] },
+    { behaviors: ['Fix src/value.mjs so value is 2'], preservations: ['do not change public APIs.'] },
   )
   assert.deepEqual(
     splitPublicApiPreservationStatement('Do not change public APIs; keep the CLI working.'),
-    { behavior: 'keep the CLI working.', preservations: ['Do not change public APIs'] },
+    { behaviors: ['keep the CLI working.'], preservations: ['Do not change public APIs'] },
   )
   assert.deepEqual(
     splitPublicApiPreservationStatement('Please do not change public APIs.'),
-    { behavior: null, preservations: ['do not change public APIs.'] },
+    { behaviors: [], preservations: ['do not change public APIs.'] },
   )
 })
 
 test('punctuation inside the stated result survives the split', () => {
   assert.deepEqual(
     splitPublicApiPreservationStatement("Fix src/message.mjs so format() returns 'a, b'. Do not change public APIs."),
-    { behavior: "Fix src/message.mjs so format() returns 'a, b'.", preservations: ['Do not change public APIs.'] },
+    {
+      behaviors: ["Fix src/message.mjs so format() returns 'a, b'."],
+      preservations: ['Do not change public APIs.'],
+    },
   )
   assert.deepEqual(
     splitPublicApiPreservationStatement("Fix src/message.mjs so format() returns 'a, b' and do not change public APIs."),
-    { behavior: "Fix src/message.mjs so format() returns 'a, b'", preservations: ['do not change public APIs.'] },
+    {
+      behaviors: ["Fix src/message.mjs so format() returns 'a, b'"],
+      preservations: ['do not change public APIs.'],
+    },
   )
 })
 
@@ -84,7 +90,7 @@ test('each of two preservation clauses becomes a separate invariant', () => {
   assert.deepEqual(
     splitPublicApiPreservationStatement('Do not change public APIs. Never rename exported APIs.'),
     {
-      behavior: null,
+      behaviors: [],
       preservations: ['Do not change public APIs.', 'Never rename exported APIs.'],
     },
   )
@@ -93,8 +99,29 @@ test('each of two preservation clauses becomes a separate invariant', () => {
       'Fix src/value.mjs so value is 2. Do not change public APIs. Never rename exported APIs.',
     ),
     {
-      behavior: 'Fix src/value.mjs so value is 2.',
+      behaviors: ['Fix src/value.mjs so value is 2.'],
       preservations: ['Do not change public APIs.', 'Never rename exported APIs.'],
+    },
+  )
+})
+
+test('a clause that shares a sentence with the goal keeps the goal mandatory', () => {
+  assert.deepEqual(
+    splitPublicApiPreservationStatement(
+      'Fix src/value.mjs so value is 2 and do not change public APIs. Also keep existing exports unchanged.',
+    ),
+    {
+      behaviors: ['Fix src/value.mjs so value is 2'],
+      preservations: ['do not change public APIs.', 'keep existing exports unchanged.'],
+    },
+  )
+  assert.deepEqual(
+    splitPublicApiPreservationStatement(
+      'Fix src/value.mjs so value is 2; do not change public APIs; keep existing exports unchanged.',
+    ),
+    {
+      behaviors: ['Fix src/value.mjs so value is 2'],
+      preservations: ['do not change public APIs', 'keep existing exports unchanged.'],
     },
   )
 })

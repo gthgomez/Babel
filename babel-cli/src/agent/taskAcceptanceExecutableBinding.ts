@@ -848,11 +848,20 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
         split.push(criterion)
         continue
       }
-      if (!parts.behavior) {
+      if (parts.behaviors.length === 0) {
         split.push({ ...criterion, required: false, verification_strategy: PUBLIC_API_PRESERVATION_STRATEGY })
         continue
       }
-      split.push({ ...criterion, description: parts.behavior })
+      for (const [index, behavior] of parts.behaviors.entries()) {
+        if (index === 0) {
+          split.push({ ...criterion, description: behavior })
+          continue
+        }
+        const derivedId = `${criterion.id}:behavior:${index + 1}`
+        if (ids.has(derivedId)) continue
+        ids.add(derivedId)
+        split.push({ ...criterion, id: derivedId, description: behavior })
+      }
       for (const [index, preservation] of parts.preservations.entries()) {
         const derivedId = index === 0
           ? `${criterion.id}:api-preservation`

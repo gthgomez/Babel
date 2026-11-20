@@ -174,7 +174,7 @@ export function requestedExportNames(rawTaskText: string): string[] {
  * punctuation inside the user's goal survives.
  */
 export interface PublicApiPreservationSplit {
-  behavior: string | null
+  behaviors: string[]
   preservations: string[]
 }
 
@@ -192,16 +192,38 @@ function trimBeforeClause(value: string): string {
 }
 
 function trimAfterClause(value: string): string {
-  return value
+  const cleaned = value
     .replace(/^[\s.;:!?]+/, '')
     .replace(new RegExp(String.raw`^(?:${COORDINATOR}|please|kindly)\b\s*`, 'i'), '')
     .trim()
+  // A state word left behind by a greedy clause match belongs to the clause.
+  return /^(?:unchanged|stable|intact|compatible)\b/i.test(cleaned) ? '' : cleaned
 }
 
 function clauseText(sentence: string, match: { start: number; end: number }): string {
   const after = sentence.slice(match.end)
   const terminal = /^\s*[.!?]\s*$/.test(after) ? after.trim() : ''
   return `${sentence.slice(match.start, match.end).trim()}${terminal}`
+}
+
+const CLAUSE_STARTER = String.raw`(?:please\s+)?(?:do\s+not|don'?t|never|must\s+not|should\s+not|keep|preserve|maintain|without|no\s+(?:public\s+)?(?:api|interface))`
+const CLAUSE_SEPARATOR = new RegExp(
+  String.raw`\s*(?:(?:[,;]\s*)?(?:and|but)\b\s+|[,;]\s+)(?=${CLAUSE_STARTER})`,
+  'gi',
+)
+
+/** Split one sentence at boundaries that introduce another preservation clause. */
+function clauseSegments(sentence: string): string[] {
+  const segments: string[] = []
+  let start = 0
+  for (const match of sentence.matchAll(CLAUSE_SEPARATOR)) {
+    const text = sentence.slice(start, match.index!).trim()
+    if (text) segments.push(text)
+    start = match.index! + match[0].length
+  }
+  const tail = sentence.slice(start).trim()
+  if (tail) segments.push(tail)
+  return segments.length > 0 ? segments : [sentence]
 }
 
 export function splitPublicApiPreservationStatement(
@@ -211,41 +233,30 @@ export function splitPublicApiPreservationStatement(
     .split(/(?<=[.!?])\s+/)
     .map(sentence => sentence.trim())
     .filter(sentence => sentence.length > 0)
-  const matched = sentences.map(sentence => preservationMatch(sentence))
-  const indexes = matched.flatMap((match, index) => match ? [index] : [])
-  if (indexes.length === 0) return null
-  const preservations = indexes.map(index => clauseText(sentences[index]!, matched[index]!))
-  if (indexes.length > 1) {
-    // Multiple clauses: keep every behavioral sentence and derive one invariant
-    // per clause. A sentence that carries only a clause contributes no behavior.
-    const clauseIndexes = new Set(indexes)
-    const behavior = sentences
-      .filter((_, position) => !clauseIndexes.has(position))
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-    return { behavior: behavior.length > 0 && /[A-Za-z]/.test(behavior) ? behavior : null, preservations }
+  const behaviors: string[] = []
+  const preservations: string[] = []
+  for (const sentence of sentences) {
+    for (const clause of clauseSegments(sentence)) {
+      const match = preservationMatch(clause)
+      if (!match) {
+        const text = trimBeforeClause(trimAfterClause(clause))
+        if (text.length > 0) behaviors.push(text)
+        continue
+      }
+      const before = trimBeforeClause(clause.slice(0, match.start))
+      const after = trimAfterClause(clause.slice(match.end))
+      if (before.length > 0) behaviors.push(before)
+      if (after.length > 0) behaviors.push(after)
+      preservations.push(clauseText(clause, match))
+    }
   }
-  const index = indexes[0]!
-  const sentence = sentences[index]!
-  const match = matched[index]!
-  const behavior = [
-    ...sentences.slice(0, index),
-    trimBeforeClause(sentence.slice(0, match.start)),
-    trimAfterClause(sentence.slice(match.end)),
-    ...sentences.slice(index + 1),
-  ]
-    .map(part => part.trim())
-    .filter(part => part.length > 0)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .replace(/^(?:and|but|while|yet|also|then|please|kindly)\b\s*/i, '')
-    .trim()
-  if (behavior.length === 0 || !/[A-Za-z0-9]/.test(behavior)) {
-    return { behavior: null, preservations }
+  if (preservations.length === 0) return null
+  return {
+    behaviors: behaviors
+      .map(value => value.replace(/\s+/g, ' ').trim())
+      .filter(value => value.length > 0 && /[A-Za-z0-9]/.test(value)),
+    preservations,
   }
-  if (!/[A-Za-z]/.test(behavior)) return null
-  return { behavior, preservations }
 }
 
 export function publicApiFreezeRef(

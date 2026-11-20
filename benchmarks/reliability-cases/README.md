@@ -36,6 +36,9 @@ an unrelated inherited check is red.
 | `L01-correct-relevant-witness` | A correct value with a relevance-matched assertion completes | Positive |
 | `L01-compound-preservation-clause` | A clause embedded with "and" splits without losing the goal | Positive |
 | `L01-polite-preservation-clause` | A polite lead-in does not make the goal unsatisfiable | Positive |
+| `L01-comma-result-preserved` | A result containing a comma survives the clause split | Positive |
+| `L01-multi-clause-wrong-value` | Two preservation clauses cannot demote the goal | Negative |
+| `L01-multi-clause-correct-value` | Clause residue does not block a correct patch | Positive |
 | `L02-docs-token-without-example` | An unchanged README token is not the requested runnable example | Negative |
 | `L02-docs-runnable-example` | A relevant fenced example is present in the final artifact | Positive |
 | `L03-read-only-required-red` | A current red required check vetoes no-change success | Negative |

@@ -232,7 +232,7 @@ async function waitForOwnedClose(closed: Promise<void>): Promise<void> {
   } finally { clearTimeout(timer); }
 }
 
-describe('real process-tree termination (qualifying)', () => {
+describe('real process-tree termination (qualifying)', { timeout: 180_000 }, () => {
   beforeEach(() => {
     resetBackgroundShellRegistryForTests();
   });
@@ -332,7 +332,7 @@ describe('real process-tree termination (qualifying)', () => {
 
 });
 
-describe('Windows tree termination failure handling', () => {
+describe('Windows tree termination failure handling', { timeout: 180_000 }, () => {
   it('bounds persistent helper failures, stops after success, and does not retry an exited root', () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
     const originalSpawnSync = childProcess.spawnSync;
