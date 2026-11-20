@@ -259,6 +259,7 @@ export async function runCase(spec) {
       durable_allowed: durableDecision?.allowed,
       durable_reason: durableDecision?.reason,
       durable_session_events: result.sessionEventCount,
+      durable_decision_present: Boolean(durableDecision),
       changed_paths: mutated,
       final_files: finalFiles,
       oracle: oracleStatus,

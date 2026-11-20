@@ -38,6 +38,8 @@ test('preservation wording distinguishes exact from compatible', () => {
 test('explicitly requested additive exports are extracted', () => {
   assert.deepEqual(requestedExportNames('Add a `doubled` export to src/value.mjs.'), ['doubled'])
   assert.deepEqual(requestedExportNames('Add an export named sum to src/math.js.'), ['sum'])
+  assert.deepEqual(requestedExportNames('Add the `doubled` export to src/value.mjs.'), ['doubled'])
+  assert.deepEqual(requestedExportNames('Add an export for records to src/math.js.'), [])
   assert.deepEqual(requestedExportNames('Do not change public APIs.'), [])
 })
 
@@ -52,19 +54,25 @@ test('a clean preservation sentence splits from a behavioral sentence', () => {
   )
 })
 
-test('a compound sentence is not split and cannot be demoted', () => {
-  assert.equal(
+test('an embedded clause splits at the clause boundary', () => {
+  assert.deepEqual(
     splitPublicApiPreservationStatement('Fix src/value.mjs so value is 2 and do not change public APIs.'),
-    null,
+    { behavior: 'Fix src/value.mjs so value is 2', preservation: 'do not change public APIs.' },
   )
-  assert.equal(
+  assert.deepEqual(
     splitPublicApiPreservationStatement('Do not change public APIs; keep the CLI working.'),
-    null,
+    { behavior: 'keep the CLI working', preservation: 'Do not change public APIs' },
   )
-  assert.equal(
+  assert.deepEqual(
     splitPublicApiPreservationStatement('Please do not change public APIs.'),
+    { behavior: null, preservation: 'do not change public APIs.' },
+  )
+})
+
+test('two preservation clauses stay whole and mandatory', () => {
+  assert.equal(
+    splitPublicApiPreservationStatement('Do not change public APIs. Never rename exported APIs.'),
     null,
-    'incidental lead-in text keeps the whole requirement mandatory',
   )
 })
 

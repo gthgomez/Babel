@@ -33,6 +33,7 @@ for (const candidate of cases) {
     outcome: run.terminal.outcome,
     status: run.terminal.status,
     allowed: run.durable_allowed,
+    reason: run.durable_reason,
     behavior: run.behavior.status,
     docs: run.docs?.status,
     changed_paths: run.changed_paths,

@@ -34,6 +34,8 @@ an unrelated inherited check is red.
 | `L01-wrong-value-9` | A value-9 patch under an API-preservation clause cannot certify | Negative |
 | `L01-correct-value-2` | A correct value with only a weak witness stays an honest partial | Negative (over-claim) |
 | `L01-correct-relevant-witness` | A correct value with a relevance-matched assertion completes | Positive |
+| `L01-compound-preservation-clause` | A clause embedded with "and" splits without losing the goal | Positive |
+| `L01-polite-preservation-clause` | A polite lead-in does not make the goal unsatisfiable | Positive |
 | `L02-docs-token-without-example` | An unchanged README token is not the requested runnable example | Negative |
 | `L02-docs-runnable-example` | A relevant fenced example is present in the final artifact | Positive |
 | `L03-read-only-required-red` | A current red required check vetoes no-change success | Negative |

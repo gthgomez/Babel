@@ -93,7 +93,12 @@ import {
   classifyChatTaskIntent,
   isConversationalTurnText,
 } from './chatEngineTaskIntent.js'
-import { hasExplicitEditDenial, stripFencedCodeBodies } from '../config/chatTaskClass.js'
+import {
+  hasExplicitEditDenial,
+  isReadOnlyTaskFrame,
+  stripFencedCodeBodies,
+  stripTaskRequestPrefix,
+} from '../config/chatTaskClass.js'
 import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
 import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
@@ -570,8 +575,9 @@ function taskRequestsEdit(task: string): boolean {
   const denial = text.search(
     /\b(?:without|do\s+not|don'?t|must\s+not|never|no)\b[^.\n]{0,40}\b(?:edit|editing|modify|modifying|change|changing|write|writing|touch|touching)\b/i,
   )
-  const scope = denial > 0 ? text.slice(0, denial) : text
-  return /(?:^|[.!?;\n]\s*)(?:please\s+)?(?:fix|repair|change|update|implement|make|ensure|add|remove|delete|create|refactor|migrate|upgrade|replace|rename|apply|extend|adjust|write|edit|modify)\b/i.test(
+  const scope = stripTaskRequestPrefix(denial > 0 ? text.slice(0, denial) : text)
+  if (isReadOnlyTaskFrame(scope)) return false
+  return /(?:^|[.!?;\n,]\s*|\band\s+)(?:fix|repair|change|update|implement|make|ensure|add|remove|delete|create|refactor|migrate|upgrade|replace|rename|apply|extend|adjust|write|edit|modify)\b/i.test(
     scope,
   )
 }

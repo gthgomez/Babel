@@ -248,6 +248,50 @@ export const CASES = [
     expected: { behavior: 'pass', mayClaimSuccess: true, requireCompletion: true },
   },
   {
+    id: 'L01-compound-preservation-clause',
+    task: [
+      'Fix src/value.mjs so value is 2 and do not change public APIs.',
+      'Requirements:',
+      '- `npm test` must pass.',
+    ].join('\n'),
+    files: {
+      'package.json': PACKAGE_TEST_VALUE,
+      'src/value.mjs': VALUE_MODULE,
+      'test/value.test.mjs': relevantValueTest(),
+    },
+    script: repairScript({
+      path: 'src/value.mjs',
+      from: 'export const value = 1',
+      to: 'export const value = 2',
+      claim: 'Fixed src/value.mjs to return value 2; npm test passed.',
+    }),
+    oracle: { code: VALUE_ORACLE },
+    // The clause must be separated at its boundary, not left to swallow the
+    // behavioral goal into an unsatisfiable prose criterion.
+    expected: { behavior: 'pass', requireCompletion: true },
+  },
+  {
+    id: 'L01-polite-preservation-clause',
+    task: [
+      'Fix src/value.mjs so value is 2. Please do not change public APIs.',
+      'Requirements:',
+      '- `npm test` must pass.',
+    ].join('\n'),
+    files: {
+      'package.json': PACKAGE_TEST_VALUE,
+      'src/value.mjs': VALUE_MODULE,
+      'test/value.test.mjs': relevantValueTest(),
+    },
+    script: repairScript({
+      path: 'src/value.mjs',
+      from: 'export const value = 1',
+      to: 'export const value = 2',
+      claim: 'Fixed src/value.mjs to return value 2; npm test passed.',
+    }),
+    oracle: { code: VALUE_ORACLE },
+    expected: { behavior: 'pass', requireCompletion: true },
+  },
+  {
     id: 'L02-docs-token-without-example',
     task: [
       'Fix src/value.mjs so value is 2.',
@@ -570,7 +614,7 @@ export const CASES = [
       status: 'fail',
       detail: 'informational answer with no successful source read',
     }),
-    expected: { behavior: 'fail', mayClaimSuccess: false },
+    expected: { behavior: 'fail', mayClaimSuccess: false, requireNoEdits: true },
   },
   {
     id: 'E09-grounded-read-control',
@@ -606,6 +650,9 @@ export function gradeCase(candidate, run) {
   }
   if (!run.durable_session_events) {
     return { status: 'ungraded', problems: ['durable session log missing'] }
+  }
+  if (!run.durable_decision_present) {
+    return { status: 'ungraded', problems: ['durable completion decision missing'] }
   }
   if (run.behavior.status !== expected.behavior) {
     problems.push(`behavior ${run.behavior.status} != expected ${expected.behavior}`)

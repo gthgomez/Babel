@@ -175,12 +175,15 @@ function commandMatches(required: string, actual: string): boolean {
  */
 function knownRedRequiredVerifier(input: ExecutorCompletionInput): boolean {
   const required = input.requiredVerifierCommands ?? []
+  // Without a declared required set there is no basis to say an arbitrary red
+  // exploratory command invalidates the no-change conclusion.
+  if (required.length === 0) return false
   const normalize = (value: string): string => value.trim().replace(/\s+/g, ' ')
   const latest = new Map<string, ExecutorVerifierReceipt>()
   for (const receipt of input.executedVerifierLedger ?? []) latest.set(normalize(receipt.command), receipt)
   if (input.lastVerifierReceipt) latest.set(normalize(input.lastVerifierReceipt.command), input.lastVerifierReceipt)
   const matchesRequired = (receipt: ExecutorVerifierReceipt): boolean =>
-    required.length === 0 || required.some(command => commandMatches(command, receipt.command))
+    required.some(command => commandMatches(command, receipt.command))
   return [...latest.values()].some(receipt => isCurrentRedReceipt(receipt) && matchesRequired(receipt))
 }
 

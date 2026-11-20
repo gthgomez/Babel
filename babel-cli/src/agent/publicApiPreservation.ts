@@ -106,7 +106,7 @@ export function hasPublicApiPreservationClause(rawTaskText: string): boolean {
   return isPublicApiPreservationStatement(stripFencedCodeBodies(rawTaskText))
 }
 
-const PUBLIC_SURFACE_NOUN = String.raw`(?:public|exported)\s+(?:api|apis|interface|interfaces|surface|contract|contracts|exports?)`
+const PUBLIC_SURFACE_NOUN = String.raw`(?:(?:public|exported)\s+(?:api|apis|interface|interfaces|surface|contract|contracts|exports?)|existing\s+exports?)`
 
 function preservationPatterns(): RegExp[] {
   return [
@@ -137,7 +137,7 @@ function preservationMatch(sentence: string): { start: number; end: number } | n
  */
 export function publicApiPreservationMode(rawTaskText: string): PublicApiPreservationMode {
   const text = stripFencedCodeBodies(rawTaskText)
-  const surface = String.raw`(?:public|exported)\s+(?:api|apis|interface|interfaces|surface|contract|contracts|exports?)`
+  const surface = PUBLIC_SURFACE_NOUN
   const exact = new RegExp(String.raw`\b(?:do\s+not|don'?t|never|must\s+not|should\s+not)\s+(?:change|modify|alter|touch|remove|rename)\b[^.\n;]{0,80}\b${surface}`, 'i').test(text) ||
     new RegExp(String.raw`\b(?:keep|preserve|maintain)\b[^.\n;]{0,40}\b${surface}\b[^.\n;]{0,30}\b(?:unchanged|stable|intact)`, 'i').test(text) ||
     new RegExp(String.raw`\b(?:without|no)\s+(?:public\s+)?(?:api|interface)\s+changes?\b`, 'i').test(text)
@@ -155,23 +155,23 @@ export function requestedExportNames(rawTaskText: string): string[] {
   const text = stripFencedCodeBodies(rawTaskText)
   const names = new Set<string>()
   for (const pattern of [
-    /\badd\s+(?:an?\s+)?export\s+(?:named\s+|called\s+)?[`"']?([A-Za-z_$][\w$]*)[`"']?/gi,
-    /\badd\s+(?:an?\s+)?[`"']?([A-Za-z_$][\w$]*)[`"']?\s+export\b/gi,
+    /\badd\s+(?:an|a|the)?\s*export\s+(?:named\s+|called\s+)?[`"']?([A-Za-z_$][\w$]*)[`"']?/gi,
+    /\badd\s+(?:(?:an|a|the)\s+)?[`"']?([A-Za-z_$][\w$]*)[`"']?\s+export\b/gi,
     /\bexport\s+[`"']([A-Za-z_$][\w$]*)[`"']/gi,
   ]) {
     for (const match of text.matchAll(pattern)) {
       const name = match[1]!
-      if (!/^(?:a|an|the|new|export)$/i.test(name)) names.add(name)
+      if (!/^(?:a|an|the|new|export|exports|for|to|of|in|with|on|by|from|as|at|and|or)$/i.test(name)) names.add(name)
     }
   }
   return [...names].sort()
 }
 
 /**
- * Split a criterion that states a behavior and a separate, purely-preservation
- * sentence. A clause embedded in a behavior sentence stays whole; the caller
- * then keeps the entire requirement mandatory (fail closed) rather than
- * demoting the behavior with it.
+ * Split a criterion that states a behavior and a separate preservation
+ * clause. The behavioral remainder stays mandatory; only the preservation
+ * clause becomes a non-required invariant. Text that cannot be attributed to
+ * exactly one clause (two preservation clauses) stays whole and mandatory.
  */
 export interface PublicApiPreservationSplit {
   behavior: string | null
@@ -191,18 +191,27 @@ export function splitPublicApiPreservationStatement(
   const index = indexes[0]!
   const sentence = sentences[index]!
   const match = matched[index]!
-  // The matching sentence must consist only of the preservation clause. Text
-  // before or after it means the behavior and constraint share a sentence,
-  // which cannot be separated safely.
-  const remainder = `${sentence.slice(0, match.start)} ${sentence.slice(match.end)}`
+  const behavior = [
+    ...sentences.slice(0, index),
+    sentence.slice(0, match.start),
+    sentence.slice(match.end),
+    ...sentences.slice(index + 1),
+  ]
+    .join(' ')
     .replace(/[\s,;:!?]+/g, ' ')
-    .replace(/\b(?:and|but|while|yet|also|then)\b/gi, ' ')
+    .replace(/[.!?]+\s*$/, '')
+    .replace(/^(?:and|but|while|yet|also|then|please|kindly)\b/i, '')
+    .replace(/\b(?:and|but|while|yet|also|then|please|kindly)\s*$/i, '')
+    .replace(/\s+/g, ' ')
     .trim()
-  if (/[A-Za-z0-9]/.test(remainder)) return null
-  const behavior = sentences.filter((_, position) => position !== index).join(' ').trim()
-  if (behavior.length === 0) return { behavior: null, preservation: sentence }
+  const afterMatch = sentence.slice(match.end)
+  const terminal = /^\s*[.!?]\s*$/.test(afterMatch) ? afterMatch.trim() : ''
+  const preservation = `${sentence.slice(match.start, match.end).trim()}${terminal}`
+  if (behavior.length === 0 || !/[A-Za-z0-9]/.test(behavior)) {
+    return { behavior: null, preservation }
+  }
   if (!/[A-Za-z]/.test(behavior)) return null
-  return { behavior, preservation: sentence }
+  return { behavior, preservation }
 }
 
 export function publicApiFreezeRef(
