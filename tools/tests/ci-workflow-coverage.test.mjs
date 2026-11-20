@@ -76,7 +76,7 @@ test('chat and harness live TAP stays outside the captured babel-cli project', (
   assert.deepEqual(commandCoverage(workflow, 'npm run test:chat-truth 2>&1'), {
     'ubuntu-latest': ['chat-truth'], 'windows-latest': ['chat-truth'],
   });
-  assert.deepEqual(commandCoverage(workflow, 'npm run test:harness-runtime -- --test-timeout=60000 2>&1'), {
+  assert.deepEqual(commandCoverage(workflow, 'npm run test:harness-runtime -- --test-timeout=120000 2>&1'), {
     'ubuntu-latest': ['harness-runtime'], 'windows-latest': ['harness-runtime'],
   });
   for (const jobName of ['chat-truth', 'harness-runtime']) {

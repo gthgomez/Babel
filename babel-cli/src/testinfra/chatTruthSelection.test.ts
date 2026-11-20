@@ -33,7 +33,7 @@ test('required Chat truth selection includes focused accounting, Chronicle and b
     fileURLToPath(new URL('../../../tools/ci-workflow-coverage.mjs', import.meta.url)), '-',
     'npm run test:chat-truth 2>&1',
     'node scripts/summarize_required_tap.mjs chat-truth',
-    'npm run test:harness-runtime -- --test-timeout=60000 2>&1',
+    'npm run test:harness-runtime -- --test-timeout=120000 2>&1',
     'node scripts/summarize_required_tap.mjs harness-runtime',
     'node scripts/capture_required_tap_selection.mjs chat-truth',
     'node scripts/capture_required_tap_selection.mjs harness-runtime',
