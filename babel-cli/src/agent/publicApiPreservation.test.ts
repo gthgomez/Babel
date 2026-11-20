@@ -86,6 +86,18 @@ test('punctuation inside the stated result survives the split', () => {
   )
 })
 
+test('a requirement that starts with a state word is preserved', () => {
+  assert.deepEqual(
+    splitPublicApiPreservationStatement(
+      'Fix src/value.mjs so value is 2. Do not change public APIs. Stable ordering of exported names is required.',
+    ),
+    {
+      behaviors: ['Fix src/value.mjs so value is 2.', 'Stable ordering of exported names is required.'],
+      preservations: ['Do not change public APIs.'],
+    },
+  )
+})
+
 test('each of two preservation clauses becomes a separate invariant', () => {
   assert.deepEqual(
     splitPublicApiPreservationStatement('Do not change public APIs. Never rename exported APIs.'),

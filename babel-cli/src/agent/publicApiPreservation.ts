@@ -196,8 +196,9 @@ function trimAfterClause(value: string): string {
     .replace(/^[\s.;:!?]+/, '')
     .replace(new RegExp(String.raw`^(?:${COORDINATOR}|please|kindly)\b\s*`, 'i'), '')
     .trim()
-  // A state word left behind by a greedy clause match belongs to the clause.
-  return /^(?:unchanged|stable|intact|compatible)\b/i.test(cleaned) ? '' : cleaned
+  // A bare state word left behind by a greedy clause match belongs to the
+  // clause; a sentence that starts with one is still a real requirement.
+  return /^(?:unchanged|stable|intact|compatible)[.!?]?$/i.test(cleaned) ? '' : cleaned
 }
 
 function clauseText(sentence: string, match: { start: number; end: number }): string {
