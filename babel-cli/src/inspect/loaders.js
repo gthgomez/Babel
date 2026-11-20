@@ -447,6 +447,46 @@ function deriveOutcomeStatus(bundle) {
     null;
   const warnings = [];
   const terminalTruth = bundle.terminalTruth;
+  // The durable turn truth describes the selected turn. When it establishes a
+  // turn, neither telemetry from an earlier turn nor an older execution report
+  // may override it (BL-14). An unfinished turn is reported as such, never as
+  // the previous turn's success.
+  if (terminalTruth && terminalTruth.turn_state && terminalTruth.turn_state !== 'none') {
+    if (terminalTruth.finished) {
+      return {
+        status: terminalTruth.user_status,
+        terminal: true,
+        statusSource: 'durable_terminal',
+        failureReason:
+          terminalTruth.user_status === 'success' || terminalTruth.user_status === 'ready'
+            ? null
+            : terminalTruth.reason_code ?? terminalTruth.status,
+        holdReason:
+          terminalTruth.user_status === 'blocked' ? 'operator_decision_required' : null,
+        retryAllowed: false,
+        terminalOutcome: terminalTruth.outcome,
+        userStatus: terminalTruth.user_status,
+        exitCode: terminalTruth.exit_code,
+        warnings,
+      };
+    }
+    return {
+      status: terminalTruth.user_status,
+      terminal: false,
+      statusSource: 'durable_terminal',
+      failureReason:
+        terminalTruth.status ??
+        (terminalTruth.turn_state === 'submitted'
+          ? 'The newest turn was submitted but never admitted.'
+          : 'The newest turn has no terminal record.'),
+      holdReason: null,
+      retryAllowed: true,
+      terminalOutcome: null,
+      userStatus: terminalTruth.user_status,
+      exitCode: null,
+      warnings,
+    };
+  }
   if (!executionStatus && finalOutcome == null && terminalTruth?.finished) {
     return {
       status: terminalTruth.user_status,

@@ -8,6 +8,7 @@ import {
   chatMessagesToInteractiveTurns,
   hydrateReplTurnsFromChatTranscript,
   parseChatTranscriptFile,
+  recoveredTerminalFromTruth,
 } from './chatTranscriptHydration.js';
 import { BabelRepl } from './BabelRepl.js';
 import { renderChatTranscript } from '../ui/chatPanel.js';
@@ -111,4 +112,67 @@ test('hydrateReplTurnsFromChatTranscript populates ctx.turns for /chat', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('BL-14: an unfinished selected turn never hydrates as complete from older prose', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'babel-hydrate-interrupted-'));
+  const transcriptPath = join(dir, 'transcript.jsonl');
+  writeFileSync(
+    transcriptPath,
+    sampleTranscript.map((m) => JSON.stringify(m)).join('\n') + '\n',
+    'utf-8',
+  );
+
+  const ctx = Object.create(BabelRepl.prototype) as {
+    turns: unknown[];
+    turnCounter: number;
+    lastAssistantAnswer: string | null;
+    lastAssistantNext: string | null;
+    lastAssistantStatus: string | null;
+    lastResolvedTask: string | null;
+    lastRunDir: string | null;
+    state: { lastRunUserStatus: string };
+    saveSessionState: () => void;
+  };
+  ctx.turns = [];
+  ctx.turnCounter = 0;
+  ctx.lastAssistantAnswer = null;
+  ctx.lastAssistantNext = null;
+  ctx.lastAssistantStatus = null;
+  ctx.lastResolvedTask = null;
+  ctx.lastRunDir = null;
+  ctx.state = { lastRunUserStatus: 'ready' };
+  ctx.saveSessionState = () => undefined;
+
+  try {
+    hydrateReplTurnsFromChatTranscript(ctx as any, {
+      sessionId: 'interrupted-session',
+      transcriptPath,
+      targetRoot: '/tmp/project',
+      workspaceRoot: '/tmp',
+      terminal: { status: 'INTERRUPTED', finished: false, turn_state: 'active' },
+    });
+
+    // History remains visible, but the selected turn did not settle.
+    assert.equal(ctx.lastAssistantStatus, 'not_verified');
+    assert.equal(ctx.state.lastRunUserStatus, 'not_verified');
+    assert.notEqual(ctx.lastAssistantStatus, 'complete');
+    assert.equal(ctx.lastAssistantAnswer, 'The main entry point is src/index.ts.');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('BL-14: the TUI terminal projection preserves the unfinished signal', () => {
+  const projected = recoveredTerminalFromTruth({
+    outcome: null,
+    status: 'INTERRUPTED',
+    finished: false,
+    turn_state: 'active',
+  });
+  assert.deepEqual(projected, {
+    status: 'INTERRUPTED',
+    finished: false,
+    turn_state: 'active',
+  });
 });

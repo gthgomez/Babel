@@ -3,22 +3,32 @@
  *
  * Recovery, `inspect outcome`, `session latest` and the TUI hydration path all
  * read the same artifacts but each used to classify them independently. This
- * module derives a single outcome/user-status pair from durable evidence only
- * (no filesystem mutation, no model inference) so those surfaces cannot report
- * a verified terminal as three different classifications (RT-10).
+ * module selects the current turn from durable evidence only (no filesystem
+ * mutation, no model inference) and derives one outcome/user-status pair so
+ * those surfaces cannot report a verified terminal as three different
+ * classifications (RT-10, BL-14).
  *
- * A summary that claims success loses to a later durable `turn_ended` that
- * records a non-success terminal: the event log is append-only and carries
- * the newest turn, so a stale success summary must not project success/exit 0
- * (the dangerous direction). The arbitration exposes `disagreement` and is
- * otherwise one-directional by design.
+ * Selection rules:
+ * - Turns are identified by the shared `turn_id` written to both journals.
+ * - Admission order is the thread journal's append order (the engine admits a
+ *   turn with `turn_started`); a generation number, when present, must not
+ *   move backwards. Session submissions are matched by the same id.
+ * - A newer turn with no matching terminal makes the run unfinished. An older
+ *   terminal — summary, telemetry or journal — is never grafted onto it.
+ * - Terminal records for the selected turn are compared. A success cannot
+ *   override a non-success for the same turn, and a disagreement is reported.
+ * - A journal that exists but cannot be validated makes the result corrupt and
+ *   fail-closed: a success claim from the surviving journal is downgraded.
+ * - Summary-only legacy runs keep their established behavior.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { inspectSessionEventLogFromDir } from '../agent/sessionEvents.js';
+import type { SessionEvent } from '../agent/sessionEvents.js';
 import { loadThreadEventLogFromDir } from '../agent/threadEventLog.js';
+import type { ThreadEvent } from '../agent/threadEventLog.js';
 import {
   terminalOutcomeExitCode,
   type TerminalOutcome,
@@ -34,6 +44,14 @@ export type DurableTerminalSource =
   | 'thread_events'
   | 'none';
 
+/** State of the currently selected turn, independent of its terminal result. */
+export type DurableTurnState =
+  | 'none'
+  | 'submitted'
+  | 'active'
+  | 'terminal'
+  | 'unknown';
+
 export interface DurableTerminalTruth {
   /** Canonical outcome when the durable record establishes one. */
   outcome: TerminalOutcome | null;
@@ -44,17 +62,22 @@ export interface DurableTerminalTruth {
   exit_code: number | null;
   /** True only for `VERIFIED_COMPLETE` / `NO_CHANGE_REQUIRED`. */
   success: boolean;
-  /** The run reached a terminal record (success or failure). */
+  /** The selected turn reached a terminal record (success or failure). */
   finished: boolean;
   reason_code: string | null;
   changed_files: string[];
+  /** Stable id of the newest admitted/submitted turn, when one exists. */
+  turn_id: string | null;
+  turn_state: DurableTurnState;
   /**
-   * True when a stale success summary was overridden by a later durable
-   * `turn_ended` event recording a non-success terminal. The projection
-   * prefers the failure in that one direction; every other disagreement
-   * keeps the summary's conservative classification.
+   * True when the durable records disagree, a journal is corrupt, or a newer
+   * unadmitted submission exists. The projection always chooses the
+   * conservative reading; this flag tells callers the evidence is not clean.
    */
   disagreement: boolean;
+  /** True when a journal file exists but could not be validated. */
+  corrupt: boolean;
+  corrupt_sources: DurableTerminalSource[];
 }
 
 // W02 canonical-guard handoff debt: this local membership list mirrors the
@@ -99,15 +122,16 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
-interface FoundTerminal {
+interface SummaryTerminal {
   outcome: TerminalOutcome | null;
   status: string | null;
   reason_code: string | null;
-  source: DurableTerminalSource;
   changed_files: string[];
+  /** Present only in newer summaries; legacy summaries are unbound. */
+  turn_id: string | null;
 }
 
-function fromTerminalSummary(runDir: string): FoundTerminal | null {
+function fromTerminalSummary(runDir: string): SummaryTerminal | null {
   const summary = readJson(join(runDir, 'terminal_status_summary.json'));
   if (!summary) return null;
   const explicitOutcome = isTerminalOutcome(summary['terminal_outcome'])
@@ -126,44 +150,236 @@ function fromTerminalSummary(runDir: string): FoundTerminal | null {
         : typeof summary['reason_category'] === 'string'
           ? summary['reason_category']
           : null,
-    source: 'terminal_status_summary',
     changed_files: stringArray(summary['changed_files']),
+    turn_id: typeof summary['turn_id'] === 'string' ? summary['turn_id'] : null,
   };
 }
 
-function fromSessionEvents(runDir: string, expectedSessionId?: string): FoundTerminal | null {
-  const result = inspectSessionEventLogFromDir(runDir, expectedSessionId);
-  if (result.kind !== 'valid') return null;
-  const ended = [...result.log.events]
-    .reverse()
-    .find((event) => event.kind === 'turn_ended');
-  if (!ended || ended.kind !== 'turn_ended') return null;
-  return {
-    outcome: isTerminalOutcome(ended.outcome) ? ended.outcome : null,
-    status: typeof ended.status === 'string' ? ended.status : null,
-    reason_code: typeof ended.reason_code === 'string' ? ended.reason_code : null,
-    source: 'session_events',
-    changed_files: [],
-  };
+interface JournalTerminal {
+  outcome: TerminalOutcome | null;
+  status: string | null;
+  reason_code: string | null;
+  source: 'session_events' | 'thread_events';
 }
 
-function fromThreadEvents(runDir: string): FoundTerminal | null {
-  let log: ReturnType<typeof loadThreadEventLogFromDir>;
-  try {
-    log = loadThreadEventLogFromDir(runDir);
-  } catch {
-    return null;
+interface TurnRecord {
+  turnId: string;
+  admitted: boolean;
+  admissionSeq: number | null;
+  admissionGeneration: number | null;
+  sessionSubmittedSeq: number | null;
+  threadEnd: JournalTerminal | null;
+  threadEndSeq: number | null;
+  sessionEnd: JournalTerminal | null;
+  sessionEndSeq: number | null;
+}
+
+interface LoadedJournals {
+  turns: Map<string, TurnRecord>;
+  corruptSources: DurableTerminalSource[];
+}
+
+function turnFor(turns: Map<string, TurnRecord>, turnId: string): TurnRecord {
+  const existing = turns.get(turnId);
+  if (existing) return existing;
+  const created: TurnRecord = {
+    turnId,
+    admitted: false,
+    admissionSeq: null,
+    admissionGeneration: null,
+    sessionSubmittedSeq: null,
+    threadEnd: null,
+    threadEndSeq: null,
+    sessionEnd: null,
+    sessionEndSeq: null,
+  };
+  turns.set(turnId, created);
+  return created;
+}
+
+function ordered(events: readonly { seq: number }[]): boolean {
+  for (let index = 1; index < events.length; index += 1) {
+    if ((events[index]?.seq ?? -1) <= (events[index - 1]?.seq ?? -1)) return false;
   }
-  if (!log) return null;
-  const ended = [...log.events].reverse().find((event) => event.kind === 'turn_ended');
-  if (!ended || ended.kind !== 'turn_ended') return null;
+  return true;
+}
+
+function loadJournals(runDir: string, expectedSessionId?: string): LoadedJournals {
+  const turns = new Map<string, TurnRecord>();
+  const corruptSources: DurableTerminalSource[] = [];
+
+  const session = inspectSessionEventLogFromDir(runDir, expectedSessionId);
+  if (session.kind === 'invalid') corruptSources.push('session_events');
+  if (session.kind === 'valid') {
+    if (!ordered(session.log.events)) corruptSources.push('session_events');
+    const events = [...session.log.events].sort((left, right) => left.seq - right.seq);
+    for (const event of events) {
+      const turnId = event.turn_id;
+      if (typeof turnId !== 'string' || turnId.length === 0) continue;
+      const turn = turnFor(turns, turnId);
+      if (event.kind === 'user_submitted') {
+        turn.sessionSubmittedSeq = Math.max(turn.sessionSubmittedSeq ?? -1, event.seq);
+      }
+      if (event.kind === 'turn_ended') {
+        if (turn.sessionEndSeq === null || event.seq > turn.sessionEndSeq) {
+          turn.sessionEnd = sessionTerminal(event);
+          turn.sessionEndSeq = event.seq;
+        }
+      }
+    }
+  }
+
+  try {
+    const thread = loadThreadEventLogFromDir(runDir);
+    if (thread) {
+      if (!ordered(thread.events)) corruptSources.push('thread_events');
+      const events = [...thread.events].sort((left, right) => left.seq - right.seq);
+      let previousGeneration = -1;
+      for (const event of events) {
+        const turn = turnFor(turns, event.turn_id);
+        if (event.kind === 'turn_started') {
+          const generation =
+            typeof event.ownership_generation === 'number' ? event.ownership_generation : null;
+          if (
+            generation !== null &&
+            previousGeneration !== -1 &&
+            generation < previousGeneration
+          ) {
+            corruptSources.push('thread_events');
+          }
+          if (generation !== null) previousGeneration = Math.max(previousGeneration, generation);
+          turn.admitted = true;
+          if (turn.admissionSeq === null || event.seq > turn.admissionSeq) {
+            turn.admissionSeq = event.seq;
+          }
+          turn.admissionGeneration = generation ?? turn.admissionGeneration;
+        }
+        if (event.kind === 'turn_ended') {
+          if (turn.threadEndSeq === null || event.seq > turn.threadEndSeq) {
+            turn.threadEnd = threadTerminal(event);
+            turn.threadEndSeq = event.seq;
+          }
+        }
+      }
+    }
+  } catch {
+    corruptSources.push('thread_events');
+  }
+
   return {
-    outcome: isTerminalOutcome(ended.outcome) ? ended.outcome : null,
-    status: typeof ended.status === 'string' ? ended.status : null,
-    reason_code: typeof ended.reason_code === 'string' ? ended.reason_code : null,
-    source: 'thread_events',
-    changed_files: [],
+    turns,
+    corruptSources: [...new Set(corruptSources)],
   };
+}
+
+function sessionTerminal(event: Extract<SessionEvent, { kind: 'turn_ended' }>): JournalTerminal {
+  return {
+    outcome: isTerminalOutcome(event.outcome) ? event.outcome : null,
+    status: typeof event.status === 'string' ? event.status : null,
+    reason_code: typeof event.reason_code === 'string' ? event.reason_code : null,
+    source: 'session_events',
+  };
+}
+
+function threadTerminal(event: Extract<ThreadEvent, { kind: 'turn_ended' }>): JournalTerminal {
+  return {
+    outcome: isTerminalOutcome(event.outcome) ? event.outcome : null,
+    status: typeof event.status === 'string' ? event.status : null,
+    reason_code: typeof event.reason_code === 'string' ? event.reason_code : null,
+    source: 'thread_events',
+  };
+}
+
+function outcomeOf(terminal: JournalTerminal | SummaryTerminal | null): TerminalOutcome | null {
+  if (!terminal) return null;
+  return (
+    terminal.outcome ??
+    terminalOutcomeFromLegacyStatus(terminal.status, 'changed_files' in terminal ? terminal.changed_files : [])
+  );
+}
+
+function isSuccessOutcome(outcome: TerminalOutcome | null): boolean {
+  return outcome === 'VERIFIED_COMPLETE' || outcome === 'NO_CHANGE_REQUIRED';
+}
+
+type SelectedTurn = {
+  turn: TurnRecord | null;
+  /** A session submission that was never admitted and is newer than admission. */
+  unadmittedNewer: boolean;
+};
+
+function selectTurn(journals: LoadedJournals): SelectedTurn {
+  const all = [...journals.turns.values()];
+  const admitted = all
+    .filter((turn) => turn.admitted)
+    .sort((left, right) => (left.admissionSeq ?? 0) - (right.admissionSeq ?? 0));
+  const newestAdmitted = admitted.at(-1);
+  if (newestAdmitted) {
+    const admittedSubmissions = admitted
+      .map((turn) => turn.sessionSubmittedSeq)
+      .filter((seq): seq is number => seq !== null);
+    const newestAdmittedSubmission =
+      admittedSubmissions.length > 0 ? Math.max(...admittedSubmissions) : null;
+    const unadmitted = all
+      .filter(
+        (turn) =>
+          !turn.admitted &&
+          turn.sessionSubmittedSeq !== null &&
+          newestAdmittedSubmission !== null &&
+          turn.sessionSubmittedSeq > newestAdmittedSubmission,
+      )
+      .sort((left, right) => (left.sessionSubmittedSeq ?? 0) - (right.sessionSubmittedSeq ?? 0));
+    const newerUnadmitted = unadmitted.at(-1);
+    if (newerUnadmitted) return { turn: newerUnadmitted, unadmittedNewer: true };
+    return { turn: newestAdmitted, unadmittedNewer: false };
+  }
+  const submitted = all
+    .filter((turn) => turn.sessionSubmittedSeq !== null)
+    .sort((left, right) => (left.sessionSubmittedSeq ?? 0) - (right.sessionSubmittedSeq ?? 0));
+  const sessionOnly = submitted.at(-1);
+  if (sessionOnly) return { turn: sessionOnly, unadmittedNewer: false };
+  // Thread activity without a start record (e.g. a truncated prefix) is still
+  // a turn; report it as unknown rather than borrowing an older terminal.
+  const anyThread = all.sort(
+    (left, right) => (left.threadEndSeq ?? -1) - (right.threadEndSeq ?? -1),
+  ).at(-1);
+  return { turn: anyThread ?? null, unadmittedNewer: false };
+}
+
+function settledTerminal(turn: TurnRecord): {
+  terminal: JournalTerminal | null;
+  disagreement: boolean;
+  source: DurableTerminalSource;
+} {
+  const thread = turn.threadEnd;
+  const session = turn.sessionEnd;
+  if (thread && session) {
+    const threadOutcome = outcomeOf(thread);
+    const sessionOutcome = outcomeOf(session);
+    const threadSuccess = isSuccessOutcome(threadOutcome);
+    const sessionSuccess = isSuccessOutcome(sessionOutcome);
+    let chosen = thread;
+    let disagreement = false;
+    if (threadSuccess && !sessionSuccess) {
+      chosen = session;
+      disagreement = true;
+    } else if (!threadSuccess && sessionSuccess) {
+      chosen = thread;
+      disagreement = true;
+    } else if (
+      threadOutcome !== null &&
+      sessionOutcome !== null &&
+      threadOutcome !== sessionOutcome
+    ) {
+      disagreement = true;
+    }
+    if (threadOutcome === null && sessionOutcome !== null) chosen = session;
+    if (threadOutcome !== null && sessionOutcome === null) chosen = thread;
+    return { terminal: chosen, disagreement, source: chosen.source };
+  }
+  if (thread) return { terminal: thread, disagreement: false, source: 'thread_events' };
+  if (session) return { terminal: session, disagreement: false, source: 'session_events' };
+  return { terminal: null, disagreement: false, source: 'none' };
 }
 
 /**
@@ -237,13 +453,35 @@ function classifiedUserStatus(truth: {
   if (/APPROVAL_REQUIRED|BLOCKED|MANUAL_BRIDGE_REQUIRED|NEEDS_MORE_CONTEXT|AMBIGUOUS/.test(status)) {
     return 'blocked';
   }
-  if (/PARTIAL|UNVERIFIED/.test(status)) return 'not_verified';
+  if (/PARTIAL|UNVERIFIED|INTERRUPTED|SUBMITTED|UNREADABLE/.test(status)) return 'not_verified';
   if (/COMPLETE|ANSWER_READY|READ_ONLY/.test(status)) return 'not_verified';
   return 'ready';
 }
 
-function isSuccessOutcome(outcome: TerminalOutcome | null): boolean {
-  return outcome === 'VERIFIED_COMPLETE' || outcome === 'NO_CHANGE_REQUIRED';
+function unresolvedTruth(
+  source: DurableTerminalSource,
+  turnId: string | null,
+  turnState: DurableTurnState,
+  status: string,
+  disagreement: boolean,
+  corruptSources: DurableTerminalSource[],
+): DurableTerminalTruth {
+  return {
+    outcome: null,
+    status,
+    source,
+    user_status: classifiedUserStatus({ outcome: null, status }),
+    exit_code: null,
+    success: false,
+    finished: false,
+    reason_code: null,
+    changed_files: [],
+    turn_id: turnId,
+    turn_state: turnState,
+    disagreement: disagreement || corruptSources.length > 0,
+    corrupt: corruptSources.length > 0,
+    corrupt_sources: corruptSources,
+  };
 }
 
 /** Derive one terminal truth from the durable run artifacts. */
@@ -252,60 +490,156 @@ export function readDurableTerminalTruth(
   expectedSessionId?: string,
 ): DurableTerminalTruth {
   const summary = fromTerminalSummary(runDir);
-  const found =
-    summary ?? fromSessionEvents(runDir, expectedSessionId) ?? fromThreadEvents(runDir);
-  if (!found) {
+  const journals = loadJournals(runDir, expectedSessionId);
+  const { turn: selected, unadmittedNewer } = selectTurn(journals);
+  const turnCount = journals.turns.size;
+
+  if (!selected) {
+    if (journals.corruptSources.length > 0) {
+      return unresolvedTruth(
+        'none',
+        null,
+        'unknown',
+        'UNREADABLE_STATE',
+        true,
+        journals.corruptSources,
+      );
+    }
+    if (!summary) {
+      return {
+        outcome: null,
+        status: null,
+        source: 'none',
+        user_status: 'ready',
+        exit_code: null,
+        success: false,
+        finished: false,
+        reason_code: null,
+        changed_files: [],
+        turn_id: null,
+        turn_state: 'none',
+        disagreement: false,
+        corrupt: false,
+        corrupt_sources: [],
+      };
+    }
+    // Legacy run: a terminal summary with no event journal is still the only
+    // durable record. Keep the established projection (no newer turn exists).
+    const outcome = outcomeOf(summary);
+    const userStatus = classifiedUserStatus({ outcome, status: summary.status });
     return {
-      outcome: null,
-      status: null,
-      source: 'none',
-      user_status: 'ready',
-      exit_code: null,
-      success: false,
-      finished: false,
-      reason_code: null,
-      changed_files: [],
-      disagreement: false,
+      outcome,
+      status: summary.status,
+      source: 'terminal_status_summary',
+      user_status: userStatus,
+      exit_code: outcome ? terminalOutcomeExitCode(outcome) : userStatus === 'ready' ? null : 1,
+      success: isSuccessOutcome(outcome),
+      finished: true,
+      reason_code: summary.reason_code,
+      changed_files: summary.changed_files,
+      turn_id: summary.turn_id,
+      turn_state: 'none',
+      disagreement: journals.corruptSources.length > 0,
+      corrupt: journals.corruptSources.length > 0,
+      corrupt_sources: journals.corruptSources,
     };
   }
-  let resolved = found;
-  let disagreement = false;
-  // A SUCCESS summary must not win wholesale over a later durable
-  // `turn_ended` that records a non-success terminal: the summary is a
-  // derived artifact, while the append-only event log carries the newest
-  // durable turn. Arbitration is deliberately one-directional — a stale
-  // success claim is the dangerous direction; a stale failure claim keeps
-  // the summary's conservative classification. Absent event evidence
-  // (invalid/missing log) leaves the summary unchanged, matching the
-  // fail-closed absent-source behavior.
-  const summaryOutcome =
-    summary?.outcome ?? terminalOutcomeFromLegacyStatus(summary?.status ?? null, summary?.changed_files ?? []);
-  if (summary !== null && isSuccessOutcome(summaryOutcome)) {
-    const eventTerminal =
-      fromSessionEvents(runDir, expectedSessionId) ?? fromThreadEvents(runDir);
-    if (eventTerminal !== null) {
-      const eventOutcome =
-        eventTerminal.outcome ??
-        terminalOutcomeFromLegacyStatus(eventTerminal.status, eventTerminal.changed_files);
-      if (eventOutcome !== null && !isSuccessOutcome(eventOutcome)) {
-        resolved = { ...eventTerminal, changed_files: summary.changed_files };
-        disagreement = true;
-      }
+
+  const settled = settledTerminal(selected);
+  let resolved: (JournalTerminal | SummaryTerminal) | null = settled.terminal;
+  let disagreement = settled.disagreement || unadmittedNewer;
+  let source: DurableTerminalSource = settled.terminal ? settled.source : 'none';
+
+  const summaryBound =
+    summary !== null &&
+    (summary.turn_id !== null
+      ? summary.turn_id === selected.turnId
+      : turnCount <= 1);
+
+  if (resolved && summary && summaryBound) {
+    const resolvedOutcome = outcomeOf(resolved);
+    const summaryOutcome = outcomeOf(summary);
+    if (isSuccessOutcome(resolvedOutcome) && !isSuccessOutcome(summaryOutcome)) {
+      // A durable summary recording a non-success is conservative evidence.
+      resolved = summary;
+      source = 'terminal_status_summary';
+      disagreement = true;
+    } else if (!isSuccessOutcome(resolvedOutcome) && isSuccessOutcome(summaryOutcome)) {
+      disagreement = true;
+    } else if (
+      resolvedOutcome !== null &&
+      summaryOutcome !== null &&
+      resolvedOutcome !== summaryOutcome
+    ) {
+      disagreement = true;
+    } else if (!disagreement) {
+      // Agreeing records keep the summary source and its changed-file record,
+      // matching the established projection for a normally settled run.
+      resolved = summary;
+      source = 'terminal_status_summary';
+    }
+  } else if (!resolved && summary && summary.turn_id !== null && summary.turn_id === selected.turnId) {
+    resolved = summary;
+    source = 'terminal_status_summary';
+  } else if (!resolved && summary && isSuccessOutcome(outcomeOf(summary)) && turnCount > 1) {
+    // An unbound success summary cannot be attached to a newer multi-turn
+    // state; record the conflict but do not project it.
+    disagreement = true;
+  }
+
+  if (journals.corruptSources.length > 0) {
+    // A journal that could not be validated may hide a newer failure. The
+    // conservative reading is never a success claim.
+    const resolvedOutcome = outcomeOf(resolved);
+    if (resolved && isSuccessOutcome(resolvedOutcome)) {
+      return {
+        ...unresolvedTruth(
+          source,
+          selected.turnId,
+          'unknown',
+          'UNREADABLE_STATE',
+          true,
+          journals.corruptSources,
+        ),
+        changed_files: summaryBound ? (summary?.changed_files ?? []) : [],
+      };
     }
   }
-  const outcome =
-    resolved.outcome ?? terminalOutcomeFromLegacyStatus(resolved.status, resolved.changed_files);
+
+  if (!resolved) {
+    const state: DurableTurnState = selected.admitted ? 'active' : 'submitted';
+    return unresolvedTruth(
+      selected.admitted ? 'thread_events' : 'session_events',
+      selected.turnId,
+      state,
+      selected.admitted ? 'INTERRUPTED' : 'SUBMITTED',
+      disagreement,
+      journals.corruptSources,
+    );
+  }
+
+  const outcome = outcomeOf(resolved);
   const userStatus = classifiedUserStatus({ outcome, status: resolved.status });
+  const changedFiles =
+    resolved === summary
+      ? summary.changed_files
+      : summaryBound
+        ? (summary?.changed_files ?? [])
+        : [];
   return {
     outcome,
     status: resolved.status,
-    source: resolved.source,
+    source,
     user_status: userStatus,
     exit_code: outcome ? terminalOutcomeExitCode(outcome) : userStatus === 'ready' ? null : 1,
-    success: outcome === 'VERIFIED_COMPLETE' || outcome === 'NO_CHANGE_REQUIRED',
-    finished: outcome !== null,
+    success: isSuccessOutcome(outcome),
+    finished: true,
     reason_code: resolved.reason_code,
-    changed_files: resolved.changed_files,
-    disagreement,
+    changed_files: changedFiles,
+    turn_id: selected.turnId,
+    turn_state: 'terminal',
+    disagreement: disagreement || journals.corruptSources.length > 0,
+    corrupt: journals.corruptSources.length > 0,
+    corrupt_sources: journals.corruptSources,
   };
 }

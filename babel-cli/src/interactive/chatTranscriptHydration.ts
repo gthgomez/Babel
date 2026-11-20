@@ -18,6 +18,24 @@ import type { InteractiveTurn } from './types.js';
 export interface RecoveredTerminal {
   outcome?: string | null;
   status?: string | null;
+  /** False when the selected turn has no terminal record yet. */
+  finished?: boolean;
+  turn_state?: string;
+}
+
+/** Project one durable truth onto the hydration status input. */
+export function recoveredTerminalFromTruth(truth: {
+  outcome: string | null;
+  status: string | null;
+  finished: boolean;
+  turn_state: string;
+}): RecoveredTerminal {
+  return {
+    ...(truth.outcome !== null ? { outcome: truth.outcome } : {}),
+    ...(truth.status !== null ? { status: truth.status } : {}),
+    finished: truth.finished,
+    turn_state: truth.turn_state,
+  };
 }
 
 export interface ChatTranscriptHydrationContext {
@@ -43,7 +61,18 @@ function recoveredUserStatus(
   terminal: RecoveredTerminal | null | undefined,
   hasAssistant: boolean,
 ): RecoveredUserStatus {
+  // A selected turn without a terminal record is interrupted or still active.
+  // Older assistant prose is history, not proof that this turn completed
+  // (BL-14).
+  if (terminal?.finished === false) return 'not_verified';
   if (!terminal) return hasAssistant ? 'complete' : 'ready';
+  if (
+    terminal.status === 'INTERRUPTED' ||
+    terminal.status === 'SUBMITTED' ||
+    terminal.status === 'UNREADABLE_STATE'
+  ) {
+    return 'not_verified';
+  }
   const outcome = isTerminalOutcome(terminal.outcome)
     ? terminal.outcome
     : terminalOutcomeFromLegacyStatus(terminal.status);
