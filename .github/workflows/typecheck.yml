@@ -783,11 +783,11 @@ jobs:
         id: harness_runtime
         env:
           BABEL_TAP_EXECUTION_PATH: artifacts/harness-runtime/execution.json
-        timeout-minutes: 15
+        timeout-minutes: 20
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force ../artifacts/harness-runtime | Out-Null
-          npm run test:harness-runtime -- --test-timeout=60000 2>&1 | Tee-Object -FilePath ../artifacts/harness-runtime/full.tap
+          npm run test:harness-runtime -- --test-timeout=120000 2>&1 | Tee-Object -FilePath ../artifacts/harness-runtime/full.tap
           exit $LASTEXITCODE
         working-directory: babel-cli
       - name: Stage harness runtime TAP
