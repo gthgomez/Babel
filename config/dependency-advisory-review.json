@@ -6,11 +6,11 @@
   "locks": [
     {
       "path": "babel-cli/package-lock.json",
-      "sha256": "60c5eac3f4520c6392fa019caf606abde07b4c71d4a7f64c54ee52a65c5bea90"
+      "sha256": "60f7b4a67fccd25d92b51016a07287d4c9ce3c2694d9e0ee9456258dea4e01fd"
     },
     {
       "path": "babel-desktop/package-lock.json",
-      "sha256": "81f76be91b1c61f6d4ebed4243675dc80a32176b3e7c1048f1a85e961125c6a6"
+      "sha256": "044183388d525f02f7e1caa99ba67f20a2c8265e702f8817b5869405d5646de6"
     }
   ],
   "advisories": [
