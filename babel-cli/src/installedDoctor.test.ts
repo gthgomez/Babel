@@ -18,10 +18,44 @@ it('profile-aware host diagnostics skip Docker probes while Docker remains requi
   assert.throws(()=>runInstalledDoctor({env:{},executionProfile:'safe_reop',dockerProbe:()=>{throw new Error('must not probe')}}),/Invalid execution profile/)
 })
 
-it('does not report a usable execution environment from a healthy daemon alone',()=>{
-  const result=runInstalledDoctor({env:{},dockerProbe:()=>true})
-  assert.equal(result.status,'fail')
-  assert.equal(result.checks.find(check=>check.id==='sandbox_image')?.status,'fail')
+it('reports the effective OS boundary instead of claiming Docker is the default',()=>{
+  const host=runInstalledDoctor({env:{},dockerProbe:()=>{throw new Error('unexpected Docker probe for host_native')},imageProbe:()=>{throw new Error('unexpected image probe for host_native')}})
+  assert.equal(host.executionProfile,'host_native')
+  assert.equal(host.checks.find(check=>check.id==='docker')?.status,'not_required')
+  assert.equal(host.checks.find(check=>check.id==='execution_boundary')?.status,'ok')
+  const hostBoundary=host.checks.find(check=>check.id==='execution_boundary')?.message ?? ''
+  assert.match(hostBoundary,/host-native/i)
+  assert.match(hostBoundary,/OS user/i)
+  assert.match(hostBoundary,/not an OS sandbox/i)
+  assert.doesNotMatch(JSON.stringify(host),/default safe_repo/i)
+
+  const safe=runInstalledDoctor({env:{BABEL_BENCHMARK_DOCKER_IMAGE:'synthetic.invalid/image:test'},executionProfile:'safe_repo',dockerProbe:()=>true,imageProbe:()=>true})
+  assert.equal(safe.checks.find(check=>check.id==='docker')?.status,'ok')
+  assert.equal(safe.checks.find(check=>check.id==='execution_boundary')?.status,'ok')
+  assert.match(safe.checks.find(check=>check.id==='execution_boundary')?.message ?? '',/container \(Docker\)/)
+
+  const imageMissing=runInstalledDoctor({env:{BABEL_BENCHMARK_DOCKER_IMAGE:'synthetic.invalid/image:test'},executionProfile:'safe_repo',dockerProbe:()=>true,imageProbe:()=>false})
+  assert.equal(imageMissing.checks.find(check=>check.id==='docker')?.status,'ok')
+  assert.equal(imageMissing.checks.find(check=>check.id==='sandbox_image')?.status,'fail')
+  assert.equal(imageMissing.checks.find(check=>check.id==='execution_boundary')?.status,'fail')
+
+  const unavailable=runInstalledDoctor({env:{},executionProfile:'safe_repo',dockerProbe:()=>false})
+  assert.equal(unavailable.status,'fail')
+  assert.equal(unavailable.checks.find(check=>check.id==='execution_boundary')?.status,'fail')
+  assert.match(unavailable.checks.find(check=>check.id==='execution_boundary')?.message ?? '',/fail closed/i)
+
+  for (const env of [{BABEL_ALLOW_HOST_FALLBACK:'1'},{BABEL_DOCKER_DISABLE:'true'}]) {
+    const escalated=runInstalledDoctor({env,executionProfile:'safe_repo',dockerProbe:()=>true})
+    assert.equal(escalated.checks.find(check=>check.id==='execution_boundary')?.status,'warn',JSON.stringify(env))
+    assert.match(escalated.checks.find(check=>check.id==='execution_boundary')?.message ?? '',/explicitly waived/i)
+    if (env.BABEL_DOCKER_DISABLE === 'true') {
+      assert.equal(escalated.checks.find(check=>check.id==='docker')?.status,'fail')
+    }
+  }
+
+  const unsafeArgs=runInstalledDoctor({env:{BABEL_BENCHMARK_DOCKER_EXTRA_ARGS:'--network host',BABEL_ALLOW_HOST_FALLBACK:'1'},executionProfile:'safe_repo',dockerProbe:()=>true,imageProbe:()=>true})
+  assert.equal(unsafeArgs.checks.find(check=>check.id==='execution_boundary')?.status,'fail')
+  assert.match(unsafeArgs.checks.find(check=>check.id==='execution_boundary')?.message ?? '',/fail closed/i)
 })
 
 it('requires unflagged WASM support and the Node 24 Unicode deletion fix', () => {
@@ -42,7 +76,7 @@ it('diagnoses an installed user without contributor files or all provider creden
     assert.equal(result.checks.find(c => c.id === 'provider')?.status, 'ok')
     assert.match(result.checks.find(c => c.id === 'executable')?.message ?? '', /command babel-harness \(aliases babel and babel-agent\)/)
     assert.doesNotMatch(JSON.stringify(result), /doctor-secret-sentinel|workspace-map|pwsh|sibling/)
-    const absent = runInstalledDoctor({ paths, env: {}, dockerProbe: () => false })
+    const absent = runInstalledDoctor({ paths, env: {}, executionProfile: 'safe_repo', dockerProbe: () => false })
     assert.equal(absent.status, 'fail')
     assert.equal(absent.checks.find(c => c.id === 'docker')?.status, 'fail')
     assert.equal(absent.checks.find(c => c.id === 'provider')?.status, 'warn')
@@ -64,7 +98,7 @@ it('explains Docker and the sandbox image for each platform', () => {
       userConfigRoot: join(root, 'config'), userStateRoot: join(root, 'state'),
       userCacheRoot: join(root, 'cache'), targetProjectRoot: root }
     for (const platform of ['linux', 'darwin', 'win32'] as const) {
-      const down = runInstalledDoctor({ paths, env: { OPENROUTER_API_KEY: 'doctor-secret-sentinel' }, dockerProbe: () => false, platform })
+      const down = runInstalledDoctor({ paths, env: { OPENROUTER_API_KEY: 'doctor-secret-sentinel' }, executionProfile: 'safe_repo', dockerProbe: () => false, platform })
       const docker = down.checks.find(check => check.id === 'docker')?.message ?? ''
       const image = down.checks.find(check => check.id === 'sandbox_image')?.message ?? ''
       assert.equal(docker.includes('doctor-secret-sentinel'), false)
@@ -80,9 +114,9 @@ it('explains Docker and the sandbox image for each platform', () => {
       if (platform === 'linux') assert.match(docker, /Docker Engine/)
       if (platform === 'darwin') assert.match(docker, /Docker Desktop for Mac/)
     }
-    const up = runInstalledDoctor({ paths, env: {}, dockerProbe: () => true, platform: 'linux' })
+    const up = runInstalledDoctor({ paths, env: { BABEL_BENCHMARK_DOCKER_IMAGE: 'synthetic.invalid/image:test' }, executionProfile: 'safe_repo', dockerProbe: () => true, imageProbe: () => true, platform: 'linux' })
     assert.match(up.checks.find(check => check.id === 'docker')?.message ?? '', /Docker is running/)
-    assert.match(up.checks.find(check => check.id === 'sandbox_image')?.message ?? '', /sandbox prepare/)
+    assert.match(up.checks.find(check => check.id === 'sandbox_image')?.message ?? '', /Linux amd64 image/)
     const setup = installedSetupChecklist({ paths })
     assert.match(setup.provider_configuration.manual_env_example, /your-key-here/)
     assert.match(setup.provider_configuration.manual_env_example, /OPENROUTER_API_KEY=your-key-here|DEEPINFRA_API_KEY=your-key-here/)
