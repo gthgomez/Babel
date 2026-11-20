@@ -106,12 +106,27 @@ export function hasPublicApiPreservationClause(rawTaskText: string): boolean {
   return isPublicApiPreservationStatement(stripFencedCodeBodies(rawTaskText))
 }
 
+const PUBLIC_SURFACE_NOUN = String.raw`(?:public|exported)\s+(?:api|apis|interface|interfaces|surface|contract|contracts|exports?)`
+
+function preservationPatterns(): RegExp[] {
+  return [
+    new RegExp(String.raw`\b(?:do\s+not|don'?t|never|must\s+not|should\s+not)\s+(?:change|modify|break|alter|touch|remove|rename)\b[^.\n;]{0,80}\b${PUBLIC_SURFACE_NOUN}\b`, 'i'),
+    new RegExp(String.raw`\b(?:keep|preserve|maintain)\b[^.\n;]{0,40}\b${PUBLIC_SURFACE_NOUN}\b[^.\n;]{0,30}\b(?:unchanged|stable|compatible|intact)`, 'i'),
+    new RegExp(String.raw`\b(?:without|no)\s+(?:public\s+)?(?:api|interface)\s+(?:changes?|breaks?)`, 'i'),
+  ]
+}
+
 /** True when this text is itself a public-surface preservation constraint. */
 export function isPublicApiPreservationStatement(taskText: string): boolean {
-  const surface = String.raw`(?:public|exported)\s+(?:api|apis|interface|interfaces|surface|contract|contracts|exports?)`
-  return new RegExp(String.raw`\b(?:do\s+not|don'?t|never|must\s+not|should\s+not)\s+(?:change|modify|break|alter|touch|remove|rename)\b[^.\n;]{0,80}\b${surface}`, 'i').test(taskText) ||
-    new RegExp(String.raw`\b(?:keep|preserve|maintain)\b[^.\n;]{0,40}\b${surface}\b[^.\n;]{0,30}\b(?:unchanged|stable|compatible|intact)`, 'i').test(taskText) ||
-    new RegExp(String.raw`\b(?:without|no)\s+(?:public\s+)?(?:api|interface)\s+(?:changes?|breaks?)`, 'i').test(taskText)
+  return preservationPatterns().some(pattern => pattern.test(taskText))
+}
+
+function preservationMatch(sentence: string): { start: number; end: number } | null {
+  for (const pattern of preservationPatterns()) {
+    const match = pattern.exec(sentence)
+    if (match) return { start: match.index, end: match.index + match[0].length }
+  }
+  return null
 }
 
 /**
@@ -128,6 +143,8 @@ export function publicApiPreservationMode(rawTaskText: string): PublicApiPreserv
     new RegExp(String.raw`\b(?:without|no)\s+(?:public\s+)?(?:api|interface)\s+changes?\b`, 'i').test(text)
   if (exact) return 'exact'
   const compatible = /\b(?:backward|backwards)[-\s]?compatible\b/i.test(text) ||
+    new RegExp(String.raw`\bwithout\s+breaking\b[^.\n;]{0,40}\b${surface}`, 'i').test(text) ||
+    new RegExp(String.raw`\b(?:without|no)\s+(?:public\s+)?(?:api|interface)\s+breaks?\b`, 'i').test(text) ||
     new RegExp(String.raw`\b(?:do\s+not|don'?t|never|must\s+not|should\s+not)\s+break\b[^.\n;]{0,80}\b${surface}`, 'i').test(text) ||
     new RegExp(String.raw`\b(?:keep|preserve|maintain)\b[^.\n;]{0,40}\b${surface}\b[^.\n;]{0,30}\bcompatible`, 'i').test(text)
   return compatible ? 'compatible' : 'exact'
@@ -138,19 +155,23 @@ export function requestedExportNames(rawTaskText: string): string[] {
   const text = stripFencedCodeBodies(rawTaskText)
   const names = new Set<string>()
   for (const pattern of [
-    /\badd\s+(?:an?\s+)?[`"']?([A-Za-z_$][\w$]*)[`"']?\s+export\b/gi,
     /\badd\s+(?:an?\s+)?export\s+(?:named\s+|called\s+)?[`"']?([A-Za-z_$][\w$]*)[`"']?/gi,
+    /\badd\s+(?:an?\s+)?[`"']?([A-Za-z_$][\w$]*)[`"']?\s+export\b/gi,
     /\bexport\s+[`"']([A-Za-z_$][\w$]*)[`"']/gi,
   ]) {
-    for (const match of text.matchAll(pattern)) names.add(match[1]!)
+    for (const match of text.matchAll(pattern)) {
+      const name = match[1]!
+      if (!/^(?:a|an|the|new|export)$/i.test(name)) names.add(name)
+    }
   }
   return [...names].sort()
 }
 
 /**
- * Split a criterion that states a behavior and a separate preservation
- * sentence. A match inside a behavior sentence is not split: the whole
- * requirement stays mandatory (fail closed) rather than being weakened.
+ * Split a criterion that states a behavior and a separate, purely-preservation
+ * sentence. A clause embedded in a behavior sentence stays whole; the caller
+ * then keeps the entire requirement mandatory (fail closed) rather than
+ * demoting the behavior with it.
  */
 export interface PublicApiPreservationSplit {
   behavior: string | null
@@ -164,13 +185,24 @@ export function splitPublicApiPreservationStatement(
     .split(/(?<=[.!?])\s+/)
     .map(sentence => sentence.trim())
     .filter(sentence => sentence.length > 0)
-  const matching = sentences.filter(sentence => isPublicApiPreservationStatement(sentence))
-  if (matching.length !== 1) return null
-  const preservation = matching[0]!
-  const behavior = sentences.filter(sentence => sentence !== preservation).join(' ').trim()
-  if (behavior.length === 0) return { behavior: null, preservation }
+  const matched = sentences.map(sentence => preservationMatch(sentence))
+  const indexes = matched.flatMap((match, index) => match ? [index] : [])
+  if (indexes.length !== 1) return null
+  const index = indexes[0]!
+  const sentence = sentences[index]!
+  const match = matched[index]!
+  // The matching sentence must consist only of the preservation clause. Text
+  // before or after it means the behavior and constraint share a sentence,
+  // which cannot be separated safely.
+  const remainder = `${sentence.slice(0, match.start)} ${sentence.slice(match.end)}`
+    .replace(/[\s,;:!?]+/g, ' ')
+    .replace(/\b(?:and|but|while|yet|also|then)\b/gi, ' ')
+    .trim()
+  if (/[A-Za-z0-9]/.test(remainder)) return null
+  const behavior = sentences.filter((_, position) => position !== index).join(' ').trim()
+  if (behavior.length === 0) return { behavior: null, preservation: sentence }
   if (!/[A-Za-z]/.test(behavior)) return null
-  return { behavior, preservation }
+  return { behavior, preservation: sentence }
 }
 
 export function publicApiFreezeRef(
@@ -189,6 +221,11 @@ interface FrozenPublicApi {
   paths: string[]
   mode: PublicApiPreservationMode
   files: Record<string, string[]> | null
+  corrupt?: boolean
+}
+
+function unreadableFreeze(): FrozenPublicApi {
+  return { digest: null, paths: [], mode: 'exact', files: null, corrupt: true }
 }
 
 function frozenPublicApiSurface(records: readonly TaskContractProvenanceRecord[]): FrozenPublicApi | null {
@@ -196,34 +233,34 @@ function frozenPublicApiSurface(records: readonly TaskContractProvenanceRecord[]
   if (v2) {
     const payload = v2.ref.slice(PUBLIC_API_FREEZE_REF_PREFIX_V2.length)
     const separator = payload.indexOf(':')
-    if (separator <= 0) return null
+    if (separator <= 0) return unreadableFreeze()
     try {
       const decoded: unknown = JSON.parse(Buffer.from(payload.slice(separator + 1), 'base64url').toString('utf8'))
-      if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) return null
+      if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) return unreadableFreeze()
       const record = decoded as { mode?: unknown; files?: unknown }
-      if (record.mode !== 'exact' && record.mode !== 'compatible') return null
-      if (record.files === null || typeof record.files !== 'object' || Array.isArray(record.files)) return null
+      if (record.mode !== 'exact' && record.mode !== 'compatible') return unreadableFreeze()
+      if (record.files === null || typeof record.files !== 'object' || Array.isArray(record.files)) return unreadableFreeze()
       const files: Record<string, string[]> = {}
       for (const [path, names] of Object.entries(record.files as Record<string, unknown>)) {
-        if (!Array.isArray(names) || !names.every(name => typeof name === 'string')) return null
+        if (!Array.isArray(names) || !names.every(name => typeof name === 'string')) return unreadableFreeze()
         files[path] = [...names]
       }
       return { digest: payload.slice(0, separator), paths: Object.keys(files), mode: record.mode, files }
     } catch {
-      return null
+      return unreadableFreeze()
     }
   }
   const record = records.find(item => item.ref.startsWith(PUBLIC_API_FREEZE_REF_PREFIX))
   if (!record) return null
   const payload = record.ref.slice(PUBLIC_API_FREEZE_REF_PREFIX.length)
   const separator = payload.indexOf(':')
-  if (separator <= 0) return null
+  if (separator <= 0) return unreadableFreeze()
   try {
     const paths = JSON.parse(Buffer.from(payload.slice(separator + 1), 'base64url').toString('utf8'))
-    if (!Array.isArray(paths) || !paths.every(path => typeof path === 'string')) return null
+    if (!Array.isArray(paths) || !paths.every(path => typeof path === 'string')) return unreadableFreeze()
     return { digest: payload.slice(0, separator), paths, mode: 'exact', files: null }
   } catch {
-    return null
+    return unreadableFreeze()
   }
 }
 
@@ -316,8 +353,7 @@ export function publicApiPreservationViolation(input: {
 }): string | null {
   const frozen = frozenPublicApiSurface(input.records)
   if (!frozen) return null
-  const current = digestForPaths(input.projectRoot, frozen.paths)
-  if (!current) return 'public API preservation could not inspect the candidate tree'
+  if (frozen.corrupt) return 'public API preservation record is unreadable'
   if (frozen.files) {
     const requested = new Set(input.requestedExports ?? [])
     const root = (() => { try { return realpathSync.native(input.projectRoot) } catch { return null } })()
@@ -337,6 +373,8 @@ export function publicApiPreservationViolation(input: {
     }
     return null
   }
+  const current = digestForPaths(input.projectRoot, frozen.paths)
+  if (!current) return 'public API preservation could not inspect the candidate tree'
   if (current === frozen.digest) return null
   return 'public API surface changed despite the stated preservation constraint'
 }

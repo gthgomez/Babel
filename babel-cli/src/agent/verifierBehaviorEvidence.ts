@@ -246,6 +246,7 @@ function insideSwallowingTry(code: string, index: number): boolean {
     const body = code.slice(cursor + 1, catchEnd)
     const propagates = /\bthrow\b/.test(body) ||
       /\bassert\s*\.\s*fail\s*\(/.test(body) ||
+      /\bassert\s*\.\s*ok\s*\(\s*false\b/.test(body) ||
       /\bfail\s*\(/.test(body)
     if (!propagates) return true
   }

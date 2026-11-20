@@ -211,7 +211,7 @@ export async function runCase(spec) {
     writeTree(root, spec.files)
     initGitFixture(root)
     const runId = `reliability-${spec.id}-${Math.random().toString(36).slice(2, 8)}`
-    const terminal = await withCaseEnvironmentAsync(runsRoot, async () => {
+    const result = await withCaseEnvironmentAsync(runsRoot, async () => {
       const engine = new ChatEngine({
         task: spec.task,
         projectRoot: root,
@@ -222,11 +222,16 @@ export async function runCase(spec) {
       })
       installScriptedRunner(engine, spec.script)
       for await (const event of engine.submitMessageStream(spec.task)) events.push(event)
-      return terminalFromEvents(events)
+      const terminal = terminalFromEvents(events)
+      // Read the durable log before BABEL_RUNS_DIR is restored: the path
+      // resolver reads the environment at call time.
+      const loaded = inspectSessionEventLogFromDir(chatSessionDir(runId), runId)
+      const sessionEvents = loaded.kind === 'valid' ? loaded.log.events : []
+      const durableDecision = [...sessionEvents].reverse().find(event => event.kind === 'completion_decision')
+      return { terminal, durableDecision, sessionEventCount: sessionEvents.length }
     })
-    const loaded = inspectSessionEventLogFromDir(chatSessionDir(runId), runId)
-    const sessionEvents = loaded.kind === 'valid' ? loaded.log.events : []
-    const durableDecision = [...sessionEvents].reverse().find(event => event.kind === 'completion_decision')
+    const terminal = result.terminal
+    const durableDecision = result.durableDecision
     const mutated = changedPaths(root)
     const finalFiles = {}
     for (const relative of Object.keys(spec.files)) {
@@ -253,6 +258,7 @@ export async function runCase(spec) {
       durable_outcome: durableDecision?.final_outcome,
       durable_allowed: durableDecision?.allowed,
       durable_reason: durableDecision?.reason,
+      durable_session_events: result.sessionEventCount,
       changed_paths: mutated,
       final_files: finalFiles,
       oracle: oracleStatus,

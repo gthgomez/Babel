@@ -1157,7 +1157,7 @@ test('engine-adjudicated no-change requires an edit request, not an informationa
   explainInput.snapshot.outcome.readOnly = true
   explainInput.snapshot.outcome.hasMutation = false
   explainInput.snapshot.context.acceptedOperation = 'READ_ONLY'
-  explainInput.snapshot.context.options.task = 'Explain this file without changing it.'
+  explainInput.snapshot.context.options.task = 'Explain how the update flow works without editing the repository.'
   explainInput.snapshot.evidence.observability.toolCallLog = [refusedWrite]
   decide(explainInput)
   const explainEvent = completeChatStream(explainInput, 'The file is a fixture and needs no change.')

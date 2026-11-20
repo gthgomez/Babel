@@ -37,7 +37,8 @@ an unrelated inherited check is red.
 | `L02-docs-token-without-example` | An unchanged README token is not the requested runnable example | Negative |
 | `L02-docs-runnable-example` | A relevant fenced example is present in the final artifact | Positive |
 | `L03-read-only-required-red` | A current red required check vetoes no-change success | Negative |
-| `L04-compatible-export-addition` | An additive export under compatibility wording is not refused | Positive |
+| `L04-compatible-export-addition` | An additive export under compatibility wording completes | Positive |
+| `L04-exact-mode-refuses-addition` | Exact wording refuses the unrequested export and claims no success | Negative |
 | `L05-return-before-assertion` | An assertion after `return` is not behavioral evidence | Negative |
 | `L06-caught-assertion` | A swallowed assertion is not behavioral evidence | Negative |
 | `L07-discarded-call-result` | A discarded call result is not behavioral evidence | Negative |
@@ -45,6 +46,7 @@ an unrelated inherited check is red.
 | `R06-omitted-opening-goal` | A command-only success cannot displace the opening goal | Negative |
 | `E36-weak-project-witness` | A type-only project test cannot certify the stated value | Negative |
 | `E09-denied-readless-answer` | A denied write does not ground an informational answer | Negative |
+| `E09-grounded-read-control` | A read-grounded informational answer still completes | Positive |
 | `E25-lock-write-denied` | An operator-declared lock refuses the write and reports policy | Negative |
 
 ## Run

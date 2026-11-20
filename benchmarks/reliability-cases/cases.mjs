@@ -139,6 +139,12 @@ const L04_ORACLE = [
   'if (doubled !== 2) process.exit(7)',
 ].join('\n')
 
+const EXACT_SURFACE_ORACLE = [
+  "import * as surface from './src/value.mjs'",
+  'if (surface.value !== 1) process.exit(7)',
+  "if ('doubled' in surface) process.exit(8)",
+].join('\n')
+
 const R06_ORACLE = [
   "import { exportRecords } from './parser.mjs'",
   'if (exportRecords([1, 2, 3]).length !== 3) process.exit(7)',
@@ -379,14 +385,61 @@ export const CASES = [
       ],
     ],
     oracle: { code: L04_ORACLE },
-    // The additive export must not be refused by the preservation guard. The
-    // engine may still report an honest partial result because no frozen
-    // witness observes `doubled`.
+    // Compatibility wording permits the additive export; a supported
+    // completion requires that the guard does not refuse it.
     expected: {
       behavior: 'pass',
-      mayClaimSuccess: 'either',
+      requireCompletion: true,
       reasonMustNotInclude: ['public API surface changed', 'public API export', 'public API member'],
     },
+  },
+  {
+    id: 'L04-exact-mode-refuses-addition',
+    task: [
+      'Keep src/value.mjs exporting value 1. Do not change public APIs.',
+      'Requirements:',
+      '- `npm test` must pass.',
+    ].join('\n'),
+    files: {
+      'package.json': PACKAGE_TEST_VALUE,
+      'src/value.mjs': VALUE_MODULE,
+      'test/value.test.mjs': [
+        "import test from 'node:test'",
+        "import assert from 'node:assert/strict'",
+        "import { value } from '../src/value.mjs'",
+        '',
+        "test('value', () => {",
+        '  assert.equal(value, 1)',
+        '})',
+        '',
+      ].join('\n'),
+    },
+    script: [
+      [
+        { type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src/value.mjs' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'write-1', name: 'str_replace', input: {
+          file_path: 'src/value.mjs',
+          old_str: 'export const value = 1',
+          new_str: 'export const value = 1\nexport const doubled = value * 2',
+        } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'tool_use', id: 'verify-1', name: 'run_command', input: { command: 'npm test' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'Added the doubled export; npm test passed.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ],
+    oracle: { code: EXACT_SURFACE_ORACLE },
+    // Exact wording also blocks the edit before it lands; the invariant is that
+    // the unrequested export never appears and no success is claimed over it.
+    expected: { behavior: 'pass', requireNoEdits: true },
   },
   {
     id: 'L05-return-before-assertion',
@@ -442,7 +495,7 @@ export const CASES = [
       claim: 'Fixed parser.js so parseSum(2, 3) returns 5; npm test passed.',
     }),
     oracle: { code: PARSER_ORACLE },
-    expected: { behavior: 'pass', mayClaimSuccess: true },
+    expected: { behavior: 'pass', requireCompletion: true },
   },
   {
     id: 'R06-omitted-opening-goal',
@@ -513,12 +566,35 @@ export const CASES = [
         { type: 'done', finishReason: 'stop' },
       ],
     ],
-    oracle: { code: VALUE_ORACLE },
-    gradeBehavior: ({ terminal }) => ({
-      status: /\b42\b/.test(terminal.answer) ? 'fail' : 'ungraded',
-      detail: 'the answer asserts an export value the run never observed',
+    gradeBehavior: () => ({
+      status: 'fail',
+      detail: 'informational answer with no successful source read',
     }),
     expected: { behavior: 'fail', mayClaimSuccess: false },
+  },
+  {
+    id: 'E09-grounded-read-control',
+    task: 'Explain what src/value.mjs exports without editing the repository.',
+    files: {
+      'package.json': PACKAGE_TEST_VALUE,
+      'src/value.mjs': VALUE_MODULE,
+      'test/value.test.mjs': WEAK_VALUE_TEST,
+    },
+    script: [
+      [
+        { type: 'tool_use', id: 'read-1', name: 'read_file', input: { path: 'src/value.mjs' } },
+        { type: 'done', finishReason: 'tool_calls' },
+      ],
+      [
+        { type: 'text_delta', text: 'src/value.mjs exports the constant value with the number 1.' },
+        { type: 'done', finishReason: 'stop' },
+      ],
+    ],
+    gradeBehavior: ({ terminal }) => ({
+      status: /\bvalue\b/.test(terminal.answer) && /\b1\b/.test(terminal.answer) ? 'pass' : 'fail',
+      detail: 'a grounded answer names the observed export',
+    }),
+    expected: { behavior: 'pass', requireSuccessClass: true },
   },
 ]
 
@@ -527,6 +603,9 @@ export function gradeCase(candidate, run) {
   const problems = []
   if (!run.exercised) {
     return { status: 'ungraded', problems: [`not exercised: ${run.run_error ?? 'unknown'}`] }
+  }
+  if (!run.durable_session_events) {
+    return { status: 'ungraded', problems: ['durable session log missing'] }
   }
   if (run.behavior.status !== expected.behavior) {
     problems.push(`behavior ${run.behavior.status} != expected ${expected.behavior}`)
@@ -545,6 +624,9 @@ export function gradeCase(candidate, run) {
   }
   if (expected.requireCompletion === true && outcome !== 'VERIFIED_COMPLETE') {
     problems.push(`expected VERIFIED_COMPLETE, observed ${String(outcome)}`)
+  }
+  if (expected.requireSuccessClass === true && !successClass) {
+    problems.push(`expected a success class, observed ${String(outcome)}`)
   }
   if (expected.reasonMustNotInclude) {
     const evidence = `${run.terminal.answer ?? ''}\n${run.durable_reason ?? ''}`

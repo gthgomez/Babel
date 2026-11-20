@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { parseSweStringList } from './agentBenchmarkHarness.js';
 import { type CampaignPhase, type SwebenchProInstanceRow } from './swebenchProCampaign.js';
 
-/** How campaign `status=pass` is decided (default gold for continuity). */
+/** How campaign `status=pass` is decided (default ftp: behavioral result primary). */
 export type SweProPassMode = 'gold' | 'ftp' | 'both';
 
 /** W1 D: host fail_to_pass outcome class (not just ok/false). */

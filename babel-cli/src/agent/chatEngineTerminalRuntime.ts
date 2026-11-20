@@ -563,8 +563,16 @@ export function normalizeInspectedNoChange(
  * answer, which a denied write does not provide.
  */
 function taskRequestsEdit(task: string): boolean {
-  return /\b(?:fix|repair|change|update|implement|make|ensure|add|remove|delete|create|refactor|migrate|upgrade|replace|rename|apply|extend|adjust|write|edit|modify)\b/i.test(
-    stripFencedCodeBodies(task),
+  const text = stripFencedCodeBodies(task)
+  // Only the part before an edit-denial clause can request an edit. An
+  // incidental edit verb later in an explanation ("how the update flow works")
+  // does not make the task an edit request.
+  const denial = text.search(
+    /\b(?:without|do\s+not|don'?t|must\s+not|never|no)\b[^.\n]{0,40}\b(?:edit|editing|modify|modifying|change|changing|write|writing|touch|touching)\b/i,
+  )
+  const scope = denial > 0 ? text.slice(0, denial) : text
+  return /(?:^|[.!?;\n]\s*)(?:please\s+)?(?:fix|repair|change|update|implement|make|ensure|add|remove|delete|create|refactor|migrate|upgrade|replace|rename|apply|extend|adjust|write|edit|modify)\b/i.test(
+    scope,
   )
 }
 

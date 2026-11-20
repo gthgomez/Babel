@@ -11,6 +11,7 @@ import {loadThreadEventLogFromDir,type ThreadEvent,type ThreadEventLog} from './
 import {assertConversationRestoreScope} from './chatExecutionScope.js';
 import type { LiveSessionV1 } from './liveSession.js';
 import {
+  DEFAULT_PROTECTED_PATHS,
   resolveLiveSessionAuthority,
   persistLiveSessionAuthority,
   loadLiveSessionAuthority,
@@ -105,7 +106,7 @@ export function prepareEngineInstructionAuthority(
     ...(input.options.instructionRoot ? { instructionRoot: input.options.instructionRoot } : {}),
     task: input.options.task,
     ...(input.options.lockedFiles && input.options.lockedFiles.length > 0
-      ? { protectedPaths: ['.env', '.git', ...input.options.lockedFiles] }
+      ? { protectedPaths: [...DEFAULT_PROTECTED_PATHS, ...input.options.lockedFiles] }
       : {}),
     ...(input.options.compiledChatStack ? { compiledChatStack: input.options.compiledChatStack } : {}),
     taskClass: input.taskClass,
