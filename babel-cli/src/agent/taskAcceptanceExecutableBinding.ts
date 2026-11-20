@@ -14,6 +14,7 @@ import { assertionEvidenceMatches, stripJsComments } from './verifierBehaviorEvi
 import { markAdvisoryDocsGoals } from './advisoryDocsGoal.js'
 import {
   isPublicApiPreservationStatement,
+  splitPublicApiPreservationStatement,
   PUBLIC_API_PRESERVATION_STRATEGY,
 } from './publicApiPreservation.js'
 import {
@@ -468,17 +469,21 @@ function relevanceSpec(description: string): RelevanceSpec | null {
       callPattern = new RegExp(`\\b${symbol}\\s*\\(`)
     }
   }
-  const resultVerb = /\b(?:returns?|equals?|is|becomes?|outputs?|produces?)\b/gi
+  const resultVerb = /\b(?:returns?|equals?|is|becomes?|outputs?|produces?|exports?)\b/gi
   const verbMatches = [...description.matchAll(resultVerb)]
   const lastVerb = verbMatches.at(-1)
   const resultTail = lastVerb && description.length - (lastVerb.index! + lastVerb[0].length) <= 200
-    ? description.slice(lastVerb.index! + lastVerb[0].length).trim().replace(/[.;]+$/, '').trim()
+    ? description.slice(lastVerb.index! + lastVerb[0].length).split(';')[0]!.trim().replace(/[.;]+$/, '').trim()
     : undefined
   const assignmentTail = description.match(/=\s*([^.;\n]{1,120})/)?.[1]?.trim()
+  const normalizeFragment = (value: string): string => value
+    .replace(/^(?:the\s+)?(?:value|result|output|length|count|size|number)\s+(?=\S)/i, '')
+    .replace(/^[\`"']/, '')
+    .replace(/[\`"']$/, '')
   const fragment = resultTail
-    ? resultTail.replace(/^[\`\"']/, '').replace(/[\`\"']$/, '')
+    ? normalizeFragment(resultTail)
     : assignmentTail
-      ? assignmentTail.replace(/^[\`\"']/, '').replace(/[\`\"']$/, '')
+      ? normalizeFragment(assignmentTail)
       : null
   if (!targetPaths.length && !callPattern) return null
   return { targetPaths, callPattern, fragment }
@@ -624,6 +629,37 @@ function relevantTrustedCommands(input: {
   })
 }
 
+/**
+ * An inferred sibling criterion may inherit an explicit verifier link only when
+ * that verifier's frozen inputs contain an assertion that observes the stated
+ * result. Unsupported descriptions (no complete target/result pair) keep the
+ * existing link semantics.
+ */
+function explicitVerifierObservesStatedResult(input: {
+  criterion: AcceptanceRequirementV1
+  command: string
+  projectRoot?: string
+  fs?: VerifierCommandInputOverrides
+}): boolean {
+  if (!input.projectRoot) return true
+  const spec = relevanceSpec(input.criterion.description)
+  if (!spec || spec.fragment === null) return true
+  const fs = input.fs ?? {}
+  const inputFiles = verifierCommandInputFiles(input.projectRoot, input.command, fs)
+    .filter(file => file !== 'package.json')
+  if (inputFiles.length === 0) return true
+  return inputFiles.some(file => {
+    const content = readVerifierCommandInput(input.projectRoot!, file, fs)
+    return content !== null && specMatchesContent({
+      projectRoot: input.projectRoot!,
+      inputFile: file,
+      content,
+      spec,
+      fs,
+    })
+  })
+}
+
 function bindRelevanceWitness(
   criterion: AcceptanceRequirementV1,
   command: string,
@@ -764,6 +800,12 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
           normalizedCriterionText(criterion.description) === behaviorKey
       })
       for (const criterion of matchingCriteria) {
+        if (criterion.id !== designated.criterionId && !explicitVerifierObservesStatedResult({
+          criterion,
+          command,
+          ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
+          ...(input.relevanceFs ? { fs: input.relevanceFs } : {}),
+        })) continue
         const bound = bindExplicitCriterionLink(
           criterion,
           command,
@@ -787,15 +829,53 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     }
   }
 
+  // A preservation sentence is enforced by the frozen export surface at
+  // completion. Split it before witness binding so it cannot pollute the
+  // behavioral goal's observable result. Compound text that cannot be split
+  // cleanly stays required (fail closed) rather than being weakened.
+  let explicitCriteria = explicitBound
+  if (input.projectRoot && explicitBound.some(criterion => criterion.required &&
+    isPublicApiPreservationStatement(criterion.description))) {
+    const split: AcceptanceRequirementV1[] = []
+    const ids = new Set(explicitBound.map(criterion => criterion.id))
+    for (const criterion of explicitBound) {
+      if (!criterion.required || !isPublicApiPreservationStatement(criterion.description)) {
+        split.push(criterion)
+        continue
+      }
+      const parts = splitPublicApiPreservationStatement(criterion.description)
+      if (!parts) {
+        split.push(criterion)
+        continue
+      }
+      if (!parts.behavior) {
+        split.push({ ...criterion, required: false, verification_strategy: PUBLIC_API_PRESERVATION_STRATEGY })
+        continue
+      }
+      split.push({ ...criterion, description: parts.behavior })
+      const derivedId = `${criterion.id}:api-preservation`
+      if (!ids.has(derivedId)) {
+        ids.add(derivedId)
+        split.push({
+          ...criterion,
+          id: derivedId,
+          description: parts.preservation,
+          required: false,
+          verification_strategy: PUBLIC_API_PRESERVATION_STRATEGY,
+        })
+      }
+    }
+    explicitCriteria = split
+  }
   // Relevance pass: an inferred behavioral goal may bind a trusted verifier
   // only when its frozen input actually exercises the goal's named target and
   // observable call. A live project root is required; replay/amendment callers
   // omit it and stay deterministic from recorded contract data.
-  let relevanceBound = explicitBound
+  let relevanceBound = explicitCriteria
   if (input.projectRoot && input.meaning.interpretation_version >= 3) {
     const projectRoot = input.projectRoot
     const fs = input.relevanceFs ?? {}
-    relevanceBound = explicitBound.map((criterion) => {
+    relevanceBound = explicitCriteria.map((criterion) => {
       const matches = relevantTrustedCommands({ criterion, trusted, projectRoot, fs })
       if (matches.length !== 1) return criterion
       const command = matches[0]!
@@ -827,7 +907,7 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   let criteria = relevanceBound
   if (witnessEligible) {
     const witnessed = relevanceBound.map((criterion) =>
-      bindDesignatedWitnessToCriterion(criterion, input.meaning.sources, explicitBound),
+      bindDesignatedWitnessToCriterion(criterion, input.meaning.sources, explicitCriteria),
     )
     criteria = relevanceBound.map((criterion, index) => witnessed[index] ?? criterion)
     for (const [index, bound] of witnessed.entries()) {
@@ -857,15 +937,8 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     }
   }
 
-  // The preservation sentence is enforced by the frozen export surface at
-  // completion; it must not also become an unsatisfiable prose requirement.
-  if (input.projectRoot && criteria.some(criterion => criterion.required &&
-    isPublicApiPreservationStatement(criterion.description))) {
-    criteria = criteria.map(criterion => criterion.required &&
-      isPublicApiPreservationStatement(criterion.description)
-      ? { ...criterion, required: false, verification_strategy: PUBLIC_API_PRESERVATION_STRATEGY }
-      : criterion)
-  }
+  // The preservation sentence was split before witness binding; the derived
+  // invariant is non-required and enforced by the frozen export surface.
 
   if (!bindingProvenance.length) return input.meaning
   return {

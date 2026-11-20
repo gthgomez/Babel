@@ -2,12 +2,12 @@
  * Non-executable documentation goals.
  *
  * A task may legitimately ask for prose ("update README.md so it shows
- * parseSum usage"). That goal cannot be satisfied by a test receipt, but it
- * must not block every other completed obligation forever either. Admission
- * marks such a goal `required: false` and records it in provenance; completion
- * then mechanically checks that the named file exists on the candidate
- * revision and contains a distinctive token from the goal. Absence is still a
- * failure - the goal is never silently dropped.
+ * parseSum usage"). A lexical token in an unrelated or unchanged file is not
+ * evidence of the requested artifact, so the goal stays mandatory: partial
+ * source delivery is preserved, but completion cannot be certified until a
+ * host-supported observation exists. The mechanical check below never
+ * certifies by itself; it only distinguishes a missing/irrelevant target from
+ * a present one.
  */
 import { readFileSync, realpathSync } from 'node:fs'
 import { join, posix } from 'node:path'
@@ -80,8 +80,9 @@ function contained(projectRoot: string, relativePath: string): string | null {
 }
 
 /**
- * Downgrade only a documentation goal that names one existing-or-creatable file
- * and at least one distinctive token. Unparseable goals stay required.
+ * Record the documentation obligation and its mechanical target. The criterion
+ * stays required: a matching token is a diagnostic, not proof of a requested
+ * runnable example. Admission only adds provenance here.
  */
 export function markAdvisoryDocsGoals(input: {
   criteria: readonly AcceptanceRequirementV1[]
@@ -105,7 +106,7 @@ export function markAdvisoryDocsGoals(input: {
       path: lexicalPath,
       tokens: goal.tokens,
     }).slice(0, 32)}`)
-    return { ...criterion, required: false, verification_strategy: ADVISORY_DOC_STRATEGY }
+    return { ...criterion, verification_strategy: ADVISORY_DOC_STRATEGY }
   })
   return { criteria: changed ? criteria : [...input.criteria], refs }
 }
@@ -124,7 +125,7 @@ export function advisoryDocsViolations(input: {
   })
   const violations: string[] = []
   for (const criterion of input.acceptance) {
-    if (criterion.required || criterion.verification_strategy !== ADVISORY_DOC_STRATEGY) continue
+    if (criterion.verification_strategy !== ADVISORY_DOC_STRATEGY) continue
     const goal = advisoryDocsGoal(criterion.description)
     if (!goal) {
       violations.push(`${criterion.id}: advisory documentation goal has no checkable target`)
@@ -151,9 +152,7 @@ export function advisoryDocsViolations(input: {
   return violations
 }
 
-/** True when the acceptance contains a recorded advisory documentation goal. */
+/** True when the acceptance contains a mechanically checked documentation goal. */
 export function hasAdvisoryDocsGoal(acceptance: readonly AcceptanceRequirementV1[]): boolean {
-  return acceptance.some(criterion =>
-    !criterion.required && criterion.verification_strategy === ADVISORY_DOC_STRATEGY,
-  )
+  return acceptance.some(criterion => criterion.verification_strategy === ADVISORY_DOC_STRATEGY)
 }

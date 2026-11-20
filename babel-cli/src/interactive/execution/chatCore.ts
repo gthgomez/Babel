@@ -70,8 +70,6 @@ import { loadProjectSessionIdentity } from '../identity.js';
 import { isChatStreamingEnabled, resolveChatEngineLimits } from '../../config/chatEngineLimits.js';
 import {
   detectWorkspaceDepPlan,
-  formatWorkspaceDepUnreadyNote,
-  probePythonImport,
 } from '../../services/workspaceDepPreflight.js';
 import {
   analyzeTaskShape,
@@ -307,24 +305,17 @@ function collectPackageJsonCommands(targetRoot: string): string | undefined {
 }
 
 /**
- * C2 product path: probe-only workspace dep readiness (no pip/npm install here).
- * When the project package is not importable, tell the model to avoid thrash.
+ * Static workspace dependency note. Preparation must not import project code:
+ * a Python probe executes `__init__` and arbitrary package code on the host
+ * before admission. File-manifest detection is data-only, so the note reports
+ * the detected kind and defers readiness to the project's own check.
  */
-function collectWorkspaceDepReadinessNote(targetRoot: string): string | undefined {
+export function collectWorkspaceDepReadinessNote(targetRoot: string): string | undefined {
   try {
     const plan = detectWorkspaceDepPlan(targetRoot);
     if (plan.kind === 'none' || plan.kind === 'node_npm') return undefined;
     if (!plan.packageHint) return undefined;
-    const probe = probePythonImport({
-      packageName: plan.packageHint,
-      cwd: targetRoot,
-      timeoutMs: 8_000,
-    });
-    if (probe.ok) return undefined;
-    return formatWorkspaceDepUnreadyNote({
-      packageHint: plan.packageHint,
-      probeDetail: probe.detail,
-    });
+    return `Python workspace detected (${plan.kind}). Dependency probing is disabled during preparation so project code is not executed; verify readiness with the project's own test command.`;
   } catch {
     return undefined;
   }
@@ -703,6 +694,8 @@ export interface RunChatEngineOnceInput {
   modelTier?: string;
   allowExpensive?: boolean;
   appendSystemPrompt?: string;
+  /** Operator-declared paths the engine must never write. */
+  lockedFiles?: readonly string[];
   preflightContext?: string;
   engine?: ChatEngine;
   engineFactory?: ChatEngineFactory;
@@ -799,6 +792,7 @@ async function runChatEngineOnceScoped(input: RunChatEngineOnceInput): Promise<C
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.modelTier !== undefined ? { modelTier: input.modelTier } : {}),
       ...(input.allowExpensive === true ? { allowExpensive: true } : {}),
+      ...(input.lockedFiles && input.lockedFiles.length > 0 ? { lockedFiles: input.lockedFiles } : {}),
       maxTurns: limits.maxTurns,
       maxConversationMessages: limits.maxConversationMessages,
       maxEstimatedTokens: limits.maxEstimatedTokens,
@@ -1701,6 +1695,8 @@ export async function runCliChatTask(input: {
   modelTier?: string;
   allowExpensive?: boolean;
   showModelPolicy?: boolean;
+  /** Operator-declared paths the engine must never write. */
+  lockedFiles?: readonly string[];
   outputFormat?: 'text' | 'json' | 'stream-json';
   onStreamEvent?: (event: ChatStreamEvent) => void;
   engineFactory?: ChatEngineFactory;
@@ -1758,6 +1754,7 @@ export async function runCliChatTask(input: {
         ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
         runtimeMode,
+        ...(input.lockedFiles && input.lockedFiles.length > 0 ? { lockedFiles: input.lockedFiles } : {}),
         ...(executionPolicy ? { executionPolicy } : {}),
       }, {
         ...(input.sessionLease ? {lease:input.sessionLease} : {}),
@@ -1776,6 +1773,7 @@ export async function runCliChatTask(input: {
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...(input.modelTier !== undefined ? { modelTier: input.modelTier } : {}),
     ...(input.allowExpensive === true ? { allowExpensive: true } : {}),
+    ...(input.lockedFiles && input.lockedFiles.length > 0 ? { lockedFiles: input.lockedFiles } : {}),
     convRenderer,
     ...(input.onStreamEvent ? { onStreamEvent: input.onStreamEvent } : {}),
     ...(resumedEngine ? { engine: resumedEngine } : {}),

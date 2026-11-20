@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { runLoggedTapChild } from './run_logged_tap_child.mjs'
 import { captureRequiredTapSelection } from './capture_required_tap_selection.mjs'
 import { requiredTapSuiteGate } from './required_tap_suite_gate.mjs'
+import { requiredTapTimeoutArgs } from './required_tap_timeout_args.mjs'
 
 export { requiredTapSuiteGate } from './required_tap_suite_gate.mjs'
 
@@ -21,6 +22,8 @@ if (!rawScript) {
   console.error(`Unsupported required TAP suite: ${suite}`)
   process.exit(2)
 }
+
+const timeoutArgs = requiredTapTimeoutArgs(process.argv.slice(3))
 
 const cliRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const artifactDir = resolve(cliRoot, 'artifacts', suite)
@@ -52,9 +55,9 @@ const result =
             signal: null,
           }
         }
-        return captureTap(process.execPath, [npmCli, 'run', '--silent', rawScript])
+        return captureTap(process.execPath, [npmCli, 'run', '--silent', rawScript, '--', ...timeoutArgs])
       })()
-    : await captureTap('npm', ['run', '--silent', rawScript])
+    : await captureTap('npm', ['run', '--silent', rawScript, '--', ...timeoutArgs])
 
 const gate = requiredTapSuiteGate(suite, result.stdout, {
   error: result.error,

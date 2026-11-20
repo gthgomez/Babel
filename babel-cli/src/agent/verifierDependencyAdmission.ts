@@ -12,7 +12,7 @@ import { initializeVerifierDependencyHashes } from './chatEngineVerifierSession.
 import { verifierCommandInputFiles } from './verifierCommandInputs.js';
 import type { AcceptanceRequirementV1, TaskContractV1 } from './taskContract.js';
 import { advisoryDocsViolations } from './advisoryDocsGoal.js';
-import { publicApiPreservationViolation } from './publicApiPreservation.js';
+import { publicApiPreservationViolation, requestedExportNames } from './publicApiPreservation.js';
 
 /** Commands frozen by executable acceptance criteria already admitted to the contract. */
 export function contractVerifierCommands(
@@ -90,7 +90,11 @@ export function contractPreservationErrors(
 ): string[] {
   if (!contract || !projectRoot) return [];
   const errors = advisoryDocsViolations({ acceptance: contract.acceptance, projectRoot });
-  const publicApi = publicApiPreservationViolation({ records: contract.provenance.records, projectRoot });
+  const publicApi = publicApiPreservationViolation({
+    records: contract.provenance.records,
+    projectRoot,
+    requestedExports: requestedExportNames(contract.user_request),
+  });
   if (publicApi) errors.push(publicApi);
   return errors;
 }

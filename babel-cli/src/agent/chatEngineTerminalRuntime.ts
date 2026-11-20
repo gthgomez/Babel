@@ -93,7 +93,7 @@ import {
   classifyChatTaskIntent,
   isConversationalTurnText,
 } from './chatEngineTaskIntent.js'
-import { hasExplicitEditDenial } from '../config/chatTaskClass.js'
+import { hasExplicitEditDenial, stripFencedCodeBodies } from '../config/chatTaskClass.js'
 import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
 import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
@@ -559,7 +559,15 @@ export function normalizeInspectedNoChange(
  * this turn. That combination is the engine-adjudicated no-change flow the
  * ordinary read-only admission contract pins (an ordinary prepared no-change
  * task whose native write proposal is denied completes NO_CHANGE_REQUIRED).
+ * An informational question is excluded: its deliverable is the grounded
+ * answer, which a denied write does not provide.
  */
+function taskRequestsEdit(task: string): boolean {
+  return /\b(?:fix|repair|change|update|implement|make|ensure|add|remove|delete|create|refactor|migrate|upgrade|replace|rename|apply|extend|adjust|write|edit|modify)\b/i.test(
+    stripFencedCodeBodies(task),
+  )
+}
+
 function engineAdjudicatedNoChangeAcceptance(
   snapshot: ChatTerminalSnapshot,
 ): boolean {
@@ -573,7 +581,8 @@ function engineAdjudicatedNoChangeAcceptance(
   )
   return (
     refusedMutation &&
-    hasExplicitEditDenial(snapshot.context.options.task)
+    hasExplicitEditDenial(snapshot.context.options.task) &&
+    taskRequestsEdit(snapshot.context.options.task)
   )
 }
 

@@ -29,6 +29,7 @@ import {
   computePublicApiSurface,
   hasPublicApiPreservationClause,
   publicApiFreezeRef,
+  publicApiPreservationMode,
 } from './publicApiPreservation.js';
 import { join } from 'node:path';
 import {
@@ -378,7 +379,9 @@ export function resolveLiveSessionAuthority(input: {
   const publicApiRecords = input.projectRoot && hasPublicApiPreservationClause(input.task)
     ? (() => {
         const surface = computePublicApiSurface(input.projectRoot!)
-        return surface ? [{ kind: 'derived_acceptance' as const, ref: publicApiFreezeRef(surface) }] : []
+        return surface ? [{ kind: 'derived_acceptance' as const, ref: publicApiFreezeRef(surface, {
+          mode: publicApiPreservationMode(input.task),
+        }) }] : []
       })()
     : [];
   const contract = freezeTaskContract(

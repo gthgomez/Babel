@@ -20,8 +20,16 @@ import { stripJsComments } from './verifierBehaviorEvidence.js'
 import { stripFencedCodeBodies } from '../config/chatTaskClass.js'
 
 export const PUBLIC_API_FREEZE_REF_PREFIX = 'babel:public-api-freeze:v1:'
+export const PUBLIC_API_FREEZE_REF_PREFIX_V2 = 'babel:public-api-freeze:v2:'
 export const PUBLIC_API_PRESERVATION_STRATEGY =
   'public API preservation constraint (enforced by the frozen export surface at completion)'
+
+/**
+ * `exact` forbids any surface change; `compatible` permits additive exports
+ * while still refusing removals, renames and signature-visible rewrites of the
+ * frozen list entries. Omission defaults to `exact` (fail closed).
+ */
+export type PublicApiPreservationMode = 'exact' | 'compatible'
 const SOURCE_EXTENSION = /\.(?:[cm]?[jt]sx?)$/i
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', 'coverage', 'runs', 'artifacts',
@@ -106,17 +114,105 @@ export function isPublicApiPreservationStatement(taskText: string): boolean {
     new RegExp(String.raw`\b(?:without|no)\s+(?:public\s+)?(?:api|interface)\s+(?:changes?|breaks?)`, 'i').test(taskText)
 }
 
-export function publicApiFreezeRef(surface: PublicApiSurface): string {
-  const paths = Object.keys(surface.files)
-  return `${PUBLIC_API_FREEZE_REF_PREFIX}${surface.digest}:${Buffer.from(JSON.stringify(paths), 'utf8').toString('base64url')}`
+/**
+ * Preservation semantics named by the task text. Exact wording ("do not
+ * change", "keep ... unchanged") forbids additions; compatibility wording
+ * ("do not break", "backward compatible") permits additive exports. Any
+ * unclassified text defaults to exact.
+ */
+export function publicApiPreservationMode(rawTaskText: string): PublicApiPreservationMode {
+  const text = stripFencedCodeBodies(rawTaskText)
+  const surface = String.raw`(?:public|exported)\s+(?:api|apis|interface|interfaces|surface|contract|contracts|exports?)`
+  const exact = new RegExp(String.raw`\b(?:do\s+not|don'?t|never|must\s+not|should\s+not)\s+(?:change|modify|alter|touch|remove|rename)\b[^.\n;]{0,80}\b${surface}`, 'i').test(text) ||
+    new RegExp(String.raw`\b(?:keep|preserve|maintain)\b[^.\n;]{0,40}\b${surface}\b[^.\n;]{0,30}\b(?:unchanged|stable|intact)`, 'i').test(text) ||
+    new RegExp(String.raw`\b(?:without|no)\s+(?:public\s+)?(?:api|interface)\s+changes?\b`, 'i').test(text)
+  if (exact) return 'exact'
+  const compatible = /\b(?:backward|backwards)[-\s]?compatible\b/i.test(text) ||
+    new RegExp(String.raw`\b(?:do\s+not|don'?t|never|must\s+not|should\s+not)\s+break\b[^.\n;]{0,80}\b${surface}`, 'i').test(text) ||
+    new RegExp(String.raw`\b(?:keep|preserve|maintain)\b[^.\n;]{0,40}\b${surface}\b[^.\n;]{0,30}\bcompatible`, 'i').test(text)
+  return compatible ? 'compatible' : 'exact'
+}
+
+/** Exports the task explicitly asks to add; only these may extend an exact surface. */
+export function requestedExportNames(rawTaskText: string): string[] {
+  const text = stripFencedCodeBodies(rawTaskText)
+  const names = new Set<string>()
+  for (const pattern of [
+    /\badd\s+(?:an?\s+)?[`"']?([A-Za-z_$][\w$]*)[`"']?\s+export\b/gi,
+    /\badd\s+(?:an?\s+)?export\s+(?:named\s+|called\s+)?[`"']?([A-Za-z_$][\w$]*)[`"']?/gi,
+    /\bexport\s+[`"']([A-Za-z_$][\w$]*)[`"']/gi,
+  ]) {
+    for (const match of text.matchAll(pattern)) names.add(match[1]!)
+  }
+  return [...names].sort()
+}
+
+/**
+ * Split a criterion that states a behavior and a separate preservation
+ * sentence. A match inside a behavior sentence is not split: the whole
+ * requirement stays mandatory (fail closed) rather than being weakened.
+ */
+export interface PublicApiPreservationSplit {
+  behavior: string | null
+  preservation: string
+}
+
+export function splitPublicApiPreservationStatement(
+  taskText: string,
+): PublicApiPreservationSplit | null {
+  const sentences = taskText
+    .split(/(?<=[.!?])\s+/)
+    .map(sentence => sentence.trim())
+    .filter(sentence => sentence.length > 0)
+  const matching = sentences.filter(sentence => isPublicApiPreservationStatement(sentence))
+  if (matching.length !== 1) return null
+  const preservation = matching[0]!
+  const behavior = sentences.filter(sentence => sentence !== preservation).join(' ').trim()
+  if (behavior.length === 0) return { behavior: null, preservation }
+  if (!/[A-Za-z]/.test(behavior)) return null
+  return { behavior, preservation }
+}
+
+export function publicApiFreezeRef(
+  surface: PublicApiSurface,
+  options: { mode?: PublicApiPreservationMode } = {},
+): string {
+  const payload = Buffer.from(JSON.stringify({
+    mode: options.mode ?? 'exact',
+    files: surface.files,
+  }), 'utf8').toString('base64url')
+  return `${PUBLIC_API_FREEZE_REF_PREFIX_V2}${surface.digest}:${payload}`
 }
 
 interface FrozenPublicApi {
-  digest: string
+  digest: string | null
   paths: string[]
+  mode: PublicApiPreservationMode
+  files: Record<string, string[]> | null
 }
 
 function frozenPublicApiSurface(records: readonly TaskContractProvenanceRecord[]): FrozenPublicApi | null {
+  const v2 = records.find(item => item.ref.startsWith(PUBLIC_API_FREEZE_REF_PREFIX_V2))
+  if (v2) {
+    const payload = v2.ref.slice(PUBLIC_API_FREEZE_REF_PREFIX_V2.length)
+    const separator = payload.indexOf(':')
+    if (separator <= 0) return null
+    try {
+      const decoded: unknown = JSON.parse(Buffer.from(payload.slice(separator + 1), 'base64url').toString('utf8'))
+      if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) return null
+      const record = decoded as { mode?: unknown; files?: unknown }
+      if (record.mode !== 'exact' && record.mode !== 'compatible') return null
+      if (record.files === null || typeof record.files !== 'object' || Array.isArray(record.files)) return null
+      const files: Record<string, string[]> = {}
+      for (const [path, names] of Object.entries(record.files as Record<string, unknown>)) {
+        if (!Array.isArray(names) || !names.every(name => typeof name === 'string')) return null
+        files[path] = [...names]
+      }
+      return { digest: payload.slice(0, separator), paths: Object.keys(files), mode: record.mode, files }
+    } catch {
+      return null
+    }
+  }
   const record = records.find(item => item.ref.startsWith(PUBLIC_API_FREEZE_REF_PREFIX))
   if (!record) return null
   const payload = record.ref.slice(PUBLIC_API_FREEZE_REF_PREFIX.length)
@@ -125,10 +221,73 @@ function frozenPublicApiSurface(records: readonly TaskContractProvenanceRecord[]
   try {
     const paths = JSON.parse(Buffer.from(payload.slice(separator + 1), 'base64url').toString('utf8'))
     if (!Array.isArray(paths) || !paths.every(path => typeof path === 'string')) return null
-    return { digest: payload.slice(0, separator), paths }
+    return { digest: payload.slice(0, separator), paths, mode: 'exact', files: null }
   } catch {
     return null
   }
+}
+
+function listMembers(entry: string): string[] | null {
+  if (entry.startsWith('list:')) {
+    return entry.slice('list:'.length)
+      .replace(/^\{|\}$/g, '')
+      .split(',')
+      .map(member => member.trim())
+      .filter(member => member.length > 0)
+  }
+  if (entry.startsWith('cjs-object:')) {
+    return entry.slice('cjs-object:'.length)
+      .split(',')
+      .map(member => member.split(':')[0]?.trim() ?? '')
+      .filter(member => member.length > 0)
+  }
+  return null
+}
+
+function exportedName(entry: string): string | null {
+  if (entry.startsWith('name:')) return entry.slice('name:'.length)
+  if (entry.startsWith('cjs:')) return entry.slice('cjs:'.length)
+  return null
+}
+
+/** Compare frozen names with current names under the recorded mode. */
+function surfaceViolation(
+  frozenNames: readonly string[],
+  currentNames: readonly string[],
+  mode: PublicApiPreservationMode,
+  requested: ReadonlySet<string>,
+): string | null {
+  const current = new Set(currentNames)
+  const frozen = new Set(frozenNames)
+  for (const entry of frozenNames) {
+    const members = listMembers(entry)
+    if (members) {
+      const currentMembers = new Set(currentNames.flatMap(candidate => listMembers(candidate) ?? []))
+      for (const member of members) {
+        if (!currentMembers.has(member)) return `public API surface changed: member ${member} was removed or renamed`
+      }
+      continue
+    }
+    if (!current.has(entry)) return `public API surface changed: export ${entry} was removed or renamed`
+  }
+  for (const entry of currentNames) {
+    if (frozen.has(entry)) continue
+    const members = listMembers(entry)
+    if (members) {
+      const frozenMembers = new Set(frozenNames.flatMap(candidate => listMembers(candidate) ?? []))
+      for (const member of members) {
+        if (frozenMembers.has(member)) continue
+        if (mode === 'compatible' || requested.has(member)) continue
+        return `public API surface changed: member ${member} was added under an exact preservation constraint`
+      }
+      continue
+    }
+    const name = exportedName(entry)
+    if (mode === 'compatible') continue
+    if (name && requested.has(name)) continue
+    return `public API surface changed: export ${entry} was added under an exact preservation constraint`
+  }
+  return null
 }
 
 /** Surface digest limited to the frozen paths; new files are not violations. */
@@ -146,17 +305,38 @@ function digestForPaths(projectRoot: string, paths: readonly string[]): string |
 }
 
 /**
- * Completion check: the export list of every frozen file must be unchanged.
- * The comparison is strict per frozen file; new files are ignored.
+ * Completion check: the frozen export surface must remain intact. Exact mode
+ * also refuses additions; compatibility mode permits additive exports but still
+ * refuses every removal, rename or changed export list entry.
  */
 export function publicApiPreservationViolation(input: {
   records: readonly TaskContractProvenanceRecord[]
   projectRoot: string
+  requestedExports?: readonly string[]
 }): string | null {
   const frozen = frozenPublicApiSurface(input.records)
   if (!frozen) return null
   const current = digestForPaths(input.projectRoot, frozen.paths)
   if (!current) return 'public API preservation could not inspect the candidate tree'
+  if (frozen.files) {
+    const requested = new Set(input.requestedExports ?? [])
+    const root = (() => { try { return realpathSync.native(input.projectRoot) } catch { return null } })()
+    if (!root) return 'public API preservation could not inspect the candidate tree'
+    for (const relative of frozen.paths) {
+      let content: string
+      try { content = readFileSync(join(root, relative), 'utf8') } catch {
+        return `public API preservation could not inspect ${relative}`
+      }
+      const violation = surfaceViolation(
+        frozen.files[relative] ?? [],
+        exportNames(content),
+        frozen.mode,
+        requested,
+      )
+      if (violation) return violation
+    }
+    return null
+  }
   if (current === frozen.digest) return null
   return 'public API surface changed despite the stated preservation constraint'
 }

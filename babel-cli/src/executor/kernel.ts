@@ -34,6 +34,7 @@ import {
   type BabelMode,
   type CompletionDecision,
   type ExecutorCompletionInput,
+  type ExecutorVerifierReceipt,
   type ModePolicy,
   modePolicyFor,
 } from "./contracts.js";
@@ -157,6 +158,32 @@ function requestToAgentAction(request: ToolCallRequest): AgentAction {
   }
 }
 
+function isCurrentRedReceipt(receipt: ExecutorVerifierReceipt | null | undefined): boolean {
+  return receipt != null && receipt.stale !== true &&
+    Number.isInteger(receipt.exitCode) && receipt.exitCode !== 0
+}
+
+function commandMatches(required: string, actual: string): boolean {
+  const normalize = (value: string): string => value.trim().replace(/\s+/g, ' ')
+  return normalize(required) === normalize(actual)
+}
+
+/**
+ * A required check that is currently red vetoes every success class, including
+ * a no-change conclusion. The model's own choice to run an unrelated optional
+ * command does not veto when a required-command set is declared.
+ */
+function knownRedRequiredVerifier(input: ExecutorCompletionInput): boolean {
+  const required = input.requiredVerifierCommands ?? []
+  const normalize = (value: string): string => value.trim().replace(/\s+/g, ' ')
+  const latest = new Map<string, ExecutorVerifierReceipt>()
+  for (const receipt of input.executedVerifierLedger ?? []) latest.set(normalize(receipt.command), receipt)
+  if (input.lastVerifierReceipt) latest.set(normalize(input.lastVerifierReceipt.command), input.lastVerifierReceipt)
+  const matchesRequired = (receipt: ExecutorVerifierReceipt): boolean =>
+    required.length === 0 || required.some(command => commandMatches(command, receipt.command))
+  return [...latest.values()].some(receipt => isCurrentRedReceipt(receipt) && matchesRequired(receipt))
+}
+
 function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
   const evidenceRefs = input.evidenceRefs ?? [];
   const finalRevision = input.finalRevision ?? undefined;
@@ -212,14 +239,18 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
   const noChangeRequested = input.requestedOutcome === 'NO_CHANGE_REQUIRED';
   const noChangeProofRequired = noChangeRequested && input.finalRevisionRequired !== false;
   const noChangeUnproven = noChangeProofRequired && finalRevision?.status !== 'verified';
+  // A current required red check vetoes no-change too: the task's own
+  // acceptance is not satisfied even though no bytes were edited.
+  const noChangeRedVeto = noChangeRequested && knownRedRequiredVerifier(input);
+  const noChangeRejected = noChangeUnproven || noChangeRedVeto;
   const verified = input.proof?.compliant === true && gate.allow && acceptance?.verified === true &&
-    !finalRevisionStale && !effectUnproven && !noChangeUnproven;
+    !finalRevisionStale && !effectUnproven && !noChangeRejected;
   const finalOutcome: TerminalOutcome =
     input.requestedOutcome === "VERIFIED_COMPLETE" && verified
       ? "VERIFIED_COMPLETE"
       : input.requestedOutcome === "VERIFIED_COMPLETE"
         ? "UNVERIFIED_PATCH"
-        : noChangeUnproven
+        : noChangeRejected
           ? "UNVERIFIED_PATCH"
           : input.requestedOutcome;
   const finalRevisionReason = noChangeUnproven
@@ -229,13 +260,15 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
   return {
     requestedOutcome: input.requestedOutcome,
     finalOutcome,
-    allowed: noChangeUnproven || finalRevisionStale
+    allowed: noChangeRejected || finalRevisionStale
       ? false
       : input.requestedOutcome !== "VERIFIED_COMPLETE" || verified,
     reason: verified
       ? "proof_carrying_completion_accepted"
       : effectUnproven
         ? finalRevision?.reason ?? 'effect_unproven:config_capable_git'
+      : noChangeRedVeto
+        ? "no_change_rejected:required_check_red"
       : noChangeUnproven || finalRevisionStale
         ? finalRevisionReason
         : input.requestedOutcome === "VERIFIED_COMPLETE"
