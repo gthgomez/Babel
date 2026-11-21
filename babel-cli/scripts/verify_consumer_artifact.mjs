@@ -163,7 +163,7 @@ function installArtifact(artifact) {
 const installed = join(prefix, 'node_modules', ...pkg.name.split('/'))
 const bin = join(installed, pkg.bin['babel-agent'])
 const cli = (args, options = {}) => command(process.execPath, [bin, ...args], { env: guardedEnv, ...options })
-const json = args => JSON.parse(cli(args, { codes: [0, 1] }).stdout)
+const json = (args, options = {}) => JSON.parse(cli(args, { codes: [0, 1], ...options }).stdout)
 function treeDigest(dir) {
   const entries = []
   function walk(path, base = '') {
@@ -336,6 +336,84 @@ try {
   writeFileSync(join(project, 'README.md'), 'Synthetic installed context, café 空\n')
   const context = json(['context', 'preview', '@file', 'README.md', '--json'])
   assert.match(JSON.stringify(context), /Synthetic installed context/)
+  // BL-14: installed status/recovery surfaces must bind to the newest durable
+  // turn. Seed real journals with a completed T1 and a newer T2 that either
+  // never settled or failed, then read them only through the installed binary.
+  const durableSession = await import(pathToFileURL(join(installed, 'dist/agent/sessionEvents.js')).href)
+  const durableThread = await import(pathToFileURL(join(installed, 'dist/agent/threadEventLog.js')).href)
+  const durableRuns = join(scratch, 'durable truth runs')
+  const durableTurnInput = task => ({
+    task, model: 'fixture-model', provider: 'fixture-provider',
+    projectRoot: project, policyPreset: 'workspace_write',
+  })
+  async function seedDurableTruthRun(name, secondOutcome) {
+    const runDir = join(durableRuns, name)
+    mkdirSync(runDir, { recursive: true })
+    const thread = durableThread.createThreadEventLog(`thread-${name}`)
+    const session = durableSession.createSessionEventLog(`session-${name}`)
+    const first = durableThread.startTurn(thread, durableTurnInput('first task'))
+    durableThread.endTurn(thread, first, 'VERIFIED_COMPLETE', 'completed')
+    durableSession.recordUserSubmitted(session, {
+      turn_id: first, task: 'first task', model: 'fixture-model',
+      provider: 'fixture-provider', projectRoot: project,
+    })
+    durableSession.recordTurnEnded(session, {
+      turn_id: first, outcome: 'VERIFIED_COMPLETE', status: 'completed',
+    })
+    const second = durableThread.startTurn(thread, durableTurnInput('second task'))
+    if (secondOutcome) durableThread.endTurn(thread, second, secondOutcome.outcome, secondOutcome.status)
+    durableSession.recordUserSubmitted(session, {
+      turn_id: second, task: 'second task', model: 'fixture-model',
+      provider: 'fixture-provider', projectRoot: project,
+    })
+    if (secondOutcome) {
+      durableSession.recordTurnEnded(session, {
+        turn_id: second, outcome: secondOutcome.outcome, status: secondOutcome.status,
+      })
+    }
+    durableSession.rewriteSessionEventLog(runDir, session)
+    await durableThread.persistThreadEventLog(runDir, thread)
+    // Older telemetry must not close the newer turn.
+    writeFileSync(join(runDir, '06_runtime_telemetry.json'),
+      JSON.stringify({ pipeline_mode: 'chat', final_outcome: 'COMPLETE' }) + '\n')
+    writeFileSync(join(durableRuns, '.latest.json'),
+      JSON.stringify({ run_dir: runDir, project: 'durable-fixture' }) + '\n')
+    return { runDir, second }
+  }
+  const truthEnv = { ...guardedEnv, BABEL_RUNS_DIR: durableRuns }
+  const unfinished = await seedDurableTruthRun('unfinished-turn')
+  const latestTruth = json(['session', 'latest', '--json'], { env: truthEnv })
+  assert.equal(latestTruth.session.status, 'INTERRUPTED', JSON.stringify(latestTruth))
+  assert.equal(latestTruth.session.terminal_outcome, null)
+  assert.equal(latestTruth.session.exit_code, null)
+  assert.notEqual(latestTruth.session.user_status, 'success')
+  const continueTruth = json(['continue', 'latest', '--inspect-only', '--json'],
+    { env: truthEnv, codes: [0, 1] })
+  assert.equal(continueTruth.recovery.terminal_outcome, null, JSON.stringify(continueTruth))
+  assert.equal(continueTruth.recovery.exit_code, null)
+  assert.notEqual(continueTruth.recovery.user_status, 'success')
+  assert.match(continueTruth.recovery.reason, /interrupted|no terminal record/i)
+  const unfinishedOutcome = cli(['inspect', 'outcome', unfinished.runDir], { env: truthEnv }).stdout
+  assert.match(unfinishedOutcome, /Outcome\s+not_verified/i)
+  assert.match(unfinishedOutcome, /Human Review\s+true/i)
+  assert.doesNotMatch(unfinishedOutcome, /Outcome\s+success/i)
+  const newestFailure = await seedDurableTruthRun('failed-newest-turn',
+    { outcome: 'AGENT_FAILURE', status: 'failed' })
+  const failedTruth = json(['session', 'latest', '--json'], { env: truthEnv })
+  assert.equal(failedTruth.session.terminal_outcome, 'AGENT_FAILURE', JSON.stringify(failedTruth))
+  assert.equal(failedTruth.session.status, 'failed')
+  assert.equal(failedTruth.session.user_status, 'failed')
+  const failedContinue = json(['continue', 'latest', '--inspect-only', '--json'],
+    { env: truthEnv, codes: [0, 1] })
+  assert.equal(failedContinue.recovery.terminal_outcome, 'AGENT_FAILURE')
+  assert.equal(failedContinue.recovery.user_status, 'failed')
+  const failedOutcome = cli(['inspect', 'outcome', newestFailure.runDir], { env: truthEnv }).stdout
+  assert.match(failedOutcome, /Outcome\s+failed/i)
+  records.push({
+    check: 'durable turn truth through installed inspect/session/continue',
+    status: 'pass',
+    turns: 3,
+  })
   const stack = json(['resolve', '--task-category', 'backend', '--project', 'global', '--json'])
   assert.ok(!stack.error, JSON.stringify(stack))
   const mcp = json(['mcp', 'add', 'consumer-fixture', 'node', '--json'])
