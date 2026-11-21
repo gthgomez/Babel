@@ -2,7 +2,7 @@ import { type ProviderMessage, type RunnerCallbacks, type RunnerInvocationMetada
 import { mapProviderMessagesToWire } from './providerMessages.js';
 import { type VcrRecorder } from '../services/streamingVcr.js';
 import { createInvocationDeadline, invocationNowMs, readPositiveIntEnv } from './providerResponsePolicy.js';
-import { normalizeFinishReason } from './providerNormalize.js';
+import { accumulateStreamFinish, classifyStreamFinish } from './providerNormalize.js';
 import type { ProviderId } from './providerRegistry.js';
 import {
   type ChatResponse,
@@ -252,13 +252,17 @@ export function parseSseLine(line: string): SseLineResult {
 
 
 function assertExecuteRawStreamTerminal(state: StreamingState): void {
-  const rawReason = (state.finishReason ?? '').trim().toLowerCase();
-  if (rawReason === 'error') {
-    throw new Error('[provider stream] Provider error during generation (finish_reason: error)');
-  }
-  const reason = normalizeFinishReason(state.finishReason ?? '');
-  if (reason === 'length' && state.partialModelOutput) {
-    throw new Error('[provider stream] Provider output budget exhausted (finish_reason: length)');
+  // Text-only transports have no tool payload. A missing, filtered,
+  // truncated or unrecognized finish is a failed invocation; partial output
+  // stays available in the streaming state for the failure receipt but is not
+  // returned as a completed answer.
+  const disposition = classifyStreamFinish({
+    reported: state.finishReason,
+    sawDone: state.sawDone,
+    hasToolCalls: false,
+  });
+  if (disposition.status === 'failed') {
+    throw new Error(`[provider stream] ${disposition.message}`);
   }
 }
 
@@ -289,11 +293,13 @@ export async function readStreamingResponse(
   const deadlineBudgetMs = requestTimeoutMs ?? Math.max(0, deadlineAt - invocationNowMs());
 
   const completeStreamingRead = async (): Promise<string> => {
+    signal?.throwIfAborted();
     assertExecuteRawStreamTerminal(state);
     return text;
   };
 
   const processLine = async (line: string): Promise<boolean> => {
+    signal?.throwIfAborted();
     if (state.sawDone) return true;
     const normalizedLine = line.replace(/\r$/, '').trim();
     if (!normalizedLine.startsWith('data:')) return false;
@@ -319,7 +325,7 @@ export async function readStreamingResponse(
     if (parsed.observedModelId) state.observedModelId = parsed.observedModelId;
     if (parsed.upstreamProvider) state.upstreamProvider = parsed.upstreamProvider;
     if (parsed.routerMetadata) state.routerMetadata = parsed.routerMetadata;
-    if (parsed.finishReason) state.finishReason = parsed.finishReason;
+    if (parsed.finishReason) state.finishReason = accumulateStreamFinish(state.finishReason, parsed.finishReason);
     if (parsed.isDone) {
       state.sawDone = true;
       state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
@@ -384,31 +390,35 @@ export async function readStreamingResponse(
   // when stream=true. Accept that only as a complete response; an SSE stream
   // that closes without [DONE] is a truthful truncated-stream failure.
   const rawTrimmed = raw.trim();
+  let json: ChatResponse | undefined;
   if (!state.sawDone && rawTrimmed.startsWith('{')) {
     try {
-      const json = JSON.parse(rawTrimmed) as ChatResponse;
-      const content = json.choices?.[0]?.message?.content ?? '';
-      if (content) {
-        text += content;
-        recordStreamingOutput(state, 'text', content);
-        if (callbacks?.onChunk) await callbacks.onChunk(content);
-      }
-      const reasoning = (json as ChatResponse & { reasoning_content?: string }).reasoning_content;
-      if (reasoning) {
-        recordStreamingOutput(state, 'reasoning', reasoning);
-        callbacks?.onThought?.(reasoning);
-      }
-      state.observedModelId = json.model ?? state.observedModelId;
-      state.upstreamProvider = upstreamProviderFromResponse(json) ?? state.upstreamProvider;
-      state.routerMetadata = json.openrouter_metadata ?? state.routerMetadata;
-      state.finishReason = json.choices?.[0]?.finish_reason ?? state.finishReason;
-      state.usage = json.usage ?? state.usage;
-      state.sawDone = true;
-      state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
-      return await completeStreamingRead();
+      json = JSON.parse(rawTrimmed) as ChatResponse;
     } catch {
-      // Fall through to the truncated-stream error below.
+      // Malformed JSON falls through to the truncated-stream error below.
     }
+  }
+  if (json) {
+    signal?.throwIfAborted();
+    const content = json.choices?.[0]?.message?.content ?? '';
+    if (content) {
+      text += content;
+      recordStreamingOutput(state, 'text', content);
+      if (callbacks?.onChunk) await callbacks.onChunk(content);
+    }
+    const reasoning = (json as ChatResponse & { reasoning_content?: string }).reasoning_content;
+    if (reasoning) {
+      recordStreamingOutput(state, 'reasoning', reasoning);
+      callbacks?.onThought?.(reasoning);
+    }
+    state.observedModelId = json.model ?? state.observedModelId;
+    state.upstreamProvider = upstreamProviderFromResponse(json) ?? state.upstreamProvider;
+    state.routerMetadata = json.openrouter_metadata ?? state.routerMetadata;
+    state.finishReason = json.choices?.[0]?.finish_reason ?? state.finishReason;
+    state.usage = json.usage ?? state.usage;
+    state.sawDone = true;
+    state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
+    return await completeStreamingRead();
   }
   if (state.generationMs === null && state.ttftMs !== null) {
     state.generationMs = Date.now() - startedAt - state.ttftMs;

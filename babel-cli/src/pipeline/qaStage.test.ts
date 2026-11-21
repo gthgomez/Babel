@@ -99,7 +99,7 @@ test('adversarial review requires a different enabled model and records its rout
   delete process.env['BABEL_PIPELINE_V9_OFFLINE'];
   globalThis.fetch = (async (_url, init) => {
     models.push(JSON.parse(String(init?.body)).model);
-    return new Response(`data: ${JSON.stringify({model:'deepseek/deepseek-v4-pro',choices:[{delta:{content:JSON.stringify(makePassVerdict())}}]})}\n\ndata: [DONE]\n\n`,{status:200});
+    return new Response(`data: ${JSON.stringify({model:'deepseek/deepseek-v4-pro',choices:[{delta:{content:JSON.stringify(makePassVerdict())}}]})}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`,{status:200});
   }) as typeof fetch;
   try {
     const result = await withPipelineModelRoute('deepseek-v4-flash-openrouter', () => runAdversarialQaGate(makeSwePlan(),makePassVerdict(),'public fixture',1,root,()=>{}));
