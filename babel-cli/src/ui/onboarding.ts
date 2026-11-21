@@ -63,6 +63,20 @@ export function showOnboarding(): void {
       `  ${bold(cmd.padEnd(cmdWidth))}  ${muted(desc)}`,
   );
 
+  // Never imply the agent can take a task before a provider and model exist.
+  const setupPending = isFirstRun();
+  const tips = setupPending
+    ? [
+        `  ${success('!')} ${dim('Setup runs next: choose a provider, exact model and budget.')}`,
+        `  ${success('✓')} ${dim('Setup sends no model requests.')} ${muted('Credentials stay in your private profile.')}`,
+        `  ${success('✓')} ${dim('After setup, type a task or')} ${bold('/help')} ${dim('for commands.')}`,
+      ]
+    : [
+        `  ${success('✓')} ${dim('Type a task to get started.')} Try: ${muted('"summarize this repo"')}`,
+        `  ${success('✓')} ${dim('Type')} ${bold('/help')} ${dim('for the full command list.')}`,
+        `  ${success('✓')} ${dim('Use')} ${bold('@')} ${dim('to search files by name.')}`,
+      ];
+
   const output = [
     '',
     logo,
@@ -72,9 +86,7 @@ export function showOnboarding(): void {
     `  ${dim('Quick reference:')}`,
     ...cmdLines,
     '',
-    `  ${success('✓')} ${dim('Type a task to get started.')} Try: ${muted('"summarize this repo"')}`,
-    `  ${success('✓')} ${dim('Type')} ${bold('/help')} ${dim('for the full command list.')}`,
-    `  ${success('✓')} ${dim('Use')} ${bold('@')} ${dim('to search files by name.')}`,
+    ...tips,
     '',
     dim('─'.repeat(width)),
     '',

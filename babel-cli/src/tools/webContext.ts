@@ -629,12 +629,61 @@ export async function handleWebFetch(
   }
 }
 
+/**
+ * Read a fetch body with the same retained-byte ceiling web_fetch uses.
+ * Unbounded `response.text()` let a search response grow memory independently
+ * of the fetch adapter's advertised limit.
+ */
+async function readBoundedFetchText(
+  response: Response,
+  maxBytes: number,
+): Promise<{ text: string; truncated: boolean; bytesReceived: number }> {
+  if (!response.body) {
+    const text = await response.text();
+    const bounded = Buffer.from(text, 'utf8');
+    return {
+      text: bounded.subarray(0, maxBytes).toString('utf8'),
+      truncated: bounded.length > maxBytes,
+      bytesReceived: bounded.length,
+    };
+  }
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let bytesReceived = 0;
+  let retained = 0;
+  let truncated = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      bytesReceived += chunk.length;
+      if (retained < maxBytes) {
+        const slice = chunk.subarray(0, maxBytes - retained);
+        chunks.push(slice);
+        retained += slice.length;
+        if (slice.length < chunk.length) truncated = true;
+      } else {
+        truncated = true;
+      }
+      if (truncated) {
+        await reader.cancel().catch(() => undefined);
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return { text: Buffer.concat(chunks).toString('utf8'), truncated, bytesReceived };
+}
+
 export async function handleWebSearch(
   req: WebSearchRequest,
   context: WebToolContext,
 ): Promise<ToolResult> {
   const maxResults = sanitizeMaxResults(req.max_results);
-  const cacheRequest = { tool: 'web_search', query: req.query, max_results: maxResults };
+  const maxBytes = sanitizeMaxBytes(undefined);
+  const cacheRequest = { tool: 'web_search', query: req.query, max_results: maxResults, max_bytes: maxBytes };
   const cache = cachePathFor(context, cacheRequest);
   const cached = readCache(cache.path);
   if (cached) {
@@ -652,8 +701,8 @@ export async function handleWebSearch(
       headers: { 'user-agent': USER_AGENT, accept: 'text/html' },
       signal: AbortSignal.timeout(15_000),
     });
-    const html = await response.text();
-    const results = parseDuckDuckGoHtml(html, maxResults);
+    const body = await readBoundedFetchText(response, maxBytes);
+    const results = parseDuckDuckGoHtml(body.text, maxResults);
     const payload = {
       status: response.ok ? 'ok' : 'http_error',
       source: {
@@ -662,6 +711,11 @@ export async function handleWebSearch(
         status_code: response.status,
         content_type: response.headers.get('content-type') ?? 'unknown',
         user_agent: USER_AGENT,
+      },
+      limits: {
+        max_bytes: maxBytes,
+        bytes_received: body.bytesReceived,
+        truncated: body.truncated,
       },
       query: req.query,
       results,

@@ -20,7 +20,9 @@ let envSnapshot: Record<string, string | undefined> = {}
 
 before(() => {
   envSnapshot = Object.fromEntries(MANAGED_ENV.map((key) => [key, process.env[key]]))
-  process.env['BABEL_OFFLINE'] = '1'
+  // Offline is now a hard remote-dispatch boundary (PV-01); this suite uses
+  // mocked critics and must run under normal routing.
+  delete process.env['BABEL_OFFLINE']
   process.env['BABEL_DIFF_CRITIC'] = '1'
   // Unpriced mock usage otherwise trips the finite cost cap's unknown-pricing
   // refusal before the critic round can run.

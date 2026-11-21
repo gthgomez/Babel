@@ -22,10 +22,15 @@
  *   4. Command chaining — &, &&, || connect commands
  *   5. Caret escaping — ^ escapes the next character
  *
- * Dangerous in ALL contexts: | (pipe), & (command separator outside &&/||)
- * Dangerous outside quotes: >, <, (, ), %, ^
- * Safe inside quotes: >, <, |, &, (, ), %, ^ (except %VAR% expansion still happens!)
+ * Dangerous outside quotes: |, &, ;, >, <, (, ), %
+ * Safe inside quotes: all of the above (cmd.exe treats quoted text literally),
+ *   except %VAR% expansion, which cmd.exe performs before command parsing.
  * Safe when caret-escaped: any single character after ^
+ *
+ * Note: a pipe is NOT "always dangerous". `cmd.exe /c` treats `|` inside a
+ * double-quoted argument as a literal character, which is what makes legitimate
+ * regex arguments such as `grep "error|warn" file` executable. Only an unquoted
+ * pipe stays an execution operator.
  */
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -49,23 +54,17 @@ export interface TokenizerResult {
 
 // ── Character classification ─────────────────────────────────────────────────
 
-/** Characters that are ALWAYS dangerous on cmd.exe, even inside quotes. */
-const ALWAYS_DANGEROUS = new Set([
-  '|', // pipe — always dangerous, even in quotes
-]);
-
 /**
  * Characters dangerous outside double-quoted strings on cmd.exe.
- * ';' is moved here from ALWAYS_DANGEROUS — it is safe inside Python -c "..."
- * strings, which is a common verifier pattern. Outside quotes, ';' is still
- * a command separator on cmd.exe and will be rejected.
- */
-
-/**
- * Characters dangerous outside double-quoted strings on cmd.exe.
- * Note: % is dangerous because cmd.exe expands %VAR% before command processing.
+ *
+ * `|` belongs here, not in an always-dangerous set: double quotes make
+ * cmd.exe pass the pipe through literally, which is required for legitimate
+ * regex arguments (`grep "a|b" file`). Unquoted pipes still split commands.
+ *
+ * `%` is dangerous because cmd.exe expands %VAR% before command processing.
  */
 const DANGEROUS_OUTSIDE_QUOTES = new Set([
+  '|', // pipe (only outside quotes)
   '&', // command separator (&& is handled separately by cd-prefix logic)
   ';', // command separator on cmd.exe (safe inside quotes for python -c "...")
   '>', // redirect stdout
@@ -184,19 +183,17 @@ export function tokenizeCmdCommand(command: string): TokenizerResult {
       continue;
     }
 
-    // ── Always-dangerous characters ─────────────────────────────────────────
-    if (ALWAYS_DANGEROUS.has(ch)) {
-      return {
-        safe: false,
-        fullyAnalyzed: true,
-        reason: `Operator '${ch}' detected — always dangerous on cmd.exe`,
-        ['operator']: ch,
-        context: ch === '|' ? 'pipe' : 'command_chain',
-      };
-    }
-
     // ── Outside-quotes dangerous characters ─────────────────────────────────
     if (!inDoubleQuotes && DANGEROUS_OUTSIDE_QUOTES.has(ch)) {
+      if (ch === '|') {
+        return {
+          safe: false,
+          fullyAnalyzed: true,
+          reason: `Pipe '|' detected outside quotes`,
+          ['operator']: '|',
+          context: 'pipe',
+        };
+      }
       if (ch === '&') {
         return {
           safe: false,

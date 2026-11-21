@@ -1,0 +1,232 @@
+#!/usr/bin/env node
+/**
+ * Host self-test for the ordinary-bug oracle.
+ *
+ * Proves that behaviorally equivalent correct implementations pass and that
+ * wrong implementations (including ones that are only wrong on negative or
+ * fractional inputs) fail. The oracle never reads expected values from the
+ * candidate workspace.
+ */
+import assert from 'node:assert/strict';
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const template = join(here, '../../workspaces/ordinary-bug');
+const score = join(here, 'score.mjs');
+
+const accepted = [
+  ['canonical', 'export const add = (a, b) => a + b;\n'],
+  ['commuted', 'export const add = (a, b) => b + a;\n'],
+  ['block-body', 'export function add(a, b) { return a + b; }\n'],
+  ['reduce', 'export const add = (...values) => values.reduce((sum, value) => sum + value, 0);\n'],
+  ['numeric-coercion', 'export const add = (a, b) => Number(a) + Number(b);\n'],
+  ['spread-sum', 'export function add(...values) { let total = 0; for (const value of values) total += value; return total; }\n'],
+];
+
+const rejected = [
+  ['subtracts', 'export const add = (a, b) => a - b;\n'],
+  ['negative-collapse', 'export const add = (a, b) => Math.abs(a) + b;\n'],
+  ['wrong-on-negative', 'export const add = (a, b) => a + Math.abs(b);\n'],
+  ['hardcoded-only-visible-case', 'export const add = (a, b) => (a === 1 && b === 2 ? 3 : 0);\n'],
+  ['returns-string', 'export const add = (a, b) => String(a + b);\n'],
+  ['throws-on-negative', 'export const add = (a, b) => { if (a < 0 || b < 0) throw new Error("negative"); return a + b; };\n'],
+  ['not-a-function', 'export const add = 42;\n'],
+  [
+    'table-reading-spoof',
+    `const expected = new Map()
+for (const argument of process.argv) {
+  try {
+    const table = JSON.parse(argument)
+    if (Array.isArray(table)) {
+      for (const row of table) {
+        if (Array.isArray(row) && row.length === 3) expected.set(row[0] + ',' + row[1], row[2])
+      }
+    }
+  } catch {}
+}
+export const add = (a, b) => expected.has(a + ',' + b) ? expected.get(a + ',' + b) : (a === 1 && b === 2 ? 3 : a + Math.abs(b));
+`,
+  ],
+  [
+    'empty-stdout-report',
+    `console.log('{}')
+export const add = (a, b) => a - b;
+`,
+  ],
+  [
+    'exits-during-import',
+    `process.exit(0)
+export const add = (a, b) => a + b;
+`,
+  ],
+  [
+    'forged-stdout-report',
+    `console.log(JSON.stringify({ cases: 11, failures: [] }))
+export const add = (a, b) => a - b;
+`,
+  ],
+  [
+    'source-reading-spoof',
+    `import { readFileSync } from 'node:fs'
+const expected = new Map()
+const remember = (table) => {
+  if (!Array.isArray(table)) return
+  for (const row of table) if (Array.isArray(row) && row.length === 3) expected.set(row[0] + ',' + row[1], row[2])
+}
+try {
+  const args = readFileSync('/proc/' + process.ppid + '/cmdline', 'utf8').split('\\0')
+  const scorePath = args.find((arg) => arg.endsWith('score.mjs'))
+  if (scorePath) {
+    const source = readFileSync(scorePath, 'utf8')
+    const visible = source.match(/const visibleCases = (\[\[[\s\S]*?\]\])/)
+    if (visible) remember(eval(visible[1]))
+    for (const match of source.matchAll(/\[\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*\]/g)) {
+      remember([[Number(match[1]), Number(match[2]), Number(match[3])]])
+    }
+  }
+} catch {}
+export const add = (a, b) => expected.has(a + ',' + b) ? expected.get(a + ',' + b) : (a === 1 && b === 2 ? 3 : a + Math.abs(b))
+`,
+  ],
+  [
+    'early-exit-fake-frame',
+    `import { writeSync } from 'node:fs'
+try {
+  const inputs = JSON.parse(process.argv[3])
+  let body = ''
+  for (let index = 0; index < inputs.length; index += 1) {
+    body += 'W04OBS\\t' + index + '\\tOK\\tnumber\\t' + (inputs[index][0] + inputs[index][1]) + '\\n'
+  }
+  writeSync(3, body)
+} catch {}
+process.exit(0)
+export const add = (a, b) => (a === 1 && b === 2 ? 3 : a - Math.abs(b))
+`,
+  ],
+  [
+    'stdout-stream-hijack',
+    `const originalWrite = process.stdout._write.bind(process.stdout)
+process.stdout._write = (chunk, encoding, callback) => callback()
+let inputs = []
+try { inputs = JSON.parse(process.argv[3]) } catch {}
+for (let index = 0; index < inputs.length; index += 1) {
+  originalWrite(
+    'W04OBS\\t' + index + '\\tOK\\tnumber\\t' + (inputs[index][0] + inputs[index][1]) + '\\n',
+    'utf8',
+    () => {},
+  )
+}
+export const add = (a, b) => (a === 1 && b === 2 ? 3 : a - Math.abs(b))
+`,
+  ],
+  [
+    'self-memory-frame-hijack',
+    `import { closeSync, openSync, readFileSync, readSync, writeSync } from 'node:fs'
+let nonce = null
+try {
+  const maps = readFileSync('/proc/self/maps', 'utf8')
+  for (const line of maps.split('\\n')) {
+    const match = line.match(/^([0-9a-f]+)-([0-9a-f]+) rw/)
+    if (!match) continue
+    let fd
+    try {
+      fd = openSync('/proc/self/mem', 'r')
+      const start = parseInt(match[1], 16)
+      const end = parseInt(match[2], 16)
+      const size = Math.min(end - start, 4 * 1024 * 1024)
+      const buffer = Buffer.alloc(size)
+      readSync(fd, buffer, 0, size, start)
+      const found = buffer.toString('latin1').match(/[0-9a-f]{32}/)
+      if (found) { nonce = found[0]; break }
+    } catch {} finally { if (fd !== undefined) { try { closeSync(fd) } catch {} } }
+  }
+} catch {}
+if (nonce !== null) {
+  try {
+    const inputs = JSON.parse(process.argv[3])
+    let body = 'W04FRAME ' + nonce + ' ' + inputs.length + ' -\\n'
+    for (let index = 0; index < inputs.length; index += 1) {
+      body += index + '\\t0\\tnumber\\t' + (inputs[index][0] + inputs[index][1]) + '\\n'
+    }
+    body += 'W04END ' + nonce + '\\n'
+    writeSync(3, body)
+  } catch {}
+}
+export const add = (a, b) => (a === 1 && b === 2 ? 3 : a - Math.abs(b))
+`,
+  ],
+  [
+    'result-file-hijack',
+    `import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+process.on('exit', () => {
+  let inputs
+  try { inputs = JSON.parse(process.argv[3]) } catch { return }
+  for (const name of readdirSync('/tmp')) {
+    if (!name.startsWith('ordinary-bug-oracle-')) continue
+    const path = join('/tmp', name, 'result.txt')
+    try {
+      const lines = readFileSync(path, 'utf8').split('\\n')
+      const nonce = lines[0]
+      if (!/^[0-9a-f]{32}$/.test(nonce)) continue
+      let body = nonce + '\\n\\n'
+      for (let index = 0; index < inputs.length; index += 1) {
+        body += index + '\\t0\\tnumber\\t' + (inputs[index][0] + inputs[index][1]) + '\\n'
+      }
+      writeFileSync(path, body)
+    } catch {}
+  }
+})
+export const add = (a, b) => (a === 1 && b === 2 ? 3 : a - Math.abs(b))
+`,
+  ],
+  [
+    'serializer-hijack',
+    `const originalStringify = JSON.stringify
+JSON.stringify = function (value, ...rest) {
+  // Legacy report channel: replace the probe's failure report with a green one.
+  if (value && typeof value === 'object' && ('failures' in value || 'observations' in value)) {
+    return originalStringify.call(JSON, { cases: 11, failures: [] })
+  }
+  return originalStringify.call(JSON, value, ...rest)
+}
+Object.defineProperty(Object.prototype, 'toJSON', {
+  configurable: true,
+  value() { return this },
+})
+export const add = (a, b) => (a === 1 && b === 2 ? 3 : a - Math.abs(b))
+`,
+  ],
+];
+
+function runVariant(contents) {
+  const dir = mkdtempSync(join(tmpdir(), 'ordinary-bug-selftest-'));
+  try {
+    cpSync(template, dir, { recursive: true });
+    writeFileSync(join(dir, 'src/math.js'), contents, 'utf8');
+    return spawnSync(process.execPath, [score, dir], { encoding: 'utf8', windowsHide: true });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+for (const [name, contents] of accepted) {
+  const result = runVariant(contents);
+  assert.equal(result.status, 0, `${name} should pass: ${result.stderr}`);
+}
+for (const [name, contents] of rejected) {
+  const result = runVariant(contents);
+  assert.notEqual(result.status, 0, `${name} should fail but passed`);
+}
+
+console.log(
+  JSON.stringify({
+    selftest: 'ordinary-bug',
+    accepted: accepted.map(([name]) => name),
+    rejected: rejected.map(([name]) => name),
+  }),
+);

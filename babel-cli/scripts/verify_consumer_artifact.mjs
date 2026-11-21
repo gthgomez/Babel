@@ -163,7 +163,7 @@ function installArtifact(artifact) {
 const installed = join(prefix, 'node_modules', ...pkg.name.split('/'))
 const bin = join(installed, pkg.bin['babel-agent'])
 const cli = (args, options = {}) => command(process.execPath, [bin, ...args], { env: guardedEnv, ...options })
-const json = args => JSON.parse(cli(args, { codes: [0, 1] }).stdout)
+const json = (args, options = {}) => JSON.parse(cli(args, { codes: [0, 1], ...options }).stdout)
 function treeDigest(dir) {
   const entries = []
   function walk(path, base = '') {
@@ -262,6 +262,11 @@ try {
   assert.ok(existsSync(claudeSdkPin), 'Claude SDK pin shipped in consumer tarball')
   assert.ok(existsSync(claudeResolveWorker), 'Claude isolated resolve worker shipped in consumer tarball')
   assert.equal(JSON.parse(readFileSync(claudeSdkPin, 'utf8')).sdkVersion, '0.3.304')
+  // toolManifest.ts reads this beside the compiled module. Without it the
+  // installed tool_catalog fails and Deep advertises a different schema.
+  const installedToolManifest = join(installed, 'dist/tools/tool-manifest.json')
+  assert.ok(existsSync(installedToolManifest), 'Executor tool manifest shipped in consumer tarball')
+  assert.ok(Array.isArray(JSON.parse(readFileSync(installedToolManifest, 'utf8')).tools), 'Executor tool manifest is readable')
   const bridgePackagingProbe = join(scratch, 'bridge-packaging-probe.mjs')
   writeFileSync(bridgePackagingProbe, `
     import assert from 'node:assert/strict';
@@ -287,12 +292,6 @@ try {
   if (process.platform !== 'win32') assert.throws(() => writeFileSync(join(installed, 'write-probe'), 'denied'), { code: 'EACCES' })
   assert.match(cli(['--help']).stdout, /Babel|babel-agent/)
   assert.equal(cli(['--version']).stdout.trim(), pkg.version)
-  const shim = join(prefix, process.platform === 'win32' ? 'node_modules/.bin/babel-agent.cmd' : 'node_modules/.bin/babel-agent')
-  assert.ok(existsSync(shim), 'npm installed the unambiguous executable')
-  const shimVersion = process.platform === 'win32'
-    ? command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${shim}" --version"`], { env: guardedEnv, windowsVerbatimArguments: true })
-    : command(shim, ['--version'], { env: guardedEnv })
-  assert.equal(shimVersion.stdout.trim(), pkg.version)
   records.push({
     check: 'runtime project workspace unicode+space cwd',
     qualification: 'qualified',
@@ -300,10 +299,30 @@ try {
     project_path_class: runtimeProjectPathClass(project),
     note: 'Installed CLI/TUI/mechanics exercise this cwd; distinct from install-path qualification.',
   })
+  const shims = Object.keys(pkg.bin).map(alias => ({
+    alias,
+    path: join(prefix, process.platform === 'win32' ? `node_modules/.bin/${alias}.cmd` : `node_modules/.bin/${alias}`),
+  }))
+  for (const shim of shims) {
+    assert.ok(existsSync(shim.path), `npm installed the ${shim.alias} executable`)
+    const shimVersion = process.platform === 'win32'
+      ? command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${shim.path}" --version"`], { env: guardedEnv, windowsVerbatimArguments: true })
+      : command(shim.path, ['--version'], { env: guardedEnv })
+    assert.equal(shimVersion.stdout.trim(), pkg.version)
+    // POSIX npm links keep the invoked alias in argv[1]. Windows .cmd shims
+    // invoke bin/babel.js, whose basename strips to the canonical babel alias.
+    if (process.platform === 'win32') {
+      const help = command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${shim.path}" --help"`], { env: guardedEnv, windowsVerbatimArguments: true })
+      assert.match(help.stdout, /^Usage: babel\b/, `${shim.alias} --help must report the Windows shim alias`)
+    } else {
+      assert.match(command(shim.path, ['--help'], { env: guardedEnv }).stdout, new RegExp(`^Usage: ${shim.alias}\\b`), `${shim.alias} --help must report the invoked alias`)
+    }
+  }
+  assert.deepEqual(shims.map(shim => shim.alias).sort(), ['babel', 'babel-agent', 'babel-harness'])
   records.push({
-    check: 'installed shim under unicode install prefix',
-    qualification: existsSync(shim) ? 'qualified' : 'unqualified',
-    shim_path: shim,
+    check: 'every installed executable alias under unicode install prefix',
+    qualification: shims.every(shim => existsSync(shim.path)) ? 'qualified' : 'unqualified',
+    shims: shims.map(shim => ({ alias: shim.alias, path_class: installPathClass(shim.path) })),
     install_prefix: prefixUnicode,
     install_path_class: installPathClass(prefixUnicode),
     not_equivalent_to: ['runtime_project_unicode_cwd_only'],
@@ -317,6 +336,84 @@ try {
   writeFileSync(join(project, 'README.md'), 'Synthetic installed context, café 空\n')
   const context = json(['context', 'preview', '@file', 'README.md', '--json'])
   assert.match(JSON.stringify(context), /Synthetic installed context/)
+  // BL-14: installed status/recovery surfaces must bind to the newest durable
+  // turn. Seed real journals with a completed T1 and a newer T2 that either
+  // never settled or failed, then read them only through the installed binary.
+  const durableSession = await import(pathToFileURL(join(installed, 'dist/agent/sessionEvents.js')).href)
+  const durableThread = await import(pathToFileURL(join(installed, 'dist/agent/threadEventLog.js')).href)
+  const durableRuns = join(scratch, 'durable truth runs')
+  const durableTurnInput = task => ({
+    task, model: 'fixture-model', provider: 'fixture-provider',
+    projectRoot: project, policyPreset: 'workspace_write',
+  })
+  async function seedDurableTruthRun(name, secondOutcome) {
+    const runDir = join(durableRuns, name)
+    mkdirSync(runDir, { recursive: true })
+    const thread = durableThread.createThreadEventLog(`thread-${name}`)
+    const session = durableSession.createSessionEventLog(`session-${name}`)
+    const first = durableThread.startTurn(thread, durableTurnInput('first task'))
+    durableThread.endTurn(thread, first, 'VERIFIED_COMPLETE', 'completed')
+    durableSession.recordUserSubmitted(session, {
+      turn_id: first, task: 'first task', model: 'fixture-model',
+      provider: 'fixture-provider', projectRoot: project,
+    })
+    durableSession.recordTurnEnded(session, {
+      turn_id: first, outcome: 'VERIFIED_COMPLETE', status: 'completed',
+    })
+    const second = durableThread.startTurn(thread, durableTurnInput('second task'))
+    if (secondOutcome) durableThread.endTurn(thread, second, secondOutcome.outcome, secondOutcome.status)
+    durableSession.recordUserSubmitted(session, {
+      turn_id: second, task: 'second task', model: 'fixture-model',
+      provider: 'fixture-provider', projectRoot: project,
+    })
+    if (secondOutcome) {
+      durableSession.recordTurnEnded(session, {
+        turn_id: second, outcome: secondOutcome.outcome, status: secondOutcome.status,
+      })
+    }
+    durableSession.rewriteSessionEventLog(runDir, session)
+    await durableThread.persistThreadEventLog(runDir, thread)
+    // Older telemetry must not close the newer turn.
+    writeFileSync(join(runDir, '06_runtime_telemetry.json'),
+      JSON.stringify({ pipeline_mode: 'chat', final_outcome: 'COMPLETE' }) + '\n')
+    writeFileSync(join(durableRuns, '.latest.json'),
+      JSON.stringify({ run_dir: runDir, project: 'durable-fixture' }) + '\n')
+    return { runDir, second }
+  }
+  const truthEnv = { ...guardedEnv, BABEL_RUNS_DIR: durableRuns }
+  const unfinished = await seedDurableTruthRun('unfinished-turn')
+  const latestTruth = json(['session', 'latest', '--json'], { env: truthEnv })
+  assert.equal(latestTruth.session.status, 'INTERRUPTED', JSON.stringify(latestTruth))
+  assert.equal(latestTruth.session.terminal_outcome, null)
+  assert.equal(latestTruth.session.exit_code, null)
+  assert.notEqual(latestTruth.session.user_status, 'success')
+  const continueTruth = json(['continue', 'latest', '--inspect-only', '--json'],
+    { env: truthEnv, codes: [0, 1] })
+  assert.equal(continueTruth.recovery.terminal_outcome, null, JSON.stringify(continueTruth))
+  assert.equal(continueTruth.recovery.exit_code, null)
+  assert.notEqual(continueTruth.recovery.user_status, 'success')
+  assert.match(continueTruth.recovery.reason, /interrupted|no terminal record/i)
+  const unfinishedOutcome = cli(['inspect', 'outcome', unfinished.runDir], { env: truthEnv }).stdout
+  assert.match(unfinishedOutcome, /Outcome\s+not_verified/i)
+  assert.match(unfinishedOutcome, /Human Review\s+true/i)
+  assert.doesNotMatch(unfinishedOutcome, /Outcome\s+success/i)
+  const newestFailure = await seedDurableTruthRun('failed-newest-turn',
+    { outcome: 'AGENT_FAILURE', status: 'failed' })
+  const failedTruth = json(['session', 'latest', '--json'], { env: truthEnv })
+  assert.equal(failedTruth.session.terminal_outcome, 'AGENT_FAILURE', JSON.stringify(failedTruth))
+  assert.equal(failedTruth.session.status, 'failed')
+  assert.equal(failedTruth.session.user_status, 'failed')
+  const failedContinue = json(['continue', 'latest', '--inspect-only', '--json'],
+    { env: truthEnv, codes: [0, 1] })
+  assert.equal(failedContinue.recovery.terminal_outcome, 'AGENT_FAILURE')
+  assert.equal(failedContinue.recovery.user_status, 'failed')
+  const failedOutcome = cli(['inspect', 'outcome', newestFailure.runDir], { env: truthEnv }).stdout
+  assert.match(failedOutcome, /Outcome\s+failed/i)
+  records.push({
+    check: 'durable turn truth through installed inspect/session/continue',
+    status: 'pass',
+    turns: 3,
+  })
   const stack = json(['resolve', '--task-category', 'backend', '--project', 'global', '--json'])
   assert.ok(!stack.error, JSON.stringify(stack))
   const mcp = json(['mcp', 'add', 'consumer-fixture', 'node', '--json'])
@@ -335,12 +432,15 @@ try {
   assert.equal(team.status, 'no_changes', JSON.stringify(team))
   assert.ok(team.agents.every(agent => agent.status === 'success' && agent.changed_files.length === 0))
   assert.ok(existsSync(join(env.BABEL_STATE_DIR, 'runs/agents')))
+  // MCP stdio is newline-delimited JSON; send the same shape real SDK clients send.
   const mcpRequest = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
     name: 'babel_catalog_inspect', arguments: {} } })
-  const framed = `Content-Length: ${Buffer.byteLength(mcpRequest)}\r\n\r\n${mcpRequest}`
-  const mcpOutput = cli(['mcp', 'serve'], { input: framed }).stdout
-  assert.match(mcpOutput, /^Content-Length: \d+\r\n\r\n/)
-  const catalogReply = JSON.parse(mcpOutput.slice(mcpOutput.indexOf('\r\n\r\n') + 4))
+  const mcpOutput = cli(['mcp', 'serve'], { input: `${mcpRequest}\n` }).stdout
+  const mcpLines = mcpOutput.split(/\r?\n/).filter(line => line.trim() !== '')
+  assert.ok(mcpLines.length > 0, `mcp serve emitted no frame: ${mcpOutput.slice(0, 200)}`)
+  assert.doesNotMatch(mcpOutput, /^Content-Length:/m, 'mcp serve must emit newline-delimited JSON')
+  const catalogReply = JSON.parse(mcpLines.at(-1))
+  assert.equal(catalogReply.jsonrpc, '2.0')
   assert.ok(catalogReply.result && !catalogReply.result.isError, JSON.stringify(catalogReply))
   const missing = cli(['run', '--mode', 'chat-headless', 'Explain this synthetic project', '--json'], { codes: [1] })
   assert.match(missing.stdout + missing.stderr, /credential|API.key|provider|model/i)

@@ -147,7 +147,6 @@ import {
   parseLockedFilesEnv,
   mergeLockedFiles,
   verifyExactOutputSchemaArtifacts,
-  repairExactOutputSchemaArtifacts,
   assertBoundedPlanActivationContract,
 } from './pipeline/contractEnforcement.js';
 import {
@@ -172,6 +171,7 @@ import { buildOrchestratorTask } from './pipeline/orchestratorTask.js';
 import { writeLatestRunPointers } from './pipeline/runPointers.js';
 import { buildSweTask } from './pipeline/sweTask.js';
 import { buildPipelineFinalTerminalState } from './pipeline/finalization.js';
+import { decidePipelineFinalCompletion } from './pipeline/finalCompletion.js';
 import {
   finalizeV9LiveSessionForPipeline,
   maybeInitializeV9LiveSession,
@@ -313,7 +313,6 @@ export {
   parseLockedFilesEnv,
   mergeLockedFiles,
   verifyExactOutputSchemaArtifacts,
-  repairExactOutputSchemaArtifacts,
   assertBoundedPlanActivationContract,
 } from './pipeline/contractEnforcement.js';
 
@@ -389,7 +388,11 @@ export interface PipelineResult {
   usageSummary?: SessionUsageSummary;
   terminalSummary?: TerminalStatusSummary;
   attemptSafetySummary?: AttemptSafetySummary | null;
-  verifierContractSummary?: VerifierContractSummary; episodePersistenceStatus?: 'active' | 'degraded'; episodePersistenceWarning?: string;
+  verifierContractSummary?: VerifierContractSummary;
+  /** `final-revision-v1` witness published with terminal evidence. */
+  finalRevision?: import('./authority/finalRevision.js').FinalRevisionWitnessV1;
+  /** Shared kernel completion decision for Deep success claims. */
+  completionDecision?: import('./executor/contracts.js').CompletionDecision; episodePersistenceStatus?: 'active' | 'degraded'; episodePersistenceWarning?: string;
 }
 
 /**
@@ -974,7 +977,9 @@ async function runBabelPipelineInternal(
   }
 
   let resolvedModelPolicy: ResolvedModelPolicy | undefined;
-  let requirePostMutationVerification = false;
+  // Every mode (Chat and Deep) must reconcile verifier evidence against the
+  // final tree. A passing check followed by a later write is not current proof.
+  let requirePostMutationVerification = true;
   const traceOptions = {
     runDir: evidence.runDir,
     orchestratorVersion,
@@ -1002,6 +1007,10 @@ async function runBabelPipelineInternal(
     episodeLifecycle.recordFinalization(result.status, reason);
     return decorateEpisodePersistence(result);
   };
+  /** Latest effective mode; finalizeResult closes over this before the try block. */
+  const toBabelMode = (mode: string): 'chat' | 'plan' | 'deep' =>
+    mode === 'plan' ? 'plan' : mode === 'deep' ? 'deep' : 'chat';
+  let finalizedMode: 'chat' | 'plan' | 'deep' = toBabelMode(options.mode ?? 'deep');
   const finalizeResult = async (result: PipelineResult): Promise<PipelineResult> => {
     if (getRunAbortSignal()?.aborted) result = { ...result, status: 'EXECUTOR_HALTED', terminalOutcome: 'CANCELLED',
       errors: ['Run cancelled by the operator.'], finalAnswer: 'Run cancelled; inspect any changes made before cancellation.' };
@@ -1020,10 +1029,26 @@ async function runBabelPipelineInternal(
       'verifier_execution_summary.json',
       `${JSON.stringify(verifierContract.summary, null, 2)}\n`,
     );
+    const requiredVerifierCommands = verifierContract.plan.verifiers
+      .filter(verifier => verifier.required)
+      .map(verifier => verifier.command);
+    const finalCompletion = decidePipelineFinalCompletion({
+      mode: finalizedMode,
+      status: result.status,
+      projectRoot: inferProjectRoot(result.manifest) ?? runtimeProjectRoot,
+      toolCallLog: terminalContext.toolCallLog,
+      requiredVerifierCommands,
+    });
+    evidence.writeDebugFile(
+      'final_revision.json',
+      `${JSON.stringify(finalCompletion.finalRevision, null, 2)}\n`,
+    );
     const terminalState = buildPipelineFinalTerminalState({
-      resultStatus: result.status,
+      resultStatus: finalCompletion.status,
       terminalContext,
       verifierContractSummary: verifierContract.summary,
+      finalRevision: finalCompletion.finalRevision,
+      ...(finalCompletion.condition !== null ? { condition: finalCompletion.condition } : {}),
     });
     let finalizedResult: PipelineResult = {
       ...result,
@@ -1031,6 +1056,8 @@ async function runBabelPipelineInternal(
       terminalSummary: terminalState.terminalSummary,
       attemptSafetySummary: terminalContext.attemptSafetySummary,
       verifierContractSummary: verifierContract.summary,
+      finalRevision: finalCompletion.finalRevision,
+      ...(finalCompletion.decision ? { completionDecision: finalCompletion.decision } : {}),
     };
     if (!getRunAbortSignal()?.aborted) await runPluginHooks('PostRun', {
       runId: evidence.runId,
@@ -1754,6 +1781,7 @@ async function runBabelPipelineInternal(
       logDetail(resolvedMode.note);
     }
     let effectiveMode = resolvedMode.mode;
+    finalizedMode = toBabelMode(effectiveMode);
     // Stage-specific model-policy routes refine the DeepSeek default.
     const effectiveModel = (options.modelOverride ??
       manifest.worker_configuration.assigned_model ??
@@ -2618,6 +2646,7 @@ async function runBabelPipelineInternal(
         // Update plan and promote to autonomous for execution
         approvedPlan.minimal_action_set = selectedSteps;
         effectiveMode = 'deep';
+        finalizedMode = toBabelMode(effectiveMode);
 
         // Re-run the bounded-contract activation gate now that mode has escalated.
         // The gate originally ran at the top of the pre-executor block (line ~6760)

@@ -8,13 +8,14 @@ import { prepareProviderRequest, assertPreparedProviderRequestAdmissible } from 
 import { CampaignPhysicalFetchSession } from '../providerCampaignPhysicalFetch.js'
 import { buildInvocationMetadata } from '../providerResponseMetadata.js'
 import { buildProviderFailureReceipt, providerRequestIdFromResponse } from '../providerFailureReceipt.js'
-import { getRequestTimeoutMs, getRequestMaxRetries, linkExternalAbortSignal, retryDelayMs, sleep } from '../providerResponsePolicy.js'
+import { createInvocationDeadline, getRequestTimeoutMs, getRequestMaxRetries, linkExternalAbortSignal, retryDelayMs, sleep } from '../providerResponsePolicy.js'
 import { getStreamIdleTimeoutMs, readStreamWithLimits } from '../providerResponseStream.js'
 import { isRetryableStatus } from '../providerNormalize.js'
 import { ProviderHttpError } from '../providerHttpError.js'
 import { dispatchRunOperation, RunStoppedError } from '../../runtime/run-control.js'
 import { extractJson } from '../../utils/extractJson.js'
 import { validateProviderBaseUrl } from '../providerEndpoint.js'
+import { assertOfflineEndpointAllowed } from '../../config/offlineMode.js'
 
 export interface NativeRunnerOptions {
   explicitCredential?: string
@@ -51,6 +52,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
   protected readonly temperature: number | undefined
   protected readonly baseUrl: string | undefined
   private readonly contextWindowTokens: number | undefined
+  private readonly environment: NodeJS.ProcessEnv | undefined
   private metadata: RunnerInvocationMetadata | null = null
 
   constructor(protected readonly provider: 'gemini' | 'anthropic', defaultModel: string, options: NativeRunnerOptions = {}) {
@@ -62,6 +64,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
     this.temperature = options.temperature
     this.baseUrl = options.baseUrl
     this.contextWindowTokens = options.contextWindowTokens
+    this.environment = options.env
   }
 
   protected abstract endpoint(stream: boolean): string
@@ -120,7 +123,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
     const unlink = linkExternalAbortSignal(controller, signal)
     const controlUnlink = linkExternalAbortSignal(controller, callbacks?.runControl?.signal)
     const timeout = getRequestTimeoutMs()
-    const deadline = Date.now() + timeout
+    const deadline = createInvocationDeadline(timeout)
     const timer = setTimeout(() => controller.abort(), timeout)
     const state: NativeStreamState = { model: null, finishReason: null, inputTokens: null, outputTokens: null, complete: false, parts: [], outputMaterial: '', calls: new Map() }
     const attempts = Math.max(1, getRequestMaxRetries())
@@ -163,7 +166,7 @@ export abstract class NativeMessagesRunner implements ChatLlmRunner {
           response = await session.dispatchAdmittedFetch({ basePrepared: request, physicalAttemptId: attemptId, operationId: request.request_id,
             ...(callbacks?.runControl ? { runControl: callbacks.runControl } : {}),
             fetch: () => dispatchRunOperation(callbacks?.runControl, 'model', request.request_id, async () => {
-              try { phase('request_dispatched'); return await fetch(this.endpoint(stream), { method: 'POST', headers: this.headers(), body: request.body, signal: controller.signal, redirect: 'error' }) }
+              try { phase('request_dispatched'); assertOfflineEndpointAllowed(this.endpoint(stream), this.environment); return await fetch(this.endpoint(stream), { method: 'POST', headers: this.headers(), body: request.body, signal: controller.signal, redirect: 'error' }) }
               catch (error) { transportFailed = true; throw error }
             }) })
           if (response.ok || !isRetryableStatus(response.status) || attempt === attempts) break

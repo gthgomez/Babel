@@ -19,6 +19,7 @@ import { buildChatEngineExecutionContext, type ChatExecutionContextHost } from '
  * Compaction: chatCompaction.ts. Critic/budget: chatEngineCriticBudget.ts.
  */
 
+import { providerSupportsOperation } from "../runners/providerRegistry.js";
 import {
   completeChatStream,
   failChatStream,
@@ -390,6 +391,7 @@ import {
   buildGateRejectionMessage,
   checkCostWallBudgets,
   currentTurnHasMutation as turnHasMutation,
+  estimateRequestCostUsd,
   formatBudgetKillAnswer,
   hasAnyWrites as sessionHasAnyWrites,
   isDiffCriticEnabled,
@@ -412,7 +414,7 @@ import {
   hashContent as hashContentFn,
 } from "./chatEngineVerifierSession.js";
 import { resolveAcceptedReadOnlyTerminal } from "./chatEngineMutatingNoChangeTerminal.js";
-import { seedChatVerifierDependencyHashes } from "./verifierDependencyAdmission.js";
+import { contractMeaningCommands, contractPreservationErrors, seedChatVerifierDependencyHashes } from "./verifierDependencyAdmission.js";
 import { admitVerifierCustodyViolation } from "./verifierCustodyAdmission.js";
 import { RepetitionDetector } from "./repetitionDetector.js";
 import { captureThought } from "./thoughtCapture.js";
@@ -433,6 +435,7 @@ import {
 import {restoreTurnRuntime} from './restoreTurnRuntime.js';
 import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjectiveSubmission,type ObjectiveAdmissionHost,type ObjectiveAdmissionResult} from './chatEngineObjectiveAdmission.js';
 import type { CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
+import { chatFinalRevisionWitness, chatFinalRevisionRequiredForChat } from '../authority/finalRevision.js';
 import {requiresObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog} from './taskObjectiveLifecycle.js';
 
 import { admitProjectContentRead, isReadOnlyChat } from "./chatReadOnly.js";
@@ -1425,7 +1428,7 @@ export class ChatEngine {
       isAuthoritativeCommand: isAuthoritativeVerifierCommand,
     }));
     const errors = [...selected.proofSelection.evidenceErrors, ...selected.proofSelection.integrityFindings,
-      ...proofs.flatMap(proof => proof.errors ?? [])];
+      ...proofs.flatMap(proof => proof.errors ?? []), ...contractPreservationErrors(this.parity.liveAuthority?.taskContract, this.options.projectRoot)];
     if (!proofs.length || selected.proofSelection.missingRequirements.length || selected.proofSelection.unresolvedRelevantFailures.length) errors.push('missing current covering green proof');
     return { compliant: errors.length === 0, ...(errors.length ? { errors } : {}) };
   }
@@ -1554,6 +1557,31 @@ export class ChatEngine {
     };
   }
 
+  /**
+   * Conservative one-request estimate for finite-cap preauthorization.
+   * Uses the last observed charge (same request shape) or policy pricing plus
+   * the effective output reserve. Unknown pricing stays unknown; Babel then
+   * keeps its existing incomplete-accounting refusal instead of inventing zero.
+   */
+  private estimateNextRequestCostUsd(maxCostUsd: number): number | undefined {
+    if (!Number.isFinite(maxCostUsd)) return undefined;
+    const metadata = this.deliberationRunner?.getLastInvocationMetadata?.() ?? null;
+    const lastCharge = metadata?.estimated_cost_usd;
+    if (typeof lastCharge === 'number' && Number.isFinite(lastCharge) && lastCharge > 0) return lastCharge;
+    const policy = this.modelPolicy;
+    if (!policy || policy.estimatedCostPer1MInput === undefined || policy.estimatedCostPer1MOutput === undefined) return undefined;
+    const outputReserve = Math.min(
+      this.limits.maxTokensPerRound,
+      policy.requestedOutputTokens ?? policy.maxOutputTokens ?? 8_000,
+    );
+    return estimateRequestCostUsd({
+      inputTokens: metadata?.prompt_tokens ?? policy.approximateInputTokens,
+      outputTokens: outputReserve,
+      inputCostPer1M: policy.estimatedCostPer1MInput,
+      outputCostPer1M: policy.estimatedCostPer1MOutput,
+    });
+  }
+
   private checkBudgets(skipTurnLimit = false): {
     ok: boolean;
     reason?: string;
@@ -1598,6 +1626,7 @@ export class ChatEngine {
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: "cost" };
     }
+    const estimatedNext = this.estimateNextRequestCostUsd(maxCostUsd);
     const maxWallMs = this.effectiveWallCapMs();
     const result = checkCostWallBudgets({
       totalCostUsd: taskCost,
@@ -1610,6 +1639,7 @@ export class ChatEngine {
         this.limits.wallBudget?.requestedMs ?? this.limits.maxWallMs,
       postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
       criticRepairCostCapUsd: this.criticRepairCostCapUsd,
+      ...(estimatedNext !== undefined ? { estimatedNextRequestCostUsd: estimatedNext } : {}),
     });
     if (!result.ok) {
       this.terminatingLimiter = result.limiter ?? "cost";
@@ -2656,7 +2686,7 @@ export class ChatEngine {
   }
 
   private isAcceptedReadOnlyTerminal(): boolean {
-    return resolveAcceptedReadOnlyTerminal({
+    return contractPreservationErrors(this.parity.liveAuthority?.taskContract, this.options.projectRoot).length === 0 && resolveAcceptedReadOnlyTerminal({
       effectiveOperation: this.lastTurnRuntime?.effectiveOperation,
       ambientReadOnly: isReadOnlyChat(),
       hasAnyWrites: this.hasAnyWrites(),
@@ -2676,11 +2706,12 @@ export class ChatEngine {
   private decideCompletion(
     requestedOutcome: TerminalOutcome | "PLAN_COMPLETE",
     hasMutation: boolean,
+    publicationRevision?: import('../authority/finalRevision.js').FinalRevisionWitnessV1,
   ) {
     refreshChatCompletionVerifierCurrency(this.options, hasMutation, this.lastVerifierReceipt, this.executedVerifierLedger);
     const verifierInput = this.buildVerifierInput();
-    const evidenceProof = requestedOutcome === "VERIFIED_COMPLETE" || hasMutation
-      ? this.buildCompletionProof(hasMutation) : { compliant: false, errors: ["no mutation-bound verifier evidence is available"] };
+    const finalRevision = publicationRevision ?? chatFinalRevisionWitness(this.options.projectRoot, toGateToolLog(this.toolCallLog), verifierInput.requiredVerifierCommands);
+    const evidenceProof = requestedOutcome === "VERIFIED_COMPLETE" || hasMutation ? this.buildCompletionProof(hasMutation) : { compliant: false, errors: ["no mutation-bound verifier evidence is available"] };
     if (this.criterionCompletion && (requestedOutcome === 'VERIFIED_COMPLETE' || hasMutation)) {
       this.criterionCompletion.refreshPrivateEvidence({
         proof: evidenceProof,
@@ -2705,6 +2736,8 @@ export class ChatEngine {
         ...(verifierInput.currentWorkspaceRevisionHash ? { currentWorkspaceRevisionHash: verifierInput.currentWorkspaceRevisionHash } : {}),
       toolCallLog: toGateToolLog(this.toolCallLog),
       acceptance: this.criterionCompletion?.currentRequest(),
+      ...(finalRevision ? { finalRevision } : {}),
+      finalRevisionRequired: chatFinalRevisionRequiredForChat({ projectRoot: this.options.projectRoot, ambientReadOnly: isReadOnlyChat(), toolCallLog: toGateToolLog(this.toolCallLog) }),
       ...(this.lastVerifierReceipt?.boundRevision
         ? { workspaceRevision: this.lastVerifierReceipt.boundRevision }
         : {}),
@@ -2733,10 +2766,7 @@ export class ChatEngine {
     return failChatStream(this.terminalRuntimeInput(), error, reason, presentationError);
   }
   private streamCancelled(): ChatEvent {
-    return cancelledChatStream(
-      () => this.terminalRuntimeInput(),
-      this.runControl,
-    );
+    return cancelledChatStream(() => this.terminalRuntimeInput(), this.runControl);
   }
   private streamStopped(stop: StopRequest): ChatEvent {
     return stoppedChatStream(() => this.terminalRuntimeInput(), stop);
@@ -2859,9 +2889,19 @@ export class ChatEngine {
   /** Last primary invocation evidence; configuration alone never supplies observed identity. */
   getProviderSelectionStatus() {
     const metadata = this.deliberationRunner?.getLastInvocationMetadata() ?? null;
-    return { provider: this.modelPolicy?.provider ?? null, connection: this.modelPolicy?.connectionId ?? null,
-      requestedModel: this.modelPolicy?.providerModelId ?? null, sentModel: metadata?.sent_model_id ?? null,
-      observedModel: metadata?.observed_model_id ?? null };
+    const policy = this.modelPolicy;
+    return { provider: policy?.provider ?? null, connection: policy?.connectionId ?? null,
+      requestedModel: policy?.providerModelId ?? null,
+      requestedSelection: policy?.requestedModelId ?? policy?.providerModelId ?? null,
+      resolvedModel: policy?.providerModelId ?? null, alias: policy?.aliasNotice ?? null,
+      sentModel: metadata?.sent_model_id ?? null,
+      observedModel: metadata?.observed_model_id ?? null,
+      capabilities: policy ? {
+        structured: providerSupportsOperation(policy.provider as never, 'structured'),
+        native_tool_stream: providerSupportsOperation(policy.provider as never, 'native_tool_stream'),
+      } : null,
+      offline: isOfflineChatMode(),
+      budgetUsd: Number.isFinite(this.limits.maxCostUsd) ? this.limits.maxCostUsd : 'unlimited' };
   }
 
   getProviderConversation(): ProviderMessage[] {
@@ -4063,8 +4103,8 @@ export class ChatEngine {
       maxEstimatedTokens: this.limits.maxEstimatedTokens,
       compactionConsecutiveFailures: this.compactionConsecutiveFailures,
       maxCompactionFailures: ChatEngine.MAX_COMPACTION_FAILURES,
-      summarizeDroppedTurns: (d: ChatMessage[]) =>
-        this.summarizeDroppedTurns(d),
+      summarizeDroppedTurns: (d: ChatMessage[], options?: import('./compactionSummary.js').DroppedTurnSummaryOptions) =>
+        this.summarizeDroppedTurns(d, options),
     };
     compactHeuristicConversation(state);
     this.conversation = state.conversation;
@@ -4072,8 +4112,8 @@ export class ChatEngine {
     this.compactionConsecutiveFailures = state.compactionConsecutiveFailures;
   }
 
-  private summarizeDroppedTurns(dropped: ChatMessage[]): string {
-    return summarizeDroppedTurnsFn(dropped);
+  private summarizeDroppedTurns(dropped: ChatMessage[], options?: import('./compactionSummary.js').DroppedTurnSummaryOptions): string {
+    return summarizeDroppedTurnsFn(dropped, options);
   }
   private parseChatTurnLenient(rawText: string): ChatTurn {
     return parseChatTurnLenient(rawText);
@@ -4400,6 +4440,7 @@ export class ChatEngine {
       hashes: this.verifierDependencyHashes,
       resolvedVerifierCommands: this.getResolvedRequiredVerifiers(),
       discoveredTestCommands: this.discoveredTestCommands.map((entry) => entry.command),
+      meaningVerifierCommands: contractMeaningCommands(this.parity.liveAuthority?.taskContract.acceptance),
     });
   }
 
@@ -4642,8 +4683,7 @@ export class ChatEngine {
         },
       },
       effects: {
-        decideCompletion: (requested, hasMutation) =>
-          this.decideCompletion(requested, hasMutation),
+        decideCompletion: (requested, hasMutation, finalRevision) => this.decideCompletion(requested, hasMutation, finalRevision),
         settleActiveExecution: () => this.settleActiveExecutionForTerminal(),
         finalizeTurn: (outcome, status, reason, response, extras) =>
           finalizeParityTurnSync(

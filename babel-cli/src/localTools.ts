@@ -76,7 +76,7 @@ import {
   type ExecutorToolDefinition,
   type ExecutorToolSnapshot,
 } from './tools/executorRegistry.js';
-import { EXECUTOR_TOOL_NAMES } from './tools/toolContracts.js';
+import { DEEP_EXECUTOR_TOOL_NAMES, EXECUTOR_TOOL_NAMES } from './tools/toolContracts.js';
 import { LSP_OPERATIONS } from './services/lsp/types.js';
 import { enforceActiveTaskEnvelope, type EnvelopeBlockResult } from './schemas/taskEnvelope.js';
 import { getCircuitBreakerState, resetCircuitBreakerForRun } from './agent/toolExecutor.js';
@@ -790,39 +790,105 @@ function handleExitPlanMode(): ToolResult {
 
 // ─── tool_catalog handler ──────────────────────────────────────────────────
 
-function handleToolCatalog(req: Extract<ToolCallRequest, { tool: 'tool_catalog' }>): ToolResult {
-  const snapshot = getManifestSnapshot();
+interface ToolCatalogEntrySource {
+  name: string;
+  category: string;
+  description: string;
+  mutating: boolean;
+  dryRunBehavior: string;
+  policyTags: string[];
+  required: string[];
+  optional: string[];
+  jitApproval?: boolean;
+  examples?: Record<string, unknown>[];
+}
 
-  let filtered = snapshot;
-
-  // Filter by category if specified
-  if (req.category) {
-    filtered = filtered.filter((t) => t.category === req.category);
+/** Deep-stage restrictions are explicit so a catalog never hides a reachable tool or advertises an unreachable one. */
+function deepStageRestrictions(source: ToolCatalogEntrySource): string[] {
+  if (!(DEEP_EXECUTOR_TOOL_NAMES as readonly string[]).includes(source.name)) {
+    return [
+      `${source.name} is intentionally restricted from the Deep executor surface; it is reachable from Chat only.`,
+    ];
   }
+  if (source.name === 'tool_catalog') {
+    return ['Omitted from Deep prompt shapes to avoid self-referential catalog expansion.'];
+  }
+  if (source.category === 'mode') {
+    return ['Omitted from Deep prompt shapes because mode switching is host-driven.'];
+  }
+  return [];
+}
 
-  // Filter by mutating status if specified
+/**
+ * Model-facing catalog built from the executable registry, enriched with the
+ * manifest metadata when present. The registry is authoritative: a tool that
+ * can be dispatched is always reported, and every reported input name is one
+ * the handler actually accepts.
+ */
+export function handleToolCatalog(
+  req: Extract<ToolCallRequest, { tool: 'tool_catalog' }>,
+): ToolResult {
+  // The executable registry is authoritative. A missing or invalid packaged
+  // manifest must degrade metadata, never fail the catalog itself.
+  let manifestEntries: ReturnType<typeof getManifestSnapshot> = [];
+  try {
+    manifestEntries = getManifestSnapshot();
+  } catch {
+    manifestEntries = [];
+  }
+  const manifestByName = new Map(manifestEntries.map((entry) => [entry.name, entry]));
+  const sources: ToolCatalogEntrySource[] = getExecutorToolRegistrySnapshot().map((tool) => {
+    const manifest = manifestByName.get(tool.name);
+    return {
+      name: tool.name,
+      category: tool.category,
+      description: manifest?.description ?? tool.description,
+      mutating: tool.mutating,
+      dryRunBehavior: tool.dryRunBehavior,
+      policyTags: [...tool.policyTags],
+      required: [...tool.input.required],
+      optional: [...tool.input.optional],
+      ...(manifest?.jitApproval !== undefined ? { jitApproval: manifest.jitApproval } : {}),
+      ...(manifest?.examples !== undefined ? { examples: manifest.examples } : {}),
+    };
+  });
+
+  let filtered = sources;
+  if (req.category) {
+    filtered = filtered.filter((tool) => tool.category === req.category);
+  }
   if (req.mutating !== undefined) {
-    filtered = filtered.filter((t) => t.mutating === req.mutating);
+    filtered = filtered.filter((tool) => tool.mutating === req.mutating);
   }
 
   const format = req.format ?? 'summary';
 
   if (format === 'full') {
-    // Full format: include all fields, examples, and input contracts
-    const entries = filtered.map((t) => ({
-      name: t.name,
-      category: t.category,
-      description: t.description,
-      mutating: t.mutating,
-      dryRunBehavior: t.dryRunBehavior,
-      policyTags: t.policyTags,
-      input: {
-        required: t.input.required,
-        optional: t.input.optional,
-      },
-      ...(t.jitApproval !== undefined ? { jitApproval: t.jitApproval } : {}),
-      ...(t.examples ? { examples: t.examples } : {}),
-    }));
+    const entries = filtered.map((tool) => {
+      const manifest = manifestByName.get(tool.name);
+      const typedField = (name: string, required: boolean) => {
+        const fromManifest = required
+          ? manifest?.input.required.find((field) => field.name === name)
+          : manifest?.input.optional.find((field) => field.name === name);
+        return fromManifest ?? { name, type: 'unknown', description: '' };
+      };
+      return {
+        name: tool.name,
+        category: tool.category,
+        description: tool.description,
+        mutating: tool.mutating,
+        dryRunBehavior: tool.dryRunBehavior,
+        policyTags: tool.policyTags,
+        input: {
+          required: tool.required.map((name) => typedField(name, true)),
+          optional: tool.optional.map((name) => typedField(name, false)),
+        },
+        deep_executor: (DEEP_EXECUTOR_TOOL_NAMES as readonly string[]).includes(tool.name),
+        surface_restrictions: deepStageRestrictions(tool),
+        ...(tool.jitApproval !== undefined ? { jitApproval: tool.jitApproval } : {}),
+        ...(tool.examples !== undefined ? { examples: tool.examples } : {}),
+      };
+    });
 
     return {
       exit_code: 0,
@@ -831,14 +897,15 @@ function handleToolCatalog(req: Extract<ToolCallRequest, { tool: 'tool_catalog' 
     };
   }
 
-  // Summary format: name, category, description, mutating, key params
-  const entries = filtered.map((t) => ({
-    name: t.name,
-    category: t.category,
-    description: t.description,
-    mutating: t.mutating,
-    requiredParams: t.input.required.map((f) => f.name),
-    optionalParams: t.input.optional.map((f) => f.name),
+  const entries = filtered.map((tool) => ({
+    name: tool.name,
+    category: tool.category,
+    description: tool.description,
+    mutating: tool.mutating,
+    requiredParams: tool.required,
+    optionalParams: tool.optional,
+    deep_executor: (DEEP_EXECUTOR_TOOL_NAMES as readonly string[]).includes(tool.name),
+    surface_restrictions: deepStageRestrictions(tool),
   }));
 
   return {
@@ -1333,7 +1400,7 @@ const EXECUTOR_TOOL_DEFINITIONS = [
     mutating: false,
     dryRunBehavior: 'live',
     policyTags: ['search', 'read', 'git'],
-    input: { required: [], optional: ['format', 'path', 'max_lines'] },
+    input: { required: [], optional: ['format', 'path', 'max_lines', 'output_format'] },
     handler: (req, context) => {
       const typedReq = req as Extract<ToolCallRequest, { tool: 'git_context' }>;
       return handleGitContextTool({

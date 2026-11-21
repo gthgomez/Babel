@@ -56,6 +56,10 @@ function receiptStructuredArgvConsistent(receipt: BoundChatVerifierReceipt): boo
 
 function isMeaningBoundAcceptance(item: AcceptanceRequirementV1): boolean {
   if (commandHintFromDescription(item.description)) return false;
+  // A frozen executable spec is command evidence even when its requirement
+  // type is generic (for example a direct node script witness).
+  if (!item.verification.verifier_id.startsWith('meaning:') &&
+    item.verification.executable_id && item.verification.argv?.length) return false;
   return item.verification_strategy === 'meaning'
     || (item.type === 'custom' && item.verification?.kind === 'custom');
 }

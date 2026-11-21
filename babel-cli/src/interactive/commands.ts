@@ -91,6 +91,9 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
       const id = args[0] ?? ctx.state.savedPlanId;
       if (!id) throw new Error('Use /apply <plan-id> after producing a plan.');
       const target = ctx.resolveCurrentTarget();
+      // An explicit /apply <plan-id> typed by the operator is this lane's
+      // confirmation; the same source, scope, fingerprint and read-only
+      // admission still runs before the executor is admitted.
       await withSavedPlanApplication(id, { projectRoot: target.targetRoot, operatorMode: ctx.state.operatorMode, execute: async plan => {
         const { executeGovernedTask } = await import('./execution/governed.js');
         const result = await executeGovernedTask(ctx, input, `Implement this approved plan within current permissions.\nTask: ${plan.task}\nPlan: ${plan.body}`, target, 'deep', plan.sourceRunId ?? null);

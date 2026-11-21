@@ -84,7 +84,7 @@ export async function runProviderSetup(options: {
       await promptForProviderCredential(variable, env)
     }
     updateUserSettings({ setup: { step: 'budget', connection: id } }, { env })
-    write('Finite USD caps are supported by standard Work. Plan, thorough review and Apply currently reject finite caps before inference; choosing unlimited explicitly permits those lanes without a dollar ceiling.\n')
+    write('Finite USD caps are supported by standard Work with conservative per-request preauthorization. Plan, thorough review and Apply currently reject finite caps before inference; offline/local routes are exempt because they cannot spend remote money. Choosing unlimited explicitly permits those lanes without a dollar ceiling.\n')
     const budgetRaw = (await ask('Per-task budget in USD, or unlimited (explicit choice required): ')).trim()
     const budget = budgetRaw === 'unlimited' ? budgetRaw : Number(budgetRaw)
     if (budget !== 'unlimited' && (!Number.isFinite(budget) || budget <= 0)) throw new Error('Choose a positive budget or unlimited. Setup progress was saved.')

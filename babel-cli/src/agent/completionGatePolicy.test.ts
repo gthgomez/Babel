@@ -778,7 +778,7 @@ describe('planCompletionGateReject', () => {
     }
   });
 
-  test('required + interactive soft-allows after max strikes', async () => {
+  test('required + interactive blocks after max strikes like headless', async () => {
     const { planCompletionGateReject } = await import('./completionGatePolicy.js');
     const p = planCompletionGateReject({
       hasWrites: true,
@@ -788,7 +788,10 @@ describe('planCompletionGateReject', () => {
       gateStrikes: 5,
       maxGateStrikes: 3,
     });
-    assert.equal(p.kind, 'soft_allow');
+    assert.equal(p.kind, 'blocked');
+    if (p.kind === 'blocked') {
+      assert.match(p.reason, /Interactive required-verification policy blocks/);
+    }
   });
 
   test('mandatory verifier contract blocks interactive recovery after max strikes', async () => {

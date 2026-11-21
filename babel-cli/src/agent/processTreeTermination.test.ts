@@ -31,10 +31,10 @@ import { terminateChildTree } from '../processTree.js';
 import { quoteWindowsCommandArg } from '../utils/commandArgv.js';
 
 const DELAY_WRITE_MS = 2_500;
-const TIMEOUT_TEST_DELAY_WRITE_MS = 30_000;
-const TIMEOUT_TEST_PROCESS_TIMEOUT_MS = 25_000;
-const TIMEOUT_TEST_READY_WAIT_MS = 12_000;
-const TIMEOUT_TEST_ARM_WAIT_MS = 8_000;
+const TIMEOUT_TEST_DELAY_WRITE_MS = 15_000;
+const TIMEOUT_TEST_PROCESS_TIMEOUT_MS = 12_000;
+const TIMEOUT_TEST_READY_WAIT_MS = 6_000;
+const TIMEOUT_TEST_ARM_WAIT_MS = 3_000;
 const POST_KILL_WAIT_MS = DELAY_WRITE_MS + 1_200;
 
 function isProcessAlive(pid: number): boolean {
@@ -232,7 +232,7 @@ async function waitForOwnedClose(closed: Promise<void>): Promise<void> {
   } finally { clearTimeout(timer); }
 }
 
-describe('real process-tree termination (qualifying)', () => {
+describe('real process-tree termination (qualifying)', { timeout: 180_000 }, () => {
   beforeEach(() => {
     resetBackgroundShellRegistryForTests();
   });
@@ -256,7 +256,9 @@ describe('real process-tree termination (qualifying)', () => {
       });
       const grandchildPid = await waitForOwnershipReady(jobRef.job.id, ownership, TIMEOUT_TEST_READY_WAIT_MS);
       writeFileSync(scripts.release, 'start', 'utf8');
-      // Readiness and child-arm waits total 20s, leaving 5s before timeout.
+      // Readiness and child-arm waits total at most 9s, leaving at least 3s
+      // before the process timeout. The descendant's later timer still
+      // guarantees timeout occurs first.
       await waitForDelayedWriteArmed(jobRef.job.id, grandchildPid, TIMEOUT_TEST_ARM_WAIT_MS);
       const result = await awaitBackgroundShell(jobRef.job.id, TIMEOUT_TEST_PROCESS_TIMEOUT_MS + 5_000);
       assert.equal(result.status, 'killed');
@@ -332,7 +334,7 @@ describe('real process-tree termination (qualifying)', () => {
 
 });
 
-describe('Windows tree termination failure handling', () => {
+describe('Windows tree termination failure handling', { timeout: 180_000 }, () => {
   it('bounds persistent helper failures, stops after success, and does not retry an exited root', () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
     const originalSpawnSync = childProcess.spawnSync;

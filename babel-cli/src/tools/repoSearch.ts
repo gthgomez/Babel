@@ -4,6 +4,7 @@ import { basename, relative, resolve } from 'node:path';
 import { collectTextFiles, type SearchHit } from '../services/indexer.js';
 import { extractFolderTokens } from '../services/pathScanner.js';
 import { isPathInside } from '../services/targetResolver.js';
+import { splitApprovedRoots } from '../utils/approvedRoots.js';
 import {
   detectRipgrep,
   ripgrep,
@@ -77,10 +78,7 @@ function compileGrepPattern(pattern: string, ignoreCase = false): RegExp {
 export function getApprovedReadRoots(projectRoot: string): string[] {
   const envVal =
     process.env['BABEL_OPENCLAW_APPROVED_ROOTS'] || process.env['BABEL_ALLOWED_ROOTS'] || '';
-  const roots = envVal
-    .split(',')
-    .map((r) => r.trim())
-    .filter(Boolean)
+  const roots = splitApprovedRoots(envVal)
     .map((r) => {
       try {
         if (existsSync(r)) {

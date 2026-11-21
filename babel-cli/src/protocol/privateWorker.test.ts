@@ -112,7 +112,7 @@ async function loadWorker() {
 
 test('private worker retains one real ChatEngine per thread for ten turns', async () => {
   const { startPrivateWorker } = await loadWorker();
-  const root = mkdtempSync(join(tmpdir(), 'babel-private-worker-'));
+  const root = mkdtempSync(join(tmpdir(), 'babel-fixture-worker-'));
   const oldRuns = process.env['BABEL_RUNS_DIR'];
   const oldProfile = process.env['BABEL_EXECUTION_PROFILE'];
   const oldCost = process.env['BABEL_CHAT_MAX_COST'];
@@ -242,7 +242,8 @@ function fakeHost(execute: (engine: ChatEngine) => void) {
         projectRoot: descriptor.projectRoot, executionProfile: 'chat' });
       engine.assignRunId(descriptor.threadId);
       engine.getProviderSelectionStatus = () => ({ provider: descriptor.provider, connection: null,
-        requestedModel: 'fixture-model', sentModel: null, observedModel: null });
+        requestedModel: 'fixture-model', requestedSelection: 'fixture-model', resolvedModel: 'fixture-model', alias: null,
+        sentModel: null, observedModel: null, capabilities: null, offline: false, budgetUsd: 'unlimited' });
       execute(engine);
       return engine;
     },
@@ -251,7 +252,7 @@ function fakeHost(execute: (engine: ChatEngine) => void) {
 
 test('private worker fences authority, thread ownership, and replay across workers', async () => {
   const { startPrivateWorker } = await loadWorker();
-  const root = mkdtempSync(join(tmpdir(), 'babel-private-authority-'));
+  const root = mkdtempSync(join(tmpdir(), 'babel-fixture-authority-'));
   const oldRuns = process.env['BABEL_RUNS_DIR'];
   const oldProfile = process.env['BABEL_EXECUTION_PROFILE'];
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
@@ -327,7 +328,7 @@ test('private worker fences authority, thread ownership, and replay across worke
 
 test('cancellation rejects a late approval and preserves terminal evidence', async () => {
   const { startPrivateWorker } = await loadWorker();
-  const root = mkdtempSync(join(tmpdir(), 'babel-private-cancel-'));
+  const root = mkdtempSync(join(tmpdir(), 'babel-fixture-cancel-'));
   const oldRuns = process.env['BABEL_RUNS_DIR'];
   const oldProfile = process.env['BABEL_EXECUTION_PROFILE'];
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
@@ -370,7 +371,7 @@ test('cancellation rejects a late approval and preserves terminal evidence', asy
 
 test('large output retains approval, terminal and durable reconciliation', async () => {
   const { startPrivateWorker } = await loadWorker();
-  const root = mkdtempSync(join(tmpdir(), 'babel-private-output-'));
+  const root = mkdtempSync(join(tmpdir(), 'babel-fixture-output-'));
   const oldRuns = process.env['BABEL_RUNS_DIR'];
   const oldProfile = process.env['BABEL_EXECUTION_PROFILE'];
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
@@ -414,7 +415,7 @@ test('large output retains approval, terminal and durable reconciliation', async
 });
 
 test('private entry communicates over inherited descriptors without CLI bootstrap', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-private-entry-'));
+  const root = mkdtempSync(join(tmpdir(), 'babel-fixture-entry-'));
   const env: NodeJS.ProcessEnv = {};
   for (const name of ['PATH', 'SystemRoot', 'ComSpec', 'TEMP', 'TMP', 'PATHEXT']) {
     const value = process.env[name];
@@ -479,7 +480,7 @@ test('private entry communicates over inherited descriptors without CLI bootstra
 
 test('worker-bound provider credentials are absent in actual host commands', async () => {
   const { startPrivateWorker } = await loadWorker();
-  const root = mkdtempSync(join(tmpdir(), 'babel-private-host-command-'));
+  const root = mkdtempSync(join(tmpdir(), 'babel-fixture-host-command-'));
   const oldRuns = process.env['BABEL_RUNS_DIR'];
   const oldProfile = process.env['BABEL_EXECUTION_PROFILE'];
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs');

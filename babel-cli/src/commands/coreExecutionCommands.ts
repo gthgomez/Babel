@@ -131,6 +131,11 @@ export function registerCoreExecutionCommands(program: Command): void {
           const task = taskParts.join(" ");
 
           if (options.background) {
+            const { daemonPipelineEnqueueRejection } = await import(
+              "../daemon/pipelineQualification.js"
+            );
+            const quarantine = daemonPipelineEnqueueRejection();
+            if (quarantine) console.error(`[daemon] ${quarantine}`);
             const { ensureDaemon, pingDaemon } =
               await import("../daemon/client.js");
             const { ipcRequest } = await import("../daemon/ipc.js");
@@ -161,6 +166,7 @@ export function registerCoreExecutionCommands(program: Command): void {
                     status: "queued",
                     job_id: result.job_id,
                     job_status: result.status,
+                    ...(quarantine ? { warning: quarantine } : {}),
                   },
                   null,
                   2,

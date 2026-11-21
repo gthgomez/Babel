@@ -134,6 +134,38 @@ test('duplicate test identities invalidate the inventory', () => withDirectory((
   assert.ok(result.summary.errors.includes('duplicate_test_id'))
 }))
 
+test('file-qualified identities from distinct test files stay distinct and complete', () => withDirectory((directory) => {
+  const tap = [
+    'TAP version 13',
+    '# Subtest: src/a.test.ts :: repeated group',
+    '    ok 1 - same title', '      ---', "      duration_ms: 1", "      type: 'test'", '      ...',
+    'ok 1 - src/a.test.ts :: repeated group', '  ---', "  duration_ms: 1", "  type: 'suite'", '  ...',
+    '# Subtest: src/b.test.ts :: repeated group',
+    '    ok 1 - same title', '      ---', "      duration_ms: 1", "      type: 'test'", '      ...',
+    'ok 2 - src/b.test.ts :: repeated group', '  ---', "  duration_ms: 1", "  type: 'suite'", '  ...',
+    footer({ tests: 2, suites: 2, passed: 2 }),
+  ].join('\n')
+  const result = tapResult(directory, tap)
+  assert.equal(result.status, 0)
+  assert.equal(result.summary.status, 'complete')
+  assert.equal(result.summary.testCount, 2)
+}))
+
+test('same-file duplicate titles remain ambiguous even when file-qualified', () => withDirectory((directory) => {
+  const tap = [
+    'TAP version 13',
+    '# Subtest: src/a.test.ts :: repeated group',
+    '    ok 1 - same title', '      ---', "      duration_ms: 1", "      type: 'test'", '      ...',
+    '    ok 2 - same title', '      ---', "      duration_ms: 1", "      type: 'test'", '      ...',
+    'ok 1 - src/a.test.ts :: repeated group', '  ---', "  duration_ms: 1", "  type: 'suite'", '  ...',
+    footer({ tests: 2, suites: 1, passed: 2 }),
+  ].join('\n')
+  const result = tapResult(directory, tap)
+  assert.equal(result.status, 1)
+  assert.equal(result.summary.status, 'failed')
+  assert.ok(result.summary.errors.includes('duplicate_test_id'))
+}))
+
 test('duplicate root TAP sequence numbers cannot produce complete evidence', () => withDirectory((directory) => {
   const tap = [
     'TAP version 13',

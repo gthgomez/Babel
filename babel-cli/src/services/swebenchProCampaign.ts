@@ -1845,7 +1845,7 @@ export async function runSwebenchProCampaign(
   const summary_lines = [
     `SWE-Bench Pro campaign ${campaign_id}`,
     `instances=${instances.length} provider=${options.provider} early_stop_n=${earlyStopN}`,
-    `pass_mode=${passMode} (BABEL_SWE_PRO_PASS_MODE=gold|ftp|both; default gold)`,
+    `pass_mode=${passMode} (BABEL_SWE_PRO_PASS_MODE=gold|ftp|both; default ftp)`,
     `scoreboard: capability_primary=host_fail_to_pass; gold_role=diagnostic_only (never sole capability)`,
     causalNote,
     `infra_pass=${cells.filter((c) => c.phase === 'infra' && c.status === 'pass').length}`,

@@ -1,6 +1,7 @@
 /** Shared CLI/TUI application operations for non-secret connection preferences. */
 import { resolve } from 'node:path'
-import { getAvailableModels } from '../modelPolicy.js'
+import { getAvailableModels, resolveModelByKey } from '../modelPolicy.js'
+import { buildProviderRouteReport } from '../runners/providerRouteReport.js'
 import { getProviderSpec, isProviderId, listProviderSpecs } from '../runners/providerRegistry.js'
 import { readUserSettings, resolveEffectiveSettings, updateUserSettings, type Connection, type UserPreferences } from '../config/userSettings.js'
 import { connectionModelSelector } from '../config/connectionModelPolicy.js'
@@ -41,17 +42,57 @@ export function connectionStatus(session: SelectionSession = {}, projectRoot = p
   const connection = effective.connection.value
   const spec = connection ? getProviderSpec(connection.provider) : null
   const keyName = connection?.apiKeyEnvVar ?? spec?.credentialEnvVar ?? null
-  const configured = Boolean(connection && effective.model.value && (connection.authentication === 'none' || !spec?.requiresCredential || (keyName && env[keyName]?.trim())))
+  // Reveal a legacy vendor alias instead of letting a saved key imply the wrong transport.
+  const requestedModel = effective.model.value
+  let alias: { from: string; to: string; notice: string | null } | null = null
+  if (requestedModel && (requestedModel.startsWith('connection/') || !isProviderId(connection?.provider ?? ''))) alias = null
+  else if (requestedModel && !requestedModel.includes('/') && !connection) {
+    try {
+      const resolved = resolveModelByKey({ key: requestedModel })
+      if (resolved.aliasResolvedFrom) alias = { from: resolved.aliasResolvedFrom, to: resolved.aliasResolvedTo ?? `${resolved.provider}/${resolved.providerModelId}`, notice: resolved.aliasNotice ?? null }
+    } catch { /* unresolvable display stays explicit below; no invented route */ }
+  }
+  const report = buildProviderRouteReport({
+    requestedModel,
+    provider: connection?.provider ?? null,
+    model: requestedModel,
+    ...(connection?.baseUrl ? { baseUrl: connection.baseUrl } : {}),
+    ...(connection?.apiKeyEnvVar ? { apiKeyEnvVar: connection.apiKeyEnvVar } : {}),
+    ...(connection?.authentication ? { authentication: connection.authentication } : {}),
+    ...(alias?.from ? { aliasFrom: alias.from, aliasTo: alias.to, ...(alias.notice ? { aliasNotice: alias.notice } : {}) } : {}),
+    budgetUsd: effective.budgetUsd.value,
+    budgetSource: effective.budgetUsd.source,
+    env,
+  })
+  const credentialReady = Boolean(connection && (connection.authentication === 'none' || !spec?.requiresCredential || (keyName && env[keyName]?.trim())))
+  const configured = Boolean(connection && effective.model.value && credentialReady && report.offline.usable)
+  const reason = !connection || !effective.model.value
+    ? 'setup_required'
+    : !report.offline.usable
+      ? 'offline_blocked'
+      : !credentialReady
+        ? 'credential_missing'
+        : 'ready_unverified'
   return {
     state: !connection || !effective.model.value ? 'setup_required' : configured ? 'configured_unverified' : 'action_required',
+    reason,
     connection: connection?.id ?? null, provider: connection?.provider ?? null, model: effective.model.value,
     endpoint: connection?.baseUrl ?? 'provider default',
     selectionSource: effective.connection.source, modelSource: effective.model.source,
-    credential: { required: connection?.authentication !== 'none' && Boolean(spec?.requiresCredential), variable: connection?.authentication === 'none' ? null : keyName, present: connection?.authentication === 'none' || (keyName ? Boolean(env[keyName]?.trim()) : !spec?.requiresCredential) },
-    operations: spec?.operations ?? [], authorityConformance: spec?.authorityConformance ?? 'unknown',
+    credential: { required: report.credential.required, variable: report.credential.variable, present: report.credential.present },
+    requestedModel: report.requested_model, resolvedProvider: report.resolved_provider, resolvedModel: report.resolved_model,
+    alias: report.alias,
+    operations: report.operations, authorityConformance: report.capabilities.authority_conformance,
+    capabilities: report.capabilities, offline: report.offline, budget: report.budget,
     connectivity: 'unverified', observedModel: null,
     autoApply: effective.autoApply, workflow: effective.workflow, review: effective.review, budgetUsd: effective.budgetUsd,
-    nextCommand: !connection || !effective.model.value ? 'babel-harness setup' : !configured ? 'babel-harness setup' : 'babel-harness work "Explain this project"',
+    nextCommand: !connection || !effective.model.value
+      ? 'babel-harness setup'
+      : !report.offline.usable
+        ? 'Run online or select a local Ollama/loopback connection.'
+        : !credentialReady
+          ? 'babel-harness setup'
+          : 'babel-harness work "Explain this project"',
   }
 }
 

@@ -209,6 +209,8 @@ export interface ChatEngineOptions {
   maxCostUsd?: number
   allowExpensive?: boolean
   workspaceRoot?: string | null
+  /** Operator-declared project-relative paths the engine must never write. */
+  lockedFiles?: readonly string[]
   fallbackModel?: string
   /** C1: Structured intent plan user message injected at session start
    *  for execute tasks when the intent compiler is enabled. */
@@ -828,6 +830,9 @@ export interface ChatEngineStreamingLoopHost {
     mutation_paths?: string[]
     effect_status?: MutationEffectStatus
     effect_scope?: import('./mutationTools.js').MutationEffectScope
+    /** `final-revision-v1`: raw-byte hash of the content this read delivered. */
+    read_revision_hash?: string
+    simulated?: boolean
   }[]
   toolsWithoutWrite: number
   readonly trackRunnerUsage: (
@@ -951,6 +956,9 @@ export interface ChatEngineActionExecutorHost {
     mutation_paths?: string[]
     effect_status?: MutationEffectStatus
     effect_scope?: import('./mutationTools.js').MutationEffectScope
+    /** `final-revision-v1`: raw-byte hash of the content this read delivered. */
+    read_revision_hash?: string
+    simulated?: boolean
   }[]
   verifierReceiptCache: Map<
     string,

@@ -12,6 +12,11 @@ import {
 import { OutputBuffer } from '../../ui/outputBuffer.js';
 import { openEditor } from '../openEditor.js';
 import { handleCommand } from '../commands.js';
+import { beginShellOutputCapture } from '../../ui/shell/shellOutputCapture.js';
+import {
+  capturesShellCommandOutput,
+  publishShellCommandOutput,
+} from '../../ui/shell/shellCommandOutput.js';
 import type { ReplContext } from '../context.js';
 import { printIdleHeader, renderTurnStatusBar } from './replSessionUi.js';
 
@@ -142,6 +147,11 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     }
   };
 
+  // Readline emits every buffered line, so a fast second line can arrive
+  // before the first task has set `isRunning`. Track the admission window so
+  // that line is queued instead of being silently dropped (UX-08/UX-11).
+  let lineInFlight = false;
+
   ctx.rl.on('line', async (line) => {
     consumeRelease();
     ctx.currentStageIdx = 0;
@@ -167,7 +177,12 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
           return;
         }
         saveHistory((ctx.rl as ReadlineWithHistory).history);
-        await executeTaskAndDrainQueue(ctx, deps, fullInput);
+        lineInFlight = true;
+        try {
+          await executeTaskAndDrainQueue(ctx, deps, fullInput);
+        } finally {
+          lineInFlight = false;
+        }
         release = await finishReplTurn(ctx, coordinator, release);
         return;
       }
@@ -192,7 +207,12 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
         : await runEditor();
       if (edited) {
         saveHistory((ctx.rl as ReadlineWithHistory).history);
-        await executeTaskAndDrainQueue(ctx, deps, edited.trim());
+        lineInFlight = true;
+        try {
+          await executeTaskAndDrainQueue(ctx, deps, edited.trim());
+        } finally {
+          lineInFlight = false;
+        }
         release = await finishReplTurn(ctx, coordinator, release);
       } else {
         release = await coordinator.acquire('repl');
@@ -208,7 +228,7 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     }
 
     // Agent busy: queue follow-up instead of parallel execution (C2).
-    if ((ctx.isRunning || ctx.preparingRun) && !input.startsWith('/')) {
+    if ((lineInFlight || ctx.isRunning || ctx.preparingRun) && !input.startsWith('/')) {
       enqueueComposerMessage(input);
       ctx.rl.prompt();
       return;
@@ -218,9 +238,23 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
 
     if (input.startsWith('/')) {
       if (ctx.shellHost) {
-        await handleCommand(ctx, input);
-        // A command such as /exit may tear the hosted shell down while it runs.
-        ctx.shellHost?.holdRepaint();
+        const command = input.slice(1).split(/\s+/)[0]?.toLowerCase() ?? '';
+        if (capturesShellCommandOutput(command)) {
+          // Print-only commands write with console.log at the composer's
+          // cursor position, which overwrote the fixed shell frame (UX-11).
+          // Capture that text and show it in the conversation pane instead.
+          ctx.shellHost.holdRepaint();
+          const capture = beginShellOutputCapture();
+          try {
+            await handleCommand(ctx, input);
+          } finally {
+            publishShellCommandOutput(ctx.shellRuntime, ctx.shellHost, capture.stop());
+          }
+        } else {
+          await handleCommand(ctx, input);
+          // A command such as /exit may tear the hosted shell down while it runs.
+          ctx.shellHost?.holdRepaint();
+        }
       } else if (ctx.withExclusiveTerminal) {
         await ctx.withExclusiveTerminal('command', () => handleCommand(ctx, input));
       } else {
@@ -229,7 +263,12 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
       await drainQueuedTasks(ctx, deps);
       release = await finishReplTurn(ctx, coordinator, release);
     } else {
-      await executeTaskAndDrainQueue(ctx, deps, input);
+      lineInFlight = true;
+      try {
+        await executeTaskAndDrainQueue(ctx, deps, input);
+      } finally {
+        lineInFlight = false;
+      }
       release = await finishReplTurn(ctx, coordinator, release);
     }
   });

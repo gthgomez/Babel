@@ -87,8 +87,10 @@ export function parseRequiredTapInventory(tap, suite) {
       .map(([, parent]) => parent.id)
       .join('/')
     const id = [...path, idSuffix].join(' / ')
+    const qualified = /^(.+?\.test\.ts) :: /.exec(id)
     const result = {
       id,
+      ...(qualified ? { sourceFile: qualified[1] } : {}),
       result: todoReason !== null ? 'todo' : skipReason !== null ? 'skipped' :
         outcome[2] === 'ok' ? 'passed' : 'failed',
       ...(skipReason !== null ? { skipReason } : {}),
@@ -182,6 +184,20 @@ export function parseRequiredTapInventory(tap, suite) {
   }
 }
 
+/**
+ * A skip identity must name the same case and, when the TAP id is file-qualified,
+ * the same source file. Legacy/synthetic TAP without a prefix keeps the title
+ * match used by reviewed skip fixtures.
+ */
+export function skipIdentityMatches(id, record) {
+  if (typeof id !== 'string' || typeof record?.name !== 'string' || typeof record?.path !== 'string') return false
+  if (id === record.name || id === `${record.path} :: ${record.name}`) return true
+  const suffix = ' / ' + record.name
+  if (!id.endsWith(suffix)) return false
+  const prefix = id.slice(0, id.length - suffix.length)
+  return !prefix.includes(' :: ') || prefix.startsWith(`${record.path} :: `)
+}
+
 export function summarizeRequiredTap(suite, artifactDirectory) {
   const directory = resolve(artifactDirectory)
   mkdirSync(directory, { recursive: true })
@@ -230,7 +246,7 @@ export function summarizeRequiredTap(suite, artifactDirectory) {
           const remaining = [...records]
           for (const test of skipped) {
             const matches = remaining.filter(record => record.reason === test.skipReason &&
-              (test.id === record.name || test.id.endsWith(' / ' + record.name)))
+              skipIdentityMatches(test.id, record))
             if (matches.length !== 1) { summary.errors.push('skip_identity_ambiguous_or_missing:' + test.id); continue }
             const record = matches[0]
             remaining.splice(remaining.indexOf(record), 1)
