@@ -30,7 +30,9 @@ import { withExecutionPolicyChoice } from '../config/executionPolicySelection.js
 import {
   hydrateReplTurnsFromCells,
   hydrateReplTurnsFromChatTranscript,
+  recoveredTerminalFromTruth,
 } from './chatTranscriptHydration.js';
+import { readDurableTerminalTruth } from '../services/durableTerminalTruth.js';
 
 export interface ResumeChatSessionResult {
   ok: true;
@@ -75,20 +77,6 @@ function savedRepoRootFromSessionEvents(log: SessionEventLog | null): string | n
 }
 
 export type ResumeChatSessionOutcome = ResumeChatSessionResult | ResumeChatSessionFailure;
-
-/** Last durable terminal record, used to hydrate one recovered status. */
-function recoveredTerminalFromLog(
-  log: ReturnType<typeof loadThreadEventLogFromDir>,
-): { outcome?: string | null; status?: string | null } | undefined {
-  const ended = log
-    ? [...log.events].reverse().find((event) => event.kind === 'turn_ended')
-    : undefined;
-  if (!ended || ended.kind !== 'turn_ended') return undefined;
-  return {
-    ...(ended.outcome !== undefined ? { outcome: ended.outcome } : {}),
-    ...(ended.status !== undefined ? { status: ended.status } : {}),
-  };
-}
 
 export async function resumeChatSession(
   ctx: ReplContext,
@@ -167,7 +155,12 @@ async function resumeChatSessionOwned(
       );
     }
     const eventLog = loadThreadEventLogFromDir(sessionDir);
-    const recoveredTerminal = recoveredTerminalFromLog(eventLog);
+    // The resume status must describe the newest turn, not merely the last
+    // `turn_ended`. A newer unfinished turn keeps the session not-verified even
+    // when older assistant prose exists (BL-14).
+    const recoveredTerminal = recoveredTerminalFromTruth(
+      readDurableTerminalTruth(sessionDir, sessionId),
+    );
 
     // D04: verify physical repository identity BEFORE any engine or execution
     // context is admitted (event-log branch) or history is hydrated as safely
