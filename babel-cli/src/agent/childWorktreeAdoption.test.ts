@@ -845,6 +845,36 @@ describe('governed child worktree adoption', () => {
     assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 2;\n');
   });
 
+  for (const side of ['child', 'parent'] as const) {
+    it(`retains the worktree when the ${side} changes during parent verification`, async () => {
+      const root = createGitProject();
+      const child = await childWorktree(root, 'adopt-verifier-drift');
+      const change = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
+      const foreignPath = side === 'child'
+        ? join(child.worktree.path, 'src/foreign.txt')
+        : join(root, change.path);
+      const result = promoteImplementWorktree({
+        projectRoot: root,
+        worktreePath: child.worktree.path,
+        writeScope: ['src'],
+        baseSha: child.baseSha!,
+        expectedChanges: [change],
+        mode: 'copy',
+        cleanupWorktree: true,
+        verify: () => {
+          writeFileSync(foreignPath, 'concurrent edit\n');
+          return { ok: true, summary: 'fixture verifier completed' };
+        },
+      });
+
+      assert.equal(result.status, side === 'child' ? 'cleanup_failed' : 'verification_failed');
+      assert.equal(result.success, false);
+      assert.equal(result.worktreeRemoved, false);
+      assert.equal(readFileSync(foreignPath, 'utf-8'), 'concurrent edit\n');
+      assert.equal(existsSync(child.worktree.path), true);
+    });
+  }
+
   it('reports cleanup failure as a failed adoption result', async () => {
     const root = createGitProject();
     const child = await childWorktree(root, 'adopt-cleanup-fail');
