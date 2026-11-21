@@ -32,6 +32,7 @@ function openRouterMockResponse(contentBody: Record<string, unknown>, init: Requ
       choices: [
         {
           message: { content: JSON.stringify(contentBody) },
+          finish_reason: 'stop',
         },
       ],
       usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },

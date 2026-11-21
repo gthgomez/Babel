@@ -46,7 +46,7 @@ function runPlanScenario(task: string, cancel: boolean | 'provider' = false, pre
           });
         }
         return new Response(JSON.stringify({model:body.model,
-          choices:[{message:{content:JSON.stringify({actions:[{type:'finish',summary:'Read-only discovery complete.',verification:[]}]})}}],
+          choices:[{finish_reason:'stop',message:{content:JSON.stringify({actions:[{type:'finish',summary:'Read-only discovery complete.',verification:[]}]})}}],
           usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15,cost:0}}));
       };
       const task=${JSON.stringify(task)};

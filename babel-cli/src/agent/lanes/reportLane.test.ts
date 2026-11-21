@@ -130,6 +130,7 @@ describe('runReportLane', { concurrency: false }, () => {
             model: 'deepseek/deepseek-v4-pro',
             choices: [
               {
+                finish_reason: 'stop',
                 message: {
                   content: JSON.stringify({
                     schema_version: 1,

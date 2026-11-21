@@ -244,7 +244,7 @@ describe('Canary B: Provider Fault Table Verification', () => {
     assert.equal(events.some((e) => e.type === 'done'), false);
   });
 
-  it('Fault Table Row 9: finish_reason length with text yields done with length', async () => {
+  it('Fault Table Row 9: finish_reason length with text fails closed', async () => {
     globalThis.fetch = (async () =>
       makeSseResponse([
         'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Long text that reached limit"}}]}',
@@ -253,10 +253,10 @@ describe('Canary B: Provider Fault Table Verification', () => {
       ])) as typeof fetch;
 
     const events = await collect(deepInfra().executeWithToolsStream(USER, []));
-    const done = events.find((e) => e.type === 'done');
-    assert.ok(done);
-    if (done?.type === 'done') assert.equal(done.finishReason, 'length');
-    assert.equal(events.some((e) => e.type === 'error'), false);
+    const errEvent = events.find((e) => e.type === 'error');
+    assert.ok(errEvent);
+    if (errEvent?.type === 'error') assert.match(errEvent.message, /finish_reason: length|budget exhausted/i);
+    assert.equal(events.some((e) => e.type === 'done'), false);
   });
 
   it('Fault Table Row 10: finish_reason length during tool call rejects incomplete tools', async () => {
