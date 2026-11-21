@@ -21,6 +21,7 @@
 
 import { Component } from "./component.js";
 import { Box } from "./primitives.js";
+import { sanitizeUntrustedTerminalBlock, sanitizeUntrustedTerminalField } from "./sanitize.js";
 import {
   dim,
   muted,
@@ -367,21 +368,21 @@ export class AgentStreamManager {
   /** Format a single event for terminal display. */
   formatEvent(event: AgentStreamEvent): string {
     const colorFn = this.agentColors.get(event.agentId) ?? muted;
-    const prefix = colorFn(`[${event.agentId}]`);
+    const prefix = colorFn(`[${sanitizeUntrustedTerminalField(event.agentId)}]`);
 
     switch (event.type) {
       case "chunk":
-        return `${prefix} ${event.text ?? ""}`;
+        return `${prefix} ${sanitizeUntrustedTerminalBlock(event.text)}`;
       case "tool_start":
-        return `${prefix} ${dim("○")} ${event.tool ?? "?"} ${dim(event.target ?? "")}`;
+        return `${prefix} ${dim("○")} ${sanitizeUntrustedTerminalField(event.tool ?? "?")} ${dim(sanitizeUntrustedTerminalField(event.target))}`;
       case "tool_complete":
-        return `${prefix} ${success("✓")} ${event.tool ?? "?"} ${dim(event.detail ?? "")}`;
+        return `${prefix} ${success("✓")} ${sanitizeUntrustedTerminalField(event.tool ?? "?")} ${dim(sanitizeUntrustedTerminalField(event.detail))}`;
       case "status":
-        return `${prefix} ${muted(event.text ?? "")}`;
+        return `${prefix} ${muted(sanitizeUntrustedTerminalField(event.text))}`;
       case "error":
-        return `${prefix} ${error(event.text ?? "unknown error")}`;
+        return `${prefix} ${error(sanitizeUntrustedTerminalField(event.text ?? "unknown error"))}`;
       default:
-        return `${prefix} ${event.text ?? ""}`;
+        return `${prefix} ${sanitizeUntrustedTerminalBlock(event.text)}`;
     }
   }
 
