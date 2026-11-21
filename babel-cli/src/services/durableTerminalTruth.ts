@@ -318,13 +318,17 @@ type SelectedTurn = {
 };
 
 function selectTurn(journals: LoadedJournals): SelectedTurn {
+  // A terminal event can stand in for a missing start only when neither
+  // journal has a start. A delayed terminal must not move an admitted turn.
+  const threadOrder = (turn: TurnRecord): number | null =>
+    turn.admissionSeq ?? (turn.sessionSubmittedSeq === null ? turn.threadEndSeq : null);
+  const sessionOrder = (turn: TurnRecord): number | null =>
+    turn.sessionSubmittedSeq ?? (turn.admissionSeq === null ? turn.sessionEndSeq : null);
   let thread: TurnRecord | null = null;
   let session: TurnRecord | null = null;
   for (const turn of journals.turns.values()) {
-    const threadSeq = turn.admissionSeq ?? turn.threadEndSeq ?? -1;
-    const sessionSeq = turn.sessionSubmittedSeq ?? turn.sessionEndSeq ?? -1;
-    if (threadSeq > (thread?.admissionSeq ?? thread?.threadEndSeq ?? -1)) thread = turn;
-    if (sessionSeq > (session?.sessionSubmittedSeq ?? session?.sessionEndSeq ?? -1)) session = turn;
+    if ((threadOrder(turn) ?? -1) > ((thread && threadOrder(thread)) ?? -1)) thread = turn;
+    if ((sessionOrder(turn) ?? -1) > ((session && sessionOrder(session)) ?? -1)) session = turn;
   }
   if (!thread || !session || thread === session) {
     return { turn: thread ?? session, unadmittedNewer: false };
@@ -332,8 +336,8 @@ function selectTurn(journals: LoadedJournals): SelectedTurn {
 
   // Journal sequence numbers are local. A shared turn anchors the ordering
   // when both journals observed it. For disjoint records use wall-clock time.
-  const sessionAfterSharedThread = thread.sessionSubmittedSeq ?? thread.sessionEndSeq;
-  const threadAfterSharedSession = session.admissionSeq ?? session.threadEndSeq;
+  const sessionAfterSharedThread = sessionOrder(thread);
+  const threadAfterSharedSession = threadOrder(session);
   if (sessionAfterSharedThread !== null && threadAfterSharedSession !== null) {
     return { turn: null, unadmittedNewer: false, ambiguousOrder: true };
   }

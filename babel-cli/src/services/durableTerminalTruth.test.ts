@@ -828,3 +828,28 @@ test('contradictory shared journal ordering cannot claim success', async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a late legacy terminal cannot move a turn with an earlier known admission', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-late-legacy-terminal-'));
+  try {
+    const thread = createThreadEventLog('thread-late-legacy');
+    const older = startFixtureTurn(thread, 'older task', root);
+    endTurn(thread, older, 'VERIFIED_COMPLETE', 'completed');
+    for (const event of thread.events) event.ts = '2026-01-01T00:00:00Z';
+    await persistThreadEventLog(root, thread);
+
+    const session = createSessionEventLog('session-late-legacy');
+    submitSessionTurn(session, 'newer-turn', 'later task', root);
+    recordTurnEnded(session, { turn_id: 'newer-turn', outcome: 'AGENT_FAILURE', status: 'failed' });
+    recordTurnEnded(session, { turn_id: older, outcome: 'VERIFIED_COMPLETE', status: 'completed' });
+    for (const event of session.events) event.ts = '2026-01-01T00:00:01Z';
+    rewriteSessionEventLog(root, session);
+
+    const truth = readDurableTerminalTruth(root);
+    assert.equal(truth.turn_id, 'newer-turn');
+    assert.equal(truth.outcome, 'AGENT_FAILURE');
+    assert.equal(truth.success, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
