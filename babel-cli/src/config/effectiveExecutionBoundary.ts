@@ -91,7 +91,7 @@ export function resolveEffectiveExecutionBoundary(
       failClosed: false,
       disclosure:
         `Execution boundary: container (Docker) for profile "${profile.name}". ` +
-        'Eligible repository commands run in the container; host credential stores are not part of that boundary.',
+        'Running eligible repository commands requires a usable sandbox image. Those commands run inside Docker, outside host credential stores.',
     };
   }
 

@@ -50,6 +50,7 @@ test('a container profile reports Docker only when the boundary is actually avai
     assert.equal(docker.requiredBoundary, 'docker');
     assert.equal(docker.failClosed, false);
     assert.match(docker.disclosure, /container \(Docker\)/);
+    assert.match(docker.disclosure, /requires a usable sandbox image/);
   } finally {
     resetDockerAvailabilityCache();
   }
