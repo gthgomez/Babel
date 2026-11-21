@@ -68,8 +68,10 @@ export function runInstalledDoctor(options: {
     ? { kind: 'host_profile', profile: profile.name }
     : unsafeDockerArgs
       ? { kind: 'fail_closed', profile: profile.name, reason: 'unsafe Docker isolation arguments' }
-      : dockerReady && imageReady
-        ? { kind: 'docker' }
+      : dockerReady && image
+        ? imageReady
+          ? { kind: 'docker' }
+          : { kind: 'fail_closed', profile: profile.name, reason: 'configured Docker image unavailable' }
         : isHostIsolationEscalationAllowed(env)
           ? { kind: 'host_escalated', profile: profile.name, reason: 'container isolation explicitly waived' }
           : { kind: 'fail_closed', profile: profile.name, reason: 'container isolation unavailable' }
