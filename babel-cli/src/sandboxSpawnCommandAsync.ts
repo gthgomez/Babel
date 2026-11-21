@@ -8,6 +8,7 @@ import {
   waitForProcessGroupExit,
 } from './processTree.js'
 import { registerPendingProcessTermination } from './sandboxProcessTermination.js'
+import { confirmWindowsDescendants, startWindowsDescendantObservation } from './windowsProcessSettlement.js'
 
 export interface AsyncSpawnResult {
   status: number | null
@@ -23,6 +24,17 @@ export interface AsyncSpawnResult {
   timedOut: boolean
   /** Particular aborted client closure; daemon cleanup must follow this barrier. */
   termination?: Promise<void>
+}
+
+/**
+ * Cancellation resolves the tool result immediately; this deadline bounds the
+ * deferred tree settlement it awaits. Windows adds a PowerShell/CIM census and
+ * taskkill rounds, so it needs more headroom than a POSIX group probe.
+ */
+const TERMINATION_SETTLEMENT_TIMEOUT_MS = process.platform === 'win32' ? 45_000 : 5_000
+
+function delay(ms: number): Promise<undefined> {
+  return new Promise((resolveDelay) => { setTimeout(() => resolveDelay(undefined), ms) })
 }
 
 function appendCappedChunk(
@@ -148,6 +160,34 @@ export function spawnCommandAsync(
 
     const terminateChildTree = (owned: ChildProcessWithoutNullStreams) => terminateChildTreeShared(owned)
 
+    const settleInterruptedTree = async (pid: number, reason: 'Aborted' | 'Timed-out'): Promise<void> => {
+      // Start the snapshot before taskkill can sever the parent chain. Its
+      // head start is short, but settlement still requires the full result.
+      const observation = process.platform === 'win32' ? startWindowsDescendantObservation(pid) : null
+      if (observation) await Promise.race([observation, delay(2_000)])
+
+      const leaderExited = child.exitCode !== null || child.signalCode !== null
+      const terminationAttempt = terminateChildTree(child)
+      if (observation && !leaderExited && !terminationAttempt.treeKillAccepted) {
+        throw new Error('Windows process-tree termination was not confirmed by taskkill')
+      }
+      if (!(await waitForProcessGroupExit(pid, 5_000))) {
+        throw new Error(`${reason} process group ${pid} did not exit after tree termination`)
+      }
+      if (!observation) return
+
+      // A dead Windows leader cannot be passed to taskkill /T, but its PID
+      // can still be the parent ID of live processes in a complete snapshot.
+      const observed = await observation
+      if (observed === null) {
+        throw new Error(`${reason} process ${pid}: Windows descendant census unavailable. Cleanup could not be confirmed.`)
+      }
+      const confirmation = await confirmWindowsDescendants(observed)
+      if (!confirmation.confirmed) {
+        throw new Error(`${reason} process ${executable} left unconfirmed descendants`)
+      }
+    }
+
     const recordWitnessTerminal = (status: number | null, error?: Error) => {
       if (witnessTerminalRecorded || !executionId) return
       witnessTerminalRecorded = true
@@ -205,7 +245,7 @@ export function spawnCommandAsync(
           if (complete) return
           complete = true
           rejectTermination(new Error(`Aborted process ${executable} did not close after tree termination`))
-        }, 5_000)
+        }, TERMINATION_SETTLEMENT_TIMEOUT_MS)
         setImmediate(() => {
           void (async () => {
             try {
@@ -213,14 +253,7 @@ export function spawnCommandAsync(
               if (!pid) {
                 throw new Error(`Aborted spawn missing child pid for ${executable}`)
               }
-              const terminationAttempt = terminateChildTree(child)
-              if (process.platform === 'win32' && !terminationAttempt.treeKillAccepted) {
-                throw new Error('Windows process-tree termination was not confirmed by taskkill')
-              }
-              const groupExited = await waitForProcessGroupExit(pid, 5_000)
-              if (!groupExited) {
-                throw new Error(`Aborted process group ${pid} did not exit after tree termination`)
-              }
+              await settleInterruptedTree(pid, 'Aborted')
               await abortPhysicalClose
               if (complete) return
               complete = true
@@ -257,23 +290,15 @@ export function spawnCommandAsync(
             if (complete) return
             complete = true
             rejectTermination(new Error(`Timed-out process ${executable} did not close after tree termination`))
-          }, 5_000)
+          }, TERMINATION_SETTLEMENT_TIMEOUT_MS)
           setImmediate(() => {
             void (async () => {
               try {
                 const pid = child.pid
-                const terminationAttempt = terminateChildTree(child)
-                if (process.platform === 'win32' && pid && !terminationAttempt.treeKillAccepted) {
-                  throw new Error('Windows process-tree termination was not confirmed by taskkill')
-                }
                 // No pid means there is no owned process group to observe, but
                 // the direct child may still emit its physical close.
-                if (pid) {
-                  const groupExited = await waitForProcessGroupExit(pid, 5_000)
-                  if (!groupExited) {
-                    throw new Error(`Timed-out process group ${pid} did not exit after tree termination`)
-                  }
-                }
+                if (pid) await settleInterruptedTree(pid, 'Timed-out')
+                else terminateChildTree(child)
                 await physicalClose
                 if (complete) return
                 complete = true
@@ -288,9 +313,13 @@ export function spawnCommandAsync(
             })()
           })
         })
-        // The close handler attaches the observable rejection; this prevents an
-        // unhandled rejection if the process hangs and close never arrives.
-        void termination.catch(() => {})
+        // An unconfirmed Windows descendant can keep the output pipe open
+        // indefinitely. Report the failure while the owner retains its latch.
+        void termination.catch((error: unknown) => {
+          if (process.platform === 'win32') {
+            finish(1, error instanceof Error ? error : new Error(String(error)))
+          }
+        })
         registerPendingProcessTermination(
           termination,
           options.processContext?.sessionId ?? 'unscoped',
@@ -355,7 +384,11 @@ export function spawnCommandAsync(
               if (options.testContext?.awaitNaturalCloseSettlementGate) {
                 await options.testContext.awaitNaturalCloseSettlementGate()
               }
-              let descendantsSettled = await waitForProcessGroupExit(pid, 150)
+              // A direct child's `close` can precede the kernel's final /proc
+              // state transition on a loaded host. Absorb only a leader-only
+              // reaping window; a real descendant or runnable leader thread is
+              // returned immediately so it can be terminated.
+              let descendantsSettled = await waitForProcessGroupExit(pid, 1_500, { leaderOnlyGraceMs: 800 })
               let hadLingeringDescendants = false
               if (!descendantsSettled) {
                 hadLingeringDescendants = true

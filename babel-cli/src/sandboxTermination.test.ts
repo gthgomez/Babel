@@ -68,7 +68,13 @@ test('container removal waits for the cancelled launch client physical closure',
     cwd: process.cwd(), env: process.env,
     ownedContainerName: 'babel-run-00000000-0000-0000-0000-000000000000',
   }))
-  t.mock.method(childProcess, 'spawn', (...args: Parameters<typeof spawn>) => { child = spawn(...args); return child })
+  t.mock.method(childProcess, 'spawn', (...args: Parameters<typeof spawn>) => {
+    const real = spawn(...args)
+    // The cancellation path may start a descendant-census helper; only the
+    // launch client is the physical-close subject of this assertion.
+    if (args[0] === process.execPath) child = real
+    return real
+  })
   t.mock.method(childProcess, 'execFile', (...args: unknown[]) => {
     cleanupAfterClose = child?.exitCode != null || child?.signalCode != null
     const callback = args.at(-1)
