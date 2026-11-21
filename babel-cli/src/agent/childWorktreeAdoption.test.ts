@@ -879,6 +879,40 @@ describe('governed child worktree adoption', () => {
     });
   }
 
+  for (const duringVerification of [false, true]) {
+    it(`preserves staged bytes at a manifested path ${duringVerification ? 'staged during verification' : 'staged before adoption'}`, async () => {
+      const root = createGitProject();
+      const child = await childWorktree(root, 'adopt-index-drift');
+      const postimage = 'export const value = 2;\n';
+      const staged = 'export const value = 3;\n';
+      const change = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', postimage);
+      const childFile = join(child.worktree.path, change.path);
+      const stageAlternative = (): void => {
+        writeFileSync(childFile, staged);
+        git(child.worktree.path, ['add', '--', change.path]);
+        writeFileSync(childFile, postimage);
+      };
+      if (!duringVerification) stageAlternative();
+      const result = promoteImplementWorktree({
+        projectRoot: root,
+        worktreePath: child.worktree.path,
+        writeScope: ['src'],
+        baseSha: child.baseSha!,
+        expectedChanges: [change],
+        mode: 'copy',
+        cleanupWorktree: true,
+        verify: () => {
+          if (duringVerification) stageAlternative();
+          return { ok: true, summary: 'readback matched' };
+        },
+      });
+      assert.equal(result.status, 'cleanup_failed');
+      assert.equal(result.worktreeRemoved, false);
+      assert.equal(git(child.worktree.path, ['show', `:${change.path}`]), staged.trim());
+      assert.equal(readFileSync(join(root, change.path), 'utf8'), postimage);
+    });
+  }
+
   it('reports cleanup failure as a failed adoption result', async () => {
     const root = createGitProject();
     const child = await childWorktree(root, 'adopt-cleanup-fail');

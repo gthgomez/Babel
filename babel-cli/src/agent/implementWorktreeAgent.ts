@@ -1103,21 +1103,24 @@ function removeWorktreeByPath(projectRoot: string, worktreePath: string): void {
  * List project-relative paths under write_scope that differ in the worktree
  * (modified or untracked), using git status --porcelain in the worktree.
  */
-/** Parse `git status --porcelain -z --no-renames -uall` records into unique paths. */
-function parsePorcelainPaths(stdout: string): string[] {
+/** Read unique paths and index changes from one NUL-delimited status snapshot. */
+function parseWorktreeStatus(stdout: string): { paths: string[]; hasStagedChanges: boolean } {
   const paths: string[] = [];
+  let hasStagedChanges = false;
   // `-z` emits NUL-delimited records with no C-quoting, so non-ASCII, tabs,
   // quotes and backslashes survive exactly. `--no-renames` turns a rename into
   // a separate deletion + addition, so both sides must be recorded.
   for (const rawRecord of stdout.split('\0')) {
     if (!rawRecord) continue;
+    const indexStatus = rawRecord[0];
+    if (indexStatus !== ' ' && indexStatus !== '?' && indexStatus !== '!') hasStagedChanges = true;
     const record = rawRecord.endsWith('\r') ? rawRecord.slice(0, -1) : rawRecord;
     const pathPart = record.length >= 3 ? record.slice(3) : record;
     const normalized = normalizeWorkspacePath(pathPart);
     if (!normalized || normalized.startsWith('.git/')) continue;
     if (!paths.includes(normalized)) paths.push(normalized);
   }
-  return paths;
+  return { paths, hasStagedChanges };
 }
 
 /**
@@ -1128,7 +1131,7 @@ function parsePorcelainPaths(stdout: string): string[] {
 export function listWorktreeDirtyPaths(
   worktreePath: string,
   includeIgnored = false,
-): { paths: string[]; error: null } | { paths: null; error: string } {
+): { paths: string[]; hasStagedChanges: boolean; error: null } | { paths: null; error: string } {
   // `-z --no-renames` is deliberate: porcelain v1 without `-z` C-quotes special
   // paths, and rename collapsing hides the source deletion.
   const result = spawnSync('git', [
@@ -1146,7 +1149,7 @@ export function listWorktreeDirtyPaths(
       error: (result.stderr || result.stdout || `git status exited ${result.status}`).trim(),
     };
   }
-  return { paths: parsePorcelainPaths(result.stdout ?? ''), error: null };
+  return { ...parseWorktreeStatus(result.stdout ?? ''), error: null };
 }
 
 /**
@@ -1601,7 +1604,7 @@ export function promoteImplementWorktree(
         parentStatusAfter: gitPorcelainStatus(projectRoot),
         summary: rollbackComplete
           ? 'Adoption failed; owned file writes were rolled back. Created parent directories may remain; the child worktree was not modified by this adoption.'
-          : `Adoption failed and rollback was incomplete; newer bytes were preserved for ${[...residual, ...errors].join(', ')}. The child worktree was not modified by this adoption.`,
+          : `Adoption failed and rollback was incomplete; ${residual.length} path(s) retained newer bytes and ${errors.length} restore(s) failed. The child worktree was not modified by this adoption.`,
         error: conflicts.map((conflict) => conflict.message).join('; ') || 'apply failed',
       });
     }
@@ -1640,7 +1643,7 @@ export function promoteImplementWorktree(
     if (mode === 'copy' && input.cleanupWorktree) {
       try {
         // Git cannot atomically bind --force to this snapshot. Keep the child
-        // when a new path or changed bytes are already visible before removal.
+        // when a new path, changed working bytes, or staged changes are already visible before removal.
         const cleanupStatus = listWorktreeDirtyPaths(worktreePath, true);
         if (childHeadBeforeApply === null ||
           (input.baseSha !== undefined && childHeadBeforeApply !== input.baseSha) ||
@@ -1650,6 +1653,9 @@ export function promoteImplementWorktree(
           records.some((record) => adoptionPathSafety(worktreePath, record.path) ||
             hashWorkspacePath(join(worktreePath, record.path)) !== (record.after_hash ?? MISSING_PATH_DIGEST))) {
           throw new Error('Child contents changed or could not be verified after adoption; the child worktree was retained.');
+        }
+        if (cleanupStatus.hasStagedChanges) {
+          throw new Error('Child has staged changes outside the recorded file-byte adoption; the child worktree was retained.');
         }
         if (input.testHooks?.removeWorktree) input.testHooks.removeWorktree(worktreePath);
         else removeWorktreeByPath(projectRoot, worktreePath);
