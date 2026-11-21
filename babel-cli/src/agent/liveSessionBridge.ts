@@ -21,8 +21,16 @@ import {inferTaskAcceptanceV3} from './taskAcceptanceMeaning.js';
 import {
   bindExecutableVerifiersToTaskAcceptance,
   mergeTrustedVerifierCommands,
+  relevanceBoundVerifierCommands,
+  relevanceBoundVerifierInputFiles,
 } from './taskAcceptanceExecutableBinding.js';
 import { designatedWitnessProtectedInputs, existingNodeVerifierInputFiles } from './taskAcceptanceProtectedInputs.js';
+import {
+  computePublicApiSurface,
+  hasPublicApiPreservationClause,
+  publicApiFreezeRef,
+  publicApiPreservationMode,
+} from './publicApiPreservation.js';
 import { join } from 'node:path';
 import {
   buildInstructionManifestV1,
@@ -253,6 +261,9 @@ function identityFragmentPrecedence(fragment: IdentityDeliveredFragment): Instru
   }
 }
 
+/** Project-relative paths protected when a caller supplies no explicit set. */
+export const DEFAULT_PROTECTED_PATHS = ['.env', '.git'] as const
+
 export function resolveLiveSessionAuthority(input: {
   mode: BabelMode;
   taskId?: string;
@@ -344,17 +355,38 @@ export function resolveLiveSessionAuthority(input: {
     meaning: inferredMeaning,
     trustedVerifierCommands,
     existingVerifierInputFiles,
-    ...(input.projectRoot ? { defaultWorkingDirectory: '.' } : {}),
+    ...(input.projectRoot ? { defaultWorkingDirectory: '.', projectRoot: input.projectRoot } : {}),
   });
   // A designated regression witness makes the already-present tests and their
   // script definitions protected inputs, enforced by the execution gate from
-  // admission through completion. Ordinary tasks keep the default set.
-  const protectedPaths = new Set(input.protectedPaths ?? ['.env', '.git']);
+  // admission through completion. A relevance-bound inferred goal freezes the
+  // verifier inputs that establish its relevance. Ordinary tasks keep the
+  // default set.
+  const protectedPaths = new Set(input.protectedPaths ?? DEFAULT_PROTECTED_PATHS);
   if (input.projectRoot) {
-    for (const path of [...designatedWitnessProtectedInputs(input.projectRoot, meaning), ...existingVerifierInputFiles]) {
+    for (const path of [
+      ...designatedWitnessProtectedInputs(input.projectRoot, meaning),
+      ...relevanceBoundVerifierInputFiles(input.projectRoot, meaning),
+      ...existingVerifierInputFiles,
+    ]) {
       protectedPaths.add(path);
     }
   }
+  // A relevance-bound witness is a required verifier for this objective, not
+  // only descriptive evidence: completion must cover it with a current green
+  // receipt.
+  const requiredVerifierCommands = [...new Set([
+    ...(input.verifierRequirements ?? []),
+    ...relevanceBoundVerifierCommands(meaning),
+  ])];
+  const publicApiRecords = input.projectRoot && hasPublicApiPreservationClause(input.task)
+    ? (() => {
+        const surface = computePublicApiSurface(input.projectRoot!)
+        return surface ? [{ kind: 'derived_acceptance' as const, ref: publicApiFreezeRef(surface, {
+          mode: publicApiPreservationMode(input.task),
+        }) }] : []
+      })()
+    : [];
   const contract = freezeTaskContract(
     buildTaskContractV1({
       mode: input.mode,
@@ -365,7 +397,7 @@ export function resolveLiveSessionAuthority(input: {
       acceptance: meaning.criteria,
       non_goals: ['Do not expand scope beyond the user request'],
       protected_paths: [...protectedPaths],
-      verifier_requirements: input.verifierRequirements ?? [],
+      verifier_requirements: requiredVerifierCommands,
       ...(input.maxTurns !== undefined ? { max_turns: input.maxTurns } : {}),
       allowed_effects:
         scope.kind==='conversation' ? [] : input.mode === 'plan'
@@ -377,7 +409,7 @@ export function resolveLiveSessionAuthority(input: {
               'non_idempotent_local_effect',
             ],
       source: 'liveSessionBridge.resolveLiveSessionAuthority',
-      provenance:[...meaning.provenance,...(input.objectiveLifecycle?[{kind:'risk_analysis' as const,ref:OBJECTIVE_LIFECYCLE_REF}]:[])],
+      provenance:[...meaning.provenance,...publicApiRecords,...(input.objectiveLifecycle?[{kind:'risk_analysis' as const,ref:OBJECTIVE_LIFECYCLE_REF}]:[])],
     }),
   );
 

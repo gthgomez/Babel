@@ -35,9 +35,11 @@ describe('userFacingStatusFromOutcome (P0-D B3)', () => {
     }
   });
 
-  test('exitCodeFromOutcome is 0 only for passing outcomes', () => {
+  test('exitCodeFromOutcome is 0 only for verified/no-change outcomes', () => {
     assert.equal(exitCodeFromOutcome('VERIFIED_COMPLETE'), 0);
-    assert.equal(exitCodeFromOutcome('UNVERIFIED_PATCH'), 0);
+    assert.equal(exitCodeFromOutcome('NO_CHANGE_REQUIRED'), 0);
+    // TF-08: not_verified must not look like success to shell chaining.
+    assert.equal(exitCodeFromOutcome('UNVERIFIED_PATCH'), 6);
     assert.equal(exitCodeFromOutcome('BLOCKED_POLICY'), 1);
     assert.equal(exitCodeFromOutcome('BUDGET_EXHAUSTED'), 1);
     assert.equal(exitCodeFromOutcome('AGENT_FAILURE'), 1);

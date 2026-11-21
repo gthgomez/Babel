@@ -54,7 +54,7 @@ import { VoiceStreamManager } from '../voice/voice-stream-manager.js';
 import type { PromptInputAdapter } from '../ui/promptInputAdapter.js';
 import { OutputBuffer } from '../ui/outputBuffer.js';
 import { installKeyHandler, type KeyEvent } from '../ui/keyInput.js';
-import { planShellLayout } from '../ui/shell/shellLayout.js';
+import { canHostResponsiveShell, planShellLayout } from '../ui/shell/shellLayout.js';
 import { buildShellFrameInput } from '../ui/shell/shellPanels.js';
 import { createShellHost, type ShellHost } from '../ui/shell/shellHost.js';
 import { selectShellHost } from '../ui/shell/selectShellHost.js';
@@ -340,6 +340,11 @@ export class BabelRepl {
     // idempotent so that path cannot install a second stdin handler or replace
     // the cleanup handles for the already-mounted host.
     if (this.shellHost) return;
+    // Below the shell's minimum grid the responsive layout collapses to a
+    // null-rect linear fallback. Mounting the host there paints an empty frame
+    // over the terminal (blank 44x16 viewport) and never shows the composer;
+    // the legacy line editor below is the supported narrow-terminal path.
+    if (!canHostResponsiveShell(OutputBuffer.getTerminalSize())) return;
     const selection = selectShellHost();
     if (selection.host !== 'north_star') return;
 

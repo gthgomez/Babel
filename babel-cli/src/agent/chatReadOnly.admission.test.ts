@@ -42,7 +42,10 @@ if (!isSyntheticProviderFixtureReady()) {
   const { OpenCodeGoApiRunner } = await import('../runners/openCodeGoApi.js')
   const { runCliChatTask } = await import('../interactive/execution/chatCore.js')
   const { MODEL_PRICING_REGISTRY } = await import('../services/modelPricingRegistry.js')
-  const task = 'Explain this file without changing it.'
+  // An edit request denied by policy is the engine-adjudicated no-change flow.
+  // An informational "explain ... without editing" answer is not: a denied
+  // write cannot ground it (see benchmarks/reliability-cases E09).
+  const task = 'Fix fixture.txt without changing it.'
   const routes = [
     { name: 'Go4.1 controlled budget seam', key: 'opencode-go/deepseek-v4.1-flash',
       model: 'deepseek-v4.1-flash', endpoint: 'https://opencode.ai/zen/go/v1/chat/completions' },

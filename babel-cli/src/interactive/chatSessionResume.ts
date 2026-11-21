@@ -30,7 +30,9 @@ import { withExecutionPolicyChoice } from '../config/executionPolicySelection.js
 import {
   hydrateReplTurnsFromCells,
   hydrateReplTurnsFromChatTranscript,
+  recoveredTerminalFromTruth,
 } from './chatTranscriptHydration.js';
+import { readDurableTerminalTruth } from '../services/durableTerminalTruth.js';
 
 export interface ResumeChatSessionResult {
   ok: true;
@@ -153,6 +155,12 @@ async function resumeChatSessionOwned(
       );
     }
     const eventLog = loadThreadEventLogFromDir(sessionDir);
+    // The resume status must describe the newest turn, not merely the last
+    // `turn_ended`. A newer unfinished turn keeps the session not-verified even
+    // when older assistant prose exists (BL-14).
+    const recoveredTerminal = recoveredTerminalFromTruth(
+      readDurableTerminalTruth(sessionDir, sessionId),
+    );
 
     // D04: verify physical repository identity BEFORE any engine or execution
     // context is admitted (event-log branch) or history is hydrated as safely
@@ -240,6 +248,7 @@ async function resumeChatSessionOwned(
         const { turnCount, exchangeCount } = hydrateReplTurnsFromCells(ctx, cells, {
           targetRoot: target.targetRoot,
           workspaceRoot: target.workspaceRoot ?? null,
+          terminal: recoveredTerminal,
         });
         ctx.saveSessionState();
         return {
@@ -256,6 +265,7 @@ async function resumeChatSessionOwned(
         transcriptPath: txPath,
         targetRoot: target.targetRoot,
         workspaceRoot: target.workspaceRoot ?? null,
+        terminal: recoveredTerminal,
       });
       ctx.saveSessionState();
       return {
@@ -277,6 +287,7 @@ async function resumeChatSessionOwned(
       const { turnCount, exchangeCount } = hydrateReplTurnsFromCells(ctx, cells, {
         targetRoot: target.targetRoot,
         workspaceRoot: target.workspaceRoot ?? null,
+        terminal: recoveredTerminal,
       });
       ctx.saveSessionState();
       return {
@@ -326,6 +337,7 @@ async function resumeChatSessionOwned(
       transcriptPath: txPath,
       targetRoot: target.targetRoot,
       workspaceRoot: target.workspaceRoot ?? null,
+      terminal: recoveredTerminal,
     });
     if (threadStoreExists(sessionId)) {
       hydrateResumedThreadToScreen(ctx, sessionId);

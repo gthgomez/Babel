@@ -444,8 +444,11 @@ export async function executeChatTask(
     // W0.4: env_blocked is operator-visible and distinct from clean complete
     if (envBlocked) {
       ctx.state.lastRunUserStatus = 'blocked';
-    } else if (lo === 'VERIFIED_COMPLETE' || lo === 'UNVERIFIED_PATCH') {
+    } else if (lo === 'VERIFIED_COMPLETE') {
       ctx.state.lastRunUserStatus = 'complete';
+    } else if (lo === 'UNVERIFIED_PATCH') {
+      // Terminal truth is not_verified; the TUI banner must not say complete.
+      ctx.state.lastRunUserStatus = 'not_verified';
     } else if (lo === 'BLOCKED_EXTERNAL' || lo === 'BLOCKED_POLICY') {
       ctx.state.lastRunUserStatus = 'blocked';
     } else if (lo === 'CANCELLED') {

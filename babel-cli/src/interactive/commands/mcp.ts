@@ -3,6 +3,7 @@
 
 import type { ReplContext } from '../context.js';
 import { readMcpServers } from '../../config/mcpServers.js';
+import { summarizeMcpServersForDiagnostics } from '../../mcp/diagnostics.js';
 import { formatMcpDoctorHuman, runMcpDoctor } from '../../services/mcpDoctor.js';
 import {
   handleMcpPromptGet,
@@ -129,11 +130,11 @@ export async function handleMcpServers(_ctx: ReplContext, args: string[]): Promi
     return;
   }
 
-  const servers = readMcpServers();
+  const servers = summarizeMcpServersForDiagnostics(readMcpServers());
   console.log(primary('\n  MCP Servers:'));
   Object.entries(servers).forEach(([name, server]) => {
     console.log(
-      `    ${accentBright(padRight(name, 14))} ${muted(`${server.command} ${server.args.join(' ')}`.trim())}`,
+      `    ${accentBright(padRight(name, 14))} ${muted(`${server.command} [${server.arg_count} arg(s), redacted]`)}`,
     );
   });
   console.log(

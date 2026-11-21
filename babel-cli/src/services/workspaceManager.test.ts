@@ -246,3 +246,50 @@ test('workspace file reads deny credential-class paths while allowing .env.examp
     rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+test('absolute nested approved workspace paths stay equivalent to dot-relative paths', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'babel-opencalw-nested-'));
+  const nested = join(workspace, 'suite', 'repo', 'src');
+  const outside = mkdtempSync(join(tmpdir(), 'babel-opencalw-nested-outside-'));
+  const previousCwd = process.cwd();
+  try {
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, 'note.txt'), 'nested\n', 'utf-8');
+    writeFileSync(join(outside, 'secret.txt'), 'nope\n', 'utf-8');
+    process.chdir(workspace);
+    withWorkspaceRoot(workspace, () => {
+      withApprovedRoots([workspace], () => {
+        const absolute = resolveApprovedWorkspacePath(join(nested, 'note.txt'));
+        const dotRelative = resolveApprovedWorkspacePath('./suite/repo/src/note.txt');
+        assert.equal(absolute.path, resolve(nested, 'note.txt'));
+        assert.equal(dotRelative.path, absolute.path);
+        assert.equal(readWorkspaceFile(join(nested, 'note.txt')).content, 'nested\n');
+        assert.equal(readWorkspaceFile('./suite/repo/src/note.txt').content, 'nested\n');
+      });
+      withApprovedRoots([nested], () => {
+        assert.equal(
+          resolveApprovedWorkspacePath(join(nested, 'note.txt')).path,
+          resolve(nested, 'note.txt'),
+        );
+        assert.equal(
+          resolveApprovedWorkspacePath('./suite/repo/src/note.txt').path,
+          resolve(nested, 'note.txt'),
+        );
+      });
+      withApprovedRoots([workspace], () => {
+        assert.throws(
+          () => resolveApprovedWorkspacePath(join(outside, 'secret.txt')),
+          /outside OpenClaw approved workspace roots/,
+        );
+        assert.throws(
+          () => resolveApprovedWorkspacePath('../' + outside.split('/').pop()! + '/secret.txt'),
+          /outside OpenClaw approved workspace roots/,
+        );
+      });
+    });
+  } finally {
+    process.chdir(previousCwd);
+    rmSync(workspace, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});

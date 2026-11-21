@@ -522,7 +522,7 @@ describe('swebenchProCampaign early-stop', () => {
   });
 
   test('W1.3: resolveSweProPassMode + cellPassesByMode dual scoreboard', () => {
-    assert.equal(resolveSweProPassMode({}), 'gold');
+    assert.equal(resolveSweProPassMode({}), 'ftp');
     assert.equal(resolveSweProPassMode({ BABEL_SWE_PRO_PASS_MODE: 'gold' }), 'gold');
     assert.equal(resolveSweProPassMode({ BABEL_SWE_PRO_PASS_MODE: 'ftp' }), 'ftp');
     assert.equal(resolveSweProPassMode({ BABEL_SWE_PRO_PASS_MODE: 'both' }), 'both');

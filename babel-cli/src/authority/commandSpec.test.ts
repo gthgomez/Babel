@@ -727,6 +727,9 @@ const HOST_PROCESS_SURFACE = new Set([
   'claude-babel-astra-lab/telemetry.ts',
   'fixtures/claude-babel-astra-lab/fixtures.ts',
   'services/reviewServiceTransport.ts',
+  // Worktree adoption runs an operator-supplied --verify command with a bounded
+  // 300s timeout, cwd=projectRoot, no shell interpolation of internal data.
+  'commands/worktreeCommands.ts',
   'commands/independentReviewCommands.ts',
   'services/babelReviewChild.ts',
   'services/babelReviewQueue.ts',
@@ -745,6 +748,9 @@ const HOST_PROCESS_SURFACE = new Set([
   'agent/codingLoop/recoveryIdentity.ts',
   // Verifier receipt capture uses bounded fixed-argument Git queries for unborn worktrees.
   'agent/chatEngineVerifierAdapter.ts',
+  // Final-revision witness binds the workspace with a fixed-argument `git rev-parse HEAD` query,
+  // cwd=project root, stdio ignored, bounded 10s timeout, no caller argv.
+  'authority/finalRevision.ts',
   // Process-tree termination uses the fixed System32 taskkill executable on Windows.
   'processTree.ts',
   // Compensation pins Windows directories with a fixed helper and encoded path data.
@@ -835,7 +841,9 @@ const HOST_PROCESS_SURFACE = new Set([
   'services/workspaceDepPreflight.ts',
   'services/worktreeIsolation.ts',
   'services/worktreeSafety.ts',
-  'tools/auditUiTool.ts',
+  // Shared external-helper runner: caller argv is resolved by the owning adapter; bounded
+  // stdout/stderr, single settlement, timeout tree kill, and no shell interpretation.
+  'tools/externalAdapterBudget.ts',
   'tools/mcpTransport.ts',
   'tools/ripgrep.ts',
   // Repository-map indexing worker: fixed module path and --max-old-space flag; no caller argv,

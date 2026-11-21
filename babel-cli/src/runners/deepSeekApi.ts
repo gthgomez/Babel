@@ -22,6 +22,7 @@ import {
   buildStructuredOutputError,
 } from './base.js';
 import { hardProviderProtocolIssues, mapProviderMessagesToWire } from './providerMessages.js';
+import { createInvocationDeadline, invocationNowMs } from './providerResponsePolicy.js';
 import {
   assertPreparedProviderRequestAdmissible,
   prepareProviderRequest,
@@ -40,6 +41,7 @@ import {
   type ProviderFailureDetails,
 } from './providerFailureReceipt.js';
 import { buildDeepSeekNativeToolsWireBody } from './deepSeekNativeWire.js';
+import { assertOfflineEndpointAllowed, OfflineModeError } from '../config/offlineMode.js';
 
 const MAX_TOKENS = readPositiveIntEnv('BABEL_DEEPSEEK_TOKENS', 32000);
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
@@ -74,6 +76,8 @@ interface ChatChoice {
 }
 
 interface ChatResponse {
+  /** Provider-reported model identity from the response envelope. */
+  model?: string;
   choices?: ChatChoice[];
   usage?: {
     prompt_tokens?: number;
@@ -95,6 +99,7 @@ function buildInvocationMetadata(
   ttftMs?: number | null,
   generationMs?: number | null,
   validationMs?: number | null,
+  observedModelId?: string | null,
 ): RunnerInvocationMetadata {
   const promptTokens = normalizeTokenCount(usage?.prompt_tokens);
   const completionTokens = normalizeTokenCount(usage?.completion_tokens);
@@ -115,6 +120,9 @@ function buildInvocationMetadata(
   return {
     provider: 'deepseek',
     provider_model_id: model,
+    requested_model_id: model,
+    sent_model_id: model,
+    observed_model_id: observedModelId ?? null,
     latency_ms: latencyMs,
     prompt_tokens: promptTokens,
     completion_tokens: completionTokens,
@@ -150,9 +158,29 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-function readPositiveIntEnv(name: string, fallback: number, max?: number): number {
-  const parsed = Number(process.env[name] ?? '');
+function readPositiveIntEnv(
+  name: string,
+  fallback: number,
+  max?: number,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const parsed = Number(env[name] ?? '');
   const value = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+  return max ? Math.min(value, max) : value;
+}
+
+/** Retry counts accept zero (initial attempt only), matching shared transport policy. */
+function readNonNegativeIntEnv(
+  name: string,
+  fallback: number,
+  max?: number,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  const value = Math.floor(parsed);
   return max ? Math.min(value, max) : value;
 }
 
@@ -173,19 +201,43 @@ function getStreamIdleTimeoutMs(): number {
   );
 }
 
+/**
+ * Resolve the direct DeepSeek invocation policy.
+ *
+ * The vendor-specific variable wins, then the shared provider transport
+ * variables. Previously only `BABEL_DEEPSEEK_*` was read, so a common
+ * invocation timeout or retry policy silently did not apply to this route.
+ */
+export function resolveDeepSeekRequestPolicy(env: NodeJS.ProcessEnv = process.env): {
+  timeoutMs: number;
+  maxRetries: number;
+  timeoutSource: 'BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS' | 'BABEL_PROVIDER_REQUEST_TIMEOUT_MS' | 'built-in';
+  retrySource: 'BABEL_DEEPSEEK_REQUEST_MAX_RETRIES' | 'BABEL_PROVIDER_REQUEST_MAX_RETRIES' | 'built-in';
+} {
+  const timeoutName = env['BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS'] !== undefined
+    ? 'BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS'
+    : env['BABEL_PROVIDER_REQUEST_TIMEOUT_MS'] !== undefined
+      ? 'BABEL_PROVIDER_REQUEST_TIMEOUT_MS'
+      : null;
+  const retryName = env['BABEL_DEEPSEEK_REQUEST_MAX_RETRIES'] !== undefined
+    ? 'BABEL_DEEPSEEK_REQUEST_MAX_RETRIES'
+    : env['BABEL_PROVIDER_REQUEST_MAX_RETRIES'] !== undefined
+      ? 'BABEL_PROVIDER_REQUEST_MAX_RETRIES'
+      : null;
+  return {
+    timeoutMs: readPositiveIntEnv(timeoutName ?? 'BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS', DEFAULT_REQUEST_TIMEOUT_MS, undefined, env),
+    maxRetries: readNonNegativeIntEnv(retryName ?? 'BABEL_DEEPSEEK_REQUEST_MAX_RETRIES', DEFAULT_REQUEST_MAX_RETRIES, 10, env),
+    timeoutSource: timeoutName ?? 'built-in',
+    retrySource: retryName ?? 'built-in',
+  };
+}
+
 function getRequestTimeoutMs(): number {
-  return readPositiveIntEnv(
-    'BABEL_DEEPSEEK_REQUEST_TIMEOUT_MS',
-    DEFAULT_REQUEST_TIMEOUT_MS,
-  );
+  return resolveDeepSeekRequestPolicy().timeoutMs;
 }
 
 function getRequestMaxRetries(): number {
-  return readPositiveIntEnv(
-    'BABEL_DEEPSEEK_REQUEST_MAX_RETRIES',
-    DEFAULT_REQUEST_MAX_RETRIES,
-    10,
-  );
+  return resolveDeepSeekRequestPolicy().maxRetries;
 }
 
 
@@ -232,7 +284,7 @@ function readStreamWithLimits(
       return;
     }
     opts.signal?.addEventListener('abort', onAbort, { once: true });
-    const remainingDeadline = opts.deadlineAt - Date.now();
+    const remainingDeadline = opts.deadlineAt - invocationNowMs();
     if (remainingDeadline <= 0) {
       finish(() => {
         reader.cancel().catch(() => {});
@@ -275,6 +327,7 @@ async function readStreamingResponse(
     ttftMs: number | null;
     generationMs: number | null;
     usage: ChatResponse['usage'] | null;
+    observedModelId: string | null;
     partialModelOutput: boolean;
     outputReceipt: string;
     sawDone: boolean;
@@ -371,7 +424,11 @@ async function readStreamingResponse(
             delta?: { content?: unknown; reasoning_content?: unknown };
           }>;
           usage?: ChatResponse['usage'];
+          model?: string;
         };
+        if (typeof json.model === 'string' && json.model.length > 0) {
+          state.observedModelId = json.model;
+        }
         const choice = json.choices?.[0];
         const content =
           typeof choice?.message?.content === 'string'
@@ -425,7 +482,11 @@ async function readStreamingResponse(
           const json = JSON.parse(data) as {
             choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
             usage?: ChatResponse['usage'];
+            model?: string;
           };
+          if (typeof json.model === 'string' && json.model.length > 0) {
+            state.observedModelId = json.model;
+          }
           const delta = json.choices?.[0]?.delta?.content || '';
           const reasoning = json.choices?.[0]?.delta?.reasoning_content || '';
           if (reasoning || delta) {
@@ -516,6 +577,7 @@ export class DeepSeekApiRunner implements LlmRunner {
 
   private readonly maxTokens: number;
   private readonly contextWindowTokens: number | undefined;
+  private readonly authorityEnvironment: NodeJS.ProcessEnv | undefined;
 
   constructor(
     model = 'deepseek-v4-flash',
@@ -524,6 +586,7 @@ export class DeepSeekApiRunner implements LlmRunner {
     const key = resolveProviderCredential('deepseek', credential);
     this.maxTokens = credential.maxTokens ?? MAX_TOKENS;
     this.contextWindowTokens = credential.contextWindowTokens;
+    this.authorityEnvironment = credential.env;
     if (key === null) throw new Error('[deepSeekApi] credential resolution failed');
     // Validate expected provider shape without including any secret fragment.
     if (!key.startsWith('sk-')) {
@@ -561,11 +624,13 @@ export class DeepSeekApiRunner implements LlmRunner {
       ttftMs: number | null;
       generationMs: number | null;
       usage: ChatResponse['usage'] | null;
+      observedModelId: string | null;
       partialModelOutput: boolean;
       outputReceipt: string;
       sawDone: boolean;
     };
   }> {
+    assertOfflineEndpointAllowed(API_URL, this.authorityEnvironment);
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
     const stopped = callbacks?.runControl?.stop();
@@ -722,6 +787,7 @@ export class DeepSeekApiRunner implements LlmRunner {
         ttftMs: null as number | null,
         generationMs: null as number | null,
         usage: null as ChatResponse['usage'] | null,
+        observedModelId: null as string | null,
         partialModelOutput: false,
         outputReceipt: '',
         sawDone: false,
@@ -739,7 +805,11 @@ export class DeepSeekApiRunner implements LlmRunner {
             const json = JSON.parse(data) as {
               choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
               usage?: ChatResponse['usage'];
+              model?: string;
             };
+            if (typeof json.model === 'string' && json.model.length > 0) {
+              streamState.observedModelId = json.model;
+            }
             if (
               !firstChunkReceived &&
               (json.choices?.[0]?.delta?.content || json.choices?.[0]?.delta?.reasoning_content)
@@ -808,7 +878,7 @@ export class DeepSeekApiRunner implements LlmRunner {
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
-        response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch(API_URL, {
+        response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => { assertOfflineEndpointAllowed(API_URL, this.authorityEnvironment); return fetch(API_URL, {
           method: 'POST',
           redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
           signal: controller.signal,
@@ -817,8 +887,9 @@ export class DeepSeekApiRunner implements LlmRunner {
             'Content-Type': 'application/json',
           },
           body: requestBody,
-        }));
+        }); });
       } catch (err) {
+        if (err instanceof OfflineModeError) throw err;
         if (err instanceof RunStoppedError) {
           settleRetry('cancelled');
           notifyCompleted('failed', '', { actualAttempt: attempt, details: { message: err.message }, failureStage: 'request', inferenceStarted: false });
@@ -923,6 +994,7 @@ export class DeepSeekApiRunner implements LlmRunner {
       ttftMs: null as number | null,
       generationMs: null as number | null,
       usage: null as ChatResponse['usage'] | null,
+      observedModelId: null as string | null,
       partialModelOutput: false,
       outputReceipt: '',
       sawDone: false,
@@ -978,6 +1050,9 @@ export class DeepSeekApiRunner implements LlmRunner {
         if (rawDataText.length > 0) notifyPhase('first_byte');
         data = JSON.parse(rawDataText) as ChatResponse;
         streamState.usage = data.usage;
+        if (typeof data.model === 'string' && data.model.length > 0) {
+          streamState.observedModelId = data.model;
+        }
         text = data?.choices?.[0]?.message?.content ?? '';
       } catch (err) {
         this.lastInvocationMetadata = buildInvocationMetadata(this.model, Date.now() - startedAt);
@@ -1004,9 +1079,10 @@ export class DeepSeekApiRunner implements LlmRunner {
     notifyPhase('response_normalized');
     this.lastInvocationMetadata = buildInvocationMetadata(
       this.model, Date.now() - startedAt, streamState.usage ?? undefined,
-      streamState.ttftMs, streamState.generationMs,
+      streamState.ttftMs, streamState.generationMs, undefined,
+      streamState.observedModelId ?? null,
     );
-    notifyCompleted('delivered', text);
+    notifyCompleted('delivered', text, { observedModelId: streamState.observedModelId ?? null });
     return { text, startedAt, streamState };
   }
 
@@ -1066,6 +1142,7 @@ export class DeepSeekApiRunner implements LlmRunner {
       streamState.ttftMs,
       streamState.generationMs,
       validationMs,
+      streamState.observedModelId ?? null,
     );
 
     if (!result.success) {
@@ -1122,6 +1199,8 @@ export class DeepSeekApiRunner implements LlmRunner {
       streamState.usage ?? undefined,
       streamState.ttftMs,
       streamState.generationMs,
+      undefined,
+      streamState.observedModelId ?? null,
     );
 
     return text;
@@ -1225,6 +1304,7 @@ export class DeepSeekApiRunner implements LlmRunner {
     toolChoice?: 'auto' | 'required',
     callbacks?: RunnerCallbacks,
   ): AsyncGenerator<ToolStreamEvent, void, undefined> {
+    assertOfflineEndpointAllowed(API_URL, this.authorityEnvironment);
     const startedAt = Date.now();
     this.lastInvocationMetadata = null;
     const stopped = callbacks?.runControl?.stop();
@@ -1398,7 +1478,7 @@ export class DeepSeekApiRunner implements LlmRunner {
     let lastError: Error | null = null;
     let retryAttempt: number | null = null;
     let retryAttemptId: string | null = null;
-    let attemptDeadlineAt = Date.now() + requestTimeoutMs;
+    let attemptDeadlineAt = createInvocationDeadline(requestTimeoutMs);
     const settleRetry = (outcome: 'succeeded' | 'failed' | 'cancelled'): void => {
       if (retryAttempt === null) return;
       callbacks?.onRetrySettled?.({
@@ -1413,7 +1493,7 @@ export class DeepSeekApiRunner implements LlmRunner {
 
     for (let attempt = 1; attempt <= requestMaxRetries; attempt += 1) {
       lastAttempt = attempt;
-      attemptDeadlineAt = Date.now() + requestTimeoutMs;
+      attemptDeadlineAt = createInvocationDeadline(requestTimeoutMs);
       const controller = new AbortController();
       if (signal) {
         signal.addEventListener('abort', () => controller.abort(), { once: true });
@@ -1421,7 +1501,7 @@ export class DeepSeekApiRunner implements LlmRunner {
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       try {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
-        response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => fetch(API_URL, {
+        response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => { assertOfflineEndpointAllowed(API_URL, this.authorityEnvironment); return fetch(API_URL, {
           method: 'POST',
           redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
           signal: controller.signal,
@@ -1430,8 +1510,9 @@ export class DeepSeekApiRunner implements LlmRunner {
             'Content-Type': 'application/json',
           },
           body: requestBody,
-        }));
+        }); });
       } catch (err) {
+        if (err instanceof OfflineModeError) throw err;
         if (err instanceof RunStoppedError) {
           settleRetry('cancelled');
           notifyCompleted('failed', '', { actualAttempt: attempt, details: { message: err.message }, failureStage: 'request', inferenceStarted: false });
@@ -1562,6 +1643,7 @@ export class DeepSeekApiRunner implements LlmRunner {
       ttftMs: number | null;
       generationMs: number | null;
       usage: ChatResponse['usage'] | null;
+      observedModelId: string | null;
       partialModelOutput: boolean;
       outputReceipt: string;
       sawDone: boolean;
@@ -1569,6 +1651,7 @@ export class DeepSeekApiRunner implements LlmRunner {
       ttftMs: null,
       generationMs: null,
       usage: null,
+      observedModelId: null,
       partialModelOutput: false,
       outputReceipt: '',
       sawDone: false,
@@ -1943,6 +2026,8 @@ export class DeepSeekApiRunner implements LlmRunner {
       streamState.usage ?? undefined,
       streamState.ttftMs,
       streamState.generationMs,
+      undefined,
+      streamState.observedModelId ?? null,
     );
     if (thinkingDisabledReason) {
       meta.thinking_disabled_reason = thinkingDisabledReason;
@@ -1951,7 +2036,7 @@ export class DeepSeekApiRunner implements LlmRunner {
     if (!invocationFailed) {
       notifyPhase('stream_completed');
       notifyPhase('response_normalized');
-      notifyCompleted('delivered', outputReceipt);
+      notifyCompleted('delivered', outputReceipt, { observedModelId: streamState.observedModelId ?? null });
     } else {
       notifyCompleted('failed', outputReceipt, {
         actualAttempt: lastAttempt,

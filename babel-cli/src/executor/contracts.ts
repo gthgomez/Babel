@@ -188,6 +188,17 @@ export interface ExecutorCompletionInput {
   requiredVerifierCommands?: readonly string[] | null
   executedVerifierLedger?: readonly ExecutorVerifierReceipt[] | null
   verifierEvidenceErrors?: readonly string[] | null
+  /**
+   * Host final-revision witness (`final-revision-v1`). A stale or unproven
+   * witness forbids a verified or no-change success; it never deletes user bytes.
+   */
+  finalRevision?: import('../authority/finalRevision.js').FinalRevisionWitnessV1 | null
+  /**
+   * Host declaration that a project-scoped NO_CHANGE conclusion must carry a
+   * current byte witness. Defaults to true; only an ambient read-only answer
+   * that makes no worktree claim may set false explicitly.
+   */
+  finalRevisionRequired?: boolean
   toolCallLog: {
     tool: string
     target: string
@@ -196,6 +207,11 @@ export interface ExecutorCompletionInput {
     stale?: boolean
     mutation_paths?: string[]
     preDispatchNoEffect?: true
+    read_revision_hash?: string
+    verifierExecuted?: boolean
+    processExecuted?: boolean
+    processCompleted?: boolean
+    simulated?: boolean
   }[]
   proof?: { compliant: boolean; errors?: string[] }
   /** Opaque per-engine authority plus the current accepted task/run/project. */
@@ -213,6 +229,10 @@ export interface CompletionDecision {
   workspaceRevision?: WorkspaceRevisionIdentity
   evidenceRefs: string[]
   policyVersion: string
+  /** Host final-revision proof attached to this decision, when evaluated. */
+  finalRevision?: import('../authority/finalRevision.js').FinalRevisionWitnessV1
+  /** Paths changed after the accepted proof; surfaced, never deleted. */
+  stalePaths?: string[]
   /** Non-authoritative per-criterion report, separate from the terminal decision. */
   acceptanceEvidence?: CriterionEvidenceResultV1[]
   acceptanceEvidenceOmitted?: number

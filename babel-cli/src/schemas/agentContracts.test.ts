@@ -187,13 +187,14 @@ test('Ask answer schema gracefully handles missing summary text (deduced from an
   );
 });
 
-test('Ask answer schema tolerates both summary and answer missing', () => {
+test('Ask answer schema fails closed when both summary and answer are missing', () => {
   const parsed = AskAnswerSchema.parse({
     schema_version: 1,
     status: 'ANSWER_READY',
   });
-  assert.equal(parsed.summary, '');
-  assert.equal(parsed.answer, '');
+  assert.equal(parsed.status, 'ASK_FAILED');
+  assert.ok(parsed.summary.length > 0);
+  assert.ok(parsed.answer.length > 0);
 });
 
 test('orchestrator manifest schema normalizes GPT-5 worker aliases', () => {

@@ -40,3 +40,18 @@ test('explicit daemon pipeline selection is rejected without connecting or falli
     }
   }
 })
+
+test('background pipeline enqueue is refused while the daemon is quarantined', async () => {
+  const { daemonPipelineEnqueueRejection, DAEMON_PIPELINE_QUARANTINE_MESSAGE } =
+    await import('./pipelineQualification.js')
+  assert.equal(daemonPipelineEnqueueRejection(), DAEMON_PIPELINE_QUARANTINE_MESSAGE)
+  assert.match(DAEMON_PIPELINE_QUARANTINE_MESSAGE, /quarantined/i)
+})
+
+test('the quarantine rejection is a clear unsupported-operation failure', async () => {
+  const { daemonPipelineEnqueueRejection } = await import('./pipelineQualification.js')
+  const rejection = daemonPipelineEnqueueRejection()
+  assert.ok(rejection)
+  assert.match(rejection, /^UNSUPPORTED_OPERATION:/)
+  assert.match(rejection, /settlement and recovery qualification/)
+})

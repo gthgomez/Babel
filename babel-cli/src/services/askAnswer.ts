@@ -27,7 +27,11 @@ import {
   type ResolvedModelPolicy,
 } from '../modelPolicy.js';
 import type { RunnerInvocationMetadata } from '../runners/base.js';
-import { AskAnswerSchema, type AskAnswer } from '../schemas/agentContracts.js';
+import {
+  AskAnswerSchema,
+  EMPTY_ASK_ANSWER_MESSAGE,
+  type AskAnswer,
+} from '../schemas/agentContracts.js';
 import { globalCostTracker, type SessionUsageSummary } from './costTracker.js';
 import { buildCostLedger, usageSummaryFromCostLedger } from './costLedger.js';
 import { logDetail, BabelEventBus } from '../pipeline/logging.js';
@@ -304,21 +308,24 @@ export function safeParseAskAnswer(raw: unknown): AskAnswer {
   const obj = (
     raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
   ) as Record<string, unknown>;
+  const summary =
+    typeof obj['summary'] === 'string'
+      ? obj['summary'].trim()
+      : typeof obj['answer'] === 'string'
+        ? obj['answer'].trim().slice(0, 200)
+        : '';
+  const answer =
+    typeof obj['answer'] === 'string'
+      ? obj['answer'].trim()
+      : typeof obj['summary'] === 'string'
+        ? obj['summary'].trim()
+        : '';
+  const usable = summary.length > 0 || answer.length > 0;
   return {
     schema_version: 1,
-    status: 'ANSWER_READY',
-    summary:
-      typeof obj['summary'] === 'string'
-        ? obj['summary']
-        : typeof obj['answer'] === 'string'
-          ? obj['answer'].slice(0, 200)
-          : '',
-    answer:
-      typeof obj['answer'] === 'string'
-        ? obj['answer']
-        : typeof obj['summary'] === 'string'
-          ? obj['summary']
-          : String(raw ?? ''),
+    status: usable ? 'ANSWER_READY' : 'ASK_FAILED',
+    summary: usable ? (summary || answer.slice(0, 200)) : EMPTY_ASK_ANSWER_MESSAGE,
+    answer: usable ? (answer || summary) : EMPTY_ASK_ANSWER_MESSAGE,
     facts: Array.isArray(obj['facts'])
       ? obj['facts'].filter((f): f is string => typeof f === 'string')
       : [],
@@ -337,6 +344,21 @@ export function safeParseAskAnswer(raw: unknown): AskAnswer {
     next: Array.isArray(obj['next'])
       ? obj['next'].filter((n): n is string => typeof n === 'string')
       : [],
+  };
+}
+
+/**
+ * Fail closed when a parsed Ask answer has no substantive text. The schema
+ * normalizer already handles provider-native payloads; this guard protects
+ * paths that construct an AskAnswer directly (and is idempotent).
+ */
+export function ensureUsableAskAnswer(answer: AskAnswer): AskAnswer {
+  if (answer.status !== 'ANSWER_READY' || answer.answer.trim().length > 0) return answer;
+  return {
+    ...answer,
+    status: 'ASK_FAILED',
+    summary: answer.summary.trim() || EMPTY_ASK_ANSWER_MESSAGE,
+    answer: EMPTY_ASK_ANSWER_MESSAGE,
   };
 }
 
@@ -646,7 +668,7 @@ Boolean(modelPolicy && isProviderId(modelPolicy.provider));
     ...options,
     projectRoot: repoPath,
   });
-  answer = grounding.answer;
+  answer = ensureUsableAskAnswer(grounding.answer);
 
   const usageSummary = globalCostTracker.getSessionSummary();
 
@@ -852,7 +874,7 @@ modelPolicy && isProviderId(modelPolicy.provider)
     ...options,
     projectRoot: repoPath,
   });
-  answer = grounding.answer;
+  answer = ensureUsableAskAnswer(grounding.answer);
   const verifyStatus: 'pass' | 'fail' | 'blocked' =
     grounding.review.status === 'repaired' || grounding.review.status === 'pass'
       ? 'pass'

@@ -36,7 +36,7 @@ Start:
   ${CLI_COMMAND}                               Open the interactive coding session
   ${CLI_COMMAND} work "Explain this project"    Inspect or implement within current permissions
   ${CLI_COMMAND} plan "Design this change"      Produce a read-only plan
-  ${CLI_COMMAND} apply --plan <id>              Apply a saved plan after scope checks
+  ${CLI_COMMAND} apply --plan <id>              Apply a saved plan after scope checks and confirmation
   ${CLI_COMMAND} work --review thorough "..."   Use governed planning, review and execution
 
 Settings:
@@ -46,10 +46,10 @@ Settings:
   ${CLI_COMMAND} settings show
   ${CLI_COMMAND} conversation list             List saved conversations
   ${CLI_COMMAND} conversation resume <id>      Resume a conversation
-  ${CLI_COMMAND} run resume <id>               Recover an execution worker chain
+  ${CLI_COMMAND} continue latest               Inspect recovery for the latest run
   ${CLI_COMMAND} doctor
 
-The command name is babel-harness. babel-agent is an installed alias for this same program.
+The command name is babel-harness; babel and babel-agent are installed aliases for this same program.
 Plan stops by default. Only an explicitly saved plans.autoApply preference enables
 automatic implementation. --plan-only always stops. No cloud provider is preselected.
 Model/provider choices inside the TUI are session-scoped; --save user|project makes
@@ -294,9 +294,12 @@ export function registerCoreCommands(program: Command): void {
       const selected = selectedConnectionModel({ model: action.opts()['model'] }, target);
       if (selected) action.setOptionValue('model', selected);
     }
+    const offlineRequested = action.opts()['offline'] === true ||
+      ['1', 'true'].includes(process.env['BABEL_OFFLINE'] ?? '') ||
+      process.argv.includes('--offline');
     if (['run', 'plan', 'deep'].includes(action.name()) && !action.opts()['model'] && !action.opts()['manual'] &&
       !process.env['BABEL_DESKTOP_PROVIDER'] && process.env['BABEL_PIPELINE_V9_OFFLINE'] !== '1' &&
-      process.env['BABEL_LITE_OFFLINE'] !== '1' && !['1', 'true'].includes(process.env['BABEL_OFFLINE'] ?? '')) {
+      process.env['BABEL_LITE_OFFLINE'] !== '1' && !offlineRequested) {
       throw new Error(`SETUP_REQUIRED: Run ${CLI_COMMAND} setup to choose a provider connection and exact model before starting work.`);
     }
   });

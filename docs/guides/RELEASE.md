@@ -84,11 +84,27 @@ not change rulesets, protected environments, permissions or publishing access.
 
 `npm --prefix babel-cli run package:release -- <output-directory>` is the
 common clean-source path for consumer CI, npm dry runs and real publication.
-It validates source provenance, builds once, stages runtime assets and packs
-once with lifecycle scripts disabled. It compares every archive member to the
+It validates source provenance and installed-dependency consistency, checks the
+reviewed advisory snapshot, builds once, stages runtime assets and packs once
+with lifecycle scripts disabled. It compares every archive member to the
 validated distribution bytes, including ignored `dist/` files, and records
-source SHA, package version, SHA256, SHA512 integrity and package file manifest.
-Publication promotes the **same immutable `consumer-candidate` archive** that passed the nine-row matrix for the frozen source commit. The `publish-npm.yml` workflow downloads that qualified artifact (or fails closed when retention expired) and rechecks digest and source identity; it does not run `package:release` on the publish runner. Registry verification compares the published version's immutable integrity.
+source SHA, source tree SHA, package version, SHA256, SHA512 integrity, the
+package file manifest, an advertised-payload inventory (bin aliases, required
+runtime assets, core/optional classes and test-only exclusion) and the advisory
+review digest.
+
+`npm run check:advisories` fails when `babel-cli/package-lock.json` no longer
+matches `config/dependency-advisory-review.json`; a `remediated` entry must
+install a version outside its recorded ranges, and a `deferred` or
+`accepted_risk` entry blocks only the artifact scopes it names. The npm
+candidate gate runs the `npm` scope. The draft step runs the `desktop` scope,
+writes the outcome (including the exact deferred GHSA and installed version) to
+`release-qualification.json` with the reviewed checkout SHA, and fails only
+when that review outcome is unavailable. A deferred Desktop advisory therefore keeps Desktop artifacts
+unqualified and requires an explicit owner decision before publication; it does
+not silently block building or drafting, and it never weakens the npm gate.
+
+Publication promotes the **same immutable `consumer-candidate` archive** that passed the nine-row matrix for the frozen source commit. The `publish-npm.yml` workflow downloads that qualified artifact (or fails closed when retention expired) and rechecks digest and source identity; it does not run `package:release` on the publish runner. Promotion also binds the candidate metadata to the checked-out frozen source: version, bin aliases, dependency-lock digest, advisory review, source-provenance record and the explicit unsigned publisher status. Registry verification compares the published version's immutable integrity.
 
 Consumer CI transports one frozen archive to all nine OS/Node rows. Each row
 checks source and digest supplied independently of the downloaded manifest
@@ -96,12 +112,17 @@ before installation. Fresh homes, caches and empty npm configuration isolate
 the installed consumer from ambient provider variables and Node preload state.
 The original nine build-toolchain rows remain separately required.
 
-CI archive identity and a later tag-release archive are separate evidence
-records. The common packer binds both routes to validated distribution content;
-this alone does not prove cross-run tarball equality or qualify a portable
-bundle's embedded CLI on every consumer row. Retain the source, normalized file
-inventory and digest for each route. Hosted cross-platform qualification and
-npm trusted-publisher access remain unverified until those operations succeed.
+The tag release does not repack the CLI. Both Desktop packagers accept
+`--cli-archive=<qualified candidate>` and the release workflow passes the exact
+`consumer-candidate` tarball for the frozen source, so the GitHub
+`babel-harness-<version>.tgz` and the npm-promoted archive are the same bytes;
+the draft step rejects a mismatch. Opening the draft also requires the exact
+staged `SHA256SUMS` to verify, the Windows/Linux build records to name the
+frozen source and version as unsigned, and a successful launch of that AppImage
+under Xvfb with evidence bound to its digest. A portable bundle's embedded CLI
+is still qualified only on the consumer rows that actually ran; hosted
+cross-platform qualification and npm trusted-publisher access remain unverified
+until those operations succeed.
 
 A successful portable build must contain exactly one `BUILD.json` whose source
 and version match the frozen tag. `release-evidence.json` records tag object,

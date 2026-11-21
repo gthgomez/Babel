@@ -1,6 +1,7 @@
 /** Terminal projection, result assembly, and durable evidence settlement. */
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { formatArgvAsCommand } from '../utils/commandArgv.js'
 import {
   TerminalReasonCodeSchema,
   type BlockedReport,
@@ -37,6 +38,12 @@ import {
   applyHonestTaskOutcomeToCompletion,
   type TaskContractV1,
 } from './taskContract.js'
+import type { FinalRevisionWitnessV1 } from '../authority/finalRevision.js'
+import {
+  evaluateFinalRevisionWitness,
+  unavailableFinalRevisionWitness,
+  untestedPathsAfterLastGreenVerifier,
+} from '../authority/finalRevision.js'
 import {
   terminalReasonFromClassification,
   terminalReasonFromFailureText,
@@ -82,7 +89,16 @@ import type {
   FinalizeParityTurnExtras,
   FinalizeParityTurnResult,
 } from './chatEngineParityBridge.js'
-import { classifyChatTaskIntent } from './chatEngineTaskIntent.js'
+import {
+  classifyChatTaskIntent,
+  isConversationalTurnText,
+} from './chatEngineTaskIntent.js'
+import {
+  hasExplicitEditDenial,
+  isReadOnlyTaskFrame,
+  stripFencedCodeBodies,
+  stripTaskRequestPrefix,
+} from '../config/chatTaskClass.js'
 import { isSessionEventPersistenceFailure } from './sessionEventDiagnostics.js'
 import { hasInspectedNoChangeEvidence } from './completionGatePolicy.js'
 import { refreshChatVerifierReceiptStalenessSync } from '../evidence/chatRevisionBinding.js'
@@ -97,6 +113,23 @@ export const SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE =
   'session event persistence failed before terminal evidence could be durably recorded'
 
 const UNVERIFIED_COMPLETION_MARKER = 'Completion status: UNVERIFIED_PATCH.'
+
+/** Publication-time no-change proof; absent roots stay absent, never inferred. */
+function publicationRevisionWitness(
+  snapshot: ChatTerminalSnapshot,
+  requested: TerminalOutcome | 'PLAN_COMPLETE',
+): FinalRevisionWitnessV1 | undefined {
+  if (requested !== 'NO_CHANGE_REQUIRED' || !snapshot.context.options.projectRoot) return undefined
+  try {
+    return evaluateFinalRevisionWitness({
+      projectRoot: snapshot.context.options.projectRoot,
+      toolCallLog: snapshot.evidence.observability.toolCallLog,
+      requiredVerifierCommands: [],
+    })
+  } catch {
+    return unavailableFinalRevisionWitness('final_revision_unavailable')
+  }
+}
 
 function singleLineEvidence(value: string, maxLength = 240): string {
   return value.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength)
@@ -129,10 +162,31 @@ function proofPlanLabel(plan: CriterionEvidenceResultV1['proof_plan']): string {
   }
 }
 
+function frozenEvidenceCommand(
+  requirement: TaskContractV1['acceptance'][number] | undefined,
+): string | null {
+  const verification = requirement?.verification
+  if (!verification?.executable_id || !verification.argv?.length) return null
+  try {
+    return formatArgvAsCommand([verification.executable_id, ...verification.argv])
+  } catch {
+    return null
+  }
+}
+
+function missingEvidenceHint(
+  requirement: TaskContractV1['acceptance'][number] | undefined,
+): string {
+  const command = frozenEvidenceCommand(requirement)
+  if (command) return `required evidence: run the frozen verifier \`${singleLineEvidence(command, 160)}\``
+  return 'required evidence: no executable witness is bound yet; restate this behavior as a concretely checkable requirement (an exact test command, or a named file/path with the expected content)'
+}
+
 function appendCriterionEvidenceSummary(
   answer: string,
   evidence?: readonly CriterionEvidenceResultV1[],
   omitted = 0,
+  contract?: TaskContractV1,
 ): string {
   if (!evidence?.length) return answer
   const statusText: Record<CriterionEvidenceResultV1['status'], string> = {
@@ -144,15 +198,56 @@ function appendCriterionEvidenceSummary(
   }
   const lines = [
     'Host criterion evidence (per-criterion report; overall completion status is unchanged):',
-    ...evidence.map((item) =>
-      `- ${singleLineEvidence(item.description, 180)} [${singleLineEvidence(item.requirement_id, 80)}]: ${statusText[item.status]}; next: ${proofPlanLabel(item.proof_plan)}.`,
-    ),
+    ...evidence.map((item) => {
+      const requirement = contract?.acceptance.find(candidate => candidate.id === item.requirement_id)
+      const proof = item.status === 'satisfied' || item.status === 'not_required'
+        ? ''
+        : `; ${missingEvidenceHint(requirement)}`
+      return `- ${singleLineEvidence(item.description, 180)} [${singleLineEvidence(item.requirement_id, 80)}]: ${statusText[item.status]}; next: ${proofPlanLabel(item.proof_plan)}${proof}.`
+    }),
   ]
   if (omitted > 0) lines.push(`- ${omitted} additional criterion result(s) omitted.`)
   return `${answer}\n\n${lines.join('\n')}`
 }
 
 /** Make the terminal answer agree with the host completion decision without changing that decision. */
+function knownRedVerifierReceipt(
+  receipt: BoundChatVerifierReceipt | null | undefined,
+): receipt is BoundChatVerifierReceipt {
+  return (
+    receipt != null &&
+    receipt.stale !== true &&
+    Number.isInteger(receipt.exit_code) &&
+    receipt.exit_code !== 0 &&
+    typeof receipt.command === 'string' &&
+    receipt.command.trim().length > 0
+  )
+}
+
+/**
+ * A later provider/network failure must not erase a known red check from the
+ * terminal explanation. The terminal cause remains the later failure; this is
+ * retained evidence, not a new success claim (TF-14).
+ */
+export function failureExplanationWithKnownVerifierState(
+  answer: string,
+  receipt: BoundChatVerifierReceipt | null | undefined,
+): string {
+  if (!knownRedVerifierReceipt(receipt)) return answer
+  const command = singleLineEvidence(receipt.command, 160)
+  if (answer.includes(command)) return answer
+  const summary =
+    typeof receipt.summary === 'string' && receipt.summary.trim().length > 0
+      ? `: ${singleLineEvidence(receipt.summary, 240)}`
+      : ''
+  return [
+    answer,
+    '',
+    `Known verification state at failure: "${command}" exited ${receipt.exit_code}${summary}.`,
+    'This earlier red check remains part of the run evidence; the later failure does not turn it green.',
+  ].join('\n')
+}
+
 function formatTerminalAnswerForOutcome(input: {
   answer: string
   outcome: TerminalOutcome
@@ -160,12 +255,15 @@ function formatTerminalAnswerForOutcome(input: {
   hasMutation: boolean
   task: string
   toolCallLog: ChatTerminalSnapshot['evidence']['observability']['toolCallLog']
+  verifierReceipt?: BoundChatVerifierReceipt | null | undefined
   preservedUnverifiedCandidate?: {
     candidate: string
     artifactRefs: readonly string[]
   }
   acceptanceEvidence?: readonly CriterionEvidenceResultV1[]
   acceptanceEvidenceOmitted?: number
+  contract?: TaskContractV1
+  finalRevision?: FinalRevisionWitnessV1
 }): string {
   const unverifiedTerminal = input.status === 'completed' && input.outcome === 'UNVERIFIED_PATCH'
   const blockedRecovery = input.status === 'blocked' && input.outcome === 'BLOCKED_POLICY'
@@ -173,12 +271,31 @@ function formatTerminalAnswerForOutcome(input: {
   if (!input.answer.trim() || satisfiesRequestedBareJsonAnswer(input.answer, input.task)) {
     return input.answer
   }
+  if (input.status === 'failed') {
+    return failureExplanationWithKnownVerifierState(input.answer, input.verifierReceipt)
+  }
+  if (input.finalRevision?.status === 'stale') {
+    return [
+      UNVERIFIED_COMPLETION_MARKER,
+      'The accepted proof is stale: inspected files changed after the check and before publication, so task completion is not certified.',
+      input.finalRevision.stale_paths.length > 0
+        ? `Changed after the accepted proof: ${input.finalRevision.stale_paths.slice(0, 20).join(', ')}.`
+        : 'Changed after the accepted proof: workspace bytes could not be attributed to a specific path.',
+      'These are user-owned worktree bytes; inspect them and rerun the required verifier before treating the result as current.',
+      '',
+      'Model response (retained as an unverified report):',
+      '---',
+      input.answer,
+    ].join('\n')
+
+  }
   if (decisionDeferral) {
     return input.acceptanceEvidence?.length
       ? appendCriterionEvidenceSummary(
           input.answer,
           input.acceptanceEvidence,
           input.acceptanceEvidenceOmitted,
+          input.contract,
         )
       : input.answer
   }
@@ -223,7 +340,7 @@ function formatTerminalAnswerForOutcome(input: {
       'Unverified model response:',
       '---',
       input.answer,
-    ].join('\n'), input.acceptanceEvidence, input.acceptanceEvidenceOmitted)
+    ].join('\n'), input.acceptanceEvidence, input.acceptanceEvidenceOmitted, input.contract)
   }
   const recoveryOnly = isRecoveryOnlyPlaceholder(input.answer)
   const lines = [
@@ -236,6 +353,10 @@ function formatTerminalAnswerForOutcome(input: {
     const shown = artifactRefs.slice(0, 20)
     lines.push('', `Paths with recorded confirmed mutations (final workspace state not re-checked): ${shown.map(path => JSON.stringify(singleLineEvidence(path))).join(', ')}${artifactRefs.length > shown.length ? `, and ${artifactRefs.length - shown.length} more` : ''}`)
   }
+  const untested = untestedPathsAfterLastGreenVerifier(input.toolCallLog)
+  if (unverifiedTerminal && untested.length > 0) {
+    lines.push('', `Modified after the last passing verifier (not covered by that result): ${untested.slice(0, 20).map(path => JSON.stringify(singleLineEvidence(path))).join(', ')}. These worktree changes are retained, not deleted; rerun the verifier to cover them.`)
+  }
   if (recoveryOnly) {
     lines.push('', 'Host-grounded delivery summary:',
       `The host recorded confirmed file changes to: ${artifactRefs.map(path => JSON.stringify(singleLineEvidence(path))).join(', ')}.`,
@@ -246,7 +367,7 @@ function formatTerminalAnswerForOutcome(input: {
     lines.push('', 'Verification status:', describeUnverifiedVerifierStatus(input.toolCallLog))
   }
   return unverifiedTerminal || blockedRecovery
-    ? appendCriterionEvidenceSummary(lines.join('\n'), input.acceptanceEvidence, input.acceptanceEvidenceOmitted)
+    ? appendCriterionEvidenceSummary(lines.join('\n'), input.acceptanceEvidence, input.acceptanceEvidenceOmitted, input.contract)
     : lines.join('\n')
 }
 
@@ -314,6 +435,8 @@ export interface ChatTerminalEffects {
   decideCompletion: (
     requested: TerminalOutcome | 'PLAN_COMPLETE',
     hasMutation: boolean,
+    /** Publication-time final-revision witness for no-change/read-only claims. */
+    finalRevision?: FinalRevisionWitnessV1,
   ) => ReturnType<ExecutorKernel['completion']['decide']>
   settleActiveExecution: () => void
   finalizeTurn: (
@@ -350,18 +473,131 @@ export type ChatStreamDoneExtra = {
   }
 }
 
+/** A recorded, successful source read (detail text is not required here). */
+function hasSuccessfulSourceRead(
+  log: ChatTerminalSnapshot['evidence']['observability']['toolCallLog'],
+): boolean {
+  return log.some(
+    (entry) =>
+      (entry.tool === 'read_file' || entry.tool === 'read_range') &&
+      !entry.error &&
+      (entry.exit_code === undefined || entry.exit_code === 0),
+  )
+}
+
+/**
+ * A repository question that produced no source observation is not a grounded
+ * informational answer. Task text only selects the requirement; evidence is
+ * still the successful tool log.
+ *
+ * Heuristic boundary (declared, round-2 P3): the requirement needs BOTH an
+ * explanatory/informational verb AND a repository-target keyword. An
+ * explain-verb turn with no repo keyword — e.g. "Summarize what you see" —
+ * escapes this guard and can still certify NO_CHANGE_REQUIRED with zero
+ * reads. Widening on the verb alone is NOT safe: `isConversationalTurnText`
+ * only recognizes short greetings/acknowledgements, so it would also sweep
+ * conversational-informational follow-ups ("summarize what we discussed",
+ * "explain your reasoning") whose referent is the conversation, not the
+ * repository, and mark them UNVERIFIED_PATCH/exit 6. The referent of a
+ * keyword-less deictic task is unknowable from task text alone; closing
+ * this gap needs a task-referent classifier, not a wider regex.
+ */
+function taskRequiresRepositoryInspection(task: string): boolean {
+  if (isConversationalTurnText(task)) return false
+  // Only explanatory/informational requests claim repository understanding.
+  // A raw read attempt that failed is handled by the completion gate, not
+  // turned into a second, text-only success claim.
+  if (
+    !/\b(explain|describe|summari[sz]e|review|audit|analy[sz]e|overview|what|how|why|tell\s+me\s+about)\b/i.test(
+      task,
+    )
+  ) {
+    return false
+  }
+  return /\b(repo(?:sitory)?|codebase|project|source|files?|modules?|packages?|readme|architecture|implementation|functions?|classes?|tests?|workspace)\b/i.test(task)
+}
+
 /** Inspection can prove no change is needed; zero writes alone cannot. */
-function normalizeInspectedNoChange(snapshot: ChatTerminalSnapshot, outcome: TerminalOutcome): TerminalOutcome {
+export function normalizeInspectedNoChange(
+  snapshot: ChatTerminalSnapshot,
+  outcome: TerminalOutcome,
+): TerminalOutcome {
   const implementation = snapshot.context.acceptedOperation !== undefined
     ? snapshot.context.acceptedOperation !== 'READ_ONLY'
     : classifyChatTaskIntent(snapshot.context.options.task) === 'execute'
   if (outcome === 'NO_CHANGE_REQUIRED' && implementation && snapshot.context.options.projectRoot)
     refreshChatVerifierReceiptStalenessSync(snapshot.context.options.projectRoot, snapshot.outcome.lastVerifierReceipt)
   const verifier = snapshot.outcome.lastVerifierReceipt
-  return outcome === 'NO_CHANGE_REQUIRED' && implementation &&
-    !hasInspectedNoChangeEvidence(snapshot.evidence.observability.toolCallLog) &&
-    !(verifier?.authority === true && verifier.exit_code === 0 && verifier.stale === false)
-    ? 'AGENT_FAILURE' : outcome
+  const greenCurrentVerifier = verifier?.authority === true && verifier.exit_code === 0 && verifier.stale === false
+  if (outcome !== 'NO_CHANGE_REQUIRED') return outcome
+  if (implementation) {
+    return !hasInspectedNoChangeEvidence(snapshot.evidence.observability.toolCallLog) && !greenCurrentVerifier
+      ? 'AGENT_FAILURE' : outcome
+  }
+  // TF-11: an informational repository answer still needs at least one
+  // successful source observation. Without it the result is an unverified
+  // inspection, not a successful explanation.
+  // Exception (landed ordinary-admission contract): when the operator's
+  // acceptance explicitly forbids edits AND the engine durably refused a
+  // native mutation attempt in this turn, the no-change terminal is
+  // engine-adjudicated — the recorded write denial plus zero mutations
+  // proves the no-change acceptance — so the turn completes
+  // NO_CHANGE_REQUIRED without demanding source reads. Either half alone
+  // keeps the demotion: a bare edit-denial with no engine-refused write
+  // still has the explanation as its deliverable, and a refused write
+  // without the operator's no-edit contract is not the admission flow.
+  if (
+    snapshot.context.options.projectRoot !== undefined &&
+    taskRequiresRepositoryInspection(snapshot.context.options.task) &&
+    !hasSuccessfulSourceRead(snapshot.evidence.observability.toolCallLog) &&
+    !greenCurrentVerifier &&
+    !engineAdjudicatedNoChangeAcceptance(snapshot)
+  ) {
+    return 'UNVERIFIED_PATCH'
+  }
+  return outcome
+}
+
+/**
+ * True when the operator's task acceptance explicitly forbids edits and the
+ * engine's durable tool log records a refused native mutation attempt for
+ * this turn. That combination is the engine-adjudicated no-change flow the
+ * ordinary read-only admission contract pins (an ordinary prepared no-change
+ * task whose native write proposal is denied completes NO_CHANGE_REQUIRED).
+ * An informational question is excluded: its deliverable is the grounded
+ * answer, which a denied write does not provide.
+ */
+function taskRequestsEdit(task: string): boolean {
+  const text = stripFencedCodeBodies(task)
+  // Only the part before an edit-denial clause can request an edit. An
+  // incidental edit verb later in an explanation ("how the update flow works")
+  // does not make the task an edit request.
+  const denial = text.search(
+    /\b(?:without|do\s+not|don'?t|must\s+not|never|no)\b[^.\n]{0,40}\b(?:edit|editing|modify|modifying|change|changing|write|writing|touch|touching)\b/i,
+  )
+  const scope = stripTaskRequestPrefix(denial > 0 ? text.slice(0, denial) : text)
+  if (isReadOnlyTaskFrame(scope)) return false
+  return /(?:^|[.!?;\n,]\s*|\band\s+)(?:fix|repair|change|update|implement|make|ensure|add|remove|delete|create|refactor|migrate|upgrade|replace|rename|apply|extend|adjust|write|edit|modify)\b/i.test(
+    scope,
+  )
+}
+
+function engineAdjudicatedNoChangeAcceptance(
+  snapshot: ChatTerminalSnapshot,
+): boolean {
+  const log = snapshot.evidence.observability.toolCallLog
+  const refusedMutation = log.some(
+    (entry) =>
+      entry.error === 'blocked' &&
+      (entry.tool === 'write_file' ||
+        entry.tool === 'str_replace' ||
+        entry.tool === 'apply_patch'),
+  )
+  return (
+    refusedMutation &&
+    hasExplicitEditDenial(snapshot.context.options.task) &&
+    taskRequestsEdit(snapshot.context.options.task)
+  )
 }
 
 /** Finalize a completed stream through the kernel decision and durable parity owner. */
@@ -413,11 +649,22 @@ export function completeChatStream(
   const decision = effects.decideCompletion(
     planCompletion ? 'PLAN_COMPLETE' : requestedOutcome,
     hasMutation,
+    publicationRevisionWitness(snapshot, planCompletion ? 'PLAN_COMPLETE' : requestedOutcome),
   )
   const decisionOutcome =
     decision.finalOutcome === 'PLAN_COMPLETE'
       ? 'UNVERIFIED_PATCH'
       : decision.finalOutcome
+  if (decision.finalRevision) {
+    try {
+      writeFileSync(
+        join(snapshot.context.engineRunDir, 'final_revision.json'),
+        `${JSON.stringify(decision.finalRevision, null, 2)}\n`,
+      )
+    } catch {
+      /* terminal evidence remains available in the completion decision */
+    }
+  }
   const terminalReason = resolveChatTerminalReason(
     input,
     decisionOutcome,
@@ -446,6 +693,8 @@ export function completeChatStream(
     reason: decision.reason,
     evidenceRefs: decision.evidenceRefs,
     policyVersion: decision.policyVersion,
+    ...(decision.finalRevision ? { finalRevision: decision.finalRevision } : {}),
+    ...(decision.stalePaths?.length ? { stalePaths: [...decision.stalePaths] } : {}),
     ...(decision.acceptanceEvidence ? { acceptanceEvidence: decision.acceptanceEvidence } : {}),
     ...(decision.acceptanceEvidenceOmitted !== undefined
       ? { acceptanceEvidenceOmitted: decision.acceptanceEvidenceOmitted }
@@ -502,6 +751,8 @@ export function completeChatStream(
     ...(decision.acceptanceEvidenceOmitted !== undefined
       ? { acceptanceEvidenceOmitted: decision.acceptanceEvidenceOmitted }
       : {}),
+    ...(snapshot.context.taskContract ? { contract: snapshot.context.taskContract } : {}),
+    ...(decision.finalRevision ? { finalRevision: decision.finalRevision } : {}),
   })
   replaceLastMatchingAssistantAnswer(
     snapshot.presentation.conversation,
@@ -565,7 +816,10 @@ export function failChatStream(
   presentationError?: string,
 ): ChatEvent {
   const { snapshot, effects } = input
-  const displayError = presentationError ?? error
+  const displayError = failureExplanationWithKnownVerifierState(
+    presentationError ?? error,
+    snapshot.outcome.lastVerifierReceipt,
+  )
   effects.settleActiveExecution()
   const providerOutputLimit = isProviderOutputLimitText(error)
   if (providerOutputLimit && snapshot.outcome.terminatingLimiter == null) {
@@ -936,6 +1190,7 @@ export function assembleChatResult(
       ? effects.decideCompletion(
           planCompletion ? 'PLAN_COMPLETE' : outcome,
           hasMutation,
+          publicationRevisionWitness(snapshot, planCompletion ? 'PLAN_COMPLETE' : outcome),
         )
       : null
   const authoritativeOutcome: TerminalOutcome | undefined =
@@ -944,6 +1199,16 @@ export function assembleChatResult(
       : planCompletion
         ? 'UNVERIFIED_PATCH'
         : outcome
+  if (kernelDecision?.finalRevision) {
+    try {
+      writeFileSync(
+        join(snapshot.context.engineRunDir, 'final_revision.json'),
+        `${JSON.stringify(kernelDecision.finalRevision, null, 2)}\n`,
+      )
+    } catch {
+      /* terminal evidence remains available in the completion decision */
+    }
+  }
   const terminalReason =
     finalStatus === 'cancelled'
       ? ({
@@ -972,6 +1237,8 @@ export function assembleChatResult(
           reason: kernelDecision.reason,
           evidenceRefs: kernelDecision.evidenceRefs,
           policyVersion: kernelDecision.policyVersion,
+          ...(kernelDecision.finalRevision ? { finalRevision: kernelDecision.finalRevision } : {}),
+          ...(kernelDecision.stalePaths?.length ? { stalePaths: [...kernelDecision.stalePaths] } : {}),
           ...(kernelDecision.acceptanceEvidence
             ? { acceptanceEvidence: kernelDecision.acceptanceEvidence }
             : {}),
@@ -1024,12 +1291,14 @@ export function assembleChatResult(
         hasMutation,
         task: snapshot.context.options.task,
         toolCallLog: snapshot.evidence.observability.toolCallLog,
+        verifierReceipt: snapshot.outcome.lastVerifierReceipt,
         ...(kernelDecision?.acceptanceEvidence
           ? { acceptanceEvidence: kernelDecision.acceptanceEvidence }
           : {}),
         ...(kernelDecision?.acceptanceEvidenceOmitted !== undefined
           ? { acceptanceEvidenceOmitted: kernelDecision.acceptanceEvidenceOmitted }
           : {}),
+        ...(kernelDecision?.finalRevision ? { finalRevision: kernelDecision.finalRevision } : {}),
       })
   if (!superseded && answer !== undefined && deliveredAnswer !== undefined) {
     replaceLastMatchingAssistantAnswer(

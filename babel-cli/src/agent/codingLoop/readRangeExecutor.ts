@@ -20,6 +20,7 @@ import {
 } from "./workingState.js";
 import { isDiscriminatingInspectionEvidence } from "../chatEngineHelpers.js";
 import { recoveryTargetIdentity } from "./recoveryIdentity.js";
+import { hashFinalRevisionFile } from '../../authority/finalRevision.js';
 import type { ChatEngineActionExecutorHost } from "../chatEngineContracts.js";
 import type { ChatToolAction } from "../chatToolDefinitions.js";
 import type { ChatActionResult, ChatCallbacks } from "../chatEngineContracts.js";
@@ -45,6 +46,7 @@ export async function executeReadRangeAction(
   host.persistToolStartedAtExecutorDispatch(action, meta);
   const bindingBefore = host.workingState.recoveryGate ? host.currentRecoveryBinding() : null;
   const targetBefore = recoveryTargetIdentity(requireProjectRoot(host.options), action.file_path);
+  const revisionHash = hashFinalRevisionFile(requireProjectRoot(host.options), action.file_path);
   const streamed = await readFileWindow(rPath, {
     kind: "range",
     startLine: action.start_line,
@@ -105,6 +107,7 @@ export async function executeReadRangeAction(
     detail: `${evaluated.window.lines.length} lines`,
     index: meta.index,
     exit_code: 0,
+    ...(revisionHash ? { read_revision_hash: revisionHash } : {}),
   });
   ctx.callbacks?.onToolComplete?.(
     toolId,

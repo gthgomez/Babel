@@ -7,6 +7,7 @@ import {execFileSync} from 'node:child_process';
 import {homedir} from 'node:os';
 import {assertAppImportsResolve} from './lib/verify-app-imports.mjs';
 import {installCanvasPlatformBinding} from '../../babel-cli/scripts/research-v2-canvas-platform-binding.mjs';
+import {verifyCliCandidate} from './lib/cli-candidate.mjs';
 import {isAllowlistedCanvasVendorNativeArtifact} from '../../babel-cli/scripts/research-v2-canvas-vendor-allowlist.mjs';
 
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -40,7 +41,19 @@ command(process.execPath, [join(desktop,'scripts','build.mjs')]);
 const cliSource = join(repo, 'babel-cli');
 command(process.execPath, [npmCli, 'run', 'build'], cliSource);
 command(process.execPath, [join(cliSource,'scripts','stage_runtime_assets.mjs')]);
-const pack = JSON.parse(command(process.execPath, [npmCli,'pack','--ignore-scripts','--json','--pack-destination',output], cliSource))[0];
+// Release promotion passes the exact npm-qualified candidate so the GitHub
+// tarball and the npm tarball cannot drift; a contributor build packs locally.
+const cliCandidate = option('cli-archive');
+let pack;
+if (cliCandidate) {
+  const sourcePackage = JSON.parse(readFileSync(join(cliSource,'package.json'),'utf8'));
+  const verified = verifyCliCandidate({archive: resolve(cliCandidate), expectedName: sourcePackage.name, expectedVersion: sourcePackage.version, tarCommand: 'tar.exe'});
+  cpSync(verified.archive, join(output, verified.filename));
+  pack = {filename: verified.filename, version: verified.version};
+  console.log(`Embedding qualified CLI candidate ${verified.filename} (${verified.sha256})`);
+} else {
+  pack = JSON.parse(command(process.execPath, [npmCli,'pack','--ignore-scripts','--json','--pack-destination',output], cliSource))[0];
+}
 // Never reuse node_modules/electron/dist: its installer can retain stale or changed files.
 mkdirSync(bundle);
 command('tar.exe', ['-xf',electronArchive,'-C',bundle]);

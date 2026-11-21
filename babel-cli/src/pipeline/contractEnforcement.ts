@@ -307,7 +307,6 @@ export function verifyExactOutputSchemaArtifacts(
   return null;
 }
 
-export { repairExactOutputSchemaArtifacts } from './exactOutputArtifacts.js';
 
 function getExpectedSummaryRowKeys(rawTask: string): string[] {
   return [...rawTask.matchAll(/^([a-z0-9_]+),(ERROR|WARNING|INFO),<count>$/gim)].map(

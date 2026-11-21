@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Reconciliation contract for the six-audit reliability campaign (issue #521). It defines the evidence vocabulary and the per-workstream disposition landing files so W01-W14 can record their own findings without editing a shared table. It is not contributor policy and not a release gate; AGENTS.md and the canonical register remain authoritative.",
+  "verifiedAgainst": "90583d97",
+  "register": {
+    "path": "docs/campaigns/babel-reliability-2026-11/FINDINGS_INDEX.csv",
+    "ownerIssue": "#521",
+    "disposition": "Proposed by PR #536 (branch docs/six-audit-parallel-wave-20261118). Until that PR merges, findings stay at their audit-time status and this repository must not claim a canonical register exists."
+  },
+  "statusVocabulary": [
+    "audited",
+    "reproduced_on_head",
+    "historical",
+    "disproven",
+    "coded",
+    "reviewed",
+    "merged",
+    "package_qualified",
+    "closed"
+  ],
+  "requiredEvidence": {
+    "audited": [],
+    "reproduced_on_head": [
+      "head_sha",
+      "evidence"
+    ],
+    "historical": [
+      "evidence"
+    ],
+    "disproven": [
+      "head_sha",
+      "evidence"
+    ],
+    "coded": [
+      "branch",
+      "evidence"
+    ],
+    "reviewed": [
+      "reviewed_head_sha",
+      "evidence"
+    ],
+    "merged": [
+      "merged_sha"
+    ],
+    "package_qualified": [
+      "merged_sha",
+      "artifact_kind",
+      "artifact_digest"
+    ],
+    "closed": [
+      "merged_sha",
+      "artifact_kind",
+      "artifact_digest",
+      "test_evidence"
+    ]
+  },
+  "rules": [
+    "A finding may move forward only in the order audited -> reproduced_on_head|historical|disproven -> coded -> reviewed -> merged -> package_qualified -> closed; skipped states stay explicitly unknown.",
+    "Only the owning workstream writes its own disposition file. Updating a row in the canonical register is a separate, owned edit after that stream lands evidence.",
+    "merged means source is on the reviewed branch history, nothing more. package_qualified requires exact artifact kind and digest; closed additionally requires the qualifying test evidence.",
+    "Audit text pinned to 198193b1 is historical evidence, never a current-head assertion. Other streams' findings and rows are not edited from this workstream."
+  ],
+  "workstreams": [
+    {
+      "id": "W01",
+      "issue": "#522",
+      "scope": "Source-linked task admission and relevant witnesses",
+      "findingCount": 8,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W01.csv"
+    },
+    {
+      "id": "W02",
+      "issue": "#523",
+      "scope": "Final tree, Chat/Deep completion authority",
+      "findingCount": 7,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W02.csv"
+    },
+    {
+      "id": "W03",
+      "issue": "#524",
+      "scope": "Status, recovery, terminal/diff projection",
+      "findingCount": 10,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W03.csv"
+    },
+    {
+      "id": "W04",
+      "issue": "#525",
+      "scope": "Independent benchmarks and evaluation semantics",
+      "findingCount": 5,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W04.csv"
+    },
+    {
+      "id": "W05",
+      "issue": "#526",
+      "scope": "Context, instruction retention and child adoption",
+      "findingCount": 4,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W05.csv"
+    },
+    {
+      "id": "W06",
+      "issue": "#527",
+      "scope": "Tool schemas and governed command execution",
+      "findingCount": 8,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W06.csv"
+    },
+    {
+      "id": "W07",
+      "issue": "#528",
+      "scope": "Providers, offline routing, optional budgets",
+      "findingCount": 8,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W07.csv"
+    },
+    {
+      "id": "W08",
+      "issue": "#529",
+      "scope": "Effective sandbox/credential/process boundaries",
+      "findingCount": 7,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W08.csv"
+    },
+    {
+      "id": "W09",
+      "issue": "#530",
+      "scope": "MCP interoperability and diagnostic trust",
+      "findingCount": 5,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W09.csv"
+    },
+    {
+      "id": "W10",
+      "issue": "#531",
+      "scope": "First-run CLI/TUI, narrow PTY and remote UI",
+      "findingCount": 10,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W10.csv"
+    },
+    {
+      "id": "W11",
+      "issue": "#532",
+      "scope": "Desktop/Deep installed integration",
+      "findingCount": 6,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W11.csv"
+    },
+    {
+      "id": "W12",
+      "issue": "#533",
+      "scope": "CI timing, identities and cost",
+      "findingCount": 7,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W12.csv"
+    },
+    {
+      "id": "W13",
+      "issue": "#534",
+      "scope": "Release artifact and supply-chain qualification",
+      "findingCount": 10,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W13.csv"
+    },
+    {
+      "id": "W14",
+      "issue": "#535",
+      "scope": "Architecture ownership and audit stewardship",
+      "findingCount": 5,
+      "dispositionFile": "docs/campaigns/babel-reliability-2026-11/dispositions/W14.csv"
+    }
+  ]
+}

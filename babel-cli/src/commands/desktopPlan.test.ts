@@ -30,6 +30,9 @@ test('Desktop streaming Plan uses the canonical read-only plan lane even with au
     assert.equal(typeof result.plan_id,'string');
     assert.equal(result.apply_available, false);
     assert.match(result.apply_unavailable_reason, /temporarily unavailable/i);
+    assert.equal(result.explicit_apply_available, true, 'a saved Plan advertises the guarded explicit route');
+    assert.match(String(result.apply_command), /^babel-harness apply --plan plan_/);
+    assert.equal(result.apply_requires_confirmation, true);
     const { loadSavedPlan } = await import('../services/savedPlan.js');
     const saved = loadSavedPlan(result.plan_id, { BABEL_STATE_DIR: join(fixture.root, 'state') });
     assert.ok(saved.sourceRunId); assert.equal(saved.sourceRunId, basename(result.run_dir));
@@ -181,6 +184,8 @@ test('Desktop Plan returns retained useful work when canonical saving is unavail
     const result = events.find(event => event.type === 'run_complete')?.result;
     assert.equal(result?.status, 'PLAN_READY'); assert.equal(result?.user_status, 'blocked'); assert.equal(result?.plan_saved, false); assert.equal(result?.apply_available, false)
     assert.equal(result?.plan_id, undefined); assert.match(result?.apply_unavailable_reason ?? '', /temporarily unavailable/i)
+    assert.equal(result?.explicit_apply_available, false, 'no saved Plan means no explicit apply advertisement')
+    assert.equal(result?.apply_command, undefined)
     assert.match(result?.answer?.answer ?? '', /Steps:|plan/i); assert.equal(readFileSync(join(fixture.cwd, 'calc.js'), 'utf8'), 'export const value=1;\n');
   } finally { removeSyntheticProviderFixture(fixture.root); }
 });

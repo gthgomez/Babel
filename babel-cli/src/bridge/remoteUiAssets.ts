@@ -17,13 +17,50 @@ const CONTENT_TYPES: Record<string, string> = {
   '.svg': 'image/svg+xml',
 };
 
+/**
+ * Candidate directories for the Remote UI shell, most specific first.
+ *
+ * @param moduleDir - Directory containing the compiled (or source) bridge module.
+ * @returns Absolute candidate directories.
+ */
+export function remoteUiCandidates(moduleDir: string): string[] {
+  const packageRoot = join(moduleDir, '..', '..');
+  return [
+    // Compiled/runtime layout: dist/bridge/remote-ui (build copies assets here).
+    join(moduleDir, 'remote-ui'),
+    // Installed package layout: staged runtime resources.
+    join(packageRoot, 'resources', 'bridge', 'remote-ui'),
+    // Source checkout without a staging step (tsx and vitest).
+    join(moduleDir, '..', '..', 'src', 'bridge', 'remote-ui'),
+  ];
+}
+
+/**
+ * Pick the first candidate that actually carries the shell entry point.
+ *
+ * @param candidates - Candidate directories, most specific first.
+ * @returns The resolved directory.
+ */
+export function pickRemoteUiDir(candidates: readonly string[]): string {
+  for (const candidate of candidates) {
+    if (existsSync(join(candidate, 'index.html'))) return candidate;
+  }
+  throw new Error(
+    'Remote UI assets are missing from this installation (expected dist/bridge/remote-ui or resources/bridge/remote-ui). Reinstall the package or omit the remote UI surface.',
+  );
+}
+
 export function resolveRemoteUiDir(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const nextToModule = join(here, 'remote-ui');
-  if (existsSync(join(nextToModule, 'index.html'))) return nextToModule;
-  const fromSrc = join(here, '..', '..', 'src', 'bridge', 'remote-ui');
-  if (existsSync(join(fromSrc, 'index.html'))) return fromSrc;
-  throw new Error('Remote UI assets not found next to the bridge module or under src/bridge/remote-ui');
+  return pickRemoteUiDir(remoteUiCandidates(dirname(fileURLToPath(import.meta.url))));
+}
+
+export function remoteUiDirAvailable(): boolean {
+  try {
+    resolveRemoteUiDir();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function remoteUiFileForPath(pathname: string): { file: string; contentType: string } | null {
@@ -45,9 +82,22 @@ export function remoteUiFileForPath(pathname: string): { file: string; contentTy
 }
 
 export function writeRemoteUiResponse(pathname: string, res: ServerResponse): boolean {
-  const resolved = remoteUiFileForPath(pathname);
+  let resolved: { file: string; contentType: string } | null;
+  try {
+    resolved = remoteUiFileForPath(pathname);
+  } catch {
+    // A packaged install without staged shell assets must degrade to 404, not
+    // a 500 that makes the bridge look unhealthy to the PWA and to /health
+    // consumers reading the same process.
+    return false;
+  }
   if (!resolved) return false;
-  const body = readFileSync(resolved.file);
+  let body: Buffer;
+  try {
+    body = readFileSync(resolved.file);
+  } catch {
+    return false;
+  }
   const headers: Record<string, string> = {
     'Content-Type': resolved.contentType,
     'Cache-Control': 'no-store',

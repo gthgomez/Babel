@@ -11,6 +11,7 @@ import {loadThreadEventLogFromDir,type ThreadEvent,type ThreadEventLog} from './
 import {assertConversationRestoreScope} from './chatExecutionScope.js';
 import type { LiveSessionV1 } from './liveSession.js';
 import {
+  DEFAULT_PROTECTED_PATHS,
   resolveLiveSessionAuthority,
   persistLiveSessionAuthority,
   loadLiveSessionAuthority,
@@ -45,6 +46,8 @@ export interface LiveAuthorityOptionsSlice {
   retainedHistory?: boolean;
   instructionRoot?: string;
   workspaceRoot?: string | null;
+  /** Operator-declared paths that admission must protect from every write. */
+  lockedFiles?: readonly string[];
   model?: string;
   maxTurns?: number;
   requiredVerifierCommands?: readonly string[] | null;
@@ -102,6 +105,9 @@ export function prepareEngineInstructionAuthority(
     ...(input.options.executionScope?{executionScope:input.options.executionScope}:{}),
     ...(input.options.instructionRoot ? { instructionRoot: input.options.instructionRoot } : {}),
     task: input.options.task,
+    ...(input.options.lockedFiles && input.options.lockedFiles.length > 0
+      ? { protectedPaths: [...DEFAULT_PROTECTED_PATHS, ...input.options.lockedFiles] }
+      : {}),
     ...(input.options.compiledChatStack ? { compiledChatStack: input.options.compiledChatStack } : {}),
     taskClass: input.taskClass,
     ...(input.options.model ? { modelId: input.options.model } : {}),

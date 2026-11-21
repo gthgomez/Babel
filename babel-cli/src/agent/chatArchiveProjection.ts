@@ -37,8 +37,30 @@ export function projectChatArchive(log: ThreadEventLog): Record<string, unknown>
           ...(event.exit_code !== undefined ? { exit_code: event.exit_code } : {}),
         };
         break;
-      case 'turn_ended':
-        if (!event.response) continue;
+      case 'turn_ended': {
+        const successOutcome = event.outcome === 'VERIFIED_COMPLETE' || event.outcome === 'NO_CHANGE_REQUIRED';
+        if (!event.response) {
+          // A terminal failure (or unverified end) without a response payload
+          // must still survive in the recovered conversation. Dropping the
+          // event lets the TUI show an earlier model candidate as if it were
+          // the settled answer (UX-10).
+          if (successOutcome && event.status === 'completed') continue;
+          message = {
+            role: 'assistant',
+            content: [
+              event.status === 'completed'
+                ? 'Run ended without a terminal response.'
+                : `Run ended: ${event.status}.`,
+              ...(event.outcome !== undefined ? [`Terminal outcome: ${event.outcome}.`] : []),
+              ...(event.reason_code !== undefined ? [`Reason: ${event.reason_code}.`] : []),
+            ].join(' '),
+            archive_kind: 'terminal_status',
+            terminal_status: event.status,
+            ...(event.outcome !== undefined ? { terminal_outcome: event.outcome } : {}),
+            ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
+          };
+          break;
+        }
         message = {
           role: 'assistant', content: event.response.content, archive_kind: 'terminal_response',
           response_kind: event.response.kind, terminal_status: event.status,
@@ -46,6 +68,7 @@ export function projectChatArchive(log: ThreadEventLog): Record<string, unknown>
           ...(event.reason_code !== undefined ? { reason_code: event.reason_code } : {}),
         };
         break;
+      }
       default:
         continue;
     }
