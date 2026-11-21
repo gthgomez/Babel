@@ -3,7 +3,7 @@
   "provenance": {
     "kind": "complete_per_file_test_summary_durations",
     "hostConcurrency": "four shards; one test file at a time within each shard; nested TAP tests may overlap",
-    "note": "Advisory Windows scheduling estimates refreshed from all four successful win32 unit shard artifacts in run 43505285190 at source revision 198193b1545682da66eae50f34f72aae4155aa8f. The run covers all 1,279 canonical files with one test:summary duration per file and preserves raw checkout SHA-256 identities."
+    "note": "Advisory Windows scheduling estimates refreshed from all four successful win32 unit shard artifacts in run 44932484875 at checkout 97551a6fe19d2c1efda6b6ebc186bf28f2adfc93. The four shards cover 1,223 files with one test:summary duration per file and preserve raw checkout SHA-256 identities. Tests delegated to separate required suites are outside the shard timing inventory."
   },
   "platforms": {
     "win32": {
