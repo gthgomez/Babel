@@ -111,6 +111,25 @@ test('filtered, unknown and truncated finishes fail without a completed answer',
   }
 });
 
+test('filtered and truncated tool payloads fail without yielding tool input', async () => {
+  for (const finish of ['content_filter', 'recitation', 'length']) {
+    const { events, completions } = await collect(
+      `${frame({ tool_calls: [{ index: 0, id: 'call-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }] }, finish)}${done}`,
+    );
+    assert.equal(events.some((event) => event.type === 'tool_use'), false, finish);
+    assert.equal(events.at(-1)?.type, 'error', finish);
+    assert.equal(completions.length, 1, finish);
+    assert.equal(completions[0]?.status, 'failed', finish);
+    assert.equal(completions[0]?.failure_receipt?.tool_call_count, 1, finish);
+    assert.equal(completions[0]?.failure_receipt?.partial_model_output, true, finish);
+    assert.equal(
+      completions[0]?.failure_receipt?.failure_class,
+      finish === 'length' ? 'INCOMPLETE_STREAM' : 'UNKNOWN_PROVIDER_FAILURE',
+      finish,
+    );
+  }
+});
+
 test('an explicit tool_calls finish emits the validated tool payload', async () => {
   const { events, completions } = await collect(
     `${frame({ tool_calls: [{ index: 0, id: 'call-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }] }, 'tool_calls')}${done}`,
