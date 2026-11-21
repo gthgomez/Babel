@@ -57,7 +57,7 @@ Do not copy those examples from older pages until `babel-harness --help` on your
 
 ## Execution profile
 
-The default is `safe_repo`. `doctor` requires a Docker server and `BABEL_BENCHMARK_DOCKER_IMAGE`. It does not fall back to the host. The image pull, and the fact that the recommended image is Node rather than a Python or Java toolchain, is in [TROUBLESHOOTING.md](./TROUBLESHOOTING.md#doctor-fails-on-docker-and-the-sandbox-image).
+In current source, Ordinary Chat defaults to `host_native`: eligible project commands run with your OS user's authority, which is not an OS sandbox. Selecting `safe_repo` requires a Docker server and `BABEL_BENCHMARK_DOCKER_IMAGE`, and that profile does not fall back to the host. `doctor` names the effective boundary for the profile it checks. The image pull, and the fact that the recommended image is Node rather than a Python or Java toolchain, is in [TROUBLESHOOTING.md](./TROUBLESHOOTING.md#doctor-fails-on-docker-and-the-sandbox-image).
 
 `babel-harness run --help` lists `--execution-profile` with `dev_local` as one value. In the published package, `dev_local` is described as host inspection without Docker, with project test and build commands denied. That profile was not used for a live task in this pass.
 

@@ -94,10 +94,14 @@ export function handleStatus(ctx: ReplContext, _args: string[]): void {
   );
 }
 
-export async function handleDoctor(_ctx: ReplContext, args: string[]): Promise<void> {
+export async function handleDoctor(ctx: ReplContext, args: string[]): Promise<void> {
   try {
     if (resolveRuntimePaths().isInstalled && !args.includes('--contributor')) {
-      const report = runInstalledDoctor({ strict: args.includes('--strict') });
+      const executionPolicy = ctx.chatEngine?.getExecutionPolicy();
+      const report = runInstalledDoctor({
+        strict: args.includes('--strict'),
+        ...(executionPolicy ? { executionPolicy } : {}),
+      });
       console.log('\n' + report.checks.map(check => `${check.status}: ${check.id} — ${check.message}`).join('\n'));
       return;
     }
