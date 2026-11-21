@@ -49,8 +49,9 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
     const load = (path) => import(pathToFileURL(join(packageRoot, 'dist', path)).href)
     const { ChatEngine } = await load('agent/chatEngine.js')
     const { chatSessionDir } = await load('cli/runsLayout.js')
-    const { inspectSessionEventLogFromDir } = await load('agent/sessionEvents.js')
-    const { loadThreadEventLogFromDir } = await load('agent/threadEventLog.js')
+    const { inspectSessionEventLogFromDir, rewriteSessionEventLog } = await load('agent/sessionEvents.js')
+    const { persistThreadEventLog, loadThreadEventLogFromDir } = await load('agent/threadEventLog.js')
+    const { readDurableTerminalTruth } = await load('services/durableTerminalTruth.js')
     const { persistTranscriptToDisk } = await load('agent/chatEngineObservability.js')
     const { resumeChatSession } = await load('interactive/chatSessionResume.js')
     const { persistRequiredExecutionPolicyRecord } = await load('config/executionPolicySelection.js')
@@ -249,6 +250,49 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
     assert.equal(afterResume.terminal.outcome, 'NO_CHANGE_REQUIRED')
     assert.equal(ctx.chatEngine.lastVerifierReceipt, null)
     assert.equal(readFileSync(join(fixture, 'parser.mjs'), 'utf8'), buggy)
+
+    // BL-14: a newer turn that durably started but never settled must resume as
+    // not-verified, never as completion inferred from older assistant prose.
+    // Simulate a crash before terminal settlement by removing the trailing
+    // turn_ended of the most recent engine turn from both journals.
+    ctx.chatEngine.closeAdmissionStore()
+    const resumeDir = chatSessionDir(sessionId)
+    const interruptedThread = loadThreadEventLogFromDir(resumeDir)
+    const interruptedTurn = [...interruptedThread.events].reverse()
+      .find((event) => event.kind === 'turn_started')?.turn_id
+    assert.ok(interruptedTurn, 'fixture has a latest started turn')
+    assert.equal(interruptedThread.events.at(-1)?.kind, 'turn_ended')
+    assert.equal(interruptedThread.events.at(-1)?.turn_id, interruptedTurn)
+    interruptedThread.events.pop()
+    interruptedThread.nextSeq = interruptedThread.events.length
+    await persistThreadEventLog(resumeDir, interruptedThread)
+    const interruptedSession = inspectSessionEventLogFromDir(resumeDir, sessionId)
+    assert.equal(interruptedSession.kind, 'valid')
+    const sessionEnd = interruptedSession.log.events
+      .findLastIndex((event) => event.kind === 'turn_ended' && event.turn_id === interruptedTurn)
+    assert.ok(sessionEnd >= 0, 'fixture has a terminal record for the latest turn')
+    // Session events have no item ids; renumbering after removing the terminal
+    // and its trailing telemetry keeps the log contiguous.
+    interruptedSession.log.events = interruptedSession.log.events.slice(0, sessionEnd)
+    interruptedSession.log.events.forEach((event, index) => { event.seq = index })
+    interruptedSession.log.nextSeq = interruptedSession.log.events.length
+    interruptedSession.log.flushedThroughSeq = interruptedSession.log.events.length - 1
+    rewriteSessionEventLog(resumeDir, interruptedSession.log)
+    const interruptedTruth = readDurableTerminalTruth(resumeDir, sessionId)
+    assert.equal(interruptedTruth.finished, false)
+    assert.equal(interruptedTruth.turn_state, 'active')
+    assert.equal(interruptedTruth.turn_id, interruptedTurn)
+    const interruptedCtx = { state: { model: 'deepseek-v4-flash' }, turns: [], turnCounter: 0,
+      chatEngine: undefined, saveSessionState: () => undefined,
+      resolveCurrentTarget: () => ({ targetRoot: fixture, workspaceRoot: null,
+        project: null, source: 'cwd', cwd: fixture }) }
+    const interruptedResume = await resumeChatSession(interruptedCtx, sessionId)
+    assert.equal(interruptedResume.ok, true, interruptedResume.message)
+    engines.push(interruptedCtx.chatEngine)
+    assert.equal(interruptedCtx.lastAssistantStatus, 'not_verified')
+    assert.equal(interruptedCtx.state.lastRunUserStatus, 'not_verified')
+    assert.notEqual(interruptedCtx.lastAssistantStatus, 'complete')
+
     const evidence = (result) => ({ status: result.terminal.status ?? result.terminal.type,
       outcome: result.terminal.outcome ?? null, providerCalls: result.calls,
       durableEvents: result.durable.length })
@@ -256,7 +300,9 @@ export async function runInstalledMechanics(packageRoot, projectRoot) {
       inspect: evidence(inspected), denied: evidence(denied),
       implicitRepair: evidence(implicitRepair), repair: evidence(repaired),
       verifierExitCodes: verifiers.map((call) => call.exit_code), cancel: evidence(cancelled),
-      freshTask: evidence(fresh), resume: evidence(afterResume) }
+      freshTask: evidence(fresh), resume: evidence(afterResume),
+      interruptedResume: { finished: interruptedTruth.finished,
+        turnState: interruptedTruth.turn_state, status: interruptedCtx.lastAssistantStatus } }
   } finally {
     for (const engine of engines) engine.closeAdmissionStore()
     for (const [key, value] of Object.entries(previous)) {
