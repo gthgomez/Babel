@@ -1,6 +1,6 @@
 import { RunStoppedError, type RunControl } from '../../runtime/run-control.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { isRetryableStatus, normalizeFinishReason } from '../providerNormalize.js';
+import { classifyStreamFinish, isRetryableStatus, normalizeFinishReason } from '../providerNormalize.js';
 import { ProviderHttpError } from '../providerHttpError.js';
 import {
   type ProviderMessage,
@@ -165,6 +165,7 @@ async *executeWithToolsStream(
         toolCallCount?: number;
         inferenceStarted?: boolean;
         outputMaterial?: string;
+        errorKind?: 'protocol' | 'provider' | 'none';
       } = {},
     ): void => {
       if (completionSent) return;
@@ -175,7 +176,11 @@ async *executeWithToolsStream(
         configuredOutputBudget,
         ...(status === 'failed'
           ? options.failureStage === 'response_normalization'
-            ? { protocolError: true }
+            ? options.errorKind === 'provider'
+              ? { providerError: true }
+              : options.errorKind === 'none'
+                ? {}
+                : { protocolError: true }
             : { providerError: true }
           : {}),
       });
@@ -861,7 +866,15 @@ async *executeWithToolsStream(
 
       streamState.generationMs = Date.now() - startedAt - (streamState.ttftMs ?? 0);
 
-      streamState.finishReason = finishReason ?? (pendingToolCalls.size > 0 ? 'tool_calls' : 'stop');
+      // One explicit terminal disposition. Missing, filtered, truncated or
+      // unrecognized finishes fail the invocation; accumulated output remains
+      // diagnostic evidence and never becomes actionable tool input.
+      const disposition = classifyStreamFinish({
+        reported: finishReason,
+        sawDone,
+        hasToolCalls: pendingToolCalls.size > 0,
+      });
+      streamState.finishReason = disposition.finishReason;
       // Admit the observed route before exposing executable tools or terminal success.
       try {
         this.validateObservedModelId(streamState.observedModelId);
@@ -882,50 +895,32 @@ async *executeWithToolsStream(
         });
         throw error;
       }
-      if (finishReason === 'length') {
-        if (pendingToolCalls.size > 0) {
-          invocationFailed = true;
-          const errMessage = 'Incomplete tool call: truncated by provider token limit (finish_reason: length)';
-          notifyPhase('response_normalization_failed', undefined, 'length_truncated_tool_call');
-          notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, 'length', this.maxTokens, {
-            actualAttempt: lastAttempt,
-            details: { message: errMessage },
-            failureStage: 'response_normalization',
-            partialModelOutput,
-            toolCallCount,
-            outputMaterial: outputReceipt,
-          });
-          yield { type: 'error', message: errMessage };
-          return;
-        }
+      if (disposition.status === 'failed') {
         invocationFailed = true;
+        const errMessage = `[${this.providerId}] ${
+          disposition.finishReason === 'length' && pendingToolCalls.size > 0
+            ? 'Incomplete tool call: truncated by provider token limit (finish_reason: length)'
+            : disposition.message
+        }`;
+        notifyPhase('response_normalization_failed', undefined, disposition.finishReason);
         this.lastInvocationMetadata = buildStreamingInvocationMetadata(
           this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
         );
-        notifyPhase('response_normalization_failed', undefined, 'output_budget_exhausted');
-        notifyCompleted(
-          'failed',
-          streamState.observedModelId,
-          outputReceipt,
-          streamState.upstreamProvider,
-          streamState.routerMetadata,
-          finishReason,
-          this.maxTokens,
-          {
-            actualAttempt: lastAttempt,
-            details: { message: `[${this.providerId}] Provider output budget exhausted.` },
-            failureStage: 'response_normalization',
-            partialModelOutput,
-            toolCallCount,
-            outputMaterial: outputReceipt,
-          },
-        );
-        yield { type: 'done', finishReason: 'length' };
+        notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, disposition.finishReason, this.maxTokens, {
+          actualAttempt: lastAttempt,
+          details: { message: errMessage },
+          failureStage: 'response_normalization',
+          partialModelOutput,
+          toolCallCount,
+          outputMaterial: outputReceipt,
+          errorKind: disposition.errorKind,
+        });
+        yield { type: 'error', message: errMessage };
         return;
       }
 
       // ── Yield accumulated tool calls ──────────────────────────────────
-      if ((finishReason === 'tool_calls' || pendingToolCalls.size > 0) && pendingToolCalls.size > 0) {
+      if (disposition.executeTools && pendingToolCalls.size > 0) {
         const seenToolIds = new Set<string>();
         for (const [callIndex, acc] of pendingToolCalls) {
           let callId = acc.id.trim();
@@ -1003,9 +998,9 @@ async *executeWithToolsStream(
           }
           yield { type: 'tool_use', id: callId, name: acc.name, input, ...(idWasNormalized ? {idWasNormalized:true as const} : {}) };
         }
-        yield { type: 'done', finishReason: finishReason ?? 'tool_calls' };
+        yield { type: 'done', finishReason: 'tool_calls' };
       } else {
-        yield { type: 'done', finishReason: finishReason ?? 'stop' };
+        yield { type: 'done', finishReason: 'stop' };
       }
     } catch (err) {
       if (responseValidationFailed) throw err;

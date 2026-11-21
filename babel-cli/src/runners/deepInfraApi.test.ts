@@ -135,7 +135,7 @@ test('DeepInfra API runner retries a stream idle timeout', async () => {
       return Promise.reject(new Error('Simulated network error'));
     }
     // Second call: valid SSE response.
-    const sseData = 'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}\n\ndata: [DONE]\n';
+    const sseData = 'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n';
     return Promise.resolve(new Response(sseData, { status: 200 }));
   }) as typeof fetch;
 
@@ -314,9 +314,9 @@ test('DeepInfra stream preserves accounting metadata when the output budget is e
     events.push(event);
   }
 
-  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'done']);
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'error']);
   const terminal = events[1];
-  assert.equal(terminal?.type === 'done' ? terminal.finishReason : undefined, 'length');
+  assert.equal(terminal?.type === 'error' ? /finish_reason: length/.test(terminal.message) : false, true);
   const metadata = runner.getLastInvocationMetadata();
   assert.equal(metadata?.provider, 'deepinfra');
   assert.equal(metadata?.provider_model_id, 'deepseek-ai/DeepSeek-V3-0324');
@@ -389,7 +389,7 @@ test('DeepInfra native stream ignores post-[DONE] buffered garbage', async () =>
   process.env['DEEPINFRA_API_KEY'] = 'test-key';
   const { DeepInfraApiRunner } = await import('./deepInfraApi.js');
   globalThis.fetch = (async () => new Response(
-    'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n' +
+    'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"stop"}]}\n\n' +
       'data: [DONE]\n\n' +
       'data: {not-json}',
     { status: 200 },

@@ -2,7 +2,7 @@ import { type ProviderMessage, type RunnerCallbacks, type RunnerInvocationMetada
 import { mapProviderMessagesToWire } from './providerMessages.js';
 import { type VcrRecorder } from '../services/streamingVcr.js';
 import { createInvocationDeadline, invocationNowMs, readPositiveIntEnv } from './providerResponsePolicy.js';
-import { normalizeFinishReason } from './providerNormalize.js';
+import { classifyStreamFinish } from './providerNormalize.js';
 import type { ProviderId } from './providerRegistry.js';
 import {
   type ChatResponse,
@@ -252,13 +252,17 @@ export function parseSseLine(line: string): SseLineResult {
 
 
 function assertExecuteRawStreamTerminal(state: StreamingState): void {
-  const rawReason = (state.finishReason ?? '').trim().toLowerCase();
-  if (rawReason === 'error') {
-    throw new Error('[provider stream] Provider error during generation (finish_reason: error)');
-  }
-  const reason = normalizeFinishReason(state.finishReason ?? '');
-  if (reason === 'length' && state.partialModelOutput) {
-    throw new Error('[provider stream] Provider output budget exhausted (finish_reason: length)');
+  // Text-only transports have no tool payload. A missing, filtered,
+  // truncated or unrecognized finish is a failed invocation; partial output
+  // stays available in the streaming state for the failure receipt but is not
+  // returned as a completed answer.
+  const disposition = classifyStreamFinish({
+    reported: state.finishReason,
+    sawDone: state.sawDone,
+    hasToolCalls: false,
+  });
+  if (disposition.status === 'failed') {
+    throw new Error(`[provider stream] ${disposition.message}`);
   }
 }
 

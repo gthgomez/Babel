@@ -189,7 +189,7 @@ test('OpenRouter streaming telemetry preserves the observed model id', async () 
     new Response(
       [
         'data: {"model":"z-ai/glm-5.3-flash","provider":"ExampleProvider","choices":[{"delta":{"content":"hello"}}]}',
-        'data: {"model":"z-ai/glm-5.3-flash","provider":"ExampleProvider","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}',
+        'data: {"model":"z-ai/glm-5.3-flash","provider":"ExampleProvider","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}',
         'data: [DONE]',
         '',
       ].join('\n'),
