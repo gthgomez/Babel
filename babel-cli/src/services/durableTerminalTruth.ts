@@ -168,6 +168,8 @@ interface TurnRecord {
   admissionSeq: number | null;
   admissionGeneration: number | null;
   sessionSubmittedSeq: number | null;
+  sessionTurnTime: number | null;
+  threadTurnTime: number | null;
   threadEnd: JournalTerminal | null;
   threadEndSeq: number | null;
   sessionEnd: JournalTerminal | null;
@@ -188,6 +190,8 @@ function turnFor(turns: Map<string, TurnRecord>, turnId: string): TurnRecord {
     admissionSeq: null,
     admissionGeneration: null,
     sessionSubmittedSeq: null,
+    sessionTurnTime: null,
+    threadTurnTime: null,
     threadEnd: null,
     threadEndSeq: null,
     sessionEnd: null,
@@ -218,11 +222,13 @@ function loadJournals(runDir: string, expectedSessionId?: string): LoadedJournal
       if (typeof turnId !== 'string' || turnId.length === 0) continue;
       const turn = turnFor(turns, turnId);
       if (event.kind === 'user_submitted') {
+        turn.sessionTurnTime = Date.parse(event.ts);
         turn.sessionSubmittedSeq = Math.max(turn.sessionSubmittedSeq ?? -1, event.seq);
       }
       if (event.kind === 'turn_ended') {
         if (turn.sessionEndSeq === null || event.seq > turn.sessionEndSeq) {
           turn.sessionEnd = sessionTerminal(event);
+          if (turn.sessionSubmittedSeq === null) turn.sessionTurnTime = Date.parse(event.ts);
           turn.sessionEndSeq = event.seq;
         }
       }
@@ -251,12 +257,14 @@ function loadJournals(runDir: string, expectedSessionId?: string): LoadedJournal
           turn.admitted = true;
           if (turn.admissionSeq === null || event.seq > turn.admissionSeq) {
             turn.admissionSeq = event.seq;
+            turn.threadTurnTime = Date.parse(event.ts);
           }
           turn.admissionGeneration = generation ?? turn.admissionGeneration;
         }
         if (event.kind === 'turn_ended') {
           if (turn.threadEndSeq === null || event.seq > turn.threadEndSeq) {
             turn.threadEnd = threadTerminal(event);
+            if (!turn.admitted) turn.threadTurnTime = Date.parse(event.ts);
             turn.threadEndSeq = event.seq;
           }
         }
@@ -309,41 +317,36 @@ type SelectedTurn = {
 };
 
 function selectTurn(journals: LoadedJournals): SelectedTurn {
-  const all = [...journals.turns.values()];
-  const admitted = all
-    .filter((turn) => turn.admitted)
-    .sort((left, right) => (left.admissionSeq ?? 0) - (right.admissionSeq ?? 0));
-  const newestAdmitted = admitted.at(-1);
-  if (newestAdmitted) {
-    const admittedSubmissions = admitted
-      .map((turn) => turn.sessionSubmittedSeq)
-      .filter((seq): seq is number => seq !== null);
-    const newestAdmittedSubmission =
-      admittedSubmissions.length > 0 ? Math.max(...admittedSubmissions) : null;
-    const unadmitted = all
-      .filter(
-        (turn) =>
-          !turn.admitted &&
-          turn.sessionSubmittedSeq !== null &&
-          newestAdmittedSubmission !== null &&
-          turn.sessionSubmittedSeq > newestAdmittedSubmission,
-      )
-      .sort((left, right) => (left.sessionSubmittedSeq ?? 0) - (right.sessionSubmittedSeq ?? 0));
-    const newerUnadmitted = unadmitted.at(-1);
-    if (newerUnadmitted) return { turn: newerUnadmitted, unadmittedNewer: true };
-    return { turn: newestAdmitted, unadmittedNewer: false };
+  let thread: TurnRecord | null = null;
+  let session: TurnRecord | null = null;
+  for (const turn of journals.turns.values()) {
+    const threadSeq = turn.admissionSeq ?? turn.threadEndSeq ?? -1;
+    const sessionSeq = turn.sessionSubmittedSeq ?? turn.sessionEndSeq ?? -1;
+    if (threadSeq > (thread?.admissionSeq ?? thread?.threadEndSeq ?? -1)) thread = turn;
+    if (sessionSeq > (session?.sessionSubmittedSeq ?? session?.sessionEndSeq ?? -1)) session = turn;
   }
-  const submitted = all
-    .filter((turn) => turn.sessionSubmittedSeq !== null)
-    .sort((left, right) => (left.sessionSubmittedSeq ?? 0) - (right.sessionSubmittedSeq ?? 0));
-  const sessionOnly = submitted.at(-1);
-  if (sessionOnly) return { turn: sessionOnly, unadmittedNewer: false };
-  // Thread activity without a start record (e.g. a truncated prefix) is still
-  // a turn; report it as unknown rather than borrowing an older terminal.
-  const anyThread = all.sort(
-    (left, right) => (left.threadEndSeq ?? -1) - (right.threadEndSeq ?? -1),
-  ).at(-1);
-  return { turn: anyThread ?? null, unadmittedNewer: false };
+  if (!thread || !session || thread === session) {
+    return { turn: thread ?? session, unadmittedNewer: false };
+  }
+
+  // Journal sequence numbers are local. A shared turn anchors the ordering
+  // when both journals observed it. For disjoint records use wall-clock time.
+  const sessionAfterSharedThread = thread.sessionSubmittedSeq ?? thread.sessionEndSeq;
+  const threadAfterSharedSession = session.admissionSeq ?? session.threadEndSeq;
+  let preferSession: boolean;
+  if (sessionAfterSharedThread !== null && threadAfterSharedSession === null) {
+    preferSession = true;
+  } else if (threadAfterSharedSession !== null && sessionAfterSharedThread === null) {
+    preferSession = false;
+  } else {
+    const timeDifference = (session.sessionTurnTime ?? NaN) - (thread.threadTurnTime ?? NaN);
+    const threadSucceeded = isSuccessOutcome(outcomeOf(settledTerminal(thread).terminal));
+    const sessionSucceeded = isSuccessOutcome(outcomeOf(settledTerminal(session).terminal));
+    preferSession = timeDifference > 0 ||
+      (!(timeDifference < 0) && threadSucceeded && !sessionSucceeded);
+  }
+  const turn = preferSession ? session : thread;
+  return { turn, unadmittedNewer: !turn.admitted && !turn.sessionEnd && !turn.threadEnd };
 }
 
 function settledTerminal(turn: TurnRecord): {
@@ -586,7 +589,7 @@ export function readDurableTerminalTruth(
     (summaryOutcome !== null && settled.terminal === null)
   );
 
-  if (resolved && summary) {
+  if (resolved && summary && (summary.turn_id === null || summaryBound)) {
     const resolvedOutcome = outcomeOf(resolved);
     const summaryOutcome = outcomeOf(summary);
     if (isSuccessOutcome(resolvedOutcome) && !isSuccessOutcome(summaryOutcome)) {
@@ -602,7 +605,7 @@ export function readDurableTerminalTruth(
       resolvedOutcome !== summaryOutcome
     ) {
       disagreement = true;
-    } else if (!disagreement) {
+    } else if (summaryBound && !disagreement) {
       // Agreeing records keep the summary source and its changed-file record,
       // matching the established projection for a normally settled run.
       resolved = summary;

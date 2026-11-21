@@ -480,7 +480,7 @@ function deriveOutcomeStatus(bundle) {
           ? 'The newest turn was submitted but never admitted.'
           : 'The newest turn has no terminal record.'),
       holdReason: null,
-      retryAllowed: true,
+      retryAllowed: terminalTruth.turn_state === 'submitted',
       terminalOutcome: null,
       userStatus: terminalTruth.user_status,
       exitCode: null,
@@ -908,16 +908,21 @@ export function buildInspectOutcomeView(bundle) {
     bundle.runtimeTelemetry?.pipeline_mode ?? bundle.manifest?.analysis?.pipeline_mode ?? 'unknown';
   const qaVerdict = inferLatestQaVerdict(bundle);
   const outcomeStatus = deriveOutcomeStatus(bundle);
-  const executionStatus = bundle.executionReport?.status ?? null;
+  const truth = bundle.terminalTruth;
+  const execution = !truth || truth.turn_state === 'none' ||
+    (truth.finished && truth.turn_id !== null && bundle.executionReport?.turn_id === truth.turn_id)
+      ? bundle.executionReport
+      : null;
+  const executionStatus = execution?.status ?? null;
   const executionPerformed = Boolean(
-    bundle.executionReport &&
-    ((typeof bundle.executionReport.steps_executed === 'number' &&
-      bundle.executionReport.steps_executed > 0) ||
-      (Array.isArray(bundle.executionReport.tool_call_log) &&
-        bundle.executionReport.tool_call_log.length > 0)),
+    execution &&
+    ((typeof execution.steps_executed === 'number' &&
+      execution.steps_executed > 0) ||
+      (Array.isArray(execution.tool_call_log) &&
+        execution.tool_call_log.length > 0)),
   );
-  const filesChanged = deriveFilesChanged(bundle.executionReport);
-  const testsRun = deriveTestsRun(bundle.executionReport);
+  const filesChanged = deriveFilesChanged(execution);
+  const testsRun = deriveTestsRun(execution);
   return {
     kind: 'outcome',
     runDir: bundle.runDir,

@@ -173,35 +173,34 @@ export function resolveRecoveryRunDir(
   return isAbsolute(reference) ? reference : resolve(reference);
 }
 
-function findFailureCapsule(
-  runDir: string,
-  terminal: Record<string, unknown> | null,
-): string | null {
-  const terminalPath =
-    typeof terminal?.['failure_capsule_path'] === 'string'
-      ? terminal['failure_capsule_path']
-      : null;
-  if (terminalPath && existsSync(terminalPath)) {
-    return terminalPath;
-  }
-
-  const known = [
+function loadRecoveryEvidence(runDir: string) {
+  const truth = readDurableTerminalTruth(runDir);
+  const legacy = truth.turn_state === 'none';
+  const belongsToTurn = (artifact: Record<string, unknown> | null): boolean =>
+    legacy || (truth.finished && truth.turn_id !== null && artifact?.['turn_id'] === truth.turn_id);
+  const terminalRecord = readJson(join(runDir, 'terminal_status_summary.json'));
+  const terminal = belongsToTurn(terminalRecord) ? terminalRecord : null;
+  const executionRecord = readJson(join(runDir, '04_execution_report.json'));
+  const execution = belongsToTurn(executionRecord) ? executionRecord : null;
+  const explicitPath = typeof terminal?.['failure_capsule_path'] === 'string'
+    ? terminal['failure_capsule_path']
+    : null;
+  const candidates = new Set([
+    ...(explicitPath ? [explicitPath] : []),
     join(runDir, '12_pre_execution_failure_capsule.json'),
     join(runDir, '12_repair_failure_capsule_attempt_1.json'),
-  ];
-  for (const path of known) {
-    if (existsSync(path)) {
-      return path;
+    ...readdirSync(runDir)
+      .filter((name) => /failure_capsule.*\.json$/i.test(name))
+      .map((name) => join(runDir, name)),
+  ]);
+  for (const path of candidates) {
+    const capsule = unwrapFailureCapsule(readJson(path));
+    if (capsule && (belongsToTurn(capsule) ||
+      (path === explicitPath && capsule['turn_id'] === undefined))) {
+      return { truth, terminal, execution, capsulePath: path, capsule };
     }
   }
-
-  if (!existsSync(runDir)) {
-    return null;
-  }
-  const dynamic = readdirSync(runDir)
-    .filter((name) => /failure_capsule.*\.json$/i.test(name))
-    .map((name) => join(runDir, name));
-  return dynamic[0] ?? null;
+  return { truth, terminal, execution, capsulePath: null, capsule: null };
 }
 
 function sanitizeTerminalSummary(
@@ -465,15 +464,15 @@ export function buildRecoveryAssessment(
   const shadowHintsPath = join(dirname(runDir), SCHEMA_LEARNING_DIR, SCHEMA_SHADOW_HINTS_FILENAME);
   addOptionalArtifact(available, 'schema_failure_ledger', schemaFailureLedgerPath);
   addOptionalArtifact(available, 'schema_shadow_hints', shadowHintsPath);
-  const terminal = readJson(terminalPath);
-  const execution = readJson(executionPath);
-  const terminalTruth = readDurableTerminalTruth(runDir);
+  const { truth: terminalTruth, terminal, execution, capsulePath, capsule } =
+    loadRecoveryEvidence(runDir);
   // The durable turn journal is authoritative for the current turn. A stale
   // summary or telemetry file may describe an earlier turn; it must not close
   // a newer admitted turn that has no terminal record (BL-14).
   const truthEstablishesTurn = terminalTruth.turn_state !== 'none';
   const effectiveTerminal = truthEstablishesTurn
     ? {
+        ...terminal,
         status: terminalTruth.outcome ?? terminalTruth.status ?? 'UNKNOWN',
         ...(terminalTruth.outcome !== null
           ? { terminal_outcome: terminalTruth.outcome }
@@ -523,8 +522,6 @@ export function buildRecoveryAssessment(
       exit_code: null,
     };
   }
-  const capsulePath = findFailureCapsule(runDir, terminal);
-  const capsule = unwrapFailureCapsule(capsulePath ? readJson(capsulePath) : null);
   if (capsulePath && capsule) {
     available.push({
       key: 'failure_capsule',
@@ -632,7 +629,7 @@ export function buildRecoveryAssessment(
     available_artifacts: available,
     missing_artifacts: missing,
     terminal_status_summary: sanitizeTerminalSummary(
-      terminal,
+      effectiveTerminal,
       capsulePath && capsule ? capsulePath : null,
     ),
     execution_report: execution,
@@ -758,11 +755,8 @@ export function buildRecoverySummary(
   const terminalPath = join(runDir, 'terminal_status_summary.json');
   const executionPath = join(runDir, '04_execution_report.json');
   const manualPlanPath = join(runDir, 'manual', 'plan.json');
-  const terminal = readJson(terminalPath);
-  const execution = readJson(executionPath);
-  const terminalTruth = readDurableTerminalTruth(runDir);
-  const capsulePath = findFailureCapsule(runDir, terminal);
-  const capsule = unwrapFailureCapsule(capsulePath ? readJson(capsulePath) : null);
+  const { truth: terminalTruth, terminal, execution, capsulePath, capsule } =
+    loadRecoveryEvidence(runDir);
   const availableArtifacts: Record<string, string> = {};
   const missingArtifacts: string[] = [];
 

@@ -700,3 +700,89 @@ test('an unclassifiable thread terminal wins over a session success', async () =
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('recovery advice only uses execution and failure evidence for the latest turn', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-turn-recovery-'));
+  try {
+    const thread = createThreadEventLog('thread-recovery-evidence');
+    const older = startFixtureTurn(thread, 'older task', root);
+    endTurn(thread, older, 'BLOCKED_POLICY', 'failed');
+    const current = startFixtureTurn(thread, 'current task', root);
+    endTurn(thread, current, 'AGENT_FAILURE', 'failed');
+    await persistThreadEventLog(root, thread);
+
+    const writeEvidence = (turnId: string): void => {
+      writeFileSync(join(root, 'terminal_status_summary.json'), JSON.stringify({
+        turn_id: turnId, status: 'FAILED', failed_command: 'npm test',
+      }));
+      writeFileSync(join(root, '04_execution_report.json'), JSON.stringify({
+        turn_id: turnId, status: 'EXECUTION_HALTED', reason: 'APPROVAL_REQUIRED',
+      }));
+      writeFileSync(join(root, '12_pre_execution_failure_capsule.json'), JSON.stringify({
+        capsule: { turn_id: turnId, failure_code: 'APPROVAL_REQUIRED' },
+      }));
+    };
+
+    writeEvidence(older);
+    const stale = buildRecoveryAssessment({ run: root });
+    assert.equal(stale.terminal_outcome, 'AGENT_FAILURE');
+    assert.equal(stale.execution_report, null);
+    assert.equal(stale.failed_command, null);
+    assert.equal(stale.failure_capsule, null);
+    assert.notEqual(stale.classification, 'requires_user_decision');
+
+    writeEvidence(current);
+    const bound = buildRecoveryAssessment({ run: root });
+    assert.equal(bound.execution_report?.['turn_id'], current);
+    assert.equal(bound.failed_command, 'npm test');
+    assert.equal(bound.failure_code, 'APPROVAL_REQUIRED');
+    assert.equal(bound.classification, 'requires_user_decision');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a newer failure in a disjoint session journal supersedes thread-only success', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-turn-split-'));
+  try {
+    const thread = createThreadEventLog('thread-split');
+    const older = startFixtureTurn(thread, 'older task', root);
+    endTurn(thread, older, 'VERIFIED_COMPLETE', 'completed');
+    for (const event of thread.events) event.ts = '2026-01-01T00:00:00Z';
+    await persistThreadEventLog(root, thread);
+    assert.equal(readDurableTerminalTruth(root).success, true);
+
+    const session = createSessionEventLog('session-split');
+    submitSessionTurn(session, 'newer-turn', 'newer task', root);
+    recordTurnEnded(session, { turn_id: 'newer-turn', outcome: 'AGENT_FAILURE', status: 'failed' });
+    for (const event of session.events) event.ts = '2026-01-01T00:00:01Z';
+    rewriteSessionEventLog(root, session);
+    const truth = readDurableTerminalTruth(root);
+    assert.equal(truth.turn_id, 'newer-turn');
+    assert.equal(truth.outcome, 'AGENT_FAILURE');
+    assert.equal(truth.success, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a summary bound to a different turn cannot replace current success', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-turn-bound-summary-'));
+  try {
+    const thread = createThreadEventLog('thread-bound-summary');
+    const older = startFixtureTurn(thread, 'older task', root);
+    endTurn(thread, older, 'AGENT_FAILURE', 'failed');
+    const current = startFixtureTurn(thread, 'current task', root);
+    endTurn(thread, current, 'VERIFIED_COMPLETE', 'completed');
+    await persistThreadEventLog(root, thread);
+    writeFileSync(join(root, 'terminal_status_summary.json'), JSON.stringify({
+      turn_id: older, terminal_outcome: 'AGENT_FAILURE', status: 'FAILED',
+    }));
+    const truth = readDurableTerminalTruth(root);
+    assert.equal(truth.turn_id, current);
+    assert.equal(truth.outcome, 'VERIFIED_COMPLETE');
+    assert.equal(truth.success, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
