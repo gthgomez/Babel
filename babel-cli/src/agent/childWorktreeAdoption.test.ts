@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -473,6 +474,197 @@ describe('governed child worktree adoption', () => {
     assert.ok(refused.diagnostics.some((d) => d.code === 'adoption_rolled_back'), JSON.stringify(refused));
     assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
     assert.equal(existsSync(join(root, 'src', 'locked', 'two.txt')), false);
+  });
+
+  it('does not erase a foreign edit to a path that was never applied', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-unapplied-foreign');
+    const first = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
+    const second = changedFile(root, child.worktree.path, 'src/unwritten.txt', null, 'child bytes\n');
+    const foreign = 'foreign editor bytes\n';
+
+    const result = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [first, second],
+      mode: 'copy',
+      testHooks: {
+        writeFile: (path, content) => {
+          writeFileSync(path, content);
+          if (path.endsWith('main.ts')) {
+            // A concurrent editor creates the not-yet-adopted path after the
+            // preflight passed but before this run reaches it.
+            writeFileSync(join(root, 'src', 'unwritten.txt'), foreign);
+          }
+        },
+      },
+    });
+
+    assert.equal(readFileSync(join(root, 'src', 'unwritten.txt'), 'utf-8'), foreign);
+    assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
+    assert.ok(result.conflicts.some((c) => c.code === 'parent_preimage_conflict'), JSON.stringify(result));
+    assert.equal(result.rollbackComplete, true, JSON.stringify(result, null, 2));
+    assert.equal(result.rollbackResidualPaths.includes('src/unwritten.txt'), false);
+    assert.ok(existsSync(child.worktree.path), 'the child worktree must be preserved');
+  });
+
+  it('preserves a newer foreign edit to a path this run already wrote', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-written-foreign');
+    const first = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
+    const second = changedFile(root, child.worktree.path, 'src/later.txt', null, 'later\n');
+    const foreign = 'foreign replacement after adoption write\n';
+
+    const result = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [first, second],
+      mode: 'copy',
+      testHooks: {
+        writeFile: (path, content) => {
+          if (path.endsWith('later.txt')) {
+            writeFileSync(join(root, 'src', 'main.ts'), foreign);
+            throw new Error('synthetic later-write failure');
+          }
+          writeFileSync(path, content);
+        },
+      },
+    });
+
+    assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), foreign);
+    assert.equal(result.status, 'rollback_incomplete', JSON.stringify(result, null, 2));
+    assert.equal(result.success, false);
+    assert.equal(result.rollbackComplete, false);
+    assert.deepEqual(result.rollbackResidualPaths, ['src/main.ts']);
+    assert.ok(result.diagnostics.some((d) => d.code === 'adoption_rollback_preserved_foreign_edit'));
+    assert.ok(existsSync(child.worktree.path), 'the child worktree must be preserved');
+  });
+
+  it('reports a restore failure instead of claiming a complete rollback', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-restore-failure');
+    const first = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
+    const second = changedFile(root, child.worktree.path, 'src/later.txt', null, 'later\n');
+
+    const result = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [first, second],
+      mode: 'copy',
+      testHooks: {
+        writeFile: (path, content) => {
+          if (path.endsWith('later.txt')) throw new Error('synthetic later-write failure');
+          writeFileSync(path, content);
+        },
+        restoreFile: () => {
+          throw new Error('synthetic restore failure');
+        },
+      },
+    });
+
+    assert.equal(result.status, 'rollback_incomplete', JSON.stringify(result, null, 2));
+    assert.equal(result.success, false);
+    assert.equal(result.rollbackComplete, false);
+    assert.deepEqual(result.rollbackErrors.map((entry) => entry.split(':')[0]), ['src/main.ts']);
+    assert.match(result.rollbackErrors[0] ?? '', /synthetic restore failure/);
+    assert.ok(result.diagnostics.some((d) => d.code === 'adoption_rollback_restore_failed'));
+    assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 2;\n');
+  });
+
+  it('compensates only the created and deleted paths it actually applied', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-created-deleted');
+    const created = changedFile(root, child.worktree.path, 'src/newdir/deeper/created.txt', null, 'created\n');
+    const deleted = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', null);
+    const failing = changedFile(root, child.worktree.path, 'src/later.txt', null, 'later\n');
+
+    const result = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [created, deleted, failing],
+      mode: 'copy',
+      testHooks: {
+        writeFile: (path, content) => {
+          if (path.endsWith('later.txt')) throw new Error('synthetic later-write failure');
+          writeFileSync(path, content);
+        },
+      },
+    });
+
+    assert.equal(result.status, 'refused', JSON.stringify(result, null, 2));
+    assert.equal(result.rollbackComplete, true);
+    assert.ok(result.diagnostics.some((d) => /synthetic later-write failure/.test(d.message)));
+    assert.equal(existsSync(join(root, 'src', 'newdir', 'deeper', 'created.txt')), false);
+    assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
+    assert.equal(existsSync(join(root, 'src', 'later.txt')), false);
+  });
+
+  it('refuses child bytes that changed after preflight and leaves newer parent work intact', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-child-drift');
+    const first = changedFile(root, child.worktree.path, 'src/main.ts', 'export const value = 1;\n', 'export const value = 2;\n');
+    const second = changedFile(root, child.worktree.path, 'src/second.txt', null, 'recorded\n');
+    const secondWorktreeFile = join(child.worktree.path, 'src/second.txt');
+
+    const result = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [first, second],
+      mode: 'copy',
+      testHooks: {
+        writeFile: (path, content) => {
+          writeFileSync(path, content);
+          if (path.endsWith('main.ts')) {
+            writeFileSync(secondWorktreeFile, 'drifted after preflight\n');
+          }
+        },
+      },
+    });
+
+    assert.equal(result.status, 'refused', JSON.stringify(result, null, 2));
+    assert.equal(result.success, false);
+    assert.ok(result.diagnostics.some((d) => d.code === 'adoption_child_postimage_conflict'));
+    assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
+    assert.equal(existsSync(join(root, 'src', 'second.txt')), false);
+    assert.equal(readFileSync(secondWorktreeFile, 'utf-8'), 'drifted after preflight\n');
+  });
+
+  it('fails the child result when the adoption manifest cannot be published', async () => {
+    const root = createGitProject();
+    const runDir = join(root, '.babel', 'runs', 'manifest-failure');
+    mkdirSync(runDir, { recursive: true });
+    const manifestPath = join(runDir, 'child-adoption-manifest.json');
+    writeFileSync(manifestPath, 'blocked\n');
+    chmodSync(manifestPath, 0o444);
+    try {
+      const result = await runImplementWorktreeAgent(
+        { id: 'manifest-failure', task: 'Write a result under src', writeScope: ['src'], maxRounds: 3 },
+        {
+          projectRoot: root,
+          useDeterministicMock: true,
+          cleanupWorktree: false,
+          runDir,
+        },
+      );
+
+      assert.equal(result.success, false, JSON.stringify(result, null, 2));
+      assert.ok(result.diagnostics.some((d) => d.code === 'adoption_manifest_write_failed'));
+      assert.equal(result.attribution, 'child_environment_failure');
+      assert.equal(result.adoptionManifestPath, undefined);
+      assert.ok(existsSync(result.worktree.path), 'the child worktree must be preserved');
+    } finally {
+      chmodSync(manifestPath, 0o666);
+    }
   });
 
   it('reports parent status after adoption', async () => {
