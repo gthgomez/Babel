@@ -36,7 +36,7 @@ export type StreamFinishDisposition =
     }
   | {
       status: 'failed';
-      finishReason: 'length' | 'content_filter' | 'recitation' | 'unknown' | 'missing' | 'error';
+      finishReason: 'tool_calls' | 'length' | 'content_filter' | 'recitation' | 'unknown' | 'missing' | 'error';
       message: string;
       /**
        * How attribution should classify this failure. Provider policy/filter
@@ -96,7 +96,7 @@ export function classifyStreamFinish(input: {
       if (!input.hasToolCalls) {
         return {
           status: 'failed',
-          finishReason: 'unknown',
+          finishReason: 'tool_calls',
           message: 'finish_reason tool_calls without an accumulated tool call',
           errorKind: 'protocol',
         };

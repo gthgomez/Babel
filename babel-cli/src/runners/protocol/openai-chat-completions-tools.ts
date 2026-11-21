@@ -913,7 +913,10 @@ async *executeWithToolsStream(
           outputMaterial: outputReceipt,
           errorKind: disposition.errorKind,
         });
-        yield { type: 'error', message: errMessage };
+        yield {
+          type: 'error', message: errMessage,
+          ...(disposition.finishReason === 'tool_calls' ? { terminalFailure: 'tool_completion_without_call' } : {}),
+        };
         return;
       }
 

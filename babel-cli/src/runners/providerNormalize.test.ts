@@ -111,6 +111,7 @@ test('classifyStreamFinish fails filtered, truncated, error and tool-less tool_c
   }
   const toolLess = classifyStreamFinish({ reported: 'tool_calls', sawDone: true, hasToolCalls: false });
   assert.equal(toolLess.status, 'failed');
+  assert.equal(toolLess.finishReason, 'tool_calls');
   assert.match(toolLess.status === 'failed' ? toolLess.message : '', /without an accumulated tool call/i);
 });
 

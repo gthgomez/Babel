@@ -131,6 +131,16 @@ test('filtered and truncated tool payloads fail without yielding tool input', as
   }
 });
 
+test('tool completion without an accumulated call fails while preserving the reported finish', async () => {
+  const { events, completions } = await collect(`${frame({ content: 'partial' }, 'tool_calls')}${done}`);
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'error']);
+  const error = events.at(-1);
+  assert.equal(error?.type === 'error' && error.terminalFailure, 'tool_completion_without_call');
+  assert.equal(completions.length, 1);
+  assert.equal(completions[0]?.status, 'failed');
+  assert.equal(completions[0]?.usage_metadata?.normalized_finish_reason, 'TOOL_CALL');
+});
+
 test('an explicit tool_calls finish emits the validated tool payload', async () => {
   const { events, completions } = await collect(
     `${frame({ tool_calls: [{ index: 0, id: 'call-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }] }, 'tool_calls')}${done}`,
