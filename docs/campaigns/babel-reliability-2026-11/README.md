@@ -1,6 +1,6 @@
 # Babel Reliability 2026-11 — Six-Audit Engineering Program
 
-> **Status:** proposed implementation program, not a certified release or a statement that all findings remain open. **Source baseline:** public main `198193b1545682da66eae50f34f72aae4155aa8f`, independently reconciled on 2026-11-18. **Campaign issue:** [#521](https://github.com/gthgomez/Babel/issues/521). **Planning branch:** `docs/six-audit-parallel-wave-20261118`.
+> **Public source snapshot:** main `4133e32128c2a2e497319020b326fd36e315a744`, reconciled on 2026-11-21. **Original audit baseline:** `198193b1545682da66eae50f34f72aae4155aa8f`. **Campaign issue:** [#521](https://github.com/gthgomez/Babel/issues/521).
 
 ## Decision
 
@@ -8,13 +8,15 @@ Babel can execute real read/edit/test sequences in scoped scripted trials, but i
 
 ## Durable source-of-truth hierarchy
 
-1. **[FINDINGS_INDEX.csv](FINDINGS_INDEX.csv)** — 100 distinct tracking items, stable IDs, source audit references, severity, owner issue and snapshot status. 22 P1 / 67 P2 / 11 P3; this is *not* a count of current confirmed production defects.
+1. **[FINDINGS_INDEX.csv](FINDINGS_INDEX.csv)** — 100 tracking items with stable IDs, audit references, severity, one owner issue and current public evidence. The 22 P1 / 67 P2 / 11 P3 counts describe the audit register.
 2. **[ROADMAP.md](ROADMAP.md)** — wave sequencing, exact handoffs, dependency graph and non-overlapping workstream ownership.
 3. **[AGENT_WAVE.md](AGENT_WAVE.md)** — reusable cloud-coding-agent mission and PR/verification handoff. Root `AGENTS.md` alone governs contributor policy; this is task scope, not a competing instruction source.
 4. **[QUALIFICATION.md](QUALIFICATION.md)** — independent positive/negative controls and release criteria.
 5. **[GitHub #521](https://github.com/gthgomez/Babel/issues/521)** — live program index, issue/PR links and blocker status. Issue comments/PRs are implementation history; code + exact artifact tests are final delivery evidence.
 
-The original six independent reports, full causal/security notes and supporting archives belong in the **private audit evidence** record; this public register uses non-exploitative summaries. The sixth report remains in open private PR #164 and must not silently become the sole canonical truth. The first five reports were user-supplied on 2026-11-18. The PDF/ZIP evidence archives are not reproduced in this public repository.
+The original audit reports and supporting evidence remain private. The public index keeps the audit-time status and adds a separate source disposition. `merged` records a landed repair for the described scope, `reviewed` records a reviewed candidate awaiting delivery, `historical` records an observation tied to an earlier release or source, `unverified` records a remaining evidence gap, and `non_blocking` records a bounded limitation or maintenance item outside the current offline qualification gate. Artifact qualification and closure require their own receipts.
+
+Duplicate aliases stay with the primary row and owner. TF-26 maps to TF-17, RT-07 to RT-02, PV-09 to UX-08, UX-05 to SC-01, SC-16 to SC-07, and CI-16 to CI-02.
 
 ## Workstream ownership
 
@@ -36,11 +38,14 @@ The original six independent reports, full causal/security notes and supporting 
 | [W14 #535](https://github.com/gthgomez/Babel/issues/535) | Architecture ownership and audit stewardship | 5 |
 | **Total** | **Every distinct finding assigned once** | **100** |
 
-## PR reconciliation at campaign creation
+## PR reconciliation at the public source snapshot
 
-- **Already merged:** [#520](https://github.com/gthgomez/Babel/pull/520) Desktop second-turn race candidate; [#518](https://github.com/gthgomez/Babel/pull/518) CI report. These are *not* new implementation tasks. Verify integrated source and installed products before closing their findings.
-- **Open draft at planning time:** [#515](https://github.com/gthgomez/Babel/pull/515) Windows QA, [#516](https://github.com/gthgomez/Babel/pull/516) first-use/provider, [#517](https://github.com/gthgomez/Babel/pull/517) Windows shards, [#519](https://github.com/gthgomez/Babel/pull/519) workflow-attempt evidence. Recheck status before acting.
-- **Existing issue inheritance:** #217 reliability hub, #259 acceptance, #280 freshness, #293 settlement, #272 recovery, #273 tool catalogs, #274 provider models, #279 comparison and related issues linked in workstream tickets.
+- **Landed source PRs by workstream:** W01 [#545](https://github.com/gthgomez/Babel/pull/545), W02 [#544](https://github.com/gthgomez/Babel/pull/544), W03 [#550](https://github.com/gthgomez/Babel/pull/550), W04 [#546](https://github.com/gthgomez/Babel/pull/546), W05 [#540](https://github.com/gthgomez/Babel/pull/540), W06 [#548](https://github.com/gthgomez/Babel/pull/548), W07 [#549](https://github.com/gthgomez/Babel/pull/549), W09 [#541](https://github.com/gthgomez/Babel/pull/541), W10 [#547](https://github.com/gthgomez/Babel/pull/547), W11 [#539](https://github.com/gthgomez/Babel/pull/539), W12 [#543](https://github.com/gthgomez/Babel/pull/543), W13 [#538](https://github.com/gthgomez/Babel/pull/538), and W14 [#537](https://github.com/gthgomez/Babel/pull/537).
+- **Merged follow-ups:** Windows repair fixture [#515](https://github.com/gthgomez/Babel/pull/515), offline CI summaries [#518](https://github.com/gthgomez/Babel/pull/518), Desktop second-turn repair [#520](https://github.com/gthgomez/Babel/pull/520), held-out grading [#551](https://github.com/gthgomez/Babel/pull/551), and durable turn recovery [#555](https://github.com/gthgomez/Babel/pull/555).
+- **Open stabilization and release candidates:** W08 umbrella [#542](https://github.com/gthgomez/Babel/pull/542), Desktop staging [#554](https://github.com/gthgomez/Babel/pull/554), adoption [#556](https://github.com/gthgomez/Babel/pull/556), provider completion [#557](https://github.com/gthgomez/Babel/pull/557), boundary disclosure [#558](https://github.com/gthgomez/Babel/pull/558), and Windows settlement [#559](https://github.com/gthgomez/Babel/pull/559).
+- **Older open drafts:** [#516](https://github.com/gthgomez/Babel/pull/516) remains held, [#517](https://github.com/gthgomez/Babel/pull/517) needs native balance evidence for its refreshed Windows timings, [#519](https://github.com/gthgomez/Babel/pull/519) needs authorized comparison with the incumbent reader, and [#536](https://github.com/gthgomez/Babel/pull/536) carries this public index.
+
+Refresh exact heads and gate results before using the snapshot as acceptance evidence.
 
 ## Definition of a completed campaign
 
