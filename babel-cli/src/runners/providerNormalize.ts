@@ -22,6 +22,11 @@ export type StreamFinishDisposition =
       status: 'failed';
       finishReason: 'length' | 'content_filter' | 'recitation' | 'unknown' | 'missing' | 'error';
       message: string;
+      /**
+       * How attribution should classify this failure. Provider policy/filter
+       * and budget exhaustion are not adapter protocol errors.
+       */
+      errorKind: 'protocol' | 'provider' | 'none';
     };
 
 /**
@@ -42,6 +47,7 @@ export function classifyStreamFinish(input: {
       status: 'failed',
       finishReason: 'missing',
       message: 'stream closed before terminal marker',
+      errorKind: 'protocol',
     };
   }
   const raw = (input.reported ?? '').trim();
@@ -50,6 +56,7 @@ export function classifyStreamFinish(input: {
       status: 'failed',
       finishReason: 'missing',
       message: 'stream ended without a finish reason',
+      errorKind: 'protocol',
     };
   }
   const lower = raw.toLowerCase();
@@ -58,6 +65,7 @@ export function classifyStreamFinish(input: {
       status: 'failed',
       finishReason: 'error',
       message: 'Provider error during generation (finish_reason: error)',
+      errorKind: 'provider',
     };
   }
   const reason = normalizeFinishReason(raw);
@@ -74,6 +82,7 @@ export function classifyStreamFinish(input: {
           status: 'failed',
           finishReason: 'unknown',
           message: 'finish_reason tool_calls without an accumulated tool call',
+          errorKind: 'protocol',
         };
       }
       return { status: 'complete', finishReason: 'tool_calls', executeTools: true };
@@ -82,24 +91,28 @@ export function classifyStreamFinish(input: {
         status: 'failed',
         finishReason: 'length',
         message: 'Provider output budget exhausted (finish_reason: length)',
+        errorKind: 'none',
       };
     case 'content_filter':
       return {
         status: 'failed',
         finishReason: 'content_filter',
         message: 'Provider filtered the response (finish_reason: content_filter)',
+        errorKind: 'none',
       };
     case 'recitation':
       return {
         status: 'failed',
         finishReason: 'recitation',
         message: 'Provider blocked the response (finish_reason: recitation)',
+        errorKind: 'none',
       };
     case 'unknown':
       return {
         status: 'failed',
         finishReason: 'unknown',
         message: `Provider returned an unrecognized finish reason: ${raw.slice(0, 40)}`,
+        errorKind: 'protocol',
       };
   }
 }

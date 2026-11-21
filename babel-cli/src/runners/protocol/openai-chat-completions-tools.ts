@@ -165,6 +165,7 @@ async *executeWithToolsStream(
         toolCallCount?: number;
         inferenceStarted?: boolean;
         outputMaterial?: string;
+        errorKind?: 'protocol' | 'provider' | 'none';
       } = {},
     ): void => {
       if (completionSent) return;
@@ -175,7 +176,11 @@ async *executeWithToolsStream(
         configuredOutputBudget,
         ...(status === 'failed'
           ? options.failureStage === 'response_normalization'
-            ? { protocolError: true }
+            ? options.errorKind === 'provider'
+              ? { providerError: true }
+              : options.errorKind === 'none'
+                ? {}
+                : { protocolError: true }
             : { providerError: true }
           : {}),
       });
@@ -908,6 +913,7 @@ async *executeWithToolsStream(
           partialModelOutput,
           toolCallCount,
           outputMaterial: outputReceipt,
+          errorKind: disposition.errorKind,
         });
         yield { type: 'error', message: errMessage };
         return;

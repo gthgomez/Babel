@@ -5,8 +5,8 @@ import type {
   ProviderInvocationCompleted,
   ToolDefinition,
   ToolStreamEvent,
-} from '../base.js';
-import { OpenAiCompatibleRunner } from './openai-chat-completions-tools.js';
+} from './base.js';
+import { OpenAiCompatibleRunner } from './protocol/openai-chat-completions-tools.js';
 
 const tools: ToolDefinition[] = [{
   type: 'function',
