@@ -786,3 +786,45 @@ test('a summary bound to a different turn cannot replace current success', async
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('unbound approval metadata cannot become recovery advice for a journal turn', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-unbound-approval-'));
+  try {
+    const runDir = terminalRun(root, 'unbound-approval', 'VERIFIED_COMPLETE', 'completed');
+    writeFileSync(join(runDir, 'terminal_status_summary.json'), JSON.stringify({
+      status: 'APPROVAL_REQUIRED', reason_code: 'APPROVAL_REQUIRED',
+    }));
+    const recovery = buildRecoveryAssessment({ run: runDir });
+    assert.equal(recovery.user_status, 'not_verified');
+    assert.equal(recovery.retryable, false);
+    assert.doesNotMatch(recovery.next_command ?? '', /approvals list/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('contradictory shared journal ordering cannot claim success', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-turn-order-'));
+  try {
+    const thread = createThreadEventLog('thread-turn-order');
+    const older = startFixtureTurn(thread, 'older task', root);
+    endTurn(thread, older, 'VERIFIED_COMPLETE', 'completed');
+    const newer = startFixtureTurn(thread, 'newer task', root);
+    endTurn(thread, newer, 'AGENT_FAILURE', 'failed');
+    await persistThreadEventLog(root, thread);
+
+    const session = createSessionEventLog('session-turn-order');
+    submitSessionTurn(session, newer, 'newer task', root);
+    recordTurnEnded(session, { turn_id: newer, outcome: 'AGENT_FAILURE', status: 'failed' });
+    submitSessionTurn(session, older, 'older task', root);
+    recordTurnEnded(session, { turn_id: older, outcome: 'VERIFIED_COMPLETE', status: 'completed' });
+    rewriteSessionEventLog(root, session);
+    const truth = readDurableTerminalTruth(root);
+    assert.equal(truth.turn_state, 'unknown');
+    assert.equal(truth.success, false);
+    assert.equal(truth.disagreement, true);
+    assert.equal(buildRecoveryAssessment({ run: root }).retryable, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -314,6 +314,7 @@ type SelectedTurn = {
   turn: TurnRecord | null;
   /** A session submission that was never admitted and is newer than admission. */
   unadmittedNewer: boolean;
+  ambiguousOrder?: boolean;
 };
 
 function selectTurn(journals: LoadedJournals): SelectedTurn {
@@ -333,6 +334,9 @@ function selectTurn(journals: LoadedJournals): SelectedTurn {
   // when both journals observed it. For disjoint records use wall-clock time.
   const sessionAfterSharedThread = thread.sessionSubmittedSeq ?? thread.sessionEndSeq;
   const threadAfterSharedSession = session.admissionSeq ?? session.threadEndSeq;
+  if (sessionAfterSharedThread !== null && threadAfterSharedSession !== null) {
+    return { turn: null, unadmittedNewer: false, ambiguousOrder: true };
+  }
   let preferSession: boolean;
   if (sessionAfterSharedThread !== null && threadAfterSharedSession === null) {
     preferSession = true;
@@ -510,10 +514,15 @@ export function readDurableTerminalTruth(
 ): DurableTerminalTruth {
   const summary = fromTerminalSummary(runDir);
   const journals = loadJournals(runDir, expectedSessionId);
-  const { turn: selected, unadmittedNewer } = selectTurn(journals);
+  const { turn: selected, unadmittedNewer, ambiguousOrder } = selectTurn(journals);
   const turnCount = journals.turns.size;
 
   if (!selected) {
+    if (ambiguousOrder) {
+      return unresolvedTruth(
+        'none', null, 'unknown', 'UNVERIFIED_TURN_ORDER', true, journals.corruptSources,
+      );
+    }
     if (journals.corruptSources.length > 0) {
       return unresolvedTruth(
         'none',
@@ -593,8 +602,15 @@ export function readDurableTerminalTruth(
     const resolvedOutcome = outcomeOf(resolved);
     const summaryOutcome = outcomeOf(summary);
     if (isSuccessOutcome(resolvedOutcome) && !isSuccessOutcome(summaryOutcome)) {
-      // A durable summary recording a non-success is conservative evidence.
-      resolved = summary;
+      // An unbound summary can make success uncertain, but its failure
+      // details do not identify the current turn or authorize recovery.
+      if (!summaryBound && (turnCount > 1 || summaryOutcome !== 'UNVERIFIED_PATCH')) {
+        return unresolvedTruth(
+          source, selected.turnId, 'unknown', 'UNVERIFIED_TERMINAL_EVIDENCE',
+          true, journals.corruptSources,
+        );
+      }
+      resolved = summaryBound ? summary : { ...summary, reason_code: null, status: 'UNVERIFIED_PATCH' };
       source = 'terminal_status_summary';
       disagreement = true;
     } else if (!isSuccessOutcome(resolvedOutcome) && isSuccessOutcome(summaryOutcome)) {
