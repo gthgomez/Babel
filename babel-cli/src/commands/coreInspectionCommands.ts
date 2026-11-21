@@ -190,7 +190,7 @@ function getStringField(
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function readSessionSummary(runDir: string): SessionSummary {
+export function readSessionSummary(runDir: string): SessionSummary {
   const manifest = safeReadJson(join(runDir, "01_manifest.json"));
   const runtimeTelemetry = safeReadJson(
     join(runDir, "06_runtime_telemetry.json"),
@@ -200,6 +200,13 @@ function readSessionSummary(runDir: string): SessionSummary {
   );
   const stats = existsSync(runDir) ? statSync(runDir) : null;
   const terminalTruth = readDurableTerminalTruth(runDir);
+  // The durable terminal describes the selected turn. When it establishes a
+  // turn, telemetry from an earlier turn must not present a conflicting status
+  // (BL-14); unfinished turns surface as INTERRUPTED, not as an old success.
+  const durableStatus =
+    terminalTruth.turn_state !== "none"
+      ? terminalTruth.status ?? terminalTruth.outcome
+      : null;
 
   return {
     run_dir: runDir,
@@ -209,6 +216,7 @@ function readSessionSummary(runDir: string): SessionSummary {
       getStringField(manifest, "task_summary") ??
       getStringField(manifest, "user_request"),
     status:
+      durableStatus ??
       getStringField(runtimeTelemetry, "final_outcome") ??
       getStringField(executionReport, "status") ??
       terminalTruth.status ??
