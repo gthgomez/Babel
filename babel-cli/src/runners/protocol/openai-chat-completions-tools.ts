@@ -1,6 +1,6 @@
 import { RunStoppedError, type RunControl } from '../../runtime/run-control.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { classifyStreamFinish, isRetryableStatus, normalizeFinishReason } from '../providerNormalize.js';
+import { accumulateStreamFinish, classifyStreamFinish, ConflictingStreamFinishError, isRetryableStatus } from '../providerNormalize.js';
 import { ProviderHttpError } from '../providerHttpError.js';
 import {
   type ProviderMessage,
@@ -781,8 +781,8 @@ async *executeWithToolsStream(
             }
           }
 
-          if (choice.finish_reason === 'error') {
-            finishReason = 'error';
+          if (choice.finish_reason) finishReason = accumulateStreamFinish(finishReason, choice.finish_reason);
+          if (finishReason === 'error') {
             streamState.finishReason = 'error';
             invocationFailed = true;
             const errMessage = `[${this.providerId}] Provider error during generation (finish_reason: error)`;
@@ -797,10 +797,8 @@ async *executeWithToolsStream(
             });
             yield { type: 'error', message: errMessage };
             return;
-          } else if (choice.finish_reason) {
-            finishReason = normalizeFinishReason(choice.finish_reason);
-            streamState.finishReason = finishReason;
           }
+          streamState.finishReason = finishReason;
         }
         if (sawDone) {
           await reader.cancel().catch(() => {});
@@ -832,7 +830,10 @@ async *executeWithToolsStream(
             if (json.usage) {
               streamState.usage = json.usage;
             }
-            if (json.choices?.[0]?.finish_reason === 'error') {
+            const reportedFinish = json.choices?.[0]?.finish_reason;
+            if (reportedFinish) finishReason = accumulateStreamFinish(finishReason, reportedFinish);
+            streamState.finishReason = finishReason;
+            if (finishReason === 'error') {
               invocationFailed = true;
               const errMessage = `[${this.providerId}] Provider error during generation (finish_reason: error)`;
               notifyPhase('provider_error', undefined, 'finish_reason_error');
@@ -847,11 +848,8 @@ async *executeWithToolsStream(
               yield { type: 'error', message: errMessage };
               return;
             }
-            if (json.choices?.[0]?.finish_reason) {
-              finishReason = normalizeFinishReason(json.choices[0].finish_reason);
-              streamState.finishReason = finishReason;
-            }
           } catch (err) {
+            if (err instanceof ConflictingStreamFinishError) throw err;
             throw new Error(
               `[${this.providerId}] Malformed SSE event chunk: ${data.slice(0, 100)}`,
               { cause: err },
@@ -919,9 +917,12 @@ async *executeWithToolsStream(
         return;
       }
 
+      signal?.throwIfAborted();
+
       // ── Yield accumulated tool calls ──────────────────────────────────
       if (disposition.executeTools && pendingToolCalls.size > 0) {
         const seenToolIds = new Set<string>();
+        const validatedToolCalls: Extract<ToolStreamEvent, { type: 'tool_use' }>[] = [];
         for (const [callIndex, acc] of pendingToolCalls) {
           let callId = acc.id.trim();
           const idWasNormalized = callId !== acc.id || !callId || seenToolIds.has(callId);
@@ -996,8 +997,13 @@ async *executeWithToolsStream(
             };
             return;
           }
-          yield { type: 'tool_use', id: callId, name: acc.name, input, ...(idWasNormalized ? {idWasNormalized:true as const} : {}) };
+          validatedToolCalls.push({ type: 'tool_use', id: callId, name: acc.name, input, ...(idWasNormalized ? {idWasNormalized:true as const} : {}) });
         }
+        for (const call of validatedToolCalls) {
+          signal?.throwIfAborted();
+          yield call;
+        }
+        signal?.throwIfAborted();
         yield { type: 'done', finishReason: 'tool_calls' };
       } else {
         yield { type: 'done', finishReason: 'stop' };
@@ -1005,22 +1011,25 @@ async *executeWithToolsStream(
     } catch (err) {
       if (responseValidationFailed) throw err;
       invocationFailed = true;
-      notifyPhase('provider_error', undefined, 'stream');
+      const cancelled = isCallerCancelError(err, signal);
+      const protocolError = err instanceof ConflictingStreamFinishError;
+      const errMessage = cancelled ? `[${this.providerId}] Request cancelled` : err instanceof Error ? err.message : String(err);
+      notifyPhase('provider_error', undefined, cancelled ? 'cancelled' : 'stream');
       this.lastInvocationMetadata = buildStreamingInvocationMetadata(
         this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
       );
       notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
         actualAttempt: lastAttempt,
         details: {
-          message: err instanceof Error ? err.message : String(err),
+          message: errMessage,
           providerRequestId: providerRequestIdFromResponse(response),
         },
-        failureStage: 'stream',
+        failureStage: protocolError ? 'response_normalization' : 'stream',
         partialModelOutput,
         toolCallCount,
         outputMaterial: outputReceipt,
       });
-      yield { type: 'error', message: err instanceof Error ? err.message : String(err) };
+      yield { type: 'error', message: errMessage };
     } finally {
       await releaseStreamReader(reader);
     }

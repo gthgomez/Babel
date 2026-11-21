@@ -49,7 +49,7 @@ function frame(delta: Record<string, unknown>, finishReason: string | null): str
   })}\n\n`;
 }
 
-async function collect(body: string): Promise<{
+async function collect(body: string, abortAfterFirstTool?: AbortController): Promise<{
   events: ToolStreamEvent[];
   completions: ProviderInvocationCompleted[];
 }> {
@@ -60,11 +60,12 @@ async function collect(body: string): Promise<{
     [{ role: 'user', content: 'Inspect the fixture.' }],
     tools,
     undefined,
-    undefined,
+    abortAfterFirstTool?.signal,
     undefined,
     { onInvocationCompleted: (completion) => completions.push(completion) },
   )) {
     events.push(event);
+    if (event.type === 'tool_use') abortAfterFirstTool?.abort();
   }
   return { events, completions };
 }
@@ -146,4 +147,31 @@ test('a stop finish with a complete tool payload remains actionable', async () =
   );
   assert.deepEqual(events.map((event) => event.type), ['tool_use', 'done']);
   assert.equal(lastFinish(events), 'tool_calls');
+});
+
+test('conflicting finish reasons fail even if the final reason is stop', async () => {
+  const { events, completions } = await collect(`${frame({ content: 'partial' }, 'length')}${frame({}, 'stop')}${done}`);
+  assert.deepEqual(events.map((event) => event.type), ['text_delta', 'error']);
+  assert.equal(completions.length, 1);
+  assert.equal(completions[0]?.status, 'failed');
+  assert.equal(completions[0]?.failure_receipt?.failure_class, 'PROTOCOL_ERROR');
+});
+
+test('cancellation between native tool events stops the remaining batch and withholds done', async () => {
+  const { events, completions } = await collect(`${frame({ tool_calls: [
+    { index: 0, id: 'first', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } },
+    { index: 1, id: 'second', type: 'function', function: { name: 'read_file', arguments: '{"path":"b"}' } },
+  ] }, 'tool_calls')}${done}`, new AbortController());
+  assert.deepEqual(events.map((event) => event.type), ['tool_use', 'error']);
+  assert.equal(completions.length, 1);
+  assert.equal(completions[0]?.status, 'failed');
+});
+
+test('a malformed later tool prevents the entire native batch from being exposed', async () => {
+  const { events, completions } = await collect(`${frame({ tool_calls: [
+    { index: 0, id: 'valid', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } },
+    { index: 1, id: 'invalid', type: 'function', function: { name: 'read_file', arguments: '{' } },
+  ] }, 'tool_calls')}${done}`);
+  assert.deepEqual(events.map((event) => event.type), ['error']);
+  assert.equal(completions[0]?.status, 'failed');
 });

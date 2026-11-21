@@ -11,6 +11,22 @@ export function normalizeFinishReason(raw: string | null | undefined): Canonical
   return 'unknown';
 }
 
+export class ConflictingStreamFinishError extends Error {
+  constructor() {
+    super('Protocol error: conflicting provider stream finish reasons');
+  }
+}
+
+/** Accept repeated equivalent finish reasons while rejecting contradictory terminal evidence. */
+export function accumulateStreamFinish(previous: string | null, reported: string): string | null {
+  const raw = reported.trim().toLowerCase();
+  if (!raw) return previous;
+  const canonical = normalizeFinishReason(raw);
+  const next = canonical === 'unknown' ? raw : canonical;
+  if (previous && previous !== next) throw new ConflictingStreamFinishError();
+  return next;
+}
+
 export type StreamFinishDisposition =
   | {
       status: 'complete';

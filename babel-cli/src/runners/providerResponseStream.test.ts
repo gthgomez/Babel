@@ -120,3 +120,19 @@ test('a stream that closes without [DONE] still fails as truncated', async () =>
     /terminal \[DONE\] marker/i,
   );
 });
+
+test('conflicting text finishes cannot turn a truncated answer into success', async () => {
+  await assert.rejects(
+    read(`${sseFrame({ content: 'partial' }, 'length')}${sseFrame({}, 'stop')}data: [DONE]\n\n`),
+    /conflicting provider stream finish reasons/i,
+  );
+});
+
+test('cancellation from the text callback rejects a buffered completion marker', async () => {
+  const controller = new AbortController();
+  await assert.rejects(readStreamingResponse(
+    new Response(`${sseFrame({ content: 'partial' }, 'stop')}data: [DONE]\n\n`),
+    { onChunk: () => { controller.abort(); } },
+    1_000, Date.now(), state(), undefined, undefined, undefined, controller.signal,
+  ), { name: 'AbortError' });
+});
