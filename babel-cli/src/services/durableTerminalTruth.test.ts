@@ -294,6 +294,8 @@ test('BL-14: an admitted unfinished turn outranks an earlier success', async () 
     assert.notEqual(recovery.user_status, 'success');
     assert.equal(recovery.terminal_outcome, null);
     assert.equal(recovery.exit_code, null);
+    assert.equal(recovery.classification, 'requires_user_decision');
+    assert.equal(recovery.retryable, false);
 
     const inspect = buildInspectOutcomeView(loadInspectBundle(runDir));
     assert.notEqual(inspect.runOutcome.status, 'success');
@@ -302,8 +304,8 @@ test('BL-14: an admitted unfinished turn outranks an earlier success', async () 
 
     // Sibling inspection views must not keep advertising the older success.
     const bundle = loadInspectBundle(runDir);
-    assert.notEqual(buildInspectRunView(bundle).finalStatus, 'COMPLETE');
-    assert.notEqual(buildInspectManifestView(bundle).finalStatus, 'COMPLETE');
+    assert.equal(buildInspectRunView(bundle).finalStatus, 'INTERRUPTED');
+    assert.equal(buildInspectManifestView(bundle).finalStatus, 'INTERRUPTED');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -467,6 +469,57 @@ test('BL-14: a newer submission that was never admitted is not a success', async
     assert.equal(truth.success, false);
     assert.notEqual(truth.user_status, 'success');
     assert.equal(truth.disagreement, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an unbound non-success summary still downgrades a journal success', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-summary-downgrade-'));
+  try {
+    const runDir = terminalRun(root, 'summary-downgrade', 'VERIFIED_COMPLETE', 'completed');
+    writeFileSync(
+      join(runDir, 'terminal_status_summary.json'),
+      `${JSON.stringify({
+        schema_version: 1,
+        artifact_type: 'babel_terminal_status_summary',
+        status: 'UNVERIFIED_PATCH',
+        reason_category: 'verifier_failure',
+        changed_files: ['src/old.ts'],
+      })}\n`,
+    );
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.success, false);
+    assert.equal(truth.outcome, 'UNVERIFIED_PATCH');
+    assert.equal(truth.user_status, 'not_verified');
+    assert.notEqual(truth.exit_code, 0);
+    assert.equal(truth.disagreement, true);
+    assert.deepEqual(truth.changed_files, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a classifiable non-success wins over an unclassifiable terminal', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-classifiable-'));
+  try {
+    const runDir = join(root, 'classifiable-non-success');
+    mkdirSync(runDir, { recursive: true });
+    const thread = createThreadEventLog('thread-classifiable');
+    const turnId = startFixtureTurn(thread, 'frozen task', root);
+    endTurn(thread, turnId, undefined, 'MADE_UP_TERMINAL');
+    await persistThreadEventLog(runDir, thread);
+
+    const session = createSessionEventLog('session-classifiable');
+    submitSessionTurn(session, turnId, 'frozen task', root);
+    recordTurnEnded(session, { turn_id: turnId, outcome: 'AGENT_FAILURE', status: 'failed' });
+    rewriteSessionEventLog(runDir, session);
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.disagreement, true);
+    assert.equal(truth.outcome, 'AGENT_FAILURE');
+    assert.equal(truth.success, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

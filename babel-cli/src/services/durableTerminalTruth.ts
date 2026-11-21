@@ -367,6 +367,22 @@ function settledTerminal(turn: TurnRecord): {
       chosen = thread;
       disagreement = true;
     } else if (
+      threadOutcome === null &&
+      sessionOutcome !== null &&
+      !sessionSuccess
+    ) {
+      // Prefer a classifiable non-success over an unclassifiable terminal,
+      // but never let a classifiable success override unknown evidence.
+      chosen = session;
+      disagreement = true;
+    } else if (
+      sessionOutcome === null &&
+      threadOutcome !== null &&
+      !threadSuccess
+    ) {
+      chosen = thread;
+      disagreement = true;
+    } else if (
       threadOutcome === null ||
       sessionOutcome === null ||
       threadOutcome !== sessionOutcome
@@ -570,7 +586,7 @@ export function readDurableTerminalTruth(
     (summaryOutcome !== null && settled.terminal === null)
   );
 
-  if (resolved && summary && summaryBound) {
+  if (resolved && summary) {
     const resolvedOutcome = outcomeOf(resolved);
     const summaryOutcome = outcomeOf(summary);
     if (isSuccessOutcome(resolvedOutcome) && !isSuccessOutcome(summaryOutcome)) {
@@ -638,12 +654,7 @@ export function readDurableTerminalTruth(
     // A terminal record whose status is unclassifiable is not "ready".
     userStatus = 'not_verified';
   }
-  const changedFiles =
-    resolved === summary
-      ? summary.changed_files
-      : summaryBound
-        ? (summary?.changed_files ?? [])
-        : [];
+  const changedFiles = summaryBound && summary ? summary.changed_files : [];
   return {
     outcome,
     status: resolved.status,
