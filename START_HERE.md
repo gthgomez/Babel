@@ -18,7 +18,7 @@ babel-harness setup
 
 Those commands are the same in bash and PowerShell. On PowerShell you can also write them one per line without `&&`.
 
-`--version` should print `0.2.0`. `doctor` exits 1 when Docker is missing. Read that as "the sandbox is not ready," not "the install failed." `setup` prints where to put a key. It does not prompt.
+`--version` should print `0.2.0`. On that release `doctor` exits 1 when Docker is missing because it defaulted to `safe_repo`. Read that as "the sandbox is not ready," not "the install failed." Current source selects `host_native` for Ordinary Chat, so Docker is not required there. `setup` prints where to put a key. It does not prompt.
 
 On Node 20 the install finishes with an `EBADENGINE` warning, and every command then prints `[babel-agent] Node ^22.19.0 or ^24.13.1 is required.` and exits 1. See [Troubleshooting](docs/TROUBLESHOOTING.md).
 
@@ -48,11 +48,11 @@ babel-harness "Explain this repository in one sentence. Do not change files."
 
 `context preview` reads a file and does not need a key. The sentence task exits 1 until a key is set. With a key, it calls the model. Check the printed target before you trust the answer. This is one request, not a reliability score.
 
-`babel-harness plan "Describe a small safe change"` and `babel-harness deep "Make that change and run the project's tests"` are separate commands listed in `--help`. `deep` is not automatically safer or more reliable than the default task. Project tests need the sandbox in the next section, or they will not run under the default profile.
+`babel-harness plan "Describe a small safe change"` and `babel-harness deep "Make that change and run the project's tests"` are separate commands listed in `--help`. `deep` is not automatically safer or more reliable than the default task. Ordinary Chat selects `host_native`, so eligible project commands run with your OS user's authority unless you select a container profile from the next section.
 
 ## 4. Docker, when you want project commands
 
-The default profile is `safe_repo`. It runs project commands in Docker and does not fall back to the host. `doctor` fails `docker` and `sandbox_image` until both are ready.
+Ordinary Chat selects `host_native`, which runs eligible project commands with your OS user's authority and is not an OS sandbox. Selecting `safe_repo` requires Docker and a usable sandbox image; that profile fails closed instead of falling back to the host. With `safe_repo` selected, `doctor` reports `docker` and `sandbox_image` until both are ready.
 
 There is no Babel-published image. Windows Desktop can prepare one. On any machine with Docker, this is the same public image Desktop pulls:
 
