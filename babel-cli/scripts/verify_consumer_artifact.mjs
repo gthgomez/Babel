@@ -221,7 +221,7 @@ async function tui(configured = false) {
     assert.equal(code, 0, transcript)
     assert.ok(sent, 'TUI advertised startup before exit was sent')
     assert.match(transcript, /session ended/i)
-    assert.match(transcript, /Docker is (?:running|not available)/)
+    assert.match(transcript, /Docker is (?:running|not available)|host_native|not an OS sandbox/i)
     assert.doesNotMatch(transcript, /Auto-spawn(?:ing|ed) daemon|\[preamble-budget\]/,
       'Startup diagnostics must not enter the conversation')
     const diagnostics = readFileSync(join(tuiEnv.BABEL_STATE_DIR, 'diagnostics', `interactive-${child.pid}.jsonl`), 'utf8')
@@ -330,7 +330,7 @@ try {
   const setup = json(['setup', '--json'])
   assert.equal(setup.mutates_workspace, false)
   const doctor = json(['doctor', '--json'])
-  assert.ok(doctor.checks.some(check => /docker/i.test(check.id)), 'Docker diagnostic included')
+  assert.ok(doctor.checks.some(check => check.id === 'execution_boundary'), 'Effective execution boundary disclosed')
   assert.ok(doctor.checks.some(check => /provider/i.test(check.id) && check.status !== 'pass'), 'Missing provider diagnosed')
   assert.ok(!doctor.checks.some(check => /powershell|workspace.?map|sibling/i.test(check.id)))
   writeFileSync(join(project, 'README.md'), 'Synthetic installed context, café 空\n')

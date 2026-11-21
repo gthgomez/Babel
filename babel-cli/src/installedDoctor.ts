@@ -9,6 +9,9 @@ import { CLI_COMMAND } from './cli/commandName.js'
 import { dockerCheckMessage, formatManualProviderEnvExample, sandboxImageCheckMessage } from './cli/firstRunText.js'
 import { inspectRunningProduct, runningProduct, type RunningProduct } from './services/runningProduct.js'
 import { resolveExecutionProfile, type ExecutionProfileName } from './config/executionProfiles.js'
+import { isHostIsolationEscalationAllowed, type GovernedIsolationDecision } from './config/benchmarkContainer.js'
+import { validateDockerIsolationArgs } from './config/dockerIsolationArgs.js'
+import { ORDINARY_CHAT_EXECUTION_PROFILE, resolveEffectiveExecutionBoundary } from './config/effectiveExecutionBoundary.js'
 
 type Check = { id: string; status: 'ok' | 'warn' | 'fail' | 'not_required'; message: string }
 
@@ -39,8 +42,11 @@ export function runInstalledDoctor(options: {
   executionProfile?: string
 } = {}): { status: 'ok' | 'warn' | 'fail'; kind: string; paths: ReturnType<typeof resolveRuntimePaths>; checks: Check[]; profileDiagnosticsVersion?: 1; executionProfile?: ExecutionProfileName } {
   const env = options.env ?? process.env
-  const profile = options.executionProfile === undefined ? undefined : resolveExecutionProfile(options.executionProfile)
-  const requiresDocker = profile?.dockerSandbox !== false
+  const configuredProfile = options.executionProfile ?? env['BABEL_EXECUTION_PROFILE']
+  const profile = configuredProfile === undefined
+    ? resolveExecutionProfile(ORDINARY_CHAT_EXECUTION_PROFILE)
+    : resolveExecutionProfile(configuredProfile)
+  const requiresDocker = profile.dockerSandbox === true
   const paths = options.paths ?? resolveRuntimePaths(env)
   const nodeReady = supportsInstalledNode(process.versions.node)
   const effective = resolveEffectiveSettings({ settings: options.settings ?? readUserSettings({ env }), env, projectRoot: paths.targetProjectRoot })
@@ -48,7 +54,9 @@ export function runInstalledDoctor(options: {
   const spec = connection ? getProviderSpec(connection.provider) : null
   const keyName = connection?.apiKeyEnvVar ?? spec?.credentialEnvVar
   const configured = Boolean(connection && effective.model.value && (connection.authentication === 'none' || !spec?.requiresCredential || (keyName && env[keyName]?.trim())))
-  const dockerReady = requiresDocker && (options.dockerProbe ? options.dockerProbe() :
+  const dockerDisabled = env['BABEL_DOCKER_DISABLE'] === 'true'
+  const unsafeDockerArgs = !validateDockerIsolationArgs(env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']).ok
+  const dockerReady = requiresDocker && !dockerDisabled && !unsafeDockerArgs && (options.dockerProbe ? options.dockerProbe() :
     spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 3000, stdio: 'ignore', env }).status === 0)
   const image=env['BABEL_BENCHMARK_DOCKER_IMAGE']?.trim()
   const imageReady=Boolean(dockerReady&&image&&(options.imageProbe?options.imageProbe(image):probeInstalledSandboxImage(image,{
@@ -56,6 +64,16 @@ export function runInstalledDoctor(options: {
   })))
   const product = inspectRunningProduct(options.running ?? runningProduct)
   const platform = options.platform ?? process.platform
+  const isolationDecision: GovernedIsolationDecision = !requiresDocker
+    ? { kind: 'host_profile', profile: profile.name }
+    : unsafeDockerArgs
+      ? { kind: 'fail_closed', profile: profile.name, reason: 'unsafe Docker isolation arguments' }
+      : dockerReady && imageReady
+        ? { kind: 'docker' }
+        : isHostIsolationEscalationAllowed(env)
+          ? { kind: 'host_escalated', profile: profile.name, reason: 'container isolation explicitly waived' }
+          : { kind: 'fail_closed', profile: profile.name, reason: 'container isolation unavailable' }
+  const boundary = resolveEffectiveExecutionBoundary({ profile: profile.name, env, decision: isolationDecision })
   const envFile = join(paths.userConfigRoot, '.env')
   const checks: Check[] = [
     { id: 'node', status: nodeReady ? 'ok' : 'fail', message: nodeReady
@@ -66,6 +84,7 @@ export function runInstalledDoctor(options: {
       `Selected ${connection!.id}: ${connection!.provider}/${effective.model.value}; source ${effective.connection.source}. Credential presence checked; connectivity and observed model unverified.` :
       `No provider is selected yet. Run ${CLI_COMMAND} setup in a terminal, or save one key in ${envFile}. Read-only commands work; nothing was contacted.` },
     { id: 'executable', status: product.restartNeeded ? 'warn' : 'ok', message: `Running Babel ${product.runningVersion ?? 'unknown'}; revision ${product.revision ?? 'unknown'}; command ${CLI_COMMAND} (aliases babel and babel-agent); CLI entry ${product.entrypoint ?? 'unknown'}; Node executable ${product.executable}; package ${product.packageRoot}; ${product.restartNeeded === true ? 'package files changed; restart to use the current installation' : product.restartNeeded === null ? 'installation change detection unknown' : 'no change detected in package manifest or entrypoint'}` },
+    { id: 'execution_boundary', status: boundary.failClosed ? 'fail' : boundary.escalation ? 'warn' : 'ok', message: boundary.disclosure },
     { id: 'docker', status: !requiresDocker ? 'not_required' : dockerReady ? 'ok' : 'fail', message: !requiresDocker ? 'Docker is not required for the selected execution profile; it was not checked.' : dockerCheckMessage(dockerReady, platform) },
     { id:'sandbox_image',status:!requiresDocker?'not_required':imageReady?'ok':'fail',message:!requiresDocker?'A Docker sandbox image is not required for the selected execution profile; it was not checked.':sandboxImageCheckMessage(imageReady, dockerReady, platform) },
   ]
@@ -86,6 +105,6 @@ export function installedSetupChecklist(options: { paths?: ReturnType<typeof res
     { step: 'diagnose_installation', command: `${CLI_COMMAND} doctor --json` },
     { step: 'preview_project_context', command: `${CLI_COMMAND} context preview @file README.md --json`, note: 'Run inside your target project, with an existing file.' },
     { step: 'configure_provider', command: `${CLI_COMMAND} setup`, note: 'Choose a provider connection, exact model and budget. Guided credentials are masked; diagnostics never send provider requests.' },
-    { step: 'start_safe_execution', command: `${CLI_COMMAND} interactive`, note: `The default safe_repo profile runs project commands in Docker. On Windows, Babel Desktop Setup can prepare the image. On macOS and Linux, run ${CLI_COMMAND} sandbox prepare after Docker is installed.` },
+    { step: 'start_safe_execution', command: `${CLI_COMMAND} interactive`, note: `Ordinary Chat defaults to host_native: project commands run with your OS user's authority, which is not an OS sandbox. Select safe_repo to require a Docker container instead. On Windows, Babel Desktop Setup can prepare the image; on macOS and Linux, run ${CLI_COMMAND} sandbox prepare after Docker is installed.` },
   ], next_command: `${CLI_COMMAND} doctor --json`, mutates_workspace: false, remote_side_effects: false }
 }
