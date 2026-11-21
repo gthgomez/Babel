@@ -1,6 +1,6 @@
 # Babel Reliability 2026-11 — Six-Audit Engineering Program
 
-> **Public source snapshot:** main `4133e32128c2a2e497319020b326fd36e315a744`, reconciled on 2026-11-21. **Original audit baseline:** `198193b1545682da66eae50f34f72aae4155aa8f`. **Campaign issue:** [#521](https://github.com/gthgomez/Babel/issues/521).
+> **Public source snapshot:** main `854f842ef192dc258323d6d649726c12863b9070`, reconciled on 2026-11-21. **Original audit baseline:** `198193b1545682da66eae50f34f72aae4155aa8f`. **Campaign issue:** [#521](https://github.com/gthgomez/Babel/issues/521).
 
 ## Decision
 
@@ -41,8 +41,8 @@ Duplicate aliases stay with the primary row and owner. TF-26 maps to TF-17, RT-0
 ## PR reconciliation at the public source snapshot
 
 - **Landed source PRs by workstream:** W01 [#545](https://github.com/gthgomez/Babel/pull/545), W02 [#544](https://github.com/gthgomez/Babel/pull/544), W03 [#550](https://github.com/gthgomez/Babel/pull/550), W04 [#546](https://github.com/gthgomez/Babel/pull/546), W05 [#540](https://github.com/gthgomez/Babel/pull/540), W06 [#548](https://github.com/gthgomez/Babel/pull/548), W07 [#549](https://github.com/gthgomez/Babel/pull/549), W09 [#541](https://github.com/gthgomez/Babel/pull/541), W10 [#547](https://github.com/gthgomez/Babel/pull/547), W11 [#539](https://github.com/gthgomez/Babel/pull/539), W12 [#543](https://github.com/gthgomez/Babel/pull/543), W13 [#538](https://github.com/gthgomez/Babel/pull/538), and W14 [#537](https://github.com/gthgomez/Babel/pull/537).
-- **Merged follow-ups:** Windows repair fixture [#515](https://github.com/gthgomez/Babel/pull/515), offline CI summaries [#518](https://github.com/gthgomez/Babel/pull/518), Desktop second-turn repair [#520](https://github.com/gthgomez/Babel/pull/520), held-out grading [#551](https://github.com/gthgomez/Babel/pull/551), and durable turn recovery [#555](https://github.com/gthgomez/Babel/pull/555).
-- **Open stabilization and release candidates:** W08 umbrella [#542](https://github.com/gthgomez/Babel/pull/542), Desktop staging [#554](https://github.com/gthgomez/Babel/pull/554), adoption [#556](https://github.com/gthgomez/Babel/pull/556), provider completion [#557](https://github.com/gthgomez/Babel/pull/557), boundary disclosure [#558](https://github.com/gthgomez/Babel/pull/558), and Windows settlement [#559](https://github.com/gthgomez/Babel/pull/559).
+- **Merged follow-ups:** Windows repair fixture [#515](https://github.com/gthgomez/Babel/pull/515), offline CI summaries [#518](https://github.com/gthgomez/Babel/pull/518), Desktop second-turn repair [#520](https://github.com/gthgomez/Babel/pull/520), held-out grading [#551](https://github.com/gthgomez/Babel/pull/551), durable turn recovery [#555](https://github.com/gthgomez/Babel/pull/555), and rollback-safe adoption [#556](https://github.com/gthgomez/Babel/pull/556).
+- **Open stabilization and release candidates:** W08 umbrella [#542](https://github.com/gthgomez/Babel/pull/542), Desktop staging [#554](https://github.com/gthgomez/Babel/pull/554), provider completion [#557](https://github.com/gthgomez/Babel/pull/557), boundary disclosure [#558](https://github.com/gthgomez/Babel/pull/558), and Windows settlement [#559](https://github.com/gthgomez/Babel/pull/559).
 - **Older open drafts:** [#516](https://github.com/gthgomez/Babel/pull/516) remains held, [#517](https://github.com/gthgomez/Babel/pull/517) needs native balance evidence for its refreshed Windows timings, [#519](https://github.com/gthgomez/Babel/pull/519) needs authorized comparison with the incumbent reader, and [#536](https://github.com/gthgomez/Babel/pull/536) carries this public index.
 
 Refresh exact heads and gate results before using the snapshot as acceptance evidence.
