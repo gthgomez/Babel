@@ -9,7 +9,7 @@ Babel is an **agent harness**. It runs on your computer, talks to a model you ch
 
 It is for developers who want a coding agent in a project they already have, including Python and Java projects. You do not have to learn Babel's internals first.
 
-Use it when you want the agent on your machine, with a provider you pick, and with project commands kept in a Docker sandbox by default instead of running straight on the host.
+Use it when you want the agent on your machine, with a provider you pick and an explicit execution profile for project commands. Ordinary Chat defaults to `host_native`, which uses your OS user's authority and is not an OS sandbox; selecting `safe_repo` keeps project commands in a Docker container.
 
 <!-- TODO: add a short Desktop demo video here once the recording exists. Do not link a file until it is in the repo. -->
 
@@ -33,7 +33,7 @@ babel-harness setup
 
 The command name to use in these docs is `babel-harness`. The published 0.2.0 installer also adds `babel-agent`, which is the same program. The current repository package (0.2.1) installs all three names — `babel`, `babel-agent`, and `babel-harness` — with identical behavior; use whichever you prefer.
 
-`doctor` exits 1 on a machine without Docker. That means the default sandbox is not ready. The install itself succeeded. `setup` prints a checklist. It does not ask you questions and it does not call a model.
+On the published `0.2.0` package, `doctor` exits 1 on a machine without Docker because that release defaulted to `safe_repo`; the install itself succeeded. The current source selects `host_native` for Ordinary Chat, so Docker is not required and `doctor` reports the effective boundary instead. `setup` prints a checklist. It does not ask you questions and it does not call a model.
 
 Create a private env file and set **one** key. `setup` on 0.2.0 lists these names:
 

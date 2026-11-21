@@ -2,7 +2,7 @@
 import { CLI_COMMAND } from './commandName.js';
 import { listProviderSpecs } from '../runners/providerRegistry.js';
 
-/** What to install so the default safe_repo profile can run project commands. */
+/** What to install when a container-backed execution profile is selected. */
 export function dockerFailureGuidance(platform: NodeJS.Platform): string {
   if (platform === 'win32') {
     return 'Install Docker Desktop for Windows, start it, and leave it running. Then run `' + CLI_COMMAND + ' doctor` again.';
@@ -13,9 +13,14 @@ export function dockerFailureGuidance(platform: NodeJS.Platform): string {
   return 'Install Docker Engine, start it, and allow this user to run `docker info` (on systemd: `sudo systemctl enable --now docker`). Then run `' + CLI_COMMAND + ' doctor` again. Babel Desktop is a Windows app, so it does not prepare Docker on Linux.';
 }
 
+/**
+ * Docker status for a *selected container profile* (safe_repo and peers).
+ * Ordinary Chat defaults to host_native, where Docker is not required; this
+ * message must never imply otherwise.
+ */
 export function dockerCheckMessage(ready: boolean, platform: NodeJS.Platform): string {
-  if (ready) return 'Docker is running. The default safe_repo profile uses it so project commands stay off this machine.';
-  return `Docker is not available, so project commands cannot run. The default safe_repo profile requires Docker and does not fall back to this machine. ${dockerFailureGuidance(platform)}`;
+  if (ready) return 'Docker is running. The selected container execution profile uses it so project commands stay off this machine.';
+  return `Docker is not available, so project commands cannot run under the selected container profile. That profile requires Docker and does not fall back to this machine. ${dockerFailureGuidance(platform)}`;
 }
 
 /** Next step for the Linux amd64 image used to run project commands. */
