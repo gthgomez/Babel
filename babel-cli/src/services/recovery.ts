@@ -1,7 +1,10 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
+import { SESSION_EVENTS_FILENAME } from '../agent/sessionEventSchema.js';
+import { THREAD_EVENT_LOG_FILENAME } from '../agent/threadEventLog.js';
 import { BABEL_RUNS_DIR } from '../cli/constants.js';
+import { chatSessionsDir } from '../cli/runsLayout.js';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import type { UserFacingStatus } from '../cli/userFacingStatus.js';
 import { readDurableTerminalTruth } from './durableTerminalTruth.js';
@@ -114,36 +117,74 @@ function unwrapFailureCapsule(
   return capsule;
 }
 
-function resolveLatestByMtime(): string | null {
-  if (!existsSync(BABEL_RUNS_DIR)) {
+interface LatestRunCandidate {
+  runDir: string;
+  activityMs: number;
+}
+
+function findLatestChatRun(runsDir: string): LatestRunCandidate | null {
+  const chatRoot = chatSessionsDir(runsDir);
+  try {
+    if (!lstatSync(chatRoot, { throwIfNoEntry: false })?.isDirectory()) return null;
+    const candidates: LatestRunCandidate[] = [];
+    for (const entry of readdirSync(chatRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const runDir = join(chatRoot, entry.name);
+      let activityMs = 0;
+      for (const name of [SESSION_EVENTS_FILENAME, THREAD_EVENT_LOG_FILENAME]) {
+        const journal = lstatSync(join(runDir, name), { throwIfNoEntry: false });
+        if (journal && (!journal.isFile() || journal.size > 0)) activityMs = Math.max(activityMs, journal.mtimeMs);
+      }
+      if (activityMs > 0) candidates.push({ runDir, activityMs });
+    }
+    candidates.sort((a, b) => b.activityMs - a.activityMs || a.runDir.localeCompare(b.runDir));
+    // An empty valid journal can exist before the first task (e.g. a branch).
+    // Corrupt journals still carry fail-closed truth and must not expose an
+    // older success merely because the newest journal is unreadable.
+    return candidates.find(({ runDir }) => readDurableTerminalTruth(runDir).turn_state !== 'none') ?? null;
+  } catch {
     return null;
   }
-  const candidates = readdirSync(BABEL_RUNS_DIR, { withFileTypes: true })
+}
+
+function resolveLatestByMtime(runsDir: string): string | null {
+  if (!existsSync(runsDir)) return null;
+  const candidates = readdirSync(runsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => join(BABEL_RUNS_DIR, entry.name))
-    .filter((path) => existsSync(path))
+    .map((entry) => join(runsDir, entry.name))
+    .filter((path) => ['01_manifest.json', '04_execution_report.json',
+      'terminal_status_summary.json', SESSION_EVENTS_FILENAME, THREAD_EVENT_LOG_FILENAME]
+      .some((name) => existsSync(join(path, name))))
     .map((path) => ({ path, mtimeMs: statSync(path).mtimeMs }))
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
   return candidates[0]?.path ?? null;
 }
 
-function readLatestPointerFromRunsDir(runsDir: string, project?: string): string | null {
+function readLatestPointerFromRunsDir(runsDir: string, project?: string): LatestRunCandidate | null {
+  const fallback = join(runsDir, '.latest.json');
   const scoped = project ? join(runsDir, `.latest.${project}.json`) : null;
-  const candidates = scoped
-    ? [scoped, join(runsDir, '.latest.json')]
-    : [join(runsDir, '.latest.json')];
-  for (const candidate of candidates) {
+  for (const candidate of scoped ? [scoped, fallback] : [fallback]) {
     const parsed = readJson(candidate);
     const runDir = parsed?.['run_dir'];
-    if (typeof runDir !== 'string' || runDir.length === 0) continue;
-    // A project-scoped recovery must not silently point at another project's
-    // run just because the global pointer is newer (UX-09).
-    if (project && typeof parsed?.['project'] === 'string' && parsed['project'] !== project) {
-      continue;
-    }
-    return runDir;
+    if (typeof runDir !== 'string' || runDir.length === 0 || !existsSync(runDir)) continue;
+    if (project && parsed?.['project'] !== project &&
+        (candidate === fallback || parsed?.['project'] !== undefined)) continue;
+    const createdAt = parsed?.['created_at'];
+    const timestamp = typeof createdAt === 'string' ? Date.parse(createdAt) : NaN;
+    const activityMs = Number.isFinite(timestamp) ? timestamp : statSync(candidate, { throwIfNoEntry: false })?.mtimeMs ?? 0;
+    return { runDir, activityMs };
   }
   return null;
+}
+
+/** Resolve journal-backed Chat and pointer-backed pipeline sessions by activity. */
+export function resolveLatestEvidenceRunDir(runsDir: string, project?: string): string | null {
+  const pointer = readLatestPointerFromRunsDir(runsDir, project);
+  // A Chat journal on disk does not establish the caller's named project.
+  if (project) return pointer?.runDir ?? null;
+  const chat = findLatestChatRun(runsDir);
+  if (chat && (!pointer || chat.activityMs >= pointer.activityMs)) return chat.runDir;
+  return pointer?.runDir ?? resolveLatestByMtime(runsDir);
 }
 
 export interface RecoveryRunReferenceOptions {
@@ -159,16 +200,7 @@ export function resolveRecoveryRunDir(
 ): string | null {
   if (reference === 'latest') {
     const runsDir = options.runsDir ?? BABEL_RUNS_DIR;
-    const pointer = readLatestPointerFromRunsDir(runsDir, options.project);
-    if (pointer) return pointer;
-    // A project-scoped request has no "latest" when its pointer is missing
-    // or points at another project: the global pointer and the machine-wide
-    // mtime fallback span every project and are not safe evidence for it
-    // (UX-09 parity with resolveAssessmentRunDir). These exports have no
-    // production callers today; the guard keeps them from reintroducing
-    // the cross-project fallback if one is added.
-    if (options.project) return null;
-    return options.runsDir ? null : resolveLatestByMtime();
+    return resolveLatestEvidenceRunDir(runsDir, options.project);
   }
   return isAbsolute(reference) ? reference : resolve(reference);
 }
@@ -378,7 +410,6 @@ function resolveAssessmentRunDir(options: RecoveryAssessmentOptions): {
   runDir: string | null;
   resolvedFrom: RecoveryAssessment['resolved_from'];
 } {
-  const runsDir = resolve(options.runsDir ?? BABEL_RUNS_DIR);
   const direct = options.runDir ?? options.run_dir;
   if (direct) {
     return { runDir: isAbsolute(direct) ? direct : resolve(direct), resolvedFrom: 'run_dir' };
@@ -389,21 +420,18 @@ function resolveAssessmentRunDir(options: RecoveryAssessmentOptions): {
       resolvedFrom: 'run',
     };
   }
-  const latest = readLatestPointerFromRunsDir(runsDir, options.project);
-  if (latest) {
-    return { runDir: latest, resolvedFrom: 'latest' };
-  }
-  // A project-scoped request has no "latest" when its pointer is missing; the
-  // mtime fallback spans every project and is not safe evidence for it.
-  if (options.project) return { runDir: null, resolvedFrom: 'none' };
-  const newest = options.runsDir ? null : resolveLatestByMtime();
-  return { runDir: newest, resolvedFrom: newest ? 'latest' : 'none' };
+  const latest = resolveRecoveryRunDir('latest', options);
+  return { runDir: latest, resolvedFrom: latest ? 'latest' : 'none' };
 }
 
 export function buildRecoveryAssessment(
   options: RecoveryAssessmentOptions = {},
 ): RecoveryAssessment {
   const { runDir, resolvedFrom } = resolveAssessmentRunDir(options);
+  return assessRecoveryRun(runDir, resolvedFrom);
+}
+
+function assessRecoveryRun(runDir: string | null, resolvedFrom: RecoveryAssessment['resolved_from']): RecoveryAssessment {
   if (!runDir) {
     return {
       status: 'NO_LATEST_RUN',
@@ -657,11 +685,11 @@ export function buildRunFailureRecoveryPayload(
   assessment: RecoveryAssessment;
   block: Record<string, unknown>;
 } {
-  const assessment = buildRecoveryAssessment({
-    run: 'latest',
-    ...(options.project !== undefined ? { project: options.project } : {}),
-    ...(options.runsDir !== undefined ? { runsDir: options.runsDir } : {}),
-  });
+  // Pipeline failure cards report pipeline recovery even if a Chat journal
+  // was updated while this command was running.
+  const pointer = readLatestPointerFromRunsDir(options.runsDir ?? BABEL_RUNS_DIR, options.project);
+  const runDir = pointer?.runDir ?? (!options.project && !options.runsDir ? resolveLatestByMtime(BABEL_RUNS_DIR) : null);
+  const assessment = assessRecoveryRun(runDir, runDir ? 'latest' : 'none');
   const block: Record<string, unknown> = {
     status: assessment.status,
     classification: assessment.classification,

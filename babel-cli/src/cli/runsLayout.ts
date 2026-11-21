@@ -17,8 +17,8 @@ export function resolveBabelRunsDir(): string {
   return resolveRuntimeRunsDir();
 }
 
-export function chatSessionsDir(): string {
-  return join(resolveBabelRunsDir(), CHAT_SESSIONS);
+export function chatSessionsDir(runsDir = resolveBabelRunsDir()): string {
+  return join(runsDir, CHAT_SESSIONS);
 }
 
 export function chatSessionDir(sessionId: string): string {
