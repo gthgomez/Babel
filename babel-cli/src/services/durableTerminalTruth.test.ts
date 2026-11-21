@@ -12,9 +12,49 @@ import {
   recordUserSubmitted,
   rewriteSessionEventLog,
 } from '../agent/sessionEvents.js';
+import {
+  createThreadEventLog,
+  endTurn,
+  persistThreadEventLog,
+  startTurn,
+} from '../agent/threadEventLog.js';
 import { readDurableTerminalTruth } from './durableTerminalTruth.js';
 import { buildRecoveryAssessment } from './recovery.js';
-import { buildInspectOutcomeView, loadInspectBundle } from '../inspect/loaders.js';
+import {
+  buildInspectManifestView,
+  buildInspectOutcomeView,
+  buildInspectRunView,
+  loadInspectBundle,
+} from '../inspect/loaders.js';
+
+function startFixtureTurn(
+  log: ReturnType<typeof createThreadEventLog>,
+  task: string,
+  root: string,
+): string {
+  return startTurn(log, {
+    task,
+    model: 'fixture-model',
+    provider: 'fixture-provider',
+    projectRoot: root,
+    policyPreset: 'workspace_write',
+  });
+}
+
+function submitSessionTurn(
+  log: ReturnType<typeof createSessionEventLog>,
+  turnId: string,
+  task: string,
+  root: string,
+): void {
+  recordUserSubmitted(log, {
+    turn_id: turnId,
+    task,
+    model: 'fixture-model',
+    provider: 'fixture-provider',
+    projectRoot: root,
+  });
+}
 
 function terminalRun(
   root: string,
@@ -123,8 +163,9 @@ test('a stale success summary loses to a later turn_ended failure', () => {
     assert.equal(truth.success, false);
     assert.equal(truth.exit_code, 1);
     assert.equal(truth.disagreement, true);
-    // The summary's changed-files record is retained for recovery display.
-    assert.deepEqual(truth.changed_files, ['src/example.ts']);
+    // An unbound summary from a different turn must not graft its paths onto
+    // the current failure.
+    assert.deepEqual(truth.changed_files, []);
 
     const recovery = buildRecoveryAssessment({ run: runDir, runsDir: root });
     assert.equal(recovery.terminal_outcome, 'AGENT_FAILURE');
@@ -213,6 +254,448 @@ test('UX-09: recovery advice uses a supported inspect-only command pinned to the
     assert.doesNotMatch(assessment.next_command, /\blatest\b/);
     assert.doesNotMatch(assessment.next_command, /^babel resume/);
     assert.ok(assessment.next_command.includes(runDir));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('BL-14: an admitted unfinished turn outranks an earlier success', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-unfinished-'));
+  try {
+    const runDir = join(root, 'two-turn-run');
+    mkdirSync(runDir, { recursive: true });
+    const thread = createThreadEventLog('thread-two-turn');
+    const session = createSessionEventLog('session-two-turn');
+
+    const first = startFixtureTurn(thread, 'first task', root);
+    endTurn(thread, first, 'VERIFIED_COMPLETE', 'completed');
+    submitSessionTurn(session, first, 'first task', root);
+    recordTurnEnded(session, {
+      turn_id: first,
+      outcome: 'VERIFIED_COMPLETE',
+      status: 'completed',
+    });
+
+    const second = startFixtureTurn(thread, 'second task', root);
+    submitSessionTurn(session, second, 'second task', root);
+
+    rewriteSessionEventLog(runDir, session);
+    await persistThreadEventLog(runDir, thread);
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.turn_id, second);
+    assert.equal(truth.turn_state, 'active');
+    assert.equal(truth.finished, false);
+    assert.equal(truth.outcome, null);
+    assert.equal(truth.success, false);
+    assert.notEqual(truth.user_status, 'success');
+
+    const recovery = buildRecoveryAssessment({ run: runDir, runsDir: root });
+    assert.notEqual(recovery.user_status, 'success');
+    assert.equal(recovery.terminal_outcome, null);
+    assert.equal(recovery.exit_code, null);
+    assert.equal(recovery.classification, 'requires_user_decision');
+    assert.equal(recovery.retryable, false);
+
+    const inspect = buildInspectOutcomeView(loadInspectBundle(runDir));
+    assert.notEqual(inspect.runOutcome.status, 'success');
+    assert.equal(inspect.runOutcome.terminal_outcome, undefined);
+    assert.equal(inspect.runOutcome.needs_human_review, true);
+
+    // Sibling inspection views must not keep advertising the older success.
+    const bundle = loadInspectBundle(runDir);
+    assert.equal(buildInspectRunView(bundle).finalStatus, 'INTERRUPTED');
+    assert.equal(buildInspectManifestView(bundle).finalStatus, 'INTERRUPTED');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('BL-14: a stale success summary and telemetry cannot close a newer unfinished turn', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-stale-newer-'));
+  try {
+    const runDir = join(root, 'stale-newer-run');
+    mkdirSync(runDir, { recursive: true });
+    const thread = createThreadEventLog('thread-stale-newer');
+    const session = createSessionEventLog('session-stale-newer');
+
+    const first = startFixtureTurn(thread, 'first task', root);
+    endTurn(thread, first, 'VERIFIED_COMPLETE', 'completed');
+    submitSessionTurn(session, first, 'first task', root);
+    recordTurnEnded(session, {
+      turn_id: first,
+      outcome: 'VERIFIED_COMPLETE',
+      status: 'completed',
+    });
+    const second = startFixtureTurn(thread, 'second task', root);
+    submitSessionTurn(session, second, 'second task', root);
+    rewriteSessionEventLog(runDir, session);
+    await persistThreadEventLog(runDir, thread);
+
+    writeFileSync(
+      join(runDir, 'terminal_status_summary.json'),
+      `${JSON.stringify({
+        schema_version: 1,
+        artifact_type: 'babel_terminal_status_summary',
+        status: 'COMPLETE',
+        terminal_outcome: 'VERIFIED_COMPLETE',
+        changed_files: ['src/old.ts'],
+      })}\n`,
+    );
+    writeFileSync(
+      join(runDir, '06_runtime_telemetry.json'),
+      `${JSON.stringify({ pipeline_mode: 'chat', final_outcome: 'COMPLETE' })}\n`,
+    );
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.finished, false);
+    assert.equal(truth.outcome, null);
+    assert.equal(truth.success, false);
+    assert.deepEqual(truth.changed_files, []);
+
+    const recovery = buildRecoveryAssessment({ run: runDir, runsDir: root });
+    assert.notEqual(recovery.user_status, 'success');
+    assert.equal(recovery.terminal_outcome, null);
+    assert.equal(recovery.exit_code, null);
+
+    const inspect = buildInspectOutcomeView(loadInspectBundle(runDir));
+    assert.notEqual(inspect.runOutcome.status, 'success');
+    assert.notEqual(inspect.runOutcome.terminal_outcome, 'VERIFIED_COMPLETE');
+    assert.equal(inspect.runOutcome.needs_human_review, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('BL-14: a newer thread-journal failure wins over an older session success', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-divergent-'));
+  try {
+    const runDir = join(root, 'divergent-run');
+    mkdirSync(runDir, { recursive: true });
+    const thread = createThreadEventLog('thread-divergent');
+    const session = createSessionEventLog('session-divergent');
+
+    const first = startFixtureTurn(thread, 'first task', root);
+    endTurn(thread, first, 'VERIFIED_COMPLETE', 'completed');
+    submitSessionTurn(session, first, 'first task', root);
+    recordTurnEnded(session, {
+      turn_id: first,
+      outcome: 'VERIFIED_COMPLETE',
+      status: 'completed',
+    });
+    const second = startFixtureTurn(thread, 'second task', root);
+    endTurn(thread, second, 'AGENT_FAILURE', 'failed');
+    rewriteSessionEventLog(runDir, session);
+    await persistThreadEventLog(runDir, thread);
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.turn_id, second);
+    assert.equal(truth.outcome, 'AGENT_FAILURE');
+    assert.equal(truth.user_status, 'failed');
+    assert.equal(truth.success, false);
+    assert.equal(truth.disagreement, false);
+
+    const recovery = buildRecoveryAssessment({ run: runDir, runsDir: root });
+    assert.equal(recovery.terminal_outcome, 'AGENT_FAILURE');
+    assert.equal(recovery.user_status, 'failed');
+
+    const inspect = buildInspectOutcomeView(loadInspectBundle(runDir));
+    assert.equal(inspect.runOutcome.terminal_outcome, 'AGENT_FAILURE');
+    assert.notEqual(inspect.runOutcome.status, 'success');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('BL-14: a corrupt thread journal cannot leave a session success standing', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-corrupt-'));
+  try {
+    const runDir = join(root, 'corrupt-run');
+    mkdirSync(runDir, { recursive: true });
+    const session = createSessionEventLog('session-corrupt');
+    recordUserSubmitted(session, {
+      turn_id: 'turn-1',
+      task: 'task',
+      model: 'fixture-model',
+      provider: 'fixture-provider',
+      projectRoot: root,
+    });
+    recordTurnEnded(session, {
+      turn_id: 'turn-1',
+      outcome: 'VERIFIED_COMPLETE',
+      status: 'completed',
+    });
+    rewriteSessionEventLog(runDir, session);
+    writeFileSync(join(runDir, 'thread_events.json'), '{"schema_version":1');
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.corrupt, true);
+    assert.deepEqual(truth.corrupt_sources, ['thread_events']);
+    assert.equal(truth.success, false);
+    assert.notEqual(truth.user_status, 'success');
+    assert.equal(truth.finished, false);
+
+    const recovery = buildRecoveryAssessment({ run: runDir, runsDir: root });
+    assert.notEqual(recovery.user_status, 'success');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('BL-14: a newer submission that was never admitted is not a success', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-submitted-'));
+  try {
+    const runDir = join(root, 'submitted-run');
+    mkdirSync(runDir, { recursive: true });
+    const thread = createThreadEventLog('thread-submitted');
+    const session = createSessionEventLog('session-submitted');
+
+    const first = startFixtureTurn(thread, 'first task', root);
+    endTurn(thread, first, 'VERIFIED_COMPLETE', 'completed');
+    submitSessionTurn(session, first, 'first task', root);
+    recordTurnEnded(session, {
+      turn_id: first,
+      outcome: 'VERIFIED_COMPLETE',
+      status: 'completed',
+    });
+    submitSessionTurn(session, 'turn-never-admitted', 'second task', root);
+    rewriteSessionEventLog(runDir, session);
+    await persistThreadEventLog(runDir, thread);
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.turn_id, 'turn-never-admitted');
+    assert.equal(truth.turn_state, 'submitted');
+    assert.equal(truth.finished, false);
+    assert.equal(truth.success, false);
+    assert.notEqual(truth.user_status, 'success');
+    assert.equal(truth.disagreement, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an unbound non-success summary still downgrades a journal success', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-summary-downgrade-'));
+  try {
+    const runDir = terminalRun(root, 'summary-downgrade', 'VERIFIED_COMPLETE', 'completed');
+    writeFileSync(
+      join(runDir, 'terminal_status_summary.json'),
+      `${JSON.stringify({
+        schema_version: 1,
+        artifact_type: 'babel_terminal_status_summary',
+        status: 'UNVERIFIED_PATCH',
+        reason_category: 'verifier_failure',
+        changed_files: ['src/old.ts'],
+      })}\n`,
+    );
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.success, false);
+    assert.equal(truth.outcome, 'UNVERIFIED_PATCH');
+    assert.equal(truth.user_status, 'not_verified');
+    assert.notEqual(truth.exit_code, 0);
+    assert.equal(truth.disagreement, true);
+    assert.deepEqual(truth.changed_files, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a classifiable non-success wins over an unclassifiable terminal', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-classifiable-'));
+  try {
+    const runDir = join(root, 'classifiable-non-success');
+    mkdirSync(runDir, { recursive: true });
+    const thread = createThreadEventLog('thread-classifiable');
+    const turnId = startFixtureTurn(thread, 'frozen task', root);
+    endTurn(thread, turnId, undefined, 'MADE_UP_TERMINAL');
+    await persistThreadEventLog(runDir, thread);
+
+    const session = createSessionEventLog('session-classifiable');
+    submitSessionTurn(session, turnId, 'frozen task', root);
+    recordTurnEnded(session, { turn_id: turnId, outcome: 'AGENT_FAILURE', status: 'failed' });
+    rewriteSessionEventLog(runDir, session);
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.disagreement, true);
+    assert.equal(truth.outcome, 'AGENT_FAILURE');
+    assert.equal(truth.success, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a legacy summary-only success is preserved', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-legacy-'));
+  try {
+    const runDir = join(root, 'legacy-run');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'terminal_status_summary.json'),
+      `${JSON.stringify({
+        schema_version: 1,
+        artifact_type: 'babel_terminal_status_summary',
+        status: 'COMPLETE',
+        terminal_outcome: 'VERIFIED_COMPLETE',
+        changed_files: [],
+      })}\n`,
+    );
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.turn_state, 'none');
+    assert.equal(truth.source, 'terminal_status_summary');
+    assert.equal(truth.outcome, 'VERIFIED_COMPLETE');
+    assert.equal(truth.success, true);
+    assert.equal(truth.finished, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('BL-14: the newest of two settled successes remains success', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-settled-'));
+  try {
+    const runDir = join(root, 'settled-run');
+    mkdirSync(runDir, { recursive: true });
+    const thread = createThreadEventLog('thread-settled');
+    const session = createSessionEventLog('session-settled');
+    const first = startFixtureTurn(thread, 'first task', root);
+    endTurn(thread, first, 'VERIFIED_COMPLETE', 'completed');
+    submitSessionTurn(session, first, 'first task', root);
+    recordTurnEnded(session, {
+      turn_id: first,
+      outcome: 'VERIFIED_COMPLETE',
+      status: 'completed',
+    });
+    const second = startFixtureTurn(thread, 'second task', root);
+    endTurn(thread, second, 'NO_CHANGE_REQUIRED', 'completed_no_modification');
+    submitSessionTurn(session, second, 'second task', root);
+    recordTurnEnded(session, {
+      turn_id: second,
+      outcome: 'NO_CHANGE_REQUIRED',
+      status: 'completed_no_modification',
+    });
+    rewriteSessionEventLog(runDir, session);
+    await persistThreadEventLog(runDir, thread);
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.turn_id, second);
+    assert.equal(truth.turn_state, 'terminal');
+    assert.equal(truth.outcome, 'NO_CHANGE_REQUIRED');
+    assert.equal(truth.success, true);
+    assert.equal(truth.finished, true);
+    assert.equal(truth.disagreement, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('BL-14: cancellation on the newest turn keeps its failure mapping', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-cancelled-'));
+  try {
+    const runDir = join(root, 'cancelled-run');
+    mkdirSync(runDir, { recursive: true });
+    const thread = createThreadEventLog('thread-cancelled');
+    const session = createSessionEventLog('session-cancelled');
+    const first = startFixtureTurn(thread, 'first task', root);
+    endTurn(thread, first, 'VERIFIED_COMPLETE', 'completed');
+    submitSessionTurn(session, first, 'first task', root);
+    recordTurnEnded(session, {
+      turn_id: first,
+      outcome: 'VERIFIED_COMPLETE',
+      status: 'completed',
+    });
+    const second = startFixtureTurn(thread, 'second task', root);
+    endTurn(thread, second, 'CANCELLED', 'cancelled');
+    submitSessionTurn(session, second, 'second task', root);
+    recordTurnEnded(session, {
+      turn_id: second,
+      outcome: 'CANCELLED',
+      status: 'cancelled',
+    });
+    rewriteSessionEventLog(runDir, session);
+    await persistThreadEventLog(runDir, thread);
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.turn_id, second);
+    assert.equal(truth.outcome, 'CANCELLED');
+    assert.equal(truth.user_status, 'failed');
+    assert.equal(truth.success, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a same-turn journal disagreement cannot yield success', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-same-turn-'));
+  try {
+    const runDir = join(root, 'same-turn-disagreement');
+    mkdirSync(runDir, { recursive: true });
+    const thread = createThreadEventLog('thread-same-turn');
+    const turnId = startFixtureTurn(thread, 'frozen task', root);
+    endTurn(thread, turnId, 'VERIFIED_COMPLETE', 'completed');
+    await persistThreadEventLog(runDir, thread);
+
+    const session = createSessionEventLog('session-same-turn');
+    submitSessionTurn(session, turnId, 'frozen task', root);
+    recordTurnEnded(session, { turn_id: turnId, outcome: 'AGENT_FAILURE', status: 'failed' });
+    rewriteSessionEventLog(runDir, session);
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.disagreement, true);
+    assert.equal(truth.outcome, 'AGENT_FAILURE');
+    assert.equal(truth.success, false);
+    assert.notEqual(truth.user_status, 'success');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an unclassifiable same-turn terminal cannot restore success from the other journal', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-unclassifiable-'));
+  try {
+    const runDir = join(root, 'unclassifiable-terminal');
+    mkdirSync(runDir, { recursive: true });
+    const thread = createThreadEventLog('thread-unclassifiable');
+    const turnId = startFixtureTurn(thread, 'frozen task', root);
+    endTurn(thread, turnId, 'VERIFIED_COMPLETE', 'completed');
+    await persistThreadEventLog(runDir, thread);
+
+    const session = createSessionEventLog('session-unclassifiable');
+    submitSessionTurn(session, turnId, 'frozen task', root);
+    recordTurnEnded(session, { turn_id: turnId, status: 'MADE_UP_TERMINAL' });
+    rewriteSessionEventLog(runDir, session);
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.disagreement, true);
+    assert.equal(truth.finished, true);
+    assert.equal(truth.outcome, null);
+    assert.equal(truth.success, false);
+    assert.equal(truth.user_status, 'not_verified');
+    assert.notEqual(truth.exit_code, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an unclassifiable thread terminal wins over a session success', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-durable-unclassifiable-thread-'));
+  try {
+    const runDir = join(root, 'unclassifiable-thread');
+    mkdirSync(runDir, { recursive: true });
+    const thread = createThreadEventLog('thread-unclassifiable-thread');
+    const turnId = startFixtureTurn(thread, 'frozen task', root);
+    endTurn(thread, turnId, undefined, 'MADE_UP_TERMINAL');
+    await persistThreadEventLog(runDir, thread);
+
+    const session = createSessionEventLog('session-unclassifiable-thread');
+    submitSessionTurn(session, turnId, 'frozen task', root);
+    recordTurnEnded(session, { turn_id: turnId, outcome: 'VERIFIED_COMPLETE', status: 'completed' });
+    rewriteSessionEventLog(runDir, session);
+
+    const truth = readDurableTerminalTruth(runDir);
+    assert.equal(truth.disagreement, true);
+    assert.equal(truth.success, false);
+    assert.notEqual(truth.user_status, 'success');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
