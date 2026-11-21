@@ -343,7 +343,9 @@ export function spawnCommandAsync(
       releasePhysicalClose?.()
       if (aborted) {
         recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} aborted`))
-        if (executionId && (!windowsJob || windowsExit !== null)) options.processWitness?.killed(processInput, executionId)
+        if (executionId && (!windowsJob || (processStarted && windowsExit !== null))) {
+          options.processWitness?.killed(processInput, executionId)
+        }
         releaseAbortPhysicalClose?.()
         finish(code ?? 1, new Error(`spawn ${executable} aborted`))
       } else if (timedOut) {

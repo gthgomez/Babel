@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 
+import { ProcessWitness } from './diagnostics/bdns/processWitness.js'
+import { awaitPendingProcessTerminations } from './sandboxProcessTermination.js'
 import { isProcessAlive } from './processTree.js'
 import { spawnCommandAsync } from './sandboxSpawnCommandAsync.js'
 import { buildOwnedWindowsInvocation } from './windowsProcessSettlement.js'
@@ -47,6 +49,30 @@ test('Windows supervisor preserves argv, stdout, stderr and the target exit stat
   assert.notEqual(rejected.status, 0)
   assert.match(rejected.error?.message ?? '', /identity could not be confirmed/)
   assert.equal(rejected.stdout, '')
+})
+
+test('Windows cancellation before target start does not certify a process exit or kill', {
+  skip: process.platform !== 'win32' && 'requires native Windows',
+  timeout: 80_000,
+}, async () => {
+  const witness = new ProcessWitness()
+  const events: string[] = []
+  witness.started = () => { events.push('started') }
+  witness.failedToStart = () => { events.push('failedToStart') }
+  witness.exited = () => { events.push('exited') }
+  witness.killed = () => { events.push('killed') }
+  const controller = new AbortController()
+  const sessionId = 'windows-prelaunch-cancellation-witness'
+  const pending = spawnCommandAsync(process.execPath, ['-e', 'console.log("must not run")'], {
+    cwd: process.cwd(), env: process.env, timeoutMs: 15_000,
+    signal: controller.signal, processWitness: witness, processContext: { sessionId },
+  })
+  controller.abort()
+  const result = await pending
+  assert.equal(result.aborted, true)
+  assert.equal(result.processStarted, false)
+  await awaitPendingProcessTerminations(sessionId)
+  assert.deepEqual(events, ['failedToStart'])
 })
 
 test('killing the Windows supervisor closes the whole job and leaves unrelated work alone', {

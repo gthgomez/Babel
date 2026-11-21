@@ -16,6 +16,9 @@ import { getSafeEnv } from './utils/safeEnv.js'
 
 const WINDOWS_HELPER = String.raw`
 $ErrorActionPreference = 'Stop'
+# The helper and command share native stderr. Module-loading progress must
+# never add a PowerShell serialization frame to the command's output.
+$ProgressPreference = 'SilentlyContinue'
 $env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')
 [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
 $stage = 'input'
@@ -315,7 +318,7 @@ export function spawnOwnedWindowsCommand(
   const host = win32.join(system32, 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   let child: ChildProcessWithoutNullStreams
   try {
-    child = launch(host, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodedHelper], {
+    child = launch(host, ['-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', encodedHelper], {
       cwd: folder, env: helperEnv, windowsHide: true,
     })
   } catch (error) {

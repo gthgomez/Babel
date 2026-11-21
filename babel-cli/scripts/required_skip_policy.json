@@ -108,6 +108,7 @@
         ],
         "src/windowsDescendantSettlement.test.ts": [
           "Windows supervisor preserves argv, stdout, stderr and the target exit status",
+          "Windows cancellation before target start does not certify a process exit or kill",
           "killing the Windows supervisor closes the whole job and leaves unrelated work alone"
         ],
         "src/agent/backgroundShell.test.ts": [

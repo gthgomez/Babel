@@ -182,11 +182,32 @@ test('a successful deferred termination closes once and does not affect another 
   await sandbox.awaitPendingProcessTerminations('task-success')
 })
 
+function awaitableWitnessStart(witness: ProcessWitness): Promise<void> {
+  const recordStart = witness.started.bind(witness)
+  return new Promise(resolve => {
+    witness.started = (...args) => {
+      recordStart(...args)
+      resolve()
+    }
+  })
+}
+
+async function expectWitnessedStart(
+  started: Promise<void>,
+  result: ReturnType<typeof sandbox.spawnCommandAsync>,
+): Promise<void> {
+  await Promise.race([
+    started,
+    result.then(outcome => assert.fail(`process settled before its start witness: ${outcome.error?.message ?? outcome.status}`)),
+  ])
+}
+
 test('cancel settles promptly but process exit witness waits for physical close', async () => {
   const witness = new ProcessWitness()
   let exits = 0
   const recordExit = witness.exited.bind(witness)
   witness.exited = (...args) => { exits++; recordExit(...args) }
+  const started = awaitableWitnessStart(witness)
   const controller = new AbortController()
   const result = sandbox.spawnCommandAsync(process.execPath, [
     '-e', 'setTimeout(() => {}, 10000)',
@@ -195,6 +216,7 @@ test('cancel settles promptly but process exit witness waits for physical close'
     signal: controller.signal, processWitness: witness,
     processContext: { sessionId: 'pr242-cancel-witness' },
   })
+  await expectWitnessedStart(started, result)
   controller.abort()
   assert.equal((await result).aborted, true)
   assert.equal(exits, 0)
@@ -215,6 +237,7 @@ test('cancel records process_exited before process_killed on the witness bus', a
     events.push('killed')
     recordKilled(...args)
   }
+  const started = awaitableWitnessStart(witness)
   const controller = new AbortController()
   const pending = sandbox.spawnCommandAsync(process.execPath, [
     '-e', 'setTimeout(() => {}, 10_000)',
@@ -223,6 +246,7 @@ test('cancel records process_exited before process_killed on the witness bus', a
     signal: controller.signal, processWitness: witness,
     processContext: { sessionId: 'pr242-cancel-witness-order' },
   })
+  await expectWitnessedStart(started, pending)
   controller.abort()
   assert.equal((await pending).aborted, true)
   assert.deepEqual(events, [], 'witness must not fire before physical close and latch drain')
