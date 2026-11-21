@@ -601,6 +601,7 @@ describe('governed child worktree adoption', () => {
 
     assert.equal(result.status, 'refused', JSON.stringify(result, null, 2));
     assert.equal(result.rollbackComplete, true);
+    assert.ok(result.diagnostics.some((d) => /synthetic later-write failure/.test(d.message)));
     assert.equal(existsSync(join(root, 'src', 'newdir', 'deeper', 'created.txt')), false);
     assert.equal(readFileSync(join(root, 'src', 'main.ts'), 'utf-8'), 'export const value = 1;\n');
     assert.equal(existsSync(join(root, 'src', 'later.txt')), false);

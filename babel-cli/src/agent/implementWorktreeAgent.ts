@@ -1498,7 +1498,22 @@ export function promoteImplementWorktree(
           });
           deletedPaths.push(record.path);
         } else {
-          const bytes = readFileSync(join(worktreePath, record.path));
+          let bytes: Buffer;
+          try {
+            bytes = readFileSync(join(worktreePath, record.path));
+          } catch (readError) {
+            const message = readError instanceof Error ? readError.message : String(readError);
+            conflicts.push({
+              path: record.path,
+              code: 'child_postimage_missing',
+              message: `Child bytes for "${record.path}" disappeared after preflight: ${message}`,
+            });
+            diagnostics.push({
+              code: 'adoption_child_postimage_conflict',
+              message: `Child bytes for "${record.path}" could not be read after preflight; no parent bytes were written for this path.`,
+            });
+            throw new Error(`child postimage unavailable: ${message}`);
+          }
           const bytesHash = hashBuffer(bytes);
           if (bytesHash !== record.after_hash) {
             conflicts.push({
@@ -1558,8 +1573,8 @@ export function promoteImplementWorktree(
         rollbackComplete,
         parentStatusAfter: gitPorcelainStatus(projectRoot),
         summary: rollbackComplete
-          ? 'Adoption failed; owned file writes were rolled back. Created parent directories may remain; the child worktree is unchanged.'
-          : `Adoption failed and rollback was incomplete; newer bytes were preserved for ${[...residual, ...errors].join(', ')}. The child worktree is unchanged.`,
+          ? 'Adoption failed; owned file writes were rolled back. Created parent directories may remain; the child worktree was not modified by this adoption.'
+          : `Adoption failed and rollback was incomplete; newer bytes were preserved for ${[...residual, ...errors].join(', ')}. The child worktree was not modified by this adoption.`,
         error: conflicts.map((conflict) => conflict.message).join('; ') || 'apply failed',
       });
     }
@@ -1581,8 +1596,9 @@ export function promoteImplementWorktree(
         success: false,
         status: 'verification_failed',
         verification,
+        rollbackComplete: false,
         parentStatusAfter: gitPorcelainStatus(projectRoot),
-        summary: `Adoption applied ${adoptedPaths.length + deletedPaths.length} path(s) but parent verification failed: ${verification.summary}`,
+        summary: `Adoption applied ${adoptedPaths.length + deletedPaths.length} path(s) but parent verification failed: ${verification.summary}. Adopted bytes are retained for inspection.`,
         error: verification.summary,
       });
     }
