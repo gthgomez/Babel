@@ -1427,6 +1427,10 @@ export function promoteImplementWorktree(
       });
     }
 
+    const childHeadBeforeApply = input.cleanupWorktree && mode === 'copy'
+      ? gitHeadSha(worktreePath)
+      : null;
+
     interface AppliedOperation {
       path: string;
       absolutePath: string;
@@ -1638,7 +1642,10 @@ export function promoteImplementWorktree(
         // Git cannot atomically bind --force to this snapshot. Keep the child
         // when a new path or changed bytes are already visible before removal.
         const cleanupStatus = listWorktreeDirtyPaths(worktreePath, true);
-        if (cleanupStatus.paths === null ||
+        if (childHeadBeforeApply === null ||
+          (input.baseSha !== undefined && childHeadBeforeApply !== input.baseSha) ||
+          gitHeadSha(worktreePath) !== childHeadBeforeApply ||
+          cleanupStatus.paths === null ||
           cleanupStatus.paths.some((path) => !expectedPaths.has(path)) ||
           records.some((record) => adoptionPathSafety(worktreePath, record.path) ||
             hashWorkspacePath(join(worktreePath, record.path)) !== (record.after_hash ?? MISSING_PATH_DIGEST))) {
