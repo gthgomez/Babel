@@ -49,7 +49,7 @@ if (role !== 'leader') {
 }
 `)
 
-  const unrelated = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], {
+  const unrelated = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 200000)'], {
     stdio: 'ignore', windowsHide: true,
   })
   try {
