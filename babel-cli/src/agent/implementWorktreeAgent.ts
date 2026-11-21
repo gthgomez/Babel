@@ -552,6 +552,7 @@ export async function runImplementWorktreeAgent(
   // recoverable after the child process returns (and even when the worktree is
   // later pruned), so the recorded base and per-path hashes live beside the run.
   const adoptionManifestPath = join(runDir, 'child-adoption-manifest.json');
+  let adoptionManifestPublished = false;
   try {
     mkdirSync(runDir, { recursive: true });
     const manifest: ChildAdoptionManifestV1 = {
@@ -572,6 +573,7 @@ export async function runImplementWorktreeAgent(
       ...(indeterminatePaths.length > 0 ? { indeterminate_paths: indeterminatePaths } : {}),
     };
     writeFileSync(adoptionManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
+    adoptionManifestPublished = true;
   } catch (err) {
     diagnostics.push({
       code: 'adoption_manifest_write_failed',
@@ -599,7 +601,9 @@ export async function runImplementWorktreeAgent(
       // explicitly opts into discarding them).
       diagnostics.push({
         code: 'worktree_retained_unadopted_changes',
-        message: `Worktree retained: ${mutation.changedFiles.length} unadopted change(s). Adopt from ${adoptionManifestPath} or pass discardChildChanges to remove it.`,
+        message: adoptionManifestPublished
+          ? `Worktree retained: ${mutation.changedFiles.length} unadopted change(s). Adopt from ${adoptionManifestPath} or pass discardChildChanges to remove it.`
+          : `Worktree retained: ${mutation.changedFiles.length} unadopted change(s). The adoption manifest could not be published; inspect the child worktree directly or pass discardChildChanges to remove it.`,
       });
     } else {
       try {
@@ -615,11 +619,12 @@ export async function runImplementWorktreeAgent(
 
   const hasScopeViolation = diagnostics.some((d) => d.code === 'write_scope_violation');
   const cleanupFailed = diagnostics.some((d) => d.code === 'worktree_cleanup_failed');
+  const manifestFailed = !adoptionManifestPublished;
   const success =
-    mutation.success && parentTreeClean && !hasScopeViolation && !cleanupFailed;
+    mutation.success && parentTreeClean && !hasScopeViolation && !cleanupFailed && !manifestFailed;
 
   let attribution: SubagentAttribution;
-  if (cleanupFailed || !parentTreeClean) {
+  if (cleanupFailed || manifestFailed || !parentTreeClean) {
     attribution = 'child_environment_failure';
   } else if (hasScopeViolation) {
     attribution = 'child_policy_block';
@@ -656,7 +661,7 @@ export async function runImplementWorktreeAgent(
     error: success ? null : (mutation.error ?? diagnostics.map((d) => d.message).join('; ')),
     mutation,
     diagnostics,
-    adoptionManifestPath,
+    ...(adoptionManifestPublished ? { adoptionManifestPath } : {}),
     ...(unrecordedPaths.length > 0 ? { unrecordedPaths } : {}),
     ...(mutation.inheritedBudgetExceeded
       ? {
@@ -833,6 +838,7 @@ export type AdoptionConflictCode =
   | 'stale_child_base'
   | 'child_postimage_missing'
   | 'child_postimage_mismatch'
+  | 'child_postimage_conflict'
   | 'parent_preimage_conflict'
   | 'duplicate_change'
   | 'worktree_status_unavailable'
@@ -857,7 +863,7 @@ export interface AdoptionVerificationResult {
   diagnostics?: Array<{ code: string; message: string }>;
 }
 
-export type AdoptionStatus = 'adopted' | 'dry_run' | 'refused' | 'noop' | 'verification_failed' | 'cleanup_failed';
+export type AdoptionStatus = 'adopted' | 'dry_run' | 'refused' | 'noop' | 'verification_failed' | 'cleanup_failed' | 'rollback_incomplete';
 
 export interface PromoteImplementWorktreeInput {
   /** Parent project root (receives promoted files). */
@@ -903,6 +909,7 @@ export interface PromoteImplementWorktreeInput {
    */
   testHooks?: {
     writeFile?: (path: string, content: Buffer) => void;
+    restoreFile?: (path: string, content: Buffer) => void;
     removeWorktree?: (worktreePath: string) => void;
   };
 }
@@ -923,6 +930,16 @@ export interface PromoteImplementWorktreeResult {
   childBaseSha: string | null;
   verification: AdoptionVerificationResult | null;
   worktreeRemoved: boolean;
+  /** Paths left in place because their bytes changed after this run owned them. */
+  rollbackResidualPaths: string[];
+  /** Owned paths whose preimage could not be restored. */
+  rollbackErrors: string[];
+  /**
+   * True only when every operation this run applied was compensated and no
+   * residual or restore error was observed. Directories created for an adopted
+   * file may remain; completion is file-level, not a filesystem snapshot.
+   */
+  rollbackComplete: boolean;
   summary: string;
   error: string | null;
 }
@@ -938,9 +955,10 @@ function hashBuffer(content: Buffer): string {
 /** Hash a file's bytes, the missing-path digest when absent, or null when unreadable. */
 function hashWorkspacePath(path: string): string | null {
   try {
-    return hashBuffer(readFileSync(path));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return MISSING_PATH_DIGEST;
+    const stat = lstatSync(path, { throwIfNoEntry: false });
+    if (!stat) return MISSING_PATH_DIGEST;
+    return stat.isFile() ? hashBuffer(readFileSync(path)) : null;
+  } catch {
     return null;
   }
 }
@@ -1041,15 +1059,12 @@ function adoptionPathSafety(root: string, relativePath: string): AdoptionConflic
   // Existing symlink components can redirect a write outside the project.
   let cursor = target;
   while (cursor !== root && cursor.startsWith(root)) {
-    if (existsSync(cursor)) {
-      try {
-        const stats = lstatSync(cursor);
-        if (stats.isSymbolicLink()) {
-          return { path: relativePath, code: 'unsafe_symlink', message: `Path "${relativePath}" traverses a symlink.` };
-        }
-      } catch {
-        return { path: relativePath, code: 'invalid_path', message: `Path "${relativePath}" could not be inspected.` };
+    try {
+      if (lstatSync(cursor, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        return { path: relativePath, code: 'unsafe_symlink', message: `Path "${relativePath}" traverses a symlink.` };
       }
+    } catch {
+      return { path: relativePath, code: 'invalid_path', message: `Path "${relativePath}" could not be inspected.` };
     }
     const parent = dirname(cursor);
     if (parent === cursor) break;
@@ -1088,21 +1103,24 @@ function removeWorktreeByPath(projectRoot: string, worktreePath: string): void {
  * List project-relative paths under write_scope that differ in the worktree
  * (modified or untracked), using git status --porcelain in the worktree.
  */
-/** Parse `git status --porcelain -z --no-renames -uall` records into unique paths. */
-function parsePorcelainPaths(stdout: string): string[] {
+/** Read unique paths and index changes from one NUL-delimited status snapshot. */
+function parseWorktreeStatus(stdout: string): { paths: string[]; hasStagedChanges: boolean } {
   const paths: string[] = [];
+  let hasStagedChanges = false;
   // `-z` emits NUL-delimited records with no C-quoting, so non-ASCII, tabs,
   // quotes and backslashes survive exactly. `--no-renames` turns a rename into
   // a separate deletion + addition, so both sides must be recorded.
   for (const rawRecord of stdout.split('\0')) {
     if (!rawRecord) continue;
+    const indexStatus = rawRecord[0];
+    if (indexStatus !== ' ' && indexStatus !== '?' && indexStatus !== '!') hasStagedChanges = true;
     const record = rawRecord.endsWith('\r') ? rawRecord.slice(0, -1) : rawRecord;
     const pathPart = record.length >= 3 ? record.slice(3) : record;
     const normalized = normalizeWorkspacePath(pathPart);
     if (!normalized || normalized.startsWith('.git/')) continue;
     if (!paths.includes(normalized)) paths.push(normalized);
   }
-  return paths;
+  return { paths, hasStagedChanges };
 }
 
 /**
@@ -1112,10 +1130,13 @@ function parsePorcelainPaths(stdout: string): string[] {
  */
 export function listWorktreeDirtyPaths(
   worktreePath: string,
-): { paths: string[]; error: null } | { paths: null; error: string } {
+  includeIgnored = false,
+): { paths: string[]; hasStagedChanges: boolean; error: null } | { paths: null; error: string } {
   // `-z --no-renames` is deliberate: porcelain v1 without `-z` C-quotes special
   // paths, and rename collapsing hides the source deletion.
-  const result = spawnSync('git', ['status', '--porcelain', '-z', '--no-renames', '-uall'], {
+  const result = spawnSync('git', [
+    'status', '--porcelain', '-z', '--no-renames', '-uall', ...(includeIgnored ? ['--ignored'] : []),
+  ], {
     cwd: worktreePath,
     encoding: 'utf-8',
     timeout: 10_000,
@@ -1128,7 +1149,7 @@ export function listWorktreeDirtyPaths(
       error: (result.stderr || result.stdout || `git status exited ${result.status}`).trim(),
     };
   }
-  return { paths: parsePorcelainPaths(result.stdout ?? ''), error: null };
+  return { ...parseWorktreeStatus(result.stdout ?? ''), error: null };
 }
 
 /**
@@ -1242,6 +1263,9 @@ export function promoteImplementWorktree(
     childBaseSha,
     verification: null,
     worktreeRemoved: false,
+    rollbackResidualPaths: [],
+    rollbackErrors: [],
+    rollbackComplete: true,
     summary: '',
     error: null,
     ...overrides,
@@ -1406,29 +1430,70 @@ export function promoteImplementWorktree(
       });
     }
 
-    const snapshots: Array<{ path: string; bytes: Buffer | null }> = active.map((record) => {
-      const parentPath = join(projectRoot, record.path);
-      return {
-        path: parentPath,
-        bytes: existsSync(parentPath) ? readFileSync(parentPath) : null,
-      };
-    });
-    const rollback = (): void => {
-      for (const snapshot of snapshots.reverse()) {
+    const childHeadBeforeApply = input.cleanupWorktree && mode === 'copy'
+      ? gitHeadSha(worktreePath)
+      : null;
+
+    interface AppliedOperation {
+      path: string;
+      absolutePath: string;
+      /** Parent bytes captured after the preimage hash was verified. */
+      preimage: Buffer | null;
+      /** Hash of the bytes this operation left in the parent. */
+      postimage: string;
+    }
+    const applied: AppliedOperation[] = [];
+    // Compensate only operations this run applied, and only while the parent
+    // still holds this run's postimage. This is an ownership check, not an
+    // atomic lock against arbitrary external editors: a writer can still race
+    // the check or the restore. Detected drift leaves the path untouched.
+    const rollback = (): { residual: string[]; errors: string[] } => {
+      const residual: string[] = [];
+      const errors: string[] = [];
+      for (const operation of [...applied].reverse()) {
+        if (adoptionPathSafety(projectRoot, operation.path) ||
+          hashWorkspacePath(operation.absolutePath) !== operation.postimage) {
+          residual.push(operation.path);
+          diagnostics.push({
+            code: 'adoption_rollback_preserved_foreign_edit',
+            message: `Left "${operation.path}" in place: its bytes changed after adoption wrote it. The newer bytes are preserved.`,
+          });
+          continue;
+        }
         try {
-          if (snapshot.bytes === null) rmSync(snapshot.path, { force: true });
-          else writeFileAtomic(snapshot.path, snapshot.bytes);
-        } catch {
-          // Best-effort rollback; the conflict report below remains authoritative.
+          if (operation.preimage === null) {
+            rmSync(operation.absolutePath, { force: true });
+          } else if (input.testHooks?.restoreFile) {
+            input.testHooks.restoreFile(operation.absolutePath, operation.preimage);
+          } else {
+            writeFileAtomic(operation.absolutePath, operation.preimage);
+          }
+        } catch (restoreError) {
+          const message = restoreError instanceof Error ? restoreError.message : String(restoreError);
+          errors.push(`${operation.path}: ${message}`);
+          diagnostics.push({
+            code: 'adoption_rollback_restore_failed',
+            message: `Could not restore "${operation.path}": ${message}`,
+          });
         }
       }
+      return { residual, errors };
     };
 
     try {
       for (const record of active) {
         const parentPath = join(projectRoot, record.path);
         const expectedParent = record.before_hash ?? MISSING_PATH_DIGEST;
-        if (hashWorkspacePath(parentPath) !== expectedParent) {
+        // Capture and verify the preimage bytes together so rollback cannot
+        // restore bytes that were never verified as this operation's input.
+        const unsafe = adoptionPathSafety(projectRoot, record.path) ?? adoptionPathSafety(worktreePath, record.path);
+        if (unsafe) {
+          conflicts.push(unsafe);
+          throw new Error('adoption path became unsafe during adoption');
+        }
+        const preimage = lstatSync(parentPath, { throwIfNoEntry: false }) ? readFileSync(parentPath) : null;
+        const actualParent = preimage === null ? MISSING_PATH_DIGEST : hashBuffer(preimage);
+        if (actualParent !== expectedParent) {
           conflicts.push({
             path: record.path,
             code: 'parent_preimage_conflict',
@@ -1437,12 +1502,75 @@ export function promoteImplementWorktree(
           throw new Error('parent preimage changed during adoption');
         }
         if (record.after_hash === null) {
+          // There is no portable atomic check of the child and mutation of the
+          // parent together. Refuse deletion unless the child entry is still
+          // absent immediately before the parent mutation.
+          let childAbsent = false;
+          try {
+            lstatSync(join(worktreePath, record.path));
+          } catch (error) {
+            childAbsent = (error as NodeJS.ErrnoException).code === 'ENOENT';
+          }
+          if (!childAbsent) {
+            conflicts.push({
+              path: record.path,
+              code: 'child_postimage_conflict',
+              message: `Child deletion of "${record.path}" could not be confirmed after preflight; the parent file was preserved.`,
+            });
+            throw new Error('child deletion changed or could not be verified during adoption');
+          }
           rmSync(parentPath, { force: true });
+          applied.push({
+            path: record.path,
+            absolutePath: parentPath,
+            preimage,
+            postimage: MISSING_PATH_DIGEST,
+          });
           deletedPaths.push(record.path);
         } else {
-          const bytes = readFileSync(join(worktreePath, record.path));
-          if (input.testHooks?.writeFile) input.testHooks.writeFile(parentPath, bytes);
-          else writeFileAtomic(parentPath, bytes);
+          let bytes: Buffer;
+          try {
+            bytes = readFileSync(join(worktreePath, record.path));
+          } catch (readError) {
+            const message = readError instanceof Error ? readError.message : String(readError);
+            conflicts.push({
+              path: record.path,
+              code: 'child_postimage_missing',
+              message: `Child bytes for "${record.path}" disappeared after preflight: ${message}`,
+            });
+            diagnostics.push({
+              code: 'adoption_child_postimage_conflict',
+              message: `Child bytes for "${record.path}" could not be read after preflight; no parent bytes were written for this path.`,
+            });
+            throw new Error(`child postimage unavailable: ${message}`);
+          }
+          const bytesHash = hashBuffer(bytes);
+          if (bytesHash !== record.after_hash) {
+            conflicts.push({
+              path: record.path,
+              code: 'child_postimage_conflict',
+              message: `Child bytes for "${record.path}" changed after preflight; refusing to write unverified content.`,
+            });
+            diagnostics.push({
+              code: 'adoption_child_postimage_conflict',
+              message: `Child bytes for "${record.path}" changed after preflight; no parent bytes were written for this path.`,
+            });
+            throw new Error('child postimage changed during adoption');
+          }
+          if (input.testHooks?.writeFile) {
+            // Match writeFileAtomic's parent-directory creation so the test
+            // seam exercises the same create-a-directory path as production.
+            mkdirSync(dirname(parentPath), { recursive: true });
+            input.testHooks.writeFile(parentPath, bytes);
+          } else {
+            writeFileAtomic(parentPath, bytes);
+          }
+          applied.push({
+            path: record.path,
+            absolutePath: parentPath,
+            preimage,
+            postimage: bytesHash,
+          });
           adoptedPaths.push(record.path);
         }
       }
@@ -1459,16 +1587,24 @@ export function promoteImplementWorktree(
         }
       }
     } catch (error) {
-      rollback();
+      const { residual, errors } = rollback();
       promotedPaths.length = 0;
       adoptedPaths.length = 0;
       deletedPaths.length = 0;
+      const rollbackComplete = residual.length === 0 && errors.length === 0;
       diagnostics.push({
-        code: 'adoption_rolled_back',
+        code: rollbackComplete ? 'adoption_rolled_back' : 'adoption_rollback_incomplete',
         message: error instanceof Error ? error.message : String(error),
       });
       return buildResult({
-        summary: 'Adoption failed and was rolled back; the child worktree is unchanged.',
+        status: rollbackComplete ? 'refused' : 'rollback_incomplete',
+        rollbackResidualPaths: residual,
+        rollbackErrors: errors,
+        rollbackComplete,
+        parentStatusAfter: gitPorcelainStatus(projectRoot),
+        summary: rollbackComplete
+          ? 'Adoption failed; owned file writes were rolled back. Created parent directories may remain; the child worktree was not modified by this adoption.'
+          : `Adoption failed and rollback was incomplete; ${residual.length} path(s) retained newer bytes and ${errors.length} restore(s) failed. The child worktree was not modified by this adoption.`,
         error: conflicts.map((conflict) => conflict.message).join('; ') || 'apply failed',
       });
     }
@@ -1485,13 +1621,19 @@ export function promoteImplementWorktree(
         };
       }
     }
+    if (verification?.ok) {
+      const drift = active.find((record) => adoptionPathSafety(projectRoot, record.path) ||
+        hashWorkspacePath(join(projectRoot, record.path)) !== (record.after_hash ?? MISSING_PATH_DIGEST));
+      if (drift) verification = { ok: false, summary: `Parent path "${drift.path}" changed during verification.` };
+    }
     if (verification && !verification.ok) {
       return buildResult({
         success: false,
         status: 'verification_failed',
         verification,
+        rollbackComplete: false,
         parentStatusAfter: gitPorcelainStatus(projectRoot),
-        summary: `Adoption applied ${adoptedPaths.length + deletedPaths.length} path(s) but parent verification failed: ${verification.summary}`,
+        summary: `Adoption applied ${adoptedPaths.length + deletedPaths.length} path(s) but parent verification failed: ${verification.summary}. Adopted bytes are retained for inspection.`,
         error: verification.summary,
       });
     }
@@ -1500,6 +1642,21 @@ export function promoteImplementWorktree(
     let cleanupFailed = false;
     if (mode === 'copy' && input.cleanupWorktree) {
       try {
+        // Git cannot atomically bind --force to this snapshot. Keep the child
+        // when a new path, changed working bytes, or staged changes are already visible before removal.
+        const cleanupStatus = listWorktreeDirtyPaths(worktreePath, true);
+        if (childHeadBeforeApply === null ||
+          (input.baseSha !== undefined && childHeadBeforeApply !== input.baseSha) ||
+          gitHeadSha(worktreePath) !== childHeadBeforeApply ||
+          cleanupStatus.paths === null ||
+          cleanupStatus.paths.some((path) => !expectedPaths.has(path)) ||
+          records.some((record) => adoptionPathSafety(worktreePath, record.path) ||
+            hashWorkspacePath(join(worktreePath, record.path)) !== (record.after_hash ?? MISSING_PATH_DIGEST))) {
+          throw new Error('Child contents changed or could not be verified after adoption; the child worktree was retained.');
+        }
+        if (cleanupStatus.hasStagedChanges) {
+          throw new Error('Child has staged changes outside the recorded file-byte adoption; the child worktree was retained.');
+        }
         if (input.testHooks?.removeWorktree) input.testHooks.removeWorktree(worktreePath);
         else removeWorktreeByPath(projectRoot, worktreePath);
         worktreeRemoved = true;
