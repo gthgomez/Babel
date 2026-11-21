@@ -1489,6 +1489,23 @@ export function promoteImplementWorktree(
           throw new Error('parent preimage changed during adoption');
         }
         if (record.after_hash === null) {
+          // There is no portable atomic check of the child and mutation of the
+          // parent together. Refuse deletion unless the child entry is still
+          // absent immediately before the parent mutation.
+          let childAbsent = false;
+          try {
+            lstatSync(join(worktreePath, record.path));
+          } catch (error) {
+            childAbsent = (error as NodeJS.ErrnoException).code === 'ENOENT';
+          }
+          if (!childAbsent) {
+            conflicts.push({
+              path: record.path,
+              code: 'child_postimage_conflict',
+              message: `Child deletion of "${record.path}" could not be confirmed after preflight; the parent file was preserved.`,
+            });
+            throw new Error('child deletion changed or could not be verified during adoption');
+          }
           rmSync(parentPath, { force: true });
           applied.push({
             path: record.path,

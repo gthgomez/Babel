@@ -607,6 +607,37 @@ describe('governed child worktree adoption', () => {
     assert.equal(existsSync(join(root, 'src', 'later.txt')), false);
   });
 
+  it('preserves a parent file when a deleted child path reappears after preflight', async () => {
+    const root = createGitProject();
+    const child = await childWorktree(root, 'adopt-reappearing-delete');
+    const added = changedFile(root, child.worktree.path, 'src/first.txt', null, 'first\n');
+    const original = 'export const value = 1;\n';
+    const deleted = changedFile(root, child.worktree.path, 'src/main.ts', original, null);
+    const childFile = join(child.worktree.path, deleted.path);
+
+    const result = promoteImplementWorktree({
+      projectRoot: root,
+      worktreePath: child.worktree.path,
+      writeScope: ['src'],
+      baseSha: child.baseSha!,
+      expectedChanges: [added, deleted],
+      mode: 'copy',
+      testHooks: {
+        writeFile: (path, content) => {
+          writeFileSync(path, content);
+          writeFileSync(childFile, 'new child edit\n');
+        },
+      },
+    });
+
+    assert.equal(result.status, 'refused');
+    assert.ok(result.conflicts.some((conflict) => conflict.code === 'child_postimage_conflict'), JSON.stringify(result));
+    assert.equal(result.rollbackComplete, true);
+    assert.equal(existsSync(join(root, added.path)), false);
+    assert.equal(readFileSync(join(root, deleted.path), 'utf-8'), original);
+    assert.equal(readFileSync(childFile, 'utf-8'), 'new child edit\n');
+  });
+
   it('refuses child bytes that changed after preflight and leaves newer parent work intact', async () => {
     const root = createGitProject();
     const child = await childWorktree(root, 'adopt-child-drift');
