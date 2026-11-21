@@ -65,6 +65,18 @@ it('reports the effective OS boundary instead of claiming Docker is the default'
   assert.match(unsafeArgs.checks.find(check=>check.id==='execution_boundary')?.message ?? '',/fail closed/i)
 })
 
+it('reports a resumed safe_repo session as blocked when ambient fallback changes its saved boundary', () => {
+  const report = runInstalledDoctor({
+    env: { BABEL_ALLOW_HOST_FALLBACK: '1' },
+    executionPolicy: { profile: 'safe_repo', source: 'persisted', expectedBoundary: 'docker' },
+    dockerProbe: () => false,
+  })
+  const boundary = report.checks.find(check => check.id === 'execution_boundary')
+  assert.equal(report.executionProfile, 'safe_repo')
+  assert.equal(boundary?.status, 'fail')
+  assert.match(boundary?.message ?? '', /differs from the saved session policy/)
+})
+
 it('requires unflagged WASM support and the Node 24 Unicode deletion fix', () => {
   for (const version of ['20.19.0', '22.18.0', '23.11.0', '24.0.0', '24.4.9', '24.5.0', '24.12.0', '24.13.0', '25.0.0', '25.4.0', '26.0.0']) assert.equal(supportsInstalledNode(version), false, version)
   for (const version of ['22.19.0', '22.23.3', '24.13.1', '24.14.0', '24.19.0']) assert.equal(supportsInstalledNode(version), true, version)

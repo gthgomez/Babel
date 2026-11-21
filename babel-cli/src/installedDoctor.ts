@@ -10,6 +10,7 @@ import { dockerCheckMessage, formatManualProviderEnvExample, sandboxImageCheckMe
 import { inspectRunningProduct, runningProduct, type RunningProduct } from './services/runningProduct.js'
 import { resolveExecutionProfile, type ExecutionProfileName } from './config/executionProfiles.js'
 import { isHostIsolationEscalationAllowed, type GovernedIsolationDecision } from './config/benchmarkContainer.js'
+import { assertExecutionBoundary, type ExecutionPolicyChoice } from './config/executionPolicySelection.js'
 import { validateDockerIsolationArgs } from './config/dockerIsolationArgs.js'
 import { ORDINARY_CHAT_EXECUTION_PROFILE, resolveEffectiveExecutionBoundary } from './config/effectiveExecutionBoundary.js'
 
@@ -40,9 +41,10 @@ export function runInstalledDoctor(options: {
   running?: RunningProduct
   /** Explicit opt-in; omission keeps the original diagnostic protocol for old clients. */
   executionProfile?: string
+  executionPolicy?: Readonly<ExecutionPolicyChoice>
 } = {}): { status: 'ok' | 'warn' | 'fail'; kind: string; paths: ReturnType<typeof resolveRuntimePaths>; checks: Check[]; profileDiagnosticsVersion?: 1; executionProfile?: ExecutionProfileName } {
   const env = options.env ?? process.env
-  const configuredProfile = options.executionProfile ?? env['BABEL_EXECUTION_PROFILE']
+  const configuredProfile = options.executionPolicy?.profile ?? options.executionProfile ?? env['BABEL_EXECUTION_PROFILE']
   const profile = configuredProfile === undefined
     ? resolveExecutionProfile(ORDINARY_CHAT_EXECUTION_PROFILE)
     : resolveExecutionProfile(configuredProfile)
@@ -76,6 +78,18 @@ export function runInstalledDoctor(options: {
           ? { kind: 'host_escalated', profile: profile.name, reason: 'container isolation explicitly waived' }
           : { kind: 'fail_closed', profile: profile.name, reason: 'container isolation unavailable' }
   const boundary = resolveEffectiveExecutionBoundary({ profile: profile.name, env, decision: isolationDecision })
+  let boundaryCheck: Check = {
+    id: 'execution_boundary',
+    status: boundary.failClosed ? 'fail' : boundary.escalation ? 'warn' : 'ok',
+    message: boundary.disclosure,
+  }
+  if (options.executionPolicy && !boundary.failClosed) {
+    try {
+      assertExecutionBoundary(options.executionPolicy, isolationDecision)
+    } catch (error) {
+      boundaryCheck = { id: 'execution_boundary', status: 'fail', message: (error as Error).message }
+    }
+  }
   const envFile = join(paths.userConfigRoot, '.env')
   const checks: Check[] = [
     { id: 'node', status: nodeReady ? 'ok' : 'fail', message: nodeReady
@@ -86,7 +100,7 @@ export function runInstalledDoctor(options: {
       `Selected ${connection!.id}: ${connection!.provider}/${effective.model.value}; source ${effective.connection.source}. Credential presence checked; connectivity and observed model unverified.` :
       `No provider is selected yet. Run ${CLI_COMMAND} setup in a terminal, or save one key in ${envFile}. Read-only commands work; nothing was contacted.` },
     { id: 'executable', status: product.restartNeeded ? 'warn' : 'ok', message: `Running Babel ${product.runningVersion ?? 'unknown'}; revision ${product.revision ?? 'unknown'}; command ${CLI_COMMAND} (aliases babel and babel-agent); CLI entry ${product.entrypoint ?? 'unknown'}; Node executable ${product.executable}; package ${product.packageRoot}; ${product.restartNeeded === true ? 'package files changed; restart to use the current installation' : product.restartNeeded === null ? 'installation change detection unknown' : 'no change detected in package manifest or entrypoint'}` },
-    { id: 'execution_boundary', status: boundary.failClosed ? 'fail' : boundary.escalation ? 'warn' : 'ok', message: boundary.disclosure },
+    boundaryCheck,
     { id: 'docker', status: !requiresDocker ? 'not_required' : dockerReady ? 'ok' : 'fail', message: !requiresDocker ? 'Docker is not required for the selected execution profile; it was not checked.' : dockerCheckMessage(dockerReady, platform) },
     { id:'sandbox_image',status:!requiresDocker?'not_required':imageReady?'ok':'fail',message:!requiresDocker?'A Docker sandbox image is not required for the selected execution profile; it was not checked.':sandboxImageCheckMessage(imageReady, dockerReady, platform) },
   ]
