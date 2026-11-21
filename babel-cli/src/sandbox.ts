@@ -1612,6 +1612,7 @@ export class SafeExecutor {
         cwd: prepared.cwd,
         timeoutMs,
         env: prepared.env,
+        ...(prepared.validateExecutable ? { validateExecutable: prepared.validateExecutable } : {}),
         ...(signal ? { signal } : {}),
         ...(this.processWitness ? { processWitness: this.processWitness } : {}),
         processContext: {

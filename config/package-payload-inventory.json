@@ -236,6 +236,10 @@
       "class": "core",
       "capability": "sandbox process termination"
     },
+    "dist/windowsProcessSettlement.js": {
+      "class": "core",
+      "capability": "Windows foreground command job ownership"
+    },
     "dist/sandboxSpawnCommandAsync.js": {
       "class": "core",
       "capability": "sandbox async spawn"

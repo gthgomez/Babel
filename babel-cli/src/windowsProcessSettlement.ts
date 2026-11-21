@@ -1,367 +1,380 @@
 /**
- * Windows descendant settlement.
- *
- * `taskkill /T /F` terminates the tree it can see at call time, and Windows
- * has no process-group signal semantics. A supervisor must therefore confirm
- * that no descendant of the owned root remains before it reports a cancelled
- * or timed-out command as settled. Windows keeps `ParentProcessId` on orphaned
- * children, so a descendant census rooted at the owned pid still finds
- * grandchildren after the direct child exits.
- *
- * Pure helpers with injectable probes keep the contract testable off Windows.
+ * Own a Windows foreground command from creation through settlement.
+ * The helper owns an unnamed, non-inherited kill-on-close Job Object. It
+ * never resumes a command that could not be assigned and never looks up a PID
+ * to terminate it. Closing the controller's pipe, including on process loss,
+ * requests termination. The child cannot inherit that pipe or the job handle.
  */
-import { spawn, spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, win32 } from 'node:path'
 
-import { getSafeEnv } from './utils/safeEnv.js';
-import { isProcessAlive } from './processTree.js';
+import { hostWindowsSystem32Directory, isResolvedCommandCurrent, resolveCommandExecutable } from './authority/commandResolver.js'
+import { buildWindowsCommandShellArgs, quoteWindowsCommandArg } from './utils/commandArgv.js'
+import { getSafeEnv } from './utils/safeEnv.js'
 
-export interface WindowsDescendantProbe {
-  /** Descendant process ids, or null when the census could not be confirmed. */
-  listDescendants: (rootPid: number, timeoutMs?: number) => number[] | null;
-  /** Best-effort kill of one process and its visible tree. */
-  kill: (pid: number) => boolean;
-}
+const WINDOWS_HELPER = String.raw`
+$ErrorActionPreference = 'Stop'
+$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+$stage = 'input'
+try {
+$request = ConvertFrom-Json -InputObject ([Console]::In.ReadLine())
+$source = @'
+using System;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
 
-export interface WindowsDescendantSettlement {
-  /** True only when a complete census observed zero remaining descendants. */
-  confirmed: boolean;
-  /** Descendants that survived the bounded kill rounds. */
-  remaining: number[];
-  /** True when the census itself was unavailable (never treated as success). */
-  probeUnavailable: boolean;
-  killsAttempted: number;
-}
-
-export interface WindowsSettlementOptions {
-  probe?: WindowsDescendantProbe;
-  /** Bounded kill rounds; each round re-censuses. */
-  rounds?: number;
-  /** Total census budget. A slow/unavailable probe reports `probeUnavailable`. */
-  budgetMs?: number;
-  /** Delay between rounds (ms). */
-  roundDelayMs?: number;
-  wait?: (ms: number) => Promise<void>;
-}
-
-const MAX_CENSUS_OUTPUT_BYTES = 64 * 1024;
-let lastWindowsCensusFailure = '';
-
-/** Last census failure detail, for diagnostics when the probe returns null. */
-export function getLastWindowsCensusFailure(): string {
-  return lastWindowsCensusFailure;
-}
-
-function recordCensusFailure(message: string): void {
-  lastWindowsCensusFailure = message;
-}
-
-export interface WindowsProcessRow {
-  processId: number;
-  parentProcessId: number;
-}
-
-/**
- * Walk the complete parent chain from `rootPid` over one process-table
- * snapshot. Windows does not reparent orphans, so the dead leader's children
- * still point at its pid. Pure and order-independent for Linux tests.
- */
-export function descendantPidsFromRows(rootPid: number, rows: readonly WindowsProcessRow[]): number[] {
-  const children = new Map<number, number[]>();
-  for (const row of rows) {
-    if (!Number.isSafeInteger(row.processId) || !Number.isSafeInteger(row.parentProcessId)) continue;
-    const list = children.get(row.parentProcessId);
-    if (list) list.push(row.processId);
-    else children.set(row.parentProcessId, [row.processId]);
+public static class BabelForegroundJob {
+  [StructLayout(LayoutKind.Sequential)]
+  struct BasicLimits {
+    public long ProcessTime, JobTime;
+    public uint Flags;
+    public UIntPtr MinWorkingSet, MaxWorkingSet;
+    public uint ProcessLimit;
+    public UIntPtr Affinity;
+    public uint Priority, Scheduling;
   }
-  const seen = new Set<number>();
-  const front = [rootPid];
-  while (front.length > 0) {
-    const next: number[] = [];
-    for (const parentId of front) {
-      for (const child of children.get(parentId) ?? []) {
-        if (child > 0 && !seen.has(child)) {
-          seen.add(child);
-          next.push(child);
+
+  [StructLayout(LayoutKind.Sequential)]
+  struct ExtendedLimits {
+    public BasicLimits Basic;
+    public ulong ReadOperations, WriteOperations, OtherOperations, ReadBytes, WriteBytes, OtherBytes;
+    public UIntPtr ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  struct Accounting {
+    public long UserTime, KernelTime, PeriodUserTime, PeriodKernelTime;
+    public uint PageFaults, TotalProcesses, ActiveProcesses, TerminatedProcesses;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  struct StartupInfo {
+    public uint Size;
+    public IntPtr Reserved, Desktop, Title;
+    public uint X, Y, XSize, YSize, XChars, YChars, Fill, Flags;
+    public ushort Show, ReservedSize;
+    public IntPtr ReservedBytes, Input, Output, Error;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  struct StartupInfoEx {
+    public StartupInfo Startup;
+    public IntPtr Attributes;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  struct ProcessInfo {
+    public IntPtr Process, Thread;
+    public uint Pid, Tid;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  struct SecurityAttributes {
+    public int Size;
+    public IntPtr Descriptor;
+    public int Inherit;
+  }
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref ExtendedLimits limits, uint size);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool QueryInformationJobObject(IntPtr job, int infoClass, out Accounting info, uint size, IntPtr returned);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool IsProcessInJob(IntPtr process, IntPtr job, [MarshalAs(UnmanagedType.Bool)] out bool assigned);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool TerminateJobObject(IntPtr job, uint code);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern uint ResumeThread(IntPtr thread);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+  [DllImport("kernel32.dll")]
+  static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll")]
+  static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll")]
+  static extern IntPtr GetStdHandle(int id);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr source, IntPtr targetProcess, out IntPtr target,
+    uint access, bool inherit, uint options);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern IntPtr CreateFile(string name, uint access, uint share, ref SecurityAttributes security,
+    uint disposition, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value,
+    IntPtr size, IntPtr previous, IntPtr returned);
+  [DllImport("kernel32.dll")]
+  static extern void DeleteProcThreadAttributeList(IntPtr list);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool CreateProcess(string executable, StringBuilder command, IntPtr processSecurity,
+    IntPtr threadSecurity, bool inherit, uint flags, IntPtr env, string cwd, ref StartupInfoEx startup, out ProcessInfo info);
+
+  static void Require(bool ok, string operation) {
+    if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error(), operation);
+  }
+  static void Close(IntPtr handle) {
+    if (handle != IntPtr.Zero && handle != new IntPtr(-1)) CloseHandle(handle);
+  }
+  static IntPtr DuplicateStdHandle(int id) {
+    IntPtr current = GetCurrentProcess(), target;
+    Require(DuplicateHandle(current, GetStdHandle(id), current, out target, 0, true, 2), "duplicate child standard handle");
+    return target;
+  }
+  static void WriteReceipt(string folder, string name, uint value) {
+    string pending = Path.Combine(folder, name + ".tmp");
+    File.WriteAllText(pending, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    File.Move(pending, Path.Combine(folder, name));
+  }
+
+  public static void Run(string executable, string command, string cwd, string envBase64, string folder) {
+    int stop = 0;
+    var control = new Thread(() => {
+      try { Console.In.Read(); }
+      catch (IOException) {}
+      finally { Interlocked.Exchange(ref stop, 1); }
+    });
+    control.IsBackground = true;
+    control.Start();
+
+    IntPtr job = CreateJobObject(IntPtr.Zero, null);
+    Require(job != IntPtr.Zero, "create command job");
+    var process = new ProcessInfo();
+    var startup = new StartupInfoEx();
+    IntPtr handleList = IntPtr.Zero, jobList = IntPtr.Zero, env = IntPtr.Zero;
+    bool attributesInitialized = false;
+    try {
+      var limits = new ExtendedLimits();
+      limits.Basic.Flags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+      Require(SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(limits)), "arm job kill-on-close");
+      var security = new SecurityAttributes { Size = Marshal.SizeOf(typeof(SecurityAttributes)), Inherit = 1 };
+      startup.Startup.Input = CreateFile("NUL", 0x80000000, 3, ref security, 3, 0, IntPtr.Zero);
+      Require(startup.Startup.Input != new IntPtr(-1), "open child null input");
+      startup.Startup.Output = DuplicateStdHandle(-11);
+      startup.Startup.Error = DuplicateStdHandle(-12);
+      startup.Startup.Size = (uint)Marshal.SizeOf(startup);
+      startup.Startup.Flags = 0x100; // STARTF_USESTDHANDLES
+      IntPtr listSize = IntPtr.Zero;
+      InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref listSize);
+      Require(listSize != IntPtr.Zero, "size command handle allowlist");
+      startup.Attributes = Marshal.AllocHGlobal(listSize);
+      Require(InitializeProcThreadAttributeList(startup.Attributes, 2, 0, ref listSize), "initialize command handle allowlist");
+      attributesInitialized = true;
+      IntPtr[] handles = { startup.Startup.Input, startup.Startup.Output, startup.Startup.Error };
+      handleList = Marshal.AllocHGlobal(IntPtr.Size * handles.Length);
+      Marshal.Copy(handles, 0, handleList, handles.Length);
+      Require(UpdateProcThreadAttribute(startup.Attributes, 0, new IntPtr(0x20002), handleList,
+        new IntPtr(IntPtr.Size * handles.Length), IntPtr.Zero, IntPtr.Zero), "restrict inherited handles");
+      // PROC_THREAD_ATTRIBUTE_JOB_LIST assigns during creation. A helper that
+      // dies between CreateProcess and ResumeThread cannot orphan a process.
+      jobList = Marshal.AllocHGlobal(IntPtr.Size);
+      Marshal.WriteIntPtr(jobList, job);
+      Require(UpdateProcThreadAttribute(startup.Attributes, 0, new IntPtr(0x2000D), jobList,
+        new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero), "bind command creation to its job");
+      env = Marshal.StringToHGlobalUni(Encoding.Unicode.GetString(Convert.FromBase64String(envBase64)));
+
+      if (Volatile.Read(ref stop) != 0) { WriteReceipt(folder, "settled", 1); return; }
+      // CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW
+      Require(CreateProcess(executable, new StringBuilder(command), IntPtr.Zero, IntPtr.Zero,
+        true, 0x08080404, env, cwd, ref startup, out process), "create suspended command");
+      bool assigned;
+      Require(IsProcessInJob(process.Process, job, out assigned), "verify suspended command job");
+      if (!assigned) throw new InvalidOperationException("Suspended command was not assigned to its job.");
+      if (Volatile.Read(ref stop) == 0) {
+        Require(ResumeThread(process.Thread) != UInt32.MaxValue, "resume owned command");
+        WriteReceipt(folder, "started", process.Pid);
+      }
+
+      Stopwatch termination = null;
+      var accounting = new Accounting();
+      while (true) {
+        Require(QueryInformationJobObject(job, 1, out accounting, (uint)Marshal.SizeOf(accounting), IntPtr.Zero),
+          "query active command job processes");
+        if (accounting.ActiveProcesses == 0) break;
+        if (Volatile.Read(ref stop) != 0 && termination == null) {
+          Require(TerminateJobObject(job, 1), "terminate owned command job");
+          termination = Stopwatch.StartNew();
         }
+        if (termination != null && termination.ElapsedMilliseconds >= 5000) {
+          throw new InvalidOperationException("Owned Windows command job did not reach zero active processes.");
+        }
+        Thread.Sleep(20);
       }
+      uint code;
+      Require(GetExitCodeProcess(process.Process, out code), "read owned command exit code");
+      WriteReceipt(folder, "settled", code);
+    } finally {
+      Close(job);
+      Close(process.Thread);
+      Close(process.Process);
+      Close(startup.Startup.Input);
+      Close(startup.Startup.Output);
+      Close(startup.Startup.Error);
+      if (attributesInitialized) DeleteProcThreadAttributeList(startup.Attributes);
+      if (startup.Attributes != IntPtr.Zero) Marshal.FreeHGlobal(startup.Attributes);
+      if (handleList != IntPtr.Zero) Marshal.FreeHGlobal(handleList);
+      if (jobList != IntPtr.Zero) Marshal.FreeHGlobal(jobList);
+      if (env != IntPtr.Zero) Marshal.FreeHGlobal(env);
     }
-    front.length = 0;
-    front.push(...next);
   }
-  return [...seen].sort((left, right) => left - right);
 }
-
-/**
- * Parse a process table whose last two columns are ProcessId,ParentProcessId.
- * Covers `wmic ... /format:csv` (Node,Parent,Process) and one-line CIM output.
- */
-export function parseWmicProcessRows(stdout: string): WindowsProcessRow[] | null {
-  const rows: WindowsProcessRow[] = [];
-  for (const line of stdout.split(/\r?\n/)) {
-    const columns = line.trim().split(',');
-    if (columns.length < 2) continue;
-    const processId = Number(columns[columns.length - 1]);
-    const parentProcessId = Number(columns[columns.length - 2]);
-    if (!Number.isSafeInteger(processId) || !Number.isSafeInteger(parentProcessId)) continue;
-    rows.push({ processId, parentProcessId });
+'@
+$stage = 'compilation'
+Import-Module -Name ([IO.Path]::Combine($PSHOME, 'Modules', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Utility.psd1')) -ErrorAction Stop
+Microsoft.PowerShell.Utility\Add-Type -TypeDefinition $source
+$stage = 'launch handshake'
+[IO.File]::WriteAllText([IO.Path]::Combine($request.folder, 'ready'), '1')
+if ([Console]::In.Read() -eq 65) {
+  $stage = 'job ownership or settlement'
+  [BabelForegroundJob]::Run($request.executable, $request.command, $request.cwd, $request.environment, $request.folder)
+} else {
+  [IO.File]::WriteAllText([IO.Path]::Combine($request.folder, 'settled'), '1')
+}
+exit 0
+} catch {
+  $failure = $_.Exception.InnerException
+  if ($failure -is [ComponentModel.Win32Exception]) {
+    [Console]::Error.WriteLine("Windows command job $stage failed (Win32 $($failure.NativeErrorCode)).")
+  } else {
+    [Console]::Error.WriteLine("Windows command job $stage failed.")
   }
-  return rows.length > 0 ? rows : null;
+  exit 1
+}
+`
+
+const encodedHelper = Buffer.from(WINDOWS_HELPER, 'utf16le').toString('base64')
+const START_TIMEOUT_MS = 65_000
+
+export interface OwnedWindowsCommand {
+  child: ChildProcessWithoutNullStreams
+  onStarted(callback: (pid: number) => void): void
+  requestStop(): void
+  launchError(): Error | undefined
+  readExit(wrapperCode: number | null): number | null
 }
 
-/**
- * Fast native table query. WMIC is optional on newer Windows; the CIM path
- * below remains the fallback.
- */
-function listViaWmic(rootPid: number, timeoutMs: number): number[] | null {
-  const systemRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows';
-  const wmic = resolve(systemRoot, 'System32', 'wbem', 'wmic.exe');
-  const result = spawnSync(wmic, ['process', 'get', 'ProcessId,ParentProcessId', '/format:csv'], {
-    encoding: 'utf8',
-    timeout: Math.max(250, Math.min(5_000, timeoutMs)),
-    maxBuffer: MAX_CENSUS_OUTPUT_BYTES,
-    windowsHide: true,
-    shell: false,
-    env: getSafeEnv(),
-  });
-  if (result.error || result.status !== 0) return null;
-  const rows = parseWmicProcessRows(result.stdout ?? '');
-  return rows ? descendantPidsFromRows(rootPid, rows) : null;
+/** Windows launch line with the established verbatim cmd.exe convention. */
+export function buildOwnedWindowsInvocation(executable: string, args: string[], systemRoot: string): {
+  executable: string
+  command: string
+} {
+  if (/\.(cmd|bat)$/i.test(executable)) {
+    args = buildWindowsCommandShellArgs([executable, ...args])
+    executable = win32.join(systemRoot, 'System32', 'cmd.exe')
+  }
+  const argsText = win32.basename(executable).toLowerCase() === 'cmd.exe'
+    ? args.join(' ')
+    : args.map(quoteWindowsCommandArg).join(' ')
+  return { executable, command: [quoteWindowsCommandArg(executable), argsText].filter(Boolean).join(' ') }
 }
 
-interface AsyncTableResult { stdout: string | null; stderr: string }
-
-/** Bounded async process-table capture used by the observation phase. */
-async function runWindowsTableAsync(executable: string, args: string[], timeoutMs: number): Promise<AsyncTableResult> {
-  return new Promise((resolveResult) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const child = spawn(executable, args, { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: getSafeEnv() });
-    const finish = (value: string | null): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolveResult({ stdout: value, stderr });
-    };
-    const timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch { /* best effort */ }
-      finish(null);
-    }, Math.max(250, timeoutMs));
-    child.stdout?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) => {
-      stdout += chunk;
-      if (stdout.length > MAX_CENSUS_OUTPUT_BYTES) {
-        try { child.kill('SIGKILL'); } catch { /* best effort */ }
-        finish(null);
-      }
-    });
-    child.stderr?.setEncoding('utf8');
-    child.stderr?.on('data', (chunk: string) => {
-      if (stderr.length < 4_000) stderr += chunk;
-    });
-    child.once('error', (error) => { stderr += String(error); finish(null); });
-    child.once('exit', (code) => finish(code === 0 ? stdout : null));
-  });
-}
-
-/** Async observation: started before taskkill so the snapshot can see live descendants. */
-export async function startWindowsDescendantObservation(rootPid: number, timeoutMs = 20_000): Promise<number[] | null> {
-  if (process.platform !== 'win32' || !Number.isSafeInteger(rootPid) || rootPid <= 0) return [];
-  const startedAt = Date.now();
-  const errors: string[] = [];
-  const systemRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows';
-  const wmic = resolve(systemRoot, 'System32', 'wbem', 'wmic.exe');
-  const fast = await runWindowsTableAsync(wmic, ['process', 'get', 'ProcessId,ParentProcessId', '/format:csv'], Math.min(5_000, timeoutMs));
-  if (fast.stdout !== null) {
-    const fastRows = parseWmicProcessRows(fast.stdout);
-    if (fastRows) return descendantPidsFromRows(rootPid, fastRows);
-  } else if (fast.stderr) errors.push(`wmic: ${fast.stderr.trim()}`);
-  const remaining = Math.max(250, timeoutMs - (Date.now() - startedAt));
-  const cimScript = [
-    '$ErrorActionPreference = "Stop";',
-    '$env:PSModulePath = [IO.Path]::Combine($PSHOME, "Modules");',
-    'Get-CimInstance -ClassName Win32_Process | ForEach-Object { "$($_.ParentProcessId),$($_.ProcessId)" }',
-  ].join(' ');
-  const cim = await runWindowsTableAsync(
-    powershellExecutable(),
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', cimScript],
-    remaining,
-  );
-  if (cim.stdout !== null) {
-    const rows = parseWmicProcessRows(cim.stdout);
-    if (rows) return descendantPidsFromRows(rootPid, rows);
-  } else if (cim.stderr) errors.push(`cim: ${cim.stderr.trim()}`);
-  const wmiScript = [
-    '$ErrorActionPreference = "Stop";',
-    '$env:PSModulePath = [IO.Path]::Combine($PSHOME, "Modules");',
-    'Get-WmiObject -Class Win32_Process | ForEach-Object { "$($_.ParentProcessId),$($_.ProcessId)" }',
-  ].join(' ');
-  const wmi = await runWindowsTableAsync(
-    powershellExecutable(),
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', wmiScript],
-    Math.max(250, timeoutMs - (Date.now() - startedAt)),
-  );
-  if (wmi.stdout !== null) {
-    const rows = parseWmicProcessRows(wmi.stdout);
-    if (rows) return descendantPidsFromRows(rootPid, rows);
-  } else if (wmi.stderr) errors.push(`wmi: ${wmi.stderr.trim()}`);
-  recordCensusFailure(errors.join(' | ') || 'census produced no process rows');
-  return null;
-}
-
-function powershellExecutable(): string {
-  const systemRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows';
-  return resolve(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-}
-
-/**
- * Synchronous descendant enumeration for the direct settlement API. Uses WMIC
- * when present, then one full CIM snapshot, then the legacy WMI cmdlet. Records
- * the mechanism error for diagnostics instead of returning a silent null.
- */
-export function listWindowsDescendantPids(rootPid: number, timeoutMs = 15_000): number[] | null {
-  if (process.platform !== 'win32' || !Number.isSafeInteger(rootPid) || rootPid <= 0) return null;
-  const startedAt = Date.now();
-  const errors: string[] = [];
-  const fast = listViaWmic(rootPid, timeoutMs);
-  if (fast !== null) return fast;
-  const remaining = () => Math.max(250, timeoutMs - (Date.now() - startedAt));
-  const run = (script: string): number[] | null => {
-    const result = spawnSync(
-      powershellExecutable(),
-      ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
-      {
-        encoding: 'utf8',
-        timeout: remaining(),
-        maxBuffer: MAX_CENSUS_OUTPUT_BYTES,
-        windowsHide: true,
-        shell: false,
-        env: getSafeEnv(),
-      },
-    );
-    if (result.error || result.status !== 0) {
-      if (result.stderr) errors.push(String(result.stderr).trim());
-      return null;
-    }
-    const rows = parseWmicProcessRows(result.stdout ?? '');
-    return rows ? descendantPidsFromRows(rootPid, rows) : null;
-  };
-  const cim = run([
-    '$ErrorActionPreference = "Stop";',
-    '$env:PSModulePath = [IO.Path]::Combine($PSHOME, "Modules");',
-    'Get-CimInstance -ClassName Win32_Process | ForEach-Object { "$($_.ParentProcessId),$($_.ProcessId)" }',
-  ].join(' '));
-  if (cim !== null) return cim;
-  const wmi = run([
-    '$ErrorActionPreference = "Stop";',
-    '$env:PSModulePath = [IO.Path]::Combine($PSHOME, "Modules");',
-    'Get-WmiObject -Class Win32_Process | ForEach-Object { "$($_.ParentProcessId),$($_.ProcessId)" }',
-  ].join(' '));
-  if (wmi !== null) return wmi;
-  recordCensusFailure(errors.join(' | ') || 'census produced no process rows');
-  return null;
-}
-
-function killWindowsProcessTree(pid: number): boolean {
-  if (process.platform !== 'win32' || !Number.isSafeInteger(pid) || pid <= 0) return false;
-  const systemRoot = process.env['SystemRoot'] || process.env['WINDIR'] || 'C:\\Windows';
-  const taskkill = resolve(systemRoot, 'System32', 'taskkill.exe');
+function readReceipt(folder: string, name: string): number | null {
   try {
-    const result = spawnSync(taskkill, ['/pid', String(pid), '/T', '/F'], {
-      windowsHide: true,
-      stdio: 'ignore',
-      env: getSafeEnv(),
-      timeout: 1_500,
-    });
-    return result.status === 0 && !result.error;
+    const value = readFileSync(join(folder, name), 'utf8')
+    if (/^\d{1,10}$/.test(value) && Number(value) <= 0xffffffff) return Number(value)
   } catch {
-    return false;
+    // Missing/unreadable settlement evidence never certifies completion.
   }
+  return null
 }
 
-/**
- * Observation phase: return every descendant of the owned root without
- * killing anything. Callers run this BEFORE taskkill so a live chain is seen;
- * `null` means the census was incomplete and must fail closed.
- */
-export async function observeWindowsDescendants(
-  rootPid: number,
-  options: { probe?: WindowsDescendantProbe; budgetMs?: number } = {},
-): Promise<number[] | null> {
-  const probe = options.probe ?? defaultProbe;
-  return probe.listDescendants(rootPid, Math.max(250, options.budgetMs ?? 20_000));
+function encodeEnvironment(env: NodeJS.ProcessEnv): string {
+  const keys = new Map<string, string>()
+  for (const key of Object.keys(env).sort()) {
+    const value = env[key]
+    if (value === undefined || keys.has(key.toUpperCase())) continue
+    keys.set(key.toUpperCase(), `${key}=${value}`)
+  }
+  return Buffer.from(`${[...keys.values()].join('\0')}\0\0`, 'utf16le').toString('base64')
 }
 
-/**
- * Confirmation phase: prove observed descendant pids are gone after the tree
- * kill. A pid check is cheap and does not depend on WMI, so the post-kill
- * bound can stay short. Unobserved survivors are killed once, then rechecked.
- */
-export async function confirmWindowsDescendants(
-  descendantPids: readonly number[],
-  options: { kill?: (pid: number) => boolean; timeoutMs?: number; wait?: (ms: number) => Promise<void> } = {},
-): Promise<{ confirmed: boolean; remaining: number[] }> {
-  const kill = options.kill ?? killWindowsProcessTree;
-  const timeoutMs = Math.max(100, options.timeoutMs ?? 2_000);
-  const wait = options.wait ?? ((ms: number) => new Promise<void>((resolveDelay) => { setTimeout(resolveDelay, ms); }));
-  const deadline = Date.now() + timeoutMs;
-  let remaining = [...new Set(descendantPids)].filter((pid) => Number.isSafeInteger(pid) && pid > 0);
-  for (let round = 0; round < 3; round++) {
-    remaining = remaining.filter(isProcessAlive);
-    if (remaining.length === 0) return { confirmed: true, remaining: [] };
-    if (Date.now() >= deadline) break;
-    for (const pid of remaining) kill(pid);
-    await wait(Math.min(100, Math.max(0, deadline - Date.now())));
-  }
-  remaining = remaining.filter(isProcessAlive);
-  return { confirmed: remaining.length === 0, remaining };
-}
-
-const defaultProbe: WindowsDescendantProbe = {
-  listDescendants: listWindowsDescendantPids,
-  kill: killWindowsProcessTree,
-};
-
-/**
- * Terminate and confirm every descendant of an owned Windows root.
- *
- * Observation uses a fast WMIC table when present, falling back to filtered
- * CIM queries; either walks the full parent chain. Never returns
- * `confirmed: true` from a failed or incomplete census: an unconfirmed tree
- * stays visible to the caller so it can fail closed.
- */
-export async function settleWindowsDescendants(
-  rootPid: number,
-  options: WindowsSettlementOptions = {},
-): Promise<WindowsDescendantSettlement> {
-  const probe = options.probe ?? defaultProbe;
-  const rounds = Math.max(1, options.rounds ?? 1);
-  const roundDelayMs = Math.max(0, options.roundDelayMs ?? 50);
-  const deadline = Date.now() + Math.max(250, options.budgetMs ?? 30_000);
-  const probeOnce = (): number[] | null =>
-    probe.listDescendants(rootPid, Math.max(250, deadline - Date.now()));
-  const wait = options.wait ?? ((ms: number) => new Promise<void>((resolveDelay) => { setTimeout(resolveDelay, ms); }));
-  let killsAttempted = 0;
-
-  for (let round = 0; round < rounds; round++) {
-    const descendants = probeOnce();
-    if (descendants === null) {
-      return { confirmed: false, remaining: [], probeUnavailable: true, killsAttempted };
-    }
-    if (descendants.length === 0) {
-      return { confirmed: true, remaining: [], probeUnavailable: false, killsAttempted };
-    }
-    for (const pid of descendants) {
-      killsAttempted += 1;
-      probe.kill(pid);
-    }
-    if (round + 1 < rounds && roundDelayMs > 0) await wait(roundDelayMs);
+/** Spawn the fixed supervisor with a separate, process-owned control pipe. */
+export function spawnOwnedWindowsCommand(
+  executable: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv; validateExecutable?: () => boolean },
+  launch: (file: string, argv: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams,
+): OwnedWindowsCommand {
+  const system32 = hostWindowsSystem32Directory()
+  if (!system32 || !win32.isAbsolute(system32)) throw new Error('Invalid Windows system directory for job supervision')
+  const systemRoot = win32.dirname(system32)
+  const resolved = resolveCommandExecutable(executable, { ...options, platform: 'win32' })
+  if (!resolved) throw new Error(`Could not resolve Windows executable: ${executable}`)
+  const invocation = buildOwnedWindowsInvocation(resolved.path, args, systemRoot)
+  const folder = mkdtempSync(join(tmpdir(), 'babel-foreground-job-'))
+  const helperEnv = { ...getSafeEnv(), TEMP: folder, TMP: folder }
+  const host = win32.join(system32, 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  let child: ChildProcessWithoutNullStreams
+  try {
+    child = launch(host, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodedHelper], {
+      cwd: folder, env: helperEnv, windowsHide: true,
+    })
+  } catch (error) {
+    rmSync(folder, { recursive: true, force: true })
+    throw error
   }
 
-  const remainder = probeOnce();
-  if (remainder === null) {
-    return { confirmed: false, remaining: [], probeUnavailable: true, killsAttempted };
+  let pid = 0
+  let stopped = false
+  let launchReleased = false
+  let launchError: Error | undefined
+  let exitCode: number | null = null
+  let startedCallback: ((pid: number) => void) | undefined
+  const requestStop = (): void => {
+    if (stopped) return
+    stopped = true
+    child.stdin.end()
   }
-  return { confirmed: remainder.length === 0, remaining: remainder, probeUnavailable: false, killsAttempted };
+  const checkStarted = (): void => {
+    if (!launchReleased && !stopped && readReceipt(folder, 'ready') === 1) {
+      launchReleased = true
+      // Recheck authority after the expensive native compilation, before
+      // releasing the helper's suspended launch protocol.
+      try {
+        if (!isResolvedCommandCurrent(resolved) || options.validateExecutable?.() === false) {
+          throw new Error('Windows command executable identity changed before launch')
+        }
+        child.stdin.write('A')
+      } catch {
+        launchError = new Error('Windows command executable identity could not be confirmed before launch')
+        requestStop()
+      }
+    }
+    if (pid) return
+    pid = readReceipt(folder, 'started') ?? 0
+    if (!pid) return
+    clearTimeout(startDeadline)
+    clearInterval(watcher)
+    startedCallback?.(pid)
+  }
+  const watcher = setInterval(checkStarted, 25)
+  watcher.unref()
+  const startDeadline = setTimeout(() => child.kill(), START_TIMEOUT_MS)
+  startDeadline.unref()
+  child.once('close', code => {
+    checkStarted()
+    clearTimeout(startDeadline)
+    clearInterval(watcher)
+    if (code === 0) exitCode = readReceipt(folder, 'settled')
+    try { rmSync(folder, { recursive: true, force: true }) } catch { /* Host cleanup is best-effort. */ }
+  })
+  // If the helper closes early, stdin EPIPE cannot take down the supervisor.
+  child.stdin.on('error', () => {})
+  child.stdin.write(JSON.stringify({ ...invocation, cwd: options.cwd, environment: encodeEnvironment(options.env), folder }) + '\n')
+  return {
+    child,
+    onStarted(callback) { startedCallback = callback; if (pid) callback(pid) },
+    requestStop,
+    launchError() { return launchError },
+    readExit(wrapperCode) { return wrapperCode === 0 ? exitCode : null },
+  }
 }
