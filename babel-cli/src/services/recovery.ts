@@ -497,17 +497,18 @@ export function buildRecoveryAssessment(
   if (truthEstablishesTurn && !terminalTruth.finished) {
     const inspectCommand = `babel continue "${runDir}" --inspect-only`;
     const unknownState = terminalTruth.turn_state === 'unknown';
+    const activeState = terminalTruth.turn_state === 'active';
     return {
       status: 'CONTINUE_READY',
       run_dir: runDir,
       resolved_from: resolvedFrom,
-      classification: unknownState ? 'requires_user_decision' : 'retry_same_command',
-      retryable: !unknownState,
+      classification: unknownState || activeState ? 'requires_user_decision' : 'retry_same_command',
+      retryable: !unknownState && !activeState,
       reason: unknownState
         ? 'The durable turn state could not be read; the latest outcome is unknown.'
         : terminalTruth.turn_state === 'submitted'
           ? 'The newest turn was submitted but never admitted; no terminal outcome was recorded.'
-          : 'The newest turn started but has no terminal record; it may still be active or was interrupted.',
+          : 'The newest turn started but has no terminal record; it may still be active. Wait for it to settle or inspect the retained state before continuing.',
       next_action: `Inspect the retained state before continuing: ${inspectCommand}`,
       next_command: inspectCommand,
       available_artifacts: available,

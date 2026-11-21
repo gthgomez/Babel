@@ -176,3 +176,45 @@ test('BL-14: the TUI terminal projection preserves the unfinished signal', () =>
     turn_state: 'active',
   });
 });
+
+test('BL-14: a journal-less legacy session keeps transcript-only hydration', () => {
+  assert.equal(
+    recoveredTerminalFromTruth({
+      outcome: null,
+      status: null,
+      finished: false,
+      turn_state: 'none',
+    }),
+    undefined,
+  );
+
+  const dir = mkdtempSync(join(tmpdir(), 'babel-hydrate-legacy-'));
+  const transcriptPath = join(dir, 'transcript.jsonl');
+  writeFileSync(
+    transcriptPath,
+    sampleTranscript.map((m) => JSON.stringify(m)).join('\n') + '\n',
+    'utf-8',
+  );
+  const ctx = Object.create(BabelRepl.prototype) as any;
+  ctx.turns = [];
+  ctx.turnCounter = 0;
+  ctx.lastAssistantAnswer = null;
+  ctx.lastAssistantNext = null;
+  ctx.lastAssistantStatus = null;
+  ctx.lastResolvedTask = null;
+  ctx.lastRunDir = null;
+  ctx.state = { lastRunUserStatus: 'ready' };
+  ctx.saveSessionState = () => undefined;
+  try {
+    hydrateReplTurnsFromChatTranscript(ctx, {
+      sessionId: 'legacy-session',
+      transcriptPath,
+      targetRoot: '/tmp/project',
+      workspaceRoot: '/tmp',
+    });
+    assert.equal(ctx.lastAssistantStatus, 'complete');
+    assert.equal(ctx.state.lastRunUserStatus, 'complete');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

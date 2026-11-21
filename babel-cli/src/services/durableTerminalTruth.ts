@@ -367,14 +367,14 @@ function settledTerminal(turn: TurnRecord): {
       chosen = thread;
       disagreement = true;
     } else if (
-      threadOutcome !== null &&
-      sessionOutcome !== null &&
+      threadOutcome === null ||
+      sessionOutcome === null ||
       threadOutcome !== sessionOutcome
     ) {
+      // An unclassifiable terminal is still a terminal. It must not be
+      // treated as absent evidence that restores the other journal's success.
       disagreement = true;
     }
-    if (threadOutcome === null && sessionOutcome !== null) chosen = session;
-    if (threadOutcome !== null && sessionOutcome === null) chosen = thread;
     return { terminal: chosen, disagreement, source: chosen.source };
   }
   if (thread) return { terminal: thread, disagreement: false, source: 'thread_events' };
@@ -550,11 +550,25 @@ export function readDurableTerminalTruth(
   let disagreement = settled.disagreement || unadmittedNewer;
   let source: DurableTerminalSource = settled.terminal ? settled.source : 'none';
 
-  const summaryBound =
-    summary !== null &&
-    (summary.turn_id !== null
+  const summaryOutcome = summary ? outcomeOf(summary) : null;
+  const selectedOutcome = settled.terminal ? outcomeOf(settled.terminal) : null;
+  // An unbound summary may only contribute to the turn it demonstrably agrees
+  // with. A count heuristic alone can graft an older turn's paths onto a newer
+  // failure (BL-14 review F2).
+  const summaryBound = summary !== null && (
+    summary.turn_id !== null
       ? summary.turn_id === selected.turnId
-      : turnCount <= 1);
+      : turnCount <= 1 &&
+        settled.terminal !== null &&
+        summaryOutcome !== null &&
+        selectedOutcome !== null &&
+        summaryOutcome === selectedOutcome
+  );
+
+  const summaryConflicts = summary !== null && !summaryBound && (
+    (summaryOutcome !== null && selectedOutcome !== null && summaryOutcome !== selectedOutcome) ||
+    (summaryOutcome !== null && settled.terminal === null)
+  );
 
   if (resolved && summary && summaryBound) {
     const resolvedOutcome = outcomeOf(resolved);
@@ -619,7 +633,11 @@ export function readDurableTerminalTruth(
   }
 
   const outcome = outcomeOf(resolved);
-  const userStatus = classifiedUserStatus({ outcome, status: resolved.status });
+  let userStatus = classifiedUserStatus({ outcome, status: resolved.status });
+  if (userStatus === 'ready') {
+    // A terminal record whose status is unclassifiable is not "ready".
+    userStatus = 'not_verified';
+  }
   const changedFiles =
     resolved === summary
       ? summary.changed_files
@@ -631,14 +649,14 @@ export function readDurableTerminalTruth(
     status: resolved.status,
     source,
     user_status: userStatus,
-    exit_code: outcome ? terminalOutcomeExitCode(outcome) : userStatus === 'ready' ? null : 1,
+    exit_code: outcome ? terminalOutcomeExitCode(outcome) : 1,
     success: isSuccessOutcome(outcome),
     finished: true,
     reason_code: resolved.reason_code,
     changed_files: changedFiles,
     turn_id: selected.turnId,
     turn_state: 'terminal',
-    disagreement: disagreement || journals.corruptSources.length > 0,
+    disagreement: disagreement || summaryConflicts || journals.corruptSources.length > 0,
     corrupt: journals.corruptSources.length > 0,
     corrupt_sources: journals.corruptSources,
   };

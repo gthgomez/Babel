@@ -29,7 +29,11 @@ export function recoveredTerminalFromTruth(truth: {
   status: string | null;
   finished: boolean;
   turn_state: string;
-}): RecoveredTerminal {
+}): RecoveredTerminal | undefined {
+  // No journal turn at all is a legacy transcript-only session. Returning no
+  // record preserves its established hydration behavior; an empty truth must
+  // not masquerade as an interrupted turn.
+  if (!truth.finished && truth.turn_state === 'none') return undefined;
   return {
     ...(truth.outcome !== null ? { outcome: truth.outcome } : {}),
     ...(truth.status !== null ? { status: truth.status } : {}),

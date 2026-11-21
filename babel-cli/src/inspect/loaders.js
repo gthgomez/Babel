@@ -772,8 +772,15 @@ function buildStageDescriptorsForBundle(bundle) {
     },
   ];
 }
+function durableTurnStatus(bundle) {
+  const truth = bundle.terminalTruth;
+  if (!truth || !truth.turn_state || truth.turn_state === 'none') return null;
+  if (truth.finished) return truth.status ?? truth.outcome ?? truth.user_status ?? null;
+  return truth.status ?? 'INTERRUPTED';
+}
+
 export function buildInspectRunView(bundle) {
-  const finalStatus = inferFinalStatus(bundle);
+  const finalStatus = durableTurnStatus(bundle) ?? inferFinalStatus(bundle);
   const task =
     bundle.manifest?.analysis?.task_summary ??
     bundle.manifest?.handoff_payload?.user_request ??
@@ -876,7 +883,7 @@ export function buildInspectManifestView(bundle) {
     kind: 'manifest',
     runDir: bundle.runDir,
     identity: bundle.identity,
-    finalStatus: inferFinalStatus(bundle) ?? 'UNKNOWN',
+    finalStatus: durableTurnStatus(bundle) ?? inferFinalStatus(bundle) ?? 'UNKNOWN',
     artifactRecords: [
       ...bundle.artifactRecords,
       ...bundle.files
