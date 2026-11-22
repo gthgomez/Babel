@@ -29,7 +29,7 @@ export async function runInstalledWindowsOwnership(packageRoot, fixtureRoot) {
   const fixtureName = 'job-tree.cjs'
   const fixture = `
 const { spawn } = require('node:child_process');
-const { existsSync, renameSync, writeFileSync } = require('node:fs');
+const { closeSync, existsSync, openSync, renameSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const role = process.argv[2];
 if (!['leader', 'child', 'grandchild'].includes(role)) throw new Error('unsupported ownership fixture role');
@@ -40,15 +40,45 @@ function publish(name, value) {
   renameSync(receipt + '.tmp', receipt);
 }
 if (role !== 'grandchild') {
-  const child = spawn(process.execPath, [${JSON.stringify(fixtureName)}, role === 'leader' ? 'child' : 'grandchild'], {
-    cwd: directory, stdio: 'ignore', windowsHide: true,
-  });
+  const next = role === 'leader' ? 'child' : 'grandchild';
+  const stderr = openSync(join(directory, next + '-stderr'), 'w');
+  let child;
+  try {
+    child = spawn(process.execPath, [${JSON.stringify(fixtureName)}, next], {
+      // Windows libuv puts non-detached children in the spawning Node
+      // process's own kill-on-close job. Skip that extra job so a fixture can
+      // outlive its parent. libuv does not set CREATE_BREAKAWAY_FROM_JOB.
+      cwd: directory, stdio: ['ignore', 'ignore', stderr], windowsHide: true, detached: true,
+    });
+  } finally {
+    closeSync(stderr);
+  }
   child.once('error', error => {
     const code = error.code || 'UNKNOWN';
     publish(role + '-spawn-failure', /^[A-Z0-9_]+$/.test(code) ? code : 'UNKNOWN');
     process.exitCode = 1;
   });
-  child.unref();
+  child.once('exit', code => {
+    if (!existsSync(join(directory, 'release'))) publish(next + '-early-exit', String(code ?? 'SIGNALLED'));
+  });
+  if (role === 'leader') {
+    // Drive the leader-exits-first case only after both nested processes
+    // have entered their running loops. Windows child startup is asynchronous.
+    const deadline = Date.now() + 8_000;
+    const waitForTree = setInterval(() => {
+      if (['child', 'grandchild'].every(name => existsSync(join(directory, name)))) {
+        clearInterval(waitForTree);
+        child.unref();
+      } else if (child.exitCode !== null || child.signalCode !== null || Date.now() >= deadline) {
+        clearInterval(waitForTree);
+        publish('leader-readiness-failure', 'DESCENDANTS_DID_NOT_START');
+        child.unref();
+        process.exitCode = 1;
+      }
+    }, 15);
+  } else {
+    child.unref();
+  }
 }
 publish(role, String(process.pid));
 if (role !== 'leader') {
@@ -85,6 +115,14 @@ if (role !== 'leader') {
             const code = /^[A-Z0-9_]{1,40}$/.test(value) ? value : 'UNKNOWN'
             assert.fail(`owned Windows ${mode} fixture ${failedRole} failed to launch its descendant (${code})`)
           }
+          const exitedRole = roles.find(role => existsSync(join(cwd, role + '-early-exit')))
+          if (exitedRole) {
+            const value = readFileSync(join(cwd, exitedRole + '-early-exit'), 'utf8')
+            const code = /^(?:-?\d{1,10}|SIGNALLED)$/.test(value) ? value : 'UNKNOWN'
+            const stderr = readFileSync(join(cwd, exitedRole + '-stderr'), 'utf8')
+            const cause = stderr.match(/ERR_[A-Z0-9_]+|MODULE_NOT_FOUND|EACCES|ENOENT|EPERM|SyntaxError|ReferenceError|TypeError/)?.[0]
+            assert.fail(`owned Windows ${mode} fixture ${exitedRole} exited before readiness (${code}, ${cause ?? 'no classified error'})`)
+          }
           if (completed || Date.now() >= deadline) {
             const ready = roles.filter(role => existsSync(join(cwd, role)))
             const stderr = completed?.stderr ?? ''
@@ -95,7 +133,8 @@ if (role !== 'leader') {
               (/job (input|compilation|launch handshake|job ownership or settlement) failed/.exec(stderr)?.[1]) ??
               (completed?.error ? 'unclassified supervisor failure' : 'no classified failure')
             assert.fail(`owned Windows ${mode} process tree must start: ${JSON.stringify({
-              ready, failureCode, status: completed?.status, started: completed?.processStarted,
+              ready, failureCode, fixtureReadinessFailed: existsSync(join(cwd, 'leader-readiness-failure')),
+              status: completed?.status, started: completed?.processStarted,
               timedOut: completed?.timedOut, completed: Boolean(completed),
             })}`)
           }
