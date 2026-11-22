@@ -17,7 +17,6 @@ import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { PassThrough } from 'node:stream';
 
 import {
   SafeExecutor,
@@ -1464,28 +1463,28 @@ test('shellExec never retries a launched supervisor timeout', (t) => {
   }
 });
 
-test('shellExecAsync never retries a launched supervisor timeout', async (t) => {
+test('shellExecAsync never retries a launched supervisor timeout', async () => {
   const fixture = makeFixture();
   const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
   process.env['BABEL_EXECUTION_PROFILE'] = 'dev_local';
-  let calls = 0;
-  const keepAlive = setInterval(() => {}, 1000);
-  t.mock.method(childProcess, 'spawn', () => {
-    calls++;
-    const child = new childProcess.ChildProcess();
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    t.mock.method(child, 'kill', () => { queueMicrotask(() => child.emit('close', 0)); return true; });
-    queueMicrotask(() => { child.emit('spawn'); child.stdout?.emit('data', SUPERVISOR_LAUNCHED_MARKER); });
-    return child;
-  });
-  syncBuiltinESMExports();
+  const launchLog = 'async-timeout-launches.txt';
   try {
-    const result = await new SafeExecutor(fixture.projectRoot).shellExecAsync('node timeout.mjs', '.', 1);
+    writeFileSync(join(fixture.projectRoot, 'timeout-once.mjs'), `import { appendFileSync } from 'node:fs';
+appendFileSync('${launchLog}', 'launched\\n', 'utf-8');
+process.stdout.write('${SUPERVISOR_LAUNCHED_MARKER}\\n');
+process.on('SIGTERM', () => process.exit(0));
+setTimeout(() => {}, 60_000);
+`, 'utf-8');
+    const result = await new SafeExecutor(fixture.projectRoot).shellExecAsync('node timeout-once.mjs', '.', 2_000);
     assertSupervisorTerminatedNotLaunchFailure(result, 'launched async timeout');
-    assert.equal(calls, 1, 'a runtime timeout must not replay potentially mutating project code');
+    assert.equal(result.process_termination, 'timed_out');
+    assert.equal(
+      readFileSync(join(fixture.projectRoot, launchLog), 'utf-8'),
+      'launched\n',
+      'a runtime timeout must not replay potentially mutating project code',
+    );
   } finally {
-    clearInterval(keepAlive); t.mock.restoreAll(); syncBuiltinESMExports(); fixture.cleanup();
+    fixture.cleanup();
     if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE']; else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
   }
 });

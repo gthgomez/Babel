@@ -500,6 +500,14 @@ try {
   rmSync(evidence.fixtureRoot, { recursive: true, maxRetries: 5, retryDelay: 100 })
   assert.ok(!readdirSync(project).some(entry => entry.startsWith('mechanics-')), JSON.stringify({ phase: 'immediate fixture cleanup', fixtureBeforeCleanup, remaining: fixtureSnapshot() }))
   records.push({ check: 'scripted installed mechanics', status: 'pass', evidence })
+  if (isWin) {
+    const ownershipRoot = join(scratch, 'Windows ownership controls')
+    mkdirSync(ownershipRoot)
+    const ownershipProbe = join(scratch, 'windows-ownership.mjs')
+    writeFileSync(ownershipProbe, `import {runInstalledWindowsOwnership} from ${JSON.stringify(pathToFileURL(join(packageRoot,'scripts/windows_owned_process_controls.mjs')).href)};\nconsole.log(JSON.stringify(await runInstalledWindowsOwnership(${JSON.stringify(installed)},${JSON.stringify(ownershipRoot)})));\n`)
+    const ownership = command(process.execPath, [ownershipProbe], { env: guardedEnv, timeout: 260_000 })
+    records.push({ check: 'installed Windows Stop and timeout job ownership', status: 'pass', evidence: JSON.parse(ownership.stdout) })
+  }
   assert.equal(treeDigest(installed), original, 'Installation remained immutable')
   assert.ok(!existsSync(env.BABEL_ROOT), 'Installed operation ignored the source-root override for state')
   readonly(installed, false)

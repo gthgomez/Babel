@@ -20,7 +20,7 @@ function readPublishedDescendantPid(childPidFile: string): number | undefined {
   return Number.isFinite(pid) && pid > 0 ? pid : undefined
 }
 
-/** Owned hold.mjs fixtures self-exit after 8s; mocked tree-kill failures leave Windows cwd busy until then. */
+/** Owned hold.mjs fixtures self-exit after 8s; a job-owner failure can leave Windows handles busy until cleanup settles. */
 const OWNED_HOLD_FIXTURE_EXIT_MS = 8000
 
 async function removeOwnedFixtureRoot(root: string, ownedPid?: number): Promise<void> {
@@ -68,7 +68,12 @@ test('container removal waits for the cancelled launch client physical closure',
     cwd: process.cwd(), env: process.env,
     ownedContainerName: 'babel-run-00000000-0000-0000-0000-000000000000',
   }))
-  t.mock.method(childProcess, 'spawn', (...args: Parameters<typeof spawn>) => { child = spawn(...args); return child })
+  t.mock.method(childProcess, 'spawn', (...args: Parameters<typeof spawn>) => {
+    const real = spawn(...args)
+    // On Windows the launch-client stream is owned by its Job Object host.
+    if (!child) child = real
+    return real
+  })
   t.mock.method(childProcess, 'execFile', (...args: unknown[]) => {
     cleanupAfterClose = child?.exitCode != null || child?.signalCode != null
     const callback = args.at(-1)
@@ -103,7 +108,7 @@ test('owner drain waits for a cancelled executor child when process diagnostics 
     const pending = new sandbox.SafeExecutor(root).shellExecAsync('node hold.mjs', root, 15_000, 'test_run', controller.signal, { sessionId: 'owner-without-diagnostics' })
     let earlyResult: sandbox.ToolResult | undefined
     void pending.then(result => { earlyResult = result })
-    const deadline = Date.now() + 5_000
+    const deadline = Date.now() + (process.platform === 'win32' ? 70_000 : 5_000)
     while (!existsSync(join(root, 'pid.txt'))) {
       if (earlyResult) throw new Error(`Owned fixture ended before its start marker: ${earlyResult.stderr}`)
       if (Date.now() > deadline) throw new Error('Owned fixture process did not start')
@@ -134,8 +139,8 @@ test('tool executor does not settle cancellation before its real child tree exit
   try {
     const sandboxExecutor = new sandbox.SafeExecutor(root)
     const executor = createToolExecutor({ executeTool: async (_request, context) => sandboxExecutor.shellExecAsync('node hold.mjs', root, 15_000, 'test_run', context.signal, { sessionId: context.sessionId ?? context.runId }) })
-    const pending = executor.execute({ type: 'run_command', command: 'node hold.mjs' }, { agentId: 'fixture', runId: owner, babelRoot: root, projectRoot: root, signal: controller.signal }, { perToolTimeoutMs: 15_000, maxIterations: 1 }).then(() => null, error => error)
-    const deadline = Date.now() + 5_000
+    const pending = executor.execute({ type: 'run_command', command: 'node hold.mjs' }, { agentId: 'fixture', runId: owner, babelRoot: root, projectRoot: root, signal: controller.signal }, { perToolTimeoutMs: process.platform === 'win32' ? 75_000 : 15_000, maxIterations: 1 }).then(() => null, error => error)
+    const deadline = Date.now() + (process.platform === 'win32' ? 70_000 : 5_000)
     while (!existsSync(join(root, 'pid.txt'))) {
       if (Date.now() > deadline) throw new Error('Owned fixture process did not start')
       await new Promise(resolve => setTimeout(resolve, 10))
@@ -177,11 +182,32 @@ test('a successful deferred termination closes once and does not affect another 
   await sandbox.awaitPendingProcessTerminations('task-success')
 })
 
+function awaitableWitnessStart(witness: ProcessWitness): Promise<void> {
+  const recordStart = witness.started.bind(witness)
+  return new Promise(resolve => {
+    witness.started = (...args) => {
+      recordStart(...args)
+      resolve()
+    }
+  })
+}
+
+async function expectWitnessedStart(
+  started: Promise<void>,
+  result: ReturnType<typeof sandbox.spawnCommandAsync>,
+): Promise<void> {
+  await Promise.race([
+    started,
+    result.then(outcome => assert.fail(`process settled before its start witness: ${outcome.error?.message ?? outcome.status}`)),
+  ])
+}
+
 test('cancel settles promptly but process exit witness waits for physical close', async () => {
   const witness = new ProcessWitness()
   let exits = 0
   const recordExit = witness.exited.bind(witness)
   witness.exited = (...args) => { exits++; recordExit(...args) }
+  const started = awaitableWitnessStart(witness)
   const controller = new AbortController()
   const result = sandbox.spawnCommandAsync(process.execPath, [
     '-e', 'setTimeout(() => {}, 10000)',
@@ -190,6 +216,7 @@ test('cancel settles promptly but process exit witness waits for physical close'
     signal: controller.signal, processWitness: witness,
     processContext: { sessionId: 'pr242-cancel-witness' },
   })
+  await expectWitnessedStart(started, result)
   controller.abort()
   assert.equal((await result).aborted, true)
   assert.equal(exits, 0)
@@ -210,6 +237,7 @@ test('cancel records process_exited before process_killed on the witness bus', a
     events.push('killed')
     recordKilled(...args)
   }
+  const started = awaitableWitnessStart(witness)
   const controller = new AbortController()
   const pending = sandbox.spawnCommandAsync(process.execPath, [
     '-e', 'setTimeout(() => {}, 10_000)',
@@ -218,6 +246,7 @@ test('cancel records process_exited before process_killed on the witness bus', a
     signal: controller.signal, processWitness: witness,
     processContext: { sessionId: 'pr242-cancel-witness-order' },
   })
+  await expectWitnessedStart(started, pending)
   controller.abort()
   assert.equal((await pending).aborted, true)
   assert.deepEqual(events, [], 'witness must not fire before physical close and latch drain')
@@ -290,7 +319,7 @@ test('abort during natural-close settlement records terminal witness after physi
   writeFileSync(join(root, 'grandchild.mjs'), 'setInterval(() => {}, 1000);\n')
   writeFileSync(parentFile, parentSpawnsGrandchildFixture(root, childPidFile))
   const waitFor = async (predicate: () => boolean, label: string): Promise<void> => {
-    const deadline = Date.now() + 5_000
+    const deadline = Date.now() + (process.platform === 'win32' ? 70_000 : 5_000)
     while (!predicate()) {
       if (Date.now() > deadline) throw new Error(label)
       await nextTurn()
@@ -363,7 +392,7 @@ test('abort during natural-close settlement preserves owner drain without latch 
       signal: controller.signal,
       processContext: { sessionId: owner },
     })
-    const deadline = Date.now() + 5_000
+    const deadline = Date.now() + (process.platform === 'win32' ? 70_000 : 5_000)
     let childPid: number | undefined
     while ((childPid = readPublishedDescendantPid(childPidFile)) === undefined) {
       if (Date.now() > deadline) throw new Error('owned descendant never published its pid')
@@ -398,7 +427,7 @@ test('owner drain waits for natural-close descendant cleanup', {
       env: process.env,
       processContext: { sessionId: owner },
     })
-    const deadline = Date.now() + 5_000
+    const deadline = Date.now() + (process.platform === 'win32' ? 70_000 : 5_000)
     let childPid: number | undefined
     while ((childPid = readPublishedDescendantPid(childPidFile)) === undefined) {
       if (Date.now() > deadline) throw new Error('owned descendant never published its pid')
@@ -453,87 +482,52 @@ test('a local supervisor deadline does not return while its owned descendant is 
   }
 });
 
-test('failed Windows tree-kill is not accepted as descendant settlement', { skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false }, async t => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-tree-kill-failure-'));
-  const owner = 'tree-kill-failure-control';
-  const controller = new AbortController();
-  let ownedPid: number | undefined;
-  writeFileSync(join(root, 'hold.mjs'), "import fs from 'node:fs'; fs.writeFileSync('pid.txt', String(process.pid)); setTimeout(() => process.exit(0), 8000);\n");
-  try {
-    const pending = sandbox.spawnCommandAsync(process.execPath, [join(root, 'hold.mjs')], {
-      cwd: root, timeoutMs: 15000, env: process.env, signal: controller.signal,
-      processContext: { sessionId: owner },
-    });
-    const deadline = Date.now() + 5000;
-    while (!existsSync(join(root, 'pid.txt'))) {
-      if (Date.now() > deadline) throw new Error('Owned fixture process did not start');
-      await new Promise(resolve => setTimeout(resolve, 10));
+for (const mode of ['stop', 'timeout'] as const) {
+  test(`Windows ${mode} fails closed when the job owner exits without a settlement receipt`, {
+    skip: process.platform !== 'win32' && 'requires native Windows',
+    timeout: 90_000,
+  }, async t => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-job-failure-'))
+    const owner = `windows-job-${mode}-failure`
+    const controller = new AbortController()
+    const spawn = childProcess.spawn
+    let ownedPid: number | undefined
+    writeFileSync(join(root, 'hold.mjs'), "import fs from 'node:fs'; fs.writeFileSync('pid.txt', String(process.pid)); setTimeout(() => {}, 8000);\n")
+    t.mock.method(childProcess, 'spawn', (...args: Parameters<typeof spawn>) => {
+      const helper = spawn(...args)
+      if (helper.stdin && String(args[0]).toLowerCase().endsWith('powershell.exe')) {
+        const input = helper.stdin
+        t.mock.method(input, 'end', () => { helper.kill(); return input })
+      }
+      return helper
+    })
+    syncBuiltinESMExports()
+    try {
+      const pending = sandbox.spawnCommandAsync(process.execPath, [join(root, 'hold.mjs')], {
+        cwd: root, env: process.env, timeoutMs: mode === 'timeout' ? 6_000 : 15_000,
+        signal: controller.signal, processContext: { sessionId: owner },
+      })
+      const deadline = Date.now() + 70_000
+      while (!existsSync(join(root, 'pid.txt'))) {
+        if (Date.now() > deadline) throw new Error('Owned fixture process did not start')
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      ownedPid = Number(readFileSync(join(root, 'pid.txt'), 'utf8'))
+      assert.ok(isProcessAlive(ownedPid))
+      if (mode === 'stop') controller.abort()
+      const result = await pending
+      assert.equal(mode === 'stop' ? result.aborted : result.timedOut, true)
+      assert.notEqual(result.status, 0)
+      await assert.rejects(sandbox.awaitPendingProcessTerminations(owner), /did not terminate cleanly/)
+    } finally {
+      controller.abort()
+      try { await sandbox.awaitPendingProcessTerminations(owner); } catch { /* observed by the assertion above */ }
+      t.mock.restoreAll()
+      syncBuiltinESMExports()
+      await removeOwnedFixtureRoot(root, ownedPid)
     }
-    ownedPid = Number(readFileSync(join(root, 'pid.txt'), 'utf8'));
-    t.mock.method(childProcess, 'spawnSync', (() => ({ status: 1, error: undefined })) as unknown as typeof childProcess.spawnSync);
-    syncBuiltinESMExports();
-    controller.abort();
-    await pending;
-    await assert.rejects(sandbox.awaitPendingProcessTerminations(owner), /did not terminate cleanly/);
-  } finally {
-    controller.abort();
-    try { await sandbox.awaitPendingProcessTerminations(owner); } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
-    await removeOwnedFixtureRoot(root, ownedPid);
-  }
-});
-
-test('failed Windows tree-kill on a deadline leaves a termination failure for the owner', { skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false }, async t => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-timeout-tree-failure-'));
-  const owner = 'timeout-tree-failure-control';
-  let ownedPid: number | undefined;
-  writeFileSync(join(root, 'hold.mjs'), "import fs from 'node:fs'; fs.writeFileSync('pid.txt', String(process.pid)); setTimeout(() => process.exit(0), 8000);\n");
-  try {
-    const pending = sandbox.spawnCommandAsync(process.execPath, [join(root, 'hold.mjs')], {
-      cwd: root, timeoutMs: 1500, env: process.env, processContext: { sessionId: owner },
-    });
-    const deadline = Date.now() + 5000;
-    while (!existsSync(join(root, 'pid.txt'))) {
-      if (Date.now() > deadline) throw new Error('Owned fixture process did not start');
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
-    ownedPid = Number(readFileSync(join(root, 'pid.txt'), 'utf8'));
-    t.mock.method(childProcess, 'spawnSync', (() => ({ status: 1, error: undefined })) as unknown as typeof childProcess.spawnSync);
-    syncBuiltinESMExports();
-    const result = await pending;
-    assert.equal(result.timedOut, true);
-    await assert.rejects(sandbox.awaitPendingProcessTerminations(owner), /did not terminate cleanly/);
-  } finally {
-    try { await sandbox.awaitPendingProcessTerminations(owner); } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
-    await removeOwnedFixtureRoot(root, ownedPid);
-  }
-});
-
-test('a timed-out shell reports failed Windows tree termination to its caller', { skip: process.platform !== 'win32' ? 'Windows-only process-tree termination contract' : false }, async t => {
-  const root = mkdtempSync(join(tmpdir(), 'babel-timeout-shell-failure-'));
-  const owner = 'timeout-shell-failure-control';
-  let ownedPid: number | undefined;
-  writeFileSync(join(root, 'hold.mjs'), "import fs from 'node:fs'; fs.writeFileSync('pid.txt', String(process.pid)); setTimeout(() => process.exit(0), 8000);\n");
-  const executor = new sandbox.SafeExecutor(root);
-  t.mock.method(executor as unknown as { prepareShellExecution: () => unknown }, 'prepareShellExecution', () => ({
-    executable: process.execPath, args: [join(root, 'hold.mjs')], cwd: root, env: process.env,
-  }));
-  try {
-    const pending = executor.shellExecAsync('synthetic', root, 1500, 'test_run', undefined, { sessionId: owner });
-    const deadline = Date.now() + 5000;
-    while (!existsSync(join(root, 'pid.txt'))) {
-      if (Date.now() > deadline) throw new Error('Owned fixture process did not start');
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
-    ownedPid = Number(readFileSync(join(root, 'pid.txt'), 'utf8'));
-    t.mock.method(childProcess, 'spawnSync', (() => ({ status: 1, error: undefined })) as unknown as typeof childProcess.spawnSync);
-    syncBuiltinESMExports();
-    await assert.rejects(pending, /did not terminate cleanly/);
-  } finally {
-    try { await sandbox.awaitPendingProcessTerminations(owner); } catch { /* the assertion observes the same owned failure */ }
-    t.mock.restoreAll(); syncBuiltinESMExports();
-    await removeOwnedFixtureRoot(root, ownedPid);
-  }
-});
+  })
+}
 
 test('failed owned-container cleanup is surfaced as unsettled work', async t => {
   const executor = new sandbox.SafeExecutor(process.cwd());

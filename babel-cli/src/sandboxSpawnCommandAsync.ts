@@ -1,5 +1,4 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { basename } from 'node:path'
 
 import type { ProcessWitness, ProcessWitnessInput } from './diagnostics/bdns/processWitness.js'
 import { MAX_SHELL_OUTPUT_BYTES } from './shellOutputNormalize.js'
@@ -8,6 +7,7 @@ import {
   waitForProcessGroupExit,
 } from './processTree.js'
 import { registerPendingProcessTermination } from './sandboxProcessTermination.js'
+import { spawnOwnedWindowsCommand, type OwnedWindowsCommand } from './windowsProcessSettlement.js'
 
 export interface AsyncSpawnResult {
   status: number | null
@@ -24,6 +24,13 @@ export interface AsyncSpawnResult {
   /** Particular aborted client closure; daemon cleanup must follow this barrier. */
   termination?: Promise<void>
 }
+
+/**
+ * Cancellation resolves the tool result immediately; this deadline bounds the
+ * deferred tree settlement it awaits. Windows can Stop while its fixed
+ * launcher is still compiling, before the admitted command starts.
+ */
+const TERMINATION_SETTLEMENT_TIMEOUT_MS = process.platform === 'win32' ? 75_000 : 5_000
 
 function appendCappedChunk(
   chunks: Buffer[],
@@ -59,6 +66,7 @@ export function spawnCommandAsync(
     cwd: string
     timeoutMs: number
     env: NodeJS.ProcessEnv
+    validateExecutable?: () => boolean
     signal?: AbortSignal
     processWitness?: ProcessWitness
     processContext?: Pick<ProcessWitnessInput, 'sessionId' | 'turnId' | 'toolCallId' | 'toolName' | 'projectRoot'>
@@ -90,17 +98,16 @@ export function spawnCommandAsync(
 
   return new Promise((resolveResult) => {
     let child: ChildProcessWithoutNullStreams
+    let windowsJob: OwnedWindowsCommand | undefined
     let processStarted = false
     try {
-      child = spawn(executable, args, {
+      if (process.platform === 'win32') windowsJob = spawnOwnedWindowsCommand(executable, args, options, spawn)
+      child = windowsJob?.child ?? spawn(executable, args, {
         cwd: options.cwd,
         env: options.env,
         windowsHide: true,
-        ...(process.platform === 'win32' && basename(executable).toLowerCase() === 'cmd.exe'
-          ? { windowsVerbatimArguments: true }
-          : {}),
         // POSIX: new process group so terminateChildTree can SIGTERM -pid.
-        detached: process.platform !== 'win32',
+        detached: true,
       }) as ChildProcessWithoutNullStreams
     } catch (err) {
       if (executionId) options.processWitness?.failedToStart(processInput, executionId, err)
@@ -117,11 +124,6 @@ export function spawnCommandAsync(
       })
       return
     }
-
-    child.once('spawn', () => {
-      processStarted = true
-      if (executionId) options.processWitness?.started(processInput, executionId, child.pid)
-    })
 
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
@@ -147,6 +149,20 @@ export function spawnCommandAsync(
     })
 
     const terminateChildTree = (owned: ChildProcessWithoutNullStreams) => terminateChildTreeShared(owned)
+
+    let windowsExit: number | null = null
+    const settleInterruptedTree = async (pid: number, reason: 'Aborted' | 'Timed-out'): Promise<void> => {
+      if (windowsJob) {
+        windowsJob.requestStop()
+        await physicalClose
+        if (windowsExit === null) throw new Error(`${reason} Windows command job settlement could not be confirmed`)
+        return
+      }
+      terminateChildTree(child)
+      if (!(await waitForProcessGroupExit(pid, 5_000))) {
+        throw new Error(`${reason} process group ${pid} did not exit after tree termination`)
+      }
+    }
 
     const recordWitnessTerminal = (status: number | null, error?: Error) => {
       if (witnessTerminalRecorded || !executionId) return
@@ -196,31 +212,20 @@ export function spawnCommandAsync(
         return
       }
       // Unblock the tool awaiter first (cancel p95). Defer tree-kill to the next
-      // event-loop turn so spawnSync(taskkill) cannot hold the promise microtask
-      // queue — otherwise Windows cancel latency is dominated by taskkill, not
-      // by AbortSignal delivery.
+      // event-loop turn so AbortSignal delivery is independent of settlement.
       termination = new Promise<void>((resolveTermination, rejectTermination) => {
         let complete = false
         const closeTimeout = setTimeout(() => {
           if (complete) return
           complete = true
           rejectTermination(new Error(`Aborted process ${executable} did not close after tree termination`))
-        }, 5_000)
+        }, TERMINATION_SETTLEMENT_TIMEOUT_MS)
         setImmediate(() => {
           void (async () => {
             try {
               const pid = child.pid
-              if (!pid) {
-                throw new Error(`Aborted spawn missing child pid for ${executable}`)
-              }
-              const terminationAttempt = terminateChildTree(child)
-              if (process.platform === 'win32' && !terminationAttempt.treeKillAccepted) {
-                throw new Error('Windows process-tree termination was not confirmed by taskkill')
-              }
-              const groupExited = await waitForProcessGroupExit(pid, 5_000)
-              if (!groupExited) {
-                throw new Error(`Aborted process group ${pid} did not exit after tree termination`)
-              }
+              if (!pid && !windowsJob) throw new Error(`Aborted spawn missing child pid for ${executable}`)
+              await settleInterruptedTree(pid ?? 0, 'Aborted')
               await abortPhysicalClose
               if (complete) return
               complete = true
@@ -243,7 +248,8 @@ export function spawnCommandAsync(
       finish(1, new Error(`spawn ${executable} aborted`))
     }
 
-    if (options.timeoutMs > 0) {
+    const armTimeout = () => {
+      if (settled || options.timeoutMs <= 0) return
       timeout = setTimeout(() => {
         timedOut = true
         if (executionId) options.processWitness?.timeout(processInput, executionId)
@@ -257,23 +263,15 @@ export function spawnCommandAsync(
             if (complete) return
             complete = true
             rejectTermination(new Error(`Timed-out process ${executable} did not close after tree termination`))
-          }, 5_000)
+          }, TERMINATION_SETTLEMENT_TIMEOUT_MS)
           setImmediate(() => {
             void (async () => {
               try {
                 const pid = child.pid
-                const terminationAttempt = terminateChildTree(child)
-                if (process.platform === 'win32' && pid && !terminationAttempt.treeKillAccepted) {
-                  throw new Error('Windows process-tree termination was not confirmed by taskkill')
-                }
                 // No pid means there is no owned process group to observe, but
                 // the direct child may still emit its physical close.
-                if (pid) {
-                  const groupExited = await waitForProcessGroupExit(pid, 5_000)
-                  if (!groupExited) {
-                    throw new Error(`Timed-out process group ${pid} did not exit after tree termination`)
-                  }
-                }
+                if (pid || windowsJob) await settleInterruptedTree(pid ?? 0, 'Timed-out')
+                else terminateChildTree(child)
                 await physicalClose
                 if (complete) return
                 complete = true
@@ -288,9 +286,12 @@ export function spawnCommandAsync(
             })()
           })
         })
-        // The close handler attaches the observable rejection; this prevents an
-        // unhandled rejection if the process hangs and close never arrives.
-        void termination.catch(() => {})
+        // A failed Windows confirmation must surface even if a pipe remains open.
+        void termination.catch((error: unknown) => {
+          if (process.platform === 'win32') {
+            finish(1, error instanceof Error ? error : new Error(String(error)))
+          }
+        })
         registerPendingProcessTermination(
           termination,
           options.processContext?.sessionId ?? 'unscoped',
@@ -298,6 +299,16 @@ export function spawnCommandAsync(
         )
       }, options.timeoutMs)
       timeout.unref?.()
+    }
+    const started = (pid: number | undefined) => {
+      processStarted = true
+      if (executionId) options.processWitness?.started(processInput, executionId, pid)
+    }
+    if (windowsJob) {
+      windowsJob.onStarted(pid => { started(pid); armTimeout() })
+    } else {
+      child.once('spawn', () => started(child.pid))
+      armTimeout()
     }
     options.signal?.addEventListener('abort', onAbort, { once: true })
 
@@ -324,18 +335,23 @@ export function spawnCommandAsync(
       if (!processStarted) recordWitnessTerminal(1, err)
       finish(1, err)
     })
-    child.once('close', (code) => {
+    child.once('close', (wrapperCode) => {
+      if (windowsJob) windowsExit = windowsJob.readExit(wrapperCode)
+      const code = windowsJob ? windowsExit : wrapperCode
+      const launchError = windowsJob?.launchError()
       physicalChildClosed = true
       releasePhysicalClose?.()
       if (aborted) {
         recordWitnessTerminal(code ?? 1, new Error(`spawn ${executable} aborted`))
-        if (executionId) options.processWitness?.killed(processInput, executionId)
+        if (executionId && (!windowsJob || (processStarted && windowsExit !== null))) {
+          options.processWitness?.killed(processInput, executionId)
+        }
         releaseAbortPhysicalClose?.()
         finish(code ?? 1, new Error(`spawn ${executable} aborted`))
       } else if (timedOut) {
         const settleTimedOut = (error?: Error) => {
           recordWitnessTerminal(code ?? 1, error ?? new Error(`spawn ${executable} ETIMEDOUT`))
-          finish(error ? 1 : code ?? 1, error ?? new Error(`spawn ${executable} ETIMEDOUT`))
+          finish(error || windowsJob ? 1 : code ?? 1, error ?? new Error(`spawn ${executable} ETIMEDOUT`))
         }
         if (termination) {
           void termination.then(
@@ -355,7 +371,11 @@ export function spawnCommandAsync(
               if (options.testContext?.awaitNaturalCloseSettlementGate) {
                 await options.testContext.awaitNaturalCloseSettlementGate()
               }
-              let descendantsSettled = await waitForProcessGroupExit(pid, 150)
+              // A direct child's `close` can precede the kernel's final /proc
+              // state transition on a loaded host. Absorb only a leader-only
+              // reaping window; a real descendant or runnable leader thread is
+              // returned immediately so it can be terminated.
+              let descendantsSettled = await waitForProcessGroupExit(pid, 1_500, { leaderOnlyGraceMs: 800 })
               let hadLingeringDescendants = false
               if (!descendantsSettled) {
                 hadLingeringDescendants = true
@@ -414,6 +434,10 @@ export function spawnCommandAsync(
             finish(1, err)
           },
         )
+      } else if (windowsJob && (windowsExit === null || launchError)) {
+        const error = launchError ?? new Error('Windows command job failed to start or confirm settlement')
+        recordWitnessTerminal(1, error)
+        finish(1, error)
       } else {
         recordWitnessTerminal(code)
         finish(code)

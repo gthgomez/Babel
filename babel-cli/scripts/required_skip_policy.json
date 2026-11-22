@@ -98,14 +98,18 @@
     {
       "id": "windows-process-tree-termination",
       "platforms": ["linux", "darwin"],
-      "reasons": ["Windows-only process-tree termination contract"],
-      "rationale": "The Windows unit lane executes the native process-tree termination, descendant-settlement and timeout contracts.",
+      "reasons": ["Windows-only process-tree termination contract", "requires native Windows"],
+      "rationale": "The Windows lanes execute native Job Object and background process-tree termination contracts.",
       "suites": ["unit", "chat-truth"],
       "files": {
         "src/sandboxTermination.test.ts": [
-          "failed Windows tree-kill is not accepted as descendant settlement",
-          "failed Windows tree-kill on a deadline leaves a termination failure for the owner",
-          "a timed-out shell reports failed Windows tree termination to its caller"
+          "Windows stop fails closed when the job owner exits without a settlement receipt",
+          "Windows timeout fails closed when the job owner exits without a settlement receipt"
+        ],
+        "src/windowsDescendantSettlement.test.ts": [
+          "Windows supervisor preserves argv, stdout, stderr and the target exit status",
+          "Windows cancellation before target start does not certify a process exit or kill",
+          "killing the Windows supervisor closes the whole job and leaves unrelated work alone"
         ],
         "src/agent/backgroundShell.test.ts": [
           "retains owner uncertainty when the Windows tree-kill helper fails",
