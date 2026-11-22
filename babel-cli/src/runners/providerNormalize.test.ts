@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert';
 import {
   normalizeFinishReason,
+  classifyStreamFinish,
   classifyProviderError,
   parseRetryAfterHeader,
   isRetryableStatus,
@@ -69,4 +70,53 @@ test('isRetryableStatus', () => {
   assert.strictEqual(isRetryableStatus(400), false);
   assert.strictEqual(isRetryableStatus(401), false);
   assert.strictEqual(isRetryableStatus(404), false);
+});
+
+test('classifyStreamFinish accepts normal text and explicit tool-call terminals', () => {
+  assert.deepEqual(
+    classifyStreamFinish({ reported: 'stop', sawDone: true, hasToolCalls: false }),
+    { status: 'complete', finishReason: 'stop', executeTools: false },
+  );
+  assert.deepEqual(
+    classifyStreamFinish({ reported: 'tool_calls', sawDone: true, hasToolCalls: true }),
+    { status: 'complete', finishReason: 'tool_calls', executeTools: true },
+  );
+  assert.deepEqual(
+    classifyStreamFinish({ reported: 'stop', sawDone: true, hasToolCalls: true }),
+    { status: 'complete', finishReason: 'tool_calls', executeTools: true },
+  );
+});
+
+test('classifyStreamFinish never infers stop from missing or unknown data', () => {
+  for (const reported of [null, undefined, '', '   ']) {
+    const missing = classifyStreamFinish({ reported, sawDone: true, hasToolCalls: true });
+    assert.equal(missing.status, 'failed');
+    assert.equal(missing.status === 'failed' ? missing.finishReason : null, 'missing');
+  }
+  const unknown = classifyStreamFinish({ reported: 'gateway_magic', sawDone: true, hasToolCalls: false });
+  assert.equal(unknown.status, 'failed');
+  assert.match(unknown.status === 'failed' ? unknown.message : '', /unrecognized/i);
+});
+
+test('classifyStreamFinish fails filtered, truncated, error and tool-less tool_calls terminals', () => {
+  for (const [reported, expected] of [
+    ['content_filter', 'content_filter'],
+    ['recitation', 'recitation'],
+    ['length', 'length'],
+    ['error', 'error'],
+  ] as const) {
+    const disposition = classifyStreamFinish({ reported, sawDone: true, hasToolCalls: true });
+    assert.equal(disposition.status, 'failed');
+    assert.equal(disposition.status === 'failed' ? disposition.finishReason : null, expected);
+  }
+  const toolLess = classifyStreamFinish({ reported: 'tool_calls', sawDone: true, hasToolCalls: false });
+  assert.equal(toolLess.status, 'failed');
+  assert.equal(toolLess.finishReason, 'tool_calls');
+  assert.match(toolLess.status === 'failed' ? toolLess.message : '', /without an accumulated tool call/i);
+});
+
+test('classifyStreamFinish requires the transport end marker', () => {
+  const disposition = classifyStreamFinish({ reported: 'stop', sawDone: false, hasToolCalls: false });
+  assert.equal(disposition.status, 'failed');
+  assert.match(disposition.status === 'failed' ? disposition.message : '', /terminal marker/i);
 });

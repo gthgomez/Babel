@@ -40,6 +40,9 @@ function streamingChatResponse(content: string): Response {
             })}\n`,
           ),
         );
+        controller.enqueue(encoder.encode(
+          `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n`,
+        ));
         controller.enqueue(encoder.encode('data: [DONE]\n'));
         controller.close();
       },

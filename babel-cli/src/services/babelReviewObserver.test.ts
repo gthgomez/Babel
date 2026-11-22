@@ -38,7 +38,10 @@ test('tool-call finish without actual tool calls cannot become a JSON approval',
     assert.deepEqual(events, [{ type: 'error', message: 'CHAT_REVIEW_NATIVE_TERMINATION_INVALID' }]);
     assert.equal(calls.length, 1); assert.equal(calls[0]?.status, 'failed');
     assert.equal(calls[0]?.metadata?.normalized_finish_reason, 'TOOL_CALL');
-    assert.throws(() => parseObservedBabelReviewAnswer(calls, 'longcat-2.0', () => { parsed = true; return 'APPROVE'; }));
+    assert.throws(
+      () => parseObservedBabelReviewAnswer(calls, 'longcat-2.0', () => { parsed = true; return 'APPROVE'; }),
+      /CHAT_REVIEW_ATTRIBUTION_INCOMPLETE_INVALID_CALL_TOOL_CALL/,
+    );
     assert.equal(parsed, false);
   } finally { globalThis.fetch = original; }
 });

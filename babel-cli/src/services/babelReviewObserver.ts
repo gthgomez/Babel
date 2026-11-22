@@ -113,7 +113,8 @@ export class ObservedBabelReviewRunner extends OpenCodeGoApiRunner {
         if (!failure && !['NATURAL_COMPLETION', 'TOOL_CALL'].includes(metadata?.normalized_finish_reason ?? '')) {
           failure = { type: 'error', message: 'CHAT_REVIEW_NATIVE_TERMINATION_INVALID' };
         }
-        if (!failure && metadata?.normalized_finish_reason === 'TOOL_CALL' && !buffered.some(event => event.type === 'tool_use')) {
+        if (failure?.terminalFailure === 'tool_completion_without_call' ||
+            (!failure && metadata?.normalized_finish_reason === 'TOOL_CALL' && !buffered.some(event => event.type === 'tool_use'))) {
           failure = { type: 'error', message: 'CHAT_REVIEW_NATIVE_TERMINATION_INVALID' };
         }
         if (!failure && !buffered.some(event => event.type === 'tool_use' || (event.type === 'text_delta' && event.text.trim().length > 0))) {

@@ -285,6 +285,10 @@ test('explicit GLM stage policy uses the exact OpenRouter route', async () => {
           })}`,
           `data: ${JSON.stringify({
             model: 'z-ai/glm-5.3-flash',
+            choices: [{ delta: {}, finish_reason: 'stop' }],
+          })}`,
+          `data: ${JSON.stringify({
+            model: 'z-ai/glm-5.3-flash',
             choices: [],
             usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
           })}`,
@@ -330,7 +334,7 @@ test('request-scoped model controls every stage with no disabled fallback', asyn
     assert.match(String(url), /^https:\/\/openrouter.ai\//);
     requests.push(JSON.parse(String(init?.body)).model);
     const content = requests.length === 3 ? '{"wrong":true}' : '{"ok":true}';
-    return new Response(`data: ${JSON.stringify({model:'deepseek/deepseek-v4-pro',choices:[{delta:{content}}]})}\n\ndata: [DONE]\n\n`, {status:200});
+    return new Response(`data: ${JSON.stringify({model:'deepseek/deepseek-v4-pro',choices:[{delta:{content}}]})}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`, {status:200});
   }) as typeof fetch;
   try {
     await withPipelineModelRoute('deepseek-v4-pro-openrouter', async () => {

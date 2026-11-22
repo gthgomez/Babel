@@ -108,7 +108,7 @@ test('OpenCode Go rejects missing response identity for structured and raw calls
 
 test('OpenCode Go rejects missing response identity from raw streams', async () => {
   globalThis.fetch = (async () => new Response([
-    `data: ${JSON.stringify({ choices: [{ delta: { content: 'answer' } }] })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: 'answer' }, finish_reason: 'stop' }] })}`,
     'data: [DONE]',
     '',
   ].join('\n'), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as typeof fetch
@@ -129,7 +129,7 @@ test('OpenCode Go rejects missing response identity from raw streams', async () 
 
 test('OpenCode Go rejects missing response identity from tool streams', async () => {
   globalThis.fetch = (async () => new Response([
-    `data: ${JSON.stringify({ choices: [{ delta: { content: 'answer' } }] })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: 'answer' }, finish_reason: 'stop' }] })}`,
     'data: [DONE]',
     '',
   ].join('\n'), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as typeof fetch
