@@ -11,6 +11,7 @@ import {
   hyperlinkFile,
 } from './theme.js';
 import { renderMarkdown, clearMdRenderCache } from './highlight.js';
+import { sanitizeUntrustedTerminalBlock, sanitizeUntrustedTerminalField } from './sanitize.js';
 import { RawModeManager } from './rawMode.js';
 import { KeybindingManager } from './keybindings.js';
 import { FrameScheduler } from './frameScheduler.js';
@@ -26,7 +27,7 @@ import { recordInteractiveDiagnostic } from './interactiveDiagnostics.js';
 import { ConversationPresentation } from './conversationPresentation.js';
 import { isRendererPresentationSuspended } from './rendererFence.js';
 import { TwoRegionStreaming } from './twoRegionStreaming.js';
-import { AgentStreamManager, type AgentStreamEvent } from './agentProgress.js';
+import { AgentStreamManager } from './agentProgress.js';
 import { renderUnseenDividerPill } from './unseenDivider.js';
 import { StateStore, createTuiStore, type TuiMutation, type TuiState } from './stateMutationBus.js';
 import { HistoryCellViewport, HistoryTranscript } from './historyCells/index.js';
@@ -681,11 +682,12 @@ export class ConversationalRenderer extends BaseRenderer {
   /** Indicate an agent completed a tool call. */
   onAgentToolComplete(agentId: string, tool: string, detail?: string): void {
     if (this.outputBroken || this.paused) return;
-    // Type assertion needed: exactOptionalPropertyTypes rejects `detail?: string`
-    // receiving `string | undefined` in an object literal, but the runtime
-    // value (undefined when missing) is correct for optional properties.
-    const event = { agentId, type: 'tool_complete' as const, tool, detail } as AgentStreamEvent;
-    this._agentStreams.push(agentId, event);
+    this._agentStreams.push(agentId, {
+      agentId,
+      type: 'tool_complete',
+      tool,
+      ...(detail === undefined ? {} : { detail }),
+    });
     this._flushAgentStreams();
   }
 
@@ -885,7 +887,7 @@ export class ConversationalRenderer extends BaseRenderer {
   showApprovalPending(tool: string, target: string): void {
     if (this.outputBroken || !this.isTTY) return;
     this._approvalPending = { tool, target };
-    const label = conversationalToolLabel(tool, target);
+    const label = conversationalToolLabel(sanitizeUntrustedTerminalField(tool), sanitizeUntrustedTerminalField(target));
     safeStdoutWrite(`\n  ${warning('⏸')} ${warning('Approval required:')} ${label}`);
   }
 
@@ -919,6 +921,8 @@ export class ConversationalRenderer extends BaseRenderer {
   onToolCallStart(tool: string | undefined, target: string | undefined): number {
     if (this.outputBroken) return -1;
     if (this.paused) return -1;
+    tool = tool === undefined ? undefined : sanitizeUntrustedTerminalField(tool);
+    target = target === undefined ? undefined : sanitizeUntrustedTerminalField(target);
     if (this._state === 'done' || this._state === 'failed') return -1;
     if (tool === undefined || target === undefined) return -1;
     if (this._state === 'thinking') {
@@ -968,6 +972,8 @@ export class ConversationalRenderer extends BaseRenderer {
   onToolCallComplete(id: number, detail?: string, error?: string, exitCode?: number): void {
     if (this.outputBroken) return;
     if (this.paused) return;
+    detail = detail === undefined ? undefined : sanitizeUntrustedTerminalField(detail);
+    error = error === undefined ? undefined : sanitizeUntrustedTerminalField(error);
     if (this._state === 'done' || this._state === 'failed') return;
     this._recordActivity();
 
@@ -1057,6 +1063,9 @@ export class ConversationalRenderer extends BaseRenderer {
     deletions: number,
     diffContent?: string | null,
   ): void {
+    diffContent = diffContent === null || diffContent === undefined
+      ? diffContent
+      : sanitizeUntrustedTerminalBlock(diffContent);
     if (this._pendingToolExecutions.length > 0) {
       const hasNonEdits = this._pendingToolExecutions.some(
         item => item.tool !== 'write_file' && item.tool !== 'str_replace' && item.tool !== 'apply_patch'
@@ -1072,7 +1081,7 @@ export class ConversationalRenderer extends BaseRenderer {
       const parts: string[] = [];
       if (additions > 0) parts.push(success(`+${additions}`));
       if (deletions > 0) parts.push(error(`-${deletions}`));
-      const mainLine = `  ${dim('└')} ${hyperlinkFile(filePath, info(filePath))} ${parts.join(' ')}`;
+      const mainLine = `  ${dim('└')} ${info(hyperlinkFile(filePath))} ${parts.join(' ')}`;
       this._writeTranscript(`${mainLine}\n`);
       this._pushLinesToScrollback(mainLine);
 
@@ -1243,7 +1252,9 @@ export class ConversationalRenderer extends BaseRenderer {
 
       const colorFn = levelColors[intervention] || dim;
       const title = colorFn(`[${intervention.toUpperCase()}]`);
-      const body = message ? dim(` - ${message}`) : dim(` (Score: ${score})`);
+      const body = message
+        ? dim(` - ${sanitizeUntrustedTerminalField(message)}`)
+        : dim(` (Score: ${score})`);
 
       const line = `  ${dim('↳')} ${title} Progress/Recovery${body}`;
       this._writeTranscript(`${line}\n`);
@@ -1259,7 +1270,7 @@ export class ConversationalRenderer extends BaseRenderer {
     this._flushPendingToolExecutions();
     if (this.outputBroken || this.paused) return;
     this._recordActivity();
-    const line = message?.trim() || '[Context compacted…]';
+    const line = sanitizeUntrustedTerminalField(message?.trim()) || '[Context compacted…]';
     const display = this.isTTY ? dim(`  ${line}`) : `  ${line}`;
     this._writeTranscript(`${display}\n`);
     this._pushLinesToScrollback(`  ${line}`);
@@ -1272,8 +1283,9 @@ export class ConversationalRenderer extends BaseRenderer {
     this._flushPendingToolExecutions();
     if (this.outputBroken || this.paused) return;
     this._recordActivity();
+    const safeLabel = sanitizeUntrustedTerminalField(label);
     this._subAgents.set(id, {
-      label: label.length > 60 ? label.slice(0, 57) + '…' : label,
+      label: safeLabel.length > 60 ? safeLabel.slice(0, 57) + '…' : safeLabel,
       startTime: Date.now(),
       status: 'running',
     });
@@ -1301,7 +1313,8 @@ export class ConversationalRenderer extends BaseRenderer {
     const agent = this._subAgents.get(id);
     if (!agent) return;
     agent.status = 'failed';
-    agent.error = error.length > 80 ? error.slice(0, 77) + '…' : error;
+    const safeError = sanitizeUntrustedTerminalField(error);
+    agent.error = safeError.length > 80 ? safeError.slice(0, 77) + '…' : safeError;
 
     setTimeout(() => {
       this._subAgents.delete(id);

@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { summarizeRequiredTap } from '../../babel-cli/scripts/summarize_required_tap.mjs';
+import { updateUnitDurations } from '../../babel-cli/scripts/update_ci_unit_durations.mjs';
 import {
   discoverDirectHostPythonBin,
   HOST_PYTHON_UNIT_PATHS,
@@ -187,6 +188,43 @@ test('inventory and selected manifests are stable and differ when the canonical 
   assert.equal(before.inventoryHash, before.selectionHash);
   writeFileSync(join(root, 'src/b.test.ts'), '// new canonical fixture\n');
   assert.notEqual(before.inventoryHash, prepareUnitShard(root, 0, 1).inventoryHash);
+});
+
+test('duration hints reproduce LF/CRLF drift and recover with a platform-matched timing update', async t => {
+  const { prepareUnitShard } = await api();
+  const root = fixture(t, ['src/a.test.ts'], ['src/*.test.ts']);
+  const path = 'src/a.test.ts';
+  const source = Buffer.from('// controlled discovery fixture\n');
+  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+  const artifact = bytes => ({
+    complete: true,
+    platform: 'win32',
+    files: [{ path, sha256: hash(bytes) }],
+    timings: [{ path, sha256: hash(bytes), durationMs: 4500 }],
+  });
+  const timingPath = join(root, 'config/ci-unit-durations.json');
+  mkdirSync(dirname(timingPath), { recursive: true });
+
+  writeFileSync(join(root, path), source);
+  writeFileSync(timingPath, JSON.stringify(updateUnitDurations(null, [artifact(source)])));
+  assert.equal(prepareUnitShard(root, 0, 1, { platform: 'win32' }).scheduling.measuredFiles, 1);
+
+  const windowsSource = Buffer.from(source.toString().replaceAll('\n', '\r\n'));
+  writeFileSync(join(root, path), windowsSource);
+  const mismatched = prepareUnitShard(root, 0, 1, { platform: 'win32' });
+  assert.equal(mismatched.scheduling.measuredFiles, 0, 'LF timing identity must not match CRLF source bytes');
+  assert.deepEqual(mismatched.selected, [path], 'a stale hint must never remove selected work');
+
+  const refreshed = updateUnitDurations(JSON.parse(readFileSync(timingPath, 'utf8')), [artifact(windowsSource)]);
+  writeFileSync(timingPath, JSON.stringify(refreshed));
+  const matched = prepareUnitShard(root, 0, 1, { platform: 'win32' });
+  assert.equal(matched.scheduling.measuredFiles, 1);
+  assert.equal(matched.scheduling.estimatedMs, 4500);
+
+  writeFileSync(join(root, path), Buffer.from(windowsSource.toString().replace('controlled', 'meaningful')));
+  const changed = prepareUnitShard(root, 0, 1, { platform: 'win32' });
+  assert.equal(changed.scheduling.measuredFiles, 0, 'a meaningful source edit must invalidate the timing hint');
+  assert.deepEqual(changed.selected, [path]);
 });
 
 function runnableFixture(t, fails = false) {

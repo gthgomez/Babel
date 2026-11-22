@@ -1,4 +1,4 @@
-import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { COLOR_TOKENS, FALLBACK_FG } from "./tokens.js";
 import {
   measureDisplayWidth,
@@ -12,6 +12,7 @@ import {
   getIdentityTrueColor,
 } from "./terminalProbe.js";
 import { peekInjectedTerminalSize } from "./observe/terminalTransport.js";
+import { sanitizeUntrustedTerminalField } from "./sanitize.js";
 
 // ── Color parse cache ──────────────────────────────────────────────────────
 // Same hex colors are parsed repeatedly per frame (every toneToAnsi call).
@@ -543,10 +544,10 @@ export class ThemeProvider {
  * @returns ANSI-escaped string with OSC 8 hyperlink, or plain text
  */
 export function hyperlinkFile(filePath: string, display?: string): string {
-  if (!HAS_COLOR) return display ?? filePath;
-  if (!filePath) return display ?? "";
-  const absolutePath = path.resolve(filePath);
-  const link = absolutePath.replace(/\\/g, "/");
-  const label = display ?? filePath;
-  return `\x1b]8;;file://${link}\x1b\\${label}\x1b]8;;\x1b\\`;
+  const safeDisplay = sanitizeUntrustedTerminalField(display ?? filePath);
+  if (!HAS_COLOR || !filePath) return safeDisplay;
+  // Encode the original path so terminal protocol and URI delimiters stay inert
+  // without redirecting the link to a different file.
+  const link = pathToFileURL(filePath).href;
+  return `\x1b]8;;${link}\x1b\\${safeDisplay}\x1b]8;;\x1b\\`;
 }

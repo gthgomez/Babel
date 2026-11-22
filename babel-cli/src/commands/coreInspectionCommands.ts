@@ -15,7 +15,7 @@ import { resolveExecutionProfile } from "../config/executionProfiles.js";
 import { BABEL_RUNS_DIR } from "../cli/constants.js";
 import { formatBdnsDiagnosticHuman, loadBdnsDiagnosticBundle } from "../diagnostics/bdns/reader.js";
 import { readAcceptanceArtifacts } from "../acceptance/recording.js";
-import { readLatestRunPointer } from "../cli/helpers.js";
+import { resolveLatestEvidenceRunDir } from "../services/recovery.js";
 import { detectContextFingerprintDrift, readExecutorSessionContext, summarizeExecutorSessionContext } from "../services/sessionContext.js";
 import { handleProofReport, resolveProofRunArg, resolveProofRunDir, resolveRunForReadOnlyCommand } from './coreCommandSupport.js';
 import { readDurableTerminalTruth } from '../services/durableTerminalTruth.js';
@@ -190,7 +190,7 @@ function getStringField(
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function readSessionSummary(runDir: string): SessionSummary {
+export function readSessionSummary(runDir: string): SessionSummary {
   const manifest = safeReadJson(join(runDir, "01_manifest.json"));
   const runtimeTelemetry = safeReadJson(
     join(runDir, "06_runtime_telemetry.json"),
@@ -200,6 +200,13 @@ function readSessionSummary(runDir: string): SessionSummary {
   );
   const stats = existsSync(runDir) ? statSync(runDir) : null;
   const terminalTruth = readDurableTerminalTruth(runDir);
+  // The durable terminal describes the selected turn. When it establishes a
+  // turn, telemetry from an earlier turn must not present a conflicting status
+  // (BL-14); unfinished turns surface as INTERRUPTED, not as an old success.
+  const durableStatus =
+    terminalTruth.turn_state !== "none"
+      ? terminalTruth.status ?? terminalTruth.outcome
+      : null;
 
   return {
     run_dir: runDir,
@@ -209,6 +216,7 @@ function readSessionSummary(runDir: string): SessionSummary {
       getStringField(manifest, "task_summary") ??
       getStringField(manifest, "user_request"),
     status:
+      durableStatus ??
       getStringField(runtimeTelemetry, "final_outcome") ??
       getStringField(executionReport, "status") ??
       terminalTruth.status ??
@@ -507,16 +515,16 @@ Examples:
 
 Notes:
   - Sessions are evidence-backed run directories, not separate chat logs.
-  - "latest" uses the same project-scoped latest pointer as inspect/evidence.
+  - "latest" uses durable Chat journals and project-scoped run pointers.
 `,
     )
     .action(() => {
-      const latest = readLatestRunPointer();
+      const latest = resolveLatestEvidenceRunDir(BABEL_RUNS_DIR);
       if (!latest) {
         console.error("[babel] No latest session pointer found.");
         process.exit(1);
       }
-      printSessionSummary(readSessionSummary(latest.run_dir), false);
+      printSessionSummary(readSessionSummary(latest), false);
     });
 
 sessionCommand
@@ -525,7 +533,7 @@ sessionCommand
     .option("--project <name>", "Use latest run pointer for a specific project")
     .option("--json", "Emit structured JSON only")
     .action((options: { project?: string; json?: boolean }) => {
-      const latest = readLatestRunPointer(options.project);
+      const latest = resolveLatestEvidenceRunDir(BABEL_RUNS_DIR, options.project);
       if (!latest) {
         if (options.json) {
           process.stdout.write(
@@ -546,7 +554,7 @@ sessionCommand
         process.exit(1);
       }
       printSessionSummary(
-        readSessionSummary(latest.run_dir),
+        readSessionSummary(latest),
         options.json === true,
       );
     });

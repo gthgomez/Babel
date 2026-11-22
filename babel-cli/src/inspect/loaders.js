@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
 import { readDurableTerminalTruth } from '../services/durableTerminalTruth.js';
+import { resolveLatestEvidenceRunDir } from '../services/recovery.js';
 const SUMMARY_CANDIDATES = [
   '09_summary.json',
   '09_summary.md',
@@ -188,27 +189,6 @@ function buildSchemaLearningSummary(runDir) {
         : 'unknown',
   };
 }
-function readLatestRunPointer(project, babelRunsDir) {
-  const scoped = project ? join(babelRunsDir, `.latest.${project}.json`) : null;
-  const fallback = join(babelRunsDir, '.latest.json');
-  const candidates = scoped ? [scoped, fallback] : [fallback];
-  for (const candidate of candidates) {
-    if (!existsSync(candidate)) continue;
-    try {
-      const parsed = JSON.parse(readFileSync(candidate, 'utf-8'));
-      if (
-        typeof parsed.run_dir === 'string' &&
-        parsed.run_dir.length > 0 &&
-        existsSync(parsed.run_dir)
-      ) {
-        return parsed.run_dir;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
 function resolveRunDirBySessionId(sessionId, babelRunsDir) {
   const normalizedSessionId = sessionId?.trim();
   if (!normalizedSessionId) {
@@ -259,7 +239,7 @@ export function resolveInspectRunDir(options) {
     }
   }
   if (!runInput || runInput.toLowerCase() === 'latest') {
-    const latest = readLatestRunPointer(options.project, options.babelRunsDir);
+    const latest = resolveLatestEvidenceRunDir(options.babelRunsDir, options.project);
     if (!latest) {
       throw new Error(
         `No latest run pointer found${options.project ? ` for project ${options.project}` : ''}.`,
@@ -447,6 +427,46 @@ function deriveOutcomeStatus(bundle) {
     null;
   const warnings = [];
   const terminalTruth = bundle.terminalTruth;
+  // The durable turn truth describes the selected turn. When it establishes a
+  // turn, neither telemetry from an earlier turn nor an older execution report
+  // may override it (BL-14). An unfinished turn is reported as such, never as
+  // the previous turn's success.
+  if (terminalTruth && terminalTruth.turn_state && terminalTruth.turn_state !== 'none') {
+    if (terminalTruth.finished) {
+      return {
+        status: terminalTruth.user_status,
+        terminal: true,
+        statusSource: 'durable_terminal',
+        failureReason:
+          terminalTruth.user_status === 'success' || terminalTruth.user_status === 'ready'
+            ? null
+            : terminalTruth.reason_code ?? terminalTruth.status,
+        holdReason:
+          terminalTruth.user_status === 'blocked' ? 'operator_decision_required' : null,
+        retryAllowed: false,
+        terminalOutcome: terminalTruth.outcome,
+        userStatus: terminalTruth.user_status,
+        exitCode: terminalTruth.exit_code,
+        warnings,
+      };
+    }
+    return {
+      status: terminalTruth.user_status,
+      terminal: false,
+      statusSource: 'durable_terminal',
+      failureReason:
+        terminalTruth.status ??
+        (terminalTruth.turn_state === 'submitted'
+          ? 'The newest turn was submitted but never admitted.'
+          : 'The newest turn has no terminal record.'),
+      holdReason: null,
+      retryAllowed: terminalTruth.turn_state === 'submitted',
+      terminalOutcome: null,
+      userStatus: terminalTruth.user_status,
+      exitCode: null,
+      warnings,
+    };
+  }
   if (!executionStatus && finalOutcome == null && terminalTruth?.finished) {
     return {
       status: terminalTruth.user_status,
@@ -732,8 +752,15 @@ function buildStageDescriptorsForBundle(bundle) {
     },
   ];
 }
+function durableTurnStatus(bundle) {
+  const truth = bundle.terminalTruth;
+  if (!truth || !truth.turn_state || truth.turn_state === 'none') return null;
+  if (truth.finished) return truth.status ?? truth.outcome ?? truth.user_status ?? null;
+  return truth.status ?? 'INTERRUPTED';
+}
+
 export function buildInspectRunView(bundle) {
-  const finalStatus = inferFinalStatus(bundle);
+  const finalStatus = durableTurnStatus(bundle) ?? inferFinalStatus(bundle);
   const task =
     bundle.manifest?.analysis?.task_summary ??
     bundle.manifest?.handoff_payload?.user_request ??
@@ -836,7 +863,7 @@ export function buildInspectManifestView(bundle) {
     kind: 'manifest',
     runDir: bundle.runDir,
     identity: bundle.identity,
-    finalStatus: inferFinalStatus(bundle) ?? 'UNKNOWN',
+    finalStatus: durableTurnStatus(bundle) ?? inferFinalStatus(bundle) ?? 'UNKNOWN',
     artifactRecords: [
       ...bundle.artifactRecords,
       ...bundle.files
@@ -861,16 +888,21 @@ export function buildInspectOutcomeView(bundle) {
     bundle.runtimeTelemetry?.pipeline_mode ?? bundle.manifest?.analysis?.pipeline_mode ?? 'unknown';
   const qaVerdict = inferLatestQaVerdict(bundle);
   const outcomeStatus = deriveOutcomeStatus(bundle);
-  const executionStatus = bundle.executionReport?.status ?? null;
+  const truth = bundle.terminalTruth;
+  const execution = !truth || truth.turn_state === 'none' ||
+    (truth.finished && truth.turn_id !== null && bundle.executionReport?.turn_id === truth.turn_id)
+      ? bundle.executionReport
+      : null;
+  const executionStatus = execution?.status ?? null;
   const executionPerformed = Boolean(
-    bundle.executionReport &&
-    ((typeof bundle.executionReport.steps_executed === 'number' &&
-      bundle.executionReport.steps_executed > 0) ||
-      (Array.isArray(bundle.executionReport.tool_call_log) &&
-        bundle.executionReport.tool_call_log.length > 0)),
+    execution &&
+    ((typeof execution.steps_executed === 'number' &&
+      execution.steps_executed > 0) ||
+      (Array.isArray(execution.tool_call_log) &&
+        execution.tool_call_log.length > 0)),
   );
-  const filesChanged = deriveFilesChanged(bundle.executionReport);
-  const testsRun = deriveTestsRun(bundle.executionReport);
+  const filesChanged = deriveFilesChanged(execution);
+  const testsRun = deriveTestsRun(execution);
   return {
     kind: 'outcome',
     runDir: bundle.runDir,

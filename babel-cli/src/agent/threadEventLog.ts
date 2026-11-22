@@ -8,7 +8,8 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import {normalizeChatExecutionScope} from './chatExecutionScope.js';
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { readCheckedJournalText } from './journalRead.js';
 import { join, resolve } from 'node:path';
 import type { ProviderMessage, ProviderToolCall } from '../runners/base.js';
 import type { ContextCheckpoint } from '../runtime/contextCheckpoints.js';
@@ -1101,9 +1102,9 @@ export async function persistThreadEventLog(
 /** Load a persisted event log; null only when it is genuinely absent. */
 export function loadThreadEventLogFromDir(runDir: string): ThreadEventLog | null {
   const path = join(runDir, THREAD_EVENT_LOG_FILENAME);
-  if (!existsSync(path)) return null;
   try {
-    return parseThreadEventLog(readFileSync(path, 'utf-8'));
+    const text = readCheckedJournalText(runDir, THREAD_EVENT_LOG_FILENAME);
+    return text === null ? null : parseThreadEventLog(text);
   } catch (error) {
     throw new ThreadEventLogRestoreError(path, error);
   }

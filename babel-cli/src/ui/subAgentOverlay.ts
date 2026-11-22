@@ -1,4 +1,5 @@
 import { dim, error } from "./theme.js";
+import { sanitizeUntrustedTerminalField } from "./sanitize.js";
 
 export interface SubAgentOverlayEntry {
   label: string;
@@ -30,7 +31,13 @@ export function renderSubAgentOverlay(
   );
 
   const maxVisible = 5;
-  const lines = all.slice(0, maxVisible).map(([, agent], index, visible) => {
+  const lines = all.slice(0, maxVisible).map(([, rawAgent], index, visible) => {
+    // Labels and failure text originate in model/subagent output.
+    const agent = {
+      ...rawAgent,
+      label: sanitizeUntrustedTerminalField(rawAgent.label),
+      ...(rawAgent.error !== undefined ? { error: sanitizeUntrustedTerminalField(rawAgent.error) } : {}),
+    };
     const branch =
       index === visible.length - 1 && all.length <= maxVisible ? "└─" : "├─";
     const elapsed = formatElapsed(now - agent.startTime);

@@ -8,7 +8,8 @@
  * Roadmap: docs/plans/BABEL_RELIABLE_EXECUTOR_ROADMAP_2026-08-01.md §7.1
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readCheckedJournalText } from './journalRead.js';
 import { join } from 'node:path';
 import type { TerminalOutcome } from '../schemas/agentContracts.js';
 import type { TerminalReason, TerminalReasonCode } from './chatTerminalReason.js';
@@ -1189,9 +1190,11 @@ export function inspectSessionEventLogFromDir(
   expectedSessionId?: string,
 ): SessionEventLogLoadResult {
   const path = join(runDir, SESSION_EVENTS_FILENAME)
-  if (!existsSync(path)) return { kind: 'missing', path }
   try {
-    return { kind: 'valid', path, log: parseSessionEventLog(readFileSync(path, 'utf-8'), expectedSessionId) }
+    const text = readCheckedJournalText(runDir, SESSION_EVENTS_FILENAME)
+    return text === null
+      ? { kind: 'missing', path }
+      : { kind: 'valid', path, log: parseSessionEventLog(text, expectedSessionId) }
   } catch (error) {
     return {
       kind: 'invalid',
