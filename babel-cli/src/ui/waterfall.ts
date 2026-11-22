@@ -1,4 +1,5 @@
 import { error } from './theme.js';
+import { sanitizeUntrustedTerminalField } from './sanitize.js';
 import { currentInvocationSettings } from '../config/invocationSettings.js';
 import { isA11yMode, a11yActivityEvent } from './a11y.js';
 import { StateStore, type TuiMutation, type TuiState } from './stateMutationBus.js';
@@ -112,6 +113,7 @@ export class AppendOnlyRenderer extends BaseRenderer {
 
   write(message: string): void {
     if (this.outputBroken) return;
+    message = sanitizeUntrustedTerminalField(message);
     const key = activityKey(message);
     if (message === this.lastMessage || this.activityKeys.has(key)) return;
     this.lastMessage = message;
