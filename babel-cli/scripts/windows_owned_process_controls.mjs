@@ -26,28 +26,38 @@ export async function runInstalledWindowsOwnership(packageRoot, fixtureRoot) {
     assert.equal(result.stderr.trim(), 'second argument')
     return extension
   }))
-  const fixture = join(fixtureRoot, 'job-tree.cjs')
-  writeFileSync(fixture, `
+  const fixtureName = 'job-tree.cjs'
+  const fixture = `
 const { spawn } = require('node:child_process');
 const { existsSync, renameSync, writeFileSync } = require('node:fs');
-const [role, directory] = process.argv.slice(2);
-const path = require('node:path');
+const { join } = require('node:path');
+const role = process.argv[2];
+if (!['leader', 'child', 'grandchild'].includes(role)) throw new Error('unsupported ownership fixture role');
+const directory = process.cwd();
+function publish(name, value) {
+  const receipt = join(directory, name);
+  writeFileSync(receipt + '.tmp', value);
+  renameSync(receipt + '.tmp', receipt);
+}
 if (role !== 'grandchild') {
-  const child = spawn(process.execPath, [__filename, role === 'leader' ? 'child' : 'grandchild', directory], {
-    stdio: 'ignore', windowsHide: true,
+  const child = spawn(process.execPath, [${JSON.stringify(fixtureName)}, role === 'leader' ? 'child' : 'grandchild'], {
+    cwd: directory, stdio: 'ignore', windowsHide: true,
+  });
+  child.once('error', error => {
+    const code = error.code || 'UNKNOWN';
+    publish(role + '-spawn-failure', /^[A-Z0-9_]+$/.test(code) ? code : 'UNKNOWN');
+    process.exitCode = 1;
   });
   child.unref();
 }
-const receipt = path.join(directory, role);
-writeFileSync(receipt + '.tmp', String(process.pid));
-renameSync(receipt + '.tmp', receipt);
+publish(role, String(process.pid));
 if (role !== 'leader') {
   const interval = setInterval(() => {
-    if (existsSync(path.join(directory, 'release'))) clearInterval(interval);
+    if (existsSync(join(directory, 'release'))) clearInterval(interval);
   }, 25);
   setTimeout(() => clearInterval(interval), 45_000).unref();
 }
-`)
+`
 
   const unrelated = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 200000)'], {
     stdio: 'ignore', windowsHide: true,
@@ -57,18 +67,38 @@ if (role !== 'leader') {
     for (const mode of ['stop', 'timeout']) {
       const cwd = join(fixtureRoot, mode)
       mkdirSync(cwd)
+      writeFileSync(join(cwd, fixtureName), fixture)
       const controller = new AbortController()
       const owner = `installed-windows-ownership-${mode}`
-      const pending = spawnCommandAsync(process.execPath, [fixture, 'leader', cwd], {
+      const pending = spawnCommandAsync(process.execPath, [fixtureName, 'leader'], {
         cwd, env: process.env, timeoutMs: 15_000, signal: controller.signal, processContext: { sessionId: owner },
       })
       try {
         const roles = ['leader', 'child', 'grandchild']
         const deadline = Date.now() + 80_000
-        let completed = false
-        void pending.then(() => { completed = true })
+        let completed
+        void pending.then(result => { completed = result })
         while (!roles.every(role => existsSync(join(cwd, role)))) {
-          assert.ok(!completed && Date.now() < deadline, 'owned process tree must start')
+          const failedRole = roles.find(role => existsSync(join(cwd, role + '-spawn-failure')))
+          if (failedRole) {
+            const value = readFileSync(join(cwd, failedRole + '-spawn-failure'), 'utf8')
+            const code = /^[A-Z0-9_]{1,40}$/.test(value) ? value : 'UNKNOWN'
+            assert.fail(`owned Windows ${mode} fixture ${failedRole} failed to launch its descendant (${code})`)
+          }
+          if (completed || Date.now() >= deadline) {
+            const ready = roles.filter(role => existsSync(join(cwd, role)))
+            const stderr = completed?.stderr ?? ''
+            // Preserve known failure discriminants without retaining host paths,
+            // environments, or arbitrary subprocess output in CI diagnostics.
+            const failureCode = stderr.match(/Win32 (\d+)/)?.[0] ??
+              stderr.match(/ERR_[A-Z0-9_]+|MODULE_NOT_FOUND|EACCES|ENOENT|EPERM/)?.[0] ??
+              (/job (input|compilation|launch handshake|job ownership or settlement) failed/.exec(stderr)?.[1]) ??
+              (completed?.error ? 'unclassified supervisor failure' : 'no classified failure')
+            assert.fail(`owned Windows ${mode} process tree must start: ${JSON.stringify({
+              ready, failureCode, status: completed?.status, started: completed?.processStarted,
+              timedOut: completed?.timedOut, completed: Boolean(completed),
+            })}`)
+          }
           await delay(25)
         }
         const [leader, child, grandchild] = roles.map(role => Number(readFileSync(join(cwd, role), 'utf8')))
@@ -77,7 +107,7 @@ if (role !== 'leader') {
           assert.ok(!completed && Date.now() < deadline, 'owned leader must exit before Stop or deadline')
           await delay(25)
         }
-        assert.equal(completed, false, 'a direct exit cannot settle a live job')
+        assert.equal(completed, undefined, 'a direct exit cannot settle a live job')
         assert.ok(isProcessAlive(child) && isProcessAlive(grandchild), 'both owned descendants must be alive before settlement')
         assert.ok(unrelated.pid && isProcessAlive(unrelated.pid), 'independent control must be alive')
         if (mode === 'stop') controller.abort()
