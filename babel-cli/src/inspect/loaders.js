@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
 import { readDurableTerminalTruth } from '../services/durableTerminalTruth.js';
+import { resolveLatestEvidenceRunDir } from '../services/recovery.js';
 const SUMMARY_CANDIDATES = [
   '09_summary.json',
   '09_summary.md',
@@ -188,27 +189,6 @@ function buildSchemaLearningSummary(runDir) {
         : 'unknown',
   };
 }
-function readLatestRunPointer(project, babelRunsDir) {
-  const scoped = project ? join(babelRunsDir, `.latest.${project}.json`) : null;
-  const fallback = join(babelRunsDir, '.latest.json');
-  const candidates = scoped ? [scoped, fallback] : [fallback];
-  for (const candidate of candidates) {
-    if (!existsSync(candidate)) continue;
-    try {
-      const parsed = JSON.parse(readFileSync(candidate, 'utf-8'));
-      if (
-        typeof parsed.run_dir === 'string' &&
-        parsed.run_dir.length > 0 &&
-        existsSync(parsed.run_dir)
-      ) {
-        return parsed.run_dir;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
 function resolveRunDirBySessionId(sessionId, babelRunsDir) {
   const normalizedSessionId = sessionId?.trim();
   if (!normalizedSessionId) {
@@ -259,7 +239,7 @@ export function resolveInspectRunDir(options) {
     }
   }
   if (!runInput || runInput.toLowerCase() === 'latest') {
-    const latest = readLatestRunPointer(options.project, options.babelRunsDir);
+    const latest = resolveLatestEvidenceRunDir(options.babelRunsDir, options.project);
     if (!latest) {
       throw new Error(
         `No latest run pointer found${options.project ? ` for project ${options.project}` : ''}.`,

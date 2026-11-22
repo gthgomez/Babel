@@ -15,7 +15,7 @@ import { resolveExecutionProfile } from "../config/executionProfiles.js";
 import { BABEL_RUNS_DIR } from "../cli/constants.js";
 import { formatBdnsDiagnosticHuman, loadBdnsDiagnosticBundle } from "../diagnostics/bdns/reader.js";
 import { readAcceptanceArtifacts } from "../acceptance/recording.js";
-import { readLatestRunPointer } from "../cli/helpers.js";
+import { resolveLatestEvidenceRunDir } from "../services/recovery.js";
 import { detectContextFingerprintDrift, readExecutorSessionContext, summarizeExecutorSessionContext } from "../services/sessionContext.js";
 import { handleProofReport, resolveProofRunArg, resolveProofRunDir, resolveRunForReadOnlyCommand } from './coreCommandSupport.js';
 import { readDurableTerminalTruth } from '../services/durableTerminalTruth.js';
@@ -515,16 +515,16 @@ Examples:
 
 Notes:
   - Sessions are evidence-backed run directories, not separate chat logs.
-  - "latest" uses the same project-scoped latest pointer as inspect/evidence.
+  - "latest" uses durable Chat journals and project-scoped run pointers.
 `,
     )
     .action(() => {
-      const latest = readLatestRunPointer();
+      const latest = resolveLatestEvidenceRunDir(BABEL_RUNS_DIR);
       if (!latest) {
         console.error("[babel] No latest session pointer found.");
         process.exit(1);
       }
-      printSessionSummary(readSessionSummary(latest.run_dir), false);
+      printSessionSummary(readSessionSummary(latest), false);
     });
 
 sessionCommand
@@ -533,7 +533,7 @@ sessionCommand
     .option("--project <name>", "Use latest run pointer for a specific project")
     .option("--json", "Emit structured JSON only")
     .action((options: { project?: string; json?: boolean }) => {
-      const latest = readLatestRunPointer(options.project);
+      const latest = resolveLatestEvidenceRunDir(BABEL_RUNS_DIR, options.project);
       if (!latest) {
         if (options.json) {
           process.stdout.write(
@@ -554,7 +554,7 @@ sessionCommand
         process.exit(1);
       }
       printSessionSummary(
-        readSessionSummary(latest.run_dir),
+        readSessionSummary(latest),
         options.json === true,
       );
     });
