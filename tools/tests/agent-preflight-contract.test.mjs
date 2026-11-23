@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -11,9 +13,38 @@ const guide = readFileSync(join(root, 'docs/guides/AGENT_GIT_OPERATIONS.md'), 'u
 test('portable Git fallback applies only when the implicit Windows path is missing', () => {
   assert.match(preflight, /\$gitPathWasExplicit = \$PSBoundParameters\.ContainsKey\('GitPath'\)/)
   assert.match(preflight, /if \(-not \$gitPathWasExplicit -and -not \(Test-Path -LiteralPath \$gitResolvedPath -PathType Leaf\)\)/)
-  assert.match(preflight, /\$gitResolvedPath = Get-AgentCommandPath -Name 'git'/)
+  assert.match(preflight, /Get-Command -Name 'git' -CommandType Application -ErrorAction Stop/)
   assert.match(preflight, /catch \{ \$gitResolvedPath = '' \}/)
   assert.match(preflight, /An\s+# explicit -GitPath/)
+})
+
+test('portable preflight finds native Git when a PowerShell function shadows it', t => {
+  const available = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command',
+    "if (Get-Command git -CommandType Application -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"])
+  if (available.error?.code === 'ENOENT' || available.status !== 0) {
+    t.skip('PowerShell and native Git are required for this behavioral check')
+    return
+  }
+  const scratch = mkdtempSync(join(tmpdir(), 'babel-preflight-contract-'))
+  const literal = value => `'${value.replaceAll("'", "''")}'`
+  try {
+    const script = join(root, 'scripts/agent-preflight.ps1')
+    const invoke = extra => spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command',
+      `function git { throw 'shadow function must not run' }; $env:ProgramFiles = ''; & ${literal(script)} -RepoRoot ${literal(scratch)} -GhPath ${literal(join(scratch, 'missing-gh'))} ${extra}`],
+    { encoding: 'utf8', timeout: 30000 })
+    const implicit = invoke('')
+    assert.ifError(implicit.error)
+    const implicitResult = JSON.parse(implicit.stdout)
+    assert.equal(implicitResult.checks.GIT_EXECUTABLE, true)
+    assert.equal(implicitResult.checks.GIT_VERSION, true)
+    const explicitBlank = invoke("-GitPath ''")
+    assert.ifError(explicitBlank.error)
+    const explicitResult = JSON.parse(explicitBlank.stdout)
+    assert.equal(explicitResult.checks.GIT_EXECUTABLE, false)
+    assert.ok(explicitResult.blockers.includes('git_executable_unavailable'))
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
 })
 
 test('preflight reports unprobed write capabilities separately from authentication and read', () => {

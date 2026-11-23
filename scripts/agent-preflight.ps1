@@ -79,7 +79,7 @@ try {
     $gitResolvedPath = Join-Path $env:ProgramFiles 'Git\cmd\git.exe'
   }
   if (-not $gitPathWasExplicit -and -not (Test-Path -LiteralPath $gitResolvedPath -PathType Leaf)) {
-    try { $gitResolvedPath = Get-AgentCommandPath -Name 'git' } catch { $gitResolvedPath = '' }
+    try { $gitResolvedPath = (Get-Command -Name 'git' -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source } catch { $gitResolvedPath = '' }
   }
   $gitAvailable = -not [string]::IsNullOrWhiteSpace($gitResolvedPath) -and (Test-Path -LiteralPath $gitResolvedPath -PathType Leaf)
   Add-AgentCheck -Name 'GIT_EXECUTABLE' -Passed $gitAvailable -Blocker 'git_executable_unavailable'
