@@ -78,7 +78,7 @@ import {
   filterSlashCommands,
 } from "./typeaheadEngine.js";
 import { ComposerHistory } from "./composerHistory.js";
-import { PastePlaceholderStore } from "./pastePlaceholders.js";
+import { PastePlaceholderStore, type OwnedPastePlaceholder } from "./pastePlaceholders.js";
 import {
   matchesHotkey,
   parseHotkeyString,
@@ -240,6 +240,9 @@ export class PromptInput {
   private history: string[] = [];
   private historyIndex = -1; // -1 = not browsing, 0 = oldest, history.length-1 = newest
   private savedDraft: string | null = null; // Saved input when browsing history
+  private savedDraftPasteOwnership: OwnedPastePlaceholder[] | null = null;
+  /** Changes when text and paste ownership are replaced as one state snapshot. */
+  private pasteOwnershipGeneration = 0;
   private browsingHistory = false;
 
   // State
@@ -262,11 +265,13 @@ export class PromptInput {
     lines: string[];
     cursorLine: number;
     cursorCol: number;
+    pasteOwnership: OwnedPastePlaceholder[];
   }> = [];
   private redoStack: Array<{
     lines: string[];
     cursorLine: number;
     cursorCol: number;
+    pasteOwnership: OwnedPastePlaceholder[];
   }> = [];
   private readonly maxUndoStack = 100;
 
@@ -300,6 +305,7 @@ export class PromptInput {
   private maxInputHeight: number;
   private historyFile: string;
   private historyLoaded: boolean = false;
+  private historySaveQueue: Promise<void> = Promise.resolve();
 
   constructor(config: PromptInputConfig) {
     this.config = {
@@ -371,19 +377,21 @@ export class PromptInput {
         const now = Date.now();
         const flushResult = this.pasteBurst.flushIfDue(now);
         if (flushResult.type === "paste") {
-          this.handlePasteText(flushResult.text);
+          this.withPasteOwnershipEdit(() => this.handlePasteText(flushResult.text));
           this.render();
         } else if (flushResult.type === "typed") {
           // The held single char can now be inserted
-          this.snapshot();
-          const line = this.lines[this.cursorLine] ?? "";
-          this.lines[this.cursorLine] =
-            line.slice(0, this.cursorCol) +
-            flushResult.char +
-            line.slice(this.cursorCol);
-          this.cursorCol++;
-          this.refreshAutocomplete();
-          this.checkMentionTrigger();
+          this.withPasteOwnershipEdit(() => {
+            this.snapshot();
+            const line = this.lines[this.cursorLine] ?? "";
+            this.lines[this.cursorLine] =
+              line.slice(0, this.cursorCol) +
+              flushResult.char +
+              line.slice(this.cursorCol);
+            this.cursorCol++;
+            this.refreshAutocomplete();
+            this.checkMentionTrigger();
+          });
           this.render();
         }
       },
@@ -486,6 +494,8 @@ export class PromptInput {
 
   /** Set the text buffer (e.g., for restoring a draft). */
   setText(text: string): void {
+    this.pasteOwnershipGeneration++;
+    this.pasteStore.clear();
     this.lines = text.split("\n");
     if (this.lines.length === 0) this.lines = [""];
     this.cursorLine = this.lines.length - 1;
@@ -551,18 +561,21 @@ export class PromptInput {
   }
 
   /** Save history to disk (keeps last 500 entries). */
-  async saveHistory(): Promise<void> {
-    try {
-      const { writeFile } = await import("node:fs/promises");
-      const entries = this.getHistory().slice(-500);
-      await writeFile(
-        this.historyFile,
-        JSON.stringify(entries, null, 2),
-        "utf-8",
-      );
-    } catch {
-      // Silently fail — don't break the TUI for history persistence issues
-    }
+  saveHistory(): Promise<void> {
+    const entries = this.getHistory().slice(-500);
+    this.historySaveQueue = this.historySaveQueue.then(async () => {
+      try {
+        const { writeFile } = await import("node:fs/promises");
+        await writeFile(
+          this.historyFile,
+          JSON.stringify(entries, null, 2),
+          "utf-8",
+        );
+      } catch {
+        // Silently fail — don't break the TUI for history persistence issues
+      }
+    });
+    return this.historySaveQueue;
   }
 
   /** Enable or disable vim mode dynamically. */
@@ -729,7 +742,80 @@ export class PromptInput {
 
   /** Public entry point retained under the editor's existing terminology. */
   handleKey(event: KeyEvent): void {
+    const before = this.lines.join("\n");
+    const beforeCursor = this.getCursorOffset();
+    const previousOwned = this.pasteStore.snapshotOwned();
+    const ownershipGeneration = this.pasteOwnershipGeneration;
     this.handleKeyInternal(event);
+    const after = this.lines.join("\n");
+    // setText/history and undo/redo install authoritative ownership together
+    // with their buffer. A visible-text diff could retain an old chip when the
+    // replacement has the same label, despite its ownership having changed.
+    if (ownershipGeneration !== this.pasteOwnershipGeneration) return;
+    this.pasteStore.reconcileBufferEdit(
+      before,
+      after,
+      previousOwned,
+      this.getKnownBufferEdit(event, before, after, beforeCursor),
+    );
+  }
+
+  private getCursorOffset(): number {
+    let offset = 0;
+    for (let line = 0; line < this.cursorLine; line++) {
+      offset += (this.lines[line] ?? "").length + 1;
+    }
+    return offset + this.cursorCol;
+  }
+
+  /** Apply scheduled paste-burst insertions with the same ownership rebase as keys. */
+  private withPasteOwnershipEdit(mutate: () => void): void {
+    const before = this.lines.join("\n");
+    const start = this.getCursorOffset();
+    const previousOwned = this.pasteStore.snapshotOwned();
+    mutate();
+    const after = this.lines.join("\n");
+    const inserted = after.length - before.length;
+    this.pasteStore.reconcileBufferEdit(
+      before,
+      after,
+      previousOwned,
+      inserted >= 0 ? { start, oldEnd: start, newEnd: start + inserted } : undefined,
+    );
+  }
+
+  private getKnownBufferEdit(
+    event: KeyEvent,
+    before: string,
+    after: string,
+    beforeCursor: number,
+  ): { start: number; oldEnd: number; newEnd: number } | undefined {
+    const delta = after.length - before.length;
+    const afterCursor = this.getCursorOffset();
+    const insertedLength = Math.max(0, delta);
+    if (
+      insertedLength > 0 &&
+      afterCursor === beforeCursor + insertedLength &&
+      (event.name === "paste" || event.name === "enter" ||
+        (event.sequence.length === 1 && !event.ctrl && !event.meta))
+    ) {
+      return { start: beforeCursor, oldEnd: beforeCursor, newEnd: beforeCursor + insertedLength };
+    }
+    const deletedLength = -delta;
+    if (deletedLength <= 0) return undefined;
+    if (event.name === "backspace" && afterCursor === beforeCursor - deletedLength) {
+      return { start: afterCursor, oldEnd: beforeCursor, newEnd: afterCursor };
+    }
+    if (event.name === "delete" && afterCursor === beforeCursor) {
+      return { start: beforeCursor, oldEnd: beforeCursor + deletedLength, newEnd: beforeCursor };
+    }
+    if (event.name === "k" && event.ctrl) {
+      return { start: beforeCursor, oldEnd: beforeCursor + deletedLength, newEnd: beforeCursor };
+    }
+    if (event.name === "u" && event.ctrl && afterCursor === 0) {
+      return { start: 0, oldEnd: beforeCursor, newEnd: 0 };
+    }
+    return undefined;
   }
 
   // ── Key Handling ────────────────────────────────────────────────────────────
@@ -1583,8 +1669,10 @@ export class PromptInput {
   /** Handle a paste event (C5 — paste placeholder collapsing). */
   private handlePasteText(pasted: string): void {
     const bufferText = this.lines.join("\n");
-    const { insertText } = this.pasteStore.integratePaste(pasted, bufferText);
+    const start = this.getCursorOffset();
+    const { insertText, collapsed, pasteToken } = this.pasteStore.integratePaste(pasted, bufferText);
     this.insertText(insertText);
+    if (collapsed && pasteToken) this.pasteStore.trackOwnedPlaceholder(pasteToken, start);
     this.refreshAutocomplete();
     this.checkMentionTrigger();
     if (this.active) this.render();
@@ -1597,6 +1685,7 @@ export class PromptInput {
       lines: this.lines.map((l) => l),
       cursorLine: this.cursorLine,
       cursorCol: this.cursorCol,
+      pasteOwnership: this.pasteStore.snapshotOwned(),
     });
     if (this.undoStack.length > this.maxUndoStack) this.undoStack.shift();
     this.redoStack = [];
@@ -1785,6 +1874,7 @@ export class PromptInput {
     this.cursorCol = 0;
     this.historyIndex = -1;
     this.savedDraft = null;
+    this.savedDraftPasteOwnership = null;
     this.browsingHistory = false;
     this.completionPopup = null;
     this.slashSelected = 0;
@@ -1803,30 +1893,36 @@ export class PromptInput {
 
   private undo(): void {
     if (this.undoStack.length === 0) return;
+    this.pasteOwnershipGeneration++;
     this.redoStack.push({
       lines: this.lines.map((l) => l),
       cursorLine: this.cursorLine,
       cursorCol: this.cursorCol,
+      pasteOwnership: this.pasteStore.snapshotOwned(),
     });
     const state = this.undoStack.pop()!;
     this.lines = state.lines;
     this.cursorLine = state.cursorLine;
     this.cursorCol = state.cursorCol;
+    this.pasteStore.restoreOwned(state.pasteOwnership, this.lines.join("\n"));
     this.refreshAutocomplete();
     this.render();
   }
 
   private redo(): void {
     if (this.redoStack.length === 0) return;
+    this.pasteOwnershipGeneration++;
     this.undoStack.push({
       lines: this.lines.map((l) => l),
       cursorLine: this.cursorLine,
       cursorCol: this.cursorCol,
+      pasteOwnership: this.pasteStore.snapshotOwned(),
     });
     const state = this.redoStack.pop()!;
     this.lines = state.lines;
     this.cursorLine = state.cursorLine;
     this.cursorCol = state.cursorCol;
+    this.pasteStore.restoreOwned(state.pasteOwnership, this.lines.join("\n"));
     this.refreshAutocomplete();
     this.render();
   }
@@ -1839,6 +1935,7 @@ export class PromptInput {
 
     if (!this.browsingHistory) {
       this.savedDraft = this.lines.join("\n");
+      this.savedDraftPasteOwnership = this.pasteStore.snapshotOwned();
       this.browsingHistory = true;
     }
 
@@ -1859,7 +1956,11 @@ export class PromptInput {
       this.historyIndex = -1;
       if (this.savedDraft !== null) {
         this.setText(this.savedDraft);
+        if (this.savedDraftPasteOwnership) {
+          this.pasteStore.restoreOwned(this.savedDraftPasteOwnership, this.lines.join("\n"));
+        }
         this.savedDraft = null;
+        this.savedDraftPasteOwnership = null;
       }
     } else if (result) {
       this.setText(result.text);
@@ -1953,13 +2054,15 @@ export class PromptInput {
 
   /** Queue current draft for post-turn execution; keep composer active (C2). */
   private queueSubmit(): void {
-    const text = this.lines.join("\n").trim();
+    const rawText = this.lines.join("\n");
+    const text = this.pasteStore.expand(rawText).trim();
     if (!text || !this.config.onQueue) return;
 
     const queued = this.config.onQueue(text);
     if (!queued) return;
 
     this.addHistory(text);
+    this.saveHistory();
     this.clear();
     this.render();
   }
