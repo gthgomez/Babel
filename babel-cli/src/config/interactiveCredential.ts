@@ -1,11 +1,9 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stderr as output } from 'node:process';
 import { once } from 'node:events';
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { listProviderSpecs } from '../runners/providerRegistry.js';
 import { resolvePrivateCredentialEnvPath } from './envBootstrap.js';
+import { appendPrivateCredential, isValidProviderKey } from './providerAccountKeys.js';
 
 export interface InteractiveCredentialOptions {
   input?: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?: (mode: boolean) => void; isRaw?: boolean };
@@ -22,10 +20,6 @@ function isInteractive(
 
 function isMachineOutput(argv: string[]): boolean {
   return argv.includes('--json') || argv.some(arg => /^--output-format=(?:json|stream-json|jsonl|ndjson)$/.test(arg));
-}
-
-function safeApiKey(key: string): boolean {
-  return key.length >= 8 && key.length <= 4096 && /^[A-Za-z0-9_./:+==-]+$/.test(key);
 }
 
 export async function readMaskedLine(
@@ -76,39 +70,6 @@ export async function readMaskedLine(
   }
 }
 
-function appendCredential(envFile: string, name: string, key: string): void {
-  mkdirSync(dirname(envFile), { recursive: true, mode: 0o700 });
-  let existing = '';
-  if (existsSync(envFile)) {
-    const info = lstatSync(envFile);
-    if (!info.isFile() || info.isSymbolicLink() || info.size > 256 * 1024) {
-      throw new Error('Existing credential file is unsafe.');
-    }
-    existing = readFileSync(envFile, 'utf8');
-    if (new RegExp(`(?:^|\\n)\\s*${name}\\s*=`, 'm').test(existing)) return;
-  }
-  const temp = `${envFile}.${randomUUID()}.tmp`;
-  const separator = existing && !existing.endsWith('\n') ? '\n' : '';
-  writeFileSync(temp, `${existing}${separator}${name}=${key}\n`, { flag: 'wx', mode: 0o600 });
-  renameSync(temp, envFile);
-}
-
-/** Prompt only for the explicitly selected connection's credential. */
-export async function promptForProviderCredential(name: string, env: NodeJS.ProcessEnv = process.env,
-  options: InteractiveCredentialOptions = {}): Promise<boolean> {
-  if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error('Invalid credential environment variable name.')
-  if (env[name]?.trim()) return true
-  const inStream = options.input ?? input
-  const outStream = options.output ?? output
-  if (!isInteractive(inStream, outStream, env)) return false
-  const key = (await readMaskedLine(inStream, outStream)).trim()
-  if (!safeApiKey(key)) throw new Error('Credential was not saved: invalid token format.')
-  appendCredential(resolvePrivateCredentialEnvPath(env), name, key)
-  env[name] = key
-  outStream.write('Credential saved to your private Babel profile.\n')
-  return true
-}
-
 /**
  * When a human runs an interactive CLI command and a certified provider credential
  * is missing, offer a masked setup flow. Noninteractive invocations fail closed.
@@ -143,11 +104,16 @@ export async function maybePromptForMissingProviderCredential(
     return;
   }
   const key = (await readMaskedLine(inStream, outStream)).trim();
-  if (!safeApiKey(key)) {
+  if (!isValidProviderKey(key)) {
     outStream.write('Credential was not saved: invalid token format.\n');
     return;
   }
-  appendCredential(resolve(target), name, key);
-  env[name] = key;
+  try {
+    appendPrivateCredential(target, name, key);
+    env[name] = key;
+  } catch {
+    outStream.write('Credential was not saved. Check your private credential file and try again.\n');
+    return;
+  }
   outStream.write('Credential saved to your private Babel profile.\n');
 }

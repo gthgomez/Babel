@@ -297,12 +297,12 @@ program
 program
     .command("setup")
     .option("--contributor", "Show source contributor setup")
-    .description("Guide provider, credential, model and budget setup; no inference is sent")
+    .description("Connect a provider key and choose a model; no inference is sent")
     .option("--json", "Emit structured JSON only")
     .action(async (options: { json?: boolean; contributor?: boolean }) => {
       if (options.contributor) printSetupChecklist(options);
       else if (options.json) printJsonOrHuman({ ...installedSetupChecklist(), ...getSetupStatus(), nextCommand: `${CLI_COMMAND} setup`, networkRequests: false }, '', true);
-      else await runProviderSetup();
+      else if ((await runProviderSetup()).failed) process.exitCode = 1;
     });
 
 program

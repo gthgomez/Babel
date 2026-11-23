@@ -55,7 +55,7 @@ test('showOnboarding writes Babel logo to stdout', () => withProfile(() => {
   };
 
   try {
-    showOnboarding();
+    showOnboarding(false);
 
     const output = chunks.join('');
     const plain = stripAnsi(output);
@@ -88,7 +88,7 @@ test('showOnboarding output includes rule separator', () => withProfile(() => {
   };
 
   try {
-    showOnboarding();
+    showOnboarding(false);
     const output = chunks.join('');
     // Should contain a horizontal rule (dashes)
     assert.ok(output.includes('─'), 'Output should include a separator rule');
@@ -105,7 +105,7 @@ test('narrow onboarding uses a compact brand and explicit model command', () => 
   Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
   process.stdout.write = ((chunk: string) => { chunks.push(String(chunk)); return true; }) as typeof process.stdout.write;
   try {
-    showOnboarding();
+    showOnboarding(false);
     const output = stripAnsi(chunks.join(''));
     assert.match(output, /BABEL/);
     assert.doesNotMatch(output, /██/);
@@ -122,10 +122,10 @@ test('first-run onboarding announces setup instead of implying a ready agent', (
   const origWrite = process.stdout.write;
   process.stdout.write = ((chunk: string) => { chunks.push(String(chunk)); return true; }) as typeof process.stdout.write;
   try {
-    showOnboarding();
+    showOnboarding(true);
     const plain = stripAnsi(chunks.join(''));
-    assert.match(plain, /Setup runs next/);
-    assert.match(plain, /sends no model requests/);
+    assert.match(plain, /Connect a provider to chat/);
+    assert.match(plain, /use \/setup later/);
     assert.doesNotMatch(plain, /Type a task to get started/);
   } finally {
     process.stdout.write = origWrite;

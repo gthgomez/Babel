@@ -2,7 +2,7 @@
 import { resolve } from 'node:path'
 import { getAvailableModels, resolveModelByKey } from '../modelPolicy.js'
 import { buildProviderRouteReport } from '../runners/providerRouteReport.js'
-import { getProviderSpec, isProviderId, listProviderSpecs } from '../runners/providerRegistry.js'
+import { isProviderId, listProviderSpecs } from '../runners/providerRegistry.js'
 import { readUserSettings, resolveEffectiveSettings, updateUserSettings, type Connection, type UserPreferences } from '../config/userSettings.js'
 import { connectionModelSelector } from '../config/connectionModelPolicy.js'
 
@@ -40,8 +40,6 @@ export function connectionStatus(session: SelectionSession = {}, projectRoot = p
   const settings = readUserSettings({ env })
   const effective = resolveEffectiveSettings({ settings, env, session, projectRoot })
   const connection = effective.connection.value
-  const spec = connection ? getProviderSpec(connection.provider) : null
-  const keyName = connection?.apiKeyEnvVar ?? spec?.credentialEnvVar ?? null
   // Reveal a legacy vendor alias instead of letting a saved key imply the wrong transport.
   const requestedModel = effective.model.value
   let alias: { from: string; to: string; notice: string | null } | null = null
@@ -64,7 +62,7 @@ export function connectionStatus(session: SelectionSession = {}, projectRoot = p
     budgetSource: effective.budgetUsd.source,
     env,
   })
-  const credentialReady = Boolean(connection && (connection.authentication === 'none' || !spec?.requiresCredential || (keyName && env[keyName]?.trim())))
+  const credentialReady = report.credential.present
   const configured = Boolean(connection && effective.model.value && credentialReady && report.offline.usable)
   const reason = !connection || !effective.model.value
     ? 'setup_required'

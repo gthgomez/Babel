@@ -739,9 +739,11 @@ export function installKeyHandler(
           buffer = buffer.slice(endIdx + BRACKETED_PASTE_END.length);
           continue;
         }
-        // No end marker yet -- accumulate everything, wait for more data
-        pasteContent += buffer.toString('utf8');
-        buffer = Buffer.alloc(0);
+        // Keep any partial end marker for the next chunk, not in the paste.
+        let tail = Math.min(buffer.length, BRACKETED_PASTE_END.length - 1);
+        while (tail > 0 && !buffer.subarray(-tail).equals(BRACKETED_PASTE_END.subarray(0, tail))) tail--;
+        pasteContent += buffer.subarray(0, buffer.length - tail).toString('utf8');
+        buffer = buffer.subarray(buffer.length - tail);
         break;
       }
 
@@ -804,8 +806,9 @@ export function installKeyHandler(
 
   // ── Data handler ───────────────────────────────────────────────────────────
 
-  function onData(data: Buffer): void {
+  function onData(chunk: Buffer | string): void {
     if (cleanupCalled) return;
+    const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
     // Feed raw data through the composition handler if attached
     if (compositionHandler) {
       compositionHandler.handleData(data);

@@ -1,3 +1,6 @@
+export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
+export const COMMAND_CODE_BASE_URL = 'https://api.commandcode.ai/provider/v1'
+
 /** Validate an explicitly selected endpoint before resolving or sending credentials. */
 export function validateProviderBaseUrl(value: string): string {
   const url = new URL(value)

@@ -4,6 +4,7 @@ import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { resolveRuntimePaths } from './config/runtimePaths.js'
 import { readUserSettings, resolveEffectiveSettings, type UserSettings } from './config/userSettings.js'
 import { getProviderSpec, listProviderSpecs } from './runners/providerRegistry.js'
+import { readProviderKeyReference } from './config/providerAccountKeys.js'
 import {probeInstalledSandboxImage} from './config/installedSandbox.js'
 import { CLI_COMMAND } from './cli/commandName.js'
 import { dockerCheckMessage, formatManualProviderEnvExample, sandboxImageCheckMessage } from './cli/firstRunText.js'
@@ -55,7 +56,8 @@ export function runInstalledDoctor(options: {
   const connection = effective.connection.value
   const spec = connection ? getProviderSpec(connection.provider) : null
   const keyName = connection?.apiKeyEnvVar ?? spec?.credentialEnvVar
-  const configured = Boolean(connection && effective.model.value && (connection.authentication === 'none' || !spec?.requiresCredential || (keyName && env[keyName]?.trim())))
+  const configured = Boolean(connection && effective.model.value && (connection.authentication === 'none' || !spec?.requiresCredential ||
+    (keyName && readProviderKeyReference(connection.provider, keyName, env))))
   const dockerDisabled = env['BABEL_DOCKER_DISABLE'] === 'true'
   const unsafeDockerArgs = !validateDockerIsolationArgs(env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']).ok
   const dockerReady = requiresDocker && !dockerDisabled && !unsafeDockerArgs && (options.dockerProbe ? options.dockerProbe() :
@@ -98,7 +100,9 @@ export function runInstalledDoctor(options: {
     { id: 'resources', status: existsSync(join(paths.resourceRoot, 'prompt_catalog.yaml')) ? 'ok' : 'fail', message: paths.resourceRoot },
     { id: 'provider', status: configured ? 'ok' : 'warn', message: configured ?
       `Selected ${connection!.id}: ${connection!.provider}/${effective.model.value}; source ${effective.connection.source}. Credential presence checked; connectivity and observed model unverified.` :
-      `No provider is selected yet. Run ${CLI_COMMAND} setup in a terminal, or save one key in ${envFile}. Read-only commands work; nothing was contacted.` },
+      connection
+        ? `Connection ${connection.id} needs ${effective.model.value ? 'an API key' : 'a model'}. Run ${CLI_COMMAND} setup in a terminal. Nothing was contacted.`
+        : `No provider is selected yet. Run ${CLI_COMMAND} setup in a terminal, or save one key in ${envFile}. Read-only commands work; nothing was contacted.` },
     { id: 'executable', status: product.restartNeeded ? 'warn' : 'ok', message: `Running Babel ${product.runningVersion ?? 'unknown'}; revision ${product.revision ?? 'unknown'}; command ${CLI_COMMAND} (aliases babel and babel-agent); CLI entry ${product.entrypoint ?? 'unknown'}; Node executable ${product.executable}; package ${product.packageRoot}; ${product.restartNeeded === true ? 'package files changed; restart to use the current installation' : product.restartNeeded === null ? 'installation change detection unknown' : 'no change detected in package manifest or entrypoint'}` },
     boundaryCheck,
     { id: 'docker', status: !requiresDocker ? 'not_required' : dockerReady ? 'ok' : 'fail', message: !requiresDocker ? 'Docker is not required for the selected execution profile; it was not checked.' : dockerCheckMessage(dockerReady, platform) },
@@ -120,7 +124,7 @@ export function installedSetupChecklist(options: { paths?: ReturnType<typeof res
   }, first_five_minutes: [
     { step: 'diagnose_installation', command: `${CLI_COMMAND} doctor --json` },
     { step: 'preview_project_context', command: `${CLI_COMMAND} context preview @file README.md --json`, note: 'Run inside your target project, with an existing file.' },
-    { step: 'configure_provider', command: `${CLI_COMMAND} setup`, note: 'Choose a provider connection, exact model and budget. Guided credentials are masked; diagnostics never send provider requests.' },
+    { step: 'configure_provider', command: `${CLI_COMMAND} setup`, note: 'Choose a provider, connect a key, then pick a model. Only an explicit metadata check contacts the provider; no inference is sent.' },
     { step: 'start_safe_execution', command: `${CLI_COMMAND} interactive`, note: `Ordinary Chat defaults to host_native: project commands run with your OS user's authority, which is not an OS sandbox. Select safe_repo to require a Docker container instead. On Windows, Babel Desktop Setup can prepare the image; on macOS and Linux, run ${CLI_COMMAND} sandbox prepare after Docker is installed.` },
   ], next_command: `${CLI_COMMAND} doctor --json`, mutates_workspace: false, remote_side_effects: false }
 }

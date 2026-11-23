@@ -45,7 +45,7 @@ export async function executeTask(
   const resolveIdentity = deps?.loadSessionIdentity ?? loadSessionIdentity;
   try {
     if (ctx.state.readinessState === 'setup_required' || ctx.state.readinessState === 'action_required') {
-      console.log('Action required: run /setup to select a provider, exact model and credential before starting a task. Use /provider status for details.');
+      console.log('Connect a provider to chat: run /setup. Use /provider status for details.');
       return;
     }
     const explicitDailyCommand = parseInteractiveDailyCommand(input);

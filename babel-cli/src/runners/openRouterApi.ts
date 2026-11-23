@@ -11,6 +11,7 @@
  */
 
 import { OpenAiCompatibleRunner } from './protocol/openai-chat-completions.js';
+import { OPENROUTER_BASE_URL } from './providerEndpoint.js';
 import { applyCampaignOpenRouterWireBody } from '../eval/campaign-openrouter-wire.js'
 import { isCampaignQualifiedModelRoute } from '../eval/campaign-qualified-routes.js'
 import { CampaignRouteUnsupportedError } from './campaignDispatchGate.js'
@@ -30,7 +31,7 @@ export class OpenRouterApiRunner extends OpenAiCompatibleRunner {
   private readonly requireExactModelId: boolean;
 
   protected override get apiUrl(): string {
-    return 'https://openrouter.ai/api/v1/chat/completions';
+    return `${OPENROUTER_BASE_URL}/chat/completions`;
   }
 
   constructor(

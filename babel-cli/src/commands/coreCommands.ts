@@ -32,7 +32,7 @@ export { resolveBenchmarkAnalyzeRun } from './coreCommandSupport.js';
 
 const TOP_LEVEL_HELP_TEXT = `
 Start:
-  ${CLI_COMMAND} setup                         Connect your provider, exact model and budget
+  ${CLI_COMMAND} setup                         Connect a provider and choose a model
   ${CLI_COMMAND}                               Open the interactive coding session
   ${CLI_COMMAND} work "Explain this project"    Inspect or implement within current permissions
   ${CLI_COMMAND} plan "Design this change"      Produce a read-only plan

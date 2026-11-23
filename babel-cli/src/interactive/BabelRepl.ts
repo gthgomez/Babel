@@ -37,6 +37,7 @@ import { buildReplCompleter } from './repl/replCompleter.js';
 import {
   printIdleHeader as renderIdleHeader,
   renderTurnStatusBar as renderReplStatusBar,
+  setupChatHint,
 } from './repl/replSessionUi.js';
 
 
@@ -433,6 +434,7 @@ export class BabelRepl {
           : null,
       });
       const activity = runtime?.activity ?? (this.isRunning || this.preparingRun ? 'running' : 'idle');
+      const connectionHint = setupChatHint(this.state.readinessState);
       const sessionLabels =
         sources.sessionStatus === 'error'
           ? ['Session list unavailable']
@@ -443,7 +445,7 @@ export class BabelRepl {
         mode: this.state.mode,
         model: this.state.resolvedModelId ?? this.state.model ?? 'auto',
         project: this.state.project ?? 'global',
-        conversation,
+        conversation: connectionHint ? [connectionHint, ...conversation] : conversation,
         sessions: sessionLabels,
         projectRows:
           sources.projectRows.length > 0
@@ -457,7 +459,7 @@ export class BabelRepl {
         context: inspector.context,
         meter: inspector.meter,
         status: [
-          activity === 'idle' ? 'Ready' : activity,
+          activity === 'idle' ? connectionHint ? 'Setup required' : 'Ready' : activity,
           ...(runtime?.lastOutcome ? [`Last outcome: ${runtime.lastOutcome}`] : []),
         ],
         ...(prompt ? { prompt } : {}),

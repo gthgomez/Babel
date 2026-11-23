@@ -219,12 +219,23 @@ node --env-file=.\babel-cli\.env .\babel-cli\dist\index.js run --project example
 
 The commands in this section (`provider`, `model`, `settings`, `work`) are implemented in this source tree. They are not part of published `babel-harness@0.2.0`. On that package, `babel-harness setup` only prints a checklist, and a word such as `settings` is run as a chat task. Use the repository [README](../README.md) for the published quickstart.
 
-A fresh profile has **no cloud provider or model selected**. Launching the interactive
-CLI offers setup before indexing or runtime warmup. Setup explains Babel, records
-an explicit provider connection and exact model ID, asks for a per-task budget
-(including an explicit `unlimited` choice), and confirms the initial user default.
-Interrupted setup retains completed non-secret choices. In a pipe or CI,
-`setup --json` reports local setup state without waiting for input.
+A fresh profile has **no cloud provider or model selected**. On first launch,
+choose a provider, use or paste a key, then search and pick a model. Use **Advanced**
+to enter an exact ID. Press Esc to go back or choose **Skip for now** to stay in
+Babel; `/setup` resumes a named connection without repasting a saved key.
+Use `/setup` to add another named key and `/provider` to switch accounts in a session.
+
+Setup sends no inference. **Check connection** explicitly fetches model metadata:
+OpenRouter checks the selected key against its account catalog, while Command
+Code's public catalog does not verify the key. Bundled and saved choices are
+unverified. Existing spending preferences remain in force; if no cap is set,
+setup asks before enabling a remote route without one. In a pipe or CI,
+`setup --json` reports local setup state without waiting for input or using the network.
+
+Pasted keys are masked and stored as plaintext in the private profile's
+`.env.accounts`, not exported to child environments. Preferences contain only
+references. This is not an OS credential vault: `host_native` commands run
+with your OS user's authority and are not sandboxed.
 
 ```sh
 babel-agent provider list
