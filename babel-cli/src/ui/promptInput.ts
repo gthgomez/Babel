@@ -86,6 +86,12 @@ import {
 } from "../voice/voice-keybinding.js";
 import { handleNormalModeKey as dispatchNormalModeKey } from "./promptInputNormalMode.js";
 import {
+  getNormalizedVisualRange as normalizePromptVisualRange,
+  getSelectionColRange as getPromptSelectionColRange,
+  deleteVisualSelection as deletePromptVisualSelection,
+  getVisualSelectionText,
+} from './promptVisualRange.js';
+import {
   type PromptInputPresentationTarget,
   type PromptView,
   type Rect,
@@ -1352,156 +1358,54 @@ export class PromptInput {
     endLine: number;
     endCol: number;
   } {
-    if (!this.visualStart) {
-      return {
-        startLine: this.cursorLine,
-        startCol: this.cursorCol,
-        endLine: this.cursorLine,
-        endCol: this.cursorCol,
-      };
-    }
-
-    if (this.visualMode === "line") {
-      const startLine = Math.min(this.visualStart.line, this.cursorLine);
-      const endLine = Math.max(this.visualStart.line, this.cursorLine);
-      return { startLine, startCol: 0, endLine, endCol: Infinity };
-    }
-
-    // Character-wise
-    const start = this.visualStart;
-    const end = { line: this.cursorLine, col: this.cursorCol };
-
-    let normStart: { line: number; col: number };
-    let normEnd: { line: number; col: number };
-
-    if (
-      start.line < end.line ||
-      (start.line === end.line && start.col <= end.col)
-    ) {
-      normStart = start;
-      normEnd = end;
-    } else {
-      normStart = end;
-      normEnd = start;
-    }
-
-    // endCol is exclusive (one past last selected char)
-    const endLineLen = this.lines[normEnd.line]?.length ?? 0;
-    const endCol = normEnd.col < endLineLen ? normEnd.col + 1 : endLineLen;
-
-    return {
-      startLine: normStart.line,
-      startCol: normStart.col,
-      endLine: normEnd.line,
-      endCol,
-    };
+    return normalizePromptVisualRange({
+      visualStart: this.visualStart,
+      visualMode: this.visualMode,
+      cursorLine: this.cursorLine,
+      cursorCol: this.cursorCol,
+      lines: this.lines,
+    });
   }
 
   /** Get the column range of visual selection for a given line, or null if not selected. */
   private getSelectionColRange(
     line: number,
   ): { start: number; end: number } | null {
-    if (!this.visualStart) return null;
-
-    const range = this.getNormalizedVisualRange();
-
-    if (line < range.startLine || line > range.endLine) return null;
-
-    if (this.visualMode === "line") {
-      return { start: 0, end: (this.lines[line] ?? "").length };
-    }
-
-    // Character-wise
-    if (line === range.startLine && line === range.endLine) {
-      return { start: range.startCol, end: range.endCol };
-    }
-    if (line === range.startLine) {
-      return { start: range.startCol, end: (this.lines[line] ?? "").length };
-    }
-    if (line === range.endLine) {
-      return { start: 0, end: range.endCol };
-    }
-    return { start: 0, end: (this.lines[line] ?? "").length };
+    return getPromptSelectionColRange({
+      line,
+      lines: this.lines,
+      visualStart: this.visualStart,
+      visualMode: this.visualMode,
+      cursorLine: this.cursorLine,
+      cursorCol: this.cursorCol,
+    });
   }
 
   /** Delete the visual selection into killBuffer. Caller must snapshot(). */
   private visualDelete(): void {
-    if (!this.visualStart) return;
-
-    const range = this.getNormalizedVisualRange();
-
-    if (this.visualMode === "line") {
-      const yankedLines: string[] = [];
-      for (let i = range.startLine; i <= range.endLine; i++) {
-        yankedLines.push(this.lines[i] ?? "");
-      }
-      this.killBuffer = yankedLines.join("\n") + "\n";
-
-      this.lines.splice(range.startLine, range.endLine - range.startLine + 1);
-      if (this.lines.length === 0) this.lines = [""];
-      this.cursorLine = Math.min(range.startLine, this.lines.length - 1);
-      this.cursorCol = 0;
-    } else {
-      const line = this.lines[range.startLine] ?? "";
-
-      if (range.startLine === range.endLine) {
-        this.killBuffer = line.slice(range.startCol, range.endCol);
-        this.lines[range.startLine] =
-          line.slice(0, range.startCol) + line.slice(range.endCol);
-        this.cursorLine = range.startLine;
-        this.cursorCol = range.startCol;
-      } else {
-        const yankedParts: string[] = [];
-        yankedParts.push(line.slice(range.startCol));
-
-        for (let i = range.startLine + 1; i < range.endLine; i++) {
-          yankedParts.push(this.lines[i] ?? "");
-        }
-
-        const lastLine = this.lines[range.endLine] ?? "";
-        yankedParts.push(lastLine.slice(0, range.endCol));
-
-        this.killBuffer = yankedParts.join("\n");
-        this.lines[range.startLine] =
-          line.slice(0, range.startCol) + lastLine.slice(range.endCol);
-
-        const deleteCount = range.endLine - range.startLine;
-        this.lines.splice(range.startLine + 1, deleteCount);
-
-        this.cursorLine = range.startLine;
-        this.cursorCol = range.startCol;
-      }
-    }
+    const result = deletePromptVisualSelection({
+      lines: this.lines,
+      visualStart: this.visualStart,
+      visualMode: this.visualMode,
+      cursorLine: this.cursorLine,
+      cursorCol: this.cursorCol,
+    });
+    if (!result) return;
+    this.killBuffer = result.killBuffer;
+    this.cursorLine = result.cursorLine;
+    this.cursorCol = result.cursorCol;
   }
 
   /** Yank visual selection into killBuffer (non-destructive). */
   private visualYank(): void {
-    if (!this.visualStart) return;
-
-    const range = this.getNormalizedVisualRange();
-
-    if (this.visualMode === "line") {
-      const yankedLines: string[] = [];
-      for (let i = range.startLine; i <= range.endLine; i++) {
-        yankedLines.push(this.lines[i] ?? "");
-      }
-      this.killBuffer = yankedLines.join("\n") + "\n";
-    } else {
-      if (range.startLine === range.endLine) {
-        this.killBuffer = (this.lines[range.startLine] ?? "").slice(
-          range.startCol,
-          range.endCol,
-        );
-      } else {
-        const parts: string[] = [];
-        parts.push((this.lines[range.startLine] ?? "").slice(range.startCol));
-        for (let i = range.startLine + 1; i < range.endLine; i++) {
-          parts.push(this.lines[i] ?? "");
-        }
-        parts.push((this.lines[range.endLine] ?? "").slice(0, range.endCol));
-        this.killBuffer = parts.join("\n");
-      }
-    }
+    const text = getVisualSelectionText({
+      lines: this.lines,
+      visualStart: this.visualStart,
+      visualMode: this.visualMode,
+      cursorLine: this.cursorLine,
+      cursorCol: this.cursorCol,
+    });
+    if (text !== null) this.killBuffer = text;
   }
 
   // ── Dot Repeat ─────────────────────────────────────────────────────────
