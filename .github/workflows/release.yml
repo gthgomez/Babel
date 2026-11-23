@@ -456,7 +456,7 @@ jobs:
             grep -v '^$' release-linux/SHA256SUMS
           } | sort -k2 > release-dist/SHA256SUMS
           cd release-dist
-          sha256sum ./*.tgz | sed 's# ./\([^/]*\)$#  \1#' >> SHA256SUMS
+          sha256sum ./*.tgz | sed 's#  \./#  #' >> SHA256SUMS
           sort -k2 -o SHA256SUMS SHA256SUMS
           sha256sum -c SHA256SUMS
           find . -maxdepth 1 -type f -printf 'draft: %f\n' | sort
