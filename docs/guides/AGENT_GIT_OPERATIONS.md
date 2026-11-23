@@ -60,6 +60,47 @@ Reuse evidence only under AGENTS.md's unchanged-input rules and required command
 
 ## Readiness diagnostics
 
+### Portable preflight and resumable delivery
+
+`agent-preflight.ps1` uses the configured `-GitPath` unchanged when supplied.
+When its built-in Windows Git path is absent, it resolves `git` from `PATH`;
+this changes executable discovery only, not credential helpers, scans, remote
+identity checks, or publication policy. Pass `-GitPath` explicitly to remove
+any ambiguity on non-Windows hosts. The script remains a read-only diagnostic.
+
+The JSON `githubCapabilities` section deliberately separates
+`nonInteractiveAuthentication` and `repositoryRead` from `branchWrite` and
+`pullRequestCreation`. The latter two remain `unproven_not_probed`: successful
+`gh auth status`, metadata reads, or `pushReady` do not prove that a branch
+push or PR creation is permitted. Do not add speculative writes to preflight.
+`nextSteps` describes safe recovery; it does not authorize a write or credential
+change. The script's `ok`/`mutationReady` fields may still be false when auth or
+repository-read checks fail. Those failures block dependent remote work; they do
+not prevent policy-compliant local inspection or offline checks, but do not
+reinterpret them as delivery readiness.
+
+For resumable handoff, record these fields in the private task record (not a
+public PR comment unless each item is appropriate for publication):
+
+| Field | Required value |
+|---|---|
+| `repository` / `remote` | Expected canonical slug and named remote; never include credential-bearing URL data. |
+| `branch` / `headSha` | Exact local branch and full commit SHA that was verified. |
+| `baseBranch` / `baseSha` | Base branch and exact base SHA used for comparison/qualification. |
+| `prNumber` / `prUrl` | Existing PR identity if observed; otherwise explicitly `none_observed`, not “not created” unless creation was checked. |
+| `checks` | Command, exit result, source SHA, and pass/fail/skip status; identify hosted checks separately from local tests. |
+| `publication` | Push/PR attempt, observed result and resulting remote SHA; if never attempted say `not_attempted`. |
+| `blocker` / `nextAction` | Stage (local, auth/read, push, PR, review/CI, merge), sanitized error/exit, responsible next owner, and recoverable next step. |
+
+On resume, re-read current local HEAD/status, remote branch tip, PR state, base
+SHA and authoritative required checks before acting. Match an existing PR to
+the exact repository, branch and head; do not create a duplicate merely because
+the earlier handoff lacks a PR number. If push outcome is ambiguous, query the
+remote branch first and compare SHAs before retrying. On rejection or movement,
+fetch/freeze the observed tip and classify ownership/divergence. Preserve the
+branch and all existing commits; do not automatically rebase, amend, force-push,
+or merge. A prior green result is not current evidence after head/base movement.
+
 Readiness diagnostic:
 
 ```powershell
@@ -264,6 +305,15 @@ degrading balance. Dedicated suites with different setup remain distinct
 qualification inputs; filename overlap alone is insufficient evidence for
 delegating a file, so the shard helper verifies the canonical raw-suite scripts
 and never delegates a file outside their expanded inventory.
+
+`tools/ci-performance-report.mjs` also reports `scheduling.freshExecution` to
+compare fresh job pre-start delay with runner execution time. It includes only
+jobs classified as executed in the current attempt; carried-forward work,
+skipped jobs, unknown timings, and runnerless cancellations are not folded into
+that comparison. The queue value remains a timestamp proxy (`created_at` to
+`started_at`), not measured provider queue or dependency delay. Null percentiles
+mean no valid sample; they are never treated as zero. These offline report
+metrics are advisory and do not authorize merge or certify hosted CI behavior.
 The portable workflow file is owned by the canonical unit inventory; `npm test`
 does not invoke it a second time. Its focused script remains available.
 

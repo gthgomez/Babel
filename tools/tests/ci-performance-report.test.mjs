@@ -165,6 +165,38 @@ test('creation-to-start delay is a scheduling proxy when dependency timing is ab
   assert.equal(report.formulas.schedulingProxy.includes('not provider capacity'), true)
 })
 
+test('fresh queue proxy is reported separately from runner time and excludes carried-forward work', () => {
+  const carried = job({
+    id: 21,
+    created_at: '2026-10-29T23:00:00Z',
+    started_at: '2026-10-29T23:01:00Z',
+    completed_at: '2026-10-29T23:02:00Z',
+  })
+  const fresh = job({
+    id: 22,
+    created_at: '2026-10-30T00:00:00Z',
+    started_at: '2026-10-30T00:00:05Z',
+    completed_at: '2026-10-30T00:01:05Z',
+  })
+  const input = docs({
+    runs: [run({ run_attempt: 2 })],
+    attempts: [
+      attempt({ run_attempt: 1, total_count: 0, jobs: [] }),
+      attempt({ run_attempt: 2, run_started_at: '2026-10-30T00:00:00Z', total_count: 2, jobs: [carried, fresh] }),
+    ],
+  })
+  const report = reportPerformance(input.runs, input.jobs)
+  assert.deepEqual(report.scheduling.freshExecution, {
+    jobs: 1,
+    queueProxySamples: 1,
+    queueProxyP50Seconds: 5,
+    queueProxyP95Seconds: 5,
+    runnerExecutionSamples: 1,
+    runnerExecutionSeconds: 60,
+  })
+  assert.equal(report.executionAccounting.carriedForwardJobs, 1)
+})
+
 test('different events are not combined into one category', () => {
   const input = docs({
     runs: [run({ id: 1, event: 'pull_request' }), run({ id: 2, event: 'push', head_sha: sha('b') })],
