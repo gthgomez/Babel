@@ -252,8 +252,9 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
           }
         } else {
           await handleCommand(ctx, input);
-          // A command such as /exit may tear the hosted shell down while it runs.
-          ctx.shellHost?.holdRepaint();
+          // Setup returns from a full terminal takeover, so restore the
+          // composer without waiting for the user's next keystroke.
+          if (command !== 'setup') ctx.shellHost?.holdRepaint();
         }
       } else if (ctx.withExclusiveTerminal) {
         await ctx.withExclusiveTerminal('command', () => handleCommand(ctx, input));

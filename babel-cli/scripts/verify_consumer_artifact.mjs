@@ -213,7 +213,7 @@ async function tui(configured = false) {
       child.stderr.on('data', data => { transcript += data })
       child.stdout.on('data', data => {
         transcript += data
-        if (!sent && /babel[^\r\n]*[>❯]|type.*(?:message|help)|Babel session/i.test(transcript)) {
+        if (!sent && /Input › /.test(transcript)) {
           sent = true
           child.stdin.write('/doctor\n/exit\n')
         }

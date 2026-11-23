@@ -81,7 +81,7 @@ export async function verifyInstalledFirstRun(bin, root, { realPty = false } = {
     syncBuiltinESMExports();
     if (${JSON.stringify(!realPty)}) {
       Object.assign(process.stdin, { isTTY: true, isRaw: false, setRawMode(raw) { this.isRaw = raw; return this; } });
-      Object.assign(process.stdout, { isTTY: true, columns: 80, rows: 24 });
+      Object.assign(process.stdout, { isTTY: true, columns: 132, rows: 36 });
       process.stderr.isTTY = true;
     }
     globalThis.fetch = async (url, init) => {
@@ -101,13 +101,12 @@ export async function verifyInstalledFirstRun(bin, root, { realPty = false } = {
   `)
   Object.assign(env, {
     TERM: 'xterm-256color', BABEL_DAEMON_WARM: '0', BABEL_SKIP_KG_INDEX: '1',
-    BABEL_TUI_SHELL: 'legacy', BABEL_PROMPT_V2: '0',
   })
   const args = ['--import', pathToFileURL(preload).href, bin]
   const scope = { cwd: project, env, windowsHide: true }
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`
   const child = realPty
-    ? spawn('script', ['-qefc', [process.execPath, ...args].map(quote).join(' '), '/dev/null'], scope)
+    ? spawn('script', ['-qefc', 'stty rows 36 cols 132 && exec ' + [process.execPath, ...args].map(quote).join(' '), '/dev/null'], scope)
     : spawn(process.execPath, args, scope)
   const transcript = await drive(child, [
     ['Provider number (Esc back): ', '\r'],
@@ -142,8 +141,7 @@ export async function verifyInstalledFirstRun(bin, root, { realPty = false } = {
     ['Model number, search text', '1\r'],
     ['Selected openrouter-2 ·', undefined],
     ['Input › ', '/provider use openrouter\r'],
-    ['"selected": "openrouter"', undefined],
-    ['Input › ', '/exit\r'],
+    ['"selected": "openrouter"', '/exit\r'],
     ['Babel session ended.', undefined],
   ])
   const beforeSetup = transcript.slice(0, transcript.indexOf('Selected openrouter ·'))
