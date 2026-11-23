@@ -103,7 +103,7 @@ if (!isSyntheticProviderFixtureReady()) {
           assert.equal(String(input), endpoint)
           const body = JSON.parse(String(init?.body))
           assert.equal(body.model, manualModelId)
-          assert.ok(++requests <= (finite ? 1 : 2))
+          assert.ok(++requests <= (finite ? 0 : 2), 'finite unpriced requests must be refused before transport')
           if (requests === 1) return reply({ tool_calls: [{ index: 0, id: 'manual-read', type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }) } }] }, 'tool_calls')
           const observation = body.messages.find((message: { role: string; tool_call_id?: string }) => message.role === 'tool' && message.tool_call_id === 'manual-read')
           assert.match(String(observation?.content), /cobalt-lantern/)
@@ -111,7 +111,7 @@ if (!isSyntheticProviderFixtureReady()) {
           return reply({ content: expectedAnswer })
         }
         const result = await runCliChatTask({ task, model: normalizeModelName(key)!, projectRoot: root, outputFormat: 'json' })
-        assert.equal(requests, finite ? 1 : 2)
+        assert.equal(requests, finite ? 0 : 2)
         assert.equal(result.exitCode === 0, !finite)
         assert.equal(result.payload[finite ? 'reason_code' : 'terminal_outcome'], finite ? 'cost_accounting_incomplete' : 'NO_CHANGE_REQUIRED')
         if (!finite) {
@@ -125,7 +125,11 @@ if (!isSyntheticProviderFixtureReady()) {
         }
         const budget = JSON.parse(readFileSync(join(chatSessionDir(result.payload['session_id'] as string), 'task-budget.json'), 'utf8'))
         assert.deepEqual(budget.grant.costCap, finite ? { kind: 'finite', usd: 0.001 } : { kind: 'unlimited' })
-        assert.ok((globalCostTracker.getTaskSummary(budget.taskOwnerId).unknownChargeCount ?? 0) > 0)
+        if (finite) {
+          assert.equal(globalCostTracker.getTaskChargeObservations(budget.taskOwnerId).length, 0)
+        } else {
+          assert.ok((globalCostTracker.getTaskSummary(budget.taskOwnerId).unknownChargeCount ?? 0) > 0)
+        }
       }
       delete process.env['BABEL_CHAT_MAX_COST']
       delete process.env['BABEL_DESKTOP_PROVIDER']

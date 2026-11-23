@@ -47,6 +47,7 @@ if (!isSyntheticProviderFixtureReady()) {
   const { join } = await import('node:path')
   const { runCliChatTask } = await import('../interactive/execution/chatCore.js')
   const { chatSessionDir } = await import('../cli/runsLayout.js')
+  const { installBoundedFixturePricing } = await import('../testUtils/boundedFixturePricing.js')
   const { initMinimalGitProject } = await import('../testUtils/chatAdmissionFixture.js')
   const { globalCostTracker } = await import('../services/costTracker.js')
   const task = 'Explain README.md and its stated purpose without changing any files.'
@@ -137,6 +138,7 @@ if (!isSyntheticProviderFixtureReady()) {
 
   test('explicit finite env cap stops before a second inference when usage is unknown', async t => {
     const root = fixture(t)
+    installBoundedFixturePricing(t, root, backendKey)
     process.env['BABEL_CHAT_MAX_COST'] = '0.75'
     let fetches = 0
     globalThis.fetch = async (input, init) => {
@@ -476,8 +478,9 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.deepEqual(allowance.getTaskAllowanceSnapshot()?.grant.costCap, { kind: 'unlimited' })
   })
 
-  test('finite grant refuses further dispatch when owner-charge journal fails', async t => {
+  test('finite grant refuses dispatch when owner-charge journal fails before inference', async t => {
     const root = fixture(t)
+    installBoundedFixturePricing(t, root, backendKey)
     process.env['BABEL_CHAT_MAX_COST'] = '0.75'
     const { ChatEngineOwnerAccounting } = await import('./chatEngineOwnerAccounting.js')
     const originalPersist = ChatEngineOwnerAccounting.prototype.persistOwnerCharges
@@ -505,7 +508,7 @@ if (!isSyntheticProviderFixtureReady()) {
       })
     }
     const result = await runCliChatTask({ task, projectRoot: root, model: backendKey, outputFormat: 'json' })
-    assert.ok(fetches <= 1, 'unsafe second dispatch must be refused after journal failure')
+    assert.equal(fetches, 0, 'the priced request must not reach transport after a pre-dispatch authority-journal failure')
     assert.notEqual(result.exitCode, 0)
     const budget = persistedBudget(result.payload)
     assert.deepEqual(budget.grant.costCap, { kind: 'finite', usd: 0.75 })
@@ -679,6 +682,7 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.deepEqual(unlimitedReload.persisted.grant.costCap, { kind: 'unlimited' })
 
     const finiteRoot = fixture(t)
+    installBoundedFixturePricing(t, finiteRoot, backendKey)
     process.env['BABEL_CHAT_MAX_COST'] = '0.75'
     let finiteFetches = 0
     globalThis.fetch = async (input, init) => {
