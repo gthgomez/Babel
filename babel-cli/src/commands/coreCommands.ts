@@ -286,11 +286,13 @@ export function registerCoreCommands(program: Command): void {
       action.setOptionValueWithSource('mode', ['chat', 'chat-headless'].includes(mode) && review === 'thorough' ? 'deep' : mode, explicitMode ? 'cli' : 'config');
       if (['plan', 'deep'].includes(action.opts()['mode'])) assertFiniteBudgetSupported('Plan or thorough Work', target);
     }
-    if (['run', 'plan', 'deep', 'interactive', 'app'].includes(action.name()) && action.opts()['model'] === undefined) {
+    // The REPL bootstrap owns its route resolution so an unavailable override
+    // can be repaired inside setup rather than aborting before the UI exists.
+    if (['run', 'plan', 'deep'].includes(action.name()) && action.opts()['model'] === undefined) {
       const selected = selectedConnectionModel({}, target);
       if (selected) action.setOptionValue('model', selected);
       else if (process.env['BABEL_MODEL']) action.setOptionValue('model', process.env['BABEL_MODEL']);
-    } else if (['run', 'plan', 'deep', 'interactive', 'app'].includes(action.name()) && typeof action.opts()['model'] === 'string' && !action.opts()['model'].startsWith('connection/')) {
+    } else if (['run', 'plan', 'deep'].includes(action.name()) && typeof action.opts()['model'] === 'string' && !action.opts()['model'].startsWith('connection/')) {
       const selected = selectedConnectionModel({ model: action.opts()['model'] }, target);
       if (selected) action.setOptionValue('model', selected);
     }

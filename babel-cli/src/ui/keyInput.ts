@@ -34,6 +34,8 @@ export interface KeyEvent {
   shift: boolean;
   /** Raw byte sequence that produced this event (used for buffer consumption tracking) */
   sequence: string;
+  /** Set only when the terminal delimited this paste with DECSET 2004 markers. */
+  bracketedPaste?: true;
   /** IME composition state — true during pre-edit, undefined when not composing */
   isComposing?: boolean;
   /** The full pre-edit text so far (meaningful only during a composition session) */
@@ -385,6 +387,9 @@ function parseEscapeSequence(data: Buffer): KeyEvent | null {
   if (secondByte === 0x4f) {
     if (data.length < 3) return null; // Need third byte
     const thirdByte = data[2]!;
+    if (thirdByte < 0x20 || thirdByte > 0x7e) {
+      return { name: 'ignored', ctrl: false, meta: false, shift: false, sequence: '\x1bO' };
+    }
     const ss3Map: Record<number, string> = {
       0x50: 'f1', // ESC O P
       0x51: 'f2', // ESC O Q
@@ -423,8 +428,7 @@ function parseEscapeSequence(data: Buffer): KeyEvent | null {
     };
   }
 
-  // Unrecognized escape sequence (non-printable continuation byte)
-  return null;
+  return null; // Not a recognized escape continuation.
 }
 
 /**
@@ -458,7 +462,9 @@ function parseCSI(params: Buffer): KeyEvent | null {
   if (i >= params.length) return null; // No final byte yet -- incomplete
 
   const finalByte = params[i]!;
-  if (finalByte < 0x40 || finalByte > 0x7e) return null; // Invalid terminator
+  if (finalByte < 0x40 || finalByte > 0x7e) {
+    return { name: 'ignored', ctrl: false, meta: false, shift: false, sequence: '\x1b[' + params.subarray(0, i).toString() };
+  }
 
   const paramPart = params.slice(0, i);
   const finalChar = String.fromCharCode(finalByte);
@@ -519,12 +525,12 @@ function parseCSI(params: Buffer): KeyEvent | null {
         sequence: seq,
       };
     }
-    return null; // Unknown tilde sequence
+    return { name: 'ignored', ctrl: false, meta: false, shift: false, sequence: seq };
   }
 
   // ── G7: Kitty keyboard protocol CSI … u ───────────────────────────────────
   if (finalByte === 0x75) {
-    return parseKittyCsiU(paramPart.toString(), seq);
+    return parseKittyCsiU(paramPart.toString(), seq) ?? { name: 'ignored', ctrl: false, meta: false, shift: false, sequence: seq };
   }
 
   // DEC 1004 focus reports: CSI I / CSI O. Must be consumed — returning
@@ -583,9 +589,10 @@ export function installKeyHandler(
   stream: NodeJS.ReadStream,
   callback: (event: KeyEvent) => void,
   compositionHandler?: CompositionHandler,
+  writeTerminalControl: (text: string) => void = text => OutputBuffer.getInstance().write(text),
 ): () => void {
   const wasRaw = (stream as unknown as { isRaw?: boolean }).isRaw ?? false;
-  const wasPaused = typeof stream.isPaused === 'function' ? stream.isPaused() : false;
+  const wasFlowing = stream.readableFlowing === true;
 
   let kittyEnabled = false;
   if (stream.isTTY) {
@@ -594,15 +601,15 @@ export function installKeyHandler(
     // Enable bracketed paste mode (DEC private mode 2004).
     // Terminals that support this wrap pasted text in \x1b[200~ ... \x1b[201~
     // markers so we can coalesce the entire paste into a single KeyEvent.
-    // Routes through OutputBuffer for a11y stripping; written outside any frame
-    // so it reaches stdout immediately via writeRaw().
-    OutputBuffer.getInstance().write('\x1b[?2004h');
+    // An exclusive prompt can have a different output TTY (e.g. stderr when
+    // stdout is redirected). The control must reach the same terminal.
+    writeTerminalControl('\x1b[?2004h');
 
     // G7 — Kitty keyboard protocol when capability (or env force) allows.
     try {
       const caps = terminalCapsCompat();
       if (shouldEnableKittyKeyboard(caps.kittyKbd)) {
-        OutputBuffer.getInstance().write(kittyEnableSequence());
+        writeTerminalControl(kittyEnableSequence());
         kittyEnabled = true;
       }
     } catch {
@@ -734,6 +741,7 @@ export function installKeyHandler(
             meta: false,
             shift: false,
             sequence: pasteContent,
+            bracketedPaste: true,
           });
           pasteContent = null;
           buffer = buffer.slice(endIdx + BRACKETED_PASTE_END.length);
@@ -775,7 +783,16 @@ export function installKeyHandler(
       // ── Normal key parsing ─────────────────────────────────────────────
       const event = parseKeypress(buffer);
       if (event === null) {
-        // Incomplete or unrecognized sequence
+        if (buffer[0] === 0x1b && buffer.length > 1 && buffer[1]! < 0x20) {
+          // Esc plus a separate control key (e.g. Enter) can arrive in one read.
+          emit({ name: 'escape', ctrl: false, meta: false, shift: false, sequence: '\x1b' });
+          buffer = buffer.subarray(1);
+          continue;
+        }
+        if (buffer[0] !== 0x1b) {
+          buffer = buffer.subarray(1); // An invalid byte must not strand later keys.
+          continue;
+        }
         if (buffer.length === 1 && buffer[0] === 0x1b) {
           // Bare Escape -- set timeout for disambiguation
           escapeTimeoutId = setTimeout(() => {
@@ -831,17 +848,16 @@ export function installKeyHandler(
       try {
         // Disable bracketed paste mode before restoring raw mode
         // Routes through OutputBuffer for a11y stripping.
-        OutputBuffer.getInstance().write('\x1b[?2004l');
+        writeTerminalControl('\x1b[?2004l');
         // G7 — pop kitty keyboard mode if we enabled it
         if (kittyEnabled) {
-          OutputBuffer.getInstance().write(kittyDisableSequence());
+          writeTerminalControl(kittyDisableSequence());
         }
         (stream as unknown as { setRawMode: (mode: boolean) => void }).setRawMode(wasRaw);
-        if (wasPaused) {
-          stream.pause();
-        }
       } catch {
         // Ignore errors during cleanup
+      } finally {
+        if (!wasFlowing) stream.pause();
       }
     }
   };

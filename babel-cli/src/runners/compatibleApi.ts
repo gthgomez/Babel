@@ -13,7 +13,7 @@ export class CompatibleApiRunner extends OpenAiCompatibleRunner {
     validateProviderBaseUrl(options.baseUrl)
     super(model, options.apiKeyEnvVar ?? 'BABEL_COMPATIBLE_API_KEY',
       { ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}), ...(options.temperature !== undefined ? { temperature: options.temperature } : {}) },
-      { provider: 'openai-compatible', ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}), ...(options.authentication === 'none' ? { explicitCredential: 'no-auth-required' } : {}), ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}), ...(options.env ? { env: options.env } : {}) })
+      { provider: 'openai-compatible', baseUrl: options.baseUrl, ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}), ...(options.authentication === 'none' ? { explicitCredential: 'no-auth-required' } : {}), ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}), ...(options.env ? { env: options.env } : {}) })
     this.authentication = options.authentication ?? 'api-key'
     this.endpoint = `${options.baseUrl.replace(/\/$/, '')}/chat/completions`
   }

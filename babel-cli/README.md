@@ -58,9 +58,10 @@ commands and source checkouts, keeping read-only planning out of the target
 project. Use the returned `run_dir` to locate it. An installed package ignores
 `BABEL_ROOT` for resource discovery.
 An optional user configuration file is `~/.babel/config/.env`; ordinary provider
-environment variables also work. Set credentials securely outside the checkout;
-Guided setup uses masked credential entry in the private profile. Setup and doctor never print keys or contact inference providers. Configure one
-supported provider for model-backed tasks; presence alone is not authentication.
+environment variables also work. Set credentials securely outside the checkout.
+Guided setup uses masked key entry in the private profile. Setup and doctor do not
+print keys or send inference. Configure a supported provider for model-backed
+tasks; presence alone is not authentication.
 A local Ollama route needs its service and selected model available.
 
 Read-only help, context preview, and stack resolution need no provider. The
@@ -228,13 +229,17 @@ Use `/setup` to add another named key and `/provider` to switch accounts in a se
 Setup sends no inference. **Check connection** explicitly fetches model metadata:
 OpenRouter checks the selected key against its account catalog, while Command
 Code's public catalog does not verify the key. Bundled and saved choices are
-unverified. Existing spending preferences remain in force; if no cap is set,
-setup asks before enabling a remote route without one. In a pipe or CI,
+unverified. Existing spending preferences remain in force. Setup asks for a
+user-wide spending choice when saving a remote default without one, even if
+a project or environment cap applies here. With a finite cap, Babel requires
+known pricing for the exact model and does not substitute a different ID.
+The cap uses estimated costs, not a guarantee of the provider's invoice. In a pipe or CI,
 `setup --json` reports local setup state without waiting for input or using the network.
 
 Pasted keys are masked and stored as plaintext in the private profile's
 `.env.accounts`, not exported to child environments. Preferences contain only
-references. This is not an OS credential vault: `host_native` commands run
+references. A pasted key for a custom endpoint must be re-entered if that
+endpoint changes. This is not an OS credential vault: `host_native` commands run
 with your OS user's authority and are not sandboxed.
 
 ```sh

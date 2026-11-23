@@ -27,7 +27,7 @@ test('Esc goes back, Ctrl+C or EOF settles the prompt, and raw mode is restored'
     const prompt = openSetupPrompt(text => terminal.stderr.write(text), terminal.stdin as NodeJS.ReadStream)
     try {
       const back = prompt.question('Choice: ')
-      terminal.sendInput('\x1b')
+      terminal.sendInput('\x1b\r')
       assert.equal(await back, null)
       const pending = prompt.question('Key: ', true)
       if (eof) terminal.stdin.push(null)
@@ -35,5 +35,25 @@ test('Esc goes back, Ctrl+C or EOF settles the prompt, and raw mode is restored'
       await assert.rejects(pending, SetupCancelled)
     } finally { prompt.close() }
     assert.equal(terminal.isRaw, false)
+    assert.equal(terminal.stdin.isPaused(), true)
   }
+})
+
+test('split unframed paste cannot echo across the masked input boundary', async t => {
+  const terminal = new VirtualTerminal()
+  const prompt = openSetupPrompt(text => terminal.stderr.write(text), terminal.stdin as NodeJS.ReadStream)
+  t.after(prompt.close)
+  const masked = prompt.question('Key: ', true)
+  const begin = 'synthetic-key-start'
+  const tail = 'synthetic-key-tail'
+  terminal.sendInput(`${begin}\r`)
+  terminal.sendInput(`${tail}\r`)
+  assert.equal(await terminal.waitForOutput('Paste a single line'), true)
+  terminal.sendInput(`${begin}\r`)
+  assert.equal(await masked === begin, true)
+  const next = prompt.question('Choice: ')
+  terminal.sendInput(`${tail}\r`)
+  await next
+  assert.equal([begin, tail].some(part => terminal.getRawOutput().includes(part)), false)
+  assert.equal(terminal.getRawOutput().includes('\x1b[?2004h'), true)
 })

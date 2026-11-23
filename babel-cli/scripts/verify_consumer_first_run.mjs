@@ -1,19 +1,21 @@
 // License: Apache-2.0 — see LICENSE
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { consumerEnvironment } from './consumer_environment.mjs'
 
 const keys = ['synthetic-setup-account-alpha', 'synthetic-setup-account-beta']
-const flash = 'deepseek/deepseek-v4.1-flash'
+const flash = 'deepseek/deepseek-v4.1-flash-1017'
+const unpricedFlash = 'deepseek/deepseek-v4.1-flash'
+const unframedTail = 'synthetic-unframed-key-tail'
 
-async function drive(child, steps) {
+async function drive(child, steps, { exitCode = 0, timeout = 45_000 } = {}) {
   let transcript = ''
   let cursor = 0
   let step = 0
-  const timer = setTimeout(() => child.kill(), 45_000)
+  const timer = setTimeout(() => child.kill(), timeout)
   const observe = chunk => {
     transcript += chunk
     while (step < steps.length) {
@@ -29,11 +31,11 @@ async function drive(child, steps) {
     const code = await new Promise((resolve, reject) => {
       child.once('error', reject).once('close', resolve)
       child.stdin.on('error', () => {})
-      child.stdout.setEncoding('utf8').on('data', observe)
+      child.stdout?.setEncoding('utf8').on('data', observe)
       child.stderr.setEncoding('utf8').on('data', observe)
     })
     assert.equal(step, steps.length, `First run stopped waiting for: ${steps[step]?.[0] ?? 'exit'}`)
-    assert.equal(code, 0, 'First-run session should exit only when requested.')
+    assert.equal(code, exitCode, 'Installed command did not exit with the expected status.')
     return transcript
   } finally { clearTimeout(timer); child.kill() }
 }
@@ -42,12 +44,12 @@ function hasKey(value) {
   return keys.some(key => value.includes(key))
 }
 
-function checkArtifacts(path) {
+function checkArtifacts(path, allowedAccountFile) {
   if (!existsSync(path)) return
   for (const file of readdirSync(path, { withFileTypes: true })) {
     const child = join(path, file.name)
-    if (file.isDirectory()) checkArtifacts(child)
-    else if (file.isFile() && file.name !== '.env.accounts') {
+    if (file.isDirectory()) checkArtifacts(child, allowedAccountFile)
+    else if (file.isFile() && child !== allowedAccountFile) {
       assert.equal(hasKey(readFileSync(child)), false, 'Setup leaked a key into a user or project artifact.')
     }
   }
@@ -68,20 +70,21 @@ export async function verifyInstalledFirstRun(bin, root, { realPty = false } = {
     import { writeFileSync } from 'node:fs';
     import { join } from 'node:path';
     const keys = ${JSON.stringify(keys)};
+    const exposed = env => Object.values(env).some(value => keys.some(key => String(value).includes(key)));
     const requests = [];
     let childEnvExposed = false;
     for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork']) {
       const original = childProcess[name];
       childProcess[name] = (...args) => {
         const options = args.slice(1).find(value => value && typeof value === 'object' && !Array.isArray(value));
-        if (Object.values(options?.env ?? process.env).some(value => keys.includes(value))) childEnvExposed = true;
+        if (exposed(options?.env ?? process.env)) childEnvExposed = true;
         return original.apply(childProcess, args);
       };
     }
     syncBuiltinESMExports();
     if (${JSON.stringify(!realPty)}) {
       Object.assign(process.stdin, { isTTY: true, isRaw: false, setRawMode(raw) { this.isRaw = raw; return this; } });
-      Object.assign(process.stdout, { isTTY: true, columns: 132, rows: 36 });
+      Object.assign(process.stdout, { isTTY: process.env.FIRST_RUN_REDIRECT_STDOUT !== '1', columns: 132, rows: 36 });
       process.stderr.isTTY = true;
     }
     globalThis.fetch = async (url, init) => {
@@ -96,7 +99,7 @@ export async function verifyInstalledFirstRun(bin, root, { realPty = false } = {
     };
     process.on('exit', () => writeFileSync(join(${JSON.stringify(root)}, 'setup-receipt-' + process.pid + '.json'), JSON.stringify({
       requests, childEnvExposed,
-      parentEnvExposed: Object.values(process.env).some(value => keys.includes(value)),
+      parentEnvExposed: exposed(process.env),
     })));
   `)
   Object.assign(env, {
@@ -105,10 +108,56 @@ export async function verifyInstalledFirstRun(bin, root, { realPty = false } = {
   const args = ['--import', pathToFileURL(preload).href, bin]
   const scope = { cwd: project, env, windowsHide: true }
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`
-  const child = realPty
-    ? spawn('script', ['-qefc', 'stty rows 36 cols 132 && exec ' + [process.execPath, ...args].map(quote).join(' '), '/dev/null'], scope)
-    : spawn(process.execPath, args, scope)
-  const transcript = await drive(child, [
+  const launch = (command = [], overrides = {}, stdoutFile) => {
+    const childScope = { ...scope, env: { ...env, ...overrides, ...(stdoutFile ? { FIRST_RUN_REDIRECT_STDOUT: '1' } : {}) } }
+    const commandArgs = [...args, ...command]
+    const redirect = stdoutFile ? ` > ${quote(stdoutFile)}` : ''
+    if (realPty) return spawn('script', ['-qefc', 'stty rows 36 cols 132 && exec ' +
+      [process.execPath, ...commandArgs].map(quote).join(' ') + redirect, '/dev/null'], childScope)
+    if (!stdoutFile) return spawn(process.execPath, commandArgs, childScope)
+    const fd = openSync(stdoutFile, 'wx', 0o600)
+    try { return spawn(process.execPath, commandArgs, { ...childScope, stdio: ['pipe', fd, 'pipe'] }) }
+    finally { closeSync(fd) }
+  }
+  const standalone = await drive(launch(['setup']), [
+    ['Provider number (Esc back): ', '\x1b\r'],
+    ['Setup left your active connection unchanged.', undefined],
+  ], { timeout: 15_000 })
+  assert.equal(hasKey(standalone), false)
+
+  const stale = await drive(launch(['interactive'], { BABEL_CONNECTION: 'unavailable-fixture-account' }), [
+    ['The selected connection is unavailable.', undefined],
+    ['Provider number (Esc back): ', '\x1b\r'],
+    ['Input › ', '/exit\r'],
+  ])
+  assert.equal(hasKey(stale), false)
+
+  const resume = await drive(launch(['interactive', '--resume', 'fixture-no-such-session']), [
+    ['Failed to resume fixture-no-such-session:', undefined],
+    ['Input › ', '/exit\r'],
+  ])
+  assert.equal(resume.includes('Provider number (Esc back)'), false, 'Explicit resume must not wait for setup.')
+
+  const redirectConfig = join(root, 'redirect-config')
+  const redirectState = join(root, 'redirect-state')
+  const stdoutPath = join(root, 'redirected-stdout.txt')
+  const redirected = await drive(launch(['setup'], {
+    BABEL_CONFIG_DIR: redirectConfig, BABEL_STATE_DIR: redirectState,
+  }, stdoutPath), [
+    ['Provider number (Esc back): ', '1\r'],
+    ['Connection name [openrouter] (Esc back): ', '\r'],
+    ['Key number (Esc back): ', '\r'],
+    ['Paste API key (masked, Esc back): ', `${keys[0]}\r`],
+    ['Connection number (Esc back): ', `${unframedTail}\r`],
+    ['Choose one of the displayed numbers.', undefined],
+    ['Connection number (Esc back): ', '\x1b\r'],
+    ['Provider number (Esc back): ', '\x03'],
+  ], { timeout: 15_000 })
+  assert.equal(redirected.includes('\x1b[?2004h'), true, 'Bracketed paste should be enabled on the prompt TTY.')
+  const redirectedOutput = redirected + (existsSync(stdoutPath) ? readFileSync(stdoutPath, 'utf8') : '')
+  assert.equal(hasKey(redirectedOutput) || redirectedOutput.includes(unframedTail), false, 'Redirected setup exposed a key fragment.')
+
+  const transcript = await drive(launch(), [
     ['Provider number (Esc back): ', '\r'],
     ['Provider number (Esc back): ', '\x1b'],
     ['Input › ', '/setup\r'],
@@ -148,6 +197,13 @@ export async function verifyInstalledFirstRun(bin, root, { realPty = false } = {
   assert.equal(beforeSetup.includes('Connect a provider to chat'), true)
   assert.equal(/Type a task to get started|type a task, or/i.test(beforeSetup), false)
   assert.equal(hasKey(transcript), false, 'Setup transcript exposed a fixture key.')
+  const refused = await drive(launch(['work', '--headless', '--execution-scope', 'conversation', 'Hello from the fixture.'], {
+    BABEL_MODEL: unpricedFlash, BABEL_DRY_RUN: '0',
+  }), [
+    ['Cannot preauthorize the next request under a finite cap', undefined],
+  ], { exitCode: 1 })
+  assert.equal(refused.includes('Provider env variable to set'), false, 'Work must not prompt for an unrelated environment credential.')
+  assert.equal(hasKey(refused), false, 'Work output exposed a profile key.')
   const receipts = readdirSync(root).filter(name => /^setup-receipt-\d+\.json$/.test(name))
     .map(name => JSON.parse(readFileSync(join(root, name), 'utf8')))
   assert.deepEqual(receipts.flatMap(receipt => receipt.requests), [0, 1], 'Only the two explicit metadata checks may dispatch.')
@@ -163,8 +219,11 @@ export async function verifyInstalledFirstRun(bin, root, { realPty = false } = {
   assert.equal(report.model, flash)
   assert.equal(report.credential.present, true)
   assert.equal(report.budget.requested_usd, 3)
-  assert.equal(existsSync(join(env.BABEL_CONFIG_DIR, '.env.accounts')), true)
-  assert.equal(existsSync(join(project, '.env.accounts')), false)
-  for (const path of [project, env.BABEL_CONFIG_DIR, env.BABEL_STATE_DIR, env.BABEL_CACHE_DIR]) checkArtifacts(path)
+  for (const config of [env.BABEL_CONFIG_DIR, redirectConfig]) {
+    const accountFile = join(config, '.env.accounts')
+    assert.equal(existsSync(accountFile), true)
+    checkArtifacts(config, accountFile)
+  }
+  for (const path of [project, env.BABEL_STATE_DIR, env.BABEL_CACHE_DIR, redirectState]) checkArtifacts(path)
   return { transport: realPty ? 'real PTY' : 'scripted TTY on pipes', metadataRequests: 2, inferenceRequests: 0 }
 }

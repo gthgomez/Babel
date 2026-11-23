@@ -1,6 +1,7 @@
 /** Guided provider setup. Only an explicit check contacts a provider, and never for inference. */
+import { isDeepStrictEqual } from 'node:util'
 import { readUserSettings, resolveEffectiveSettings, updateUserSettings, type Connection, type UserSettings } from '../config/userSettings.js'
-import { isValidProviderKey, readProviderKeyReference, saveProfileAccountKey } from '../config/providerAccountKeys.js'
+import { checkProfileAccountLocation, isValidProviderKey, prepareProfileAccountKey, readProviderKeyReference, UnsafeAccountLocationError } from '../config/providerAccountKeys.js'
 import { resolvePrivateCredentialEnvPath } from '../config/envBootstrap.js'
 import { isProviderLocal } from '../config/offlineMode.js'
 import { connectionStatus, type SelectionSession } from './connectionSettings.js'
@@ -11,13 +12,15 @@ import { formatManualProviderEnvExample } from '../cli/firstRunText.js'
 import { openSetupPrompt, SetupCancelled, type SetupQuestion } from '../ui/setupPrompt.js'
 import { sanitizeUntrustedTerminalField } from '../ui/sanitize.js'
 import { checkSetupConnection, setupMetadataEndpoint } from './providerSetupCatalog.js'
-import { numberedChoice, pickSetupModel, type SetupIO } from './providerSetupMenu.js'
+import { numberedChoice, pickSetupModel, pricedSetupModels, type SetupIO } from './providerSetupMenu.js'
+import { resolveAgentTarget } from './targetResolver.js'
 
 export interface SetupResult {
   state: 'setup_required' | 'configured_unverified' | 'action_required'
   connection: string | null
   provider: string | null
   model: string | null
+  unavailableConnection?: true
 }
 
 interface GuidedSetupResult extends SetupResult {
@@ -29,11 +32,13 @@ const featured: Partial<Record<ProviderId, string>> = { openrouter: 'OpenRouter'
 const codingProviders = listProviderSpecs()
   .filter(spec => spec.authorityConformance === 'certified' && spec.operations.includes('native_tool_stream'))
   .sort((a, b) => Number(Boolean(featured[b.id])) - Number(Boolean(featured[a.id])))
+const unavailableNotice = 'The selected connection is unavailable. Check --connection or BABEL_CONNECTION; /provider use can select a configured account for this session.'
 
 /** Presence is a local prerequisite; it never proves authentication or model health. */
 export function getSetupStatus(env: NodeJS.ProcessEnv = process.env, session: SelectionSession = {}, projectRoot = process.cwd()): SetupResult {
   const status = connectionStatus(session, projectRoot, env)
-  return { state: status.state as SetupResult['state'], connection: status.connection, provider: status.provider, model: status.model }
+  return { state: status.state, connection: status.connection, provider: status.provider, model: status.model,
+    ...(status.reason === 'connection_unavailable' ? { unavailableConnection: true } : {}) }
 }
 
 /** Do not open any prompts on a pipe, CI, or headless invocation. */
@@ -48,7 +53,7 @@ function needsKey(connection: Connection): boolean {
 
 function existingKey(connection: Connection, env: NodeJS.ProcessEnv): string | undefined {
   const name = connection.apiKeyEnvVar ?? getProviderSpec(connection.provider).credentialEnvVar
-  return needsKey(connection) && name ? readProviderKeyReference(connection.provider, name, env) : undefined
+  return needsKey(connection) && name ? readProviderKeyReference(connection.provider, name, env, connection.baseUrl) : undefined
 }
 
 async function newConnection(provider: ProviderId, settings: UserSettings, io: SetupIO): Promise<Connection | null> {
@@ -77,7 +82,7 @@ async function newConnection(provider: ProviderId, settings: UserSettings, io: S
   }
 }
 
-async function connectKey(connection: Connection, env: NodeJS.ProcessEnv, io: SetupIO, addingAnother: boolean): Promise<{ key?: string; newKey?: true } | null> {
+async function connectKey(connection: Connection, env: NodeJS.ProcessEnv, root: string, io: SetupIO, addingAnother: boolean): Promise<{ key?: string; newKey?: true } | null> {
   if (!needsKey(connection)) {
     io.write('No key required. Model not yet tested.\n')
     return {}
@@ -91,6 +96,7 @@ async function connectKey(connection: Connection, env: NodeJS.ProcessEnv, io: Se
       io.write('Existing key selected. Authentication unverified; model not yet tested.\n')
       return { key }
     }
+    checkProfileAccountLocation(env, root)
     io.write('New keys are stored in your private Babel profile as plaintext, not in the project.\n')
     for (;;) {
       const answer = await io.ask('Paste API key (masked, Esc back): ', true)
@@ -102,16 +108,35 @@ async function connectKey(connection: Connection, env: NodeJS.ProcessEnv, io: Se
   }
 }
 
-function saveKey(connection: Connection, key: string, env: NodeJS.ProcessEnv): Connection {
-  return { ...connection, apiKeyEnvVar: saveProfileAccountKey(connection.provider, key, env) }
+class SetupChangedError extends Error {}
+
+function saveAccount(connection: Connection, key: string | undefined, env: NodeJS.ProcessEnv, root: string,
+  update: (latest: UserSettings, account: Connection) => Partial<UserSettings>,
+): Connection {
+  const entry = key ? prepareProfileAccountKey(connection.provider, connection.baseUrl, key, env, root) : undefined
+  const account = entry ? { ...connection, apiKeyEnvVar: entry.reference } : connection
+  updateUserSettings(latest => update(latest, account), { env, ...(entry ? { commitWith: entry.commitWith } : {}) })
+  return account
 }
 
-async function chooseSpending(io: SetupIO): Promise<number | 'unlimited' | null> {
-  io.write('No spending cap is set. Remote tasks may incur provider charges.\n')
+function defaultSelection(settings: UserSettings, id: string, env: NodeJS.ProcessEnv, root: string) {
+  return {
+    connection: settings.defaults?.connection,
+    model: settings.defaults?.model,
+    remembered: settings.defaults?.modelsByConnection?.[id],
+    userBudget: settings.defaults?.budgetUsd,
+    effectiveBudget: resolveEffectiveSettings({ settings, env, projectRoot: root, reportUnavailableConnection: true }).budgetUsd,
+  }
+}
+
+async function chooseSpending(io: SetupIO, hasScopedSetting: boolean): Promise<number | 'unlimited' | null> {
+  io.write(hasScopedSetting
+    ? 'A scoped spending setting is active here. Choose a user-wide setting for this default; the scoped setting stays in effect.\n'
+    : 'No user spending setting is saved. Remote tasks may incur provider charges.\n')
   const choice = await numberedChoice(io, 'Spending', ['Set a per-task spending cap', 'Continue without a Babel spending cap'])
   if (choice === null) return null
   if (choice === 1) return 'unlimited'
-  io.write('Standard Work can enforce a USD cap. Plan, thorough review and Apply cannot run remotely with a finite cap.\n')
+  io.write('Standard Work checks estimated USD costs before dispatch. Plan, thorough review and Apply cannot run remotely with a finite cap.\n')
   for (;;) {
     const answer = await io.ask('Per-task cap in USD (Esc back): ')
     if (answer === null) return null
@@ -133,12 +158,14 @@ export async function runProviderSetup(options: {
   write?: (text: string) => void
 } = {}): Promise<GuidedSetupResult> {
   const env = options.env ?? process.env
-  const root = options.projectRoot ?? process.cwd()
+  const cwd = env['BABEL_PROJECT_ROOT'] ?? process.cwd()
+  const root = options.projectRoot ?? resolveAgentTarget({ cwd }).targetRoot
   const write = options.write ?? (text => process.stderr.write(text))
   let previous: SetupResult = { state: 'setup_required', connection: null, provider: null, model: null }
   let terminal: ReturnType<typeof openSetupPrompt> | undefined
   try {
     previous = getSetupStatus(env, {}, root)
+    if (previous.unavailableConnection) write(`${unavailableNotice}\n`)
     if (!(options.interactive ?? canPromptForSetup(env))) {
       write(`${formatManualProviderEnvExample(resolvePrivateCredentialEnvPath(env))}\n`)
       write(`Or use provider list, provider connect <provider> --model <exact-id>, then provider use <connection> --save user.\n`)
@@ -169,21 +196,24 @@ export async function runProviderSetup(options: {
       let connection = saved ?? await newConnection(spec.id, settings, io)
       if (!connection) continue
       write(`Endpoint: ${sanitizeUntrustedTerminalField(connection.baseUrl ?? setupMetadataEndpoint(spec.id) ?? 'provider default')}\n`)
-      const credential = await connectKey(connection, env, io, !saved && accounts.length > 0)
+      const credential = await connectKey(connection, env, root, io, !saved && accounts.length > 0)
       if (!credential) continue
-      let expected = saved
+      const snapshot = defaultSelection(settings, connection.id, env, root)
       // Persist a new account only after its key is available. On an existing
       // account, defer key replacement until the model is confirmed.
       if (!saved) {
-        if (Object.hasOwn(readUserSettings({ env }).connections, connection.id)) throw new Error('Connection name changed.')
-        if (credential.newKey) connection = saveKey(connection, credential.key!, env)
-        updateUserSettings({ connections: { [connection.id]: connection } }, { env })
-        expected = connection
+        connection = saveAccount(connection, credential.newKey ? credential.key : undefined, env, root, (latest, account) => {
+          if (Object.hasOwn(latest.connections, account.id)) throw new SetupChangedError()
+          return { connections: { [account.id]: account } }
+        })
         if (credential.newKey) write('Key saved. Authentication unverified; model not yet tested.\n')
       } else if (credential.newKey) write('New key entered. It will replace this account’s key reference when you confirm a model.\n')
 
       let checked: { models: string[]; label: string } | undefined
       const selected = { connection: connection.id }
+      const isLocal = isProviderLocal(spec.id, connection.baseUrl)
+      const priced = isLocal ? undefined : pricedSetupModels(connection)
+      const savedModel = snapshot.remembered ?? (snapshot.connection === connection.id ? snapshot.model : undefined) ?? connection.model
       for (;;) {
         const check = await numberedChoice(io, 'Connection', ['Continue to models',
           ...(setupMetadataEndpoint(spec.id) ? ['Check connection (metadata only)'] : [])], 0)
@@ -206,39 +236,46 @@ export async function runProviderSetup(options: {
             write(`${detail} Using ${checked ? 'cached' : 'bundled'} choices, unverified.\n`)
           }
         }
-        let model: string | null
-        let budget: number | 'unlimited' | null | undefined
-        do {
-          model = await pickSetupModel(io, connection, checked)
+        let budget: number | 'unlimited' | undefined
+        for (;;) {
+          const capped = !isLocal && [snapshot.userBudget, snapshot.effectiveBudget.value, budget].some(value => typeof value === 'number')
+          const model = await pickSetupModel(io, connection, { catalog: checked, savedModel, priced: capped ? priced : undefined })
           if (model === null) break
-          const budgetInForce = resolveEffectiveSettings({ env, projectRoot: root }).budgetUsd.value
-          budget = budgetInForce === null && !isProviderLocal(spec.id, connection.baseUrl)
-            ? await chooseSpending(io)
-            : undefined
-        } while (budget === null)
-        if (model === null || budget === null) continue
-
-        const latest = readUserSettings({ env })
-        const live = latest.connections[connection.id]
-        if (JSON.stringify(live) !== JSON.stringify(expected) || (budget !== undefined &&
-            resolveEffectiveSettings({ settings: latest, env, projectRoot: root }).budgetUsd.value !== null)) {
-          throw new Error('Setup preferences changed.')
+          if (credential.key && model.includes(credential.key)) {
+            write('Enter a model ID, not a credential. Nothing was selected.\n')
+            continue
+          }
+          if (!isLocal && snapshot.userBudget === undefined && budget === undefined) {
+            const choice = await chooseSpending(io, snapshot.effectiveBudget.value !== null)
+            if (choice === null) continue
+            budget = choice
+            if (typeof budget === 'number' && !priced?.has(model)) {
+              write('The selected model has no known pricing for this cap. No model was saved or substituted.\n')
+              continue
+            }
+          }
+          const replaceKey = Boolean(saved && credential.newKey)
+          saveAccount(connection, replaceKey ? credential.key : undefined, env, root, (latest, account) => {
+            if (!isDeepStrictEqual(latest.connections[account.id], connection) ||
+                !isDeepStrictEqual(defaultSelection(latest, account.id, env, root), snapshot)) throw new SetupChangedError()
+            return {
+              connections: { [account.id]: { ...account, model } },
+              defaults: { ...selected, model, modelsByConnection: { ...latest.defaults?.modelsByConnection, [account.id]: model },
+                ...(budget !== undefined ? { budgetUsd: budget } : {}) },
+              setup: { completed: true, step: 'complete', ...selected },
+            }
+          })
+          if (replaceKey) write('Key saved.\n')
+          const status = getSetupStatus(env, {}, root)
+          if (status.unavailableConnection) {
+            write(`Saved as your user default. ${unavailableNotice}\n`)
+          } else if (status.connection !== connection.id || status.model !== model) {
+            write('Saved as your user default. An environment or project override still controls the effective selection; see provider status.\n')
+          } else if (status.state === 'configured_unverified') {
+            write(`Selected ${connection.id} · ${model}. Model not yet tested.\n`)
+          } else write('Choices saved. Action is required before chat; see provider status.\n')
+          return { ...status, saved: { ...selected, model } }
         }
-        if (saved && credential.newKey) connection = saveKey(connection, credential.key!, env)
-        updateUserSettings({
-          connections: { [connection.id]: { ...connection, model } },
-          defaults: { ...selected, model, modelsByConnection: { ...latest.defaults?.modelsByConnection, [connection.id]: model },
-            ...(budget !== undefined ? { budgetUsd: budget } : {}) },
-          setup: { completed: true, step: 'complete', ...selected },
-        }, { env })
-        if (saved && credential.newKey) write('Key saved.\n')
-        const status = getSetupStatus(env, {}, root)
-        if (status.connection !== connection.id || status.model !== model) {
-          write('Saved as your user default. An environment or project override still controls the effective selection; see provider status.\n')
-        } else if (status.state === 'configured_unverified') {
-          write(`Selected ${connection.id} · ${model}. Model not yet tested.\n`)
-        } else write('Choices saved. Action is required before chat; see provider status.\n')
-        return { ...status, saved: { ...selected, model } }
       }
     }
   } catch (error) {
@@ -246,7 +283,9 @@ export async function runProviderSetup(options: {
       write(`Setup cancelled. ${CLI_COMMAND} setup or /setup to continue.\n`)
       return previous
     }
-    write('Setup could not finish. Check that your private Babel profile is valid and writable, then run setup again.\n')
+    if (error instanceof UnsafeAccountLocationError) write(`${error.message}\n`)
+    else if (error instanceof SetupChangedError) write('Connection or spending preferences changed during setup. Run setup again to review the latest choices.\n')
+    else write('Setup could not finish. Check that your private Babel profile is valid and writable, then run setup again.\n')
     return { ...previous, failed: true }
   } finally {
     terminal?.close()

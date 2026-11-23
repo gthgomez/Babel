@@ -45,7 +45,6 @@ import {
   type ValidMode,
   type ValidOrchestrator,
 } from '../cli/constants.js';
-import { maybePromptForMissingProviderCredential } from '../config/interactiveCredential.js';
 import {
   copyFileToClipboard,
   detectProjectFromCwd,
@@ -2084,7 +2083,6 @@ Notes:
         }
 
         applyRunCommandEnvFlags(options);
-        await maybePromptForMissingProviderCredential();
         assertEnvFileActiveForPipelineCommand();
         const isManualMode = options.mode === 'manual';
         const requestedMode = options.mode ?? 'chat';

@@ -52,12 +52,12 @@ export function runInstalledDoctor(options: {
   const requiresDocker = profile.dockerSandbox === true
   const paths = options.paths ?? resolveRuntimePaths(env)
   const nodeReady = supportsInstalledNode(process.versions.node)
-  const effective = resolveEffectiveSettings({ settings: options.settings ?? readUserSettings({ env }), env, projectRoot: paths.targetProjectRoot })
+  const effective = resolveEffectiveSettings({ settings: options.settings ?? readUserSettings({ env }), env, projectRoot: paths.targetProjectRoot, reportUnavailableConnection: true })
   const connection = effective.connection.value
   const spec = connection ? getProviderSpec(connection.provider) : null
   const keyName = connection?.apiKeyEnvVar ?? spec?.credentialEnvVar
   const configured = Boolean(connection && effective.model.value && (connection.authentication === 'none' || !spec?.requiresCredential ||
-    (keyName && readProviderKeyReference(connection.provider, keyName, env))))
+    (keyName && readProviderKeyReference(connection.provider, keyName, env, connection.baseUrl))))
   const dockerDisabled = env['BABEL_DOCKER_DISABLE'] === 'true'
   const unsafeDockerArgs = !validateDockerIsolationArgs(env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']).ok
   const dockerReady = requiresDocker && !dockerDisabled && !unsafeDockerArgs && (options.dockerProbe ? options.dockerProbe() :
@@ -100,7 +100,8 @@ export function runInstalledDoctor(options: {
     { id: 'resources', status: existsSync(join(paths.resourceRoot, 'prompt_catalog.yaml')) ? 'ok' : 'fail', message: paths.resourceRoot },
     { id: 'provider', status: configured ? 'ok' : 'warn', message: configured ?
       `Selected ${connection!.id}: ${connection!.provider}/${effective.model.value}; source ${effective.connection.source}. Credential presence checked; connectivity and observed model unverified.` :
-      connection
+      effective.unavailableConnection ? `Selected connection unavailable. Check --connection or BABEL_CONNECTION, or run ${CLI_COMMAND} setup.`
+      : connection
         ? `Connection ${connection.id} needs ${effective.model.value ? 'an API key' : 'a model'}. Run ${CLI_COMMAND} setup in a terminal. Nothing was contacted.`
         : `No provider is selected yet. Run ${CLI_COMMAND} setup in a terminal, or save one key in ${envFile}. Read-only commands work; nothing was contacted.` },
     { id: 'executable', status: product.restartNeeded ? 'warn' : 'ok', message: `Running Babel ${product.runningVersion ?? 'unknown'}; revision ${product.revision ?? 'unknown'}; command ${CLI_COMMAND} (aliases babel and babel-agent); CLI entry ${product.entrypoint ?? 'unknown'}; Node executable ${product.executable}; package ${product.packageRoot}; ${product.restartNeeded === true ? 'package files changed; restart to use the current installation' : product.restartNeeded === null ? 'installation change detection unknown' : 'no change detected in package manifest or entrypoint'}` },

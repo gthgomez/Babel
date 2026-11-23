@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -81,4 +81,21 @@ test('arbitrary exact connection model does not claim unverified native tool cap
   } })
   assert.equal(policy?.providerModelId, 'vendor/unknown')
   assert.equal(policy?.nativeToolUse, undefined)
+})
+
+test('settings compare and commit hold the same lock as an ordinary preference update', async t => {
+  const { updateUserSettings, readUserSettings } = await import('./userSettings.js')
+  const dir = mkdtempSync(join(tmpdir(), 'babel-settings-lock-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const path = join(dir, 'settings.json')
+  updateUserSettings({ defaults: { budgetUsd: 2 } }, { path })
+  updateUserSettings(current => {
+    assert.equal(current.defaults?.budgetUsd, 2)
+    assert.throws(() => updateUserSettings({ defaults: { budgetUsd: 5 } }, { path }), /locked by another writer/)
+    return { defaults: { workflow: 'plan' } }
+  }, { path })
+  assert.equal(readUserSettings({ path }).defaults?.budgetUsd, 2)
+  assert.equal(readUserSettings({ path }).defaults?.workflow, 'plan')
+  updateUserSettings({ defaults: { budgetUsd: 5 } }, { path })
+  assert.equal(readUserSettings({ path }).defaults?.budgetUsd, 5)
 })

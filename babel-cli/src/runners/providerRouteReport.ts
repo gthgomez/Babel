@@ -62,7 +62,7 @@ export interface ProviderRouteReportInput {
 
 const UNSUPPORTED_FINITE_BUDGET_LANES = ['plan', 'thorough work', 'apply'] as const
 
-/** Resolve a shared report from local configuration only; performs no I/O. */
+/** Resolve a shared report from local configuration only; no provider contact. */
 export function buildProviderRouteReport(input: ProviderRouteReportInput): ProviderRouteReport {
   const env = input.env ?? process.env
   const provider = input.provider
@@ -72,7 +72,7 @@ export function buildProviderRouteReport(input: ProviderRouteReportInput): Provi
   const keyName = input.apiKeyEnvVar ?? spec?.credentialEnvVar ?? null
   const credentialRequired = input.authentication !== 'none' && Boolean(spec?.requiresCredential)
   const credentialPresent = input.authentication === 'none' || !credentialRequired ||
-    Boolean(knownProvider && keyName && readProviderKeyReference(knownProvider, keyName, env))
+    Boolean(knownProvider && keyName && readProviderKeyReference(knownProvider, keyName, env, input.baseUrl))
   const offline = describeOfflineRoute({
     provider: provider ?? 'unknown',
     ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),

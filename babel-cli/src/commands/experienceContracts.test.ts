@@ -110,7 +110,7 @@ test('finite budgets stop unmetered lanes before inference', async () => fixture
   assert.doesNotThrow(() => assertFiniteBudgetSupported('Plan'))
 }))
 
-test('interactive review preference works independently and setup follows the retargeted project', async () => fixture(async () => {
+test('interactive review preference works independently; headless setup does not retarget the session', async () => fixture(async () => {
   const { bootstrapReplSession } = await import('../interactive/repl/replLifecycle.js')
   const { handleCommand } = await import('../interactive/commands.js')
   const { handleMode } = await import('../interactive/commands/config.js')
@@ -125,7 +125,7 @@ test('interactive review preference works independently and setup follows the re
     handleMode(ctx as never, ['work'])
     assert.equal(ctx.state.mode, 'deep'); assert.equal(ctx.state.operatorMode, 'hard_plan')
     await handleCommand(ctx as never, '/setup')
-    assert.equal(ctx.state.model, 'connection/b/b-model'); assert.equal(ctx.state.connectionId, 'b')
+    assert.equal(ctx.state.model, 'connection/a/a-model'); assert.equal(ctx.state.connectionId, 'a')
   } finally { if (previous === undefined) delete process.env['BABEL_INTERACTIVE']; else process.env['BABEL_INTERACTIVE'] = previous }
 }))
 

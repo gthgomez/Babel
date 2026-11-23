@@ -21,6 +21,7 @@ export interface ResolveCredentialOptions {
   env?: NodeJS.ProcessEnv
   envVarOverride?: string
   explicitCredential?: string
+  baseUrl?: string
 }
 
 export interface CredentialStatus {
@@ -50,7 +51,7 @@ export function resolveProviderCredential(
   if (explicit) return explicit
 
   const envVar = normalizeEnvVarName(options.envVarOverride ?? spec.credentialEnvVar ?? '')
-  const value = readProviderKeyReference(provider, envVar, options.env ?? process.env)
+  const value = readProviderKeyReference(provider, envVar, options.env ?? process.env, options.baseUrl)
   if (!value) throw new ProviderCredentialError(provider, envVar)
   return value
 }
