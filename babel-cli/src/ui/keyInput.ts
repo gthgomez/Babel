@@ -625,6 +625,11 @@ export function installKeyHandler(
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
+  /** Discard consumed bytes without copying the remaining input buffer. */
+  function consumeBuffer(bytes: number): void {
+    buffer = buffer.subarray(bytes);
+  }
+
   function clearEscapeTimeout(): void {
     if (escapeTimeoutId !== null) {
       clearTimeout(escapeTimeoutId);
@@ -664,7 +669,7 @@ export function installKeyHandler(
     for (let j = 3; j < buffer.length; j++) {
       const b = buffer[j]!;
       if (b === 0x6d || b === 0x4d) {
-        buffer = buffer.slice(j + 1);
+        consumeBuffer(j + 1);
         return true;
       }
       // If we encounter a byte that is not part of a valid SGR mouse sequence
@@ -673,7 +678,7 @@ export function installKeyHandler(
       // Discard the consumed prefix bytes so the invalid/next byte can be
       // re-parsed as regular keyboard input.
       if (!((b >= 0x30 && b <= 0x39) || b === 0x3b)) {
-        buffer = buffer.slice(j);
+        consumeBuffer(j);
         return false;
       }
     }
@@ -726,7 +731,7 @@ export function installKeyHandler(
         buffer.slice(0, BRACKETED_PASTE_START.length).equals(BRACKETED_PASTE_START)
       ) {
         pasteContent = '';
-        buffer = buffer.slice(BRACKETED_PASTE_START.length);
+        consumeBuffer(BRACKETED_PASTE_START.length);
         continue;
       }
 
@@ -744,14 +749,14 @@ export function installKeyHandler(
             bracketedPaste: true,
           });
           pasteContent = null;
-          buffer = buffer.slice(endIdx + BRACKETED_PASTE_END.length);
+          consumeBuffer(endIdx + BRACKETED_PASTE_END.length);
           continue;
         }
         // Keep any partial end marker for the next chunk, not in the paste.
         let tail = Math.min(buffer.length, BRACKETED_PASTE_END.length - 1);
         while (tail > 0 && !buffer.subarray(-tail).equals(BRACKETED_PASTE_END.subarray(0, tail))) tail--;
         pasteContent += buffer.subarray(0, buffer.length - tail).toString('utf8');
-        buffer = buffer.subarray(buffer.length - tail);
+        consumeBuffer(buffer.length - tail);
         break;
       }
 
@@ -775,7 +780,7 @@ export function installKeyHandler(
             shift: false,
             sequence: burst.text,
           });
-          buffer = buffer.slice(burst.byteLength);
+          consumeBuffer(burst.byteLength);
           continue;
         }
       }
@@ -786,11 +791,11 @@ export function installKeyHandler(
         if (buffer[0] === 0x1b && buffer.length > 1 && buffer[1]! < 0x20) {
           // Esc plus a separate control key (e.g. Enter) can arrive in one read.
           emit({ name: 'escape', ctrl: false, meta: false, shift: false, sequence: '\x1b' });
-          buffer = buffer.subarray(1);
+          consumeBuffer(1);
           continue;
         }
         if (buffer[0] !== 0x1b) {
-          buffer = buffer.subarray(1); // An invalid byte must not strand later keys.
+          consumeBuffer(1); // An invalid byte must not strand later keys.
           continue;
         }
         if (buffer.length === 1 && buffer[0] === 0x1b) {
@@ -804,7 +809,7 @@ export function installKeyHandler(
               shift: false,
               sequence: '\x1b',
             });
-            buffer = buffer.slice(1);
+            consumeBuffer(1);
             // Re-process in case more data arrived during the timeout
             if (buffer.length > 0) {
               processBuffer();
@@ -817,7 +822,7 @@ export function installKeyHandler(
 
       emit(event);
       const byteLen = Buffer.byteLength(event.sequence, 'utf8');
-      buffer = buffer.slice(byteLen);
+      consumeBuffer(byteLen);
     }
   }
 
