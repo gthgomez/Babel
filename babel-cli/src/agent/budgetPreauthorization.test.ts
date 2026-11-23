@@ -64,3 +64,13 @@ test('wall limits retain their existing behavior when cost preauthorization is s
   assert.equal(wall.ok, false)
   assert.equal(wall.limiter, 'wall')
 })
+
+test('an unknown remote estimate denies the first finite-cap request; no cap or known zero is different', () => {
+  const input = { totalCostUsd: 0, maxCostUsd: 1, sessionStartTime: 0, maxWallMs: Infinity }
+  const denied = checkCostWallBudgets({ ...input, estimatedNextRequestCostUsd: null })
+  assert.equal(denied.ok, false)
+  assert.equal(denied.limiter, 'cost')
+  assert.match(denied.reason ?? '', /cannot preauthorize.*before dispatch/i)
+  assert.equal(checkCostWallBudgets({ ...input, estimatedNextRequestCostUsd: 0 }).ok, true)
+  assert.equal(checkCostWallBudgets({ ...input, maxCostUsd: Infinity, estimatedNextRequestCostUsd: null }).ok, true)
+})
