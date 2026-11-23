@@ -66,6 +66,7 @@ Read these after you can start a session, or when you are changing the harness.
 - [PR review](./BABEL_PR_REVIEW.md)
 - [Reviewer scope](./REVIEWER_SCOPE.md) — still cited by the CLI review commands
 - [Guides](./guides/RELEASE.md) — release, git operations, and other maintainer notes
+- [Architectural file-size advisory](./guides/ARCHITECTURAL_SIZE_ADVISORY.md)
 - [Repository layout for agents](../PROJECT_CONTEXT.md)
 
 ## Release notes
