@@ -1568,8 +1568,7 @@ export class ChatEngine {
     const metadata = this.deliberationRunner?.getLastInvocationMetadata?.() ?? null;
     const lastCharge = metadata?.estimated_cost_usd;
     const policy = this.modelPolicy;
-    if (!policy || policy.estimatedCostPer1MInput === undefined || policy.estimatedCostPer1MOutput === undefined) return undefined;
-    if (policy.connectionId && !policy.contextWindow) return undefined;
+    if (!policy || (policy.connectionId && !policy.contextWindow)) return undefined;
     const contextBound = policy.connectionId ? policy.contextWindow : undefined;
     const outputReserve = this.deliberationRunner?.getNativeRequestReservedCompletionTokens?.() ?? contextBound ??
       Math.min(this.limits.maxTokensPerRound, policy.requestedOutputTokens ?? policy.maxOutputTokens ?? 8_000);

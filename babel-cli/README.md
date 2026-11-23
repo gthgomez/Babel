@@ -83,8 +83,9 @@ Unicode/space paths, user/project boundaries, and uninstall/reinstall. Outputs
 include tarball, SHA-256, exact source SHA/version, full pack manifest and observed
 verification. The synthetic journey uses an explicit disposable `dev_local`
 fixture lease for actual local tests and blocks external inference; this is
-mechanics evidence, not live-model quality. Its UI start/exit check uses pipes;
-separate PTY evidence and platform-specific skipped coverage belong in the PR.
+mechanics evidence, not live-model quality. Its default UI checks use pipes.
+On Linux, add `-- --real-pty` to also test the installed first-run journey
+through `script` from util-linux. This does not qualify a Windows terminal.
 
 Releases use the repository's [release guide](../docs/guides/RELEASE.md): source
 and package provenance are checked, and an immutable consumer artifact is
