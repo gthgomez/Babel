@@ -17,7 +17,7 @@ import {
   resolveLiveSessionAuthority,
 } from './liveSessionBridge.js'
 import { buildTaskContractV1, freezeTaskContract } from './taskContract.js'
-import { inferTaskAcceptanceV1, inferTaskAcceptanceV2 } from './taskAcceptanceMeaning.js'
+import { inferTaskAcceptanceV1, inferTaskAcceptanceV2, requireAcceptanceMeaningVersion } from './taskAcceptanceMeaning.js'
 import {
   createTaskAcceptanceRevision,
   validateTaskAcceptanceRevision,
@@ -46,7 +46,7 @@ const refreshContext = (runtime: ReturnType<typeof createParityRuntime>, root: s
   engineRunDir: root,
 })
 
-test('refresh retains frozen v1 acceptance while the builder alone would emit v3', () => {
+test('refresh retains frozen v1 acceptance while the builder alone would emit v4', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-acceptance-lifecycle-'))
   const task = 'Fix it'
   try {
@@ -57,17 +57,17 @@ test('refresh retains frozen v1 acceptance while the builder alone would emit v3
     persistLiveSessionAuthority(root, runtime.liveAuthority)
 
     const resolved = prepareEngineInstructionAuthority(refreshContext(runtime, root, task))
-    assert.ok(
-      resolved.taskContract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:')),
-      'resolveLiveSessionAuthority is a fresh v3 builder; its contract is not adopted on refresh',
+    assert.equal(
+      requireAcceptanceMeaningVersion(resolved.taskContract.provenance.records, resolved.taskContract),
+      4,
+      'resolveLiveSessionAuthority is a fresh v4 builder; its contract is not adopted on refresh',
     )
 
     refreshEngineInstructionManifest(refreshContext(runtime, root, task))
     const retained = runtime.liveAuthority!.taskContract
     assert.equal(retained.contract_id, v1Contract.contract_id)
     assert.deepEqual(retained.acceptance_criteria, v1Contract.acceptance_criteria)
-    assert.ok(retained.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v1:')))
-    assert.equal(retained.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:')), false)
+    assert.equal(requireAcceptanceMeaningVersion(retained.provenance.records, retained), 1)
 
     const cold = loadLiveSessionAuthorityStrict(root)
     assert.deepEqual(cold.taskContract.acceptance_criteria, v1Contract.acceptance_criteria)
@@ -110,7 +110,7 @@ test('cold load preserves an archived v2 session containing a goal-looking sampl
     const restored = loadLiveSessionAuthorityStrict(root)
     assert.equal(restored.taskContract.contract_id, archivedContract.contract_id)
     assert.deepEqual(restored.taskContract.acceptance_criteria, archivedContract.acceptance_criteria)
-    assert.equal(restored.taskContract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:')), false)
+    assert.equal(requireAcceptanceMeaningVersion(restored.taskContract.provenance.records, restored.taskContract), 2)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

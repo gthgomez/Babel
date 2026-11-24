@@ -14,7 +14,7 @@ import {
   extractPositiveCommandSuccessCriterion,
   mergeTrustedVerifierCommands,
 } from './taskAcceptanceExecutableBinding.js'
-import { inferTaskAcceptance, inferTaskAcceptanceV2, inferTaskAcceptanceV3 } from './taskAcceptanceMeaning.js'
+import { inferTaskAcceptance, inferTaskAcceptanceV2, inferTaskAcceptanceV3, inferTaskAcceptanceV4 } from './taskAcceptanceMeaning.js'
 import { applyWorkingStateEvent, createWorkingState, formatWorkingStateBlock } from './codingLoop/workingState.js'
 
 test('plain-text npm test passes binds with suffix-anchored grammar', () => {
@@ -231,6 +231,60 @@ test('a verifier named in a separate requirement cannot bind the behavioral goal
   assert.deepEqual(genericTest!.verification.argv, ['test'])
 })
 
+test('v4 binds equivalent labeled verifier links without rewriting their source text', t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-labeled-criterion-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: 'node --test exporter.test.mjs' } }))
+  writeFileSync(join(root, 'exporter.mjs'), 'export const exportRows = rows => [...rows]\n')
+  writeFileSync(join(root, 'exporter.test.mjs'), [
+    'import assert from "node:assert/strict";',
+    'import test from "node:test";',
+    'import { exportRows } from "./exporter.mjs";',
+    'test("exports every record", () => assert.deepEqual(exportRows([1, 2]), [1, 2]));',
+  ].join('\n') + '\n')
+  const behavior = 'Fix the export to include every record'
+  for (const prefix of ['Goal: ', '**Goal:** ', 'Objective: ', '']) {
+    const criterion = `${prefix}${behavior}; verified by: \`npm test\` must pass.`
+    const task = `Goal: ${behavior}.\r\nRequirements:\r\n- ${criterion}`
+    const contract = resolveLiveSessionAuthority({
+      mode: 'chat', task, projectRoot: root, projectTestCommands: ['npm test'],
+    }).taskContract
+    assert.deepEqual(contract.acceptance_criteria, [`${behavior}.`, criterion])
+    assert.deepEqual(contract.acceptance.map(item => item.verification.verifier_id), ['verifier:npm', 'verifier:npm'])
+    assert.ok(contract.acceptance.every(item => item.verification.argv?.join(' ') === 'test'))
+  }
+})
+
+test('v4 binds every equivalent explicit verifier link and retains both source spans', () => {
+  const behavior = 'Fix the export to include every record'
+  const link = `${behavior}; verified by: npm test must pass.`
+  const bullets = [`- Goal: ${link}`, `- Objective: ${link}`]
+  const task = [`Goal: ${behavior}.`, 'Requirements:', ...bullets].join('\r\n')
+  const meaning = inferTaskAcceptanceV4(task)
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning, trustedVerifierCommands: ['npm test'],
+  })
+  assert.deepEqual(bound.criteria.slice(1).map(item => `- ${item.description}`), bullets)
+  assert.deepEqual(bound.sources.slice(1).map(source => task.slice(source.start, source.end)), bullets)
+  assert.deepEqual(bound.criteria.map(item => item.verification.argv), [['test'], ['test'], ['test']])
+})
+
+test('labeled verifier comparisons are v4-only and keep distinct literals unbound', () => {
+  const behavior = "Fix parser.js so echo('A  B') returns 'A  B'"
+  const task = (linked: string) =>
+    `${behavior}.\nRequirements:\n- Goal: ${linked}; verified by: \`npm test\` must pass.`
+  const bound = (meaning: ReturnType<typeof inferTaskAcceptance>) => bindExecutableVerifiersToTaskAcceptance({
+    meaning, trustedVerifierCommands: ['npm test'],
+  }).criteria
+  assert.match(bound(inferTaskAcceptanceV3(task(behavior)))[0]!.verification.verifier_id, /^meaning:/)
+  assert.equal(bound(inferTaskAcceptanceV4(task(behavior)))[0]!.verification.verifier_id, 'verifier:npm')
+  for (const variant of [behavior.replaceAll('A  B', 'A B'), behavior.replaceAll('A  B', 'a  b')]) {
+    const [goal, link] = bound(inferTaskAcceptanceV4(task(variant)))
+    assert.match(goal!.verification.verifier_id, /^meaning:/)
+    assert.equal(link!.verification.verifier_id, 'verifier:npm')
+  }
+})
+
 test('verifier binding preserves exact whitespace inside string literals', () => {
   const task = [
     "Fix parser.js so echo('A  B') returns 'A  B'.",
@@ -308,6 +362,22 @@ test('conflicting verifier links for the same behavior do not bind the goal', ()
   const behaviorCriteria = bound.acceptance.filter(item => item.description.startsWith(behavior))
   assert.ok(behaviorCriteria.length >= 2)
   assert.ok(behaviorCriteria.every(item => item.verification.verifier_id.startsWith('meaning:')))
+})
+
+test('v4 keeps equivalent labels with conflicting verifier commands unbound', () => {
+  const behavior = 'Fix the export to include every record'
+  const task = [
+    `Goal: ${behavior}.`,
+    'Requirements:',
+    `- Goal: ${behavior}; verified by: npm test must pass.`,
+    `- Objective: ${behavior}; verified by: npm run test:export must pass.`,
+  ].join('\n')
+  const { criteria } = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptanceV4(task),
+    trustedVerifierCommands: ['npm test', 'npm run test:export'],
+  })
+  assert.equal(criteria.length, 3)
+  assert.ok(criteria.every(item => item.verification.verifier_id.startsWith('meaning:')))
 })
 
 test('an untrusted conflicting verifier declaration also keeps the behavior unbound', () => {

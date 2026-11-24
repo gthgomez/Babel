@@ -2,7 +2,7 @@
  * Admission-side verifier freeze command set for ChatEngine. Expands the
  * dependency hash seed list without changing verifierIntegrity resolution (#507).
  */
-import { inferTaskAcceptanceV3 } from './taskAcceptanceMeaning.js';
+import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js';
 import {
   canonicalCommandFromFrozenVerification,
   contractMeaningVerifierCommands,
@@ -40,7 +40,7 @@ export function admissionVerifierFreezeCommands(input: {
   /** Meaning-derived executable criteria already frozen by admission (witness/relevance). */
   meaningVerifierCommands?: readonly string[];
 }): string[] {
-  const meaning = inferTaskAcceptanceV3(input.task);
+  const meaning = inferFreshTaskAcceptance(input.task);
   return [...new Set([
     ...input.resolvedVerifierCommands,
     ...explicitCriterionVerifierCommands(meaning),

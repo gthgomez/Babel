@@ -12,6 +12,7 @@
 import type { ChatEngineLimits } from './chatEngineLimits.js';
 import { autonomyClassFromEnv, autonomyTaskClassFor } from './autonomyPolicy.js';
 import { Marked, type Token, type Tokens } from 'marked';
+import { findOpeningLabeledGoal } from '../agent/taskAcceptanceMeaning.js';
 
 /** Supported chat task classes (product-facing). */
 export type ChatTaskClass =
@@ -612,8 +613,15 @@ export function analyzeTaskShape(taskText: string): TaskShape {
   // only a positive mutation verb that survives the negation counts. This keeps
   // "never patch X, but implement Y" mutating while "review; do not fix" stays
   // read-only.
+  // Test the original indentation and opening frame before evidence stripping.
+  // Only the mutation scan sees the unframed goal; all no-edit checks retain
+  // the original request and the caller's resolved mode/operation.
+  const goal = findOpeningLabeledGoal(taskText);
+  const mutationText = goal
+    ? `${goal.operative ? goal.text : ''}${taskText.slice(goal.end)}`.toLowerCase()
+    : t;
   const mutationScope = stripInformationalFrames(
-    stripPathLikeTokens(stripScopedEditProhibitions(stripFencedCodeBodies(t))),
+    stripPathLikeTokens(stripScopedEditProhibitions(stripFencedCodeBodies(mutationText))),
   );
   const positiveMutationScope = mutationScope.replace(
     new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'),
