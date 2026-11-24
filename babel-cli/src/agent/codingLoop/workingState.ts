@@ -417,7 +417,7 @@ export function recordControllerRecoveryStrategy(
  */
 function acceptanceSourceStatus(contract: TaskContractV1, criterionId: string): AcceptanceMeaningStatus | 'mixed' | 'unknown' {
   const suffix = `:${criterionId}`
-  const statuses = new Set(contract.provenance.records.flatMap(record => {
+  const statuses = new Set(contract.provenance.records.flatMap<AcceptanceMeaningStatus>(record => {
     if (record.kind !== 'derived_acceptance' || !record.ref.endsWith(suffix)) return []
     if (!isAcceptanceMeaningDerivedRef(record.ref)) return []
     const [, , status, payload] = record.ref.split(':', 4)
