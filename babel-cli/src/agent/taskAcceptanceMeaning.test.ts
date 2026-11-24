@@ -213,9 +213,33 @@ test('a tagged example-only labeled goal is not required, even through base pros
 })
 
 test('an opening example-only label does not become required when followed by a verifier clause', () => {
-  const task = 'Goal: Fix the export to include every record (example only; not required); verified by: `npm test` passes.'
-  const request = `${task}\nRequirements:\n- ${TEST_CRITERION}`
-  assert.deepEqual(acceptance(request).acceptance_criteria, [TEST_CRITERION])
+  for (const body of [
+    'Fix the export to include every record (example only; not required); verified by: `npm test` passes.',
+    `Fix the users' export so it outputs "row; verified by: pending" (example only); verified by: \`npm test\` passes.`,
+    'Fix the export so it outputs "one backtick `" (example only); verified by: npm test passes.',
+  ]) {
+    assert.deepEqual(acceptance(`Goal: ${body}\nRequirements:\n- ${TEST_CRITERION}`).acceptance_criteria,
+      [TEST_CRITERION])
+  }
+})
+
+test('a verifier marker in an output literal does not erase the behavior in v4', () => {
+  for (const body of [
+    'Fix the export so it outputs "row (not required); verified by: pending".',
+    'Fix the export so it outputs `row (not required); verified by: pending`.',
+    "Fix the export so it outputs 'don't add a row (not required); verified by: pending'.",
+    'Fix the users’ export so it outputs `` `row` (not required); verified by: pending ``.',
+    'Fix the export so it outputs "a \\"row\\" (not required); verified by: pending".',
+    'Fix the export so it outputs “row (not required); verified by: pending”.',
+    'Fix the export so it outputs "`sample; verified by: draft "row (not required); verified by: pending`".',
+  ]) {
+    for (const task of [
+      `Goal: ${body}\nRequirements:\n- ${TEST_CRITERION}`,
+      `Requirements:\n- Objective: ${body}\n- ${TEST_CRITERION}`,
+    ]) {
+      assert.deepEqual(acceptance(task).acceptance_criteria, [body, TEST_CRITERION], task)
+    }
+  }
 })
 
 test('a newly preserved labeled goal does not activate unrelated prose', () => {

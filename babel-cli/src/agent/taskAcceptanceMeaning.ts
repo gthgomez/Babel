@@ -39,7 +39,6 @@ const OPERATIVE_GOAL_LINE = /^\s{0,3}(?:ACTION:\s*)?(?:please\s+)?(?:(?:also|add
 const GOAL_LABEL = /^ {0,3}(?:(?:goal|objective):|\*\*(?:goal|objective):\*\*)[ \t]+/i
 const OPENING_TASK_HEADING = /^ {0,3}#{1,6}[ \t]+task(?:[ \t]+#+)?[ \t]*$/i
 const NON_OPERATIVE_GOAL_QUALIFIER = /\([ \t]*(?:example only|not required)(?:[ \t]*[;,][ \t]*(?:example only|not required))*[ \t]*\)[.!]?[ \t]*$/i
-const VERIFIER_LINK_SEPARATOR = /[.;]\s+verified by:/i
 export type AcceptanceMeaningStatus = 'explicit' | 'inferred' | 'unresolved'
 export interface AcceptanceMeaningSource {
   criterion_id: string
@@ -73,8 +72,41 @@ function labeledGoalBody(line: string): string | undefined {
 }
 
 function behaviorBeforeVerifierLink(body: string): string {
-  const link = body.search(VERIFIER_LINK_SEPARATOR)
-  return link < 0 ? body : body.slice(0, link)
+  // A marker written as part of a required output is not a verifier clause.
+  // Scan only the v4 label projection; historical replay and command binding
+  // retain their existing grammar and still reject ambiguous links.
+  const separator = /[.;]\s+verified by:/iy
+  const word = /[\p{L}\p{N}_]/u
+  const codeSpanEnds = new Map<number, number>()
+  const nextRunEnd = new Map<number, number>()
+  for (const run of [...body.matchAll(/`+/g)].reverse()) {
+    const width = run[0].length
+    const end = nextRunEnd.get(width)
+    if (end !== undefined) codeSpanEnds.set(run.index, end)
+    nextRunEnd.set(width, run.index + width)
+  }
+  let quoteEnd = ''
+  for (let i = 0; i < body.length; i++) {
+    const char = body[i]!
+    if (char === '\\') { i++; continue }
+    // Matched code spans are opaque even inside a prose quote: a quote
+    // character in the span must not close the surrounding literal.
+    const codeEnd = codeSpanEnds.get(i)
+    if (codeEnd !== undefined) { i = codeEnd - 1; continue }
+    const afterWord = (char === "'" || char === '’') && word.test(body[i - 1] ?? '')
+    if (quoteEnd) {
+      if (char === quoteEnd && !(afterWord && word.test(body[i + 1] ?? ''))) quoteEnd = ''
+      continue
+    }
+    if (char === '"' || (char === "'" && !afterWord)) quoteEnd = char
+    else if (char === '“') quoteEnd = '”'
+    else if (char === '‘') quoteEnd = '’'
+    else if (char === '.' || char === ';') {
+      separator.lastIndex = i
+      if (separator.test(body)) return body.slice(0, i)
+    }
+  }
+  return body
 }
 
 function isObservableGoal(line: string): boolean {
