@@ -7,6 +7,7 @@ import test from 'node:test'
 
 import { verifyTuiVisualPass } from './tui-visual-verification.js'
 import { buildTuiVisualReceipt, evaluateTuiSemanticOracle } from './tuiVisualEvidence.js'
+import { TUI_VISUAL_SCENARIOS } from './tuiVisualScenarioCatalog.js'
 import {
   type TuiVisualObservation,
   type TuiVisualReceipt,
@@ -56,6 +57,27 @@ async function fixture() {
     cleanup: () => rm(evidenceDir, { recursive: true, force: true }),
   }
 }
+
+test('returning startup evidence cannot substitute for an unconfigured clean start', async (t) => {
+  const { submitted, cleanup } = await fixture()
+  t.after(cleanup)
+  const clean = TUI_VISUAL_SCENARIOS.find(({ id }) => id === 'T01-visual-clean-start')!
+  const returning = TUI_VISUAL_SCENARIOS.find(({ id }) => id === 'T01-visual-returning-start')!
+  assert.ok(clean.expectedVisualStates.some(({ id, afterStep }) => id === 'authentication-unverified' && afterStep === 0))
+  assert.ok(clean.expectedVisualStates.some(({ id, afterStep }) => id === 'narrow-guidance' && afterStep === 2))
+  const observation: TuiVisualObservation = { ...submitted.observations[0]!, label: 'initial returning screen' }
+  const returningProof = {
+    ...submitted, scenario: returning, observations: [observation],
+    checks: returning.expectedVisualStates.map(({ id }) => ({
+      criterionId: id, observationId: observation.id, screenshotSha256: observation.screenshotSha256!,
+      outcome: 'met' as const,
+    })),
+  }
+  const receipt = await buildTuiVisualReceipt(returningProof, returningProof)
+  assert.equal(receipt.status, 'PASS')
+  assert.equal((await verifyTuiVisualPass(receipt, { ...returningProof, scenario: clean })).ok, false)
+  assert.equal((await buildTuiVisualReceipt({ ...returningProof, scenario: clean }, { ...returningProof, scenario: clean })).status, 'INCONCLUSIVE')
+})
 
 test('trusted checks, exact checkpoints and matching PNG bytes permit a PASS', async (t) => {
   const { submitted, cleanup } = await fixture()

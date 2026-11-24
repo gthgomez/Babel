@@ -106,11 +106,18 @@ npx --yes tsx --no-warnings=ExperimentalWarning --test `
   src/ui/reviewCard.test.ts
 ```
 
-The initial manifest covers clean launch, composer cancellation, paste
+The initial manifest covers clean unconfigured launch, returning configured launch,
+composer cancellation, paste
 cancellation, resize, resume-picker cancellation, diff round-trip, Unicode in
 narrow terminals, and terminal restoration on exit. It complements rather
 than replaces the T01–T23 fixture matrix; real Windows Terminal behavior is
 the T24 lane.
+
+Run `T01-visual-clean-start` with an empty disposable profile and no inherited
+provider credentials. It checks visible setup guidance and the narrow-screen
+checkpoint, not provider authentication or zero network effects. Run
+`T01-visual-returning-start` with a separate configured synthetic profile and
+the network guard. A ready-composer receipt is not a clean-start receipt.
 
 ## Failure classification
 

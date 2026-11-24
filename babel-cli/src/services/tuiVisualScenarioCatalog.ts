@@ -48,15 +48,34 @@ const check = (id: string, afterStep: number, description: string): TuiVisualCri
 export const TUI_VISUAL_SCENARIOS: readonly TuiVisualScenario[] = [
   {
     id: 'T01-visual-clean-start',
-    name: 'Clean start shows one ready prompt',
+    name: 'Clean unconfigured start gives setup guidance',
     safety: 'read_only',
-    steps: [observe('initial ready screen')],
+    steps: [
+      observe('initial unconfigured screen'),
+      resize(60, 22, 'resize unconfigured terminal'),
+      wait(300, 'observe settled narrow setup'),
+    ],
+    evidenceMode: 'visual_only',
+    expectedEvents: [],
+    expectedVisualStates: [
+      check('single-welcome', 0, 'Babel startup banner or welcome appears once'),
+      check('setup-guidance', 0, 'Provider setup or actionable missing-configuration guidance is visible'),
+      check('authentication-unverified', 0, 'No verified provider, account, or model readiness is claimed'),
+      check('narrow-guidance', 2, 'Setup instructions and the current input prompt remain readable after narrowing'),
+    ],
+  },
+  {
+    id: 'T01-visual-returning-start',
+    name: 'Returning configured profile shows one ready composer',
+    safety: 'read_only',
+    steps: [observe('initial returning screen')],
     evidenceMode: 'visual_only',
     expectedEvents: [],
     expectedVisualStates: [
       check('single-banner', 0, 'BABEL banner appears once'),
       check('chat-mode', 0, 'CHAT mode is visible'),
       check('ready-prompt', 0, 'Ready prompt is visible'),
+      check('no-repeated-setup', 0, 'The ready composer is not obscured by first-run setup'),
     ],
   },
   {
