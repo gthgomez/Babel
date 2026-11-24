@@ -14,7 +14,7 @@ import {
 } from '../protocol/remoteContract.js';
 
 test('integration contract hash is stable over the exported versioned schema descriptor', () => {
-  assert.equal(BABEL_INTEGRATION_SCHEMA_SHA256, '316b1320837ab2b1546b0487118853e50a1d8e164aa146390bee20416fbc1299',
+  assert.equal(BABEL_INTEGRATION_SCHEMA_SHA256, '914d712a785f3df5db5264db2d23b50f62e82ed282e1df2dec1bce126c89f29a',
     'schema changes require an explicit reviewed profile/hash fixture update');
   assert.equal(BABEL_INTEGRATION_SCHEMA_SHA256,
     createHash('sha256').update(JSON.stringify(BABEL_INTEGRATION_SCHEMA_DESCRIPTOR)).digest('hex'));
@@ -37,7 +37,8 @@ test('strict protocol.info profile describes only bounded, implemented native ca
 });
 
 test('negotiation accepts only exact contract, version, and schema hash profiles', () => {
-  assert.deepEqual(negotiateIntegrationContract({}), { ok: true });
+  assert.deepEqual(negotiateIntegrationContract({}), { ok: false, reason: 'incomplete_contract_profile' });
+  assert.deepEqual(negotiateIntegrationContract({}, 'discovery'), { ok: true });
   assert.deepEqual(negotiateIntegrationContract({ contract: BABEL_INTEGRATION_CONTRACT }),
     { ok: false, reason: 'incomplete_contract_profile' });
   assert.deepEqual(negotiateIntegrationContract({ contract: 'other', version: '1.0.0', schemaHash: BABEL_INTEGRATION_SCHEMA_SHA256 }),

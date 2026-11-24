@@ -128,6 +128,8 @@ export const BABEL_INTEGRATION_SCHEMA_DESCRIPTOR = canonicalize({
   },
   negotiation: {
     discovery: { method: 'GET', path: '/protocol.info' },
+    missingProfileAllowedForDiscovery: true,
+    missingProfileAllowedForOperations: false,
     requiredHeadersForOperations: {
       'x-babel-contract': BABEL_INTEGRATION_CONTRACT,
       'x-babel-contract-version': BABEL_INTEGRATION_CONTRACT_VERSION,
@@ -149,14 +151,19 @@ export interface IntegrationNegotiationHeaders {
   schemaHash?: string;
 }
 
+export type IntegrationNegotiationPurpose = 'operation' | 'discovery';
+
 export type IntegrationNegotiationResult =
   | { ok: true }
   | { ok: false; reason: 'incomplete_contract_profile' | 'unsupported_contract' | 'unsupported_version' | 'schema_mismatch' };
 
 /** Exact profile matching is intentional; no implicit downgrade or major-version guess. */
-export function negotiateIntegrationContract(headers: IntegrationNegotiationHeaders): IntegrationNegotiationResult {
+export function negotiateIntegrationContract(
+  headers: IntegrationNegotiationHeaders,
+  purpose: IntegrationNegotiationPurpose = 'operation',
+): IntegrationNegotiationResult {
   const present = [headers.contract, headers.version, headers.schemaHash].filter((value) => value !== undefined).length;
-  if (present === 0) return { ok: true };
+  if (present === 0) return purpose === 'discovery' ? { ok: true } : { ok: false, reason: 'incomplete_contract_profile' };
   if (present !== 3) return { ok: false, reason: 'incomplete_contract_profile' };
   if (headers.contract !== BABEL_INTEGRATION_CONTRACT) return { ok: false, reason: 'unsupported_contract' };
   if (headers.version !== BABEL_INTEGRATION_CONTRACT_VERSION) return { ok: false, reason: 'unsupported_version' };

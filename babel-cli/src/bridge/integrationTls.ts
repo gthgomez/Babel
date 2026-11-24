@@ -10,7 +10,7 @@ import {
   IntegrationTransportCreateRequestSchema,
   negotiateIntegrationContract,
 } from '../protocol/remoteContract.js';
-import type { IntegrationNegotiationHeaders } from '../protocol/remoteContract.js';
+import type { IntegrationNegotiationHeaders, IntegrationNegotiationPurpose } from '../protocol/remoteContract.js';
 import type { z } from 'zod';
 import type { IntegrationRegistry } from './integrationRegistry.js';
 import type { NativeCommandJournal } from './commandJournal.js';
@@ -119,13 +119,13 @@ export class IntegrationTlsServer {
       : credentialMatches(req.headers.authorization, this.options.integrationCredential ?? '');
   }
 
-  private negotiationFor(req: IncomingMessage) {
+  private negotiationFor(req: IncomingMessage, purpose: IntegrationNegotiationPurpose = 'operation') {
     const headers: IntegrationNegotiationHeaders = {
       ...(typeof req.headers['x-babel-contract'] === 'string' ? { contract: req.headers['x-babel-contract'] } : {}),
       ...(typeof req.headers['x-babel-contract-version'] === 'string' ? { version: req.headers['x-babel-contract-version'] } : {}),
       ...(typeof req.headers['x-babel-schema-sha256'] === 'string' ? { schemaHash: req.headers['x-babel-schema-sha256'] } : {}),
     };
-    return negotiateIntegrationContract(headers);
+    return negotiateIntegrationContract(headers, purpose);
   }
 
   private requireNegotiated(req: IncomingMessage, res: ServerResponse): boolean {
@@ -173,7 +173,7 @@ export class IntegrationTlsServer {
         reply(res, 401, { error: 'integration_authentication_required' });
         return;
       }
-      const negotiated = this.negotiationFor(req);
+      const negotiated = this.negotiationFor(req, 'discovery');
       if (!negotiated.ok) {
         reply(res, 406, { error: negotiated.reason, supported_contract: this.info.contract,
           supported_version: this.info.version, schema_sha256: this.info.schema_sha256 });

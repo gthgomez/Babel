@@ -25,7 +25,7 @@ async function freePort(): Promise<number> {
 
 function requestJson(
   port: number, ca: Buffer, authorization?: string, path = '/protocol.info',
-  method = 'GET', body?: string, extraHeaders: Record<string, string> = {},
+  method = 'GET', body?: string, extraHeaders: Record<string, string> = {}, includeProfileHeaders = true,
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = request({
@@ -34,7 +34,7 @@ function requestJson(
       headers: {
         ...(authorization ? { authorization } : {}),
         ...(body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}),
-        ...(path !== '/protocol.info' ? {
+        ...(includeProfileHeaders && path !== '/protocol.info' ? {
           'x-babel-contract': 'babel.integration',
           'x-babel-contract-version': '1.0.0',
           'x-babel-schema-sha256': BABEL_INTEGRATION_SCHEMA_SHA256,
@@ -167,7 +167,7 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     await service.listen();
     const auth = `Babel-Integration ${rootCredential}`;
     const infoReply = await requestJson(port, cert, auth);
-    assert.equal(infoReply.status, 200);
+    assert.equal(infoReply.status, 200, 'authenticated zero-profile GET /protocol.info remains discovery');
     const info = JSON.parse(infoReply.body) as typeof service.info;
     assert.deepEqual(info.capabilities, ['transport.create', 'command.lookup', 'thread.create']);
     const missingNegotiation = await requestJson(port, cert, 'Babel-Acp-Session placeholder', '/sessions', 'POST',
@@ -197,6 +197,7 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     const rpc = (token: string, id: string, method: string, params: Record<string, unknown>) => rpcAt(port, token, id, method, params);
     const createParams = { project_id: 'project-one', session_id: transport.session_id,
       command_id: 'cmd-1', expected_host_instance: service.info.instance_id };
+
     const profileMismatch = await requestJson(port, cert, `Babel-Acp-Session ${session.credential}`, '/rpc', 'POST',
       JSON.stringify({ jsonrpc: '2.0', id: 'cmd-1', method: 'thread.create', params: createParams }),
       { 'x-babel-schema-sha256': '0'.repeat(64) });
@@ -274,6 +275,26 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
       project_id: 'project-one', session_id: renewedTransport.session_id, command_id: 'cmd-1', expected_host_instance: service.info.instance_id,
     });
     assert.equal(JSON.parse(recoveredCommand.body).result.state, 'settled');
+
+    const noProfileDispatchBaseline = dispatchCount;
+    const noProfileRegistration = await requestJson(restartedPort, cert, auth, '/integrations/acp-sessions', 'POST', JSON.stringify({
+      request_id: 'unnegotiated-registration', project_id: 'project-one', session_binding: 'unnegotiated-launch',
+      expected_host_instance: service.info.instance_id,
+    }), {}, false);
+    const noProfileTransport = await requestJson(restartedPort, cert, `Babel-Acp-Session ${renewed.credential}`, '/sessions', 'POST',
+      JSON.stringify({ project_id: 'project-one', expected_host_instance: service.info.instance_id }), {}, false);
+    const noProfileRpc = await requestJson(restartedPort, cert, `Babel-Acp-Session ${renewed.credential}`, '/rpc', 'POST',
+      JSON.stringify({ jsonrpc: '2.0', id: 'unnegotiated-command', method: 'thread.create', params: {
+        project_id: 'project-one', session_id: renewedTransport.session_id, command_id: 'unnegotiated-command',
+        expected_host_instance: service.info.instance_id,
+      } }), {}, false);
+    const noProfileRenewal = await requestJson(restartedPort, cert, auth,
+      `/integrations/acp-sessions/${renewed.principal_id}/renew`, 'POST', JSON.stringify({
+        request_id: 'unnegotiated-renewal', session_binding: 'launch-1', expected_host_instance: service.info.instance_id,
+      }), {}, false);
+    assert.deepEqual({ statuses: [noProfileRegistration.status, noProfileTransport.status, noProfileRpc.status, noProfileRenewal.status],
+      dispatchCount: dispatchCount - noProfileDispatchBaseline }, { statuses: [406, 406, 406, 406], dispatchCount: 0 },
+    'all four scoped mutation classes require an exact profile and zero-profile RPC cannot dispatch native work');
   } finally {
     await service.close();
     journal.close();
