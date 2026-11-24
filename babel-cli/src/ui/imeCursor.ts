@@ -7,8 +7,12 @@
  * Layout model matches PromptInput.render():
  *   textStart row = startRow + queuedLines + slashPopupLines
  *   caret row     = textStart + cursorLine
- *   caret col     = 1 + visibleLength(prefix) + cursorCol  (prefix is prompt
- *                   or continuationPrompt)
+ *   caret col     = 1 + visibleLength(prefix + textBeforeCursor)  (prefix is
+ *                   prompt or continuationPrompt)
+ *
+ * The caret column is a screen column, not a UTF-16 index: wide (CJK/emoji)
+ * clusters occupy two terminal cells. Callers that cannot supply the text
+ * before the caret fall back to the legacy `cursorCol` index.
  *
  * @module imeCursor
  */
@@ -22,6 +26,11 @@ export interface ImeCursorLayout {
   slashPopupLines: number;
   cursorLine: number;
   cursorCol: number;
+  /**
+   * Text between the line prefix and the caret. Preferred over `cursorCol`
+   * because wide clusters make the raw code-unit index a wrong screen column.
+   */
+  textBeforeCursor?: string;
   prompt: string;
   continuationPrompt: string;
   /** Terminal rows (for clamping). */
@@ -47,9 +56,13 @@ export function computeImeCursorPos(layout: ImeCursorLayout): TerminalCursorPos 
   );
   const prefix =
     layout.cursorLine === 0 ? layout.prompt : layout.continuationPrompt;
+  const textWidth =
+    layout.textBeforeCursor !== undefined
+      ? visibleLength(layout.textBeforeCursor)
+      : layout.cursorCol;
   const col = Math.min(
     layout.termCols,
-    Math.max(1, 1 + visibleLength(prefix) + layout.cursorCol),
+    Math.max(1, 1 + visibleLength(prefix) + textWidth),
   );
   return { row, col };
 }

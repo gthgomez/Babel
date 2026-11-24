@@ -56,7 +56,14 @@ export interface TuiLatestPointer {
   frameId: number;
   screen: string;
   frame: string;
-  hashes: { screen: string; frame: string };
+  hashes: {
+    /** sha256 of the text cell grid. Historical contract: text only. */
+    screen: string;
+    /** sha256 of the persisted frame bundle. */
+    frame: string;
+    /** Non-cryptographic visual digest; absent from older pointers. */
+    visual?: string;
+  };
 }
 
 export const BYTE_BUDGET = 8 * 1024 * 1024;
@@ -127,6 +134,7 @@ export function persistTuiFrame(
     hashes: {
       screen: screenHash,
       frame: createHash("sha256").update(json).digest("hex"),
+      visual: snap.visualHash,
     },
   };
   atomicWriteJson(join(sessionDir, "latest.json"), pointer);
@@ -140,16 +148,26 @@ export function persistTuiFrame(
  * @param sessionDir tui-sessions/<id>
  */
 export function loadLatestTuiFrame(sessionDir: string): TuiFrameBundle | null {
-  const pointerPath = join(sessionDir, "latest.json");
-  if (!existsSync(pointerPath)) return null;
-  const pointer = JSON.parse(
-    readFileSync(pointerPath, "utf8"),
-  ) as TuiLatestPointer;
-  const framePath = join(sessionDir, pointer.frame);
-  if (!existsSync(framePath)) return null;
-  const bundle = JSON.parse(readFileSync(framePath, "utf8")) as TuiFrameBundle;
-  if (bundle.watermarks.frameId !== pointer.frameId) return null;
-  return bundle;
+  try {
+    const pointer = JSON.parse(
+      readFileSync(join(sessionDir, "latest.json"), "utf8"),
+    ) as TuiLatestPointer;
+    if (pointer.schemaVersion !== TUI_OBSERVE_SCHEMA ||
+      !Number.isSafeInteger(pointer.frameId) || pointer.frameId < 1) return null;
+    const frame = `frames/${String(pointer.frameId).padStart(8, "0")}.json`;
+    if (pointer.frame !== frame) return null;
+
+    const bytes = readFileSync(join(sessionDir, frame));
+    if (createHash("sha256").update(bytes).digest("hex") !== pointer.hashes?.frame) return null;
+    const bundle = JSON.parse(bytes.toString("utf8")) as TuiFrameBundle;
+    if (bundle.schemaVersion !== TUI_OBSERVE_SCHEMA ||
+      bundle.watermarks.frameId !== pointer.frameId ||
+      (pointer.hashes.visual !== undefined && pointer.hashes.visual !== bundle.screen.visualHash)) return null;
+    return bundle;
+  } catch {
+    // A truncated, pruned, or unreadable snapshot is not observation evidence.
+    return null;
+  }
 }
 
 /**

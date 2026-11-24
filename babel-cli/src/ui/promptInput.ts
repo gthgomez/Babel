@@ -709,9 +709,14 @@ export class PromptInput {
       this.cursorLine === 0
         ? this.config.prompt
         : this.config.continuationPrompt;
+    // The hosted caret is a screen column. Wide clusters (CJK/emoji) occupy
+    // two cells, so the UTF-16 cursor index cannot be added directly.
+    const textBeforeCursor = sanitizeUserText(
+      (this.lines[this.cursorLine] ?? "").slice(0, this.cursorCol),
+    );
     const cursorCol = Math.min(
       Math.max(0, width - 1),
-      visibleLength(cursorPrefix) + this.cursorCol,
+      visibleLength(cursorPrefix) + visibleLength(textBeforeCursor),
     );
 
     const popupRows = buildPopupViewRows(viewState, width);

@@ -17,6 +17,29 @@ import {
 import { resolveChatEngineLimits, isSweChatProfileEnabled } from './chatEngineLimits.js';
 
 describe('chatTaskClass', () => {
+  test('opening labeled Make routes like bare Make without overriding edit restrictions', () => {
+    const goal = 'Make the export include every record.';
+    const requirement = '\nRequirements:\n- `npm test` must pass.';
+    const bare = resolveTaskShape(`${goal}${requirement}`);
+    assert.equal(bare.operation, 'MUTATING');
+    for (const opening of ['Goal: ', '**Goal:** ', 'Objective: ', '## Task\nGoal: ']) {
+      const task = `${opening}${goal}${requirement}`;
+      assert.deepEqual(resolveTaskShape(task), bare, opening);
+      assert.equal(resolveTaskShape(task, 'READ_ONLY').operation, 'READ_ONLY');
+      assert.equal(resolveTaskShape(`${task}\nDo not edit any files.`, 'CHANGE').operation, 'READ_ONLY');
+      assert.equal(hasExplicitEditDenial(`${task}\nDo not modify existing tests.`), false);
+    }
+    for (const opening of [
+      `## Context\nGoal: ${goal}`,
+      `## Examples\n### Task\nGoal: ${goal}`,
+      `## Task\n> Goal: ${goal}`,
+      `## Task\n\`\`\`text\nGoal: ${goal}\n\`\`\``,
+      `    Goal: ${goal}`,
+      'Goal: Fix the export to include every record (example only; not required).',
+    ]) {
+      assert.equal(resolveTaskShape(`${opening}${requirement}`).operation, 'READ_ONLY', opening);
+    }
+  });
   test('protecting existing tests does not deny a separate implementation request', () => {
     const task = 'Add an exported clamp function to calc.js. Add tests in a new file, do not modify existing tests. Run npm test and report the actual result.';
     assert.equal(hasExplicitEditDenial(task), false);

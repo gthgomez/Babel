@@ -15,7 +15,9 @@ import {
   loadTerminalVisibleEvents,
   loadTuiLifecycleEvents,
   persistTuiFrame,
+  type TuiLatestPointer,
 } from './tuiSessionStore.js'
+import { formatInspectTui } from './inspectTui.js'
 import type { TerminalWriteEvent } from './terminalTransport.js'
 
 const PINNED = {
@@ -185,6 +187,86 @@ describe('tuiSessionStore retention', () => {
       assert.equal(lastLifecycle!.detail['rule'], 'read_only_audit')
     } finally {
       // cleanup handled by tmpdir
+    }
+  })
+
+  it('persists a separate visual digest for style-only frames and keeps the text screen hash', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tui-style-digest-'))
+    const transport = createTerminalTransport(PINNED, 'tui-style-digest')
+    try {
+      transport.ingestVisible('OK')
+      const first = transport.observeManual()
+      persistTuiFrame(dir, first.snap, first.marks, null)
+      const firstPointer = JSON.parse(
+        readFileSync(join(dir, 'latest.json'), 'utf8'),
+      ) as TuiLatestPointer
+
+      transport.ingestVisible('\x1b[1;1H\x1b[1mOK')
+      const second = transport.observeManual()
+      persistTuiFrame(dir, second.snap, second.marks, null)
+      const secondPointer = JSON.parse(
+        readFileSync(join(dir, 'latest.json'), 'utf8'),
+      ) as TuiLatestPointer
+
+      assert.notEqual(second.marks.frameId, first.marks.frameId)
+      assert.equal(second.snap.textHash, first.snap.textHash)
+      assert.notEqual(second.snap.visualHash, first.snap.visualHash)
+      // Historical screen hash stays text-only; the visual digest is additive.
+      assert.equal(secondPointer.hashes.screen, firstPointer.hashes.screen)
+      assert.equal(secondPointer.hashes.visual, second.snap.visualHash)
+      assert.notEqual(secondPointer.hashes.visual, firstPointer.hashes.visual)
+
+      const latest = loadLatestTuiFrame(dir)
+      assert.ok(latest)
+      assert.equal(latest!.artifacts[0]!.hash, secondPointer.hashes.screen)
+      assert.equal(latest!.screen.visualHash, second.snap.visualHash)
+      assert.ok((latest!.screen.styleRuns ?? []).length > 0)
+      assert.match(
+        formatInspectTui(dir, 'screen'),
+        new RegExp(`VISUAL_HASH ${second.snap.visualHash}`),
+      )
+      assert.equal(frameFiles(dir).length, 4)
+    } finally {
+      setObservedTerminalSize(null)
+    }
+  })
+
+  it('loads a legacy latest pointer that has no separate visual digest', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tui-pointer-legacy-'))
+    const transport = createTerminalTransport(PINNED, 'tui-pointer-legacy')
+    try {
+      transport.ingestVisible('Legacy pointer')
+      const { snap, marks } = transport.observeManual()
+      persistTuiFrame(dir, snap, marks, null)
+
+      const pointerPath = join(dir, 'latest.json')
+      const pointer = JSON.parse(readFileSync(pointerPath, 'utf8')) as {
+        hashes: Record<string, string>
+      }
+      delete pointer.hashes['visual']
+      writeFileSync(pointerPath, `${JSON.stringify(pointer, null, 2)}\n`)
+
+      const loaded = loadLatestTuiFrame(dir)
+      assert.ok(loaded)
+      assert.equal(loaded!.screen.visualHash, snap.visualHash)
+    } finally {
+      setObservedTerminalSize(null)
+    }
+  })
+
+  it('rejects modified frame bytes even when the frame id still matches', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tui-tampered-frame-'))
+    const transport = createTerminalTransport(PINNED, 'tui-tampered-frame')
+    try {
+      transport.ingestVisible('Original')
+      const { snap, marks } = transport.observeManual()
+      const pointer = persistTuiFrame(dir, snap, marks, null)
+      assert.ok(loadLatestTuiFrame(dir))
+      const path = join(dir, pointer.frame)
+      writeFileSync(path, readFileSync(path, 'utf8').replace('Original', 'Modified'))
+      assert.equal(loadLatestTuiFrame(dir), null)
+    } finally {
+      setObservedTerminalSize(null)
     }
   })
 })

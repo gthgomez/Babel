@@ -10,7 +10,7 @@ import type {
   TuiVisualObservation,
   TuiVisualScenario,
 } from './tuiVisualTestContract.js'
-import { validateTuiVisualScenario } from './tuiVisualTestContract.js'
+import { tuiCheckpointLabel, validateTuiVisualScenario } from './tuiVisualTestContract.js'
 
 /**
  * Execute one allow-listed scenario through an external controller.
@@ -32,25 +32,21 @@ export async function driveTuiVisualScenario(input: {
   for (const step of input.scenario.steps) {
     switch (step.action) {
       case 'observe':
-        observations.push(await input.controller.observe(step.label))
         break
       case 'press_key':
         await input.controller.pressKey(step.key)
-        observations.push(await input.controller.observe(`${step.label} (after)`))
         break
       case 'type_text':
         await input.controller.typeText(step.text)
-        observations.push(await input.controller.observe(`${step.label} (after)`))
         break
       case 'resize':
         await input.controller.resize(step.cols, step.rows)
-        observations.push(await input.controller.observe(`${step.label} (after)`))
         break
       case 'wait':
         await input.controller.wait(step.milliseconds)
-        observations.push(await input.controller.observe(`${step.label} (after)`))
         break
     }
+    observations.push(await input.controller.observe(tuiCheckpointLabel(step)))
   }
 
   return observations

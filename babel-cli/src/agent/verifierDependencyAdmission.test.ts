@@ -10,3 +10,12 @@ test('admission freeze commands dedupe resolved, explicit, and discovered npm te
   })
   assert.deepEqual(commands, ['npm test'])
 })
+
+test('verifier dependency admission freezes the separate explicit command for a labeled goal', () => {
+  const commands = admissionVerifierFreezeCommands({
+    task: 'Objective: Fix the export to include every record.\nRequirements:\n- `npm test` must pass.',
+    resolvedVerifierCommands: [],
+    discoveredTestCommands: [],
+  })
+  assert.deepEqual(commands, ['npm test'])
+})

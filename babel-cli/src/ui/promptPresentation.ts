@@ -432,6 +432,9 @@ export function renderPromptCursor(view: PromptPresentationSnapshot): void {
         slashPopupLines,
         cursorLine: view.cursorLine,
         cursorCol: view.cursorCol,
+        textBeforeCursor: sanitizeUserText(
+          (view.lines[view.cursorLine] ?? "").slice(0, view.cursorCol),
+        ),
         prompt: view.config.prompt,
         continuationPrompt: view.config.continuationPrompt,
         termRows: rows,

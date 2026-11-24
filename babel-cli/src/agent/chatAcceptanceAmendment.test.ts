@@ -15,6 +15,7 @@ import {sha256Canonical} from '../acceptance/canonical.js'
 import {parityOnUserTurn,checkpointParityEventLogStrictSync} from './chatEngineParityBridge.js'
 import {bindChatVerifierReceipt} from '../evidence/chatRevisionBinding.js'
 import {validateTaskAcceptanceRevision} from './taskAcceptanceRevision.js'
+import {isAcceptanceMeaningDerivedRef} from './taskAcceptanceMeaning.js'
 import {validateTaskModeCompanion} from './taskModeRevision.js'
 import {createWorkingState,type WorkingState} from './codingLoop/workingState.js'
 import {assertObjectiveLifecycle} from './taskObjectiveLifecycle.js'
@@ -144,13 +145,15 @@ test('an amendment cannot waive required checks through ambiguous prose', () =>
     assert.equal(engine.getTaskContract()!.contract_hash, before.contract_hash)
   }))
 
-test('acceptance additions cannot turn a Plan-only root into execution authority', () =>
-  fixture(engine => {
-    engine.admitUserSubmission({ userInput: addition }, route)
-    assert.equal(engine.getTaskContract()!.acceptance.at(-1)!.description, 'The task survives restart.')
-    assert.deepEqual(engine.getTaskContract()!.allowed_effects, ['read_only'])
-    assert.throws(() => engine.applyTurnPreparation({ task: 'continue', executionProfile: 'chat' }), /MODE_EXECUTION_AUTHORITY_REQUIRED/)
-  }, 'plan'))
+for (const initial of [request, '## Task\nGoal: Make the export include every record.\nRequirements:\n- `npm test` must pass.']) {
+  test(`acceptance additions cannot turn a Plan-only root into execution authority: ${initial.split('\n')[0]}`, () =>
+    fixture(engine => {
+      engine.admitUserSubmission({ userInput: addition }, route)
+      assert.equal(engine.getTaskContract()!.acceptance.at(-1)!.description, 'The task survives restart.')
+      assert.deepEqual(engine.getTaskContract()!.allowed_effects, ['read_only'])
+      assert.throws(() => engine.applyTurnPreparation({ task: 'continue', executionProfile: 'chat' }), /MODE_EXECUTION_AUTHORITY_REQUIRED/)
+    }, 'plan', false, initial))
+}
 
 for (const corruption of ['missing', 'copied', 'duplicate'])
 test(`amendment lineage rejects ${corruption} canonical source`, () =>
@@ -239,6 +242,39 @@ test('explicit counter continuation cannot reuse a warm receipt after acceptance
     assert.equal(state.verifierReceiptCache.size,0,'The next required dispatch must execute rather than reuse an old-contract check')
   }))
 
+test('an exact labeled continuation does not amend acceptance or retire warm evidence', () => {
+  const goal = 'Fix the export to include every record named "A  B".'
+  const initialTask = `Goal: ${goal}\nRequirements:\n- \`npm test\` must pass.`
+  return fixture(async (engine, runDir, root) => {
+    const before = engine.getTaskContract()!
+    writeFileSync(join(root, 'fixture.mjs'), 'export const fixture = true\n')
+    const receipt = await bindChatVerifierReceipt({
+      projectRoot: root, command: 'node --test fixture.mjs', exit_code: 0, summary: 'fixture check',
+      mutationPaths: ['fixture.mjs'],
+      structured: { verifierId: 'fixture-check', authoritySource: 'built_in_runner', executable: 'node', args: ['--test', 'fixture.mjs'] },
+    })
+    const state = engine as unknown as { lastVerifierReceipt: typeof receipt | null }
+    state.lastVerifierReceipt = receipt
+    engine.admitUserSubmission({ userInput: `Also require:\n- Objective: ${goal}`, continueTask: true }, route)
+    assert.equal(engine.getTaskContract()!.contract_hash, before.contract_hash)
+    assert.equal(state.lastVerifierReceipt, receipt)
+    assert.equal(engine.getParityEventLog().events.some(event => event.kind === 'task_acceptance_amended'), false)
+
+    const distinct = goal.replace('A  B', 'A B')
+    const changedInput = `Also require:\r\n- Goal: ${distinct}`
+    engine.admitUserSubmission({ userInput: changedInput, continueTask: true }, route)
+    const current = engine.getTaskContract()!
+    assert.notEqual(current.contract_hash, before.contract_hash)
+    assert.equal(current.acceptance_criteria.at(-1), distinct)
+    assert.equal(state.lastVerifierReceipt, null)
+    const amendment = engine.getParityEventLog().events.find(event => event.kind === 'task_acceptance_amended')
+    assert.ok(amendment)
+    const source = amendment.descriptor.meaning_sources[0]!
+    assert.equal(changedInput.slice(source.start, source.end), `- Goal: ${distinct}`)
+    assert.deepEqual(loadLiveSessionAuthorityStrict(runDir).taskContract.acceptance, current.acceptance)
+  }, 'chat', false, initialTask, ['npm test'])
+})
+
 for (const target of ['task-mode-history.json','task-objective-lifecycle.json','thread_events.json','task-budget.json'])
 test(`failed acceptance publication at ${target} retains the whole previous generation`, t =>
   fixture((engine,runDir)=>{
@@ -290,7 +326,7 @@ test('an additive edge cannot erase inherited acceptance provenance',()=>
     engine.admitUserSubmission({userInput:addition},route)
     const current=engine.getTaskContract()!
     const {provenance,...body}=current
-    const inherited=new Set(before.provenance.records.filter(record=>record.ref.startsWith('task-acceptance-meaning:v1:')||record.ref.startsWith('task-acceptance-meaning:v2:')||record.ref.startsWith('task-acceptance-meaning:v3:')).map(record=>record.ref))
+    const inherited=new Set(before.provenance.records.filter(record=>isAcceptanceMeaningDerivedRef(record.ref)).map(record=>record.ref))
     assert.ok(inherited.size>0)
     const forged=freezeTaskContract(buildTaskContractV1({...body,
       provenance:provenance.records.filter(record=>!inherited.has(record.ref)),
@@ -369,7 +405,7 @@ test('a mode successor cannot erase inherited meaning provenance',()=>
     const authority=engine.getParityRuntime().liveAuthority!,current=authority.taskContract
     const {provenance,...body}=current
     const forged=freezeTaskContract(buildTaskContractV1({...body,
-      provenance:provenance.records.filter(record=>!record.ref.startsWith('task-acceptance-meaning:v1:')&&!record.ref.startsWith('task-acceptance-meaning:v2:')&&!record.ref.startsWith('task-acceptance-meaning:v3:')),
+      provenance:provenance.records.filter(record=>!isAcceptanceMeaningDerivedRef(record.ref)),
       source:provenance.source,parent_contract_id:provenance.parent_contract_id!,
       failure_class_budgets:current.budgets.failure_class_budgets,
       ...(current.budgets.max_turns!==undefined?{max_turns:current.budgets.max_turns}:{}),
@@ -591,7 +627,7 @@ test(`V${version} mode history rejects ${corruption} meaning provenance`,()=>
     engine.applyTurnPreparation({task:'continue',executionProfile:'plan'})
     const authority=engine.getParityRuntime().liveAuthority!,current=authority.taskContract
     const {provenance,...body}=current
-    const records=corruption==='drop'?provenance.records.filter(record=>!record.ref.startsWith('task-acceptance-meaning:v1:')&&!record.ref.startsWith('task-acceptance-meaning:v2:')&&!record.ref.startsWith('task-acceptance-meaning:v3:')):
+    const records=corruption==='drop'?provenance.records.filter(record=>!isAcceptanceMeaningDerivedRef(record.ref)):
       [...provenance.records,{kind:'derived_acceptance' as const,ref:`task-acceptance-meaning:v1:explicit:${'c'.repeat(64)}:0:1:${current.acceptance[0]!.id}`}]
     const forged=freezeTaskContract(buildTaskContractV1({...body,provenance:records,
       source:provenance.source,parent_contract_id:provenance.parent_contract_id!,
