@@ -11,6 +11,22 @@ import {
 } from './tuiVisualEvidence.js'
 import { TUI_VISUAL_SCENARIOS } from './tuiVisualScenarioCatalog.js'
 
+test('a visual-only receipt without observations does not pass', async () => {
+  const scenario = TUI_VISUAL_SCENARIOS[0]!
+  const receipt = await buildTuiVisualReceipt({
+    scenario,
+    startedAt: '2026-08-12T00:00:00.000Z',
+    endedAt: '2026-08-12T00:00:01.000Z',
+    terminal: { program: 'Windows Terminal', term: 'xterm', cols: 80, rows: 24, platform: 'win32', isWindowsTerminal: true },
+    semantic: evaluateTuiSemanticOracle({ records: [], evidenceMode: 'visual_only', expectedEvents: [] }),
+    observations: [],
+    evidenceDir: 'runs/tui-visual/scenario',
+    controller: { name: 'test', version: '1' },
+  })
+
+  assert.equal(receipt.status, 'INCONCLUSIVE')
+})
+
 test('event reader preserves valid records and counts malformed lines', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'babel-tui-visual-events-'))
   const path = join(dir, 'events.jsonl')
@@ -96,7 +112,7 @@ test('semantic oracle rejects malformed streams, missing events, and accepts com
   assert.equal(complete.passed, true)
 })
 
-test('receipt adds a deterministic finding when semantic evidence fails', () => {
+test('receipt adds a deterministic finding when semantic evidence fails', async () => {
   const scenario = {
     ...TUI_VISUAL_SCENARIOS[0]!,
     evidenceMode: 'visual_plus_semantic' as const,
@@ -108,7 +124,7 @@ test('receipt adds a deterministic finding when semantic evidence fails', () => 
     expectedEvents: ['babel.stream.started'],
     stream: { missing: true, malformedLines: 0 },
   })
-  const receipt = buildTuiVisualReceipt({
+  const receipt = await buildTuiVisualReceipt({
     scenario,
     startedAt: '2026-08-12T00:00:00.000Z',
     endedAt: '2026-08-12T00:00:01.000Z',
@@ -131,14 +147,14 @@ test('receipt adds a deterministic finding when semantic evidence fails', () => 
   assert.match(receipt.findings[0]!.summary, /Semantic oracle failed/)
 })
 
-test('visual evidence failure prevents a visual PASS receipt', () => {
+test('visual evidence failure prevents a visual PASS receipt', async () => {
   const semantic = evaluateTuiSemanticOracle({
     records: [],
     evidenceMode: 'visual_plus_semantic',
     expectedEvents: ['babel.diff.review.closed'],
     stream: { missing: false, malformedLines: 0 },
   })
-  const receipt = buildTuiVisualReceipt({
+  const receipt = await buildTuiVisualReceipt({
     scenario: TUI_VISUAL_SCENARIOS.find(({ id }) => id === 'T20-visual-diff-roundtrip')!,
     startedAt: '2026-08-12T00:00:00.000Z',
     endedAt: '2026-08-12T00:00:01.000Z',
