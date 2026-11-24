@@ -5,7 +5,8 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFile
 import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { assertReleaseBuildInfo } from './write_build_info.mjs'
+import { assertRecordedBuildInputs, assertReleaseBuildInfo, captureRecordedBuildInputs } from './write_build_info.mjs'
+import { npmNormalizedShebangDigest } from './consumer_archive.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(root, '..')
@@ -21,10 +22,17 @@ function command(binary, args) {
 }
 function sha256(bytes) { return createHash('sha256').update(bytes).digest('hex') }
 assert.equal(command('git', ['status', '--porcelain']).trim(), '', 'Release packaging requires a clean candidate')
+const sourceSha = command('git', ['rev-parse', 'HEAD']).trim()
+const sourceTreeSha = command('git', ['rev-parse', 'HEAD^{tree}']).trim()
+assert.match(sourceSha, /^[a-f0-9]{40}$/)
+assert.match(sourceTreeSha, /^[a-f0-9]{40}$/)
+const recordedBuildInputs = captureRecordedBuildInputs(root)
+assert.ok(recordedBuildInputs, 'Release packaging requires readable CLI build inputs')
 command(process.execPath, [npmCli, 'run', 'check:source-provenance'])
 // Advisory and dependency review run on the same lock the candidate will ship.
 const dependencies = JSON.parse(command(process.execPath, ['scripts/check_installed_dependencies.mjs']))
 assert.equal(dependencies.status, 'PASS', 'Installed dependencies drifted from the lock')
+assert.equal(dependencies.lockSha256, recordedBuildInputs.packageLockSha256, 'Dependency check did not cover the recorded lockfile')
 const advisories = JSON.parse(command(process.execPath, ['scripts/check_dependency_advisories.mjs', '--scope=npm']))
 assert.equal(advisories.status, 'PASS', `Dependency advisories block npm qualification: ${advisories.problems.join('; ')}`)
 command(process.execPath, [npmCli, 'run', 'build'])
@@ -37,13 +45,11 @@ assert.equal(pack.name, packageJson.name, 'Packed name must match the candidate 
 assert.equal(pack.version, packageJson.version, 'Packed version must match the candidate package')
 const bytes = readFileSync(join(output, pack.filename))
 const sha = sha256(bytes)
-const sourceSha = command('git', ['rev-parse', 'HEAD']).trim()
-const sourceTreeSha = command('git', ['rev-parse', 'HEAD^{tree}']).trim()
-assert.match(sourceSha, /^[a-f0-9]{40}$/)
-assert.match(sourceTreeSha, /^[a-f0-9]{40}$/)
 const buildInfoBytes = readFileSync(join(root, 'dist', 'cli', 'build-info.json'))
 const buildInfo = JSON.parse(buildInfoBytes)
-assertReleaseBuildInfo(buildInfo, { packageVersion: packageJson.version, sourceCommit: sourceSha, sourceTree: sourceTreeSha })
+assertReleaseBuildInfo(buildInfo, { packageVersion: packageJson.version, sourceCommit: sourceSha, sourceTree: sourceTreeSha, recordedBuildInputs })
+assertRecordedBuildInputs(captureRecordedBuildInputs(root), recordedBuildInputs)
+assert.equal(command('git', ['rev-parse', 'HEAD']).trim(), sourceSha, 'Candidate revision changed during release packaging')
 assert.equal(command('git', ['status', '--porcelain']).trim(), '', 'Source changed during release packaging')
 // Load payload qualification only after build and pack succeed: earlier gates
 // (source provenance, dependency/advisory review) must stop the flow without
@@ -56,11 +62,16 @@ const listing = command('tar', ['-tzf', join(output, pack.filename)]).trim().spl
 const safeRelative = path => typeof path === 'string' && !/^[A-Za-z]:|^[\\/]|\\/.test(path) && !path.split('/').some(part => part === '..')
 assert.ok(listing.every(path => path.startsWith('package/') && safeRelative(path)), 'Unsafe archive path')
 const extracted = mkdtempSync(join(output, 'verify-'))
+const archiveFiles = []
+const binTargets = new Set(Object.values(packageJson.bin))
 try {
   command('tar', ['-xzf', join(output, pack.filename), '-C', extracted])
   for (const file of pack.files) {
     assert.ok(safeRelative(file.path), 'Unsafe package file path')
-    assert.deepEqual(readFileSync(join(extracted, 'package', file.path)), readFileSync(join(root, file.path)), 'Package content differs from validated build: ' + file.path)
+    const archived = readFileSync(join(extracted, 'package', file.path))
+    assert.deepEqual(archived, readFileSync(join(root, file.path)), 'Package content differs from validated build: ' + file.path)
+    const npmShebangSha256 = binTargets.has(file.path) ? npmNormalizedShebangDigest(archived) : null
+    archiveFiles.push({ ...file, sha256: sha256(archived), ...(npmShebangSha256 === null ? {} : { npmShebangSha256 }) })
   }
   // Re-run the advertised-payload proof against the extracted bytes, including bin shebangs.
   const extractedPackage = JSON.parse(readFileSync(join(extracted, 'package', 'package.json'), 'utf8'))
@@ -79,6 +90,8 @@ const manifest = {
   sourceSha,
   sourceTreeSha,
   buildInfoSha256: sha256(buildInfoBytes),
+  recordedBuildInputs,
+  compilerVersion: buildInfo.typescriptVersion,
   candidateHead: process.env.CANDIDATE_HEAD || sourceSha,
   workflowSha: process.env.RELEASE_WORKFLOW_SHA,
   runId: process.env.GITHUB_RUN_ID,
@@ -91,7 +104,7 @@ const manifest = {
   tarball: pack.filename,
   sha256: sha,
   integrity: 'sha512-' + createHash('sha512').update(bytes).digest('base64'),
-  manifest: pack.files,
+  manifest: archiveFiles,
   inventory: payload,
   dependencies: {
     lockSha256: dependencies.lockSha256,

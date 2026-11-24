@@ -1,6 +1,6 @@
 // License: Apache-2.0 — see LICENSE
 import assert from 'node:assert/strict'
-import { verifyConsumerArchive, verifyConsumerContents } from './consumer_archive.mjs'
+import { verifyConsumerArchive, verifyConsumerContents, verifyInstalledBuildIdentity, verifyInstalledPayloadFiles } from './consumer_archive.mjs'
 import { parseArgs } from 'node:util'
 import { consumerEnvironment } from './consumer_environment.mjs'
 import { verifyInstalledFirstRun } from './verify_consumer_first_run.mjs'
@@ -262,6 +262,16 @@ try {
   writeFileSync(join(output, 'manifest.json'), JSON.stringify({...identity, consumerNode: process.version, consumerPlatform: process.platform, consumerArch: process.arch}, null, 2) + '\n')
   writeFileSync(join(output, 'SHA256SUMS'), `${identity.sha256}  ${identity.tarball}\n`)
   installArtifact(artifact)
+  const payloadCheck = verifyInstalledPayloadFiles({ root: installed, files: identity.manifest, binTargets: pkg.bin })
+  const installedBuild = verifyInstalledBuildIdentity(readFileSync(join(installed, 'dist/cli/build-info.json')), identity)
+  records.push({
+    check: 'installed build identity matches producer archive receipt',
+    status: 'pass',
+    source: installedBuild.sourceCommit,
+    buildInfoSha256: identity.buildInfoSha256,
+    recordedBuildInputs: installedBuild.recordedBuildInputs,
+    ...payloadCheck,
+  })
   const claudeSdkPin = join(installed, 'dist/bridge/claude-agent-sdk-pin.json')
   const claudeResolveWorker = join(installed, 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs')
   assert.ok(existsSync(claudeSdkPin), 'Claude SDK pin shipped in consumer tarball')

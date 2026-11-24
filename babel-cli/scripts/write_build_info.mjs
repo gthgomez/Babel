@@ -1,5 +1,6 @@
 // License: Apache-2.0 — see LICENSE
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -20,11 +21,10 @@ function git(root, args) {
   return result.status === 0 && !result.error ? result.stdout.trim() : null
 }
 
-function readCompilerVersion(root) {
+function readBuildInput(path, maxBytes) {
   try {
-    const path = join(root, 'node_modules', 'typescript', 'package.json')
     const expected = lstatSync(path, { bigint: true })
-    if (!expected.isFile() || expected.isSymbolicLink() || expected.nlink !== 1n || expected.size > 64n * 1024n) return null
+    if (!expected.isFile() || expected.isSymbolicLink() || expected.nlink !== 1n || expected.size > BigInt(maxBytes)) return null
     const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
     try {
       const actual = fstatSync(fd, { bigint: true })
@@ -38,10 +38,51 @@ function readCompilerVersion(root) {
         offset += count
       }
       if (offset !== Number(actual.size)) return null
-      const version = JSON.parse(bytes.subarray(0, offset).toString('utf8')).version
-      return typeof version === 'string' && /^[0-9A-Za-z.+-]{1,40}$/.test(version) ? version : null
+      return bytes.subarray(0, offset)
     } finally { closeSync(fd) }
   } catch { return null }
+}
+
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
+const compilerPackagePath = 'node_modules/typescript/package.json'
+const buildInputs = [
+  ['package.json', 1024 * 1024],
+  ['package-lock.json', 16 * 1024 * 1024],
+  ['tsconfig.json', 1024 * 1024],
+  [compilerPackagePath, 64 * 1024],
+  ['node_modules/typescript/bin/tsc', 64 * 1024],
+  ['node_modules/typescript/lib/tsc.js', 16 * 1024 * 1024],
+  ['node_modules/typescript/lib/_tsc.js', 16 * 1024 * 1024],
+]
+
+/**
+ * A bounded, versioned digest of named CLI inputs, not a reproducible-build
+ * attestation. The source tree is bound separately; npm's installed dependency
+ * bytes, other compiler files, the Node binary, flags and host remain uncovered.
+ */
+export function captureRecordedBuildInputs(packageRoot) {
+  const files = []
+  for (const [path, limit] of buildInputs) {
+    const bytes = readBuildInput(join(packageRoot, path), limit)
+    if (bytes === null) return null
+    files.push([path, sha256(bytes)])
+  }
+  const scope = 'cli-manifest-lock-config-and-tsc-files:v1'
+  return {
+    scope,
+    sha256: sha256(JSON.stringify([scope, process.versions.node, files])),
+    packageLockSha256: files[1][1],
+  }
+}
+
+export function assertRecordedBuildInputs(value, expected) {
+  const digest = /^[a-f0-9]{64}$/
+  if (value?.scope !== 'cli-manifest-lock-config-and-tsc-files:v1' ||
+      !digest.test(value.sha256) || !digest.test(value.packageLockSha256) ||
+      value.sha256 !== expected?.sha256 || value.packageLockSha256 !== expected?.packageLockSha256 ||
+      value.scope !== expected?.scope) {
+    throw new Error('Recorded CLI build inputs do not match the expected receipt')
+  }
 }
 
 /** Self-reported build metadata; the external archive receipt remains authoritative. */
@@ -49,7 +90,12 @@ export function createBuildInfo(packageRoot) {
   const root = resolve(packageRoot)
   const packageVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version
   if (typeof packageVersion !== 'string' || !packageVersion) throw new Error('Package version is missing')
-  const typescriptVersion = readCompilerVersion(root)
+  const compilerPackage = readBuildInput(join(root, compilerPackagePath), 64 * 1024)
+  let typescriptVersion = null
+  try {
+    const version = compilerPackage && JSON.parse(compilerPackage.toString('utf8')).version
+    if (typeof version === 'string' && /^[0-9A-Za-z.+-]{1,40}$/.test(version)) typescriptVersion = version
+  } catch { /* Compiler version remains unknown. */ }
   const trackedPackage = git(root, ['ls-files', '--error-unmatch', '--', 'package.json'])
   const commit = trackedPackage === null ? null : git(root, ['rev-parse', '--verify', 'HEAD'])
   const tree = commit === null ? null : git(root, ['rev-parse', '--verify', 'HEAD^{tree}'])
@@ -63,6 +109,7 @@ export function createBuildInfo(packageRoot) {
     workingTreeClean: status === null ? null : status.length === 0,
     buildInputsDigest: null,
     buildInputsReason: 'complete build inputs were not recorded',
+    recordedBuildInputs: captureRecordedBuildInputs(root),
     nodeVersion: process.versions.node,
     typescriptVersion,
   }
@@ -80,6 +127,9 @@ export function assertReleaseBuildInfo(info, expected) {
   check(info.workingTreeClean === true, 'Release build identity must report a clean source tree')
   check(typeof info.nodeVersion === 'string' && /^[0-9A-Za-z.+-]{1,40}$/.test(info.nodeVersion), 'Build Node version is unavailable')
   check(typeof info.typescriptVersion === 'string' && /^[0-9A-Za-z.+-]{1,40}$/.test(info.typescriptVersion), 'Build compiler version is unavailable')
+  check(info.buildInputsDigest === null && info.buildInputsReason === 'complete build inputs were not recorded',
+    'Build identity must not claim complete input coverage')
+  assertRecordedBuildInputs(info.recordedBuildInputs, expected.recordedBuildInputs)
 }
 
 export function writeBuildInfo(packageRoot) {

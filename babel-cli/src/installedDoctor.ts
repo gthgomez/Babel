@@ -81,7 +81,7 @@ export function runInstalledDoctor(options: {
   })))
   const product = inspectRunningProduct(options.running ?? runningProduct)
   const buildDescription = product.buildInfo
-    ? `self-reported build commit ${product.buildInfo.sourceCommit ?? 'unknown'}, working tree ${product.buildInfo.workingTreeClean === null ? 'unknown' : product.buildInfo.workingTreeClean ? 'clean' : 'dirty'}; complete build inputs unrecorded`
+    ? `self-reported build commit ${product.buildInfo.sourceCommit ?? 'unknown'}, working tree ${product.buildInfo.workingTreeClean === null ? 'unknown' : product.buildInfo.workingTreeClean ? 'clean' : 'dirty'}; ${product.buildInfo.recordedBuildInputs ? 'CLI manifest, lockfile, configuration and selected compiler files recorded; ' : ''}complete build inputs unrecorded`
     : 'build metadata unavailable'
   const platform = options.platform ?? process.platform
   const isolationDecision: GovernedIsolationDecision = !requiresDocker

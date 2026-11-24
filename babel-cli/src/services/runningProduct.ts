@@ -21,6 +21,11 @@ export interface BuildInfo {
   workingTreeClean: boolean | null
   buildInputsDigest: null
   buildInputsReason: 'complete build inputs were not recorded'
+  recordedBuildInputs?: {
+    scope: 'cli-manifest-lock-config-and-tsc-files:v1'
+    sha256: string
+    packageLockSha256: string
+  } | null
   nodeVersion: string
   typescriptVersion: string | null
 }
@@ -50,6 +55,13 @@ function readBuildManifest(path: string, version: string | null): { info: BuildI
     try { value = JSON.parse(bytes.toString('utf8')) } catch { return { info: null, hash } }
     if (!value || typeof value !== 'object') return { info: null, hash }
     const data = value as Record<string, unknown>
+    const recorded = data['recordedBuildInputs']
+    const recordedInfo = recorded && typeof recorded === 'object' ? recorded as Record<string, unknown> : null
+    const digest = (item: unknown): item is string => typeof item === 'string' && /^[a-f0-9]{64}$/.test(item)
+    const recordedBuildInputs = recordedInfo?.['scope'] === 'cli-manifest-lock-config-and-tsc-files:v1' &&
+      digest(recordedInfo['sha256']) && digest(recordedInfo['packageLockSha256'])
+      ? { scope: recordedInfo['scope'], sha256: recordedInfo['sha256'], packageLockSha256: recordedInfo['packageLockSha256'] } as const
+      : null
     const objectId = (id: unknown): id is string | null => id === null ||
       (typeof id === 'string' && /^[a-f0-9]{40,64}$/.test(id))
     if (data['schemaVersion'] !== 1 || version === null || data['packageVersion'] !== version ||
@@ -57,6 +69,7 @@ function readBuildManifest(path: string, version: string | null): { info: BuildI
         !(data['workingTreeClean'] === null || typeof data['workingTreeClean'] === 'boolean') ||
         (data['workingTreeClean'] === true && data['sourceCommit'] === null) ||
         data['buildInputsDigest'] !== null || data['buildInputsReason'] !== 'complete build inputs were not recorded' ||
+        (recorded !== undefined && recorded !== null && recordedBuildInputs === null) ||
         typeof data['nodeVersion'] !== 'string' || !/^[0-9A-Za-z.+-]{1,40}$/.test(data['nodeVersion']) ||
         !(data['typescriptVersion'] === null || (typeof data['typescriptVersion'] === 'string' && /^[0-9A-Za-z.+-]{1,40}$/.test(data['typescriptVersion'])))) {
       return { info: null, hash }
@@ -66,6 +79,7 @@ function readBuildManifest(path: string, version: string | null): { info: BuildI
       sourceCommit: data['sourceCommit'] as string | null, sourceTree: data['sourceTree'] as string | null,
       workingTreeClean: data['workingTreeClean'] as boolean | null,
       buildInputsDigest: null, buildInputsReason: 'complete build inputs were not recorded',
+      ...(recorded === undefined ? {} : { recordedBuildInputs }),
       nodeVersion: data['nodeVersion'], typescriptVersion: data['typescriptVersion'] as string | null,
     }, hash }
   } catch { return { info: null, hash: null } }

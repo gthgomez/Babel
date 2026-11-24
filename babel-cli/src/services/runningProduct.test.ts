@@ -50,5 +50,11 @@ test('build metadata is captured at process start and a changed manifest require
     assert.equal(inspectRunningProduct(running).restartNeeded, true)
     writeFileSync(manifest, JSON.stringify({ ...build, packageVersion: '9.9.9' }))
     assert.equal((captureRunningProduct(root, entry) as typeof running).buildInfo, null)
+    const recordedBuildInputs = { scope: 'cli-manifest-lock-config-and-tsc-files:v1',
+      sha256: 'd'.repeat(64), packageLockSha256: 'e'.repeat(64) }
+    writeFileSync(manifest, JSON.stringify({ ...build, recordedBuildInputs }))
+    assert.deepEqual(captureRunningProduct(root, entry).buildInfo?.recordedBuildInputs, recordedBuildInputs)
+    writeFileSync(manifest, JSON.stringify({ ...build, recordedBuildInputs: { ...recordedBuildInputs, scope: 'all-inputs' } }))
+    assert.equal(captureRunningProduct(root, entry).buildInfo, null)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
