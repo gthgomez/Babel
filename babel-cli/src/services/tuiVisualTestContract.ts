@@ -161,8 +161,12 @@ export function tuiCheckpointLabel(step: TuiVisualStep): string {
   return step.action === 'observe' ? step.label : `${step.label} (after)`
 }
 
-function isNonEmpty(value: string): boolean {
-  return value.trim().length > 0
+function isNonEmpty(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function validateStep(step: TuiVisualStep, index: number, errors: string[]): void {
@@ -174,6 +178,9 @@ function validateStep(step: TuiVisualStep, index: number, errors: string[]): voi
     case 'type_text':
       if (step.action === 'press_key' && !isNonEmpty(step.key)) {
         errors.push(`steps[${index}].key must be non-empty`)
+      }
+      if (step.action === 'type_text' && typeof step.text !== 'string') {
+        errors.push(`steps[${index}].text must be a string`)
       }
       break
     case 'resize':
@@ -203,6 +210,11 @@ function validateStep(step: TuiVisualStep, index: number, errors: string[]): voi
 export function validateTuiVisualScenario(
   scenario: TuiVisualScenario,
 ): TuiScenarioValidation {
+  if (!isRecord(scenario) || !Array.isArray(scenario.steps) ||
+    !Array.isArray(scenario.expectedEvents) || !Array.isArray(scenario.expectedVisualStates) ||
+    !scenario.steps.every(isRecord) || !scenario.expectedVisualStates.every(isRecord)) {
+    return { ok: false, errors: ['Expected a version 2 scenario with structured steps and visual criteria.'] }
+  }
   const errors: string[] = []
   if (!isNonEmpty(scenario.id)) errors.push('id must be non-empty')
   if (!isNonEmpty(scenario.name)) errors.push('name must be non-empty')
@@ -227,6 +239,7 @@ export function validateTuiVisualScenario(
   if (scenario.evidenceMode === 'visual_only' && scenario.expectedEvents.length > 0) {
     errors.push('visual_only scenarios must not declare expected semantic events')
   }
+  if (!scenario.expectedEvents.every(isNonEmpty)) errors.push('expectedEvents must contain event names')
   if (scenario.evidenceMode !== 'visual_only' && scenario.evidenceMode !== 'visual_plus_semantic') {
     errors.push('evidenceMode must be visual_only or visual_plus_semantic')
   }
@@ -249,8 +262,14 @@ export function validateTuiVisualScenario(
  * @param receipt Receipt emitted by an external visual-test runner.
  * @returns A successful result or receipt validation errors.
  */
-export function validateTuiVisualReceipt(receipt: TuiVisualReceipt): TuiScenarioValidation {
+export function validateTuiVisualReceiptStructure(receipt: TuiVisualReceipt): TuiScenarioValidation {
   const errors: string[] = []
+  if (!isRecord(receipt) || !isRecord(receipt.terminal) || !isRecord(receipt.semantic) ||
+    !Array.isArray(receipt.findings) || !receipt.findings.every(isRecord) ||
+    !Array.isArray(receipt.observations) || !receipt.observations.every(isRecord) ||
+    !Array.isArray(receipt.checks) || !receipt.checks.every(isRecord)) {
+    return { ok: false, errors: ['Malformed visual receipt structure.'] }
+  }
   if (receipt.schemaVersion !== TUI_VISUAL_TEST_SCHEMA_VERSION) {
     errors.push(`schemaVersion must be ${TUI_VISUAL_TEST_SCHEMA_VERSION}`)
   }
@@ -259,11 +278,21 @@ export function validateTuiVisualReceipt(receipt: TuiVisualReceipt): TuiScenario
   if (receipt.status === 'PASS' && receipt.findings.length > 0) {
     errors.push('PASS receipts must not contain findings')
   }
-  if (receipt.status === 'PASS' && !receipt.semantic.passed) {
+  if (receipt.status === 'PASS' && receipt.semantic.passed !== true) {
     errors.push('PASS receipts require passing semantic evidence')
   }
-  if (receipt.status === 'PASS' && (!receipt.run || !receipt.observations.length || !receipt.checks?.length)) {
+  if (receipt.status === 'PASS' && (!isRecord(receipt.run) || !receipt.observations.length || !receipt.checks.length)) {
     errors.push('PASS receipts require run identity, observations, and positive visual checks')
+  }
+  if (receipt.status === 'PASS' && (
+    receipt.observations.some((observation) => !isNonEmpty(observation.id) ||
+      !isNonEmpty(observation.label) || !isNonEmpty(observation.timestamp) ||
+      !isNonEmpty(observation.screenshotPath) || !isRecord(observation.terminal)) ||
+    receipt.checks.some((check) => !isNonEmpty(check.criterionId) || !isNonEmpty(check.observationId) ||
+      !isNonEmpty(check.screenshotSha256) || check.outcome !== 'met')
+  )) errors.push('PASS receipts require well-formed observations and positive checks')
+  if (!['PASS', 'BUG', 'BLOCKED', 'INCONCLUSIVE'].includes(receipt.status)) {
+    errors.push('Unknown receipt status')
   }
   if (receipt.semantic.evidenceMode === 'visual_plus_semantic' && !receipt.semantic.evidenceRequired) {
     errors.push('semantic-required receipts must record evidenceRequired=true')
@@ -275,7 +304,7 @@ export function validateTuiVisualReceipt(receipt: TuiVisualReceipt): TuiScenario
     errors.push('non-PASS receipts must contain at least one finding')
   }
   for (const finding of receipt.findings) {
-    if (finding.confidence < 0 || finding.confidence > 1) {
+    if (!Number.isFinite(finding.confidence) || finding.confidence < 0 || finding.confidence > 1) {
       errors.push('finding confidence must be between 0 and 1')
     }
   }

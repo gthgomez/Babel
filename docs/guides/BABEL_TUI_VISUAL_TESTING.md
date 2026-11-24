@@ -26,9 +26,10 @@ The command only prints JSON. It does not open a terminal or send input.
 
 An external controller should implement these operations:
 
-- `observe()` — return a unique observation ID, UTC ISO timestamp, checkpoint
+- `observe()` — return a unique observation ID, `Date.toISOString()` UTC timestamp, checkpoint
   label, terminal identity and dimensions, launch identity, and a relative PNG
-  path and SHA-256. Mark a real terminal window capture as `native_terminal`;
+  path and SHA-256. Use `/` separators and the actual case of each file-name
+  component on disk. Mark a real terminal window capture as `native_terminal`;
   a reference-renderer screenshot or virtual grid is not native evidence.
 - `press_key(key)` — accept only keys from the scenario step.
 - `type_text(text)` — type only scenario-provided text.
@@ -59,15 +60,18 @@ or transmission; have the reviewer inspect the exact redacted bytes.
 The version 2 manifest identifies each mandatory visual criterion by `id` and
 the zero-based checkpoint index `afterStep`. The independent reviewer must
 explicitly mark every criterion `met` and name the checkpoint observation ID and
-PNG hash. An empty findings list, a missing image, a stale or foreign capture,
-or a virtual/reference capture cannot substantiate `PASS`.
+PNG hash. A missing check, a missing image, a stale or foreign capture, or a
+virtual/reference capture leaves the result inconclusive even with zero findings.
 
-Await `buildTuiVisualReceipt` when generating receipts. When consuming a
-receipt, `validateTuiVisualReceipt` only checks its structure; pass the
+Await `buildTuiVisualReceipt` when generating receipts, supplying the
+launcher and independent reviewer expectation as the second argument.
+With no expectation, a submission cannot pass on its own. When consuming a
+receipt, `validateTuiVisualReceiptStructure` only checks its structure; pass the
 launcher-owned scenario/run settings and independent review results to
-`verifyTuiVisualPass` to check checkpoint coverage, dimensions and screenshot
-bytes before accepting a `PASS` claim. That verifier checks PNG headers and
-hashes, not visual correctness or the authenticity of the capture system.
+`verifyTuiVisualPass` to check checkpoint coverage, terminal dimensions and
+screenshot bytes before accepting a `PASS` claim. That verifier checks PNG
+structure and hashes. It does not decode pixels or establish the authenticity
+of the capture system.
 Both the launcher/controller and reviewer have to be trusted; never infer an
 independent visual review from a hash or a controller's assertion.
 

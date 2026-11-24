@@ -9,10 +9,12 @@ import { verifyTuiVisualPass } from './tui-visual-verification.js'
 import { buildTuiVisualReceipt, evaluateTuiSemanticOracle } from './tuiVisualEvidence.js'
 import {
   type TuiVisualObservation,
+  type TuiVisualReceipt,
   type TuiVisualScenario,
 } from './tuiVisualTestContract.js'
 
-const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a+9sAAAAASUVORK5CYII=', 'base64')
+// An 80×24 PNG used to exercise artifact plumbing, not a real terminal capture.
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAFAAAAAYCAIAAADieO37AAAAHElEQVR4nO3BMQEAAADCoPVPbQsvoAAAAAAA4GcWmAABRX1+/QAAAABJRU5ErkJggg==', 'base64')
 const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
 
 async function fixture() {
@@ -59,7 +61,9 @@ test('trusted checks, exact checkpoints and matching PNG bytes permit a PASS', a
   const { submitted, cleanup } = await fixture()
   t.after(cleanup)
   // Pixel-identical frames can be valid, but each needs its own capture record.
-  const receipt = await buildTuiVisualReceipt(submitted)
+  const unreviewed = await buildTuiVisualReceipt(submitted)
+  assert.equal(unreviewed.status, 'INCONCLUSIVE')
+  const receipt = await buildTuiVisualReceipt(submitted, submitted)
   assert.equal(receipt.status, 'PASS')
   assert.deepEqual(await verifyTuiVisualPass(receipt, submitted), { ok: true })
   const forged = await verifyTuiVisualPass(receipt, { ...submitted, checks: [] })
@@ -100,7 +104,7 @@ test('missing or misleading checkpoint evidence is inconclusive', async (t) => {
     },
   }
   for (const [name, overrides] of Object.entries(cases)) {
-    const receipt = await buildTuiVisualReceipt({ ...submitted, ...overrides })
+    const receipt = await buildTuiVisualReceipt({ ...submitted, ...overrides }, submitted)
     assert.equal(receipt.status, 'INCONCLUSIVE', name)
   }
 })
@@ -108,7 +112,7 @@ test('missing or misleading checkpoint evidence is inconclusive', async (t) => {
 test('PNG replaced after review or an artifact symlink cannot substantiate PASS', async (t) => {
   const { submitted, cleanup } = await fixture()
   t.after(cleanup)
-  const receipt = await buildTuiVisualReceipt(submitted)
+  const receipt = await buildTuiVisualReceipt(submitted, submitted)
   assert.equal(receipt.status, 'PASS')
   const changed = Buffer.from(png)
   changed[33] = changed[33]! ^ 1
@@ -122,4 +126,36 @@ test('PNG replaced after review or an artifact symlink cannot substantiate PASS'
     await symlink('before.png', join(submitted.evidenceDir, 'after.png'))
     assert.equal((await verifyTuiVisualPass(receipt, submitted)).ok, false)
   }
+})
+
+test('malformed external evidence and historical scenarios return validation errors', async (t) => {
+  const { submitted, cleanup } = await fixture()
+  t.after(cleanup)
+  const receipt = await buildTuiVisualReceipt(submitted, submitted)
+  assert.equal(receipt.status, 'PASS')
+  for (const malformed of [
+    {},
+    { ...receipt, observations: [null] },
+    { ...receipt, observations: [{ id: 'unrelated' }] },
+    { ...receipt, checks: [null] },
+    { ...receipt, checks: 'abc' },
+  ]) {
+    assert.equal((await verifyTuiVisualPass(malformed as TuiVisualReceipt, submitted)).ok, false)
+  }
+  const oldScenario = { ...submitted.scenario, expectedVisualStates: ['legacy label'] }
+  const historical = await verifyTuiVisualPass(receipt, { ...submitted, scenario: oldScenario as unknown as TuiVisualScenario })
+  assert.deepEqual(historical, { ok: false, errors: ['Expected a version 2 scenario with structured steps and visual criteria.'] })
+})
+
+test('matching hashes cannot turn a header-only file into a screenshot', async (t) => {
+  const { submitted, cleanup } = await fixture()
+  t.after(cleanup)
+  const headerOnly = Buffer.concat([png.subarray(0, 33), png.subarray(-12)])
+  await writeFile(join(submitted.evidenceDir, 'after.png'), headerOnly)
+  const digest = hash(headerOnly)
+  submitted.observations[1]!.screenshotSha256 = digest
+  submitted.checks[0]!.screenshotSha256 = digest
+  const receipt = await buildTuiVisualReceipt(submitted, submitted)
+  assert.equal(receipt.status, 'INCONCLUSIVE')
+  assert.match(receipt.findings[0]!.summary, /missing or invalid screenshot artifact/)
 })

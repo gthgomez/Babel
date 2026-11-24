@@ -20,7 +20,7 @@ import type {
   TuiVisualRunIdentity,
 } from './tuiVisualTestContract.js'
 import { TUI_VISUAL_TEST_SCHEMA_VERSION } from './tuiVisualTestContract.js'
-import { verifyTuiVisualPass } from './tui-visual-verification.js'
+import { verifyTuiVisualPass, type TuiVisualPassExpectation } from './tui-visual-verification.js'
 
 export interface TuiEventRecord {
   event?: string
@@ -164,7 +164,8 @@ function semanticFinding(semantic: TuiSemanticOracle): TuiVisualFinding {
 /**
  * Build a complete receipt from controller observations and Babel evidence.
  *
- * @param input Driver observations and positive checks from an independent reviewer.
+ * @param input Driver observations and submitted checks.
+ * @param expected Launcher-owned run metadata and independent reviewer checks.
  * @returns A receipt suitable for JSON serialization; artifact checks finish before PASS.
  */
 export async function buildTuiVisualReceipt(input: {
@@ -179,7 +180,7 @@ export async function buildTuiVisualReceipt(input: {
   findings?: TuiVisualFinding[]
   evidenceDir: string
   controller: { name: string; version: string }
-}): Promise<TuiVisualReceipt> {
+}, expected?: TuiVisualPassExpectation): Promise<TuiVisualReceipt> {
   const findings = [...(input.findings ?? [])]
   if (!input.semantic.passed) findings.push(semanticFinding(input.semantic))
 
@@ -204,9 +205,9 @@ export async function buildTuiVisualReceipt(input: {
     controller: input.controller,
   }
   if (receipt.status !== 'PASS') return receipt
-  const verification = input.run
-    ? await verifyTuiVisualPass(receipt, { ...input, run: input.run, checks: receipt.checks })
-    : { ok: false as const, errors: ['Capture run identity is missing.'] }
+  const verification = expected
+    ? await verifyTuiVisualPass(receipt, expected)
+    : { ok: false as const, errors: ['Independent review and launch expectation are missing.'] }
   if (verification.ok) return receipt
   receipt.status = 'INCONCLUSIVE'
   findings.push({

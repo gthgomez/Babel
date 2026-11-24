@@ -9,7 +9,7 @@ import { join } from 'node:path'
 
 import {
   tuiCheckpointLabel,
-  validateTuiVisualReceipt,
+  validateTuiVisualReceiptStructure,
   validateTuiVisualScenario,
   type TuiScenarioValidation,
   type TuiTerminalIdentity,
@@ -53,6 +53,26 @@ function isoMilliseconds(value: string): number {
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value ? parsed : Number.NaN
 }
 
+function hasPngImageData(bytes: Buffer, terminal: TuiTerminalIdentity): boolean {
+  if (bytes.length < 45 || !bytes.subarray(0, 8).equals(PNG_SIGNATURE) ||
+    bytes.readUInt32BE(8) !== 13 || bytes.toString('ascii', 12, 16) !== 'IHDR' ||
+    bytes.readUInt32BE(16) < terminal.cols || bytes.readUInt32BE(20) < terminal.rows ||
+    !bytes.subarray(-PNG_IEND.length).equals(PNG_IEND)) return false
+  // Check that there is an actual image data chunk, not just PNG headers.
+  // A trusted reviewer still needs to decode and inspect the pixels.
+  let imageData = false
+  for (let start = 8; start <= bytes.length - 12;) {
+    const length = bytes.readUInt32BE(start)
+    const end = start + 12 + length
+    if (end > bytes.length) return false
+    const type = bytes.toString('ascii', start + 4, start + 8)
+    if (type === 'IDAT' && length > 0) imageData = true
+    if (type === 'IEND') return imageData && length === 0 && end === bytes.length
+    start = end
+  }
+  return false
+}
+
 async function screenshotMatches(root: string, observation: TuiVisualObservation): Promise<boolean> {
   const parts = observation.screenshotPath.split('/')
   if (!parts.every((part) => /^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$/.test(part)) ||
@@ -75,11 +95,9 @@ async function screenshotMatches(root: string, observation: TuiVisualObservation
         if (!bytesRead) break
         offset += bytesRead
       }
-      return offset === size && bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE) &&
-        bytes.readUInt32BE(8) === 13 && bytes.toString('ascii', 12, 16) === 'IHDR' &&
-        bytes.readUInt32BE(16) > 0 && bytes.readUInt32BE(20) > 0 &&
-        bytes.subarray(size - PNG_IEND.length, size).equals(PNG_IEND) &&
-        createHash('sha256').update(bytes.subarray(0, size)).digest('hex') === observation.screenshotSha256
+      const captured = bytes.subarray(0, size)
+      return offset === size && hasPngImageData(captured, observation.terminal) &&
+        createHash('sha256').update(captured).digest('hex') === observation.screenshotSha256
     } finally {
       await file.close()
     }
@@ -97,20 +115,21 @@ export async function verifyTuiVisualPass(
   receipt: TuiVisualReceipt,
   expected: TuiVisualPassExpectation,
 ): Promise<TuiScenarioValidation> {
-  const structure = validateTuiVisualReceipt(receipt)
+  const structure = validateTuiVisualReceiptStructure(receipt)
   if (!structure.ok) return structure
   if (receipt.status !== 'PASS') return { ok: false, errors: ['The receipt does not claim PASS.'] }
   const { scenario, run } = expected
   const scenarioValidation = validateTuiVisualScenario(scenario)
   if (!scenarioValidation.ok) return scenarioValidation
   if (
-    !run.sessionId.trim() || !REVISION.test(run.revision) || !SHA256.test(run.buildId) ||
+    typeof run.sessionId !== 'string' || !run.sessionId.trim() || !REVISION.test(run.revision) || !SHA256.test(run.buildId) ||
     !sameRun(receipt.run, run) || receipt.scenarioId !== scenario.id ||
     receipt.scenarioName !== scenario.name || receipt.evidenceDir !== expected.evidenceDir ||
     !sameTerminal(receipt.terminal, expected.terminal) ||
     receipt.startedAt !== expected.startedAt || receipt.endedAt !== expected.endedAt
   ) return { ok: false, errors: ['Receipt does not match the expected scenario and run.'] }
-  if (scenario.evidenceMode !== receipt.semantic.evidenceMode || scenario.evidenceMode !== 'visual_only') {
+  if (receipt.semantic.passed !== true || receipt.semantic.evidenceRequired !== false ||
+    scenario.evidenceMode !== receipt.semantic.evidenceMode || scenario.evidenceMode !== 'visual_only') {
     return { ok: false, errors: ['The event-name oracle does not certify run-bound semantic criteria.'] }
   }
   const start = isoMilliseconds(expected.startedAt)
