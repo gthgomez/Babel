@@ -11,6 +11,7 @@ import {
   mkdtempSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -307,14 +308,16 @@ test('tracked diff over the subprocess buffer limit fails closed as an output li
     git(root, ['init', '--quiet'])
     git(root, ['config', 'user.email', 'test@example.invalid'])
     git(root, ['config', 'user.name', 'Test'])
-    // Ordinary tracked text: each revision is ~0.8 MB, so the one-file diff is
-    // ~1.6 MB and genuinely overruns the subprocess buffer limit.
-    const revision = (marker: string): string =>
-      `${Array.from({ length: 1_200 }, (_, index) => `${marker} ${index} ${'.'.repeat(680)}`).join('\n')}\n`
-    writeFileSync(join(root, 'tracked.txt'), revision('version one'))
+    // Ordinary tracked text. The second revision is a different size (more
+    // lines), so Git detects it from the stat alone and the ~2.3 MB one-file
+    // diff genuinely overruns the subprocess buffer limit regardless of
+    // filesystem timestamp granularity.
+    const revision = (marker: string, lines: number): string =>
+      `${Array.from({ length: lines }, (_, index) => `${marker} ${index} ${'.'.repeat(680)}`).join('\n')}\n`
+    writeFileSync(join(root, 'tracked.txt'), revision('version one', 900))
     git(root, ['add', '.'])
     git(root, ['commit', '--quiet', '-m', 'initial'])
-    writeFileSync(join(root, 'tracked.txt'), revision('version two'))
+    writeFileSync(join(root, 'tracked.txt'), revision('version two', 2_400))
 
     const snapshot = collectWorkspaceChanges(root)
 
@@ -324,6 +327,43 @@ test('tracked diff over the subprocess buffer limit fails closed as an output li
     assert.equal(snapshot.reason, 'workspace diff output limit exceeded')
     assert.equal((snapshot.reason ?? '').includes(root), false)
     assert.equal(/timed out/i.test(snapshot.reason ?? ''), false)
+  } finally {
+    removeTree(root)
+  }
+})
+
+test('isolated index copy keeps racy-clean re-checks for a same-size edit', () => {
+  requireGit()
+  const root = mkdtempSync(join(tmpdir(), 'babel-workspace-racy-index-'))
+  try {
+    git(root, ['init', '--quiet'])
+    git(root, ['config', 'user.email', 'test@example.invalid'])
+    git(root, ['config', 'user.name', 'Test'])
+    // A same-timestamp add leaves the index racy against its own entry. Pin
+    // that state deterministically instead of sleeping: the index file and the
+    // edited file share the entry mtime, and both revisions have equal length.
+    const pinned = new Date(1_700_000_000_000)
+    writeFileSync(join(root, 'tracked.txt'), 'version one\nsame byte count\n')
+    utimesSync(join(root, 'tracked.txt'), pinned, pinned)
+    git(root, ['add', '.'])
+    git(root, ['commit', '--quiet', '-m', 'initial'])
+    utimesSync(join(root, '.git', 'index'), pinned, pinned)
+    writeFileSync(join(root, 'tracked.txt'), 'version two\nsame byte count\n')
+    utimesSync(join(root, 'tracked.txt'), pinned, pinned)
+
+    // The source checkout re-checks the racy entry and sees the edit; the
+    // read-only inspection must reproduce that, not trust the stale stat.
+    assert.equal(git(root, ['--no-optional-locks', 'status', '--porcelain=v1']), 'M tracked.txt')
+
+    const snapshot = collectWorkspaceChanges(root)
+
+    assert.equal(snapshot.available, true, snapshot.reason)
+    assert.deepEqual(
+      snapshot.files.map((file) => file.path),
+      ['tracked.txt'],
+    )
+    assert.match(snapshot.diff, /-version one/)
+    assert.match(snapshot.diff, /\+version two/)
   } finally {
     removeTree(root)
   }

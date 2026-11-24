@@ -27,6 +27,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -282,7 +283,12 @@ function sameCanonicalPath(left: string, right: string): boolean {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
-function readBoundedFile(path: string, maxBytes: number): Buffer {
+interface BoundedFileSnapshot {
+  bytes: Buffer
+  mtimeMs: number
+}
+
+function readBoundedFileSnapshot(path: string, maxBytes: number): BoundedFileSnapshot {
   assertNoLinkAncestors(path)
   const leaf = lstatSync(path)
   if (!leaf.isFile() || leaf.isSymbolicLink()) {
@@ -306,14 +312,38 @@ function readBoundedFile(path: string, maxBytes: number): Buffer {
     if (readSync(descriptor, extra, 0, 1, stat.size) > 0) {
       throw new ScopeError('repository scope could not be validated')
     }
-    return buffer
+    return { bytes: buffer, mtimeMs: stat.mtimeMs }
   } finally {
     closeSync(descriptor)
   }
 }
 
+function readBoundedFile(path: string, maxBytes: number): Buffer {
+  return readBoundedFileSnapshot(path, maxBytes).bytes
+}
+
 function copyBoundedFile(source: string, destination: string, maxBytes: number): void {
   writeFileSync(destination, readBoundedFile(source, maxBytes))
+}
+
+/**
+ * Git treats an index entry as racy-clean when its mtime is not older than the
+ * index file itself, and only then re-checks the file content. Copying the
+ * index bytes stamps the private copy with the current time, which would
+ * silently promote those racy entries to "definitely clean" and hide a
+ * same-size edit that the source checkout still reports. Flooring the copy to
+ * whole seconds of the source timestamp keeps the racy set a superset of the
+ * source's: the copy can re-check content, never skip a check Git would do.
+ * The timestamp is the stat of the same descriptor that supplies the bytes, so
+ * a replaced index path cannot pair one index's bytes with another index's
+ * timestamp. A same-descriptor in-place rewrite during the read can only leave
+ * the recorded timestamp older than the bytes, which adds re-checks.
+ */
+function copyIndexPreservingRacyWindow(source: string, destination: string): void {
+  const snapshot = readBoundedFileSnapshot(source, MAX_INDEX_BYTES)
+  const sourceSeconds = Math.floor(snapshot.mtimeMs / 1000)
+  writeFileSync(destination, snapshot.bytes)
+  utimesSync(destination, sourceSeconds, sourceSeconds)
 }
 
 function assertOptionalDirectory(path: string): void {
@@ -742,7 +772,7 @@ function createIsolatedRepository(
     writeFileSync(join(gitDir, 'HEAD'), head)
     writeFileSync(join(gitDir, 'config'), buildIsolatedConfig(entries, tempRoot, formatVersion, localSentinel))
     if (metadataExists(scope.index)) {
-      copyBoundedFile(scope.index, indexFile, MAX_INDEX_BYTES)
+      copyIndexPreservingRacyWindow(scope.index, indexFile)
     }
     for (const [source, name] of [
       [scope.infoExclude, 'exclude'],
