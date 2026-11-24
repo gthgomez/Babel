@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,8 @@ import type { ReplContext } from '../context.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { executeChatTask } from './chat.js';
+import { ShellRuntimeBinding } from '../../ui/shell/shellRuntimeBinding.js';
+import { resolveEffectiveExecutionBoundary } from '../../config/effectiveExecutionBoundary.js';
 import { OpenCodeGoApiRunner } from '../../runners/openCodeGoApi.js';
 import { babelReviewModelPolicy } from '../../services/babelChatReview.js';
 import { initMinimalGitProject, mkExternalRunsDir } from '../../testUtils/chatAdmissionFixture.js';
@@ -41,7 +43,9 @@ function createMockEngine(
     submitMessageStream: async function* () {
       hooks?.onSubmit?.();
       if (result.status === 'failed') {
-        yield { type: 'failed', error: result.answer } as ChatEvent;
+        yield { type: 'failed', error: result.answer, ...(result.outcome ? { outcome: result.outcome } : {}),
+          ...(result.reason_code ? { reason_code: result.reason_code } : {}),
+          ...(result.reason_detail ? { reason_detail: result.reason_detail } : {}) } as ChatEvent;
         return;
       }
       yield { type: 'done', answer: result.answer, usage: result.usage } as ChatEvent;
@@ -136,6 +140,243 @@ const testDeps = {
 };
 
 describe('executeChatTask integration', { concurrency: 1 }, () => {
+test('a current route rejected by authentication blocks a second send', async () => {
+  const { executeTask } = await import('./dispatch.js');
+  const root = mkdtempSync(join(tmpdir(), 'babel-route-rejected-'));
+  const previous = { state: process.env['BABEL_STATE_DIR'], project: process.env['BABEL_PROJECT_ROOT'], key: process.env['ROUTE_FIXTURE_KEY'] };
+  const previousLog = console.log;
+  const state = join(root, 'state'); const project = join(root, 'project');
+  mkdirSync(state); mkdirSync(project); writeFileSync(join(project, 'README.md'), 'fixture');
+  writeFileSync(join(state, 'preferences.json'), JSON.stringify({ schemaVersion: 1, connections: {
+    a: { id: 'a', provider: 'openrouter', model: 'vendor/model', apiKeyEnvVar: 'ROUTE_FIXTURE_KEY' },
+  }, defaults: { connection: 'a', model: 'vendor/model' } }));
+  process.env['BABEL_STATE_DIR'] = state; process.env['BABEL_PROJECT_ROOT'] = project; process.env['ROUTE_FIXTURE_KEY'] = 'synthetic-only';
+  console.log = () => {};
+  let submitted = 0;
+  try {
+    const ctx = makeReplContext();
+    ctx.state.connectionId = 'a'; ctx.state.model = 'connection/a/vendor/model'; ctx.state.readinessState = 'configured_unverified';
+    ctx.resolveCurrentTarget = () => makeTarget(project); ctx.scheduleIndexWarmup = () => {}; ctx.saveSessionState = () => {};
+    const events: unknown[] = [];
+    const engine = createMockEngine({ status: 'failed', outcome: 'INFRA_FAILURE', reason_code: 'provider_failure', reason_detail: 'authentication',
+      answer: 'Provider authentication rejected', usage: EMPTY_USAGE, conversation: [] }, { onSubmit: () => {
+        submitted++;
+        events.push({ kind: 'model_input_receipt', turn_id: 'turn-a', inference_id: 'inference-a', provider: 'openrouter', sent_model_id: 'vendor/model',
+          route_receipt: { execution_stage: 'chat', provider: 'openrouter', exact_model_id_sent: 'vendor/model', substitution_or_fallback: false } });
+        events.push({ kind: 'provider_failure_receipt', turn_id: 'turn-a', inference_id: 'inference-a', provider: 'openrouter', model: 'vendor/model', receipt: { http_status: 401 } });
+      } });
+    engine.getParityRuntime = () => ({ turnId: 'turn-a', sessionEvents: { events } }) as never;
+    engine.getProviderRouteIdentity = () => ({ connection: 'a', provider: 'openrouter', requestedModel: 'vendor/model',
+      endpoint: null, credentialReference: 'ROUTE_FIXTURE_KEY', authentication: null }) as never;
+    const deps = { loadSessionIdentity: async () => '', executeChatTask: (c: ReplContext, i: string, task: string, target: AgentTargetContext, system?: string) =>
+      executeChatTask(c, i, task, target, system, { ...testDeps, engineFactory: () => engine }) };
+    await executeTask(ctx, 'original request', deps);
+    assert.equal(submitted, 1);
+    assert.equal(ctx.state.readinessState, 'action_required');
+    ctx.state.readinessState = 'configured_unverified'; // Merely reselecting the same route is not recovery.
+    await executeTask(ctx, 'second request', deps);
+    assert.equal(submitted, 1, 'no second inference before explicit recovery');
+    assert.ok(ctx.turns.some(turn => turn.input === 'original request'));
+  } finally {
+    console.log = previousLog;
+    for (const [name, value] of Object.entries({ BABEL_STATE_DIR: previous.state, BABEL_PROJECT_ROOT: previous.project, ROUTE_FIXTURE_KEY: previous.key })) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+test('a real engine 401 or 403 blocks a second request for the selected route', async () => {
+  const { executeTask } = await import('./dispatch.js');
+  const { connectionModelSelector, resolveConnectionModelPolicy } = await import('../../config/connectionModelPolicy.js');
+  const { OpenRouterApiRunner } = await import('../../runners/openRouterApi.js');
+  const root = mkdtempSync(join(tmpdir(), 'babel-real-auth-'));
+  const previous = { state: process.env['BABEL_STATE_DIR'], project: process.env['BABEL_PROJECT_ROOT'], key: process.env['ROUTE_FIXTURE_KEY'], fetch: globalThis.fetch, log: console.log };
+  const state = join(root, 'state'); const project = join(root, 'project');
+  mkdirSync(state); mkdirSync(project); writeFileSync(join(project, 'README.md'), 'fixture');
+  writeFileSync(join(state, 'preferences.json'), JSON.stringify({ schemaVersion: 1, connections: {
+    a: { id: 'a', provider: 'openrouter', model: 'vendor/model', apiKeyEnvVar: 'ROUTE_FIXTURE_KEY' },
+  }, defaults: { connection: 'a', model: 'vendor/model' } }));
+  process.env['BABEL_STATE_DIR'] = state; process.env['BABEL_PROJECT_ROOT'] = project; process.env['ROUTE_FIXTURE_KEY'] = 'synthetic-only';
+  let requests = 0; let selectedModel = ''; let responseStatus = 401; const output: string[] = [];
+  globalThis.fetch = async (_url, init) => {
+    requests++; selectedModel = JSON.parse(String(init?.body)).model as string;
+    return new Response('{}', { status: responseStatus });
+  };
+  console.log = (...args: unknown[]) => { output.push(args.map(String).join(' ')); };
+  let engine: ChatEngine | undefined;
+  try {
+    for (const status of [401, 403]) {
+    responseStatus = status; requests = 0; selectedModel = ''; output.length = 0;
+    const ctx = makeReplContext();
+    ctx.state.connectionId = 'a'; ctx.state.model = connectionModelSelector('a', 'vendor/model'); ctx.state.readinessState = 'configured_unverified';
+    ctx.resolveCurrentTarget = () => makeTarget(project); ctx.scheduleIndexWarmup = () => {}; ctx.saveSessionState = () => {};
+    const policy = resolveConnectionModelPolicy(ctx.state.model);
+    assert.ok(policy);
+    const runner = new OpenRouterApiRunner('vendor/model', {}, { env: { ROUTE_FIXTURE_KEY: 'synthetic-only' }, explicitCredential: 'synthetic-only' });
+    const deps = { loadSessionIdentity: async () => '', executeChatTask: (c: ReplContext, i: string, task: string, target: AgentTargetContext, system?: string) =>
+      executeChatTask(c, i, task, target, system, { ...testDeps, engineFactory: options => (engine = new ChatEngine({ ...options, providerPolicy: policy, providerRunner: runner })) }) };
+    await executeTask(ctx, 'Inspect the fixture', deps);
+    assert.equal(requests, 1); assert.equal(selectedModel, 'vendor/model');
+    const observations = engine?.getParityRuntime().sessionEvents.events
+      .filter(event => event.kind === 'provider_failure_receipt' || event.kind === 'model_result_delivery')
+      .map(event => event.kind === 'provider_failure_receipt'
+        ? { kind: event.kind, provider: event.provider, model: event.model, status: event.receipt.http_status }
+        : { kind: event.kind, provider: event.provider, model: event.model, status: event.http_status, receiptStatus: event.failure_receipt?.http_status });
+    const terminals = engine?.getParityRuntime().sessionEvents.events.filter(event => event.kind === 'turn_ended')
+      .map(event => ({ reason: event.reason_code, detail: event.reason_detail, status: event.status }));
+    assert.equal(ctx.state.readinessState, 'action_required', JSON.stringify({ observations, terminals, selection: engine?.getProviderSelectionStatus() }));
+    assert.equal(/openrouter.*connection a/i.test(output.join('\n')), true, 'provider and account must be visible');
+    assert.equal(/\/setup/.test(output.join('\n')), true, 'reconnection must be actionable');
+    assert.equal(/synthetic-only/.test(output.join('\n')), false, 'fixture credential must not be displayed');
+    await executeTask(ctx, 'Do not send this automatically', deps);
+    assert.equal(requests, 1);
+    engine?.closeAdmissionStore(); engine = undefined;
+    }
+  } finally {
+    engine?.closeAdmissionStore(); globalThis.fetch = previous.fetch; console.log = previous.log;
+    for (const [name, value] of Object.entries({ BABEL_STATE_DIR: previous.state, BABEL_PROJECT_ROOT: previous.project, ROUTE_FIXTURE_KEY: previous.key })) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+test('a late authentication receipt cannot reject a replacement route', async () => {
+  const { executeTask } = await import('./dispatch.js');
+  const root = mkdtempSync(join(tmpdir(), 'babel-route-stale-'));
+  const previous = { state: process.env['BABEL_STATE_DIR'], project: process.env['BABEL_PROJECT_ROOT'], key: process.env['ROUTE_FIXTURE_KEY'], log: console.log };
+  const state = join(root, 'state'); const project = join(root, 'project');
+  mkdirSync(state); mkdirSync(project); writeFileSync(join(project, 'README.md'), 'fixture');
+  writeFileSync(join(state, 'preferences.json'), JSON.stringify({ schemaVersion: 1, connections: {
+    a: { id: 'a', provider: 'openrouter', model: 'vendor/model', apiKeyEnvVar: 'ROUTE_FIXTURE_KEY' },
+    b: { id: 'b', provider: 'openrouter', model: 'vendor/other', apiKeyEnvVar: 'ROUTE_FIXTURE_KEY' },
+  }, defaults: { connection: 'a', model: 'vendor/model' } }));
+  process.env['BABEL_STATE_DIR'] = state; process.env['BABEL_PROJECT_ROOT'] = project; process.env['ROUTE_FIXTURE_KEY'] = 'synthetic-only'; console.log = () => {};
+  let release!: () => void; let started!: () => void; let replacementSubmits = 0;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  try {
+    const ctx = makeReplContext();
+    ctx.state.connectionId = 'a'; ctx.state.model = 'connection/a/vendor/model'; ctx.state.readinessState = 'configured_unverified';
+    ctx.resolveCurrentTarget = () => makeTarget(project); ctx.scheduleIndexWarmup = () => {}; ctx.saveSessionState = () => {};
+    const events: unknown[] = [];
+    const first = createMockEngine({ status: 'failed', answer: 'rejected', usage: EMPTY_USAGE, conversation: [] });
+    first.getParityRuntime = () => ({ turnId: 'turn-a', sessionEvents: { events } }) as never;
+    first.getProviderRouteIdentity = () => ({ connection: 'a', provider: 'openrouter', requestedModel: 'vendor/model',
+      endpoint: null, credentialReference: 'ROUTE_FIXTURE_KEY', authentication: null }) as never;
+    first.submitMessageStream = async function* () {
+      started(); await pending;
+      events.push({ kind: 'model_input_receipt', turn_id: 'turn-a', inference_id: 'inference-a', provider: 'openrouter', sent_model_id: 'vendor/model',
+        route_receipt: { execution_stage: 'chat', provider: 'openrouter', exact_model_id_sent: 'vendor/model', substitution_or_fallback: false } });
+      events.push({ kind: 'provider_failure_receipt', turn_id: 'turn-a', inference_id: 'inference-a', provider: 'openrouter', model: 'vendor/model', receipt: { http_status: 401 } });
+      yield { type: 'failed', error: 'rejected', outcome: 'INFRA_FAILURE', reason_code: 'provider_failure', reason_detail: 'authentication' } as ChatEvent;
+    };
+    const replacement = createMockEngine({ status: 'completed', answer: 'done', usage: EMPTY_USAGE, conversation: [] }, { onSubmit: () => { replacementSubmits++; } });
+    replacement.getProviderRouteIdentity = () => ({ connection: 'b', provider: 'openrouter', requestedModel: 'vendor/other',
+      endpoint: null, credentialReference: 'ROUTE_FIXTURE_KEY', authentication: null }) as never;
+    const deps = { loadSessionIdentity: async () => '', executeChatTask: (c: ReplContext, i: string, task: string, target: AgentTargetContext, system?: string) =>
+      executeChatTask(c, i, task, target, system, { ...testDeps, engineFactory: () => first }) };
+    const prior = executeTask(ctx, 'first request', deps);
+    await entered;
+    ctx.state.connectionId = 'b'; ctx.state.model = 'connection/b/vendor/other'; ctx.state.readinessState = 'configured_unverified'; ctx.chatEngine = replacement;
+    release(); await prior;
+    assert.equal(ctx.state.readinessState, 'configured_unverified');
+    await executeTask(ctx, 'replacement request', deps);
+    assert.equal(replacementSubmits, 1);
+  } finally {
+    console.log = previous.log;
+    for (const [name, value] of Object.entries({ BABEL_STATE_DIR: previous.state, BABEL_PROJECT_ROOT: previous.project, ROUTE_FIXTURE_KEY: previous.key })) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+test('a failure from a different inference stage does not reject the selected chat route', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-other-stage-'));
+  const previous = { state: process.env['BABEL_STATE_DIR'], project: process.env['BABEL_PROJECT_ROOT'], log: console.log };
+  const state = join(root, 'state'); const project = join(root, 'project');
+  mkdirSync(state); mkdirSync(project); writeFileSync(join(project, 'README.md'), 'fixture');
+  writeFileSync(join(state, 'preferences.json'), JSON.stringify({ schemaVersion: 1, connections: {
+    a: { id: 'a', provider: 'openrouter', model: 'vendor/model' },
+  }, defaults: { connection: 'a', model: 'vendor/model' } }));
+  process.env['BABEL_STATE_DIR'] = state; process.env['BABEL_PROJECT_ROOT'] = project; console.log = () => {};
+  try {
+    const ctx = makeReplContext();
+    ctx.state.connectionId = 'a'; ctx.state.model = 'connection/a/vendor/model'; ctx.state.readinessState = 'configured_unverified';
+    const events: unknown[] = [];
+    const engine = createMockEngine({ status: 'failed', outcome: 'INFRA_FAILURE', reason_code: 'provider_failure', reason_detail: 'authentication',
+      answer: 'rejected', usage: EMPTY_USAGE, conversation: [] }, { onSubmit: () => {
+        events.push({ kind: 'model_input_receipt', turn_id: 'turn-a', inference_id: 'critic-a', provider: 'openrouter', sent_model_id: 'vendor/model',
+          route_receipt: { execution_stage: 'critic', provider: 'openrouter', exact_model_id_sent: 'vendor/model', substitution_or_fallback: false } });
+        events.push({ kind: 'provider_failure_receipt', turn_id: 'turn-a', inference_id: 'critic-a', provider: 'openrouter', model: 'vendor/model', receipt: { http_status: 401 } });
+      } });
+    engine.getParityRuntime = () => ({ turnId: 'turn-a', sessionEvents: { events } }) as never;
+    engine.getProviderRouteIdentity = () => ({ connection: 'a', provider: 'openrouter', requestedModel: 'vendor/model',
+      endpoint: null, credentialReference: null, authentication: null }) as never;
+    await executeChatTask(ctx, 'task', 'task', makeTarget(project), undefined, { ...testDeps, engineFactory: () => engine });
+    assert.equal(ctx.state.readinessState, 'configured_unverified');
+  } finally {
+    console.log = previous.log;
+    for (const [name, value] of Object.entries({ BABEL_STATE_DIR: previous.state, BABEL_PROJECT_ROOT: previous.project })) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+test('hosted exceptions stay in the shell and retain the original task', async () => {
+  const ctx = makeReplContext();
+  const task = 'Preserve this exact request';
+  const binding = new ShellRuntimeBinding({ width: 80 });
+  binding.beginTurn(1, task);
+  ctx.shellRuntime = binding;
+  ctx.shellHost = {} as never;
+  const originalLog = console.log;
+  const raw: string[] = [];
+  console.log = (...args: unknown[]) => { raw.push(args.map(String).join(' ')); };
+  try {
+    await executeChatTask(ctx, task, task, makeTarget(), undefined, {
+      ...testDeps,
+      engineFactory: () => { throw new Error('[provider:fixture] HTTP 401'); },
+    });
+  } finally {
+    console.log = originalLog;
+  }
+  const records = binding.store.getRecords();
+  assert.ok(records.some(record => JSON.stringify(record).includes('authentication')));
+  assert.ok(records.some(record => JSON.stringify(record).includes(task)));
+  assert.equal(raw.some(line => /HTTP 401|authentication/i.test(line)), false);
+});
+test('hosted chat retains the full execution boundary before starting the engine', async () => {
+  const ctx = makeReplContext();
+  const binding = new ShellRuntimeBinding({ width: 40 });
+  binding.beginTurn(1, 'hello');
+  binding.getVisibleRows(40, 8);
+  ctx.shellRuntime = binding;
+  ctx.shellHost = {} as never;
+  const previousProfile = process.env['BABEL_EXECUTION_PROFILE'];
+  const previousLog = console.log;
+  const raw: string[] = [];
+  let recordedBeforeEngine = false;
+  process.env['BABEL_EXECUTION_PROFILE'] = 'host_native';
+  console.log = (...args: unknown[]) => { raw.push(args.map(String).join(' ')); };
+  const expected = resolveEffectiveExecutionBoundary({ profile: 'host_native' }).disclosure;
+  try {
+    const engine = createMockEngine({ status: 'completed', answer: 'done', usage: EMPTY_USAGE, conversation: [] });
+    await executeChatTask(ctx, 'hello', 'hello', makeTarget(), undefined, {
+      ...testDeps,
+      engineFactory: () => {
+        recordedBeforeEngine = binding.store.getRecords().some(record =>
+          record.kind === 'plain' && 'lines' in record.payload && record.payload.lines.join('\n').includes(expected));
+        return engine;
+      },
+    });
+  } finally {
+    console.log = previousLog;
+    if (previousProfile === undefined) delete process.env['BABEL_EXECUTION_PROFILE'];
+    else process.env['BABEL_EXECUTION_PROFILE'] = previousProfile;
+  }
+  assert.equal(recordedBeforeEngine, true, 'the complete disclosure must be retained before engine creation');
+  assert.equal(raw.some(line => line.includes('Execution boundary:')), false, 'hosted output must not bypass the frame');
+});
 test('ordinary Chat does not consume retained legacy Plan text', async () => {
   await withStdoutIsTTY(false, async () => {
     const ctx = makeReplContext(); ctx.state.pendingPlanBody = 'LEGACY_PLAN_CANARY'

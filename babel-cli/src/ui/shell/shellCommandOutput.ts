@@ -6,9 +6,8 @@
  * (pagers, pickers, prompts, keybinding wizards, and apply/execute flows that
  * stream a live turn) must keep writing straight to the terminal.
  *
- * `model`, `m` and `provider` are deliberately absent: their bare forms open
- * an interactive `CommandPalette` picker through `withExclusiveTerminal`, so
- * capturing them would hide the picker.
+ * `pwd`, `model`, `m` and `provider` use direct shell presentation; bare
+ * provider/model forms may also open an exclusive terminal picker.
  */
 const PRINT_ONLY_COMMANDS = new Set([
   'status',

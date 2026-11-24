@@ -20,6 +20,17 @@ test('authentication and rate limits have different recovery guidance', () => {
   assert.notDeepEqual(terminalReasonGuidance(auth.code, auth.detail), terminalReasonGuidance(rate.code, rate.detail))
 })
 
+test('provider recovery guidance does not recommend replay without settlement evidence', () => {
+  for (const detail of [undefined, 'rate_limit'] as const) {
+    const actions = terminalReasonGuidance('provider_failure', detail).nextActions.join(' ')
+    assert.match(actions, /inspect/i)
+    assert.doesNotMatch(actions, /\bretry\b/i)
+  }
+  const auth = terminalReasonGuidance('provider_failure', 'authentication').nextActions.join(' ')
+  assert.match(auth, /\/setup/)
+  assert.doesNotMatch(auth, /restart Babel/i)
+})
+
 
 test('authentication detail survives an actual Chat failure and durable terminal projection', async () => {
   const { mkdtempSync, writeFileSync } = await import('node:fs'); const { join } = await import('node:path'); const { tmpdir } = await import('node:os')

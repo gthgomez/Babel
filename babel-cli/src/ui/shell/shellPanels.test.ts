@@ -35,6 +35,20 @@ test('buildShellFrameInput keeps required panels inside the planned layout', () 
   }
 })
 
+test('minimal shell presents project, selected connection and unverified readiness', () => {
+  const layout = planShellLayout({ cols: 80, rows: 24 }, { leftDrawerOpen: false, rightDrawerOpen: false })
+  const frame = buildShellFrameInput(layout, {
+    mode: 'chat', model: 'vendor/exact-model', project: 'demo', connection: 'personal',
+    readiness: 'Inference unverified', conversation: [],
+    prompt: { rows: ['› '], cursor: { row: 0, col: 2, visible: true } },
+  })
+  const chrome = frame.surfaces.filter(surface => surface.id === 'header' || surface.id === 'footer').flatMap(surface => surface.rows).join(' ')
+  assert.match(chrome, /demo/)
+  assert.match(chrome, /personal/)
+  assert.match(chrome, /vendor\/exact-model/)
+  assert.match(chrome, /Inference unverified/)
+})
+
 test('buildShellFrameInput keeps hosted editor popups in the composer surface', () => {
   const layout = planShellLayout({ cols: 120, rows: 30 })
   const frame = buildShellFrameInput(layout, {

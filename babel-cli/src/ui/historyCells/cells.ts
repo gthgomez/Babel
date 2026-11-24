@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { renderMarkdown } from '../highlight.js';
+import { sanitizeUntrustedTerminalBlock, sanitizeUntrustedTerminalField } from '../sanitize.js';
 import {
   accentBright,
   dim,
@@ -79,9 +80,10 @@ function wrapPrefixedBody(
   const header = `  ${accentBright(padRight(label, USER_PREFIX_COLS))}`;
   // Markdown reserves one right-margin column; the outer cell owns that margin
   // and the speaker prefix, so give both layouts the same content width.
+  const safeBody = sanitizeUntrustedTerminalBlock(body);
   const renderedBody = mode === 'rich'
-    ? renderMarkdown(body, Math.max(1, width - BODY_INDENT.length + 1))
-    : body;
+    ? renderMarkdown(safeBody, Math.max(1, width - BODY_INDENT.length + 1))
+    : safeBody;
   const lines = wrapPrefixedBlock(renderedBody, {
     firstPrefix: header,
     continuationPrefix: BODY_INDENT,
@@ -148,16 +150,19 @@ export class ToolCallCell extends BaseHistoryCell {
     if (width <= 0) return [];
     const payload = this.record.payload as ToolCallPayload;
     if (mode === 'shell') return formatShellTool(payload, width);
+    const tool = sanitizeUntrustedTerminalField(payload.tool);
+    const target = sanitizeUntrustedTerminalField(payload.target);
+    const detail = sanitizeUntrustedTerminalField(payload.detail);
     const label =
       mode === 'raw'
-        ? `${payload.tool} ${payload.target}`
-        : conversationalToolLabel(payload.tool, payload.target);
+        ? `${tool} ${target}`
+        : conversationalToolLabel(tool, target);
 
     if (payload.status === 'running') {
       return [`  ${dim('…')} ${label}`];
     }
 
-    const detailStr = payload.detail ? ` ${dim(`(${payload.detail})`)}` : '';
+    const detailStr = detail ? ` ${dim(`(${detail})`)}` : '';
     if (payload.status === 'failed' || payload.status === 'cancelled') {
       return [`  ${error('✗')} ${label}${detailStr}`];
     }
@@ -166,14 +171,15 @@ export class ToolCallCell extends BaseHistoryCell {
 
   override transcriptLines(width: number): string[] {
     const payload = this.record.payload as ToolCallPayload;
-    const command = `${payload.tool} ${payload.target}`.trim();
+    const command = `${sanitizeUntrustedTerminalField(payload.tool)} ${sanitizeUntrustedTerminalField(payload.target)}`.trim();
     const status =
       payload.status === 'completed'
         ? 'ok'
         : payload.status === 'failed'
           ? 'failed'
           : payload.status;
-    const detail = payload.detail ? ` (${payload.detail})` : '';
+    const safeDetail = sanitizeUntrustedTerminalField(payload.detail);
+    const detail = safeDetail ? ` (${safeDetail})` : '';
     return wrapText(`$ ${command} → ${status}${detail}`, Math.max(1, width));
   }
 }
@@ -193,7 +199,7 @@ export class ThinkingCell extends BaseHistoryCell {
   protected displayLinesForMode(width: number, mode: HistoryRenderMode): string[] {
     if (width <= 0) return [];
     const payload = this.record.payload as ThinkingPayload;
-    const text = payload.text?.trim() || 'Thinking…';
+    const text = sanitizeUntrustedTerminalBlock(payload.text).trim() || 'Thinking…';
     if (mode === 'raw') {
       return wrapText(text, width);
     }
@@ -225,7 +231,7 @@ export class SeparatorCell extends BaseHistoryCell {
       const pill = renderUnseenDividerPill(count);
       return pill ? [pill] : [];
     }
-    const label = payload.label ?? '';
+    const label = sanitizeUntrustedTerminalField(payload.label);
     const ruleWidth = Math.max(8, Math.min(width - 4, 40));
     const rule = '─'.repeat(ruleWidth);
     if (mode === 'raw') {
@@ -253,12 +259,13 @@ export class SessionHeaderCell extends BaseHistoryCell {
     if (width <= 0) return [];
     const payload = this.record.payload as SessionHeaderPayload;
     const lines: string[] = [];
-    const title = mode === 'raw' ? payload.title : primary(payload.title);
+    const safeTitle = sanitizeUntrustedTerminalField(payload.title);
+    const title = mode === 'raw' ? safeTitle : primary(safeTitle);
     lines.push(title);
     const meta: string[] = [];
-    if (payload.mode) meta.push(`mode=${payload.mode}`);
-    if (payload.model) meta.push(`model=${payload.model}`);
-    if (payload.subtitle) meta.push(payload.subtitle);
+    if (payload.mode) meta.push(`mode=${sanitizeUntrustedTerminalField(payload.mode)}`);
+    if (payload.model) meta.push(`model=${sanitizeUntrustedTerminalField(payload.model)}`);
+    if (payload.subtitle) meta.push(sanitizeUntrustedTerminalField(payload.subtitle));
     if (meta.length > 0) {
       lines.push(mode === 'raw' ? meta.join(' · ') : muted(`  ${meta.join(' · ')}`));
     }

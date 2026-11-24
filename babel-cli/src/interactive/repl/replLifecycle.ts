@@ -2,6 +2,7 @@ import { resolveEffectiveSettings } from '../../config/userSettings.js'
 import { canPromptForSetup, getSetupStatus } from '../../services/providerSetup.js'
 import { connectionModelSelector } from '../../config/connectionModelPolicy.js'
 import { setupReplConnection } from './replProviderSetup.js'
+import { hasProviderTaskPrerequisites, parseConnectionModelSelector } from './replReadiness.js'
 import process from 'node:process';
 
 import logUpdate from 'log-update';
@@ -109,14 +110,26 @@ export async function bootstrapReplSession(
     // Repository settings cannot select a credential destination for a fresh profile.
     if (!ctx.state.model && merged.model) OutputBuffer.getInstance().write(muted('Legacy project model found. Use /setup to explicitly select its provider and account.\n'))
   }
-  const status = getSetupStatus(process.env, ctx.state.connectionId ? { connection: ctx.state.connectionId } : {}, target)
-  ctx.state.readinessState = status.state
-  if (isFirstRun()) showOnboarding(status.state !== 'configured_unverified')
-  if ((!ctx.state.model || status.state === 'action_required') &&
+  const selected = parseConnectionModelSelector(ctx.state.model)
+  const selectorInvalid = Boolean(ctx.state.model?.startsWith('connection/') && !selected)
+  const selectorConflict = Boolean(selected && ctx.state.connectionId && selected.connection !== ctx.state.connectionId)
+  const selection = selected && !selectorConflict
+    ? { connection: selected.connection, model: selected.model }
+    : ctx.state.connectionId ? { connection: ctx.state.connectionId } : {}
+  const status = getSetupStatus(process.env, selection, target)
+  const effectiveConflict = Boolean(
+    (ctx.state.connectionId && status.connection !== ctx.state.connectionId) ||
+    (selected && (status.connection !== selected.connection || status.model !== selected.model)),
+  )
+  const routeConflict = selectorInvalid || selectorConflict || effectiveConflict
+  ctx.state.readinessState = routeConflict ? 'action_required' : status.state
+  if (selected && !routeConflict) ctx.state.connectionId = selected.connection
+  if (isFirstRun()) showOnboarding(ctx.state.readinessState !== 'configured_unverified')
+  if (!hasProviderTaskPrerequisites(ctx.state) &&
       !process.env['BABEL_RESUME_SESSION']?.trim() && canPromptForSetup()) {
     await setupReplConnection(ctx)
   }
-  const canWarm = ctx.state.model && ctx.state.readinessState !== 'action_required'
+  const canWarm = hasProviderTaskPrerequisites(ctx.state)
   recordInteractiveDiagnostic('startup', `Setup state: ${ctx.state.readinessState}; runtime warmup: ${canWarm ? 'eligible' : 'skipped'}`)
   if (!canWarm) ctx.state.lastRunUserStatus = 'blocked'
   if (canWarm) {

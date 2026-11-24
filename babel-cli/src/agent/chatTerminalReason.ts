@@ -65,7 +65,7 @@ const GUIDANCE: Record<TerminalReasonCode, TerminalReasonGuidance> = {
   },
   provider_failure: {
     message: 'Provider / infrastructure failure',
-    nextActions: ['Retry'],
+    nextActions: ['Inspect the workspace and run evidence before continuing'],
   },
   verification_failed: {
     message: 'Authoritative verification failed — the change did not pass its verifier',
@@ -123,10 +123,10 @@ export function terminalReasonGuidance(
 ): TerminalReasonGuidance {
   const providerGuidance: Record<string, TerminalReasonGuidance> = {
     credential_missing: { message: 'Provider setup is incomplete', nextActions: ['Run /setup or babel-harness setup', 'Use /provider status to inspect the selected connection'] },
-    authentication: { message: 'Provider authentication was rejected', nextActions: ['Update the selected credential environment variable and restart Babel', 'Inspect /provider status before trying again'] },
+    authentication: { message: 'Provider authentication was rejected', nextActions: ['Run /setup to reconnect the selected account', 'Inspect /provider status; shell-managed credentials require a new process'] },
     authorization: { message: 'Provider access was forbidden', nextActions: ['Inspect /provider status and the selected account permissions'] },
     quota: { message: 'Provider quota or credit was exhausted', nextActions: ['Review quota with the selected provider', 'Choose another configured connection explicitly if needed'] },
-    rate_limit: { message: 'Provider rate limit reached', nextActions: ['Wait for the provider retry window', 'Retry the same selected connection'] },
+    rate_limit: { message: 'Provider rate limit reached', nextActions: ['Wait for the provider rate limit to reset', 'Inspect the workspace and run evidence before continuing'] },
     model_unavailable: { message: 'Selected model is unavailable', nextActions: ['Use /model list or /model use <exact-id> on this connection'] },
   };
   if (detail && providerGuidance[detail]) return { ...providerGuidance[detail]!, nextActions: [...providerGuidance[detail]!.nextActions] };

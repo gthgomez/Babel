@@ -21,6 +21,9 @@
 
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ReplContext } from '../context.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 
@@ -109,6 +112,8 @@ function makeContext(opts: MakeContextOptions = {}): ReplContext {
   ctx.state = {
     mode: (opts.mode as 'chat' | 'chat-headless' | 'plan' | 'deep') ?? 'chat',
     router: 'v9' as const,
+    model: 'fixture-model',
+    readinessState: 'configured_unverified',
     project: (opts.project ?? undefined) as unknown as string,
     costTotals: {
       totalCostUSD: 0,
@@ -229,6 +234,100 @@ describe('executeTask dispatch routing', { concurrency: 1 }, () => {
   test.beforeEach(async () => {
     resetCalls();
     await loadDispatch();
+  });
+
+  test('dispatch blocks unknown readiness and an absent model', async () => {
+    const oldLog = console.log;
+    console.log = () => {};
+    try {
+      for (const status of ['unknown', 'missing_model', 'setup_required', 'action_required', 'mismatched_account'] as const) {
+        const ctx = makeContext({ mode: 'chat' });
+        if (status === 'unknown') delete ctx.state.readinessState;
+        else if (status === 'missing_model') delete ctx.state.model;
+        else if (status === 'mismatched_account') { ctx.state.connectionId = 'selected'; ctx.state.model = 'connection/other/vendor/model'; }
+        else ctx.state.readinessState = status;
+        await executeTask(ctx, 'task', testDeps);
+        assert.equal(calls.length, 0, `${status} must not start an engine`);
+      }
+    } finally {
+      console.log = oldLog;
+    }
+  });
+
+  test('hosted dispatch routes a blocked setup notice through the shell', async () => {
+    const ctx = makeContext({ mode: 'chat' });
+    ctx.state.readinessState = 'setup_required';
+    const notices: string[] = [];
+    ctx.shellRuntime = { appendNotice: (text: string) => notices.push(text) } as never;
+    const oldLog = console.log;
+    const raw: string[] = [];
+    console.log = (...args: unknown[]) => { raw.push(args.map(String).join(' ')); };
+    try {
+      await executeTask(ctx, 'task', testDeps);
+    } finally {
+      console.log = oldLog;
+    }
+    assert.equal(calls.length, 0);
+    assert.equal(notices.length, 1);
+    assert.match(notices[0]!, /\/setup/);
+    assert.equal(raw.length, 0, 'hosted recovery notices must not write directly to stdout');
+  });
+
+  test('hosted dispatch keeps pre-execution warnings and refusals inside the shell', async () => {
+    const notices: string[] = [];
+    const raw: string[] = [];
+    const oldLog = console.log;
+    const oldWarn = console.warn;
+    console.log = (...args: unknown[]) => { raw.push(args.map(String).join(' ')); };
+    console.warn = (...args: unknown[]) => { raw.push(args.map(String).join(' ')); };
+    try {
+      for (const [input, opts] of [
+        ['bl explain this', { mode: 'chat' }],
+        ['babel', { mode: 'chat' }],
+        ['yes', { mode: 'chat', lastAssistantAnswer: 'I can help.', lastAssistantStatus: 'ANSWER_READY' }],
+      ] as const) {
+        const ctx = makeContext(opts);
+        ctx.shellRuntime = { appendNotice: (text: string) => notices.push(text), store: { epoch: 1 } } as never;
+        await executeTask(ctx, input, testDeps);
+      }
+    } finally {
+      console.log = oldLog;
+      console.warn = oldWarn;
+    }
+    assert.match(notices.join('\n'), /DEPRECATED/);
+    assert.match(notices.join('\n'), /task text/);
+    assert.match(notices.join('\n'), /bare confirmation/);
+    assert.deepEqual(raw, []);
+  });
+
+  test('dispatch rechecks current credentials and refuses a stale engine route', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'babel-dispatch-route-'));
+    const state = join(root, 'state'); const project = join(root, 'project');
+    const previous = { state: process.env['BABEL_STATE_DIR'], project: process.env['BABEL_PROJECT_ROOT'], key: process.env['ROUTE_FIXTURE_KEY'], log: console.log };
+    mkdirSync(state); mkdirSync(project); writeFileSync(join(project, 'README.md'), 'fixture');
+    writeFileSync(join(state, 'preferences.json'), JSON.stringify({ schemaVersion: 1, connections: {
+      a: { id: 'a', provider: 'openrouter', model: 'vendor/model', apiKeyEnvVar: 'ROUTE_FIXTURE_KEY' },
+    }, defaults: { connection: 'a', model: 'vendor/model' } }));
+    process.env['BABEL_STATE_DIR'] = state; process.env['BABEL_PROJECT_ROOT'] = project; delete process.env['ROUTE_FIXTURE_KEY']; console.log = () => {};
+    try {
+      const ctx = makeContext({ mode: 'chat' });
+      ctx.state.connectionId = 'a'; ctx.state.model = 'connection/a/vendor/model';
+      ctx.resolveCurrentTarget = () => makeTarget(project);
+      await executeTask(ctx, 'must not dispatch without the key', testDeps);
+      assert.equal(calls.length, 0);
+      process.env['ROUTE_FIXTURE_KEY'] = 'synthetic-only';
+      ctx.state.readinessState = 'configured_unverified';
+      ctx.chatEngine = { getProviderRouteIdentity: () => ({ connection: 'a', provider: 'openrouter', requestedModel: 'vendor/model',
+        endpoint: null, credentialReference: 'OLD_REFERENCE', authentication: null }) } as never;
+      await executeTask(ctx, 'must not use the stale engine', testDeps);
+      assert.equal(calls.length, 0);
+    } finally {
+      console.log = previous.log;
+      for (const [name, value] of Object.entries({ BABEL_STATE_DIR: previous.state, BABEL_PROJECT_ROOT: previous.project, ROUTE_FIXTURE_KEY: previous.key })) {
+        if (value === undefined) delete process.env[name]; else process.env[name] = value;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // ── Chat mode ─────────────────────────────────────────────────────────────

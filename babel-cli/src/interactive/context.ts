@@ -30,6 +30,8 @@ export interface ReplContext {
 
   // ── Session state ────────────────────────────────────────────────────────
   state: SessionState;
+  /** In-memory observations for explicit routes rejected during this process. */
+  rejectedProviderRoutes?: Set<string>;
   isRunning: boolean;
   /** An admitted task owns the session during asynchronous preparation too. */
   preparingRun?: boolean;

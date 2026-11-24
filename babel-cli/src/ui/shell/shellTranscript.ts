@@ -1,5 +1,6 @@
 import { border, dim, error, sectionLabel, success, wrapText } from '../theme.js'
 import { measureDisplayWidth, truncateDisplay } from '../textLayout.js'
+import { sanitizeUntrustedTerminalBlock, sanitizeUntrustedTerminalField } from '../sanitize.js'
 import type { ToolCallPayload } from '../historyCells/types.js'
 
 function clip(text: string, width: number): string {
@@ -29,7 +30,9 @@ function renderCard(title: string, bodyLines: readonly string[], width: number):
 /** YOU / BABEL label on its own line, with markdown headings drawn as cards. */
 export function formatShellSpeaker(label: 'YOU' | 'BABEL', body: string, width: number): string[] {
   const lines: string[] = [sectionLabel(label)]
-  const source = body.replace(/\r\n/g, '\n').split('\n')
+  // Sanitize the complete accumulated message before wrapping, so a control
+  // sequence split across streaming chunks cannot reach the frame renderer.
+  const source = sanitizeUntrustedTerminalBlock(body).split('\n')
   let index = 0
   while (index < source.length) {
     const heading = /^#{1,3}\s+(.+)$/.exec(source[index] ?? '')
@@ -68,9 +71,10 @@ export function formatShellTool(payload: ToolCallPayload, width: number): string
       : payload.status === 'failed' || payload.status === 'cancelled'
         ? error('✗')
         : success('✓')
-  const left = `> ${payload.tool}  ${payload.target}`
-  const right = payload.detail?.trim() ? `${payload.detail.trim()} ${mark}` : mark
+  const left = `> ${sanitizeUntrustedTerminalField(payload.tool)}  ${sanitizeUntrustedTerminalField(payload.target)}`
+  const detail = sanitizeUntrustedTerminalField(payload.detail)
+  const right = detail ? `${detail} ${mark}` : mark
   const gap = width - measureDisplayWidth(left) - measureDisplayWidth(right)
   if (gap >= 1) return [`${left}${' '.repeat(gap)}${right}`]
-  return [clip(`${left}  ${payload.detail?.trim() ?? ''} ${mark}`.replace(/\s+/g, ' ').trim(), width)]
+  return [clip(`${left}  ${detail} ${mark}`.replace(/\s+/g, ' ').trim(), width)]
 }

@@ -2,7 +2,6 @@ import * as readline from 'node:readline/promises';
 import * as rl from 'node:readline';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { InteractiveRunBusyError } from './context.js';
 
 interface ReadlineWithHistory extends readline.Interface {
   history: string[];
@@ -22,7 +21,6 @@ import { startLiteIndexWarmup } from '../services/liteIndexWarmup.js';
 import { ScreenManager } from '../ui/screenManager.js';
 import { PaneManager } from '../ui/paneManager.js';
 import { CommandPalette } from '../ui/palette.js';
-import { alert } from '../ui/dialog.js';
 import { SessionPicker } from '../ui/sessionPicker.js';
 import { preserveComposerAcrossResize } from '../ui/interruptHost.js';
 import { openEditor } from './openEditor.js';
@@ -47,7 +45,7 @@ import { type SessionState, type InteractiveTurn } from './types.js';
 import * as Session from './session.js';
 import * as Turn from './turns.js';
 import { handleCommand } from './commands.js';
-import { executeTask } from './execution/dispatch.js';
+import { executeReplTask } from './repl/replCommandDispatch.js';
 import { printRunSummary as printRunSummaryModule } from './execution/summary.js';
 import { reverseHistorySearch } from './commands/service.js';
 import { ChatEngine } from '../agent/chatEngine.js';
@@ -56,6 +54,7 @@ import type { PromptInputAdapter } from '../ui/promptInputAdapter.js';
 import { OutputBuffer } from '../ui/outputBuffer.js';
 import { installKeyHandler, type KeyEvent } from '../ui/keyInput.js';
 import { canHostResponsiveShell, planShellLayout } from '../ui/shell/shellLayout.js';
+import type { ShellDimensions, ShellLayout } from '../ui/shell/shellTypes.js';
 import { buildShellFrameInput } from '../ui/shell/shellPanels.js';
 import { createShellHost, type ShellHost } from '../ui/shell/shellHost.js';
 import { selectShellHost } from '../ui/shell/selectShellHost.js';
@@ -145,8 +144,8 @@ export class BabelRepl {
   private startupHydrationComplete = false;
   private shellInputState: ShellInputState = {
     focus: 'composer',
-    leftDrawerOpen: true,
-    rightDrawerOpen: true,
+    leftDrawerOpen: false,
+    rightDrawerOpen: false,
   };
   /** Row cursor for the hosted shell; never the active-thread authority. */
   private readonly shellNavigator = new ShellNavigator();
@@ -159,6 +158,17 @@ export class BabelRepl {
   private shellCommandOperations: ShellCommandOperations | undefined;
   /** Cached target root so the frame path never probes the filesystem (U02). */
   private cachedTargetRoot: string | null = null;
+  private shellLayoutCache: { key: string; layout: ShellLayout } | undefined;
+
+  /** Reuse one visibility-aware geometry for frames, editor placement and key routing. */
+  private currentShellLayout(dimensions: ShellDimensions = OutputBuffer.getTerminalSize()): ShellLayout {
+    const visibility = { leftDrawerOpen: this.shellInputState.leftDrawerOpen, rightDrawerOpen: this.shellInputState.rightDrawerOpen };
+    const key = JSON.stringify([dimensions.cols, dimensions.rows, dimensions.effectiveCols ?? null, visibility.leftDrawerOpen, visibility.rightDrawerOpen]);
+    if (this.shellLayoutCache?.key !== key) {
+      this.shellLayoutCache = { key, layout: planShellLayout(dimensions, visibility) };
+    }
+    return this.shellLayoutCache.layout;
+  }
 
   constructor(initialState?: Partial<SessionState>) {
     // Load saved history before creating the input interface
@@ -388,7 +398,7 @@ export class BabelRepl {
     }
     const frameSource = () => {
       const dimensions = OutputBuffer.getTerminalSize();
-      const layout = planShellLayout(dimensions);
+      const layout = this.currentShellLayout(dimensions);
       const promptRect = layout.composer ?? {
         x: 0,
         y: Math.max(0, layout.rows - 3),
@@ -443,9 +453,13 @@ export class BabelRepl {
             : sources.sessions.map((row) => row.label);
       return buildShellFrameInput(layout, {
         mode: this.state.mode,
-        model: this.state.resolvedModelId ?? this.state.model ?? 'auto',
-        project: this.state.project ?? 'global',
-        conversation: connectionHint ? [connectionHint, ...conversation] : conversation,
+        model: this.state.resolvedModelId ?? this.state.model ?? 'No model',
+        project: this.state.project ?? (this.cachedTargetRoot ? path.basename(this.cachedTargetRoot) || this.cachedTargetRoot : 'unknown target'),
+        connection: this.state.connectionId ?? 'No connection',
+        readiness: this.state.readinessState === 'configured_unverified' ? 'Inference unverified'
+          : this.state.readinessState === 'action_required' ? 'Action required'
+          : this.state.readinessState === 'setup_required' ? 'Setup required' : 'Connection unknown',
+        conversation: connectionHint ? [connectionHint, ...conversation] : conversation.length ? conversation : ['Ask about this project or describe a change.'],
         sessions: sessionLabels,
         projectRows:
           sources.projectRows.length > 0
@@ -453,13 +467,12 @@ export class BabelRepl {
             : [sources.projectRoot || this.cachedTargetRoot || 'unknown target'],
         actions: sources.actions.map((row) => row.label),
         modelChoices: this.shellModelChoices,
-        clock: new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
         tools: inspector.tools,
         toolStates: inspector.toolStates,
         context: inspector.context,
         meter: inspector.meter,
         status: [
-          activity === 'idle' ? connectionHint ? 'Setup required' : 'Ready' : activity,
+          activity === 'idle' ? this.state.readinessState === 'configured_unverified' ? 'Inference unverified' : connectionHint ? 'Setup required' : 'Connection unknown' : activity,
           ...(runtime?.lastOutcome ? [`Last outcome: ${runtime.lastOutcome}`] : []),
         ],
         ...(prompt ? { prompt } : {}),
@@ -482,7 +495,7 @@ export class BabelRepl {
       .catch(() => {});
     adapter.setPresentationTarget({
       getRect: () => {
-        const layout = planShellLayout(OutputBuffer.getTerminalSize());
+        const layout = this.currentShellLayout();
         return layout.composer ?? {
           x: 0,
           y: Math.max(0, layout.rows - 3),
@@ -567,7 +580,7 @@ export class BabelRepl {
     event: KeyEvent,
     host: ShellHost | undefined,
     adapter: PromptInputAdapter,
-    layout: ReturnType<typeof planShellLayout> = planShellLayout(OutputBuffer.getTerminalSize()),
+    layout: ReturnType<typeof planShellLayout> = this.currentShellLayout(),
   ): void {
     if (host?.releaseRepaintHold()) host.invalidate('repaint-hold');
     this.shellInputState = projectShellPresentation(layout, this.shellInputState).inputState;
@@ -604,7 +617,7 @@ export class BabelRepl {
     if (routed.action === 'open-reverse-search') {
       void this.handleReverseSearch().catch(() => {});
     }
-    if (routed.action === 'focus-changed' || routed.action === 'close-overlay') {
+    if (routed.action === 'focus-changed' || routed.action === 'close-overlay' || routed.action === 'drawer-changed') {
       host?.invalidate(routed.action);
     }
     if (!routed.handled && routed.state.focus === 'composer') adapter.processKey(event);
@@ -770,29 +783,7 @@ export class BabelRepl {
   // ── Task Execution ────────────────────────────────────────────────────────
 
   private async executeTask(input: string): Promise<void> {
-    try {
-      return await executeTask(this, input);
-    } catch (err: any) {
-      if (!(err instanceof InteractiveRunBusyError)) this.isRunning = false;
-      // Skip if an inner boundary (governed/plan/chat) already showed a dialog
-      if (err[Symbol.for('babel.error.alerted')]) return;
-      const message = err instanceof Error ? err.message : String(err);
-      if (process.stdout.isTTY && !process.env['CI']) {
-        try {
-          await this.withExclusiveTerminal('error-alert', () =>
-            alert({
-              title: 'Execution Error',
-              message: `A fatal error occurred during execution:\n\n${message}`,
-            }),
-          );
-        } catch {
-          // alert() itself failed — fall back to console
-          console.error(`\nExecution Error: ${message}\n`);
-        }
-      } else {
-        console.error(`\nExecution Error: ${message}\n`);
-      }
-    }
+    await executeReplTask(this, input);
   }
 
   // ── Run Summary (test-only wrapper) ───────────────────────────────────────

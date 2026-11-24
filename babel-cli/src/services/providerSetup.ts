@@ -1,7 +1,7 @@
 /** Guided provider setup. Only an explicit check contacts a provider, and never for inference. */
 import { isDeepStrictEqual } from 'node:util'
 import { readUserSettings, resolveEffectiveSettings, updateUserSettings, type Connection, type UserSettings } from '../config/userSettings.js'
-import { checkProfileAccountLocation, isValidProviderKey, prepareProfileAccountKey, readProviderKeyReference, UnsafeAccountLocationError } from '../config/providerAccountKeys.js'
+import { checkProfileAccountLocation, isValidProviderKey, prepareProfileAccountKey, ProfileAccountRecoveryError, readProviderKeyReference, recoverProfileAccountTransaction, UnsafeAccountLocationError } from '../config/providerAccountKeys.js'
 import { resolvePrivateCredentialEnvPath } from '../config/envBootstrap.js'
 import { isProviderLocal } from '../config/offlineMode.js'
 import { connectionStatus, type SelectionSession } from './connectionSettings.js'
@@ -164,6 +164,9 @@ export async function runProviderSetup(options: {
   let previous: SetupResult = { state: 'setup_required', connection: null, provider: null, model: null }
   let terminal: ReturnType<typeof openSetupPrompt> | undefined
   try {
+    if (recoverProfileAccountTransaction(env, root)) {
+      write('Recovered an interrupted account update. Review your saved connection before continuing.\n')
+    }
     previous = getSetupStatus(env, {}, root)
     if (previous.unavailableConnection) write(`${unavailableNotice}\n`)
     if (!(options.interactive ?? canPromptForSetup(env))) {
@@ -283,7 +286,7 @@ export async function runProviderSetup(options: {
       write(`Setup cancelled. ${CLI_COMMAND} setup or /setup to continue.\n`)
       return previous
     }
-    if (error instanceof UnsafeAccountLocationError) write(`${error.message}\n`)
+    if (error instanceof UnsafeAccountLocationError || error instanceof ProfileAccountRecoveryError) write(`${error.message}\n`)
     else if (error instanceof SetupChangedError) write('Connection or spending preferences changed during setup. Run setup again to review the latest choices.\n')
     else write('Setup could not finish. Check that your private Babel profile is valid and writable, then run setup again.\n')
     return { ...previous, failed: true }

@@ -46,6 +46,18 @@ test('Escape closes open drawers and Ctrl+P opens the palette from the composer'
   assert.equal(routeShellInput(key('r', { ctrl: true }), base).action, 'open-reverse-search')
 })
 
+test('F7 and F8 toggle the left and right drawers from the composer', () => {
+  const closed: ShellInputState = { focus: 'composer', leftDrawerOpen: false, rightDrawerOpen: false }
+  const left = routeShellInput(key('f7'), closed)
+  assert.equal(left.handled, true)
+  assert.equal(left.state.leftDrawerOpen, true)
+  assert.equal(left.action, 'drawer-changed')
+  const both = routeShellInput(key('f8'), left.state)
+  assert.equal(both.state.rightDrawerOpen, true)
+  assert.equal(both.action, 'drawer-changed')
+  assert.equal(routeShellInput(key('f7'), both.state).state.leftDrawerOpen, false)
+})
+
 test('composer editing keys remain unhandled for PromptInput', () => {
   const result = routeShellInput(key('a'), base)
   assert.equal(result.handled, false)

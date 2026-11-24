@@ -5,7 +5,7 @@ import {
   createPlainCell,
   createUserMessageCell,
 } from '../historyCells/cells.js';
-import { stripAnsi } from '../theme.js';
+import { sanitizeUntrustedTerminalBlock } from '../sanitize.js';
 import { HistoryTranscript } from '../historyCells/transcript.js';
 import { HistoryCellViewport } from '../historyCells/viewport.js';
 import type { HistoryCellRecord } from '../historyCells/types.js';
@@ -294,15 +294,15 @@ export class ShellRuntimeBinding {
    * Direct writes scroll the terminal behind the shell's frame cache and
    * produce a partial, duplicated repaint.
    */
-  appendNote(text: string): void {
-    const cleaned = stripAnsi(text).trim();
+  appendNote(text: string, options: { preserveFull?: boolean } = {}): void {
+    const cleaned = sanitizeUntrustedTerminalBlock(text).trim();
     if (!cleaned || this.currentTurnId === undefined) return;
     if (this.store.epoch !== this.currentTurnEpoch || this.store.turnId !== this.currentTurnId) {
       this.clearActiveTurn();
       return;
     }
     const epoch = this.store.epoch;
-    const noteRows = compactOutcomeNote(cleaned, this.viewport.renderHeight, this.viewport.terminalWidth).split('\n');
+    const noteRows = (options.preserveFull ? cleaned : compactOutcomeNote(cleaned, this.viewport.renderHeight, this.viewport.terminalWidth)).split('\n');
     this.transcript.appendCommitted(createPlainCell(noteRows, {
       cell_id: `interactive-note:${this.currentTurnId}:${this.nextNoteId++}`,
       turn_id: this.currentTurnId,
@@ -322,11 +322,11 @@ export class ShellRuntimeBinding {
    * output here keeps it visible in the conversation pane and lets the next
    * repaint draw a complete frame instead of a partially overwritten one.
    */
-  appendNotice(text: string): void {
-    const cleaned = stripAnsi(text).replace(/\r/g, '').trim();
+  appendNotice(text: string, options: { preserveFull?: boolean } = {}): void {
+    const cleaned = sanitizeUntrustedTerminalBlock(text).trim();
     if (!cleaned) return;
     if (this.currentTurnId !== undefined) {
-      this.appendNote(cleaned);
+      this.appendNote(cleaned, options);
       return;
     }
     const epoch = this.store.epoch;

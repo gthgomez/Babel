@@ -13,6 +13,17 @@ import {
 } from './reviewCard.js';
 
 describe('review card — truthful terminal states', () => {
+  it('leads with the provider reason and does not recommend blind replay', () => {
+    const card = buildReviewCard({ outcome: 'INFRA_FAILURE', reasonCode: 'provider_failure', reasonDetail: 'authentication', costComplete: false });
+    assert.equal(card.kind, 'INFRA_FAILURE');
+    assert.match(card.title, /authentication/i);
+    assert.match(stripAnsi(card.body), /cost unavailable|cost incomplete/i);
+    assert.match(stripAnsi(card.body), /\/setup/);
+    assert.doesNotMatch(stripAnsi(card.body), /Next\s+Retry/i);
+    const fallback = buildReviewCard({ outcome: 'INFRA_FAILURE', mutated: true });
+    assert.match(stripAnsi(fallback.body), /inspect/i);
+    assert.doesNotMatch(stripAnsi(fallback.body), /Next\s+Retry/i);
+  });
   it('treats verifier-passed complete as VERIFIED_COMPLETE', () => {
     const card = presentChatReview({
       outcome: 'VERIFIED_COMPLETE',

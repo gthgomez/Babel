@@ -5,6 +5,25 @@ import { createInterface } from 'node:readline'
 import { AgentSession } from '../../agent/session.js'
 import { executePlanTask } from './plan.js'
 
+test('hosted Plan presents its own notice and failure through the shell', async () => {
+  const previousRun = AgentSession.prototype.run
+  const previousLog = console.log; const previousError = console.error
+  const input = new PassThrough(); const rl = createInterface({ input, output: new PassThrough() })
+  const notices: string[] = []; const raw: string[] = []
+  const ctx = { state: { operatorMode: 'hard_plan', router: 'v9' }, rl, isRunning: false, lastRunDir: null,
+    shellRuntime: { store: { epoch: 1 }, appendNotice(text: string) { notices.push(text) } },
+    appendTurn() {}, saveSessionState() {}, settleShellTurn() {} }
+  console.log = (...args: unknown[]) => { raw.push(args.map(String).join(' ')) }
+  console.error = (...args: unknown[]) => { raw.push(args.map(String).join(' ')) }
+  try {
+    AgentSession.prototype.run = async () => ({ payload: { status: 'PLAN_READY', run_dir: null }, exitCode: 0, planText: 'Plan body' })
+    await executePlanTask(ctx as never, 'Plan', 'Plan', { targetRoot: process.cwd(), workspaceRoot: null } as never)
+    assert.match(notices.join('\n'), /Planning only/)
+    assert.match(notices.join('\n'), /plan source is unavailable/i)
+    assert.deepEqual(raw, [])
+  } finally { AgentSession.prototype.run = previousRun; console.log = previousLog; console.error = previousError; rl.close(); input.destroy() }
+})
+
 test('interactive plan refuses a successful-looking result with no source identity', async () => {
   const previous = AgentSession.prototype.run
   const input = new PassThrough(); const rl = createInterface({ input, terminal: false })

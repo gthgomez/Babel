@@ -26,10 +26,10 @@ import {
   formatHumanOutputReviewNote,
 } from '../../cli/structuredOutput.js';
 import type { ValidMode } from '../../cli/constants.js';
-import { muted, dim } from '../../ui/theme.js';
 import { userStatusForRun } from '../utils.js';
 import { updateConversationMemory } from '../turns.js';
-import { printRunSummary } from './summary.js';
+import { presentRunText, printRunCostFooter, printRunSummary } from './summary.js';
+import { HostedGovernedRenderer } from './hostedGovernedRenderer.js';
 import { alert } from '../../ui/dialog.js';
 
 export async function executeGovernedTask(
@@ -45,11 +45,15 @@ export async function executeGovernedTask(
   assertFiniteBudgetSupported('Thorough Work', target.targetRoot);
   ctx.isRunning = true;
   stdinCoordinatorPauseForRun(ctx.rl);
-  const epoch = ctx.shellRuntime?.store.epoch;
+  const hostedShell = ctx.shellRuntime;
+  const epoch = hostedShell?.store.epoch;
+  const shellTurnId = hostedShell?.store.turnId;
+  const mayPresent = () => !hostedShell || (ctx.shellRuntime === hostedShell &&
+    hostedShell.store.epoch === epoch && hostedShell.store.turnId === shellTurnId);
   const controller = new AbortController();
   const cancel = () => controller.abort();
   ctx.cancelActiveRun = cancel;
-  process.stdout.write('[?25l'); // hide cursor
+  if (!ctx.shellRuntime) process.stdout.write('\x1b[?25l'); // hide cursor
 
   const bus = new BabelEventBus();
   const eventStream = process.env['BABEL_EVENTS_JSONL']
@@ -57,13 +61,13 @@ export async function executeGovernedTask(
     : null;
   const onVerboseLog = ctx.verboseMode
     ? (line: string) => {
-        process.stdout.write(`${muted(line)}\n`);
+        if (mayPresent()) presentRunText(ctx, line, 'muted');
       }
     : undefined;
   const onVerboseRuntime = ctx.verboseMode
     ? (event: { event_type?: string; payload?: Record<string, unknown> }) => {
         const label = event.payload?.['tool'] ?? event.event_type ?? 'runtime';
-        process.stdout.write(`${dim(`[${event.event_type ?? 'runtime'}] ${String(label)}`)}\n`);
+        if (mayPresent()) presentRunText(ctx, `[${event.event_type ?? 'runtime'}] ${String(label)}`, 'dim');
       }
     : undefined;
   if (onVerboseLog) {
@@ -83,16 +87,10 @@ export async function executeGovernedTask(
   // Render mode may be overridden by /compact toggle: on = always conversational, off = always waterfall
   const compactMode = ctx.state.compactMode;
   const renderMode = compactMode === 'on' ? 'chat' : compactMode === 'off' ? 'deep' : activeMode;
-  const waterfall = createLiveRunRenderer(
-    bus,
-    {
-      task,
-      mode: renderMode,
-      project: ctx.state.project,
-      projectRoot,
-    },
-    process.stdout,
-  );
+  const rendererContext = { task, mode: renderMode, project: ctx.state.project, projectRoot };
+  const waterfall = hostedShell
+    ? new HostedGovernedRenderer(bus, rendererContext, hostedShell, () => ctx.shellRuntime === hostedShell)
+    : createLiveRunRenderer(bus, rendererContext, process.stdout);
 
   // Wire ConversationalRenderer to event bus for chat/compact mode
   const toolCallIds = new Map<string, number>();
@@ -259,18 +257,9 @@ export async function executeGovernedTask(
         next: ctx.lastAssistantNext,
       }, String(result.status ?? 'completed'));
       // Compact cost footer only (no structured output dump)
-      const convSessionCost = globalCostTracker.getSessionSummary();
-      const costLine =
-        typeof convSessionCost.totalCostUSD === 'number'
-          ? `$${convSessionCost.totalCostUSD.toFixed(4)}`
-          : '--';
-      console.log(
-        dim(
-          `  ${userStatusForRun(result.status)} | Session cost: ${costLine} | Next: /inspect, or type your next task\n`,
-        ),
-      );
+      printRunCostFooter(ctx, result.status);
     } else {
-      process.stdout.write('[?25h');
+      if (!ctx.shellRuntime) process.stdout.write('\x1b[?25h');
       printRunSummary(ctx, result, {
         input,
         task,
@@ -284,7 +273,7 @@ export async function executeGovernedTask(
     ctx.state.lastRunUserStatus = cancelled ? 'cancelled' : 'failed';
     waterfall.fail();
     eventStream?.write('babel.run.error', { error: caughtError.message });
-    process.stdout.write('[?25h');
+    if (!ctx.shellRuntime) process.stdout.write('\x1b[?25h');
     const runDir = typeof caughtError?.runDir === 'string' ? caughtError.runDir : currentResult?.runDir ?? null;
     const changedFiles = currentResult?.terminalSummary?.changed_files ?? [];
     if (runDir) {
@@ -318,7 +307,7 @@ export async function executeGovernedTask(
       usage: currentResult?.usageSummary ?? globalCostTracker.getSessionSummary(),
       errors: [caughtError.message ?? String(caughtError)],
       next: [
-        cancelled ? 'Inspect changes made before cancellation before starting another run.' : 'Retry after resolving the failure or inspect the run evidence if a run directory was created.',
+        cancelled ? 'Inspect changes made before cancellation before starting another run.' : 'Inspect any changes and run evidence before deciding whether to retry.',
       ],
     };
     const human = formatRunResultHuman(errorPayload);
@@ -332,7 +321,7 @@ export async function executeGovernedTask(
       );
       const note = formatHumanOutputReviewNote(review);
       if (note) {
-        console.log(muted(`  ${note}\n`));
+        presentRunText(ctx, `  ${note}\n`, 'muted');
       }
     }
     updateConversationMemory(ctx, errorPayload, task);
@@ -347,7 +336,7 @@ export async function executeGovernedTask(
       verification: cancelled ? 'skipped' : 'failed',
       next: ctx.lastAssistantNext,
     }, ctx.state.lastRunUserStatus);
-    console.error(`\n${human}\n`);
+    presentRunText(ctx, `\n${human}\n`, undefined, true);
     if (!cancelled && process.stdout.isTTY && !process.env['CI']) {
       try {
         const showAlert = () =>

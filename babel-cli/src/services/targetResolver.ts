@@ -32,8 +32,9 @@ const TARGET_MARKERS = [
   'next.config.js',
 ];
 
-function hasTargetMarker(dir: string): boolean {
-  return TARGET_MARKERS.some((marker) => existsSync(join(dir, marker)));
+function hasTargetMarker(dir: string, allowInstructionsOnly = true): boolean {
+  return TARGET_MARKERS.some((marker) =>
+    (allowInstructionsOnly || marker !== 'AGENTS.md') && existsSync(join(dir, marker)));
 }
 
 function parentOf(path: string): string {
@@ -58,10 +59,12 @@ export function findNearestAgentTargetRoot(cwd = process.cwd()): string {
 
   let cursor = current;
   while (true) {
-    if (hasTargetMarker(cursor)) {
+    const parent = parentOf(cursor);
+    // An instruction file at a drive/filesystem root can govern many unrelated
+    // projects. It is not enough to turn the whole drive into the current one.
+    if (hasTargetMarker(cursor, parent !== cursor || cursor === current)) {
       return cursor;
     }
-    const parent = parentOf(cursor);
     if (parent === cursor) {
       return current;
     }

@@ -64,6 +64,26 @@ test('legacy REPL dispatch rejection cannot clear another active owner', async (
   assert.equal(ctx.isRunning, true); assert.equal(ctx.cancelActiveRun, cancel)
 })
 
+test('hosted run-admission failures stay inside the shell for both REPL entry paths', async () => {
+  const { BabelRepl } = await import('../BabelRepl.js')
+  const { executeReplTask } = await import('../repl/replCommandDispatch.js')
+  const raw: string[] = []; const notices: string[] = []; const previous = console.error
+  console.error = (...args: unknown[]) => { raw.push(args.map(String).join(' ')) }
+  try {
+    for (const legacy of [false, true]) {
+      const ctx = Object.create(BabelRepl.prototype) as ReplContext
+      ctx.isRunning = true; ctx.state = {} as ReplContext['state']
+      ctx.shellRuntime = { appendNotice: (text: string) => notices.push(text) } as never
+      if (legacy) await executeReplTask(ctx, 'second task')
+      else await (ctx as unknown as { executeTask(input: string): Promise<void> }).executeTask('second task')
+      assert.equal(ctx.isRunning, true)
+    }
+  } finally { console.error = previous }
+  assert.equal(notices.length, 2)
+  assert.ok(notices.every(text => /active.*settle/i.test(text)))
+  assert.deepEqual(raw, [])
+})
+
 test('cancelling uncancellable session preparation does not abort the previous engine', async () => {
   const { handleCancelTurn } = await import('../commands/review.js')
   let aborted = 0

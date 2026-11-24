@@ -247,7 +247,7 @@ export function getContextualNextActions(
     case 'BUDGET_EXHAUSTED':
       return ['Follow-up to continue'];
     case 'INFRA_FAILURE':
-      return ['Retry'];
+      return ['Inspect the workspace and run evidence before continuing'];
     case 'AGENT_FAILURE':
       return input.sessionConsistencyFailure
         ? ['Inspect diagnostics', 'Do not resume this session blindly']
@@ -275,14 +275,18 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
         files.length === 0 &&
         !input.mutated));
 
-  const title = input.reasonCode === 'context_preparation_failed'
+  const providerReason = kind === 'INFRA_FAILURE' && input.reasonCode === 'provider_failure' &&
+    ['authentication', 'authorization', 'quota', 'rate_limit', 'model_unavailable'].includes(input.reasonDetail ?? '')
+    ? terminalReasonGuidance(input.reasonCode, input.reasonDetail).message
+    : undefined;
+  const title = providerReason ?? (input.reasonCode === 'context_preparation_failed'
     ? 'Context preparation blocked'
     : input.reasonCode === 'cost_accounting_incomplete'
       ? 'Cost accounting incomplete'
       : isVerificationNotApplicable &&
     (kind === 'COMPLETE_UNVERIFIED' || kind === 'VERIFIED_COMPLETE')
       ? 'Response complete'
-      : TITLES[kind];
+      : TITLES[kind]);
 
   const lines: string[] = [];
   lines.push(paintTitle(kind, title, isVerificationNotApplicable));
@@ -329,7 +333,7 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
 
   // D03: surface the structured reason so a no-progress terminal never reads as
   // a missing capability. Cancelled is already self-evident from the title.
-  if (input.reasonCode && input.reasonCode !== 'cancelled') {
+  if (input.reasonCode && input.reasonCode !== 'cancelled' && !providerReason) {
     const reasonText = terminalReasonGuidance(input.reasonCode, input.reasonDetail).message;
     lines.push(dim('Reason'));
     lines.push(`  ${reasonText}`);

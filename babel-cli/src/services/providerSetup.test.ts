@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readUserSettings, resolveEffectiveSettings, updateUserSettings } from '../config/userSettings.js'
@@ -17,6 +17,8 @@ function profile(t: TestContext): NodeJS.ProcessEnv {
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const project = join(root, 'project')
   mkdirSync(project)
+  // A drive-level instruction file must not turn the whole drive into this fixture's project.
+  writeFileSync(join(project, 'README.md'), 'Fixture project\n')
   return { HOME: join(root, 'home'), USERPROFILE: join(root, 'home'), BABEL_CONFIG_DIR: join(root, 'config'),
     BABEL_STATE_DIR: join(root, 'state'), BABEL_PROJECT_ROOT: project }
 }

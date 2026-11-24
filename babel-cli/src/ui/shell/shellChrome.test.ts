@@ -34,7 +34,7 @@ test('empty wide frame shows the north star chrome without invented catalog data
   assert.match(text, /QUICK ACTIONS/)
   assert.match(text, /No saved conversations/)
   assert.match(text, /Unknown until/)
-  assert.match(text, /Enter send · Ctrl\+Enter send/)
+  assert.match(text, /Enter at end: send · elsewhere: newline/)
   assert.match(text, /BABEL v/)
   assert.equal(text.includes('gpt-5.6'), false)
   assert.equal(text.includes('42,318'), false)
@@ -126,4 +126,14 @@ test('shell transcript uses speaker labels, tool detail only when present, and h
   ).join('\n')
   assert.equal(withoutDetail.includes('lines'), false)
   assert.match(withoutDetail, /> read/)
+})
+
+test('shell transcript strips untrusted terminal protocols from messages and tool fields', () => {
+  const hyperlink = '\x1b]8;;file:///unsafe-fixture\x07link\x1b]8;;\x07'
+  const message = formatShellSpeaker('BABEL', `Result ${hyperlink}`, 80).join('\n')
+  const tool = formatShellTool({ tool: 'read\x1b[2J', target: hyperlink, detail: '\x1b]0;unsafe-title\x07done', status: 'completed' }, 80).join('\n')
+  assert.match(message, /Result link/)
+  assert.doesNotMatch(message, /\x1b\]8|file:\/\/\/unsafe-fixture/)
+  assert.doesNotMatch(tool, /\x1b\[2J|\x1b\]0;|unsafe-title|\x1b\]8/)
+  assert.match(tool, /read/)
 })

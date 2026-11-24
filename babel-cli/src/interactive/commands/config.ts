@@ -244,18 +244,22 @@ export function handleRetarget(ctx: ReplContext, args: string[]): void {
 // ── Model ────────────────────────────────────────────────────────────────────
 
 export function handleModel(ctx: ReplContext, args: string[]): void {
+  const present = (text: string): void => {
+    if (ctx.shellRuntime) ctx.shellRuntime.appendNotice(text, { preserveFull: true });
+    else console.log(text);
+  };
   const sub = args[0]?.toLowerCase();
   if (sub === 'show') {
     const snapshot = resolveModelSnapshot(ctx.state.model);
     if (!snapshot) {
-      console.log(muted('\n  Model policy could not be resolved — run /doctor for details.'));
+      present(muted('\n  Model policy could not be resolved — run /doctor for details.'));
     } else {
-      console.log(renderModelDetail(snapshot));
+      present(renderModelDetail(snapshot));
     }
     return;
   }
   if (sub === 'why') {
-    console.log(
+    present(
       renderModelWhy({
         sessionModel: ctx.state.model,
         lastRoutingLabel: ctx.lastRoutingLabel,
@@ -265,7 +269,7 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
     return;
   }
   if (sub === 'health') {
-    console.log(renderModelHealth(ctx.state.model, process.env, ctx.lastRunDir));
+    present(renderModelHealth(ctx.state.model, process.env, ctx.lastRunDir));
     return;
   }
   if (sub && sub !== 'clear') {
@@ -311,20 +315,20 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
       const aliasSuffix = aliasResolution
         ? ` ${muted(`(alias: ${aliasResolution.aliasName})`)}`
         : '';
-      console.log(
+      present(
         primary(
           `\n  Model set to ${accentBright(resolved.resolvedBackendKey)}${aliasSuffix} (active · ${resolved.provider})`,
         ),
       );
       const selected = getAvailableModels().find((m) => m.key === resolved.resolvedBackendKey);
-      if (selected) console.log(`  ${formatModelPricing(selected.entry)}`);
+      if (selected) present(`  ${formatModelPricing(selected.entry)}`);
       if (keyWarnings.length > 0) {
-        console.log(warning(`  ⚠ ${keyWarnings.join('. ')}.`));
+        present(warning(`  ⚠ ${keyWarnings.join('. ')}.`));
       }
     } catch {
       const available = renderAvailableModelsTable(getAvailableModels(), ctx.state.model);
-      console.log(accentBright(`\n  Invalid model: "${requested}". Available backends:`));
-      console.log(available);
+      present(accentBright(`\n  Invalid model: "${requested}". Available backends:`));
+      present(available);
     }
   } else if (args[0]?.toLowerCase() === 'clear') {
     delete (ctx.state as any).model;
@@ -335,12 +339,12 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
     // Invalidate stale engine so the next turn uses route-selected model
     ctx.chatEngine?.closeAdmissionStore?.();
     ctx.chatEngine = undefined;
-    console.log(primary('\n  Model cleared — route-selected enabled'));
+    present(primary('\n  Model cleared — route-selected enabled'));
   } else {
     // Show current model first, then available backends
     if (ctx.state.model) {
       const detail = ctx.state.resolvedModelId ? ` (${ctx.state.resolvedModelId})` : '';
-      console.log(
+      present(
         primary(
           `\n  Current model: ${accentBright(ctx.state.model)}${muted(detail)} (active)`,
         ),
@@ -348,13 +352,13 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
     } else {
       const snapshot = resolveModelSnapshot(undefined);
       if (snapshot) {
-        console.log(
+        present(
           primary(
             `\n  Current model: ${accentBright(snapshot.policy.resolvedBackendKey)} ${muted(`(auto · ${snapshot.policy.provider} → ${snapshot.policy.providerModelId})`)}`,
           ),
         );
       } else {
-        console.log(muted('\n  No model set — using auto (route-selected default)'));
+        present(muted('\n  No model set — using auto (route-selected default)'));
       }
     }
     const activeKey = ctx.state.model ?? resolveModelSnapshot(undefined)?.policy.resolvedBackendKey;
@@ -368,10 +372,10 @@ export function handleModel(ctx: ReplContext, args: string[]): void {
         return wrapPrefixedBlock(`${a} → ${effective ?? 'unavailable'}`, { firstPrefix: '    ', continuationPrefix: '      ', width: Math.max(12, getTerminalWidth() - 1) }).join('\n');
       })
       .join('\n');
-    console.log(available);
-    console.log(primary('\n  Model Aliases:'));
-    console.log(aliases);
-    console.log(
+    present(available);
+    present(primary('\n  Model Aliases:'));
+    present(aliases);
+    present(
       muted(`\n  Use '/model show|why|health' for detail, '/model <key>' or '<alias>' to select, '/model clear' to reset.`),
     );
   }

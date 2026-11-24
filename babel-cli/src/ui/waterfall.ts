@@ -39,10 +39,11 @@ export class AppendOnlyRenderer extends BaseRenderer {
   private activityKeys: Set<string>;
   private transcriptLines: string[];
   private thoughtText: string;
+  private readonly outputSink: ((line: string) => void) | undefined;
   private readonly _eventBus: EventBus;
   private _eventBusHandles: Array<{ event: string; listener: (...args: any[]) => void }> = [];
 
-  constructor(eventBus: EventBus, context: RendererContext = {}) {
+  constructor(eventBus: EventBus, context: RendererContext = {}, outputSink?: (line: string) => void) {
     super();
     this._eventBus = eventBus;
     this.context = context;
@@ -51,6 +52,7 @@ export class AppendOnlyRenderer extends BaseRenderer {
     this.activityKeys = new Set();
     this.transcriptLines = [];
     this.thoughtText = '';
+    this.outputSink = outputSink;
 
     const onStage = (index: number) => this.write(stageAction(index));
     eventBus.on('stage', onStage);
@@ -120,10 +122,11 @@ export class AppendOnlyRenderer extends BaseRenderer {
     this.activityKeys.add(key);
     const line = `[${formatElapsed(Date.now() - this.startTime)}] ${message}\n`;
     this.transcriptLines.push(line.trimEnd());
-    if (!safeStdoutWrite(line)) {
+    if (this.outputSink) this.outputSink(line);
+    else if (!safeStdoutWrite(line)) {
       this.outputBroken = true;
     }
-    if (isA11yMode()) {
+    if (!this.outputSink && isA11yMode()) {
       a11yActivityEvent(message);
     }
   }

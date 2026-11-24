@@ -12,7 +12,35 @@ import {
 import { userStatusForRun } from '../utils.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 import { dim, muted } from '../../ui/theme.js';
+import { sanitizeUntrustedTerminalBlock } from '../../ui/sanitize.js';
 import { updateConversationMemory } from '../turns.js';
+
+export function presentRunText(ctx: ReplContext, text: string, style?: 'muted' | 'dim', isError = false): void {
+  if (ctx.shellRuntime) {
+    ctx.shellRuntime.appendNotice(text, { preserveFull: true });
+    return;
+  }
+  const safe = sanitizeUntrustedTerminalBlock(text);
+  const formatted = style === 'muted' ? muted(safe) : style === 'dim' ? dim(safe) : safe;
+  if (isError) console.error(formatted);
+  else console.log(formatted);
+}
+
+/** Keep incomplete invoices distinct from the known or estimated subtotal. */
+export function printRunCostFooter(ctx: ReplContext, status: string): void {
+  const cost = globalCostTracker.getSessionSummary();
+  const incomplete = cost.costComplete === false || cost.completeCostUSD === null ||
+    (cost.unknownChargeCount ?? 0) > 0;
+  const subtotal = cost.knownCostUSD ?? cost.totalCostUSD;
+  const costText = incomplete
+    ? [
+        `Session cost incomplete: $${subtotal.toFixed(4)} known subtotal`,
+        ...(cost.estimatedCostUSD ? [`$${cost.estimatedCostUSD.toFixed(4)} usage estimate`] : []),
+        ...(cost.unknownChargeCount ? [`${cost.unknownChargeCount} unpriced charge(s)`] : []),
+      ].join('; ')
+    : `Session cost: $${(cost.completeCostUSD ?? cost.totalCostUSD).toFixed(4)}`;
+  presentRunText(ctx, `  ${userStatusForRun(status)} | ${costText} | Next: /inspect, or type your next task\n`, 'dim');
+}
 
 export function printRunSummary(
   ctx: ReplContext,
@@ -55,18 +83,10 @@ export function printRunSummary(
     verification,
     next: ctx.lastAssistantNext,
   }, String(result.status ?? ctx.state.lastRunUserStatus ?? 'completed'));
-  console.log(`\n${human}\n`);
+  presentRunText(ctx, `\n${human}\n`);
   const note = formatHumanOutputReviewNote(review);
   if (note) {
-    console.log(muted(`  ${note}\n`));
+    presentRunText(ctx, `  ${note}\n`, 'muted');
   }
-  // One-line compact cost summary after every run
-  const sessionCost = globalCostTracker.getSessionSummary();
-  const runStatus = ctx.state.lastRunUserStatus ?? String(result.status ?? '');
-  const costLine =
-    typeof sessionCost.totalCostUSD === 'number' ? `$${sessionCost.totalCostUSD.toFixed(4)}` : '--';
-  const runLabel = userStatusForRun(String(result.status ?? ''));
-  console.log(
-    dim(`  ${runLabel} | Session cost: ${costLine} | Next: /inspect, or type your next task\n`),
-  );
+  printRunCostFooter(ctx, String(result.status ?? ''));
 }

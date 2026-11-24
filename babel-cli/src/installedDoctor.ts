@@ -8,7 +8,7 @@ import { readProviderKeyReference } from './config/providerAccountKeys.js'
 import {probeInstalledSandboxImage} from './config/installedSandbox.js'
 import { CLI_COMMAND } from './cli/commandName.js'
 import { dockerCheckMessage, formatManualProviderEnvExample, sandboxImageCheckMessage } from './cli/firstRunText.js'
-import { inspectRunningProduct, runningProduct, type RunningProduct } from './services/runningProduct.js'
+import { inspectRunningProduct, runningProduct, type BuildInfo, type RunningProduct } from './services/runningProduct.js'
 import { resolveExecutionProfile, type ExecutionProfileName } from './config/executionProfiles.js'
 import { isHostIsolationEscalationAllowed, type GovernedIsolationDecision } from './config/benchmarkContainer.js'
 import { assertExecutionBoundary, type ExecutionPolicyChoice } from './config/executionPolicySelection.js'
@@ -16,6 +16,19 @@ import { validateDockerIsolationArgs } from './config/dockerIsolationArgs.js'
 import { ORDINARY_CHAT_EXECUTION_PROFILE, resolveEffectiveExecutionBoundary } from './config/effectiveExecutionBoundary.js'
 
 type Check = { id: string; status: 'ok' | 'warn' | 'fail' | 'not_required'; message: string }
+type RunningIdentity = {
+  version: string | null
+  sourceRevision: string | null
+  installation: 'installed' | 'source'
+  packageRoot: string
+  entrypoint: string | null
+  nodeExecutable: string
+  packageManifestSha256: string | null
+  entrypointSha256: string | null
+  buildInfo: BuildInfo | null
+  buildInfoSha256: string | null
+  restartNeeded: boolean | null
+}
 
 /** Fixed-argument Docker calls for installed diagnostics. The host-process manifest owns this file. */
 export function runInstalledDockerCommand(args: readonly string[], timeout: number, env: NodeJS.ProcessEnv): { status: number | null; stdout: string } {
@@ -43,7 +56,7 @@ export function runInstalledDoctor(options: {
   /** Explicit opt-in; omission keeps the original diagnostic protocol for old clients. */
   executionProfile?: string
   executionPolicy?: Readonly<ExecutionPolicyChoice>
-} = {}): { status: 'ok' | 'warn' | 'fail'; kind: string; paths: ReturnType<typeof resolveRuntimePaths>; checks: Check[]; profileDiagnosticsVersion?: 1; executionProfile?: ExecutionProfileName } {
+} = {}): { status: 'ok' | 'warn' | 'fail'; kind: string; paths: ReturnType<typeof resolveRuntimePaths>; checks: Check[]; identity: RunningIdentity; profileDiagnosticsVersion?: 1; executionProfile?: ExecutionProfileName } {
   const env = options.env ?? process.env
   const configuredProfile = options.executionPolicy?.profile ?? options.executionProfile ?? env['BABEL_EXECUTION_PROFILE']
   const profile = configuredProfile === undefined
@@ -67,6 +80,9 @@ export function runInstalledDoctor(options: {
     env,execute:(_binary,args,settings)=>spawnSync('docker',args,settings),
   })))
   const product = inspectRunningProduct(options.running ?? runningProduct)
+  const buildDescription = product.buildInfo
+    ? `self-reported build commit ${product.buildInfo.sourceCommit ?? 'unknown'}, working tree ${product.buildInfo.workingTreeClean === null ? 'unknown' : product.buildInfo.workingTreeClean ? 'clean' : 'dirty'}; complete build inputs unrecorded`
+    : 'build metadata unavailable'
   const platform = options.platform ?? process.platform
   const isolationDecision: GovernedIsolationDecision = !requiresDocker
     ? { kind: 'host_profile', profile: profile.name }
@@ -104,13 +120,21 @@ export function runInstalledDoctor(options: {
       : connection
         ? `Connection ${connection.id} needs ${effective.model.value ? 'an API key' : 'a model'}. Run ${CLI_COMMAND} setup in a terminal. Nothing was contacted.`
         : `No provider is selected yet. Run ${CLI_COMMAND} setup in a terminal, or save one key in ${envFile}. Read-only commands work; nothing was contacted.` },
-    { id: 'executable', status: product.restartNeeded ? 'warn' : 'ok', message: `Running Babel ${product.runningVersion ?? 'unknown'}; revision ${product.revision ?? 'unknown'}; command ${CLI_COMMAND} (aliases babel and babel-agent); CLI entry ${product.entrypoint ?? 'unknown'}; Node executable ${product.executable}; package ${product.packageRoot}; ${product.restartNeeded === true ? 'package files changed; restart to use the current installation' : product.restartNeeded === null ? 'installation change detection unknown' : 'no change detected in package manifest or entrypoint'}` },
+    { id: 'executable', status: product.restartNeeded ? 'warn' : 'ok', message: `Running Babel ${product.runningVersion ?? 'unknown'}; revision ${product.revision ?? 'unknown'}; ${buildDescription}; command ${CLI_COMMAND} (aliases babel and babel-agent); CLI entry ${product.entrypoint ?? 'unknown'}; entry SHA-256 ${product.entryFingerprint ?? 'unknown'}; package manifest SHA-256 ${product.packageFingerprint ?? 'unknown'}; Node executable ${product.executable}; package ${product.packageRoot}; ${product.restartNeeded === true ? 'package files changed; restart to use the current installation' : product.restartNeeded === null ? 'installation change detection unknown' : 'no change detected in package manifest, entrypoint, or recorded build metadata'}` },
     boundaryCheck,
     { id: 'docker', status: !requiresDocker ? 'not_required' : dockerReady ? 'ok' : 'fail', message: !requiresDocker ? 'Docker is not required for the selected execution profile; it was not checked.' : dockerCheckMessage(dockerReady, platform) },
     { id:'sandbox_image',status:!requiresDocker?'not_required':imageReady?'ok':'fail',message:!requiresDocker?'A Docker sandbox image is not required for the selected execution profile; it was not checked.':sandboxImageCheckMessage(imageReady, dockerReady, platform) },
   ]
   return { status: checks.some(c => c.status === 'fail' || (options.strict && c.status === 'warn')) ? 'fail' :
     checks.some(c => c.status === 'warn') ? 'warn' : 'ok', kind: 'installed_user', paths, checks,
+    identity: {
+      version: product.runningVersion, sourceRevision: product.revision,
+      installation: paths.isInstalled ? 'installed' : 'source', packageRoot: product.packageRoot,
+      entrypoint: product.entrypoint, nodeExecutable: product.executable,
+      packageManifestSha256: product.packageFingerprint, entrypointSha256: product.entryFingerprint,
+      buildInfo: product.buildInfo ?? null, buildInfoSha256: product.buildManifestFingerprint ?? null,
+      restartNeeded: product.restartNeeded,
+    },
     ...(profile ? {profileDiagnosticsVersion:1 as const,executionProfile:profile.name} : {}) }
 }
 

@@ -11,6 +11,10 @@ export async function executeReplTask(ctx: ReplContext, input: string): Promise<
     if (!(err instanceof InteractiveRunBusyError)) ctx.isRunning = false;
     if (err && typeof err === 'object' && Symbol.for('babel.error.alerted') in err) return;
     const message = err instanceof Error ? err.message : String(err);
+    if (ctx.shellRuntime) {
+      ctx.shellRuntime.appendNotice(`Execution Error: ${message}`, { preserveFull: true });
+      return;
+    }
     if (process.stdout.isTTY && !process.env['CI']) {
       try {
         const showAlert = () =>

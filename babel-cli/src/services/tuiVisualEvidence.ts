@@ -16,8 +16,9 @@ import type {
   TuiTerminalIdentity,
   TuiVisualObservation,
   TuiVisualEvidenceMode,
+  TuiVisualAssessment,
 } from './tuiVisualTestContract.js'
-import { TUI_VISUAL_TEST_SCHEMA_VERSION } from './tuiVisualTestContract.js'
+import { TUI_VISUAL_TEST_SCHEMA_VERSION, unassessedTuiVisualStates } from './tuiVisualTestContract.js'
 
 export interface TuiEventRecord {
   event?: string
@@ -171,12 +172,28 @@ export function buildTuiVisualReceipt(input: {
   terminal: TuiTerminalIdentity
   semantic: TuiSemanticOracle
   observations: TuiVisualObservation[]
+  visualAssessments?: TuiVisualAssessment[]
   findings?: TuiVisualFinding[]
   evidenceDir: string
   controller: { name: string; version: string }
 }): TuiVisualReceipt {
   const findings = [...(input.findings ?? [])]
   if (!input.semantic.passed) findings.push(semanticFinding(input.semantic))
+
+  const visualAssessments = input.visualAssessments ?? []
+  const missingVisualStates = unassessedTuiVisualStates(input.scenario.expectedVisualStates, visualAssessments, input.observations)
+  if (input.semantic.passed && findings.length === 0 &&
+      (input.scenario.expectedVisualStates.length === 0 || missingVisualStates.length > 0)) {
+    findings.push({
+      status: 'INCONCLUSIVE',
+      severity: 'high',
+      summary: 'Visual states were not all assessed against screenshot observations.',
+      confidence: 1,
+      screenshotRefs: [],
+      eventRefs: [],
+      reproSteps: ['Capture and assess each expected visual state before reporting a pass.'],
+    })
+  }
 
   const highestFinding = findings
     .slice()
@@ -193,6 +210,8 @@ export function buildTuiVisualReceipt(input: {
     terminal: input.terminal,
     semantic: input.semantic,
     observations: input.observations,
+    expectedVisualStates: [...input.scenario.expectedVisualStates],
+    visualAssessments,
     findings,
     evidenceDir: input.evidenceDir,
     controller: input.controller,

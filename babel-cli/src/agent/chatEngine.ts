@@ -2905,6 +2905,14 @@ export class ChatEngine {
       budgetUsd: Number.isFinite(this.limits.maxCostUsd) ? this.limits.maxCostUsd : 'unlimited' };
   }
 
+  /** Non-secret configuration used to bind a runtime observation to its route. */
+  getProviderRouteIdentity() {
+    const policy = this.modelPolicy;
+    return { provider: policy?.provider ?? null, connection: policy?.connectionId ?? null,
+      requestedModel: policy?.providerModelId ?? null, endpoint: policy?.baseUrl ?? null,
+      credentialReference: policy?.apiKeyEnvVar ?? null, authentication: policy?.authentication ?? null };
+  }
+
   getProviderConversation(): ProviderMessage[] {
     return this.services.conversation.rebuildProviderMessages(
       this.parity.eventLog,

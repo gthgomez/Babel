@@ -1,5 +1,5 @@
 /** User-owned, non-secret connection preferences and their effective provenance. */
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
@@ -8,6 +8,7 @@ import { resolveRuntimeUserStateRoot } from './runtimePaths.js'
 import { currentInvocationSettings } from './invocationSettings.js'
 import { validateProviderBaseUrl } from '../runners/providerEndpoint.js'
 import { isLoopbackEndpoint } from './offlineMode.js'
+import { acquireProfileWriteLease, ProfileWriteLeaseError } from './profileWriteLease.js'
 
 /** Return only schema-owned text so a preference value is never echoed in an error. */
 function describePreferenceIssues(issues: readonly { path: readonly (string | number | symbol)[]; message: string }[]): string {
@@ -109,6 +110,18 @@ export function readUserSettings(options: { path?: string; env?: NodeJS.ProcessE
   return result.data
 }
 
+export interface UserSettingsCommitContext {
+  readonly path: string
+  readonly temporary: string
+}
+
+const activeCommitContexts = new WeakSet<UserSettingsCommitContext>()
+
+/** A transaction participant may act only while this settings writer owns its lease. */
+export function isActiveUserSettingsCommitContext(context: UserSettingsCommitContext): boolean {
+  return activeCommitContexts.has(context)
+}
+
 /**
  * Validate and commit under one writer lock. A callback sees the latest committed
  * preferences. Setup can wrap the final rename to commit a prepared private key
@@ -116,17 +129,19 @@ export function readUserSettings(options: { path?: string; env?: NodeJS.ProcessE
  */
 export function updateUserSettings(
   change: Partial<UserSettings> | ((current: UserSettings) => Partial<UserSettings>),
-  options: { path?: string; env?: NodeJS.ProcessEnv; commitWith?: (commit: () => void) => void } = {},
+  options: { path?: string; env?: NodeJS.ProcessEnv; commitWith?: (commit: () => void, context: UserSettingsCommitContext) => void } = {},
 ): UserSettings {
   const path = options.path ?? userSettingsPath(options.env)
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  const lock = `${path}.babel-lock`
-  let fd: number
-  try { fd = openSync(lock, 'wx', 0o600) } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    throw new Error('Babel preferences are locked by another writer. Retry when it finishes.')
+  let release: () => void
+  try { release = acquireProfileWriteLease(path) } catch (error) {
+    if (error instanceof ProfileWriteLeaseError && error.reason === 'busy') {
+      throw new Error('Babel preferences are locked by another writer. Retry when it finishes.')
+    }
+    throw error
   }
   const temporary = `${path}.${randomUUID()}.tmp`
+  let temporaryIdentity: Pick<BigIntStats, 'dev' | 'ino'> | undefined
   try {
     const current = readUserSettings({ ...options, path })
     const update = typeof change === 'function' ? change(current) : change
@@ -139,15 +154,43 @@ export function updateUserSettings(
     }
     const result = settingsSchema.safeParse(candidate)
     if (!result.success) throw new Error(`Invalid Babel preference update (${describePreferenceIssues(result.error.issues)}); previous preferences were preserved.`)
-    writeFileSync(temporary, `${JSON.stringify(result.data, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
-    const commit = (): void => renameSync(temporary, path)
-    if (options.commitWith) options.commitWith(commit)
-    else commit()
+    const fd = openSync(temporary, 'wx', 0o600)
+    try {
+      const info = fstatSync(fd, { bigint: true })
+      temporaryIdentity = { dev: info.dev, ino: info.ino }
+      writeFileSync(fd, `${JSON.stringify(result.data, null, 2)}\n`, 'utf8')
+      fsyncSync(fd)
+    } finally { closeSync(fd) }
+    const commit = (): void => {
+      const currentTemporary = lstatSync(temporary, { bigint: true })
+      if (!temporaryIdentity || !currentTemporary.isFile() || currentTemporary.isSymbolicLink() || currentTemporary.nlink !== 1n ||
+          currentTemporary.dev !== temporaryIdentity.dev || currentTemporary.ino !== temporaryIdentity.ino) {
+        throw new Error('Babel temporary preferences changed; preserve the file and inspect the profile.')
+      }
+      renameSync(temporary, path)
+    }
+    if (options.commitWith) {
+      const context = Object.freeze({ path, temporary })
+      activeCommitContexts.add(context)
+      try { options.commitWith(commit, context) } finally { activeCommitContexts.delete(context) }
+    } else commit()
     return result.data
   } finally {
-    try { rmSync(temporary, { force: true }) } finally {
-      closeSync(fd)
-      rmSync(lock, { force: true })
+    try {
+      if (temporaryIdentity) {
+        try {
+          const current = lstatSync(temporary, { bigint: true })
+          if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1n ||
+              current.dev !== temporaryIdentity.dev || current.ino !== temporaryIdentity.ino) {
+            throw new Error('Babel temporary preferences changed; preserve the file and inspect the profile.')
+          }
+          rmSync(temporary)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
+      }
+    } finally {
+      release()
     }
   }
 }

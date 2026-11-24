@@ -90,6 +90,18 @@ test("resize reconciles focus to a visible surface and routing uses that same st
   );
 });
 
+test("narrow layouts preserve drawer preference for a later resize", () => {
+  const narrow = projectShellPresentation(planShellLayout({ cols: 80, rows: 20 }), { ...base, focus: "inspector" });
+  assert.equal(narrow.focus, "composer");
+  assert.equal(narrow.leftDrawerOpen, false);
+  assert.equal(narrow.rightDrawerOpen, false);
+  assert.equal(narrow.inputState.leftDrawerOpen, true);
+  assert.equal(narrow.inputState.rightDrawerOpen, true);
+  const wide = projectShellPresentation(planShellLayout({ cols: 160, rows: 40 }), narrow.inputState);
+  assert.equal(wide.leftDrawerOpen, true);
+  assert.equal(wide.rightDrawerOpen, true);
+});
+
 test("focus changes and Escape change the rendered frame and close both drawers", () => {
   const layout = planShellLayout({ cols: 160, rows: 40 });
   const focused = projectShellPresentation(layout, {

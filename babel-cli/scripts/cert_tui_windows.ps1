@@ -1,6 +1,6 @@
 # Windows Terminal / PowerShell certification path for Babel chat TUI.
-# This script is the reproducible T24 harness. It does NOT claim PASS
-# unless the operator actually runs it in Windows Terminal.
+# This script runs fixture checks and prints the T24 manual checklist. It
+# remains BLOCKED until a separate Windows Terminal run supplies evidence.
 #
 # Usage (from babel-cli/):
 #   pwsh -NoProfile -File scripts/cert_tui_windows.ps1
@@ -48,5 +48,5 @@ Write-Host '  [ ] paste + Ctrl+C discards paste'
 Write-Host '  [ ] /diff then q restores composer'
 Write-Host '  [ ] exit restores cursor'
 Write-Host '  [ ] Unicode and long paths render'
-Write-Host 'This script does not auto-PASS those interactive checks.'
-exit 0
+Write-Host 'BLOCKED: manual Windows Terminal checks and their evidence remain outstanding.'
+exit 3

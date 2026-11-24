@@ -118,6 +118,16 @@ describe('ShellRuntimeBinding', () => {
     assert.doesNotMatch(rows, /\u001b\[/, 'notice text is stripped');
   });
 
+  it('removes untrusted terminal controls from hosted notices', () => {
+    const binding = new ShellRuntimeBinding({ width: 80 });
+    binding.beginTurn(10, 'run a task');
+    binding.appendNotice('before\u001b]0;spoofed\u0007after\u001b[2Jdone\u001bPpayload\u001b\\end');
+    const plain = binding.store.getRecords().filter(record => record.kind === 'plain');
+    const text = plain.flatMap(record => 'lines' in record.payload ? record.payload.lines : []).join('\n');
+    assert.doesNotMatch(text, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
+    assert.equal(text, 'beforeafterdoneend');
+  });
+
   it('ignores empty captured output', () => {
     const binding = new ShellRuntimeBinding({ width: 80 });
     binding.appendNotice('  \n\t\n');

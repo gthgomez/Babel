@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, parse } from 'node:path';
 import test from 'node:test';
 
 import { normalizeManifestProjectRoot } from '../pipeline/manifestContext.js';
 import { validatePlanTargetsWithinEffectiveRoots } from '../pipeline/targetConsistency.js';
-import { resolveAgentTarget } from './targetResolver.js';
+import { findNearestAgentTargetRoot, resolveAgentTarget } from './targetResolver.js';
 
 function makeWorkspaceFixture(): {
   root: string;
@@ -29,6 +30,24 @@ function makeWorkspaceFixture(): {
   writeFileSync(join(outside, 'README.md'), '# Other\n', 'utf-8');
   return { root, workspace, child, outside };
 }
+
+test('a filesystem-wide AGENTS file alone does not make the drive the project', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'babel-target-empty-'));
+  const volume = parse(cwd).root;
+  const originalExistsSync = fs.existsSync;
+  const simulatedMarkers = new Set([join(volume, 'AGENTS.md')]);
+  fs.existsSync = ((path) => String(path) === cwd || simulatedMarkers.has(String(path))) as typeof fs.existsSync;
+  syncBuiltinESMExports();
+  try {
+    assert.equal(findNearestAgentTargetRoot(cwd), cwd);
+    simulatedMarkers.add(join(volume, '.git'));
+    assert.equal(findNearestAgentTargetRoot(cwd), volume, 'a real drive-root repository remains discoverable');
+  } finally {
+    fs.existsSync = originalExistsSync;
+    syncBuiltinESMExports();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test('target resolver prefers active child repo over named parent workspace', () => {
   const fixture = makeWorkspaceFixture();

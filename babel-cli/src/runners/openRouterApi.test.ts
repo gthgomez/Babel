@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { createServer, type Server } from 'node:http'
 import test from 'node:test'
 import { z } from 'zod'
 import { OpenRouterApiRunner } from './openRouterApi.js'
@@ -42,6 +43,49 @@ test.afterEach(() => {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
   }
+})
+
+test('OpenRouter does not follow a redirect to another origin', async t => {
+  let firstRequests = 0
+  let foreignRequests = 0
+  let foreignAuthorized = false
+  let redirectPolicy: string | undefined
+  const listen = async (server: Server): Promise<number> => {
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Loopback fixture did not bind')
+    return address.port
+  }
+  const foreign = createServer((request, response) => {
+    foreignRequests += 1
+    foreignAuthorized ||= Boolean(request.headers.authorization)
+    request.resume()
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ model: 'example/fixed-model', choices: [{ message: { content: '{\"ok\":true}' } }] }))
+  })
+  const foreignPort = await listen(foreign)
+  const first = createServer((request, response) => {
+    firstRequests += 1
+    request.resume()
+    response.writeHead(307, { location: `http://127.0.0.1:${foreignPort}/different-origin` })
+    response.end()
+  })
+  const firstPort = await listen(first)
+  t.after(() => { first.closeAllConnections(); foreign.closeAllConnections(); first.close(); foreign.close() })
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(String(input), 'https://openrouter.ai/api/v1/chat/completions')
+    redirectPolicy = init?.redirect
+    return originalFetch(`http://127.0.0.1:${firstPort}/chat/completions`, init)
+  }) as typeof fetch
+  class OneAttemptRunner extends OpenRouterApiRunner {
+    protected override getRequestMaxRetries(): number { return 1 }
+  }
+  const runner = new OneAttemptRunner('example/fixed-model', {}, { env: { OPENROUTER_API_KEY: 'test-key' } })
+  try { await runner.execute('respond', z.object({ ok: z.literal(true) })) } catch { /* rejected redirect is expected */ }
+  assert.equal(firstRequests, 1)
+  assert.equal(redirectPolicy, 'error')
+  assert.equal(foreignRequests, 0, 'the selected endpoint must not redirect the request to another origin')
+  assert.equal(foreignAuthorized, false)
 })
 
 test('OpenRouter uses the declared credential variable and sampling body', async () => {

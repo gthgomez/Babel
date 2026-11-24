@@ -286,6 +286,17 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
       assertInteractiveRunAvailable(ctx);
       handleProject(ctx, args);
       break;
+    case 'pwd': {
+      if (args.length) throw new Error('Use /pwd without arguments.');
+      const target = ctx.resolveCurrentTarget();
+      const present = (text: string): void => {
+        if (ctx.shellRuntime) ctx.shellRuntime.appendNotice(text, { preserveFull: true });
+        else console.log(text);
+      };
+      present(`Target: ${JSON.stringify(target.targetRoot)}`);
+      if (target.cwd !== target.targetRoot) present(`Invocation directory: ${JSON.stringify(target.cwd)}`);
+      break;
+    }
     case 'target':
       handleTarget(ctx, []);
       break;

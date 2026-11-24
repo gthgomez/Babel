@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
@@ -58,8 +58,16 @@ test('failed preference rename removes a new key or restores the previous store'
     assert.equal(existsSync(path), existing)
     assert.equal(Boolean(readProviderKeyReference('openrouter', entry.reference, env)), false)
     assert.equal(Boolean(readProviderKeyReference('openrouter', previous.reference, env)), existing)
-    assert.equal(readdirSync(env.BABEL_STATE_DIR).length, 0)
-    assert.equal(readdirSync(env.BABEL_CONFIG_DIR).length, existing ? 1 : 0)
+    const settingsGuard = 'preferences.json.babel-lock.sqlite'
+    const accountGuard = '.env.accounts.babel-lock.sqlite'
+    assert.deepEqual(readdirSync(env.BABEL_STATE_DIR), [settingsGuard])
+    assert.deepEqual(readdirSync(env.BABEL_CONFIG_DIR).sort(),
+      [accountGuard, ...(existing ? ['.env.accounts'] : [])].sort())
+    for (const guard of [join(env.BABEL_STATE_DIR, settingsGuard), join(env.BABEL_CONFIG_DIR, accountGuard)]) {
+      const bytes = readFileSync(guard)
+      assert.equal(bytes.includes(Buffer.from(key)), false, 'Coordination files must not contain the new key.')
+      assert.equal(bytes.includes(Buffer.from('synthetic-previous-account-key')), false, 'Coordination files must not contain the previous key.')
+    }
   }
 })
 

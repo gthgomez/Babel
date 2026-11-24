@@ -89,6 +89,22 @@ test('thinking — active default', () => {
   matchStrippedSnapshot(renderCell(cell), 'thinking active', import.meta.url);
 });
 
+test('raw terminal history strips untrusted protocols from content and metadata', () => {
+  const hostile = '\x1b]8;;file:///unsafe-fixture\x07visible\x1b]8;;\x07';
+  const cells = [
+    createUserMessageCell(hostile),
+    createAssistantMessageCell(hostile),
+    createThinkingCell(hostile),
+    createToolCallCell('read\x1b[2J', hostile, 'completed', { detail: hostile }),
+    createSessionHeaderCell(hostile, { model: hostile, subtitle: hostile }),
+  ];
+  for (const cell of cells) {
+    const text = cell.displayLines(WIDTH, 'raw').join('\n');
+    assert.doesNotMatch(text, /\x1b\]8|\x1b\[2J|unsafe-fixture/);
+    assert.match(text, /visible|read/);
+  }
+});
+
 test('separator — turn rule', () => {
   const cell = createSeparatorCell('turn');
   matchStrippedSnapshot(renderCell(cell), 'separator turn', import.meta.url);

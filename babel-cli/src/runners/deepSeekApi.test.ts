@@ -67,6 +67,28 @@ test('DeepSeek API runner calls the direct OpenAI-compatible endpoint', async ()
   assert.ok(Math.abs((metadata?.estimated_cost_usd ?? 0) - 0.0025824) < 1e-12);
 });
 
+test('DeepSeek rejects redirects for both buffered and native streaming requests', async t => {
+  const previousDesktop = process.env['BABEL_DESKTOP_PROVIDER'];
+  delete process.env['BABEL_DESKTOP_PROVIDER'];
+  t.after(() => {
+    if (previousDesktop === undefined) delete process.env['BABEL_DESKTOP_PROVIDER'];
+    else process.env['BABEL_DESKTOP_PROVIDER'] = previousDesktop;
+  });
+  process.env['DEEPSEEK_API_KEY'] = 'sk-fixture-redirect-only';
+  const policies: Array<string | undefined> = [];
+  globalThis.fetch = (async (_input, init) => {
+    policies.push(init?.redirect);
+    const body = JSON.parse(String(init?.body));
+    if (body.stream) return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+    return Response.json({ choices: [{ message: { content: '{\"ok\":true}' } }] });
+  }) as typeof fetch;
+  const { DeepSeekApiRunner } = await import('./deepSeekApi.js');
+  const runner = new DeepSeekApiRunner('deepseek-v4-flash');
+  await runner.execute('respond', z.object({ ok: z.literal(true) }));
+  for await (const _event of runner.executeWithToolsStream([{ role: 'user', content: 'respond' }], [])) { /* consume */ }
+  assert.deepEqual(policies, ['error', 'error']);
+});
+
 test('DeepSeek API runner normalizes a JSON completion when stream callback is present', async () => {
   process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
   const { DeepSeekApiRunner } = await import('./deepSeekApi.js');

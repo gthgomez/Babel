@@ -165,3 +165,47 @@ it('doctor reports the running snapshot when package files have changed', async 
     assert.match(message, /restart/i); assert.match(message, /revision.*unknown/i)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
+
+it('doctor exposes the running entry and manifest fingerprints without inventing a revision', async () => {
+  const { captureRunningProduct } = await import('./services/runningProduct.js')
+  const root = mkdtempSync(join(tmpdir(), 'babel-doctor-identity-'))
+  try {
+    const entry = join(root, 'entry.js')
+    writeFileSync(entry, 'first executable')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ version: '1.0.0' }))
+    const first = captureRunningProduct(root, entry)
+    writeFileSync(entry, 'other executable')
+    const second = captureRunningProduct(root, entry)
+    const paths = { packageRoot: root, resourceRoot: root, isInstalled: true, userConfigRoot: root, userStateRoot: root, userCacheRoot: root, targetProjectRoot: root }
+    const options = { paths, env: {}, settings: { schemaVersion: 1 as const, connections: {} }, dockerProbe: () => false }
+    const report = runInstalledDoctor({ ...options, running: second })
+    assert.equal(report.identity.entrypoint, entry)
+    assert.equal(report.identity.packageRoot, root)
+    assert.equal(report.identity.installation, 'installed')
+    assert.equal(report.identity.version, '1.0.0')
+    assert.equal(report.identity.sourceRevision, null)
+    assert.match(report.identity.entrypointSha256 ?? '', /^[a-f0-9]{64}$/)
+    assert.match(report.identity.packageManifestSha256 ?? '', /^[a-f0-9]{64}$/)
+    assert.notEqual(first.entryFingerprint, report.identity.entrypointSha256)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+it('doctor labels embedded build information as self-reported', async () => {
+  const { captureRunningProduct } = await import('./services/runningProduct.js')
+  const root = mkdtempSync(join(tmpdir(), 'babel-doctor-build-'))
+  try {
+    mkdirSync(join(root, 'dist', 'cli'), { recursive: true })
+    const entry = join(root, 'entry.js')
+    writeFileSync(entry, 'fixture')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ version: '1.0.0' }))
+    const build = { schemaVersion: 1, packageVersion: '1.0.0', sourceCommit: 'a'.repeat(40),
+      sourceTree: 'b'.repeat(40), workingTreeClean: false, buildInputsDigest: null,
+      buildInputsReason: 'complete build inputs were not recorded', nodeVersion: '24.13.1', typescriptVersion: '5.8.3' }
+    writeFileSync(join(root, 'dist', 'cli', 'build-info.json'), JSON.stringify(build))
+    const paths = { packageRoot: root, resourceRoot: root, isInstalled: true, userConfigRoot: root, userStateRoot: root, userCacheRoot: root, targetProjectRoot: root }
+    const report = runInstalledDoctor({ paths, env: {}, settings: { schemaVersion: 1, connections: {} }, dockerProbe: () => false, running: captureRunningProduct(root, entry) })
+    assert.deepEqual((report.identity as typeof report.identity & { buildInfo?: unknown }).buildInfo, build)
+    assert.equal(report.identity.sourceRevision, null)
+    assert.match(report.checks.find(check => check.id === 'executable')?.message ?? '', /self-reported.*dirty/i)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})

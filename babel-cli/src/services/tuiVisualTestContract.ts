@@ -83,6 +83,12 @@ export interface TuiVisualObservation {
   terminal: TuiTerminalIdentity
 }
 
+/** A controller's positive assessment of one expected state and its observations. */
+export interface TuiVisualAssessment {
+  state: string
+  screenshotRefs: string[]
+}
+
 /** Vision-model or controller finding attached to evidence references. */
 export interface TuiVisualFinding {
   status: Exclude<TuiVisualStatus, 'PASS'>
@@ -117,6 +123,9 @@ export interface TuiVisualReceipt {
   terminal: TuiTerminalIdentity
   semantic: TuiSemanticOracle
   observations: TuiVisualObservation[]
+  /** Required for PASS; references alone do not establish screenshot authenticity. */
+  expectedVisualStates?: string[]
+  visualAssessments?: TuiVisualAssessment[]
   findings: TuiVisualFinding[]
   evidenceDir: string
   controller: {
@@ -132,6 +141,19 @@ export type TuiScenarioValidation =
 
 function isNonEmpty(value: string): boolean {
   return value.trim().length > 0
+}
+
+/** Identify expected states without a positive assessment linked to an observation. */
+export function unassessedTuiVisualStates(
+  expected: string[],
+  assessments: TuiVisualAssessment[],
+  observations: TuiVisualObservation[],
+): string[] {
+  const observationIds = new Set(observations
+    .filter(observation => isNonEmpty(observation.id) && isNonEmpty(observation.screenshotPath))
+    .map(observation => observation.id))
+  return expected.filter(state => !assessments.some(assessment =>
+    assessment.state === state && assessment.screenshotRefs.some(ref => observationIds.has(ref))))
 }
 
 function validateStep(step: TuiVisualStep, index: number, errors: string[]): void {
@@ -209,6 +231,13 @@ export function validateTuiVisualReceipt(receipt: TuiVisualReceipt): TuiScenario
   }
   if (receipt.status === 'PASS' && !receipt.semantic.passed) {
     errors.push('PASS receipts require passing semantic evidence')
+  }
+  if (receipt.status === 'PASS') {
+    const expected = receipt.expectedVisualStates ?? []
+    const assessments = receipt.visualAssessments ?? []
+    if (expected.length === 0 || unassessedTuiVisualStates(expected, assessments, receipt.observations).length > 0) {
+      errors.push('PASS receipts require a visual assessment linked to a screenshot observation for every expected state')
+    }
   }
   if (receipt.semantic.evidenceMode === 'visual_plus_semantic' && !receipt.semantic.evidenceRequired) {
     errors.push('semantic-required receipts must record evidenceRequired=true')

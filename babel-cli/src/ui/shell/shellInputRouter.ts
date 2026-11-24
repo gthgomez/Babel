@@ -15,6 +15,7 @@ export interface ShellInputResult {
     | 'open-palette'
     | 'open-reverse-search'
     | 'close-overlay'
+    | 'drawer-changed'
     | 'focus-changed'
     | 'move-selection'
     | 'activate-selection'
@@ -76,11 +77,23 @@ export function routeShellInput(event: KeyEvent, state: ShellInputState): ShellI
   if (event.ctrl && event.name === 'c') {
     return { handled: true, state, action: 'interrupt' }
   }
+  if (!event.ctrl && !event.meta && !event.shift && (event.name === 'f7' || event.name === 'f8')) {
+    const left = event.name === 'f7'
+    const opening = left ? !state.leftDrawerOpen : !state.rightDrawerOpen
+    const focusInDrawer = left ? ['sessions', 'project', 'actions'].includes(state.focus) : state.focus === 'inspector'
+    return { handled: true, state: { ...state,
+      ...(left ? { leftDrawerOpen: opening } : { rightDrawerOpen: opening }),
+      focus: !opening && focusInDrawer ? 'composer' : state.focus,
+    }, action: 'drawer-changed' }
+  }
   if (event.name === 'f6') {
     return { handled: true, state: { ...state, focus: nextFocus(state, event.shift ? -1 : 1) }, action: 'focus-changed' }
   }
   if (event.name === 'escape') {
-    if (state.leftDrawerOpen || state.rightDrawerOpen) {
+    const visibleDrawer = state.availableSurfaces
+      ? state.availableSurfaces.some(surface => ['sessions', 'project', 'actions', 'inspector'].includes(surface))
+      : state.leftDrawerOpen || state.rightDrawerOpen
+    if (visibleDrawer) {
       return { handled: true, state: { ...state, leftDrawerOpen: false, rightDrawerOpen: false, focus: 'composer' }, action: 'close-overlay' }
     }
     if (state.focus !== 'composer') {

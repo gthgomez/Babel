@@ -34,6 +34,9 @@ export class OpenRouterApiRunner extends OpenAiCompatibleRunner {
     return `${OPENROUTER_BASE_URL}/chat/completions`;
   }
 
+  /** The selected endpoint must not redirect a credentialed request elsewhere. */
+  protected override getRequestRedirect(): 'error' { return 'error'; }
+
   constructor(
     model: string,
     sampling: { maxTokens?: number; temperature?: number } = {},

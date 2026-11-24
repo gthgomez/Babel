@@ -35,4 +35,5 @@ describe('shellOutputCapture', () => {
       assert.equal(capturesShellCommandOutput(command), false, command);
     }
   });
+
 });

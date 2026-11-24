@@ -6,6 +6,7 @@ import { inspectDefaults } from '../services/defaultsInspection.js'
 import { connectionModelSelector } from '../config/connectionModelPolicy.js'
 import type { ReplContext } from '../interactive/context.js'
 import { assertInteractiveRunAvailable } from '../interactive/context.js'
+import { selectedProviderRoute } from '../interactive/repl/replReadiness.js'
 import { CommandPalette } from '../ui/palette.js'
 import { withExclusiveStdin } from '../ui/inputCoordinator.js'
 
@@ -94,7 +95,12 @@ export async function handleConnectionCommand(ctx: ReplContext, name: 'provider'
   if (name === 'settings' && args.length && args[0] !== 'show') assertInteractiveRunAvailable(ctx)
   if (name !== 'settings' && (!args.length || !(name === 'provider' ? ['list', 'status'] : ['list', 'show']).includes(args[0]!))) assertInteractiveRunAvailable(ctx)
   const program = new Command().name('babel-harness').exitOverride()
-  program.configureOutput({ writeOut: text => console.log(text), writeErr: text => console.error(text) })
+  const present = (text: string, isError = false): void => {
+    if (ctx.shellRuntime) ctx.shellRuntime.appendNotice(text, { preserveFull: true })
+    else if (isError) console.error(text)
+    else console.log(text)
+  }
+  program.configureOutput({ writeOut: text => present(text), writeErr: text => present(text, true) })
   const parts = ctx.state.model?.startsWith('connection/') ? ctx.state.model.split('/') : []
   let session: SelectionSession = ctx.state.modelSource && ctx.state.modelSource !== 'session' ? {} : { ...(ctx.state.connectionId ? { connection: ctx.state.connectionId } : {}), ...(parts.length > 2 ? { model: parts.slice(2).join('/') } : {}), ...(ctx.state.modelsByConnection ? { modelsByConnection: ctx.state.modelsByConnection } : {}) }
   try {
@@ -111,7 +117,7 @@ export async function handleConnectionCommand(ctx: ReplContext, name: 'provider'
       args = ['use', resolveScopedModelReference(reference, session, ctx.resolveCurrentTarget().targetRoot ?? process.cwd())]
     }
   } catch (error) {
-    console.error(error instanceof Error ? error.message : 'Selection failed.')
+    present(error instanceof Error ? error.message : 'Selection failed.', true)
     return
   }
   if (args.length === 0 && name !== 'settings' && process.stdin.isTTY && process.stdout.isTTY) {
@@ -122,7 +128,7 @@ export async function handleConnectionCommand(ctx: ReplContext, name: 'provider'
       : [...new Set([...(status.model ? [status.model] : []), ...listConnectionModels(session, root).models.map(item => item.id)])]
         .map(id => ({ command: id, description: status.connection ?? '', group: 'Models' }))
     if (choices.length === 0) {
-      console.log(name === 'provider' ? 'No configured connections. Use /setup to connect a provider.' : 'No known models for this connection. Use /model use <exact-model-id>.')
+      present(name === 'provider' ? 'No configured connections. Use /setup to connect a provider.' : 'No known models for this connection. Use /model use <exact-model-id>.')
       return
     }
     const choose = () => CommandPalette.choose(ctx, choices)
@@ -136,7 +142,16 @@ export async function handleConnectionCommand(ctx: ReplContext, name: 'provider'
       const evidence = name === 'settings' && (!args.length || args[0] === 'show')
         ? { runInstructionManifest: ctx.chatEngine?.getInstructionManifest() ?? null }
         : name !== 'settings' ? { lastInvocation: ctx.chatEngine?.getProviderSelectionStatus() ?? null } : {};
-      console.log(JSON.stringify(value && typeof value === 'object' ? { ...value, ...evidence } : value, null, 2));
+      let report: unknown = value && typeof value === 'object' ? { ...value, ...evidence } : value
+      const isStatus = (name === 'provider' && (!args.length || args[0] === 'status')) || (name === 'model' && (!args.length || args[0] === 'show'))
+      const route = isStatus ? selectedProviderRoute(ctx.state) : null
+      if (route && ctx.rejectedProviderRoutes?.has(route.key) && report && typeof report === 'object') {
+        const status = report as Record<string, unknown>
+        if (status['connection'] === route.connection && status['provider'] === route.provider && status['model'] === route.model) {
+          report = { ...status, state: 'action_required', reason: 'credential_rejected', connectivity: 'rejected', nextCommand: '/setup' }
+        }
+      }
+      present(JSON.stringify(report, null, 2) ?? '');
     },
     select: selection => {
       ctx.chatEngine?.closeAdmissionStore?.()
@@ -149,6 +164,8 @@ export async function handleConnectionCommand(ctx: ReplContext, name: 'provider'
       } else { delete ctx.state.model; delete ctx.state.resolvedModelId }
       ctx.state.modelSource = 'session'
       ctx.state.readinessState = connectionStatus(selection, ctx.resolveCurrentTarget().targetRoot).state as NonNullable<typeof ctx.state.readinessState>
+      const route = selectedProviderRoute(ctx.state)
+      if (route && ctx.rejectedProviderRoutes?.has(route.key)) ctx.state.readinessState = 'action_required'
       delete ctx.state.savedPlanId
       ctx.saveSessionState()
     },
@@ -156,6 +173,6 @@ export async function handleConnectionCommand(ctx: ReplContext, name: 'provider'
   try { await program.parseAsync(['node', 'babel-agent', name, ...(args.length ? args : [name === 'provider' ? 'status' : name === 'model' ? 'show' : 'show'])]) }
   catch (error) {
     if (error instanceof CommanderError && error.code === 'commander.helpDisplayed') return
-    console.error(error instanceof Error ? error.message : 'Command failed.')
+    present(error instanceof Error ? error.message : 'Command failed.', true)
   }
 }

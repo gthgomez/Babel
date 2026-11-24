@@ -52,6 +52,7 @@ import { isOperatorAbortError } from '../../agent/operatorAbort.js';
 import { isSessionConsistencyFailureMessage } from '../../agent/sessionEventDiagnostics.js';
 import { projectChatTerminal, classifyFailureText } from '../../agent/chatFailureClassification.js';
 import { terminalReasonFromFailureText } from '../../agent/chatTerminalReason.js';
+import { providerRouteMatchesEngine, selectedProviderRoute } from '../repl/replReadiness.js';
 
 /**
  * Extract changed file paths from a ChatResult's tool-call log.
@@ -145,7 +146,9 @@ export async function executeChatTask(
     activeProfile === 'ordinary_delivery';
 
   if (isExplicitOrSpecialized) {
-    console.log(muted(`  coding profile: ${describeInteractiveCodingProfile(activeProfile)}`));
+    const message = `coding profile: ${describeInteractiveCodingProfile(activeProfile)}`;
+    if (ctx.shellRuntime) ctx.shellRuntime.appendNotice(message);
+    else console.log(muted(`  ${message}`));
   }
 
   try {
@@ -186,7 +189,11 @@ export async function executeChatTask(
       // Disclose the OS-enforced boundary, not just the profile name, before
       // the first command can run. Escalation is never silent.
       const boundary = resolveEffectiveExecutionBoundary({ profile: executionPolicy.profile });
-      console.log(boundary.escalation ? warning(`  ! ${boundary.disclosure}`) : muted(`  ${boundary.disclosure}`));
+      if (ctx.shellRuntime) {
+        ctx.shellRuntime.appendNotice(boundary.escalation ? `! ${boundary.disclosure}` : boundary.disclosure, { preserveFull: true });
+      } else {
+        console.log(boundary.escalation ? warning(`  ! ${boundary.disclosure}`) : muted(`  ${boundary.disclosure}`));
+      }
       const engineOptions: ChatEngineOptions = {
         task,
         executionPolicy,
@@ -208,6 +215,11 @@ export async function executeChatTask(
     }
 
     const shellEpoch = ctx.shellRuntime?.store.epoch;
+    const route = selectedProviderRoute(ctx.state);
+    const routeEngine = ctx.chatEngine!;
+    const selection = typeof routeEngine.getProviderRouteIdentity === 'function' ? routeEngine.getProviderRouteIdentity() : null;
+    const events = typeof routeEngine.getParityRuntime === 'function' ? routeEngine.getParityRuntime().sessionEvents.events : null;
+    const firstNewEvent = events?.length ?? 0;
     const result = await runChatEngineOnce({
       task,
       target,
@@ -226,6 +238,41 @@ export async function executeChatTask(
         ? { onChatEvent: (event) => ctx.shellRuntime?.onChatEvent(event, shellEpoch) }
         : {}),
     });
+
+    // Only a new, route-matched provider receipt may invalidate the selected
+    // account. Text or a failure from a superseded engine/session is not proof.
+    const currentRoute = selectedProviderRoute(ctx.state);
+    const currentParity = typeof routeEngine.getParityRuntime === 'function' ? routeEngine.getParityRuntime() : null;
+    const currentTurnId = currentParity?.turnId;
+    const newEvents = currentParity?.sessionEvents.events.slice(firstNewEvent) ?? [];
+    const selectedInferences = new Set(newEvents.flatMap(event => {
+      if (!route || !currentTurnId || event.kind !== 'model_input_receipt' || event.turn_id !== currentTurnId ||
+          event.provider !== route.provider || event.sent_model_id !== route.model || !event.route_receipt ||
+          event.route_receipt.execution_stage !== 'chat' || event.route_receipt.provider !== route.provider ||
+          event.route_receipt.exact_model_id_sent !== route.model || event.route_receipt.substitution_or_fallback) return [];
+      return [event.inference_id];
+    }));
+    const receiptRejected = route && currentTurnId && newEvents.some(event => {
+      if (!('turn_id' in event) || event.turn_id !== currentTurnId) return false;
+      if (!('inference_id' in event) || !selectedInferences.has(event.inference_id)) return false;
+      if (event.kind === 'provider_failure_receipt' && event.provider === route.provider && event.model === route.model) {
+        return event.receipt.http_status === 401 || event.receipt.http_status === 403;
+      }
+      if (event.kind === 'model_result_delivery' && event.status === 'failed' && event.provider === route.provider && event.model === route.model) {
+        return event.failure_receipt?.http_status === 401 || event.failure_receipt?.http_status === 403;
+      }
+      return false;
+    });
+    if (route && selection && receiptRejected && result.reason_code === 'provider_failure' &&
+        (result.reason_detail === 'authentication' || result.reason_detail === 'authorization') &&
+        ctx.chatEngine === routeEngine && ctx.shellRuntime?.store.epoch === shellEpoch && currentRoute?.key === route.key &&
+        providerRouteMatchesEngine(route, selection)) {
+      (ctx.rejectedProviderRoutes ??= new Set()).add(route.key);
+      ctx.state.readinessState = 'action_required';
+      const recovery = `${route.provider} rejected ${result.reason_detail === 'authentication' ? 'authentication' : 'access'} for connection ${route.connection}. Run /setup to reconnect before sending another task.`;
+      if (ctx.shellRuntime) ctx.shellRuntime.appendNotice(recovery, { preserveFull: true });
+      else console.log(recovery);
+    }
 
     // U1.3: Surface last routing receipt label on status bar (model tier + phase)
     if (result.turnRouting && result.turnRouting.length > 0) {
@@ -580,7 +627,8 @@ export async function executeChatTask(
     ctx.state.lastRunUserStatus = outcome === 'BLOCKED_EXTERNAL' ? 'blocked' : 'failed';
     convRenderer?.fail(err, { render: false });
     const failure = presentChatReview({ status: ctx.state.lastRunUserStatus, ...(outcome ? { outcome } : {}), summary: message, ...(reason ? { reasonCode: reason.code, reasonDetail: reason.detail, causeClass: reason.cause_class } : {}) });
-    console.log(`\n${failure.body}\n`);
+    if (ctx.shellRuntime) ctx.shellRuntime.appendNote(failure.body, { preserveFull: true });
+    else console.log(`\n${failure.body}\n`);
     // Record the failure in turn history so the session transcript is continuous
     updateConversationMemory(
       ctx,

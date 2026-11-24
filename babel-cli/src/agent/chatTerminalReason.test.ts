@@ -240,7 +240,8 @@ describe('D03 terminalReasonGuidance', () => {
     const a = terminalReasonGuidance('provider_failure');
     a.nextActions.push('mutated');
     const b = terminalReasonGuidance('provider_failure');
-    assert.deepEqual(b.nextActions, ['Retry']);
+    assert.ok(b.nextActions.length > 0);
+    assert.ok(!b.nextActions.includes('mutated'));
   });
 });
 

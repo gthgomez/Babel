@@ -99,6 +99,27 @@ test('BabelRepl handler: cursoring does not touch the active thread; Enter rebin
   assert.equal(runtime.getSnapshot().threadId, 's2')
 })
 
+test('BabelRepl reuses and invalidates geometry as drawer visibility changes', () => {
+  const { repl, dispatch } = createHandlerSubject()
+  repl['shellInputState'] = { focus: 'composer', leftDrawerOpen: false, rightDrawerOpen: false }
+  const geometry = (repl['currentShellLayout'] as (dimensions: { cols: number; rows: number }) => ReturnType<typeof planShellLayout>).bind(repl)
+  const dimensions = { cols: 160, rows: 45 }
+  const closed = geometry(dimensions)
+  assert.equal(closed.left, null)
+  assert.equal(closed.right, null)
+  assert.equal(closed.center?.width, 158)
+  assert.equal(geometry(dimensions), closed)
+  dispatch(key('f7'), undefined, { processKey: () => {} }, closed)
+  const left = geometry(dimensions)
+  assert.notEqual(left, closed)
+  assert.equal(left.center?.x, 30)
+  assert.equal(left.composer?.x, left.center?.x)
+  dispatch(key('f8'), undefined, { processKey: () => {} }, left)
+  const both = geometry(dimensions)
+  assert.equal(both.center?.width, 96)
+  assert.equal(both.composer?.width, both.center?.width)
+})
+
 test('BabelRepl handler: active New conversation preserves cancellation and shows recovery', async () => {
   const { repl, runtime, navigator, dispatch } = createHandlerSubject()
   let closed = 0

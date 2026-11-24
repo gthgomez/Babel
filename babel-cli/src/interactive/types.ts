@@ -135,6 +135,7 @@ export const INTERACTIVE_COMMAND_GROUPS = [
       ['/model list|use|show', 'List known models, select an exact ID, or inspect the active route'],
       ['/project [name]', 'Set project context or clear it'],
       ['/target', 'Show current target root'],
+      ['/pwd', 'Show target and invocation directories without a provider'],
       ['/retarget [path]', 'Override target root for this session'],
       ['/theme', 'Open the theme picker'],
       ['/keymap', 'Rebind keyboard shortcuts'],

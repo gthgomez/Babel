@@ -152,3 +152,27 @@ test('visual evidence failure prevents a visual PASS receipt', () => {
   assert.equal(receipt.status, 'INCONCLUSIVE')
   assert.equal(receipt.semantic.evidenceRequired, true)
 })
+
+test('a visual-only scenario needs observations and an assessment of every expected state', () => {
+  const scenario = TUI_VISUAL_SCENARIOS[0]!
+  const semantic = evaluateTuiSemanticOracle({ records: [], evidenceMode: 'visual_only', expectedEvents: [] })
+  const terminal = { program: 'test', term: 'xterm', cols: 80, rows: 24, platform: 'win32', isWindowsTerminal: false }
+  const common = {
+    scenario,
+    startedAt: '2026-08-12T00:00:00.000Z',
+    endedAt: '2026-08-12T00:00:01.000Z',
+    terminal,
+    semantic,
+    evidenceDir: 'runs/tui-visual/scenario',
+    controller: { name: 'test', version: '1' },
+  }
+  assert.equal(buildTuiVisualReceipt({ ...common, observations: [] }).status, 'INCONCLUSIVE')
+
+  const observations = [{ id: 'screen-1', label: 'initial', timestamp: common.startedAt, screenshotPath: 'screen.png', terminal }]
+  assert.equal(buildTuiVisualReceipt({ ...common, observations }).status, 'INCONCLUSIVE')
+
+  const visualAssessments = scenario.expectedVisualStates.map(state => ({ state, screenshotRefs: ['screen-1'] }))
+  assert.equal(buildTuiVisualReceipt({ ...common, observations, visualAssessments }).status, 'PASS')
+  assert.equal(buildTuiVisualReceipt({ ...common, observations, visualAssessments: visualAssessments.slice(1) }).status, 'INCONCLUSIVE')
+  assert.equal(buildTuiVisualReceipt({ ...common, observations, visualAssessments: visualAssessments.map(item => ({ ...item, screenshotRefs: ['missing'] })) }).status, 'INCONCLUSIVE')
+})

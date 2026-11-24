@@ -15,6 +15,13 @@ test('all catalog scenarios satisfy the external-driver contract', () => {
   }
 })
 
+test('the clean-start visual scenario expects setup instead of asserting a ready connection', () => {
+  const scenario = TUI_VISUAL_SCENARIOS.find(item => item.id === 'T01-visual-clean-start')
+  assert.ok(scenario)
+  assert.match(scenario.expectedVisualStates.join(' '), /setup|configuration/i)
+  assert.doesNotMatch(scenario.expectedVisualStates.join(' '), /ready prompt is visible/i)
+})
+
 test('scenario validation rejects unsafe dimensions and empty labels', () => {
   const result = validateTuiVisualScenario({
     ...TUI_VISUAL_SCENARIOS[0]!,
@@ -101,4 +108,25 @@ test('receipt validation rejects PASS when semantic evidence failed', () => {
   const result = validateTuiVisualReceipt(base)
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.errors.join('\n'), /require passing semantic evidence/)
+})
+
+test('a PASS receipt cannot omit visual observations and assessments', () => {
+  const receipt = {
+    schemaVersion: TUI_VISUAL_TEST_SCHEMA_VERSION,
+    scenarioId: 'scenario',
+    scenarioName: 'Scenario',
+    status: 'PASS' as const,
+    startedAt: '2026-08-12T00:00:00.000Z',
+    endedAt: '2026-08-12T00:00:01.000Z',
+    terminal: { program: 'test', term: 'xterm', cols: 80, rows: 24, platform: 'win32', isWindowsTerminal: false },
+    semantic: { passed: true, evidenceMode: 'visual_only' as const, evidenceRequired: false, observedEvents: [], missingEvents: [], detail: 'not required' },
+    observations: [],
+    findings: [],
+    evidenceDir: 'runs/tui-visual/scenario',
+    controller: { name: 'test', version: '1' },
+  } satisfies TuiVisualReceipt
+
+  const result = validateTuiVisualReceipt(receipt)
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.errors.join('\n'), /visual assessment/i)
 })

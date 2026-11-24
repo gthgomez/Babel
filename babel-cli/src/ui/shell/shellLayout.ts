@@ -57,7 +57,10 @@ export function canHostResponsiveShell(dimensions: ShellDimensions): boolean {
  * @param dimensions - Physical and, when required, guard-adjusted dimensions.
  * @returns A bounded layout whose coordinates use zero-based half-open rectangles.
  */
-export function planShellLayout(dimensions: ShellDimensions): ShellLayout {
+export function planShellLayout(
+  dimensions: ShellDimensions,
+  visibility: { leftDrawerOpen: boolean; rightDrawerOpen: boolean } = { leftDrawerOpen: true, rightDrawerOpen: true },
+): ShellLayout {
   const cols = Math.max(0, Math.floor(dimensions.cols))
   const rows = Math.max(0, Math.floor(dimensions.rows))
   const effectiveCols = Math.max(
@@ -92,19 +95,13 @@ export function planShellLayout(dimensions: ShellDimensions): ShellLayout {
   let center: Rect
   let right: Rect | null = null
 
-  if (mode === 'wide') {
-    const leftWidth = 28
-    const rightWidth = 32
-    const centerWidth = Math.max(0, effectiveCols - 64)
-    left = rect(1, centerY, leftWidth, bodyHeight)
-    center = rect(30, centerY, centerWidth, bodyHeight)
-    right = rect(30 + centerWidth + 1, centerY, rightWidth, bodyHeight)
-  } else if (mode === 'medium') {
-    left = rect(1, centerY, 24, bodyHeight)
-    center = rect(26, centerY, Math.max(0, effectiveCols - 27), bodyHeight)
-  } else {
-    center = rect(1, centerY, Math.max(0, effectiveCols - 2), bodyHeight)
-  }
+  const leftWidth = mode === 'wide' ? 28 : mode === 'medium' ? 24 : 0
+  const rightWidth = mode === 'wide' ? 32 : 0
+  const leftSpace = leftWidth && visibility.leftDrawerOpen ? leftWidth + 1 : 0
+  const rightSpace = rightWidth && visibility.rightDrawerOpen ? rightWidth + 1 : 0
+  if (leftSpace) left = rect(1, centerY, leftWidth, bodyHeight)
+  center = rect(1 + leftSpace, centerY, Math.max(0, effectiveCols - 2 - leftSpace - rightSpace), bodyHeight)
+  if (rightSpace) right = rect(center.x + center.width + 1, centerY, rightWidth, bodyHeight)
 
   const conversation = rect(center.x, center.y, center.width, conversationHeight)
   const composer = rect(

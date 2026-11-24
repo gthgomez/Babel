@@ -239,7 +239,13 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     if (input.startsWith('/')) {
       if (ctx.shellHost) {
         const command = input.slice(1).split(/\s+/)[0]?.toLowerCase() ?? '';
-        if (capturesShellCommandOutput(command)) {
+        if (ctx.shellRuntime && ['provider', 'model', 'm', 'pwd'].includes(command)) {
+          // These commands present through the shell directly. A bare picker
+          // still takes its own exclusive terminal lease inside the handler.
+          await handleCommand(ctx, input);
+          ctx.shellHost.releaseRepaintHold();
+          ctx.shellHost.invalidate('command-output');
+        } else if (capturesShellCommandOutput(command)) {
           // Print-only commands write with console.log at the composer's
           // cursor position, which overwrote the fixed shell frame (UX-11).
           // Capture that text and show it in the conversation pane instead.

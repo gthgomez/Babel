@@ -5,6 +5,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFile
 import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { assertReleaseBuildInfo } from './write_build_info.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(root, '..')
@@ -40,6 +41,10 @@ const sourceSha = command('git', ['rev-parse', 'HEAD']).trim()
 const sourceTreeSha = command('git', ['rev-parse', 'HEAD^{tree}']).trim()
 assert.match(sourceSha, /^[a-f0-9]{40}$/)
 assert.match(sourceTreeSha, /^[a-f0-9]{40}$/)
+const buildInfoBytes = readFileSync(join(root, 'dist', 'cli', 'build-info.json'))
+const buildInfo = JSON.parse(buildInfoBytes)
+assertReleaseBuildInfo(buildInfo, { packageVersion: packageJson.version, sourceCommit: sourceSha, sourceTree: sourceTreeSha })
+assert.equal(command('git', ['status', '--porcelain']).trim(), '', 'Source changed during release packaging')
 // Load payload qualification only after build and pack succeed: earlier gates
 // (source provenance, dependency/advisory review) must stop the flow without
 // depending on the inventory tooling.
@@ -73,6 +78,7 @@ const manifest = {
   schemaVersion: 2,
   sourceSha,
   sourceTreeSha,
+  buildInfoSha256: sha256(buildInfoBytes),
   candidateHead: process.env.CANDIDATE_HEAD || sourceSha,
   workflowSha: process.env.RELEASE_WORKFLOW_SHA,
   runId: process.env.GITHUB_RUN_ID,

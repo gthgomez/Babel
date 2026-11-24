@@ -45,8 +45,8 @@ export function projectShellPresentation(
   const rightDrawerOpen = Boolean(layout.right && state.rightDrawerOpen)
   const inputState: ShellInputState = {
     focus,
-    leftDrawerOpen,
-    rightDrawerOpen,
+    leftDrawerOpen: state.leftDrawerOpen,
+    rightDrawerOpen: state.rightDrawerOpen,
     availableSurfaces,
   }
   const selectionSurface =

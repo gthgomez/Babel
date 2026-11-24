@@ -3,6 +3,7 @@ import { connectionStatus } from '../../services/connectionSettings.js'
 import { runProviderSetup } from '../../services/providerSetup.js'
 import { withExclusiveStdin } from '../../ui/inputCoordinator.js'
 import type { ReplContext } from '../context.js'
+import { selectedProviderRoute } from './replReadiness.js'
 
 /** Run setup with exclusive input and adopt saved choices only on completion. */
 export async function setupReplConnection(ctx: ReplContext): Promise<void> {
@@ -26,6 +27,10 @@ export async function setupReplConnection(ctx: ReplContext): Promise<void> {
   ctx.state.modelsByConnection = { ...ctx.state.modelsByConnection, [result.saved.connection]: result.saved.model }
   ctx.state.modelSource = status.modelSource
   ctx.state.readinessState = result.state
+  if (status.connection === result.saved.connection && status.model === result.saved.model) {
+    const route = selectedProviderRoute(ctx.state)
+    if (route) ctx.rejectedProviderRoutes?.delete(route.key)
+  }
   if (wasSetupBlocked && result.state === 'configured_unverified') delete ctx.state.lastRunUserStatus
   delete ctx.state.savedPlanId
   ctx.chatEngine?.closeAdmissionStore?.()

@@ -52,6 +52,24 @@ function topLevelRects(layout: ShellLayout): Rect[] {
 }
 
 describe('planShellLayout', () => {
+  it('reclaims closed drawer widths for both conversation and composer', () => {
+    for (const [leftDrawerOpen, rightDrawerOpen] of [[false, false], [true, false], [false, true], [true, true]] as const) {
+      const layout = planShellLayout({ cols: 160, rows: 45 }, { leftDrawerOpen, rightDrawerOpen })
+      assert.equal(layout.left !== null, leftDrawerOpen)
+      assert.equal(layout.right !== null, rightDrawerOpen)
+      assert.equal(layout.center?.x, leftDrawerOpen ? 30 : 1)
+      assert.equal(layout.center?.width, 158 - (leftDrawerOpen ? 29 : 0) - (rightDrawerOpen ? 33 : 0))
+      assert.equal(layout.composer?.x, layout.center?.x)
+      assert.equal(layout.composer?.width, layout.center?.width)
+      for (const rect of topLevelRects(layout)) assertInside(rect, 160, 45)
+      assertDisjoint(topLevelRects(layout))
+    }
+    const medium = planShellLayout({ cols: 120, rows: 35 }, { leftDrawerOpen: false, rightDrawerOpen: true })
+    assert.equal(medium.left, null)
+    assert.equal(medium.right, null)
+    assert.equal(medium.center?.width, 118)
+  })
+
   it('plans the 160-column wide shell with the packet geometry', () => {
     const layout = planShellLayout({ cols: 160, rows: 45 })
 

@@ -75,21 +75,13 @@ export async function runDailyDriverScenarios(opts?: {
   windowsTerminalAutomation?: boolean;
 }): Promise<CertMatrix> {
   const pty = opts?.ptyAvailable ?? false;
-  const winAuto = opts?.windowsTerminalAutomation ?? false;
   const scenarios: CertScenarioResult[] = [];
 
   const t01 = (() => {
     resetInterruptHostForTests();
     const forced = shouldForceResumePicker();
     if (forced) return fail('T01', 'Clean Start', 'default path still forces resume picker');
-    if (!pty) {
-      return pass(
-        'T01',
-        'Clean Start',
-        'default launch skips picker; ready prompt owned by interrupt host (no PTY spawn)',
-      );
-    }
-    return pass('T01', 'Clean Start', 'PTY ready prompt asserted by caller');
+    return blocked('T01', 'Clean Start', 'default launch skips the picker, but this fixture did not observe the clean-start screen');
   })();
   scenarios.push(t01);
 
@@ -370,15 +362,11 @@ export async function runDailyDriverScenarios(opts?: {
   const t23 = runTenTaskLoop();
   scenarios.push(t23.scenario);
 
-  scenarios.push(
-    winAuto
-      ? pass('T24', 'Windows certification', 'Windows Terminal automation executed')
-      : blocked(
-          'T24',
-          'Windows certification',
-          'No Windows Terminal automation in this environment; see scripts/cert_tui_windows.ps1',
-        ),
-  );
+  scenarios.push(blocked(
+    'T24',
+    'Windows certification',
+    'This fixture does not collect Windows Terminal evidence; see scripts/cert_tui_windows.ps1',
+  ));
 
   return {
     scenarios,

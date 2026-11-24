@@ -42,12 +42,12 @@ const wait = (milliseconds: number, label: string): {
 export const TUI_VISUAL_SCENARIOS: readonly TuiVisualScenario[] = [
   {
     id: 'T01-visual-clean-start',
-    name: 'Clean start shows one ready prompt',
+    name: 'Clean start presents unconfigured setup',
     safety: 'read_only',
-    steps: [observe('initial ready screen')],
+    steps: [observe('initial unconfigured screen')],
     evidenceMode: 'visual_only',
     expectedEvents: [],
-    expectedVisualStates: ['BABEL banner appears once', 'CHAT mode is visible', 'ready prompt is visible'],
+    expectedVisualStates: ['BABEL banner appears once', 'setup or missing-configuration guidance is visible', 'unverified authentication is not presented as confirmed'],
   },
   {
     id: 'T06-visual-clear-composer',

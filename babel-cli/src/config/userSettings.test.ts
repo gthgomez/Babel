@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import test from 'node:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import fs, { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -98,4 +100,54 @@ test('settings compare and commit hold the same lock as an ordinary preference u
   assert.equal(readUserSettings({ path }).defaults?.workflow, 'plan')
   updateUserSettings({ defaults: { budgetUsd: 5 } }, { path })
   assert.equal(readUserSettings({ path }).defaults?.budgetUsd, 5)
+})
+
+test('a pre-existing temporary preferences path is not deleted', async () => {
+  const { updateUserSettings } = await import('./userSettings.js')
+  const dir = mkdtempSync(join(tmpdir(), 'babel-settings-temp-'))
+  const original = crypto.randomUUID
+  const id = '44444444-4444-4444-8444-444444444444'
+  const path = join(dir, 'preferences.json')
+  const occupied = `${path}.${id}.tmp`
+  try {
+    writeFileSync(occupied, 'fixture-owned-data', { flag: 'wx', mode: 0o600 })
+    crypto.randomUUID = (() => id) as typeof crypto.randomUUID
+    syncBuiltinESMExports()
+    assert.throws(() => updateUserSettings({ defaults: { workflow: 'work' } }, { path }))
+    assert.equal(existsSync(occupied), true)
+    assert.equal(statSync(occupied).size, 'fixture-owned-data'.length)
+  } finally {
+    crypto.randomUUID = original
+    syncBuiltinESMExports()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a failed preferences flush preserves the last committed settings', async () => {
+  const { readUserSettings, updateUserSettings } = await import('./userSettings.js')
+  const dir = mkdtempSync(join(tmpdir(), 'babel-settings-flush-'))
+  const path = join(dir, 'preferences.json')
+  const original = fs.fsyncSync
+  let injected = false
+  try {
+    updateUserSettings({ defaults: { workflow: 'work' } }, { path })
+    fs.fsyncSync = ((fd: number) => {
+      if (readdirSync(dir).some(name => name.startsWith('preferences.json.') && name.endsWith('.tmp'))) {
+        injected = true
+        throw Object.assign(new Error('Injected flush failure'), { code: 'EIO' })
+      }
+      return original(fd)
+    }) as typeof fs.fsyncSync
+    syncBuiltinESMExports()
+    assert.throws(() => updateUserSettings({ defaults: { workflow: 'plan' } }, { path }))
+    fs.fsyncSync = original
+    syncBuiltinESMExports()
+    assert.equal(injected, true)
+    assert.equal(readUserSettings({ path }).defaults?.workflow, 'work')
+    assert.equal(readdirSync(dir).some(name => name.endsWith('.tmp')), false)
+  } finally {
+    fs.fsyncSync = original
+    syncBuiltinESMExports()
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

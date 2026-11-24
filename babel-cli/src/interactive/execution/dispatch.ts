@@ -4,6 +4,8 @@
 
 import type { ReplContext } from '../context.js';
 import { assertInteractiveRunAvailable } from '../context.js';
+import { hasProviderTaskPrerequisites, providerRouteMatchesEngine, selectedProviderRoute } from '../repl/replReadiness.js';
+import { getSetupStatus } from '../../services/providerSetup.js';
 import type { AgentTargetContext } from '../../services/targetResolver.js';
 import { parseInteractiveDailyCommand } from '../parsers.js';
 import * as Turn from '../turns.js';
@@ -44,17 +46,36 @@ export async function executeTask(
   const executeGovernedTask = deps?.executeGovernedTask ?? _executeGovernedTask;
   const resolveIdentity = deps?.loadSessionIdentity ?? loadSessionIdentity;
   try {
-    if (ctx.state.readinessState === 'setup_required' || ctx.state.readinessState === 'action_required') {
-      console.log('Connect a provider to chat: run /setup. Use /provider status for details.');
+    const route = selectedProviderRoute(ctx.state);
+    const rejected = route && ctx.rejectedProviderRoutes?.has(route.key);
+    const unresolvedExplicitRoute = ctx.state.model?.startsWith('connection/') && !route;
+    let currentRouteReady = true;
+    if (route) {
+      try {
+        const status = getSetupStatus(process.env, { connection: route.connection, model: route.model }, ctx.resolveCurrentTarget().targetRoot);
+        currentRouteReady = status.state === 'configured_unverified' && status.connection === route.connection && status.model === route.model;
+      } catch { currentRouteReady = false; }
+    }
+    const staleEngine = route && ctx.chatEngine && (typeof ctx.chatEngine.getProviderRouteIdentity !== 'function' ||
+      !providerRouteMatchesEngine(route, ctx.chatEngine.getProviderRouteIdentity()));
+    if (!hasProviderTaskPrerequisites(ctx.state) || rejected || unresolvedExplicitRoute || !currentRouteReady || staleEngine) {
+      const message = rejected
+        ? 'The selected connection rejected authentication. Run /setup to reconnect before sending another task.'
+        : staleEngine ? 'The selected connection changed. Use /provider use or /setup to refresh the session before sending a task.'
+        : 'Connect a provider to chat: run /setup. Use /provider status for details.';
+      if (ctx.shellRuntime) ctx.shellRuntime.appendNotice(message);
+      else console.log(message);
+      ctx.state.lastRunUserStatus = 'blocked';
+      if (rejected || unresolvedExplicitRoute || !currentRouteReady || staleEngine) ctx.state.readinessState = 'action_required';
       return;
     }
     const explicitDailyCommand = parseInteractiveDailyCommand(input);
     const emptyExplicitTask = /^(?:bl|babel)\s*$/i.test(input.trim());
     // Phase 4A: Deprecation warning for `bl` prefix in REPL (CLI already blocks it)
     if (explicitDailyCommand?.prefix === 'bl') {
-      console.warn(
-        '[DEPRECATED] `bl` prefix is deprecated. Use `babel` instead. Continuing with babel prefix.',
-      );
+      const message = '[DEPRECATED] `bl` prefix is deprecated. Use `babel` instead. Continuing with babel prefix.';
+      if (ctx.shellRuntime) ctx.shellRuntime.appendNotice(message);
+      else console.warn(message);
     }
     const resolvedTask = explicitDailyCommand
       ? explicitDailyCommand.task
@@ -97,9 +118,9 @@ export async function executeTask(
       return;
     }
     if (!resolvedTask || emptyExplicitTask) {
-      console.log(
-        primary('\n  Please include task text after `babel`. Try: babel "describe the task"\n'),
-      );
+      const message = 'Please include task text after `babel`. Try: babel "describe the task"';
+      if (ctx.shellRuntime) ctx.shellRuntime.appendNotice(message);
+      else console.log(primary(`\n  ${message}\n`));
       ctx.state.lastRunUserStatus = 'blocked';
       return;
     }
@@ -208,5 +229,6 @@ export function handleAmbiguousConfirmation(
     verification: 'not required - ambiguous confirmation',
     next: ctx.lastAssistantNext,
   });
-  console.log(`\n${human}\n`);
+  if (ctx.shellRuntime) ctx.shellRuntime.appendNotice(human, { preserveFull: true });
+  else console.log(`\n${human}\n`);
 }

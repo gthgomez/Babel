@@ -11,7 +11,7 @@ import {
 } from '../theme.js'
 import { measureDisplayWidth, truncateDisplay } from '../textLayout.js'
 import type { PromptView } from '../promptView.js'
-import type { ShellFrameInput, ShellLayout, ShellRule, ShellSurface } from './shellTypes.js'
+import type { ShellFrameInput, ShellLayout, ShellMode, ShellRule, ShellSurface } from './shellTypes.js'
 import type { ShellFocus } from './shellInputRouter.js'
 import type { ShellPresentation } from './shellPresentation.js'
 
@@ -39,6 +39,8 @@ export interface ShellPanelSnapshot {
   mode: string
   model: string
   project: string
+  connection?: string
+  readiness?: string
   conversation: readonly string[]
   sessions?: readonly string[]
   projectRows?: readonly string[]
@@ -103,13 +105,12 @@ function headerRows(snapshot: ShellPanelSnapshot, width: number): readonly strin
     choice.id === active ? accent(`[ ${choice.label} ]`) : muted(choice.label),
   ).join('  ')
   const left = `${accent('◎')} ${primary('BABEL')}  ${tabs}`
-  const rightParts = [snapshot.model]
+  const rightParts = [snapshot.connection ? `${snapshot.connection} / ${snapshot.model}` : snapshot.model]
   if (snapshot.meter && snapshot.meter.limit > 0) {
     rightParts.push(`${Math.round((snapshot.meter.used / snapshot.meter.limit) * 100)}%`)
   }
   if (snapshot.clock) rightParts.push(snapshot.clock)
-  rightParts.push('Run. Verify. Understand.')
-  const right = muted(rightParts.join('  ·  '))
+  const right = muted(clip(rightParts.join('  ·  '), Math.max(0, width - measureDisplayWidth(left) - 1)))
   return [paint(joinEnds(left, right, width), width, false)]
 }
 
@@ -251,7 +252,7 @@ function composerRows(prompt: PromptView, width: number, height: number): { rows
   const inner = width - 2
   const top = border(`┌${'─'.repeat(inner)}┐`)
   const bottom = border(`└${'─'.repeat(inner)}┘`)
-  const hint = border(`│${pad(muted('Enter send · Ctrl+Enter send · Enter inserts a newline'), inner)}│`)
+  const hint = border(`│${pad(muted('Enter at end: send · elsewhere: newline'), inner)}│`)
   const body = prompt.rows.map((row) => border(`│${pad(row, inner)}│`))
   const middleCount = Math.max(1, height - 3)
   const middle = body.slice(0, middleCount)
@@ -260,10 +261,11 @@ function composerRows(prompt: PromptView, width: number, height: number): { rows
   return { rows: [top, ...middle, bottom].slice(0, height), rowShift: 1, colShift: 1 }
 }
 
-function footerRows(snapshot: ShellPanelSnapshot, width: number): readonly string[] {
+function footerRows(snapshot: ShellPanelSnapshot, width: number, mode: ShellMode): readonly string[] {
   const version = snapshot.version ?? shellPackageVersion
   const left = `BABEL v${version}  ${snapshot.project}`
-  const right = 'Run. Verify. Understand.'
+  const hints = mode === 'wide' ? 'F7 panels · F8 details · /help' : mode === 'medium' ? 'F7 panels · /help' : '/help'
+  const right = clip([snapshot.readiness, hints].filter(Boolean).join(' · '), Math.max(0, width - measureDisplayWidth(left) - 1))
   return [paint(joinEnds(left, right, width), width, false)]
 }
 
@@ -315,7 +317,7 @@ export function buildShellFrameInput(
       y: layout.footer.y + 1,
       height: Math.max(0, layout.footer.height - 1),
     }
-    add(surface('footer', footerContent, footerRows(snapshot, footerContent.width)))
+    add(surface('footer', footerContent, footerRows(snapshot, footerContent.width, layout.mode)))
   }
 
   const rules: ShellRule[] = []
@@ -347,6 +349,8 @@ export function buildShellFrameInput(
       snapshot.mode,
       snapshot.model,
       snapshot.project,
+      snapshot.connection ?? '',
+      snapshot.readiness ?? '',
       snapshot.clock ?? '',
       snapshot.conversation.length,
       snapshot.presentation?.focus ?? 'composer',

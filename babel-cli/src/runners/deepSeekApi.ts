@@ -880,7 +880,7 @@ export class DeepSeekApiRunner implements LlmRunner {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
         response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => { assertOfflineEndpointAllowed(API_URL, this.authorityEnvironment); return fetch(API_URL, {
           method: 'POST',
-          redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
+          redirect: 'error',
           signal: controller.signal,
           headers: {
             Authorization: `Bearer ${this.apiKey}`,
@@ -1503,7 +1503,7 @@ export class DeepSeekApiRunner implements LlmRunner {
         notifyPhase('request_dispatched', undefined, `attempt ${attempt}`);
         response = await dispatchRunOperation(callbacks?.runControl, 'model', inferenceId, () => { assertOfflineEndpointAllowed(API_URL, this.authorityEnvironment); return fetch(API_URL, {
           method: 'POST',
-          redirect: process.env['BABEL_DESKTOP_PROVIDER'] ? 'error' : 'follow',
+          redirect: 'error',
           signal: controller.signal,
           headers: {
             Authorization: `Bearer ${this.apiKey}`,

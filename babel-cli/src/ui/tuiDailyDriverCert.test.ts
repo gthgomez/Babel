@@ -9,6 +9,16 @@ afterEach(() => {
 });
 
 describe('TUI daily-driver cert T01–T24', () => {
+  it('does not treat capability flags as observed terminal evidence', async () => {
+    const result = await runDailyDriverScenarios({
+      ptyAvailable: true,
+      windowsTerminalAutomation: true,
+    });
+
+    assert.equal(scenarioById(result, 'T01')?.status, 'BLOCKED');
+    assert.equal(scenarioById(result, 'T24')?.status, 'BLOCKED');
+  });
+
   it('runs the fixture matrix with honest statuses', async () => {
     const first = await runDailyDriverScenarios({
       ptyAvailable: false,
