@@ -401,8 +401,16 @@ function canonicalMcpMethodResult(method: string, result: unknown): unknown | nu
   return parsed.success ? parsed.data : null;
 }
 
+const McpMediaWithheldSchema = z.object({
+  kind: z.enum(['image', 'resource_blob']),
+  count: z.number().int().positive(),
+}).strict();
+type McpMediaWithheld = z.infer<typeof McpMediaWithheldSchema>;
+
 const CanonicalMcpSuccessResultSchema = z.object({
   status: z.literal('success'),
+  /** Transport-owned summary, kept ahead of remote text and request arguments. */
+  media_withheld: McpMediaWithheldSchema.optional(),
   server: z.string().min(1),
   /**
    * Operation label for the caller. `tools/search` is synthesized locally from
@@ -432,6 +440,8 @@ export function isCanonicalMcpSuccessResult(payload: unknown): boolean {
   // shape-valid canonical envelope. Only the already-projected marker form is
   // accepted at this boundary.
   if (canonicalMcpResultContainsMedia(parsed.data.method, parsed.data.result)) return false;
+  const media = parsed.data.media_withheld;
+  if (media && parsed.data.method !== (media.kind === 'image' ? 'tools/call' : 'resources/read')) return false;
   const canonicalResult = canonicalMcpMethodResult(parsed.data.method, parsed.data.result);
   if (canonicalResult === null) return false;
   const expectsContentPolicy =
@@ -1121,33 +1131,34 @@ async function executeMcpMethodImpl(
         settle(rpcErrorMcpMethodResult(server, method));
         return;
       }
-      if (method === 'resources/read') {
-        const resourceProjection = projectMcpResourceResult(response['result']);
-        if (resourceProjection !== null && !resourceProjection.usableText && resourceProjection.blobCount > 0) {
-          settle(resourceBlobOnlyMcpMethodResult(server, resourceProjection.blobCount));
-          return;
-        }
+      const resource = method === 'resources/read' ? projectMcpResourceResult(response['result']) : null;
+      if (resource && !resource.usableText && resource.blobCount > 0) {
+        settle(resourceBlobOnlyMcpMethodResult(server, resource.blobCount));
+        return;
       }
-      const payloadStatus = method === 'tools/call'
-        ? assessMcpToolCallPayload(response['result'])
-        : null;
-      if (payloadStatus?.kind === 'tool_error') {
+      const toolCall = method === 'tools/call' ? projectMcpToolCallResult(response['result']) : null;
+      if (toolCall?.kind === 'tool_error') {
         settle(toolErrorMcpMethodResult(server, method));
         return;
       }
-      if (payloadStatus?.kind === 'image_only') {
-        settle(imageOnlyMcpMethodResult(server, method, payloadStatus.imageCount));
+      if (toolCall?.kind === 'image_only') {
+        settle(imageOnlyMcpMethodResult(server, method, toolCall.imageCount));
         return;
       }
-      if (payloadStatus?.kind === 'invalid' || !hasValidMcpMethodResult(method, response['result'])) {
-        settle(invalidMcpMethodResult(server, method));
-        return;
-      }
-      const canonicalResult = canonicalMcpMethodResult(method, response['result']);
+      const canonicalResult = toolCall !== null
+        ? toolCall.result
+        : method === 'resources/read'
+          ? resource && { contents: resource.contents }
+          : canonicalMcpMethodResult(method, response['result']);
       if (canonicalResult === null) {
         settle(invalidMcpMethodResult(server, method));
         return;
       }
+      const mediaWithheld: McpMediaWithheld | undefined = toolCall && toolCall.imageCount > 0
+        ? { kind: 'image', count: toolCall.imageCount }
+        : resource && resource.blobCount > 0
+          ? { kind: 'resource_blob', count: resource.blobCount }
+          : undefined;
       settle(
         buildMcpResult(
           server,
@@ -1156,6 +1167,7 @@ async function executeMcpMethodImpl(
           0,
           JSON.stringify({
             status: 'success',
+            ...(mediaWithheld ? { media_withheld: mediaWithheld } : {}),
             server,
             method,
             result: canonicalResult,
@@ -1177,7 +1189,10 @@ async function executeMcpMethodImpl(
           }),
           '',
           'response_received',
-          [`command:${config.command}`, `method:${method}`, ...mcpOriginEvidence(config)],
+          [
+            `command:${config.command}`, `method:${method}`, ...mcpOriginEvidence(config),
+            ...(mediaWithheld ? [`${mediaWithheld.kind === 'image' ? 'images' : 'blobs'}:${mediaWithheld.count}`] : []),
+          ],
         ),
       );
     });
@@ -1696,24 +1711,22 @@ export async function handleMcpRequest(
         settle(rpcErrorMcpMethodResult(req.server, 'tools/call'));
         return;
       }
-      const payloadStatus = assessMcpToolCallPayload(response['result']);
-      if (payloadStatus.kind === 'tool_error') {
+      const projection = projectMcpToolCallResult(response['result']);
+      if (projection.kind === 'tool_error') {
         settle(toolErrorMcpMethodResult(req.server, 'tools/call'));
         return;
       }
-      if (payloadStatus.kind === 'image_only') {
-        settle(imageOnlyMcpMethodResult(req.server, 'tools/call', payloadStatus.imageCount));
+      if (projection.kind === 'image_only') {
+        settle(imageOnlyMcpMethodResult(req.server, 'tools/call', projection.imageCount));
         return;
       }
-      if (payloadStatus.kind === 'invalid') {
+      if (projection.result === null) {
         settle(invalidMcpMethodResult(req.server, 'tools/call'));
         return;
       }
-      const canonicalResult = canonicalMcpMethodResult('tools/call', response['result']);
-      if (canonicalResult === null) {
-        settle(invalidMcpMethodResult(req.server, 'tools/call'));
-        return;
-      }
+      const mediaWithheld: McpMediaWithheld | undefined = projection.imageCount > 0
+        ? { kind: 'image', count: projection.imageCount }
+        : undefined;
       settle(
         buildMcpResult(
           req.server,
@@ -1722,16 +1735,22 @@ export async function handleMcpRequest(
           0,
           JSON.stringify({
             status: 'success',
+            ...(mediaWithheld ? { media_withheld: mediaWithheld } : {}),
+            // A long echoed query must not hide the result's withholding
+            // notice from prefix-bounded chat tool observations.
+            result: projection.result,
             server: req.server,
             method: 'tools/call',
             ...(dispatchedToolParams
               ? { request: { tool: dispatchedToolParams.name, arguments: dispatchedToolParams.arguments } }
               : {}),
-            result: canonicalResult,
           }),
           '',
           'response_received',
-          ['command:' + config.command, ...mcpOriginEvidence(config)],
+          [
+            'command:' + config.command, ...mcpOriginEvidence(config),
+            ...(mediaWithheld ? [`images:${mediaWithheld.count}`] : []),
+          ],
         ),
       );
     });

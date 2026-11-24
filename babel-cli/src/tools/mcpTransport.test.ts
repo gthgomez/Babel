@@ -572,8 +572,9 @@ test('generic MCP request withholds live image blocks over stdio', async () => {
     );
     assert.doesNotMatch(multiTextResult.stdout, /MCP_IMAGE_WITHHELD/);
 
+    const longQuery = `long-mixed ${'q'.repeat(5_000)}`;
     const longMixedResult = await handleMcpRequest(
-      { tool: 'mcp_request', server: 'fixture', query: 'long-mixed' },
+      { tool: 'mcp_request', server: 'fixture', query: longQuery },
       servers,
     );
     assert.equal(longMixedResult.exit_code, 0);
@@ -582,12 +583,21 @@ test('generic MCP request withholds live image blocks over stdio', async () => {
         longMixedResult.stdout.indexOf('remote-start'),
     );
     const longObservation = formatChatToolObservation(
-      { type: 'mcp_request', server: 'fixture', query: 'long-mixed' },
+      { type: 'mcp_request', server: 'fixture', query: longQuery },
       { stdout: longMixedResult.stdout, stderr: longMixedResult.stderr, exitCode: longMixedResult.exit_code },
     );
     assert.ok(longObservation.indexOf('MCP_IMAGE_WITHHELD') >= 0);
     assert.ok(longObservation.indexOf('MCP_IMAGE_WITHHELD') < 500);
     assert.doesNotMatch(longObservation, new RegExp(canary));
+    const longPayload = JSON.parse(longMixedResult.stdout) as {
+      request: { arguments: { query: string } };
+      media_withheld: { kind: string; count: number };
+    };
+    assert.equal(longPayload.request.arguments.query, longQuery);
+    assert.deepEqual(longPayload.media_withheld, { kind: 'image', count: 1 });
+    assert.ok(longMixedResult.mcp_lifecycle?.evidence?.includes('images:1'));
+    assert.equal(isCanonicalMcpSuccessResult(longPayload), true);
+    assert.equal(isCanonicalMcpSuccessResult({ ...longPayload, media_withheld: { kind: 'resource_blob', count: 1 } }), false);
 
     const directMixed = await executeMcpMethod(
       'fixture',
@@ -619,8 +629,10 @@ test('MCP resources/read withholds live blob bytes and preserves text resources'
   const fixtureDir = mkdtempSync(join(tmpdir(), 'babel-mcp-resource-blob-'));
   const serverPath = join(fixtureDir, 'server.cjs');
   const canary = 'MCP_LIVE_RESOURCE_CANARY';
+  const longText = 't'.repeat(5_000);
   const resourceResult = {
     contents: [
+      { uri: 'file:///large-text', text: longText },
       { uri: 'file:///mixed', text: 'safe resource', blob: canary, mimeType: 'image/png' },
       { uri: 'file:///text-only', text: 'plain text resource' },
       { uri: `data:image/png;base64,${canary}`, text: 'safe text with data uri' },
@@ -649,21 +661,26 @@ test('MCP resources/read withholds live blob bytes and preserves text resources'
 
     assert.equal(result.exit_code, 0);
     const payload = JSON.parse(result.stdout) as {
+      media_withheld: { kind: string; count: number };
       result: { contents: Array<Record<string, unknown>> };
     };
     const contents = payload.result.contents;
-    assert.equal(contents.length, 3);
-    assert.ok(String(contents[0]!['text']).startsWith('[MCP_RESOURCE_BLOB_WITHHELD: text-only transport]'));
-    assert.match(String(contents[0]!['text']), /safe resource/);
+    assert.equal(contents.length, 4);
+    assert.equal(contents[0]!['text'], longText);
+    assert.ok(String(contents[1]!['text']).startsWith('[MCP_RESOURCE_BLOB_WITHHELD: text-only transport]'));
+    assert.match(String(contents[1]!['text']), /safe resource/);
     assert.ok(
-      String(contents[0]!['text']).indexOf('MCP_RESOURCE_BLOB_WITHHELD') <
-        String(contents[0]!['text']).indexOf('safe resource'),
+      String(contents[1]!['text']).indexOf('MCP_RESOURCE_BLOB_WITHHELD') <
+        String(contents[1]!['text']).indexOf('safe resource'),
     );
-    assert.equal(contents[0]!['blob'], undefined);
-    assert.equal(contents[0]!['mimeType'], undefined);
-    assert.equal(contents[1]!['text'], 'plain text resource');
-    assert.equal(contents[2]!['uri'], 'withheld:data-uri');
-    assert.equal(contents[2]!['text'], 'safe text with data uri');
+    assert.equal(contents[1]!['blob'], undefined);
+    assert.equal(contents[1]!['mimeType'], undefined);
+    assert.equal(contents[2]!['text'], 'plain text resource');
+    assert.equal(contents[3]!['uri'], 'withheld:data-uri');
+    assert.equal(contents[3]!['text'], 'safe text with data uri');
+    assert.deepEqual(payload.media_withheld, { kind: 'resource_blob', count: 1 });
+    assert.match(result.stdout.slice(0, 4_000), /"media_withheld":\{"kind":"resource_blob","count":1\}/);
+    assert.ok(result.mcp_lifecycle?.evidence?.includes('blobs:1'));
     assert.doesNotMatch(JSON.stringify(result), new RegExp(canary));
     assert.equal(isCanonicalMcpSuccessResult(payload), true);
   } finally {
