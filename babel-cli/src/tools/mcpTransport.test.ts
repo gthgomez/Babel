@@ -21,6 +21,7 @@ import {
   McpFrameLimitError,
   parseFramedMessages,
 } from '../mcp/framing.js';
+import { formatChatToolObservation } from '../agent/chatToolDefinitions.js';
 
 test('parseFramedMessages parses one complete JSON-RPC frame', () => {
   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { ok: true } });
@@ -156,6 +157,165 @@ test('MCP tool result preserves valid text output with explicit render intent', 
   assert.equal(result.stdout, 'safe result');
   assert.equal(result.render_intent, 'mcp_result');
 });
+test('MCP tool result keeps usable text and withholds image bytes', () => {
+  const canary = 'MCP_IMAGE_BYTES_CANARY';
+  const mixed = {
+    content: [
+      { type: 'text', text: 'screen captured' },
+      { type: 'image', data: canary, mimeType: 'image/png' },
+    ],
+  };
+  assert.deepEqual(assessMcpToolCallPayload(mixed), { kind: 'success' });
+
+  const result = parseMcpToolCallResult(
+    {
+      exit_code: 0,
+      stdout: JSON.stringify({ status: 'success', result: mixed }),
+      stderr: '',
+    },
+    'capture',
+  );
+
+  assert.equal(result.exit_code, 0);
+  assert.ok(result.stdout.startsWith('[MCP_IMAGE_WITHHELD: text-only transport] images=1'));
+  assert.ok(result.stdout.indexOf('MCP_IMAGE_WITHHELD') < result.stdout.indexOf('screen captured'));
+  assert.match(result.stdout, /screen captured/);
+  assert.equal(result.stderr, '');
+  assert.equal(result.render_intent, 'mcp_result');
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(canary));
+});
+
+test('mixed image notice survives the representative 4k prefix formatter without bytes', () => {
+  const canary = 'MCP_IMAGE_LONG_TEXT_CANARY';
+  const longText = `remote-start\n${'x'.repeat(9_000)}`;
+  const result = parseMcpToolCallResult(
+    {
+      exit_code: 0,
+      stdout: JSON.stringify({
+        status: 'success',
+        result: {
+          content: [
+            { type: 'text', text: longText },
+            { type: 'image', data: canary, mimeType: 'image/png' },
+          ],
+        },
+      }),
+      stderr: '',
+    },
+    'capture',
+  );
+
+  assert.equal(result.exit_code, 0);
+  assert.ok(result.stdout.startsWith('[MCP_IMAGE_WITHHELD: text-only transport] images=1'));
+  assert.ok(result.stdout.indexOf('MCP_IMAGE_WITHHELD') < result.stdout.indexOf('remote-start'));
+
+  const observation = formatChatToolObservation(
+    { type: 'mcp_request', server: 'fixture', query: 'long mixed text' },
+    { stdout: result.stdout, stderr: result.stderr, exitCode: result.exit_code },
+  );
+  assert.ok(observation.indexOf('MCP_IMAGE_WITHHELD') >= 0);
+  assert.ok(observation.indexOf('MCP_IMAGE_WITHHELD') < 500);
+  assert.doesNotMatch(observation, new RegExp(canary));
+});
+
+test('MCP image-only result is not a usable observation and leaks no bytes', () => {
+  const canary = 'MCP_IMAGE_ONLY_CANARY';
+  const imageOnly = {
+    content: [{ type: 'image', data: canary, mimeType: 'image/png' }],
+  };
+  assert.deepEqual(assessMcpToolCallPayload(imageOnly), { kind: 'image_only', imageCount: 1 });
+
+  const result = parseMcpToolCallResult(
+    {
+      exit_code: 0,
+      stdout: JSON.stringify({ status: 'success', result: imageOnly }),
+      stderr: '',
+    },
+    'capture',
+  );
+
+  assert.equal(result.exit_code, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /MCP_IMAGE_WITHHELD/);
+  assert.match(result.stderr, /images=1/);
+  assert.equal(result.failure?.code, 'invalid_mcp_tool_result');
+  assert.equal(result.render_intent, 'tool_failure');
+  assert.equal(result.mcp_lifecycle?.reason_code, 'image_withheld');
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(canary));
+});
+
+test('MCP malformed image and isError results stay typed and nonleaking', () => {
+  const canary = 'MCP_IMAGE_ERROR_CANARY';
+  for (const [result, expectedCode] of [
+    [
+      {
+        content: [
+          { type: 'text', text: 'screen captured' },
+          { type: 'image', data: canary },
+        ],
+      },
+      'invalid_mcp_tool_result',
+    ],
+    [
+      {
+        content: [
+          { type: 'text', text: 'screen captured' },
+          { type: 'image', data: canary, mimeType: 'image/png' },
+        ],
+        isError: true,
+      },
+      'mcp_tool_error',
+    ],
+  ] as const) {
+    const parsed = parseMcpToolCallResult(
+      {
+        exit_code: 0,
+        stdout: JSON.stringify({ status: 'success', result }),
+        stderr: '',
+      },
+      'capture',
+    );
+    assert.equal(parsed.exit_code, 1, expectedCode);
+    assert.equal(parsed.stdout, '', expectedCode);
+    assert.equal(parsed.failure?.code, expectedCode, expectedCode);
+    assert.equal(parsed.render_intent, 'tool_failure', expectedCode);
+    assert.doesNotMatch(JSON.stringify(parsed), new RegExp(canary), expectedCode);
+  }
+});
+
+test('canonical MCP success validation rejects raw media bytes', () => {
+  const canary = 'MCP_IMAGE_CANONICAL_CANARY';
+  const base = {
+    status: 'success',
+    server: 'fixture',
+    method: 'tools/call',
+    request: { tool: 'capture', arguments: {} },
+  };
+  assert.equal(
+    isCanonicalMcpSuccessResult({
+      ...base,
+      result: {
+        content: [
+          { type: 'text', text: 'screen captured' },
+          { type: 'image', data: canary, mimeType: 'image/png' },
+        ],
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    isCanonicalMcpSuccessResult({
+      ...base,
+      result: {
+        content: [
+          { type: 'text', text: 'screen captured\n[MCP_IMAGE_WITHHELD: text-only transport] images=1' },
+        ],
+      },
+    }),
+    true,
+  );
+});
+
 test('generic MCP request rejects a malformed live tools/call result without echoing it', async () => {
   const fixtureDir = mkdtempSync(join(tmpdir(), 'babel-mcp-invalid-result-'));
   const serverPath = join(fixtureDir, 'server.cjs');
@@ -337,6 +497,215 @@ test('generic MCP request rejects live tool-level errors without returning remot
     assert.equal(result.mcp_lifecycle?.outcome, 'failure');
     assert.equal(result.mcp_lifecycle?.reason_code, 'tool_error');
     assert.doesNotMatch(result.stderr, new RegExp(sentinel));
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('generic MCP request withholds live image blocks over stdio', async () => {
+  const fixtureDir = mkdtempSync(join(tmpdir(), 'babel-mcp-image-request-'));
+  const serverPath = join(fixtureDir, 'server.cjs');
+  const canary = 'MCP_LIVE_IMAGE_CANARY';
+  const mixed = {
+    content: [
+      { type: 'text', text: 'screen captured' },
+      { type: 'image', data: canary, mimeType: 'image/png' },
+    ],
+  };
+  const imageOnly = {
+    content: [{ type: 'image', data: canary, mimeType: 'image/png' }],
+  };
+  const multiText = {
+    content: [
+      { type: 'text', text: 'first block' },
+      { type: 'text', text: 'second block' },
+    ],
+  };
+  const longMixed = {
+    content: [
+      { type: 'text', text: `remote-start\n${'x'.repeat(9_000)}` },
+      { type: 'image', data: canary, mimeType: 'image/png' },
+    ],
+  };
+  const fixture = [
+    "let input = ''; let initialized = false; let listed = false; let called = false;",
+    "function frame(value) { const body = JSON.stringify(value); return 'Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body; }",
+    "function send(value) { process.stdout.write(frame(value)); }",
+    "process.stdin.on('data', (chunk) => {",
+    "  input += chunk.toString();",
+    "  if (!initialized && input.includes('\\\"id\\\":0')) { initialized = true; send({ jsonrpc: '2.0', id: 0, result: {} }); }",
+    `  if (!listed && input.includes('"method":"tools/list"')) { listed = true; const match = input.match(/"id":(\\d+),"method":"tools\\/list"/); const id = match ? Number(match[1]) : 1; send({ jsonrpc: '2.0', id, result: { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } }, annotations: { readOnlyHint: true, destructiveHint: false } }] } }); }`,
+    `  if (!called && input.includes('"method":"tools/call"')) { called = true; const match = input.match(/"id":(\\d+),"method":"tools\\/call"/); const id = match ? Number(match[1]) : 2; send({ jsonrpc: '2.0', id, result: input.includes('image-only') ? ${JSON.stringify(imageOnly)} : input.includes('multi-text') ? ${JSON.stringify(multiText)} : input.includes('long-mixed') ? ${JSON.stringify(longMixed)} : ${JSON.stringify(mixed)} }); }`,
+    "});",
+  ].join('\n');
+
+  try {
+    writeFileSync(serverPath, fixture, 'utf8');
+    const servers = { fixture: { command: 'node', args: [serverPath] } };
+    const mixedResult = await handleMcpRequest(
+      { tool: 'mcp_request', server: 'fixture', query: 'mixed' },
+      servers,
+    );
+    assert.equal(mixedResult.exit_code, 0);
+    const mixedPayload = JSON.parse(mixedResult.stdout) as {
+      result: { content: Array<{ type: string; text: string }> };
+    };
+    assert.equal(mixedPayload.result.content.length, 2);
+    assert.match(
+      mixedPayload.result.content[0]!.text,
+      /\[MCP_IMAGE_WITHHELD: text-only transport\] images=1/,
+    );
+    assert.equal(mixedPayload.result.content[1]!.text, 'screen captured');
+    assert.doesNotMatch(JSON.stringify(mixedResult), new RegExp(canary));
+
+    const multiTextResult = await handleMcpRequest(
+      { tool: 'mcp_request', server: 'fixture', query: 'multi-text' },
+      servers,
+    );
+    assert.equal(multiTextResult.exit_code, 0);
+    const multiTextPayload = JSON.parse(multiTextResult.stdout) as {
+      result: { content: Array<{ type: string; text: string }> };
+    };
+    assert.deepEqual(
+      multiTextPayload.result.content.map((block) => block.text),
+      ['first block', 'second block'],
+    );
+    assert.doesNotMatch(multiTextResult.stdout, /MCP_IMAGE_WITHHELD/);
+
+    const longMixedResult = await handleMcpRequest(
+      { tool: 'mcp_request', server: 'fixture', query: 'long-mixed' },
+      servers,
+    );
+    assert.equal(longMixedResult.exit_code, 0);
+    assert.ok(
+      longMixedResult.stdout.indexOf('MCP_IMAGE_WITHHELD') <
+        longMixedResult.stdout.indexOf('remote-start'),
+    );
+    const longObservation = formatChatToolObservation(
+      { type: 'mcp_request', server: 'fixture', query: 'long-mixed' },
+      { stdout: longMixedResult.stdout, stderr: longMixedResult.stderr, exitCode: longMixedResult.exit_code },
+    );
+    assert.ok(longObservation.indexOf('MCP_IMAGE_WITHHELD') >= 0);
+    assert.ok(longObservation.indexOf('MCP_IMAGE_WITHHELD') < 500);
+    assert.doesNotMatch(longObservation, new RegExp(canary));
+
+    const directMixed = await executeMcpMethod(
+      'fixture',
+      'tools/call',
+      { name: 'lookup', arguments: { query: 'mixed' } },
+      undefined,
+      servers,
+    );
+    assert.equal(directMixed.exit_code, 0);
+    assert.match(directMixed.stdout, /MCP_IMAGE_WITHHELD/);
+    assert.doesNotMatch(JSON.stringify(directMixed), new RegExp(canary));
+
+    const imageOnlyResult = await handleMcpRequest(
+      { tool: 'mcp_request', server: 'fixture', query: 'image-only' },
+      servers,
+    );
+    assert.equal(imageOnlyResult.exit_code, 1);
+    assert.equal(imageOnlyResult.stdout, '');
+    assert.match(imageOnlyResult.stderr, /MCP_IMAGE_WITHHELD/);
+    assert.equal(imageOnlyResult.failure?.code, 'invalid_mcp_tool_result');
+    assert.equal(imageOnlyResult.mcp_lifecycle?.reason_code, 'image_withheld');
+    assert.doesNotMatch(JSON.stringify(imageOnlyResult), new RegExp(canary));
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('MCP resources/read withholds live blob bytes and preserves text resources', async () => {
+  const fixtureDir = mkdtempSync(join(tmpdir(), 'babel-mcp-resource-blob-'));
+  const serverPath = join(fixtureDir, 'server.cjs');
+  const canary = 'MCP_LIVE_RESOURCE_CANARY';
+  const resourceResult = {
+    contents: [
+      { uri: 'file:///mixed', text: 'safe resource', blob: canary, mimeType: 'image/png' },
+      { uri: 'file:///text-only', text: 'plain text resource' },
+      { uri: `data:image/png;base64,${canary}`, text: 'safe text with data uri' },
+    ],
+  };
+  const fixture = [
+    "let input = ''; let initialized = false; let replied = false;",
+    "function frame(value) { const body = JSON.stringify(value); return 'Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body; }",
+    "function send(value) { process.stdout.write(frame(value)); }",
+    "process.stdin.on('data', (chunk) => {",
+    "  input += chunk.toString();",
+    "  if (!initialized && input.includes('\\\"id\\\":0')) { initialized = true; send({ jsonrpc: '2.0', id: 0, result: {} }); }",
+    `  if (!replied && input.includes('\\"id\\":1')) { replied = true; send({ jsonrpc: '2.0', id: 1, result: ${JSON.stringify(resourceResult)} }); }`,
+    "});",
+  ].join('\n');
+
+  try {
+    writeFileSync(serverPath, fixture, 'utf8');
+    const result = await executeMcpMethod(
+      'fixture',
+      'resources/read',
+      { uri: 'file:///mixed' },
+      undefined,
+      { fixture: { command: 'node', args: [serverPath] } },
+    );
+
+    assert.equal(result.exit_code, 0);
+    const payload = JSON.parse(result.stdout) as {
+      result: { contents: Array<Record<string, unknown>> };
+    };
+    const contents = payload.result.contents;
+    assert.equal(contents.length, 3);
+    assert.ok(String(contents[0]!['text']).startsWith('[MCP_RESOURCE_BLOB_WITHHELD: text-only transport]'));
+    assert.match(String(contents[0]!['text']), /safe resource/);
+    assert.ok(
+      String(contents[0]!['text']).indexOf('MCP_RESOURCE_BLOB_WITHHELD') <
+        String(contents[0]!['text']).indexOf('safe resource'),
+    );
+    assert.equal(contents[0]!['blob'], undefined);
+    assert.equal(contents[0]!['mimeType'], undefined);
+    assert.equal(contents[1]!['text'], 'plain text resource');
+    assert.equal(contents[2]!['uri'], 'withheld:data-uri');
+    assert.equal(contents[2]!['text'], 'safe text with data uri');
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(canary));
+    assert.equal(isCanonicalMcpSuccessResult(payload), true);
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('MCP resources/read binary-only is a diagnostic failure, not a PASS source', async () => {
+  const fixtureDir = mkdtempSync(join(tmpdir(), 'babel-mcp-resource-blob-only-'));
+  const serverPath = join(fixtureDir, 'server.cjs');
+  const canary = 'MCP_BINARY_ONLY_CANARY';
+  const resourceResult = {
+    contents: [{ uri: 'file:///binary', blob: canary, mimeType: 'application/octet-stream' }],
+  };
+  const fixture = [
+    "let input = ''; let initialized = false; let replied = false;",
+    "function frame(value) { const body = JSON.stringify(value); return 'Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body; }",
+    "function send(value) { process.stdout.write(frame(value)); }",
+    "process.stdin.on('data', (chunk) => {",
+    "  input += chunk.toString();",
+    "  if (!initialized && input.includes('\\\"id\\\":0')) { initialized = true; send({ jsonrpc: '2.0', id: 0, result: {} }); }",
+    `  if (!replied && input.includes('\\"id\\":1')) { replied = true; send({ jsonrpc: '2.0', id: 1, result: ${JSON.stringify(resourceResult)} }); }`,
+    "});",
+  ].join('\n');
+
+  try {
+    writeFileSync(serverPath, fixture, 'utf8');
+    const result = await executeMcpMethod(
+      'fixture',
+      'resources/read',
+      { uri: 'file:///binary' },
+      undefined,
+      { fixture: { command: 'node', args: [serverPath] } },
+    );
+
+    assert.equal(result.exit_code, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /MCP_RESOURCE_BLOB_WITHHELD/);
+    assert.match(result.stderr, /not a PASS source/);
+    assert.equal(result.failure?.code, 'invalid_mcp_tool_result');
+    assert.equal(result.mcp_lifecycle?.reason_code, 'resource_blob_withheld');
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(canary));
   } finally {
     rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
