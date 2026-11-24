@@ -1,5 +1,6 @@
-import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, rmdirSync, rmSync, writeFileSync, type BigIntStats } from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readlinkSync, readSync, readdirSync, renameSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { randomBytes } from 'node:crypto'
+import { basename, dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 /** A busy or unidentifiable lock must never be removed on the caller's behalf. */
@@ -13,6 +14,16 @@ export class ProfileWriteLeaseError extends Error {
 
 type FileIdentity = Pick<BigIntStats, 'dev' | 'ino'>
 const ownerText = (token: string): string => `babel-profile-lock-v1:${token}\n`
+const ownerName = (token: string): string => `owner-${token}`
+const linkTarget = (marker: string, token: string): string => `${basename(marker)}.${token}.owner`
+const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === 'ENOENT'
+const sameFile = (a: FileIdentity, b: FileIdentity): boolean => a.dev === b.dev && a.ino === b.ino
+function lstatIfPresent(path: string): BigIntStats | undefined {
+  try { return lstatSync(path, { bigint: true }) } catch (error) {
+    if (!missing(error)) throw error
+    return undefined
+  }
+}
 
 function matchingOwnerFile(path: string, token: string): FileIdentity | undefined {
   try {
@@ -47,18 +58,69 @@ function removeMatchingOwnerFile(path: string, identity: FileIdentity): void {
   }
   if (!current.isFile() || current.isSymbolicLink() || current.nlink < 1n || current.nlink > 2n ||
       current.dev !== identity.dev || current.ino !== identity.ino) throw new ProfileWriteLeaseError('unavailable')
-  rmSync(path)
+  unlinkSync(path)
+}
+
+function ownedMarkerDirectory(path: string, token: string): FileIdentity {
+  const directory = lstatSync(path, { bigint: true })
+  const uid = process.getuid?.()
+  if (!directory.isDirectory() || directory.isSymbolicLink() ||
+      (uid !== undefined && (directory.uid !== BigInt(uid) || (directory.mode & 0o077n) !== 0n))) {
+    throw new ProfileWriteLeaseError('unavailable')
+  }
+  const name = ownerName(token)
+  const entries = readdirSync(path)
+  if (entries.length !== 1 || entries[0] !== name) throw new ProfileWriteLeaseError('unavailable')
+  const owner = lstatSync(join(path, name), { bigint: true })
+  if (!owner.isFile() || owner.isSymbolicLink() || owner.nlink !== 1n || owner.size !== 0n ||
+      (uid !== undefined && (owner.uid !== BigInt(uid) || (owner.mode & 0o077n) !== 0n)) ||
+      !sameFile(directory, lstatSync(path, { bigint: true }))) throw new ProfileWriteLeaseError('unavailable')
+  return directory
+}
+
+function retireMarkerDirectory(marker: string, token: string, expected?: FileIdentity): void {
+  const identity = ownedMarkerDirectory(marker, token)
+  if (expected && !sameFile(identity, expected)) throw new ProfileWriteLeaseError('unavailable')
+  const stage = mkdtempSync(`${marker}.retired-`)
+  const retired = join(stage, 'marker')
+  // Detach the complete marker before removing any part of it. A crash during
+  // cleanup cannot leave an empty directory at the legacy exclusion name.
+  renameSync(marker, retired)
+  if (!sameFile(ownedMarkerDirectory(retired, token), identity)) throw new ProfileWriteLeaseError('unavailable')
+  unlinkSync(join(retired, ownerName(token)))
+  rmdirSync(retired)
+  rmdirSync(stage)
+}
+
+function removeMarkerLink(marker: string, token: string, expected?: FileIdentity): void {
+  const before = lstatSync(marker, { bigint: true })
+  if (process.platform === 'win32' || !before.isSymbolicLink() ||
+      (expected && !sameFile(before, expected)) || readlinkSync(marker) !== linkTarget(marker, token)) {
+    throw new ProfileWriteLeaseError('unavailable')
+  }
+  const after = lstatSync(marker, { bigint: true })
+  if (!after.isSymbolicLink() || !sameFile(before, after)) throw new ProfileWriteLeaseError('unavailable')
+  unlinkSync(marker)
 }
 
 /**
  * Hold an OS-backed SQLite write lock while retaining the legacy exclusive
  * marker name. Old binaries still conflict on the marker. The normal marker
- * is published atomically from a complete owner file and bound to the guard;
- * a directory fallback preserves safety where hard links are unsupported.
+ * is published atomically from a complete owner file and bound to the guard.
+ * Without hard links, publish a no-follow symlink on POSIX or a complete
+ * directory using Windows directory-rename semantics. Fail closed if the
+ * filesystem provides neither primitive. This is process-crash recovery.
  */
 export function acquireProfileWriteLease(target: string): () => void {
   const marker = `${target}.babel-lock`
   const guard = `${marker}.sqlite`
+  const parentPath = dirname(marker)
+  const parent = lstatSync(parentPath, { bigint: true })
+  const uid = process.getuid?.()
+  if (!parent.isDirectory() || parent.isSymbolicLink() ||
+      (uid !== undefined && (parent.uid !== BigInt(uid) || (parent.mode & 0o022n) !== 0n))) {
+    throw new ProfileWriteLeaseError('unavailable')
+  }
   // Do not initialize a new protocol over an existing, unidentified marker.
   // In particular, an older live writer owns a regular file at this path.
   try {
@@ -69,58 +131,71 @@ export function acquireProfileWriteLease(target: string): () => void {
       if ((markerError as NodeJS.ErrnoException).code !== 'ENOENT') throw markerError
     }
   }
-  let created = false
   try {
     const fd = openSync(guard, 'wx', 0o600)
     closeSync(fd)
-    created = true
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
   }
-  const info = lstatSync(guard)
-  const uid = process.getuid?.()
-  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > 1024 * 1024 ||
-      (uid !== undefined && (info.uid !== uid || (info.mode & 0o077) !== 0))) {
+  const info = lstatSync(guard, { bigint: true })
+  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1n || info.size > 1024n * 1024n ||
+      (uid !== undefined && (info.uid !== BigInt(uid) || (info.mode & 0o077n) !== 0n))) {
     throw new ProfileWriteLeaseError('unavailable')
   }
   let db: DatabaseSync | undefined
   let transaction = false
-  let initialized = false
-  let ownerName = ''
-  let ownerIdentity: FileIdentity | undefined
   let markerIdentity: FileIdentity | undefined
-  let markerKind: 'file' | 'directory' | undefined
+  let markerKind: 'file' | 'directory' | 'symlink' | undefined
   let tokenTemporary: string | undefined
   let tokenIdentity: FileIdentity | undefined
   let ownedToken = ''
+  const assertGuardIdentity = (): void => {
+    const directory = lstatSync(parentPath, { bigint: true })
+    const current = lstatSync(guard, { bigint: true })
+    if (!directory.isDirectory() || directory.isSymbolicLink() || !sameFile(parent, directory) ||
+        !current.isFile() || current.isSymbolicLink() || current.nlink !== 1n || !sameFile(info, current)) {
+      throw new ProfileWriteLeaseError('unavailable')
+    }
+  }
   try {
+    assertGuardIdentity()
+    // This guard uses SQLite's rollback journal only. Before SQLite opens
+    // adjacent files, reject unexpected WAL sidecars or a non-private journal.
+    const journal = lstatIfPresent(`${guard}-journal`)
+    if (lstatIfPresent(`${guard}-shm`) || lstatIfPresent(`${guard}-wal`) ||
+        (journal && (!journal.isFile() || journal.isSymbolicLink() || journal.nlink !== 1n ||
+          (uid !== undefined && (journal.uid !== BigInt(uid) || (journal.mode & 0o077n) !== 0n))))) {
+      throw new ProfileWriteLeaseError('unavailable')
+    }
     db = new DatabaseSync(guard)
     db.exec('PRAGMA busy_timeout=0')
-    if (created) {
-      try { lstatSync(marker); throw new ProfileWriteLeaseError('busy') } catch (markerError) {
-        if ((markerError as NodeJS.ErrnoException).code !== 'ENOENT') throw markerError
-      }
-      db.exec("CREATE TABLE babel_profile_writer_guard (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL, token TEXT NOT NULL); INSERT INTO babel_profile_writer_guard VALUES (1, 1, '')")
-      initialized = true
-    } else {
-      const row = db.prepare('SELECT version FROM babel_profile_writer_guard WHERE id = 1').get()
-      if (row?.['version'] !== 1) throw new ProfileWriteLeaseError('unavailable')
-    }
+    db.exec('PRAGMA trusted_schema=OFF')
     db.exec('BEGIN IMMEDIATE')
     transaction = true
+    assertGuardIdentity()
+    const objects = db.prepare('SELECT name, type FROM sqlite_schema').all()
+    if (objects.length === 0) {
+      // A killed initializer may leave an empty guard. Only an otherwise empty
+      // database with no legacy marker can be initialized under the OS lock.
+      try { lstatSync(marker); throw new ProfileWriteLeaseError('busy') } catch (markerError) {
+        if (!missing(markerError)) throw markerError
+      }
+      db.exec("CREATE TABLE babel_profile_writer_guard (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL, token TEXT NOT NULL); INSERT INTO babel_profile_writer_guard VALUES (1, 1, '')")
+    } else if (objects.length !== 1 || objects[0]?.['name'] !== 'babel_profile_writer_guard' || objects[0]?.['type'] !== 'table') {
+      throw new ProfileWriteLeaseError('unavailable')
+    }
     const row = db.prepare('SELECT version, token FROM babel_profile_writer_guard WHERE id = 1').get()
     if (!row || row['version'] !== 1 || typeof row['token'] !== 'string' || !/^(?:|[a-f0-9]{32})$/.test(row['token'])) {
       throw new ProfileWriteLeaseError('unavailable')
     }
-    let existing: ReturnType<typeof lstatSync> | undefined
-    try { existing = lstatSync(marker) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
+    const existing = lstatIfPresent(marker)
     if (existing) {
       // Legacy files and unrecognized directories must remain untouched.
       // Remove only an owner marker bound to this guard.
-      if (created || existing.isSymbolicLink() || !row['token']) throw new ProfileWriteLeaseError('busy')
-      if (existing.isFile()) {
+      if (!row['token']) throw new ProfileWriteLeaseError('busy')
+      if (existing.isSymbolicLink()) {
+        removeMarkerLink(marker, row['token'])
+      } else if (existing.isFile()) {
         const previous = matchingOwnerFile(marker, row['token'])
         if (!previous) throw new ProfileWriteLeaseError('busy')
         removeMatchingOwnerFile(marker, previous)
@@ -128,18 +203,7 @@ export function acquireProfileWriteLease(target: string): () => void {
         try { removeMatchingOwnerFile(`${marker}.${row['token']}.owner`, previous) } catch { /* Preserve an unrelated file. */ }
       } else {
         if (!existing.isDirectory()) throw new ProfileWriteLeaseError('busy')
-        const priorOwner = `owner-${row['token']}`
-        const entries = readdirSync(marker)
-        if (!row['token'] || entries.length !== 1 || entries[0] !== priorOwner) throw new ProfileWriteLeaseError('unavailable')
-        const priorPath = `${marker}/${priorOwner}`
-        const prior = lstatSync(priorPath, { bigint: true })
-        const ownerUid = process.getuid?.()
-        if (!prior.isFile() || prior.isSymbolicLink() || prior.nlink !== 1n || prior.size !== 0n ||
-            (ownerUid !== undefined && (prior.uid !== BigInt(ownerUid) || (prior.mode & 0o077n) !== 0n))) throw new ProfileWriteLeaseError('unavailable')
-        const current = lstatSync(priorPath, { bigint: true })
-        if (current.dev !== prior.dev || current.ino !== prior.ino || current.nlink !== 1n) throw new ProfileWriteLeaseError('unavailable')
-        rmSync(priorPath)
-        rmdirSync(marker)
+        retireMarkerDirectory(marker, row['token'])
       }
     }
     if (row['token']) {
@@ -153,6 +217,7 @@ export function acquireProfileWriteLease(target: string): () => void {
     transaction = false
     db.exec('BEGIN IMMEDIATE')
     transaction = true
+    assertGuardIdentity()
     const afterCommit = db.prepare('SELECT token FROM babel_profile_writer_guard WHERE id = 1').get()
     if (afterCommit?.['token'] !== token) throw new ProfileWriteLeaseError('busy')
     ownedToken = token
@@ -171,38 +236,41 @@ export function acquireProfileWriteLease(target: string): () => void {
       try { removeMatchingOwnerFile(tokenTemporary, tokenIdentity) } catch { /* Preserve an unrecognized file. */ }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new ProfileWriteLeaseError('busy')
-      if (!['ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
+      if (!['ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
       removeMatchingOwnerFile(tokenTemporary, tokenIdentity)
       tokenTemporary = undefined
       tokenIdentity = undefined
-      try { mkdirSync(marker, { mode: 0o700 }) } catch (markerError) {
-        if ((markerError as NodeJS.ErrnoException).code === 'EEXIST') throw new ProfileWriteLeaseError('busy')
-        throw markerError
+      if (process.platform === 'win32') {
+        const staged = mkdtempSync(`${marker}.stage-`)
+        closeSync(openSync(join(staged, ownerName(token)), 'wx', 0o600))
+        markerIdentity = ownedMarkerDirectory(staged, token)
+        // Windows cannot replace an existing file or directory with a directory
+        // rename. Do not use this fallback on POSIX, where an empty unrelated
+        // directory at the destination could be replaced.
+        try { renameSync(staged, marker) } catch (failure) {
+          try {
+            if (sameFile(ownedMarkerDirectory(staged, token), markerIdentity)) {
+              unlinkSync(join(staged, ownerName(token)))
+              rmdirSync(staged)
+            }
+          } catch { /* Preserve an unrecognized staged entry. */ }
+          if (!missing(failure) && lstatIfPresent(marker)) throw new ProfileWriteLeaseError('busy')
+          throw failure
+        }
+        markerKind = 'directory'
+      } else {
+        try { symlinkSync(linkTarget(marker, token), marker) } catch (failure) {
+          if ((failure as NodeJS.ErrnoException).code === 'EEXIST') throw new ProfileWriteLeaseError('busy')
+          throw failure
+        }
+        markerIdentity = lstatSync(marker, { bigint: true })
+        markerKind = 'symlink'
       }
-      markerKind = 'directory'
-      const markerInfo = lstatSync(marker, { bigint: true })
-      markerIdentity = { dev: markerInfo.dev, ino: markerInfo.ino }
-      ownerName = `owner-${token}`
-      const directoryOwnerFd = openSync(`${marker}/${ownerName}`, 'wx', 0o600)
-      try {
-        const ownerInfo = fstatSync(directoryOwnerFd, { bigint: true })
-        ownerIdentity = { dev: ownerInfo.dev, ino: ownerInfo.ino }
-      } finally { closeSync(directoryOwnerFd) }
     }
   } catch (error) {
     if (tokenTemporary && tokenIdentity) { try { removeMatchingOwnerFile(tokenTemporary, tokenIdentity) } catch { /* Preserve an unrelated file. */ } }
     if (transaction) { try { db?.exec('ROLLBACK') } catch { /* Preserve the failure. */ } }
     try { db?.close() } catch { /* Preserve the failure. */ }
-    if (created && !initialized && error instanceof ProfileWriteLeaseError && error.reason === 'busy') {
-      // An older writer may have acquired the marker immediately after our
-      // initial check. Remove only the still-empty guard file we just created;
-      // never remove the other writer's marker or an initialized database.
-      try {
-        const current = lstatSync(guard)
-        if (current.isFile() && !current.isSymbolicLink() && current.nlink === 1 && current.size === 0 &&
-            current.dev === info.dev && current.ino === info.ino) rmSync(guard)
-      } catch { /* Keep an unrecognized record for manual inspection. */ }
-    }
     if (error instanceof ProfileWriteLeaseError) throw error
     if ([5, 6].includes((error as { errcode?: number }).errcode ?? -1)) throw new ProfileWriteLeaseError('busy')
     throw new ProfileWriteLeaseError('unavailable')
@@ -213,6 +281,7 @@ export function acquireProfileWriteLease(target: string): () => void {
     if (released) return
     released = true
     try {
+      assertGuardIdentity()
       if (markerKind === 'file') {
         const current = matchingOwnerFile(marker, ownedToken)
         if (!current || !markerIdentity || current.dev !== markerIdentity.dev || current.ino !== markerIdentity.ino) {
@@ -220,16 +289,11 @@ export function acquireProfileWriteLease(target: string): () => void {
         }
         removeMatchingOwnerFile(marker, markerIdentity)
         if (tokenTemporary && tokenIdentity) { try { removeMatchingOwnerFile(tokenTemporary, tokenIdentity) } catch { /* Preserve an unrelated file. */ } }
+      } else if (markerKind === 'symlink') {
+        removeMarkerLink(marker, ownedToken, markerIdentity)
       } else {
-        const currentMarker = lstatSync(marker, { bigint: true })
-        const currentOwner = lstatSync(`${marker}/${ownerName}`, { bigint: true })
-        if (!markerIdentity || !ownerIdentity || !currentMarker.isDirectory() || currentMarker.isSymbolicLink() ||
-            currentMarker.dev !== markerIdentity.dev || currentMarker.ino !== markerIdentity.ino ||
-            !currentOwner.isFile() || currentOwner.isSymbolicLink() || currentOwner.nlink !== 1n || currentOwner.size !== 0n ||
-            currentOwner.dev !== ownerIdentity.dev || currentOwner.ino !== ownerIdentity.ino ||
-            readdirSync(marker).length !== 1) throw new ProfileWriteLeaseError('unavailable')
-        rmSync(`${marker}/${ownerName}`)
-        rmdirSync(marker)
+        if (!markerIdentity || markerKind !== 'directory') throw new ProfileWriteLeaseError('unavailable')
+        retireMarkerDirectory(marker, ownedToken, markerIdentity)
       }
     } finally {
       try { owned.exec('ROLLBACK') } finally { owned.close() }

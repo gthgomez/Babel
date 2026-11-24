@@ -69,23 +69,82 @@ test('a crash before publishing an owner marker does not strand the lock', () =>
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
-test('an interrupted unsupported-filesystem fallback preserves an unrecognized directory', () => {
-  const f = fixture()
-  try {
-    const moduleUrl = pathToFileURL(resolve('src/config/userSettings.ts')).href
-    const source = `import { updateUserSettings } from ${JSON.stringify(moduleUrl)};
-      const fs = (await import('node:fs')).default;
-      const { syncBuiltinESMExports } = await import('node:module');
+const fallbackHooks = {
+  'before fallback publish': `
+    if (process.platform === 'win32') {
       const original = fs.openSync;
-      fs.linkSync = () => { throw Object.assign(new Error('Unsupported link'), { code: 'ENOTSUP' }) };
-      fs.openSync = (path, flags, ...rest) => { if (String(path).includes('.babel-lock/owner-')) process.exit(17); return original(path, flags, ...rest) };
-      syncBuiltinESMExports(); updateUserSettings({ defaults: { workflow: 'work' } });`
-    crashIn(source, f.env)
-    const marker = `${f.settingsPath}.babel-lock`
-    assert.throws(() => updateUserSettings({ defaults: { workflow: 'plan' } }, { env: f.env }))
+      fs.openSync = (path, ...args) => {
+        if (String(path).includes('.babel-lock.stage-')) process.exit(17);
+        return original(path, ...args);
+      };
+    } else fs.symlinkSync = () => process.exit(17);
+  `,
+  'after fallback publish': `
+    if (process.platform === 'win32') {
+      const original = fs.renameSync;
+      fs.renameSync = (from, to) => {
+        original(from, to);
+        if (String(to).endsWith('.babel-lock')) process.exit(17);
+      };
+    } else {
+      const original = fs.symlinkSync;
+      fs.symlinkSync = (...args) => { original(...args); process.exit(17) };
+    }
+  `,
+  'during fallback cleanup': `
+    if (process.platform === 'win32') {
+      const original = fs.unlinkSync;
+      fs.unlinkSync = (path) => {
+        original(path);
+        if (String(path).includes('.babel-lock.retired-')) process.exit(17);
+      };
+    } else {
+      const original = fs.unlinkSync;
+      fs.unlinkSync = (path) => {
+        original(path);
+        if (String(path).endsWith('.babel-lock')) process.exit(17);
+      };
+    }
+  `,
+}
+
+for (const [boundary, hook] of Object.entries(fallbackHooks)) {
+  test(`preferences recover from process exit ${boundary}`, () => {
+    const f = fixture()
+    try {
+      const moduleUrl = pathToFileURL(resolve('src/config/userSettings.ts')).href
+      crashIn(`import { updateUserSettings } from ${JSON.stringify(moduleUrl)};
+        const fs = (await import('node:fs')).default;
+        const { syncBuiltinESMExports } = await import('node:module');
+        fs.linkSync = () => { throw Object.assign(new Error('Unsupported link'), { code: 'ENOTSUP' }) };
+        ${hook}
+        syncBuiltinESMExports(); updateUserSettings({ defaults: { workflow: 'work' } });`, f.env)
+      updateUserSettings({ defaults: { workflow: 'plan' } }, { env: f.env })
+      assert.equal(readUserSettings({ env: f.env }).defaults?.workflow, 'plan')
+      assert.equal(readdirSync(f.env.BABEL_STATE_DIR).includes('preferences.json.babel-lock'), false)
+    } finally { rmSync(f.root, { recursive: true, force: true }) }
+  })
+}
+
+test('fallback publication never replaces an unrelated directory arriving before publication', () => {
+  const f = fixture()
+  const marker = `${f.settingsPath}.babel-lock`
+  const originalLink = fs.linkSync
+  try {
+    fs.linkSync = () => {
+      mkdirSync(marker, { mode: 0o700 })
+      throw Object.assign(new Error('Unsupported link'), { code: 'ENOTSUP' })
+    }
+    syncBuiltinESMExports()
+    assert.throws(() => updateUserSettings({ defaults: { workflow: 'work' } }, { env: f.env }))
     assert.equal(statSync(marker).isDirectory(), true)
     assert.equal(readdirSync(marker).length, 0)
-  } finally { rmSync(f.root, { recursive: true, force: true }) }
+    assert.equal(existsSync(f.settingsPath), false)
+  } finally {
+    fs.linkSync = originalLink
+    syncBuiltinESMExports()
+    rmSync(f.root, { recursive: true, force: true })
+  }
 })
 
 test('account writers recover their lock after process exit', () => {
@@ -151,14 +210,52 @@ test('a marker with an unrelated owner file is preserved', () => {
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
-test('an uninitialized guard is preserved and does not authorize recovery', () => {
+test('a process exit after guard file creation does not strand future writers', () => {
+  const f = fixture()
+  try {
+    const moduleUrl = pathToFileURL(resolve('src/config/userSettings.ts')).href
+    crashIn(`import { updateUserSettings } from ${JSON.stringify(moduleUrl)};
+      const fs = (await import('node:fs')).default;
+      const { syncBuiltinESMExports } = await import('node:module');
+      const original = fs.openSync;
+      fs.openSync = (path, ...args) => {
+        const fd = original(path, ...args);
+        if (String(path).endsWith('.babel-lock.sqlite')) process.exit(17);
+        return fd;
+      };
+      syncBuiltinESMExports(); updateUserSettings({ defaults: { workflow: 'work' } });`, f.env)
+    assert.equal(statSync(`${f.settingsPath}.babel-lock.sqlite`).size, 0)
+    updateUserSettings({ defaults: { workflow: 'plan' } }, { env: f.env })
+    assert.equal(readUserSettings({ env: f.env }).defaults?.workflow, 'plan')
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('an uninitialized guard never authorizes recovery of an unidentified legacy lock', () => {
   const f = fixture()
   try {
     mkdirSync(f.env.BABEL_STATE_DIR, { recursive: true })
     const guard = `${f.settingsPath}.babel-lock.sqlite`
+    const marker = `${f.settingsPath}.babel-lock`
     writeFileSync(guard, '', { flag: 'wx', mode: 0o600 })
-    assert.throws(() => updateUserSettings({ defaults: { workflow: 'work' } }, { env: f.env }), /ownership record is unavailable/)
+    writeFileSync(marker, '', { flag: 'wx', mode: 0o600 })
+    assert.throws(() => updateUserSettings({ defaults: { workflow: 'work' } }, { env: f.env }))
     assert.equal(statSync(guard).size, 0)
+    assert.equal(statSync(marker).size, 0)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('SQLite never opens an unexpected journal junction', () => {
+  const f = fixture()
+  try {
+    updateUserSettings({ defaults: { workflow: 'work' } }, { env: f.env })
+    const other = join(f.root, 'other-directory')
+    const journal = `${f.settingsPath}.babel-lock.sqlite-journal`
+    mkdirSync(other)
+    writeFileSync(join(other, 'keep'), 'fixture')
+    symlinkSync(other, journal, process.platform === 'win32' ? 'junction' : 'dir')
+    assert.throws(() => updateUserSettings({ defaults: { workflow: 'plan' } }, { env: f.env }), /ownership record is unavailable/)
+    assert.equal(existsSync(join(other, 'keep')), true)
+    assert.equal(readUserSettings({ env: f.env }).defaults?.workflow, 'work')
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
@@ -184,7 +281,7 @@ test('an old writer arriving during guard creation cannot strand the new protoco
     syncBuiltinESMExports()
     assert.equal(injected, true)
     assert.equal(existsSync(marker), true)
-    assert.equal(existsSync(guard), false)
+    assert.equal(statSync(guard).size, 0)
     rmSync(marker)
     updateUserSettings({ defaults: { workflow: 'plan' } }, { env: f.env })
     assert.equal(readUserSettings({ env: f.env }).defaults?.workflow, 'plan')
