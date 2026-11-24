@@ -21,6 +21,7 @@ const packedFiles = [
   { path: 'package.json' }, ...bin.map(entry => ({ path: entry.target })),
   { path: 'LICENSE' }, { path: 'resources/prompt_catalog.yaml' },
   { path: 'dist/index.js' }, { path: 'dist/cliEntryDispatch.js' },
+  { path: 'dist/cli/build-info.json' },
   { path: 'bin/check-node-engine.mjs' },
   { path: 'dist/voice/audio-capture-worker.mjs' }, { path: 'dist/voice/vad-worker.mjs' },
   { path: 'dist/bridge/claude-agent-sdk-pin.json' }, { path: 'dist/bridge/opencode-acp-source-pin.json' },
@@ -50,7 +51,7 @@ function fixtureCandidate(root, {sourceSha, version = pkg.version, bytes = 'qual
       files: packedFiles.length,
       unpackedBytes: packedFiles.length,
       bin,
-      requiredAssets: ['LICENSE', 'resources/prompt_catalog.yaml', 'dist/index.js', 'dist/cliEntryDispatch.js', 'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs', 'dist/bridge/claude-agent-sdk-pin.json', 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs', 'dist/authority/ownedFileAssertion.windows.ps1'],
+      requiredAssets: ['LICENSE', 'resources/prompt_catalog.yaml', 'dist/index.js', 'dist/cliEntryDispatch.js', 'dist/cli/build-info.json', 'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs', 'dist/bridge/claude-agent-sdk-pin.json', 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs', 'dist/authority/ownedFileAssertion.windows.ps1'],
       testOnlyShipped: false,
     },
     advisories: {
@@ -114,6 +115,7 @@ test('promotion fails closed on stale advisory, provenance, bin or inventory cla
       ['test-only claimed shipped', m => { m.inventory.testOnlyShipped = true }],
       ['authenticity misstated', m => { m.publisherAuthenticity.signed = true }],
       ['bin target hidden', m => { m.manifest = m.manifest.filter(file => !file.path.endsWith('babel.js')) }],
+      ['build identity missing', m => { m.manifest = m.manifest.filter(file => file.path !== 'dist/cli/build-info.json') }],
     ]
     for (const [label, mutate] of cases) {
       fixtureCandidate(root, {sourceSha: source, mutate})
