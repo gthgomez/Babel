@@ -20,6 +20,7 @@ import test from 'node:test'
 import {
   buildReadOnlyGitArgs,
   buildReadOnlyGitEnvironment,
+  classifyGitTermination,
   collectWorkspaceChanges,
   sanitizeNoIndexDiff,
   WORKSPACE_CHANGE_CONFIG_SENTINEL_KEY,
@@ -233,6 +234,9 @@ test('workspace inspection fails closed when diff output exceeds its byte budget
   const root = mkdtempSync(join(tmpdir(), 'babel-workspace-large-diff-'))
   try {
     git(root, ['init', '--quiet'])
+    // This budget is enforced before any subprocess: the untracked file is
+    // rejected by its copied byte count. The subprocess buffer limit itself is
+    // covered by the tracked-diff control below.
     writeFileSync(join(root, 'large-untracked.txt'), `${'x'.repeat(1_050_000)}\n`)
 
     const snapshot = collectWorkspaceChanges(root)
@@ -241,6 +245,85 @@ test('workspace inspection fails closed when diff output exceeds its byte budget
     assert.equal(snapshot.diff, '')
     assert.deepEqual(snapshot.files, [])
     assert.match(snapshot.reason ?? '', /output limit|buffer|ENOBUFS/i)
+  } finally {
+    removeTree(root)
+  }
+})
+
+test('termination classification separates a full buffer from an elapsed deadline', () => {
+  // Node kills a maxBuffer overrun with SIGTERM, the signal its own timeout
+  // kill uses, so the bare signal must never be read as an elapsed deadline.
+  for (const deadlineElapsed of [false, true]) {
+    assert.deepEqual(
+      classifyGitTermination({ errorCode: 'ENOBUFS', signal: 'SIGTERM', deadlineElapsed }),
+      { outputLimit: true, timedOut: false },
+    )
+  }
+  assert.deepEqual(
+    classifyGitTermination({ errorCode: 'ETIMEDOUT', signal: 'SIGTERM', deadlineElapsed: true }),
+    { outputLimit: false, timedOut: true },
+  )
+  // Ordinary termination signals are only a timeout once the explicit deadline
+  // this process set has actually elapsed.
+  for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
+    assert.deepEqual(
+      classifyGitTermination({ errorCode: undefined, signal, deadlineElapsed: false }),
+      { outputLimit: false, timedOut: false },
+    )
+    assert.deepEqual(
+      classifyGitTermination({ errorCode: undefined, signal, deadlineElapsed: true }),
+      { outputLimit: false, timedOut: true },
+    )
+  }
+  assert.deepEqual(
+    classifyGitTermination({ errorCode: 'ENOENT', signal: null, deadlineElapsed: true }),
+    { outputLimit: false, timedOut: false },
+  )
+  assert.deepEqual(classifyGitTermination({ errorCode: undefined, signal: null, deadlineElapsed: false }), {
+    outputLimit: false,
+    timedOut: false,
+  })
+})
+
+test('harmless subprocess control: a full buffer is an output limit even though Node signals it', () => {
+  const probe = spawnSync(process.execPath, ['-e', 'process.stdout.write("y".repeat(4_000_000))'], {
+    encoding: 'utf8',
+    maxBuffer: 1_000_000,
+    windowsHide: true,
+  })
+  const errorCode = (probe.error as NodeJS.ErrnoException | undefined)?.code
+  assert.equal(errorCode, 'ENOBUFS', 'the control must genuinely cross the subprocess output limit')
+  assert.equal(typeof probe.stdout, 'string')
+  assert.deepEqual(classifyGitTermination({ errorCode, signal: probe.signal, deadlineElapsed: false }), {
+    outputLimit: true,
+    timedOut: false,
+  })
+})
+
+test('tracked diff over the subprocess buffer limit fails closed as an output limit, never a timeout', () => {
+  requireGit()
+  const root = mkdtempSync(join(tmpdir(), 'babel-workspace-tracked-buffer-'))
+  try {
+    git(root, ['init', '--quiet'])
+    git(root, ['config', 'user.email', 'test@example.invalid'])
+    git(root, ['config', 'user.name', 'Test'])
+    // Ordinary tracked text: each revision is ~0.8 MB, so the one-file diff is
+    // ~1.6 MB and genuinely overruns the subprocess buffer limit.
+    const revision = (marker: string): string =>
+      `${Array.from({ length: 1_200 }, (_, index) => `${marker} ${index} ${'.'.repeat(680)}`).join('\n')}\n`
+    writeFileSync(join(root, 'tracked.txt'), revision('version one'))
+    git(root, ['add', '.'])
+    git(root, ['commit', '--quiet', '-m', 'initial'])
+    writeFileSync(join(root, 'tracked.txt'), revision('version two'))
+
+    const snapshot = collectWorkspaceChanges(root)
+
+    assert.equal(snapshot.available, false)
+    assert.deepEqual(snapshot.files, [])
+    assert.equal(snapshot.diff, '')
+    assert.equal(snapshot.reason, 'workspace diff output limit exceeded')
+    assert.equal((snapshot.reason ?? '').includes(root), false)
+    assert.equal(/timed out/i.test(snapshot.reason ?? ''), false)
   } finally {
     removeTree(root)
   }

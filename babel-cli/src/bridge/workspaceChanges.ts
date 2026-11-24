@@ -147,6 +147,30 @@ interface GitResult {
   timedOut: boolean
 }
 
+interface GitTerminationEvidence {
+  errorCode: string | undefined
+  signal: NodeJS.Signals | null | undefined
+  deadlineElapsed: boolean
+}
+
+/**
+ * Node terminates a child that overruns `maxBuffer` with SIGTERM, the same
+ * signal it uses for its own elapsed-timeout kill. A bare signal is therefore
+ * not timeout evidence: only the Timeout errno, or a termination observed
+ * after the caller's explicit deadline elapsed, reports an elapsed timeout.
+ * Buffer exhaustion always wins so a killed full buffer is never told apart
+ * as an elapsed deadline.
+ */
+export function classifyGitTermination(
+  evidence: GitTerminationEvidence,
+): Pick<GitResult, 'outputLimit' | 'timedOut'> {
+  if (evidence.errorCode === 'ENOBUFS') return { outputLimit: true, timedOut: false }
+  if (evidence.errorCode === 'ETIMEDOUT') return { outputLimit: false, timedOut: true }
+  const signal = evidence.signal
+  const timedOut = (signal === 'SIGTERM' || signal === 'SIGKILL') && evidence.deadlineElapsed
+  return { outputLimit: false, timedOut }
+}
+
 function runGit(
   gitExecutable: string,
   cwd: string,
@@ -173,17 +197,16 @@ function runGit(
     windowsHide: true,
   })
   const stdout = typeof result.stdout === 'string' ? result.stdout : ''
-  const outputLimit = (result.error as NodeJS.ErrnoException | undefined)?.code === 'ENOBUFS'
-  const timedOut =
-    (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' ||
-    result.signal === 'SIGTERM' ||
-    result.signal === 'SIGKILL'
+  const termination = classifyGitTermination({
+    errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code,
+    signal: result.signal,
+    deadlineElapsed: Date.now() >= deadline,
+  })
   if (result.error || (result.status !== 0 && !acceptedExitCodes.includes(result.status ?? Number.NaN))) {
     return {
       ok: false,
       stdout,
-      outputLimit,
-      timedOut,
+      ...termination,
     }
   }
   return { ok: true, stdout, outputLimit: false, timedOut: false }
