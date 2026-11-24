@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 export const BABEL_INTEGRATION_CONTRACT = 'babel.integration' as const;
-export const BABEL_INTEGRATION_CONTRACT_VERSION = '1.0.0' as const;
+export const BABEL_INTEGRATION_CONTRACT_VERSION = '2.0.0' as const;
 
 export const IntegrationCapabilitySchema = z.enum([
   'transport.create',
@@ -44,10 +44,50 @@ export const IntegrationAcpSessionRegistrationSchema = z.object({
   discovery_ref: z.string().min(1).max(256).optional(),
 }).strict();
 
+/** Renewal IDs use a disjoint namespace so a pruned renewal label can never become a registration. */
+export const INTEGRATION_RENEWAL_REQUEST_PREFIX = 'renewal:' as const;
+export const INTEGRATION_RENEWAL_REQUEST_PATTERN = /^renewal:[0-9a-f-]{36}:\d{1,16}$/;
+
+/** Canonical renewal label derived from the principal and its monotonic sequence. */
+export function integrationRenewalRequestId(principalId: string, sequence: number): string {
+  if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error('invalid renewal request sequence');
+  return `${INTEGRATION_RENEWAL_REQUEST_PREFIX}${principalId}:${sequence}`;
+}
+
 export const IntegrationAcpSessionRenewalSchema = z.object({
-  request_id: z.string().min(1).max(128),
+  request_id: z.string().min(1).max(128).regex(INTEGRATION_RENEWAL_REQUEST_PATTERN),
+  /** Monotonic per-principal idempotency sequence; retired sequences never act again. */
+  request_sequence: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
   session_binding: z.string().min(1).max(256),
   expected_host_instance: z.string().uuid(),
+  /** Idempotency fence: a renewal may only rotate the generation it observed. */
+  expected_registration_generation: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+}).strict();
+
+export const IntegrationAcpSessionStatusRequestSchema = z.object({
+  request_id: z.string().min(1).max(128),
+  request_sequence: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  project_id: z.string().min(1).max(64),
+  session_binding: z.string().min(1).max(256),
+  expected_host_instance: z.string().uuid(),
+}).strict();
+
+export const IntegrationAcpSessionStatusDispositionSchema = z.enum([
+  'issued', 'not_issued', 'superseded', 'expired', 'revoked', 'reserved', 'retired',
+]);
+
+export const IntegrationAcpSessionStatusResponseSchema = z.object({
+  principal_id: z.string().uuid(),
+  project_id: z.string().min(1).max(64),
+  session_binding: z.string().min(1).max(256),
+  request_id: z.string().min(1).max(128),
+  request_sequence: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  renewal_sequence: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  host_instance_id: z.string().uuid(),
+  registration_generation: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  /** 0 is the legacy disabled-row sentinel; live credentials remain strictly positive. */
+  expires_at_ms: z.number().int().min(0),
+  disposition: IntegrationAcpSessionStatusDispositionSchema,
 }).strict();
 
 export const IntegrationAcpSessionCredentialResponseSchema = z.object({
@@ -120,6 +160,8 @@ export const BABEL_INTEGRATION_SCHEMA_DESCRIPTOR = canonicalize({
     transportCreateRequest: z.toJSONSchema(IntegrationTransportCreateRequestSchema, { io: 'input' }),
     acpSessionRegistration: z.toJSONSchema(IntegrationAcpSessionRegistrationSchema, { io: 'input' }),
     acpSessionRenewal: z.toJSONSchema(IntegrationAcpSessionRenewalSchema, { io: 'input' }),
+    acpSessionStatusRequest: z.toJSONSchema(IntegrationAcpSessionStatusRequestSchema, { io: 'input' }),
+    acpSessionStatusResponse: z.toJSONSchema(IntegrationAcpSessionStatusResponseSchema, { io: 'output' }),
     rpcRequest: z.toJSONSchema(IntegrationRpcRequestSchema, { io: 'input' }),
     rpcResponse: z.toJSONSchema(IntegrationRpcResponseSchema, { io: 'output' }),
     acpSessionCredentialResponse: z.toJSONSchema(IntegrationAcpSessionCredentialResponseSchema, { io: 'output' }),

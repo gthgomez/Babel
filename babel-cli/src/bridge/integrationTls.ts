@@ -2,9 +2,12 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type Server as HttpsServer } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
+  BABEL_INTEGRATION_CONTRACT,
+  BABEL_INTEGRATION_CONTRACT_VERSION,
   BABEL_INTEGRATION_SCHEMA_SHA256,
   IntegrationAcpSessionRegistrationSchema,
   IntegrationAcpSessionRenewalSchema,
+  IntegrationAcpSessionStatusRequestSchema,
   IntegrationProtocolInfoSchema,
   IntegrationRpcRequestSchema,
   IntegrationTransportCreateRequestSchema,
@@ -72,8 +75,8 @@ export class IntegrationTlsServer {
       capabilities.push('thread.create');
     }
     this.info = {
-      contract: 'babel.integration',
-      version: '1.0.0',
+      contract: BABEL_INTEGRATION_CONTRACT,
+      version: BABEL_INTEGRATION_CONTRACT_VERSION,
       schema_sha256: BABEL_INTEGRATION_SCHEMA_SHA256,
       gateway_id: options.gatewayId,
       instance_id: options.instanceId ?? randomUUID(),
@@ -236,7 +239,9 @@ export class IntegrationTlsServer {
       }
       const result = this.options.registry.requalifyAcpSession({
         integrationCredential: this.integrationCredential(req) ?? '', principalId: requalifyPath[1]!,
-        requestId: parsedRenewal.data.request_id, sessionBinding: parsedRenewal.data.session_binding,
+        requestId: parsedRenewal.data.request_id, requestSequence: parsedRenewal.data.request_sequence,
+        sessionBinding: parsedRenewal.data.session_binding,
+        expectedRegistrationGeneration: parsedRenewal.data.expected_registration_generation,
         expectedHostInstance: parsedRenewal.data.expected_host_instance, currentHostInstance: this.info.instance_id,
       });
       if (!result.ok) { reply(res, 403, { error: result.reason }); return; }
@@ -244,6 +249,43 @@ export class IntegrationTlsServer {
         project_id: result.session.projectId, registration_generation: result.session.registrationGeneration,
         expires_at_ms: result.session.expiresAtMs, renew_after_ms: 60_000,
         credential: result.session.credential });
+      return;
+    }
+    const statusPath = /^\/integrations\/acp-sessions\/([0-9a-f-]{36})\/status$/.exec(req.url ?? '');
+    if (req.method === 'POST' && statusPath && this.options.registry) {
+      if (!this.isIntegrationAuthenticated(req)) {
+        reply(res, 401, { error: 'integration_authentication_required' });
+        return;
+      }
+      if (!this.requireNegotiated(req, res)) return;
+      const raw = await this.readBody(req, res);
+      if (raw === null) return;
+      let body: unknown;
+      try { body = JSON.parse(raw); } catch { reply(res, 400, { error: 'invalid_reconciliation' }); return; }
+      const parsedStatus = IntegrationAcpSessionStatusRequestSchema.safeParse(body);
+      if (!parsedStatus.success) {
+        reply(res, 400, { error: 'invalid_reconciliation' });
+        return;
+      }
+      if (parsedStatus.data.expected_host_instance !== this.info.instance_id) {
+        reply(res, 400, { error: 'stale_host_instance' });
+        return;
+      }
+      const result = this.options.registry.inspectAcpSession({
+        integrationCredential: this.integrationCredential(req) ?? '', principalId: statusPath[1]!,
+        requestId: parsedStatus.data.request_id, requestSequence: parsedStatus.data.request_sequence,
+        projectId: parsedStatus.data.project_id, sessionBinding: parsedStatus.data.session_binding,
+        expectedHostInstance: parsedStatus.data.expected_host_instance, currentHostInstance: this.info.instance_id,
+      });
+      if (!result.ok) { reply(res, 403, { error: result.reason }); return; }
+      reply(res, 200, {
+        principal_id: result.status.principalId, project_id: result.status.projectId,
+        session_binding: result.status.sessionBinding, request_id: result.status.requestId,
+        request_sequence: result.status.requestSequence, renewal_sequence: result.status.renewalSequence,
+        host_instance_id: result.status.hostInstanceId,
+        registration_generation: result.status.registrationGeneration,
+        expires_at_ms: result.status.expiresAtMs, disposition: result.status.disposition,
+      });
       return;
     }
     reply(res, 404, { error: 'unsupported_integration_operation' });

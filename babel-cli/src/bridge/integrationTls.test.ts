@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createServer as createTcpServer } from 'node:net';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:https';
@@ -11,7 +11,11 @@ import { IntegrationRegistry } from './integrationRegistry.js';
 import { NativeCommandJournal } from './commandJournal.js';
 import { ProtocolGateway } from './protocolGateway.js';
 import { closeProtocolHostState } from '../protocol/client/host.js';
-import { BABEL_INTEGRATION_SCHEMA_SHA256 } from '../protocol/remoteContract.js';
+import {
+  BABEL_INTEGRATION_CONTRACT_VERSION,
+  BABEL_INTEGRATION_SCHEMA_SHA256,
+  integrationRenewalRequestId,
+} from '../protocol/remoteContract.js';
 
 async function freePort(): Promise<number> {
   const server = createTcpServer();
@@ -36,7 +40,7 @@ function requestJson(
         ...(body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}),
         ...(includeProfileHeaders && path !== '/protocol.info' ? {
           'x-babel-contract': 'babel.integration',
-          'x-babel-contract-version': '1.0.0',
+          'x-babel-contract-version': BABEL_INTEGRATION_CONTRACT_VERSION,
           'x-babel-schema-sha256': BABEL_INTEGRATION_SCHEMA_SHA256,
         } : {}),
         ...extraHeaders,
@@ -52,18 +56,28 @@ function requestJson(
   });
 }
 
-test('integration TLS serves only authenticated version info and rejects an unpinned peer', async (t) => {
+function compareIssuanceReplay(leftBody: string, rightBody: string, message: string): void {
+  const left = JSON.parse(leftBody) as Record<string, unknown>;
+  const right = JSON.parse(rightBody) as Record<string, unknown>;
+  assert.equal(left['credential'] === right['credential'], true, message);
+  const redact = (value: Record<string, unknown>): Record<string, unknown> => ({
+    ...value, credential: value['credential'] === undefined ? 'absent' : 'present',
+  });
+  assert.deepEqual(redact(left), redact(right), message);
+}
+
+test('integration TLS serves only authenticated version info and rejects an unpinned peer', async () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-integration-tls-'));
   const generated = spawnSync('openssl', [
     'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'),
     '-out', join(root, 'cert.pem'), '-days', '1', '-subj', '/CN=127.0.0.1',
     '-addext', 'subjectAltName=IP:127.0.0.1',
   ], { encoding: 'utf8', windowsHide: true });
-  if (generated.error || generated.status !== 0) {
-    rmSync(root, { recursive: true, force: true });
-    t.skip('openssl is required to generate a synthetic local TLS identity');
-    return;
-  }
+  if (generated.error || generated.status !== 0) rmSync(root, { recursive: true, force: true });
+  assert.equal(generated.error, undefined,
+    'openssl is a required precondition for the synthetic local TLS identity; install it on the test host');
+  assert.equal(generated.status === 0, true,
+    `openssl failed to generate the synthetic local TLS identity (status ${String(generated.status)})`);
   const cert = readFileSync(join(root, 'cert.pem'));
   const key = readFileSync(join(root, 'key.pem'));
   const port = await freePort();
@@ -81,7 +95,7 @@ test('integration TLS serves only authenticated version info and rejects an unpi
     assert.equal(allowed.status, 200);
     const info = JSON.parse(allowed.body) as typeof service.info;
     assert.equal(info.contract, 'babel.integration');
-    assert.equal(info.version, '1.0.0');
+    assert.equal(info.version, BABEL_INTEGRATION_CONTRACT_VERSION);
     assert.equal(info.gateway_id, 'synthetic-gateway');
     assert.equal(info.schema_sha256.length, 64);
     assert.equal(info.instance_id, service.info.instance_id);
@@ -94,7 +108,7 @@ test('integration TLS serves only authenticated version info and rejects an unpi
     assert.equal(acceptedNegotiation.status, 200);
     const wrongVersion = await requestJson(port, cert,
       'Babel-Integration synthetic-credential-' + 'x'.repeat(40), '/protocol.info', 'GET', undefined, {
-        'x-babel-contract': info.contract, 'x-babel-contract-version': '2.0.0',
+        'x-babel-contract': info.contract, 'x-babel-contract-version': '9.0.0',
         'x-babel-schema-sha256': info.schema_sha256,
       });
     assert.equal(wrongVersion.status, 406);
@@ -116,7 +130,7 @@ test('integration TLS serves only authenticated version info and rejects an unpi
   }
 });
 
-test('TLS ACP registration issues a project-scoped principal and never opens legacy RPC', async (t) => {
+test('TLS ACP registration issues a project-scoped principal and never opens legacy RPC', async () => {
   const priorRuns = process.env['BABEL_RUNS_DIR'];
   const root = mkdtempSync(join(tmpdir(), 'babel-integration-acp-tls-'));
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
@@ -127,17 +141,20 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     '-days', '1', '-subj', '/CN=127.0.0.1', '-addext', 'subjectAltName=IP:127.0.0.1',
   ], { encoding: 'utf8', windowsHide: true });
   if (generated.error || generated.status !== 0) {
+    if (priorRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
+    else process.env['BABEL_RUNS_DIR'] = priorRuns;
     rmSync(root, { recursive: true, force: true });
-    t.skip('openssl is required to generate a synthetic local TLS identity');
-    return;
   }
+  assert.equal(generated.error, undefined,
+    'openssl is a required precondition for the synthetic local TLS identity; install it on the test host');
+  assert.equal(generated.status === 0, true,
+    `openssl failed to generate the synthetic local TLS identity (status ${String(generated.status)})`);
   const cert = readFileSync(certPath);
   const key = readFileSync(keyPath);
   const port = await freePort();
   const project = join(root, 'project');
   const privateDir = join(root, 'private');
   const dbPath = join(privateDir, 'integration.sqlite');
-  const { mkdirSync } = await import('node:fs');
   mkdirSync(project);
   mkdirSync(privateDir, { mode: 0o700 });
   const registry = new IntegrationRegistry(dbPath, (directory) => assert.equal(directory, privateDir));
@@ -181,6 +198,16 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     const session = JSON.parse(created.body) as { principal_id: string; credential: string; registration_generation: number };
     assert.ok(session.principal_id);
     assert.equal(session.registration_generation, 1);
+    const registrationReplay = await requestJson(port, cert, auth, '/integrations/acp-sessions', 'POST', body);
+    assert.equal(registrationReplay.status, 201);
+    compareIssuanceReplay(registrationReplay.body, created.body,
+      'a lost registration response replays the same credential, generation, and expiry');
+    const conflictingIntent = await requestJson(port, cert, auth, '/integrations/acp-sessions', 'POST', JSON.stringify({
+      request_id: 'request-1', project_id: 'project-one', session_binding: 'launch-conflict', expected_host_instance: info.instance_id,
+    }));
+    assert.equal(conflictingIntent.status, 403);
+    assert.equal(JSON.parse(conflictingIntent.body).error, 'registration_fingerprint_conflict');
+    assert.equal(JSON.parse(conflictingIntent.body).credential === undefined, true, 'failures never return a credential');
     const schemaMismatch = await requestJson(port, cert, `Babel-Acp-Session ${session.credential}`, '/sessions', 'POST',
       JSON.stringify({ project_id: 'project-one', expected_host_instance: info.instance_id }), {
         'x-babel-schema-sha256': '0'.repeat(64),
@@ -259,13 +286,33 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     assert.notEqual(service.info.instance_id, previousInstance);
     const oldCredential = await requestJson(restartedPort, cert, `Babel-Acp-Session ${session.credential}`);
     assert.equal(oldCredential.status, 401, 'a prior host instance token cannot authenticate after restart');
+    const renewalBody = JSON.stringify({
+      request_id: integrationRenewalRequestId(session.principal_id, 1), request_sequence: 1,
+      session_binding: 'launch-1', expected_host_instance: service.info.instance_id,
+      expected_registration_generation: 1,
+    });
     const requalified = await requestJson(restartedPort, cert, auth,
-      `/integrations/acp-sessions/${session.principal_id}/renew`, 'POST', JSON.stringify({
-        request_id: 'requal-1', session_binding: 'launch-1', expected_host_instance: service.info.instance_id,
-      }));
+      `/integrations/acp-sessions/${session.principal_id}/renew`, 'POST', renewalBody);
     assert.equal(requalified.status, 200);
-    const renewed = JSON.parse(requalified.body) as { credential: string; principal_id: string };
+    const renewed = JSON.parse(requalified.body) as { credential: string; principal_id: string; registration_generation: number };
     assert.equal(renewed.principal_id, session.principal_id);
+    assert.equal(renewed.registration_generation, 2);
+    const renewalReplay = await requestJson(restartedPort, cert, auth,
+      `/integrations/acp-sessions/${session.principal_id}/renew`, 'POST', renewalBody);
+    assert.equal(renewalReplay.status, 200);
+    compareIssuanceReplay(renewalReplay.body, requalified.body,
+      'a lost renewal response replays the same credential and generation');
+    const staleRenewal = await requestJson(restartedPort, cert, auth,
+      `/integrations/acp-sessions/${session.principal_id}/renew`, 'POST', JSON.stringify({
+        request_id: integrationRenewalRequestId(session.principal_id, 2), request_sequence: 2,
+        session_binding: 'launch-1', expected_host_instance: service.info.instance_id,
+        expected_registration_generation: 1,
+      }));
+    assert.equal(staleRenewal.status, 403);
+    assert.equal(JSON.parse(staleRenewal.body).error, 'stale_registration_generation');
+    assert.equal(JSON.parse(staleRenewal.body).credential === undefined, true, 'stale renewal never returns a credential');
+    assert.equal((await requestJson(restartedPort, cert, `Babel-Acp-Session ${renewed.credential}`)).status, 200,
+      'a stale renewal cannot rotate the current credential');
     const recoveredInfo = await requestJson(restartedPort, cert, `Babel-Acp-Session ${renewed.credential}`);
     assert.equal(recoveredInfo.status, 200);
     const renewedTransportReply = await requestJson(restartedPort, cert, `Babel-Acp-Session ${renewed.credential}`, '/sessions', 'POST',
@@ -290,7 +337,9 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
       } }), {}, false);
     const noProfileRenewal = await requestJson(restartedPort, cert, auth,
       `/integrations/acp-sessions/${renewed.principal_id}/renew`, 'POST', JSON.stringify({
-        request_id: 'unnegotiated-renewal', session_binding: 'launch-1', expected_host_instance: service.info.instance_id,
+        request_id: integrationRenewalRequestId(renewed.principal_id, 2), request_sequence: 2,
+        session_binding: 'launch-1', expected_host_instance: service.info.instance_id,
+        expected_registration_generation: 2,
       }), {}, false);
     assert.deepEqual({ statuses: [noProfileRegistration.status, noProfileTransport.status, noProfileRpc.status, noProfileRenewal.status],
       dispatchCount: dispatchCount - noProfileDispatchBaseline }, { statuses: [406, 406, 406, 406], dispatchCount: 0 },
@@ -303,5 +352,254 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     rmSync(root, { recursive: true, force: true });
     if (priorRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
     else process.env['BABEL_RUNS_DIR'] = priorRuns;
+  }
+});
+
+test('TLS issuance classification is stable across handles, expiry, revocation, and project change', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-integration-issuance-tls-'));
+  const generated = spawnSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'),
+    '-out', join(root, 'cert.pem'), '-days', '1', '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1',
+  ], { encoding: 'utf8', windowsHide: true });
+  if (generated.error || generated.status !== 0) rmSync(root, { recursive: true, force: true });
+  assert.equal(generated.error, undefined,
+    'openssl is a required precondition for the synthetic local TLS identity; install it on the test host');
+  assert.equal(generated.status === 0, true,
+    `openssl failed to generate the synthetic local TLS identity (status ${String(generated.status)})`);
+  const cert = readFileSync(join(root, 'cert.pem'));
+  const key = readFileSync(join(root, 'key.pem'));
+  const project = join(root, 'project');
+  const privateDir = join(root, 'private');
+  mkdirSync(project);
+  mkdirSync(privateDir, { mode: 0o700 });
+  const host = 'c1b6af6e-cb97-4317-aa4c-9831f9f2c3cb';
+  let now = 1_000;
+  const dbPath = join(privateDir, 'integration.sqlite');
+  const first = new IntegrationRegistry(dbPath, () => undefined, { now: () => now });
+  const second = new IntegrationRegistry(dbPath, () => undefined, { now: () => now });
+  let serviceA: IntegrationTlsServer | undefined;
+  let serviceB: IntegrationTlsServer | undefined;
+  try {
+    first.registerProject({ projectId: 'project', root: project });
+    const rootCredential = first.registerIntegration({ integrationId: 'bridge', name: 'fixture', allowedProjectIds: ['project'] });
+    const auth = `Babel-Integration ${rootCredential}`;
+    const makeService = (port: number, registry: IntegrationRegistry) => new IntegrationTlsServer({
+      port, gatewayId: 'synthetic-gateway', certificate: cert, privateKey: key, registry, instanceId: host,
+    });
+    const portA = await freePort();
+    serviceA = makeService(portA, first);
+    await serviceA.listen();
+    const portB = await freePort();
+    serviceB = makeService(portB, second);
+    await serviceB.listen();
+
+    const registrationBody = JSON.stringify({ request_id: 'api-create', project_id: 'project',
+      session_binding: 'launch', expected_host_instance: host });
+    const created = await requestJson(portA, cert, auth, '/integrations/acp-sessions', 'POST', registrationBody);
+    assert.equal(created.status, 201);
+    const session = JSON.parse(created.body) as { principal_id: string; credential: string; registration_generation: number };
+    const replayed = await requestJson(portB, cert, auth, '/integrations/acp-sessions', 'POST', registrationBody);
+    assert.equal(replayed.status, 201);
+    compareIssuanceReplay(replayed.body, created.body,
+      'the durable request ledger and reproducible credential are shared by two database handles');
+
+    now += 5 * 60_000;
+    const expiredRegistration = await requestJson(portA, cert, auth, '/integrations/acp-sessions', 'POST', registrationBody);
+    assert.equal(expiredRegistration.status, 403);
+    assert.deepEqual(JSON.parse(expiredRegistration.body), { error: 'registration_expired' },
+      'expired request IDs never rotate or expose plaintext');
+
+    const renewalPath = `/integrations/acp-sessions/${session.principal_id}/renew`;
+    const renewalBody = JSON.stringify({ request_id: integrationRenewalRequestId(session.principal_id, 1),
+      request_sequence: 1, session_binding: 'launch', expected_host_instance: host,
+      expected_registration_generation: 1 });
+    const renewed = await requestJson(portA, cert, auth, renewalPath, 'POST', renewalBody);
+    assert.equal(renewed.status, 200);
+    const renewedSession = JSON.parse(renewed.body) as { credential: string; registration_generation: number };
+    assert.equal(renewedSession.registration_generation, 2);
+    const renewalReplay = await requestJson(portB, cert, auth, renewalPath, 'POST', renewalBody);
+    assert.equal(renewalReplay.status, 200);
+    compareIssuanceReplay(renewalReplay.body, renewed.body,
+      'a lost renewal response replays the same credential and generation across handles');
+
+    now += 5 * 60_000;
+    const expiredRenewal = await requestJson(portB, cert, auth, renewalPath, 'POST', renewalBody);
+    assert.equal(expiredRenewal.status, 403);
+    assert.deepEqual(JSON.parse(expiredRenewal.body), { error: 'requalification_expired' });
+    const nextRenewal = await requestJson(portA, cert, auth, renewalPath, 'POST', JSON.stringify({
+      request_id: integrationRenewalRequestId(session.principal_id, 2), request_sequence: 2,
+      session_binding: 'launch', expected_host_instance: host, expected_registration_generation: 2,
+    }));
+    assert.equal(nextRenewal.status, 200);
+    const nextSession = JSON.parse(nextRenewal.body) as { credential: string; registration_generation: number };
+    assert.equal(nextSession.registration_generation, 3);
+    assert.equal((await requestJson(portB, cert, `Babel-Acp-Session ${nextSession.credential}`)).status, 200);
+
+    second.revokeAcpSession(session.principal_id);
+    const revokedReplay = await requestJson(portA, cert, auth, '/integrations/acp-sessions', 'POST', registrationBody);
+    assert.equal(revokedReplay.status, 403);
+    assert.deepEqual(JSON.parse(revokedReplay.body), { error: 'registration_revoked' });
+    const revokedRenewal = await requestJson(portA, cert, auth, renewalPath, 'POST', JSON.stringify({
+      request_id: integrationRenewalRequestId(session.principal_id, 3), request_sequence: 3,
+      session_binding: 'launch', expected_host_instance: host, expected_registration_generation: 3,
+    }));
+    assert.equal(revokedRenewal.status, 403);
+    assert.deepEqual(JSON.parse(revokedRenewal.body), { error: 'registration_revoked' });
+    assert.equal((await requestJson(portB, cert, `Babel-Acp-Session ${nextSession.credential}`)).status, 401);
+
+    const replacementBody = JSON.stringify({ request_id: 'api-create-replacement', project_id: 'project',
+      session_binding: 'launch', expected_host_instance: host });
+    const replacement = await requestJson(portA, cert, auth, '/integrations/acp-sessions', 'POST', replacementBody);
+    assert.equal(replacement.status, 201);
+    const replacementSession = JSON.parse(replacement.body) as { principal_id: string };
+    assert.notEqual(replacementSession.principal_id, session.principal_id,
+      'a new request issues a new principal instead of resurrecting the revoked one');
+
+    second.registerProject({ projectId: 'project', root: project });
+    const identityChanged = await requestJson(portA, cert, auth,
+      `/integrations/acp-sessions/${replacementSession.principal_id}/renew`, 'POST', JSON.stringify({
+        request_id: integrationRenewalRequestId(replacementSession.principal_id, 1), request_sequence: 1,
+        session_binding: 'launch', expected_host_instance: host, expected_registration_generation: 1,
+      }));
+    assert.equal(identityChanged.status, 403);
+    assert.deepEqual(JSON.parse(identityChanged.body), { error: 'project_identity_changed' });
+  } finally {
+    if (serviceA) await serviceA.close();
+    if (serviceB) await serviceB.close();
+    first.close();
+    second.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TLS restart reconciliation recovers a withheld renewal without duplicate generation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-integration-reconcile-tls-'));
+  const generated = spawnSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'),
+    '-out', join(root, 'cert.pem'), '-days', '1', '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1',
+  ], { encoding: 'utf8', windowsHide: true });
+  if (generated.error || generated.status !== 0) rmSync(root, { recursive: true, force: true });
+  assert.equal(generated.error, undefined,
+    'openssl is a required precondition for the synthetic local TLS identity; install it on the test host');
+  assert.equal(generated.status === 0, true,
+    `openssl failed to generate the synthetic local TLS identity (status ${String(generated.status)})`);
+  const cert = readFileSync(join(root, 'cert.pem'));
+  const key = readFileSync(join(root, 'key.pem'));
+  const project = join(root, 'project');
+  const privateDir = join(root, 'private');
+  mkdirSync(project);
+  mkdirSync(privateDir, { mode: 0o700 });
+  const hostA = 'c1b6af6e-cb97-4317-aa4c-9831f9f2c3cb';
+  const hostB = '6f0f3a52-4a1b-4c9e-9b2f-1a2b3c4d5e6f';
+  let now = 1_000;
+  const dbPath = join(privateDir, 'integration.sqlite');
+  const registryA = new IntegrationRegistry(dbPath, () => undefined, { now: () => now });
+  const registryB = new IntegrationRegistry(dbPath, () => undefined, { now: () => now });
+  let serviceA: IntegrationTlsServer | undefined;
+  let serviceB: IntegrationTlsServer | undefined;
+  try {
+    registryA.registerProject({ projectId: 'project', root: project });
+    const rootCredential = registryA.registerIntegration({ integrationId: 'bridge', name: 'fixture', allowedProjectIds: ['project'] });
+    const auth = `Babel-Integration ${rootCredential}`;
+    const portA = await freePort();
+    serviceA = new IntegrationTlsServer({ port: portA, gatewayId: 'synthetic-gateway', certificate: cert,
+      privateKey: key, registry: registryA, instanceId: hostA });
+    await serviceA.listen();
+    const registrationBody = JSON.stringify({ request_id: 'api-create', project_id: 'project',
+      session_binding: 'launch', expected_host_instance: hostA });
+    const created = await requestJson(portA, cert, auth, '/integrations/acp-sessions', 'POST', registrationBody);
+    assert.equal(created.status, 201);
+    const session = JSON.parse(created.body) as { principal_id: string; credential: string; registration_generation: number };
+    const canonical = (sequence: number) => integrationRenewalRequestId(session.principal_id, sequence);
+    const renewalPath = `/integrations/acp-sessions/${session.principal_id}/renew`;
+    const statusPath = `/integrations/acp-sessions/${session.principal_id}/status`;
+    const withheld = await requestJson(portA, cert, auth, renewalPath, 'POST', JSON.stringify({
+      request_id: canonical(1), request_sequence: 1, session_binding: 'launch',
+      expected_host_instance: hostA, expected_registration_generation: 1,
+    }));
+    assert.equal(withheld.status, 200, 'the renewal commits while its response is withheld from the client');
+    // The client never reads the withheld credential. A real gateway restart rotates boot identity.
+    await serviceA.close();
+    serviceA = undefined;
+    const portB = await freePort();
+    serviceB = new IntegrationTlsServer({ port: portB, gatewayId: 'synthetic-gateway', certificate: cert,
+      privateKey: key, registry: registryB, instanceId: hostB });
+    await serviceB.listen();
+    assert.equal((await requestJson(portB, cert, `Babel-Acp-Session ${session.credential}`)).status, 401,
+      'random boot identity invalidates the pre-restart session credential');
+
+    const statusBody = (requestId: string, sequence: number, extra: Record<string, string> = {}) => JSON.stringify({
+      request_id: requestId, request_sequence: sequence, project_id: 'project',
+      session_binding: 'launch', expected_host_instance: hostB, ...extra,
+    });
+    const issued = await requestJson(portB, cert, auth, statusPath, 'POST', statusBody(canonical(1), 1));
+    assert.equal(issued.status, 200);
+    const issuedStatus = JSON.parse(issued.body) as Record<string, unknown>;
+    assert.equal(issuedStatus['disposition'], 'issued');
+    assert.equal(issuedStatus['registration_generation'], 2);
+    assert.equal(issuedStatus['renewal_sequence'], 1, 'status reports the authoritative renewal sequence');
+    assert.equal(issuedStatus['host_instance_id'], hostB, 'status reports the serving incarnation');
+    assert.equal(Object.hasOwn(issuedStatus, 'credential'), false, 'status never returns a credential');
+    const repeated = await requestJson(portB, cert, auth, statusPath, 'POST', statusBody(canonical(1), 1));
+    assert.equal(repeated.status, 200);
+    assert.equal(JSON.parse(repeated.body)['registration_generation'], 2, 'status never duplicates the generation');
+
+    const wrongBinding = await requestJson(portB, cert, auth, statusPath, 'POST',
+      statusBody(canonical(1), 1, { session_binding: 'other-launch' }));
+    assert.equal(wrongBinding.status, 403);
+    assert.deepEqual(JSON.parse(wrongBinding.body), { error: 'session_binding_denied' });
+    const wrongProject = await requestJson(portB, cert, auth, statusPath, 'POST',
+      statusBody(canonical(1), 1, { project_id: 'other-project' }));
+    assert.equal(wrongProject.status, 403);
+    assert.deepEqual(JSON.parse(wrongProject.body), { error: 'project_scope_denied' });
+
+    const recovered = await requestJson(portB, cert, auth, renewalPath, 'POST', JSON.stringify({
+      request_id: canonical(2), request_sequence: 2, session_binding: 'launch',
+      expected_host_instance: hostB, expected_registration_generation: 2,
+    }));
+    assert.equal(recovered.status, 200);
+    const recoveredSession = JSON.parse(recovered.body) as { credential: string; registration_generation: number; expires_at_ms: number };
+    assert.equal(recoveredSession.registration_generation, 3);
+    const superseded = await requestJson(portB, cert, auth, statusPath, 'POST', statusBody(canonical(1), 1));
+    assert.equal(JSON.parse(superseded.body)['disposition'], 'superseded');
+
+    now = recoveredSession.expires_at_ms;
+    const expired = await requestJson(portB, cert, auth, statusPath, 'POST', statusBody(canonical(2), 2));
+    assert.equal(expired.status, 200);
+    assert.equal(JSON.parse(expired.body)['disposition'], 'expired');
+    assert.equal(JSON.parse(expired.body)['renewal_sequence'], 2);
+    assert.equal(Object.hasOwn(JSON.parse(expired.body) as Record<string, unknown>, 'credential'), false);
+    const expiredRetry = await requestJson(portB, cert, auth, renewalPath, 'POST', JSON.stringify({
+      request_id: canonical(2), request_sequence: 2, session_binding: 'launch',
+      expected_host_instance: hostB, expected_registration_generation: 2,
+    }));
+    assert.equal(expiredRetry.status, 403);
+    assert.deepEqual(JSON.parse(expiredRetry.body), { error: 'requalification_expired' });
+    const fresh = await requestJson(portB, cert, auth, renewalPath, 'POST', JSON.stringify({
+      request_id: canonical(3), request_sequence: 3, session_binding: 'launch',
+      expected_host_instance: hostB, expected_registration_generation: 3,
+    }));
+    assert.equal(fresh.status, 200);
+    assert.equal(JSON.parse(fresh.body).registration_generation, 4);
+
+    registryB.revokeAcpSession(session.principal_id);
+    const revoked = await requestJson(portB, cert, auth, statusPath, 'POST', statusBody(canonical(3), 3));
+    assert.equal(revoked.status, 200);
+    assert.equal(JSON.parse(revoked.body)['disposition'], 'revoked');
+    assert.equal(Object.hasOwn(JSON.parse(revoked.body) as Record<string, unknown>, 'credential'), false);
+    const revokedRetry = await requestJson(portB, cert, auth, renewalPath, 'POST', JSON.stringify({
+      request_id: canonical(4), request_sequence: 4, session_binding: 'launch',
+      expected_host_instance: hostB, expected_registration_generation: 4,
+    }));
+    assert.equal(revokedRetry.status, 403);
+    assert.deepEqual(JSON.parse(revokedRetry.body), { error: 'registration_revoked' });
+  } finally {
+    if (serviceA) await serviceA.close();
+    if (serviceB) await serviceB.close();
+    registryA.close();
+    registryB.close();
+    rmSync(root, { recursive: true, force: true });
   }
 });

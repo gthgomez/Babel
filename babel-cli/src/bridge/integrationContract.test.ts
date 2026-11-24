@@ -6,6 +6,10 @@ import {
   BABEL_INTEGRATION_CONTRACT_VERSION,
   BABEL_INTEGRATION_SCHEMA_DESCRIPTOR,
   BABEL_INTEGRATION_SCHEMA_SHA256,
+  IntegrationAcpSessionCredentialResponseSchema,
+  IntegrationAcpSessionRenewalSchema,
+  IntegrationAcpSessionStatusRequestSchema,
+  IntegrationAcpSessionStatusResponseSchema,
   IntegrationProtocolInfoSchema,
   IntegrationRpcResponseSchema,
   IntegrationRpcRequestSchema,
@@ -14,12 +18,12 @@ import {
 } from '../protocol/remoteContract.js';
 
 test('integration contract hash is stable over the exported versioned schema descriptor', () => {
-  assert.equal(BABEL_INTEGRATION_SCHEMA_SHA256, '914d712a785f3df5db5264db2d23b50f62e82ed282e1df2dec1bce126c89f29a',
+  assert.equal(BABEL_INTEGRATION_SCHEMA_SHA256, 'b2f1f0f7668dc4557367f6ad85b7a54686491108312dc1f6ab8c0c1bd18e1d49',
     'schema changes require an explicit reviewed profile/hash fixture update');
   assert.equal(BABEL_INTEGRATION_SCHEMA_SHA256,
     createHash('sha256').update(JSON.stringify(BABEL_INTEGRATION_SCHEMA_DESCRIPTOR)).digest('hex'));
   assert.equal(BABEL_INTEGRATION_CONTRACT, 'babel.integration');
-  assert.equal(BABEL_INTEGRATION_CONTRACT_VERSION, '1.0.0');
+  assert.equal(BABEL_INTEGRATION_CONTRACT_VERSION, '2.0.0');
 });
 
 test('strict protocol.info profile describes only bounded, implemented native capabilities', () => {
@@ -43,12 +47,87 @@ test('negotiation accepts only exact contract, version, and schema hash profiles
     { ok: false, reason: 'incomplete_contract_profile' });
   assert.deepEqual(negotiateIntegrationContract({ contract: 'other', version: '1.0.0', schemaHash: BABEL_INTEGRATION_SCHEMA_SHA256 }),
     { ok: false, reason: 'unsupported_contract' });
-  assert.deepEqual(negotiateIntegrationContract({ contract: BABEL_INTEGRATION_CONTRACT, version: '2.0.0', schemaHash: BABEL_INTEGRATION_SCHEMA_SHA256 }),
+  assert.deepEqual(negotiateIntegrationContract({ contract: BABEL_INTEGRATION_CONTRACT, version: '9.0.0', schemaHash: BABEL_INTEGRATION_SCHEMA_SHA256 }),
     { ok: false, reason: 'unsupported_version' });
   assert.deepEqual(negotiateIntegrationContract({ contract: BABEL_INTEGRATION_CONTRACT, version: BABEL_INTEGRATION_CONTRACT_VERSION, schemaHash: '0'.repeat(64) }),
     { ok: false, reason: 'schema_mismatch' });
   assert.deepEqual(negotiateIntegrationContract({ contract: BABEL_INTEGRATION_CONTRACT, version: BABEL_INTEGRATION_CONTRACT_VERSION, schemaHash: BABEL_INTEGRATION_SCHEMA_SHA256 }),
     { ok: true });
+  assert.deepEqual(negotiateIntegrationContract({ contract: BABEL_INTEGRATION_CONTRACT, version: '1.0.0', schemaHash: BABEL_INTEGRATION_SCHEMA_SHA256 }),
+    { ok: false, reason: 'unsupported_version' }, 'the superseded draft profile is never a fallback');
+  assert.deepEqual((BABEL_INTEGRATION_SCHEMA_DESCRIPTOR as { negotiation: { exactMatchOnly: boolean } })
+    .negotiation.exactMatchOnly, true);
+});
+
+test('renewal requires positive safe-integer generation and sequence fences', () => {
+  const renewal = { request_id: 'renewal:c1b6af6e-cb97-4317-aa4c-9831f9f2c3cb:1', request_sequence: 1,
+    session_binding: 'launch-1', expected_host_instance: 'c1b6af6e-cb97-4317-aa4c-9831f9f2c3cb',
+    expected_registration_generation: 1 };
+  assert.equal(IntegrationAcpSessionRenewalSchema.safeParse(renewal).success, true);
+  assert.equal(IntegrationAcpSessionRenewalSchema.safeParse({ ...renewal, request_id: 'renew-1' }).success, false,
+    'renewal IDs must use the canonical namespace');
+  for (const field of ['request_sequence', 'expected_registration_generation'] as const) {
+    assert.equal(IntegrationAcpSessionRenewalSchema.safeParse({ ...renewal, [field]: Number.MAX_SAFE_INTEGER }).success, true);
+    for (const invalid of [undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '1', null]) {
+      assert.equal(IntegrationAcpSessionRenewalSchema.safeParse({ ...renewal, [field]: invalid }).success, false,
+        `rejects ${field}=${String(invalid)}`);
+    }
+  }
+  for (const field of ['request_sequence', 'expected_registration_generation'] as const) {
+    const missing = { ...renewal } as Record<string, unknown>;
+    delete missing[field];
+    assert.equal(IntegrationAcpSessionRenewalSchema.safeParse(missing).success, false);
+  }
+  const descriptorRenewal = (BABEL_INTEGRATION_SCHEMA_DESCRIPTOR as {
+    schemas: { acpSessionRenewal: { required: string[]; properties: Record<string, unknown> } };
+  }).schemas.acpSessionRenewal;
+  assert.deepEqual(descriptorRenewal.required,
+    ['request_id', 'request_sequence', 'session_binding', 'expected_host_instance', 'expected_registration_generation']);
+  for (const field of ['request_sequence', 'expected_registration_generation']) {
+    assert.deepEqual(descriptorRenewal.properties[field],
+      { maximum: Number.MAX_SAFE_INTEGER, minimum: 1, type: 'integer' });
+  }
+});
+
+test('status reconciliation exposes only disposition and authoritative metadata', () => {
+  const statusRequest = { request_id: 'renew-1', request_sequence: 2, project_id: 'p1',
+    session_binding: 'launch-1', expected_host_instance: 'c1b6af6e-cb97-4317-aa4c-9831f9f2c3cb' };
+  assert.equal(IntegrationAcpSessionStatusRequestSchema.safeParse(statusRequest).success, true);
+  assert.equal(IntegrationAcpSessionStatusRequestSchema.safeParse({ ...statusRequest, extra: true }).success, false);
+  assert.equal(IntegrationAcpSessionStatusRequestSchema.safeParse({ ...statusRequest, request_sequence: 0 }).success, false);
+  const response = { principal_id: 'c1b6af6e-cb97-4317-aa4c-9831f9f2c3cb', project_id: 'p1',
+    session_binding: 'launch-1', request_id: 'renewal:c1b6af6e-cb97-4317-aa4c-9831f9f2c3cb:2',
+    request_sequence: 2, renewal_sequence: 2, host_instance_id: 'c1b6af6e-cb97-4317-aa4c-9831f9f2c3cb',
+    registration_generation: 3, expires_at_ms: 1000, disposition: 'issued' };
+  assert.equal(IntegrationAcpSessionStatusResponseSchema.safeParse(response).success, true);
+  assert.equal(IntegrationAcpSessionStatusResponseSchema.safeParse({ ...response, disposition: 'rotated' }).success, false);
+  assert.equal(IntegrationAcpSessionStatusResponseSchema.safeParse({ ...response, disposition: 'retired' }).success, true);
+  assert.equal(IntegrationAcpSessionStatusResponseSchema.safeParse({ ...response, credential: 'secret' }).success, false,
+    'status can never carry a credential');
+  assert.equal(IntegrationAcpSessionStatusResponseSchema.safeParse({ ...response, renewal_sequence: -1 }).success, false);
+  assert.equal(IntegrationAcpSessionStatusResponseSchema.safeParse({ ...response,
+    disposition: 'revoked', expires_at_ms: 0 }).success, true,
+  'status accepts the legacy disabled-row expiry sentinel');
+  assert.equal(IntegrationAcpSessionStatusResponseSchema.safeParse({ ...response, expires_at_ms: -1 }).success, false);
+
+  const credentialResponse = { principal_id: response.principal_id, session_id: response.principal_id,
+    project_id: response.project_id, registration_generation: 1, expires_at_ms: 1,
+    renew_after_ms: 60_000, credential: 'x'.repeat(43) };
+  assert.equal(IntegrationAcpSessionCredentialResponseSchema.safeParse(credentialResponse).success, true);
+  assert.equal(IntegrationAcpSessionCredentialResponseSchema.safeParse({ ...credentialResponse, expires_at_ms: 0 }).success, false,
+    'live credential responses remain strictly positive');
+  const descriptorStatus = (BABEL_INTEGRATION_SCHEMA_DESCRIPTOR as {
+    schemas: {
+      acpSessionStatusRequest: { required: string[] };
+      acpSessionStatusResponse: { required: string[]; properties: Record<string, unknown> };
+    };
+  }).schemas;
+  assert.deepEqual(descriptorStatus.acpSessionStatusRequest.required,
+    ['request_id', 'request_sequence', 'project_id', 'session_binding', 'expected_host_instance']);
+  assert.deepEqual(descriptorStatus.acpSessionStatusResponse.required,
+    ['principal_id', 'project_id', 'session_binding', 'request_id', 'request_sequence',
+      'renewal_sequence', 'host_instance_id', 'registration_generation', 'expires_at_ms', 'disposition']);
+  assert.equal(Object.hasOwn(descriptorStatus.acpSessionStatusResponse.properties, 'credential'), false);
 });
 
 test('strict ingress schemas reject unsupported methods and authority-bearing fields', () => {
