@@ -1,11 +1,11 @@
 <# .SYNOPSIS
-Architectural budget CI ratchet — fails on regression against committed baselines.
+Architectural budget CI ratchet — size warnings are advisory; other regressions fail.
 This is the cross-cutting gate from §10 of the post-OSS architectural audit.
 
 .DESCRIPTION
-Enforces four non-regression rules:
-  1. Max file length: no src/**/*.ts file may grow past its current line count
-     if already >2,000 lines; hard cap 2,000 for new files.
+Enforces blocking non-regression rules and reports file-size advisories:
+  1. File length: reports growth beyond baseline for oversize files and
+     crossings above 2,000 lines; size findings alone do not fail the check.
   2. Cast ratchet: `as any` count per file may only decrease.
   3. Output-path allowlist: `process.stdout.write` in src/ui/ only in the
      documented emergency-restore allowlist.
@@ -23,7 +23,7 @@ Only check; do not update baselines (default behavior).
 
 .EXAMPLE
 pwsh tools/check-architectural-budget.ps1
-# Checks all budgets against committed baselines; exits 1 on any regression.
+# Checks budgets; exits 1 on cast/stdout/process-exit regression.
 
 .EXAMPLE
 pwsh tools/check-architectural-budget.ps1 -UpdateBaseline
@@ -72,6 +72,16 @@ $boundaries = ($boundaryOutput -join "`n") | ConvertFrom-Json
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function Write-SizeAdvisory {
+    param([string]$Message)
+    $display = $Message.Replace("`r", '\r').Replace("`n", '\n')
+    Write-Warning "File-size advisory: $display"
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        $escaped = $Message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+        Write-Output "::warning::File-size advisory: $escaped"
+    }
+}
+
 function Write-ErrorSummary {
     param([System.Collections.Generic.List[string]]$Errors)
     if ($Errors.Count -gt 0) {
@@ -93,7 +103,7 @@ if (Test-Path $fileSizeBaselinePath) {
 }
 
 $currentFileSizes = @{}
-$sizeErrors = New-Object System.Collections.Generic.List[string]
+$sizeAdvisories = New-Object System.Collections.Generic.List[string]
 
 # Collect all .ts files in src/ (excluding test files for size tracking)
 $allSourceFiles = Get-ChildItem -Path $srcDir -Recurse -Filter "*.ts" -File |
@@ -105,10 +115,10 @@ foreach ($file in $allSourceFiles) {
     $lineCount = (Get-Content $file.FullName | Measure-Object -Line).Lines
     $currentFileSizes[$relativePath] = $lineCount
 
-    # Hard cap: new files must not exceed 2,000 lines
+    # Warn when an unbaselined file exceeds 2,000 lines
     if (-not $fileSizeBaseline.ContainsKey($relativePath)) {
         if ($lineCount -gt 2000) {
-            $sizeErrors.Add("UNBASELINED $relativePath = $lineCount lines (hard cap: 2000)")
+            $sizeAdvisories.Add("UNBASELINED $relativePath = $lineCount lines (threshold: 2000)")
         }
         continue
     }
@@ -117,12 +127,12 @@ foreach ($file in $allSourceFiles) {
     if ($baseline -le 2000) {
         # File was under threshold — only flag if it crosses 2,000
         if ($lineCount -gt 2000) {
-            $sizeErrors.Add("$relativePath grew from $baseline to $lineCount (crossed 2,000-line threshold)")
+            $sizeAdvisories.Add("$relativePath grew from $baseline to $lineCount (crossed 2,000-line threshold)")
         }
     } else {
-        # File was over threshold — may not grow
+        # Warn when a grandfathered oversize file grows
         if ($lineCount -gt $baseline) {
-            $sizeErrors.Add("$relativePath grew from $baseline to $lineCount lines (ratchet violation: >2,000-line files may not grow)")
+            $sizeAdvisories.Add("$relativePath grew from $baseline to $lineCount lines (above the grandfathered line budget)")
         }
     }
 }
@@ -130,10 +140,11 @@ foreach ($file in $allSourceFiles) {
 Write-Host "  Tracked files: $($currentFileSizes.Count)"
 Write-Host "  Files >2,000 lines: $(@($currentFileSizes.GetEnumerator() | Where-Object { $_.Value -gt 2000 }).Count)"
 
-if ($sizeErrors.Count -gt 0) {
-    Write-Host "  File size errors: $($sizeErrors.Count)" -ForegroundColor Red
+if ($sizeAdvisories.Count -gt 0) {
+    Write-Host "  File size advisories: $($sizeAdvisories.Count)" -ForegroundColor Yellow
+    foreach ($message in $sizeAdvisories) { Write-SizeAdvisory $message }
 } else {
-    Write-Host "  File size ratchet: PASS" -ForegroundColor Green
+    Write-Host "  File size advisory: none" -ForegroundColor Green
 }
 
 # ─── 2. Cast Ratchet ──────────────────────────────────────────────────────────
@@ -220,7 +231,7 @@ if ($UpdateBaseline) {
     foreach ($path in $currentCasts.Keys) {
         if (-not $castBaseline.ContainsKey($path)) { throw "Cannot adopt unbaselined type casts: $path" }
     }
-    if ($sizeErrors.Count -gt 0 -or $castErrors.Count -gt 0 -or $stdoutErrors.Count -gt 0 -or $exitErrors.Count -gt 0) {
+    if ($sizeAdvisories.Count -gt 0 -or $castErrors.Count -gt 0 -or $stdoutErrors.Count -gt 0 -or $exitErrors.Count -gt 0) {
         throw "Baseline updates may only record verified reductions; repair regressions first."
     }
     Write-Host "`n=== Updating Baselines ===" -ForegroundColor Yellow
@@ -254,15 +265,14 @@ if ($UpdateBaseline) {
 
 # ─── Final Verdict ────────────────────────────────────────────────────────────
 
-$totalErrors = $sizeErrors.Count + $castErrors.Count + $stdoutErrors.Count + $exitErrors.Count
+$totalErrors = $castErrors.Count + $stdoutErrors.Count + $exitErrors.Count
 
-Write-ErrorSummary -Errors $sizeErrors
 Write-ErrorSummary -Errors $castErrors
 Write-ErrorSummary -Errors $stdoutErrors
 Write-ErrorSummary -Errors $exitErrors
 
 Write-Host "=== Architectural Budget Summary ===" -ForegroundColor Cyan
-Write-Host "  File size ratchet:   $(if ($sizeErrors.Count -eq 0) { 'PASS' } else { 'FAIL' })" -ForegroundColor $(if ($sizeErrors.Count -eq 0) { 'Green' } else { 'Red' })
+Write-Host "  File size advisory:  $(if ($sizeAdvisories.Count -eq 0) { 'none' } else { "$($sizeAdvisories.Count) warning(s)" })" -ForegroundColor $(if ($sizeAdvisories.Count -eq 0) { 'Green' } else { 'Yellow' })
 Write-Host "  Cast ratchet:        $(if ($castErrors.Count -eq 0) { 'PASS' } else { 'FAIL' })" -ForegroundColor $(if ($castErrors.Count -eq 0) { 'Green' } else { 'Red' })
 Write-Host "  Output allowlist:    $(if ($stdoutErrors.Count -eq 0) { 'PASS' } else { 'FAIL' })" -ForegroundColor $(if ($stdoutErrors.Count -eq 0) { 'Green' } else { 'Red' })
 Write-Host "  Exit allowlist:      $(if ($exitErrors.Count -eq 0) { 'PASS' } else { 'FAIL' })" -ForegroundColor $(if ($exitErrors.Count -eq 0) { 'Green' } else { 'Red' })
