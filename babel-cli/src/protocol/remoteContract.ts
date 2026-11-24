@@ -4,6 +4,10 @@ import { z } from 'zod';
 export const BABEL_INTEGRATION_CONTRACT = 'babel.integration' as const;
 export const BABEL_INTEGRATION_CONTRACT_VERSION = '2.0.0' as const;
 
+/** Canonical native chat thread ID; must match services/threadStore/threadIds.ts. */
+export const NATIVE_THREAD_ID_PATTERN = /^chat-[0-9a-f]{12}$/;
+export const NativeThreadIdSchema = z.string().regex(NATIVE_THREAD_ID_PATTERN);
+
 export const IntegrationCapabilitySchema = z.enum([
   'transport.create',
   'command.lookup',
@@ -129,16 +133,18 @@ export const IntegrationRpcRequestSchema = z.discriminatedUnion('method', [
 export const IntegrationCommandLookupResultSchema = z.union([
   z.object({ command_id: z.string().min(1).max(128), state: z.literal('unknown'), reason: z.literal('no_admission_record') }).strict(),
   z.object({ command_id: z.string().min(1).max(128), fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-    state: z.enum(['admitted', 'settled', 'unknown']), thread_id: z.string().uuid().nullable(),
+    state: z.enum(['admitted', 'settled', 'unknown']), thread_id: NativeThreadIdSchema.nullable(),
     host_instance_id: z.string().uuid(), registration_generation: z.number().int().min(1), result: z.unknown().nullable() }).strict(),
 ]);
 
 export const IntegrationRpcResponseSchema = z.union([
   z.object({ jsonrpc: z.literal('2.0'), id: z.string().min(1).max(128),
-    result: z.union([IntegrationCommandLookupResultSchema, z.object({ thread_id: z.string().uuid() }).strict()]) }).strict(),
+    result: z.union([IntegrationCommandLookupResultSchema,
+      z.object({ thread_id: NativeThreadIdSchema }).strict()]) }).strict(),
   z.object({ jsonrpc: z.literal('2.0'), id: z.string().min(1).max(128),
     error: z.object({ code: z.number().int(), message: z.string().min(1).max(256),
-      data: z.object({ reason: z.string().min(1).max(128), thread_id: z.string().uuid().optional() }).strict().optional() }).strict() }).strict(),
+      data: z.object({ reason: z.string().min(1).max(128),
+        thread_id: NativeThreadIdSchema.optional() }).strict().optional() }).strict() }).strict(),
 ]);
 
 function canonicalize(value: unknown): unknown {

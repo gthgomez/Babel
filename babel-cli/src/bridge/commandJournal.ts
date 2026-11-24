@@ -40,21 +40,29 @@ export class NativeCommandJournal {
     // create its database, WAL or shared-memory sidecars.
     options.protectStoreDirectory(dirname(path));
     this.db = new DatabaseSync(path);
-    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=10000;');
-    this.db.exec(`CREATE TABLE IF NOT EXISTS native_command_journal (
-      command_id TEXT PRIMARY KEY,
-      fingerprint TEXT NOT NULL,
-      principal_id TEXT NOT NULL,
-      project_id TEXT NOT NULL,
-      thread_id TEXT,
-      host_instance_id TEXT NOT NULL,
-      registration_generation INTEGER NOT NULL,
-      state TEXT NOT NULL CHECK (state IN ('admitted','settled','unknown')),
-      result_json TEXT,
-      updated_at INTEGER NOT NULL
-    );`);
-    this.db.prepare(`UPDATE native_command_journal SET state='unknown', updated_at=?
-      WHERE state='admitted' AND host_instance_id<>?`).run(Date.now(), options.hostInstanceId);
+    try {
+      // Set the lock wait before WAL/table work so a contended store does not
+      // fail immediately; close a partially initialized database on any failure.
+      this.db.exec('PRAGMA busy_timeout=10000;');
+      this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
+      this.db.exec(`CREATE TABLE IF NOT EXISTS native_command_journal (
+        command_id TEXT PRIMARY KEY,
+        fingerprint TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        thread_id TEXT,
+        host_instance_id TEXT NOT NULL,
+        registration_generation INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('admitted','settled','unknown')),
+        result_json TEXT,
+        updated_at INTEGER NOT NULL
+      );`);
+      this.db.prepare(`UPDATE native_command_journal SET state='unknown', updated_at=?
+        WHERE state='admitted' AND host_instance_id<>?`).run(Date.now(), options.hostInstanceId);
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
   reserve(input: {

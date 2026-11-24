@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { NativeCommandJournal } from './commandJournal.js';
 
@@ -48,4 +49,22 @@ test('native command journal scopes lookup and converts crash-window admission t
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('native command journal closes a partially initialized database on schema failure', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-command-journal-failure-'));
+  const path = join(root, 'private', 'commands.sqlite');
+  mkdirSync(dirname(path), { recursive: true });
+  const raw = new DatabaseSync(path);
+  raw.exec('CREATE TABLE native_command_journal (command_id TEXT PRIMARY KEY)');
+  raw.close();
+  assert.throws(() => new NativeCommandJournal(path, {
+    hostInstanceId: 'instance-a', protectStoreDirectory: () => undefined,
+  }), /no such column|state/i);
+  if (process.platform === 'win32') {
+    // The failed constructor must have closed its handle; Windows rejects
+    // deleting a database file still held open by SQLite.
+    rmSync(path);
+  }
+  rmSync(root, { recursive: true, force: true });
 });

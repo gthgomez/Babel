@@ -23,6 +23,7 @@ import {
   buildReadOnlyGitEnvironment,
   classifyGitTermination,
   collectWorkspaceChanges,
+  isSafeRacyIndexStamp,
   sanitizeNoIndexDiff,
   WORKSPACE_CHANGE_CONFIG_SENTINEL_KEY,
   WORKSPACE_CHANGE_ISOLATED_SENTINEL_KEY,
@@ -367,6 +368,15 @@ test('isolated index copy keeps racy-clean re-checks for a same-size edit', () =
   } finally {
     removeTree(root)
   }
+})
+
+test('private index stamp predicate rejects a rounded-up timestamp', () => {
+  // The bound is the floored source second; anything after it would let Git
+  // treat a racy entry as definitely clean.
+  assert.equal(isSafeRacyIndexStamp(1_700_000_000_000, 1_700_000_000), true)
+  assert.equal(isSafeRacyIndexStamp(1_699_999_999_000, 1_700_000_000), true)
+  assert.equal(isSafeRacyIndexStamp(1_700_000_000_500, 1_700_000_000), false)
+  assert.equal(isSafeRacyIndexStamp(1_700_000_001_000, 1_700_000_000), false)
 })
 
 test('workspace inspection refuses a file list larger than its count budget', () => {

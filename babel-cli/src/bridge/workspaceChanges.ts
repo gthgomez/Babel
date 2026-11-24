@@ -337,13 +337,29 @@ function copyBoundedFile(source: string, destination: string, maxBytes: number):
  * The timestamp is the stat of the same descriptor that supplies the bytes, so
  * a replaced index path cannot pair one index's bytes with another index's
  * timestamp. A same-descriptor in-place rewrite during the read can only leave
- * the recorded timestamp older than the bytes, which adds re-checks.
+ * the recorded timestamp older than the bytes, which adds re-checks. The stamp
+ * the private file actually stores is verified below, because a coarse temp
+ * filesystem can round a timestamp up past the bound.
  */
+export function isSafeRacyIndexStamp(actualMtimeMs: number, sourceSeconds: number): boolean {
+  return actualMtimeMs <= sourceSeconds * 1000
+}
+
+function stampRacyIndexTimestamp(destination: string, sourceSeconds: number): void {
+  // Retry one common coarse filesystem tick (2 s) below the bound, then fail
+  // closed rather than hand Git a stamp that silently drops racy entries.
+  for (const stamp of [sourceSeconds, sourceSeconds - 2]) {
+    utimesSync(destination, stamp, stamp)
+    if (isSafeRacyIndexStamp(lstatSync(destination).mtimeMs, sourceSeconds)) return
+  }
+  throw new ScopeError('repository scope could not be validated')
+}
+
 function copyIndexPreservingRacyWindow(source: string, destination: string): void {
   const snapshot = readBoundedFileSnapshot(source, MAX_INDEX_BYTES)
   const sourceSeconds = Math.floor(snapshot.mtimeMs / 1000)
   writeFileSync(destination, snapshot.bytes)
-  utimesSync(destination, sourceSeconds, sourceSeconds)
+  stampRacyIndexTimestamp(destination, sourceSeconds)
 }
 
 function assertOptionalDirectory(path: string): void {

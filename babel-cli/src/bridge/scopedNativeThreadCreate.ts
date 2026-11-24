@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
 import type { JsonRpcResponse } from '../protocol/jsonRpc.js';
+import { IntegrationRpcResponseSchema, NATIVE_THREAD_ID_PATTERN } from '../protocol/remoteContract.js';
 import type { ProtocolGateway } from './protocolGateway.js';
 import type { NativeCommandJournal } from './commandJournal.js';
 import { allocateThreadId } from '../services/threadStore/threadIds.js';
@@ -35,6 +36,30 @@ export type ScopedThreadCreateResult =
     'project_identity_changed' | 'stale_host_instance' | 'command_fingerprint_conflict' |
     'native_create_unavailable'; threadId?: string }
   | { ok: false; reason: 'reconcile_required'; threadId?: string };
+
+/**
+ * A committed native create may only be settled/replayed when the full strict
+ * integration success envelope is bound to the reserved command ID and the
+ * canonical planned thread ID. Anything else is ambiguous after admission:
+ * mark unknown and require reconciliation; never replay, retry, or infer
+ * that no effect occurred.
+ */
+function isStrictScopedCreateSuccess(
+  response: unknown,
+  commandId: string,
+  plannedThreadId: string,
+): response is JsonRpcResponse {
+  if (!NATIVE_THREAD_ID_PATTERN.test(plannedThreadId)) return false;
+  if (!IntegrationRpcResponseSchema.safeParse(response).success) return false;
+  if (!response || typeof response !== 'object') return false;
+  const envelope = response as { jsonrpc?: unknown; id?: unknown; result?: unknown; error?: unknown };
+  if (envelope.jsonrpc !== '2.0' || envelope.id !== commandId || envelope.error !== undefined) return false;
+  const result = envelope.result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+  const keys = Object.keys(result);
+  return keys.length === 1 && keys[0] === 'thread_id' &&
+    (result as { thread_id?: unknown }).thread_id === plannedThreadId;
+}
 
 /**
  * Strict, non-transport admission seam for native thread creation. A caller
@@ -79,6 +104,7 @@ export async function createScopedNativeThread(
   }
 
   const plannedThreadId = allocateThreadId();
+  if (!NATIVE_THREAD_ID_PATTERN.test(plannedThreadId)) return { ok: false, reason: 'native_create_unavailable' };
   const reservation = deps.journal.reserve({
     commandId: input.commandId,
     principalId: principal.principalId,
@@ -96,9 +122,12 @@ export async function createScopedNativeThread(
   if (!reservation.created) {
     if (reservation.record.state === 'settled' && reservation.record.resultJson) {
       try {
-        return { ok: true, replayed: true, response: JSON.parse(reservation.record.resultJson) as JsonRpcResponse };
+        const stored = JSON.parse(reservation.record.resultJson) as unknown;
+        if (isStrictScopedCreateSuccess(stored, input.commandId, reservation.record.threadId ?? '')) {
+          return { ok: true, replayed: true, response: stored };
+        }
       } catch {
-        return { ok: false, reason: 'reconcile_required' };
+        /* malformed durable response: reconcile, never replay */
       }
     }
     return { ok: false, reason: 'reconcile_required', ...(reservation.record.threadId ? { threadId: reservation.record.threadId } : {}) };
@@ -124,8 +153,7 @@ export async function createScopedNativeThread(
       projectGeneration: project.generation,
       hostInstanceId: principal.hostInstanceId,
     });
-    const result = 'result' in response ? response.result as { thread_id?: unknown } : null;
-    if (!result || result.thread_id !== plannedThreadId) {
+    if (!isStrictScopedCreateSuccess(response, input.commandId, plannedThreadId)) {
       deps.journal.markUnknown({ commandId: input.commandId, principalId: principal.principalId });
       return { ok: false, reason: 'reconcile_required', threadId: plannedThreadId };
     }

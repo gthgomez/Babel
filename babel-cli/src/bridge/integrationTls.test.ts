@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createServer as createTcpServer } from 'node:net';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:https';
@@ -233,14 +233,15 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     const createdThread = await rpc(session.credential, 'cmd-1', 'thread.create', createParams);
     assert.equal(createdThread.status, 200);
     const createResponse = JSON.parse(createdThread.body) as { result: { thread_id: string } };
-    assert.ok(createResponse.result.thread_id);
+    const nativeThreadId = createResponse.result.thread_id;
+    assert.match(nativeThreadId, /^chat-[0-9a-f]{12}$/, 'create exposes the canonical native thread ID');
     const duplicateThread = await rpc(session.credential, 'cmd-1', 'thread.create', createParams);
     assert.deepEqual(JSON.parse(duplicateThread.body), createResponse, 'duplicate create replays its durable response without dispatch');
     assert.equal(dispatchCount, 1);
     const lookup = await rpc(session.credential, 'lookup-1', 'command.lookup', { ...createParams, command_id: 'cmd-1' });
     const lookupResult = JSON.parse(lookup.body) as { result: { state: string; thread_id: string } };
     assert.equal(lookupResult.result.state, 'settled');
-    assert.equal(lookupResult.result.thread_id, createResponse.result.thread_id);
+    assert.equal(lookupResult.result.thread_id, nativeThreadId, 'lookup returns the same native thread ID');
 
     const secondCreated = await requestJson(port, cert, auth, '/integrations/acp-sessions', 'POST', JSON.stringify({
       request_id: 'request-2', project_id: 'project-one', session_binding: 'launch-2', expected_host_instance: info.instance_id,
@@ -267,17 +268,18 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     const lostResponse = JSON.parse(lost.body) as { error: { data: { reason: string; thread_id: string } } };
     assert.equal(lostResponse.error.data.reason, 'reconcile_required');
     const lostThreadId = lostResponse.error.data.thread_id;
+    assert.match(lostThreadId, /^chat-[0-9a-f]{12}$/, 'reconciliation error carries the same native thread ID shape');
     const countAfterLoss = dispatchCount;
     const noReplay = await rpc(session.credential, 'cmd-lost', 'thread.create', lostParams);
     assert.equal(JSON.parse(noReplay.body).error.data.thread_id, lostThreadId);
     assert.equal(dispatchCount, countAfterLoss, 'unknown create is not replayed automatically');
     const lostLookup = await rpc(session.credential, 'lookup-lost', 'command.lookup', { ...lostParams, command_id: 'cmd-lost' });
     assert.equal(JSON.parse(lostLookup.body).result.state, 'unknown');
-    assert.equal(JSON.parse(lostLookup.body).result.thread_id, lostThreadId);
+    assert.equal(JSON.parse(lostLookup.body).result.thread_id, lostThreadId,
+      'lookup and reconciliation error expose the same native thread ID');
 
     const previousInstance = info.instance_id;
     await service.close();
-    journal.close();
     closeProtocolHostState(gateway.host);
     gateway = new ProtocolGateway({ allowedWorkspaceRoot: root, remoteSurface: true, enforceControlLease: true });
     const restartedPort = await freePort();
@@ -346,7 +348,6 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     'all four scoped mutation classes require an exact profile and zero-profile RPC cannot dispatch native work');
   } finally {
     await service.close();
-    journal.close();
     closeProtocolHostState(gateway.host);
     registry.close();
     rmSync(root, { recursive: true, force: true });
@@ -665,6 +666,347 @@ test('TLS validates successful output schemas and never emits malformed syntheti
       JSON.stringify({ project_id: 'project', expected_host_instance: host })));
   } finally {
     await service.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TLS rejects an invalid native thread ID in lookup output with a sanitized failure', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-integration-invalid-thread-id-'));
+  const generated = spawnSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'),
+    '-out', join(root, 'cert.pem'), '-days', '1', '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1',
+  ], { encoding: 'utf8', windowsHide: true });
+  if (generated.error || generated.status !== 0) rmSync(root, { recursive: true, force: true });
+  assert.equal(generated.error, undefined,
+    'openssl is a required precondition for the synthetic local TLS identity; install it on the test host');
+  assert.equal(generated.status === 0, true,
+    `openssl failed to generate the synthetic local TLS identity (status ${String(generated.status)})`);
+  const cert = readFileSync(join(root, 'cert.pem'));
+  const key = readFileSync(join(root, 'key.pem'));
+  const host = '99999999-9999-4999-8999-999999999999';
+  const principalId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const sessionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const principal = { principalId, projectId: 'project', sessionBinding: 'launch',
+    registrationGeneration: 1, projectGeneration: 1, hostInstanceId: host, expiresAtMs: 1_000 };
+  const registry = {
+    authenticateAcpSession: () => principal,
+    resolveTransportSession: () => ({ ...principal, transportSessionId: sessionId }),
+  } as unknown as IntegrationRegistry;
+  const invalidThreadId = 'chat-INVALID';
+  const journal = {
+    lookup: () => ({ commandId: 'cmd-invalid-thread', fingerprint: 'a'.repeat(64),
+      principalId, projectId: 'project', threadId: invalidThreadId, hostInstanceId: host,
+      registrationGeneration: 1, state: 'settled', resultJson: null, updatedAt: 0 }),
+  } as unknown as NativeCommandJournal;
+  const port = await freePort();
+  const service = new IntegrationTlsServer({ port, gatewayId: 'synthetic-gateway', certificate: cert,
+    privateKey: key, registry, commandJournal: journal, instanceId: host });
+  try {
+    await service.listen();
+    const response = await requestJson(port, cert, 'Babel-Acp-Session synthetic-session', '/rpc', 'POST',
+      JSON.stringify({ jsonrpc: '2.0', id: 'lookup-invalid-thread', method: 'command.lookup',
+        params: { project_id: 'project', session_id: sessionId, command_id: 'cmd-invalid-thread',
+          expected_host_instance: host } }));
+    assert.equal(response.status, 500);
+    assert.deepEqual(JSON.parse(response.body), { error: 'integration_response_contract_violation' });
+    assert.equal(response.body.includes(invalidThreadId), false, 'invalid native ID is never echoed');
+    assert.equal(response.body.toLowerCase().includes('zod'), false, 'schema diagnostics are never emitted');
+  } finally {
+    await service.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TLS close releases an incomplete authenticated request body without stranding', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-integration-incomplete-body-'));
+  const generated = spawnSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'),
+    '-out', join(root, 'cert.pem'), '-days', '1', '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1',
+  ], { encoding: 'utf8', windowsHide: true });
+  if (generated.error || generated.status !== 0) rmSync(root, { recursive: true, force: true });
+  assert.equal(generated.error, undefined,
+    'openssl is a required precondition for the synthetic local TLS identity; install it on the test host');
+  assert.equal(generated.status === 0, true,
+    `openssl failed to generate the synthetic local TLS identity (status ${String(generated.status)})`);
+  const cert = readFileSync(join(root, 'cert.pem'));
+  const key = readFileSync(join(root, 'key.pem'));
+  const host = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  let markAuthenticated!: () => void;
+  const authenticated = new Promise<void>((resolve) => { markAuthenticated = resolve; });
+  const registry = {
+    authenticateIntegration: () => {
+      markAuthenticated();
+      return true;
+    },
+  } as unknown as IntegrationRegistry;
+  const port = await freePort();
+  const service = new IntegrationTlsServer({ port, gatewayId: 'synthetic-gateway', certificate: cert,
+    privateKey: key, registry, instanceId: host });
+  let client: ReturnType<typeof request> | undefined;
+  try {
+    await service.listen();
+    const oversize = await requestJson(port, cert, 'Babel-Integration synthetic-owner',
+      '/integrations/acp-sessions', 'POST', JSON.stringify({ payload: 'x'.repeat(20_000) }));
+    assert.equal(oversize.status, 413, 'complete oversize bodies keep their bounded rejection');
+    assert.deepEqual(JSON.parse(oversize.body), { error: 'registration_payload_too_large' });
+
+    client = request({ host: '127.0.0.1', port, path: '/integrations/acp-sessions', method: 'POST',
+      ca: cert, rejectUnauthorized: true, headers: {
+        authorization: 'Babel-Integration synthetic-owner',
+        'content-type': 'application/json', 'content-length': '1024',
+        'x-babel-contract': 'babel.integration',
+        'x-babel-contract-version': BABEL_INTEGRATION_CONTRACT_VERSION,
+        'x-babel-schema-sha256': BABEL_INTEGRATION_SCHEMA_SHA256,
+      } });
+    client.on('error', () => undefined);
+    client.flushHeaders();
+    client.write('{"request_id":"partial"');
+    await Promise.race([
+      authenticated,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(
+        'incomplete authenticated request did not reach the body reader')), 5_000)),
+    ]);
+    const closed = await Promise.race([
+      service.close().then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 5_000)),
+    ]);
+    assert.equal(closed, true, 'close must settle after an incomplete body abort');
+  } finally {
+    client?.destroy();
+    await service.close().catch(() => undefined);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TLS listen failure rejects the listen error even if an owned journal close throws', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-integration-listen-close-error-'));
+  const generated = spawnSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'),
+    '-out', join(root, 'cert.pem'), '-days', '1', '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1',
+  ], { encoding: 'utf8', windowsHide: true });
+  if (generated.error || generated.status !== 0) rmSync(root, { recursive: true, force: true });
+  assert.equal(generated.error, undefined,
+    'openssl is a required precondition for the synthetic local TLS identity; install it on the test host');
+  assert.equal(generated.status === 0, true,
+    `openssl failed to generate the synthetic local TLS identity (status ${String(generated.status)})`);
+  const cert = readFileSync(join(root, 'cert.pem'));
+  const key = readFileSync(join(root, 'key.pem'));
+  const blocker = createTcpServer();
+  await new Promise<void>((resolve, reject) => blocker.once('error', reject).listen(0, '127.0.0.1', resolve));
+  const address = blocker.address();
+  assert.ok(address && typeof address === 'object');
+  let created = 0;
+  const journal = {
+    close: () => { throw new Error('synthetic journal close failure'); },
+  } as unknown as NativeCommandJournal;
+  const service = new IntegrationTlsServer({ port: address.port, gatewayId: 'synthetic-gateway',
+    certificate: cert, privateKey: key, integrationCredential: 'synthetic-owner-' + 'x'.repeat(40),
+    commandJournal: () => {
+      created += 1;
+      return journal;
+    } });
+  try {
+    await assert.rejects(service.listen(), /EADDRINUSE|address already in use/i);
+    assert.equal(created, 1);
+    await service.close();
+  } finally {
+    await service.close().catch(() => undefined);
+    await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TLS owns factory journals, reacquires on re-listen, and never closes borrowed journals', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-integration-journal-owner-'));
+  const generated = spawnSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'),
+    '-out', join(root, 'cert.pem'), '-days', '1', '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1',
+  ], { encoding: 'utf8', windowsHide: true });
+  if (generated.error || generated.status !== 0) rmSync(root, { recursive: true, force: true });
+  assert.equal(generated.error, undefined,
+    'openssl is a required precondition for the synthetic local TLS identity; install it on the test host');
+  assert.equal(generated.status === 0, true,
+    `openssl failed to generate the synthetic local TLS identity (status ${String(generated.status)})`);
+  const cert = readFileSync(join(root, 'cert.pem'));
+  const key = readFileSync(join(root, 'key.pem'));
+  const privateDir = join(root, 'private');
+  mkdirSync(privateDir, { mode: 0o700 });
+  const ownerCredential = 'synthetic-owner-' + 'x'.repeat(40);
+  let creations = 0;
+  let owned: NativeCommandJournal | undefined;
+  const service = new IntegrationTlsServer({ port: await freePort(), gatewayId: 'synthetic-gateway',
+    certificate: cert, privateKey: key, integrationCredential: ownerCredential,
+    commandJournal: () => {
+      creations += 1;
+      owned = new NativeCommandJournal(join(privateDir, `owned-${creations}.sqlite`), {
+        hostInstanceId: 'owned-host', protectStoreDirectory: () => undefined,
+      });
+      return owned;
+    } });
+  try {
+    await service.listen();
+    assert.equal(creations, 1);
+    assert.ok(owned);
+    assert.equal(owned.lookup({ commandId: 'missing', principalId: 'p', projectId: 'p' }), null);
+    await service.close();
+    assert.throws(() => owned!.lookup({ commandId: 'missing', principalId: 'p', projectId: 'p' }),
+      /closed|not open/i);
+    await service.listen();
+    assert.equal(creations, 2, 'same-instance re-listen reacquires the owned journal');
+    assert.ok(owned);
+    assert.equal(owned.lookup({ commandId: 'missing', principalId: 'p', projectId: 'p' }), null);
+    await service.close();
+    assert.throws(() => owned!.lookup({ commandId: 'missing', principalId: 'p', projectId: 'p' }),
+      /closed|not open/i);
+  } finally {
+    await service.close().catch(() => undefined);
+  }
+
+  const borrowed = new NativeCommandJournal(join(privateDir, 'borrowed.sqlite'), {
+    hostInstanceId: 'borrowed-host', protectStoreDirectory: () => undefined,
+  });
+  const borrowedService = new IntegrationTlsServer({ port: await freePort(), gatewayId: 'synthetic-gateway',
+    certificate: cert, privateKey: key, integrationCredential: ownerCredential, commandJournal: borrowed });
+  try {
+    await borrowedService.listen();
+    await borrowedService.close();
+    assert.equal(borrowed.lookup({ commandId: 'missing', principalId: 'p', projectId: 'p' }), null,
+      'a borrowed journal remains open after TLS shutdown');
+  } finally {
+    await borrowedService.close().catch(() => undefined);
+    borrowed.close();
+  }
+
+  let neverCreated = 0;
+  const neverService = new IntegrationTlsServer({ port: await freePort(), gatewayId: 'synthetic-gateway',
+    certificate: cert, privateKey: key, integrationCredential: ownerCredential,
+    commandJournal: () => {
+      neverCreated += 1;
+      return borrowed;
+    } });
+  await neverService.close();
+  assert.equal(neverCreated, 0, 'a never-started service does not create a factory journal');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('TLS listen failure closes the factory journal and close remains safe', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-integration-journal-listen-failure-'));
+  const generated = spawnSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'),
+    '-out', join(root, 'cert.pem'), '-days', '1', '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1',
+  ], { encoding: 'utf8', windowsHide: true });
+  if (generated.error || generated.status !== 0) rmSync(root, { recursive: true, force: true });
+  assert.equal(generated.error, undefined,
+    'openssl is a required precondition for the synthetic local TLS identity; install it on the test host');
+  assert.equal(generated.status === 0, true,
+    `openssl failed to generate the synthetic local TLS identity (status ${String(generated.status)})`);
+  const cert = readFileSync(join(root, 'cert.pem'));
+  const key = readFileSync(join(root, 'key.pem'));
+  const privateDir = join(root, 'private');
+  mkdirSync(privateDir, { mode: 0o700 });
+  const blocker = createTcpServer();
+  await new Promise<void>((resolve, reject) => blocker.once('error', reject).listen(0, '127.0.0.1', resolve));
+  const address = blocker.address();
+  assert.ok(address && typeof address === 'object');
+  const port = address.port;
+  let owned: NativeCommandJournal | undefined;
+  const service = new IntegrationTlsServer({ port, gatewayId: 'synthetic-gateway',
+    certificate: cert, privateKey: key, integrationCredential: 'synthetic-owner-' + 'x'.repeat(40),
+    commandJournal: () => {
+      owned = new NativeCommandJournal(join(privateDir, 'listen-failure.sqlite'), {
+        hostInstanceId: 'failure-host', protectStoreDirectory: () => undefined,
+      });
+      return owned;
+    } });
+  try {
+    await assert.rejects(service.listen(), /EADDRINUSE|address already in use/i);
+    assert.ok(owned);
+    assert.throws(() => owned!.lookup({ commandId: 'missing', principalId: 'p', projectId: 'p' }),
+      /closed|not open/i, 'listen failure closes the owned journal');
+    await service.close();
+  } finally {
+    await service.close().catch(() => undefined);
+    await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TLS close waits for an admitted handler before closing its owned journal', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-integration-journal-inflight-'));
+  const generated = spawnSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'),
+    '-out', join(root, 'cert.pem'), '-days', '1', '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1',
+  ], { encoding: 'utf8', windowsHide: true });
+  if (generated.error || generated.status !== 0) rmSync(root, { recursive: true, force: true });
+  assert.equal(generated.error, undefined,
+    'openssl is a required precondition for the synthetic local TLS identity; install it on the test host');
+  assert.equal(generated.status === 0, true,
+    `openssl failed to generate the synthetic local TLS identity (status ${String(generated.status)})`);
+  const cert = readFileSync(join(root, 'cert.pem'));
+  const key = readFileSync(join(root, 'key.pem'));
+  const projectDir = join(root, 'project');
+  const privateDir = join(root, 'private');
+  mkdirSync(projectDir);
+  mkdirSync(privateDir, { mode: 0o700 });
+  const projectRoot = realpathSync(projectDir);
+  const host = '66666666-6666-4666-8666-666666666666';
+  const principalId = '77777777-7777-4777-8777-777777777777';
+  const sessionId = '88888888-8888-4888-8888-888888888888';
+  const principal = { principalId, projectId: 'project', sessionBinding: 'launch',
+    registrationGeneration: 1, projectGeneration: 1, hostInstanceId: host, expiresAtMs: 1_000 };
+  const registry = {
+    authenticateAcpSession: () => principal,
+    resolveTransportSession: () => ({ ...principal, transportSessionId: sessionId }),
+    resolveProject: () => ({ projectId: 'project', canonicalRoot: projectRoot, generation: 1 }),
+  } as unknown as IntegrationRegistry;
+  let entered!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const gateway = {
+    dispatchScopedNativeThreadCreate: async (input: Parameters<ProtocolGateway['dispatchScopedNativeThreadCreate']>[0]) => {
+      entered();
+      await gate;
+      return { jsonrpc: '2.0' as const, id: input.commandId, result: { thread_id: input.threadId } };
+    },
+  } as unknown as Pick<ProtocolGateway, 'dispatchScopedNativeThreadCreate'>;
+  let journal: NativeCommandJournal | undefined;
+  const port = await freePort();
+  const service = new IntegrationTlsServer({ port, gatewayId: 'synthetic-gateway',
+    certificate: cert, privateKey: key, registry, gateway, enableNativeThreadCreate: true, instanceId: host,
+    commandJournal: (instanceId) => {
+      journal = new NativeCommandJournal(join(privateDir, 'inflight.sqlite'), {
+        hostInstanceId: instanceId, protectStoreDirectory: () => undefined,
+      });
+      return journal;
+    } });
+  try {
+    await service.listen();
+    const requestBody = JSON.stringify({ jsonrpc: '2.0', id: 'cmd-inflight', method: 'thread.create',
+      params: { project_id: 'project', session_id: sessionId, command_id: 'cmd-inflight',
+        expected_host_instance: host } });
+    const pending = requestJson(port, cert, 'Babel-Acp-Session synthetic-session',
+      '/rpc', 'POST', requestBody);
+    await enteredPromise;
+    assert.ok(journal);
+    assert.equal(journal.lookup({ commandId: 'cmd-inflight', principalId, projectId: 'project' })?.state,
+      'admitted');
+    const closing = service.close();
+    assert.equal(journal.lookup({ commandId: 'cmd-inflight', principalId, projectId: 'project' })?.state,
+      'admitted', 'journal stays open while the admitted handler is still running');
+    release();
+    await Promise.allSettled([pending, closing]);
+    assert.throws(() => journal!.lookup({ commandId: 'missing', principalId, projectId: 'project' }),
+      /closed|not open/i);
+  } finally {
+    release();
+    await service.close().catch(() => undefined);
     rmSync(root, { recursive: true, force: true });
   }
 });

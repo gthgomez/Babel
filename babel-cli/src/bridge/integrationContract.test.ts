@@ -14,11 +14,12 @@ import {
   IntegrationRpcResponseSchema,
   IntegrationRpcRequestSchema,
   IntegrationTransportCreateRequestSchema,
+  NATIVE_THREAD_ID_PATTERN,
   negotiateIntegrationContract,
 } from '../protocol/remoteContract.js';
 
 test('integration contract hash is stable over the exported versioned schema descriptor', () => {
-  assert.equal(BABEL_INTEGRATION_SCHEMA_SHA256, 'b2f1f0f7668dc4557367f6ad85b7a54686491108312dc1f6ab8c0c1bd18e1d49',
+  assert.equal(BABEL_INTEGRATION_SCHEMA_SHA256, 'a0a5f8d89701055bd4b2b4934a22490d4c1051f62c5e93632cb2e30b15003e36',
     'schema changes require an explicit reviewed profile/hash fixture update');
   assert.equal(BABEL_INTEGRATION_SCHEMA_SHA256,
     createHash('sha256').update(JSON.stringify(BABEL_INTEGRATION_SCHEMA_DESCRIPTOR)).digest('hex'));
@@ -55,6 +56,9 @@ test('negotiation accepts only exact contract, version, and schema hash profiles
     { ok: true });
   assert.deepEqual(negotiateIntegrationContract({ contract: BABEL_INTEGRATION_CONTRACT, version: '1.0.0', schemaHash: BABEL_INTEGRATION_SCHEMA_SHA256 }),
     { ok: false, reason: 'unsupported_version' }, 'the superseded draft profile is never a fallback');
+  assert.deepEqual(negotiateIntegrationContract({ contract: BABEL_INTEGRATION_CONTRACT, version: BABEL_INTEGRATION_CONTRACT_VERSION,
+    schemaHash: 'b2f1f0f7668dc4557367f6ad85b7a54686491108312dc1f6ab8c0c1bd18e1d49' }),
+  { ok: false, reason: 'schema_mismatch' }, 'the prior 2.0.0 draft hash is rejected without fallback');
   assert.deepEqual((BABEL_INTEGRATION_SCHEMA_DESCRIPTOR as { negotiation: { exactMatchOnly: boolean } })
     .negotiation.exactMatchOnly, true);
 });
@@ -142,16 +146,36 @@ test('strict ingress schemas reject unsupported methods and authority-bearing fi
 });
 
 test('versioned RPC response schema covers scoped results and bounded errors', () => {
+  const nativeThreadId = 'chat-0123456789ab';
+  assert.equal(NATIVE_THREAD_ID_PATTERN.source, '^chat-[0-9a-f]{12}$',
+    'validator is bound to the canonical allocator format');
   assert.equal(IntegrationRpcResponseSchema.safeParse({ jsonrpc: '2.0', id: 'cmd-1', result: {
     command_id: 'cmd-1', state: 'unknown', reason: 'no_admission_record',
   } }).success, true);
   assert.equal(IntegrationRpcResponseSchema.safeParse({ jsonrpc: '2.0', id: 'cmd-1', result: {
-    thread_id: 'c1b6af6e-cb97-4317-aa4c-9831f9f2c3cb',
+    command_id: 'cmd-1', fingerprint: 'a'.repeat(64), state: 'settled', thread_id: nativeThreadId,
+    host_instance_id: 'c1b6af6e-cb97-4317-aa4c-9831f9f2c3cb', registration_generation: 1, result: null,
+  } }).success, true);
+  assert.equal(IntegrationRpcResponseSchema.safeParse({ jsonrpc: '2.0', id: 'cmd-1', result: {
+    thread_id: nativeThreadId,
   } }).success, true);
   assert.equal(IntegrationRpcResponseSchema.safeParse({ jsonrpc: '2.0', id: 'cmd-1', error: {
     code: -32601, message: 'unsupported_capability', data: { reason: 'unsupported_capability' },
   } }).success, true);
+  assert.equal(IntegrationRpcResponseSchema.safeParse({ jsonrpc: '2.0', id: 'cmd-1', error: {
+    code: -32602, message: 'reconcile_required',
+    data: { reason: 'reconcile_required', thread_id: nativeThreadId },
+  } }).success, true);
+  for (const invalid of ['c1b6af6e-cb97-4317-aa4c-9831f9f2c3cb', 'chat-0123456789AB',
+    'chat-0123456789a', 'chat-0123456789abc', 'chat_0123456789ab', 'chat-0123456789a_']) {
+    assert.equal(IntegrationRpcResponseSchema.safeParse({ jsonrpc: '2.0', id: 'cmd-1',
+      result: { thread_id: invalid } }).success, false, `rejects ${invalid}`);
+    assert.equal(IntegrationRpcResponseSchema.safeParse({ jsonrpc: '2.0', id: 'cmd-1', error: {
+      code: -32602, message: 'reconcile_required',
+      data: { reason: 'reconcile_required', thread_id: invalid },
+    } }).success, false, `rejects error thread ID ${invalid}`);
+  }
   assert.equal(IntegrationRpcResponseSchema.safeParse({ jsonrpc: '2.0', id: 'cmd-1', result: {
-    thread_id: 'not-a-uuid', project_root: '/private/path',
+    thread_id: nativeThreadId, project_root: '/private/path',
   } }).success, false);
 });

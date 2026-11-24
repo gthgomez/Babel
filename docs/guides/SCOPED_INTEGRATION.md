@@ -7,10 +7,14 @@ contract for production use.
 ## Negotiation
 
 - Contract: `babel.integration`; version: `2.0.0`; schema SHA-256:
-  `b2f1f0f7668dc4557367f6ad85b7a54686491108312dc1f6ab8c0c1bd18e1d49`.
+  `a0a5f8d89701055bd4b2b4934a22490d4c1051f62c5e93632cb2e30b15003e36`.
 - Operations require the exact contract, version, and schema hash headers.
-- `1.0.0` and prior draft hashes are denied. There is no fallback, downgrade, or
-  major-version guess.
+- `1.0.0` and prior draft hashes (including
+  `b2f1f0f7668dc4557367f6ad85b7a54686491108312dc1f6ab8c0c1bd18e1d49`) are
+  denied. There is no fallback, downgrade, or major-version guess. A companion
+  must use the exact hash above.
+- Migration for this unactivated draft requires no data rewrite and no client
+  activation; native thread identities are unchanged.
 - Capability advertisements remain gated exactly as before; this draft adds no
   capability activation. Integration credentials still cannot reach `/rpc`.
 
@@ -81,6 +85,71 @@ sequences during normal operation.
 Returns `201`. The response is validated against the strict transport schema
 before emission.
 
+## JSON-RPC envelopes, authority, and replay
+
+- HTTP status and the JSON-RPC envelope are distinct. Authentication,
+  negotiation, payload, availability, response-validation, and transport
+  failures are non-200 JSON errors; they can occur after authentication and
+  negotiation as well. A non-200 reply after admission does not establish that
+  the native effect was skipped. Once a `/rpc` request is authenticated and
+  negotiated, a successful HTTP response is `200` and the body is a strict
+  JSON-RPC 2.0 envelope validated against the negotiated RPC response schema
+  before emission.
+  A malformed internal envelope becomes the fixed sanitized `500` transport
+  error, not a partial success.
+- Authority is unchanged: execution owner is `protocol_host`, `native_only` is
+  true, and turns remain lease-gated. This surface accepts no prompt, provider,
+  model, adapter, or execution-profile input.
+- `thread.create` requires `id === params.command_id`. A mismatch returns a `200`
+  JSON-RPC error with `command_fingerprint_conflict` and admits no effect.
+- Capability gates: `transport.create` requires a registry; `command.lookup`
+  requires a registry and a command journal; `thread.create` additionally
+  requires the native gateway and explicit `enableNativeThreadCreate`. This draft
+  activates no new effect or active profile.
+- `command.lookup` is read-only. It returns the durable admission record
+  (`admitted`, `settled`, or `unknown`); a missing record is reported as
+  `unknown` with `no_admission_record`.
+- Native thread IDs are validated exactly as the canonical allocator produces
+  them: `chat-` followed by exactly 12 lowercase hexadecimal characters. There
+  is no UUID projection, generic-string fallback, or second identity. An invalid
+  ID is rejected by the strict output emitter with the sanitized `500` error.
+- The current scoped surface only creates/looks up IDs from that allocator.
+  Fork APIs accept caller-supplied IDs outside this draft; exposing forks or
+  saved threads here would require extending the validator by contract decision.
+- Before journal settlement, a native create success must satisfy the full
+  strict integration success envelope and bind `jsonrpc: "2.0"`,
+  `id === command_id`, and exactly `result.thread_id ===` the reserved canonical
+  planned native ID. Extra, malformed, or ambiguous results are marked `unknown`
+  and return `reconcile_required`; they are never settled, replayed, retried, or
+  treated as proof that no effect occurred.
+- Once a command has been admitted, a lost or ambiguous reply does **not** mean
+  “not dispatched.” The effect may have committed. Do not retry the effect;
+  reconcile with `command.lookup`. A settled record may replay its durable
+  response without dispatch only after the stored envelope passes the same
+  strict binding; admitted/unknown records and malformed settled rows are never
+  replayed automatically.
+
+## Journal ownership and lifecycle
+
+- A journal passed directly is borrowed. The TLS server never closes it.
+- A journal created by a factory is owned by the TLS server: it is created when
+  listening is attempted, closed on listen failure, and closed after terminal
+  shutdown once admitted handlers have settled. A never-started server creates
+  no factory journal.
+- A same-instance `close()` followed by `listen()` reacquires a factory-owned
+  journal. Callers must serialize **all** start/stop cycles, including
+  `listen()`/`close()`, with no overlap on the same instance; `listen()` while
+  already listening is idempotent, and `close()` without a running listener is
+  safe.
+- On a failed listen, owned-journal cleanup is best effort. A cleanup error must
+  not mask the listen failure; the caller should treat the store as requiring
+  process-level cleanup rather than assume the journal is closed.
+- Terminal close drains admitted handlers indefinitely before closing the store.
+  This indefinite drain is explicitly **unqualified for activation**; do not
+  claim completion or bound it by closing a journal under an active handler. An
+  external supervisor may terminate the process, but must not close the store
+  underneath a live admission.
+
 ## Durable IDs and bounded storage
 
 - The durable renewal identity is `(principal, request_sequence)`, encoded in
@@ -108,9 +177,9 @@ before emission.
 
 ## Output validation and credential safety
 
-Successful registration, renewal, status, and transport bodies are validated
-against their existing strict output schemas before emission. A malformed body is
-rejected with the fixed sanitized error
+Successful registration, renewal, status, transport, and every HTTP `200` `/rpc`
+JSON-RPC envelope are validated against their existing strict output schemas
+before emission. A malformed body is rejected with the fixed sanitized error
 `integration_response_contract_violation`; the invalid body and schema
 diagnostics are neither logged nor returned. A credential is only returned in a
 successful credential response, and never written to logs or diagnostics.
