@@ -1,7 +1,17 @@
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type Server as HttpsServer } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { BABEL_PROTOCOL_METHODS, BABEL_PROTOCOL_NOTIFICATIONS, BABEL_PROTOCOL_VERSION } from '../protocol/types.js';
+import {
+  BABEL_INTEGRATION_SCHEMA_SHA256,
+  IntegrationAcpSessionRegistrationSchema,
+  IntegrationAcpSessionRenewalSchema,
+  IntegrationProtocolInfoSchema,
+  IntegrationRpcRequestSchema,
+  IntegrationTransportCreateRequestSchema,
+  negotiateIntegrationContract,
+} from '../protocol/remoteContract.js';
+import type { IntegrationNegotiationHeaders } from '../protocol/remoteContract.js';
+import type { z } from 'zod';
 import type { IntegrationRegistry } from './integrationRegistry.js';
 import type { NativeCommandJournal } from './commandJournal.js';
 import type { ProtocolGateway } from './protocolGateway.js';
@@ -20,17 +30,10 @@ export interface IntegrationTlsOptions {
   gateway?: Pick<ProtocolGateway, 'dispatchScopedNativeThreadCreate'>;
   /** Effectful native create stays disabled until credential expiry/renewal is qualified. */
   enableNativeThreadCreate?: boolean;
+  buildRevision?: string;
 }
 
-export interface IntegrationProtocolInfo {
-  protocol: 'babel-native-integration';
-  protocol_version: string;
-  schema_hash: string;
-  gateway_id: string;
-  instance_id: string;
-  capabilities: string[];
-  limits: { max_rpc_bytes: number };
-}
+export type IntegrationProtocolInfo = z.infer<typeof IntegrationProtocolInfoSchema>;
 
 function credentialMatches(header: string | undefined, credential: string): boolean {
   const prefix = 'Babel-Integration ';
@@ -62,22 +65,26 @@ export class IntegrationTlsServer {
     if (!options.gatewayId.trim() || (!options.registry && (options.integrationCredential?.length ?? 0) < 32)) {
       throw new Error('integration TLS requires a gateway identity and registry or high-entropy credential');
     }
+    const capabilities: IntegrationProtocolInfo['capabilities'] = [];
+    if (options.registry) capabilities.push('transport.create');
+    if (options.registry && options.commandJournal) capabilities.push('command.lookup');
+    if (options.registry && options.commandJournal && options.gateway && options.enableNativeThreadCreate === true) {
+      capabilities.push('thread.create');
+    }
     this.info = {
-      protocol: 'babel-native-integration',
-      protocol_version: BABEL_PROTOCOL_VERSION,
-      // This hash identifies the currently exported catalog, not full JSON schemas.
-      schema_hash: createHash('sha256')
-        .update(JSON.stringify({ methods: BABEL_PROTOCOL_METHODS, notifications: BABEL_PROTOCOL_NOTIFICATIONS }))
-        .digest('hex'),
+      contract: 'babel.integration',
+      version: '1.0.0',
+      schema_sha256: BABEL_INTEGRATION_SCHEMA_SHA256,
       gateway_id: options.gatewayId,
       instance_id: options.instanceId ?? randomUUID(),
-      capabilities: [
-        ...(options.registry ? ['transport.create'] : []),
-        ...(options.registry && options.commandJournal ? ['command.lookup'] : []),
-        ...(options.registry && options.commandJournal && options.gateway && options.enableNativeThreadCreate === true ? ['thread.create'] : []),
-      ],
-      limits: { max_rpc_bytes: 16 * 1024 },
+      build_revision: options.buildRevision ?? null,
+      capabilities,
+      limits: { max_rpc_bytes: 16 * 1024, max_history_page: 0, max_ws_frame_bytes: 0, ws_ticket_ttl_ms: 0 },
+      authority: { execution_owner: 'protocol_host', native_only: true, lease_required_for_turns: true },
     };
+    if (!IntegrationProtocolInfoSchema.safeParse(this.info).success) {
+      throw new Error('integration protocol info failed its exported contract schema');
+    }
     this.commandJournal = typeof options.commandJournal === 'function'
       ? options.commandJournal(this.info.instance_id)
       : options.commandJournal;
@@ -112,24 +119,42 @@ export class IntegrationTlsServer {
       : credentialMatches(req.headers.authorization, this.options.integrationCredential ?? '');
   }
 
+  private negotiationFor(req: IncomingMessage) {
+    const headers: IntegrationNegotiationHeaders = {
+      ...(typeof req.headers['x-babel-contract'] === 'string' ? { contract: req.headers['x-babel-contract'] } : {}),
+      ...(typeof req.headers['x-babel-contract-version'] === 'string' ? { version: req.headers['x-babel-contract-version'] } : {}),
+      ...(typeof req.headers['x-babel-schema-sha256'] === 'string' ? { schemaHash: req.headers['x-babel-schema-sha256'] } : {}),
+    };
+    return negotiateIntegrationContract(headers);
+  }
+
+  private requireNegotiated(req: IncomingMessage, res: ServerResponse): boolean {
+    const result = this.negotiationFor(req);
+    if (result.ok) return true;
+    reply(res, 406, { error: result.reason, supported_contract: this.info.contract,
+      supported_version: this.info.version, schema_sha256: this.info.schema_sha256 });
+    return false;
+  }
+
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.url === '/sessions' && req.method === 'POST' && this.options.registry) {
       const credential = this.acpCredential(req);
       if (!credential) { reply(res, 401, { error: 'acp_session_authentication_required' }); return; }
+      if (!this.options.registry.authenticateAcpSession(credential, this.info.instance_id)) {
+        reply(res, 401, { error: 'acp_session_authentication_required' }); return;
+      }
+      if (!this.requireNegotiated(req, res)) return;
       const raw = await this.readBody(req, res);
       if (raw === null) return;
       let body: unknown;
       try { body = JSON.parse(raw); } catch { reply(res, 400, { error: 'invalid_transport_session' }); return; }
-      if (!body || typeof body !== 'object' || Array.isArray(body)) { reply(res, 400, { error: 'invalid_transport_session' }); return; }
-      const value = body as Record<string, unknown>;
-      if (Object.keys(value).some((key) => !['project_id', 'expected_host_instance'].includes(key)) ||
-          typeof value['project_id'] !== 'string' || typeof value['expected_host_instance'] !== 'string' ||
-          value['expected_host_instance'] !== this.info.instance_id) {
-        reply(res, 400, { error: value['expected_host_instance'] !== this.info.instance_id ? 'stale_host_instance' : 'invalid_transport_session' });
+      const parsed = IntegrationTransportCreateRequestSchema.safeParse(body);
+      if (!parsed.success || parsed.data.expected_host_instance !== this.info.instance_id) {
+        reply(res, 400, { error: parsed.success ? 'stale_host_instance' : 'invalid_transport_session' });
         return;
       }
       const result = this.options.registry.createTransportSession({ acpCredential: credential,
-        projectId: value['project_id'], expectedHostInstance: value['expected_host_instance'] });
+        projectId: parsed.data.project_id, expectedHostInstance: parsed.data.expected_host_instance });
       if (!result.ok) { reply(res, 403, { error: result.reason }); return; }
       reply(res, 201, { session_id: result.sessionId, project_id: result.principal.projectId,
         host_instance_id: result.principal.hostInstanceId, registration_generation: result.principal.registrationGeneration,
@@ -148,6 +173,12 @@ export class IntegrationTlsServer {
         reply(res, 401, { error: 'integration_authentication_required' });
         return;
       }
+      const negotiated = this.negotiationFor(req);
+      if (!negotiated.ok) {
+        reply(res, 406, { error: negotiated.reason, supported_contract: this.info.contract,
+          supported_version: this.info.version, schema_sha256: this.info.schema_sha256 });
+        return;
+      }
       reply(res, 200, this.info);
       return;
     }
@@ -156,32 +187,28 @@ export class IntegrationTlsServer {
         reply(res, 401, { error: 'integration_authentication_required' });
         return;
       }
+      if (!this.requireNegotiated(req, res)) return;
       const raw = await this.readBody(req, res);
       if (raw === null) return;
       let body: unknown;
       try { body = JSON.parse(raw); } catch { reply(res, 400, { error: 'invalid_registration' }); return; }
-      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      const parsedRegistration = IntegrationAcpSessionRegistrationSchema.safeParse(body);
+      if (!parsedRegistration.success) {
         reply(res, 400, { error: 'invalid_registration' });
         return;
       }
-      const value = body as Record<string, unknown>;
-      const allowedKeys = new Set(['request_id', 'project_id', 'session_binding', 'expected_host_instance', 'discovery_ref']);
-      if (Object.keys(value).some((key) => !allowedKeys.has(key)) ||
-          typeof value['request_id'] !== 'string' || value['request_id'].length < 1 || value['request_id'].length > 128 ||
-          typeof value['project_id'] !== 'string' || value['project_id'].length < 1 || value['project_id'].length > 64 ||
-          typeof value['session_binding'] !== 'string' || value['session_binding'].length < 1 || value['session_binding'].length > 256 ||
-          typeof value['expected_host_instance'] !== 'string' || value['expected_host_instance'].length > 128) {
-        reply(res, 400, { error: 'invalid_registration' });
+      if (parsedRegistration.data.expected_host_instance !== this.info.instance_id) {
+        reply(res, 400, { error: 'stale_host_instance' });
         return;
       }
-      if (value['discovery_ref'] !== undefined) {
+      if (parsedRegistration.data.discovery_ref !== undefined) {
         reply(res, 403, { error: 'unsupported_capability', reason: 'thread_scope_denied' });
         return;
       }
       const result = this.options.registry.createAcpSession({
         integrationCredential: this.integrationCredential(req) ?? '',
-        requestId: value['request_id'], projectId: value['project_id'],
-        sessionBinding: value['session_binding'], expectedHostInstance: value['expected_host_instance'],
+        requestId: parsedRegistration.data.request_id, projectId: parsedRegistration.data.project_id,
+        sessionBinding: parsedRegistration.data.session_binding, expectedHostInstance: parsedRegistration.data.expected_host_instance,
         currentHostInstance: this.info.instance_id,
       });
       if (!result.ok) { reply(res, 403, { error: result.reason }); return; }
@@ -197,27 +224,20 @@ export class IntegrationTlsServer {
         reply(res, 401, { error: 'integration_authentication_required' });
         return;
       }
+      if (!this.requireNegotiated(req, res)) return;
       const raw = await this.readBody(req, res);
       if (raw === null) return;
       let body: unknown;
       try { body = JSON.parse(raw); } catch { reply(res, 400, { error: 'invalid_requalification' }); return; }
-      if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        reply(res, 400, { error: 'invalid_requalification' });
-        return;
-      }
-      const value = body as Record<string, unknown>;
-      const allowedKeys = new Set(['request_id', 'session_binding', 'expected_host_instance']);
-      if (Object.keys(value).some((key) => !allowedKeys.has(key)) ||
-          typeof value['request_id'] !== 'string' || value['request_id'].length < 1 || value['request_id'].length > 128 ||
-          typeof value['session_binding'] !== 'string' || value['session_binding'].length < 1 || value['session_binding'].length > 256 ||
-          typeof value['expected_host_instance'] !== 'string' || value['expected_host_instance'].length > 128) {
+      const parsedRenewal = IntegrationAcpSessionRenewalSchema.safeParse(body);
+      if (!parsedRenewal.success) {
         reply(res, 400, { error: 'invalid_requalification' });
         return;
       }
       const result = this.options.registry.requalifyAcpSession({
         integrationCredential: this.integrationCredential(req) ?? '', principalId: requalifyPath[1]!,
-        requestId: value['request_id'], sessionBinding: value['session_binding'],
-        expectedHostInstance: value['expected_host_instance'], currentHostInstance: this.info.instance_id,
+        requestId: parsedRenewal.data.request_id, sessionBinding: parsedRenewal.data.session_binding,
+        expectedHostInstance: parsedRenewal.data.expected_host_instance, currentHostInstance: this.info.instance_id,
       });
       if (!result.ok) { reply(res, 403, { error: result.reason }); return; }
       reply(res, 200, { principal_id: result.session.principalId, session_id: result.session.sessionId,
@@ -232,74 +252,62 @@ export class IntegrationTlsServer {
   private async handleScopedRpc(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const credential = this.acpCredential(req);
     if (!credential || !this.options.registry) { reply(res, 401, { error: 'acp_session_authentication_required' }); return; }
+    if (!this.options.registry.authenticateAcpSession(credential, this.info.instance_id)) {
+      reply(res, 401, { error: 'acp_session_authentication_required' }); return;
+    }
+    if (!this.requireNegotiated(req, res)) return;
     const raw = await this.readBody(req, res);
     if (raw === null) return;
     let envelope: unknown;
     try { envelope = JSON.parse(raw); } catch { reply(res, 400, { error: 'invalid_rpc_request' }); return; }
-    if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) { reply(res, 400, { error: 'invalid_rpc_request' }); return; }
-    const request = envelope as Record<string, unknown>;
-    if (Object.keys(request).some((key) => !['jsonrpc', 'id', 'method', 'params'].includes(key)) ||
-        request['jsonrpc'] !== '2.0' || (typeof request['id'] !== 'string' && typeof request['id'] !== 'number') ||
-        typeof request['method'] !== 'string' || !request['params'] || typeof request['params'] !== 'object' ||
-        Array.isArray(request['params'])) {
+    const parsedRequest = IntegrationRpcRequestSchema.safeParse(envelope);
+    if (!parsedRequest.success) {
       reply(res, 400, { error: 'invalid_rpc_request' });
       return;
     }
-    const params = request['params'] as Record<string, unknown>;
-    const method = request['method'];
-    const expectedFields = method === 'thread.create'
-      ? ['project_id', 'session_id', 'command_id', 'expected_host_instance']
-      : method === 'command.lookup'
-        ? ['project_id', 'session_id', 'command_id', 'expected_host_instance']
-        : null;
-    if (!expectedFields || Object.keys(params).some((key) => !expectedFields.includes(key)) ||
-        expectedFields.some((key) => !(key in params)) || typeof params['project_id'] !== 'string' ||
-        typeof params['session_id'] !== 'string' || typeof params['command_id'] !== 'string' ||
-        typeof params['expected_host_instance'] !== 'string') {
-      reply(res, 200, { jsonrpc: '2.0', id: request['id'], error: { code: -32602, message: 'unsupported or invalid scoped RPC', data: { reason: 'unsupported_capability' } } });
+    const request = parsedRequest.data;
+    const { params, method, id } = request;
+    if (params.expected_host_instance !== this.info.instance_id) {
+      reply(res, 200, { jsonrpc: '2.0', id, error: { code: -32008, message: 'stale_host_instance', data: { reason: 'stale_host_instance' } } });
       return;
     }
-    if (params['expected_host_instance'] !== this.info.instance_id) {
-      reply(res, 200, { jsonrpc: '2.0', id: request['id'], error: { code: -32008, message: 'stale_host_instance', data: { reason: 'stale_host_instance' } } });
+    if (method === 'thread.create' && id !== params.command_id) {
+      reply(res, 200, { jsonrpc: '2.0', id, error: { code: -32602, message: 'command ID must match request ID', data: { reason: 'command_fingerprint_conflict' } } });
       return;
     }
-    if (method === 'thread.create' && request['id'] !== params['command_id']) {
-      reply(res, 200, { jsonrpc: '2.0', id: request['id'], error: { code: -32602, message: 'command ID must match request ID', data: { reason: 'command_fingerprint_conflict' } } });
-      return;
-    }
-    const transport = this.options.registry.resolveTransportSession({ sessionId: params['session_id'],
+    const transport = this.options.registry.resolveTransportSession({ sessionId: params.session_id,
       acpCredential: credential, expectedHostInstance: this.info.instance_id });
     if (!transport) {
-      reply(res, 200, { jsonrpc: '2.0', id: request['id'], error: { code: -32602, message: 'transport session scope denied', data: { reason: 'thread_scope_denied' } } });
+      reply(res, 200, { jsonrpc: '2.0', id, error: { code: -32602, message: 'transport session scope denied', data: { reason: 'thread_scope_denied' } } });
       return;
     }
-    if (params['project_id'] !== transport.projectId) {
-      reply(res, 200, { jsonrpc: '2.0', id: request['id'], error: { code: -32602, message: 'project scope denied', data: { reason: 'project_scope_denied' } } });
+    if (params.project_id !== transport.projectId) {
+      reply(res, 200, { jsonrpc: '2.0', id, error: { code: -32602, message: 'project scope denied', data: { reason: 'project_scope_denied' } } });
       return;
     }
     if (method === 'command.lookup') {
       if (!this.commandJournal) { reply(res, 503, { error: 'command_journal_unavailable' }); return; }
-      const record = this.commandJournal.lookup({ commandId: params['command_id'],
+      const record = this.commandJournal.lookup({ commandId: params.command_id,
         principalId: transport.principalId, projectId: transport.projectId });
-      reply(res, 200, { jsonrpc: '2.0', id: request['id'], result: record ? {
+      reply(res, 200, { jsonrpc: '2.0', id, result: record ? {
         command_id: record.commandId, fingerprint: record.fingerprint, state: record.state,
         thread_id: record.threadId, host_instance_id: record.hostInstanceId,
         registration_generation: record.registrationGeneration,
         result: record.resultJson === null ? null : JSON.parse(record.resultJson),
-      } : { command_id: params['command_id'], state: 'unknown', reason: 'no_admission_record' } });
+      } : { command_id: params.command_id, state: 'unknown', reason: 'no_admission_record' } });
       return;
     }
     if (this.options.enableNativeThreadCreate !== true) {
-      reply(res, 200, { jsonrpc: '2.0', id: request['id'], error: { code: -32601,
+      reply(res, 200, { jsonrpc: '2.0', id, error: { code: -32601,
         message: 'unsupported_capability', data: { reason: 'unsupported_capability' } } });
       return;
     }
     if (!this.options.gateway || !this.commandJournal) { reply(res, 503, { error: 'native_create_unavailable' }); return; }
     const result = await createScopedNativeThread({
       acpCredential: credential, transportSessionId: transport.transportSessionId,
-      commandId: params['command_id'], projectId: params['project_id'],
+      commandId: params.command_id, projectId: params.project_id,
       sessionBinding: transport.sessionBinding, expectedProjectGeneration: transport.projectGeneration,
-      expectedHostInstance: params['expected_host_instance'],
+      expectedHostInstance: params.expected_host_instance,
     }, {
       resolveTransportSession: (session) => this.options.registry!.resolveTransportSession(session),
       resolveProject: (projectId) => this.options.registry!.resolveProject(projectId),
@@ -307,7 +315,7 @@ export class IntegrationTlsServer {
     });
     if (!result.ok) {
       const code = result.reason === 'stale_host_instance' ? -32008 : -32602;
-      reply(res, 200, { jsonrpc: '2.0', id: request['id'], error: { code, message: result.reason,
+      reply(res, 200, { jsonrpc: '2.0', id, error: { code, message: result.reason,
         data: { reason: result.reason, ...(result.threadId ? { thread_id: result.threadId } : {}) } } });
       return;
     }

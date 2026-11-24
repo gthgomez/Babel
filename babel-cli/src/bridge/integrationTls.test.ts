@@ -11,6 +11,7 @@ import { IntegrationRegistry } from './integrationRegistry.js';
 import { NativeCommandJournal } from './commandJournal.js';
 import { ProtocolGateway } from './protocolGateway.js';
 import { closeProtocolHostState } from '../protocol/client/host.js';
+import { BABEL_INTEGRATION_SCHEMA_SHA256 } from '../protocol/remoteContract.js';
 
 async function freePort(): Promise<number> {
   const server = createTcpServer();
@@ -24,14 +25,22 @@ async function freePort(): Promise<number> {
 
 function requestJson(
   port: number, ca: Buffer, authorization?: string, path = '/protocol.info',
-  method = 'GET', body?: string,
+  method = 'GET', body?: string, extraHeaders: Record<string, string> = {},
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = request({
       host: '127.0.0.1', port, path, method, ca,
       rejectUnauthorized: true,
-      ...(body ? { headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), ...(authorization ? { authorization } : {}) } } : {}),
-      ...(!body && authorization ? { headers: { authorization } } : {}),
+      headers: {
+        ...(authorization ? { authorization } : {}),
+        ...(body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}),
+        ...(path !== '/protocol.info' ? {
+          'x-babel-contract': 'babel.integration',
+          'x-babel-contract-version': '1.0.0',
+          'x-babel-schema-sha256': BABEL_INTEGRATION_SCHEMA_SHA256,
+        } : {}),
+        ...extraHeaders,
+      },
     }, (res) => {
       let body = '';
       res.setEncoding('utf8');
@@ -71,10 +80,24 @@ test('integration TLS serves only authenticated version info and rejects an unpi
     const allowed = await requestJson(port, cert, 'Babel-Integration synthetic-credential-' + 'x'.repeat(40));
     assert.equal(allowed.status, 200);
     const info = JSON.parse(allowed.body) as typeof service.info;
-    assert.equal(info.protocol, 'babel-native-integration');
+    assert.equal(info.contract, 'babel.integration');
+    assert.equal(info.version, '1.0.0');
     assert.equal(info.gateway_id, 'synthetic-gateway');
+    assert.equal(info.schema_sha256.length, 64);
     assert.equal(info.instance_id, service.info.instance_id);
-    assert.deepEqual(info.capabilities, [], 'no execution RPC is advertised before scoped ACP auth exists');
+    assert.deepEqual(info.capabilities, [], 'no scoped operation is advertised without a registry');
+    const acceptedNegotiation = await requestJson(port, cert,
+      'Babel-Integration synthetic-credential-' + 'x'.repeat(40), '/protocol.info', 'GET', undefined, {
+        'x-babel-contract': info.contract, 'x-babel-contract-version': info.version,
+        'x-babel-schema-sha256': info.schema_sha256,
+      });
+    assert.equal(acceptedNegotiation.status, 200);
+    const wrongVersion = await requestJson(port, cert,
+      'Babel-Integration synthetic-credential-' + 'x'.repeat(40), '/protocol.info', 'GET', undefined, {
+        'x-babel-contract': info.contract, 'x-babel-contract-version': '2.0.0',
+        'x-babel-schema-sha256': info.schema_sha256,
+      });
+    assert.equal(wrongVersion.status, 406);
     const rpcDenied = await requestJson(
       port,
       cert,
@@ -146,12 +169,23 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     const infoReply = await requestJson(port, cert, auth);
     assert.equal(infoReply.status, 200);
     const info = JSON.parse(infoReply.body) as typeof service.info;
+    assert.deepEqual(info.capabilities, ['transport.create', 'command.lookup', 'thread.create']);
+    const missingNegotiation = await requestJson(port, cert, 'Babel-Acp-Session placeholder', '/sessions', 'POST',
+      JSON.stringify({ project_id: 'project-one', expected_host_instance: info.instance_id }), {
+        'x-babel-contract-version': '9.0.0',
+      });
+    assert.equal(missingNegotiation.status, 401, 'authentication is checked before negotiation details');
     const body = JSON.stringify({ request_id: 'request-1', project_id: 'project-one', session_binding: 'launch-1', expected_host_instance: info.instance_id });
     const created = await requestJson(port, cert, auth, '/integrations/acp-sessions', 'POST', body);
     assert.equal(created.status, 201);
     const session = JSON.parse(created.body) as { principal_id: string; credential: string; registration_generation: number };
     assert.ok(session.principal_id);
     assert.equal(session.registration_generation, 1);
+    const schemaMismatch = await requestJson(port, cert, `Babel-Acp-Session ${session.credential}`, '/sessions', 'POST',
+      JSON.stringify({ project_id: 'project-one', expected_host_instance: info.instance_id }), {
+        'x-babel-schema-sha256': '0'.repeat(64),
+      });
+    assert.equal(schemaMismatch.status, 406);
     const acpInfo = await requestJson(port, cert, `Babel-Acp-Session ${session.credential}`);
     assert.equal(acpInfo.status, 200);
     const transportReply = await requestJson(port, cert, `Babel-Acp-Session ${session.credential}`, '/sessions', 'POST',
@@ -163,6 +197,11 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     const rpc = (token: string, id: string, method: string, params: Record<string, unknown>) => rpcAt(port, token, id, method, params);
     const createParams = { project_id: 'project-one', session_id: transport.session_id,
       command_id: 'cmd-1', expected_host_instance: service.info.instance_id };
+    const profileMismatch = await requestJson(port, cert, `Babel-Acp-Session ${session.credential}`, '/rpc', 'POST',
+      JSON.stringify({ jsonrpc: '2.0', id: 'cmd-1', method: 'thread.create', params: createParams }),
+      { 'x-babel-schema-sha256': '0'.repeat(64) });
+    assert.equal(profileMismatch.status, 406);
+    assert.equal(dispatchCount, 0, 'schema negotiation failure happens before native admission');
     const createdThread = await rpc(session.credential, 'cmd-1', 'thread.create', createParams);
     assert.equal(createdThread.status, 200);
     const createResponse = JSON.parse(createdThread.body) as { result: { thread_id: string } };
@@ -189,7 +228,8 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     const invalidRawProject = await rpc(session.credential, 'cmd-invalid', 'thread.create', {
       ...createParams, command_id: 'cmd-invalid', project_root: root,
     });
-    assert.equal(JSON.parse(invalidRawProject.body).error.data.reason, 'unsupported_capability');
+    assert.equal(invalidRawProject.status, 400);
+    assert.equal(JSON.parse(invalidRawProject.body).error, 'invalid_rpc_request');
     const denied = await requestJson(port, cert, 'Bearer ' + rootCredential, '/integrations/acp-sessions', 'POST', body);
     assert.equal(denied.status, 401);
 
