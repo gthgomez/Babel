@@ -232,6 +232,7 @@ test('a verifier marker in an output literal does not erase the behavior in v4',
     'Fix the export so it outputs "a \\"row\\" (not required); verified by: pending".',
     'Fix the export so it outputs “row (not required); verified by: pending”.',
     'Fix the export so it outputs "`sample; verified by: draft "row (not required); verified by: pending`".',
+    'Fix the export so it outputs "prefix; verified by: draft" then \\``row (not required); verified by: pending`.',
   ]) {
     for (const task of [
       `Goal: ${body}\nRequirements:\n- ${TEST_CRITERION}`,

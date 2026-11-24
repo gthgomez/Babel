@@ -78,17 +78,25 @@ function behaviorBeforeVerifierLink(body: string): string {
   const separator = /[.;]\s+verified by:/iy
   const word = /[\p{L}\p{N}_]/u
   const codeSpanEnds = new Map<number, number>()
+  const escapedOpenerEnds = new Map<number, number>()
   const nextRunEnd = new Map<number, number>()
   for (const run of [...body.matchAll(/`+/g)].reverse()) {
     const width = run[0].length
     const end = nextRunEnd.get(width)
     if (end !== undefined) codeSpanEnds.set(run.index, end)
+    // A backslash escapes only the first tick of an opening run. Closing
+    // runs inside the code span are still matched by their full raw width.
+    const shorterEnd = width > 1 ? nextRunEnd.get(width - 1) : undefined
+    if (shorterEnd !== undefined) escapedOpenerEnds.set(run.index, shorterEnd)
     nextRunEnd.set(width, run.index + width)
   }
   let quoteEnd = ''
   for (let i = 0; i < body.length; i++) {
     const char = body[i]!
-    if (char === '\\') { i++; continue }
+    if (char === '\\') {
+      i = (escapedOpenerEnds.get(i + 1) ?? (i + 2)) - 1
+      continue
+    }
     // Matched code spans are opaque even inside a prose quote: a quote
     // character in the span must not close the surrounding literal.
     const codeEnd = codeSpanEnds.get(i)
