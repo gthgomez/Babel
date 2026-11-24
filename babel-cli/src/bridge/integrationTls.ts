@@ -5,12 +5,15 @@ import {
   BABEL_INTEGRATION_CONTRACT,
   BABEL_INTEGRATION_CONTRACT_VERSION,
   BABEL_INTEGRATION_SCHEMA_SHA256,
+  IntegrationAcpSessionCredentialResponseSchema,
   IntegrationAcpSessionRegistrationSchema,
   IntegrationAcpSessionRenewalSchema,
   IntegrationAcpSessionStatusRequestSchema,
+  IntegrationAcpSessionStatusResponseSchema,
   IntegrationProtocolInfoSchema,
   IntegrationRpcRequestSchema,
   IntegrationTransportCreateRequestSchema,
+  IntegrationTransportSessionResponseSchema,
   negotiateIntegrationContract,
 } from '../protocol/remoteContract.js';
 import type { IntegrationNegotiationHeaders, IntegrationNegotiationPurpose } from '../protocol/remoteContract.js';
@@ -50,6 +53,24 @@ function credentialMatches(header: string | undefined, credential: string): bool
 function reply(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
   res.end(JSON.stringify(body));
+}
+
+interface StrictOutputSchema {
+  safeParse(value: unknown): { success: true; data: unknown } | { success: false };
+}
+
+/**
+ * Successful scoped responses must satisfy the negotiated strict output schema
+ * before they are emitted. Failures are a fixed sanitized internal error; never
+ * log or return the body or Zod diagnostics, which can contain credentials.
+ */
+function emitValidated(res: ServerResponse, status: number, schema: StrictOutputSchema, body: unknown): void {
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    reply(res, 500, { error: 'integration_response_contract_violation' });
+    return;
+  }
+  reply(res, status, parsed.data);
 }
 
 /**
@@ -159,8 +180,10 @@ export class IntegrationTlsServer {
       const result = this.options.registry.createTransportSession({ acpCredential: credential,
         projectId: parsed.data.project_id, expectedHostInstance: parsed.data.expected_host_instance });
       if (!result.ok) { reply(res, 403, { error: result.reason }); return; }
-      reply(res, 201, { session_id: result.sessionId, project_id: result.principal.projectId,
-        host_instance_id: result.principal.hostInstanceId, registration_generation: result.principal.registrationGeneration,
+      emitValidated(res, 201, IntegrationTransportSessionResponseSchema, {
+        session_id: result.sessionId, project_id: result.principal.projectId,
+        host_instance_id: result.principal.hostInstanceId,
+        registration_generation: result.principal.registrationGeneration,
         expires_at_ms: result.principal.expiresAtMs });
       return;
     }
@@ -215,7 +238,8 @@ export class IntegrationTlsServer {
         currentHostInstance: this.info.instance_id,
       });
       if (!result.ok) { reply(res, 403, { error: result.reason }); return; }
-      reply(res, 201, { principal_id: result.session.principalId, session_id: result.session.sessionId,
+      emitValidated(res, 201, IntegrationAcpSessionCredentialResponseSchema, {
+        principal_id: result.session.principalId, session_id: result.session.sessionId,
         project_id: result.session.projectId, registration_generation: result.session.registrationGeneration,
         expires_at_ms: result.session.expiresAtMs, renew_after_ms: 60_000,
         credential: result.session.credential });
@@ -245,7 +269,8 @@ export class IntegrationTlsServer {
         expectedHostInstance: parsedRenewal.data.expected_host_instance, currentHostInstance: this.info.instance_id,
       });
       if (!result.ok) { reply(res, 403, { error: result.reason }); return; }
-      reply(res, 200, { principal_id: result.session.principalId, session_id: result.session.sessionId,
+      emitValidated(res, 200, IntegrationAcpSessionCredentialResponseSchema, {
+        principal_id: result.session.principalId, session_id: result.session.sessionId,
         project_id: result.session.projectId, registration_generation: result.session.registrationGeneration,
         expires_at_ms: result.session.expiresAtMs, renew_after_ms: 60_000,
         credential: result.session.credential });
@@ -278,7 +303,7 @@ export class IntegrationTlsServer {
         expectedHostInstance: parsedStatus.data.expected_host_instance, currentHostInstance: this.info.instance_id,
       });
       if (!result.ok) { reply(res, 403, { error: result.reason }); return; }
-      reply(res, 200, {
+      emitValidated(res, 200, IntegrationAcpSessionStatusResponseSchema, {
         principal_id: result.status.principalId, project_id: result.status.projectId,
         session_binding: result.status.sessionBinding, request_id: result.status.requestId,
         request_sequence: result.status.requestSequence, renewal_sequence: result.status.renewalSequence,

@@ -603,3 +603,68 @@ test('TLS restart reconciliation recovers a withheld renewal without duplicate g
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('TLS validates successful output schemas and never emits malformed synthetic bodies', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-integration-output-contract-'));
+  const generated = spawnSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'),
+    '-out', join(root, 'cert.pem'), '-days', '1', '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1',
+  ], { encoding: 'utf8', windowsHide: true });
+  if (generated.error || generated.status !== 0) rmSync(root, { recursive: true, force: true });
+  assert.equal(generated.error, undefined,
+    'openssl is a required precondition for the synthetic local TLS identity; install it on the test host');
+  assert.equal(generated.status === 0, true,
+    `openssl failed to generate the synthetic local TLS identity (status ${String(generated.status)})`);
+  const cert = readFileSync(join(root, 'cert.pem'));
+  const key = readFileSync(join(root, 'key.pem'));
+  const host = '44444444-4444-4444-8444-444444444444';
+  const principalId = '55555555-5555-4555-8555-555555555555';
+  const secret = 'synthetic-credential-' + 'y'.repeat(30);
+  const principal = { principalId, projectId: 'project', sessionBinding: 'launch',
+    registrationGeneration: 1, projectGeneration: 1, hostInstanceId: host, expiresAtMs: 1_000 };
+  const malformedSession = { ...principal, sessionId: principalId, expiresAtMs: 0, credential: secret };
+  const stub = {
+    authenticateIntegration: () => true,
+    authenticateAcpSession: () => principal,
+    createAcpSession: () => ({ ok: true, session: malformedSession }),
+    requalifyAcpSession: () => ({ ok: true, session: malformedSession }),
+    createTransportSession: () => ({ ok: true, sessionId: principalId,
+      principal: { ...principal, expiresAtMs: 0 } }),
+    inspectAcpSession: () => ({ ok: true, status: { principalId, projectId: 'project',
+      sessionBinding: 'launch', requestId: integrationRenewalRequestId(principalId, 1),
+      requestSequence: 1, renewalSequence: 1, hostInstanceId: host,
+      registrationGeneration: 0, expiresAtMs: 0, disposition: 'issued' } }),
+  } as unknown as IntegrationRegistry;
+  const port = await freePort();
+  const service = new IntegrationTlsServer({ port, gatewayId: 'synthetic-gateway', certificate: cert,
+    privateKey: key, registry: stub, instanceId: host });
+  try {
+    await service.listen();
+    const ownerAuth = 'Babel-Integration synthetic-owner';
+    const acpAuth = 'Babel-Acp-Session synthetic-session';
+    const expectSanitizedFailure = async (response: Promise<{ status: number; body: string }>): Promise<void> => {
+      const result = await response;
+      assert.equal(result.status, 500);
+      assert.deepEqual(JSON.parse(result.body), { error: 'integration_response_contract_violation' });
+      assert.equal(result.body.includes(secret), false, 'failure body never contains the credential');
+      assert.equal(result.body.toLowerCase().includes('zod'), false, 'failure body never contains schema diagnostics');
+    };
+    await expectSanitizedFailure(requestJson(port, cert, ownerAuth, '/integrations/acp-sessions', 'POST',
+      JSON.stringify({ request_id: 'synthetic-registration', project_id: 'project',
+        session_binding: 'launch', expected_host_instance: host })));
+    await expectSanitizedFailure(requestJson(port, cert, ownerAuth,
+      `/integrations/acp-sessions/${principalId}/renew`, 'POST', JSON.stringify({
+        request_id: integrationRenewalRequestId(principalId, 1), request_sequence: 1,
+        session_binding: 'launch', expected_host_instance: host, expected_registration_generation: 1 })));
+    await expectSanitizedFailure(requestJson(port, cert, ownerAuth,
+      `/integrations/acp-sessions/${principalId}/status`, 'POST', JSON.stringify({
+        request_id: integrationRenewalRequestId(principalId, 1), request_sequence: 1,
+        project_id: 'project', session_binding: 'launch', expected_host_instance: host })));
+    await expectSanitizedFailure(requestJson(port, cert, acpAuth, '/sessions', 'POST',
+      JSON.stringify({ project_id: 'project', expected_host_instance: host })));
+  } finally {
+    await service.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

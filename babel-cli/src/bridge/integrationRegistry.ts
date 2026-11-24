@@ -174,13 +174,15 @@ export class IntegrationRegistry {
     this.now = options.now ?? Date.now;
     protectDirectory(dirname(resolve(databasePath)));
     this.db = new DatabaseSync(databasePath);
-    const initialVersion = this.readSchemaVersion();
-    if (initialVersion > ACP_REGISTRY_SCHEMA_VERSION) {
-      this.db.close();
-      throw new Error(`integration registry schema version ${initialVersion} is newer than supported ${ACP_REGISTRY_SCHEMA_VERSION}`);
-    }
-    this.db.exec('PRAGMA busy_timeout=10000; PRAGMA synchronous=FULL; PRAGMA journal_mode=WAL;');
     try {
+      // Set the lock wait before the first version read so a cold or contended
+      // database cannot fail immediately, and close on every startup failure.
+      this.db.exec('PRAGMA busy_timeout=10000;');
+      const initialVersion = this.readSchemaVersion();
+      if (initialVersion > ACP_REGISTRY_SCHEMA_VERSION) {
+        throw new Error(`integration registry schema version ${initialVersion} is newer than supported ${ACP_REGISTRY_SCHEMA_VERSION}`);
+      }
+      this.db.exec('PRAGMA synchronous=FULL; PRAGMA journal_mode=WAL;');
       this.transaction(() => this.applySchema());
     } catch (error) {
       this.db.close();
