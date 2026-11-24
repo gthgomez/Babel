@@ -72,6 +72,11 @@ function labeledGoalBody(line: string): string | undefined {
   return prefix ? line.slice(prefix.length).trim() : undefined
 }
 
+function behaviorBeforeVerifierLink(body: string): string {
+  const link = body.search(VERIFIER_LINK_SEPARATOR)
+  return link < 0 ? body : body.slice(0, link)
+}
+
 function isObservableGoal(line: string): boolean {
   return BEHAVIORAL_GOAL_LINE.test(line) || QUANTIFIED_BEHAVIORAL_GOAL_LINE.test(line)
 }
@@ -101,7 +106,7 @@ export function findOpeningLabeledGoal(request: string): OpeningLabeledGoal | un
       } else {
         const text = labeledGoalBody(line)
         if (!text) return undefined
-        const operative = !NON_OPERATIVE_GOAL_QUALIFIER.test(text)
+        const operative = !NON_OPERATIVE_GOAL_QUALIFIER.test(behaviorBeforeVerifierLink(text))
         if (operative && !isOperativeBehavioralGoal(text)) return undefined
         return { text, start, end: start + line.length, operative }
       }
@@ -127,9 +132,9 @@ function projectV4Criterion(
   // Keep a declared verifier clause verbatim. The binding stage compares its
   // behavior separately. Standalone labels are framing, so exact amendments
   // can recognize an unchanged goal without rewriting any literal in its body.
-  const link = body.search(VERIFIER_LINK_SEPARATOR)
-  if (NON_OPERATIVE_GOAL_QUALIFIER.test(link < 0 ? body : body.slice(0, link))) return undefined
-  return link < 0 && isOperativeBehavioralGoal(body) ? body : description
+  const behavior = behaviorBeforeVerifierLink(body)
+  if (NON_OPERATIVE_GOAL_QUALIFIER.test(behavior)) return undefined
+  return behavior === body && isOperativeBehavioralGoal(body) ? body : description
 }
 
 function sortCriteriaBySourceSpan(

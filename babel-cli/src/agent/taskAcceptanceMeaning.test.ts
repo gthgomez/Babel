@@ -212,6 +212,12 @@ test('a tagged example-only labeled goal is not required, even through base pros
     [literal, TEST_CRITERION])
 })
 
+test('an opening example-only label does not become required when followed by a verifier clause', () => {
+  const task = 'Goal: Fix the export to include every record (example only; not required); verified by: `npm test` passes.'
+  const request = `${task}\nRequirements:\n- ${TEST_CRITERION}`
+  assert.deepEqual(acceptance(request).acceptance_criteria, [TEST_CRITERION])
+})
+
 test('a newly preserved labeled goal does not activate unrelated prose', () => {
   const task = `Goal: ${EXPORT_GOAL}\nUpdate the demo mentioned in the issue.\nRequirements:\n- ${TEST_CRITERION}`
   assert.deepEqual(acceptance(task).acceptance_criteria, [EXPORT_GOAL, TEST_CRITERION])

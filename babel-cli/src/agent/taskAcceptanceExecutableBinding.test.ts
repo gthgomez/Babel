@@ -255,6 +255,20 @@ test('v4 binds equivalent labeled verifier links without rewriting their source 
   }
 })
 
+test('v4 binds every equivalent explicit verifier link and retains both source spans', () => {
+  const behavior = 'Fix the export to include every record'
+  const link = `${behavior}; verified by: npm test must pass.`
+  const bullets = [`- Goal: ${link}`, `- Objective: ${link}`]
+  const task = [`Goal: ${behavior}.`, 'Requirements:', ...bullets].join('\r\n')
+  const meaning = inferTaskAcceptanceV4(task)
+  const bound = bindExecutableVerifiersToTaskAcceptance({
+    meaning, trustedVerifierCommands: ['npm test'],
+  })
+  assert.deepEqual(bound.criteria.slice(1).map(item => `- ${item.description}`), bullets)
+  assert.deepEqual(bound.sources.slice(1).map(source => task.slice(source.start, source.end)), bullets)
+  assert.deepEqual(bound.criteria.map(item => item.verification.argv), [['test'], ['test'], ['test']])
+})
+
 test('labeled verifier comparisons are v4-only and keep distinct literals unbound', () => {
   const behavior = "Fix parser.js so echo('A  B') returns 'A  B'"
   const task = (linked: string) =>
@@ -348,6 +362,22 @@ test('conflicting verifier links for the same behavior do not bind the goal', ()
   const behaviorCriteria = bound.acceptance.filter(item => item.description.startsWith(behavior))
   assert.ok(behaviorCriteria.length >= 2)
   assert.ok(behaviorCriteria.every(item => item.verification.verifier_id.startsWith('meaning:')))
+})
+
+test('v4 keeps equivalent labels with conflicting verifier commands unbound', () => {
+  const behavior = 'Fix the export to include every record'
+  const task = [
+    `Goal: ${behavior}.`,
+    'Requirements:',
+    `- Goal: ${behavior}; verified by: npm test must pass.`,
+    `- Objective: ${behavior}; verified by: npm run test:export must pass.`,
+  ].join('\n')
+  const { criteria } = bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptanceV4(task),
+    trustedVerifierCommands: ['npm test', 'npm run test:export'],
+  })
+  assert.equal(criteria.length, 3)
+  assert.ok(criteria.every(item => item.verification.verifier_id.startsWith('meaning:')))
 })
 
 test('an untrusted conflicting verifier declaration also keeps the behavior unbound', () => {
