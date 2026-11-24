@@ -84,6 +84,7 @@ import {
 import type { ClaudeCodeSessionAdmissionDeps } from './claudeCodeSessionAdmission.js';
 import type { ClaudeCodeSdkPort } from './claudeCodeSdkPort.js';
 import { resolveClaudeCodeHostLaunchRegistryFromEnv } from './claudeCodeHostLaunchRegistry.js';
+import { IntegrationTlsServer, type IntegrationTlsOptions } from './integrationTls.js';
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export interface BridgeServerOptions {
@@ -148,6 +149,8 @@ export interface BridgeServerOptions {
   claudeCodeTestCredentialResolver?: ClaudeCodeCredentialResolver;
   claudeCodeAdmissionDeps?: ClaudeCodeSessionAdmissionDeps;
   claudeCodeHostLaunchRegistry?: import('./claudeCodeHostLaunchRegistry.js').ClaudeCodeHostLaunchRegistry;
+  /** Explicit owner-provisioned integration TLS listener; disabled when omitted. */
+  integrationTls?: IntegrationTlsOptions;
 }
 
 /** Test-only hooks for post-initial-auth / pre-body-read synchronization. */
@@ -255,6 +258,7 @@ function errorResponse(
  */
 export class BridgeServer {
   private server: Server;
+  private integrationTlsServer?: IntegrationTlsServer;
   private options: BridgeServerOptions;
   private authToken: string;
   private allowedOrigins: string[];
@@ -369,6 +373,9 @@ export class BridgeServer {
         this.respondToRequestFailure(res);
       }
     });
+    if (this.options.integrationTls) {
+      this.integrationTlsServer = new IntegrationTlsServer(this.options.integrationTls);
+    }
 
     // Handle WebSocket upgrades
     this.server.on('upgrade', (req, socket, head) =>
@@ -429,12 +436,13 @@ export class BridgeServer {
     assertLoopbackBind(this.listenHost);
 
     return new Promise<void>((resolve, reject) => {
-      this.server.on('listening', () => {
+      this.server.on('listening', async () => {
         try {
           const bound = this.server.address();
           if (bound && typeof bound === 'object' && bound.port > 0) {
             this._port = bound.port;
           }
+          await this.integrationTlsServer?.listen();
           // Persist config with the actual auth token.
           const config = loadBridgeConfig();
           if (!config.authToken || config.authToken !== this.authToken) {
@@ -447,6 +455,7 @@ export class BridgeServer {
           this.options.onListening?.(this._port);
           resolve();
         } catch (error) {
+          await this.integrationTlsServer?.close().catch(() => undefined);
           this.server.close(() => {
             this._started = false;
             reject(error instanceof Error ? error : new Error('Bridge config persistence failed'));
@@ -485,6 +494,8 @@ export class BridgeServer {
     await this.commandCodeRegistry.closeAll();
     await this.openCodeRegistry.closeAll();
     await this.claudeCodeRegistry.closeAll();
+
+    await this.integrationTlsServer?.close();
 
     if (typeof this.server.closeAllConnections === 'function') {
       this.server.closeAllConnections();
