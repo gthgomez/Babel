@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -41,7 +41,7 @@ test('integration registry scopes and rotates one durable ACP principal per laun
     assert.equal(created.ok, true);
     if (!created.ok) return;
     const old = created.session;
-    assert.equal(registry.authenticateAcpSession(old.credential)?.principalId, old.principalId);
+    assert.equal(registry.authenticateAcpSession(old.credential, 'instance-a')?.principalId, old.principalId);
     const retry = registry.createAcpSession({
       integrationCredential, requestId: 'request-a', projectId: 'a', sessionBinding: 'launch-a',
       expectedHostInstance: 'instance-a', currentHostInstance: 'instance-a',
@@ -50,20 +50,42 @@ test('integration registry scopes and rotates one durable ACP principal per laun
     if (!retry.ok) return;
     assert.equal(retry.session.principalId, old.principalId, 'retry reuses the same principal');
     assert.equal(retry.session.registrationGeneration, old.registrationGeneration + 1);
-    assert.equal(registry.authenticateAcpSession(old.credential), null, 'rotation revokes lost-response credential');
-    assert.equal(registry.authenticateAcpSession(retry.session.credential)?.principalId, old.principalId);
+    assert.equal(registry.authenticateAcpSession(old.credential, 'instance-a'), null, 'rotation revokes lost-response credential');
+    assert.equal(registry.authenticateAcpSession(retry.session.credential, 'instance-a')?.principalId, old.principalId);
     const conflict = registry.createAcpSession({
       integrationCredential, requestId: 'request-a', projectId: 'a', sessionBinding: 'different-launch',
       expectedHostInstance: 'instance-a', currentHostInstance: 'instance-a',
     });
     assert.deepEqual(conflict, { ok: false, reason: 'registration_fingerprint_conflict' });
 
+    assert.equal(registry.authenticateAcpSession(retry.session.credential, 'instance-b'), null,
+      'the previous host instance credential cannot authenticate on a restarted gateway');
+    const requalified = registry.requalifyAcpSession({
+      integrationCredential, principalId: retry.session.principalId, requestId: 'requal-1',
+      sessionBinding: 'launch-a', expectedHostInstance: 'instance-b', currentHostInstance: 'instance-b',
+    });
+    assert.equal(requalified.ok, true);
+    if (!requalified.ok) return;
+    assert.equal(requalified.session.principalId, retry.session.principalId);
+    assert.equal(requalified.session.hostInstanceId, 'instance-b');
+    assert.equal(registry.authenticateAcpSession(retry.session.credential, 'instance-b'), null);
+    assert.equal(registry.authenticateAcpSession(requalified.session.credential, 'instance-b')?.hostInstanceId, 'instance-b');
+    const wrongBinding = registry.requalifyAcpSession({
+      integrationCredential, principalId: retry.session.principalId, requestId: 'requal-2',
+      sessionBinding: 'other-launch', expectedHostInstance: 'instance-b', currentHostInstance: 'instance-b',
+    });
+    assert.deepEqual(wrongBinding, { ok: false, reason: 'session_binding_denied' });
+
     registry.registerProject({ projectId: 'a', root: a });
-    assert.equal(registry.authenticateAcpSession(retry.session.credential), null, 'project generation change fences old grants');
+    assert.equal(registry.authenticateAcpSession(requalified.session.credential, 'instance-b'), null, 'project generation change fences old grants');
     assert.deepEqual(registry.createAcpSession({
       integrationCredential, requestId: 'request-a', projectId: 'a', sessionBinding: 'launch-a',
       expectedHostInstance: 'instance-a', currentHostInstance: 'instance-a',
     }), { ok: false, reason: 'registration_fingerprint_conflict' }, 'stale project grants cannot be revived by retry');
+    const moved = join(root, 'project-a-moved');
+    renameSync(a, moved);
+    mkdirSync(a);
+    assert.equal(registry.resolveProject('a'), null, 'same-path replacement is detected by filesystem identity');
   } finally {
     registry.close();
     rmSync(root, { recursive: true, force: true });

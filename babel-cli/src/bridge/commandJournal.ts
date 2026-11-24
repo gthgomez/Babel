@@ -74,7 +74,7 @@ export class NativeCommandJournal {
     const existing = this.db.prepare('SELECT * FROM native_command_journal WHERE command_id=?').get(input.commandId) as Record<string, unknown> | undefined;
     if (existing) {
       if (existing['fingerprint'] !== fingerprint || existing['principal_id'] !== input.principalId ||
-          existing['project_id'] !== input.projectId || existing['thread_id'] !== (input.threadId ?? null)) {
+          existing['project_id'] !== input.projectId) {
         return { ok: false, reason: 'command_fingerprint_conflict' };
       }
       return { ok: true, created: false, record: this.decode(existing) };
@@ -95,11 +95,11 @@ export class NativeCommandJournal {
     };
   }
 
-  settle(input: { commandId: string; principalId: string; result: unknown }): boolean {
+  settle(input: { commandId: string; principalId: string; result: unknown; threadId?: string }): boolean {
     const resultJson = JSON.stringify(input.result);
-    const update = this.db.prepare(`UPDATE native_command_journal SET state='settled',result_json=?,updated_at=?
+    const update = this.db.prepare(`UPDATE native_command_journal SET state='settled',result_json=?,thread_id=COALESCE(?,thread_id),updated_at=?
       WHERE command_id=? AND principal_id=? AND state='admitted'`)
-      .run(resultJson, Date.now(), input.commandId, input.principalId);
+      .run(resultJson, input.threadId ?? null, Date.now(), input.commandId, input.principalId);
     return Number(update.changes) === 1;
   }
 

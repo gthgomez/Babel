@@ -117,7 +117,7 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
   let journal!: NativeCommandJournal;
   registry.registerProject({ projectId: 'project-one', root: project });
   const rootCredential = registry.registerIntegration({ integrationId: 'bridge', name: 'fixture', allowedProjectIds: ['project-one'] });
-  const service = new IntegrationTlsServer({ port, gatewayId: 'gw', certificate: cert, privateKey: key, registry,
+  const makeService = (listenPort: number) => new IntegrationTlsServer({ port: listenPort, gatewayId: 'gw', certificate: cert, privateKey: key, registry,
     commandJournal: (instanceId) => {
       journal = new NativeCommandJournal(join(privateDir, 'commands.sqlite'), {
         hostInstanceId: instanceId, protectStoreDirectory: (directory) => assert.equal(directory, privateDir),
@@ -125,6 +125,7 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
       return journal;
     },
   });
+  let service = makeService(port);
   try {
     await service.listen();
     const auth = `Babel-Integration ${rootCredential}`;
@@ -140,7 +141,8 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     const acpInfo = await requestJson(port, cert, `Babel-Acp-Session ${session.credential}`);
     assert.equal(acpInfo.status, 200);
     const reserved = journal.reserve({ commandId: 'cmd-1', principalId: session.principal_id,
-      projectId: 'project-one', hostInstanceId: service.info.instance_id, registrationGeneration: session.registration_generation,
+      projectId: 'project-one', threadId: 'thread-fixture', hostInstanceId: service.info.instance_id,
+      registrationGeneration: session.registration_generation,
       payload: { method: 'turn.submit', text: 'synthetic' } });
     assert.equal(reserved.ok, true);
     if (reserved.ok) journal.settle({ commandId: 'cmd-1', principalId: session.principal_id, result: { terminal: 'fixture' } });
@@ -148,7 +150,8 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     assert.equal(command.status, 200);
     assert.deepEqual(JSON.parse(command.body), {
       command_id: 'cmd-1', fingerprint: reserved.ok ? reserved.record.fingerprint : '', state: 'settled',
-      host_instance_id: service.info.instance_id, registration_generation: 1, result: { terminal: 'fixture' },
+      thread_id: 'thread-fixture', host_instance_id: service.info.instance_id, registration_generation: 1,
+      result: { terminal: 'fixture' },
     });
     const secondCreated = await requestJson(port, cert, auth, '/integrations/acp-sessions', 'POST', JSON.stringify({
       request_id: 'request-2', project_id: 'project-one', session_binding: 'launch-2', expected_host_instance: info.instance_id,
@@ -160,6 +163,27 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     assert.equal(rpc.status, 404);
     const denied = await requestJson(port, cert, 'Bearer ' + rootCredential, '/integrations/acp-sessions', 'POST', body);
     assert.equal(denied.status, 401);
+
+    const previousInstance = info.instance_id;
+    await service.close();
+    journal.close();
+    const restartedPort = await freePort();
+    service = makeService(restartedPort);
+    await service.listen();
+    assert.notEqual(service.info.instance_id, previousInstance);
+    const oldCredential = await requestJson(restartedPort, cert, `Babel-Acp-Session ${session.credential}`);
+    assert.equal(oldCredential.status, 401, 'a prior host instance token cannot authenticate after restart');
+    const requalified = await requestJson(restartedPort, cert, auth,
+      `/integrations/acp-sessions/${session.principal_id}/renew`, 'POST', JSON.stringify({
+        request_id: 'requal-1', session_binding: 'launch-1', expected_host_instance: service.info.instance_id,
+      }));
+    assert.equal(requalified.status, 200);
+    const renewed = JSON.parse(requalified.body) as { credential: string; principal_id: string };
+    assert.equal(renewed.principal_id, session.principal_id);
+    const recoveredInfo = await requestJson(restartedPort, cert, `Babel-Acp-Session ${renewed.credential}`);
+    assert.equal(recoveredInfo.status, 200);
+    const recoveredCommand = await requestJson(restartedPort, cert, `Babel-Acp-Session ${renewed.credential}`, '/commands/cmd-1');
+    assert.equal(JSON.parse(recoveredCommand.body).state, 'settled');
   } finally {
     await service.close();
     journal.close();

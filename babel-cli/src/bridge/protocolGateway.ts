@@ -4,6 +4,7 @@
  */
 
 import type { IncomingMessage } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 
 import {
@@ -46,6 +47,11 @@ const MUTATING_METHODS = REMOTE_MUTATING_RPC_METHODS;
 
 export interface ProtocolDispatchContext {
   client: BridgeClientContext;
+  /** In-process only admission metadata; no legacy HTTP/WebSocket route parses this. */
+  scopedNativeThreadCreate?: {
+    threadId: string; commandId: string; principalId: string; projectId: string;
+    projectRoot: string; projectGeneration: number; hostInstanceId: string;
+  };
 }
 
 export type JsonRpcNotificationHandler = (payload: string) => void;
@@ -61,6 +67,7 @@ function notificationThreadId(notification: object): string | undefined {
 }
 
 export class ProtocolGateway {
+  readonly instanceId = randomUUID();
   readonly host: ProtocolHostState;
   readonly threadOwnership = new ThreadOwnershipRegistry();
   readonly controlLeases = new ControlLeaseRegistry();
@@ -264,6 +271,19 @@ export class ProtocolGateway {
         },
       };
     }
+    const scopedCreate = dispatchContext?.scopedNativeThreadCreate;
+    if (scopedCreate) {
+      const params = parsed.method === 'thread.create' ? parsed.params : undefined;
+      if (parsed.method !== 'thread.create' || !params || params.session_id !== scopedCreate.principalId ||
+          params.project_root !== scopedCreate.projectRoot || params.harness_adapter_id !== 'babel-native' ||
+          parsed.id !== scopedCreate.commandId || scopedCreate.hostInstanceId !== this.instanceId ||
+          threadStoreExists(scopedCreate.threadId)) {
+        return {
+          jsonrpc: '2.0', id: parsed.id,
+          error: { code: BabelProtocolErrorCode.INVALID_PARAMS, message: 'Scoped native create admission mismatch' },
+        };
+      }
+    }
     const threadId = (parsed as { params?: { thread_id?: unknown } }).params?.thread_id;
     if (typeof threadId === 'string' && parsed.method !== 'thread.create') {
       const resumeRoot = (parsed as { params?: { project_root?: unknown } }).params?.project_root;
@@ -289,6 +309,7 @@ export class ProtocolGateway {
       (notification) => {
         this.fanout(notification);
       },
+      scopedCreate,
     );
     if (
       (parsed.method === 'thread.create' || parsed.method === 'thread.resume') &&
@@ -315,6 +336,17 @@ export class ProtocolGateway {
       }
     }
     return response;
+  }
+
+  /** Trusted in-process path used only after the scoped native admission gate. */
+  dispatchScopedNativeThreadCreate(input: NonNullable<ProtocolDispatchContext['scopedNativeThreadCreate']>): Promise<JsonRpcResponse> {
+    return this.dispatch(JSON.stringify({
+      jsonrpc: '2.0', id: input.commandId, method: 'thread.create',
+      params: { project_root: input.projectRoot, session_id: input.principalId, harness_adapter_id: 'babel-native' },
+    }), {
+      client: { authKind: 'none', clientId: 'anonymous' },
+      scopedNativeThreadCreate: input,
+    });
   }
 
   /** Test helper: drive fan-out with a crafted notification. */

@@ -13,6 +13,8 @@ export interface IntegrationTlsOptions {
   integrationCredential?: string;
   registry?: IntegrationRegistry;
   commandJournal?: NativeCommandJournal | ((instanceId: string) => NativeCommandJournal);
+  /** The owning ProtocolGateway supplies its boot identity when attached. */
+  instanceId?: string;
 }
 
 export interface IntegrationProtocolInfo {
@@ -63,7 +65,7 @@ export class IntegrationTlsServer {
         .update(JSON.stringify({ methods: BABEL_PROTOCOL_METHODS, notifications: BABEL_PROTOCOL_NOTIFICATIONS }))
         .digest('hex'),
       gateway_id: options.gatewayId,
-      instance_id: randomUUID(),
+      instance_id: options.instanceId ?? randomUUID(),
       capabilities: [],
       limits: { max_rpc_bytes: 0 },
     };
@@ -105,7 +107,7 @@ export class IntegrationTlsServer {
     if (req.url === '/protocol.info' && req.method === 'GET') {
       const integrationOk = this.isIntegrationAuthenticated(req);
       const acpCredential = this.acpCredential(req);
-      const acpOk = !!acpCredential && !!this.options.registry?.authenticateAcpSession(acpCredential);
+      const acpOk = !!acpCredential && !!this.options.registry?.authenticateAcpSession(acpCredential, this.info.instance_id);
       if (!integrationOk && !acpOk) {
         reply(res, 401, { error: 'integration_authentication_required' });
         return;
@@ -148,10 +150,44 @@ export class IntegrationTlsServer {
         credential: result.session.credential });
       return;
     }
+    const requalifyPath = /^\/integrations\/acp-sessions\/([0-9a-f-]{36})\/renew$/.exec(req.url ?? '');
+    if (req.method === 'POST' && requalifyPath && this.options.registry) {
+      if (!this.isIntegrationAuthenticated(req)) {
+        reply(res, 401, { error: 'integration_authentication_required' });
+        return;
+      }
+      const raw = await this.readBody(req, res);
+      if (raw === null) return;
+      let body: unknown;
+      try { body = JSON.parse(raw); } catch { reply(res, 400, { error: 'invalid_requalification' }); return; }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        reply(res, 400, { error: 'invalid_requalification' });
+        return;
+      }
+      const value = body as Record<string, unknown>;
+      const allowedKeys = new Set(['request_id', 'session_binding', 'expected_host_instance']);
+      if (Object.keys(value).some((key) => !allowedKeys.has(key)) ||
+          typeof value['request_id'] !== 'string' || value['request_id'].length < 1 || value['request_id'].length > 128 ||
+          typeof value['session_binding'] !== 'string' || value['session_binding'].length < 1 || value['session_binding'].length > 256 ||
+          typeof value['expected_host_instance'] !== 'string' || value['expected_host_instance'].length > 128) {
+        reply(res, 400, { error: 'invalid_requalification' });
+        return;
+      }
+      const result = this.options.registry.requalifyAcpSession({
+        integrationCredential: this.integrationCredential(req) ?? '', principalId: requalifyPath[1]!,
+        requestId: value['request_id'], sessionBinding: value['session_binding'],
+        expectedHostInstance: value['expected_host_instance'], currentHostInstance: this.info.instance_id,
+      });
+      if (!result.ok) { reply(res, 403, { error: result.reason }); return; }
+      reply(res, 200, { principal_id: result.session.principalId, session_id: result.session.sessionId,
+        project_id: result.session.projectId, registration_generation: result.session.registrationGeneration,
+        credential: result.session.credential });
+      return;
+    }
     if (req.method === 'GET' && /^\/commands\/[A-Za-z0-9._-]{1,128}$/.test(req.url ?? '') &&
         this.options.registry && this.commandJournal) {
       const credential = this.acpCredential(req);
-      const principal = credential ? this.options.registry.authenticateAcpSession(credential) : null;
+      const principal = credential ? this.options.registry.authenticateAcpSession(credential, this.info.instance_id) : null;
       if (!principal) { reply(res, 401, { error: 'acp_session_authentication_required' }); return; }
       const commandId = (req.url ?? '').slice('/commands/'.length);
       const record = this.commandJournal.lookup({
@@ -159,6 +195,7 @@ export class IntegrationTlsServer {
       });
       reply(res, 200, record ? {
         command_id: record.commandId, fingerprint: record.fingerprint, state: record.state,
+        thread_id: record.threadId,
         host_instance_id: record.hostInstanceId, registration_generation: record.registrationGeneration,
         result: record.resultJson === null ? null : JSON.parse(record.resultJson),
       } : { command_id: commandId, state: 'unknown', reason: 'no_admission_record' });

@@ -374,7 +374,10 @@ export class BridgeServer {
       }
     });
     if (this.options.integrationTls) {
-      this.integrationTlsServer = new IntegrationTlsServer(this.options.integrationTls);
+      this.integrationTlsServer = new IntegrationTlsServer({
+        ...this.options.integrationTls,
+        instanceId: this.protocolGateway.instanceId,
+      });
     }
 
     // Handle WebSocket upgrades
