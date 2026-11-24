@@ -22,14 +22,19 @@ export interface RegisteredAcpSession {
   registrationGeneration: number;
   projectGeneration: number;
   hostInstanceId: string;
+  expiresAtMs: number;
   credential: string;
 }
+
+export const ACP_SESSION_CREDENTIAL_TTL_MS = 5 * 60_000;
 
 /** Durable owner-provisioned project and scoped ACP principal registry. */
 export class IntegrationRegistry {
   private readonly db: DatabaseSync;
+  private readonly now: () => number;
 
-  constructor(databasePath: string, protectDirectory: (directory: string) => void) {
+  constructor(databasePath: string, protectDirectory: (directory: string) => void, options: { now?: () => number } = {}) {
+    this.now = options.now ?? Date.now;
     protectDirectory(dirname(resolve(databasePath)));
     this.db = new DatabaseSync(databasePath);
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=10000;');
@@ -49,8 +54,15 @@ export class IntegrationRegistry {
         request_fingerprint TEXT NOT NULL, project_id TEXT NOT NULL, session_binding TEXT NOT NULL,
         credential_hash TEXT NOT NULL, generation INTEGER NOT NULL, project_generation INTEGER NOT NULL,
         integration_generation INTEGER NOT NULL, host_instance_id TEXT NOT NULL,
-        last_requalification_request_id TEXT, last_requalification_fingerprint TEXT, enabled INTEGER NOT NULL,
+        last_requalification_request_id TEXT, last_requalification_fingerprint TEXT,
+        expires_at INTEGER NOT NULL, enabled INTEGER NOT NULL,
         UNIQUE(integration_id, request_id)
+      );
+      CREATE TABLE IF NOT EXISTS integration_transport_sessions (
+        session_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, project_id TEXT NOT NULL,
+        registration_generation INTEGER NOT NULL, project_generation INTEGER NOT NULL,
+        host_instance_id TEXT NOT NULL, enabled INTEGER NOT NULL,
+        UNIQUE(principal_id,host_instance_id,registration_generation)
       );
     `);
     const principalColumns = new Set((this.db.prepare('PRAGMA table_info(acp_principals)').all() as Array<{ name: string }>).map((column) => column.name));
@@ -64,6 +76,10 @@ export class IntegrationRegistry {
     if (!principalColumns.has('last_requalification_fingerprint')) {
       this.db.exec('ALTER TABLE acp_principals ADD COLUMN last_requalification_fingerprint TEXT');
     }
+    if (!principalColumns.has('expires_at')) {
+      this.db.exec('ALTER TABLE acp_principals ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0');
+      this.db.exec('UPDATE acp_principals SET enabled=0 WHERE expires_at=0');
+    }
     const projectColumns = new Set((this.db.prepare('PRAGMA table_info(registered_projects)').all() as Array<{ name: string }>).map((column) => column.name));
     if (!projectColumns.has('filesystem_dev')) {
       this.db.exec("ALTER TABLE registered_projects ADD COLUMN filesystem_dev TEXT NOT NULL DEFAULT ''");
@@ -73,7 +89,7 @@ export class IntegrationRegistry {
       this.db.exec("ALTER TABLE registered_projects ADD COLUMN filesystem_ino TEXT NOT NULL DEFAULT ''");
       this.db.exec("UPDATE registered_projects SET enabled=0 WHERE filesystem_ino=''");
     }
-    this.db.exec('PRAGMA user_version=3');
+    this.db.exec('PRAGMA user_version=4');
   }
 
   registerProject(input: { projectId: string; root: string }): void {
@@ -170,31 +186,66 @@ export class IntegrationRegistry {
     const credential = randomBytes(32).toString('base64url');
     const principalId = prior ? String(prior['principal_id']) : randomUUID();
     const generation = prior ? Number(prior['generation']) + 1 : 1;
+    const expiresAtMs = this.now() + ACP_SESSION_CREDENTIAL_TTL_MS;
     this.db.prepare(`INSERT INTO acp_principals(principal_id,integration_id,request_id,request_fingerprint,project_id,
-      session_binding,credential_hash,generation,project_generation,integration_generation,host_instance_id,enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
+      session_binding,credential_hash,generation,project_generation,integration_generation,host_instance_id,expires_at,enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1)
       ON CONFLICT(principal_id) DO UPDATE SET credential_hash=excluded.credential_hash,generation=excluded.generation,
       project_generation=excluded.project_generation,integration_generation=excluded.integration_generation,
-      host_instance_id=excluded.host_instance_id,enabled=1`)
+      host_instance_id=excluded.host_instance_id,expires_at=excluded.expires_at,enabled=1`)
       .run(principalId, integrationId, input.requestId, fingerprint, input.projectId,
-        input.sessionBinding, digest(credential), generation, project.generation, Number(owner['generation']), input.currentHostInstance);
+        input.sessionBinding, digest(credential), generation, project.generation, Number(owner['generation']),
+        input.currentHostInstance, expiresAtMs);
     return { ok: true, session: { principalId, sessionId: principalId, projectId: input.projectId,
       sessionBinding: input.sessionBinding, registrationGeneration: generation, projectGeneration: project.generation,
-      hostInstanceId: input.currentHostInstance, credential } };
+      hostInstanceId: input.currentHostInstance, expiresAtMs, credential } };
   }
 
   authenticateAcpSession(credential: string, expectedHostInstance: string): Omit<RegisteredAcpSession, 'credential' | 'sessionId'> | null {
     const rows = this.db.prepare(`SELECT a.principal_id,a.project_id,a.session_binding,a.generation,a.project_generation,
-        a.host_instance_id,a.credential_hash,p.canonical_root,p.filesystem_dev,p.filesystem_ino
+        a.host_instance_id,a.credential_hash,a.expires_at,p.canonical_root,p.filesystem_dev,p.filesystem_ino
       FROM acp_principals a
       JOIN integrations i ON i.integration_id=a.integration_id AND i.enabled=1 AND i.generation=a.integration_generation
       JOIN integration_projects ip ON ip.integration_id=a.integration_id AND ip.project_id=a.project_id
       JOIN registered_projects p ON p.project_id=a.project_id AND p.enabled=1 AND p.generation=a.project_generation
-      WHERE a.enabled=1 AND a.host_instance_id=?`).all(expectedHostInstance) as Array<Record<string, unknown>>;
+      WHERE a.enabled=1 AND a.host_instance_id=? AND a.expires_at>?`).all(expectedHostInstance, this.now()) as Array<Record<string, unknown>>;
     const row = rows.find((item) => sameSecret(credential, String(item['credential_hash'])) &&
       this.resolveProject(String(item['project_id'])) !== null);
     return row ? { principalId: String(row['principal_id']), projectId: String(row['project_id']),
       sessionBinding: String(row['session_binding']), registrationGeneration: Number(row['generation']),
-      projectGeneration: Number(row['project_generation']), hostInstanceId: String(row['host_instance_id']) } : null;
+      projectGeneration: Number(row['project_generation']), hostInstanceId: String(row['host_instance_id']),
+      expiresAtMs: Number(row['expires_at']) } : null;
+  }
+
+  createTransportSession(input: { acpCredential: string; projectId: string; expectedHostInstance: string }):
+    { ok: true; sessionId: string; principal: Omit<RegisteredAcpSession, 'credential' | 'sessionId'> } |
+    { ok: false; reason: string } {
+    return this.transaction(() => {
+      const principal = this.authenticateAcpSession(input.acpCredential, input.expectedHostInstance);
+      if (!principal) return { ok: false, reason: 'acp_session_authentication_required' };
+      if (principal.projectId !== input.projectId) return { ok: false, reason: 'project_scope_denied' };
+      const existing = this.db.prepare(`SELECT session_id FROM integration_transport_sessions
+        WHERE principal_id=? AND host_instance_id=? AND registration_generation=? AND enabled=1`)
+        .get(principal.principalId, principal.hostInstanceId, principal.registrationGeneration) as { session_id: string } | undefined;
+      if (existing) return { ok: true, sessionId: existing.session_id, principal };
+      const sessionId = randomUUID();
+      this.db.prepare(`INSERT INTO integration_transport_sessions(session_id,principal_id,project_id,
+        registration_generation,project_generation,host_instance_id,enabled) VALUES(?,?,?,?,?,?,1)`)
+        .run(sessionId, principal.principalId, principal.projectId, principal.registrationGeneration,
+          principal.projectGeneration, principal.hostInstanceId);
+      return { ok: true, sessionId, principal };
+    });
+  }
+
+  resolveTransportSession(input: { sessionId: string; acpCredential: string; expectedHostInstance: string }):
+    ({ transportSessionId: string } & Omit<RegisteredAcpSession, 'credential' | 'sessionId'>) | null {
+    const principal = this.authenticateAcpSession(input.acpCredential, input.expectedHostInstance);
+    if (!principal) return null;
+    const row = this.db.prepare(`SELECT * FROM integration_transport_sessions WHERE session_id=? AND enabled=1`)
+      .get(input.sessionId) as Record<string, unknown> | undefined;
+    if (!row || row['principal_id'] !== principal.principalId || row['project_id'] !== principal.projectId ||
+        Number(row['registration_generation']) !== principal.registrationGeneration ||
+        Number(row['project_generation']) !== principal.projectGeneration || row['host_instance_id'] !== principal.hostInstanceId) return null;
+    return { ...principal, transportSessionId: input.sessionId };
   }
 
   requalifyAcpSession(input: {
@@ -223,21 +274,18 @@ export class IntegrationRegistry {
       const fingerprint = digest(JSON.stringify({ principalId: input.principalId, projectId, projectGeneration: project.generation,
         integrationGeneration: owner['generation'], sessionBinding: input.sessionBinding,
         hostInstanceId: input.currentHostInstance }));
-      if (row['host_instance_id'] === input.currentHostInstance &&
-          (row['last_requalification_request_id'] !== input.requestId || row['last_requalification_fingerprint'] !== fingerprint)) {
-        return { ok: false, reason: 'requalification_already_current' };
-      }
       if (row['last_requalification_request_id'] === input.requestId && row['last_requalification_fingerprint'] !== fingerprint) {
         return { ok: false, reason: 'requalification_fingerprint_conflict' };
       }
       const credential = randomBytes(32).toString('base64url');
       const generation = Number(row['generation']) + 1;
-      this.db.prepare(`UPDATE acp_principals SET credential_hash=?,generation=?,host_instance_id=?,
+      const expiresAtMs = this.now() + ACP_SESSION_CREDENTIAL_TTL_MS;
+      this.db.prepare(`UPDATE acp_principals SET credential_hash=?,generation=?,host_instance_id=?,expires_at=?,
         last_requalification_request_id=?,last_requalification_fingerprint=? WHERE principal_id=?`)
-        .run(digest(credential), generation, input.currentHostInstance, input.requestId, fingerprint, input.principalId);
+        .run(digest(credential), generation, input.currentHostInstance, expiresAtMs, input.requestId, fingerprint, input.principalId);
       return { ok: true, session: { principalId: input.principalId, sessionId: input.principalId, projectId,
         sessionBinding: input.sessionBinding, registrationGeneration: generation, projectGeneration: project.generation,
-        hostInstanceId: input.currentHostInstance, credential } };
+        hostInstanceId: input.currentHostInstance, expiresAtMs, credential } };
     });
   }
 

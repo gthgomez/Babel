@@ -377,6 +377,7 @@ export class BridgeServer {
       this.integrationTlsServer = new IntegrationTlsServer({
         ...this.options.integrationTls,
         instanceId: this.protocolGateway.instanceId,
+        gateway: this.protocolGateway,
       });
     }
 

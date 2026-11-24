@@ -9,6 +9,8 @@ import test from 'node:test';
 import { IntegrationTlsServer } from './integrationTls.js';
 import { IntegrationRegistry } from './integrationRegistry.js';
 import { NativeCommandJournal } from './commandJournal.js';
+import { ProtocolGateway } from './protocolGateway.js';
+import { closeProtocolHostState } from '../protocol/client/host.js';
 
 async function freePort(): Promise<number> {
   const server = createTcpServer();
@@ -92,7 +94,9 @@ test('integration TLS serves only authenticated version info and rejects an unpi
 });
 
 test('TLS ACP registration issues a project-scoped principal and never opens legacy RPC', async (t) => {
+  const priorRuns = process.env['BABEL_RUNS_DIR'];
   const root = mkdtempSync(join(tmpdir(), 'babel-integration-acp-tls-'));
+  process.env['BABEL_RUNS_DIR'] = join(root, 'runs');
   const certPath = join(root, 'cert.pem');
   const keyPath = join(root, 'key.pem');
   const generated = spawnSync('openssl', [
@@ -115,9 +119,19 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
   mkdirSync(privateDir, { mode: 0o700 });
   const registry = new IntegrationRegistry(dbPath, (directory) => assert.equal(directory, privateDir));
   let journal!: NativeCommandJournal;
+  let gateway = new ProtocolGateway({ allowedWorkspaceRoot: root, remoteSurface: true, enforceControlLease: true });
+  let loseNextReply = false;
+  let dispatchCount = 0;
+  const gatewayPort = () => ({ dispatchScopedNativeThreadCreate: async (input: Parameters<ProtocolGateway['dispatchScopedNativeThreadCreate']>[0]) => {
+    dispatchCount += 1;
+    const response = await gateway.dispatchScopedNativeThreadCreate(input);
+    if (loseNextReply) { loseNextReply = false; throw new Error('synthetic reply loss after native thread admission'); }
+    return response;
+  } });
   registry.registerProject({ projectId: 'project-one', root: project });
   const rootCredential = registry.registerIntegration({ integrationId: 'bridge', name: 'fixture', allowedProjectIds: ['project-one'] });
   const makeService = (listenPort: number) => new IntegrationTlsServer({ port: listenPort, gatewayId: 'gw', certificate: cert, privateKey: key, registry,
+    instanceId: gateway.instanceId, gateway: gatewayPort(), enableNativeThreadCreate: true,
     commandJournal: (instanceId) => {
       journal = new NativeCommandJournal(join(privateDir, 'commands.sqlite'), {
         hostInstanceId: instanceId, protectStoreDirectory: (directory) => assert.equal(directory, privateDir),
@@ -140,33 +154,64 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     assert.equal(session.registration_generation, 1);
     const acpInfo = await requestJson(port, cert, `Babel-Acp-Session ${session.credential}`);
     assert.equal(acpInfo.status, 200);
-    const reserved = journal.reserve({ commandId: 'cmd-1', principalId: session.principal_id,
-      projectId: 'project-one', threadId: 'thread-fixture', hostInstanceId: service.info.instance_id,
-      registrationGeneration: session.registration_generation,
-      payload: { method: 'turn.submit', text: 'synthetic' } });
-    assert.equal(reserved.ok, true);
-    if (reserved.ok) journal.settle({ commandId: 'cmd-1', principalId: session.principal_id, result: { terminal: 'fixture' } });
-    const command = await requestJson(port, cert, `Babel-Acp-Session ${session.credential}`, '/commands/cmd-1');
-    assert.equal(command.status, 200);
-    assert.deepEqual(JSON.parse(command.body), {
-      command_id: 'cmd-1', fingerprint: reserved.ok ? reserved.record.fingerprint : '', state: 'settled',
-      thread_id: 'thread-fixture', host_instance_id: service.info.instance_id, registration_generation: 1,
-      result: { terminal: 'fixture' },
-    });
+    const transportReply = await requestJson(port, cert, `Babel-Acp-Session ${session.credential}`, '/sessions', 'POST',
+      JSON.stringify({ project_id: 'project-one', expected_host_instance: service.info.instance_id }));
+    assert.equal(transportReply.status, 201);
+    const transport = JSON.parse(transportReply.body) as { session_id: string };
+    const rpcAt = (listenPort: number, token: string, id: string, method: string, params: Record<string, unknown>) => requestJson(listenPort, cert,
+      `Babel-Acp-Session ${token}`, '/rpc', 'POST', JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+    const rpc = (token: string, id: string, method: string, params: Record<string, unknown>) => rpcAt(port, token, id, method, params);
+    const createParams = { project_id: 'project-one', session_id: transport.session_id,
+      command_id: 'cmd-1', expected_host_instance: service.info.instance_id };
+    const createdThread = await rpc(session.credential, 'cmd-1', 'thread.create', createParams);
+    assert.equal(createdThread.status, 200);
+    const createResponse = JSON.parse(createdThread.body) as { result: { thread_id: string } };
+    assert.ok(createResponse.result.thread_id);
+    const duplicateThread = await rpc(session.credential, 'cmd-1', 'thread.create', createParams);
+    assert.deepEqual(JSON.parse(duplicateThread.body), createResponse, 'duplicate create replays its durable response without dispatch');
+    assert.equal(dispatchCount, 1);
+    const lookup = await rpc(session.credential, 'lookup-1', 'command.lookup', { ...createParams, command_id: 'cmd-1' });
+    const lookupResult = JSON.parse(lookup.body) as { result: { state: string; thread_id: string } };
+    assert.equal(lookupResult.result.state, 'settled');
+    assert.equal(lookupResult.result.thread_id, createResponse.result.thread_id);
+
     const secondCreated = await requestJson(port, cert, auth, '/integrations/acp-sessions', 'POST', JSON.stringify({
       request_id: 'request-2', project_id: 'project-one', session_binding: 'launch-2', expected_host_instance: info.instance_id,
     }));
     const secondSession = JSON.parse(secondCreated.body) as { credential: string };
-    const isolated = await requestJson(port, cert, `Babel-Acp-Session ${secondSession.credential}`, '/commands/cmd-1');
-    assert.deepEqual(JSON.parse(isolated.body), { command_id: 'cmd-1', state: 'unknown', reason: 'no_admission_record' });
-    const rpc = await requestJson(port, cert, `Babel-Acp-Session ${session.credential}`, '/rpc');
-    assert.equal(rpc.status, 404);
+    const secondTransportReply = await requestJson(port, cert, `Babel-Acp-Session ${secondSession.credential}`, '/sessions', 'POST',
+      JSON.stringify({ project_id: 'project-one', expected_host_instance: service.info.instance_id }));
+    const secondTransport = JSON.parse(secondTransportReply.body) as { session_id: string };
+    const isolated = await rpc(secondSession.credential, 'lookup-other', 'command.lookup', {
+      project_id: 'project-one', session_id: secondTransport.session_id, command_id: 'cmd-1', expected_host_instance: service.info.instance_id,
+    });
+    assert.deepEqual(JSON.parse(isolated.body).result, { command_id: 'cmd-1', state: 'unknown', reason: 'no_admission_record' });
+    const invalidRawProject = await rpc(session.credential, 'cmd-invalid', 'thread.create', {
+      ...createParams, command_id: 'cmd-invalid', project_root: root,
+    });
+    assert.equal(JSON.parse(invalidRawProject.body).error.data.reason, 'unsupported_capability');
     const denied = await requestJson(port, cert, 'Bearer ' + rootCredential, '/integrations/acp-sessions', 'POST', body);
     assert.equal(denied.status, 401);
+
+    loseNextReply = true;
+    const lostParams = { ...createParams, command_id: 'cmd-lost' };
+    const lost = await rpc(session.credential, 'cmd-lost', 'thread.create', lostParams);
+    const lostResponse = JSON.parse(lost.body) as { error: { data: { reason: string; thread_id: string } } };
+    assert.equal(lostResponse.error.data.reason, 'reconcile_required');
+    const lostThreadId = lostResponse.error.data.thread_id;
+    const countAfterLoss = dispatchCount;
+    const noReplay = await rpc(session.credential, 'cmd-lost', 'thread.create', lostParams);
+    assert.equal(JSON.parse(noReplay.body).error.data.thread_id, lostThreadId);
+    assert.equal(dispatchCount, countAfterLoss, 'unknown create is not replayed automatically');
+    const lostLookup = await rpc(session.credential, 'lookup-lost', 'command.lookup', { ...lostParams, command_id: 'cmd-lost' });
+    assert.equal(JSON.parse(lostLookup.body).result.state, 'unknown');
+    assert.equal(JSON.parse(lostLookup.body).result.thread_id, lostThreadId);
 
     const previousInstance = info.instance_id;
     await service.close();
     journal.close();
+    closeProtocolHostState(gateway.host);
+    gateway = new ProtocolGateway({ allowedWorkspaceRoot: root, remoteSurface: true, enforceControlLease: true });
     const restartedPort = await freePort();
     service = makeService(restartedPort);
     await service.listen();
@@ -182,12 +227,20 @@ test('TLS ACP registration issues a project-scoped principal and never opens leg
     assert.equal(renewed.principal_id, session.principal_id);
     const recoveredInfo = await requestJson(restartedPort, cert, `Babel-Acp-Session ${renewed.credential}`);
     assert.equal(recoveredInfo.status, 200);
-    const recoveredCommand = await requestJson(restartedPort, cert, `Babel-Acp-Session ${renewed.credential}`, '/commands/cmd-1');
-    assert.equal(JSON.parse(recoveredCommand.body).state, 'settled');
+    const renewedTransportReply = await requestJson(restartedPort, cert, `Babel-Acp-Session ${renewed.credential}`, '/sessions', 'POST',
+      JSON.stringify({ project_id: 'project-one', expected_host_instance: service.info.instance_id }));
+    const renewedTransport = JSON.parse(renewedTransportReply.body) as { session_id: string };
+    const recoveredCommand = await rpcAt(restartedPort, renewed.credential, 'lookup-recovered', 'command.lookup', {
+      project_id: 'project-one', session_id: renewedTransport.session_id, command_id: 'cmd-1', expected_host_instance: service.info.instance_id,
+    });
+    assert.equal(JSON.parse(recoveredCommand.body).result.state, 'settled');
   } finally {
     await service.close();
     journal.close();
+    closeProtocolHostState(gateway.host);
     registry.close();
     rmSync(root, { recursive: true, force: true });
+    if (priorRuns === undefined) delete process.env['BABEL_RUNS_DIR'];
+    else process.env['BABEL_RUNS_DIR'] = priorRuns;
   }
 });

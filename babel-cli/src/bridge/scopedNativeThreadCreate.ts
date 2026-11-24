@@ -21,6 +21,7 @@ export interface ScopedRegisteredProject {
 
 export interface ScopedThreadCreateInput {
   acpCredential: string;
+  transportSessionId: string;
   commandId: string;
   projectId: string;
   sessionBinding: string;
@@ -43,7 +44,8 @@ export type ScopedThreadCreateResult =
 export async function createScopedNativeThread(
   input: ScopedThreadCreateInput,
   deps: {
-    resolvePrincipal: (credential: string) => ScopedNativePrincipal | null;
+    resolveTransportSession: (input: { sessionId: string; acpCredential: string; expectedHostInstance: string }) =>
+      (ScopedNativePrincipal & { transportSessionId: string }) | null;
     resolveProject: (projectId: string) => ScopedRegisteredProject | null;
     currentHostInstance: string;
     gateway: Pick<ProtocolGateway, 'dispatchScopedNativeThreadCreate'>;
@@ -51,7 +53,8 @@ export async function createScopedNativeThread(
   },
 ): Promise<ScopedThreadCreateResult> {
   if (!input.commandId || input.commandId.length > 128) return { ok: false, reason: 'native_create_unavailable' };
-  const principal = deps.resolvePrincipal(input.acpCredential);
+  const principal = deps.resolveTransportSession({ sessionId: input.transportSessionId,
+    acpCredential: input.acpCredential, expectedHostInstance: deps.currentHostInstance });
   if (!principal) return { ok: false, reason: 'integration_authentication_required' };
   if (principal.projectId !== input.projectId || principal.sessionBinding !== input.sessionBinding) {
     return { ok: false, reason: 'project_scope_denied' };
@@ -115,6 +118,7 @@ export async function createScopedNativeThread(
       threadId: plannedThreadId,
       commandId: input.commandId,
       principalId: principal.principalId,
+      transportSessionId: principal.transportSessionId,
       projectId: principal.projectId,
       projectRoot: canonicalRoot,
       projectGeneration: project.generation,

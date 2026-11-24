@@ -49,7 +49,7 @@ export interface ProtocolDispatchContext {
   client: BridgeClientContext;
   /** In-process only admission metadata; no legacy HTTP/WebSocket route parses this. */
   scopedNativeThreadCreate?: {
-    threadId: string; commandId: string; principalId: string; projectId: string;
+    threadId: string; commandId: string; principalId: string; transportSessionId: string; projectId: string;
     projectRoot: string; projectGeneration: number; hostInstanceId: string;
   };
 }
@@ -274,7 +274,7 @@ export class ProtocolGateway {
     const scopedCreate = dispatchContext?.scopedNativeThreadCreate;
     if (scopedCreate) {
       const params = parsed.method === 'thread.create' ? parsed.params : undefined;
-      if (parsed.method !== 'thread.create' || !params || params.session_id !== scopedCreate.principalId ||
+      if (parsed.method !== 'thread.create' || !params || params.session_id !== scopedCreate.transportSessionId ||
           params.project_root !== scopedCreate.projectRoot || params.harness_adapter_id !== 'babel-native' ||
           parsed.id !== scopedCreate.commandId || scopedCreate.hostInstanceId !== this.instanceId ||
           threadStoreExists(scopedCreate.threadId)) {
@@ -342,7 +342,7 @@ export class ProtocolGateway {
   dispatchScopedNativeThreadCreate(input: NonNullable<ProtocolDispatchContext['scopedNativeThreadCreate']>): Promise<JsonRpcResponse> {
     return this.dispatch(JSON.stringify({
       jsonrpc: '2.0', id: input.commandId, method: 'thread.create',
-      params: { project_root: input.projectRoot, session_id: input.principalId, harness_adapter_id: 'babel-native' },
+      params: { project_root: input.projectRoot, session_id: input.transportSessionId, harness_adapter_id: 'babel-native' },
     }), {
       client: { authKind: 'none', clientId: 'anonymous' },
       scopedNativeThreadCreate: input,

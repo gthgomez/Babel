@@ -71,28 +71,29 @@ export class NativeCommandJournal {
       throw new Error('invalid command admission identity');
     }
     const fingerprint = createHash('sha256').update(JSON.stringify(input.payload)).digest('hex');
-    const existing = this.db.prepare('SELECT * FROM native_command_journal WHERE command_id=?').get(input.commandId) as Record<string, unknown> | undefined;
-    if (existing) {
-      if (existing['fingerprint'] !== fingerprint || existing['principal_id'] !== input.principalId ||
-          existing['project_id'] !== input.projectId) {
-        return { ok: false, reason: 'command_fingerprint_conflict' };
+    return this.transaction(() => {
+      const existing = this.db.prepare('SELECT * FROM native_command_journal WHERE command_id=?').get(input.commandId) as Record<string, unknown> | undefined;
+      if (existing) {
+        if (existing['fingerprint'] !== fingerprint || existing['principal_id'] !== input.principalId ||
+            existing['project_id'] !== input.projectId) {
+          return { ok: false, reason: 'command_fingerprint_conflict' };
+        }
+        return { ok: true, created: false, record: this.decode(existing) };
       }
-      return { ok: true, created: false, record: this.decode(existing) };
-    }
-    const updatedAt = Date.now();
-    this.db.prepare(`INSERT INTO native_command_journal
-      (command_id,fingerprint,principal_id,project_id,thread_id,host_instance_id,registration_generation,state,result_json,updated_at)
-      VALUES (?,?,?,?,?,?,?,'admitted',NULL,?)`).run(
-      input.commandId, fingerprint, input.principalId, input.projectId, input.threadId ?? null,
-      input.hostInstanceId, input.registrationGeneration, updatedAt,
-    );
-    return {
-      ok: true,
-      created: true,
-      record: { commandId: input.commandId, fingerprint, principalId: input.principalId, projectId: input.projectId,
-        threadId: input.threadId ?? null, hostInstanceId: input.hostInstanceId,
-        registrationGeneration: input.registrationGeneration, state: 'admitted', resultJson: null, updatedAt },
-    };
+      const updatedAt = Date.now();
+      this.db.prepare(`INSERT INTO native_command_journal
+        (command_id,fingerprint,principal_id,project_id,thread_id,host_instance_id,registration_generation,state,result_json,updated_at)
+        VALUES (?,?,?,?,?,?,?,'admitted',NULL,?)`).run(
+        input.commandId, fingerprint, input.principalId, input.projectId, input.threadId ?? null,
+        input.hostInstanceId, input.registrationGeneration, updatedAt,
+      );
+      return {
+        ok: true, created: true,
+        record: { commandId: input.commandId, fingerprint, principalId: input.principalId, projectId: input.projectId,
+          threadId: input.threadId ?? null, hostInstanceId: input.hostInstanceId,
+          registrationGeneration: input.registrationGeneration, state: 'admitted', resultJson: null, updatedAt },
+      };
+    });
   }
 
   settle(input: { commandId: string; principalId: string; result: unknown; threadId?: string }): boolean {
@@ -119,6 +120,18 @@ export class NativeCommandJournal {
   }
 
   close(): void { this.db.close(); }
+
+  private transaction<T>(operation: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = operation();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
 
   private decode(row: Record<string, unknown>): NativeCommandRecord {
     return {

@@ -447,7 +447,7 @@ export async function handleProtocolRequest(
   request: BabelProtocolRequest,
   state: ProtocolHostState,
   onNotification?: (notification: import('../messages.js').BabelProtocolServerNotification) => void,
-  scopedCreate?: { threadId: string; principalId: string; projectId: string; projectRoot: string;
+  scopedCreate?: { threadId: string; principalId: string; transportSessionId: string; projectId: string; projectRoot: string;
     projectGeneration: number; hostInstanceId: string; commandId: string }
 ): Promise<JsonRpcResponse> {
   const id = request.id;
@@ -481,7 +481,7 @@ export async function handleProtocolRequest(
           return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Missing params');
         }
         if (scopedCreate && (params.project_root !== scopedCreate.projectRoot ||
-            params.session_id !== scopedCreate.principalId || params.harness_adapter_id !== 'babel-native' ||
+            params.session_id !== scopedCreate.transportSessionId || params.harness_adapter_id !== 'babel-native' ||
             request.id !== scopedCreate.commandId)) {
           return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Scoped native create admission mismatch');
         }

@@ -29,13 +29,16 @@ test('scoped create binds one native thread to its ACP principal and same-comman
   } };
   const session = principal(gateway.instanceId);
   const deps = {
-    resolvePrincipal: (credential: string) => credential === 'synthetic-acp-token' ? session : null,
+    resolveTransportSession: (input: { sessionId: string; acpCredential: string }) =>
+      input.acpCredential === 'synthetic-acp-token' && input.sessionId === 'transport-session-1'
+        ? { ...session, transportSessionId: input.sessionId } : null,
     resolveProject: (projectId: string) => projectId === 'project-1'
       ? { projectId, canonicalRoot: projectRoot, generation: 1 } : null,
     currentHostInstance: gateway.instanceId, gateway: wrappedGateway, journal,
   };
   const input = {
-    acpCredential: 'synthetic-acp-token', commandId: 'create-command-1', projectId: 'project-1',
+    acpCredential: 'synthetic-acp-token', transportSessionId: 'transport-session-1',
+    commandId: 'create-command-1', projectId: 'project-1',
     sessionBinding: 'launch-1', expectedProjectGeneration: 1, expectedHostInstance: gateway.instanceId,
   };
   try {
@@ -49,7 +52,7 @@ test('scoped create binds one native thread to its ACP principal and same-comman
     if (!created.ok) return;
     assert.equal(created.replayed, false);
     const threadId = (created.response as { result: { thread_id: string } }).result.thread_id;
-    assert.equal(gateway.threadOwnership.ownerOf(threadId)?.sessionId, 'principal-1');
+    assert.equal(gateway.threadOwnership.ownerOf(threadId)?.sessionId, 'transport-session-1');
     const retry = await createScopedNativeThread(input, deps);
     assert.equal(retry.ok, true);
     if (retry.ok) {
@@ -84,11 +87,14 @@ test('lost thread-create reply is journaled unknown and never automatically repl
   } };
   const session = principal(gateway.instanceId);
   const input = {
-    acpCredential: 'synthetic-acp-token', commandId: 'create-command-lost', projectId: 'project-1',
+    acpCredential: 'synthetic-acp-token', transportSessionId: 'transport-session-1',
+    commandId: 'create-command-lost', projectId: 'project-1',
     sessionBinding: 'launch-1', expectedProjectGeneration: 1, expectedHostInstance: gateway.instanceId,
   };
   const deps = {
-    resolvePrincipal: (credential: string) => credential === 'synthetic-acp-token' ? session : null,
+    resolveTransportSession: (value: { sessionId: string; acpCredential: string }) =>
+      value.acpCredential === 'synthetic-acp-token' && value.sessionId === 'transport-session-1'
+        ? { ...session, transportSessionId: value.sessionId } : null,
     resolveProject: (projectId: string) => projectId === 'project-1'
       ? { projectId, canonicalRoot: projectRoot, generation: 1 } : null,
     currentHostInstance: gateway.instanceId, gateway: lostReplyGateway, journal,
@@ -105,7 +111,7 @@ test('lost thread-create reply is journaled unknown and never automatically repl
     assert.equal(record?.state, 'unknown');
     assert.ok(record?.threadId);
     assert.equal(first.threadId, record?.threadId);
-    assert.equal(gateway.threadOwnership.ownerOf(record!.threadId!)?.sessionId, 'principal-1');
+    assert.equal(gateway.threadOwnership.ownerOf(record!.threadId!)?.sessionId, 'transport-session-1');
   } finally {
     journal.close();
     closeProtocolHostState(gateway.host);

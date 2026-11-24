@@ -91,3 +91,36 @@ test('integration registry scopes and rotates one durable ACP principal per laun
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('ACP credentials expire after five minutes and parent renewal works on the same host', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-integration-expiry-'));
+  const privateDir = join(root, 'private');
+  const project = join(root, 'project');
+  mkdirSync(privateDir, { mode: 0o700 });
+  mkdirSync(project);
+  let now = 1_000;
+  const registry = new IntegrationRegistry(join(privateDir, 'integration.sqlite'), () => undefined, { now: () => now });
+  try {
+    registry.registerProject({ projectId: 'project', root: project });
+    const rootCredential = registry.registerIntegration({ integrationId: 'bridge', name: 'fixture', allowedProjectIds: ['project'] });
+    const created = registry.createAcpSession({ integrationCredential: rootCredential, requestId: 'create',
+      projectId: 'project', sessionBinding: 'launch', expectedHostInstance: 'instance', currentHostInstance: 'instance' });
+    assert.equal(created.ok, true);
+    if (!created.ok) return;
+    assert.equal(created.session.expiresAtMs, now + 5 * 60_000);
+    assert.ok(registry.authenticateAcpSession(created.session.credential, 'instance'));
+    now += 5 * 60_000;
+    assert.equal(registry.authenticateAcpSession(created.session.credential, 'instance'), null);
+    const renewed = registry.requalifyAcpSession({ integrationCredential: rootCredential,
+      principalId: created.session.principalId, requestId: 'renew-1', sessionBinding: 'launch',
+      expectedHostInstance: 'instance', currentHostInstance: 'instance' });
+    assert.equal(renewed.ok, true, 'same-instance parent renewal is permitted for exact binding');
+    if (!renewed.ok) return;
+    assert.equal(renewed.session.expiresAtMs, now + 5 * 60_000);
+    assert.equal(registry.authenticateAcpSession(created.session.credential, 'instance'), null);
+    assert.equal(registry.authenticateAcpSession(renewed.session.credential, 'instance')?.principalId, created.session.principalId);
+  } finally {
+    registry.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
