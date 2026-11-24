@@ -6,7 +6,7 @@
  * states a real terminal controller must exercise.
  */
 
-import type { TuiVisualScenario } from './tuiVisualTestContract.js'
+import type { TuiVisualCriterion, TuiVisualScenario } from './tuiVisualTestContract.js'
 
 const observe = (label: string): { action: 'observe'; label: string } => ({
   action: 'observe',
@@ -38,6 +38,12 @@ const wait = (milliseconds: number, label: string): {
   label: string
 } => ({ action: 'wait', milliseconds, label })
 
+const check = (id: string, afterStep: number, description: string): TuiVisualCriterion => ({
+  id,
+  afterStep,
+  description,
+})
+
 /** Read-only scenarios safe to run against a dedicated Babel TUI window. */
 export const TUI_VISUAL_SCENARIOS: readonly TuiVisualScenario[] = [
   {
@@ -47,7 +53,11 @@ export const TUI_VISUAL_SCENARIOS: readonly TuiVisualScenario[] = [
     steps: [observe('initial ready screen')],
     evidenceMode: 'visual_only',
     expectedEvents: [],
-    expectedVisualStates: ['BABEL banner appears once', 'CHAT mode is visible', 'ready prompt is visible'],
+    expectedVisualStates: [
+      check('single-banner', 0, 'BABEL banner appears once'),
+      check('chat-mode', 0, 'CHAT mode is visible'),
+      check('ready-prompt', 0, 'Ready prompt is visible'),
+    ],
   },
   {
     id: 'T06-visual-clear-composer',
@@ -61,7 +71,11 @@ export const TUI_VISUAL_SCENARIOS: readonly TuiVisualScenario[] = [
     ],
     evidenceMode: 'visual_only',
     expectedEvents: [],
-    expectedVisualStates: ['draft is visible before cancellation', 'composer is empty after Ctrl+C', 'process remains alive'],
+    expectedVisualStates: [
+      check('draft-present', 1, 'Draft is visible before cancellation'),
+      check('draft-cleared', 3, 'Composer is empty after Ctrl+C'),
+      check('process-alive', 3, 'Babel remains alive at its ready prompt, not the shell prompt'),
+    ],
   },
   {
     id: 'T08-visual-cancel-paste',
@@ -75,7 +89,11 @@ export const TUI_VISUAL_SCENARIOS: readonly TuiVisualScenario[] = [
     ],
     evidenceMode: 'visual_only',
     expectedEvents: [],
-    expectedVisualStates: ['paste line count is visible', 'paste cancelled notice is visible', 'normal prompt is restored'],
+    expectedVisualStates: [
+      check('paste-line-count', 1, 'Paste line count is visible'),
+      check('cancel-notice', 3, 'Paste cancelled notice is visible'),
+      check('prompt-restored', 3, 'Normal prompt is restored'),
+    ],
   },
   {
     id: 'T10-visual-resize-draft',
@@ -90,7 +108,11 @@ export const TUI_VISUAL_SCENARIOS: readonly TuiVisualScenario[] = [
     ],
     evidenceMode: 'visual_only',
     expectedEvents: [],
-    expectedVisualStates: ['draft remains readable after narrow resize', 'draft remains present after wide resize', 'no duplicate idle header'],
+    expectedVisualStates: [
+      check('narrow-draft', 2, 'Draft remains readable after narrow resize'),
+      check('wide-draft', 4, 'Draft remains present after wide resize'),
+      check('single-header', 4, 'No duplicate idle header'),
+    ],
   },
   {
     id: 'T19-visual-resume-cancel',
@@ -106,7 +128,11 @@ export const TUI_VISUAL_SCENARIOS: readonly TuiVisualScenario[] = [
     ],
     evidenceMode: 'visual_only',
     expectedEvents: [],
-    expectedVisualStates: ['resume picker is visible', 'picker closes on Escape', 'resume text is not submitted as a task'],
+    expectedVisualStates: [
+      check('picker-open', 3, 'Resume picker is visible'),
+      check('picker-closed', 5, 'Picker closes on Escape'),
+      check('not-submitted', 5, 'Resume text is not submitted as a task'),
+    ],
   },
   {
     id: 'T20-visual-diff-roundtrip',
@@ -122,7 +148,11 @@ export const TUI_VISUAL_SCENARIOS: readonly TuiVisualScenario[] = [
     ],
     evidenceMode: 'visual_only',
     expectedEvents: [],
-    expectedVisualStates: ['diff view is visible', 'diff view closes on q', 'composer is usable after closing'],
+    expectedVisualStates: [
+      check('diff-open', 3, 'Diff view is visible'),
+      check('diff-closed', 5, 'Diff view closes on q'),
+      check('composer-usable', 5, 'Composer is usable after closing'),
+    ],
   },
   {
     id: 'T21-visual-unicode-narrow',
@@ -135,7 +165,11 @@ export const TUI_VISUAL_SCENARIOS: readonly TuiVisualScenario[] = [
     ],
     evidenceMode: 'visual_only',
     expectedEvents: [],
-    expectedVisualStates: ['wide characters do not overlap', 'cursor remains aligned', 'prompt remains visible'],
+    expectedVisualStates: [
+      check('no-overlap', 2, 'Wide characters do not overlap'),
+      check('aligned-cursor', 2, 'Cursor remains aligned'),
+      check('visible-prompt', 2, 'Prompt remains visible'),
+    ],
   },
   {
     id: 'T22-visual-exit-restore',
@@ -148,7 +182,11 @@ export const TUI_VISUAL_SCENARIOS: readonly TuiVisualScenario[] = [
     ],
     evidenceMode: 'visual_only',
     expectedEvents: [],
-    expectedVisualStates: ['cursor is visible after exit', 'scroll region is restored', 'no alternate-screen residue remains'],
+    expectedVisualStates: [
+      check('visible-cursor', 2, 'Cursor is visible after exit'),
+      check('scroll-restored', 2, 'Scroll region is restored'),
+      check('no-screen-residue', 2, 'No alternate-screen residue remains'),
+    ],
   },
 ]
 

@@ -6,7 +6,7 @@
  * shape that an external Luna runner can produce and validate.
  */
 
-export const TUI_VISUAL_TEST_SCHEMA_VERSION = 1 as const
+export const TUI_VISUAL_TEST_SCHEMA_VERSION = 2 as const
 
 /** Safety boundary for scenario actions. */
 export type TuiVisualSafety = 'read_only' | 'fixture_mutation'
@@ -28,6 +28,14 @@ export type TuiVisualStep =
   | { action: 'resize'; cols: number; rows: number; label: string }
   | { action: 'wait'; milliseconds: number; label: string }
 
+/** A mandatory visual check at a specific checkpoint in the journey. */
+export interface TuiVisualCriterion {
+  id: string
+  description: string
+  /** Zero-based index into the scenario's steps. */
+  afterStep: number
+}
+
 export interface TuiVisualScenario {
   /** Stable identifier used in receipts and evidence directory names. */
   id: string
@@ -41,8 +49,22 @@ export interface TuiVisualScenario {
   evidenceMode: TuiVisualEvidenceMode
   /** Event names that must be observed for the semantic oracle to pass. */
   expectedEvents: string[]
-  /** Labels interpreted by the vision agent as expected screen states. */
-  expectedVisualStates: string[]
+  expectedVisualStates: TuiVisualCriterion[]
+}
+
+/** Run identity established by the launcher, not inferred from a file name. */
+export interface TuiVisualRunIdentity {
+  sessionId: string
+  revision: string
+  buildId: string
+}
+
+/** Explicit positive verdict for the exact pixels reviewed at a checkpoint. */
+export interface TuiVisualCheck {
+  criterionId: string
+  observationId: string
+  screenshotSha256: string
+  outcome: 'met'
 }
 
 export interface TuiTerminalIdentity {
@@ -80,6 +102,8 @@ export interface TuiVisualObservation {
   timestamp: string
   screenshotPath: string
   screenshotSha256?: string
+  captureKind?: 'native_terminal' | 'reference_renderer'
+  run?: TuiVisualRunIdentity
   terminal: TuiTerminalIdentity
 }
 
@@ -117,6 +141,8 @@ export interface TuiVisualReceipt {
   terminal: TuiTerminalIdentity
   semantic: TuiSemanticOracle
   observations: TuiVisualObservation[]
+  run?: TuiVisualRunIdentity
+  checks: TuiVisualCheck[]
   findings: TuiVisualFinding[]
   evidenceDir: string
   controller: {
@@ -129,6 +155,11 @@ export interface TuiVisualReceipt {
 export type TuiScenarioValidation =
   | { ok: true }
   | { ok: false; errors: string[] }
+
+/** Label emitted by the driver at the checkpoint for this step. */
+export function tuiCheckpointLabel(step: TuiVisualStep): string {
+  return step.action === 'observe' ? step.label : `${step.label} (after)`
+}
 
 function isNonEmpty(value: string): boolean {
   return value.trim().length > 0
@@ -158,6 +189,8 @@ function validateStep(step: TuiVisualStep, index: number, errors: string[]): voi
         errors.push(`steps[${index}].milliseconds must be a non-negative integer`)
       }
       break
+    default:
+      errors.push(`steps[${index}] has an unsupported action`)
   }
 }
 
@@ -177,6 +210,17 @@ export function validateTuiVisualScenario(
   if (scenario.expectedVisualStates.length === 0) {
     errors.push('expectedVisualStates must not be empty')
   }
+  const criterionIds = new Set<string>()
+  for (const [index, criterion] of scenario.expectedVisualStates.entries()) {
+    if (!isNonEmpty(criterion.id) || criterionIds.has(criterion.id)) {
+      errors.push(`expectedVisualStates[${index}].id must be non-empty and unique`)
+    }
+    criterionIds.add(criterion.id)
+    if (!isNonEmpty(criterion.description)) errors.push(`expectedVisualStates[${index}] needs a description`)
+    if (!Number.isInteger(criterion.afterStep) || criterion.afterStep < 0 || criterion.afterStep >= scenario.steps.length) {
+      errors.push(`expectedVisualStates[${index}].afterStep must reference a scenario step`)
+    }
+  }
   if (scenario.evidenceMode === 'visual_plus_semantic' && scenario.expectedEvents.length === 0) {
     errors.push('visual_plus_semantic scenarios must require at least one expected event')
   }
@@ -186,13 +230,21 @@ export function validateTuiVisualScenario(
   if (scenario.evidenceMode !== 'visual_only' && scenario.evidenceMode !== 'visual_plus_semantic') {
     errors.push('evidenceMode must be visual_only or visual_plus_semantic')
   }
-  scenario.steps.forEach((step, index) => validateStep(step, index, errors))
+  const checkpointLabels = new Set<string>()
+  scenario.steps.forEach((step, index) => {
+    validateStep(step, index, errors)
+    const label = tuiCheckpointLabel(step)
+    if (checkpointLabels.has(label)) errors.push(`steps[${index}] repeats a checkpoint label`)
+    checkpointLabels.add(label)
+  })
 
   return errors.length === 0 ? { ok: true } : { ok: false, errors }
 }
 
 /**
- * Validate a complete receipt before publishing it as bug evidence.
+ * Validate receipt structure, not the validity of an external PASS claim.
+ * A PASS must also go through the artifact and scenario verification in
+ * `verifyTuiVisualPass`.
  *
  * @param receipt Receipt emitted by an external visual-test runner.
  * @returns A successful result or receipt validation errors.
@@ -209,6 +261,9 @@ export function validateTuiVisualReceipt(receipt: TuiVisualReceipt): TuiScenario
   }
   if (receipt.status === 'PASS' && !receipt.semantic.passed) {
     errors.push('PASS receipts require passing semantic evidence')
+  }
+  if (receipt.status === 'PASS' && (!receipt.run || !receipt.observations.length || !receipt.checks?.length)) {
+    errors.push('PASS receipts require run identity, observations, and positive visual checks')
   }
   if (receipt.semantic.evidenceMode === 'visual_plus_semantic' && !receipt.semantic.evidenceRequired) {
     errors.push('semantic-required receipts must record evidenceRequired=true')

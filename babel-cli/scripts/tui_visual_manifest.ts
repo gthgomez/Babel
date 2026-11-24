@@ -2,6 +2,7 @@ import {
   TUI_VISUAL_SCENARIOS,
 } from '../src/services/tuiVisualScenarioCatalog.js'
 import {
+  TUI_VISUAL_TEST_SCHEMA_VERSION,
   validateTuiVisualScenario,
   type TuiVisualScenario,
 } from '../src/services/tuiVisualTestContract.js'
@@ -60,7 +61,7 @@ function main(): void {
   })
   if (invalid.length > 0) throw new Error(`Invalid TUI visual manifest:\n${invalid.join('\n')}`)
 
-  process.stdout.write(`${JSON.stringify({ schemaVersion: 1, scenarios }, null, 2)}\n`)
+  process.stdout.write(`${JSON.stringify({ schemaVersion: TUI_VISUAL_TEST_SCHEMA_VERSION, scenarios }, null, 2)}\n`)
 }
 
 try {
