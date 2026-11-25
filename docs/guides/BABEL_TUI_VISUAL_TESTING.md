@@ -26,8 +26,11 @@ The command only prints JSON. It does not open a terminal or send input.
 
 An external controller should implement these operations:
 
-- `observe()` — return a screenshot, timestamp, terminal dimensions, and a
-  stable observation id.
+- `observe()` — return a unique observation ID, `Date.toISOString()` UTC timestamp, checkpoint
+  label, terminal identity and dimensions, launch identity, and a relative PNG
+  path and SHA-256. Use `/` separators and the actual case of each file-name
+  component on disk. Mark a real terminal window capture as `native_terminal`;
+  a reference-renderer screenshot or virtual grid is not native evidence.
 - `press_key(key)` — accept only keys from the scenario step.
 - `type_text(text)` — type only scenario-provided text.
 - `resize(cols, rows)` — resize the dedicated terminal window.
@@ -48,15 +51,43 @@ session. Store each scenario under its own evidence directory with:
 - a semantic oracle result;
 - Luna findings and a final receipt.
 
-The Babel semantic oracle treats missing required events or malformed JSONL as
-evidence failure. UI-only scenarios with no required events may run without an
-event stream. A visual finding alone must not be promoted to `PASS`.
+The launcher assigns a fresh session ID, records the full Git revision and the
+SHA-256 of the tested build, and retains the start/end window independently of
+the receipt. Put screenshots in a private, session-owned artifact directory
+that the app cannot write. Use disposable data and redact before persistence
+or transmission; have the reviewer inspect the exact redacted bytes.
+
+The version 2 manifest identifies each mandatory visual criterion by `id` and
+the zero-based checkpoint index `afterStep`. The independent reviewer must
+explicitly mark every criterion `met` and name the checkpoint observation ID and
+PNG hash. A missing check, a missing image, a stale or foreign capture, or a
+virtual/reference capture leaves the result inconclusive even with zero findings.
+
+Await `buildTuiVisualReceipt` when generating receipts, supplying the
+launcher and independent reviewer expectation as the second argument.
+With no expectation, a submission cannot pass on its own. When consuming a
+receipt, `validateTuiVisualReceiptStructure` only checks its structure; pass the
+launcher-owned scenario/run settings and independent review results to
+`verifyTuiVisualPass` to check checkpoint coverage, terminal dimensions and
+screenshot bytes before accepting a `PASS` claim. That verifier checks PNG
+structure and hashes. It does not decode pixels or establish the authenticity
+of the capture system.
+Both the launcher/controller and reviewer have to be trusted; never infer an
+independent visual review from a hash or a controller's assertion.
+
+Version 1 manifests and receipts are historical evidence, not version 2 PASS
+proof. Repeat the journey with a compatible controller rather than upgrading
+old artifacts in place. The current semantic oracle can report missing events
+and malformed JSONL, but event-name presence alone does not establish session
+identity or outcomes. Version 2 withholds `PASS` for scenarios requiring
+that semantic proof. Visual-only scenarios can run without an event stream.
 
 Receipts use the versioned contracts in:
 
 - `babel-cli/src/services/tuiVisualTestContract.ts`
 - `babel-cli/src/services/tuiVisualDriver.ts`
 - `babel-cli/src/services/tuiVisualEvidence.ts`
+- `babel-cli/src/services/tui-visual-verification.ts`
 - `babel-cli/src/services/tuiVisualScenarioCatalog.ts`
 
 Statuses are `PASS`, `BUG`, `BLOCKED`, and `INCONCLUSIVE`. `INCONCLUSIVE` is
@@ -86,7 +117,8 @@ the T24 lane.
 - `BUG`: a visual defect persists and contradicts the expected screen state.
 - `BLOCKED`: the terminal, runtime, model, or required permission is absent.
 - `INCONCLUSIVE`: the controller or evidence is ambiguous.
-- `PASS`: visual and semantic expectations agree.
+- `PASS`: every mandatory criterion was positively reviewed at its expected
+  checkpoint, with verified artifacts and no unmet evidence requirement.
 
 Keep live visual runs staged or nightly until a dedicated Windows runner can
 reliably provide a clean terminal, stable dimensions, and artifact retention.

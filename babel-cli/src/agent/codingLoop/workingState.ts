@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import type { FailureSurface, RepairDiagnosis, RepairDiagnosisKind } from './failureSurface.js'
 import type { AdmittedRecoveryPlanV2 } from './recoveryPlan.js'
 import type { FailureLocalization } from './failureLocalization.js'
+import { isAcceptanceMeaningDerivedRef, type AcceptanceMeaningStatus } from '../taskAcceptanceMeaning.js'
 import type { TaskContractV1 } from '../taskContract.js'
 
 export const WORKING_STATE_NAME = 'working_state'
@@ -414,12 +415,15 @@ export function recordControllerRecoveryStrategy(
 /**
  * Compact YAML-like block for model injection.
  */
-function acceptanceSourceStatus(contract: TaskContractV1, criterionId: string): 'explicit' | 'inferred' | 'unresolved' | 'mixed' | 'unknown' {
+function acceptanceSourceStatus(contract: TaskContractV1, criterionId: string): AcceptanceMeaningStatus | 'mixed' | 'unknown' {
   const suffix = `:${criterionId}`
-  const statuses = new Set(contract.provenance.records.flatMap(record => {
+  const statuses = new Set(contract.provenance.records.flatMap<AcceptanceMeaningStatus>(record => {
     if (record.kind !== 'derived_acceptance' || !record.ref.endsWith(suffix)) return []
-    const match = record.ref.match(/^task-acceptance-meaning:v[123]:(explicit|inferred|unresolved):/)
-    return match ? [match[1] as 'explicit' | 'inferred' | 'unresolved'] : []
+    if (!isAcceptanceMeaningDerivedRef(record.ref)) return []
+    const [, , status, payload] = record.ref.split(':', 4)
+    return payload !== undefined && (status === 'explicit' || status === 'inferred' || status === 'unresolved')
+      ? [status]
+      : []
   }))
   if (statuses.size === 1) return [...statuses][0]!
   return statuses.size > 1 ? 'mixed' : 'unknown'

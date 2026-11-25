@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import {
   TUI_VISUAL_TEST_SCHEMA_VERSION,
-  validateTuiVisualReceipt,
+  validateTuiVisualReceiptStructure,
   validateTuiVisualScenario,
   type TuiVisualReceipt,
 } from './tuiVisualTestContract.js'
@@ -54,12 +54,13 @@ test('receipt validation requires findings for non-PASS outcomes', () => {
       detail: 'no events required',
     },
     observations: [],
+    checks: [],
     findings: [],
     evidenceDir: 'runs/tui-visual/scenario',
     controller: { name: 'luna', version: 'test' },
   } satisfies TuiVisualReceipt
 
-  const result = validateTuiVisualReceipt(receipt)
+  const result = validateTuiVisualReceiptStructure(receipt)
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.errors.join('\n'), /must contain at least one finding/)
 })
@@ -93,12 +94,13 @@ test('receipt validation rejects PASS when semantic evidence failed', () => {
       detail: 'missing event',
     },
     observations: [],
+    checks: [],
     findings: [],
     evidenceDir: 'runs/tui-visual/scenario',
     controller: { name: 'test', version: '1' },
   } satisfies TuiVisualReceipt
 
-  const result = validateTuiVisualReceipt(base)
+  const result = validateTuiVisualReceiptStructure(base)
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.errors.join('\n'), /require passing semantic evidence/)
 })

@@ -446,7 +446,9 @@ function repoIdentityMismatchResponse(
 export async function handleProtocolRequest(
   request: BabelProtocolRequest,
   state: ProtocolHostState,
-  onNotification?: (notification: import('../messages.js').BabelProtocolServerNotification) => void
+  onNotification?: (notification: import('../messages.js').BabelProtocolServerNotification) => void,
+  scopedCreate?: { threadId: string; principalId: string; transportSessionId: string; projectId: string; projectRoot: string;
+    projectGeneration: number; hostInstanceId: string; commandId: string }
 ): Promise<JsonRpcResponse> {
   const id = request.id;
 
@@ -477,6 +479,11 @@ export async function handleProtocolRequest(
         let params = request.params;
         if (!params) {
           return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Missing params');
+        }
+        if (scopedCreate && (params.project_root !== scopedCreate.projectRoot ||
+            params.session_id !== scopedCreate.transportSessionId || params.harness_adapter_id !== 'babel-native' ||
+            request.id !== scopedCreate.commandId)) {
+          return errorResponse(id, BabelProtocolErrorCode.INVALID_PARAMS, 'Scoped native create admission mismatch');
         }
         if (params.harness_adapter_id === 'command-code') {
           const probe = await probeCommandCodeInstallation();
@@ -586,7 +593,7 @@ export async function handleProtocolRequest(
             err instanceof Error ? err.message : String(err),
           );
         }
-        const threadId = allocateThreadId();
+        const threadId = scopedCreate?.threadId ?? allocateThreadId();
         if (claudeAdmitted && state.claudeCodeRegistry) {
           state.claudeCodeRegistry.bindAdmitted(threadId, claudeAdmitted);
         }

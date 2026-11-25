@@ -1202,6 +1202,16 @@ describe('hosted prompt presentation', () => {
     }
   });
 
+  it('places the hosted caret by display width for wide characters', () => {
+    const input = createTestInput();
+    input.setText('你好');
+
+    const view = input.getView({ x: 0, y: 0, width: 24, height: 8 });
+    // Default prompt "› " is 2 cols; each CJK cluster is 2 cols.
+    assert.equal(view.cursor.col, 2 + 4);
+    assert.equal(view.cursor.row, 0);
+  });
+
   it('routes hosted keys through the existing editor state machine', () => {
     const invalidations: string[] = [];
     const input = new PromptInput({ onSubmit: () => {} }) as any;

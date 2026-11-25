@@ -35,19 +35,22 @@ export function createHarnessAwareEngineFactory(
   claudeCodeRegistry?: ClaudeCodeAgentRuntimeRegistry,
 ): ProtocolHostState['engineFactory'] {
   return (descriptor: SessionDescriptor) => {
-    if (descriptor.harness_adapter_id === 'command-code') {
-      return createCommandCodeHarnessEngine({ descriptor, registry: commandCodeRegistry });
+    switch (descriptor.harness_adapter_id) {
+      case undefined:
+      case 'babel-native':
+        return defaultNativeEngine(descriptor);
+      case 'command-code':
+        return createCommandCodeHarnessEngine({ descriptor, registry: commandCodeRegistry });
+      case 'opencode':
+        return createOpenCodeHarnessEngine({ descriptor, registry: openCodeRegistry });
+      case 'claude-code':
+        if (!claudeCodeRegistry) {
+          throw new Error('CLAUDE_CODE_REGISTRY_UNAVAILABLE');
+        }
+        return createClaudeCodeHarnessEngine({ descriptor, registry: claudeCodeRegistry });
+      default:
+        throw new Error('UNSUPPORTED_HARNESS_ADAPTER_ID');
     }
-    if (descriptor.harness_adapter_id === 'opencode') {
-      return createOpenCodeHarnessEngine({ descriptor, registry: openCodeRegistry });
-    }
-    if (descriptor.harness_adapter_id === 'claude-code') {
-      if (!claudeCodeRegistry) {
-        throw new Error('CLAUDE_CODE_REGISTRY_UNAVAILABLE');
-      }
-      return createClaudeCodeHarnessEngine({ descriptor, registry: claudeCodeRegistry });
-    }
-    return defaultNativeEngine(descriptor);
   };
 }
 

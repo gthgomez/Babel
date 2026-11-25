@@ -58,6 +58,23 @@ describe('imeCursor', () => {
     assert.equal(pos.row, 5 + 2 + 3);
   });
 
+  it('keeps the caret aligned after wide characters', () => {
+    const pos = computeImeCursorPos({
+      startRow: 20,
+      queuedLines: 0,
+      slashPopupLines: 0,
+      cursorLine: 0,
+      cursorCol: 2,
+      textBeforeCursor: '你好',
+      prompt: 'Input › ',
+      continuationPrompt: '        ',
+      termRows: 40,
+      termCols: 80,
+    });
+    // "Input › " is 8 cols; each CJK cluster is 2 cols → col = 1 + 8 + 4 = 13.
+    assert.equal(pos.col, 13);
+  });
+
   it('cupSequence formats CSI H', () => {
     assert.equal(cupSequence({ row: 4, col: 7 }), '\x1b[4;7H');
   });
