@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { it } from 'node:test'
+import { it, type TestContext } from 'node:test'
 import { runInstalledDoctor, installedSetupChecklist, supportsInstalledNode } from './installedDoctor.js'
+import { captureRunningProduct, type RunningProduct } from './services/runningProduct.js'
 
 it('profile-aware host diagnostics skip Docker probes while Docker remains required for safe_repo',()=>{
   const host=runInstalledDoctor({env:{},executionProfile:'host_native',dockerProbe:()=>{throw new Error('unexpected Docker probe')},imageProbe:()=>{throw new Error('unexpected image probe')}})
@@ -150,8 +151,7 @@ it('does not treat an unrelated ambient provider key as a selected connection', 
   assert.match(result.checks.find(check => check.id === 'provider')?.message ?? '', /setup/)
 })
 
-it('doctor reports the running snapshot when package files have changed', async () => {
-  const { captureRunningProduct } = await import('./services/runningProduct.js')
+it('doctor reports the running snapshot when package files have changed', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-doctor-running-'))
   try {
     const entry = join(root, 'entry.js'); const packageFile = join(root, 'package.json')
@@ -164,4 +164,98 @@ it('doctor reports the running snapshot when package files have changed', async 
     assert.match(message, /1\.0\.0/); assert.doesNotMatch(message, /2\.0\.0/)
     assert.match(message, /restart/i); assert.match(message, /revision.*unknown/i)
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+const startupBuild = {
+  schemaVersion: 1,
+  packageVersion: '1.0.0',
+  sourceCommit: 'a'.repeat(40),
+  sourceTree: 'b'.repeat(40),
+  workingTreeClean: true,
+  buildInputsDigest: null,
+  buildInputsReason: 'complete build inputs were not recorded',
+  recordedBuildInputs: {
+    scope: 'cli-manifest-lock-config-and-tsc-files:v1',
+    sha256: 'c'.repeat(64),
+    packageLockSha256: 'd'.repeat(64),
+  },
+  nodeVersion: '22.19.0',
+  typescriptVersion: '5.9.3',
+}
+
+function buildMetadataFixture(t: TestContext) {
+  const root = mkdtempSync(join(tmpdir(), 'babel-doctor-build-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const entry = join(root, 'entry.js')
+  const metadataDir = join(root, 'dist', 'cli')
+  const metadataPath = join(metadataDir, 'build-info.json')
+  mkdirSync(metadataDir, { recursive: true })
+  writeFileSync(entry, 'fixture')
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ version: '1.0.0' }))
+  const paths = { packageRoot: root, resourceRoot: root, isInstalled: true, userConfigRoot: root, userStateRoot: root, userCacheRoot: root, targetProjectRoot: root }
+
+  return {
+    capture: () => captureRunningProduct(root, entry),
+    writeMetadata: (metadata: unknown) => writeFileSync(metadataPath, JSON.stringify(metadata)),
+    removeMetadata: () => rmSync(metadataPath),
+    diagnose(running: RunningProduct) {
+      const report = runInstalledDoctor({ paths, env: {}, settings: { schemaVersion: 1, connections: {} }, running })
+      const check = report.checks.find(item => item.id === 'executable')
+      assert.ok(check)
+      return check
+    },
+  }
+}
+
+it('doctor reports bounded startup metadata in the structured executable check', (t) => {
+  const fixture = buildMetadataFixture(t)
+  fixture.writeMetadata(startupBuild)
+  const check = fixture.diagnose(fixture.capture())
+
+  assert.equal(check.status, 'ok')
+  assert.match(check.message, /running build revision unknown.*self-reported startup build metadata available/i)
+  assert.match(check.message, /no change detected in package manifest, entrypoint, or recorded build metadata/i)
+  assert.doesNotMatch(check.message, new RegExp(startupBuild.sourceCommit))
+  assert.deepEqual(check.startupBuildMetadata, {
+    provenance: 'self_reported',
+    sourceCommit: startupBuild.sourceCommit,
+    sourceTree: startupBuild.sourceTree,
+    workingTreeClean: true,
+    recordedBuildInputs: startupBuild.recordedBuildInputs,
+    buildInputsReason: 'complete build inputs were not recorded',
+  })
+})
+
+it('doctor names only the fingerprints it could compare when startup metadata is missing or malformed', (t) => {
+  const fixture = buildMetadataFixture(t)
+  const missing = fixture.diagnose(fixture.capture())
+  assert.equal(missing.status, 'ok')
+  assert.match(missing.message, /startup build metadata unavailable/i)
+  assert.match(missing.message, /no change detected in package manifest or entrypoint$/i)
+  assert.equal(Object.hasOwn(missing, 'startupBuildMetadata'), false)
+
+  fixture.writeMetadata({ ...startupBuild, sourceCommit: 'invalid-metadata-fixture' })
+  const malformed = fixture.diagnose(fixture.capture())
+  assert.equal(malformed.status, 'ok')
+  assert.match(malformed.message, /startup build metadata unavailable/i)
+  assert.match(malformed.message, /no change detected in package manifest, entrypoint, or recorded build metadata/i)
+  assert.equal(Object.hasOwn(malformed, 'startupBuildMetadata'), false)
+  assert.doesNotMatch(malformed.message, /invalid-metadata-fixture/)
+})
+
+it('doctor recommends restarting after a same-version build replacement and keeps the startup self-report', (t) => {
+  const fixture = buildMetadataFixture(t)
+  fixture.writeMetadata(startupBuild)
+  const running = fixture.capture()
+  fixture.writeMetadata({ ...startupBuild, sourceCommit: 'e'.repeat(40) })
+
+  const replaced = fixture.diagnose(running)
+  assert.equal(replaced.status, 'warn')
+  assert.match(replaced.message, /restart to use the current installation/i)
+  assert.equal(replaced.startupBuildMetadata?.sourceCommit, startupBuild.sourceCommit)
+
+  fixture.removeMetadata()
+  const removed = fixture.diagnose(running)
+  assert.match(removed.message, /installation change detection unknown/i)
+  assert.equal(removed.startupBuildMetadata?.sourceCommit, startupBuild.sourceCommit)
 })
