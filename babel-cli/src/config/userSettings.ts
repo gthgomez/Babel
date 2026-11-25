@@ -102,10 +102,11 @@ export function readUserSettings(options: { path?: string; env?: NodeJS.ProcessE
   return result.data
 }
 
-/** Validate the entire candidate before an atomic save, preserving forward-compatible fields. */
-export function updateUserSettings(update: Partial<UserSettings>, options: { path?: string; env?: NodeJS.ProcessEnv } = {}): UserSettings {
-  const path = options.path ?? userSettingsPath(options.env)
-  const current = readUserSettings({ ...options, path })
+type UserSettingsChange = Partial<UserSettings> | ((current: UserSettings) => Partial<UserSettings>)
+
+/** Merge and validate a settings change without writing the profile. */
+export function prepareUserSettingsUpdate(current: UserSettings, change: UserSettingsChange): UserSettings {
+  const update = typeof change === 'function' ? change(current) : change
   const candidate = {
     ...current, ...update,
     connections: { ...current.connections, ...update.connections },
@@ -115,11 +116,18 @@ export function updateUserSettings(update: Partial<UserSettings>, options: { pat
   }
   const result = settingsSchema.safeParse(candidate)
   if (!result.success) throw new Error(`Invalid Babel preference update (${describePreferenceIssues(result.error.issues)}); previous preferences were preserved.`)
+  return result.data
+}
+
+/** Validate the entire candidate before an atomic save, preserving forward-compatible fields. */
+export function updateUserSettings(change: UserSettingsChange, options: { path?: string; env?: NodeJS.ProcessEnv } = {}): UserSettings {
+  const path = options.path ?? userSettingsPath(options.env)
+  const candidate = prepareUserSettingsUpdate(readUserSettings({ ...options, path }), change)
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const temporary = `${path}.${randomUUID()}.tmp`
-  writeFileSync(temporary, `${JSON.stringify(result.data, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
+  writeFileSync(temporary, `${JSON.stringify(candidate, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
   renameSync(temporary, path)
-  return result.data
+  return candidate
 }
 
 /** Resolve selection once; environment credentials never choose a provider. */

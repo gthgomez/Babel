@@ -114,7 +114,7 @@ export async function bootstrapReplSession(
   }
   if (isFirstRun()) showOnboarding()
   if (!ctx.state.model && process.stdin.isTTY && process.stderr.isTTY && !process.env['CI']) {
-    const setup = () => runProviderSetup()
+    const setup = () => runProviderSetup({ projectRoot: target })
     if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('first-run-setup', setup)
     else await setup()
     const selected = selectedConnectionModel({}, target)
