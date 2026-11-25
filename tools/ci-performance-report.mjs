@@ -362,6 +362,7 @@ export function reportPerformance(runsDoc, jobsDoc) {
   const executed = observations.filter(row => row.classification === 'executed-this-attempt' && Number.isFinite(row.executedSeconds))
   const observedExecutedSeconds = executed.reduce((sum, row) => sum + row.executedSeconds, 0)
   const executedJobsFresh = executed.length
+  const freshQueueProxySeconds = executed.map(row => row.schedulingProxySeconds).filter(Number.isFinite)
   const stageBreakdown = jobStageBreakdown(observations)
   const runnerlessCancelled = observations.filter(row => row.runnerlessCancellation)
   const runnerlessUnstartedSeconds = runnerlessCancelled.map(row => {
@@ -524,6 +525,14 @@ export function reportPerformance(runsDoc, jobsDoc) {
       proxySecondsP50: percentile(observations.map(row => row.schedulingProxySeconds).filter(value => Number.isFinite(value)), 50),
       proxySecondsP95: percentile(observations.map(row => row.schedulingProxySeconds).filter(value => Number.isFinite(value)), 95),
       observedProxySeconds: observations.filter(row => Number.isFinite(row.schedulingProxySeconds)).reduce((sum, row) => sum + row.schedulingProxySeconds, 0),
+      freshExecution: {
+        jobs: executed.length,
+        queueProxySamples: freshQueueProxySeconds.length,
+        queueProxyP50Seconds: percentile(freshQueueProxySeconds, 50),
+        queueProxyP95Seconds: percentile(freshQueueProxySeconds, 95),
+        runnerExecutionSamples: executedJobsFresh,
+        runnerExecutionSeconds: executedJobsFresh ? observedExecutedSeconds : null,
+      },
       waitInterpretation: 'pre-start timestamp proxy only; not proven provider queue or prerequisite completion',
     },
     platformCoreSteps,
@@ -538,6 +547,7 @@ export function reportPerformance(runsDoc, jobsDoc) {
       carriedForward: 'started_at and completed_at are both strictly before attempt run_started_at; executedSeconds is 0',
       runnerlessCancellation: 'cancelled completed job with no steps and created_at equal to started_at; requires runner_id 0 with empty runner_name, or both runner fields null',
       schedulingProxy: 'created_at to started_at; not provider capacity and not workflow dependency delay',
+      freshSchedulingVsExecution: 'freshExecution includes only executed-this-attempt jobs; queue proxy is created_at to started_at, runner execution is started_at to completed_at; carried-forward, skipped, unknown and runnerless cancellations are excluded',
       updatedAt: 'not used as qualification completion',
       stageBreakdown: 'observed step seconds classified by explicit step-name hints; unknown and unassigned runner seconds remain unattributed; not billing time',
       rootFailureCandidates: 'failed non-aggregate job rows; dependency/root-cause identity is unknown without dependency evidence',

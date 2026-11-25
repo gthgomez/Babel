@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$RepoRoot = (Join-Path $PSScriptRoot '..'),
-  [string]$GitPath = (Join-Path $env:ProgramFiles 'Git\cmd\git.exe'),
+  [string]$GitPath = '',
   [string]$GhPath = '',
   [string]$ExpectedRemote = 'origin',
   [string]$ExpectedRepository = 'gthgomez/Babel',
@@ -35,6 +35,8 @@ $remoteHead = $null
 $gitVersion = $null
 $ghVersion = $null
 $ghResolvedPath = $GhPath
+$gitPathWasExplicit = $PSBoundParameters.ContainsKey('GitPath')
+$gitResolvedPath = $GitPath
 
 function Add-AgentCheck {
   param(
@@ -53,19 +55,41 @@ function Add-AgentWarning {
   if ($script:warnings -notcontains $Message) { $script:warnings += $Message }
 }
 
+function Get-PreflightGithubCapabilities {
+  param(
+    [string]$AuthCapability = 'unproven_preflight_incomplete',
+    [string]$ReadCapability = 'unproven_preflight_incomplete'
+  )
+  return [ordered]@{
+    nonInteractiveAuthentication = $AuthCapability
+    repositoryRead = $ReadCapability
+    branchWrite = 'unproven_not_probed'
+    pullRequestCreation = 'unproven_not_probed'
+    note = 'Read-only preflight does not attempt a branch write or create a pull request; never treat auth or repository-read success as write authority.'
+  }
+}
+
 try {
   $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot -ErrorAction Stop).Path
   $envState = Set-AgentNonInteractiveEnvironment
 
-  $gitAvailable = Test-Path -LiteralPath $GitPath -PathType Leaf
+  # Prefer Windows Git when available; otherwise resolve Git from PATH. An
+  # explicit -GitPath remains authoritative and is never silently replaced.
+  if (-not $gitPathWasExplicit -and -not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+    $gitResolvedPath = Join-Path $env:ProgramFiles 'Git\cmd\git.exe'
+  }
+  if (-not $gitPathWasExplicit -and -not (Test-Path -LiteralPath $gitResolvedPath -PathType Leaf)) {
+    try { $gitResolvedPath = (Get-Command -Name 'git' -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source } catch { $gitResolvedPath = '' }
+  }
+  $gitAvailable = -not [string]::IsNullOrWhiteSpace($gitResolvedPath) -and (Test-Path -LiteralPath $gitResolvedPath -PathType Leaf)
   Add-AgentCheck -Name 'GIT_EXECUTABLE' -Passed $gitAvailable -Blocker 'git_executable_unavailable'
-  if (-not $gitAvailable) { throw "Git executable not found: $GitPath" }
+  if (-not $gitAvailable) { throw "Git executable not found: $gitResolvedPath" }
 
-  $gitVersionResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('--version')
+  $gitVersionResult = Invoke-AgentGit -GitPath $gitResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('--version')
   if ($gitVersionResult.exitCode -eq 0) { $gitVersion = $gitVersionResult.text.Trim() }
   Add-AgentCheck -Name 'GIT_VERSION' -Passed ($gitVersionResult.exitCode -eq 0) -Blocker 'git_version_failed'
 
-  $rootResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', '--show-toplevel')
+  $rootResult = Invoke-AgentGit -GitPath $gitResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', '--show-toplevel')
   $reportedRoot = if ($rootResult.exitCode -eq 0) { $rootResult.text.Trim() } else { $null }
   $rootMatches = $rootResult.exitCode -eq 0 -and [string]::Equals(
     (ConvertTo-AgentAbsolutePath -BasePath $resolvedRepoRoot -Path $reportedRoot),
@@ -74,13 +98,13 @@ try {
   )
   Add-AgentCheck -Name 'EXPECTED_REPOSITORY_ROOT' -Passed $rootMatches -Blocker 'wrong_repository_root'
 
-  $remoteUrl = Get-AgentRemoteUrl -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Remote $ExpectedRemote
+  $remoteUrl = Get-AgentRemoteUrl -GitPath $gitResolvedPath -RepoRoot $resolvedRepoRoot -Remote $ExpectedRemote
   $remoteSlug = Get-AgentRemoteSlug -RemoteUrl $remoteUrl
   $remoteMatches = [string]::Equals($remoteSlug, $ExpectedRepository, [StringComparison]::OrdinalIgnoreCase)
   Add-AgentCheck -Name 'REMOTE_OK' -Passed $remoteMatches -Blocker 'unexpected_origin_repository'
   Add-AgentCheck -Name 'REMOTE_CREDENTIAL_FREE' -Passed (Test-AgentRemoteCredentialFree -RemoteUrl $remoteUrl) -Blocker 'token_bearing_remote_url'
 
-  $credential = Get-AgentCredentialIsolation -GitPath $GitPath -RepoRoot $resolvedRepoRoot
+  $credential = Get-AgentCredentialIsolation -GitPath $gitResolvedPath -RepoRoot $resolvedRepoRoot
   $credentialOk = $credential.localGhHelper -and $credential.resetInheritedHelpers
   Add-AgentCheck -Name 'CREDENTIAL_PROVIDER_GH' -Passed $credentialOk -Blocker 'repo_local_gh_credential_helper_missing'
 
@@ -117,20 +141,20 @@ try {
     Add-AgentCheck -Name 'EXPECTED_BASE_BRANCH' -Passed $false -Blocker 'default_branch_not_checked'
   }
 
-  $head = Get-AgentGitText -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', 'HEAD')
+  $head = Get-AgentGitText -GitPath $gitResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', 'HEAD')
   $headKnown = Test-AgentSha -Value $head
   Add-AgentCheck -Name 'LOCAL_HEAD_KNOWN' -Passed $headKnown -Blocker 'local_head_unknown'
 
-  $branchResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('symbolic-ref', '--quiet', '--short', 'HEAD')
+  $branchResult = Invoke-AgentGit -GitPath $gitResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('symbolic-ref', '--quiet', '--short', 'HEAD')
   if ($branchResult.exitCode -eq 0) { $branch = $branchResult.text.Trim() }
   $branchKnown = -not [string]::IsNullOrWhiteSpace($branch)
   Add-AgentCheck -Name 'ON_BRANCH' -Passed $branchKnown -Blocker 'detached_head'
 
-  $originMain = Get-AgentGitText -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', "$ExpectedRemote/$ExpectedBaseBranch")
+  $originMain = Get-AgentGitText -GitPath $gitResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('rev-parse', "$ExpectedRemote/$ExpectedBaseBranch")
   $baseKnown = Test-AgentSha -Value $originMain
   Add-AgentCheck -Name 'EXPECTED_BASE_SHA_AVAILABLE' -Passed $baseKnown -Blocker 'expected_base_sha_unavailable'
 
-  $lsRemoteResult = Invoke-AgentGit -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Arguments @('ls-remote', $ExpectedRemote, 'HEAD', "refs/heads/$ExpectedBaseBranch")
+  $lsRemoteResult = Invoke-AgentGit -GitPath $gitResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('ls-remote', $ExpectedRemote, 'HEAD', "refs/heads/$ExpectedBaseBranch")
   $remoteBase = ''
   if ($lsRemoteResult.exitCode -eq 0) {
     foreach ($row in ($lsRemoteResult.text -split '\r?\n')) {
@@ -144,7 +168,7 @@ try {
   Add-AgentCheck -Name 'REMOTE_REACHABLE' -Passed $remoteReachable -Blocker 'remote_unreachable'
   Add-AgentCheck -Name 'REMOTE_BASE_CURRENT' -Passed ($baseKnown -and $remoteBase -eq $originMain) -Blocker 'remote_base_stale_fetch_required'
 
-  $statusSnapshot = Get-AgentStatusSnapshot -GitPath $GitPath -RepoRoot $resolvedRepoRoot
+  $statusSnapshot = Get-AgentStatusSnapshot -GitPath $gitResolvedPath -RepoRoot $resolvedRepoRoot
   Add-AgentCheck -Name 'STATUS_READABLE' -Passed $statusSnapshot.commandOk -Blocker 'git_status_failed'
   $worktreeClean = $statusSnapshot.commandOk -and $statusSnapshot.clean
   if (-not $worktreeClean -and $AllowDirtyWorktree) {
@@ -154,7 +178,7 @@ try {
     Add-AgentCheck -Name 'WORKTREE_CLEAN' -Passed $worktreeClean -Blocker 'unexpected_dirty_worktree'
   }
 
-  $topology = Get-AgentWorktreeTopology -GitPath $GitPath -RepoRoot $resolvedRepoRoot
+  $topology = Get-AgentWorktreeTopology -GitPath $gitResolvedPath -RepoRoot $resolvedRepoRoot
   if ($RequireIsolatedWorktree) {
     Add-AgentCheck -Name 'WORKTREE_ISOLATED' -Passed ($topology.available -and $topology.isolated) -Blocker 'isolated_worktree_required'
   } else {
@@ -215,6 +239,8 @@ try {
 
   $ok = $blockers.Count -eq 0
   $pushReady = $ok -and $worktreeClean -and $branchKnown -and $headKnown -and $baseKnown -and $remoteReachable
+  $authCapability = if ($ghAuthOk) { 'verified' } else { 'failed_or_unavailable' }
+  $readCapability = if ($ghRepoOk) { 'verified' } else { 'failed_or_unavailable' }
   $result = [ordered]@{
     schemaVersion = 1
     kind = 'babel_agent_preflight'
@@ -229,8 +255,14 @@ try {
     head = $head
     originMain = $originMain
     remoteHead = $remoteHead
-    git = [ordered]@{ path = $GitPath; version = $gitVersion }
+    git = [ordered]@{ path = $gitResolvedPath; version = $gitVersion }
     gh = [ordered]@{ path = $ghResolvedPath; version = $ghVersion }
+    githubCapabilities = Get-PreflightGithubCapabilities -AuthCapability $authCapability -ReadCapability $readCapability
+    nextSteps = @(
+      'Resolve GitHub authentication or repository-read blockers before dependent remote work; do not change credentials or global Git configuration automatically.',
+      'Branch-write and pull-request-creation capability are not tested by this read-only preflight. Establish them only through an authorized normal push or PR-creation operation, then record the observed result.',
+      'If a push is rejected, fetch and freeze the remote branch tip, identify ownership and divergence, then reconcile safely; do not automatically rebase or force-push.'
+    )
     environment = $envState
     credential = $credential
     worktree = [ordered]@{
@@ -261,6 +293,7 @@ try {
     repoRoot = $resolvedRepoRoot
     repository = $repository
     remote = $ExpectedRemote
+    githubCapabilities = Get-PreflightGithubCapabilities
     checks = $checks
     blockers = @($blockers + 'preflight_exception' | Select-Object -Unique)
     warnings = @($warnings | Select-Object -Unique)
