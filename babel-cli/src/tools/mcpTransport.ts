@@ -158,16 +158,26 @@ const McpToolCallContentSchema = z.union([
   McpToolCallImageContentSchema,
 ]);
 
-const MCP_IMAGE_WITHHELD_MARKER = '[MCP_IMAGE_WITHHELD: text-only transport]';
+const MCP_MEDIA_WITHHELD_MARKER = '[MCP_MEDIA_WITHHELD: text-only transport]';
+const MCP_MEDIA_REFERENCE_WITHHELD_MARKER = '[MCP_MEDIA_REFERENCE_WITHHELD: text-only transport]';
 const MCP_RESOURCE_BLOB_WITHHELD_MARKER = '[MCP_RESOURCE_BLOB_WITHHELD: text-only transport]';
 const MCP_BINARY_ONLY_DIAGNOSTIC = `${MCP_RESOURCE_BLOB_WITHHELD_MARKER} non-image diagnostic only; not a PASS source`;
 
-function imageWithheldNotice(count: number): string {
-  return `${MCP_IMAGE_WITHHELD_MARKER} images=${count}`;
+type McpMediaWithheld = { images?: number; data_uris?: number; resource_blobs?: number };
+
+function mediaWithheldNotice(counts: McpMediaWithheld): string {
+  return `${MCP_MEDIA_WITHHELD_MARKER}${counts.images ? ` images=${counts.images}` : ''}` +
+    `${counts.data_uris ? ` data_uris=${counts.data_uris}` : ''}` +
+    `${counts.resource_blobs ? ` resource_blobs=${counts.resource_blobs}` : ''}`;
 }
 
-function isImageWithheldNotice(text: string): boolean {
-  return /^\[MCP_IMAGE_WITHHELD: text-only transport\] images=[1-9]\d*$/.test(text.trim());
+function sanitizeMediaText(text: string): { text: string; dataUriCount: number } {
+  let dataUriCount = 0;
+  const sanitized = text.replace(/(^|[\s([{="'])data:[^\s<>"')\]}]+/gi, (_match, prefix: string) => {
+    dataUriCount += 1;
+    return `${prefix}${MCP_MEDIA_REFERENCE_WITHHELD_MARKER}`;
+  });
+  return { text: sanitized, dataUriCount };
 }
 
 function isResourceWithheldNotice(text: string): boolean {
@@ -209,6 +219,7 @@ interface McpToolCallProjection {
   /** Direct parser form: notice first for mixed results, original text otherwise. */
   text: string;
   imageCount: number;
+  dataUriCount: number;
   /**
    * Canonical envelope form. Text-only results preserve their original text
    * blocks and order; mixed results prepend the notice as its own block.
@@ -227,35 +238,43 @@ interface McpToolCallProjection {
 function projectMcpToolCallResult(result: unknown): McpToolCallProjection {
   const envelope = McpToolCallResultEnvelopeSchema.safeParse({ status: 'success', result });
   if (!envelope.success) {
-    return { kind: 'invalid', text: '', imageCount: 0, result: null };
+    return { kind: 'invalid', text: '', imageCount: 0, dataUriCount: 0, result: null };
   }
 
   const content = envelope.data.result.content;
+  let dataUriCount = 0;
   const textBlocks = content
     .filter((entry): entry is z.infer<typeof McpToolCallTextContentSchema> => entry.type === 'text')
-    .map((entry) => ({ type: 'text' as const, text: entry.text }));
+    .map((entry) => {
+      const safe = sanitizeMediaText(entry.text);
+      dataUriCount += safe.dataUriCount;
+      return { type: 'text' as const, text: safe.text };
+    });
   const textContent = textBlocks.map((entry) => entry.text).join('\n');
   const imageCount = content.filter((entry) => entry.type === 'image').length;
 
   if (envelope.data.result.isError === true) {
-    return { kind: 'tool_error', text: textContent, imageCount, result: null };
+    return { kind: 'tool_error', text: textContent, imageCount, dataUriCount, result: null };
   }
-  if (!textBlocks.some(({ text }) => text.trim() && !isImageWithheldNotice(text))) {
+  if (!textBlocks.some(({ text }) => text.split(MCP_MEDIA_REFERENCE_WITHHELD_MARKER).join('').trim())) {
     return {
       kind: imageCount > 0 ? 'image_only' : 'invalid',
       text: '',
       imageCount,
+      dataUriCount,
       result: null,
     };
   }
 
-  const notice = imageWithheldNotice(imageCount);
+  const counts = { ...(imageCount ? { images: imageCount } : {}), ...(dataUriCount ? { data_uris: dataUriCount } : {}) };
+  const notice = mediaWithheldNotice(counts);
   return {
     kind: 'success',
-    text: imageCount > 0 ? `${notice}\n${textContent}` : textContent,
+    text: Object.keys(counts).length ? `${notice}\n${textContent}` : textContent,
     imageCount,
+    dataUriCount,
     result: {
-      content: imageCount > 0 ? [{ type: 'text', text: notice }, ...textBlocks] : textBlocks,
+      content: Object.keys(counts).length ? [{ type: 'text', text: notice }, ...textBlocks] : textBlocks,
       ...(envelope.data.result.isError === false ? { isError: false } : {}),
     },
   };
@@ -291,6 +310,7 @@ interface McpResourceProjection {
   contents: Array<{ uri: string; text: string }>;
   usableText: boolean;
   blobCount: number;
+  dataUriCount: number;
 }
 
 /**
@@ -308,19 +328,41 @@ function projectMcpResourceResult(result: unknown): McpResourceProjection | null
   const parsedContents = (parsed.data as { contents: Array<z.infer<typeof McpResourceContentSchema>> }).contents;
   let usableText = false;
   let blobCount = 0;
+  let dataUriCount = 0;
   const contents = parsedContents.map((content) => {
-    const text = content.text;
+    const safe = content.text === undefined ? undefined : sanitizeMediaText(content.text);
+    if (safe) dataUriCount += safe.dataUriCount;
+    const text = safe?.text;
     const hasBlob = content.blob !== undefined;
-    if (text !== undefined && hasUsableResourceText(text)) usableText = true;
+    if (text !== undefined && text.split(MCP_MEDIA_REFERENCE_WITHHELD_MARKER).join('').trim() && hasUsableResourceText(text)) usableText = true;
     if (hasBlob) blobCount += 1;
     const projectedText = text === undefined
       ? MCP_BINARY_ONLY_DIAGNOSTIC
-      : hasBlob
-        ? `${MCP_RESOURCE_BLOB_WITHHELD_MARKER}\n${text}`
-        : text;
-    return { uri: safeMcpResourceUri(content.uri), text: projectedText };
+      : [hasBlob ? MCP_RESOURCE_BLOB_WITHHELD_MARKER : '', text.includes(MCP_MEDIA_REFERENCE_WITHHELD_MARKER) ? mediaWithheldNotice({data_uris: safe?.dataUriCount ?? 0}) : '']
+          .filter(Boolean).concat(text).join('\n');
+    const uri = safeMcpResourceUri(content.uri);
+    if (uri !== content.uri) dataUriCount += 1;
+    return { uri, text: projectedText };
   });
-  return { contents, usableText, blobCount };
+  return { contents, usableText, blobCount, dataUriCount };
+}
+
+function projectMcpResourceListResult(result: unknown): { result: unknown; dataUriCount: number } | null {
+  const parsed = McpGenericResultSchemas['resources/list']?.safeParse(result);
+  if (!parsed?.success) return null;
+  let dataUriCount = 0;
+  const sanitize = (value: unknown, key?: string): unknown => {
+    if (typeof value === 'string') {
+      if (key === 'uri' && /^\s*data:/i.test(value)) { dataUriCount += 1; return 'withheld:data-uri'; }
+      const safe = sanitizeMediaText(value);
+      dataUriCount += safe.dataUriCount;
+      return safe.text;
+    }
+    if (Array.isArray(value)) return value.map((item) => sanitize(item));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, sanitize(v, k)]));
+    return value;
+  };
+  return { result: sanitize(parsed.data), dataUriCount };
 }
 
 const McpPromptMessageSchema = z
@@ -408,7 +450,12 @@ function isProjectedMcpMethodResult(method: string, result: unknown): boolean {
     if (!parsed?.success) return false;
     const contents = (parsed.data as { contents: Array<z.infer<typeof McpResourceContentSchema>> }).contents;
     return contents.every((content) => content.blob === undefined && content.mimeType === undefined &&
-      content.uri === safeMcpResourceUri(content.uri));
+      content.uri === safeMcpResourceUri(content.uri) && !content.text?.includes('data:'));
+  }
+  if (method === 'resources/list') {
+    const raw = result as { resources?: Array<Record<string, unknown>> };
+    const projected = projectMcpResourceListResult(result);
+    return projected !== null && JSON.stringify(projected.result) === JSON.stringify(raw);
   }
   return true;
 }
@@ -430,6 +477,9 @@ function canonicalMcpMethodResult(method: string, result: unknown): unknown | nu
         projection.contents.some(({ text }) => isResourceWithheldNotice(text)))) return null;
     return { contents: projection.contents };
   }
+  if (method === 'resources/list') {
+    return projectMcpResourceListResult(result)?.result ?? null;
+  }
   const schema = McpGenericResultSchemas[method];
   if (!schema) return null;
   const parsed = schema.safeParse(result);
@@ -437,10 +487,10 @@ function canonicalMcpMethodResult(method: string, result: unknown): unknown | nu
 }
 
 const McpMediaWithheldSchema = z.object({
-  kind: z.enum(['image', 'resource_blob']),
-  count: z.number().int().positive(),
-}).strict();
-type McpMediaWithheld = z.infer<typeof McpMediaWithheldSchema>;
+  images: z.number().int().positive().optional(),
+  data_uris: z.number().int().positive().optional(),
+  resource_blobs: z.number().int().positive().optional(),
+}).strict().refine((counts) => Object.keys(counts).length > 0);
 
 const CanonicalMcpSuccessResultSchema = z.object({
   status: z.literal('success'),
@@ -476,17 +526,42 @@ export function isCanonicalMcpSuccessResult(payload: unknown): boolean {
   // accepted at this boundary.
   if (!isProjectedMcpMethodResult(parsed.data.method, parsed.data.result)) return false;
   const media = parsed.data.media_withheld;
-  if (media && parsed.data.method !== (media.kind === 'image' ? 'tools/call' : 'resources/read')) return false;
+  if (media?.images && parsed.data.method !== 'tools/call') return false;
+  if (media?.resource_blobs && parsed.data.method !== 'resources/read') return false;
+  if (media?.data_uris && !['tools/call', 'resources/read', 'resources/list'].includes(parsed.data.method)) return false;
   const canonicalResult = canonicalMcpMethodResult(parsed.data.method, parsed.data.result);
   if (canonicalResult === null) return false;
-  if (media?.kind === 'image') {
+  if (media?.images) {
     const first = McpCanonicalToolCallResultSchema.safeParse(canonicalResult).data?.content[0];
-    if (first?.type !== 'text' || first.text !== imageWithheldNotice(media.count)) return false;
+    const noticeCounts = {
+      ...(media.images ? { images: media.images } : {}),
+      ...(media.data_uris ? { data_uris: media.data_uris } : {}),
+      ...(media.resource_blobs ? { resource_blobs: media.resource_blobs } : {}),
+    };
+    if (first?.type !== 'text' || first.text !== mediaWithheldNotice(noticeCounts)) return false;
+    const toolResult = McpCanonicalToolCallResultSchema.safeParse(canonicalResult).data;
+    const body = toolResult?.content.slice(1).map((block) => block.text).join('\n') ?? '';
+    if (!body.trim() || body.split(MCP_MEDIA_REFERENCE_WITHHELD_MARKER).join('').trim().length === 0) return false;
   }
-  if (media?.kind === 'resource_blob') {
+  if (media?.resource_blobs) {
     const resource = projectMcpResourceResult(canonicalResult);
     if (!resource?.usableText ||
-        resource.contents.filter(({ text }) => isResourceWithheldNotice(text)).length !== media.count) return false;
+        (JSON.stringify(canonicalResult).match(/MCP_RESOURCE_BLOB_WITHHELD/g) ?? []).length !== media.resource_blobs) return false;
+  }
+  if (media?.data_uris) {
+    const serialized = JSON.stringify(canonicalResult);
+    const refs = (serialized.match(/MCP_MEDIA_REFERENCE_WITHHELD/g) ?? []).length;
+    const uris = (serialized.match(/withheld:data-uri/g) ?? []).length;
+    if (refs + uris !== media.data_uris) return false;
+  }
+  if (!media && parsed.data.method === 'tools/call') {
+    const tool = McpCanonicalToolCallResultSchema.safeParse(canonicalResult).data;
+    if (tool?.content[0]?.text.startsWith(MCP_MEDIA_WITHHELD_MARKER)) return false;
+  }
+  if (!media && ['resources/read', 'resources/list'].includes(parsed.data.method)) {
+    const serialized = JSON.stringify(canonicalResult);
+    if (serialized.includes(MCP_MEDIA_REFERENCE_WITHHELD_MARKER) || serialized.includes('withheld:data-uri') ||
+        (parsed.data.method === 'resources/read' && serialized.includes(MCP_RESOURCE_BLOB_WITHHELD_MARKER))) return false;
   }
   const expectsContentPolicy =
     parsed.data.method.startsWith('resources/') || parsed.data.method.startsWith('prompts/');
@@ -1198,11 +1273,16 @@ async function executeMcpMethodImpl(
         settle(invalidMcpMethodResult(server, method));
         return;
       }
-      const mediaWithheld: McpMediaWithheld | undefined = toolCall && toolCall.imageCount > 0
-        ? { kind: 'image', count: toolCall.imageCount }
-        : resource && resource.blobCount > 0
-          ? { kind: 'resource_blob', count: resource.blobCount }
-          : undefined;
+      const listProjection = method === 'resources/list' ? projectMcpResourceListResult(response['result']) : null;
+      const mediaCounts: McpMediaWithheld = {
+        ...(toolCall?.imageCount ? { images: toolCall.imageCount } : {}),
+        ...(toolCall?.dataUriCount ? { data_uris: toolCall.dataUriCount } : {}),
+        ...(resource?.blobCount ? { resource_blobs: resource.blobCount } : {}),
+        ...(resource?.dataUriCount || listProjection?.dataUriCount
+          ? { data_uris: (resource?.dataUriCount ?? 0) + (listProjection?.dataUriCount ?? 0) }
+          : {}),
+      };
+      const mediaWithheld: McpMediaWithheld | undefined = Object.keys(mediaCounts).length ? mediaCounts : undefined;
       settle(
         buildMcpResult(
           server,
@@ -1235,7 +1315,9 @@ async function executeMcpMethodImpl(
           'response_received',
           [
             `command:${config.command}`, `method:${method}`, ...mcpOriginEvidence(config),
-            ...(mediaWithheld ? [`${mediaWithheld.kind === 'image' ? 'images' : 'blobs'}:${mediaWithheld.count}`] : []),
+            ...(mediaWithheld?.images ? [`images:${mediaWithheld.images}`] : []),
+            ...(mediaWithheld?.data_uris ? [`data_uris:${mediaWithheld.data_uris}`] : []),
+            ...(mediaWithheld?.resource_blobs ? [`blobs:${mediaWithheld.resource_blobs}`] : []),
           ],
         ),
       );
@@ -1768,9 +1850,11 @@ export async function handleMcpRequest(
         settle(invalidMcpMethodResult(req.server, 'tools/call'));
         return;
       }
-      const mediaWithheld: McpMediaWithheld | undefined = projection.imageCount > 0
-        ? { kind: 'image', count: projection.imageCount }
-        : undefined;
+      const mediaCounts: McpMediaWithheld = {
+        ...(projection.imageCount ? { images: projection.imageCount } : {}),
+        ...(projection.dataUriCount ? { data_uris: projection.dataUriCount } : {}),
+      };
+      const mediaWithheld: McpMediaWithheld | undefined = Object.keys(mediaCounts).length ? mediaCounts : undefined;
       settle(
         buildMcpResult(
           req.server,
@@ -1793,7 +1877,8 @@ export async function handleMcpRequest(
           'response_received',
           [
             'command:' + config.command, ...mcpOriginEvidence(config),
-            ...(mediaWithheld ? [`images:${mediaWithheld.count}`] : []),
+            ...(mediaWithheld?.images ? [`images:${mediaWithheld.images}`] : []),
+            ...(mediaWithheld?.data_uris ? [`data_uris:${mediaWithheld.data_uris}`] : []),
           ],
         ),
       );
