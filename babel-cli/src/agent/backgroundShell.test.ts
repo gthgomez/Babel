@@ -20,6 +20,7 @@ import {
 } from './backgroundShell.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
 import { quoteWindowsCommandArg } from '../utils/commandArgv.js';
+import { waitForProcessGroupExit } from '../processTree.js';
 import { ChatEngine } from './chatEngine.js';
 import type { ProcessWitness } from '../diagnostics/bdns/processWitness.js';
 
@@ -259,35 +260,59 @@ describe('backgroundShell', () => {
 
   it('preserves cancellation that arrives while close waits for POSIX tree settlement', {
     skip: process.platform === 'win32' ? 'POSIX process-group cleanup is not available on Windows' : false,
-  }, async () => {
+  }, async t => {
     const dir = mkdtempSync(join(tmpdir(), 'bg-shell-cancel-during-settlement-'));
+    const readyMarker = join(dir, 'grandchild-ready');
+    const signalMarker = join(dir, 'grandchild-term-received');
+    const releaseMarker = join(dir, 'release-grandchild');
     const grandchildScript = join(dir, 'grandchild.js');
     const parentScript = join(dir, 'parent.js');
-    writeFileSync(grandchildScript, 'setTimeout(()=>{},60000);\n');
+    writeFileSync(grandchildScript, [
+      "const fs=require('fs');",
+      "process.on('SIGTERM',()=>{fs.writeFileSync(process.argv[3],'yes');const wait=()=>fs.existsSync(process.argv[4])?process.exit(0):setTimeout(wait,10);wait();});",
+      "fs.writeFileSync(process.argv[2],'ready');",
+      'setTimeout(()=>{},60000);',
+    ].join(''));
     writeFileSync(parentScript, [
       "const cp=require('child_process');",
-      'const child=cp.spawn(process.execPath,[process.argv[2]],{stdio:"ignore"});',
+      "const fs=require('fs');",
+      'const child=cp.spawn(process.execPath,[process.argv[2],process.argv[3],process.argv[4],process.argv[5]],{stdio:"ignore"});',
       'child.unref();',
-      'console.log(String(child.pid));',
-      'process.exit(0);',
+      'const ready=()=>fs.existsSync(process.argv[3])?(console.log(String(child.pid)),process.exit(0)):setTimeout(ready,10);ready();',
     ].join(''));
+    let ownedGroupId: number | undefined;
+    const originalKill = process.kill.bind(process);
+    let restoreKillMock: (() => void) | undefined;
     const ownerId = 'cancel-during-initial-settlement';
+    let ownedJobId: string | undefined;
     let grandchildPid: number | undefined;
     try {
       const job = startBackgroundShell({
-        command: `node ${parentScript} ${grandchildScript}`,
+        command: `node ${parentScript} ${grandchildScript} ${readyMarker} ${signalMarker} ${releaseMarker}`,
         cwd: dir,
         ownerId,
         timeoutMs: 10_000,
       });
+      ownedJobId = job.id;
       const directChild = (job as unknown as { child?: import('node:child_process').ChildProcess }).child;
       assert.ok(directChild, 'the fixture has an owned direct child');
+      assert.ok(directChild.pid, 'the fixture process group has an owned leader');
+      const fixtureGroupId = directChild.pid;
+      ownedGroupId = fixtureGroupId;
+      const killMock = t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
+        if (pid === -fixtureGroupId && signal === 'SIGKILL') return originalKill(pid, 'SIGTERM');
+        return originalKill(pid, signal);
+      }) as typeof process.kill);
+      restoreKillMock = () => killMock.mock.restore();
       const directClose = new Promise<void>(resolveClose => directChild.once('close', () => resolveClose()));
       grandchildPid = await waitForStdoutPid(job.id);
       await directClose;
+      await waitForFile(signalMarker);
+      assert.ok(isProcessAlive(grandchildPid), 'the signal-handling descendant remains alive until the test releases it');
       assert.equal(job.status, 'running', 'the close handler is still waiting on the live descendant');
       assert.equal(hasUnsettledBackgroundShells(ownerId), true);
       assert.equal(killBackgroundShell(job.id).status, 'killed');
+      writeFileSync(releaseMarker, 'released');
       await job.done;
       const result = await awaitBackgroundShell(job.id, 1_000);
       assert.equal(result.status, 'killed', 'the later cancellation cause survives the earlier close snapshot');
@@ -297,8 +322,31 @@ describe('backgroundShell', () => {
         'the descendant is stopped before the owner fence is released');
       assert.equal(hasUnsettledBackgroundShells(ownerId), false);
     } finally {
-      if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) {
-        try { process.kill(grandchildPid); } catch { /* already gone */ }
+      restoreKillMock?.();
+      try { writeFileSync(releaseMarker, 'released'); } catch { /* fixture directory is already gone */ }
+      if (grandchildPid === undefined && ownedJobId !== undefined) {
+        const pidText = getBackgroundShellJob(ownedJobId)?.stdout.trim().match(/^\d+$/m)?.[0];
+        if (pidText) grandchildPid = Number(pidText);
+      }
+      if (ownedGroupId !== undefined) {
+        let fixtureSettled = await waitForProcessGroupExit(ownedGroupId, 0);
+        if (!fixtureSettled) {
+          try { originalKill(-ownedGroupId, 'SIGTERM'); } catch { /* owned fixture group may have exited */ }
+          fixtureSettled = await waitForProcessGroupExit(ownedGroupId, 1_500);
+        }
+        if (!fixtureSettled) {
+          try { originalKill(-ownedGroupId, 'SIGKILL'); } catch { /* owned fixture group may have exited */ }
+          fixtureSettled = await waitForProcessGroupExit(ownedGroupId, 2_000);
+        }
+        assert.ok(fixtureSettled, 'the owned fixture process group is observed settled before its markers are removed');
+      } else if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) {
+        try { originalKill(grandchildPid, 'SIGTERM'); } catch { /* owned grandchild may have exited */ }
+        let grandchildSettled = await waitUntilDead(grandchildPid, 1_500);
+        if (!grandchildSettled && isProcessAlive(grandchildPid)) {
+          try { originalKill(grandchildPid, 'SIGKILL'); } catch { /* owned grandchild may have exited */ }
+          grandchildSettled = await waitUntilDead(grandchildPid, 2_000);
+        }
+        assert.ok(grandchildSettled, 'the owned grandchild is observed stopped before its markers are removed');
       }
       rmSync(dir, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
     }
