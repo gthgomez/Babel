@@ -894,6 +894,7 @@ test('MCP prompt projections withhold comma-separated media references and rejec
     }
   };
   const canary = 'MCP_PROMPT_DATA_CANARY';
+  const secondCanary = 'MCP_PROMPT_SECOND_DATA_CANARY';
 
   const textOnly = await run('prompts/get', {
     messages: [{ role: 'user', content: { type: 'text', text: 'A readable prompt.' } }],
@@ -903,16 +904,15 @@ test('MCP prompt projections withhold comma-separated media references and rejec
   assert.match(textOnly.stdout, /A readable prompt/);
 
   const mixed = await run('prompts/get', {
-    messages: [{ role: 'user', content: { type: 'text', text: `Readable prompt,data:image/png;base64,${canary}, and https://docs.example.test/prompt` } }],
+    messages: [{ role: 'user', content: { type: 'text', text: `Readable prompt,data:image/webp;base64,${canary}, then;data:image/png;base64,${secondCanary}. Next, https://docs.example.test/prompt` } }],
   }, { name: 'fixture', arguments: {} });
   assert.equal(mixed.exit_code, 0, mixed.stderr);
   const mixedPayload = JSON.parse(mixed.stdout) as { media_withheld: Record<string, number>; result: { messages: Array<{ content: { text: string } }> } };
-  assert.deepEqual(mixedPayload.media_withheld, { data_uris: 1 });
+  assert.deepEqual(mixedPayload.media_withheld, { data_uris: 2 });
   assert.match(mixedPayload.result.messages[0]!.content.text, /Readable prompt/);
-  assert.match(mixedPayload.result.messages[0]!.content.text, /prompt,\[MCP_MEDIA_REFERENCE_WITHHELD: text-only transport\], and/);
-  assert.match(mixedPayload.result.messages[0]!.content.text, /, and https:\/\/docs\.example\.test\/prompt/);
-  assert.match(mixedPayload.result.messages[0]!.content.text, /MCP_MEDIA_REFERENCE_WITHHELD/);
+  assert.match(mixedPayload.result.messages[0]!.content.text, /prompt,\[MCP_MEDIA_REFERENCE_WITHHELD: text-only transport\], then;\[MCP_MEDIA_REFERENCE_WITHHELD: text-only transport\]\. Next, https:\/\/docs\.example\.test\/prompt/);
   assert.doesNotMatch(mixed.stdout, new RegExp(canary));
+  assert.doesNotMatch(mixed.stdout, new RegExp(secondCanary));
   assert.equal(isCanonicalMcpSuccessResult(mixedPayload), true);
 
   const withheldOnly = await run('prompts/get', {
