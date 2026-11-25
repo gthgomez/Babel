@@ -1,14 +1,21 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stderr as output } from 'node:process';
-import { once } from 'node:events';
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { listProviderSpecs } from '../runners/providerRegistry.js';
 import { resolvePrivateCredentialEnvPath } from './envBootstrap.js';
 
+type CredentialInput = NodeJS.ReadableStream & {
+  isTTY?: boolean
+  isRaw?: boolean
+  setRawMode?: (mode: boolean) => void
+  readableEnded?: boolean
+  destroyed?: boolean
+}
+
 export interface InteractiveCredentialOptions {
-  input?: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?: (mode: boolean) => void; isRaw?: boolean };
+  input?: CredentialInput;
   output?: NodeJS.WritableStream & { isTTY?: boolean };
 }
 
@@ -28,50 +35,64 @@ function safeApiKey(key: string): boolean {
   return key.length >= 8 && key.length <= 4096 && /^[A-Za-z0-9_./:+==-]+$/.test(key);
 }
 
+/** Read one masked credential while holding terminal input through completion or cancellation. */
 export async function readMaskedLine(
-  inStream: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?: (mode: boolean) => void; isRaw?: boolean } = input,
+  inStream: CredentialInput = input,
   outStream: NodeJS.WritableStream & { isTTY?: boolean } = output,
 ): Promise<string> {
-  if (!inStream.isTTY) return '';
-  outStream.write('Paste API key (masked): ');
-  const canSetRaw = typeof inStream.setRawMode === 'function';
-  const prevRaw = Boolean(inStream.isRaw);
-  if (canSetRaw) {
-    inStream.setRawMode!(true);
-  }
-  if (typeof (inStream as any).resume === 'function') {
-    (inStream as any).resume();
-  }
-  if (typeof (inStream as any).setEncoding === 'function') {
-    (inStream as any).setEncoding('utf8');
-  }
-  let value = '';
+  if (!inStream.isTTY) return ''
+  const wasRaw = Boolean(inStream.isRaw)
+  const wasPaused = inStream.isPaused()
+  let detach = (): void => {}
   try {
-    while (true) {
-      const [chunk] = (await once(inStream, 'data')) as [string | Buffer];
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      for (const char of text) {
-        if (char === '\r' || char === '\n') {
-          outStream.write('\n');
-          return value;
-        }
-        if (char === '\u0003') {
-          throw new Error('Credential setup cancelled.');
-        }
-        if (char === '\u007f' || char === '\b') {
-          value = value.slice(0, -1);
-          continue;
-        }
-        value += char;
+    return await new Promise<string>((resolve, reject) => {
+      let value = ''
+      let settled = false
+      const fail = (error: Error): void => {
+        if (settled) return
+        settled = true
+        reject(error)
       }
-    }
+      const cancel = (): void => fail(new Error('Credential setup cancelled. Run setup again to retry.'))
+      const onData = (chunk: Buffer | string): void => {
+        if (settled) return
+        for (const char of chunk.toString()) {
+          if (char === '\r' || char === '\n') {
+            settled = true
+            outStream.write('\n')
+            resolve(value)
+            return
+          }
+          if (char === '\x03' || char === '\x04') {
+            outStream.write('\n')
+            cancel()
+            return
+          }
+          value = char === '\x7f' || char === '\b' ? value.slice(0, -1) : value + char
+        }
+      }
+      detach = () => {
+        inStream.removeListener('data', onData)
+        inStream.removeListener('end', cancel)
+        inStream.removeListener('close', cancel)
+        inStream.removeListener('error', fail)
+      }
+      if (inStream.readableEnded || inStream.destroyed) {
+        cancel()
+        return
+      }
+      inStream.setRawMode?.(true)
+      inStream.on('end', cancel).on('close', cancel).on('error', fail).on('data', onData)
+      outStream.write('Ctrl+C or Ctrl+D cancels key entry.\nPaste API key (masked): ')
+      inStream.resume()
+    })
   } finally {
-    if (canSetRaw) {
-      try {
-        inStream.setRawMode!(prevRaw);
-      } catch {
-        // Stream may have ended or closed
-      }
+    detach()
+    if (wasPaused) inStream.pause()
+    try {
+      inStream.setRawMode?.(wasRaw)
+    } catch {
+      // The terminal may have closed before its original mode could be restored.
     }
   }
 }
