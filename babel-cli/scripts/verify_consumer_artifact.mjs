@@ -1,6 +1,6 @@
 // License: Apache-2.0 — see LICENSE
 import assert from 'node:assert/strict'
-import { verifyArchivePayload, verifyConsumerArchive, verifyInstalledBuildIdentity, verifyInstalledPayloadFiles } from './consumer_archive.mjs'
+import { verifyArchivePayload, verifyConsumerArchive, verifyConsumerContents, verifyInstalledBuildIdentity, verifyInstalledPayloadFiles } from './consumer_archive.mjs'
 import { parseArgs } from 'node:util'
 import { consumerEnvironment } from './consumer_environment.mjs'
 import { spawn, spawnSync } from 'node:child_process'
@@ -253,7 +253,9 @@ try {
     artifact = join(output, identity.tarball)
     verifyConsumerArchive({archive: artifact, manifest: identity, expectedDigest: identity.sha256, expectedSource: identity.sourceSha, expectedVersion: pkg.version})
   }
-  verifyArchivePayload({ archive: artifact, files: identity.manifest, binTargets: pkg.bin })
+  verifyConsumerContents(identity.manifest)
+  const { buildInfoBytes } = verifyArchivePayload({ archive: artifact, files: identity.manifest, binTargets: pkg.bin })
+  verifyInstalledBuildIdentity(buildInfoBytes, identity)
   writeFileSync(join(output, 'manifest.json'), JSON.stringify({...identity, consumerNode: process.version, consumerPlatform: process.platform, consumerArch: process.arch}, null, 2) + '\n')
   writeFileSync(join(output, 'SHA256SUMS'), `${identity.sha256}  ${identity.tarball}\n`)
   installArtifact(artifact)

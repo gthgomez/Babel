@@ -77,10 +77,11 @@ test('installed payload permits only the exact npm executable shebang transform'
   const bin = 'bin/babel.js'
   const archivedBin = Buffer.from('#!/usr/bin/env node\r\nconsole.log("fixture")\r\n')
   const normalized = Buffer.from('#!/usr/bin/env node\nconsole.log("fixture")\r\n')
-  const files = [bin, 'resources/prompt_catalog.yaml', 'LICENSE', 'dist/voice/audio-capture-worker.mjs',
+  const files = [bin, 'resources/prompt_catalog.yaml', 'LICENSE', 'package.json', 'dist/voice/audio-capture-worker.mjs',
     'dist/voice/vad-worker.mjs', 'dist/bridge/claude-agent-sdk-pin.json',
     'dist/bridge/claudeCodeIsolatedResolveWorker.mjs', 'dist/cli/build-info.json'].map(path => {
-    const bytes = path === bin ? archivedBin : Buffer.from('fixture\n')
+    const bytes = path === bin ? archivedBin : path === 'package.json'
+      ? Buffer.from(JSON.stringify({ bin: { babel: bin } })) : Buffer.from('fixture\n')
     const npmShebangSha256 = npmNormalizedShebangDigest(bytes)
     return { path, bytes, size: bytes.length, sha256: hash(bytes), ...(npmShebangSha256 ? { npmShebangSha256 } : {}) }
   })
@@ -95,6 +96,9 @@ test('installed payload permits only the exact npm executable shebang transform'
     execFileSync('tar', ['-czf', archive, ...files.map(file => 'package/' + file.path)], { cwd: scratch })
     const binTargets = { babel: bin }
     assert.doesNotThrow(() => verifyArchivePayload({ archive, files, binTargets }))
+    assert.throws(() => verifyArchivePayload({
+      archive, files: [...files, { ...files[2], path: 'license' }], binTargets,
+    }), /portable path collision/)
     assert.throws(() => verifyArchivePayload({ archive, files: files.slice(1), binTargets }), /Archive payload paths/)
     const changedReceipt = files.map(file => file.path === bin ? { ...file, sha256: hash('different bytes') } : file)
     assert.throws(() => verifyArchivePayload({ archive, files: changedReceipt, binTargets }), /Archive bytes/)

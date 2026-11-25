@@ -6,7 +6,7 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, read
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadPayloadInventory, verifyPackedPayload } from '../babel-cli/scripts/release_artifact_inventory.mjs'
+import { loadPayloadInventory, verifyArchivePayload, verifyBuildInfoReceipt, verifyPackedPayload } from '../babel-cli/scripts/release_artifact_inventory.mjs'
 
 const TRUSTED_WORKFLOW = 'typecheck.yml'
 const ARTIFACT_NAME = 'consumer-candidate'
@@ -19,7 +19,7 @@ export function readCandidateManifest(candidateDir) {
   assert.match(manifest.sourceSha, /^[a-f0-9]{40}$/, 'Candidate sourceSha is invalid')
   assert.match(manifest.sourceTreeSha, /^[a-f0-9]{40}$/, 'Candidate sourceTreeSha is invalid')
   assert.match(manifest.sha256, /^[a-f0-9]{64}$/, 'Candidate sha256 is invalid')
-  assert.ok(typeof manifest.tarball === 'string' && manifest.tarball.length > 0, 'Candidate tarball name missing')
+  assert.match(manifest.tarball ?? '', /^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/, 'Candidate tarball name is invalid')
   return manifest
 }
 
@@ -87,6 +87,11 @@ export function verifyQualifiedCandidate({candidateDir, expectedSourceSha, expec
     throw new Error('Qualified candidate integrity does not match archive bytes')
   }
   if (sourceRoot) verifyManifestBinding({manifest, sourceRoot})
+  const binTargets = Object.fromEntries(manifest.inventory.bin.map(({ alias, target }) => [alias, target]))
+  const { packageJson, buildInfoBytes } = verifyArchivePayload({ archive, files: manifest.manifest, binTargets })
+  assert.equal(packageJson.name, manifest.name, 'Archived package name differs from the receipt')
+  assert.equal(packageJson.version, manifest.version, 'Archived package version differs from the receipt')
+  verifyBuildInfoReceipt(buildInfoBytes, manifest)
   return {manifest, archive, digest, integrity}
 }
 

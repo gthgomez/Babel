@@ -74,7 +74,7 @@
     "test:public-release:security:local": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../tools/run-public-secret-scan.ps1 -RepoRoot .. -Strict",
     "test:schema-failures": "npm run test:schema-failures:unit && npm run test:schema-failures:replay",
     "test:schema-failures:replay": "node --import tsx --no-warnings=ExperimentalWarning scripts/test_schema_failures_replay.ts",
-    "build": "npm run clean:dist && tsc && node scripts/copy_playbooks.mjs && node scripts/write_build_info.mjs",
+    "build": "npm run clean:dist && node node_modules/typescript/bin/tsc && node scripts/copy_playbooks.mjs && node scripts/write_build_info.mjs",
     "copy:playbooks": "node scripts/copy_playbooks.mjs",
     "clean:dist": "node scripts/clean_dist.mjs",
     "check:dist": "node scripts/check_dist_clean.mjs",

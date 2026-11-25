@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertRecordedBuildInputs, assertReleaseBuildInfo, captureRecordedBuildInputs, inspectBuildSource, readBuildGit } from './write_build_info.mjs'
-import { npmNormalizedShebangDigest, withExtractedArchive } from './consumer_archive.mjs'
+import { verifyConsumerContents } from './consumer_archive.mjs'
+import { loadPayloadInventory, npmNormalizedShebangDigest, payloadManifest, withExtractedArchive } from './release_artifact_inventory.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = realpathSync(resolve(root, '..'))
@@ -21,8 +22,23 @@ function command(binary, args) {
   return r.stdout
 }
 function sha256(bytes) { return createHash('sha256').update(bytes).digest('hex') }
-const source = inspectBuildSource(root)
-assert.equal(source.workingTreeClean, true, 'Release packaging requires a clean candidate')
+const generatedPaths = [
+  'babel-cli/node_modules', 'babel-cli/dist', 'babel-cli/resources', 'babel-cli/LICENSE', 'babel-cli/.tsbuildinfo',
+  'artifacts/consumer-candidate', 'artifacts/consumer-package', 'WORKSPACE_CONTEXT.local.md',
+]
+function checkReleaseSource() {
+  const state = inspectBuildSource(root)
+  assert.equal(state.workingTreeClean, true, 'Release packaging requires a clean candidate')
+  const entries = readBuildGit(repoRoot, ['ls-files', '-v', '-z'])
+  assert.ok(entries && !entries.split('\0').some(entry => /^[a-zS] /.test(entry)), 'Release source has hidden Git index entries')
+  const ignored = readBuildGit(repoRoot, [
+    'ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', '.',
+    ...generatedPaths.map(path => ':(exclude,literal)' + path),
+  ])
+  assert.equal(ignored === '', true, 'Release source has ignored files outside generated paths')
+  return state
+}
+const source = checkReleaseSource()
 const { sourceCommit: sourceSha, sourceTree: sourceTreeSha } = source
 assert.match(sourceSha, /^[a-f0-9]{40}$/)
 assert.match(sourceTreeSha, /^[a-f0-9]{40}$/)
@@ -60,11 +76,9 @@ try {
   const buildInfo = JSON.parse(buildInfoBytes)
   assertReleaseBuildInfo(buildInfo, { packageVersion: packageJson.version, sourceCommit: sourceSha, sourceTree: sourceTreeSha, recordedBuildInputs })
   assertRecordedBuildInputs(captureRecordedBuildInputs(root), recordedBuildInputs)
-  // Load payload qualification only after build and pack succeed: earlier gates
-  // (source provenance, dependency/advisory review) must stop the flow without
-  // depending on the inventory tooling.
-  const { loadPayloadInventory, payloadManifest } = await import('./release_artifact_inventory.mjs')
+  // Read the frozen inventory only after build and pack succeed.
   const inventory = loadPayloadInventory(repoRoot)
+  verifyConsumerContents(pack.files)
   const payload = payloadManifest({ inventory, packageJson, files: pack.files })
   const binTargets = new Set(Object.values(packageJson.bin))
   const archiveFiles = withExtractedArchive(archive, pack.files, read => {
@@ -143,7 +157,7 @@ try {
   }
   writeFileSync(join(staging, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
   writeFileSync(join(staging, 'SHA256SUMS'), `${sha}  ${pack.filename}\n`)
-  assert.deepEqual(inspectBuildSource(root), source, 'Source changed during release packaging')
+  assert.deepEqual(checkReleaseSource(), source, 'Source changed during release packaging')
   const outputNames = [pack.filename, 'SHA256SUMS', 'manifest.json']
   const configuredOutput = relativeToRepo(output)
   assert.ok(configuredOutput?.split(sep)[0].toLowerCase() !== '.git', 'Release output cannot be under Git metadata')

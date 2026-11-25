@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+export { assertRecordedBuildInputs, assertReleaseBuildInfo } from './release_artifact_inventory.mjs'
 
 export function readBuildGit(root, args) {
   // Ambient Git routing or injected config must not make another repository
@@ -75,16 +76,6 @@ export function captureRecordedBuildInputs(packageRoot) {
   }
 }
 
-export function assertRecordedBuildInputs(value, expected) {
-  const digest = /^[a-f0-9]{64}$/
-  if (value?.scope !== 'cli-manifest-lock-config-and-tsc-files:v1' ||
-      !digest.test(value.sha256) || !digest.test(value.packageLockSha256) ||
-      value.sha256 !== expected?.sha256 || value.packageLockSha256 !== expected?.packageLockSha256 ||
-      value.scope !== expected?.scope) {
-    throw new Error('Recorded CLI build inputs do not match the expected receipt')
-  }
-}
-
 export function inspectBuildSource(root) {
   const trackedPackage = readBuildGit(root, ['ls-files', '--error-unmatch', '--', 'package.json'])
   const commit = trackedPackage === null ? null : readBuildGit(root, ['rev-parse', '--verify', 'HEAD'])
@@ -119,23 +110,6 @@ export function createBuildInfo(packageRoot) {
     nodeVersion: process.versions.node,
     typescriptVersion,
   }
-}
-
-/** A release may bind this self-report only after comparing it to the clean candidate. */
-export function assertReleaseBuildInfo(info, expected) {
-  const check = (condition, message) => { if (!condition) throw new Error(message) }
-  const objectId = value => typeof value === 'string' && /^[a-f0-9]{40,64}$/.test(value)
-  check(Boolean(info && typeof info === 'object' && !Array.isArray(info)), 'Build identity is missing')
-  check(info.schemaVersion === 1, 'Unsupported build identity schema')
-  check(typeof expected.packageVersion === 'string' && info.packageVersion === expected.packageVersion, 'Build identity version does not match the package')
-  check(objectId(expected.sourceCommit) && info.sourceCommit === expected.sourceCommit, 'Build identity commit does not match the candidate')
-  check(objectId(expected.sourceTree) && info.sourceTree === expected.sourceTree, 'Build identity tree does not match the candidate')
-  check(info.workingTreeClean === true, 'Release build identity must report a clean source tree')
-  check(typeof info.nodeVersion === 'string' && /^[0-9A-Za-z.+-]{1,40}$/.test(info.nodeVersion), 'Build Node version is unavailable')
-  check(typeof info.typescriptVersion === 'string' && /^[0-9A-Za-z.+-]{1,40}$/.test(info.typescriptVersion), 'Build compiler version is unavailable')
-  check(info.buildInputsDigest === null && info.buildInputsReason === 'complete build inputs were not recorded',
-    'Build identity must not claim complete input coverage')
-  assertRecordedBuildInputs(info.recordedBuildInputs, expected.recordedBuildInputs)
 }
 
 export function writeBuildInfo(packageRoot) {
