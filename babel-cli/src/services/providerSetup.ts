@@ -1,7 +1,7 @@
 /** First-run provider setup without network requests or automatic provider selection. */
 import { createInterface } from 'node:readline/promises'
 import { isDeepStrictEqual } from 'node:util'
-import { readUserSettings, updateUserSettings, resolveEffectiveSettings } from '../config/userSettings.js'
+import { prepareUserSettingsUpdate, readUserSettings, updateUserSettings, type UserSettings } from '../config/userSettings.js'
 import { promptForProviderCredential } from '../config/interactiveCredential.js'
 import { resolvePrivateCredentialEnvPath } from '../config/envBootstrap.js'
 import { connectionStatus, type SelectionSession } from './connectionSettings.js'
@@ -132,17 +132,7 @@ export async function runProviderSetup(options: {
       write(`Setup left your active connection unchanged. Run ${CLI_COMMAND} setup to try again.\n`)
       return cancelled()
     }
-    const variable = updated.apiKeyEnvVar ?? spec.credentialEnvVar
-    if (connection.authentication !== 'none' && spec.requiresCredential && variable && !env[variable]?.trim()) {
-      write(`This connection uses ${variable}. A masked prompt can store it in ${envFile} without printing the key.\n`)
-      if (!/^(?:y|yes)$/i.test((await ask('Save a key to your private profile using masked entry? [y/N]: ')).trim())) {
-        write(`Set ${variable} in ${envFile} (for example ${variable}=your-key-here) or in your environment, then run setup again.\n`)
-        return cancelled()
-      }
-      rl?.close(); rl = undefined
-      if (!await promptForProviderCredential(variable, env)) return cancelled()
-    }
-    updateUserSettings(latest => {
+    const settingsChange = (latest: UserSettings): Partial<UserSettings> => {
       if (!isDeepStrictEqual(latest.connections[id], saved) || !isDeepStrictEqual(latest.defaults, previous.defaults)) {
         throw new Error('Connection or default preferences changed during setup. Run setup again to review the latest settings.')
       }
@@ -151,7 +141,19 @@ export async function runProviderSetup(options: {
         defaults: { connection: id, model, budgetUsd: budget, modelsByConnection: { ...latest.defaults?.modelsByConnection, [id]: model } },
         setup: { completed: true, step: 'complete', connection: id },
       }
-    }, { env })
+    }
+    const variable = updated.apiKeyEnvVar ?? spec.credentialEnvVar
+    if (connection.authentication !== 'none' && spec.requiresCredential && variable && !env[variable]?.trim()) {
+      prepareUserSettingsUpdate(readUserSettings({ env }), settingsChange)
+      write(`This connection uses ${variable}. A masked prompt can store it in ${envFile} without printing the key.\n`)
+      if (!/^(?:y|yes)$/i.test((await ask('Save a key to your private profile using masked entry? [y/N]: ')).trim())) {
+        write(`Set ${variable} in ${envFile} (for example ${variable}=your-key-here) or in your environment, then run setup again.\n`)
+        return cancelled()
+      }
+      rl?.close(); rl = undefined
+      if (!await promptForProviderCredential(variable, env)) return cancelled()
+    }
+    updateUserSettings(settingsChange, { env })
     write(`Configured, connectivity unverified. No request has been sent.\nNext: ${CLI_COMMAND} doctor for execution prerequisites, then ${CLI_COMMAND} work "Explain this project".\nCommands: /provider status, /model use <id>, /mode plan, /settings show, /help.\n`)
     return current()
   } catch (error) {

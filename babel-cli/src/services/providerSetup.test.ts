@@ -119,3 +119,20 @@ test('the bundled model chooser searches its selected provider and persists the 
   assert.equal(readUserSettings({ env }).defaults?.budgetUsd, 5)
   assert.equal(fetch.mock.callCount(), 0)
 })
+
+test('invalid confirmed setup is rejected before requesting or saving a credential', async t => {
+  const { runProviderSetup } = await import('./providerSetup.js')
+  const { userSettingsPath } = await import('../config/userSettings.js')
+  const directory = mkdtempSync(join(tmpdir(), 'babel-setup-invalid-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const env = { BABEL_CONFIG_DIR: directory, BABEL_STATE_DIR: directory }
+  const answers = ['openrouter', 'personal', 'vendor/exact-model', 'bad-context', '', '5', 'yes']
+  await assert.rejects(runProviderSetup({ env, interactive: true, write: () => {}, question: async prompt => {
+    assert.doesNotMatch(prompt, /Save a key/, 'An invalid account reached the credential prompt')
+    assert.ok(answers.length > 0)
+    return answers.shift()!
+  } }), /Invalid Babel preference update.*contextWindow/)
+  assert.equal(answers.length, 0)
+  assert.equal(existsSync(userSettingsPath(env)), false)
+  assert.equal(existsSync(join(directory, '.env')), false)
+})
