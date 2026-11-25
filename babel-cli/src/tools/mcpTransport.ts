@@ -166,6 +166,8 @@ const MCP_BINARY_ONLY_DIAGNOSTIC = `${MCP_RESOURCE_BLOB_WITHHELD_MARKER} non-ima
 // consume its bounded value, leave markup closers untouched, then restore any
 // terminal sentence punctuation separately.
 const MCP_DATA_URI_TEXT_TOKEN = /(?<![A-Za-z0-9+.-])data:[^\s<>"')\]}]+/giu;
+// Keep HTTP(S) URI tokens intact before scanning the text between them.
+const MCP_HTTP_URI_TEXT_TOKEN = /(?<![A-Za-z0-9+.-])https?:\/\/[^\s<>"')\]}]+/giu;
 const MCP_SENTENCE_PUNCTUATION = /[.,;:!?…]+$/u;
 
 type McpMediaWithheld = { images?: number; data_uris?: number; resource_blobs?: number };
@@ -178,12 +180,21 @@ function mediaWithheldNotice(counts: McpMediaWithheld): string {
 
 function sanitizeMediaText(text: string): { text: string; dataUriCount: number } {
   let dataUriCount = 0;
-  const sanitized = text.replace(MCP_DATA_URI_TEXT_TOKEN, (match: string) => {
+  const sanitizeDataUriTokens = (segment: string): string => segment.replace(MCP_DATA_URI_TEXT_TOKEN, (match: string) => {
     dataUriCount += 1;
     const trailingPunctuation = match.match(MCP_SENTENCE_PUNCTUATION)?.[0] ?? '';
     return `${MCP_MEDIA_REFERENCE_WITHHELD_MARKER}${trailingPunctuation}`;
   });
-  return { text: sanitized, dataUriCount };
+  let textOut = '';
+  let offset = 0;
+  for (const match of text.matchAll(MCP_HTTP_URI_TEXT_TOKEN)) {
+    const start = match.index ?? offset;
+    textOut += sanitizeDataUriTokens(text.slice(offset, start));
+    textOut += match[0];
+    offset = start + match[0].length;
+  }
+  textOut += sanitizeDataUriTokens(text.slice(offset));
+  return { text: textOut, dataUriCount };
 }
 
 /** Remove only transport-authored withholding metadata before judging content. */
@@ -345,9 +356,12 @@ function projectMcpResourceResult(result: unknown): McpResourceProjection | null
     const hasBlob = content.blob !== undefined;
     if (text !== undefined && hasUsableResourceText(text)) usableText = true;
     if (hasBlob) blobCount += 1;
+    const inlineMediaNotice = safe && safe.dataUriCount > 0
+      ? mediaWithheldNotice({ data_uris: safe.dataUriCount })
+      : '';
     const projectedText = text === undefined
       ? MCP_BINARY_ONLY_DIAGNOSTIC
-      : [hasBlob ? MCP_RESOURCE_BLOB_WITHHELD_MARKER : '', text.includes(MCP_MEDIA_REFERENCE_WITHHELD_MARKER) ? mediaWithheldNotice({data_uris: safe?.dataUriCount ?? 0}) : '']
+      : [hasBlob ? MCP_RESOURCE_BLOB_WITHHELD_MARKER : '', inlineMediaNotice]
           .filter(Boolean).concat(text).join('\n');
     const uri = safeMcpResourceUri(content.uri);
     if (uri !== content.uri) dataUriCount += 1;
@@ -490,8 +504,9 @@ function isProjectedMcpMethodResult(method: string, result: unknown): boolean {
     const parsed = McpGenericResultSchemas['resources/read']?.safeParse(result);
     if (!parsed?.success) return false;
     const contents = (parsed.data as { contents: Array<z.infer<typeof McpResourceContentSchema>> }).contents;
-    return contents.every((content) => content.blob === undefined && content.mimeType === undefined &&
-      content.uri === safeMcpResourceUri(content.uri) && !content.text?.includes('data:'));
+    const projection = projectMcpResourceResult(result);
+    return projection !== null && contents.every((content) => content.blob === undefined && content.mimeType === undefined &&
+      content.uri === safeMcpResourceUri(content.uri)) && JSON.stringify(projection.contents) === JSON.stringify(contents);
   }
   if (method === 'resources/list') {
     const raw = result as { resources?: Array<Record<string, unknown>> };

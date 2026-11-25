@@ -946,6 +946,9 @@ test('MCP data URI text tokenization preserves punctuation, delimiters, and ordi
     ['tab boundary', `left\tdata:image/avif;base64,${canary}.\tright`, `left\t${marker}.\tright`],
     ['newline boundary', `first\ndata:image/png;base64,${canary}.\nlast`, `first\n${marker}.\nlast`],
     ['ordinary URL and scheme-like word', 'https://docs.example.test/data and metadata: remains readable', 'https://docs.example.test/data and metadata: remains readable'],
+    ['HTTP URL path data text', 'https://docs.example.test/path/data:image/png;base64,PATH_CONTROL', 'https://docs.example.test/path/data:image/png;base64,PATH_CONTROL'],
+    ['HTTPS URL query data text', 'https://docs.example.test/search?preview=data:image/png;base64,QUERY_CONTROL', 'https://docs.example.test/search?preview=data:image/png;base64,QUERY_CONTROL'],
+    ['HTTPS URL fragment data text', 'https://docs.example.test/page#preview=data:image/png;base64,FRAGMENT_CONTROL', 'https://docs.example.test/page#preview=data:image/png;base64,FRAGMENT_CONTROL'],
   ];
   const fixture = createLocalMcpFixture('prompts/get', {
     messages: [{ role: 'user', content: { type: 'text', text: cases.map(([name, source]) => `${name}: ${source}`).join('\n') } }],
