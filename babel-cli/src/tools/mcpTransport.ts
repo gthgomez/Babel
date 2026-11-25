@@ -173,23 +173,27 @@ function mediaWithheldNotice(counts: McpMediaWithheld): string {
 
 function sanitizeMediaText(text: string): { text: string; dataUriCount: number } {
   let dataUriCount = 0;
-  const sanitized = text.replace(/(^|[\s([{="'])data:[^\s<>"')\]}]+/gi, (_match, prefix: string) => {
+  const sanitized = text.replace(/(^|[\s,([{="'])data:[^\s<>"')\]}]+/gi, (match, prefix: string) => {
     dataUriCount += 1;
-    return `${prefix}${MCP_MEDIA_REFERENCE_WITHHELD_MARKER}`;
+    const trailingComma = match.match(/,+$/)?.[0] ?? '';
+    return `${prefix}${MCP_MEDIA_REFERENCE_WITHHELD_MARKER}${trailingComma}`;
   });
   return { text: sanitized, dataUriCount };
 }
 
-function isResourceWithheldNotice(text: string): boolean {
-  return text === MCP_BINARY_ONLY_DIAGNOSTIC || text.startsWith(`${MCP_RESOURCE_BLOB_WITHHELD_MARKER}\n`);
+/** Remove only transport-authored withholding metadata before judging content. */
+function hasMeaningfulText(text: string): boolean {
+  if (text === MCP_BINARY_ONLY_DIAGNOSTIC) return false;
+  const content = text
+    .replace(/^[ \t]*\[MCP_MEDIA_WITHHELD: text-only transport\][^\r\n]*(?:\r?\n|$)/gm, '')
+    .replace(/^[ \t]*\[MCP_RESOURCE_BLOB_WITHHELD: text-only transport\][ \t]*(?:\r?\n|$)/gm, '')
+    .replaceAll(MCP_MEDIA_REFERENCE_WITHHELD_MARKER, '')
+    .trim();
+  return content.length > 0;
 }
 
 function hasUsableResourceText(text: string): boolean {
-  if (text === MCP_BINARY_ONLY_DIAGNOSTIC || text.trim() === MCP_RESOURCE_BLOB_WITHHELD_MARKER) return false;
-  const body = text.startsWith(`${MCP_RESOURCE_BLOB_WITHHELD_MARKER}\n`)
-    ? text.slice(MCP_RESOURCE_BLOB_WITHHELD_MARKER.length + 1)
-    : text;
-  return body.trim().length > 0;
+  return hasMeaningfulText(text);
 }
 
 const McpToolCallResultEnvelopeSchema = z
@@ -256,7 +260,7 @@ function projectMcpToolCallResult(result: unknown): McpToolCallProjection {
   if (envelope.data.result.isError === true) {
     return { kind: 'tool_error', text: textContent, imageCount, dataUriCount, result: null };
   }
-  if (!textBlocks.some(({ text }) => text.split(MCP_MEDIA_REFERENCE_WITHHELD_MARKER).join('').trim())) {
+  if (!textBlocks.some(({ text }) => hasMeaningfulText(text))) {
     return {
       kind: imageCount > 0 ? 'image_only' : 'invalid',
       text: '',
@@ -334,7 +338,7 @@ function projectMcpResourceResult(result: unknown): McpResourceProjection | null
     if (safe) dataUriCount += safe.dataUriCount;
     const text = safe?.text;
     const hasBlob = content.blob !== undefined;
-    if (text !== undefined && text.split(MCP_MEDIA_REFERENCE_WITHHELD_MARKER).join('').trim() && hasUsableResourceText(text)) usableText = true;
+    if (text !== undefined && hasUsableResourceText(text)) usableText = true;
     if (hasBlob) blobCount += 1;
     const projectedText = text === undefined
       ? MCP_BINARY_ONLY_DIAGNOSTIC
@@ -440,6 +444,38 @@ const McpGenericResultSchemas: Record<string, z.ZodType<unknown>> = {
   'prompts/get': z.object({ messages: z.array(McpPromptMessageSchema) }).strict(),
 };
 
+interface McpGenericProjection {
+  result: unknown;
+  dataUriCount: number;
+}
+
+/** Replace only data-URI string leaves after each method's narrow schema check. */
+function projectMcpGenericResult(method: string, result: unknown): McpGenericProjection | null {
+  const schema = McpGenericResultSchemas[method];
+  if (!schema) return null;
+  const parsed = schema.safeParse(result);
+  if (!parsed.success) return null;
+  let dataUriCount = 0;
+  const sanitize = (value: unknown): unknown => {
+    if (typeof value === 'string') {
+      const safe = sanitizeMediaText(value);
+      dataUriCount += safe.dataUriCount;
+      return safe.text;
+    }
+    if (Array.isArray(value)) return value.map(sanitize);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitize(item)]));
+    }
+    return value;
+  };
+  const projected = sanitize(parsed.data);
+  if (method === 'prompts/get') {
+    const prompt = projected as { messages: Array<{ content: { text?: string } }> };
+    if (!prompt.messages.some(({ content }) => content.text !== undefined && hasMeaningfulText(content.text))) return null;
+  }
+  return { result: projected, dataUriCount };
+}
+
 /** Check that any media-bearing wire format has already been projected. */
 function isProjectedMcpMethodResult(method: string, result: unknown): boolean {
   if (method === 'tools/call') {
@@ -457,6 +493,10 @@ function isProjectedMcpMethodResult(method: string, result: unknown): boolean {
     const projected = projectMcpResourceListResult(result);
     return projected !== null && JSON.stringify(projected.result) === JSON.stringify(raw);
   }
+  if (['tools/list', 'prompts/list', 'prompts/get'].includes(method)) {
+    const projected = projectMcpGenericResult(method, result);
+    return projected !== null && JSON.stringify(projected.result) === JSON.stringify(result);
+  }
   return true;
 }
 
@@ -473,17 +513,13 @@ function canonicalMcpMethodResult(method: string, result: unknown): unknown | nu
     if (projection === null) return null;
     // Binary-only reads are an explicit non-image diagnostic, never a success
     // observation that downstream evidence could treat as a PASS source.
-    if (!projection.usableText && (projection.blobCount > 0 ||
-        projection.contents.some(({ text }) => isResourceWithheldNotice(text)))) return null;
+    if (!projection.usableText) return null;
     return { contents: projection.contents };
   }
   if (method === 'resources/list') {
     return projectMcpResourceListResult(result)?.result ?? null;
   }
-  const schema = McpGenericResultSchemas[method];
-  if (!schema) return null;
-  const parsed = schema.safeParse(result);
-  return parsed.success ? parsed.data : null;
+  return projectMcpGenericResult(method, result)?.result ?? null;
 }
 
 const McpMediaWithheldSchema = z.object({
@@ -528,7 +564,7 @@ export function isCanonicalMcpSuccessResult(payload: unknown): boolean {
   const media = parsed.data.media_withheld;
   if (media?.images && parsed.data.method !== 'tools/call') return false;
   if (media?.resource_blobs && parsed.data.method !== 'resources/read') return false;
-  if (media?.data_uris && !['tools/call', 'resources/read', 'resources/list'].includes(parsed.data.method)) return false;
+  if (media?.data_uris && !['tools/call', 'tools/search', 'tools/list', 'resources/read', 'resources/list', 'prompts/list', 'prompts/get'].includes(parsed.data.method)) return false;
   const canonicalResult = canonicalMcpMethodResult(parsed.data.method, parsed.data.result);
   if (canonicalResult === null) return false;
   if (media?.images) {
@@ -541,7 +577,7 @@ export function isCanonicalMcpSuccessResult(payload: unknown): boolean {
     if (first?.type !== 'text' || first.text !== mediaWithheldNotice(noticeCounts)) return false;
     const toolResult = McpCanonicalToolCallResultSchema.safeParse(canonicalResult).data;
     const body = toolResult?.content.slice(1).map((block) => block.text).join('\n') ?? '';
-    if (!body.trim() || body.split(MCP_MEDIA_REFERENCE_WITHHELD_MARKER).join('').trim().length === 0) return false;
+    if (!hasMeaningfulText(body)) return false;
   }
   if (media?.resource_blobs) {
     const resource = projectMcpResourceResult(canonicalResult);
@@ -563,6 +599,8 @@ export function isCanonicalMcpSuccessResult(payload: unknown): boolean {
     if (serialized.includes(MCP_MEDIA_REFERENCE_WITHHELD_MARKER) || serialized.includes('withheld:data-uri') ||
         (parsed.data.method === 'resources/read' && serialized.includes(MCP_RESOURCE_BLOB_WITHHELD_MARKER))) return false;
   }
+  if (!media && ['tools/list', 'tools/search', 'prompts/list', 'prompts/get'].includes(parsed.data.method) &&
+      JSON.stringify(canonicalResult).includes(MCP_MEDIA_REFERENCE_WITHHELD_MARKER)) return false;
   const expectsContentPolicy =
     parsed.data.method.startsWith('resources/') || parsed.data.method.startsWith('prompts/');
   const expectsQuery = parsed.data.method === 'tools/search';
@@ -1255,6 +1293,10 @@ async function executeMcpMethodImpl(
         settle(resourceBlobOnlyMcpMethodResult(server, resource.blobCount));
         return;
       }
+      if (resource && !resource.usableText) {
+        settle(invalidMcpMethodResult(server, method));
+        return;
+      }
       const toolCall = method === 'tools/call' ? projectMcpToolCallResult(response['result']) : null;
       if (toolCall?.kind === 'tool_error') {
         settle(toolErrorMcpMethodResult(server, method));
@@ -1274,12 +1316,19 @@ async function executeMcpMethodImpl(
         return;
       }
       const listProjection = method === 'resources/list' ? projectMcpResourceListResult(response['result']) : null;
+      const genericProjection = ['tools/list', 'prompts/list', 'prompts/get'].includes(method)
+        ? projectMcpGenericResult(method, response['result'])
+        : null;
       const mediaCounts: McpMediaWithheld = {
         ...(toolCall?.imageCount ? { images: toolCall.imageCount } : {}),
         ...(toolCall?.dataUriCount ? { data_uris: toolCall.dataUriCount } : {}),
         ...(resource?.blobCount ? { resource_blobs: resource.blobCount } : {}),
         ...(resource?.dataUriCount || listProjection?.dataUriCount
           ? { data_uris: (resource?.dataUriCount ?? 0) + (listProjection?.dataUriCount ?? 0) }
+          : {}),
+        ...(genericProjection?.dataUriCount
+          ? { data_uris: (toolCall?.dataUriCount ?? 0) + (resource?.dataUriCount ?? 0) +
+              (listProjection?.dataUriCount ?? 0) + genericProjection.dataUriCount }
           : {}),
       };
       const mediaWithheld: McpMediaWithheld | undefined = Object.keys(mediaCounts).length ? mediaCounts : undefined;
@@ -1461,6 +1510,7 @@ export async function handleMcpToolSearch(
   try {
     const parsed = JSON.parse(listResult.stdout) as Record<string, unknown>;
     const result = parsed['result'] as Record<string, unknown> | null;
+    const mediaWithheld = parsed['media_withheld'];
     const tools = Array.isArray(result?.['tools'])
       ? result['tools'].filter(
           (tool): tool is Record<string, unknown> => typeof tool === 'object' && tool !== null,
@@ -1472,6 +1522,7 @@ export async function handleMcpToolSearch(
       ...listResult,
       stdout: JSON.stringify({
         status: 'success',
+        ...(mediaWithheld ? { media_withheld: mediaWithheld } : {}),
         server: req.server,
         method: 'tools/search',
         // `tools/search` is a local projection; the wire method is tools/list.

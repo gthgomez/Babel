@@ -11,6 +11,7 @@ import {
   isCanonicalMcpSuccessResult,
   executeMcpMethod,
   handleMcpRequest,
+  handleMcpToolSearch,
   runWithApprovedMcpJit,
   handleMcpToolCall,
   parseMcpToolCallResult,
@@ -22,6 +23,26 @@ import {
   parseFramedMessages,
 } from '../mcp/framing.js';
 import { formatChatToolObservation } from '../agent/chatToolDefinitions.js';
+
+function createLocalMcpFixture(method: string, result: unknown) {
+  const fixtureDir = mkdtempSync(join(tmpdir(), 'babel-mcp-projection-'));
+  const serverPath = join(fixtureDir, 'server.cjs');
+  const fixture = [
+    "let input = ''; let initialized = false; let replied = false;",
+    "function frame(value) { const body = JSON.stringify(value); return 'Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body; }",
+    "function send(value) { process.stdout.write(frame(value)); }",
+    "process.stdin.on('data', (chunk) => {",
+    "  input += chunk.toString();",
+    "  if (!initialized && input.includes('\\\"id\\\":0')) { initialized = true; send({ jsonrpc: '2.0', id: 0, result: {} }); }",
+    `  if (!replied && input.includes('\\\"id\\\":1') && input.includes(${JSON.stringify(`"method":"${method}"`)})) { replied = true; send({ jsonrpc: '2.0', id: 1, result: ${JSON.stringify(result)} }); }`,
+    "});",
+  ].join('\n');
+  writeFileSync(serverPath, fixture, 'utf8');
+  return {
+    fixtureDir,
+    servers: { fixture: { command: 'node', args: [serverPath] } },
+  };
+}
 
 test('parseFramedMessages parses one complete JSON-RPC frame', () => {
   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { ok: true } });
@@ -860,6 +881,107 @@ test('MCP resources/list withholds media references from every returned descript
     assert.doesNotMatch(JSON.stringify(result), /MCP_RESOURCE_LIST_.*CANARY/);
   } finally {
     rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('MCP prompt projections withhold comma-separated media references and reject marker-only content', async () => {
+  const run = async (method: string, fixtureResult: unknown, params?: Record<string, unknown>) => {
+    const fixture = createLocalMcpFixture(method, fixtureResult);
+    try {
+      return await executeMcpMethod('fixture', method, params, undefined, fixture.servers);
+    } finally {
+      rmSync(fixture.fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  };
+  const canary = 'MCP_PROMPT_DATA_CANARY';
+
+  const textOnly = await run('prompts/get', {
+    messages: [{ role: 'user', content: { type: 'text', text: 'A readable prompt.' } }],
+  }, { name: 'fixture', arguments: {} });
+  assert.equal(textOnly.exit_code, 0, textOnly.stderr);
+  assert.equal(JSON.parse(textOnly.stdout).media_withheld, undefined);
+  assert.match(textOnly.stdout, /A readable prompt/);
+
+  const mixed = await run('prompts/get', {
+    messages: [{ role: 'user', content: { type: 'text', text: `Readable prompt,data:image/png;base64,${canary}, and https://docs.example.test/prompt` } }],
+  }, { name: 'fixture', arguments: {} });
+  assert.equal(mixed.exit_code, 0, mixed.stderr);
+  const mixedPayload = JSON.parse(mixed.stdout) as { media_withheld: Record<string, number>; result: { messages: Array<{ content: { text: string } }> } };
+  assert.deepEqual(mixedPayload.media_withheld, { data_uris: 1 });
+  assert.match(mixedPayload.result.messages[0]!.content.text, /Readable prompt/);
+  assert.match(mixedPayload.result.messages[0]!.content.text, /prompt,\[MCP_MEDIA_REFERENCE_WITHHELD: text-only transport\], and/);
+  assert.match(mixedPayload.result.messages[0]!.content.text, /, and https:\/\/docs\.example\.test\/prompt/);
+  assert.match(mixedPayload.result.messages[0]!.content.text, /MCP_MEDIA_REFERENCE_WITHHELD/);
+  assert.doesNotMatch(mixed.stdout, new RegExp(canary));
+  assert.equal(isCanonicalMcpSuccessResult(mixedPayload), true);
+
+  const withheldOnly = await run('prompts/get', {
+    messages: [{ role: 'user', content: { type: 'text', text: `data:image/png;base64,${canary}` } }],
+  }, { name: 'fixture', arguments: {} });
+  assert.equal(withheldOnly.exit_code, 1);
+  assert.equal(withheldOnly.stdout, '');
+  assert.doesNotMatch(JSON.stringify(withheldOnly), new RegExp(canary));
+
+  const promptList = await run('prompts/list', {
+    prompts: [{ name: 'summary', description: `Readable summary, data:image/png;base64,${canary}, https://docs.example.test/list` }],
+  });
+  assert.equal(promptList.exit_code, 0, promptList.stderr);
+  const listPayload = JSON.parse(promptList.stdout) as { media_withheld: Record<string, number>; result: { prompts: Array<{ name: string; description: string }> } };
+  assert.deepEqual(listPayload.media_withheld, { data_uris: 1 });
+  assert.equal(listPayload.result.prompts[0]!.name, 'summary');
+  assert.match(listPayload.result.prompts[0]!.description, /Readable summary/);
+  assert.match(listPayload.result.prompts[0]!.description, /, https:\/\/docs\.example\.test\/list/);
+  assert.doesNotMatch(promptList.stdout, new RegExp(canary));
+});
+
+test('MCP tool discovery withholds descriptor media and preserves schema structure', async () => {
+  const canary = 'MCP_TOOL_DISCOVERY_DATA_CANARY';
+  const fixture = createLocalMcpFixture('tools/list', {
+    tools: [{
+      name: 'image_lookup',
+      description: `Find images, data:image/png;base64,${canary}, see https://docs.example.test/tool`,
+      inputSchema: { type: 'object', properties: { query: { type: 'string', enum: ['small', 'large'] } } },
+    }],
+  });
+  try {
+    const result = await handleMcpToolSearch({
+      tool: 'mcp_tool_search', server: 'fixture', query: `${' '.repeat(5_000)}image`, limit: 5, schema_limit: 5,
+    }, fixture.servers);
+    assert.equal(result.exit_code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout) as {
+      media_withheld: Record<string, number>;
+      result: { tools: Array<{ name: string; description: string; inputSchema: unknown }> };
+    };
+    const discovered = payload.result.tools[0]!;
+    assert.deepEqual(payload.media_withheld, { data_uris: 1 });
+    assert.equal(discovered.name, 'image_lookup');
+    assert.match(discovered.description, /Find images/);
+    assert.match(discovered.description, /https:\/\/docs\.example\.test\/tool/);
+    assert.deepEqual(discovered.inputSchema, {
+      type: 'object', properties: { query: { type: 'string', enum: ['small', 'large'] } },
+    });
+    assert.doesNotMatch(result.stdout, new RegExp(canary));
+    assert.ok(result.stdout.indexOf('MCP_MEDIA_WITHHELD') < 500);
+    assert.equal(isCanonicalMcpSuccessResult(payload), true);
+  } finally {
+    rmSync(fixture.fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('MCP resources/read rejects text containing only a withholding marker', async () => {
+  const canary = 'MCP_RESOURCE_ONLY_DATA_CANARY';
+  const fixture = createLocalMcpFixture('resources/read', {
+    contents: [{ uri: 'file:///text', text: `data:image/png;base64,${canary}` }],
+  });
+  try {
+    const result = await executeMcpMethod(
+      'fixture', 'resources/read', { uri: 'file:///text' }, undefined, fixture.servers,
+    );
+    assert.equal(result.exit_code, 1, result.stdout || result.stderr);
+    assert.equal(result.stdout, '');
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(canary));
+  } finally {
+    rmSync(fixture.fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
