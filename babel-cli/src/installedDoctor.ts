@@ -14,7 +14,50 @@ import { assertExecutionBoundary, type ExecutionPolicyChoice } from './config/ex
 import { validateDockerIsolationArgs } from './config/dockerIsolationArgs.js'
 import { ORDINARY_CHAT_EXECUTION_PROFILE, resolveEffectiveExecutionBoundary } from './config/effectiveExecutionBoundary.js'
 
-type Check = { id: string; status: 'ok' | 'warn' | 'fail' | 'not_required'; message: string }
+type StartupBuildMetadata = Pick<NonNullable<RunningProduct['buildInfo']>,
+  'sourceCommit' | 'sourceTree' | 'workingTreeClean' | 'recordedBuildInputs' | 'buildInputsReason'
+> & { provenance: 'self_reported' }
+
+type Check = {
+  id: string
+  status: 'ok' | 'warn' | 'fail' | 'not_required'
+  message: string
+  startupBuildMetadata?: StartupBuildMetadata
+}
+
+function checkInstalledExecutable(product: ReturnType<typeof inspectRunningProduct>): Check {
+  const build = product.buildInfo
+  const observedFiles = product.buildManifestFingerprint == null
+    ? 'package manifest or entrypoint'
+    : 'package manifest, entrypoint, or recorded build metadata'
+  const change = product.restartNeeded === true
+    ? 'package files changed; restart to use the current installation'
+    : product.restartNeeded === null
+      ? 'installation change detection unknown'
+      : `no change detected in ${observedFiles}`
+
+  return {
+    id: 'executable',
+    status: product.restartNeeded ? 'warn' : 'ok',
+    message: [
+      `Running Babel ${product.runningVersion ?? 'unknown'} (running build revision ${product.revision ?? 'unknown'})`,
+      `self-reported startup build metadata ${build ? 'available' : 'unavailable'}`,
+      `command ${CLI_COMMAND} (aliases babel and babel-agent)`,
+      `CLI entry ${product.entrypoint ?? 'unknown'}`,
+      `Node executable ${product.executable}`,
+      `package ${product.packageRoot}`,
+      change,
+    ].join('; '),
+    ...(build ? { startupBuildMetadata: {
+      provenance: 'self_reported',
+      sourceCommit: build.sourceCommit,
+      sourceTree: build.sourceTree,
+      workingTreeClean: build.workingTreeClean,
+      recordedBuildInputs: build.recordedBuildInputs ?? null,
+      buildInputsReason: build.buildInputsReason,
+    } } : {}),
+  }
+}
 
 /** Fixed-argument Docker calls for installed diagnostics. The host-process manifest owns this file. */
 export function runInstalledDockerCommand(args: readonly string[], timeout: number, env: NodeJS.ProcessEnv): { status: number | null; stdout: string } {
@@ -99,7 +142,7 @@ export function runInstalledDoctor(options: {
     { id: 'provider', status: configured ? 'ok' : 'warn', message: configured ?
       `Selected ${connection!.id}: ${connection!.provider}/${effective.model.value}; source ${effective.connection.source}. Credential presence checked; connectivity and observed model unverified.` :
       `No provider is selected yet. Run ${CLI_COMMAND} setup in a terminal, or save one key in ${envFile}. Read-only commands work; nothing was contacted.` },
-    { id: 'executable', status: product.restartNeeded ? 'warn' : 'ok', message: `Running Babel ${product.runningVersion ?? 'unknown'}; revision ${product.revision ?? 'unknown'}; command ${CLI_COMMAND} (aliases babel and babel-agent); CLI entry ${product.entrypoint ?? 'unknown'}; Node executable ${product.executable}; package ${product.packageRoot}; ${product.restartNeeded === true ? 'package files changed; restart to use the current installation' : product.restartNeeded === null ? 'installation change detection unknown' : 'no change detected in package manifest or entrypoint'}` },
+    checkInstalledExecutable(product),
     boundaryCheck,
     { id: 'docker', status: !requiresDocker ? 'not_required' : dockerReady ? 'ok' : 'fail', message: !requiresDocker ? 'Docker is not required for the selected execution profile; it was not checked.' : dockerCheckMessage(dockerReady, platform) },
     { id:'sandbox_image',status:!requiresDocker?'not_required':imageReady?'ok':'fail',message:!requiresDocker?'A Docker sandbox image is not required for the selected execution profile; it was not checked.':sandboxImageCheckMessage(imageReady, dockerReady, platform) },
