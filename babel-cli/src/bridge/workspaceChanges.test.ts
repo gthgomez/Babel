@@ -24,7 +24,6 @@ import {
   classifyGitTermination,
   collectWorkspaceChanges,
   isSafeRacyIndexStamp,
-  sanitizeNoIndexDiff,
   WORKSPACE_CHANGE_CONFIG_SENTINEL_KEY,
   WORKSPACE_CHANGE_ISOLATED_SENTINEL_KEY,
 } from './workspaceChanges.js'
@@ -166,7 +165,7 @@ test('repository clean/process/smudge filters fail closed before status or diff'
   }
 })
 
-test('RT-09: staged and untracked changes are present in the returned diff', () => {
+test('RT-09: staged and unstaged tracked changes are present and untracked files are omitted', () => {
   requireGit()
   const root = mkdtempSync(join(tmpdir(), 'babel-workspace-changes-'))
   try {
@@ -184,12 +183,13 @@ test('RT-09: staged and untracked changes are present in the returned diff', () 
     writeFileSync(join(root, 'untracked.txt'), 'new untracked file\n')
 
     const snapshot = collectWorkspaceChanges(root)
-    assert.equal(snapshot.available, true)
-    assert.deepEqual(snapshot.files.map((file) => file.path).sort(), ['staged.txt', 'tracked.txt', 'untracked.txt'])
+    assert.equal(snapshot.available, true, snapshot.reason)
+    assert.deepEqual(snapshot.files.map((file) => file.path).sort(), ['staged.txt', 'tracked.txt'])
     assert.match(snapshot.diff, /staged v2 staged/)
     assert.match(snapshot.diff, /tracked v2 unstaged/)
-    assert.match(snapshot.diff, /# Untracked file: "untracked\.txt"/)
-    assert.match(snapshot.diff, /new untracked file/)
+    assert.equal(snapshot.diff.includes('untracked.txt'), false)
+    assert.equal(snapshot.diff.includes('new untracked file'), false)
+    assert.match(snapshot.reason ?? '', /untracked files are omitted/i)
   } finally {
     removeTree(root)
   }
@@ -231,22 +231,29 @@ test('Windows CI sentinel: a marker helper executes directly but not during prot
   }
 })
 
-test('workspace inspection fails closed when diff output exceeds its byte budget', () => {
+test('workspace inspection fails closed when tracked diff output exceeds its byte budget', () => {
   requireGit()
   const root = mkdtempSync(join(tmpdir(), 'babel-workspace-large-diff-'))
   try {
     git(root, ['init', '--quiet'])
-    // This budget is enforced before any subprocess: the untracked file is
-    // rejected by its copied byte count. The subprocess buffer limit itself is
-    // covered by the tracked-diff control below.
-    writeFileSync(join(root, 'large-untracked.txt'), `${'x'.repeat(1_050_000)}\n`)
+    git(root, ['config', 'user.email', 'test@example.invalid'])
+    git(root, ['config', 'user.name', 'Test'])
+    writeFileSync(join(root, 'unstaged.txt'), 'small\n')
+    writeFileSync(join(root, 'staged.txt'), 'small\n')
+    git(root, ['add', '.'])
+    git(root, ['commit', '--quiet', '-m', 'initial'])
+    // Each command stays below the subprocess buffer, but their combined
+    // appended diff exceeds the collector byte budget.
+    writeFileSync(join(root, 'unstaged.txt'), `${'x'.repeat(600_000)}\n`)
+    writeFileSync(join(root, 'staged.txt'), `${'y'.repeat(600_000)}\n`)
+    git(root, ['add', 'staged.txt'])
 
     const snapshot = collectWorkspaceChanges(root)
 
     assert.equal(snapshot.available, false)
     assert.equal(snapshot.diff, '')
     assert.deepEqual(snapshot.files, [])
-    assert.match(snapshot.reason ?? '', /output limit|buffer|ENOBUFS/i)
+    assert.match(snapshot.reason ?? '', /output limit/i)
   } finally {
     removeTree(root)
   }
@@ -379,13 +386,20 @@ test('private index stamp predicate rejects a rounded-up timestamp', () => {
   assert.equal(isSafeRacyIndexStamp(1_700_000_001_000, 1_700_000_000), false)
 })
 
-test('workspace inspection refuses a file list larger than its count budget', () => {
+test('workspace inspection refuses a tracked file list larger than its count budget', () => {
   requireGit()
   const root = mkdtempSync(join(tmpdir(), 'babel-workspace-many-files-'))
   try {
     git(root, ['init', '--quiet'])
+    git(root, ['config', 'user.email', 'test@example.invalid'])
+    git(root, ['config', 'user.name', 'Test'])
     for (let index = 0; index < 201; index += 1) {
-      writeFileSync(join(root, `untracked-${index}.txt`), 'fixture\n')
+      writeFileSync(join(root, `tracked-${index}.txt`), 'fixture v1\n')
+    }
+    git(root, ['add', '.'])
+    git(root, ['commit', '--quiet', '-m', 'initial'])
+    for (let index = 0; index < 201; index += 1) {
+      writeFileSync(join(root, `tracked-${index}.txt`), 'fixture v2\n')
     }
 
     const snapshot = collectWorkspaceChanges(root)
@@ -414,6 +428,7 @@ test('RT-09 positive control: a clean workspace reports no files and no diff', (
     assert.equal(snapshot.available, true)
     assert.deepEqual(snapshot.files, [])
     assert.equal(snapshot.diff, '')
+    assert.match(snapshot.reason ?? '', /untracked files are omitted/i)
   } finally {
     removeTree(root)
   }
@@ -460,7 +475,12 @@ test('trusted Git resolution ignores inert absolute PATH entries', () => {
     // Inert, non-executable marker. It is not a helper and is never chmodded.
     writeFileSync(join(inertDir, process.platform === 'win32' ? 'git.exe' : 'git'), 'not an executable\n')
     git(root, ['init', '--quiet', repo])
-    writeFileSync(join(repo, 'tracked.txt'), 'tracked\n')
+    git(repo, ['config', 'user.email', 'test@example.invalid'])
+    git(repo, ['config', 'user.name', 'Test'])
+    writeFileSync(join(repo, 'tracked.txt'), 'tracked v1\n')
+    git(repo, ['add', '.'])
+    git(repo, ['commit', '--quiet', '-m', 'initial'])
+    writeFileSync(join(repo, 'tracked.txt'), 'tracked v2\n')
 
     const snapshot = collectWorkspaceChanges(repo, {
       env: { ...process.env, PATH: inertDir },
@@ -516,7 +536,7 @@ test('workspace inspection fails closed for split index metadata', () => {
   }
 })
 
-test('workspace inspection preserves unusual path whitespace and unicode', () => {
+test('workspace inspection preserves unusual tracked path whitespace and unicode', () => {
   requireGit()
   const root = mkdtempSync(join(tmpdir(), 'babel-workspace-paths-'))
   try {
@@ -524,47 +544,42 @@ test('workspace inspection preserves unusual path whitespace and unicode', () =>
     git(root, ['config', 'user.email', 'test@example.invalid'])
     git(root, ['config', 'user.name', 'Test'])
     writeFileSync(join(root, 'plain.txt'), 'plain v1\n')
+    writeFileSync(join(root, 'sp ace.txt'), 'spaced v1\n')
+    writeFileSync(join(root, 'two  spaces.txt'), 'double v1\n')
+    writeFileSync(join(root, 'café.txt'), 'unicode v1\n')
+    writeFileSync(join(root, ' leading space.txt'), 'leading v1\n')
+    writeFileSync(join(root, 'empty.txt'), '')
     git(root, ['add', '.'])
     git(root, ['commit', '--quiet', '-m', 'initial'])
 
-    writeFileSync(join(root, 'plain.txt'), 'plain v2\n')
-    writeFileSync(join(root, 'sp ace.txt'), 'spaced staged\n')
-    git(root, ['add', 'sp ace.txt'])
-    writeFileSync(join(root, 'two  spaces.txt'), 'double untracked\n')
-    writeFileSync(join(root, 'café.txt'), 'unicode untracked\n')
-    writeFileSync(join(root, 'empty untracked.txt'), '')
-    writeFileSync(join(root, ' leading space.txt'), 'leading untracked\n')
-    writeFileSync(join(root, 'binary.dat'), Buffer.from([0, 1, 2, 3]))
+    writeFileSync(join(root, 'sp ace.txt'), 'spaced unstaged\n')
+    writeFileSync(join(root, 'café.txt'), 'unicode unstaged\n')
+    writeFileSync(join(root, ' leading space.txt'), 'leading staged\n')
+    git(root, ['add', ' leading space.txt'])
+    writeFileSync(join(root, 'two  spaces.txt'), 'double staged\n')
+    git(root, ['add', 'two  spaces.txt'])
+    writeFileSync(join(root, 'untracked canary.txt'), 'synthetic untracked canary\n')
 
     const snapshot = collectWorkspaceChanges(root)
 
     assert.equal(snapshot.available, true, snapshot.reason)
     assert.deepEqual(
       snapshot.files.map((file) => file.path).sort(),
-      [
-        'binary.dat',
-        'café.txt',
-        'empty untracked.txt',
-        ' leading space.txt',
-        'plain.txt',
-        'sp ace.txt',
-        'two  spaces.txt',
-      ].sort(),
+      [' leading space.txt', 'café.txt', 'sp ace.txt', 'two  spaces.txt'].sort(),
     )
-    assert.match(snapshot.diff, /spaced staged/)
-    assert.match(snapshot.diff, /double untracked/)
-    assert.match(snapshot.diff, /unicode untracked/)
-    assert.match(snapshot.diff, /leading untracked/)
-    assert.match(snapshot.diff, /# Untracked file: "empty untracked\.txt"/)
-    assert.match(snapshot.diff, /Binary files \/dev\/null and "binary\.dat" differ/)
-    assert.equal(snapshot.diff.includes('/untracked/'), false)
-    assert.equal(snapshot.diff.includes('repository.git'), false)
+    assert.match(snapshot.diff, /spaced unstaged/)
+    assert.match(snapshot.diff, /unicode unstaged/)
+    assert.match(snapshot.diff, /leading staged/)
+    assert.match(snapshot.diff, /double staged/)
+    assert.equal(snapshot.diff.includes('untracked canary'), false)
+    assert.equal(snapshot.diff.includes('synthetic untracked canary'), false)
+    assert.match(snapshot.reason ?? '', /untracked files are omitted/i)
   } finally {
     removeTree(root)
   }
 })
 
-test('workspace inspection bounds nested untracked files instead of collapsing directories', () => {
+test('workspace inspection omits nested untracked trees without enumerating them', () => {
   requireGit()
   const root = mkdtempSync(join(tmpdir(), 'babel-workspace-nested-files-'))
   try {
@@ -577,10 +592,11 @@ test('workspace inspection bounds nested untracked files instead of collapsing d
 
     const snapshot = collectWorkspaceChanges(root)
 
-    assert.equal(snapshot.available, false)
+    assert.equal(snapshot.available, true, snapshot.reason)
     assert.equal(snapshot.diff, '')
     assert.deepEqual(snapshot.files, [])
-    assert.match(snapshot.reason ?? '', /untracked file limit|file limit/i)
+    assert.equal((snapshot.diff + JSON.stringify(snapshot.files)).includes('untracked-0'), false)
+    assert.match(snapshot.reason ?? '', /untracked files are omitted/i)
   } finally {
     removeTree(root)
   }
@@ -760,56 +776,7 @@ test('workspace inspection denies a bare gitlink without .gitmodules', () => {
   }
 })
 
-test('no-index header sanitization encodes control characters in every reconstructed position', () => {
-  const controlPath = 'line\nbreak\tfile "quote" \\ ü.txt'
-  const encoded = JSON.stringify(controlPath)
-  const raw = [
-    'diff --git a/dev/null b/C:/private/untracked/0',
-    'new file mode 100644',
-    'index 0000000..1234567',
-    '--- /dev/null',
-    '+++ b/C:/private/untracked/0',
-    '@@ -0,0 +1 @@',
-    '+body',
-  ].join('\n')
-  const sanitized = sanitizeNoIndexDiff(raw, controlPath)
-  const lines = sanitized.split('\n')
-  assert.equal(lines[0], `diff --git a/${encoded} b/${encoded}`)
-  assert.equal(lines[4], `+++ b/${encoded}`)
-  assert.equal(lines[6], '+body')
-  assert.equal(sanitized.includes('C:/private/untracked/0'), false)
-
-  const binary = [
-    'diff --git a/dev/null b/snapshot',
-    'new file mode 100644',
-    'index 0000000..1234567',
-    'Binary files /dev/null and b/snapshot differ',
-  ].join('\n')
-  const binarySanitized = sanitizeNoIndexDiff(binary, controlPath)
-  assert.equal(binarySanitized.split('\n').at(-1), `Binary files /dev/null and ${encoded} differ`)
-  assert.equal(binarySanitized.includes('snapshot'), false)
-
-  if (process.platform !== 'win32') {
-    const root = mkdtempSync(join(tmpdir(), 'babel-workspace-control-path-'))
-    try {
-      git(root, ['init', '--quiet'])
-      writeFileSync(join(root, controlPath), 'control body\n')
-
-      const snapshot = collectWorkspaceChanges(root)
-
-      assert.equal(snapshot.available, true, snapshot.reason)
-      assert.ok(snapshot.files.some((file) => file.path === controlPath))
-      const header = snapshot.diff.split('\n').find((line) => line.startsWith('diff --git '))
-      assert.equal(header, `diff --git a/${encoded} b/${encoded}`)
-      assert.equal(snapshot.diff.includes('C:/private/untracked/0'), false)
-      assert.equal(snapshot.diff.includes('repository.git'), false)
-    } finally {
-      removeTree(root)
-    }
-  }
-})
-
-test('workspace inspection denies hardlinked untracked leaves', () => {
+test('workspace inspection omits hardlinked untracked leaves without inspecting them', () => {
   requireGit()
   const root = mkdtempSync(join(tmpdir(), 'babel-workspace-hardlink-'))
   try {
@@ -821,17 +788,19 @@ test('workspace inspection denies hardlinked untracked leaves', () => {
 
     const snapshot = collectWorkspaceChanges(repo)
 
-    assert.equal(snapshot.available, false)
+    assert.equal(snapshot.available, true, snapshot.reason)
     assert.deepEqual(snapshot.files, [])
     assert.equal(snapshot.diff, '')
-    assert.match(snapshot.reason ?? '', /hardlinked untracked paths are unsupported/i)
+    assert.equal(snapshot.diff.includes('untracked.txt'), false)
+    assert.equal(snapshot.diff.includes('outside'), false)
+    assert.match(snapshot.reason ?? '', /untracked files are omitted/i)
     assert.equal((snapshot.reason ?? '').includes(root), false)
   } finally {
     removeTree(root)
   }
 })
 
-test('workspace inspection fails closed for an embedded Git checkout', () => {
+test('workspace inspection omits an embedded Git checkout without inspecting it', () => {
   requireGit()
   const root = mkdtempSync(join(tmpdir(), 'babel-workspace-embedded-'))
   try {
@@ -842,17 +811,18 @@ test('workspace inspection fails closed for an embedded Git checkout', () => {
 
     const snapshot = collectWorkspaceChanges(root)
 
-    assert.equal(snapshot.available, false)
+    assert.equal(snapshot.available, true, snapshot.reason)
     assert.deepEqual(snapshot.files, [])
     assert.equal(snapshot.diff, '')
-    assert.match(snapshot.reason ?? '', /not a regular in-scope file|embedded repositories are unsupported/i)
+    assert.equal(snapshot.diff.includes('embedded'), false)
+    assert.match(snapshot.reason ?? '', /untracked files are omitted/i)
     assert.equal((snapshot.reason ?? '').includes(root), false)
   } finally {
     removeTree(root)
   }
 })
 
-test('workspace inspection fails closed for linked untracked paths', () => {
+test('workspace inspection omits linked untracked paths without following them', () => {
   requireGit()
   const root = mkdtempSync(join(tmpdir(), 'babel-workspace-untracked-link-'))
   const link = join(root, 'linked')
@@ -865,10 +835,12 @@ test('workspace inspection fails closed for linked untracked paths', () => {
 
     const snapshot = collectWorkspaceChanges(root)
 
-    assert.equal(snapshot.available, false)
+    assert.equal(snapshot.available, true, snapshot.reason)
     assert.deepEqual(snapshot.files, [])
     assert.equal(snapshot.diff, '')
-    assert.match(snapshot.reason ?? '', /not a regular in-scope file|embedded repositories are unsupported/i)
+    assert.equal(snapshot.diff.includes('linked'), false)
+    assert.equal(snapshot.diff.includes('target'), false)
+    assert.match(snapshot.reason ?? '', /untracked files are omitted/i)
     assert.equal((snapshot.reason ?? '').includes(root), false)
   } finally {
     try {
@@ -903,6 +875,75 @@ test('ambient Git configuration cannot replace the inspection boundary', () => {
     assert.equal(snapshot.available, true, snapshot.reason)
     assert.deepEqual(snapshot.files, [])
     assert.equal(snapshot.diff, '')
+  } finally {
+    removeTree(root)
+  }
+})
+
+test('workspace inspection omits untracked files under repository, user redirect, and visible controls', () => {
+  requireGit()
+  const root = mkdtempSync(join(tmpdir(), 'babel-workspace-omission-controls-'))
+  try {
+    const repo = join(root, 'repo')
+    git(root, ['init', '--quiet', repo])
+    git(repo, ['config', 'user.email', 'test@example.invalid'])
+    git(repo, ['config', 'user.name', 'Test'])
+    writeFileSync(join(repo, '.gitignore'), 'repo-ignored.txt\n')
+    writeFileSync(join(repo, 'tracked.txt'), 'tracked v1\n')
+    writeFileSync(join(repo, 'staged.txt'), 'staged v1\n')
+    git(repo, ['add', '.'])
+    git(repo, ['commit', '--quiet', '-m', 'initial'])
+    writeFileSync(join(repo, 'tracked.txt'), 'tracked v2 unstaged\n')
+    writeFileSync(join(repo, 'staged.txt'), 'staged v2 staged\n')
+    git(repo, ['add', 'staged.txt'])
+    writeFileSync(join(repo, 'repo-ignored.txt'), 'synthetic repo canary\n')
+    const userExcludes = join(root, 'user-ignore')
+    writeFileSync(userExcludes, 'user-ignored.txt\n')
+    writeFileSync(join(repo, 'user-ignored.txt'), 'synthetic user canary\n')
+    writeFileSync(join(repo, 'visible-untracked.txt'), 'synthetic visible canary\n')
+
+    const snapshot = collectWorkspaceChanges(repo, {
+      env: {
+        ...process.env,
+        GIT_CONFIG_PARAMETERS: `'core.excludesFile'='${userExcludes.replace(/\\/g, '/')}'`,
+      },
+    })
+
+    assert.equal(snapshot.available, true, snapshot.reason)
+    assert.deepEqual(snapshot.files.map((file) => file.path).sort(), ['staged.txt', 'tracked.txt'])
+    assert.match(snapshot.diff, /tracked v2 unstaged/)
+    assert.match(snapshot.diff, /staged v2 staged/)
+    for (const name of ['repo-ignored.txt', 'user-ignored.txt', 'visible-untracked.txt']) {
+      assert.equal(snapshot.diff.includes(name), false)
+    }
+    for (const canary of ['synthetic repo canary', 'synthetic user canary', 'synthetic visible canary']) {
+      assert.equal(snapshot.diff.includes(canary), false)
+    }
+    assert.match(snapshot.reason ?? '', /untracked files are omitted/i)
+  } finally {
+    removeTree(root)
+  }
+})
+
+test('workspace inspection discloses untracked omission even with no tracked edits', () => {
+  requireGit()
+  const root = mkdtempSync(join(tmpdir(), 'babel-workspace-only-untracked-'))
+  try {
+    git(root, ['init', '--quiet'])
+    git(root, ['config', 'user.email', 'test@example.invalid'])
+    git(root, ['config', 'user.name', 'Test'])
+    writeFileSync(join(root, 'tracked.txt'), 'tracked\n')
+    git(root, ['add', '.'])
+    git(root, ['commit', '--quiet', '-m', 'initial'])
+    writeFileSync(join(root, 'visible-untracked.txt'), 'synthetic visible canary\n')
+
+    const snapshot = collectWorkspaceChanges(root)
+
+    assert.equal(snapshot.available, true, snapshot.reason)
+    assert.deepEqual(snapshot.files, [])
+    assert.equal(snapshot.diff, '')
+    assert.equal(snapshot.diff.includes('visible-untracked.txt'), false)
+    assert.match(snapshot.reason ?? '', /untracked files are omitted/i)
   } finally {
     removeTree(root)
   }

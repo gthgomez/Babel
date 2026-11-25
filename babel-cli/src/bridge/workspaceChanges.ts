@@ -9,6 +9,8 @@
  * index, and no submodule state. The isolated config contains no filters,
  * hooks, includes, worktree layers or helper programs. The original config is
  * inspected only through a bounded snapshot and is never used for execution.
+ * Untracked files are not enumerated because this isolation does not preserve
+ * the checkout's effective user and system ignore rules.
  */
 
 import { spawnSync } from 'node:child_process'
@@ -31,7 +33,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 export interface WorkspaceFileChange {
   path: string
@@ -46,13 +48,13 @@ export interface WorkspaceChangeSnapshot {
 }
 
 const MAX_FILES = 200
-const MAX_UNTRACKED_FILES = 200
 const MAX_OUTPUT_BYTES = 1_000_000
 const MAX_TOTAL_TIME_MS = 15_000
 const MAX_CONFIG_BYTES = 256 * 1024
 const MAX_METADATA_BYTES = 1024 * 1024
 const MAX_INDEX_BYTES = 64 * 1024 * 1024
 const MAX_POINTER_BYTES = 4096
+const UNTRACKED_OMITTED_REASON = 'untracked files are omitted; only tracked changes are reported'
 
 /** Global-config key that proves the sanitized Git configuration boundary is active. */
 export const WORKSPACE_CHANGE_CONFIG_SENTINEL_KEY = 'babelWorkspaceInspection.configBoundarySentinel'
@@ -824,13 +826,11 @@ function buildIsolatedGitEnvironment(base: NodeJS.ProcessEnv, repository: Isolat
 
 interface ParsedStatus {
   files: WorkspaceFileChange[]
-  untracked: string[]
 }
 
 function parseStatusOutput(output: string): ParsedStatus {
   const records = output.split('\0')
   const files: WorkspaceFileChange[] = []
-  const untracked: string[] = []
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index]
     if (!record || record.length < 3) continue
@@ -838,140 +838,9 @@ function parseStatusOutput(output: string): ParsedStatus {
     const path = record.slice(3)
     if (path.length === 0) continue
     files.push({ status: status.trim() || 'M', path })
-    if (status === '??') untracked.push(path)
     if (status.includes('R') || status.includes('C')) index += 1
   }
-  return { files, untracked }
-}
-
-type UntrackedSnapshotResult = { ok: true; label: string; snapshotPath: string } | { ok: false; reason: string }
-
-function untrackedPathFailure(): UntrackedSnapshotResult {
-  return { ok: false, reason: 'untracked path is not a regular in-scope file' }
-}
-
-function validateUntrackedPath(
-  worktree: string,
-  untrackedPath: string,
-  snapshotDirectory: string,
-  sequence: number,
-): UntrackedSnapshotResult {
-  if (
-    untrackedPath.length === 0 ||
-    untrackedPath.endsWith('/') ||
-    untrackedPath.startsWith('/') ||
-    (process.platform === 'win32' && (untrackedPath.includes('\\') || /^[A-Za-z]:/.test(untrackedPath)))
-  ) {
-    return untrackedPathFailure()
-  }
-  const components = untrackedPath.split('/')
-  if (
-    components.some(
-      (component) =>
-        component.length === 0 || component === '.' || component === '..' || component.toLowerCase() === '.git',
-    )
-  ) {
-    return untrackedPathFailure()
-  }
-  const candidate = resolve(worktree, ...components)
-  const relativePath = relative(worktree, candidate)
-  if (
-    relativePath.length === 0 ||
-    relativePath === '..' ||
-    relativePath.startsWith(`..${sep}`) ||
-    isAbsolute(relativePath)
-  ) {
-    return untrackedPathFailure()
-  }
-  try {
-    assertNoLinkAncestors(candidate)
-  } catch {
-    return untrackedPathFailure()
-  }
-  try {
-    let current = worktree
-    for (const component of components.slice(0, -1)) {
-      current = join(current, component)
-      if (
-        metadataExists(join(current, '.git')) ||
-        (metadataExists(join(current, 'HEAD')) &&
-          metadataExists(join(current, 'objects')) &&
-          metadataExists(join(current, 'refs')))
-      ) {
-        return { ok: false, reason: 'embedded repositories are unsupported' }
-      }
-    }
-  } catch {
-    return untrackedPathFailure()
-  }
-  let stat
-  try {
-    stat = lstatSync(candidate)
-  } catch {
-    return untrackedPathFailure()
-  }
-  if (!stat.isFile() || stat.isSymbolicLink()) return untrackedPathFailure()
-  if (stat.nlink > 1) {
-    return { ok: false, reason: 'hardlinked untracked paths are unsupported' }
-  }
-  if (stat.size > MAX_OUTPUT_BYTES) {
-    return { ok: false, reason: 'workspace diff output limit exceeded' }
-  }
-  const snapshotPath = join(snapshotDirectory, String(sequence))
-  try {
-    copyBoundedFile(candidate, snapshotPath, MAX_OUTPUT_BYTES)
-    const after = lstatSync(candidate)
-    if (
-      !after.isFile() ||
-      after.isSymbolicLink() ||
-      after.nlink > 1 ||
-      after.nlink !== stat.nlink ||
-      after.size !== stat.size ||
-      after.mtimeMs !== stat.mtimeMs ||
-      (stat.ino !== 0 && after.ino !== 0 && stat.ino !== after.ino)
-    ) {
-      return untrackedPathFailure()
-    }
-  } catch {
-    return untrackedPathFailure()
-  }
-  return { ok: true, label: untrackedPath, snapshotPath }
-}
-
-function encodeDiffPath(path: string): string {
-  return JSON.stringify(path)
-}
-
-/** Testable pure sanitizer for reconstructed no-index diff headers. */
-export function sanitizeNoIndexDiff(raw: string, path: string): string {
-  if (raw.length === 0) return ''
-  const encodedLabel = encodeDiffPath(path)
-  const lines = raw.split(/\r?\n/)
-  const headerEnd = lines.findIndex(
-    (line) =>
-      line.startsWith('@@') ||
-      line.startsWith('GIT binary patch') ||
-      line.startsWith('Binary files ') ||
-      line.startsWith('Files '),
-  )
-  const limit = headerEnd === -1 ? lines.length : headerEnd
-  for (let index = 0; index < limit; index += 1) {
-    const line = lines[index]!
-    if (line.startsWith('diff --git ')) {
-      lines[index] = `diff --git a/${encodedLabel} b/${encodedLabel}`
-    } else if (line.startsWith('--- ')) {
-      lines[index] = '--- /dev/null'
-    } else if (line.startsWith('+++ ')) {
-      lines[index] = `+++ b/${encodedLabel}`
-    }
-  }
-  if (headerEnd !== -1) {
-    const line = lines[headerEnd]!
-    if (line.startsWith('Binary files ') || line.startsWith('Files ')) {
-      lines[headerEnd] = `Binary files /dev/null and ${encodedLabel} differ`
-    }
-  }
-  return lines.join('\n')
+  return { files }
 }
 
 export function collectWorkspaceChanges(
@@ -1069,7 +938,7 @@ export function collectWorkspaceChanges(
     const status = runGit(
       gitExecutable,
       scope.worktree,
-      ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=all'],
+      ['status', '--porcelain=v1', '-z', '--untracked-files=no', '--ignore-submodules=all'],
       isolatedEnv,
       deadline,
     )
@@ -1085,9 +954,6 @@ export function collectWorkspaceChanges(
 
     const parsed = parseStatusOutput(status.stdout)
     if (parsed.files.length > MAX_FILES) return unavailable('workspace file limit exceeded')
-    if (parsed.untracked.length > MAX_UNTRACKED_FILES) {
-      return unavailable('untracked file limit exceeded')
-    }
 
     const parts: string[] = []
     const reasons: string[] = []
@@ -1125,56 +991,16 @@ export function collectWorkspaceChanges(
       reasons.push('staged diff unavailable')
     }
 
-    const snapshotDirectory = join(tempRoot, 'untracked')
-    mkdirSync(snapshotDirectory, { recursive: true })
-    let untrackedSequence = 0
-    for (const path of parsed.untracked) {
-      const validated = validateUntrackedPath(scope.worktree, path, snapshotDirectory, untrackedSequence)
-      untrackedSequence += 1
-      if (!validated.ok) return unavailable(validated.reason)
-      const fileDiff = runGit(
-        gitExecutable,
-        scope.worktree,
-        [
-          'diff',
-          '--no-index',
-          '--no-ext-diff',
-          '--no-textconv',
-          '--no-color',
-          '--',
-          '/dev/null',
-          validated.snapshotPath,
-        ],
-        isolatedEnv,
-        deadline,
-        [1],
-      )
-      if (fileDiff.ok) {
-        const body = sanitizeNoIndexDiff(fileDiff.stdout.trim(), validated.label)
-        if (!appendDiff(`# Untracked file: ${encodeDiffPath(validated.label)}\n${body}`)) {
-          return unavailable('workspace diff output limit exceeded')
-        }
-      } else {
-        return unavailable(
-          fileDiff.timedOut
-            ? 'workspace inspection timed out'
-            : fileDiff.outputLimit
-              ? 'workspace diff output limit exceeded'
-              : 'untracked diff unavailable',
-        )
-      }
-    }
-
     if (parsed.files.length > 0 && parts.length === 0) {
       return unavailable('workspace diff unavailable')
     }
 
-    const reason = reasons.length > 0 ? `${reasons.join('; ')}; showing the diff that is available` : undefined
+    const reason = [UNTRACKED_OMITTED_REASON, ...reasons].join('; ')
     return {
       available: true,
       files: parsed.files,
       diff: parts.join('\n\n'),
-      ...(reason !== undefined ? { reason } : {}),
+      reason,
     }
   } catch {
     return unavailable('workspace inspection unavailable')

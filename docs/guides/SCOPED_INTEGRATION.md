@@ -33,6 +33,15 @@ contract for production use.
 - Prior free-form renewal labels remain retained as tombstones. New renewal IDs
   use the disjoint canonical namespace below.
 
+## Legacy `workspace.changes`
+
+The existing remote `workspace.changes` JSON-RPC method is a legacy host-side
+Git inspection, not a scoped integration route. It reports only tracked changes
+(staged and unstaged); untracked files are always omitted, and its `reason`
+states that limitation even when there are no tracked edits. It must not be
+read as a complete or clean workspace snapshot. The scoped integration surface
+listed in this draft still does not expose `workspace.changes`.
+
 ## Endpoints
 
 ### Initial registration — `POST /integrations/acp-sessions`
