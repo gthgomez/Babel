@@ -104,11 +104,11 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
     }
     case 'setup': {
       assertInteractiveRunAvailable(ctx);
-      const setup = () => runProviderSetup();
-      if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('provider-setup', setup);
-      else await setup();
-      const { selectedConnectionModel, connectionStatus } = await import('../services/connectionSettings.js');
       const root = ctx.resolveCurrentTarget().targetRoot;
+      const setup = () => runProviderSetup({ projectRoot: root });
+      const result = ctx.withExclusiveTerminal ? await ctx.withExclusiveTerminal('provider-setup', setup) : await setup();
+      if (result.cancelled) break;
+      const { selectedConnectionModel, connectionStatus } = await import('../services/connectionSettings.js');
       const selected = selectedConnectionModel({}, root);
       const status = connectionStatus({}, root);
       delete ctx.state.model; delete ctx.state.connectionId; delete ctx.state.resolvedModelId;

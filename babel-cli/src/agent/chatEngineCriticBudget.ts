@@ -143,8 +143,8 @@ export function estimateRequestCostUsd(input: {
 }): number | undefined {
   const inputPrice = input.inputCostPer1M;
   const outputPrice = input.outputCostPer1M;
-  if (typeof inputPrice !== 'number' || !Number.isFinite(inputPrice) ||
-    typeof outputPrice !== 'number' || !Number.isFinite(outputPrice)) return undefined
+  if (typeof inputPrice !== 'number' || !Number.isFinite(inputPrice) || inputPrice < 0 ||
+    typeof outputPrice !== 'number' || !Number.isFinite(outputPrice) || outputPrice < 0) return undefined
   const inputTokens = Math.max(1, Math.floor(input.inputTokens ?? 0))
   const outputTokens = Math.max(1, Math.floor(input.outputTokens ?? 0))
   return (inputTokens * inputPrice + outputTokens * outputPrice) / 1_000_000
@@ -157,8 +157,9 @@ export function checkCostPreauthorization(input: {
   estimatedNextRequestCostUsd?: number | null;
 }): { ok: boolean; reason?: string } {
   const estimate = input.estimatedNextRequestCostUsd
-  if (!Number.isFinite(input.maxCostUsd) || typeof estimate !== 'number' || !Number.isFinite(estimate) || estimate <= 0) {
-    return { ok: true }
+  if (!Number.isFinite(input.maxCostUsd) || estimate === undefined) return { ok: true }
+  if (estimate === null || !Number.isFinite(estimate) || estimate < 0) {
+    return { ok: false, reason: 'COST_ACCOUNTING_INCOMPLETE: Cannot preauthorize the next request under a finite cap without known pricing and a context bound. Request rejected before dispatch.' }
   }
   const remaining = Math.max(0, input.maxCostUsd - input.totalCostUsd)
   if (remaining + 1e-12 >= estimate) return { ok: true }
@@ -167,7 +168,7 @@ export function checkCostPreauthorization(input: {
     reason:
       `Cost budget preauthorization denied: remaining ${formatBudgetUsd(remaining)} of ` +
       `${formatBudgetUsd(input.maxCostUsd)} cannot cover the estimated next request ` +
-      `${formatBudgetUsd(estimate)}. Babel made no paid request.`,
+      `${formatBudgetUsd(estimate)}. Request rejected before dispatch.`,
   }
 }
 
@@ -180,6 +181,7 @@ export function checkCostWallBudgets(input: {
   declaredWallMs?: number;
   postWriteRepairWallCapMs?: number | null;
   criticRepairCostCapUsd?: number | null;
+  /** Null means preauthorization is required and the estimate is unavailable. */
   estimatedNextRequestCostUsd?: number | null;
   nowMs?: number;
 }): { ok: boolean; reason?: string; limiter?: ChatRunLimiter } {

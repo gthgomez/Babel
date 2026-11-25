@@ -103,9 +103,13 @@ export function readUserSettings(options: { path?: string; env?: NodeJS.ProcessE
 }
 
 /** Validate the entire candidate before an atomic save, preserving forward-compatible fields. */
-export function updateUserSettings(update: Partial<UserSettings>, options: { path?: string; env?: NodeJS.ProcessEnv } = {}): UserSettings {
+export function updateUserSettings(
+  change: Partial<UserSettings> | ((current: UserSettings) => Partial<UserSettings>),
+  options: { path?: string; env?: NodeJS.ProcessEnv } = {},
+): UserSettings {
   const path = options.path ?? userSettingsPath(options.env)
   const current = readUserSettings({ ...options, path })
+  const update = typeof change === 'function' ? change(current) : change
   const candidate = {
     ...current, ...update,
     connections: { ...current.connections, ...update.connections },

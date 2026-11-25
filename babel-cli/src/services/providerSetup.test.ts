@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -54,4 +54,68 @@ test('setup saves explicit provider model and budget without persisting a key', 
   assert.equal(settings.defaults?.budgetUsd, 5)
   assert.equal(settings.setup?.completed, true)
   assert.equal(JSON.stringify(settings).includes(env.OPENROUTER_API_KEY), false)
+})
+
+for (const legacy of [false, true]) {
+  test(`declining setup preserves the ${legacy ? 'legacy' : 'explicit'} account selection and preferences`, async t => {
+    const { getSetupStatus, runProviderSetup } = await import('./providerSetup.js')
+    const { updateUserSettings, userSettingsPath } = await import('../config/userSettings.js')
+    const directory = mkdtempSync(join(tmpdir(), 'babel-setup-decline-'))
+    t.after(() => rmSync(directory, { recursive: true, force: true }))
+    const env = { BABEL_STATE_DIR: directory, OPENROUTER_API_KEY: 'synthetic-key' }
+    updateUserSettings({
+      connections: { personal: { id: 'personal', provider: 'openrouter', model: 'vendor/original' } },
+      defaults: { connection: 'personal', ...(!legacy ? { model: 'vendor/original' } : {}), budgetUsd: 2 },
+      setup: { completed: true, step: 'complete', connection: 'personal' },
+    }, { env })
+    const path = userSettingsPath(env)
+    const previous = readFileSync(path, 'utf8')
+    const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected setup request') })
+    const answers = ['openrouter', 'personal', 'vendor/replacement', '', '', '3', 'no']
+    const result = await runProviderSetup({ env, interactive: true, question: async () => answers.shift()!, write: () => {} })
+
+    assert.equal(answers.length, 0)
+    assert.equal(result.connection, 'personal')
+    assert.equal(result.model, 'vendor/original')
+    assert.equal(getSetupStatus(env).model, 'vendor/original')
+    assert.equal(readFileSync(path, 'utf8'), previous)
+    assert.equal(fetch.mock.callCount(), 0)
+  })
+}
+
+test('fresh setup can skip to the composer without creating a profile or sending a request', async t => {
+  const { runProviderSetup } = await import('./providerSetup.js')
+  const { userSettingsPath } = await import('../config/userSettings.js')
+  const directory = mkdtempSync(join(tmpdir(), 'babel-setup-skip-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const env = { BABEL_STATE_DIR: directory }
+  const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected setup request') })
+  let output = ''
+  const result = await runProviderSetup({ env, interactive: true, question: async () => '0', write: text => { output += text } })
+
+  assert.equal(result.state, 'setup_required')
+  assert.equal(result.connection, null)
+  assert.equal(existsSync(userSettingsPath(env)), false)
+  assert.equal(fetch.mock.callCount(), 0)
+  assert.match(output, /0\. Skip setup/)
+})
+
+test('the bundled model chooser searches its selected provider and persists the named account and exact ID', async t => {
+  const { getSetupStatus, runProviderSetup } = await import('./providerSetup.js')
+  const { readUserSettings } = await import('../config/userSettings.js')
+  const directory = mkdtempSync(join(tmpdir(), 'babel-setup-catalog-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const env = { BABEL_STATE_DIR: directory, OPENROUTER_API_KEY: 'synthetic-key' }
+  const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected setup request') })
+  const answers = ['1', 'personal', '/search deepseek-v4.1-flash-1017', '#1', '', '', '5', 'yes']
+  let output = ''
+  const result = await runProviderSetup({ env, interactive: true, question: async () => answers.shift()!, write: text => { output += text } })
+
+  assert.equal(answers.length, 0)
+  assert.match(output, /1\. OpenRouter\n2\. Command Code/)
+  assert.match(output, /#1\. deepseek\/deepseek-v4\.1-flash-1017/)
+  assert.equal(result.connection, 'personal')
+  assert.equal(getSetupStatus(env).model, 'deepseek/deepseek-v4.1-flash-1017')
+  assert.equal(readUserSettings({ env }).defaults?.budgetUsd, 5)
+  assert.equal(fetch.mock.callCount(), 0)
 })
