@@ -83,7 +83,7 @@ function Get-AgentJsonFromGh {
   if ($remaining -lt 1) { return [pscustomobject]@{ available = $false; value = $null; error = 'github_api_timeout' } }
   $result = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments $Arguments -TimeoutSeconds ([Math]::Min(15, $remaining))
   if ($result.exitCode -ne 0) { return [pscustomobject]@{ available = $false; value = $null; error = $(if ($result.exitCode -eq 124) { 'github_api_timeout' } elseif ($result.text -match 'HTTP 403') { 'github_api_forbidden' } elseif ($result.text -match 'HTTP 429|rate limit') { 'github_api_rate_limited' } elseif ($result.text -match 'HTTP 5\d\d') { 'github_api_server_error' } else { 'github_api_unavailable' }) } }
-  try { return [pscustomobject]@{ available = $true; value = ($result.text | ConvertFrom-Json); error = '' } }
+  try { return [pscustomobject]@{ available = $true; value = ($result.stdout | ConvertFrom-Json); error = '' } }
   catch { return [pscustomobject]@{ available = $false; value = $null; error = 'github_json_malformed' } }
 }
 
@@ -176,9 +176,12 @@ function Get-AgentReviewThreadStatus {
       $query = 'query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}'
       $arguments = @('api', 'graphql', '-f', "query=$query", '-F', "owner=$($parts[0])", '-F', "name=$($parts[1])", '-F', "number=$PR", '-f', "after=$after")
     }
-    $result = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments $arguments
-    if ($result.exitCode -ne 0) { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_unreadable' } }
-    try { $graph = $result.text | ConvertFrom-Json } catch { return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = 'review_threads_malformed' } }
+    $result = Get-AgentJsonFromGh -Arguments $arguments
+    if (-not $result.available) {
+      $errorCode = if ($result.error -eq 'github_json_malformed') { 'review_threads_malformed' } else { 'review_threads_unreadable' }
+      return [pscustomobject]@{ available = $false; resolved = $false; count = 0; error = $errorCode }
+    }
+    $graph = $result.value
     $data = Get-AgentLocalValue -Object $graph -Name 'data'
     $repository = Get-AgentLocalValue -Object $data -Name 'repository'
     $pullRequest = Get-AgentLocalValue -Object $repository -Name 'pullRequest'
@@ -284,8 +287,8 @@ try {
   if ($ghAvailable) {
     # `gh auth status` reports local login state, which is not the same as
     # proving that the Actions token can perform the API read this gate needs.
-    $authResult = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('api', "repos/$ExpectedRepository", '--jq', '.full_name')
-    $authOk = $authResult.exitCode -eq 0 -and [string]::Equals($authResult.text.Trim(), $ExpectedRepository, [StringComparison]::OrdinalIgnoreCase)
+    $authResult = Invoke-AgentGh -GhPath $ghResolvedPath -RepoRoot $resolvedRepoRoot -Arguments @('api', "repos/$ExpectedRepository", '--jq', '.full_name') -TimeoutSeconds 15
+    $authOk = $authResult.exitCode -eq 0 -and [string]::Equals($authResult.stdout.Trim(), $ExpectedRepository, [StringComparison]::OrdinalIgnoreCase)
   }
   Add-AgentCheck -Name 'AUTH_OK' -Passed $authOk -Blocker 'github_auth_failed'
   $remoteUrl = Get-AgentRemoteUrl -GitPath $GitPath -RepoRoot $resolvedRepoRoot -Remote $ExpectedRemote
