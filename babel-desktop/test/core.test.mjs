@@ -58,6 +58,14 @@ test('linux setup names a missing Docker engine and Windows conversation copy st
   assert.equal(composerSendBlockMessage({platform:'win32', providerConfigured:false}), '');
 });
 
+test('execution boundary disclosure does not infer Docker from a selected profile', async () => {
+  const {executionBoundaryLabel} = await load();
+  assert.equal(executionBoundaryLabel({executionProfile:'safe_repo'}), 'Not yet confirmed');
+  assert.equal(executionBoundaryLabel({executionProfile:'host_native'}), 'Host · no OS sandbox');
+  assert.equal(executionBoundaryLabel({executionProfile:'unknown'}), 'Not yet confirmed');
+  assert.equal(executionBoundaryLabel(), 'Not yet confirmed');
+});
+
 test('HTML renderer escapes untrusted model content', async () => {
   const { escapeHtml } = await load();
   assert.equal(typeof escapeHtml, 'function', 'escapeHtml must exist');

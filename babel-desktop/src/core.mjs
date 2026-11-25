@@ -27,11 +27,15 @@ export function runtimeProviderLabel({platform, providerConfigured, reported} = 
   if (!providerConfigured) return 'Not selected';
   return reported === 'configured' ? 'Configured' : 'Selected';
 }
-/** The effective command boundary shown beside the selected profile. */
+/**
+ * The effective command boundary shown beside the selected profile.
+ * Desktop currently receives only a selected profile, not the executor's
+ * resolved boundary. A native profile has a stable host boundary; a container
+ * profile alone does not prove Docker is the boundary actually in force.
+ */
 export function executionBoundaryLabel({executionProfile} = {}) {
   if (executionProfile === 'host_native') return 'Host · no OS sandbox';
-  if (executionProfile === 'safe_repo') return 'Docker sandbox';
-  return null;
+  return 'Not yet confirmed';
 }
 export function runtimeDockerLabel({platform, docker, dockerInstallation, executionProfile} = {}) {
   if (executionProfile === 'host_native') return 'Not required';
