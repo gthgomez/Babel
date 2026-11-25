@@ -28,7 +28,7 @@ function assertCombinedQualification(candidate, manifest, os) {
   assert.equal(step['continue-on-error'], undefined);
   assert.equal(step['working-directory'], 'babel-cli');
   assert.equal(manifest.scripts['qualify:build'], 'npm run build && npm run typecheck:scripts');
-  assert.equal(manifest.scripts.build, 'npm run clean:dist && tsc && node scripts/copy_playbooks.mjs');
+  assert.equal(manifest.scripts.build, 'npm run clean:dist && tsc && node scripts/copy_playbooks.mjs && node scripts/write_build_info.mjs');
   assert.equal(manifest.scripts['typecheck:scripts'], 'tsc -p tsconfig.scripts.json --noEmit');
 }
 

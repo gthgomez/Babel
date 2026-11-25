@@ -8,6 +8,7 @@ const REQUIRED_ASSETS = [
   'resources/prompt_catalog.yaml',
   'dist/index.js',
   'dist/cliEntryDispatch.js',
+  'dist/cli/build-info.json',
   'dist/voice/audio-capture-worker.mjs',
   'dist/voice/vad-worker.mjs',
   'dist/bridge/claude-agent-sdk-pin.json',

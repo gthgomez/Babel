@@ -14,12 +14,15 @@ test('common dry-run packaging stops a source-provenance rejection before build 
   }
   try {
     mkdirSync(join(pkg,'scripts'),{recursive:true})
-    copyFileSync(new URL('../../babel-cli/scripts/prepare_release_package.mjs',import.meta.url),join(pkg,'scripts/prepare_release_package.mjs'))
+    for (const script of ['prepare_release_package.mjs', 'write_build_info.mjs', 'consumer_archive.mjs']) {
+      copyFileSync(new URL('../../babel-cli/scripts/' + script, import.meta.url), join(pkg, 'scripts', script))
+    }
     writeFileSync(join(root,'.gitignore'),'calls.log\noutput/\n')
+    writeFileSync(join(pkg, 'package.json'), '{"version":"1.0.0"}\n')
     const npm = join(root,'fake-npm.mjs')
     writeFileSync(npm,"import {appendFileSync} from 'node:fs'; appendFileSync(process.env.FIXTURE_CALL_LOG,process.argv.slice(2).join(' ')+'\\n'); process.exit(7);")
     git('init','-q'); git('config','user.email','fixture@example.invalid'); git('config','user.name','Fixture')
-    git('add','babel-cli/scripts/prepare_release_package.mjs','.gitignore','fake-npm.mjs'); git('commit','-qm','fixture')
+    git('add','babel-cli','.gitignore','fake-npm.mjs'); git('commit','-qm','fixture')
     const r = spawnSync(process.execPath,['scripts/prepare_release_package.mjs',join(root,'output')],
       {cwd:pkg,env:{...process.env,npm_execpath:npm,FIXTURE_CALL_LOG:log},encoding:'utf8'})
     assert.notEqual(r.status,0)
