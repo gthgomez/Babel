@@ -934,6 +934,41 @@ test('MCP prompt projections withhold comma-separated media references and rejec
   assert.doesNotMatch(promptList.stdout, new RegExp(canary));
 });
 
+test('MCP data URI text tokenization preserves punctuation, delimiters, and ordinary links', async () => {
+  const marker = '[MCP_MEDIA_REFERENCE_WITHHELD: text-only transport]';
+  const canary = 'MCP_BOUNDARY_CONTROL_CANARY';
+  const cases: Array<[string, string, string]> = [
+    ['sentence start/end', `data:image/png;base64,${canary}.`, `${marker}.`],
+    ['comma adjacent', `left,data:image/webp;base64,${canary}, right`, `left,${marker}, right`],
+    ['semicolon adjacent', `left;data:image/jpeg;base64,${canary}; right`, `left;${marker}; right`],
+    ['closing bracket adjacent', `label]data:image/gif;base64,${canary}]suffix`, `label]${marker}]suffix`],
+    ['markdown image', `![preview](data:image/png;base64,${canary}), [manual](https://docs.example.test/guide)`, `![preview](${marker}), [manual](https://docs.example.test/guide)`],
+    ['tab boundary', `left\tdata:image/avif;base64,${canary}.\tright`, `left\t${marker}.\tright`],
+    ['newline boundary', `first\ndata:image/png;base64,${canary}.\nlast`, `first\n${marker}.\nlast`],
+    ['ordinary URL and scheme-like word', 'https://docs.example.test/data and metadata: remains readable', 'https://docs.example.test/data and metadata: remains readable'],
+  ];
+  const fixture = createLocalMcpFixture('prompts/get', {
+    messages: [{ role: 'user', content: { type: 'text', text: cases.map(([name, source]) => `${name}: ${source}`).join('\n') } }],
+  });
+  try {
+    const result = await executeMcpMethod(
+      'fixture', 'prompts/get', { name: 'fixture', arguments: {} }, undefined, fixture.servers,
+    );
+    assert.equal(result.exit_code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout) as {
+      media_withheld: Record<string, number>;
+      result: { messages: Array<{ content: { text: string } }> };
+    };
+    const output = payload.result.messages[0]!.content.text;
+    assert.deepEqual(payload.media_withheld, { data_uris: 7 });
+    for (const [name, _source, expected] of cases) assert.ok(output.includes(`${name}: ${expected}`), name);
+    assert.doesNotMatch(output, new RegExp(canary));
+    assert.equal(isCanonicalMcpSuccessResult(payload), true);
+  } finally {
+    rmSync(fixture.fixtureDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
 test('MCP tool discovery withholds descriptor media and preserves schema structure', async () => {
   const canary = 'MCP_TOOL_DISCOVERY_DATA_CANARY';
   const fixture = createLocalMcpFixture('tools/list', {

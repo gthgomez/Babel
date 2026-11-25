@@ -162,9 +162,10 @@ const MCP_MEDIA_WITHHELD_MARKER = '[MCP_MEDIA_WITHHELD: text-only transport]';
 const MCP_MEDIA_REFERENCE_WITHHELD_MARKER = '[MCP_MEDIA_REFERENCE_WITHHELD: text-only transport]';
 const MCP_RESOURCE_BLOB_WITHHELD_MARKER = '[MCP_RESOURCE_BLOB_WITHHELD: text-only transport]';
 const MCP_BINARY_ONLY_DIAGNOSTIC = `${MCP_RESOURCE_BLOB_WITHHELD_MARKER} non-image diagnostic only; not a PASS source`;
-// Match a data URI token only at a text/punctuation boundary; stop before
-// whitespace or markup closers, then restore sentence punctuation separately.
-const MCP_DATA_URI_TEXT_TOKEN = /(^|[\s([{<="'`,;:!?…])data:[^\s<>"')\]}]+/giu;
+// Recognize the explicit data: scheme outside another URI scheme/word token;
+// consume its bounded value, leave markup closers untouched, then restore any
+// terminal sentence punctuation separately.
+const MCP_DATA_URI_TEXT_TOKEN = /(?<![A-Za-z0-9+.-])data:[^\s<>"')\]}]+/giu;
 const MCP_SENTENCE_PUNCTUATION = /[.,;:!?…]+$/u;
 
 type McpMediaWithheld = { images?: number; data_uris?: number; resource_blobs?: number };
@@ -177,11 +178,10 @@ function mediaWithheldNotice(counts: McpMediaWithheld): string {
 
 function sanitizeMediaText(text: string): { text: string; dataUriCount: number } {
   let dataUriCount = 0;
-  const sanitized = text.replace(MCP_DATA_URI_TEXT_TOKEN, (match, prefix: string) => {
+  const sanitized = text.replace(MCP_DATA_URI_TEXT_TOKEN, (match: string) => {
     dataUriCount += 1;
-    const token = match.slice(prefix.length);
-    const trailingPunctuation = token.match(MCP_SENTENCE_PUNCTUATION)?.[0] ?? '';
-    return `${prefix}${MCP_MEDIA_REFERENCE_WITHHELD_MARKER}${trailingPunctuation}`;
+    const trailingPunctuation = match.match(MCP_SENTENCE_PUNCTUATION)?.[0] ?? '';
+    return `${MCP_MEDIA_REFERENCE_WITHHELD_MARKER}${trailingPunctuation}`;
   });
   return { text: sanitized, dataUriCount };
 }
