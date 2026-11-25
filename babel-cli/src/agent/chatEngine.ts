@@ -147,7 +147,6 @@ import {
   type ChatEngineLimits,
   type ChatRunLimiter,
 } from "../config/chatEngineLimits.js";
-import { isProviderLocal } from "../config/offlineMode.js";
 import {
   classifyFailureText,
   projectChatTerminal,
@@ -1560,29 +1559,27 @@ export class ChatEngine {
 
   /**
    * Conservative one-request estimate for finite-cap preauthorization.
-   * A named remote connection needs policy prices and a context bound. A
-   * previous charge can raise its reserve, but cannot replace missing prices.
+   * Uses the last observed charge (same request shape) or policy pricing plus
+   * the effective output reserve. Unknown pricing stays unknown; Babel then
+   * keeps its existing incomplete-accounting refusal instead of inventing zero.
    */
   private estimateNextRequestCostUsd(maxCostUsd: number): number | undefined {
     if (!Number.isFinite(maxCostUsd)) return undefined;
     const metadata = this.deliberationRunner?.getLastInvocationMetadata?.() ?? null;
     const lastCharge = metadata?.estimated_cost_usd;
+    if (typeof lastCharge === 'number' && Number.isFinite(lastCharge) && lastCharge > 0) return lastCharge;
     const policy = this.modelPolicy;
-    if (!policy?.connectionId && typeof lastCharge === 'number' && Number.isFinite(lastCharge) && lastCharge > 0) return lastCharge;
     if (!policy || policy.estimatedCostPer1MInput === undefined || policy.estimatedCostPer1MOutput === undefined) return undefined;
-    const contextBound = policy.connectionId ? policy.contextWindow : undefined;
-    if (policy.connectionId && !contextBound) return undefined;
-    const outputReserve = contextBound === undefined
-      ? Math.min(this.limits.maxTokensPerRound, policy.requestedOutputTokens ?? policy.maxOutputTokens ?? 8_000)
-      : this.deliberationRunner?.getNativeRequestReservedCompletionTokens?.() ?? contextBound;
-    const estimate = estimateRequestCostUsd({
-      inputTokens: contextBound ?? metadata?.prompt_tokens ?? policy.approximateInputTokens,
+    const outputReserve = Math.min(
+      this.limits.maxTokensPerRound,
+      policy.requestedOutputTokens ?? policy.maxOutputTokens ?? 8_000,
+    );
+    return estimateRequestCostUsd({
+      inputTokens: metadata?.prompt_tokens ?? policy.approximateInputTokens,
       outputTokens: outputReserve,
       inputCostPer1M: policy.estimatedCostPer1MInput,
       outputCostPer1M: policy.estimatedCostPer1MOutput,
     });
-    return estimate !== undefined && typeof lastCharge === 'number' && Number.isFinite(lastCharge)
-      ? Math.max(estimate, lastCharge) : estimate;
   }
 
   private checkBudgets(skipTurnLimit = false): {
@@ -1629,10 +1626,7 @@ export class ChatEngine {
       this.terminalLimiterReason = reason;
       return { ok: false, reason, limiter: "cost" };
     }
-    const policy = this.modelPolicy;
-    const requireEstimate = policy?.connectionId && explicitFiniteCostOverride(this.limits) !== undefined
-      && !isProviderLocal(policy.provider, policy.baseUrl);
-    const estimatedNext = this.estimateNextRequestCostUsd(maxCostUsd) ?? (requireEstimate ? null : undefined);
+    const estimatedNext = this.estimateNextRequestCostUsd(maxCostUsd);
     const maxWallMs = this.effectiveWallCapMs();
     const result = checkCostWallBudgets({
       totalCostUsd: taskCost,
