@@ -120,6 +120,54 @@ test('the bundled model chooser searches its selected provider and persists the 
   assert.equal(fetch.mock.callCount(), 0)
 })
 
+for (const confirm of [true, false]) {
+  test(`going back from review revises the draft before ${confirm ? 'saving' : 'declining'}`, async t => {
+    const { runProviderSetup } = await import('./providerSetup.js')
+    const { readUserSettings, updateUserSettings, userSettingsPath } = await import('../config/userSettings.js')
+    const directory = mkdtempSync(join(tmpdir(), 'babel-setup-back-'))
+    t.after(() => rmSync(directory, { recursive: true, force: true }))
+    const env = { BABEL_STATE_DIR: directory, BABEL_CONFIG_DIR: directory, OPENROUTER_API_KEY: 'fixture-only' }
+    updateUserSettings({
+      connections: { personal: { id: 'personal', provider: 'openrouter', model: 'vendor/original' } },
+      defaults: { connection: 'personal', model: 'vendor/original', budgetUsd: 2 },
+    }, { env })
+    const path = userSettingsPath(env)
+    const previous = readFileSync(path, 'utf8')
+    const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected setup request') })
+    const answers = [
+      [/^Provider/, 'openrouter'],
+      [/^Connection name/, 'personal'],
+      [/^Exact model ID/, 'vendor/first'],
+      [/^Context capacity/, '128000'],
+      [/^Output budget/, '8192'],
+      [/^Per-task budget/, '5'],
+      [/^Save this connection/, '/back'],
+      [/^Exact model ID \[vendor\/first\]/, 'vendor/revised'],
+      [/^Context capacity.*blank if unknown/, ''],
+      [/^Output budget.*blank for transport default/, ''],
+      [/^Per-task budget.*\[5\]/, ''],
+      [/^Save this connection/, confirm ? 'yes' : 'no'],
+    ] as const
+    let step = 0
+    const result = await runProviderSetup({ env, interactive: true, write: () => {}, question: async prompt => {
+      const answer = answers[step++]
+      assert.ok(answer, 'setup asked an unexpected question')
+      assert.match(prompt, answer[0])
+      assert.equal(readFileSync(path, 'utf8'), previous)
+      return answer[1]
+    } })
+    assert.equal(step, answers.length, 'Back should revisit the model before confirmation')
+    const settings = readUserSettings({ env })
+    assert.equal(result.connection, 'personal')
+    assert.equal(result.model, confirm ? 'vendor/revised' : 'vendor/original')
+    assert.equal(settings.defaults?.budgetUsd, confirm ? 5 : 2)
+    assert.equal(settings.connections.personal?.contextWindow, undefined)
+    assert.equal(settings.connections.personal?.maxOutputTokens, undefined)
+    if (!confirm) assert.equal(readFileSync(path, 'utf8'), previous)
+    assert.equal(fetch.mock.callCount(), 0)
+  })
+}
+
 test('invalid confirmed setup is rejected before requesting or saving a credential', async t => {
   const { runProviderSetup } = await import('./providerSetup.js')
   const { userSettingsPath } = await import('../config/userSettings.js')

@@ -1,7 +1,7 @@
 /** First-run provider setup without network requests or automatic provider selection. */
 import { createInterface } from 'node:readline/promises'
 import { isDeepStrictEqual } from 'node:util'
-import { prepareUserSettingsUpdate, readUserSettings, updateUserSettings, type UserSettings } from '../config/userSettings.js'
+import { prepareUserSettingsUpdate, readUserSettings, updateUserSettings, type Connection, type UserSettings } from '../config/userSettings.js'
 import { promptForProviderCredential } from '../config/interactiveCredential.js'
 import { resolvePrivateCredentialEnvPath } from '../config/envBootstrap.js'
 import { connectionStatus, type SelectionSession } from './connectionSettings.js'
@@ -24,7 +24,8 @@ export function getSetupStatus(env: NodeJS.ProcessEnv = process.env, session: Se
   return { state: status.state as SetupResult['state'], connection: status.connection, provider: status.provider, model: status.model }
 }
 
-type AskSetup = (prompt: string) => Promise<string>
+type AskSetup = (prompt: string, allowBack?: boolean) => Promise<string>
+const backChoice = '/back'
 
 async function chooseSetupModel(
   provider: ProviderId, remembered: string | undefined, ask: AskSetup, write: (text: string) => void,
@@ -48,6 +49,44 @@ async function chooseSetupModel(
       continue
     }
     return answer || remembered
+  }
+}
+
+async function reviewSetupSelection(
+  connection: Connection, remembered: string | undefined, savedBudget: number | 'unlimited' | undefined,
+  ask: AskSetup, write: (text: string) => void,
+): Promise<{ model: string; contextWindow: number | undefined; maxOutputTokens: number | undefined; budget: number | 'unlimited' } | undefined> {
+  let modelDefault = remembered
+  let contextDefault = connection.contextWindow
+  let outputDefault = connection.maxOutputTokens
+  let budgetDefault = savedBudget
+  for (;;) {
+    const model = await chooseSetupModel(connection.provider, modelDefault, ask, write)
+    if (!model) throw new Error('A model ID is required.')
+    if (model !== modelDefault) {
+      contextDefault = connection.contextWindow
+      outputDefault = connection.maxOutputTokens
+    }
+    const contextRaw = (await ask(`Context capacity in tokens${contextDefault ? ` [${contextDefault}]` : ' (blank if unknown)'}: `)).trim()
+    const outputRaw = (await ask(`Output budget in tokens${outputDefault ? ` [${outputDefault}]` : ' (blank for transport default)'}: `)).trim()
+    const contextWindow = contextRaw ? Number(contextRaw) : contextDefault
+    const maxOutputTokens = outputRaw ? Number(outputRaw) : outputDefault
+    write('Finite USD caps are supported by standard Work with conservative per-request preauthorization. Plan, thorough review and Apply currently reject finite caps before inference; offline/local routes are exempt because they cannot spend remote money. Choosing unlimited explicitly permits those lanes without a dollar ceiling.\n')
+    const budgetRaw = (await ask(`Per-task budget in USD, or unlimited${budgetDefault === undefined ? ' (explicit choice required)' : ` [${budgetDefault}]`}: `)).trim()
+      || String(budgetDefault ?? '')
+    const budget = budgetRaw === 'unlimited' ? budgetRaw : Number(budgetRaw)
+    if (budget !== 'unlimited' && (!Number.isFinite(budget) || budget <= 0)) throw new Error('Choose a positive budget or unlimited.')
+    write(`Connection: ${sanitizeUntrustedTerminalField(connection.id)} (${connection.provider}); model: ${sanitizeUntrustedTerminalField(model)}; budget: ${budget === 'unlimited' ? 'unlimited' : `$${budget} per task`}.\n`)
+    write("Plan is read-only by default. Ordinary Chat execution defaults to host_native, which runs eligible commands with your OS user's authority and is not an OS sandbox. Selecting a container profile such as safe_repo requires Docker and a usable sandbox image.\n")
+    write('Press Esc or enter /back to revisit the model.\n')
+    const confirmation = (await ask('Save this connection and budget as your user default? [y/N]: ', true)).trim().toLowerCase()
+    if (confirmation !== backChoice) {
+      return /^(?:y|yes)$/.test(confirmation) ? { model, contextWindow, maxOutputTokens, budget } : undefined
+    }
+    modelDefault = model
+    contextDefault = contextWindow
+    outputDefault = maxOutputTokens
+    budgetDefault = budget
   }
 }
 
@@ -76,12 +115,30 @@ export async function runProviderSetup(options: {
   }
   const cancellation = new AbortController()
   let rl: ReturnType<typeof createInterface> | undefined
-  const ask = options.question ?? ((prompt: string) => {
+  const ask: AskSetup = options.question ?? (async (prompt, allowBack) => {
     if (!rl) {
       rl = createInterface({ input: process.stdin, output: process.stderr })
       rl.on('SIGINT', () => cancellation.abort())
     }
-    return rl.question(prompt, { signal: cancellation.signal })
+    if (!allowBack) return rl.question(prompt, { signal: cancellation.signal })
+    const terminal = rl
+    const back = new AbortController()
+    const onKeypress = (_: string, key?: { name?: string; sequence?: string }) => {
+      // Readline sets meta on the bare Escape timeout. Match its bytes to exclude chords.
+      if (key?.name !== 'escape' || key.sequence !== '\x1b') return
+      terminal.write(undefined, { name: 'u', ctrl: true })
+      back.abort()
+    }
+    process.stdin.on('keypress', onKeypress)
+    try {
+      return await terminal.question(prompt, { signal: AbortSignal.any([cancellation.signal, back.signal]) })
+    } catch (error) {
+      if (!back.signal.aborted || cancellation.signal.aborted) throw error
+      write('\n')
+      return backChoice
+    } finally {
+      process.stdin.off('keypress', onKeypress)
+    }
   })
   try {
     const previous = readUserSettings({ env })
@@ -113,25 +170,13 @@ export async function runProviderSetup(options: {
     const connection = { ...saved, id, provider: selected, ...(baseUrl ? { baseUrl } : {}), ...(authentication ? { authentication } : {}) }
     const remembered = (previous.defaults?.connection === id ? previous.defaults.model : undefined)
       ?? previous.defaults?.modelsByConnection?.[id] ?? saved?.model
-    const model = await chooseSetupModel(selected, remembered, ask, write)
-    if (!model) throw new Error('A model ID is required.')
-    const contextRaw = (await ask(`Context capacity in tokens${saved?.contextWindow ? ` [${saved.contextWindow}]` : ' (blank if unknown)'}: `)).trim()
-    const outputRaw = (await ask(`Output budget in tokens${saved?.maxOutputTokens ? ` [${saved.maxOutputTokens}]` : ' (blank for transport default)'}: `)).trim()
-    const contextWindow = contextRaw ? Number(contextRaw) : saved?.contextWindow
-    const maxOutputTokens = outputRaw ? Number(outputRaw) : saved?.maxOutputTokens
-    const updated = { ...connection, model, ...(contextWindow !== undefined ? { contextWindow } : {}), ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}) }
-    write('Finite USD caps are supported by standard Work with conservative per-request preauthorization. Plan, thorough review and Apply currently reject finite caps before inference; offline/local routes are exempt because they cannot spend remote money. Choosing unlimited explicitly permits those lanes without a dollar ceiling.\n')
-    const userBudget = previous.defaults?.budgetUsd
-    const budgetRaw = (await ask(`Per-task budget in USD, or unlimited${userBudget === undefined ? ' (explicit choice required)' : ` [${userBudget}]`}: `)).trim()
-      || String(userBudget ?? '')
-    const budget = budgetRaw === 'unlimited' ? budgetRaw : Number(budgetRaw)
-    if (budget !== 'unlimited' && (!Number.isFinite(budget) || budget <= 0)) throw new Error('Choose a positive budget or unlimited.')
-    write(`Connection: ${sanitizeUntrustedTerminalField(id)} (${selected}); model: ${sanitizeUntrustedTerminalField(model)}; budget: ${budget === 'unlimited' ? 'unlimited' : `$${budget} per task`}.\n`)
-    write("Plan is read-only by default. Ordinary Chat execution defaults to host_native, which runs eligible commands with your OS user's authority and is not an OS sandbox. Selecting a container profile such as safe_repo requires Docker and a usable sandbox image.\n")
-    if (!/^(?:y|yes)$/i.test((await ask('Save this connection and budget as your user default? [y/N]: ')).trim())) {
+    const reviewed = await reviewSetupSelection(connection, remembered, previous.defaults?.budgetUsd, ask, write)
+    if (!reviewed) {
       write(`Setup left your active connection unchanged. Run ${CLI_COMMAND} setup to try again.\n`)
       return cancelled()
     }
+    const { model, contextWindow, maxOutputTokens, budget } = reviewed
+    const updated = { ...connection, model, ...(contextWindow !== undefined ? { contextWindow } : {}), ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}) }
     const settingsChange = (latest: UserSettings): Partial<UserSettings> => {
       if (!isDeepStrictEqual(latest.connections[id], saved) || !isDeepStrictEqual(latest.defaults, previous.defaults)) {
         throw new Error('Connection or default preferences changed during setup. Run setup again to review the latest settings.')
