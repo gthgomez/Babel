@@ -209,3 +209,65 @@ test('stage errors preserve exit status and never echo child source or diagnosti
   assert.ok(events.every(line => !line.includes('synthetic-private-output')))
   await assert.rejects(runValidationStage(process.execPath, ['-e', 'setInterval(()=>{},1000)'], process.cwd(), 'timeout-fixture', () => {}, 30), /timed out/)
 })
+
+const preflight = readFileSync(new URL('../../scripts/agent-preflight.ps1', import.meta.url), 'utf8')
+const guide = readFileSync(new URL('../../docs/guides/AGENT_GIT_OPERATIONS.md', import.meta.url), 'utf8')
+
+test('portable Git fallback applies only when the implicit Windows path is missing', () => {
+  assert.match(preflight, /\$gitPathWasExplicit = \$PSBoundParameters\.ContainsKey\('GitPath'\)/)
+  assert.match(preflight, /if \(-not \$gitPathWasExplicit -and -not \(Test-Path -LiteralPath \$gitResolvedPath -PathType Leaf\)\)/)
+  assert.match(preflight, /Get-Command -Name 'git' -CommandType Application -ErrorAction Stop/)
+  assert.match(preflight, /catch \{ \$gitResolvedPath = '' \}/)
+  assert.match(preflight, /An\s+# explicit -GitPath/)
+})
+
+test('portable preflight finds native Git when a PowerShell function shadows it', async t => {
+  const scratch = mkdtempSync(join(tmpdir(), 'babel-preflight-contract-'))
+  t.after(() => removeFixtureTree(scratch))
+  const literal = value => `'${value.replaceAll("'", "''")}'`
+  const script = fileURLToPath(new URL('../../scripts/agent-preflight.ps1', import.meta.url))
+  const invoke = extra => {
+    const command = [
+      "function git { throw 'shadow function must not run' }",
+      "Clear-Item Env:ProgramFiles -ErrorAction SilentlyContinue",
+      `& ${literal(script)} -RepoRoot ${literal(scratch)} -GhPath ${literal(join(scratch, 'missing-gh'))} ${extra}`,
+    ].join('; ')
+    const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      encoding: 'utf8', timeout: 30000, windowsHide: true,
+    })
+    assert.ifError(result.error)
+    assert.equal(result.status, 1, 'the temporary directory is outside the repository')
+    assert.notEqual(result.stdout.trim(), '', 'preflight must emit its JSON result')
+    return JSON.parse(result.stdout)
+  }
+
+  const implicit = invoke('')
+  assert.equal(implicit.checks.GIT_EXECUTABLE, true)
+  assert.equal(implicit.checks.GIT_VERSION, true)
+  const explicitBlank = invoke("-GitPath ''")
+  assert.equal(explicitBlank.checks.GIT_EXECUTABLE, false)
+  assert.ok(explicitBlank.blockers.includes('git_executable_unavailable'))
+})
+
+test('preflight reports unprobed write capabilities separately from authentication and read', () => {
+  assert.match(preflight, /nonInteractiveAuthentication = \$AuthCapability/)
+  assert.match(preflight, /repositoryRead = \$ReadCapability/)
+  assert.match(preflight, /branchWrite = 'unproven_not_probed'/)
+  assert.match(preflight, /pullRequestCreation = 'unproven_not_probed'/)
+  assert.match(preflight, /does not attempt a branch write or create a pull request/)
+  assert.match(guide, /do not prove that a branch\s+push or PR creation is permitted/i)
+})
+
+test('incomplete preflight retains capability fields without claiming successful checks', () => {
+  assert.match(preflight, /\$AuthCapability = 'unproven_preflight_incomplete'/)
+  assert.match(preflight, /\$ReadCapability = 'unproven_preflight_incomplete'/)
+  assert.match(preflight, /\$fallback = \[ordered\]@\{[\s\S]*githubCapabilities = Get-PreflightGithubCapabilities\s/)
+})
+
+test('delivery handoff documents exact-head resume and ambiguous publication reconciliation', () => {
+  for (const field of ['headSha', 'baseSha', 'prNumber', 'publication', 'blocker', 'nextAction']) {
+    assert.ok(guide.includes(`\`${field}\``), `missing handoff field ${field}`)
+  }
+  assert.match(guide, /If push outcome is ambiguous,\s+query the\s+remote branch first/)
+  assert.match(guide, /do not automatically rebase, amend, force-push,\s+or merge/)
+})
