@@ -5,12 +5,20 @@ import type { AcceptanceRequirementV1, TaskContractProvenanceRecord, TaskContrac
 export const ACCEPTANCE_MEANING_REF_V1 = 'task-acceptance-meaning:v1'
 /** Fresh admissions: provisional inferred capture from authenticated active prose. */
 export const ACCEPTANCE_MEANING_REF_V2 = 'task-acceptance-meaning:v2'
-/** Fresh admission with explicit behavioral-goal preservation and bounded evidence sections. */
+/** Frozen v3 behavioral-goal preservation and bounded evidence sections. */
 export const ACCEPTANCE_MEANING_REF_V3 = 'task-acceptance-meaning:v3'
+/** Fresh admission also preserves narrowly labeled opening behavioral goals. */
+export const ACCEPTANCE_MEANING_REF_V4 = 'task-acceptance-meaning:v4'
 /** @deprecated Use ACCEPTANCE_MEANING_REF_V1; default export alias preserves v1 replay. */
 export const ACCEPTANCE_MEANING_REF = ACCEPTANCE_MEANING_REF_V1
 
-export type TaskAcceptanceMeaningVersion = 1 | 2 | 3
+export type TaskAcceptanceMeaningVersion = 1 | 2 | 3 | 4
+const ACCEPTANCE_MEANING_REFS: ReadonlyMap<TaskAcceptanceMeaningVersion, string> = new Map([
+  [1, ACCEPTANCE_MEANING_REF_V1],
+  [2, ACCEPTANCE_MEANING_REF_V2],
+  [3, ACCEPTANCE_MEANING_REF_V3],
+  [4, ACCEPTANCE_MEANING_REF_V4],
+])
 
 const MAX_INPUT_CHARS = 65_536
 const MAX_CRITERIA = 128
@@ -28,6 +36,9 @@ const QUANTIFIED_BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:please\s+)?(?:fix|repair|cha
 // only admitted when at least one sibling line states an observable behavioral
 // objective, so ordinary context or a lone vague instruction is unchanged.
 const OPERATIVE_GOAL_LINE = /^\s{0,3}(?:ACTION:\s*)?(?:please\s+)?(?:(?:also|additionally|and)\b[\s,:]*)?(?:fix|repair|change|update|implement|make|ensure|support|add|remove|delete|create|refactor|migrate|upgrade|replace|rename|improve|document|write|apply|extend|adjust)\b.{1,300}$/i
+const GOAL_LABEL = /^ {0,3}(?:(?:goal|objective):|\*\*(?:goal|objective):\*\*)[ \t]+/i
+const OPENING_TASK_HEADING = /^ {0,3}#{1,6}[ \t]+task(?:[ \t]+#+)?[ \t]*$/i
+const NON_OPERATIVE_GOAL_QUALIFIER = /\([ \t]*(?:example only|not required)(?:[ \t]*[;,][ \t]*(?:example only|not required))*[ \t]*\)[.!]?[ \t]*$/i
 export type AcceptanceMeaningStatus = 'explicit' | 'inferred' | 'unresolved'
 export interface AcceptanceMeaningSource {
   criterion_id: string
@@ -48,6 +59,124 @@ export interface TaskAcceptanceMeaning {
   interpretation_version: TaskAcceptanceMeaningVersion
 }
 
+interface OpeningLabeledGoal {
+  text: string
+  start: number
+  end: number
+  operative: boolean
+}
+
+function labeledGoalBody(line: string): string | undefined {
+  const prefix = line.match(GOAL_LABEL)?.[0]
+  return prefix ? line.slice(prefix.length).trim() : undefined
+}
+
+function behaviorBeforeVerifierLink(body: string): string {
+  // A marker written as part of a required output is not a verifier clause.
+  // Scan only the v4 label projection; historical replay and command binding
+  // retain their existing grammar and still reject ambiguous links.
+  const separator = /[.;]\s+verified by:/iy
+  const word = /[\p{L}\p{N}_]/u
+  const codeSpanEnds = new Map<number, number>()
+  const escapedOpenerEnds = new Map<number, number>()
+  const nextRunEnd = new Map<number, number>()
+  for (const run of [...body.matchAll(/`+/g)].reverse()) {
+    const width = run[0].length
+    const end = nextRunEnd.get(width)
+    if (end !== undefined) codeSpanEnds.set(run.index, end)
+    // A backslash escapes only the first tick of an opening run. Closing
+    // runs inside the code span are still matched by their full raw width.
+    const shorterEnd = width > 1 ? nextRunEnd.get(width - 1) : undefined
+    if (shorterEnd !== undefined) escapedOpenerEnds.set(run.index, shorterEnd)
+    nextRunEnd.set(width, run.index + width)
+  }
+  let quoteEnd = ''
+  for (let i = 0; i < body.length; i++) {
+    const char = body[i]!
+    if (char === '\\') {
+      i = (escapedOpenerEnds.get(i + 1) ?? (i + 2)) - 1
+      continue
+    }
+    // Matched code spans are opaque even inside a prose quote: a quote
+    // character in the span must not close the surrounding literal.
+    const codeEnd = codeSpanEnds.get(i)
+    if (codeEnd !== undefined) { i = codeEnd - 1; continue }
+    const afterWord = (char === "'" || char === '’') && word.test(body[i - 1] ?? '')
+    if (quoteEnd) {
+      if (char === quoteEnd && !(afterWord && word.test(body[i + 1] ?? ''))) quoteEnd = ''
+      continue
+    }
+    if (char === '"' || (char === "'" && !afterWord)) quoteEnd = char
+    else if (char === '“') quoteEnd = '”'
+    else if (char === '‘') quoteEnd = '’'
+    else if (char === '.' || char === ';') {
+      separator.lastIndex = i
+      if (separator.test(body)) return body.slice(0, i)
+    }
+  }
+  return body
+}
+
+function isObservableGoal(line: string): boolean {
+  return BEHAVIORAL_GOAL_LINE.test(line) || QUANTIFIED_BEHAVIORAL_GOAL_LINE.test(line)
+}
+
+function isOperativeBehavioralGoal(body: string): boolean {
+  return isObservableGoal(body) && OPERATIVE_GOAL_LINE.test(body)
+}
+
+/** V4 comparison text: remove only a recognized behavioral goal's outer label. */
+export function labeledBehavioralGoalText(line: string): string | undefined {
+  const body = labeledGoalBody(line)
+  return body && isOperativeBehavioralGoal(body) && !NON_OPERATIVE_GOAL_QUALIFIER.test(body)
+    ? body
+    : undefined
+}
+
+/** V4 opening framing, also used by task routing. Offsets refer to the original labeled line. */
+export function findOpeningLabeledGoal(request: string): OpeningLabeledGoal | undefined {
+  if (request.length > MAX_INPUT_CHARS) return undefined
+  let start = 0
+  let seenTaskHeading = false
+  for (const raw of request.split('\n')) {
+    const line = raw.replace(/\r$/, '')
+    if (line.trim()) {
+      if (!seenTaskHeading && OPENING_TASK_HEADING.test(line)) {
+        seenTaskHeading = true
+      } else {
+        const text = labeledGoalBody(line)
+        if (!text) return undefined
+        const operative = !NON_OPERATIVE_GOAL_QUALIFIER.test(behaviorBeforeVerifierLink(text))
+        if (operative && !isOperativeBehavioralGoal(text)) return undefined
+        return { text, start, end: start + line.length, operative }
+      }
+    }
+    start += raw.length + 1
+  }
+  return undefined
+}
+
+type V4GoalProjection = { opening: OpeningLabeledGoal | undefined }
+
+function projectV4Criterion(
+  description: string,
+  status: AcceptanceMeaningStatus,
+  start: number,
+  opening: OpeningLabeledGoal | undefined,
+): string | undefined {
+  if (status === 'inferred' && opening?.start === start)
+    return opening.operative ? opening.text : undefined
+  if (status !== 'explicit') return description
+  const body = labeledGoalBody(description)
+  if (!body) return description
+  // Keep a declared verifier clause verbatim. The binding stage compares its
+  // behavior separately. Standalone labels are framing, so exact amendments
+  // can recognize an unchanged goal without rewriting any literal in its body.
+  const behavior = behaviorBeforeVerifierLink(body)
+  if (NON_OPERATIVE_GOAL_QUALIFIER.test(behavior)) return undefined
+  return behavior === body && isOperativeBehavioralGoal(body) ? body : description
+}
+
 function sortCriteriaBySourceSpan(
   criteria: AcceptanceRequirementV1[],
   sources: AcceptanceMeaningSource[],
@@ -66,7 +195,8 @@ function hasRawPythonFunctionDefinition(request: string): boolean {
 function preserveBehavioralGoal(
   meaning: TaskAcceptanceMeaning,
   request: string,
-  meaningRef = ACCEPTANCE_MEANING_REF_V3,
+  meaningRef: string,
+  opening?: OpeningLabeledGoal,
 ): TaskAcceptanceMeaning {
   // Limit this bridge to a directly stated, observable opening goal. Do not
   // reinterpret examples, quoted text, fenced content, or arbitrary prose.
@@ -83,7 +213,7 @@ function preserveBehavioralGoal(
   let plainExample = false
   let behavioral = false
   const seenCandidate = new Set<string>()
-  const candidates: { text: string; start: number; end: number }[] = []
+  const candidates: { text: string; start: number; end: number; labeled: boolean }[] = []
   for (const raw of lines) {
     const line = raw.replace(/\r$/, '')
     // Markdown indented code may use four spaces or a tab. Keep it outside
@@ -138,25 +268,29 @@ function preserveBehavioralGoal(
     // this bridge never reinterprets them as opening goals.
     if (/^\s{0,3}(?:[-*+•]|\d+[.)])\s+/.test(line)) break
     if (line.trim() && headingDepth === undefined) {
-      if (BEHAVIORAL_GOAL_LINE.test(line) || QUANTIFIED_BEHAVIORAL_GOAL_LINE.test(line)) behavioral = true
-      if (OPERATIVE_GOAL_LINE.test(line)) {
-        const text = line.trim()
+      const labeled = opening?.start === offset && opening.operative ? opening : undefined
+      if (!labeled && isObservableGoal(line)) behavioral = true
+      if (labeled || OPERATIVE_GOAL_LINE.test(line)) {
+        const text = labeled?.text ?? line.trim()
         if (!seenCandidate.has(text)) {
           seenCandidate.add(text)
-          candidates.push({ text, start: offset, end: offset + line.length })
+          candidates.push({ text, start: offset, end: offset + line.length, labeled: labeled !== undefined })
         }
       }
     }
     offset += raw.length + 1
   }
-  // A lone imperative or contextual sentence is not enough: preserve the block
-  // only when at least one line states a directly observable behavior.
-  if (!behavioral || candidates.length === 0) return meaning
-
-  const inputDigest = sha256Canonical(request)
+  // A labeled goal retains only its own observable obligation. It does not
+  // make neighboring imperatives operative as an unlabeled v3 goal would.
+  if (candidates.length === 0) return meaning
   const existing = new Set(meaning.criteria.map(item => item.description))
-  const preserved = candidates.filter(item => !existing.has(item.text))
+  const preserved = candidates.filter(item =>
+    (behavioral || item.labeled) && !existing.has(item.text) &&
+    // The base projection can already have admitted the full labeled line.
+    (!item.labeled || !existing.has(request.slice(item.start, item.end).trim())),
+  )
   if (!preserved.length) return meaning
+  const inputDigest = sha256Canonical(request)
 
   const makeCriterion = (found: { text: string }): AcceptanceRequirementV1 => {
     const id = `acceptance:${sha256Canonical({ description: found.text, status: 'inferred' }).slice(0, 32)}`
@@ -247,15 +381,17 @@ type InterpretOptions = {
   unresolvedWhenEmpty: boolean
 }
 
-function interpretTaskAcceptance(request: string, opts: InterpretOptions): TaskAcceptanceMeaning {
+function interpretTaskAcceptance(request: string, opts: InterpretOptions, v4?: V4GoalProjection): TaskAcceptanceMeaning {
   const inputDigest = sha256Canonical(request)
+  const opening = v4?.opening
   const criteria: AcceptanceRequirementV1[] = []
   const sources: AcceptanceMeaningSource[] = []
   const activeProse: string[] = []
   const seen = new Set<string>()
   let incomplete = request.length > MAX_INPUT_CHARS
   const add = (description: string, status: AcceptanceMeaningStatus, start: number, end: number) => {
-    const normalized = description.trim()
+    const text = description.trim()
+    const normalized = v4 ? projectV4Criterion(text, status, start, opening) : text
     if (!normalized || seen.has(normalized)) return
     if (normalized.length > MAX_CRITERION_CHARS || criteria.length >= MAX_CRITERIA) {
       incomplete = true
@@ -294,6 +430,7 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions): TaskA
         continue
       }
       if (fence || /^\s*>/.test(line)) continue
+      if (opening?.start === start && !opening.operative) continue
       if (opts.version === 2) {
         if (!rawPythonFunctionBody && RAW_PYTHON_FUNCTION_DEFINITION.test(line)) {
           rawPythonFunctionBody = true
@@ -406,14 +543,18 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions): TaskA
   }
 }
 
-/** v1 replay semantics (frozen). */
-export function inferTaskAcceptanceV1(request: string): TaskAcceptanceMeaning {
+function interpretV1Projection(request: string, v4?: V4GoalProjection): TaskAcceptanceMeaning {
   return interpretTaskAcceptance(request, {
     version: 1,
     meaningRef: ACCEPTANCE_MEANING_REF_V1,
     admitActiveProseSpans: false,
     unresolvedWhenEmpty: true,
-  })
+  }, v4)
+}
+
+/** v1 replay semantics (frozen). */
+export function inferTaskAcceptanceV1(request: string): TaskAcceptanceMeaning {
+  return interpretV1Projection(request)
 }
 
 function relabelMeaningProvenanceV1ToV2(
@@ -438,19 +579,15 @@ function promoteV1ProjectionToV2Admission(legacy: TaskAcceptanceMeaning): TaskAc
   }
 }
 
-/**
- * v2 fresh admission: use v1 when it already yields real criteria or structural incompleteness;
- * otherwise fall back to provisional active-prose capture (short vague requests only).
- */
-export function inferTaskAcceptanceV2(request: string): TaskAcceptanceMeaning {
-  const legacy = inferTaskAcceptanceV1(request)
+function interpretV2Projection(request: string, v4?: V4GoalProjection): TaskAcceptanceMeaning {
+  const legacy = interpretV1Projection(request, v4)
   if (hasRawPythonFunctionDefinition(request)) {
     const rawFunctionMeaning = interpretTaskAcceptance(request, {
       version: 2,
       meaningRef: ACCEPTANCE_MEANING_REF_V2,
       admitActiveProseSpans: true,
       unresolvedWhenEmpty: false,
-    })
+    }, v4)
     // Raw Python function examples are task data, not malformed acceptance prose.
     // Override the frozen v1 structural fallback only when v2 can account for
     // the rest of the request without losing an ambiguous requirement.
@@ -465,24 +602,45 @@ export function inferTaskAcceptanceV2(request: string): TaskAcceptanceMeaning {
     meaningRef: ACCEPTANCE_MEANING_REF_V2,
     admitActiveProseSpans: true,
     unresolvedWhenEmpty: false,
-  })
+  }, v4)
 }
 
-/** Fresh admission v3 adds the behavioral-goal obligation while v1/v2 remain stable for archived replay. */
-export function inferTaskAcceptanceV3(request: string): TaskAcceptanceMeaning {
-  const previous = inferTaskAcceptanceV2(request)
+/**
+ * v2 replay: use v1 when it already yields real criteria or structural incompleteness;
+ * otherwise fall back to provisional active-prose capture (short vague requests only).
+ */
+export function inferTaskAcceptanceV2(request: string): TaskAcceptanceMeaning {
+  return interpretV2Projection(request)
+}
+
+function inferTaskAcceptanceWithBehavioralGoals(request: string, version: 3 | 4): TaskAcceptanceMeaning {
+  const v4 = version === 4 ? { opening: findOpeningLabeledGoal(request) } : undefined
+  const previous = interpretV2Projection(request, v4)
   const v2Prefix = `${ACCEPTANCE_MEANING_REF_V2}:`
-  const v3Prefix = `${ACCEPTANCE_MEANING_REF_V3}:`
+  const meaningRef = acceptanceMeaningRefForVersion(version)
   const versioned: TaskAcceptanceMeaning = {
     ...previous,
-    interpretation_version: 3,
+    interpretation_version: version,
     provenance: previous.provenance.map(record => ({
       ...record,
-      ref: record.ref.startsWith(v2Prefix) ? record.ref.replace(v2Prefix, v3Prefix) : record.ref,
+      ref: record.ref.startsWith(v2Prefix) ? record.ref.replace(v2Prefix, `${meaningRef}:`) : record.ref,
     })),
   }
-  return preserveBehavioralGoal(versioned, request)
+  return preserveBehavioralGoal(versioned, request, meaningRef, v4?.opening)
 }
+
+/** Frozen v3 replay preserves the original behavioral-goal interpretation. */
+export function inferTaskAcceptanceV3(request: string): TaskAcceptanceMeaning {
+  return inferTaskAcceptanceWithBehavioralGoals(request, 3)
+}
+
+/** V4 preserves an observable opening goal with a Goal or Objective label. */
+export function inferTaskAcceptanceV4(request: string): TaskAcceptanceMeaning {
+  return inferTaskAcceptanceWithBehavioralGoals(request, 4)
+}
+
+/** Live acceptance admission and verifier dependency selection share this policy. */
+export const inferFreshTaskAcceptance = inferTaskAcceptanceV4
 
 /** Default export path preserves v1 outputs for existing callers and replay tests. */
 export function inferTaskAcceptance(request: string): TaskAcceptanceMeaning {
@@ -493,16 +651,24 @@ export function inferTaskAcceptanceForVersion(
   request: string,
   version: TaskAcceptanceMeaningVersion,
 ): TaskAcceptanceMeaning {
+  if (version === 4) return inferTaskAcceptanceV4(request)
   if (version === 3) return inferTaskAcceptanceV3(request)
   return version === 2 ? inferTaskAcceptanceV2(request) : inferTaskAcceptanceV1(request)
 }
 
 export function acceptanceMeaningRefForVersion(version: TaskAcceptanceMeaningVersion): string {
-  return version === 3 ? ACCEPTANCE_MEANING_REF_V3 : version === 2 ? ACCEPTANCE_MEANING_REF_V2 : ACCEPTANCE_MEANING_REF_V1
+  return ACCEPTANCE_MEANING_REFS.get(version) ?? ACCEPTANCE_MEANING_REF_V1
+}
+
+function versionOfAcceptanceMeaningRef(ref: string): TaskAcceptanceMeaningVersion | undefined {
+  for (const [version, prefix] of ACCEPTANCE_MEANING_REFS) {
+    if (ref.startsWith(`${prefix}:`)) return version
+  }
+  return undefined
 }
 
 export function isAcceptanceMeaningDerivedRef(ref: string): boolean {
-  return ref.startsWith(`${ACCEPTANCE_MEANING_REF_V1}:`) || ref.startsWith(`${ACCEPTANCE_MEANING_REF_V2}:`) || ref.startsWith(`${ACCEPTANCE_MEANING_REF_V3}:`)
+  return versionOfAcceptanceMeaningRef(ref) !== undefined
 }
 
 export type AcceptanceMeaningVersionResolution =
@@ -511,30 +677,19 @@ export type AcceptanceMeaningVersionResolution =
 
 const ACCEPTANCE_MEANING_NAMESPACE_PREFIX = 'task-acceptance-meaning:'
 
-function recordedMeaningVersionFlags(records: readonly TaskContractProvenanceRecord[]): { v1: boolean; v2: boolean; v3: boolean } {
-  let v1 = false
-  let v2 = false
-  let v3 = false
+function recordedMeaningVersions(records: readonly TaskContractProvenanceRecord[]): Set<TaskAcceptanceMeaningVersion> {
+  const versions = new Set<TaskAcceptanceMeaningVersion>()
   for (const record of records) {
     if (record.kind !== 'derived_acceptance') continue
     const ref = record.ref
-    if (ref.startsWith(`${ACCEPTANCE_MEANING_REF_V3}:`)) {
-      v3 = true
-      continue
-    }
-    if (ref.startsWith(`${ACCEPTANCE_MEANING_REF_V2}:`)) {
-      v2 = true
-      continue
-    }
-    if (ref.startsWith(`${ACCEPTANCE_MEANING_REF_V1}:`)) {
-      v1 = true
-      continue
-    }
-    if (ref.startsWith(ACCEPTANCE_MEANING_NAMESPACE_PREFIX)) {
+    const version = versionOfAcceptanceMeaningRef(ref)
+    if (version !== undefined) {
+      versions.add(version)
+    } else if (ref.startsWith(ACCEPTANCE_MEANING_NAMESPACE_PREFIX)) {
       throw new Error('TASK_ACCEPTANCE_MEANING_VERSION_UNSUPPORTED: Malformed or unknown acceptance-meaning provenance ref')
     }
   }
-  return { v1, v2, v3 }
+  return versions
 }
 
 /**
@@ -545,13 +700,12 @@ export function resolveAcceptanceMeaningVersion(
   records: readonly TaskContractProvenanceRecord[],
   contract?: TaskContractV1,
 ): AcceptanceMeaningVersionResolution {
-  const { v1, v2, v3 } = recordedMeaningVersionFlags(records)
-  if (Number(v1) + Number(v2) + Number(v3) > 1) {
+  const versions = recordedMeaningVersions(records)
+  if (versions.size > 1) {
     throw new Error('TASK_ACCEPTANCE_MEANING_VERSION_MIXED: Contract provenance records multiple acceptance-meaning versions')
   }
-  if (v3) return { kind: 'version', version: 3 }
-  if (v2) return { kind: 'version', version: 2 }
-  if (v1) return { kind: 'version', version: 1 }
+  const [version] = versions
+  if (version !== undefined) return { kind: 'version', version }
   if (contract && isLegacyAcceptancePlaceholderContract(contract)) {
     return { kind: 'legacy_absent_ref', version: 1 }
   }

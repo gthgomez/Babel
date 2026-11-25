@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { describe, it } from "node:test";
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -288,6 +289,110 @@ describe("TerminalTransport", () => {
       setObservedTerminalSize(null);
     }
   });
+
+  it("emits a frame for a style-only rewrite of unchanged text", () => {
+    const transport = createTerminalTransport(PINNED, "tui-test-style-only");
+    try {
+      const frames: Array<{ textHash: string; visualHash: string }> = [];
+      transport.onFlush((snap) => {
+        frames.push({ textHash: snap.textHash, visualHash: snap.visualHash });
+      });
+
+      transport.ingestVisible("OK");
+      transport.ingestVisible("\x1b[1;1H\x1b[1mOK");
+
+      assert.equal(frames.length, 2);
+      assert.equal(frames[1]!.textHash, frames[0]!.textHash);
+      assert.notEqual(frames[1]!.visualHash, frames[0]!.visualHash);
+      const snap = transport.getGrid().snapshot();
+      assert.equal(snap.lines[0], "OK");
+      assert.equal(snap.styleRuns.length, 1);
+      assert.equal(snap.styleRuns[0]!.attr.bold, true);
+    } finally {
+      setObservedTerminalSize(null);
+    }
+  });
+
+  it("emits a frame for cursor-only movement with unchanged text", () => {
+    const transport = createTerminalTransport(PINNED, "tui-test-cursor-only");
+    try {
+      const frames: Array<{ textHash: string; visualHash: string }> = [];
+      transport.onFlush((snap) => {
+        frames.push({ textHash: snap.textHash, visualHash: snap.visualHash });
+      });
+
+      transport.ingestVisible("OK");
+      transport.ingestVisible("\x1b[5;7H");
+
+      assert.equal(frames.length, 2);
+      assert.equal(frames[1]!.textHash, frames[0]!.textHash);
+      assert.equal(frames[1]!.visualHash, frames[0]!.visualHash);
+      const snap = transport.getGrid().snapshot();
+      assert.equal(snap.cursorRow, 4);
+      assert.equal(snap.cursorCol, 6);
+    } finally {
+      setObservedTerminalSize(null);
+    }
+  });
+
+  it("suppresses duplicate no-op frames while preserving distinct states", () => {
+    const transport = createTerminalTransport(PINNED, "tui-test-dedup");
+    try {
+      let flushes = 0;
+      transport.onFlush(() => {
+        flushes += 1;
+      });
+
+      transport.ingestVisible("OK");
+      transport.ingestVisible("\x1b[1;1H\x1b[1mOK");
+      assert.equal(flushes, 2);
+
+      // Same text, same style, cursor ends at the same cell: no new frame.
+      transport.ingestVisible("\x1b[1;1H\x1b[1mOK");
+      assert.equal(flushes, 2);
+
+      transport.ingestVisible("\x1b[5;7H");
+      assert.equal(flushes, 3);
+      transport.ingestVisible("\x1b[5;7H");
+      assert.equal(flushes, 3);
+
+      const manual = transport.observeManual();
+      assert.equal(flushes, 4, "explicit observations remain new checkpoints");
+      assert.equal(manual.marks.frameId, 4);
+
+      transport.ingestVisible("\x1b[2;2H\x1b[1mOK");
+      assert.equal(flushes, 5);
+    } finally {
+      setObservedTerminalSize(null);
+    }
+  });
+
+  it("emits a frame when geometry changes without any cell change", () => {
+    const transport = createTerminalTransport(PINNED, "tui-test-resize-distinct");
+    try {
+      let flushes = 0;
+      transport.onFlush(() => {
+        flushes += 1;
+      });
+
+      // Same text and cursor as the post-resize frame; only geometry differs.
+      transport.ingestVisible("OK\x1b[1;1H");
+      assert.equal(flushes, 1);
+
+      setObservedTerminalSize({ cols: 30, rows: 9 });
+      transport.ingestVisible("\x1b[1;1H");
+      assert.equal(flushes, 2);
+      assert.deepEqual(transport.getGrid().getGeometry(), {
+        cols: 30,
+        rows: 9,
+      });
+
+      transport.ingestVisible("\x1b[1;1H");
+      assert.equal(flushes, 2);
+    } finally {
+      setObservedTerminalSize(null);
+    }
+  });
 });
 
 describe("tuiSessionStore + inspect tui", () => {
@@ -332,6 +437,7 @@ describe("tuiSessionStore + inspect tui", () => {
         readFileSync(join(dir, "latest.json"), "utf8"),
       ) as {
         frame: string;
+        hashes: { frame: string; visual?: string };
       };
       const framePath = join(dir, pointer.frame);
       const legacyFrame = JSON.parse(readFileSync(framePath, "utf8")) as {
@@ -342,7 +448,13 @@ describe("tuiSessionStore + inspect tui", () => {
       delete legacyFrame.screen["textHash"];
       delete legacyFrame.screen["visualHash"];
       delete legacyFrame.screen["styleRuns"];
-      writeFileSync(framePath, `${JSON.stringify(legacyFrame, null, 2)}\n`);
+      // Model a legacy producer, not a tampered frame: schema 1 already
+      // published the frame SHA-256, but no pointer visual digest.
+      const legacyBytes = `${JSON.stringify(legacyFrame, null, 2)}\n`;
+      writeFileSync(framePath, legacyBytes);
+      pointer.hashes.frame = createHash("sha256").update(legacyBytes).digest("hex");
+      delete pointer.hashes.visual;
+      writeFileSync(join(dir, "latest.json"), `${JSON.stringify(pointer, null, 2)}\n`);
 
       const loaded = loadLatestTuiFrame(dir);
       assert.ok(loaded);

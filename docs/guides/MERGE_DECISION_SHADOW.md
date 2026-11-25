@@ -5,6 +5,14 @@ review evidence mandatory for the GREEN lane. It does not analyze a diff, retrie
 the latest PR, authenticate a receipt, publish a check, or grant permission to
 merge. Do not use its output as status-check or review evidence.
 
+The existing gate can report `MERGE_READY` for a GREEN candidate whose
+independent review is unsatisfied because that evidence is advisory. The
+shadow decision shows the effect of requiring it. For the same matching
+candidate and gate result, missing independent review yields
+`would_block` with `independent_review_missing`, while satisfied review
+yields `would_pass`. This comparison can be run offline on gate output
+before any change to enforcement.
+
 After obtaining v4 JSON directly from the existing base-rooted gate in its
 approved environment, compare it with independently observed identities:
 

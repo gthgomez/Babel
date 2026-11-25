@@ -8,7 +8,7 @@ import {
   parseStructuredVerifierCommand,
 } from './completionGatePolicy.js'
 import type { AcceptanceRequirementV1, AcceptanceRequirementType, VerificationSpecV1 } from './taskContract.js'
-import type { AcceptanceMeaningSource, TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
+import { labeledBehavioralGoalText, type AcceptanceMeaningSource, type TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
 import { assertionEvidenceMatches, stripJsComments } from './verifierBehaviorEvidence.js'
 import { markAdvisoryDocsGoals } from './advisoryDocsGoal.js'
@@ -280,7 +280,7 @@ export function explicitCriterionVerifierCommands(meaning: TaskAcceptanceMeaning
   })
 }
 
-function normalizedCriterionText(value: string): string {
+function normalizedCriterionText(value: string, meaning: TaskAcceptanceMeaning): string {
   // This identity decides whether a verifier explicitly designated for one
   // behavioral statement may also prove an inferred opening goal. Treat the
   // statement as exact text (apart from framing whitespace and terminal prose
@@ -288,7 +288,9 @@ function normalizedCriterionText(value: string): string {
   // string, regex, HTML <pre>, and other literal content in ways that make two
   // distinct user requirements share verifier authority. Conservative misses
   // simply leave the inferred criterion unbound and therefore unverified.
-  return value.trim().replace(/[.!?]+$/, '')
+  const text = value.trim()
+  const behavior = meaning.interpretation_version === 4 ? labeledBehavioralGoalText(text) ?? text : text
+  return behavior.replace(/[.!?]+$/, '')
 }
 
 function trustedDesignation(
@@ -768,9 +770,10 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     return bound
   })
 
-  // V3 is the current admission format. V1/V2 replay semantics stay frozen:
-  // their archived criteria cannot gain a new task-authored link on reload.
+  // V1/V2 replay cannot gain a task-authored link on reload. Only v4 treats
+  // recognized goal labels as framing when comparing the linked behavior.
   if (input.meaning.interpretation_version >= 3) {
+    const bindEquivalentExplicitLinks = input.meaning.interpretation_version === 4
     const linked = input.meaning.criteria.flatMap((criterion) => {
       const source = input.meaning.sources.find(item => item.criterion_id === criterion.id)
       if (source?.status !== 'explicit') return []
@@ -780,36 +783,42 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     })
     const linksByBehavior = new Map<string, typeof linked>()
     for (const link of linked) {
-      const key = normalizedCriterionText(link.behavior)
+      const key = normalizedCriterionText(link.behavior, input.meaning)
       linksByBehavior.set(key, [...(linksByBehavior.get(key) ?? []), link])
     }
     for (const [behaviorKey, candidates] of linksByBehavior) {
       const commands = new Set(candidates.map(candidate =>
         structuredCommandIdentity(candidate.command) ?? `raw:${candidate.command.trim().replace(/\s+/g, ' ')}`,
       ))
-      // Conflicting or duplicate link declarations are ambiguous and do not
-      // authorize either executable for the behavior.
+      // Competing commands authorize neither executable for this behavior.
       if (commands.size !== 1) continue
       const designated = candidates[0]!
       const command = trustedDesignation(designated, trusted)
       if (!command) continue
+      // V4 keeps each explicit row and its own provenance. A shared identity
+      // alone is not enough: every declaration must match the exact trusted argv.
+      const explicitLinks = bindEquivalentExplicitLinks ? candidates : [designated]
+      if (bindEquivalentExplicitLinks && explicitLinks.some(link => !commandsMatchForExecutableBinding(link.command, command))) continue
+      const explicitById = new Map(explicitLinks.map(link => [link.criterionId, link]))
       const matchingCriteria = input.meaning.criteria.filter((criterion) => {
-        if (criterion.id === designated.criterionId) return true
+        if (explicitById.has(criterion.id)) return true
         const source = input.meaning.sources.find(item => item.criterion_id === criterion.id)
         return source?.status === 'inferred' &&
-          normalizedCriterionText(criterion.description) === behaviorKey
+          normalizedCriterionText(criterion.description, input.meaning) === behaviorKey
       })
       for (const criterion of matchingCriteria) {
-        if (criterion.id !== designated.criterionId && !explicitVerifierObservesStatedResult({
+        const explicit = explicitById.get(criterion.id)
+        if (!explicit && !explicitVerifierObservesStatedResult({
           criterion,
           command,
           ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
           ...(input.relevanceFs ? { fs: input.relevanceFs } : {}),
         })) continue
+        const link = explicit ?? designated
         const bound = bindExplicitCriterionLink(
           criterion,
           command,
-          designated.behavior,
+          link.behavior,
           input.defaultWorkingDirectory,
           input.existingVerifierInputFiles,
         )
@@ -819,9 +828,9 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
         bindingProvenance.push({
           kind: 'derived_acceptance',
           ref: `${CRITERION_VERIFIER_LINK_REF}:${sha256Canonical({
-            source_criterion_id: designated.criterionId,
+            source_criterion_id: link.criterionId,
             criterion_id: criterion.id,
-            behavior: designated.behavior,
+            behavior: link.behavior,
             command,
           }).slice(0, 32)}`,
         })

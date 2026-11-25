@@ -52,6 +52,49 @@ function createTestInput(config: Partial<PromptInputConfig> = {}): any {
   return input;
 }
 
+async function waitForHistoryFile(historyFile: string, expected: string[]): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try {
+      assert.deepEqual(JSON.parse(await fs.promises.readFile(historyFile, 'utf-8')), expected);
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  assert.fail(`history file did not reach the expected contents: ${String(lastError)}`);
+}
+
+function preparePasteOwnershipCase(input: any, scenario: string): string {
+  const content = 'A'.repeat(1001);
+  const label = `[Pasted Content ${content.length} chars]`;
+  input.handleKey(key('paste', { sequence: content }));
+  if (scenario === 'literal-after-chip') {
+    input.handleKey(key('paste', { sequence: label }));
+    return content + label;
+  }
+  if (scenario === 'literal-at-caret-before-chip') {
+    input.handleKey(key('a', { ctrl: true, sequence: '\x01' }));
+    input.handleKey(key('paste', { sequence: label }));
+    return label + content;
+  }
+  if (scenario === 'delete-chip-then-retype-label') {
+    input.handleKey(key('a', { ctrl: true, sequence: '\x01' }));
+    input.handleKey(key('k', { ctrl: true, sequence: '\x0b' }));
+    type(input, label);
+    return label;
+  }
+  if (scenario === 'edit-second-chip-to-overlapping-label') {
+    input.handleKey(key('paste', { sequence: 'B'.repeat(1001) }));
+    input.handleKey(key('backspace'));
+    input.handleKey(key('backspace'));
+    input.handleKey(key('backspace'));
+    return content + label;
+  }
+  throw new Error(`Unknown paste ownership scenario: ${scenario}`);
+}
+
 function makeCompleter(matches: string[]) {
   return (line: string): [string[], string] => {
     const filtered = matches.filter((m) => m.startsWith(line));
@@ -341,6 +384,46 @@ describe('PromptInput', () => {
       assert.equal(input.getState().browsingHistory, false);
     });
 
+    it('restores owned paste content when returning to a pasted draft', () => {
+      const content = 'H'.repeat(1001);
+      const submitted: string[] = [];
+      const input = createTestInput({ history: ['older entry'], onSubmit: text => submitted.push(text) });
+      input.handleKey(key('paste', { sequence: content }));
+      input.handleKey(key('up'));
+      assert.equal(input.getState().text, 'older entry');
+      input.handleKey(key('down'));
+      assert.equal(input.getState().text, '[Pasted Content 1001 chars]');
+      input.handleKey(key('enter', { ctrl: true }));
+      assert.deepEqual(submitted, [content]);
+    });
+
+    it('keeps a history label literal instead of inheriting draft paste ownership', () => {
+      const content = 'H'.repeat(1001);
+      const label = '[Pasted Content 1001 chars]';
+      const submitted: string[] = [];
+      const input = createTestInput({ history: [label], onSubmit: text => submitted.push(text) });
+      input.handleKey(key('paste', { sequence: content }));
+      input.handleKey(key('up'));
+      input.handleKey(key('enter', { ctrl: true }));
+      assert.deepEqual(submitted, [label]);
+    });
+
+    it('keeps recalled same-label history literal when the draft chip has trailing text', () => {
+      const content = 'H'.repeat(1001);
+      const label = '[Pasted Content 1001 chars]';
+      const submitted: string[] = [];
+      const input = createTestInput({ history: [label], onSubmit: text => submitted.push(text) });
+      input.handleKey(key('paste', { sequence: content }));
+      type(input, ' extra');
+
+      input.handleKey(key('up'));
+      assert.equal(input.getState().text, label);
+      input.handleKey(key('enter'));
+
+      assert.deepEqual(submitted, [label]);
+      assert.deepEqual(input.getHistory(), [label]);
+    });
+
     it('up arrow with empty history is no-op', () => {
       const input = createTestInput();
       input.handleKey(key('up'));
@@ -455,6 +538,74 @@ describe('PromptInput', () => {
   // ── Submit Flow ─────────────────────────────────────────────────────────
 
   describe('submit flow', () => {
+    it('expands ordered long pastes before Send without rescanning their contents', async () => {
+      const first = 'A-start\n' + 'a'.repeat(1224);
+      const second = 'B-start\n' + 'b'.repeat(1224);
+      const secondLabel = '[Pasted Content 1200 chars]';
+      const third = secondLabel + 'c'.repeat(1201 - secondLabel.length);
+      const fourth = 'd'.repeat(1200);
+      assert.deepEqual([first.length, second.length, third.length, fourth.length], [1232, 1232, 1201, 1200]);
+      const expected = first + second + third + fourth;
+      const historyFile = path.join(os.tmpdir(), `babel-prompt-send-history-${process.pid}-${Date.now()}.json`);
+      let submitted: string[] = [];
+      const input = createTestInput({
+        isTaskRunning: () => true,
+        historyFile,
+        onSubmit: (text: string) => submitted.push(text),
+      });
+
+      for (const content of [first, second, third, fourth]) {
+        input.handleKey(key('paste', { sequence: content }));
+      }
+      input.handleKey(key('enter'));
+
+      assert.deepEqual(submitted, [expected]);
+      assert.deepEqual(input.getHistory(), [expected]);
+      await waitForHistoryFile(historyFile, [expected]);
+      fs.rmSync(historyFile, { force: true });
+    });
+
+    for (const scenario of [
+      'literal-after-chip',
+      'literal-at-caret-before-chip',
+      'delete-chip-then-retype-label',
+      'edit-second-chip-to-overlapping-label',
+    ]) {
+      it(`expands only owned paste chips on Send (${scenario})`, () => {
+        const submitted: string[] = [];
+        const input = createTestInput({
+          isTaskRunning: () => true,
+          onSubmit: (text: string) => submitted.push(text),
+        });
+        const expected = preparePasteOwnershipCase(input, scenario);
+        input.handleKey(key('enter', { ctrl: true }));
+        assert.deepEqual(submitted, [expected]);
+        assert.deepEqual(input.getHistory(), [expected]);
+      });
+    }
+
+    it('restores owned paste bytes through undo and redoes without a fake label', () => {
+      const content = 'U'.repeat(1001);
+      const label = '[Pasted Content 1001 chars]';
+      const submitted: string[] = [];
+      const input = createTestInput({ onSubmit: text => submitted.push(text) });
+      input.handleKey(key('paste', { sequence: content }));
+      for (let index = 0; index < label.length; index++) input.handleKey(key('backspace'));
+      for (let index = 0; index < label.length; index++) input.handleKey(key('z', { ctrl: true }));
+      input.handleKey(key('enter', { ctrl: true }));
+      assert.deepEqual(submitted, [content]);
+
+      const redoInput = createTestInput({ onSubmit: text => submitted.push(text) });
+      redoInput.handleKey(key('paste', { sequence: content }));
+      for (let index = 0; index < label.length; index++) redoInput.handleKey(key('backspace'));
+      for (let index = 0; index < label.length; index++) redoInput.handleKey(key('z', { ctrl: true }));
+      redoInput.handleKey(key('y', { ctrl: true }));
+      const visibleEditedLabel = redoInput.getState().text;
+      redoInput.handleKey(key('enter', { ctrl: true }));
+      assert.equal(submitted[1], visibleEditedLabel);
+      assert.notEqual(submitted[1], content);
+    });
+
     it('clears submitted text before callbacks and preserves history', () => {
       let draftAtSubmit = 'unset';
       const input = createTestInput({ onSubmit: () => { draftAtSubmit = input.getState().text; } });
@@ -583,6 +734,31 @@ describe('PromptInput', () => {
       assert.ok(input.completionPopup !== null);
       input.handleKey(key('escape'));
       assert.equal(input.completionPopup, null);
+    });
+  });
+
+  describe('scheduled paste-burst ownership', () => {
+    it('rebases existing paste ownership during the scheduled paste flush', async () => {
+      const first = 'A'.repeat(1001);
+      const burst = 'B'.repeat(1001);
+      const submitted: string[] = [];
+      const input = createTestInput({ onSubmit: text => submitted.push(text) });
+      input.active = false;
+      input.installKeyHandlerIfNeeded = () => {};
+      input.activate();
+      try {
+        input.handleKey(key('paste', { sequence: first }));
+        input.handleKey(key('a', { ctrl: true, sequence: '\x01' }));
+        const oldTime = Date.now() - 100;
+        input.pasteBurst.onPlainCharNoHold(oldTime);
+        input.pasteBurst.beginWithRetroGrabbed(burst, oldTime);
+        await new Promise(resolve => setTimeout(resolve, 60));
+        input.handleKey(key('enter', { ctrl: true }));
+        assert.deepEqual(submitted, [burst + first]);
+      } finally {
+        input.deactivate();
+        FrameScheduler.getInstance().resetForTest();
+      }
     });
   });
 
@@ -801,6 +977,66 @@ describe('PromptInput', () => {
   });
 
   describe('queue-while-busy (C2)', () => {
+    it('expands ordered long pastes before busy Tab queues them and records them once', async () => {
+      const first = 'A-start\n' + 'a'.repeat(1224);
+      const second = 'B-start\n' + 'b'.repeat(1224);
+      const secondLabel = '[Pasted Content 1200 chars]';
+      const third = secondLabel + 'c'.repeat(1201 - secondLabel.length);
+      const fourth = 'd'.repeat(1200);
+      assert.deepEqual([first.length, second.length, third.length, fourth.length], [1232, 1232, 1201, 1200]);
+      const expected = first + second + third + fourth;
+      const queued: string[] = [];
+      const historyFile = path.join(os.tmpdir(), `babel-prompt-history-${process.pid}-${Date.now()}.json`);
+      let acceptQueue = false;
+      const input = createTestInput({
+        isTaskRunning: () => true,
+        historyFile,
+        onQueue: (text) => {
+          if (!acceptQueue) return false;
+          queued.push(text);
+          return true;
+        },
+      });
+
+      for (const content of [first, second, third, fourth]) {
+        input.handleKey(key('paste', { sequence: content }));
+      }
+      const draftBeforeQueue = input.getState().text;
+      input.handleKey(key('tab'));
+      assert.equal(input.getState().text, draftBeforeQueue);
+      assert.deepEqual(input.getHistory(), []);
+
+      acceptQueue = true;
+      input.handleKey(key('tab'));
+      input.handleKey(key('tab'));
+
+      assert.deepEqual(queued, [expected]);
+      assert.deepEqual(input.getHistory(), [expected]);
+      assert.equal(input.getState().text, '');
+      await waitForHistoryFile(historyFile, [expected]);
+      fs.rmSync(historyFile, { force: true });
+    });
+
+    for (const scenario of [
+      'literal-after-chip',
+      'literal-at-caret-before-chip',
+      'delete-chip-then-retype-label',
+      'edit-second-chip-to-overlapping-label',
+    ]) {
+      it(`expands only owned paste chips on busy Tab (${scenario})`, () => {
+        const queued: string[] = [];
+        const input = createTestInput({
+          isTaskRunning: () => true,
+          onQueue: (text) => { queued.push(text); return true; },
+        });
+        const expected = preparePasteOwnershipCase(input, scenario);
+        input.handleKey(key('tab'));
+        input.handleKey(key('tab'));
+        assert.deepEqual(queued, [expected]);
+        assert.deepEqual(input.getHistory(), [expected]);
+      });
+    }
+
     it('keeps the hosted composer active after a running-turn submission', () => {
       const queued: string[] = [];
       let running = false;
@@ -964,6 +1200,16 @@ describe('hosted prompt presentation', () => {
     } finally {
       process.stdout.write = originalWrite;
     }
+  });
+
+  it('places the hosted caret by display width for wide characters', () => {
+    const input = createTestInput();
+    input.setText('你好');
+
+    const view = input.getView({ x: 0, y: 0, width: 24, height: 8 });
+    // Default prompt "› " is 2 cols; each CJK cluster is 2 cols.
+    assert.equal(view.cursor.col, 2 + 4);
+    assert.equal(view.cursor.row, 0);
   });
 
   it('routes hosted keys through the existing editor state machine', () => {

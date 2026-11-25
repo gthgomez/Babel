@@ -16,8 +16,11 @@ import type {
   TuiTerminalIdentity,
   TuiVisualObservation,
   TuiVisualEvidenceMode,
+  TuiVisualCheck,
+  TuiVisualRunIdentity,
 } from './tuiVisualTestContract.js'
 import { TUI_VISUAL_TEST_SCHEMA_VERSION } from './tuiVisualTestContract.js'
+import { verifyTuiVisualPass, type TuiVisualPassExpectation } from './tui-visual-verification.js'
 
 export interface TuiEventRecord {
   event?: string
@@ -161,40 +164,60 @@ function semanticFinding(semantic: TuiSemanticOracle): TuiVisualFinding {
 /**
  * Build a complete receipt from controller observations and Babel evidence.
  *
- * @param input Receipt inputs from the external driver.
- * @returns A deterministic receipt suitable for JSON serialization.
+ * @param input Driver observations and submitted checks.
+ * @param expected Launcher-owned run metadata and independent reviewer checks.
+ * @returns A receipt suitable for JSON serialization; artifact checks finish before PASS.
  */
-export function buildTuiVisualReceipt(input: {
+export async function buildTuiVisualReceipt(input: {
   scenario: TuiVisualScenario
   startedAt: string
   endedAt: string
   terminal: TuiTerminalIdentity
   semantic: TuiSemanticOracle
   observations: TuiVisualObservation[]
+  run?: TuiVisualRunIdentity
+  checks?: TuiVisualCheck[]
   findings?: TuiVisualFinding[]
   evidenceDir: string
   controller: { name: string; version: string }
-}): TuiVisualReceipt {
+}, expected?: TuiVisualPassExpectation): Promise<TuiVisualReceipt> {
   const findings = [...(input.findings ?? [])]
   if (!input.semantic.passed) findings.push(semanticFinding(input.semantic))
 
   const highestFinding = findings
     .slice()
     .sort((a, b) => statusRank(b.status) - statusRank(a.status))[0]
-  const status = highestFinding?.status ?? 'PASS'
 
-  return {
+  const receipt: TuiVisualReceipt = {
     schemaVersion: TUI_VISUAL_TEST_SCHEMA_VERSION,
     scenarioId: input.scenario.id,
     scenarioName: input.scenario.name,
-    status,
+    status: highestFinding?.status ?? 'PASS',
     startedAt: input.startedAt,
     endedAt: input.endedAt,
     terminal: input.terminal,
     semantic: input.semantic,
     observations: input.observations,
+    ...(input.run ? { run: input.run } : {}),
+    checks: [...(input.checks ?? [])],
     findings,
     evidenceDir: input.evidenceDir,
     controller: input.controller,
   }
+  if (receipt.status !== 'PASS') return receipt
+  const verification = expected
+    ? await verifyTuiVisualPass(receipt, expected)
+    : { ok: false as const, errors: ['Independent review and launch expectation are missing.'] }
+  if (verification.ok) return receipt
+  receipt.status = 'INCONCLUSIVE'
+  findings.push({
+    status: 'INCONCLUSIVE',
+    severity: 'high',
+    summary: `Visual verification incomplete: ${verification.errors.join(' ')}`,
+    confidence: 1,
+    screenshotRefs: [],
+    eventRefs: [],
+    reproSteps: ['Repeat the scenario with complete independently reviewed capture evidence.'],
+  })
+  return receipt
 }
