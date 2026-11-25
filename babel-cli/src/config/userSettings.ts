@@ -2,12 +2,15 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { createRequire } from 'node:module'
 import { z } from 'zod'
 import { PROVIDER_IDS } from '../runners/providerRegistry.js'
 import { resolveRuntimeUserStateRoot } from './runtimePaths.js'
 import { currentInvocationSettings } from './invocationSettings.js'
 import { validateProviderBaseUrl } from '../runners/providerEndpoint.js'
 import { isLoopbackEndpoint } from './offlineMode.js'
+
+const loadModule = createRequire(import.meta.url)
 
 /** Return only schema-owned text so a preference value is never echoed in an error. */
 function describePreferenceIssues(issues: readonly { path: readonly (string | number | symbol)[]; message: string }[]): string {
@@ -119,15 +122,28 @@ export function prepareUserSettingsUpdate(current: UserSettings, change: UserSet
   return result.data
 }
 
-/** Validate the entire candidate before an atomic save, preserving forward-compatible fields. */
+/** Read, validate and replace preferences under one process-recoverable writer lease. */
 export function updateUserSettings(change: UserSettingsChange, options: { path?: string; env?: NodeJS.ProcessEnv } = {}): UserSettings {
   const path = options.path ?? userSettingsPath(options.env)
-  const candidate = prepareUserSettingsUpdate(readUserSettings({ ...options, path }), change)
+  // Read-only settings paths do not need SQLite or a profile owner marker.
+  const { acquireProfileWriteLease, ProfileWriteLeaseError } = loadModule('./profileWriteLease.js') as typeof import('./profileWriteLease.js')
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  const temporary = `${path}.${randomUUID()}.tmp`
-  writeFileSync(temporary, `${JSON.stringify(candidate, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
-  renameSync(temporary, path)
-  return candidate
+  let release: () => void
+  try {
+    release = acquireProfileWriteLease(path)
+  } catch (error) {
+    if (error instanceof ProfileWriteLeaseError && error.reason === 'busy') {
+      throw new Error('Babel preferences are locked. If another Babel process is writing, retry after it finishes. If the lock persists, preserve the ownership record and inspect the profile.', { cause: error })
+    }
+    throw error
+  }
+  try {
+    const candidate = prepareUserSettingsUpdate(readUserSettings({ ...options, path }), change)
+    const temporary = `${path}.${randomUUID()}.tmp`
+    writeFileSync(temporary, `${JSON.stringify(candidate, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
+    renameSync(temporary, path)
+    return candidate
+  } finally { release() }
 }
 
 /** Resolve selection once; environment credentials never choose a provider. */
