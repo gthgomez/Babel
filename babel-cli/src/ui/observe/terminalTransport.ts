@@ -128,7 +128,7 @@ export class TerminalTransport {
   private lastSemantic: ObservationSemanticState | null = null
   private onVisibleFlush: ObservationCallback<[GridSnapshot, ObservationWatermarks]> | null = null
   private onVisibleChunk: ObservationCallback<[TerminalWriteEvent]> | null = null
-  private lastEmittedHash = ''
+  private lastEmittedStateKey = ''
   private lastMarks: ObservationWatermarks | null = null
   private resizeListener: (() => void) | null = null
   private observationDegraded = false
@@ -311,7 +311,12 @@ export class TerminalTransport {
 
   private emitFrame(trigger: ObserveTrigger): { snap: GridSnapshot; marks: ObservationWatermarks } {
     const snap = this.grid.snapshot()
-    if (trigger === 'idle_flush' && snap.hash === this.lastEmittedHash && this.lastMarks) {
+    const stateKey = frameStateKey(
+      snap,
+      this.semanticEventSeq,
+      this.lastSemantic?.turnId ?? null,
+    )
+    if (trigger === 'idle_flush' && stateKey === this.lastEmittedStateKey && this.lastMarks) {
       return { snap, marks: this.lastMarks }
     }
     this.frameId += 1
@@ -326,7 +331,7 @@ export class TerminalTransport {
       capabilityProfileId: capabilityProfileId(this.profile),
       geometry: { cols: snap.cols, rows: snap.rows },
     }
-    this.lastEmittedHash = snap.hash
+    this.lastEmittedStateKey = stateKey
     this.lastMarks = marks
     this.notifyObservation(this.onVisibleFlush, snap, marks)
     return { snap, marks }
@@ -364,6 +369,32 @@ export class TerminalTransport {
     this.visibleLog = []
     return copy
   }
+}
+
+/**
+ * Bounded observation identity for frame dedup.
+ *
+ * Text-only equality loses style-only and cursor-only renders. The key keeps
+ * every visible distinction the frame bundle persists while staying fixed-size
+ * (hashes, not screen text) so a no-op write cannot grow observation memory.
+ */
+function frameStateKey(
+  snap: GridSnapshot,
+  semanticEventSeq: number,
+  turnId: string | null,
+): string {
+  return [
+    snap.cols,
+    snap.rows,
+    snap.textHash,
+    snap.visualHash,
+    snap.cursorRow,
+    snap.cursorCol,
+    snap.cursorVisible ? 1 : 0,
+    snap.altScreen ? 1 : 0,
+    semanticEventSeq,
+    turnId ?? '',
+  ].join('|')
 }
 
 /**

@@ -7,6 +7,7 @@ import {
   type AcpNegotiatedCodec,
 } from './commandCodeAcpNegotiation.js';
 import { createAcpHarnessRpcTimeoutError } from './acpHarnessTransportErrors.js';
+import { buildIntegrationChildEnv } from './integrationChildEnv.js';
 import {
   isCommandCodeNotification,
   isCommandCodeRequest,
@@ -79,7 +80,7 @@ export class CommandCodeAcpTransport {
     if (this.codec) return this.codec;
     const child = spawn(this.options.command, this.options.args, {
       cwd: this.options.cwd,
-      env: this.options.env ?? process.env,
+      env: buildIntegrationChildEnv(this.options.env ?? process.env),
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });

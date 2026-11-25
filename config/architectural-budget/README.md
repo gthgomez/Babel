@@ -4,10 +4,12 @@ Run `pwsh tools/check-architectural-budget.ps1` after installing the CLI's
 locked development dependencies with `npm ci` in `babel-cli/`. The checker
 uses the existing TypeScript parser; it does not download a parser at runtime.
 
-The file-size and cast baselines remain non-regression ceilings. Files without
-a recorded size ceiling must stay within 2,000 nonblank lines. An absent
-baseline is not evidence that a file is new in Git. Baseline update mode records
-reductions only and refuses to update while any budget violation exists.
+Normal checks report file-size advisories for files over 2,000 counted lines
+(or over their grandfathered size ceiling, if higher). These
+findings do not fail the check by themselves; cast regressions still fail.
+An absent baseline is not evidence that a file is new in Git. Baseline update
+mode records reductions only and still refuses to update when it finds a size
+advisory or any blocking violation.
 
 `process-boundaries.json` is the sole registry for host exits and raw terminal
 output. Each grant identifies its role, reason, and maximum executable call

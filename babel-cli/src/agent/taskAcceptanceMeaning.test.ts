@@ -9,14 +9,15 @@ import {
   inferTaskAcceptanceV1,
   inferTaskAcceptanceV2,
   inferTaskAcceptanceV3,
+  inferTaskAcceptanceForVersion,
   isLegacyAcceptancePlaceholderContract,
   requireAcceptanceMeaningVersion,
   resolveAcceptanceMeaningVersion,
 } from './taskAcceptanceMeaning.js'
 
-function freezeV1AdmissionContract(task: string) {
+function freezeArchivedAdmissionContract(task: string, version: 1 | 2 | 3) {
   const meaning = bindExecutableVerifiersToTaskAcceptance({
-    meaning: inferTaskAcceptanceV1(task),
+    meaning: inferTaskAcceptanceForVersion(task, version),
     trustedVerifierCommands: [],
     defaultWorkingDirectory: '.',
   })
@@ -54,7 +55,7 @@ test('initial acceptance captures explicit user criteria before publishing the f
   assert.ok(contract.acceptance.every(criterion => criterion.required))
   assert.equal(new Set(contract.acceptance.map(criterion => criterion.verification.verifier_id)).size, 2,
     'Different behavioral requirements cannot inherit one generic verification identity')
-  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:explicit:')))
+  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v4:explicit:')))
 })
 
 test('fenced, quoted and introduced example requirements cannot become acceptance authority', () => {
@@ -77,15 +78,15 @@ test('fenced, quoted and introduced example requirements cannot become acceptanc
 test('inferred requirements stay distinguishable from explicit acceptance', () => {
   const contract = acceptance('The startup must succeed without Docker.')
   assert.deepEqual(contract.acceptance_criteria, ['The startup must succeed without Docker.'])
-  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:inferred:')))
-  assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:explicit:')), false)
+  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v4:inferred:')))
+  assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v4:explicit:')), false)
 })
 
 test('fresh admission captures short vague prose as provisional inferred requirements', () => {
   const contract = acceptance('Fix it')
   assert.deepEqual(contract.acceptance_criteria, ['Fix it'])
-  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:inferred:')))
-  assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:unresolved:')), false)
+  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v4:inferred:')))
+  assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v4:unresolved:')), false)
   assert.equal(contract.acceptance[0]!.required, true)
 })
 
@@ -118,7 +119,134 @@ const GOAL_WITH_UNRELATED_GREEN_TEST = [
   'Requirements:',
   '- `npm test` must pass.',
 ].join('\n')
+const EXPORT_GOAL = 'Fix the export to include every record.'
+const TEST_CRITERION = '`npm test` must pass.'
+const EXPORT_GOAL_LABELS = ['Goal: ', '**Goal:** ', 'Objective: ']
 const OBJECTIVE_CRASH_INITIAL = 'Explain fixture A.\nRequirements:\n- Preserve its public API.'
+
+for (const label of ['', ...EXPORT_GOAL_LABELS]) {
+  test(`fresh Chat separately admits export behavior and the command for ${label.trim() || 'a bare goal'}`, () => {
+    const task = `${label}${EXPORT_GOAL}\nRequirements:\n- ${TEST_CRITERION}`
+    const { taskContract } = resolveLiveSessionAuthority({
+      mode: 'chat',
+      task,
+      projectRoot: null,
+      executionScope: { kind: 'conversation' },
+      projectTestCommands: ['npm test'],
+    })
+    assert.deepEqual(taskContract.acceptance_criteria, [EXPORT_GOAL, TEST_CRITERION])
+    const [goal, command] = taskContract.acceptance
+    assert.ok(goal?.required && command?.required)
+    assert.match(goal.verification.verifier_id, /^meaning:/)
+    assert.equal(command.verification.executable_id, 'npm')
+    assert.deepEqual(command.verification.argv, ['test'])
+  })
+}
+
+test('fresh Chat keeps CRLF source spans over the original labeled line', () => {
+  const line = `  **Goal:** ${EXPORT_GOAL}  `
+  const task = `\r\n## Task\r\n\r\n${line}\r\nRequirements:\r\n- ${TEST_CRITERION}`
+  const contract = acceptance(task)
+  const version = requireAcceptanceMeaningVersion(contract.provenance.records, contract)
+  assert.equal(version, 4)
+  const replay = inferTaskAcceptanceForVersion(task, version)
+  assert.deepEqual(contract.acceptance_criteria, [EXPORT_GOAL, TEST_CRITERION])
+  assert.deepEqual(replay.criteria.map(item => item.description), contract.acceptance_criteria)
+  const [goal, command] = replay.sources
+  assert.ok(goal && command)
+  assert.equal(goal.status, 'inferred')
+  assert.equal(task.slice(goal.start, goal.end), line)
+  assert.equal(command.status, 'explicit')
+  assert.equal(task.slice(command.start, command.end), `- ${TEST_CRITERION}`)
+  assert.ok(replay.provenance.every(expected =>
+    contract.provenance.records.some(record => record.kind === expected.kind && record.ref === expected.ref),
+  ))
+})
+
+test('a bounded opening Task heading keeps a labeled goal separate from the test', () => {
+  const task = `## Task\nGoal: ${EXPORT_GOAL}\nRequirements:\n- ${TEST_CRITERION}`
+  assert.deepEqual(acceptance(task).acceptance_criteria, [EXPORT_GOAL, TEST_CRITERION])
+  assert.deepEqual(inferTaskAcceptanceForVersion(task, 3).criteria.map(item => item.description), [TEST_CRITERION])
+})
+
+test('fresh Chat does not add non-operative, ambiguous or non-observable labeled goals', () => {
+  const labeled = `Goal: ${EXPORT_GOAL}`
+  for (const opening of [
+    `Context: The issue said "${labeled}"`,
+    `Context:\n${labeled}`,
+    `## Context\n${labeled}`,
+    `> ${labeled}`,
+    `> Background only\n${labeled}`,
+    `Goal: "${EXPORT_GOAL}"`,
+    `\`\`\`text\n${labeled}\n\`\`\``,
+    `    ${labeled}`,
+    `**Examples:**\n**Goal:** ${EXPORT_GOAL}`,
+    `Non-goals:\nObjective: ${EXPORT_GOAL}`,
+    `## Context\n## Task\n${labeled}`,
+    `## Task notes\n${labeled}`,
+    `> ## Task\n> ${labeled}`,
+    `\`\`\`text\n## Task\n${labeled}\n\`\`\``,
+    `Status: ${EXPORT_GOAL}`,
+    'Goal: Fix the export.',
+  ]) {
+    const task = `${opening}\nRequirements:\n- ${TEST_CRITERION}`
+    assert.deepEqual(acceptance(task).acceptance_criteria, [TEST_CRITERION], opening)
+  }
+  for (const region of ['### Example', '### Non-goals']) {
+    const task = `## Task\n${region}\n${labeled}\n## Requirements\n- ${TEST_CRITERION}`
+    assert.deepEqual(acceptance(task).acceptance_criteria, [TEST_CRITERION], region)
+  }
+})
+
+test('a tagged example-only labeled goal is not required, even through base prose capture', () => {
+  for (const opening of [
+    'Goal: Fix the export to include every record (example only; not required).',
+    '**Goal:** Ensure the export includes every record (not required).',
+    '## Task\nObjective: Fix the export to include every record (example only).',
+  ]) {
+    const task = `${opening}\nRequirements:\n- ${TEST_CRITERION}`
+    assert.deepEqual(acceptance(task).acceptance_criteria, [TEST_CRITERION], opening)
+  }
+  const literal = 'Fix the export to include every record named "(example only; not required)".'
+  assert.deepEqual(acceptance(`Goal: ${literal}\nRequirements:\n- ${TEST_CRITERION}`).acceptance_criteria,
+    [literal, TEST_CRITERION])
+})
+
+test('an opening example-only label does not become required when followed by a verifier clause', () => {
+  for (const body of [
+    'Fix the export to include every record (example only; not required); verified by: `npm test` passes.',
+    `Fix the users' export so it outputs "row; verified by: pending" (example only); verified by: \`npm test\` passes.`,
+    'Fix the export so it outputs "one backtick `" (example only); verified by: npm test passes.',
+  ]) {
+    assert.deepEqual(acceptance(`Goal: ${body}\nRequirements:\n- ${TEST_CRITERION}`).acceptance_criteria,
+      [TEST_CRITERION])
+  }
+})
+
+test('a verifier marker in an output literal does not erase the behavior in v4', () => {
+  for (const body of [
+    'Fix the export so it outputs "row (not required); verified by: pending".',
+    'Fix the export so it outputs `row (not required); verified by: pending`.',
+    "Fix the export so it outputs 'don't add a row (not required); verified by: pending'.",
+    'Fix the users’ export so it outputs `` `row` (not required); verified by: pending ``.',
+    'Fix the export so it outputs "a \\"row\\" (not required); verified by: pending".',
+    'Fix the export so it outputs “row (not required); verified by: pending”.',
+    'Fix the export so it outputs "`sample; verified by: draft "row (not required); verified by: pending`".',
+    'Fix the export so it outputs "prefix; verified by: draft" then \\``row (not required); verified by: pending`.',
+  ]) {
+    for (const task of [
+      `Goal: ${body}\nRequirements:\n- ${TEST_CRITERION}`,
+      `Requirements:\n- Objective: ${body}\n- ${TEST_CRITERION}`,
+    ]) {
+      assert.deepEqual(acceptance(task).acceptance_criteria, [body, TEST_CRITERION], task)
+    }
+  }
+})
+
+test('a newly preserved labeled goal does not activate unrelated prose', () => {
+  const task = `Goal: ${EXPORT_GOAL}\nUpdate the demo mentioned in the issue.\nRequirements:\n- ${TEST_CRITERION}`
+  assert.deepEqual(acceptance(task).acceptance_criteria, [EXPORT_GOAL, TEST_CRITERION])
+})
 
 test('v2 precedence retains v1 projection when explicit criteria exist (S07 positive)', () => {
   const meaning = inferTaskAcceptanceV2(S07_EXPLICIT_ACCEPTANCE)
@@ -417,18 +545,14 @@ test('v1 replay keeps unresolved placeholder for short vague prose', () => {
   assert.notEqual(meaning.criteria[0]!.description, 'Fix it')
 })
 
-test('mixed v1/v2/v3 meaning provenance rejects instead of picking a version', () => {
-  const contract = acceptance('Fix it')
-  const records = [
-    ...contract.provenance.records,
-    { kind: 'derived_acceptance' as const, ref: 'task-acceptance-meaning:v1:unresolved:0:0:0:acceptance:deadbeef' },
-  ]
-  assert.throws(() => resolveAcceptanceMeaningVersion(records, contract), /TASK_ACCEPTANCE_MEANING_VERSION_MIXED/)
-  const mixedV2V3 = [
-    ...contract.provenance.records,
-    { kind: 'derived_acceptance' as const, ref: 'task-acceptance-meaning:v2:inferred:0:0:0:acceptance:deadbeef' },
-  ]
-  assert.throws(() => resolveAcceptanceMeaningVersion(mixedV2V3, contract), /TASK_ACCEPTANCE_MEANING_VERSION_MIXED/)
+test('mixed meaning provenance rejects instead of picking an interpretation', () => {
+  for (const [left, right] of [[1, 3], [2, 3], [1, 4], [2, 4], [3, 4]] as const) {
+    const records = [
+      ...inferTaskAcceptanceForVersion('Fix it', left).provenance,
+      ...inferTaskAcceptanceForVersion('Fix it', right).provenance,
+    ]
+    assert.throws(() => resolveAcceptanceMeaningVersion(records), /TASK_ACCEPTANCE_MEANING_VERSION_MIXED/)
+  }
 })
 
 test('unknown acceptance-meaning provenance rejects absent-ref contracts that are not legacy placeholder', () => {
@@ -461,14 +585,19 @@ test('legacy absent-ref provenance resolves to v1 only for the historical placeh
   assert.deepEqual(resolveAcceptanceMeaningVersion(contract.provenance.records, contract), { kind: 'legacy_absent_ref', version: 1 })
 })
 
-test('v3 replay amendment path uses recorded v3 version from provenance', () => {
-  const contract = acceptance(J03_PROMPT)
-  assert.equal(requireAcceptanceMeaningVersion(contract.provenance.records, contract), 3)
-  const replay = inferTaskAcceptanceV3(J03_PROMPT)
-  assert.deepEqual(
-    contract.acceptance_criteria,
-    replay.criteria.map(item => item.description),
-  )
+test('replaying recorded v1/v2/v3 meaning keeps labeled requests command-only', () => {
+  for (const label of EXPORT_GOAL_LABELS) {
+    const task = `${label}${EXPORT_GOAL}\nRequirements:\n- ${TEST_CRITERION}`
+    for (const version of [1, 2, 3] as const) {
+      const archived = freezeArchivedAdmissionContract(task, version)
+      const recordedVersion = requireAcceptanceMeaningVersion(archived.provenance.records, archived)
+      assert.equal(recordedVersion, version)
+      const replay = inferTaskAcceptanceForVersion(task, recordedVersion)
+      assert.deepEqual(replay.criteria.map(item => item.description), [TEST_CRITERION])
+      assert.deepEqual(replay.criteria, archived.acceptance)
+      assert.deepEqual(replay.sources.map(source => source.status), ['explicit'])
+    }
+  }
 })
 
 test('v2 compatibility: frozen harness J03 J08 J13 admit ordinary prose unproven', () => {
@@ -482,12 +611,12 @@ test('v2 compatibility: frozen harness J03 J08 J13 admit ordinary prose unproven
   }
 })
 
-test('v3 fresh admission matches direct v3 interpretation for journey prompts', () => {
+test('v4 fresh admission keeps the v3 criteria for existing journey prompts', () => {
   for (const task of [J03_PROMPT, J08_PROMPT, J13_PROMPT]) {
     const contract = acceptance(task)
     const meaning = inferTaskAcceptanceV3(task)
     assert.deepEqual(contract.acceptance_criteria, meaning.criteria.map(item => item.description))
-    assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v3:')), true)
+    assert.equal(requireAcceptanceMeaningVersion(contract.provenance.records, contract), 4)
   }
 })
 
