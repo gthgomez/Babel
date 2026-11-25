@@ -223,8 +223,10 @@ A fresh profile has **no cloud provider or model selected**. Launching the inter
 CLI offers setup before indexing or runtime warmup. Setup explains Babel, records
 an explicit provider connection and exact model ID, asks for a per-task budget
 (including an explicit `unlimited` choice), and confirms the initial user default.
-Interrupted setup retains completed non-secret choices. In a pipe or CI,
-`setup --json` reports local setup state without waiting for input.
+If setup is interrupted, run `babel-harness setup` again, or use `/setup`
+from Composer. During masked key entry, Ctrl+C or Ctrl+D cancels that entry
+without saving the key. In a pipe or CI, `setup --json` reports local setup
+state without waiting for input.
 
 ```sh
 babel-agent provider list

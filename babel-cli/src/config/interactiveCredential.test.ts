@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 import { maybePromptForMissingProviderCredential, readMaskedLine } from './interactiveCredential.js';
 import { VirtualTerminal } from '../interactive/testing/ptyHarness.js';
 
@@ -68,3 +69,37 @@ test('readMaskedLine restores terminal mode on Ctrl+C cancellation', async () =>
   assert.equal(term.isRaw, false, 'Terminal raw mode was not restored after cancellation!');
 });
 
+
+function requireSettlement<T>(read: Promise<T>): Promise<T> {
+  return Promise.race([read, delay(300).then(() => { throw new Error('Masked prompt did not settle') })])
+}
+
+test('masked key input consumes successive chunks before Enter without echoing them', async () => {
+  const terminal = new VirtualTerminal({ isTTY: true })
+  const read = readMaskedLine(terminal.stdin, terminal.stderr)
+  const parts = ['synthetic-', 'masked-input-canary']
+  await terminal.waitForOutput('Paste API key (masked):', 2000)
+  const running = requireSettlement(read)
+  for (const chunk of [...parts, '\r']) terminal.stdin.emit('data', Buffer.from(chunk))
+  assert.equal(await running === parts.join(''), true, 'The masked reader lost part of the fixture key')
+  assert.equal(parts.some(part => terminal.getRawOutput().includes(part)), false)
+  assert.equal(terminal.isRaw, false)
+})
+
+for (const end of ['Ctrl+D', 'EOF', 'close'] as const) {
+  test(`masked key entry cancels on ${end} and releases terminal ownership`, async () => {
+    const terminal = new VirtualTerminal({ isTTY: true })
+    const stream = terminal.stdin
+    const read = readMaskedLine(stream, terminal.stderr)
+    await terminal.waitForOutput('Paste API key (masked):', 2000)
+    const settled = assert.rejects(requireSettlement(read), /Credential setup cancelled/)
+    terminal.sendInput('synthetic-interrupted-input')
+    if (end === 'Ctrl+D') terminal.sendInput('\x04')
+    else if (end === 'EOF') stream.push(null)
+    else stream.destroy()
+    await settled
+    assert.equal(terminal.isRaw, false)
+    assert.equal(stream.listenerCount('data'), 0)
+    assert.equal(terminal.getRawOutput().includes('synthetic-interrupted-input'), false)
+  })
+}
