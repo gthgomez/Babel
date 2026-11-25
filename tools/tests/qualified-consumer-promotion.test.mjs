@@ -31,11 +31,11 @@ const payloadPaths = [
 const tree = spawnSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' })
 const sourceTreeSha = tree.stdout.trim()
 
-function fixtureCandidate(root, {sourceSha, version = pkg.version, bytes = 'qualified-bytes', mutate}) {
+function fixtureCandidate(root, {sourceSha, version = pkg.version, bytes = 'qualified-bytes', mutate, recordedLockSha}) {
   const tarball = `babel-harness-${version}.tgz`
   const archive = join(root, tarball)
   const lockSha256 = digest('babel-cli/package-lock.json')
-  const recordedBuildInputs = { scope: 'cli-manifest-lock-config-and-tsc-files:v1', sha256: 'c'.repeat(64), packageLockSha256: lockSha256 }
+  const recordedBuildInputs = { scope: 'cli-manifest-lock-config-and-tsc-files:v1', sha256: 'c'.repeat(64), packageLockSha256: recordedLockSha ?? lockSha256 }
   const buildInfo = JSON.stringify({
     schemaVersion: 1, packageVersion: version, sourceCommit: sourceSha, sourceTree: sourceTreeSha,
     workingTreeClean: true, buildInputsDigest: null, buildInputsReason: 'complete build inputs were not recorded',
@@ -71,7 +71,7 @@ function fixtureCandidate(root, {sourceSha, version = pkg.version, bytes = 'qual
     compilerVersion: '6.0.3',
     buildInfoSha256: hash(buildInfo),
     recordedBuildInputs,
-    dependencies: { lockSha256 },
+    dependencies: { lockSha256: recordedBuildInputs.packageLockSha256 },
     tarball,
     sha256,
     integrity: 'sha512-' + createHash('sha512').update(archiveBytes).digest('base64'),
@@ -130,6 +130,8 @@ test('stagePromotionCandidate copies exact bytes without repacking', () => {
 test('promotion rejects missing or modified file and build identity receipts before copying', () => {
   const root = mkdtempSync(join(tmpdir(), 'qualified-receipt-'))
   const out = join(root, 'promotion-output')
+  const candidateDir = join(root, 'candidate')
+  mkdirSync(candidateDir)
   const source = 'd'.repeat(40)
   try {
     const cases = [
@@ -139,9 +141,12 @@ test('promotion rejects missing or modified file and build identity receipts bef
       [m => { m.recordedBuildInputs = null }, /Recorded CLI build inputs/],
     ]
     for (const [mutate, reason] of cases) {
-      fixtureCandidate(root, { sourceSha: source, mutate })
-      assert.throws(() => stagePromotionCandidate({candidateDir: root, outputDir: out, expectedSourceSha: source, expectedVersion: pkg.version}), reason)
+      fixtureCandidate(candidateDir, { sourceSha: source, mutate })
+      assert.throws(() => stagePromotionCandidate({candidateDir, outputDir: out, expectedSourceSha: source, expectedVersion: pkg.version}), reason)
     }
+    fixtureCandidate(candidateDir, { sourceSha: source, recordedLockSha: 'e'.repeat(64) })
+    assert.throws(() => stagePromotionCandidate({candidateDir, outputDir: out, expectedSourceSha: source, expectedVersion: pkg.version}),
+      /build lock differs from the advisory lock/)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 

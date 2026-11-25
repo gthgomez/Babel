@@ -55,7 +55,7 @@ export function verifyManifestBinding({manifest, sourceRoot}) {
   if (manifest.advisories.reviewSha256 !== digest('config/dependency-advisory-review.json')) throw new Error('Candidate advisory review record differs from the frozen source')
   if (manifest.provenance?.recordSha256 !== digest('babel-cli/source-provenance.json')) throw new Error('Candidate source provenance record differs from the frozen source')
   if (manifest.provenance?.dirty !== false) throw new Error('Candidate source provenance does not record a clean tree')
-  const tree = spawnSync('git', ['-C', sourceRoot, 'rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' })
+  const tree = spawnSync('git', ['--no-replace-objects', '-C', sourceRoot, 'rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' })
   if (tree.status !== 0) throw new Error(tree.stderr || 'Unable to read the frozen source tree')
   if (manifest.sourceTreeSha !== tree.stdout.trim()) throw new Error('Candidate sourceTreeSha does not match the checked-out frozen source tree')
   if (manifest.publisherAuthenticity?.signed !== false || manifest.publisherAuthenticity?.checksumsOnly !== true) throw new Error('Candidate publisher authenticity claims are not recorded accurately')
@@ -87,6 +87,7 @@ export function verifyQualifiedCandidate({candidateDir, expectedSourceSha, expec
     throw new Error('Qualified candidate integrity does not match archive bytes')
   }
   if (sourceRoot) verifyManifestBinding({manifest, sourceRoot})
+  assert.equal(manifest.dependencies?.lockSha256, manifest.advisories?.lockSha256, 'Candidate build lock differs from the advisory lock')
   const binTargets = Object.fromEntries(manifest.inventory.bin.map(({ alias, target }) => [alias, target]))
   const { packageJson, buildInfoBytes } = verifyArchivePayload({ archive, files: manifest.manifest, binTargets })
   assert.equal(packageJson.name, manifest.name, 'Archived package name differs from the receipt')

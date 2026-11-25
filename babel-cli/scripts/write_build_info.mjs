@@ -16,7 +16,7 @@ export function readBuildGit(root, args) {
   env.GIT_CONFIG_GLOBAL = process.platform === 'win32' ? 'NUL' : '/dev/null'
   env.GIT_OPTIONAL_LOCKS = '0'
   env.GIT_TERMINAL_PROMPT = '0'
-  const result = spawnSync('git', ['-c', 'core.fsmonitor=false', '-C', root, ...args], {
+  const result = spawnSync('git', ['--no-replace-objects', '-c', 'core.fsmonitor=false', '-C', root, ...args], {
     encoding: 'utf8', windowsHide: true, timeout: 30_000, maxBuffer: 4 * 1024 * 1024, env,
   })
   return result.status === 0 && !result.error ? result.stdout.trim() : null

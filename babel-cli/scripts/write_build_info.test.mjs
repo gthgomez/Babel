@@ -76,5 +76,13 @@ test('build metadata distinguishes clean, dirty, and unknown source without embe
     const dirty = createBuildInfo(root)
     assert.equal(dirty.workingTreeClean, false)
     assert.equal(dirty.sourceCommit, clean.sourceCommit)
+    git(root, 'add', 'source.js')
+    git(root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'replacement')
+    git(root, 'replace', clean.sourceCommit, git(root, 'rev-parse', 'HEAD'))
+    git(root, 'update-ref', 'HEAD', clean.sourceCommit)
+    const replaced = createBuildInfo(root)
+    assert.equal(replaced.sourceCommit, clean.sourceCommit)
+    assert.equal(replaced.sourceTree, clean.sourceTree)
+    assert.equal(replaced.workingTreeClean, false)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
