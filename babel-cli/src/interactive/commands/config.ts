@@ -191,7 +191,7 @@ function refreshProjectDefaults(ctx: ReplContext): void {
   if (!ctx.state.modeExplicit) ctx.state.mode = status.workflow.value === 'plan' ? 'plan' : status.review.value === 'thorough' ? 'deep' : 'chat';
   if (ctx.state.modelSource === 'session' || ctx.state.modelSource === 'invocation' ||
     (!ctx.state.modelSource && ctx.state.model)) return;
-  const model = selectedConnectionModel({}, root);
+  const model = status.reason === 'connection_unavailable' ? null : selectedConnectionModel({}, root);
   delete ctx.state.model;
   delete ctx.state.connectionId;
   delete ctx.state.resolvedModelId;

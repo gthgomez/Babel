@@ -61,6 +61,9 @@ const OPENROUTER_POLICY: ResolvedModelPolicy = {
   contextLimit: 128_000,
   maxOutputTokens: 4_096,
   nativeToolUse: true,
+  // Fixture prices admit the actual bounded turn; post-dispatch terminal proof remains under test.
+  estimatedCostPer1MInput: 0.01,
+  estimatedCostPer1MOutput: 0.02,
 }
 
 const MANAGED_ENV = [

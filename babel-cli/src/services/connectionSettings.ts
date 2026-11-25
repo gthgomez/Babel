@@ -2,7 +2,7 @@
 import { resolve } from 'node:path'
 import { getAvailableModels, resolveModelByKey } from '../modelPolicy.js'
 import { buildProviderRouteReport } from '../runners/providerRouteReport.js'
-import { getProviderSpec, isProviderId, listProviderSpecs } from '../runners/providerRegistry.js'
+import { isProviderId, listProviderSpecs } from '../runners/providerRegistry.js'
 import { readUserSettings, resolveEffectiveSettings, updateUserSettings, type Connection, type UserPreferences } from '../config/userSettings.js'
 import { connectionModelSelector } from '../config/connectionModelPolicy.js'
 
@@ -11,14 +11,19 @@ export type SaveScope = 'user' | 'project'
 
 /** Store only an explicit user choice; project scope remains in the private user profile. */
 export function savePreferences(preferences: UserPreferences, scope: SaveScope, projectRoot = process.cwd()): void {
+  const withRememberedModels = (current?: UserPreferences): UserPreferences => ({
+    ...preferences,
+    ...(preferences.modelsByConnection ? { modelsByConnection: { ...current?.modelsByConnection, ...preferences.modelsByConnection } } : {}),
+  })
   if (scope === 'user') {
-    const settings = readUserSettings()
-    updateUserSettings({ defaults: { ...preferences, ...(preferences.modelsByConnection ? { modelsByConnection: { ...settings.defaults?.modelsByConnection, ...preferences.modelsByConnection } } : {}) } })
-  }
-  else {
-    const settings = readUserSettings()
+    updateUserSettings(settings => ({ defaults: withRememberedModels(settings.defaults) }))
+  } else {
     const key = resolve(projectRoot)
-    updateUserSettings({ projects: { ...settings.projects, [key]: { ...settings.projects?.[key], ...preferences, ...(preferences.modelsByConnection ? { modelsByConnection: { ...settings.projects?.[key]?.modelsByConnection, ...preferences.modelsByConnection } } : {}), ...(preferences.plans ? { plans: { ...settings.projects?.[key]?.plans, ...preferences.plans } } : {}) } } })
+    updateUserSettings(settings => {
+      const current = settings.projects?.[key]
+      return { projects: { [key]: { ...current, ...withRememberedModels(current),
+        ...(preferences.plans ? { plans: { ...current?.plans, ...preferences.plans } } : {}) } } }
+    })
   }
 }
 
@@ -28,20 +33,18 @@ export function connectProvider(provider: string, options: {
 } = {}): Connection {
   if (!isProviderId(provider)) throw new Error('Unknown provider. Use babel-harness provider list.')
   const id = options.name ?? provider
-  const previous = readUserSettings().connections[id]
-  if (previous && previous.provider !== provider) throw new Error('Connection name already belongs to another provider; choose another --name.')
-  const connection: Connection = { ...previous, ...options, id, provider }
-  updateUserSettings({ connections: { [id]: connection } })
-  return connection
+  return updateUserSettings(settings => {
+    const previous = Object.hasOwn(settings.connections, id) ? settings.connections[id] : undefined
+    if (previous && previous.provider !== provider) throw new Error('Connection name already belongs to another provider; choose another --name.')
+    return { connections: { [id]: { ...previous, ...options, id, provider } } }
+  }).connections[id]!
 }
 
 /** Report only declared non-secret fields; never dump arbitrary preference content. */
 export function connectionStatus(session: SelectionSession = {}, projectRoot = process.cwd(), env: NodeJS.ProcessEnv = process.env) {
   const settings = readUserSettings({ env })
-  const effective = resolveEffectiveSettings({ settings, env, session, projectRoot })
+  const effective = resolveEffectiveSettings({ settings, env, session, projectRoot, reportUnavailableConnection: true })
   const connection = effective.connection.value
-  const spec = connection ? getProviderSpec(connection.provider) : null
-  const keyName = connection?.apiKeyEnvVar ?? spec?.credentialEnvVar ?? null
   // Reveal a legacy vendor alias instead of letting a saved key imply the wrong transport.
   const requestedModel = effective.model.value
   let alias: { from: string; to: string; notice: string | null } | null = null
@@ -64,17 +67,18 @@ export function connectionStatus(session: SelectionSession = {}, projectRoot = p
     budgetSource: effective.budgetUsd.source,
     env,
   })
-  const credentialReady = Boolean(connection && (connection.authentication === 'none' || !spec?.requiresCredential || (keyName && env[keyName]?.trim())))
+  const credentialReady = report.credential.present
   const configured = Boolean(connection && effective.model.value && credentialReady && report.offline.usable)
-  const reason = !connection || !effective.model.value
+  const reason = effective.unavailableConnection ? 'connection_unavailable' : !connection || !effective.model.value
     ? 'setup_required'
     : !report.offline.usable
       ? 'offline_blocked'
       : !credentialReady
         ? 'credential_missing'
         : 'ready_unverified'
+  const state = reason === 'setup_required' ? 'setup_required' as const : configured ? 'configured_unverified' as const : 'action_required' as const
   return {
-    state: !connection || !effective.model.value ? 'setup_required' : configured ? 'configured_unverified' : 'action_required',
+    state,
     reason,
     connection: connection?.id ?? null, provider: connection?.provider ?? null, model: effective.model.value,
     endpoint: connection?.baseUrl ?? 'provider default',
@@ -86,7 +90,9 @@ export function connectionStatus(session: SelectionSession = {}, projectRoot = p
     capabilities: report.capabilities, offline: report.offline, budget: report.budget,
     connectivity: 'unverified', observedModel: null,
     autoApply: effective.autoApply, workflow: effective.workflow, review: effective.review, budgetUsd: effective.budgetUsd,
-    nextCommand: !connection || !effective.model.value
+    nextCommand: reason === 'connection_unavailable'
+      ? 'Correct --connection or BABEL_CONNECTION, or choose a configured account with /provider use.'
+      : !connection || !effective.model.value
       ? 'babel-harness setup'
       : !report.offline.usable
         ? 'Run online or select a local Ollama/loopback connection.'

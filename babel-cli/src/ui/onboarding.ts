@@ -23,7 +23,7 @@ export function isFirstRun(): boolean {
  * Keep this list short and focused on what a new user needs first.
  */
 const QUICK_COMMANDS: Array<[string, string]> = [
-  ['/setup', 'Connect your provider, model and budget'],
+  ['/setup', 'Connect a provider and choose a model'],
   ['/provider status', 'Show connection and credential readiness'],
   ['/help', 'Show all commands and groups'],
   ['/model use <id>', 'Choose an exact model on this connection'],
@@ -44,7 +44,11 @@ const QUICK_COMMANDS: Array<[string, string]> = [
  * table, and key getting-started tips. Designed to be glanceable and
  * non-intimidating for first-time users.
  */
-export function showOnboarding(): void {
+export function showOnboarding(setupPending: boolean): void {
+  if (setupPending) {
+    OutputBuffer.getInstance().write(`\n  ${primary('Welcome to Babel')}\n  ${muted('Connect a provider to chat. You can skip now and use /setup later.')}\n`);
+    return;
+  }
   const width = Math.min(process.stdout.columns ?? 80, 80);
 
   const logo = width < 48 ? accentBright('  BABEL') : [
@@ -63,19 +67,11 @@ export function showOnboarding(): void {
       `  ${bold(cmd.padEnd(cmdWidth))}  ${muted(desc)}`,
   );
 
-  // Never imply the agent can take a task before a provider and model exist.
-  const setupPending = isFirstRun();
-  const tips = setupPending
-    ? [
-        `  ${success('!')} ${dim('Setup runs next: choose a provider, exact model and budget.')}`,
-        `  ${success('✓')} ${dim('Setup sends no model requests.')} ${muted('Credentials stay in your private profile.')}`,
-        `  ${success('✓')} ${dim('After setup, type a task or')} ${bold('/help')} ${dim('for commands.')}`,
-      ]
-    : [
-        `  ${success('✓')} ${dim('Type a task to get started.')} Try: ${muted('"summarize this repo"')}`,
-        `  ${success('✓')} ${dim('Type')} ${bold('/help')} ${dim('for the full command list.')}`,
-        `  ${success('✓')} ${dim('Use')} ${bold('@')} ${dim('to search files by name.')}`,
-      ];
+  const tips = [
+    `  ${success('✓')} ${dim('Type a task to get started.')} Try: ${muted('"summarize this repo"')}`,
+    `  ${success('✓')} ${dim('Type')} ${bold('/help')} ${dim('for the full command list.')}`,
+    `  ${success('✓')} ${dim('Use')} ${bold('@')} ${dim('to search files by name.')}`,
+  ];
 
   const output = [
     '',

@@ -11,6 +11,13 @@ import { OutputBuffer } from '../../ui/outputBuffer.js';
 import { resolveStatusBarModelLabel } from '../commands/modelDetail.js';
 import type { ReplContext } from '../context.js';
 
+/** Display an actionable connection hint instead of a task prompt when setup is incomplete. */
+export function setupChatHint(state: ReplContext['state']['readinessState']): string | undefined {
+  if (state === 'setup_required') return 'Connect a provider to chat: /setup';
+  if (state === 'action_required') return 'Check your connection: /setup or /provider status';
+  return undefined;
+}
+
 export function printIdleHeader(ctx: ReplContext): void {
   const header = renderOperatorHeader({
     ...ctx.state,
@@ -26,7 +33,7 @@ export function printIdleHeader(ctx: ReplContext): void {
   const sessionPlan = ctx.state.mode === 'plan';
   const planWarning = runtimePlan || sessionPlan ? `\n${renderPlanModeWarning()}\n` : '';
   const readiness = ctx.state.readinessState ? muted(`  Connection: ${ctx.state.readinessState.replaceAll('_', ' ')}. /provider status for details.\n`) : '';
-  const hint = muted('  › type a task, or /help for commands\n');
+  const hint = muted(`  › ${setupChatHint(ctx.state.readinessState) ?? 'type a task, or /help for commands'}\n`);
   // Unified write path — avoids interleaving with SessionPicker / PromptInput frames
   OutputBuffer.getInstance().write(header + planWarning + readiness + hint);
 }

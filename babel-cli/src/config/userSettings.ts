@@ -1,5 +1,5 @@
 /** User-owned, non-secret connection preferences and their effective provenance. */
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
@@ -73,10 +73,17 @@ const settingsSchema = z.object({
 export type Connection = z.infer<typeof connectionSchema>
 export type UserPreferences = z.infer<typeof preferences>
 export type UserSettings = z.infer<typeof settingsSchema>
+/** An explicit selection cannot be resolved. Never fall back to a different account. */
+export class UnavailableConnectionError extends Error {
+  constructor() {
+    super('Selected Babel connection is unavailable. Check --connection or BABEL_CONNECTION, or use babel-harness setup.')
+  }
+}
 export type SettingSource = 'invocation' | 'session' | 'environment' | 'project' | 'user' | 'connection' | 'built-in'
 export interface EffectiveValue<T> { value: T; source: SettingSource }
 export interface EffectiveSettings {
   connection: EffectiveValue<Connection | null>
+  unavailableConnection?: true
   model: EffectiveValue<string | null>
   workflow: EffectiveValue<'work' | 'plan'>
   review: EffectiveValue<'standard' | 'thorough'>
@@ -102,24 +109,47 @@ export function readUserSettings(options: { path?: string; env?: NodeJS.ProcessE
   return result.data
 }
 
-/** Validate the entire candidate before an atomic save, preserving forward-compatible fields. */
-export function updateUserSettings(update: Partial<UserSettings>, options: { path?: string; env?: NodeJS.ProcessEnv } = {}): UserSettings {
+/**
+ * Validate and commit under one writer lock. A callback sees the latest committed
+ * preferences. Setup can wrap the final rename to commit a prepared private key
+ * alongside its reference, rolling back the key if the rename fails.
+ */
+export function updateUserSettings(
+  change: Partial<UserSettings> | ((current: UserSettings) => Partial<UserSettings>),
+  options: { path?: string; env?: NodeJS.ProcessEnv; commitWith?: (commit: () => void) => void } = {},
+): UserSettings {
   const path = options.path ?? userSettingsPath(options.env)
-  const current = readUserSettings({ ...options, path })
-  const candidate = {
-    ...current, ...update,
-    connections: { ...current.connections, ...update.connections },
-    defaults: { ...current.defaults, ...update.defaults, ...(update.defaults?.plans ? { plans: { ...current.defaults?.plans, ...update.defaults.plans } } : {}) },
-    projects: { ...current.projects, ...update.projects },
-    setup: { ...current.setup, ...update.setup },
-  }
-  const result = settingsSchema.safeParse(candidate)
-  if (!result.success) throw new Error(`Invalid Babel preference update (${describePreferenceIssues(result.error.issues)}); previous preferences were preserved.`)
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  const lock = `${path}.babel-lock`
+  let fd: number
+  try { fd = openSync(lock, 'wx', 0o600) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    throw new Error('Babel preferences are locked by another writer. Retry when it finishes.')
+  }
   const temporary = `${path}.${randomUUID()}.tmp`
-  writeFileSync(temporary, `${JSON.stringify(result.data, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
-  renameSync(temporary, path)
-  return result.data
+  try {
+    const current = readUserSettings({ ...options, path })
+    const update = typeof change === 'function' ? change(current) : change
+    const candidate = {
+      ...current, ...update,
+      connections: { ...current.connections, ...update.connections },
+      defaults: { ...current.defaults, ...update.defaults, ...(update.defaults?.plans ? { plans: { ...current.defaults?.plans, ...update.defaults.plans } } : {}) },
+      projects: { ...current.projects, ...update.projects },
+      setup: { ...current.setup, ...update.setup },
+    }
+    const result = settingsSchema.safeParse(candidate)
+    if (!result.success) throw new Error(`Invalid Babel preference update (${describePreferenceIssues(result.error.issues)}); previous preferences were preserved.`)
+    writeFileSync(temporary, `${JSON.stringify(result.data, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
+    const commit = (): void => renameSync(temporary, path)
+    if (options.commitWith) options.commitWith(commit)
+    else commit()
+    return result.data
+  } finally {
+    try { rmSync(temporary, { force: true }) } finally {
+      closeSync(fd)
+      rmSync(lock, { force: true })
+    }
+  }
 }
 
 /** Resolve selection once; environment credentials never choose a provider. */
@@ -129,12 +159,15 @@ export function resolveEffectiveSettings(options: {
   projectRoot?: string
   session?: UserPreferences
   invocation?: UserPreferences
+  /** Status and setup can report an unavailable route without resolving to a fallback. */
+  reportUnavailableConnection?: boolean
 } = {}): EffectiveSettings {
   const env = options.env ?? process.env
   const settings = options.settings ?? readUserSettings({ env })
+  const budgetEnv = env['BABEL_CHAT_MAX_COST']
   const layers: Array<[SettingSource, UserPreferences | undefined]> = [
     ['invocation', options.invocation ?? currentInvocationSettings()], ['session', options.session],
-    ['environment', { ...(env['BABEL_CONNECTION'] ? { connection: env['BABEL_CONNECTION'] } : {}), ...(env['BABEL_MODEL'] ? { model: env['BABEL_MODEL'] } : {}), ...(env['BABEL_CHAT_MAX_COST'] ? { budgetUsd: env['BABEL_CHAT_MAX_COST'] === 'unlimited' ? 'unlimited' as const : Number(env['BABEL_CHAT_MAX_COST']) } : {}) }],
+    ['environment', { ...(env['BABEL_CONNECTION'] ? { connection: env['BABEL_CONNECTION'] } : {}), ...(env['BABEL_MODEL'] ? { model: env['BABEL_MODEL'] } : {}), ...(budgetEnv ? { budgetUsd: budgetEnv.trim().toLowerCase() === 'unlimited' ? 'unlimited' as const : Number(budgetEnv) } : {}) }],
     ['project', options.projectRoot ? settings.projects?.[resolve(options.projectRoot)] : undefined],
     ['user', settings.defaults],
   ]
@@ -143,8 +176,10 @@ export function resolveEffectiveSettings(options: {
     return { value: fallback, source: 'built-in' }
   }
   const selected = field('connection', null)
-  const connection = selected.value ? settings.connections[String(selected.value)] : undefined
-  if (selected.value && !connection) throw new Error('Selected Babel connection is unavailable. Use babel-harness provider list or setup.')
+  const connection = selected.value && Object.hasOwn(settings.connections, selected.value)
+    ? settings.connections[String(selected.value)] : undefined
+  const unavailable = Boolean(selected.value && !connection)
+  if (unavailable && !options.reportUnavailableConnection) throw new UnavailableConnectionError()
   const model: EffectiveValue<string | null> = { value: null, source: 'built-in' }
   const connectionLayer = layers.findIndex(([source]) => source === selected.source)
   if (connection) for (const [index, [source, layer]] of layers.entries()) {
@@ -159,6 +194,7 @@ export function resolveEffectiveSettings(options: {
   const trusted = options.projectRoot ? settings.projects?.[resolve(options.projectRoot)] : undefined
   const autoApply = trusted?.plans?.autoApply ?? settings.defaults?.plans?.autoApply ?? false
   return {
+    ...(unavailable ? { unavailableConnection: true as const } : {}),
     connection: { value: connection ? { id: connection.id, provider: connection.provider,
       ...(connection.model ? { model: connection.model } : {}), ...(connection.baseUrl ? { baseUrl: connection.baseUrl } : {}),
       ...(connection.apiKeyEnvVar ? { apiKeyEnvVar: connection.apiKeyEnvVar } : {}), ...(connection.authentication ? { authentication: connection.authentication } : {}),

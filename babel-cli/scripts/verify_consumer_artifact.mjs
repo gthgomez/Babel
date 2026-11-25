@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { verifyConsumerArchive, verifyConsumerContents } from './consumer_archive.mjs'
 import { parseArgs } from 'node:util'
 import { consumerEnvironment } from './consumer_environment.mjs'
+import { verifyInstalledFirstRun } from './verify_consumer_first_run.mjs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -212,7 +213,7 @@ async function tui(configured = false) {
       child.stderr.on('data', data => { transcript += data })
       child.stdout.on('data', data => {
         transcript += data
-        if (!sent && /babel[^\r\n]*[>❯]|type.*(?:message|help)|Babel session/i.test(transcript)) {
+        if (!sent && /Input › /.test(transcript)) {
           sent = true
           child.stdin.write('/doctor\n/exit\n')
         }
@@ -241,7 +242,11 @@ async function tui(configured = false) {
   } finally { clearTimeout(timer); child.kill() }
 }
 try {
-  const { values } = parseArgs({ options: Object.fromEntries(['archive', 'manifest', 'expected-sha256', 'expected-source'].map(key => [key, { type: 'string' }])) })
+  const { values } = parseArgs({ options: {
+    ...Object.fromEntries(['archive', 'manifest', 'expected-sha256', 'expected-source'].map(key => [key, { type: 'string' }])),
+    'real-pty': { type: 'boolean' },
+  } })
+  if (values['real-pty']) assert.equal(process.platform, 'linux', '--real-pty requires Linux and util-linux script')
   let artifact, identity
   if (values.archive) {
     artifact = resolve(values.archive)
@@ -461,6 +466,10 @@ try {
   cli(['dry', 'on', '--json'])
   assert.ok(existsSync(join(env.BABEL_CONFIG_DIR, 'runtime-flags.json')))
   await tui()
+  records.push({ check: 'fresh installed provider setup, account switching and recovery', status: 'pass',
+    ...await verifyInstalledFirstRun(bin, join(scratch, 'first run')) })
+  if (values['real-pty']) records.push({ check: 'fresh installed provider setup under Linux PTY', status: 'pass',
+    ...await verifyInstalledFirstRun(bin, join(scratch, 'first run PTY'), { realPty: true }) })
   const profileProbe = join(scratch, 'configured-profile.mjs')
   writeFileSync(profileProbe, `import {updateUserSettings} from ${JSON.stringify(pathToFileURL(join(installed, 'dist/config/userSettings.js')).href)};\nupdateUserSettings({connections:{fixture:{id:'fixture',provider:'openai',model:'fixture-model'}},defaults:{connection:'fixture',model:'fixture-model',budgetUsd:'unlimited'},setup:{completed:true}});\n`)
   command(process.execPath, [profileProbe], { env: configuredTuiEnv })

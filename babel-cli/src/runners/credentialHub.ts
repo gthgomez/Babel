@@ -1,5 +1,6 @@
 import { getProviderSpec, type ProviderId } from './providerRegistry.js'
 import { resolveRuntimePaths } from '../config/runtimePaths.js'
+import { isProfileAccountReference, readProviderKeyReference } from '../config/providerAccountKeys.js'
 
 export class ProviderCredentialError extends Error {
   readonly code = 'PROVIDER_CREDENTIAL_MISSING'
@@ -7,7 +8,9 @@ export class ProviderCredentialError extends Error {
   readonly envVar: string
 
   constructor(provider: ProviderId, envVar: string) {
-    super(`[provider:${provider}] ${envVar} is not set. Set it in the host environment or ${resolveRuntimePaths().isInstalled ? 'the user config .env shown by babel-harness setup' : 'babel-cli/.env'}.`)
+    super(isProfileAccountReference(envVar)
+      ? `[provider:${provider}] The selected account's private key is unavailable. Run babel-harness setup to reconnect it.`
+      : `[provider:${provider}] ${envVar} is not set. Set it in the host environment or ${resolveRuntimePaths().isInstalled ? 'the user config .env shown by babel-harness setup' : 'babel-cli/.env'}.`)
     this.name = 'ProviderCredentialError'
     this.provider = provider
     this.envVar = envVar
@@ -18,6 +21,7 @@ export interface ResolveCredentialOptions {
   env?: NodeJS.ProcessEnv
   envVarOverride?: string
   explicitCredential?: string
+  baseUrl?: string
 }
 
 export interface CredentialStatus {
@@ -47,7 +51,7 @@ export function resolveProviderCredential(
   if (explicit) return explicit
 
   const envVar = normalizeEnvVarName(options.envVarOverride ?? spec.credentialEnvVar ?? '')
-  const value = (options.env ?? process.env)[envVar]?.trim()
+  const value = readProviderKeyReference(provider, envVar, options.env ?? process.env, options.baseUrl)
   if (!value) throw new ProviderCredentialError(provider, envVar)
   return value
 }

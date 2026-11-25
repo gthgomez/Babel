@@ -58,9 +58,10 @@ commands and source checkouts, keeping read-only planning out of the target
 project. Use the returned `run_dir` to locate it. An installed package ignores
 `BABEL_ROOT` for resource discovery.
 An optional user configuration file is `~/.babel/config/.env`; ordinary provider
-environment variables also work. Set credentials securely outside the checkout;
-Guided setup uses masked credential entry in the private profile. Setup and doctor never print keys or contact inference providers. Configure one
-supported provider for model-backed tasks; presence alone is not authentication.
+environment variables also work. Set credentials securely outside the checkout.
+Guided setup uses masked key entry in the private profile. Setup and doctor do not
+print keys or send inference. Configure a supported provider for model-backed
+tasks; presence alone is not authentication.
 A local Ollama route needs its service and selected model available.
 
 Read-only help, context preview, and stack resolution need no provider. The
@@ -82,8 +83,9 @@ Unicode/space paths, user/project boundaries, and uninstall/reinstall. Outputs
 include tarball, SHA-256, exact source SHA/version, full pack manifest and observed
 verification. The synthetic journey uses an explicit disposable `dev_local`
 fixture lease for actual local tests and blocks external inference; this is
-mechanics evidence, not live-model quality. Its UI start/exit check uses pipes;
-separate PTY evidence and platform-specific skipped coverage belong in the PR.
+mechanics evidence, not live-model quality. Its default UI checks use pipes.
+On Linux, add `-- --real-pty` to also test the installed first-run journey
+through `script` from util-linux. This does not qualify a Windows terminal.
 
 Releases use the repository's [release guide](../docs/guides/RELEASE.md): source
 and package provenance are checked, and an immutable consumer artifact is
@@ -219,12 +221,27 @@ node --env-file=.\babel-cli\.env .\babel-cli\dist\index.js run --project example
 
 The commands in this section (`provider`, `model`, `settings`, `work`) are implemented in this source tree. They are not part of published `babel-harness@0.2.0`. On that package, `babel-harness setup` only prints a checklist, and a word such as `settings` is run as a chat task. Use the repository [README](../README.md) for the published quickstart.
 
-A fresh profile has **no cloud provider or model selected**. Launching the interactive
-CLI offers setup before indexing or runtime warmup. Setup explains Babel, records
-an explicit provider connection and exact model ID, asks for a per-task budget
-(including an explicit `unlimited` choice), and confirms the initial user default.
-Interrupted setup retains completed non-secret choices. In a pipe or CI,
-`setup --json` reports local setup state without waiting for input.
+A fresh profile has **no cloud provider or model selected**. On first launch,
+choose a provider, use or paste a key, then search and pick a model. Use **Advanced**
+to enter an exact ID. Press Esc to go back or choose **Skip for now** to stay in
+Babel; `/setup` resumes a named connection without repasting a saved key.
+Use `/setup` to add another named key and `/provider` to switch accounts in a session.
+
+Setup sends no inference. **Check connection** explicitly fetches model metadata:
+OpenRouter checks the selected key against its account catalog, while Command
+Code's public catalog does not verify the key. Bundled and saved choices are
+unverified. Existing spending preferences remain in force. Setup asks for a
+user-wide spending choice when saving a remote default without one, even if
+a project or environment cap applies here. With a finite cap, Babel requires
+known pricing for the exact model and does not substitute a different ID.
+The cap uses estimated costs, not a guarantee of the provider's invoice. In a pipe or CI,
+`setup --json` reports local setup state without waiting for input or using the network.
+
+Pasted keys are masked and stored as plaintext in the private profile's
+`.env.accounts`, not exported to child environments. Preferences contain only
+references. A pasted key for a custom endpoint must be re-entered if that
+endpoint changes. This is not an OS credential vault: `host_native` commands run
+with your OS user's authority and are not sandboxed.
 
 ```sh
 babel-agent provider list

@@ -53,6 +53,7 @@ if (!isSyntheticProviderFixtureReady()) {
   const { CommandCodeApiRunner } = await import('../runners/commandCodeApi.js')
   const { resolveChatModelPolicy } = await import('./chatModelPolicy.js')
   const { chatSessionDir } = await import('../cli/runsLayout.js')
+  const { installBoundedFixturePricing } = await import('../testUtils/boundedFixturePricing.js')
   const { initMinimalGitProject } = await import('../testUtils/chatAdmissionFixture.js')
   const { globalCostTracker } = await import('../services/costTracker.js')
   const task = 'Explain README.md and its stated purpose without changing any files.'
@@ -172,6 +173,7 @@ if (!isSyntheticProviderFixtureReady()) {
 
   test('the same valid native SSE without usage or bill stops before another inference', async t => {
     const root = fixture(t)
+    installBoundedFixturePricing(t, root, backendKey)
     process.env['BABEL_CHAT_MAX_COST'] = '2'
     let fetches = 0
     globalThis.fetch = async (input, init) => {

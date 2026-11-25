@@ -66,7 +66,7 @@ test('core registration preserves the complete existing command contract', () =>
     flags: '--connection <id>', description: 'Use a configured provider connection for this invocation', mandatory: false,
   });
   assert.equal(contract.children.find(child => child.name === 'setup')?.description,
-    'Guide provider, credential, model and budget setup; no inference is sent');
+    'Connect a provider key and choose a model; no inference is sent');
   assert.deepEqual(contract.children.find(child => child.name === 'doctor')?.options.find(option => option.flags === '--execution-profile <profile>'), {
     flags: '--execution-profile <profile>', description: 'Check prerequisites for a specific execution profile (installed diagnostics)', mandatory: false,
   });

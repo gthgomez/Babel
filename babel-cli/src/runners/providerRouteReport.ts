@@ -7,6 +7,7 @@
  */
 import { getProviderSpec, isProviderId, providerSupportsOperation, type ProviderOperation } from './providerRegistry.js'
 import { describeOfflineRoute, type OfflineModeSource } from '../config/offlineMode.js'
+import { isProfileAccountReference, readProviderKeyReference } from '../config/providerAccountKeys.js'
 
 export interface ProviderRouteReport {
   requested_model: string | null
@@ -26,7 +27,7 @@ export interface ProviderRouteReport {
     required: boolean
     variable: string | null
     present: boolean
-    source: 'environment' | 'none' | 'unknown'
+    source: 'environment' | 'private-profile' | 'none' | 'unknown'
   }
   offline: {
     active: boolean
@@ -61,7 +62,7 @@ export interface ProviderRouteReportInput {
 
 const UNSUPPORTED_FINITE_BUDGET_LANES = ['plan', 'thorough work', 'apply'] as const
 
-/** Resolve a shared report from local configuration only; performs no I/O. */
+/** Resolve a shared report from local configuration only; no provider contact. */
 export function buildProviderRouteReport(input: ProviderRouteReportInput): ProviderRouteReport {
   const env = input.env ?? process.env
   const provider = input.provider
@@ -71,7 +72,7 @@ export function buildProviderRouteReport(input: ProviderRouteReportInput): Provi
   const keyName = input.apiKeyEnvVar ?? spec?.credentialEnvVar ?? null
   const credentialRequired = input.authentication !== 'none' && Boolean(spec?.requiresCredential)
   const credentialPresent = input.authentication === 'none' || !credentialRequired ||
-    (keyName !== null && Boolean(env[keyName]?.trim()))
+    Boolean(knownProvider && keyName && readProviderKeyReference(knownProvider, keyName, env, input.baseUrl))
   const offline = describeOfflineRoute({
     provider: provider ?? 'unknown',
     ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
@@ -105,7 +106,8 @@ export function buildProviderRouteReport(input: ProviderRouteReportInput): Provi
       required: credentialRequired,
       variable: input.authentication === 'none' ? null : keyName,
       present: credentialPresent,
-      source: input.authentication === 'none' ? 'none' : credentialRequired ? 'environment' : 'unknown',
+      source: input.authentication === 'none' ? 'none' : !credentialRequired ? 'unknown'
+        : keyName && isProfileAccountReference(keyName) ? 'private-profile' : 'environment',
     },
     offline: {
       active: offline.offline,

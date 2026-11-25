@@ -17,7 +17,7 @@ export class OpenAiApiRunner extends OpenAiCompatibleRunner {
     if (!model) throw new Error('SETUP_REQUIRED: Select an exact OpenAI model; no model is chosen automatically.');
     super(model, options.apiKeyEnvVar ?? 'OPENAI_API_KEY',
       { maxTokens: options.maxTokens ?? Number(env['BABEL_OPENAI_TOKENS'] ?? 8096), ...(options.temperature !== undefined ? { temperature: options.temperature } : {}) },
-      { provider: 'openai', ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}), ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}), ...(options.env ? { env: options.env } : {}) })
+      { provider: 'openai', ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}), ...(options.contextWindowTokens ? { contextWindowTokens: options.contextWindowTokens } : {}), ...(options.explicitCredential ? { explicitCredential: options.explicitCredential } : {}), ...(options.env ? { env: options.env } : {}) })
     this.endpointBase = options.baseUrl ?? 'https://api.openai.com/v1'
     this.explicitTemperature = options.temperature !== undefined
   }

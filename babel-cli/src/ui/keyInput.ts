@@ -34,6 +34,8 @@ export interface KeyEvent {
   shift: boolean;
   /** Raw byte sequence that produced this event (used for buffer consumption tracking) */
   sequence: string;
+  /** Set only when the terminal delimited this paste with DECSET 2004 markers. */
+  bracketedPaste?: true;
   /** IME composition state — true during pre-edit, undefined when not composing */
   isComposing?: boolean;
   /** The full pre-edit text so far (meaningful only during a composition session) */
@@ -385,6 +387,9 @@ function parseEscapeSequence(data: Buffer): KeyEvent | null {
   if (secondByte === 0x4f) {
     if (data.length < 3) return null; // Need third byte
     const thirdByte = data[2]!;
+    if (thirdByte < 0x20 || thirdByte > 0x7e) {
+      return { name: 'ignored', ctrl: false, meta: false, shift: false, sequence: '\x1bO' };
+    }
     const ss3Map: Record<number, string> = {
       0x50: 'f1', // ESC O P
       0x51: 'f2', // ESC O Q
@@ -423,8 +428,7 @@ function parseEscapeSequence(data: Buffer): KeyEvent | null {
     };
   }
 
-  // Unrecognized escape sequence (non-printable continuation byte)
-  return null;
+  return null; // Not a recognized escape continuation.
 }
 
 /**
@@ -458,7 +462,9 @@ function parseCSI(params: Buffer): KeyEvent | null {
   if (i >= params.length) return null; // No final byte yet -- incomplete
 
   const finalByte = params[i]!;
-  if (finalByte < 0x40 || finalByte > 0x7e) return null; // Invalid terminator
+  if (finalByte < 0x40 || finalByte > 0x7e) {
+    return { name: 'ignored', ctrl: false, meta: false, shift: false, sequence: '\x1b[' + params.subarray(0, i).toString() };
+  }
 
   const paramPart = params.slice(0, i);
   const finalChar = String.fromCharCode(finalByte);
@@ -519,12 +525,12 @@ function parseCSI(params: Buffer): KeyEvent | null {
         sequence: seq,
       };
     }
-    return null; // Unknown tilde sequence
+    return { name: 'ignored', ctrl: false, meta: false, shift: false, sequence: seq };
   }
 
   // ── G7: Kitty keyboard protocol CSI … u ───────────────────────────────────
   if (finalByte === 0x75) {
-    return parseKittyCsiU(paramPart.toString(), seq);
+    return parseKittyCsiU(paramPart.toString(), seq) ?? { name: 'ignored', ctrl: false, meta: false, shift: false, sequence: seq };
   }
 
   // DEC 1004 focus reports: CSI I / CSI O. Must be consumed — returning
@@ -583,9 +589,10 @@ export function installKeyHandler(
   stream: NodeJS.ReadStream,
   callback: (event: KeyEvent) => void,
   compositionHandler?: CompositionHandler,
+  writeTerminalControl: (text: string) => void = text => OutputBuffer.getInstance().write(text),
 ): () => void {
   const wasRaw = (stream as unknown as { isRaw?: boolean }).isRaw ?? false;
-  const wasPaused = typeof stream.isPaused === 'function' ? stream.isPaused() : false;
+  const wasFlowing = stream.readableFlowing === true;
 
   let kittyEnabled = false;
   if (stream.isTTY) {
@@ -594,15 +601,15 @@ export function installKeyHandler(
     // Enable bracketed paste mode (DEC private mode 2004).
     // Terminals that support this wrap pasted text in \x1b[200~ ... \x1b[201~
     // markers so we can coalesce the entire paste into a single KeyEvent.
-    // Routes through OutputBuffer for a11y stripping; written outside any frame
-    // so it reaches stdout immediately via writeRaw().
-    OutputBuffer.getInstance().write('\x1b[?2004h');
+    // An exclusive prompt can have a different output TTY (e.g. stderr when
+    // stdout is redirected). The control must reach the same terminal.
+    writeTerminalControl('\x1b[?2004h');
 
     // G7 — Kitty keyboard protocol when capability (or env force) allows.
     try {
       const caps = terminalCapsCompat();
       if (shouldEnableKittyKeyboard(caps.kittyKbd)) {
-        OutputBuffer.getInstance().write(kittyEnableSequence());
+        writeTerminalControl(kittyEnableSequence());
         kittyEnabled = true;
       }
     } catch {
@@ -617,6 +624,11 @@ export function installKeyHandler(
   let cleanupCalled = false;
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+
+  /** Discard consumed bytes without copying the remaining input buffer. */
+  function consumeBuffer(bytes: number): void {
+    buffer = buffer.subarray(bytes);
+  }
 
   function clearEscapeTimeout(): void {
     if (escapeTimeoutId !== null) {
@@ -657,7 +669,7 @@ export function installKeyHandler(
     for (let j = 3; j < buffer.length; j++) {
       const b = buffer[j]!;
       if (b === 0x6d || b === 0x4d) {
-        buffer = buffer.slice(j + 1);
+        consumeBuffer(j + 1);
         return true;
       }
       // If we encounter a byte that is not part of a valid SGR mouse sequence
@@ -666,7 +678,7 @@ export function installKeyHandler(
       // Discard the consumed prefix bytes so the invalid/next byte can be
       // re-parsed as regular keyboard input.
       if (!((b >= 0x30 && b <= 0x39) || b === 0x3b)) {
-        buffer = buffer.slice(j);
+        consumeBuffer(j);
         return false;
       }
     }
@@ -719,7 +731,7 @@ export function installKeyHandler(
         buffer.slice(0, BRACKETED_PASTE_START.length).equals(BRACKETED_PASTE_START)
       ) {
         pasteContent = '';
-        buffer = buffer.slice(BRACKETED_PASTE_START.length);
+        consumeBuffer(BRACKETED_PASTE_START.length);
         continue;
       }
 
@@ -734,14 +746,17 @@ export function installKeyHandler(
             meta: false,
             shift: false,
             sequence: pasteContent,
+            bracketedPaste: true,
           });
           pasteContent = null;
-          buffer = buffer.slice(endIdx + BRACKETED_PASTE_END.length);
+          consumeBuffer(endIdx + BRACKETED_PASTE_END.length);
           continue;
         }
-        // No end marker yet -- accumulate everything, wait for more data
-        pasteContent += buffer.toString('utf8');
-        buffer = Buffer.alloc(0);
+        // Keep any partial end marker for the next chunk, not in the paste.
+        let tail = Math.min(buffer.length, BRACKETED_PASTE_END.length - 1);
+        while (tail > 0 && !buffer.subarray(-tail).equals(BRACKETED_PASTE_END.subarray(0, tail))) tail--;
+        pasteContent += buffer.subarray(0, buffer.length - tail).toString('utf8');
+        consumeBuffer(buffer.length - tail);
         break;
       }
 
@@ -765,7 +780,7 @@ export function installKeyHandler(
             shift: false,
             sequence: burst.text,
           });
-          buffer = buffer.slice(burst.byteLength);
+          consumeBuffer(burst.byteLength);
           continue;
         }
       }
@@ -773,7 +788,16 @@ export function installKeyHandler(
       // ── Normal key parsing ─────────────────────────────────────────────
       const event = parseKeypress(buffer);
       if (event === null) {
-        // Incomplete or unrecognized sequence
+        if (buffer[0] === 0x1b && buffer.length > 1 && buffer[1]! < 0x20) {
+          // Esc plus a separate control key (e.g. Enter) can arrive in one read.
+          emit({ name: 'escape', ctrl: false, meta: false, shift: false, sequence: '\x1b' });
+          consumeBuffer(1);
+          continue;
+        }
+        if (buffer[0] !== 0x1b) {
+          consumeBuffer(1); // An invalid byte must not strand later keys.
+          continue;
+        }
         if (buffer.length === 1 && buffer[0] === 0x1b) {
           // Bare Escape -- set timeout for disambiguation
           escapeTimeoutId = setTimeout(() => {
@@ -785,7 +809,7 @@ export function installKeyHandler(
               shift: false,
               sequence: '\x1b',
             });
-            buffer = buffer.slice(1);
+            consumeBuffer(1);
             // Re-process in case more data arrived during the timeout
             if (buffer.length > 0) {
               processBuffer();
@@ -798,14 +822,15 @@ export function installKeyHandler(
 
       emit(event);
       const byteLen = Buffer.byteLength(event.sequence, 'utf8');
-      buffer = buffer.slice(byteLen);
+      consumeBuffer(byteLen);
     }
   }
 
   // ── Data handler ───────────────────────────────────────────────────────────
 
-  function onData(data: Buffer): void {
+  function onData(chunk: Buffer | string): void {
     if (cleanupCalled) return;
+    const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
     // Feed raw data through the composition handler if attached
     if (compositionHandler) {
       compositionHandler.handleData(data);
@@ -828,17 +853,16 @@ export function installKeyHandler(
       try {
         // Disable bracketed paste mode before restoring raw mode
         // Routes through OutputBuffer for a11y stripping.
-        OutputBuffer.getInstance().write('\x1b[?2004l');
+        writeTerminalControl('\x1b[?2004l');
         // G7 — pop kitty keyboard mode if we enabled it
         if (kittyEnabled) {
-          OutputBuffer.getInstance().write(kittyDisableSequence());
+          writeTerminalControl(kittyDisableSequence());
         }
         (stream as unknown as { setRawMode: (mode: boolean) => void }).setRawMode(wasRaw);
-        if (wasPaused) {
-          stream.pause();
-        }
       } catch {
         // Ignore errors during cleanup
+      } finally {
+        if (!wasFlowing) stream.pause();
       }
     }
   };

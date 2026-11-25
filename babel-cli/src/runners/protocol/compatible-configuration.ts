@@ -35,6 +35,7 @@ export class CompatibleConfiguration {
       provider?: ProviderId;
       contextWindowTokens?: number;
       explicitCredential?: string;
+      baseUrl?: string;
       env?: NodeJS.ProcessEnv;
       executionEnvelope?: ResolvedExecutionEnvelope;
     } = {},
@@ -57,6 +58,7 @@ export class CompatibleConfiguration {
     }
     this.apiKey = credential.explicitCredential ?? resolveProviderCredential(provider, {
       envVarOverride: apiKeyEnvVar,
+      ...(credential.baseUrl ? { baseUrl: credential.baseUrl } : {}),
       ...(credential.env ? { env: credential.env } : {}),
     }) ?? '';
     this.model = model;

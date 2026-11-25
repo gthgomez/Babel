@@ -1,10 +1,11 @@
 import { OpenAiCompatibleRunner, type FetchRedirectPolicy } from './protocol/openai-chat-completions.js'
 import type { ResolvedExecutionEnvelope } from '../intelligence/types.js'
+import { COMMAND_CODE_BASE_URL } from './providerEndpoint.js'
 
 /** Command Code's native API transport; tool execution stays in Babel. */
 export class CommandCodeApiRunner extends OpenAiCompatibleRunner {
   protected override get apiUrl(): string {
-    return 'https://api.commandcode.ai/provider/v1/chat/completions'
+    return `${COMMAND_CODE_BASE_URL}/chat/completions`
   }
 
   constructor(

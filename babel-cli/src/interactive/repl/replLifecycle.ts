@@ -1,10 +1,10 @@
 import { resolveEffectiveSettings } from '../../config/userSettings.js'
-import { getSetupStatus, runProviderSetup } from '../../services/providerSetup.js'
-import { selectedConnectionModel } from '../../services/connectionSettings.js'
+import { canPromptForSetup, getSetupStatus } from '../../services/providerSetup.js'
+import { connectionModelSelector } from '../../config/connectionModelPolicy.js'
+import { setupReplConnection } from './replProviderSetup.js'
 import process from 'node:process';
 
 import logUpdate from 'log-update';
-import { getAvailableModels } from '../../modelPolicy.js';
 import { globalCostTracker } from '../../services/costTracker.js';
 import { detectProjectFromCwd } from '../../cli/helpers.js';
 import { readRuntimeMode } from '../../config/runtimeMode.js';
@@ -90,16 +90,13 @@ export async function bootstrapReplSession(
   // Configuration and local prerequisites precede indexing or daemon warmup.
   globalCostTracker.resetSession()
   const target = ctx.resolveCurrentTarget().targetRoot ?? process.cwd()
-  const effective = resolveEffectiveSettings({ projectRoot: target,
+  const effective = resolveEffectiveSettings({ projectRoot: target, reportUnavailableConnection: true,
     ...(ctx.state.connectionId ? { session: { connection: ctx.state.connectionId } } : {}) })
-  if (!ctx.state.model) {
-    const selector = selectedConnectionModel({}, target)
-    if (selector) {
-      ctx.state.model = selector
-      if (effective.connection.value) ctx.state.connectionId = effective.connection.value.id
-      ctx.state.modelSource = effective.connection.source
-      ctx.resolveSessionModel()
-    }
+  if (!ctx.state.model && effective.connection.value && effective.model.value) {
+    ctx.state.model = connectionModelSelector(effective.connection.value.id, effective.model.value)
+    ctx.state.connectionId = effective.connection.value.id
+    ctx.state.modelSource = effective.model.source
+    ctx.resolveSessionModel()
   }
   if (!ctx.state.modeExplicit && (effective.workflow.source !== 'built-in' || effective.review.source !== 'built-in')) {
     ctx.state.mode = effective.workflow.value === 'plan' ? 'plan' : effective.review.value === 'thorough' ? 'deep' : 'chat'
@@ -112,19 +109,17 @@ export async function bootstrapReplSession(
     // Repository settings cannot select a credential destination for a fresh profile.
     if (!ctx.state.model && merged.model) OutputBuffer.getInstance().write(muted('Legacy project model found. Use /setup to explicitly select its provider and account.\n'))
   }
-  if (isFirstRun()) showOnboarding()
-  if (!ctx.state.model && process.stdin.isTTY && process.stderr.isTTY && !process.env['CI']) {
-    const setup = () => runProviderSetup()
-    if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('first-run-setup', setup)
-    else await setup()
-    const selected = selectedConnectionModel({}, target)
-    if (selected) { ctx.state.model = selected; ctx.state.modelSource = 'user'; const id = resolveEffectiveSettings({ projectRoot: target }).connection.value?.id; if (id) ctx.state.connectionId = id; ctx.resolveSessionModel() }
-  }
   const status = getSetupStatus(process.env, ctx.state.connectionId ? { connection: ctx.state.connectionId } : {}, target)
   ctx.state.readinessState = status.state
-  recordInteractiveDiagnostic('startup', `Setup state: ${status.state}; runtime warmup: ${ctx.state.model && status.state !== 'action_required' ? 'eligible' : 'skipped'}`)
-  if (!ctx.state.model || status.state === 'action_required') ctx.state.lastRunUserStatus = 'blocked'
-  if (ctx.state.model && status.state !== 'action_required') {
+  if (isFirstRun()) showOnboarding(status.state !== 'configured_unverified')
+  if ((!ctx.state.model || status.state === 'action_required') &&
+      !process.env['BABEL_RESUME_SESSION']?.trim() && canPromptForSetup()) {
+    await setupReplConnection(ctx)
+  }
+  const canWarm = ctx.state.model && ctx.state.readinessState !== 'action_required'
+  recordInteractiveDiagnostic('startup', `Setup state: ${ctx.state.readinessState}; runtime warmup: ${canWarm ? 'eligible' : 'skipped'}`)
+  if (!canWarm) ctx.state.lastRunUserStatus = 'blocked'
+  if (canWarm) {
     if (typeof hooks.warmRuntime === 'function') hooks.warmRuntime()
     else if (hooks.warmRuntime !== false && process.env['NODE_ENV'] !== 'test' && !process.env['BABEL_TEST']) warmReplRuntime()
     if (typeof hooks.startIndexing === 'function') hooks.startIndexing()
@@ -137,32 +132,30 @@ export async function bootstrapReplSession(
 export { formatResumeHint, shouldForceResumePicker } from './startupResumeHint.js';
 
 export async function maybeShowResumePicker(ctx: ReplContext): Promise<void> {
-  if (!process.stdout.isTTY || process.env['CI']) {
-    return;
-  }
-
-  const sessions = await listResumableSessions({ limit: 20 });
   const requested = process.env['BABEL_RESUME_SESSION']?.trim();
   if (requested) {
     const id =
       requested === 'latest' || requested === '1'
-        ? sessions[0]?.id
+        ? (await listResumableSessions({ limit: 1 }))[0]?.id
         : requested;
+    const buf = OutputBuffer.getInstance();
     if (id) {
       const { resumeChatSession } = await import('../chatSessionResume.js');
       const outcome = await resumeChatSession(ctx, id);
-      const buf = OutputBuffer.getInstance();
       if (outcome.ok) {
         buf.write(primary(`\n  Resumed ${id} — ${outcome.turnCount} turns loaded\n`));
         buf.write(muted('  Type a message to continue, or /help for commands.\n'));
       } else {
         buf.write(error(`\n  ${outcome.reason === 'cancelled' ? outcome.message : `Failed to resume ${id}: ${outcome.message}`}\n`));
       }
-    }
+    } else buf.write(error('\n  No saved session was found to resume.\n'));
     ctx.isRunning = false;
     return;
   }
 
+  if (!process.stdout.isTTY || process.env['CI'] ||
+      ctx.state.readinessState === 'setup_required' || ctx.state.readinessState === 'action_required') return;
+  const sessions = await listResumableSessions({ limit: 20 });
   if (sessions.length === 0) return;
 
   if (!shouldForceResumePicker() || process.env['BABEL_SKIP_RESUME_PICKER'] === '1') {

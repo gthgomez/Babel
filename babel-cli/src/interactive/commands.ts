@@ -77,7 +77,7 @@ import { KeybindingManager } from '../ui/keybindings.js';
 // Help
 import { showHelp } from './help.js';
 import { handleConnectionCommand } from '../commands/connectionCommands.js';
-import { runProviderSetup } from '../services/providerSetup.js';
+import { setupReplConnection } from './repl/replProviderSetup.js';
 import { withSavedPlanApplication } from '../services/savedPlan.js';
 
 export async function handleCommand(ctx: ReplContext, input: string): Promise<void> {
@@ -104,23 +104,7 @@ export async function handleCommand(ctx: ReplContext, input: string): Promise<vo
     }
     case 'setup': {
       assertInteractiveRunAvailable(ctx);
-      const setup = () => runProviderSetup();
-      if (ctx.withExclusiveTerminal) await ctx.withExclusiveTerminal('provider-setup', setup);
-      else await setup();
-      const { selectedConnectionModel, connectionStatus } = await import('../services/connectionSettings.js');
-      const root = ctx.resolveCurrentTarget().targetRoot;
-      const selected = selectedConnectionModel({}, root);
-      const status = connectionStatus({}, root);
-      delete ctx.state.model; delete ctx.state.connectionId; delete ctx.state.resolvedModelId;
-      if (selected) { ctx.state.model = selected; ctx.resolveSessionModel(); }
-      if (status.connection) ctx.state.connectionId = status.connection;
-      if (status.model) ctx.state.resolvedModelId = status.model;
-      ctx.state.modelSource = status.modelSource;
-      ctx.state.readinessState = status.state as NonNullable<typeof ctx.state.readinessState>;
-      delete ctx.state.savedPlanId;
-      ctx.chatEngine?.closeAdmissionStore?.();
-      ctx.chatEngine = undefined;
-      ctx.saveSessionState();
+      await setupReplConnection(ctx);
       break;
     }
     // ── Session control ──────────────────────────────────────────────

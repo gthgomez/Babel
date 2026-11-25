@@ -47,6 +47,7 @@ if (!isSyntheticProviderFixtureReady()) {
   const { join } = await import('node:path')
   const { runCliChatTask } = await import('../interactive/execution/chatCore.js')
   const { chatSessionDir } = await import('../cli/runsLayout.js')
+  const { installBoundedFixturePricing } = await import('../testUtils/boundedFixturePricing.js')
   const { initMinimalGitProject } = await import('../testUtils/chatAdmissionFixture.js')
   const { globalCostTracker } = await import('../services/costTracker.js')
   const task = 'Explain README.md and its stated purpose without changing any files.'
@@ -154,7 +155,10 @@ if (!isSyntheticProviderFixtureReady()) {
   for (const finite of [false, true]) {
     test(`${finite ? 'finite' : 'unbudgeted'} priced native task under financial-file-only I/O failure`, async t => {
       const root = fixture(t)
-      if (finite) process.env['BABEL_CHAT_MAX_COST'] = '0.75'
+      if (finite) {
+        installBoundedFixturePricing(t, root, backendKey)
+        process.env['BABEL_CHAT_MAX_COST'] = '0.75'
+      }
       const fault = journalFault(t)
       const bodies = usefulFetch(fault.activate)
       const result = await runCliChatTask({ task, projectRoot: root, model: backendKey, outputFormat: 'json' })

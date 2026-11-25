@@ -666,7 +666,7 @@ export function resolveChatEngineLimits(
   const requestedOverrideMaxCostUsd = parseExplicitCostOverrideUsd(
     overrides.maxCostUsd,
   );
-  const savedBudget = resolveEffectiveSettings({ projectRoot: options?.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd() }).budgetUsd.value;
+  const savedBudget = resolveEffectiveSettings({ projectRoot: options?.projectRoot ?? process.env['BABEL_PROJECT_ROOT'] ?? process.cwd(), reportUnavailableConnection: true }).budgetUsd.value;
   const rawEnvCost = process.env['BABEL_CHAT_MAX_COST'];
   const explicitCostCeiling =
     requestedOverrideMaxCostUsd !== undefined ||

@@ -147,6 +147,7 @@ import {
   type ChatEngineLimits,
   type ChatRunLimiter,
 } from "../config/chatEngineLimits.js";
+import { isProviderLocal } from "../config/offlineMode.js";
 import {
   classifyFailureText,
   projectChatTerminal,
@@ -1559,27 +1560,26 @@ export class ChatEngine {
 
   /**
    * Conservative one-request estimate for finite-cap preauthorization.
-   * Uses the last observed charge (same request shape) or policy pricing plus
-   * the effective output reserve. Unknown pricing stays unknown; Babel then
-   * keeps its existing incomplete-accounting refusal instead of inventing zero.
+   * A named route reserves its context bound and wire output allowance at the
+   * policy prices. A prior charge cannot stand in for missing pricing.
    */
   private estimateNextRequestCostUsd(maxCostUsd: number): number | undefined {
     if (!Number.isFinite(maxCostUsd)) return undefined;
     const metadata = this.deliberationRunner?.getLastInvocationMetadata?.() ?? null;
     const lastCharge = metadata?.estimated_cost_usd;
-    if (typeof lastCharge === 'number' && Number.isFinite(lastCharge) && lastCharge > 0) return lastCharge;
     const policy = this.modelPolicy;
-    if (!policy || policy.estimatedCostPer1MInput === undefined || policy.estimatedCostPer1MOutput === undefined) return undefined;
-    const outputReserve = Math.min(
-      this.limits.maxTokensPerRound,
-      policy.requestedOutputTokens ?? policy.maxOutputTokens ?? 8_000,
-    );
-    return estimateRequestCostUsd({
-      inputTokens: metadata?.prompt_tokens ?? policy.approximateInputTokens,
+    if (!policy || (policy.connectionId && !policy.contextWindow)) return undefined;
+    const contextBound = policy.connectionId ? policy.contextWindow : undefined;
+    const outputReserve = this.deliberationRunner?.getNativeRequestReservedCompletionTokens?.() ?? contextBound ??
+      Math.min(this.limits.maxTokensPerRound, policy.requestedOutputTokens ?? policy.maxOutputTokens ?? 8_000);
+    const estimate = estimateRequestCostUsd({
+      inputTokens: contextBound ?? metadata?.prompt_tokens ?? policy.approximateInputTokens,
       outputTokens: outputReserve,
       inputCostPer1M: policy.estimatedCostPer1MInput,
       outputCostPer1M: policy.estimatedCostPer1MOutput,
     });
+    return estimate !== undefined && typeof lastCharge === 'number' && Number.isFinite(lastCharge)
+      ? Math.max(estimate, lastCharge) : estimate;
   }
 
   private checkBudgets(skipTurnLimit = false): {
@@ -1639,7 +1639,8 @@ export class ChatEngine {
         this.limits.wallBudget?.requestedMs ?? this.limits.maxWallMs,
       postWriteRepairWallCapMs: this.postWriteRepairWallCapMs,
       criticRepairCostCapUsd: this.criticRepairCostCapUsd,
-      ...(estimatedNext !== undefined ? { estimatedNextRequestCostUsd: estimatedNext } : {}),
+      ...(this.modelPolicy && !isOfflineChatMode() && !isProviderLocal(this.modelPolicy.provider, this.modelPolicy.baseUrl)
+        ? { estimatedNextRequestCostUsd: estimatedNext ?? null } : {}),
     });
     if (!result.ok) {
       this.terminatingLimiter = result.limiter ?? "cost";
