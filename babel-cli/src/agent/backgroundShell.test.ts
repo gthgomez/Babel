@@ -20,6 +20,7 @@ import {
 } from './backgroundShell.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
 import { quoteWindowsCommandArg } from '../utils/commandArgv.js';
+import { waitForProcessGroupExit } from '../processTree.js';
 import { ChatEngine } from './chatEngine.js';
 import type { ProcessWitness } from '../diagnostics/bdns/processWitness.js';
 
@@ -285,7 +286,6 @@ describe('backgroundShell', () => {
     const ownerId = 'cancel-during-initial-settlement';
     let ownedJobId: string | undefined;
     let grandchildPid: number | undefined;
-    let directChildPid: number | undefined;
     try {
       const job = startBackgroundShell({
         command: `node ${parentScript} ${grandchildScript} ${readyMarker} ${signalMarker} ${releaseMarker}`,
@@ -298,7 +298,6 @@ describe('backgroundShell', () => {
       assert.ok(directChild, 'the fixture has an owned direct child');
       assert.ok(directChild.pid, 'the fixture process group has an owned leader');
       const fixtureGroupId = directChild.pid;
-      directChildPid = fixtureGroupId;
       ownedGroupId = fixtureGroupId;
       const killMock = t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
         if (pid === -fixtureGroupId && signal === 'SIGKILL') return originalKill(pid, 'SIGTERM');
@@ -330,22 +329,16 @@ describe('backgroundShell', () => {
         if (pidText) grandchildPid = Number(pidText);
       }
       if (ownedGroupId !== undefined) {
-        const ownedFixturePids = [directChildPid, grandchildPid]
-          .filter((pid): pid is number => pid !== undefined);
-        const waitForOwnedFixtureExit = async (timeoutMs: number) => {
-          const results = await Promise.all(ownedFixturePids.map(pid => waitUntilDead(pid, timeoutMs)));
-          return results.every(Boolean);
-        };
-        let fixtureSettled = await waitForOwnedFixtureExit(0);
-        if (!fixtureSettled && ownedFixturePids.some(isProcessAlive)) {
+        let fixtureSettled = await waitForProcessGroupExit(ownedGroupId, 0);
+        if (!fixtureSettled) {
           try { originalKill(-ownedGroupId, 'SIGTERM'); } catch { /* owned fixture group may have exited */ }
-          fixtureSettled = await waitForOwnedFixtureExit(1_500);
+          fixtureSettled = await waitForProcessGroupExit(ownedGroupId, 1_500);
         }
-        if (!fixtureSettled && ownedFixturePids.some(isProcessAlive)) {
+        if (!fixtureSettled) {
           try { originalKill(-ownedGroupId, 'SIGKILL'); } catch { /* owned fixture group may have exited */ }
-          fixtureSettled = await waitForOwnedFixtureExit(2_000);
+          fixtureSettled = await waitForProcessGroupExit(ownedGroupId, 2_000);
         }
-        assert.ok(fixtureSettled, 'owned fixture processes are observed stopped before their markers are removed');
+        assert.ok(fixtureSettled, 'the owned fixture process group is observed settled before its markers are removed');
       } else if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) {
         try { originalKill(grandchildPid, 'SIGTERM'); } catch { /* owned grandchild may have exited */ }
         let grandchildSettled = await waitUntilDead(grandchildPid, 1_500);
