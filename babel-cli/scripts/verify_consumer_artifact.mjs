@@ -1,6 +1,6 @@
 // License: Apache-2.0 — see LICENSE
 import assert from 'node:assert/strict'
-import { verifyConsumerArchive, verifyConsumerContents } from './consumer_archive.mjs'
+import { verifyArchivePayload, verifyConsumerArchive, verifyConsumerContents, verifyInstalledBuildIdentity, verifyInstalledPayloadFiles } from './consumer_archive.mjs'
 import { parseArgs } from 'node:util'
 import { consumerEnvironment } from './consumer_environment.mjs'
 import { spawn, spawnSync } from 'node:child_process'
@@ -254,9 +254,21 @@ try {
     verifyConsumerArchive({archive: artifact, manifest: identity, expectedDigest: identity.sha256, expectedSource: identity.sourceSha, expectedVersion: pkg.version})
   }
   verifyConsumerContents(identity.manifest)
+  const { buildInfoBytes } = verifyArchivePayload({ archive: artifact, files: identity.manifest, binTargets: pkg.bin })
+  verifyInstalledBuildIdentity(buildInfoBytes, identity)
   writeFileSync(join(output, 'manifest.json'), JSON.stringify({...identity, consumerNode: process.version, consumerPlatform: process.platform, consumerArch: process.arch}, null, 2) + '\n')
   writeFileSync(join(output, 'SHA256SUMS'), `${identity.sha256}  ${identity.tarball}\n`)
   installArtifact(artifact)
+  const payloadCheck = verifyInstalledPayloadFiles({ root: installed, files: identity.manifest, binTargets: pkg.bin })
+  const buildInfoPath = join(installed, 'dist', 'cli', 'build-info.json')
+  const buildInfo = verifyInstalledBuildIdentity(readFileSync(buildInfoPath), identity)
+  records.push({
+    check: 'installed build identity and payload match the archive receipt',
+    status: 'pass',
+    source: buildInfo.sourceCommit,
+    buildInfoSha256: identity.buildInfoSha256,
+    ...payloadCheck,
+  })
   const claudeSdkPin = join(installed, 'dist/bridge/claude-agent-sdk-pin.json')
   const claudeResolveWorker = join(installed, 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs')
   assert.ok(existsSync(claudeSdkPin), 'Claude SDK pin shipped in consumer tarball')
@@ -305,6 +317,7 @@ try {
   }))
   for (const shim of shims) {
     assert.ok(existsSync(shim.path), `npm installed the ${shim.alias} executable`)
+    if (!isWin) assert.equal(realpathSync(shim.path), realpathSync(join(installed, pkg.bin[shim.alias])))
     const shimVersion = process.platform === 'win32'
       ? command(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${shim.path}" --version"`], { env: guardedEnv, windowsVerbatimArguments: true })
       : command(shim.path, ['--version'], { env: guardedEnv })
@@ -516,6 +529,8 @@ try {
   assert.ok(!existsSync(installed))
   assert.equal(readFileSync(join(env.BABEL_CONFIG_DIR, 'runtime-flags.json'), 'utf8'), saved)
   installArtifact(artifact)
+  verifyInstalledPayloadFiles({ root: installed, files: identity.manifest, binTargets: pkg.bin })
+  verifyInstalledBuildIdentity(readFileSync(buildInfoPath), identity)
   assert.equal(cli(['--version']).stdout.trim(), pkg.version)
   assert.equal(readFileSync(join(env.BABEL_CONFIG_DIR, 'runtime-flags.json'), 'utf8'), saved)
   assert.deepEqual(readdirSync(project).sort(), ['.babel_history', 'README.md'].filter(path => existsSync(join(project, path))).sort(), JSON.stringify({ phase: 'after reinstall', fixtureBeforeCleanup, remaining: fixtureSnapshot() }))

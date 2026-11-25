@@ -1,13 +1,17 @@
 // License: Apache-2.0 — see LICENSE
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { lstatSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 
 const REQUIRED_ASSETS = [
   'LICENSE',
   'resources/prompt_catalog.yaml',
   'dist/index.js',
   'dist/cliEntryDispatch.js',
+  'dist/cli/build-info.json',
   'dist/voice/audio-capture-worker.mjs',
   'dist/voice/vad-worker.mjs',
   'dist/bridge/claude-agent-sdk-pin.json',
@@ -145,4 +149,114 @@ export function payloadManifest({ inventory, packageJson, files, readFile }) {
     requiredAssets: REQUIRED_ASSETS,
     testOnlyShipped: result.testOnlyShipped,
   }
+}
+
+const hash = bytes => createHash('sha256').update(bytes).digest('hex')
+
+/** npm bin-links can normalize the first CRLF of an executable shebang. */
+export function npmNormalizedShebangDigest(bytes) {
+  const newline = bytes.indexOf(0x0a)
+  if (bytes[0] !== 0x23 || bytes[1] !== 0x21 || newline < 4 || newline >= 2048 || bytes[newline - 1] !== 0x0d) return null
+  return hash(Buffer.concat([bytes.subarray(0, newline - 1), bytes.subarray(newline)]))
+}
+
+/** Read regular files from a private extraction of exactly the advertised payload. */
+export function withExtractedArchive(archive, files, inspect) {
+  const portablePaths = new Map()
+  const paths = new Set()
+  for (const { path } of files) {
+    assert.equal(typeof path, 'string', 'Missing archive payload path')
+    const segments = path.split('/')
+    assert.ok(!/[:\\\x00-\x1f]/.test(path) && segments.every(part => part && part !== '.' && part !== '..' && !/[. ]$/.test(part)), 'Unsafe archive payload path')
+    let prefix = ''
+    for (const part of segments) {
+      prefix += '/' + part
+      const canonical = prefix.normalize('NFC').toLowerCase()
+      const previous = portablePaths.get(canonical)
+      assert.ok(previous === undefined || previous === prefix, 'Archive payload has a portable path collision')
+      portablePaths.set(canonical, prefix)
+    }
+    paths.add('package/' + path)
+  }
+  const tar = args => execFileSync('tar', args, { encoding: 'utf8', timeout: 120000, windowsHide: true })
+  const listing = tar(['-tzf', archive]).trimEnd().split(/\r?\n/)
+  assert.ok(paths.size === files.length && new Set(listing).size === paths.size &&
+    listing.length === paths.size && listing.every(path => paths.has(path)), 'Archive payload paths differ from the receipt')
+  const scratch = mkdtempSync(join(tmpdir(), 'babel-archive-payload-'))
+  try {
+    tar(['-xzf', archive, '-C', scratch])
+    return inspect(path => {
+      assert.ok(paths.has('package/' + path), 'Archive file is absent from the receipt')
+      let target = join(scratch, 'package')
+      const parts = path.split('/')
+      for (const part of parts.slice(0, -1)) {
+        assert.ok(lstatSync(target).isDirectory(), 'Archive parent is not a directory: ' + path)
+        target = join(target, part)
+      }
+      assert.ok(lstatSync(target).isDirectory(), 'Archive parent is not a directory: ' + path)
+      target = join(target, parts.at(-1))
+      const metadata = lstatSync(target)
+      assert.ok(metadata.isFile() && metadata.nlink === 1, 'Archive payload must be a regular file: ' + path)
+      return readFileSync(target)
+    })
+  } finally { rmSync(scratch, { recursive: true, force: true }) }
+}
+
+/** Validate the receipt against the downloaded archive before using its rows after npm install. */
+export function verifyArchivePayload({ archive, files, binTargets }) {
+  const bins = new Set(Object.values(binTargets))
+  return withExtractedArchive(archive, files, read => {
+    for (const file of files) {
+      const bytes = read(file.path)
+      assert.ok(bytes.length === file.size && hash(bytes) === file.sha256, 'Archive bytes differ from the receipt: ' + file.path)
+      const normalized = bins.has(file.path) ? npmNormalizedShebangDigest(bytes) : null
+      assert.equal(file.npmShebangSha256, normalized ?? undefined, 'Archive shebang receipt differs: ' + file.path)
+    }
+    const packageJson = JSON.parse(read('package.json'))
+    assert.deepEqual(packageJson.bin, binTargets, 'Archive bin declarations differ from the receipt')
+    return { packageJson, buildInfoBytes: read('dist/cli/build-info.json') }
+  })
+}
+
+export function assertRecordedBuildInputs(value, expected) {
+  const digest = /^[a-f0-9]{64}$/
+  if (value?.scope !== 'cli-manifest-lock-config-and-tsc-files:v1' ||
+      !digest.test(value.sha256) || !digest.test(value.packageLockSha256) ||
+      value.sha256 !== expected?.sha256 || value.packageLockSha256 !== expected?.packageLockSha256 ||
+      value.scope !== expected?.scope) {
+    throw new Error('Recorded CLI build inputs do not match the expected receipt')
+  }
+}
+
+/** A release may bind this self-report only after comparing it to the clean candidate. */
+export function assertReleaseBuildInfo(info, expected) {
+  const check = (condition, message) => { if (!condition) throw new Error(message) }
+  const objectId = value => typeof value === 'string' && /^[a-f0-9]{40,64}$/.test(value)
+  check(Boolean(info && typeof info === 'object' && !Array.isArray(info)), 'Build identity is missing')
+  check(info.schemaVersion === 1, 'Unsupported build identity schema')
+  check(typeof expected.packageVersion === 'string' && info.packageVersion === expected.packageVersion, 'Build identity version does not match the package')
+  check(objectId(expected.sourceCommit) && info.sourceCommit === expected.sourceCommit, 'Build identity commit does not match the candidate')
+  check(objectId(expected.sourceTree) && info.sourceTree === expected.sourceTree, 'Build identity tree does not match the candidate')
+  check(info.workingTreeClean === true, 'Release build identity must report a clean source tree')
+  check(typeof info.nodeVersion === 'string' && /^[0-9A-Za-z.+-]{1,40}$/.test(info.nodeVersion), 'Build Node version is unavailable')
+  check(typeof info.typescriptVersion === 'string' && /^[0-9A-Za-z.+-]{1,40}$/.test(info.typescriptVersion), 'Build compiler version is unavailable')
+  check(info.buildInputsDigest === null && info.buildInputsReason === 'complete build inputs were not recorded',
+    'Build identity must not claim complete input coverage')
+  assertRecordedBuildInputs(info.recordedBuildInputs, expected.recordedBuildInputs)
+}
+
+/** Bind archived or installed build metadata to the producer receipt. */
+export function verifyBuildInfoReceipt(bytes, receipt) {
+  assert.equal(hash(bytes), receipt.buildInfoSha256, 'Build info digest mismatch')
+  const info = JSON.parse(bytes.toString('utf8'))
+  assertReleaseBuildInfo(info, {
+    packageVersion: receipt.version,
+    sourceCommit: receipt.sourceSha,
+    sourceTree: receipt.sourceTreeSha,
+    recordedBuildInputs: receipt.recordedBuildInputs,
+  })
+  assert.equal(`v${info.nodeVersion}`, receipt.node, 'Producer Node version mismatch')
+  assert.equal(info.typescriptVersion, receipt.compilerVersion, 'Producer compiler version mismatch')
+  assert.equal(info.recordedBuildInputs.packageLockSha256, receipt.dependencies?.lockSha256, 'Producer dependency lock mismatch')
+  return info
 }

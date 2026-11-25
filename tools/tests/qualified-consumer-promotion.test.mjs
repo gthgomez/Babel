@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import {
   downloadTrustedCandidate,
   extractCommand,
@@ -15,42 +15,72 @@ import {
 
 const repoRoot = resolve(import.meta.dirname, '../..')
 const pkg = JSON.parse(readFileSync(join(repoRoot, 'babel-cli/package.json'), 'utf8'))
-const digest = path => createHash('sha256').update(readFileSync(join(repoRoot, path))).digest('hex')
+const hash = bytes => createHash('sha256').update(bytes).digest('hex')
+const digest = path => hash(readFileSync(join(repoRoot, path)))
 const bin = Object.entries(pkg.bin).map(([alias, target]) => ({ alias, target }))
-const packedFiles = [
-  { path: 'package.json' }, ...bin.map(entry => ({ path: entry.target })),
-  { path: 'LICENSE' }, { path: 'resources/prompt_catalog.yaml' },
-  { path: 'dist/index.js' }, { path: 'dist/cliEntryDispatch.js' },
-  { path: 'bin/check-node-engine.mjs' },
-  { path: 'dist/voice/audio-capture-worker.mjs' }, { path: 'dist/voice/vad-worker.mjs' },
-  { path: 'dist/bridge/claude-agent-sdk-pin.json' }, { path: 'dist/bridge/opencode-acp-source-pin.json' },
-  { path: 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs' },
-  { path: 'dist/authority/ownedFileAssertion.windows.ps1' },
-  { path: 'dist/services/playbooks/single-file.json' },
-  { path: 'dist/tools/tool-manifest.json' },
-].map(file => ({ ...file, size: 1 }))
+const payloadPaths = [
+  'package.json', ...new Set(bin.map(entry => entry.target)),
+  'LICENSE', 'resources/prompt_catalog.yaml',
+  'dist/index.js', 'dist/cliEntryDispatch.js', 'dist/cli/build-info.json',
+  'bin/check-node-engine.mjs',
+  'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs',
+  'dist/bridge/claude-agent-sdk-pin.json', 'dist/bridge/opencode-acp-source-pin.json',
+  'dist/bridge/claudeCodeIsolatedResolveWorker.mjs', 'dist/authority/ownedFileAssertion.windows.ps1',
+  'dist/services/playbooks/single-file.json', 'dist/tools/tool-manifest.json',
+]
 const tree = spawnSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' })
 const sourceTreeSha = tree.stdout.trim()
 
-function fixtureCandidate(root, {sourceSha, version = pkg.version, bytes = 'qualified-bytes', mutate}) {
+function fixtureCandidate(root, {sourceSha, version = pkg.version, bytes = 'qualified-bytes', mutate, recordedLockSha}) {
   const tarball = `babel-harness-${version}.tgz`
-  writeFileSync(join(root, tarball), bytes)
-  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const archive = join(root, tarball)
+  const lockSha256 = digest('babel-cli/package-lock.json')
+  const recordedBuildInputs = { scope: 'cli-manifest-lock-config-and-tsc-files:v1', sha256: 'c'.repeat(64), packageLockSha256: recordedLockSha ?? lockSha256 }
+  const buildInfo = JSON.stringify({
+    schemaVersion: 1, packageVersion: version, sourceCommit: sourceSha, sourceTree: sourceTreeSha,
+    workingTreeClean: true, buildInputsDigest: null, buildInputsReason: 'complete build inputs were not recorded',
+    recordedBuildInputs, nodeVersion: process.versions.node, typescriptVersion: '6.0.3',
+  })
+  const source = mkdtempSync(join(root, 'archive-fixture-'))
+  let packedFiles
+  try {
+    const inputs = new Map([
+      ['package.json', JSON.stringify({ ...pkg, version })],
+      ['dist/cli/build-info.json', buildInfo],
+      ...bin.map(({ target }) => [target, '#!/usr/bin/env node\n' + bytes]),
+    ])
+    packedFiles = payloadPaths.map(path => {
+      const content = Buffer.from(inputs.get(path) ?? bytes)
+      const file = join(source, 'package', path)
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, content)
+      return { path, size: content.length, sha256: hash(content) }
+    })
+    execFileSync('tar', ['-czf', archive, ...payloadPaths.map(path => 'package/' + path)], { cwd: source })
+  } finally { rmSync(source, { recursive: true, force: true }) }
+  const archiveBytes = readFileSync(archive)
+  const sha256 = hash(archiveBytes)
   writeFileSync(join(root, 'SHA256SUMS'), `${sha256}  ${tarball}\n`)
   const manifest = {
     schemaVersion: 2,
     sourceSha,
     sourceTreeSha,
+    name: pkg.name,
     version,
+    node: process.version,
+    compilerVersion: '6.0.3',
+    buildInfoSha256: hash(buildInfo),
+    recordedBuildInputs,
+    dependencies: { lockSha256: recordedBuildInputs.packageLockSha256 },
     tarball,
     sha256,
-    integrity: 'sha512-' + createHash('sha512').update(bytes).digest('base64'),
+    integrity: 'sha512-' + createHash('sha512').update(archiveBytes).digest('base64'),
     manifest: packedFiles,
     inventory: {
       files: packedFiles.length,
-      unpackedBytes: packedFiles.length,
+      unpackedBytes: packedFiles.reduce((total, file) => total + file.size, 0),
       bin,
-      requiredAssets: ['LICENSE', 'resources/prompt_catalog.yaml', 'dist/index.js', 'dist/cliEntryDispatch.js', 'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs', 'dist/bridge/claude-agent-sdk-pin.json', 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs', 'dist/authority/ownedFileAssertion.windows.ps1'],
+      requiredAssets: ['LICENSE', 'resources/prompt_catalog.yaml', 'dist/index.js', 'dist/cliEntryDispatch.js', 'dist/cli/build-info.json', 'dist/voice/audio-capture-worker.mjs', 'dist/voice/vad-worker.mjs', 'dist/bridge/claude-agent-sdk-pin.json', 'dist/bridge/claudeCodeIsolatedResolveWorker.mjs', 'dist/authority/ownedFileAssertion.windows.ps1'],
       testOnlyShipped: false,
     },
     advisories: {
@@ -97,6 +127,29 @@ test('stagePromotionCandidate copies exact bytes without repacking', () => {
   }
 })
 
+test('promotion rejects missing or modified file and build identity receipts before copying', () => {
+  const root = mkdtempSync(join(tmpdir(), 'qualified-receipt-'))
+  const out = join(root, 'promotion-output')
+  const candidateDir = join(root, 'candidate')
+  mkdirSync(candidateDir)
+  const source = 'd'.repeat(40)
+  try {
+    const cases = [
+      [m => { delete m.manifest[0].sha256 }, /Archive bytes/],
+      [m => { m.manifest[0].sha256 = 'e'.repeat(64) }, /Archive bytes/],
+      [m => { delete m.buildInfoSha256 }, /Build info digest mismatch/],
+      [m => { m.recordedBuildInputs = null }, /Recorded CLI build inputs/],
+    ]
+    for (const [mutate, reason] of cases) {
+      fixtureCandidate(candidateDir, { sourceSha: source, mutate })
+      assert.throws(() => stagePromotionCandidate({candidateDir, outputDir: out, expectedSourceSha: source, expectedVersion: pkg.version}), reason)
+    }
+    fixtureCandidate(candidateDir, { sourceSha: source, recordedLockSha: 'e'.repeat(64) })
+    assert.throws(() => stagePromotionCandidate({candidateDir, outputDir: out, expectedSourceSha: source, expectedVersion: pkg.version}),
+      /build lock differs from the advisory lock/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 test('promotion fails closed on stale advisory, provenance, bin or inventory claims', () => {
   const root = mkdtempSync(join(tmpdir(), 'qualified-binding-'))
   const source = 'f'.repeat(40)
@@ -114,6 +167,7 @@ test('promotion fails closed on stale advisory, provenance, bin or inventory cla
       ['test-only claimed shipped', m => { m.inventory.testOnlyShipped = true }],
       ['authenticity misstated', m => { m.publisherAuthenticity.signed = true }],
       ['bin target hidden', m => { m.manifest = m.manifest.filter(file => !file.path.endsWith('babel.js')) }],
+      ['build identity missing', m => { m.manifest = m.manifest.filter(file => file.path !== 'dist/cli/build-info.json') }],
     ]
     for (const [label, mutate] of cases) {
       fixtureCandidate(root, {sourceSha: source, mutate})
