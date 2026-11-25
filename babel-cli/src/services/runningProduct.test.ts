@@ -90,6 +90,9 @@ test('invalid build metadata stays unreported and an inspected file cannot repla
     const invalidRecords = [
       '{',
       JSON.stringify({ ...buildInfo, packageVersion: '9.0.0' }),
+      JSON.stringify({ ...buildInfo, sourceCommit: 'a'.repeat(41) }),
+      JSON.stringify({ ...buildInfo, sourceTree: 'b'.repeat(64) }),
+      JSON.stringify({ ...buildInfo, sourceTree: null }),
       JSON.stringify({ ...buildInfo, buildInputsDigest: 'f'.repeat(64) }),
       JSON.stringify({ ...buildInfo, recordedBuildInputs: { ...buildInfo.recordedBuildInputs, scope: 'all-inputs' } }),
       JSON.stringify({ ...buildInfo, recordedBuildInputs: { ...buildInfo.recordedBuildInputs, packageLockSha256: 'invalid' } }),
@@ -109,5 +112,8 @@ test('invalid build metadata stays unreported and an inspected file cannot repla
     }
     writeFileSync(manifest, JSON.stringify(developmentBuild))
     assert.deepEqual(captureRunningProduct(root, entry).buildInfo, developmentBuild)
+    const sha256Build = { ...buildInfo, sourceCommit: 'a'.repeat(64), sourceTree: 'b'.repeat(64) }
+    writeFileSync(manifest, JSON.stringify(sha256Build))
+    assert.deepEqual(captureRunningProduct(root, entry).buildInfo, sha256Build)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

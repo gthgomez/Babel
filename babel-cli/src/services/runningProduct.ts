@@ -61,13 +61,14 @@ function parseBuildInfo(bytes: Buffer, packageVersion: string): BuildInfo | null
   const data = value as Record<string, unknown>
   const { sourceCommit, sourceTree, workingTreeClean, nodeVersion, typescriptVersion, recordedBuildInputs } = data
   const objectId = (input: unknown): input is string | null =>
-    input === null || (typeof input === 'string' && /^[a-f0-9]{40,64}$/.test(input))
+    input === null || (typeof input === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input))
   const version = (input: unknown): input is string =>
     typeof input === 'string' && /^[0-9A-Za-z.+-]{1,40}$/.test(input)
   if (data['schemaVersion'] !== 1 || data['packageVersion'] !== packageVersion ||
       !objectId(sourceCommit) || !objectId(sourceTree) ||
+      (sourceCommit !== null && sourceTree !== null && sourceCommit.length !== sourceTree.length) ||
       !(workingTreeClean === null || typeof workingTreeClean === 'boolean') ||
-      (workingTreeClean === true && sourceCommit === null) ||
+      (workingTreeClean === true && (sourceCommit === null || sourceTree === null)) ||
       data['buildInputsDigest'] !== null || data['buildInputsReason'] !== 'complete build inputs were not recorded' ||
       !version(nodeVersion) || !(typescriptVersion === null || version(typescriptVersion))) return null
 
