@@ -20,7 +20,6 @@ import {
 } from './backgroundShell.js';
 import { getSafeEnv } from '../utils/safeEnv.js';
 import { quoteWindowsCommandArg } from '../utils/commandArgv.js';
-import { waitForProcessGroupExit } from '../processTree.js';
 import { ChatEngine } from './chatEngine.js';
 import type { ProcessWitness } from '../diagnostics/bdns/processWitness.js';
 
@@ -282,12 +281,11 @@ describe('backgroundShell', () => {
     ].join(''));
     let ownedGroupId: number | undefined;
     const originalKill = process.kill.bind(process);
-    const killMock = t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
-      if (ownedGroupId !== undefined && pid === -ownedGroupId && signal === 'SIGKILL') return originalKill(pid, 'SIGTERM');
-      return originalKill(pid, signal);
-    }) as typeof process.kill);
+    let restoreKillMock: (() => void) | undefined;
     const ownerId = 'cancel-during-initial-settlement';
+    let ownedJobId: string | undefined;
     let grandchildPid: number | undefined;
+    let directChildPid: number | undefined;
     try {
       const job = startBackgroundShell({
         command: `node ${parentScript} ${grandchildScript} ${readyMarker} ${signalMarker} ${releaseMarker}`,
@@ -295,10 +293,18 @@ describe('backgroundShell', () => {
         ownerId,
         timeoutMs: 10_000,
       });
+      ownedJobId = job.id;
       const directChild = (job as unknown as { child?: import('node:child_process').ChildProcess }).child;
       assert.ok(directChild, 'the fixture has an owned direct child');
       assert.ok(directChild.pid, 'the fixture process group has an owned leader');
-      ownedGroupId = directChild.pid;
+      const fixtureGroupId = directChild.pid;
+      directChildPid = fixtureGroupId;
+      ownedGroupId = fixtureGroupId;
+      const killMock = t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
+        if (pid === -fixtureGroupId && signal === 'SIGKILL') return originalKill(pid, 'SIGTERM');
+        return originalKill(pid, signal);
+      }) as typeof process.kill);
+      restoreKillMock = () => killMock.mock.restore();
       const directClose = new Promise<void>(resolveClose => directChild.once('close', () => resolveClose()));
       grandchildPid = await waitForStdoutPid(job.id);
       await directClose;
@@ -317,19 +323,29 @@ describe('backgroundShell', () => {
         'the descendant is stopped before the owner fence is released');
       assert.equal(hasUnsettledBackgroundShells(ownerId), false);
     } finally {
-      killMock.mock.restore();
+      restoreKillMock?.();
       try { writeFileSync(releaseMarker, 'released'); } catch { /* fixture directory is already gone */ }
+      if (grandchildPid === undefined && ownedJobId !== undefined) {
+        const pidText = getBackgroundShellJob(ownedJobId)?.stdout.trim().match(/^\d+$/m)?.[0];
+        if (pidText) grandchildPid = Number(pidText);
+      }
       if (ownedGroupId !== undefined) {
-        let groupSettled = await waitForProcessGroupExit(ownedGroupId, 0);
-        if (!groupSettled) {
+        const ownedFixturePids = [directChildPid, grandchildPid]
+          .filter((pid): pid is number => pid !== undefined);
+        const waitForOwnedFixtureExit = async (timeoutMs: number) => {
+          const results = await Promise.all(ownedFixturePids.map(pid => waitUntilDead(pid, timeoutMs)));
+          return results.every(Boolean);
+        };
+        let fixtureSettled = await waitForOwnedFixtureExit(0);
+        if (!fixtureSettled && ownedFixturePids.some(isProcessAlive)) {
           try { originalKill(-ownedGroupId, 'SIGTERM'); } catch { /* owned fixture group may have exited */ }
-          groupSettled = await waitForProcessGroupExit(ownedGroupId, 1_500);
+          fixtureSettled = await waitForOwnedFixtureExit(1_500);
         }
-        if (!groupSettled) {
+        if (!fixtureSettled && ownedFixturePids.some(isProcessAlive)) {
           try { originalKill(-ownedGroupId, 'SIGKILL'); } catch { /* owned fixture group may have exited */ }
-          groupSettled = await waitForProcessGroupExit(ownedGroupId, 2_000);
+          fixtureSettled = await waitForOwnedFixtureExit(2_000);
         }
-        assert.ok(groupSettled, 'the fixture process group is observed settled before its markers are removed');
+        assert.ok(fixtureSettled, 'owned fixture processes are observed stopped before their markers are removed');
       } else if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) {
         try { originalKill(grandchildPid, 'SIGTERM'); } catch { /* owned grandchild may have exited */ }
         let grandchildSettled = await waitUntilDead(grandchildPid, 1_500);
