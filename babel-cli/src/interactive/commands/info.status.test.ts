@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { stripVTControlCharacters } from 'node:util'
 import { createSessionEventLog, flushSessionEventLogStrict, recordTurnEnded, recordUserSubmitted } from '../../agent/sessionEvents.js'
 import { createThreadEventLog, persistThreadEventLog, startTurn } from '../../agent/threadEventLog.js'
 import { globalCostTracker } from '../../services/costTracker.js'
@@ -110,7 +111,7 @@ test('/cost shows unresolved charges and labels the accounting scope', (t) => {
   }))
 
   handleCost({} as ReplContext, [])
-  const text = messages.join('\n')
+  const text = stripVTControlCharacters(messages.join('\n'))
   assert.match(text, /all conversations tracked in this session/)
   assert.match(text, /\$0\.000000 known subtotal \+ 8 unresolved charge\(s\); final cost unknown/)
   assert.doesNotMatch(text, /Total USD/)

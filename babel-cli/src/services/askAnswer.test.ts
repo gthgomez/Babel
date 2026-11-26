@@ -146,6 +146,7 @@ test('streamed ask retries non-streaming after schema failure without preserving
                   next: ['Run bl plan "inspect exampleBrowserGame architecture" for a deeper plan.'],
                 }),
               },
+              finish_reason: 'stop',
             },
           ],
           usage: {

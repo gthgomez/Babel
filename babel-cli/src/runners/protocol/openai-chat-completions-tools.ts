@@ -752,30 +752,35 @@ async *executeWithToolsStream(
         if (done || streamState.sawDone) break;
       }
 
-      if (!streamState.sawDone) {
-        throw new Error(`[${this.providerId}] stream closed before terminal [DONE] marker`);
-      }
-
-      streamState.generationMs = Date.now() - startedAt - (streamState.ttftMs ?? 0);
-
       // One explicit terminal disposition. Missing, filtered, truncated or
       // unrecognized finishes fail the invocation; accumulated output remains
       // diagnostic evidence and never becomes actionable tool input.
-      const disposition = classifyStreamFinish({
+      const disposition = streamState.sawDone ? classifyStreamFinish({
         reported: finishReason,
-        sawDone: streamState.sawDone,
+        sawDone: true,
         hasToolCalls: pendingToolCalls.size > 0,
-      });
-      streamState.finishReason = disposition.finishReason;
-      // Admit the observed route before exposing executable tools or terminal success.
+      }) : null;
+      if (disposition) {
+        streamState.generationMs = Date.now() - startedAt - (streamState.ttftMs ?? 0);
+        streamState.finishReason = disposition.finishReason;
+      } else {
+        signal?.throwIfAborted();
+      }
+      // Preserve route attribution even at premature EOF, before reporting a transport failure.
       try {
         this.validateObservedModelId(streamState.observedModelId);
         this.validateObservedUpstream(streamState.upstreamProvider);
         this.validateObservedRouterMetadata(streamState.routerMetadata, streamState.observedModelId, streamState.upstreamProvider);
       } catch (error) {
         responseValidationFailed = true;
-        settleStream({ stage: 'response_normalization', message: error instanceof Error ? error.message : String(error) });
+        settleStream({
+          stage: disposition ? 'response_normalization' : 'stream',
+          message: error instanceof Error ? error.message : String(error),
+        });
         throw error;
+      }
+      if (!disposition) {
+        throw new Error(`[${this.providerId}] stream closed before terminal [DONE] marker`);
       }
       if (disposition.status === 'failed') {
         const errMessage = `[${this.providerId}] ${

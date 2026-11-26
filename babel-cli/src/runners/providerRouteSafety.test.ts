@@ -225,12 +225,13 @@ if (!isSyntheticProviderFixtureReady()) {
             onInvocationCompleted: value => { completed.push(value) },
             onInvocationPhase: value => { phases.push(value.phase) },
           })) events.push(event)
-        }, /model|identity/i)
-        assert.deepEqual(events.filter(event => event.type === 'tool_use' || event.type === 'done').map(event => event.type), [])
+        }, { message: /^\[LIVE_MODEL_POLICY\].*response model mismatch/ })
+        assert.deepEqual(events.map(event => event.type), payload === 'text' ? ['text_delta'] : [])
         assert.equal(phases.includes('response_normalized'), false)
         assert.equal(completed.length, 1)
         assert.equal(completed[0]?.status, 'failed')
         assert.equal(completed[0]?.failure_receipt?.failure_stage, terminal ? 'response_normalization' : 'stream')
+        assert.equal(completed[0]?.failure_receipt?.partial_model_output, true)
         assert.equal(api.getLastInvocationMetadata()?.observed_model_id, observed)
         assert.equal(api.getLastInvocationMetadata()?.sent_model_id, route.model)
         assert.equal(requests, 1)
