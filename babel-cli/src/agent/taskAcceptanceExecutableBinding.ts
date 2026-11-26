@@ -769,15 +769,18 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   relevanceFs?: VerifierCommandInputOverrides
   /** Historical descriptors already froze their executable interpretation. */
   replayBinding?: 'v2' | 'v3'
+  /** New amendments apply current evidence rules to any retained meaning version. */
+  requirePointWitness?: boolean
 }): TaskAcceptanceMeaning {
   const prohibits = input.replayBinding === 'v2' ? legacyTaskProhibitsCommand
     : input.replayBinding === 'v3' ? v3TaskProhibitsCommand : taskProhibitsCommand
+  const currentBinding = input.requirePointWitness === true || input.meaning.interpretation_version >= 6
   const trusted = [
     ...new Set(
       input.trustedVerifierCommands
         .map((command) => command.trim())
         .filter(command => command.length > 0 &&
-          (input.meaning.interpretation_version < 6 || !prohibits(input.meaning.activeProse, command))),
+          (!currentBinding || !prohibits(input.meaning.activeProse, command))),
     ),
   ]
   if (trusted.length === 0 || input.meaning.unresolved) return input.meaning
@@ -836,7 +839,7 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
       })
       for (const criterion of matchingCriteria) {
         const explicit = explicitById.get(criterion.id)
-        const point = !input.replayBinding && input.meaning.interpretation_version >= 6
+        const point = !input.replayBinding && currentBinding
           ? taskBehaviorPointForVerification(explicit?.behavior ?? criterion.description)
           : undefined
         const pointWitness = point && input.projectRoot

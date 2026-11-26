@@ -87,6 +87,7 @@ export function projectTaskAcceptanceRevision(
     defaultWorkingDirectory: '.',
     existingVerifierInputFiles: previous.protected_paths,
     ...(version === 2 || version === 3 ? { replayBinding: version === 2 ? 'v2' : 'v3' } : {}),
+    ...(version === 4 ? { requirePointWitness: true } : {}),
   })
   const retained = kind === 'initialize' ? [] : previous.acceptance
   const descriptions = new Set(retained.map(item => item.description))

@@ -15,7 +15,7 @@ import {sha256Canonical} from '../acceptance/canonical.js'
 import {parityOnUserTurn,checkpointParityEventLogStrictSync} from './chatEngineParityBridge.js'
 import {bindChatVerifierReceipt} from '../evidence/chatRevisionBinding.js'
 import {projectTaskAcceptanceRevision,validateTaskAcceptanceRevision} from './taskAcceptanceRevision.js'
-import {isAcceptanceMeaningDerivedRef} from './taskAcceptanceMeaning.js'
+import {ACCEPTANCE_MEANING_REF_V6,acceptanceMeaningRefForVersion,isAcceptanceMeaningDerivedRef} from './taskAcceptanceMeaning.js'
 import {validateTaskModeCompanion} from './taskModeRevision.js'
 import {createWorkingState,type WorkingState} from './codingLoop/workingState.js'
 import {assertObjectiveLifecycle} from './taskObjectiveLifecycle.js'
@@ -116,6 +116,16 @@ test('an amended point remains required without a governed case and survives col
     assert.equal(amended.required, true)
     assert.match(amended.verification.verifier_id, /^meaning:/)
     assert.equal(projectTaskAcceptanceRevision(previous, amendment, 'add', 2).added[0]?.verification.verifier_id, 'verifier:npm')
+    for (const version of [4, 5] as const) {
+      const older = { ...previous, provenance: {
+        ...previous.provenance,
+        records: previous.provenance.records.map(record => ({
+          ...record, ref: record.ref.replace(ACCEPTANCE_MEANING_REF_V6, acceptanceMeaningRefForVersion(version)),
+        })),
+      } }
+      const projected = projectTaskAcceptanceRevision(older, amendment, 'add', 4)
+      assert.match(projected.added[0]!.verification.verifier_id, /^meaning:/)
+    }
     const restored = loadLiveSessionAuthorityStrict(runDir)
     assert.equal(restored.taskContract.contract_hash, current.contract_hash)
     assert.deepEqual(restored.taskContract.acceptance, current.acceptance)
