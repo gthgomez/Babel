@@ -195,6 +195,16 @@ export class ChatEngineStreamingLoop {
         return;
       }
 
+      // Neither compaction nor the last-chance critic may consume a provider
+      // call when the observation authority required by this turn is incomplete.
+      if (this.host.p11ObservationCaptureIssues?.length) {
+        yield this.host.streamFailed(
+          "Could not prepare context: observation recovery is incomplete. Inspect the run evidence before retrying.",
+          { code: 'context_preparation_failed', cause_class: 'harness', detail: 'observation_recovery_unavailable' },
+        );
+        return;
+      }
+
       // Budget checks (P1): cost, wall-clock — honest receipts + last-chance critic
       if (this.host.terminatingLimiter === "child_exhaustion") {
         if (!this.host.isSubmissionCurrent(submissionGeneration)) return;

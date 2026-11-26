@@ -18,7 +18,7 @@ import {
   loadLiveSessionAuthorityStrict,
   projectFromDurableSession,
   persistLiveSessionSnapshot,
-  loadLiveSessionSnapshot,
+  loadLiveObservationMembership,
   recoverCheckpointArtifacts,
   canMutateWithIdempotencyKey,
   type LiveSessionAuthority,
@@ -186,7 +186,9 @@ export function hydrateRetainedModeSources(input:RefreshableAuthorityInput):void
     ...(input.parity.sessionEvents.observationBus?{observationBus:input.parity.sessionEvents.observationBus}:{}),
     ...(input.parity.sessionEvents.deferObservations?{deferObservations:true}:{}),
   };
-  input.parity.authorizedObservationIds=new Set([...(input.parity.authorizedObservationIds??[]),...(loadLiveSessionSnapshot(input.engineRunDir)?.authorized_observation_ids??[])]);
+  const membership = loadLiveObservationMembership(input.engineRunDir, thread.thread_id);
+  if (membership) input.parity.authorizedObservationIds = membership;
+  else delete input.parity.authorizedObservationIds;
 }
 
 /** A cold selection uses the same guard as a later resumed-mode preparation. */
@@ -342,7 +344,7 @@ export function restoreEngineSessionEvents(input: {
     authorizedObservationIds: [...(input.parity.authorizedObservationIds ?? [])],
   });
   try {
-    if (input.parity.liveSession) {
+    if (input.parity.authorizedObservationIds !== undefined && input.parity.liveSession) {
       persistLiveSessionSnapshot(input.runDir, input.parity.liveSession);
     }
   } catch {

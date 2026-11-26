@@ -35,7 +35,7 @@ import { ADMISSION_REASONS } from '../runtime/admissionContracts.js';
 import type { ParityRuntime, PersistenceReceipt } from './chatEngineParityBridge.js';
 import { interruptedToolRecoveries, type SessionEventLog } from './sessionEvents.js';
 import { checkpointParityEventLogStrict } from './chatEngineParityBridge.js';
-import { loadLiveSessionSnapshot } from './liveSessionBridge.js';
+import { loadLiveObservationMembership } from './liveSessionBridge.js';
 import { recordWorkingStateSnapshot } from './sessionEvents.js';
 import type { WorkingState } from './codingLoop/workingState.js';
 import type { RecoveryCandidateBinding } from './codingLoop/index.js';
@@ -465,11 +465,15 @@ export class ChatEngineP11Authority {
     }
   }
 
-  /** Conversation recovery is fenced by admitted ownership, never repository capture. */
+  /** Fence compaction by admitted ownership and recovered observation authority. */
   prepareCompactionGuard(): () => boolean {
     const owner = this.currentP11Owner();
     if (!owner) throw new ContextPreparationError(this.host.options.projectRoot ?? '',
       'owner_unavailable', 'context owner unavailable', this.host.engineRunDir);
+    if (!this.host.parity.authorizedObservationIds || this.host.p11ObservationCaptureIssues.length > 0) {
+      throw new ContextPreparationError(this.host.options.projectRoot ?? '',
+        'observation_recovery_unavailable', 'observation recovery is incomplete', this.host.engineRunDir);
+    }
     return () => {
       const currentOwner = this.currentP11Owner();
       if (!currentOwner || currentOwner.generation !== owner.generation || currentOwner.token !== owner.token) return false;
@@ -769,15 +773,13 @@ export class ChatEngineP11Authority {
     return true;
   }
 
-  /**
-   * Execute a batch of tool actions sequentially through the policy gate.
-   * Each action emits start/complete callbacks for the ConversationalRenderer.
-   */
+  /** Load current durable membership before projecting restored session state. */
   loadObservationMembership(sessionDir: string = this.host.engineRunDir): void {
-    const liveSnapshot = loadLiveSessionSnapshot(sessionDir);
-    this.host.parity.authorizedObservationIds = new Set(
-      liveSnapshot?.authorized_observation_ids ?? [],
+    const membership = loadLiveObservationMembership(
+      sessionDir, this.host.parity.eventLog.thread_id,
     );
+    if (membership) this.host.parity.authorizedObservationIds = membership;
+    else delete this.host.parity.authorizedObservationIds;
   }
 
   private isSettledObservationFromCurrentTask(observation: ObservationRefV1): boolean {
@@ -815,90 +817,76 @@ export class ChatEngineP11Authority {
     applied: boolean;
     issues: string[];
   } {
-    const issues: string[] = [];
-    const checkpointPath = join(sessionDir, "context-checkpoint.json");
-    if (!existsSync(checkpointPath)) return { applied: false, issues };
-    const threadId = this.host.parity.eventLog.thread_id;
-    // Durable session membership for model-readable observations is loaded from
-    // the live-session snapshot; a checkpoint manifest cannot grant its own.
     this.loadObservationMembership(sessionDir);
+    delete this.host.parity.contextCheckpoint;
+    this.host.p11ObservationRefs = [];
+    this.host.p11ObservationCaptureIssues = [];
+    const membership = this.host.parity.authorizedObservationIds;
+    const authorizedObservationIds = [...(membership ?? [])];
+    const checkpointPath = join(sessionDir, "context-checkpoint.json");
+    const issues: string[] = [];
+    let validCheckpoint: ContextCheckpoint | undefined;
+    let membershipRevoked = false;
     try {
-      const checkpoint = JSON.parse(
-        readFileSync(checkpointPath, "utf8"),
-      ) as ContextCheckpoint;
-      const durableOwner =
-        this.host.parity.admissionStore?.readOwner(threadId) ?? null;
-      const lineageEvidence: ContextCheckpointLineageEvidenceV1 = {
-        threadEvents: this.host.parity.eventLog.events,
-        sessionEvents: this.host.parity.sessionEvents.events,
-      };
-      const authorizedObservationIds = [...(this.host.parity.authorizedObservationIds ?? [])];
-      const validationInput = {
-        expectedThreadId: threadId,
-        currentOwner: durableOwner,
-        requireInstalledLineage: true as const,
-        authorizedObservationIds,
-        lineageEvidence,
-      };
-      const coldResume = validateContextCheckpoint(checkpoint, validationInput);
-      if (coldResume.status !== "valid") {
-        // A stop can durably settle work after the last pre-provider checkpoint.
-        // Confirm the empty checkpoint is otherwise sound for its old context;
-        // it is never installed with the historical membership.
-        const emptyCheckpointLag = authorizedObservationIds.length > 0 &&
-          Array.isArray(checkpoint?.observation_manifest) && checkpoint.observation_manifest.length === 0 &&
-          coldResume.reasons.every(reason => reason === 'observation_manifest_incomplete') &&
-          validateContextCheckpoint(checkpoint, {
-            ...validationInput,
-            authorizedObservationIds: [],
-          }).status === 'valid';
-        if (!emptyCheckpointLag) {
-          issues.push(coldResume.reasons.join("; "));
-          return { applied: false, issues };
-        }
-      }
-      const checkpointIds = new Set(checkpoint.observation_manifest.map(observation => observation.observation_id));
-      const recovered: ObservationRefV1[] = [];
-      for (const observationId of authorizedObservationIds) {
-        const resolved = resolveObservation(
-          observationId,
-          {
-            principal_id: "agent:main",
-            authorized_observation_ids: authorizedObservationIds,
+      if (existsSync(checkpointPath)) {
+        const checkpoint = JSON.parse(readFileSync(checkpointPath, "utf8")) as ContextCheckpoint;
+        const threadId = this.host.parity.eventLog.thread_id;
+        const coldResume = validateContextCheckpoint(checkpoint, {
+          expectedThreadId: threadId,
+          currentOwner: this.host.parity.admissionStore?.readOwner(threadId) ?? null,
+          requireInstalledLineage: true,
+          authorizedObservationIds,
+          lineageEvidence: {
+            threadEvents: this.host.parity.eventLog.events,
+            sessionEvents: this.host.parity.sessionEvents.events,
           },
-          {
-            storage_root: join(this.host.engineRunDir, "observations"),
-            clock: () => new Date().toISOString(),
-            policy: { durability: "none" },
-          },
-        );
-        if (resolved.status !== 'resolved') {
-          issues.push(`observation ${observationId} unavailable: ${resolved.reason}`);
-        } else if (!checkpointIds.has(observationId) && !this.isSettledObservationFromCurrentTask(resolved.observation)) {
-          issues.push(`observation ${observationId} has no matching durable tool settlement in the current task`);
+        });
+        if (coldResume.status === "valid") {
+          validCheckpoint = checkpoint;
         } else {
-          recovered.push(resolved.observation);
+          issues.push(coldResume.reasons.join("; "));
+          membershipRevoked = coldResume.reasons.includes('observation_membership_unavailable');
         }
       }
-      if (issues.length > 0) {
-        // An authorized id with no durable payload must not silently
-        // reconstruct partial trusted context.
-        this.host.p11ObservationCaptureIssues = [...issues];
-        return { applied: false, issues };
-      }
-      this.host.p11ObservationRefs = recovered;
-      if (checkpointIds.size !== authorizedObservationIds.length) {
-        // The next live admitted owner installs the complete manifest.
-        return { applied: false, issues };
-      }
-      this.host.parity.contextCheckpoint = checkpoint;
-      return { applied: true, issues };
     } catch (err) {
-      // A malformed or stale context checkpoint is unavailable evidence;
-      // durable thread/session logs remain the only resume source.
       issues.push(err instanceof Error ? err.message : String(err));
-      return { applied: false, issues };
     }
+    if (!membership || membershipRevoked) {
+      this.host.p11ObservationCaptureIssues = ['observation_membership_unavailable'];
+      return { applied: false, issues: [...issues, ...this.host.p11ObservationCaptureIssues] };
+    }
+
+    // A stop can leave a newer durable tool tail or compaction commit than
+    // the pre-provider checkpoint names. Recover references independently and
+    // leave installation to the next live admitted owner.
+    const checkpointIds = new Set(validCheckpoint?.observation_manifest.map(ref => ref.observation_id));
+    const recoveryIssues: string[] = [];
+    const recovered: ObservationRefV1[] = [];
+    for (const observationId of authorizedObservationIds) {
+      const resolved = resolveObservation(observationId, {
+        principal_id: "agent:main",
+        authorized_observation_ids: authorizedObservationIds,
+      }, {
+        storage_root: join(sessionDir, "observations"),
+        clock: () => new Date().toISOString(),
+        policy: { durability: "none" },
+      });
+      if (resolved.status !== 'resolved') {
+        recoveryIssues.push(`observation ${observationId} unavailable: ${resolved.reason}`);
+      } else if (!checkpointIds.has(observationId) && !this.isSettledObservationFromCurrentTask(resolved.observation)) {
+        recoveryIssues.push(`observation ${observationId} has no matching durable tool settlement in the current task`);
+      } else {
+        recovered.push(resolved.observation);
+      }
+    }
+    if (recoveryIssues.length > 0) {
+      this.host.p11ObservationCaptureIssues = recoveryIssues;
+      return { applied: false, issues: [...issues, ...recoveryIssues] };
+    }
+    this.host.p11ObservationRefs = recovered;
+    if (!validCheckpoint || checkpointIds.size !== membership.size) return { applied: false, issues };
+    this.host.parity.contextCheckpoint = validCheckpoint;
+    return { applied: true, issues };
   }
 
 }

@@ -8,15 +8,16 @@ import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { ChatEngineP11Authority, type ChatEngineP11Host } from './chatEngineP11Authority.js'
 import { ChatEngine } from './chatEngine.js'
-import { createParityRuntime, parityOnUserTurn } from './chatEngineParityBridge.js'
-import { loadLiveSessionSnapshot, resolveLiveSessionAuthority } from './liveSessionBridge.js'
+import { checkpointParityEventLogStrictSync, createParityRuntime, parityOnUserTurn } from './chatEngineParityBridge.js'
+import { commitCompaction } from './compactionCommit.js'
+import { LIVE_SESSION_SNAPSHOT_FILENAME, loadLiveSessionSnapshot, persistLiveSessionSnapshot, resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import { createWorkingState } from './codingLoop/workingState.js'
 import { RevisionManager } from '../evidence/revisionBoundReceipt.js'
 import { resolveObservation } from '../evidence/observationStore.js'
 import { openAdmissionStore } from '../runtime/admission.js'
 import { chatSessionDir } from '../cli/runsLayout.js'
 import { validateContextCheckpoint } from '../runtime/contextCheckpoints.js'
-import type { ToolStreamEvent } from '../runners/base.js'
+import type { ProviderMessage, ToolStreamEvent } from '../runners/base.js'
 
 const route = { compiled_request_identity: 'fixture-request', tool_profile: 'native-tools', model_route: 'fixture:model' }
 
@@ -298,6 +299,12 @@ test('conversation compaction guard rejects a superseded owner', t => {
   assert.equal(validate(), false)
 })
 
+test('conversation compaction guard rejects unresolved observation recovery', t => {
+  const { authority, host } = fixture(t)
+  host.p11ObservationCaptureIssues = ['An authorized observation payload could not be recovered']
+  assert.throws(() => authority.prepareCompactionGuard(), /observation recovery/i)
+})
+
 test('runtime evidence changes physical capture without blocking conversation ownership', async t => {
   const { authority, host, projectRoot, parity } = fixture(t, true, true)
   const before = RevisionManager.computeRevisionSync(projectRoot, [], { scope_kind: 'repository' })
@@ -319,7 +326,10 @@ test('a command with unknown physical settlement remains indeterminate in the du
   assert.equal(admission?.state, 'indeterminate')
 })
 
-async function checkColdContinuation(t: TestContext, payload: 'intact' | 'corrupt'): Promise<void> {
+async function checkColdContinuation(
+  t: TestContext,
+  scenario: 'intact' | 'corrupt' | 'compacted' | 'missing-membership' | 'invalid-membership' | 'revoked-after-restore',
+): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), 'babel-p11-cold-observation-'))
   const projectRoot = join(root, 'workspace')
   mkdirSync(projectRoot)
@@ -342,6 +352,7 @@ async function checkColdContinuation(t: TestContext, payload: 'intact' | 'corrup
   const runId = 'cold-tail-observation'
   const original = new ChatEngine({ ...options, runId })
   let continuedCalls = 0
+  let continuedMessages: readonly ProviderMessage[] = []
   const runner = {
     async *executeWithToolsStream(): AsyncGenerator<ToolStreamEvent> {
       yield { type: 'tool_use', id: 'inspect-source', name: 'read_range',
@@ -368,7 +379,34 @@ async function checkColdContinuation(t: TestContext, payload: 'intact' | 'corrup
   const originalTask = original.getParityRuntime().liveAuthority?.taskContract.task_id
   assert.ok(originalTask)
 
-  if (payload === 'corrupt') {
+  if (scenario === 'compacted') {
+    const parity = original.getParityRuntime()
+    assert.ok(parity.turnId)
+    const compacted = await commitCompaction({
+      strategyMessages: [{ role: 'user', content: task }],
+      priorConversation: [{ role: 'user', content: task }],
+      strategy: 'heuristic-truncate',
+      tokensBefore: 100,
+      tokensAfter: 40,
+      operational: { task, progressSummary: 'Inspected the native fixture' },
+      threadLog: parity.eventLog,
+      sessionLog: parity.sessionEvents,
+      turnId: parity.turnId,
+      modelId: options.model,
+      persist: async () => {
+        const saved = checkpointParityEventLogStrictSync(parity, sessionDir)
+        assert.equal(saved.status, 'committed')
+      },
+    })
+    assert.equal(compacted.status, 'committed')
+    assert.equal(JSON.parse(readFileSync(join(sessionDir, 'context-checkpoint.json'), 'utf8')).checkpoint_digest,
+      persisted.checkpoint_digest, 'simulate a stop before installing the next context checkpoint')
+  }
+
+  const snapshotPath = join(sessionDir, LIVE_SESSION_SNAPSHOT_FILENAME)
+  if (scenario === 'missing-membership') rmSync(snapshotPath)
+  if (scenario === 'invalid-membership') writeFileSync(snapshotPath, '{')
+  if (scenario === 'corrupt') {
     const observationDir = join(sessionDir, 'observations')
     const ref = resolveObservation(membership[0]!, {
       principal_id: 'agent:main',
@@ -380,11 +418,20 @@ async function checkColdContinuation(t: TestContext, payload: 'intact' | 'corrup
   const resumed = await ChatEngine.restore(runId, options)
   const hydrated = resumed.hydrateInstalledContextAuthority(sessionDir)
   assert.equal(hydrated.applied, false)
-  if (payload === 'intact') assert.deepEqual(hydrated.issues, [])
-  else assert.match(hydrated.issues.join('; '), /payload object (?:hash|size) mismatch/)
+  if (scenario === 'intact' || scenario === 'revoked-after-restore') {
+    assert.deepEqual(hydrated.issues, ['observation_manifest_incomplete'])
+  }
+  if (scenario === 'compacted') assert.match(hydrated.issues.join('; '), /lineage_superseded/)
+  if (scenario === 'corrupt') assert.match(hydrated.issues.join('; '), /payload object (?:hash|size) mismatch/)
+  if (scenario === 'revoked-after-restore') {
+    const snapshot = loadLiveSessionSnapshot(sessionDir)
+    assert.ok(snapshot)
+    persistLiveSessionSnapshot(sessionDir, { ...snapshot, authorized_observation_ids: [] })
+  }
   Object.assign(resumed, {
-    deliberationRunner: { ...runner, async *executeWithToolsStream(): AsyncGenerator<ToolStreamEvent> {
+    deliberationRunner: { ...runner, async *executeWithToolsStream(messages: ProviderMessage[]): AsyncGenerator<ToolStreamEvent> {
       continuedCalls++
+      continuedMessages = messages
       yield { type: 'text_delta', text: 'The fixture contains 17 widgets.' }
       yield { type: 'done', finishReason: 'stop' }
     } },
@@ -392,14 +439,26 @@ async function checkColdContinuation(t: TestContext, payload: 'intact' | 'corrup
     shouldUseNativeTools: () => true,
   })
   const result = await resumed.submitMessage('  continue  ', {})
-  if (payload === 'intact') {
+  if (scenario === 'intact' || scenario === 'compacted') {
     assert.equal(continuedCalls, 1, result.answer)
     assert.deepEqual(resumed.getParityRuntime().contextCheckpoint?.observation_manifest.map(ref => ref.observation_id), membership)
     assert.match(result.answer, /17 widgets/)
+    if (scenario === 'compacted') {
+      assert.ok(resumed.getParityRuntime().contextCheckpoint?.installed_lineage?.compaction_event_id)
+      assert.ok(continuedMessages.some(message => message.name === 'compaction_capsule'))
+    } else {
+      assert.ok(continuedMessages.some(message => message.role === 'tool' &&
+        message.content?.includes(text.trim())), 'the settled observation reached the resumed provider input')
+    }
   } else {
     assert.equal(continuedCalls, 0)
     assert.equal(result.reason_code, 'context_preparation_failed')
     assert.equal(resumed.getParityRuntime().contextCheckpoint, undefined)
+  }
+  if (scenario === 'missing-membership') assert.equal(fs.existsSync(snapshotPath), false)
+  if (scenario === 'invalid-membership') assert.equal(readFileSync(snapshotPath, 'utf8'), '{')
+  if (scenario === 'revoked-after-restore') {
+    assert.deepEqual(loadLiveSessionSnapshot(sessionDir)?.authorized_observation_ids, [])
   }
   assert.equal(resumed.getParityRuntime().liveAuthority?.taskContract.task_id, originalTask)
   assert.equal(resumed.getParityRuntime().sessionEvents.events.filter(event =>
@@ -411,3 +470,11 @@ test('cold continuation recovers a settled observation from an intact payload',
   t => checkColdContinuation(t, 'intact'))
 test('cold continuation blocks before dispatch if the settled observation payload is corrupt',
   t => checkColdContinuation(t, 'corrupt'))
+test('cold continuation recovers settled observations after compaction supersedes the checkpoint',
+  t => checkColdContinuation(t, 'compacted'))
+test('cold continuation does not rewrite missing observation membership as empty',
+  t => checkColdContinuation(t, 'missing-membership'))
+test('cold continuation does not rewrite corrupt observation membership as empty',
+  t => checkColdContinuation(t, 'invalid-membership'))
+test('retained admission does not restore membership revoked after hydration',
+  t => checkColdContinuation(t, 'revoked-after-restore'))

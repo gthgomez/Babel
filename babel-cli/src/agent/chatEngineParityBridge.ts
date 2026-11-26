@@ -1270,7 +1270,7 @@ function persistParityLiveSessionArtifacts(rt: ParityRuntime, runDir: string): v
     authorizedObservationIds: [...(rt.authorizedObservationIds ?? [])],
   });
   rt.liveSession = live;
-  persistLiveSessionSnapshot(runDir, live);
+  if (rt.authorizedObservationIds !== undefined) persistLiveSessionSnapshot(runDir, live);
 }
 
 function tryPersistParityLiveSessionArtifacts(rt: ParityRuntime, runDir: string): boolean {
@@ -1502,6 +1502,7 @@ export function checkpointParityEventLogStrictSync(
     });
 
     if (!rt.liveAuthority) throw new Error('live authority is missing');
+    if (rt.authorizedObservationIds === undefined) throw new Error('observation membership is unavailable');
     assertAuthorityModeHistory(rt.liveAuthority);
     assertObjectiveLifecycle(rt.liveAuthority,rt.liveAuthority.taskObjectiveLifecycle,{thread:rt.eventLog,session:rt.sessionEvents});
 

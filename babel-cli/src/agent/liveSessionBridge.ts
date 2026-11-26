@@ -606,6 +606,24 @@ export function loadLiveSessionSnapshot(runDir: string): LiveSessionV1 | null {
   }
 }
 
+/** Read the session's observation membership without treating lost authority as an empty set. */
+export function loadLiveObservationMembership(runDir: string, sessionId: string): Set<string> | undefined {
+  const snapshot = loadLiveSessionSnapshot(runDir);
+  const ids = snapshot?.authorized_observation_ids;
+  if (snapshot?.schema_version === 1 && snapshot.session_id === sessionId &&
+    Array.isArray(ids) && ids.every(id => typeof id === 'string' && id.length > 0)) {
+    return new Set(ids);
+  }
+  // Older sessions without observation artifacts did not need a membership record.
+  const legacy = snapshot?.schema_version === 1 && snapshot.session_id === sessionId && ids === undefined;
+  const absent = snapshot === null && !existsSync(join(runDir, LIVE_SESSION_SNAPSHOT_FILENAME));
+  if ((legacy || absent) && !existsSync(join(runDir, 'context-checkpoint.json')) &&
+    !existsSync(join(runDir, 'observations'))) {
+    return new Set();
+  }
+  return undefined;
+}
+
 /**
  * Resume equivalence for H2: project twice from durable artifacts and compare.
  */

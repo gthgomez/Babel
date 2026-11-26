@@ -703,6 +703,7 @@ export interface ChatEngineStreamingLoopHost {
   ) => Promise<boolean>
   /** Structured diagnostic from the most recent refused P11 install (codes only). */
   p11InstallBlock: { code: string; details: string[] } | null
+  readonly p11ObservationCaptureIssues?: readonly string[]
   investigateSoftNudgeDone: boolean
   readonly isSubmissionCurrent: (ownerGeneration: number) => boolean
   readonly lastCriticReceipt: DiffCriticVerdict | null

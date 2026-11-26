@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { sha256Canonical } from '../acceptance/canonical.js'
+import { ContextPreparationError } from './chatContextFailure.js'
 import type {
   ChatEngineOptions,
   ChatTaskAllowanceSnapshot,
@@ -151,7 +152,7 @@ export function admitObjectiveSubmission(
     episodeStream: structuredClone(previous.episodeStream),
     loop: structuredClone(previous.loop),
     progress: structuredClone(previous.progress),
-    authorizedObservationIds: new Set(previous.authorizedObservationIds),
+    ...(previous.authorizedObservationIds ? { authorizedObservationIds: new Set(previous.authorizedObservationIds) } : {}),
   }
   const authority = previous.liveAuthority
   if (!authority) throw new Error('OBJECTIVE_AUTHORITY_MISSING')
@@ -188,7 +189,20 @@ export function admitObjectiveSubmission(
     !lifecycle &&
     authority.taskContract.user_request === runtime.taskText
   const preserve = prepared.objectiveDisposition === 'preserve'
-  if (!preserve && !initialSeed) staged.authorizedObservationIds = new Set()
+  if (preserve) {
+    const membership = staged.authorizedObservationIds
+    const previousIds = previous.authorizedObservationIds
+    if (!membership || !previousIds || previousIds.size !== membership.size ||
+        [...previousIds].some(id => !membership.has(id))) {
+      // Failure settlement can still project the previous runtime. Never let
+      // that projection write stale membership back over the source of record.
+      delete previous.authorizedObservationIds
+      delete previous.contextCheckpoint
+      throw new ContextPreparationError(host.options.projectRoot ?? '',
+        'observation_membership_unavailable', 'durable observation membership is unavailable or changed; reopen this session',
+        host.engineRunDir)
+    }
+  } else if (!initialSeed) staged.authorizedObservationIds = new Set()
   const delivered = prepareEngineInstructionAuthority(context)
   if (
     (preserve || initialSeed) &&
