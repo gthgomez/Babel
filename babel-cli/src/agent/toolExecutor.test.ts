@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -386,6 +387,43 @@ describe('createToolExecutor', () => {
     assert.equal(result.policyDecision, 'deny');
     assert.match(result.results[0]?.stderr ?? '', /User denied approval/);
   });
+
+  for (const approval of ['granted', 'denied', 'unavailable'] as const) {
+    it(`eligible scoped command with approval ${approval}`, async () => {
+      const marker = 'babel-approval-fixture';
+      let requests = 0;
+      let starts = 0;
+      const executor = createToolExecutor({ executeTool: async request => {
+        assert.equal(request.tool, 'shell_exec');
+        starts++;
+        const child = process.platform === 'win32'
+          ? spawnSync('cmd.exe', ['/d', '/c', 'echo', marker], { encoding: 'utf8' })
+          : spawnSync('echo', [marker], { encoding: 'utf8' });
+        assert.ifError(child.error);
+        return { exit_code: child.status ?? 1, stdout: child.stdout, stderr: child.stderr };
+      } });
+      const result = await executeActionWithPolicy(
+        { type: 'run_command', command: `echo ${marker}` }, 'ask_before_mutation',
+        { ...context, runId: `scoped-approval-${approval}`, projectRoot: process.cwd() }, {
+          executor,
+          ...(approval !== 'unavailable' ? { onAskApproval: async () => {
+            requests++;
+            return approval === 'granted';
+          } } : {}),
+        },
+      );
+      assert.equal(requests, approval === 'unavailable' ? 0 : 1);
+      assert.equal(starts, approval === 'granted' ? 1 : 0);
+      if (approval === 'granted') {
+        assert.equal(result.policyDecision, 'allow');
+        assert.equal(result.results[0]?.exit_code, 0);
+        assert.equal(result.results[0]?.stdout.trim(), marker);
+      } else {
+        assert.equal(result.policyDecision, approval === 'denied' ? 'deny' : 'ask');
+        assert.equal(result.preDispatchNoEffect, true);
+      }
+    });
+  }
 
   it('executeActionWithPolicy allows mutations under workspace_write', async () => {
     let invoked = false;

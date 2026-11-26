@@ -63,6 +63,7 @@ import {
 import { settleChatVerifierResult } from "./chatVerifierSettlement.js";
 import { isAuthoritativeVerifierCommand } from "./completionGatePolicy.js";
 import { acceptToolStop, settlePreventedChatAction } from './chatEngineRunControl.js';
+import { requestsLocalExporterExecution } from './requestedLocalExecution.js';
 import { RunStoppedError } from '../runtime/run-control.js';
 import { ProcessTerminationError } from '../sandbox.js';
 import { chatReadToolExecutor } from "./chatReadExecutor.js";
@@ -1613,6 +1614,13 @@ export class ChatEngineActionExecutor {
           ? result.mutationPaths[0]
           : target;
 
+      const requestedExecutionDenied = control && action.type === 'run_command' &&
+        action.background !== true && result.policyDecision === 'deny' && result.preDispatchNoEffect === true &&
+        result.reasonCode === 'DENY_MISSING_AUTHORITY' &&
+        requestsLocalExporterExecution(this.host.options.task, action.command, this.host.toolCallLog.flatMap(entry =>
+          entry.effect_status === 'confirmed_change' ? entry.mutation_paths ?? [] : [],
+        ));
+
       const verifierSemanticSignature = frozenVerifierDispatch?.owner && frozenVerifierDispatch.candidate &&
         !result.policyBlocked && !result.notStarted && lastResult?.process_started === true && lastResult.simulated !== true && lastResult.launch_failure === undefined
         && isAuthoritativeVerifierCommand(target)
@@ -1636,7 +1644,7 @@ export class ChatEngineActionExecutor {
           result.results.every(entry => entry.exit_code === 0 && !entry.denial) && !toolError
           ? { read_revision_hash: readRevisionHash }
           : {}),
-        detail,
+        detail: requestedExecutionDenied ? 'requested_execution_denied' : detail,
         index: meta.index,
         ...((action.type === 'run_command' || action.type === 'test_run') ? {
           verifierExecuted: !result.policyBlocked && !result.notStarted &&
@@ -1662,6 +1670,9 @@ export class ChatEngineActionExecutor {
 
       if (result.policyBlocked) {
         callbacks?.onToolComplete?.(toolId, "blocked", "blocked", 1);
+        if (requestedExecutionDenied) control.requestStop({
+          owner: control.owner, kind: 'blocked', reasonCode: 'permission_denied', source: 'executor',
+        });
       } else {
         const hasErr = lastResult && lastResult.exit_code !== 0;
         callbacks?.onToolComplete?.(

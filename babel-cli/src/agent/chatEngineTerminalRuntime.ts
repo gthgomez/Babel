@@ -938,8 +938,16 @@ export function stoppedChatStream(
   if (stop.kind === 'failed') {
     return failChatStream(inputForTerminal(), `Execution stopped: ${stop.reasonCode}.`)
   }
-  return completeChatStream(inputForTerminal(), `Execution stopped: ${stop.reasonCode}.`, {
+  const input = inputForTerminal()
+  const refusedCommand = stop.reasonCode === 'permission_denied'
+    ? input.snapshot.evidence.observability.toolCallLog.filter(entry => entry.detail === 'requested_execution_denied').at(-1)?.target
+    : undefined
+  const answer = refusedCommand
+    ? `Babel denied the required command before dispatch: \`${singleLineEvidence(refusedCommand)}\`. The current session lacks authority for this script and cannot request approval for it. The exporter did not run. To finish, use an authorized execution environment to run the command and check the generated CSV.`
+    : `Execution stopped: ${stop.reasonCode}.`
+  return completeChatStream(input, answer, {
     stopRequest: stop,
+    ...(refusedCommand ? { reason: { code: 'permission_denied', cause_class: 'harness' } } : {}),
   })
 }
 

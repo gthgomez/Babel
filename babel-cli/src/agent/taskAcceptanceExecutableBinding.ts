@@ -8,7 +8,7 @@ import {
   parseStructuredVerifierCommand,
 } from './completionGatePolicy.js'
 import type { AcceptanceRequirementV1, AcceptanceRequirementType, VerificationSpecV1 } from './taskContract.js'
-import { labeledBehavioralGoalText, type AcceptanceMeaningSource, type TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
+import { isQuantifiedArithmeticBehavior, labeledBehavioralGoalText, type AcceptanceMeaningSource, type TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
 import { assertionEvidenceMatches, stripJsComments } from './verifierBehaviorEvidence.js'
 import { markAdvisoryDocsGoals } from './advisoryDocsGoal.js'
@@ -289,7 +289,9 @@ function normalizedCriterionText(value: string, meaning: TaskAcceptanceMeaning):
   // distinct user requirements share verifier authority. Conservative misses
   // simply leave the inferred criterion unbound and therefore unverified.
   const text = value.trim()
-  const behavior = meaning.interpretation_version === 4 ? labeledBehavioralGoalText(text) ?? text : text
+  const behavior = meaning.interpretation_version >= 4
+    ? labeledBehavioralGoalText(text, meaning.interpretation_version >= 5) ?? text
+    : text
   return behavior.replace(/[.!?]+$/, '')
 }
 
@@ -770,10 +772,10 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     return bound
   })
 
-  // V1/V2 replay cannot gain a task-authored link on reload. Only v4 treats
+  // V1/V2 replay cannot gain a task-authored link on reload. V4 onward treats
   // recognized goal labels as framing when comparing the linked behavior.
   if (input.meaning.interpretation_version >= 3) {
-    const bindEquivalentExplicitLinks = input.meaning.interpretation_version === 4
+    const bindEquivalentExplicitLinks = input.meaning.interpretation_version >= 4
     const linked = input.meaning.criteria.flatMap((criterion) => {
       const source = input.meaning.sources.find(item => item.criterion_id === criterion.id)
       if (source?.status !== 'explicit') return []
@@ -897,6 +899,7 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     const projectRoot = input.projectRoot
     const fs = input.relevanceFs ?? {}
     relevanceBound = explicitCriteria.map((criterion) => {
+      if (input.meaning.interpretation_version >= 5 && isQuantifiedArithmeticBehavior(criterion.description)) return criterion
       const matches = relevantTrustedCommands({ criterion, trusted, projectRoot, fs })
       if (matches.length !== 1) return criterion
       const command = matches[0]!
