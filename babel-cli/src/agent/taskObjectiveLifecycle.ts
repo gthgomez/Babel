@@ -244,6 +244,7 @@ export function assertObjectiveLifecycle(
           requestedOperation: event.requestedOperation ?? 'AUTO',
           requestedTaskIntent: event.requestedTaskIntent ?? null,
           requestedContinueTask: event.requestedContinueTask ?? false,
+          ...(event.objectiveOperation ? { objectiveOperation: event.objectiveOperation } : {}),
         }) !== attempt.input_digest
       )
         throw new Error('OBJECTIVE_LIFECYCLE_INVALID: Accepted input')

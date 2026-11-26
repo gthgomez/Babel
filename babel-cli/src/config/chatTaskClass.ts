@@ -13,6 +13,7 @@ import type { ChatEngineLimits } from './chatEngineLimits.js';
 import { autonomyClassFromEnv, autonomyTaskClassFor } from './autonomyPolicy.js';
 import { Marked, type Token, type Tokens } from 'marked';
 import { findOpeningLabeledGoal } from '../agent/taskAcceptanceMeaning.js';
+import { isDeclarativeBehaviorPoint } from '../agent/taskBehaviorPoint.js';
 
 /** Supported chat task classes (product-facing). */
 export type ChatTaskClass =
@@ -597,7 +598,7 @@ export function isReadOnlyTaskFrame(taskText: string): boolean {
  * Lightweight multi-dimensional task-shape analysis.
  * Analyzes operation kind (READ_ONLY vs MUTATING vs HYBRID) and complexity (TRIVIAL vs BOUNDED vs OPEN_ENDED).
  */
-export function analyzeTaskShape(taskText: string): TaskShape {
+export function analyzeTaskShape(taskText: string, allowDeclarativePoint = true): TaskShape {
   const t = taskText.trim().toLowerCase();
   if (!t) {
     return { operation: 'READ_ONLY', complexity: 'TRIVIAL' };
@@ -616,7 +617,9 @@ export function analyzeTaskShape(taskText: string): TaskShape {
   // Test the original indentation and opening frame before evidence stripping.
   // Only the mutation scan sees the unframed goal; all no-edit checks retain
   // the original request and the caller's resolved mode/operation.
-  const goal = findOpeningLabeledGoal(taskText);
+  const goal = allowDeclarativePoint
+    ? findOpeningLabeledGoal(taskText, true, true)
+    : findOpeningLabeledGoal(taskText);
   const mutationText = goal
     ? `${goal.operative ? goal.text : ''}${taskText.slice(goal.end)}`.toLowerCase()
     : t;
@@ -627,7 +630,14 @@ export function analyzeTaskShape(taskText: string): TaskShape {
     new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'gi'),
     ' ',
   );
+  const firstProseLine = taskText.split(/\r?\n/).find(line => line.trim());
+  const declarativePoint = allowDeclarativePoint && !hasExplicitEditDenial(taskText) && (
+    goal?.operative
+      ? isDeclarativeBehaviorPoint(goal.text)
+      : firstProseLine !== undefined && /^ {0,3}\S/.test(firstProseLine) && isDeclarativeBehaviorPoint(firstProseLine)
+  );
   const hasMutationTokens =
+    declarativePoint ||
     /^(?:(?:can|could|would)\s+you\s+|please\s+)?(?:make|order|sort)\b/i.test(positiveMutationScope.trim()) ||
     /\b(?:and|then)\s+(?:make|order|sort)\s+(?:this|it|the|[\w-]+\s+(?:by|from))\b/i.test(positiveMutationScope) ||
     new RegExp(`\\b(clean\\s*up\\s+and\\s+delete|${MUTATION_VERB_SOURCE})\\b`, 'i').test(
@@ -697,8 +707,9 @@ export function analyzeTaskShape(taskText: string): TaskShape {
 export function resolveTaskShape(
   taskText: string,
   requested: RequestedTaskOperation = 'AUTO',
+  allowDeclarativePoint = true,
 ): TaskShape {
-  const shape = analyzeTaskShape(taskText);
+  const shape = analyzeTaskShape(taskText, allowDeclarativePoint);
   const denied = hasExplicitEditDenial(taskText);
   if (denied) return { ...shape, operation: 'READ_ONLY' };
   if (requested === 'AUTO') return shape;
@@ -787,6 +798,7 @@ export function resolveChatTaskClass(opts?: {
    */
   autoClassify?: boolean;
   operation?: RequestedTaskOperation | undefined;
+  taskShape?: TaskShape;
 }): ChatTaskClass {
   const env = opts?.env ?? process.env;
   const auto = opts?.autoClassify !== false;
@@ -820,7 +832,7 @@ export function resolveChatTaskClass(opts?: {
   if (autonomyClass) return autonomyTaskClassFor(autonomyClass);
 
   if (auto && opts?.taskText && opts.taskText.trim()) {
-    return mapTaskShapeToClass(resolveTaskShape(opts.taskText, opts.operation), opts.taskText);
+    return mapTaskShapeToClass(opts.taskShape ?? resolveTaskShape(opts.taskText, opts.operation), opts.taskText);
   }
 
   return 'default';

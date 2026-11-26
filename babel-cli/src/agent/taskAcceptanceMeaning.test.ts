@@ -38,6 +38,23 @@ function acceptance(task: string) {
   return resolveLiveSessionAuthority({ mode: 'chat', task, projectRoot: null, executionScope: { kind: 'conversation' } }).taskContract
 }
 
+test('a green-test requirement does not displace the requested arithmetic repair', () => {
+  for (const goal of [
+    'Repair addition in src/math.js so it correctly adds any two numbers.',
+    'Fix add() to correctly add two numbers.',
+    'Repair the add function to add any two numbers.',
+  ]) {
+    const task = `${goal}\nRequirements: npm test must pass`
+    const { taskContract } = resolveLiveSessionAuthority({
+      mode: 'chat', task, projectRoot: null, executionScope: { kind: 'conversation' },
+      verifierRequirements: ['npm test'],
+    })
+    assert.deepEqual(taskContract.acceptance_criteria, [goal, 'npm test must pass'])
+    assert.match(taskContract.acceptance[0]!.verification.verifier_id, /^meaning:/)
+    assert.deepEqual(inferTaskAcceptanceForVersion(task, 4).criteria.map(item => item.description), ['npm test must pass'])
+  }
+})
+
 test('initial acceptance captures explicit user criteria before publishing the frozen seed', () => {
   const request = [
     'Update the fixture buttons.',
@@ -55,7 +72,7 @@ test('initial acceptance captures explicit user criteria before publishing the f
   assert.ok(contract.acceptance.every(criterion => criterion.required))
   assert.equal(new Set(contract.acceptance.map(criterion => criterion.verification.verifier_id)).size, 2,
     'Different behavioral requirements cannot inherit one generic verification identity')
-  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v4:explicit:')))
+  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v6:explicit:')))
 })
 
 test('fenced, quoted and introduced example requirements cannot become acceptance authority', () => {
@@ -78,15 +95,15 @@ test('fenced, quoted and introduced example requirements cannot become acceptanc
 test('inferred requirements stay distinguishable from explicit acceptance', () => {
   const contract = acceptance('The startup must succeed without Docker.')
   assert.deepEqual(contract.acceptance_criteria, ['The startup must succeed without Docker.'])
-  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v4:inferred:')))
-  assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v4:explicit:')), false)
+  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v6:inferred:')))
+  assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v6:explicit:')), false)
 })
 
 test('fresh admission captures short vague prose as provisional inferred requirements', () => {
   const contract = acceptance('Fix it')
   assert.deepEqual(contract.acceptance_criteria, ['Fix it'])
-  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v4:inferred:')))
-  assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v4:unresolved:')), false)
+  assert.ok(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v6:inferred:')))
+  assert.equal(contract.provenance.records.some(record => record.ref.startsWith('task-acceptance-meaning:v6:unresolved:')), false)
   assert.equal(contract.acceptance[0]!.required, true)
 })
 
@@ -148,7 +165,7 @@ test('fresh Chat keeps CRLF source spans over the original labeled line', () => 
   const task = `\r\n## Task\r\n\r\n${line}\r\nRequirements:\r\n- ${TEST_CRITERION}`
   const contract = acceptance(task)
   const version = requireAcceptanceMeaningVersion(contract.provenance.records, contract)
-  assert.equal(version, 4)
+  assert.equal(version, 6)
   const replay = inferTaskAcceptanceForVersion(task, version)
   assert.deepEqual(contract.acceptance_criteria, [EXPORT_GOAL, TEST_CRITERION])
   assert.deepEqual(replay.criteria.map(item => item.description), contract.acceptance_criteria)
@@ -611,12 +628,12 @@ test('v2 compatibility: frozen harness J03 J08 J13 admit ordinary prose unproven
   }
 })
 
-test('v4 fresh admission keeps the v3 criteria for existing journey prompts', () => {
+test('v6 fresh admission keeps the v3 criteria for existing journey prompts', () => {
   for (const task of [J03_PROMPT, J08_PROMPT, J13_PROMPT]) {
     const contract = acceptance(task)
     const meaning = inferTaskAcceptanceV3(task)
     assert.deepEqual(contract.acceptance_criteria, meaning.criteria.map(item => item.description))
-    assert.equal(requireAcceptanceMeaningVersion(contract.provenance.records, contract), 4)
+    assert.equal(requireAcceptanceMeaningVersion(contract.provenance.records, contract), 6)
   }
 })
 

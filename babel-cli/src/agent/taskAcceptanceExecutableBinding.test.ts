@@ -61,6 +61,54 @@ test('binds a clearly accepted positive command-success criterion with exact arg
   assert.equal(contract.acceptance.some(item => item.description === 'Fix the parser bug.'), false)
 })
 
+test('a numeric point binds only to an exact assertion in the admitted Node test entry', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-point-witness-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  writeFileSync(join(root, 'discount.js'), 'export const computeDiscount = amount => amount / 10\n')
+  const assertPoint = 'assert.equal(discount(100), 10)'
+  const testFile = (body: string) => [
+    'import test from "node:test"',
+    'import assert from "node:assert/strict"',
+    'import {computeDiscount as discount} from "./discount.js"',
+    body,
+  ].join('\n')
+  const checks = [
+    ['direct', 'node --test discount.test.mjs', `test("point", () => ${assertPoint})`, true],
+    ['wrong argument', 'node --test discount.test.mjs', 'test("other", () => assert.equal(discount(101), 10))', false],
+    ['wrong expected type', 'node --test discount.test.mjs', 'test("other", () => assert.equal(discount(100), "10"))', false],
+    ['unrelated assertion', 'node --test discount.test.mjs', 'test("other", () => assert.equal(10, 10))', false],
+    ['skipped', 'node --test discount.test.mjs', `test.skip("point", () => ${assertPoint})`, false],
+    ['shadowed', 'node --test discount.test.mjs', `test("point", (discount) => ${assertPoint})`, false],
+    ['unregistered', 'node --test discount.test.mjs', `const example = () => ${assertPoint}`, false],
+    ['filtered', 'node --test --test-name-pattern=other discount.test.mjs', `test("point", () => ${assertPoint})`, false],
+    ['different entry', 'node --test other.test.mjs', `test("point", () => ${assertPoint})`, false],
+    ['compound script', 'echo node --test discount.test.mjs', `test("point", () => ${assertPoint})`, false],
+  ] as const
+  writeFileSync(join(root, 'other.test.mjs'), 'import test from "node:test"; test("other", () => {});\n')
+  for (const [label, script, body, binds] of checks) {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: script } }))
+    writeFileSync(join(root, 'discount.test.mjs'), testFile(body))
+    for (const goal of [
+      'Fix computeDiscount so it returns 10 for a total of 100.',
+      'We need computeDiscount to return 10 for a total of 100.',
+      'We need computeDiscount to return 10 for a total of 100. Implement this change.',
+    ]) {
+      const task = `${goal}\nRequirements:\n- npm test must pass.`
+      const { taskContract } = resolveLiveSessionAuthority({
+        mode: 'chat', task, projectRoot: root, projectTestCommands: ['npm test'],
+      })
+      const [behavior, command] = taskContract.acceptance
+      assert.equal(taskContract.user_request, task)
+      assert.equal(taskContract.acceptance.length, 2, `${label}: ${goal}`)
+      assert.ok(behavior)
+      assert.match(behavior.description, /computeDiscount/)
+      assert.equal(behavior.verification.executable_id, binds ? 'npm' : undefined, label)
+      assert.equal(command?.verification.executable_id, 'npm', label)
+      if (binds) assert.ok(taskContract.protected_paths.includes('discount.test.mjs'))
+    }
+  }
+})
+
 test('negated command-success assertions do not bind', () => {
   assert.equal(extractPositiveCommandSuccessCriterion('npm test must FAIL for invalid input'), null)
   assert.equal(
@@ -229,6 +277,35 @@ test('a verifier named in a separate requirement cannot bind the behavioral goal
   assert.ok(genericTest)
   assert.ok(goal!.verification.verifier_id.startsWith('meaning:'), 'unrelated test remains unable to prove the goal')
   assert.deepEqual(genericTest!.verification.argv, ['test'])
+})
+
+test('a frozen single-case verifier cannot cover a broader arithmetic goal', t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-arithmetic-criterion-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: 'node --test math.test.mjs' } }))
+  writeFileSync(join(root, 'math.js'), 'export const add = (a, b) => 5\n')
+  writeFileSync(join(root, 'math.test.mjs'), [
+    'import test from "node:test"',
+    'import assert from "node:assert/strict"',
+    'import { add } from "./math.js"',
+    'test("one case", () => assert.equal(add(2, 3), 5))',
+  ].join('\n'))
+  for (const [goal, verifier] of [
+    ['Fix math.js so add(2, 3) returns 5.', /^verifier:npm$/],
+    ['Fix math.js so add returns the correct sum for any two integers, for example add(2, 3) returns 5.', /^meaning:/],
+    ['Fix math.js so addition works for all signed integers, e.g. add(2, 3) returns 5.', /^meaning:/],
+    ['Fix math.js so add returns the sum of its two operands for all integer inputs, e.g. add(2, 3) returns 5.', /^meaning:/],
+    ['Fix math.js so add always returns the sum of its two inputs, e.g. add(2, 3) returns 5.', /^meaning:/],
+  ] as const) {
+    const { taskContract } = resolveLiveSessionAuthority({
+      mode: 'chat', task: `${goal}\nRequirements: npm test must pass`, projectRoot: root,
+      projectTestCommands: ['npm test'], verifierRequirements: ['npm test'],
+    })
+    const [behavior, testCommand] = taskContract.acceptance
+    assert.equal(behavior?.description, goal)
+    assert.match(behavior!.verification.verifier_id, verifier)
+    assert.equal(testCommand?.verification.verifier_id, 'verifier:npm')
+  }
 })
 
 test('v4 binds equivalent labeled verifier links without rewriting their source text', t => {

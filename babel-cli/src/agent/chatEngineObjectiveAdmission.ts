@@ -225,6 +225,7 @@ export function admitObjectiveSubmission(
   const marked = bindInitialObjective(candidate)
   candidate = { ...candidate, ...marked }
   const requestedOperation = input.operation ?? options.operation ?? 'AUTO'
+  const objectiveOperation = runtime.taskShape?.operation
   const inputDigest = sha256Canonical({
     task: input.userInput,
     requestedOperation,
@@ -287,6 +288,8 @@ export function admitObjectiveSubmission(
       ? { requestedTaskIntent: input.taskIntent }
       : {}),
     requestedContinueTask: input.continueTask === true,
+    ...(objectiveOperation ? { objectiveOperation } : {}),
+    ...(objectiveOperation ? { objectiveOperation } : {}),
     taskAttempt: binding,
   })
   const submitted = [...staged.sessionEvents.events]

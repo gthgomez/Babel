@@ -17,6 +17,7 @@
 import {
   resolveChatTaskClass,
   resolveTaskShape,
+  hasExplicitEditDenial,
   type ChatTaskClass,
   type TaskOperation,
   type VerificationPolicy,
@@ -89,6 +90,8 @@ export interface BeginUserSubmissionInput {
   /** Explicit intent override from the caller. */
   taskIntent?: TurnTaskIntent;
   operation?: RequestedTaskOperation | undefined;
+  /** Cold replay uses the accepted objective operation instead of fresh classification. */
+  replayOperation?: TaskOperation | 'legacy';
   /**
    * Explicit continuation linkage: preserve counters/verifier-facing state
    * from the previous submission. Default false = isolate.
@@ -181,18 +184,24 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
   // explicit `continue` can still resume the task. An explicit CHANGE wins.
   const statusPresentation = statusQuestion && input.operation !== 'CHANGE';
 
-  const taskShape = carryOperation && prev?.taskShape
+  const classifiedShape = carryOperation && prev?.taskShape
     ? prev.taskShape
-    : resolveTaskShape(taskText, input.operation);
+    : resolveTaskShape(taskText, input.operation, input.replayOperation !== 'legacy');
+  const replayOperation = input.replayOperation === 'legacy' ? undefined : input.replayOperation;
+  const preserveReadOnly = amendment && input.operation !== 'CHANGE' && prev?.taskShape?.operation === 'READ_ONLY';
+  const narrowerOperation = preserveReadOnly || input.operation === 'READ_ONLY' ||
+    (replayOperation !== undefined && hasExplicitEditDenial(taskText));
+  const taskShape: TaskShape = {
+    ...classifiedShape,
+    operation: narrowerOperation ? 'READ_ONLY' : replayOperation ?? classifiedShape.operation,
+  };
   const effectiveOperation: TaskOperation =
-    statusPresentation
+    statusPresentation || narrowerOperation
       ? 'READ_ONLY'
-      : carryOperation && prev
+      : carryOperation && replayOperation === undefined && prev && !prev.presentationOnly
         // A continuation after a status presentation resumes the objective's
         // real operation, not the read-only presentation's operation.
-        ? prev.presentationOnly
-          ? prev.taskShape?.operation ?? resolveTaskShape(prev.taskText).operation
-          : prev.effectiveOperation ?? prev.taskShape?.operation ?? resolveTaskShape(prev.taskText).operation
+        ? prev.effectiveOperation ?? taskShape.operation
         : taskShape.operation;
 
   const taskIntent: TurnTaskIntent =
@@ -206,7 +215,7 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
     : resolveChatTaskClass({
         taskText,
         autoClassify: true,
-        operation: input.operation,
+        taskShape,
       });
 
   const gatePolicy = resolveCompletionVerificationContext({

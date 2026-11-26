@@ -77,10 +77,26 @@ if(!isSyntheticProviderFixtureReady()){
   })
   test('canonical submit bridge preserves requested policy separately from effective status policy',()=>{
     const rt=createParityRuntime('continuity-metadata')
-    const input={task:'status?',model:'fixture-model',provider:'fixture-provider',projectRoot:process.cwd(),requestedOperation:'AUTO' as const,requestedTaskIntent:'explain' as const,requestedContinueTask:false,continuedTask:true}
+    const input={task:'status?',model:'fixture-model',provider:'fixture-provider',projectRoot:process.cwd(),requestedOperation:'AUTO' as const,objectiveOperation:'MUTATING' as const,requestedTaskIntent:'explain' as const,requestedContinueTask:false,continuedTask:true}
     parityOnUserTurn(rt,input)
     const turn=parseThreadEventLog(serializeThreadEventLog(rt.eventLog)).events.find(event=>event.kind==='turn_started')!
-    for(const field of ['requestedOperation','requestedTaskIntent','requestedContinueTask'] as const)assert.equal((turn as unknown as Record<string,unknown>)[field],input[field],'REQUEST_METADATA_LOST')
+    for(const field of ['requestedOperation','objectiveOperation','requestedTaskIntent','requestedContinueTask'] as const)assert.equal((turn as unknown as Record<string,unknown>)[field],input[field],'REQUEST_METADATA_LOST')
+  })
+  test('cold replay keeps the admitted declarative operation and does not upgrade historical AUTO',()=>{
+    const task='We need computeDiscount to return 10 for a total of 100.\nRequirements:\n- npm test must pass.'
+    const turn={task,model:'fixture-model',provider:'fixture-provider',projectRoot:process.cwd(),policyPreset:'workspace_write',requestedOperation:'AUTO' as const}
+    const legacy=createThreadEventLog('continuity-legacy-auto')
+    const current=createThreadEventLog('continuity-declarative')
+    startTurn(legacy,turn)
+    startTurn(current,{...turn,objectiveOperation:'MUTATING'})
+    return import('./restoreTurnRuntime.js').then(({restoreTurnRuntime})=>{
+      assert.equal(restoreTurnRuntime(legacy)?.effectiveOperation,'READ_ONLY')
+      assert.equal(restoreTurnRuntime(current)?.effectiveOperation,'MUTATING')
+      startTurn(current,{...turn,task:'status?',objectiveOperation:'MUTATING'})
+      assert.equal(restoreTurnRuntime(current)?.effectiveOperation,'READ_ONLY')
+      startTurn(current,{...turn,task:'continue',objectiveOperation:'MUTATING'})
+      assert.equal(restoreTurnRuntime(current)?.effectiveOperation,'MUTATING')
+    })
   })
   test('legacy submissions with unknown host operation retain intent but cannot recreate a mutation grant',async()=>{
     const engine=await restore('continuity-legacy-policy',[{text:'Fix the fixture'},{text:'continue'},{text:'status?',metadata:{continuedTask:true}}])

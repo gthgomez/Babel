@@ -231,6 +231,7 @@ export function parityOnUserTurn(
     submissionIndex?: number;
     continuedTask?: boolean;
     requestedOperation?: import('../config/chatTaskClass.js').RequestedTaskOperation;
+    objectiveOperation?: import('../config/chatTaskClass.js').TaskOperation;
     requestedTaskIntent?: import('./turnRuntime.js').TurnTaskIntent;
     requestedContinueTask?: boolean;
     taskAttempt?: TaskAttemptBinding;
@@ -252,6 +253,7 @@ export function parityOnUserTurn(
     ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
     ...(input.requestedOperation !== undefined ? { requestedOperation: input.requestedOperation } : {}),
+    ...(input.objectiveOperation !== undefined ? { objectiveOperation: input.objectiveOperation } : {}),
     ...(input.requestedTaskIntent !== undefined ? { requestedTaskIntent: input.requestedTaskIntent } : {}),
     ...(input.requestedContinueTask !== undefined ? { requestedContinueTask: input.requestedContinueTask } : {}),
     ...input.taskAttempt,

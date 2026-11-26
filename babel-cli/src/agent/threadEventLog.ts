@@ -85,6 +85,8 @@ export type ThreadEvent =
       continuedTask?: boolean;
       /** Accepted host inputs, distinct from derived status/counter policy. */
       requestedOperation?: import('../config/chatTaskClass.js').RequestedTaskOperation;
+      /** Accepted objective operation; status presentation may be narrower. */
+      objectiveOperation?: import('../config/chatTaskClass.js').TaskOperation;
       requestedTaskIntent?: import('./turnRuntime.js').TurnTaskIntent;
       requestedContinueTask?: boolean;
       task_id?:string;
@@ -250,6 +252,7 @@ export function startTurn(
     submissionIndex?: number;
     continuedTask?: boolean;
     requestedOperation?: import('../config/chatTaskClass.js').RequestedTaskOperation;
+    objectiveOperation?: import('../config/chatTaskClass.js').TaskOperation;
     requestedTaskIntent?: import('./turnRuntime.js').TurnTaskIntent;
     requestedContinueTask?: boolean;
     task_id?:string;
@@ -280,6 +283,7 @@ export function startTurn(
     ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
     ...(input.requestedOperation !== undefined ? { requestedOperation: input.requestedOperation } : {}),
+    ...(input.objectiveOperation !== undefined ? { objectiveOperation: input.objectiveOperation } : {}),
     ...(input.requestedTaskIntent !== undefined ? { requestedTaskIntent: input.requestedTaskIntent } : {}),
     ...(input.requestedContinueTask !== undefined ? { requestedContinueTask: input.requestedContinueTask } : {}),
     ...(input.task_id!==undefined?{task_id:input.task_id,contract_id:input.contract_id!,contract_hash:input.contract_hash!,attempt_id:input.attempt_id!}:{}),
@@ -963,6 +967,7 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
       requireOptionalInteger(event, 'submissionIndex', context);
       requireOptionalBoolean(event, 'continuedTask', context);
       if(event['requestedOperation']!==undefined&&!['AUTO','READ_ONLY','CHANGE'].includes(event['requestedOperation'] as string))throw new Error(`${context} has invalid requestedOperation`);
+      if(event['objectiveOperation']!==undefined&&!['READ_ONLY','MUTATING','HYBRID'].includes(event['objectiveOperation'] as string))throw new Error(`${context} has invalid objectiveOperation`);
       if(event['requestedTaskIntent']!==undefined&&!['execute','explain'].includes(event['requestedTaskIntent'] as string))throw new Error(`${context} has invalid requestedTaskIntent`);
       requireOptionalBoolean(event, 'requestedContinueTask', context);
       requireOptionalInteger(event, 'ownership_generation', context);
