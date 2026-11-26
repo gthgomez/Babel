@@ -5,6 +5,8 @@ const COMMAND_PROHIBITION = /^(?:please\s+)?(?:you\s+)?(?:do not|don['’]t|must
 const GENERAL_COMMANDS = /^(?:(?:any|all|the)\s+)?(?:shell commands?|commands?|shell|scripts?)$/i
 const TESTS = /^(?:(?:any|all|the)\s+)?tests?(?:\s+suites?)?$/i
 const WHOLE_TASK_SCOPE = /\s+(?:during|throughout|for)\s+(?:this|the)\s+(?:task|session|run)$/i
+const LEGACY_PROHIBITION = /^(?:do not|don't|never)\s+(?:(?:edit|change|modify)\b[^.;!?]*?\s+(?:or|and)\s+)?(?:run|execute)\s+(.+)$/i
+const V3_PROHIBITION = /^(?:please\s+)?(?:do not|don['’]t|never)\s+(?:(?:edit|change|modify)\b.*?\s+(?:or|and)\s+)?(?:run|execute)\s+(.+)$/i
 
 function executableName(value: string): string {
   return value.replace(/\\/g, '/').split('/').at(-1)!.replace(/\.(?:cmd|exe|bat)$/i, '').toLowerCase()
@@ -35,7 +37,32 @@ function commandTargets(line: string): string[] {
 
 /** Honor explicit command denials from active operator prose, including verifier dispatch. */
 export function taskProhibitsCommand(activeProse: readonly string[], command: string): boolean {
-  const targets = activeProse.flatMap(commandTargets)
+  return prohibitsCommand(activeProse.flatMap(commandTargets), command)
+}
+
+/** Replay the prohibition grammar used by V2 acceptance amendment descriptors. */
+export function legacyTaskProhibitsCommand(activeProse: readonly string[], command: string): boolean {
+  const targets = activeProse.flatMap(line => line
+    .split(/[.;!?](?=\s+(?:do not|don't|never)\b|$)/i)
+    .map(clause => clause.trim().replace(/^(?:[-*+•]|\d+[.)])\s+/, '').replace(/^requirements?:\s*/i, ''))
+    .flatMap(clause => LEGACY_PROHIBITION.exec(clause)?.[1]?.trim() ?? []))
+  if (targets.some(target => target.split(/\s+(?:or|and)\s+/i).some(part => GENERAL_COMMANDS.test(part)))) return true
+  return prohibitsCommand(targets, command)
+}
+
+/** Replay the grammar used by V3, before scoped and repeated denials were recognized. */
+export function v3TaskProhibitsCommand(activeProse: readonly string[], command: string): boolean {
+  const targets = activeProse.flatMap(line => splitProse(
+    line.trim().replace(/^(?:[-*+•]|\d+[.)])\s+/, '').replace(/^requirements?:\s*/i, ''),
+    /[.;!?](?=\s|$)/,
+  ).flatMap(clause => {
+    const target = V3_PROHIBITION.exec(clause)?.[1]
+    return target ? splitProse(target, /\s+(?:or|and)\s+|,\s+/) : []
+  }))
+  return prohibitsCommand(targets, command)
+}
+
+function prohibitsCommand(targets: string[], command: string): boolean {
   if (targets.length === 0) return false
   if (targets.some(target => GENERAL_COMMANDS.test(target))) return true
   if (hasVerifierShellComposition(command)) return true

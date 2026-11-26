@@ -20,8 +20,8 @@ import { isAmendmentPrompt, isStatusPrompt } from './turnRuntime.js'
 
 export const ACCEPTANCE_AMENDMENT_REF = `user:task-${'acceptance-amendment:v1'}` as const
 export interface TaskAcceptanceDescriptorV1 {
-  /** v1 replays unbound meaning; v2 binds verifiers; v3 adds requested runtime effects. */
-  schema_version: 1 | 2 | 3
+  /** V4 applies current command restrictions and requires case evidence for point links. */
+  schema_version: 1 | 2 | 3 | 4
   kind: 'add' | 'initialize' | 'migrate_addition'
   amendment_id: string
   task_id: string
@@ -86,14 +86,16 @@ export function projectTaskAcceptanceRevision(
     trustedVerifierCommands: previous.verifier_requirements,
     defaultWorkingDirectory: '.',
     existingVerifierInputFiles: previous.protected_paths,
+    ...(version === 2 || version === 3 ? { replayBinding: version === 2 ? 'v2' : 'v3' } : {}),
   })
   const retained = kind === 'initialize' ? [] : previous.acceptance
   const descriptions = new Set(retained.map(item => item.description))
   const standard = meaning.criteria.filter(item => !descriptions.has(item.description))
-  const requested = version === 3 ? requestedLocalExecutionAcceptance({
+  const requested = version >= 3 ? requestedLocalExecutionAcceptance({
     request: userInput, activeProse: meaning.activeProse,
     existingCriteria: [...retained, ...standard],
     amendment: true,
+    replayV3: version === 3,
   }) : undefined
   const soleSource = requested?.sources.length === 1 ? requested.sources[0] : undefined
   const soleExplicitEffect = soleSource !== undefined &&
@@ -136,14 +138,14 @@ export function createTaskAcceptanceRevision(
   // Only a new user addition can admit a new runtime obligation. Legacy
   // initialization and migration still use their historical V2 semantics.
   const { added, meaningSources, operationRefs, unresolved } =
-    projectTaskAcceptanceRevision(current, source.userInput, kind, kind === 'add' ? 3 : 2)
+    projectTaskAcceptanceRevision(current, source.userInput, kind, kind === 'add' ? 4 : 2)
   if (unresolved)
     throw new Error('TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED: State the additional observable requirement explicitly')
   if (!added.length) return null
   if (added.some(item => /^(?:skip|remove|drop|ignore|waive|replace|stop requiring|no longer)\b/i.test(item.description)))
     throw new Error('TASK_ACCEPTANCE_AMENDMENT_UNSUPPORTED: An additive amendment cannot remove required obligations')
   const descriptor: TaskAcceptanceDescriptorV1 = deepFreeze({
-    schema_version: operationRefs.length ? 3 : 2, kind, amendment_id: randomUUID(),
+    schema_version: kind === 'add' ? 4 : 2, kind, amendment_id: randomUUID(),
     task_id: current.task_id, previous_contract_id: current.contract_id,
     previous_contract_hash: current.contract_hash, source_attempt_id: source.attemptId,
     input_digest: source.inputDigest, text_digest: sha256Canonical(source.userInput),
@@ -182,8 +184,11 @@ export function isTaskAcceptanceDescriptor(value:unknown):value is TaskAcceptanc
   const descriptor=value as TaskAcceptanceDescriptorV1
   const fields = ['schema_version', 'kind', 'amendment_id', 'task_id', 'previous_contract_id',
     'previous_contract_hash', 'source_attempt_id', 'input_digest', 'text_digest', 'added_acceptance', 'meaning_sources']
-  if (descriptor.schema_version === 3) fields.push('requested_execution_refs')
-  const validOperationRefs = descriptor.schema_version !== 3 || (
+  if (descriptor.schema_version === 3 || (descriptor.schema_version === 4 && Object.hasOwn(descriptor, 'requested_execution_refs')))
+    fields.push('requested_execution_refs')
+  const hasOperation = Array.isArray(descriptor.added_acceptance) &&
+    descriptor.added_acceptance.some(item => item?.verification?.kind === REQUESTED_LOCAL_EXECUTION_KIND)
+  const validOperationRefs = !fields.includes('requested_execution_refs') ? !hasOperation : (
     descriptor.kind === 'add' && Array.isArray(descriptor.added_acceptance) &&
     descriptor.added_acceptance.some(item => item?.verification?.kind === REQUESTED_LOCAL_EXECUTION_KIND) &&
     Array.isArray(descriptor.requested_execution_refs) && descriptor.requested_execution_refs.length > 0 &&
@@ -191,7 +196,8 @@ export function isTaskAcceptanceDescriptor(value:unknown):value is TaskAcceptanc
     descriptor.requested_execution_refs.every(ref => typeof ref === 'string' && isRequestedOperationAmendmentRef(ref))
   )
   return Object.keys(descriptor).length===fields.length&&fields.every(field=>Object.hasOwn(descriptor,field))&&
-    validOperationRefs && (descriptor.schema_version===1||descriptor.schema_version===2||descriptor.schema_version===3)&&['add','initialize','migrate_addition'].includes(descriptor.kind)&&
+    validOperationRefs && (descriptor.schema_version===1||descriptor.schema_version===2||descriptor.schema_version===3||
+      (descriptor.schema_version===4&&descriptor.kind==='add'))&&['add','initialize','migrate_addition'].includes(descriptor.kind)&&
     [descriptor.amendment_id,descriptor.task_id,descriptor.previous_contract_id,descriptor.source_attempt_id].every(field=>typeof field==='string'&&field.length>0&&field.length<=512)&&
     /^[0-9a-f]{32,64}$/.test(descriptor.previous_contract_hash)&&/^[0-9a-f]{64}$/.test(descriptor.input_digest)&&/^[0-9a-f]{64}$/.test(descriptor.text_digest)&&
     Array.isArray(descriptor.added_acceptance)&&descriptor.added_acceptance.length>0&&descriptor.added_acceptance.length<=128&&

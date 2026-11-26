@@ -30,6 +30,11 @@ function strictTestCommand(projectRoot: string, command: string, fs: VerifierCom
 const LEGACY_POINT_TARGET_PREFIX = 'node-test-point:v1:'
 export const POINT_TARGET_PREFIX = 'node-test-point:v2:'
 
+/** Retained objectives keep their original point identity until resubmitted. */
+export function isLegacyPointTarget(target: string | undefined): boolean {
+  return target?.startsWith(LEGACY_POINT_TARGET_PREFIX) ?? false
+}
+
 interface PointVerifierWitness {
   target: string
   entry: string
@@ -215,7 +220,7 @@ export function nodePointExecuted(stdout: string, witness: Omit<PointVerifierWit
 /** A later same-scope run without this case must not inherit an earlier case result. */
 export function retainCurrentPointReceipts(receipts: readonly BoundChatVerifierReceipt[]): BoundChatVerifierReceipt[] {
   return receipts.filter(receipt => {
-    if (receipt.target?.startsWith(LEGACY_POINT_TARGET_PREFIX)) return false
+    if (isLegacyPointTarget(receipt.target)) return false
     if (!receipt.target?.startsWith(POINT_TARGET_PREFIX)) return true
     const order = receipt.order
     const command = verifierExecutionFingerprint(receipt.command)

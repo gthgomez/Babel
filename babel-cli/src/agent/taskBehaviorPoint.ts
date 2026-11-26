@@ -37,7 +37,8 @@ export function taskBehaviorPoint(text: string): TaskBehaviorPoint | undefined {
 export function taskBehaviorPointForVerification(text: string): (TaskBehaviorPoint & { modulePath?: string }) | undefined {
   const qualifier = /^(?<verb>(?:please\s+)?(?:fix|repair|change|update|make|ensure))\s+(?<quote>`?)(?<path>(?:[\w.-]+\/)*[\w.-]+\.[cm]?js)\k<quote>\s+so\s+(?<call>.+)$/i
     .exec(text.trim())?.groups
-  if (!qualifier) return taskBehaviorPoint(withoutPointImplementationFraming(text))
+  if (!qualifier) return taskBehaviorPoint(withoutPointImplementationFraming(text)) ??
+    taskBehaviorPoint(`Ensure ${text.trim()}`)
   const point = taskBehaviorPoint(withoutPointImplementationFraming(`${qualifier.verb} ${qualifier.call}`))
   return point && { ...point, modulePath: qualifier.path!.replace(/^\.\//, '') }
 }

@@ -5,7 +5,7 @@ import { formatArgvAsCommand, parseCommandArgv } from '../utils/commandArgv.js'
 import { redactSecrets } from '../utils/redaction.js'
 import type { ChatToolAction } from './chatToolDefinitions.js'
 import type { AcceptanceMeaningSource } from './taskAcceptanceMeaning.js'
-import { taskProhibitsCommand } from './taskCommandProhibitions.js'
+import { taskProhibitsCommand, v3TaskProhibitsCommand } from './taskCommandProhibitions.js'
 import type { AcceptanceRequirementV1, TaskContractProvenanceRecord } from './taskContract.js'
 
 const REF_PREFIX = 'babel:requested-local-execution'
@@ -84,6 +84,7 @@ export function requestedLocalExecutionAcceptance(input: {
   activeProse: readonly string[]
   existingCriteria: readonly AcceptanceRequirementV1[]
   amendment?: boolean
+  replayV3?: boolean
 }): {
   criteria: AcceptanceRequirementV1[]
   provenance: TaskContractProvenanceRecord[]
@@ -100,6 +101,7 @@ export function requestedLocalExecutionAcceptance(input: {
   const scope = !input.amendment && clauses.length === 1 && input.request.trim().replace(/[.!]$/, '') === clauses[0]
     ? 'standalone' : 'mixed'
   const sourceDigest = sha256Canonical(input.request)
+  const prohibits = input.replayV3 ? v3TaskProhibitsCommand : taskProhibitsCommand
   let descriptions: Set<string> | undefined
   for (const clause of new Set(clauses)) {
     // A derived operation must be traceable to literal user text. Its source
@@ -113,7 +115,7 @@ export function requestedLocalExecutionAcceptance(input: {
     const command = EXACT_RUN.exec(clause)?.[1]
     const exactArgv = command ? argvForLocalOperation(command) : null
     const argvAlternatives = (exactArgv ? [exactArgv] : jobArgv(clause, declaredScripts))
-      .filter(argv => !taskProhibitsCommand(input.activeProse, formatArgvAsCommand(argv)))
+      .filter(argv => !prohibits(input.activeProse, formatArgvAsCommand(argv)))
     if (argvAlternatives.length === 0) continue
     const operations = argvAlternatives.map(operationDigest)
     const baseDescription = `Requested foreground effect: ${redactSecrets(clause)}`

@@ -11,7 +11,7 @@ import type { AcceptanceRequirementV1, AcceptanceRequirementType, VerificationSp
 import { isQuantifiedArithmeticBehavior, labeledBehavioralGoalText, type AcceptanceMeaningSource, type TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
 import { taskBehaviorPoint, taskBehaviorPointForVerification } from './taskBehaviorPoint.js'
 import { pointVerifierWitness } from './pointVerifierWitness.js'
-import { taskProhibitsCommand } from './taskCommandProhibitions.js'
+import { legacyTaskProhibitsCommand, taskProhibitsCommand, v3TaskProhibitsCommand } from './taskCommandProhibitions.js'
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
 import { assertionEvidenceMatches, stripJsComments } from './verifierBehaviorEvidence.js'
 import { markAdvisoryDocsGoals } from './advisoryDocsGoal.js'
@@ -767,13 +767,17 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
    */
   projectRoot?: string
   relevanceFs?: VerifierCommandInputOverrides
+  /** Historical descriptors already froze their executable interpretation. */
+  replayBinding?: 'v2' | 'v3'
 }): TaskAcceptanceMeaning {
+  const prohibits = input.replayBinding === 'v2' ? legacyTaskProhibitsCommand
+    : input.replayBinding === 'v3' ? v3TaskProhibitsCommand : taskProhibitsCommand
   const trusted = [
     ...new Set(
       input.trustedVerifierCommands
         .map((command) => command.trim())
         .filter(command => command.length > 0 &&
-          (input.meaning.interpretation_version < 6 || !taskProhibitsCommand(input.meaning.activeProse, command))),
+          (input.meaning.interpretation_version < 6 || !prohibits(input.meaning.activeProse, command))),
     ),
   ]
   if (trusted.length === 0 || input.meaning.unresolved) return input.meaning
@@ -832,7 +836,7 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
       })
       for (const criterion of matchingCriteria) {
         const explicit = explicitById.get(criterion.id)
-        const point = input.projectRoot && input.meaning.interpretation_version >= 6
+        const point = !input.replayBinding && input.meaning.interpretation_version >= 6
           ? taskBehaviorPointForVerification(explicit?.behavior ?? criterion.description)
           : undefined
         const pointWitness = point && input.projectRoot

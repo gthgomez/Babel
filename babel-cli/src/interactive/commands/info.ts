@@ -39,6 +39,7 @@ import { readApprovalProfileStatus } from '../../config/approvalProfiles.js';
 import { terminalReasonGuidance } from '../../agent/chatTerminalReason.js';
 import { TerminalReasonCodeSchema } from '../../schemas/agentContracts.js';
 import { readDurableTerminalTruth } from '../../services/durableTerminalTruth.js';
+import { isLegacyPointTarget } from '../../agent/pointVerifierWitness.js';
 import { getActiveAdmittedChatSession } from '../turns.js';
 
 // ── Shared helper ────────────────────────────────────────────────────────────
@@ -288,6 +289,11 @@ export function handleWhyStopped(ctx: ReplContext, args: string[]): void {
     const reason = TerminalReasonCodeSchema.safeParse(truth.reason_code);
     const guidance = reason.success ? terminalReasonGuidance(reason.data) : null;
     console.log(`    Reason: ${truth.reason_code}${guidance ? ` — ${guidance.message}` : ''}`);
+  }
+  if (!explicit && ctx.chatEngine?.getTaskContract?.()?.acceptance.some(
+    requirement => isLegacyPointTarget(requirement.verification.target),
+  )) {
+    console.log('    To verify the point with the current rules, resubmit the original objective as a new task.');
   }
   const changedFiles = [...new Set(truth.changed_files)];
   if (changedFiles.length > 0) {
