@@ -848,7 +848,7 @@ async *executeWithToolsStream(
               type: 'error',
               message: errMessage,
               malformedToolArguments: {
-                callId, name: acc.name, finishReason: streamState.finishReason,
+                callId, name: acc.name, finishReason: disposition.finishReason,
                 idWasNormalized,
               },
             };

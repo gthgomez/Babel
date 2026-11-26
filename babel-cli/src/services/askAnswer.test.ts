@@ -107,19 +107,30 @@ test('ask grounding review repairs unsupported absence claims using local target
 test('streamed ask retries non-streaming after schema failure without preserving partial chunks', async () => {
   const fixture = makeExampleBrowserGameFixture();
   const originalFetch = globalThis.fetch;
-  const originalDeepSeekKey = process.env['DEEPSEEK_API_KEY'];
-  const originalOpenRouterKey = process.env['OPENROUTER_API_KEY'];
-  const originalDeepInfraKey = process.env['DEEPINFRA_API_KEY'];
-  const previousOffline = process.env['BABEL_LITE_OFFLINE'];
+  const route = 'deepseek/deepseek-v4-flash-0731';
+  const settings = {
+    BABEL_STATE_DIR: fixture.root,
+    BABEL_RUNS_DIR: join(fixture.root, 'runs'),
+    BABEL_CONNECTION: 'fixture-router',
+    BABEL_LITE_OFFLINE: '1',
+    OPENROUTER_API_KEY: 'sk-test-router-key',
+  };
+  const priorSettings = Object.entries(settings).map(([key, value]) => {
+    const previous = process.env[key];
+    process.env[key] = value;
+    return [key, previous] as const;
+  });
   let calls = 0;
   let resetCalled = false;
   let streamedText = '';
   const requestBodies: Array<{ stream?: boolean; model?: string }> = [];
   try {
-    process.env['DEEPSEEK_API_KEY'] = 'sk-test-key';
-    process.env['OPENROUTER_API_KEY'] = 'sk-test-router-key';
-    process.env['DEEPINFRA_API_KEY'] = 'test-key';
-    process.env['BABEL_LITE_OFFLINE'] = '1';
+    writeFileSync(join(fixture.root, 'preferences.json'), JSON.stringify({
+      schemaVersion: 1,
+      connections: {
+        'fixture-router': { id: 'fixture-router', provider: 'openrouter', apiKeyEnvVar: 'OPENROUTER_API_KEY' },
+      },
+    }));
     globalThis.fetch = (async (_input, init) => {
       calls += 1;
       const body = JSON.parse(String(init?.body ?? '{}')) as { stream?: boolean; model?: string };
@@ -131,7 +142,7 @@ test('streamed ask retries non-streaming after schema failure without preserving
       }
       return new Response(
         JSON.stringify({
-          model: 'deepseek/deepseek-v4-flash-0731',
+          model: route,
           choices: [
             {
               message: {
@@ -163,7 +174,7 @@ test('streamed ask retries non-streaming after schema failure without preserving
       task: 'what is exampleBrowserGame?',
       projectRoot: fixture.target,
       workspaceRoot: fixture.workspace,
-      model: 'deepseek-v4-flash',
+      model: route,
       onChunk(chunk) {
         streamedText += chunk;
       },
@@ -175,32 +186,16 @@ test('streamed ask retries non-streaming after schema failure without preserving
 
     assert.equal(calls, 2);
     assert.equal(requestBodies[0]?.stream, true);
-    assert.equal(requestBodies[0]?.model, 'deepseek/deepseek-v4-flash-0731');
+    assert.equal(requestBodies[0]?.model, route);
     assert.equal(requestBodies[1]?.stream, false);
     assert.equal(resetCalled, true);
     assert.equal(streamedText, '');
     assert.match(result.answer.answer, /roguelike extraction prototype/);
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalDeepSeekKey === undefined) {
-      delete process.env['DEEPSEEK_API_KEY'];
-    } else {
-      process.env['DEEPSEEK_API_KEY'] = originalDeepSeekKey;
-    }
-    if (originalDeepInfraKey === undefined) {
-      delete process.env['DEEPINFRA_API_KEY'];
-    } else {
-      process.env['DEEPINFRA_API_KEY'] = originalDeepInfraKey;
-    }
-    if (originalOpenRouterKey === undefined) {
-      delete process.env['OPENROUTER_API_KEY'];
-    } else {
-      process.env['OPENROUTER_API_KEY'] = originalOpenRouterKey;
-    }
-    if (previousOffline === undefined) {
-      delete process.env['BABEL_LITE_OFFLINE'];
-    } else {
-      process.env['BABEL_LITE_OFFLINE'] = previousOffline;
+    for (const [key, value] of priorSettings) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
     }
     rmSync(fixture.root, { recursive: true, force: true });
   }
