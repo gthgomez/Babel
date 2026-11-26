@@ -18,6 +18,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import {normalizeChatExecutionScope} from './chatExecutionScope.js';
 import {inferFreshTaskAcceptance} from './taskAcceptanceMeaning.js';
+import { requestedLocalExecutionRefs } from './requestedLocalExecution.js';
 import {
   bindExecutableVerifiersToTaskAcceptance,
   mergeTrustedVerifierCommands,
@@ -409,7 +410,12 @@ export function resolveLiveSessionAuthority(input: {
               'non_idempotent_local_effect',
             ],
       source: 'liveSessionBridge.resolveLiveSessionAuthority',
-      provenance:[...meaning.provenance,...publicApiRecords,...(input.objectiveLifecycle?[{kind:'risk_analysis' as const,ref:OBJECTIVE_LIFECYCLE_REF}]:[])],
+    provenance:[
+      ...meaning.provenance,
+      ...requestedLocalExecutionRefs(meaning.activeProse),
+      ...publicApiRecords,
+      ...(input.objectiveLifecycle ? [{kind:'risk_analysis' as const,ref:OBJECTIVE_LIFECYCLE_REF}] : []),
+    ],
     }),
   );
 

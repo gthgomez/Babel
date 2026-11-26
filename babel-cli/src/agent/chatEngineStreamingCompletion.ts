@@ -22,6 +22,7 @@ import { captureGateRejectedCompletionAttempt, formatPreservedUnverifiedTerminal
 import { PROJECT_REQUIRED_MESSAGE, conversationScopeRequiredReport } from './chatToolScopeAdmission.js';
 import { describeUnverifiedVerifierStatus, unverifiedFileDeliveryPaths } from './unverifiedFileDelivery.js';
 import { shellBlockedByIsolation } from './capabilityRecoveryScope.js';
+import { requiredLocalExecutionBlock } from './requestedLocalExecution.js';
 
 /** Resolve completion gates and settle one completed streaming turn. */
 export async function* settleStreamingCompletion(input: {
@@ -61,6 +62,14 @@ export async function* settleStreamingCompletion(input: {
       host.conversation.push({ role: 'assistant', content: answer });
       yield host.streamDone(answer);
     }
+    return 'done';
+  }
+  const requiredOperation = requiredLocalExecutionBlock(host.toolCallLog, { final: true });
+  if (requiredOperation) {
+    endSpan(turnSpan, SpanStatusCode.OK);
+    if (!host.isSubmissionCurrent(submissionGeneration)) return 'done';
+    host.conversation.push({ role: 'assistant', content: requiredOperation.answer });
+    yield host.streamDone(requiredOperation.answer, { blockedReport: requiredOperation.blockedReport });
     return 'done';
   }
   // Execution gate: buffer streaming answer until gate check passes
