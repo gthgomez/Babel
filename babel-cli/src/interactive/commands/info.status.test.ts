@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
-import { handleStatus } from './info.js'
+import { createSessionEventLog, flushSessionEventLogStrict, recordTurnEnded, recordUserSubmitted } from '../../agent/sessionEvents.js'
+import { createThreadEventLog, persistThreadEventLog, startTurn } from '../../agent/threadEventLog.js'
+import { globalCostTracker } from '../../services/costTracker.js'
+import type { ReplContext } from '../context.js'
+import { trackInteractiveChatTurn } from '../turns.js'
+import { handleCost } from './config.js'
+import { handleStatus, handleWhyStopped } from './info.js'
 
 test('status shows running product identity and configured route', () => {
   const prior = console.log; const output: string[] = []
@@ -11,4 +20,98 @@ test('status shows running product identity and configured route', () => {
     assert.match(text, /Babel/); assert.match(text, /revision unknown/i)
     assert.match(text, /Package/); assert.match(text, /Entry/); assert.match(text, /openrouter/i)
   } finally { console.log = prior }
+})
+
+test('/why-stopped selects the current conversation and supports an explicit saved run', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-stopped-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const previousRuns = process.env['BABEL_RUNS_DIR']
+  process.env['BABEL_RUNS_DIR'] = root
+  t.after(() => {
+    if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previousRuns
+  })
+  const messages: string[] = []
+  t.mock.method(console, 'log', (message: string) => messages.push(message))
+
+  const currentRun = join(root, 'chat-sessions', 'current')
+  const otherRun = join(root, 'another run')
+  mkdirSync(currentRun, { recursive: true })
+  mkdirSync(otherRun)
+  writeFileSync(join(otherRun, 'terminal_status_summary.json'), JSON.stringify({ terminal_outcome: 'VERIFIED_COMPLETE' }))
+
+  const sessionLog = createSessionEventLog('current')
+  recordUserSubmitted(sessionLog, { turn_id: 'prior', task: 'Earlier task', projectRoot: root })
+  recordTurnEnded(sessionLog, { turn_id: 'prior', outcome: 'VERIFIED_COMPLETE', status: 'completed' })
+  const threadLog = createThreadEventLog('current')
+  const turnId = startTurn(threadLog, {
+    task: 'Current task', model: 'fixture', provider: 'fixture', projectRoot: root, policyPreset: 'workspace_write',
+  })
+  recordUserSubmitted(sessionLog, { turn_id: turnId, task: 'Current task', projectRoot: root })
+  const runtime = { turnId: 'prior' }
+  const turns: Array<{ role: 'assistant' | 'user'; run_dir?: string | null; input?: string }> = [
+    { role: 'assistant', run_dir: otherRun },
+    { role: 'user', input: 'Current task' },
+  ]
+  const ctx = {
+    turns, isRunning: true, lastRunDir: otherRun,
+    chatEngine: { getEngineRunId: () => 'current', getParityRuntime: () => runtime },
+  } as unknown as ReplContext
+
+  await trackInteractiveChatTurn(ctx, async () => {
+    handleWhyStopped(ctx, [])
+    assert.match(messages.join('\n'), /Conversation run: another run[\s\S]*VERIFIED_COMPLETE/)
+
+    messages.length = 0
+    await persistThreadEventLog(currentRun, threadLog)
+    flushSessionEventLogStrict(currentRun, sessionLog)
+    runtime.turnId = turnId
+    handleWhyStopped(ctx, ['latest'])
+    assert.match(messages.join('\n'), /Conversation run: current[\s\S]*Outcome: IN_PROGRESS/)
+    assert.doesNotMatch(messages.join('\n'), /VERIFIED_COMPLETE|another run/)
+
+    messages.length = 0
+    handleWhyStopped(ctx, [otherRun])
+    assert.match(messages.join('\n'), /Selected run: another run[\s\S]*Outcome: VERIFIED_COMPLETE/)
+  })
+
+  // Once the live window closes, the latest Chat answer has no separate
+  // pipeline run directory; its engine still owns the conversation archive.
+  ctx.isRunning = false
+  turns.push({ role: 'assistant', run_dir: null })
+  messages.length = 0
+  recordTurnEnded(sessionLog, {
+    turn_id: turnId, outcome: 'BLOCKED_POLICY', status: 'blocked',
+    reason: { code: 'permission_denied', cause_class: 'harness' },
+  })
+  flushSessionEventLogStrict(currentRun, sessionLog)
+  handleWhyStopped(ctx, [])
+  assert.match(messages.join('\n'), /BLOCKED_POLICY[\s\S]*permission_denied/)
+
+  messages.length = 0
+  handleWhyStopped(ctx, [otherRun])
+  assert.match(messages.join('\n'), /Selected run: another run[\s\S]*Outcome: VERIFIED_COMPLETE/)
+
+  messages.length = 0
+  ctx.chatEngine = undefined
+  ctx.turns = []
+  handleWhyStopped(ctx, [])
+  assert.match(messages.join('\n'), /No recorded run in this conversation/)
+  assert.doesNotMatch(messages.join('\n'), /VERIFIED_COMPLETE/)
+})
+
+test('/cost shows unresolved charges and labels the accounting scope', (t) => {
+  const messages: string[] = []
+  t.mock.method(console, 'log', (message: string) => messages.push(message))
+  t.mock.method(globalCostTracker, 'getSessionSummary', () => ({
+    totalCostUSD: 0, knownCostUSD: 0, completeCostUSD: null, costComplete: false, unknownChargeCount: 8,
+    totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0,
+    modelBreakdown: { 'provider/test': { costUSD: 0, inputTokens: 0, outputTokens: 0, unknownChargeCount: 8 } },
+  }))
+
+  handleCost({} as ReplContext, [])
+  const text = messages.join('\n')
+  assert.match(text, /all conversations tracked in this session/)
+  assert.match(text, /\$0\.000000 known subtotal \+ 8 unresolved charge\(s\); final cost unknown/)
+  assert.doesNotMatch(text, /Total USD/)
 })

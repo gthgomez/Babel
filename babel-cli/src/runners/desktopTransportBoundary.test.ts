@@ -56,7 +56,7 @@ test('Desktop raw, native and compaction requests reject redirects', async (t) =
   globalThis.fetch = (async (_url, init) => {
     requests.push(init ?? {});
     const body = JSON.parse(String(init?.body));
-    if (!body.stream) return Response.json({ model: body.model, choices: [{ message: { content: '{"ok":true}' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    if (!body.stream) return Response.json({ model: body.model, choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
     return new Response(`data: ${JSON.stringify({ model: body.model, choices: [{ delta: { content: '{"ok":true}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`, { status: 200 });
   }) as typeof fetch;
   for (const [provider, runner] of [

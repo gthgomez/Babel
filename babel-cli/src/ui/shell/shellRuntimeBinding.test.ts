@@ -136,6 +136,42 @@ describe('ShellRuntimeBinding', () => {
     assert.match(rows, /Terminal-only answer/);
   });
 
+  it('replaces provisional success text when terminal evidence reports a block', () => {
+    const binding = new ShellRuntimeBinding({ width: 100 });
+    binding.beginTurn(11, 'Run the exporter to create the CSV');
+    binding.onChatEvent({ type: 'answer_chunk', text: 'Created the exporter and CSV.' });
+    binding.onChatEvent({ type: 'tool_start', tool: 'run_command', target: 'python3 export.py' });
+    binding.onChatEvent({
+      type: 'done',
+      answer: 'The required process was denied before dispatch.',
+      usage: {} as never,
+      outcome: 'BLOCKED_POLICY',
+      blockedReport: {
+        schema_version: 1, status: 'BLOCKED', reason: 'No execution lease', reason_code: 'permission_denied',
+        missing: 'The exporter did not run',
+        checked: [{ action: 'run_command', target: 'python3 export.py', finding: 'No process started' }],
+      },
+    });
+    const rows = binding.getVisibleRows(100, 20).join('\n');
+    assert.match(rows, /denied before dispatch/);
+    assert.match(rows, /python3 export\.py/);
+    assert.doesNotMatch(rows, /Created the exporter and CSV/);
+  });
+
+  it('displays a corrected unverified answer without a blocked report', () => {
+    const binding = new ShellRuntimeBinding({ width: 100 });
+    binding.beginTurn(12, 'Fix the calculation and verify it');
+    binding.onChatEvent({ type: 'answer_chunk', text: 'The calculation is verified.' });
+    binding.onChatEvent({
+      type: 'done',
+      answer: 'The calculation changed, but the check did not establish correctness.',
+      usage: {} as never,
+      outcome: 'UNVERIFIED_PATCH',
+    });
+    assert.match(binding.getVisibleRows(100, 20).join('\n'), /did not establish correctness/);
+    assert.doesNotMatch(binding.getVisibleRows(100, 20).join('\n'), /The calculation is verified/);
+  });
+
   it('retains an explicit cancellation outcome when settling a turn', () => {
     const binding = new ShellRuntimeBinding({ width: 80 });
     binding.beginTurn(8, 'cancel this task');

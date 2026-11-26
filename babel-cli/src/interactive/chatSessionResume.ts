@@ -32,7 +32,7 @@ import {
   hydrateReplTurnsFromChatTranscript,
   recoveredTerminalFromTruth,
 } from './chatTranscriptHydration.js';
-import { readDurableTerminalTruth } from '../services/durableTerminalTruth.js';
+import { readDurableTerminalTruth, type DurableTerminalTruth } from '../services/durableTerminalTruth.js';
 
 export interface ResumeChatSessionResult {
   ok: true;
@@ -40,6 +40,7 @@ export interface ResumeChatSessionResult {
   turnCount: number;
   exchangeCount: number;
   source: 'thread_store' | 'transcript';
+  terminal: DurableTerminalTruth;
   /**
    * D04: set when the session's physical repository identity could not be
    * verified (no durable identity, or neither root resolvable). The session is
@@ -77,6 +78,17 @@ function savedRepoRootFromSessionEvents(log: SessionEventLog | null): string | n
 }
 
 export type ResumeChatSessionOutcome = ResumeChatSessionResult | ResumeChatSessionFailure;
+
+/** Display the archived latest turn consistently across resume entry points. */
+export function formatResumedTerminalNotice(terminal: DurableTerminalTruth): string {
+  if (terminal.outcome === 'CANCELLED') return 'Latest turn was cancelled. Task completion is unverified.';
+  if (terminal.turn_state === 'active') return 'Latest turn was interrupted. Task completion is unverified.';
+  if (terminal.turn_state === 'submitted') return 'Latest submission has no admitted terminal outcome.';
+  const outcome = terminal.outcome ?? terminal.status;
+  const reason = terminal.reason_code ? ` (${terminal.reason_code})` : '';
+  const verification = terminal.user_status === 'not_verified' ? ' Task completion is unverified.' : '';
+  return outcome ? `Latest turn: ${outcome}${reason}.${verification}` : 'No durable outcome recorded for the latest turn.';
+}
 
 export async function resumeChatSession(
   ctx: ReplContext,
@@ -155,13 +167,6 @@ async function resumeChatSessionOwned(
       );
     }
     const eventLog = loadThreadEventLogFromDir(sessionDir);
-    // The resume status must describe the newest turn, not merely the last
-    // `turn_ended`. A newer unfinished turn keeps the session not-verified even
-    // when older assistant prose exists (BL-14).
-    const recoveredTerminal = recoveredTerminalFromTruth(
-      readDurableTerminalTruth(sessionDir, sessionId),
-    );
-
     // D04: verify physical repository identity BEFORE any engine or execution
     // context is admitted (event-log branch) or history is hydrated as safely
     // resumed. The saved root comes from the durable thread event log first;
@@ -235,69 +240,43 @@ async function resumeChatSessionOwned(
       ctx.chatEngine=engine;
       resumeAdmissionAdopted=true;
     };
+    const finish = (source: ResumeChatSessionResult['source']): ResumeChatSessionResult => {
+      // Select the newest turn after recovery has settled any interrupted
+      // operations, so all resume surfaces see the finalized durable prefix.
+      const terminal = readDurableTerminalTruth(sessionDir, sessionId);
+      const hydration = {
+        targetRoot: target.targetRoot,
+        workspaceRoot: target.workspaceRoot ?? null,
+        terminal: recoveredTerminalFromTruth(terminal),
+      };
+      const turns = source === 'thread_store'
+        ? hydrateReplTurnsFromCells(ctx, loadThreadCells(sessionId), hydration)
+        : hydrateReplTurnsFromChatTranscript(ctx, { ...hydration, sessionId, transcriptPath: txPath });
+      if (!terminal.finished && ctx.state.lastRunUserStatus === 'complete') {
+        // An archived assistant message alone cannot establish completion.
+        ctx.state.lastRunUserStatus = 'not_verified';
+        ctx.lastAssistantStatus = 'not_verified';
+      }
+      if (threadStoreExists(sessionId)) hydrateResumedThreadToScreen(ctx, sessionId);
+      else ctx.screenManager?.getHistoryCellViewport()?.setCells([]);
+      ctx.lastTargetRoot = target.targetRoot;
+      ctx.lastWorkspaceRoot = target.workspaceRoot ?? null;
+      ctx.lastSessionRunDir = sessionDir;
+      ctx.saveSessionState();
+      return { ok: true, sessionId, source, terminal, ...turns, ...degraded };
+    };
 
     if (eventLog && eventLog.events.length > 0) {
       candidate = withExecutionPolicyChoice(policy,()=>createEngineFromEventLog(resumeOptions, eventLog));
-      candidate.assignRunId(sessionId);
-      // W2.2: session-events settle after run id assignment (same session dir).
-      candidate.restoreSessionEventsFromDir(sessionDir);
       adopt(candidate);
-      if (hasThreadStore) {
-        hydrateResumedThreadToScreen(ctx, sessionId);
-        const cells = loadThreadCells(sessionId);
-        const { turnCount, exchangeCount } = hydrateReplTurnsFromCells(ctx, cells, {
-          targetRoot: target.targetRoot,
-          workspaceRoot: target.workspaceRoot ?? null,
-          terminal: recoveredTerminal,
-        });
-        ctx.saveSessionState();
-        return {
-          ok: true,
-          sessionId,
-          turnCount,
-          exchangeCount,
-          source: 'thread_store',
-          ...degraded,
-        };
-      }
-      const { turnCount, exchangeCount } = hydrateReplTurnsFromChatTranscript(ctx, {
-        sessionId,
-        transcriptPath: txPath,
-        targetRoot: target.targetRoot,
-        workspaceRoot: target.workspaceRoot ?? null,
-        terminal: recoveredTerminal,
-      });
-      ctx.saveSessionState();
-      return {
-        ok: true,
-        sessionId,
-        turnCount,
-        exchangeCount,
-        source: hasTranscript ? 'transcript' : 'thread_store',
-        ...degraded,
-      };
+      return finish(hasThreadStore ? 'thread_store' : 'transcript');
     }
 
     if (hasThreadStore) {
       const cells = loadThreadCells(sessionId);
       candidate = withExecutionPolicyChoice(policy,()=>createEngineFromThreadCells(sessionId, resumeOptions, cells));
       adopt(candidate);
-      // If an event log appears mid-session, keep cells as UI; still prefer empty event log path above
-      hydrateResumedThreadToScreen(ctx, sessionId);
-      const { turnCount, exchangeCount } = hydrateReplTurnsFromCells(ctx, cells, {
-        targetRoot: target.targetRoot,
-        workspaceRoot: target.workspaceRoot ?? null,
-        terminal: recoveredTerminal,
-      });
-      ctx.saveSessionState();
-      return {
-        ok: true,
-        sessionId,
-        turnCount,
-        exchangeCount,
-        source: 'thread_store',
-        ...degraded,
-      };
+      return finish('thread_store');
     }
 
     let engine: ChatEngine;
@@ -332,28 +311,7 @@ async function resumeChatSessionOwned(
       applyEventLogToChatEngine(engine, lateLog);
     }
     adopt(engine);
-    const { turnCount, exchangeCount } = hydrateReplTurnsFromChatTranscript(ctx, {
-      sessionId,
-      transcriptPath: txPath,
-      targetRoot: target.targetRoot,
-      workspaceRoot: target.workspaceRoot ?? null,
-      terminal: recoveredTerminal,
-    });
-    if (threadStoreExists(sessionId)) {
-      hydrateResumedThreadToScreen(ctx, sessionId);
-    } else {
-      const viewport = ctx.screenManager?.getHistoryCellViewport();
-      viewport?.setCells([]);
-    }
-    ctx.saveSessionState();
-    return {
-      ok: true,
-      sessionId,
-      turnCount,
-      exchangeCount,
-      source: 'transcript',
-      ...degraded,
-    };
+    return finish('transcript');
   } catch (err) {
     if(candidate){
       candidate.closeAdmissionStore();

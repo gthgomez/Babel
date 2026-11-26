@@ -21,6 +21,7 @@ import {
 } from './chatEngineLiveSession.js'
 import {
   bindInitialObjective,
+  acceptedObjectiveInputDigest,
   assertObjectiveLifecycle,
   type ObjectiveAuthorityRecord,
   type TaskObjectiveLifecycleV1,
@@ -225,12 +226,14 @@ export function admitObjectiveSubmission(
   const marked = bindInitialObjective(candidate)
   candidate = { ...candidate, ...marked }
   const requestedOperation = input.operation ?? options.operation ?? 'AUTO'
-  const inputDigest = sha256Canonical({
-    task: input.userInput,
+  const objectiveOperation = runtime.taskShape?.operation
+  const acceptedOperation = {
     requestedOperation,
-    requestedTaskIntent: input.taskIntent ?? null,
+    ...(input.taskIntent !== undefined ? { requestedTaskIntent: input.taskIntent } : {}),
     requestedContinueTask: input.continueTask === true,
-  })
+    ...(objectiveOperation ? { objectiveOperation } : {}),
+  }
+  const inputDigest = acceptedObjectiveInputDigest({ task: input.userInput, ...acceptedOperation })
   const attemptId=randomUUID()
   const amendments: NonNullable<ReturnType<typeof createTaskAcceptanceRevision>>[] = []
   const acceptRevision = (amendment: ReturnType<typeof createTaskAcceptanceRevision>) => {
@@ -282,11 +285,7 @@ export function admitObjectiveSubmission(
     gatePolicy: runtime.gatePolicy ?? 'required',
     submissionIndex: runtime.submissionIndex,
     continuedTask: runtime.continuedTask,
-    requestedOperation,
-    ...(input.taskIntent !== undefined
-      ? { requestedTaskIntent: input.taskIntent }
-      : {}),
-    requestedContinueTask: input.continueTask === true,
+    ...acceptedOperation,
     taskAttempt: binding,
   })
   const submitted = [...staged.sessionEvents.events]

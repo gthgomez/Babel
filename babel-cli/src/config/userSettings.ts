@@ -107,13 +107,28 @@ export function readUserSettings(options: { path?: string; env?: NodeJS.ProcessE
 
 type UserSettingsChange = Partial<UserSettings> | ((current: UserSettings) => Partial<UserSettings>)
 
+/** Merge a preference scope, retaining the outgoing account's exact selection from older profiles. */
+export function mergeUserPreferences(current: UserPreferences | undefined, change: UserPreferences): UserPreferences {
+  const next = { ...current, ...change }
+  const switchedAccount = change.connection !== undefined && change.connection !== current?.connection
+  const outgoing = switchedAccount && current?.connection && current.model
+    ? { [current.connection]: current.model }
+    : undefined
+  if (switchedAccount && !('model' in change)) delete next.model
+  if (outgoing || change.modelsByConnection) {
+    next.modelsByConnection = { ...current?.modelsByConnection, ...outgoing, ...change.modelsByConnection }
+  }
+  if (change.plans) next.plans = { ...current?.plans, ...change.plans }
+  return next
+}
+
 /** Merge and validate a settings change without writing the profile. */
 export function prepareUserSettingsUpdate(current: UserSettings, change: UserSettingsChange): UserSettings {
   const update = typeof change === 'function' ? change(current) : change
   const candidate = {
     ...current, ...update,
     connections: { ...current.connections, ...update.connections },
-    defaults: { ...current.defaults, ...update.defaults, ...(update.defaults?.plans ? { plans: { ...current.defaults?.plans, ...update.defaults.plans } } : {}) },
+    defaults: mergeUserPreferences(current.defaults, update.defaults ?? {}),
     projects: { ...current.projects, ...update.projects },
     setup: { ...current.setup, ...update.setup },
   }

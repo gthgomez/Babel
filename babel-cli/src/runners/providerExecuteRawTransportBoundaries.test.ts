@@ -123,6 +123,150 @@ function heldOpenStreamAfterDone(ssePrefix: string): { response: Response; onCan
 }
 
 describe('executeRaw transport boundaries (mocked)', { concurrency: 1 }, () => {
+  for (const streaming of [false, true]) {
+    const mode = streaming ? 'JSON fallback' : 'buffered JSON'
+    for (const indexes of [[1], [0, 1], [0, 0]]) {
+      it(`${mode} rejects choices with indexes ${indexes.join(', ')} and retains usage`, async t => {
+        t.mock.method(globalThis, 'fetch', async () => Response.json({
+          model: ROUTED_MODEL,
+          provider: 'fixture upstream',
+          choices: indexes.map(index => ({ index, message: { content: 'discard this' }, finish_reason: 'stop' })),
+          usage: { prompt_tokens: 17, completion_tokens: 3, cost: 0.01 },
+        }))
+        const chunks: string[] = []
+        const completed: ProviderInvocationCompleted[] = []
+        const runner = new OpenRouterApiRunner(ROUTED_MODEL, {}, { explicitCredential: 'fixture-only', env: {} })
+        await assert.rejects(runner.executeRaw('probe', {
+          ...(streaming ? { onChunk: (chunk: string) => { chunks.push(chunk) } } : {}),
+          onInvocationCompleted: event => completed.push(event),
+        }), /single choice/i)
+        assert.deepEqual(chunks, [])
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.normalized_finish_reason, 'PROTOCOL_ERROR')
+        assert.equal(completed[0]?.provider_finish_reason, null)
+        assert.equal(completed[0]?.observed_model_id, ROUTED_MODEL)
+        assert.equal(completed[0]?.upstream_provider, 'fixture upstream')
+        assert.equal(completed[0]?.usage_metadata?.completion_tokens, 3)
+        assert.equal(completed[0]?.usage_metadata?.provider_reported_total_charge_usd, 0.01)
+      })
+    }
+
+    it(`${mode} preserves an explicit provider error even when choices are invalid`, async t => {
+      t.mock.method(globalThis, 'fetch', async () => Response.json({
+        model: ROUTED_MODEL,
+        choices: [{ index: 1, message: { content: 'discard this' }, finish_reason: 'stop' }],
+        error: { message: 'fixture rejection', code: 'rate_limit_exceeded' },
+        usage: { cost: 0.01 },
+      }))
+      const chunks: string[] = []
+      const completed: ProviderInvocationCompleted[] = []
+      const runner = new OpenRouterApiRunner(ROUTED_MODEL, {}, { explicitCredential: 'fixture-only', env: {} })
+      await assert.rejects(runner.executeRaw('probe', {
+        ...(streaming ? { onChunk: (chunk: string) => { chunks.push(chunk) } } : {}),
+        onInvocationCompleted: event => completed.push(event),
+      }), /fixture rejection/i)
+      assert.deepEqual(chunks, [])
+      assert.equal(completed.length, 1)
+      assert.equal(completed[0]?.status, 'failed')
+      assert.equal(completed[0]?.normalized_finish_reason, 'PROVIDER_ERROR')
+      assert.equal(completed[0]?.api_error_code, 'rate_limit_exceeded')
+      assert.equal(completed[0]?.usage_metadata?.provider_reported_total_charge_usd, 0.01)
+    })
+  }
+
+  it('only one choice may contribute text, and no output may follow its finish', async t => {
+    const first = { choices: [{ index: 0, delta: { content: 'prefix' } }] }
+    const stop = { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }
+    const stray = { content: 'discard this' }
+    const usage = { prompt_tokens: 17, completion_tokens: 3, cost: 0.01 }
+    const cases = [
+      { prefix: [first], invalid: [{ index: 1, delta: stray, finish_reason: 'stop' }], finish: null, reason: /single choice/i },
+      { prefix: [first], invalid: [{ index: 0, delta: stray }, { index: 1, delta: stray }], finish: null, reason: /single choice/i },
+      { prefix: [first, stop], invalid: [{ index: 0, delta: stray }], finish: 'stop', reason: /output after the reported finish/i },
+      { prefix: [first, stop], invalid: [{ delta: { reasoning_content: 'discard this' } }], finish: 'stop', reason: /output after the reported finish/i },
+    ]
+    for (const { prefix, invalid, finish, reason } of cases) {
+      const frames = [...prefix, { choices: invalid, usage }, stop]
+      t.mock.method(globalThis, 'fetch', async () => new Response(
+        frames.map(frame => `data: ${JSON.stringify({ model: ROUTED_MODEL, ...frame })}\n\n`).join('') + 'data: [DONE]\n\n',
+        { headers: { 'content-type': 'text/event-stream' } },
+      ))
+      const text: string[] = []
+      const thoughts: string[] = []
+      const completed: ProviderInvocationCompleted[] = []
+      const runner = new OpenRouterApiRunner(ROUTED_MODEL, {}, { explicitCredential: 'fixture-only', env: {} })
+      await assert.rejects(runner.executeRaw('probe', {
+        onChunk: chunk => { text.push(chunk) },
+        onThought: thought => { thoughts.push(thought) },
+        onInvocationCompleted: event => completed.push(event),
+      }), reason)
+      assert.deepEqual(text, ['prefix'])
+      assert.deepEqual(thoughts, [])
+      assert.equal(completed.length, 1)
+      assert.equal(completed[0]?.status, 'failed')
+      assert.equal(completed[0]?.normalized_finish_reason, 'PROTOCOL_ERROR')
+      assert.equal(completed[0]?.provider_finish_reason, finish)
+      assert.equal(completed[0]?.partial_model_output, true)
+      assert.equal(completed[0]?.usage_metadata?.completion_tokens, 3)
+      assert.equal(completed[0]?.usage_metadata?.provider_reported_total_charge_usd, 0.01)
+    }
+  })
+
+  it('accepts an indexless single choice with a usage-only footer and retains explicit errors', async t => {
+    for (const withError of [false, true]) {
+      const footer = {
+        choices: withError ? [{ index: 1 }] : [],
+        usage: { prompt_tokens: 17, completion_tokens: 2, cost: 0.01 },
+        ...(withError ? { error: { message: 'fixture provider error' } } : {}),
+      }
+      t.mock.method(globalThis, 'fetch', async () => new Response([
+        { model: ROUTED_MODEL, choices: [{ delta: { content: 'complete text' }, finish_reason: 'stop' }] },
+        footer,
+      ].map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('') + 'data: [DONE]\n\n'))
+      const completed: ProviderInvocationCompleted[] = []
+      const runner = new OpenRouterApiRunner(ROUTED_MODEL, {}, { explicitCredential: 'fixture-only', env: {} })
+      const response = runner.executeRaw('probe', {
+        onChunk: () => {},
+        onInvocationCompleted: event => completed.push(event),
+      })
+      if (withError) await assert.rejects(response, /fixture provider error/i)
+      else assert.equal(await response, 'complete text')
+      assert.equal(completed.length, 1)
+      assert.equal(completed[0]?.normalized_finish_reason, withError ? 'PROVIDER_ERROR' : 'NATURAL_COMPLETION')
+      assert.equal(completed[0]?.provider_finish_reason, 'stop')
+      assert.equal(completed[0]?.usage_metadata?.provider_reported_total_charge_usd, 0.01)
+    }
+  })
+
+  it('a usage footer received before an idle stop remains attached to the first request', async () => {
+    process.env['BABEL_PROVIDER_STREAM_IDLE_TIMEOUT_MS'] = '40'
+    process.env['BABEL_PROVIDER_STREAM_MAX_RETRIES'] = '1'
+    let requests = 0
+    globalThis.fetch = async () => {
+      requests++
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({
+            model: ROUTED_MODEL, choices: [], usage: { cost: 0.01 },
+          })}\n\n`))
+        },
+      }), { headers: { 'content-type': 'text/event-stream' } })
+    }
+    const completed: ProviderInvocationCompleted[] = []
+    await assert.rejects(new OpenRouterApiRunner(ROUTED_MODEL, {}, {
+      explicitCredential: 'fixture-only', env: {},
+    }).executeRaw('probe', {
+      onChunk: () => {},
+      onInvocationCompleted: completion => completed.push(completion),
+    }), /stream idle timeout/i)
+    assert.equal(requests, 1)
+    assert.equal(completed.length, 1)
+    assert.equal(completed[0]?.failure_stage, 'stream')
+    assert.equal(completed[0]?.usage_metadata?.prompt_tokens, null)
+    assert.equal(completed[0]?.usage_metadata?.provider_reported_total_charge_usd, 0.01)
+  })
+
   for (const adapter of ADAPTERS) {
     describe(`${adapter.label} executeRaw / executeRawStream`, { concurrency: 1 }, () => {
       it('raw-stream-partial-then-provider-error: must not finalize delivered', async () => {
@@ -168,6 +312,56 @@ describe('executeRaw transport boundaries (mocked)', { concurrency: 1 }, () => {
         assert.equal(completed[0]?.status, 'failed')
         assert.equal(completed[0]?.partial_model_output, true)
         assert.equal(completed.some((entry) => entry.status === 'delivered'), false)
+      })
+
+      it('text SSE terminal failures retain disposition and observed usage independently', async () => {
+        for (const [finish, expected] of [['content_filter', 'CONTENT_FILTER'], [null, 'PROTOCOL_ERROR']] as const) {
+          globalThis.fetch = async () => new Response(sseFixture(adapter, [
+            wrapSsePayload(adapter, { choices: [{ delta: { content: 'partial' }, finish_reason: finish }] }),
+            wrapSsePayload(adapter, { choices: [], usage: { prompt_tokens: 17, completion_tokens: 3, cost: 0.01 } }),
+            'data: [DONE]',
+          ]), { headers: { 'content-type': 'text/event-stream' } })
+          const completed: ProviderInvocationCompleted[] = []
+          await assert.rejects(adapter.runner().executeRaw('probe', {
+            onChunk: () => {},
+            onInvocationCompleted: completion => completed.push(completion),
+          }), /filtered|without a finish reason/i)
+          assert.equal(completed.length, 1)
+          assert.equal(completed[0]?.status, 'failed')
+          assert.equal(completed[0]?.failure_stage, 'response_normalization')
+          assert.equal(completed[0]?.normalized_finish_reason, expected)
+          assert.equal(completed[0]?.provider_finish_reason, finish)
+          assert.equal(completed[0]?.usage_metadata?.prompt_tokens, 17)
+          assert.equal(completed[0]?.usage_metadata?.completion_tokens, 3)
+          assert.equal(completed[0]?.usage_metadata?.provider_reported_total_charge_usd, adapter.label === 'openrouter' ? 0.01 : undefined)
+        }
+      })
+
+      it('buffered Chat Completions distinguish missing finish from completed JSON', async () => {
+        for (const streaming of [false, true]) {
+          for (const finish of [undefined, null, 'stop', 'end_turn']) {
+            globalThis.fetch = async () => Response.json({
+              model: ROUTED_MODEL,
+              choices: [{
+                ...(finish === 'stop' ? { index: 0 } : {}),
+                message: { content: 'fixture answer' },
+                finish_reason: finish,
+              }],
+              usage: { prompt_tokens: 11, completion_tokens: 3 },
+            })
+            const completed: ProviderInvocationCompleted[] = []
+            const result = adapter.runner().executeRaw('probe', {
+              ...(streaming ? { onChunk: () => {} } : {}),
+              onInvocationCompleted: completion => completed.push(completion),
+            })
+            if (finish) assert.equal(await result, 'fixture answer')
+            else await assert.rejects(result, /without a finish reason/i)
+            assert.equal(completed.length, 1)
+            assert.equal(completed[0]?.status, finish ? 'delivered' : 'failed')
+            assert.equal(completed[0]?.normalized_finish_reason, finish ? 'NATURAL_COMPLETION' : 'PROTOCOL_ERROR')
+            assert.equal(completed[0]?.usage_metadata?.completion_tokens, 3)
+          }
+        }
       })
 
       it('HTTP transport throw then successful SSE preserves observed model and usage metadata', async () => {

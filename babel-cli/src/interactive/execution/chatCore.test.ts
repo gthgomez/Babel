@@ -645,6 +645,28 @@ test('consumeChatStream preserves host-attested verifier execution counts for th
   assert.equal(payload['verifier_execution_count'], 1)
 })
 
+test('a denied write and one completed check do not verify the task', () => {
+  const payload = buildChatRunPayload({
+    ...completedResult('One check passed. The requested change is unverified.'),
+    outcome: 'UNVERIFIED_PATCH',
+    toolCalls: [
+      { tool: 'write_file', target: 'target.ts', error: 'blocked' },
+      { tool: 'test_run', target: 'npm test', exit_code: 0 },
+    ],
+    toolCallAggregates: {
+      tool_call_count: 2, write_count: 0, verifier_attempt_count: 1, verifier_execution_count: 1,
+    },
+    verifierReceipt: { command: 'npm test', exit_code: 0, summary: 'Check passed' },
+  }, { task: 'Change the fixture', projectRoot: '/fixture' })
+
+  assert.deepEqual(payload['changed_files'], [])
+  assert.equal(payload['write_count'], 0)
+  assert.deepEqual(payload['checks'], ['npm test'])
+  assert.equal(payload['verifier_execution_count'], 1)
+  assert.equal((payload['completion_verification'] as { status: string }).status, 'not_run')
+  assert.equal(payload['terminal_outcome'], 'UNVERIFIED_PATCH')
+})
+
 test('consumeChatStream returns failed result on failed event', async () => {
   async function* mockStream(): AsyncGenerator<ChatEvent, void, undefined> {
     yield { type: 'answer_chunk', text: 'partial' };

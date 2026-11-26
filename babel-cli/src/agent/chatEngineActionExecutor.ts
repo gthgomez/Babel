@@ -63,6 +63,10 @@ import {
 import { settleChatVerifierResult } from "./chatVerifierSettlement.js";
 import { isAuthoritativeVerifierCommand } from "./completionGatePolicy.js";
 import { acceptToolStop, settlePreventedChatAction } from './chatEngineRunControl.js';
+import { actionRequestFromAction } from '../authority/actionRequest.js';
+import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js';
+import { taskProhibitsCommand } from './taskCommandProhibitions.js';
+import { requiredLocalExecutionDenialMarker, requiredLocalExecutionScope, substitutesRequestedProcessOutput } from './requestedLocalExecution.js';
 import { RunStoppedError } from '../runtime/run-control.js';
 import { ProcessTerminationError } from '../sandbox.js';
 import { chatReadToolExecutor } from "./chatReadExecutor.js";
@@ -178,7 +182,8 @@ export class ChatEngineActionExecutor {
     const ownerGeneration =
       meta.ownerGeneration ?? this.host.activeSubmissionGeneration;
     const ownerRunDir = this.host.engineRunDir;
-    const acceptedOperation = this.host.getTurnRuntimeSnapshot()?.effectiveOperation;
+    const turnRuntime = this.host.getTurnRuntimeSnapshot();
+    const acceptedOperation = turnRuntime?.effectiveOperation;
     const taskReadOnlyDenied = deniesReadOnlyTaskAction(action, acceptedOperation,
       acceptedOperation === "READ_ONLY" ? this.host.getResolvedRequiredVerifiers() : []);
     // R0-7: the parent turn at dispatch time. Child mutation evidence must be
@@ -199,6 +204,22 @@ export class ChatEngineActionExecutor {
     let observedToolExecution = false;
 
     try {
+    if ((action.type === 'write_file' || action.type === 'str_replace' || action.type === 'apply_patch') && turnRuntime &&
+      substitutesRequestedProcessOutput(this.host.parity.liveAuthority?.taskContract.provenance.records ?? [],
+        [turnRuntime.durableObjective ?? turnRuntime.taskText, ...(turnRuntime.amendments ?? [])],
+        action, requireProjectRoot(this.host.options))) {
+      const detail = 'requested-process-output';
+      this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
+      callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
+      return { index: meta.index, observation: 'The user required the process to produce this file. Leave it untouched by direct edits; report the unmet operation if the process cannot run.' };
+    }
+    if ((action.type === 'run_command' || action.type === 'test_run') && turnRuntime &&
+      taskProhibitsCommand(inferFreshTaskAcceptance(turnRuntime.taskText).activeProse, action.command)) {
+      const detail = 'task-command-prohibited';
+      this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
+      callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
+      return { index: meta.index, observation: 'The user explicitly prohibited running this command. No process started.' };
+    }
     const frozenVerifierDispatch = action.type === 'run_command' || action.type === 'test_run' ? {
       owner: this.host.currentVerifierOwner(), candidate: this.host.currentRecoveryBinding(),
       proofCandidate: freezeChatVerifierCandidate(requireProjectRoot(this.host.options)),
@@ -1351,6 +1372,8 @@ export class ChatEngineActionExecutor {
 
       // Standard tool execution via policy gate
       const agentAction = mapChatActionToAgentAction(action);
+      const authoritySession = this.host.parity.authoritySession;
+      const taskContract = this.host.parity.liveAuthority?.taskContract;
       const classC = resolveClassCGateDecision({
         executionProfile: this.host.executionProfile,
       });
@@ -1395,9 +1418,7 @@ export class ChatEngineActionExecutor {
                   this.host.parity.liveAuthority.taskContract.protected_paths,
               }
             : {}),
-          ...(this.host.parity.authoritySession
-            ? { authoritySession: this.host.parity.authoritySession }
-            : {}),
+          ...(authoritySession ? { authoritySession } : {}),
           onDispatchAuthorized: recoveryDispatchAuthorization,
           onBeforeExecutorExecute: () =>
             this.host.persistToolStartedAtExecutorDispatch(action, meta),
@@ -1613,6 +1634,25 @@ export class ChatEngineActionExecutor {
           ? result.mutationPaths[0]
           : target;
 
+      let executionDenial: string | undefined;
+      if (result.policyDecision === 'deny' && result.policyBlocked && result.preDispatchNoEffect === true &&
+          result.reasonCode === 'DENY_MISSING_AUTHORITY' && (action.type === 'run_command' || action.type === 'test_run')) {
+        const request = actionRequestFromAction(agentAction);
+        const authority = authoritySession?.lease === null ? 'no_lease'
+          : authoritySession?.lease && request && !authoritySession.lease.allowedCapabilities.includes(request.capability)
+            ? 'missing_capability'
+            : 'unresolved';
+        obsParts.push(`[BABEL POLICY] DENY_MISSING_AUTHORITY (${authority}): no process was dispatched and no approval applied.`);
+        const requiredExecution = acceptedOperation !== undefined && acceptedOperation !== 'READ_ONLY' && taskContract?.frozen
+          ? requiredLocalExecutionScope(taskContract.provenance.records, action, requireProjectRoot(this.host.options))
+          : null;
+        if (requiredExecution) {
+          // Additive amendments retain older provenance, but may add independent work.
+          executionDenial = requiredLocalExecutionDenialMarker(turnRuntime?.amendments?.length ? 'mixed' : requiredExecution, authority);
+          obsParts.push('[BABEL ADVISORY] This denied command is required. Continue independent work; a substitute artifact does not establish that the command ran.');
+        }
+      }
+
       const verifierSemanticSignature = frozenVerifierDispatch?.owner && frozenVerifierDispatch.candidate &&
         !result.policyBlocked && !result.notStarted && lastResult?.process_started === true && lastResult.simulated !== true && lastResult.launch_failure === undefined
         && isAuthoritativeVerifierCommand(target)
@@ -1626,17 +1666,16 @@ export class ChatEngineActionExecutor {
         target: projectedTarget,
         ...(frozenVerifierDispatch ? { working_directory: frozenVerifierDispatch.identity.cwd } : {}),
         ...((action.type === 'run_command' || action.type === 'test_run') ? {
-          processExecuted: lastResult?.process_started === true && lastResult.simulated !== true && lastResult.launch_failure === undefined,
-          processCompleted: lastResult?.process_started === true && lastResult.exit_code !== undefined &&
-            lastResult.simulated !== true && lastResult.launch_failure === undefined &&
-            lastResult.process_termination === 'exited',
+          processExecuted: observedToolExecution && lastResult?.process_started === true && lastResult.launch_failure === undefined,
+          processCompleted: observedToolExecution && lastResult?.process_started === true &&
+            lastResult.exit_code !== undefined && lastResult.launch_failure === undefined && lastResult.process_termination === 'exited',
         } : {}),
         ...(verifierSemanticSignature ? { verifierSemanticSignature } : {}),
         ...(readRevisionHash && !result.policyBlocked && result.results.length > 0 &&
           result.results.every(entry => entry.exit_code === 0 && !entry.denial) && !toolError
           ? { read_revision_hash: readRevisionHash }
           : {}),
-        detail,
+        detail: executionDenial ?? detail,
         index: meta.index,
         ...((action.type === 'run_command' || action.type === 'test_run') ? {
           verifierExecuted: !result.policyBlocked && !result.notStarted &&

@@ -38,7 +38,7 @@ test('OpenCode Zen uses the declared credential variable and sampling body', asy
     observedAuthorization = String((init?.headers as Record<string, string>)?.Authorization ?? '')
     observedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
     return new Response(
-      JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }),
+      JSON.stringify({ choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }] }),
       { status: 200 },
     )
   }) as typeof fetch
@@ -63,7 +63,7 @@ test('OpenCodeApiRunner respects BABEL_OPENCODE_BASE_URL', async () => {
   globalThis.fetch = (async (input) => {
     observedUrl = String(input)
     return new Response(
-      JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }),
+      JSON.stringify({ choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }] }),
       { status: 200 },
     )
   }) as typeof fetch
@@ -238,7 +238,7 @@ test('OpenCode Go rejects unknown or substituted models without fallback', async
   let calls = 0
   globalThis.fetch = (async () => {
     calls += 1
-    return new Response(JSON.stringify({ model: 'longcat-2.0', choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 })
+    return new Response(JSON.stringify({ model: 'longcat-2.0', choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }] }), { status: 200 })
   }) as typeof fetch
   const runner = new OpenCodeGoApiRunner('mimo-v2.5', {}, { credentialSource: 'explicit-test', explicitCredential: 'synthetic-go-key' })
   await assert.rejects(
@@ -252,7 +252,7 @@ test('OpenCode Go rejects a successful response with missing observed model iden
   let calls = 0
   globalThis.fetch = (async () => {
     calls += 1
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 })
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }] }), { status: 200 })
   }) as typeof fetch
   const runner = new OpenCodeGoApiRunner('deepseek-v4-flash', {}, { credentialSource: 'explicit-test', explicitCredential: 'synthetic-go-key' })
   await assert.rejects(runner.execute('respond', z.object({ ok: z.literal(true) })),

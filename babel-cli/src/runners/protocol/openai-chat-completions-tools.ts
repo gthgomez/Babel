@@ -5,6 +5,7 @@ import { ProviderHttpError } from '../providerHttpError.js';
 import {
   type ProviderMessage,
   type RunnerCallbacks,
+  type ProviderFailureStage,
   type ProviderInvocationPhase,
   type ToolDefinition,
   type ToolStreamEvent,
@@ -13,10 +14,8 @@ import {
 import { hardProviderProtocolIssues } from '../providerMessages.js';
 import {
   assertPreparedProviderRequestAdmissible,
-  prepareProviderRequest,
 } from '../preparedProviderRequest.js';
 import { parseRateLimitHeaders } from '../../ui/rateLimitWidget.js';
-import { buildWireRequestFromEnvelope, hashWirePolicy, type WireRequest } from '../../intelligence/wire.js';
 import { normalizeBabelFinishReason } from '../../intelligence/attribution.js';
 import {
   buildProviderFailureReceipt,
@@ -50,7 +49,7 @@ import {
 import {
   buildInvocationMetadata,
   routerMetadataProvenance,
-  type ChatResponse,
+  safeProviderFinishReason,
   type OpenRouterResponseMetadata,
   upstreamProviderFromResponse,
 } from '../providerResponseMetadata.js';
@@ -59,7 +58,12 @@ import {
   CampaignRouteUnsupportedError,
 } from '../campaignDispatchGate.js';
 import { CampaignPhysicalFetchSession } from '../providerCampaignPhysicalFetch.js';
-import { ssePayloadFromTrimmedLine } from './openai-chat-completions-sse.js';
+import {
+  MalformedChatCompletionsResponseError,
+  parseChatCompletionsStreamFrame,
+  readChatCompletionsStreamChoice,
+  ssePayloadFromTrimmedLine,
+} from './openai-chat-completions-sse.js';
 import { OpenAiCompatibleRunnerBase } from './openai-chat-completions-base.js';
 
 export class OpenAiCompatibleRunner extends OpenAiCompatibleRunnerBase {
@@ -75,6 +79,7 @@ async *executeWithToolsStream(
     this.lastInvocationMetadata = null;
     const stopped = callbacks?.runControl?.stop();
     if (stopped) throw new RunStoppedError(stopped);
+    signal?.throwIfAborted();
     const requestTimeoutMs = this.getRequestTimeoutMs();
     const requestMaxRetries = Math.max(1, this.getRequestMaxRetries());
     const streamIdleTimeoutMs = getStreamIdleTimeoutMs();
@@ -88,24 +93,12 @@ async *executeWithToolsStream(
       return JSON.stringify(this.sealCampaignWireBody(parsed, callbacks));
     };
     const inferenceId = randomUUID();
-    const preparedRequest = prepareProviderRequest({
-      body: buildBody(),
-      mode: 'native',
-      provider: this.providerId,
-      ...(this.contextWindowTokens ? { contextLimitTokens: this.contextWindowTokens, contextLimitSource: 'explicit' as const } : {}),
-      requestedModelId: this.model,
-      requestId: inferenceId,
-      ...(callbacks?.parentRequestId !== undefined
-        ? { parentRequestId: callbacks.parentRequestId }
-        : {}),
-      reservedCompletionTokens: this.executionEnvelope?.output.effective ?? this.maxTokens,
-    });
+    const { request: preparedRequest, sentOutputBudget } = this.prepareCompatibleRequest(
+      buildBody(), 'native', inferenceId, callbacks?.parentRequestId,
+    );
     assertPreparedProviderRequestAdmissible(preparedRequest);
     const requestBody = preparedRequest.body;
     const requestAccounting = preparedRequest.accounting;
-    this.lastWirePolicyHash = this.executionEnvelope
-      ? hashWirePolicy(JSON.parse(requestBody) as WireRequest)
-      : null;
     const inputDigest = requestAccounting.request_digest;
     const campaignSession = new CampaignPhysicalFetchSession(callbacks);
     callbacks?.onInvocationStarted?.({
@@ -116,9 +109,9 @@ async *executeWithToolsStream(
         ? { parent_request_id: preparedRequest.parent_request_id }
         : {}),
       provider: this.providerId,
-      requested_model_id: this.model,
-      normalized_model_id: this.model,
-      sent_model_id: this.model,
+      requested_model_id: preparedRequest.requested_model_id,
+      normalized_model_id: preparedRequest.normalized_model_id,
+      sent_model_id: preparedRequest.sent_model_id,
       input_digest: inputDigest,
       input_bytes: preparedRequest.body_bytes,
       accounting_kind: preparedRequest.accounting_kind,
@@ -127,14 +120,13 @@ async *executeWithToolsStream(
       ...(requestAccounting.input_message_count === null
         ? {}
         : { input_message_count: requestAccounting.input_message_count }),
-      requested_output_budget: this.executionEnvelope?.output.requested ?? this.maxTokens,
-      effective_output_budget: this.executionEnvelope?.output.effective ?? this.maxTokens,
+      requested_output_budget: this.requestedOutputBudget,
+      effective_output_budget: this.maxTokens,
+      sent_output_budget: sentOutputBudget,
       ...(this.executionEnvelope
         ? {
             execution_envelope_hash: this.executionEnvelope.configurationHash,
             ...(this.lastWirePolicyHash === null ? {} : { wire_policy_hash: this.lastWirePolicyHash }),
-            requested_output_budget: this.executionEnvelope.output.requested ?? null,
-            effective_output_budget: this.executionEnvelope.output.effective ?? null,
           }
         : {}),
       capability_bindings: tools.map((tool) => ({
@@ -149,6 +141,7 @@ async *executeWithToolsStream(
     });
     let completionSent = false;
     let lastAttempt = 0;
+    let reportedProviderFinish: string | null = null;
     const notifyCompleted = (
       status: 'delivered' | 'failed',
       observedModelId: string | null,
@@ -166,15 +159,18 @@ async *executeWithToolsStream(
         inferenceStarted?: boolean;
         outputMaterial?: string;
         errorKind?: 'protocol' | 'provider' | 'none';
+        interrupted?: boolean;
       } = {},
     ): void => {
       if (completionSent) return;
       completionSent = true;
       const router = routerMetadataProvenance(routerMetadata);
+      const usage = this.getLastInvocationMetadata();
       const finish = normalizeBabelFinishReason({
         raw: finishReason,
-        configuredOutputBudget,
-        ...(status === 'failed'
+        configuredOutputBudget: configuredOutputBudget !== null && usage?.completion_tokens != null ? sentOutputBudget : null,
+        actualCompletionTokens: usage?.completion_tokens ?? null,
+        ...(options.interrupted ? { interrupted: true } : status === 'failed'
           ? options.failureStage === 'response_normalization'
             ? options.errorKind === 'provider'
               ? { providerError: true }
@@ -199,8 +195,8 @@ async *executeWithToolsStream(
               inferenceStarted: options.inferenceStarted ?? true,
               partialModelOutput: options.partialModelOutput ?? false,
               toolCallCount: options.toolCallCount,
-              requestedOutputBudget: this.executionEnvelope?.output.requested,
-              effectiveOutputBudget: this.executionEnvelope?.output.effective,
+               requestedOutputBudget: this.requestedOutputBudget,
+               effectiveOutputBudget: this.maxTokens,
               wirePolicyHash: this.lastWirePolicyHash,
               executionEnvelopeHash: this.executionEnvelope?.configurationHash,
               outputMaterial: options.outputMaterial ?? outputText,
@@ -211,8 +207,7 @@ async *executeWithToolsStream(
         provider: this.providerId,
         model: this.model,
         status,
-        ...((status === 'delivered' || options.failureStage === 'response_normalization')
-          ? { usage_metadata: this.getLastInvocationMetadata() } : {}),
+        usage_metadata: usage,
         observed_model_id: observedModelId,
         upstream_provider: upstreamProvider,
         output_digest: createHash('sha256').update(outputText).digest('hex'),
@@ -224,10 +219,13 @@ async *executeWithToolsStream(
         }),
         normalized_finish_reason: finish.normalized,
         failure_attribution: finish.attribution.kind,
+        provider_finish_reason: safeProviderFinishReason(reportedProviderFinish),
+        requested_output_budget: this.requestedOutputBudget,
+        effective_output_budget: this.maxTokens,
+        sent_output_budget: options.inferenceStarted === false ? null : sentOutputBudget,
+        provider_effective_output_budget: null,
         ...(this.executionEnvelope
           ? {
-              requested_output_budget: this.executionEnvelope.output.requested ?? null,
-              effective_output_budget: this.executionEnvelope.output.effective ?? null,
               wire_policy_hash: this.lastWirePolicyHash,
               execution_envelope_hash: this.executionEnvelope.configurationHash,
             }
@@ -280,6 +278,7 @@ async *executeWithToolsStream(
         actualAttempt: 0,
         details: { message: errMessage },
         failureStage: 'request',
+        inferenceStarted: false,
       });
       yield { type: 'error', message: errMessage };
       return;
@@ -374,6 +373,7 @@ async *executeWithToolsStream(
             actualAttempt: attempt,
             details: { message: lastError.message },
             failureStage: 'request',
+            interrupted: true,
           });
           yield { type: 'error', message: lastError.message };
           return;
@@ -578,10 +578,8 @@ async *executeWithToolsStream(
     const pendingToolCalls = new Map<number, { id: string; name: string; arguments: string }>();
     let outputReceipt = '';
     let partialModelOutput = false;
-    let toolCallCount = 0;
-    let invocationFailed = false;
     let responseValidationFailed = false;
-    let sawDone = false;
+    let hasText = false;
 
     const streamState: StreamingState = {
       ttftMs: null,
@@ -595,145 +593,102 @@ async *executeWithToolsStream(
       outputReceipt: '',
       sawDone: false,
     };
+    const settleStream = (failure?: {
+      stage: ProviderFailureStage;
+      message: string;
+      apiErrorCode?: string | null;
+      errorKind?: 'protocol' | 'provider' | 'none';
+      interrupted?: boolean;
+    }): void => {
+      this.lastInvocationMetadata = buildStreamingInvocationMetadata(
+        this.providerId, this.model, Date.now() - startedAt, streamState, sentOutputBudget,
+      );
+      notifyCompleted(
+        failure ? 'failed' : 'delivered',
+        streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata,
+        streamState.finishReason, this.maxTokens,
+        failure ? {
+          details: {
+            message: failure.message,
+            providerRequestId: providerRequestIdFromResponse(response),
+            ...(failure.apiErrorCode !== undefined ? { apiErrorCode: failure.apiErrorCode } : {}),
+          },
+          failureStage: failure.stage,
+          partialModelOutput,
+          toolCallCount: pendingToolCalls.size,
+          ...(failure.errorKind ? { errorKind: failure.errorKind } : {}),
+          ...(failure.interrupted ? { interrupted: true } : {}),
+        } : {},
+      );
+    };
 
     try {
       let finishReason: string | null = null;
 
       while (true) {
-        let done: boolean;
-        let value: Uint8Array | undefined;
-        try {
-          const result = await readStreamWithLimits(reader, {
-            idleTimeoutMs: streamIdleTimeoutMs,
-            deadlineAt: invocationDeadlineAt,
-            requestTimeoutMs,
-            ...(signal ? { signal } : {}),
-            idleMessage: `[${this.providerId}] stream idle timeout after ${streamIdleTimeoutMs}ms`,
-            deadlineMessage: `[${this.providerId}] request timeout after ${requestTimeoutMs}ms (${this.model})`,
-          });
-          done = result.done;
-          value = result.value;
-        } catch (err) {
-          invocationFailed = true;
-          const cancelled = isCallerCancelError(err, signal);
-          const errMessage = cancelled
-            ? `[${this.providerId}] Request cancelled`
-            : err instanceof Error
-              ? err.message
-              : String(err);
-          notifyPhase('provider_error', undefined, cancelled ? 'cancelled' : 'stream');
-          // Every invocation must have a durable terminal receipt, including
-          // reader stalls/cancellation that exit before the outer stream
-          // finalizer runs.
-          notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
-            actualAttempt: lastAttempt,
-            details: {
-              message: errMessage,
-              providerRequestId: providerRequestIdFromResponse(response),
-            },
-            failureStage: 'stream',
-            partialModelOutput,
-            toolCallCount,
-            outputMaterial: outputReceipt,
-          });
-          yield { type: 'error', message: errMessage };
-          return;
+        const { done, value } = await readStreamWithLimits(reader, {
+          idleTimeoutMs: streamIdleTimeoutMs,
+          deadlineAt: invocationDeadlineAt,
+          requestTimeoutMs,
+          ...(signal ? { signal } : {}),
+          idleMessage: `[${this.providerId}] stream idle timeout after ${streamIdleTimeoutMs}ms`,
+          deadlineMessage: `[${this.providerId}] request timeout after ${requestTimeoutMs}ms (${this.model})`,
+        });
+        if (!done) {
+          totalBytes += value?.byteLength ?? 0;
+          if (progressPhaseCount < 32) {
+            progressPhaseCount += 1;
+            notifyPhase('stream_progress', undefined, `bytes=${totalBytes}`);
+          }
+          if (!firstChunkReceived) {
+            firstChunkReceived = true;
+            streamState.ttftMs = Date.now() - startedAt;
+            notifyPhase('first_byte');
+          }
         }
 
-        if (done) break;
-
-        totalBytes += value?.byteLength ?? 0;
-        if (progressPhaseCount < 32) {
-          progressPhaseCount += 1;
-          notifyPhase('stream_progress', undefined, `bytes=${totalBytes}`);
-        }
-
-        if (!firstChunkReceived) {
-          firstChunkReceived = true;
-          streamState.ttftMs = Date.now() - startedAt;
-          notifyPhase('first_byte');
-        }
-
-        const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk;
+        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+        buffer = done ? '' : lines.pop() ?? '';
 
         for (const line of lines) {
-          if (sawDone) break;
+          signal?.throwIfAborted();
           const trimmed = line.trim();
           if (!trimmed) continue;
           const data = ssePayloadFromTrimmedLine(trimmed);
           if (data === null) continue;
           if (data === '[DONE]') {
-            sawDone = true;
             streamState.sawDone = true;
             break;
           }
-
-          let json: {
-            error?: { message?: string; code?: unknown; type?: string };
-            model?: string;
-            provider?: string;
-            openrouter_metadata?: OpenRouterResponseMetadata;
-            choices?: Array<{
-              delta?: {
-                content?: string | null;
-                reasoning_content?: string;
-                tool_calls?: Array<{
-                  index: number;
-                  id?: string;
-                  type?: string;
-                  function?: { name?: string; arguments?: string };
-                }>;
-              };
-              finish_reason?: string | null;
-            }>;
-            usage?: ChatResponse['usage'];
-          };
-          try {
-            json = JSON.parse(data) as typeof json;
-          } catch {
-            invocationFailed = true;
-            const errMessage = `[${this.providerId}] Malformed SSE event chunk: ${data.slice(0, 100)}`;
-            notifyPhase('provider_error', undefined, 'malformed_sse');
-            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
-              actualAttempt: lastAttempt,
-              details: { message: errMessage },
-              failureStage: 'stream',
-              partialModelOutput,
-              toolCallCount,
-              outputMaterial: outputReceipt,
-            });
-            yield { type: 'error', message: errMessage };
-            return;
-          }
-
-          if (json.error) {
-            invocationFailed = true;
-            const errMessage = `[${this.providerId}] Provider stream error: ${json.error.message || JSON.stringify(json.error)}`;
-            notifyPhase('provider_error', undefined, 'provider_error_payload');
-            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
-              actualAttempt: lastAttempt,
-              details: { message: errMessage },
-              failureStage: 'stream',
-              partialModelOutput,
-              toolCallCount,
-              outputMaterial: outputReceipt,
-            });
-            yield { type: 'error', message: errMessage };
-            return;
-          }
-
+          const json = parseChatCompletionsStreamFrame(data);
           if (json.model) streamState.observedModelId = json.model;
-          const upstreamProvider = upstreamProviderFromResponse(json);
+          const router = json.openrouter_metadata as OpenRouterResponseMetadata | null | undefined;
+          const upstreamProvider = upstreamProviderFromResponse({
+            ...(json.provider ? { provider: json.provider } : {}),
+            ...(router ? { openrouter_metadata: router } : {}),
+          });
           if (upstreamProvider) streamState.upstreamProvider = upstreamProvider;
-          if (json.openrouter_metadata) streamState.routerMetadata = json.openrouter_metadata;
+          if (router) streamState.routerMetadata = router;
           if (json.usage) streamState.usage = json.usage;
+          if (json.error) {
+            const apiErrorCode = providerErrorCodeFromBody(data);
+            const errMessage = `[${this.providerId}] Provider stream error${apiErrorCode ? ` [${apiErrorCode}]` : ''}`;
+            notifyPhase('provider_error', undefined, 'provider_error_payload');
+            settleStream({ stage: 'stream', message: errMessage, apiErrorCode });
+            yield { type: 'error', message: errMessage };
+            return;
+          }
 
-          const choice = json.choices?.[0];
+          const choice = readChatCompletionsStreamChoice(json.choices, finishReason);
           if (!choice) continue;
           const delta = choice.delta;
+          if (choice.finish_reason?.trim()) {
+            finishReason = accumulateStreamFinish(finishReason, choice.finish_reason);
+            reportedProviderFinish ??= choice.finish_reason;
+            streamState.providerFinishReason = reportedProviderFinish;
+            streamState.finishReason = finishReason;
+          }
 
           if (delta?.reasoning_content) {
             partialModelOutput = true;
@@ -744,6 +699,7 @@ async *executeWithToolsStream(
           }
 
           if (delta?.content) {
+            hasText ||= delta.content.trim().length > 0;
             partialModelOutput = true;
             streamState.partialModelOutput = true;
             outputReceipt += delta.content;
@@ -756,9 +712,12 @@ async *executeWithToolsStream(
               const idx = tc.index;
               if (!pendingToolCalls.has(idx)) {
                 pendingToolCalls.set(idx, { id: '', name: '', arguments: '' });
-                toolCallCount += 1;
               }
               const acc = pendingToolCalls.get(idx)!;
+              if ((tc.id && acc.id && tc.id !== acc.id) ||
+                  (tc.function?.name && acc.name && tc.function.name !== acc.name)) {
+                throw new MalformedChatCompletionsResponseError('Malformed SSE event chunk (conflicting tool identity)');
+              }
               if (tc.id) {
                 acc.id = tc.id;
                 partialModelOutput = true;
@@ -781,84 +740,19 @@ async *executeWithToolsStream(
             }
           }
 
-          if (choice.finish_reason) finishReason = accumulateStreamFinish(finishReason, choice.finish_reason);
           if (finishReason === 'error') {
-            streamState.finishReason = 'error';
-            invocationFailed = true;
             const errMessage = `[${this.providerId}] Provider error during generation (finish_reason: error)`;
             notifyPhase('provider_error', undefined, 'finish_reason_error');
-            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, 'error', this.maxTokens, {
-              actualAttempt: lastAttempt,
-              details: { message: errMessage },
-              failureStage: 'stream',
-              partialModelOutput,
-              toolCallCount,
-              outputMaterial: outputReceipt,
-            });
+            settleStream({ stage: 'stream', message: errMessage });
             yield { type: 'error', message: errMessage };
             return;
           }
-          streamState.finishReason = finishReason;
         }
-        if (sawDone) {
-          await reader.cancel().catch(() => {});
-          break;
-        }
+        if (streamState.sawDone) await reader.cancel().catch(() => {});
+        if (done || streamState.sawDone) break;
       }
 
-      // Process remaining buffered SSE line
-      buffer += decoder.decode();
-      if (!sawDone) {
-        const tailPayload = buffer.trim() ? ssePayloadFromTrimmedLine(buffer.trim()) : null;
-        if (tailPayload === '[DONE]') {
-          sawDone = true;
-          streamState.sawDone = true;
-        } else if (tailPayload !== null && tailPayload !== '[DONE]') {
-          const data = tailPayload;
-          try {
-            const json = JSON.parse(data) as {
-              model?: string;
-              provider?: string;
-              openrouter_metadata?: OpenRouterResponseMetadata;
-              choices?: Array<{ finish_reason?: string | null }>;
-              usage?: ChatResponse['usage'];
-            };
-            if (json.model) streamState.observedModelId = json.model;
-            const upstreamProvider = upstreamProviderFromResponse(json);
-            if (upstreamProvider) streamState.upstreamProvider = upstreamProvider;
-            if (json.openrouter_metadata) streamState.routerMetadata = json.openrouter_metadata;
-            if (json.usage) {
-              streamState.usage = json.usage;
-            }
-            const reportedFinish = json.choices?.[0]?.finish_reason;
-            if (reportedFinish) finishReason = accumulateStreamFinish(finishReason, reportedFinish);
-            streamState.finishReason = finishReason;
-            if (finishReason === 'error') {
-              invocationFailed = true;
-              const errMessage = `[${this.providerId}] Provider error during generation (finish_reason: error)`;
-              notifyPhase('provider_error', undefined, 'finish_reason_error');
-              notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, 'error', this.maxTokens, {
-                actualAttempt: lastAttempt,
-                details: { message: errMessage },
-                failureStage: 'stream',
-                partialModelOutput,
-                toolCallCount,
-                outputMaterial: outputReceipt,
-              });
-              yield { type: 'error', message: errMessage };
-              return;
-            }
-          } catch (err) {
-            if (err instanceof ConflictingStreamFinishError) throw err;
-            throw new Error(
-              `[${this.providerId}] Malformed SSE event chunk: ${data.slice(0, 100)}`,
-              { cause: err },
-            );
-          }
-        }
-      }
-
-      if (!sawDone) {
+      if (!streamState.sawDone) {
         throw new Error(`[${this.providerId}] stream closed before terminal [DONE] marker`);
       }
 
@@ -869,7 +763,7 @@ async *executeWithToolsStream(
       // diagnostic evidence and never becomes actionable tool input.
       const disposition = classifyStreamFinish({
         reported: finishReason,
-        sawDone,
+        sawDone: streamState.sawDone,
         hasToolCalls: pendingToolCalls.size > 0,
       });
       streamState.finishReason = disposition.finishReason;
@@ -880,39 +774,17 @@ async *executeWithToolsStream(
         this.validateObservedRouterMetadata(streamState.routerMetadata, streamState.observedModelId, streamState.upstreamProvider);
       } catch (error) {
         responseValidationFailed = true;
-        this.lastInvocationMetadata = buildStreamingInvocationMetadata(
-          this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
-        );
-        notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
-          actualAttempt: lastAttempt,
-          details: { message: error instanceof Error ? error.message : String(error) },
-          failureStage: 'response_normalization',
-          partialModelOutput,
-          toolCallCount,
-          outputMaterial: outputReceipt,
-        });
+        settleStream({ stage: 'response_normalization', message: error instanceof Error ? error.message : String(error) });
         throw error;
       }
       if (disposition.status === 'failed') {
-        invocationFailed = true;
         const errMessage = `[${this.providerId}] ${
           disposition.finishReason === 'length' && pendingToolCalls.size > 0
             ? 'Incomplete tool call: truncated by provider token limit (finish_reason: length)'
             : disposition.message
         }`;
         notifyPhase('response_normalization_failed', undefined, disposition.finishReason);
-        this.lastInvocationMetadata = buildStreamingInvocationMetadata(
-          this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
-        );
-        notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, disposition.finishReason, this.maxTokens, {
-          actualAttempt: lastAttempt,
-          details: { message: errMessage },
-          failureStage: 'response_normalization',
-          partialModelOutput,
-          toolCallCount,
-          outputMaterial: outputReceipt,
-          errorKind: disposition.errorKind,
-        });
+        settleStream({ stage: 'response_normalization', message: errMessage, errorKind: disposition.errorKind });
         yield {
           type: 'error', message: errMessage,
           ...(disposition.finishReason === 'tool_calls' ? { terminalFailure: 'tool_completion_without_call' } : {}),
@@ -921,6 +793,9 @@ async *executeWithToolsStream(
       }
 
       signal?.throwIfAborted();
+      if (!disposition.executeTools && !hasText) {
+        throw new MalformedChatCompletionsResponseError('Empty provider response: no answer text or actionable tool calls');
+      }
 
       // ── Yield accumulated tool calls ──────────────────────────────────
       if (disposition.executeTools && pendingToolCalls.size > 0) {
@@ -940,32 +815,16 @@ async *executeWithToolsStream(
           }
           seenToolIds.add(callId);
           if (!acc.name || !acc.name.trim()) {
-            invocationFailed = true;
             const errMessage = `[${this.providerId}] Incomplete tool call: missing name for tool call ${callId}`;
             notifyPhase('response_normalization_failed', undefined, 'missing_tool_name');
-            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
-              actualAttempt: lastAttempt,
-              details: { message: errMessage },
-              failureStage: 'response_normalization',
-              partialModelOutput,
-              toolCallCount,
-              outputMaterial: outputReceipt,
-            });
+            settleStream({ stage: 'response_normalization', message: errMessage });
             yield { type: 'error', message: errMessage };
             return;
           }
           if (!acc.arguments || !acc.arguments.trim()) {
-            invocationFailed = true;
             const errMessage = `[${this.providerId}] Incomplete tool call: missing arguments for tool ${acc.name} (${callId})`;
             notifyPhase('response_normalization_failed', undefined, 'missing_tool_arguments');
-            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
-              actualAttempt: lastAttempt,
-              details: { message: errMessage },
-              failureStage: 'response_normalization',
-              partialModelOutput,
-              toolCallCount,
-              outputMaterial: outputReceipt,
-            });
+            settleStream({ stage: 'response_normalization', message: errMessage });
             yield { type: 'error', message: errMessage };
             return;
           }
@@ -976,23 +835,13 @@ async *executeWithToolsStream(
               throw new Error('tool arguments must be a JSON object');
             }
             input = parsed as Record<string, unknown>;
-          } catch (error) {
-            invocationFailed = true;
-            this.lastInvocationMetadata = buildStreamingInvocationMetadata(
-              this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
-            );
+          } catch {
+            const errMessage = `[${this.providerId}] Malformed arguments for tool ${acc.name}: expected a JSON object`;
             notifyPhase('response_normalization_failed', undefined, 'tool_arguments');
-            notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
-              actualAttempt: lastAttempt,
-              details: { message: error instanceof Error ? error.message : String(error) },
-              failureStage: 'response_normalization',
-              partialModelOutput,
-              toolCallCount,
-              outputMaterial: outputReceipt,
-            });
+            settleStream({ stage: 'response_normalization', message: errMessage });
             yield {
               type: 'error',
-              message: `[${this.providerId}] Malformed arguments for tool ${acc.name || '<unknown>'}: ${error instanceof Error ? error.message : String(error)}`,
+              message: errMessage,
               malformedToolArguments: {
                 callId, name: acc.name, finishReason: streamState.finishReason,
                 idWasNormalized,
@@ -1007,56 +856,25 @@ async *executeWithToolsStream(
           yield call;
         }
         signal?.throwIfAborted();
-        yield { type: 'done', finishReason: 'tool_calls' };
-      } else {
-        yield { type: 'done', finishReason: 'stop' };
       }
+      notifyPhase('stream_completed');
+      notifyPhase('response_normalized');
+      settleStream();
+      yield { type: 'done', finishReason: disposition.finishReason };
     } catch (err) {
       if (responseValidationFailed) throw err;
-      invocationFailed = true;
       const cancelled = isCallerCancelError(err, signal);
-      const protocolError = err instanceof ConflictingStreamFinishError;
+      const protocolError = err instanceof ConflictingStreamFinishError || err instanceof MalformedChatCompletionsResponseError;
       const errMessage = cancelled ? `[${this.providerId}] Request cancelled` : err instanceof Error ? err.message : String(err);
       notifyPhase('provider_error', undefined, cancelled ? 'cancelled' : 'stream');
-      this.lastInvocationMetadata = buildStreamingInvocationMetadata(
-        this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
-      );
-      notifyCompleted('failed', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
-        actualAttempt: lastAttempt,
-        details: {
-          message: errMessage,
-          providerRequestId: providerRequestIdFromResponse(response),
-        },
-        failureStage: protocolError ? 'response_normalization' : 'stream',
-        partialModelOutput,
-        toolCallCount,
-        outputMaterial: outputReceipt,
-      });
+      settleStream({ stage: protocolError ? 'response_normalization' : 'stream', message: errMessage, interrupted: cancelled });
       yield { type: 'error', message: errMessage };
     } finally {
       await releaseStreamReader(reader);
+      if (!completionSent) {
+        notifyPhase('provider_error', undefined, 'consumer_stopped');
+        settleStream({ stage: 'stream', message: 'Provider stream consumption interrupted', interrupted: true });
+      }
     }
-
-    if (!invocationFailed || !this.lastInvocationMetadata) {
-      this.lastInvocationMetadata = buildStreamingInvocationMetadata(
-        this.providerId, this.model, Date.now() - startedAt, streamState, this.maxTokens,
-      );
-    }
-    if (invocationFailed) {
-      this.validateObservedModelId(streamState.observedModelId);
-      this.validateObservedUpstream(streamState.upstreamProvider);
-      this.validateObservedRouterMetadata(streamState.routerMetadata, streamState.observedModelId, streamState.upstreamProvider);
-    } else {
-      notifyPhase('stream_completed');
-      notifyPhase('response_normalized');
-    }
-    notifyCompleted(invocationFailed ? 'failed' : 'delivered', streamState.observedModelId, outputReceipt, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, invocationFailed ? {
-      actualAttempt: lastAttempt,
-      details: { message: 'stream invocation failed' },
-      failureStage: 'stream',
-      partialModelOutput,
-      toolCallCount,
-      outputMaterial: outputReceipt,
-    } : {});
   }
 }

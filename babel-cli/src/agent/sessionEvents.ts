@@ -486,6 +486,10 @@ export function recordModelResultDelivery(
     tool_call_count?: number | null;
     requested_output_budget?: number | null;
     effective_output_budget?: number | null;
+    sent_output_budget?: number | null;
+    provider_effective_output_budget?: number | null;
+    provider_finish_reason?: string | null;
+    normalized_finish_reason?: string | null;
     wire_policy_hash?: string | null;
     execution_envelope_hash?: string | null;
     route_receipt?: ModelRouteReceiptV1;
@@ -549,6 +553,12 @@ export function recordModelResultDelivery(
     ...(input.effective_output_budget !== undefined
       ? { effective_output_budget: input.effective_output_budget }
       : {}),
+    ...(input.sent_output_budget !== undefined ? { sent_output_budget: input.sent_output_budget } : {}),
+    ...(input.provider_effective_output_budget !== undefined
+      ? { provider_effective_output_budget: input.provider_effective_output_budget }
+      : {}),
+    ...(input.provider_finish_reason !== undefined ? { provider_finish_reason: input.provider_finish_reason } : {}),
+    ...(input.normalized_finish_reason !== undefined ? { normalized_finish_reason: input.normalized_finish_reason } : {}),
     ...(input.wire_policy_hash !== undefined
       ? { wire_policy_hash: input.wire_policy_hash }
       : {}),

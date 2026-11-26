@@ -2600,8 +2600,8 @@ Notes:
                   run_dir: null,
                   changed_files: [],
                   verification: {
-                    status: 'failed',
-                    commands: ['chat engine path'],
+                     status: 'unknown',
+                     commands: [],
                     skipped_reason: null,
                   },
                   scope: {

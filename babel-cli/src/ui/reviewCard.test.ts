@@ -57,6 +57,8 @@ describe('review card — truthful terminal states', () => {
     assert.equal(looksLikeVerifiedSuccess(card.kind), false);
     const text = stripAnsi(card.body);
     assert.match(text, /Verification failed/);
+    assert.match(text, /^Checks$/m);
+    assert.doesNotMatch(text, /^Verified$/m);
     assert.match(text, /exit 1/);
     assert.doesNotMatch(text, /REVIEW_KIND:/);
   });

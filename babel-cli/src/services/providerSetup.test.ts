@@ -4,10 +4,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-test('noninteractive setup prints the private file and a placeholder example', async () => {
+test('noninteractive setup prints the private file and a placeholder example', async t => {
   const { runProviderSetup } = await import('./providerSetup.js')
   const dir = mkdtempSync(join(tmpdir(), 'babel-setup-example-'))
-  const env = { BABEL_CONFIG_DIR: dir, OPENROUTER_API_KEY: 'sentinel-do-not-print' }
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const env = { BABEL_CONFIG_DIR: dir, BABEL_STATE_DIR: dir, OPENROUTER_API_KEY: 'sentinel-do-not-print' }
   let output = ''
   const result = await runProviderSetup({ env, interactive: false, write: text => { output += text } })
   assert.equal(result.state, 'setup_required')
@@ -183,4 +184,29 @@ test('invalid confirmed setup is rejected before requesting or saving a credenti
   assert.equal(answers.length, 0)
   assert.equal(existsSync(userSettingsPath(env)), false)
   assert.equal(existsSync(join(directory, '.env')), false)
+})
+
+test('confirming a switch preserves the legacy exact model on the prior account', async t => {
+  const { runProviderSetup } = await import('./providerSetup.js')
+  const { readUserSettings, resolveEffectiveSettings, userSettingsPath } = await import('../config/userSettings.js')
+  const { writeFileSync } = await import('node:fs')
+  const directory = mkdtempSync(join(tmpdir(), 'babel-setup-switch-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const env = { BABEL_STATE_DIR: directory, BABEL_CONFIG_DIR: directory, OPENROUTER_API_KEY: 'fixture-only' }
+  writeFileSync(userSettingsPath(env), JSON.stringify({
+    schemaVersion: 1,
+    connections: {
+      personal: { id: 'personal', provider: 'openrouter', model: 'vendor/older-model' },
+      office: { id: 'office', provider: 'openrouter', model: 'vendor/office' },
+    },
+    defaults: { connection: 'personal', model: 'vendor/Personal-Exact', budgetUsd: 2 },
+  }))
+  const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected setup request') })
+  const answers = ['', 'office', '', '', '', '', 'yes']
+  const result = await runProviderSetup({ env, interactive: true, question: async () => answers.shift()!, write: () => {} })
+  assert.equal(result.connection, 'office')
+  assert.equal(result.model, 'vendor/office')
+  const settings = readUserSettings({ env })
+  assert.equal(resolveEffectiveSettings({ settings, env, session: { connection: 'personal' } }).model.value, 'vendor/Personal-Exact')
+  assert.equal(fetch.mock.callCount(), 0)
 })

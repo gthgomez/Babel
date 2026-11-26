@@ -21,6 +21,7 @@ import {
 } from '../../modelPolicy.js';
 import { isOfflineChatMode } from '../../agent/chatModelPolicy.js';
 import { globalCostTracker } from '../../services/costTracker.js';
+import { formatUsageCost } from '../../cli/usageCost.js';
 import { VALID_MODES } from '../../cli/constants.js';
 import { getRecentRuns } from '../utils.js';
 import {
@@ -445,16 +446,24 @@ export function handlePolicy(_ctx: ReplContext, _args: string[]): void {
 
 export function handleCost(_ctx: ReplContext, _args: string[]): void {
   const summary = globalCostTracker.getSessionSummary();
-  console.log(primary('\n  Session Cost Summary:'));
+  const costIncomplete = summary.costComplete === false || summary.completeCostUSD === null ||
+    (summary.unknownChargeCount ?? 0) > 0;
+  console.log(primary('\n  Interactive session cost (all conversations tracked in this session):'));
   console.log(
-    `    ${muted(padRight('Total USD', 14))} ${accentBright('$' + summary.totalCostUSD.toFixed(6))}`,
+    `    ${accentBright(formatUsageCost(summary))}${costIncomplete ? '; final cost unknown' : ''}`,
   );
   console.log(primary('\n  Breakdown by Model:'));
   Object.entries(summary.modelBreakdown).forEach(([model, usage]) => {
     const shortName = model.split('/').pop() ?? model;
+    const modelCost = formatUsageCost({
+      totalCostUSD: usage.costUSD,
+      unknownChargeCount: usage.unknownChargeCount ?? 0,
+      ...(usage.completeCostUSD !== undefined ? { completeCostUSD: usage.completeCostUSD } : {}),
+      ...(usage.estimatedCostUSD !== undefined ? { estimatedCostUSD: usage.estimatedCostUSD } : {}),
+    });
     console.log(
-      `    ${accentBright(padRight(shortName, 24))} ${muted(`In: ${usage.inputTokens.toString().padStart(8)}`)} ${muted(`Out: ${usage.outputTokens.toString().padStart(8)}`)} ${accentBright(`$${usage.costUSD.toFixed(6)}`)}`,
+      `    ${accentBright(padRight(shortName, 24))} ${muted(`In: ${usage.inputTokens.toString().padStart(8)}`)} ${muted(`Out: ${usage.outputTokens.toString().padStart(8)}`)} ${accentBright(modelCost)}`,
     );
   });
-  console.log(muted('\n  Use /stats for lifetime project totals.'));
+  console.log(muted('\n  Use /stats for run evidence and session stats.'));
 }

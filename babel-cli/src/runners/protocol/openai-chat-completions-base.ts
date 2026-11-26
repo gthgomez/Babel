@@ -3,7 +3,7 @@ import { CompatibleConfiguration } from './compatible-configuration.js';
 import { dispatchRunOperation, RunStoppedError, type RunControl } from '../../runtime/run-control.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ZodType } from 'zod';
-import { isRetryableStatus, normalizeFinishReason } from '../providerNormalize.js';
+import { ConflictingStreamFinishError, isRetryableStatus } from '../providerNormalize.js';
 import { ProviderHttpError } from '../providerHttpError.js';
 import {
   type LlmRunner,
@@ -32,7 +32,6 @@ import {
   type ProviderFailureDetails,
 } from '../providerFailureReceipt.js';
 import {
-  REQUEST_MAX_RETRIES,
   getRequestMaxRetries,
   getRequestTimeoutMs,
   isAbortError,
@@ -60,21 +59,24 @@ import {
   isStreamIdleTimeoutError,
   mapProviderMessages,
   releaseStreamReader,
-  parseSseLine,
+  readBufferedTextResponse,
+  readTextSseFrame,
   readErrorBody,
   readStreamWithLimits,
   readResponseBodyText,
   readStreamingResponse,
   recordStreamingOutput,
   buildStreamingInvocationMetadata,
+  assertTextResponseFinish,
+  TextResponseFinishError,
+  TextProviderResponseError,
   type StreamingState,
 } from '../providerResponseStream.js';
 import {
   buildInvocationMetadata,
   routerMetadataProvenance,
-  type ChatResponse,
+  safeProviderFinishReason,
   type OpenRouterResponseMetadata,
-  upstreamProviderFromResponse,
 } from '../providerResponseMetadata.js';
 import {
   CampaignBudgetDeniedError,
@@ -82,7 +84,7 @@ import {
 } from '../campaignDispatchGate.js';
 import { assertOfflineEndpointAllowed } from '../../config/offlineMode.js';
 
-import { ssePayloadFromTrimmedLine } from './openai-chat-completions-sse.js';
+import { MalformedChatCompletionsResponseError, ssePayloadFromTrimmedLine } from './openai-chat-completions-sse.js';
 import type { PreparedProviderRequest } from '../preparedProviderRequest.js';
 import { CampaignPhysicalFetchSession } from '../providerCampaignPhysicalFetch.js';
 import type { ProviderInvocationCompleted } from '../base.js';
@@ -102,23 +104,72 @@ const SYSTEM_PROMPT =
 
 const CHAT_SYSTEM_PROMPT = CHAT_NATIVE_DEFAULT_SYSTEM_PROMPT;
 
+function createTextResponseState(): StreamingState {
+  return {
+    ttftMs: null,
+    generationMs: null,
+    usage: null,
+    observedModelId: null,
+    upstreamProvider: null,
+    routerMetadata: null,
+    finishReason: null,
+    partialModelOutput: false,
+    outputReceipt: '',
+    sawDone: false,
+  };
+}
+
 // ─── Runner implementation ────────────────────────────────────────────────────
 
 export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implements LlmRunner {
   protected lastInvocationMetadata: RunnerInvocationMetadata | null = null;
   protected lastWirePolicyHash: string | null = null;
+  private lastCompatibleRequest: Pick<RunnerInvocationMetadata, 'requested_model_id' | 'normalized_model_id'
+    | 'sent_model_id' | 'requested_output_budget' | 'effective_output_budget' | 'sent_output_budget'> = {};
 
   getLastInvocationMetadata(): RunnerInvocationMetadata | null {
     if (!this.lastInvocationMetadata) return null;
-    return this.executionEnvelope
-      ? {
-          ...this.lastInvocationMetadata,
-          execution_envelope_hash: this.executionEnvelope.configurationHash,
-          wire_policy_hash: this.lastWirePolicyHash,
-          requested_output_budget: this.executionEnvelope.output.requested ?? null,
-          effective_output_budget: this.executionEnvelope.output.effective ?? null,
-        }
-      : this.lastInvocationMetadata;
+    return {
+      ...this.lastInvocationMetadata,
+      ...this.lastCompatibleRequest,
+      provider_effective_output_budget: null,
+      ...(this.executionEnvelope ? {
+        execution_envelope_hash: this.executionEnvelope.configurationHash,
+        wire_policy_hash: this.lastWirePolicyHash,
+      } : {}),
+    };
+  }
+
+  /** The sealed wire body, rather than the connection default, defines what was sent. */
+  protected prepareCompatibleRequest(
+    body: string,
+    mode: 'text' | 'native',
+    inferenceId: string,
+    parentRequestId?: string | null,
+  ): { request: PreparedProviderRequest; sentOutputBudget: number | null } {
+    const wire = JSON.parse(body) as WireRequest & { max_completion_tokens?: number };
+    const sentOutputBudget = wire.max_completion_tokens ?? wire.max_tokens ?? null;
+    const request = prepareProviderRequest({
+      body, mode,
+      provider: this.providerId,
+      requestedModelId: this.executionEnvelope?.model.requested ?? this.model,
+      normalizedModelId: this.model,
+      sentModelId: wire.model,
+      requestId: inferenceId,
+      ...(parentRequestId !== undefined ? { parentRequestId } : {}),
+      ...(this.contextWindowTokens ? { contextLimitTokens: this.contextWindowTokens, contextLimitSource: 'explicit' as const } : {}),
+      reservedCompletionTokens: sentOutputBudget,
+    });
+    this.lastWirePolicyHash = this.executionEnvelope ? hashWirePolicy(wire) : null;
+    this.lastCompatibleRequest = {
+      requested_model_id: request.requested_model_id,
+      normalized_model_id: request.normalized_model_id,
+      sent_model_id: request.sent_model_id,
+      requested_output_budget: this.requestedOutputBudget,
+      effective_output_budget: this.maxTokens,
+      sent_output_budget: sentOutputBudget,
+    };
+    return { request, sentOutputBudget };
   }
 
   /** Provider-specific exact-route checks run after response identity is captured. */
@@ -260,6 +311,7 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
     this.lastInvocationMetadata = null;
     const stopped = callbacks?.runControl?.stop();
     if (stopped) throw new RunStoppedError(stopped);
+    signal?.throwIfAborted();
     if (callbacks?.onProgress) {
       callbacks.onProgress({ state: 'Contacting model' });
     }
@@ -303,24 +355,12 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
       return JSON.stringify(bodyObject);
     };
     const inferenceId = randomUUID();
-    const preparedRequest = prepareProviderRequest({
-      body: buildBody(),
-      mode: 'text',
-      provider: this.providerId,
-      ...(this.contextWindowTokens ? { contextLimitTokens: this.contextWindowTokens, contextLimitSource: 'explicit' as const } : {}),
-      requestedModelId: this.model,
-      requestId: inferenceId,
-      ...(callbacks?.parentRequestId !== undefined
-        ? { parentRequestId: callbacks.parentRequestId }
-        : {}),
-      reservedCompletionTokens: this.executionEnvelope?.output.effective ?? this.maxTokens,
-    });
+    const { request: preparedRequest, sentOutputBudget } = this.prepareCompatibleRequest(
+      buildBody(), 'text', inferenceId, callbacks?.parentRequestId,
+    );
     assertPreparedProviderRequestAdmissible(preparedRequest);
     const requestBody = preparedRequest.body;
     const requestAccounting = preparedRequest.accounting;
-    this.lastWirePolicyHash = this.executionEnvelope
-      ? hashWirePolicy(JSON.parse(requestBody) as WireRequest)
-      : null;
     const inputDigest = requestAccounting.request_digest;
     const campaignSession = new CampaignPhysicalFetchSession(callbacks);
     callbacks?.onInvocationStarted?.({
@@ -331,9 +371,9 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
         ? { parent_request_id: preparedRequest.parent_request_id }
         : {}),
       provider: this.providerId,
-      requested_model_id: this.model,
-      normalized_model_id: this.model,
-      sent_model_id: this.model,
+      requested_model_id: preparedRequest.requested_model_id,
+      normalized_model_id: preparedRequest.normalized_model_id,
+      sent_model_id: preparedRequest.sent_model_id,
       input_digest: inputDigest,
       input_bytes: preparedRequest.body_bytes,
       accounting_kind: preparedRequest.accounting_kind,
@@ -342,14 +382,13 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
       ...(requestAccounting.input_message_count === null
         ? {}
         : { input_message_count: requestAccounting.input_message_count }),
-      requested_output_budget: this.executionEnvelope?.output.requested ?? this.maxTokens,
-      effective_output_budget: this.executionEnvelope?.output.effective ?? this.maxTokens,
+      requested_output_budget: this.requestedOutputBudget,
+      effective_output_budget: this.maxTokens,
+      sent_output_budget: sentOutputBudget,
       ...(this.executionEnvelope
         ? {
             execution_envelope_hash: this.executionEnvelope.configurationHash,
             ...(this.lastWirePolicyHash === null ? {} : { wire_policy_hash: this.lastWirePolicyHash }),
-            requested_output_budget: this.executionEnvelope.output.requested ?? null,
-            effective_output_budget: this.executionEnvelope.output.effective ?? null,
           }
         : {}),
     });
@@ -371,20 +410,33 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
         toolCallCount?: number;
         inferenceStarted?: boolean;
         outputMaterial?: string;
+        providerFinishReason?: string | null;
+        errorKind?: 'protocol' | 'provider' | 'none';
+        interrupted?: boolean;
       } = {},
     ): void => {
       if (completionSent) return;
       completionSent = true;
       const router = routerMetadataProvenance(routerMetadata);
+      const usage = this.getLastInvocationMetadata();
       const finish = normalizeBabelFinishReason({
         raw: finishReason,
-        configuredOutputBudget,
-        ...(status === 'failed'
-          ? options.failureStage === 'response_normalization'
-            ? { protocolError: true }
-            : { providerError: true }
+        configuredOutputBudget: configuredOutputBudget !== null && usage?.completion_tokens != null ? sentOutputBudget : null,
+        actualCompletionTokens: usage?.completion_tokens ?? null,
+        ...(options.interrupted ? { interrupted: true } : status === 'failed'
+          ? options.errorKind === 'none' ? {}
+            : options.errorKind === 'protocol' || (options.errorKind === undefined && options.failureStage === 'response_normalization')
+              ? { protocolError: true }
+              : { providerError: true }
           : {}),
       });
+      if (status === 'failed' && this.lastInvocationMetadata) {
+        this.lastInvocationMetadata = {
+          ...this.lastInvocationMetadata,
+          normalized_finish_reason: finish.normalized,
+          failure_attribution: finish.attribution.kind,
+        };
+      }
       const failureReceipt =
         status === 'failed'
           ? buildProviderFailureReceipt({
@@ -400,8 +452,8 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
               inferenceStarted: options.inferenceStarted ?? true,
               partialModelOutput: options.partialModelOutput ?? false,
               toolCallCount: options.toolCallCount,
-              requestedOutputBudget: this.executionEnvelope?.output.requested,
-              effectiveOutputBudget: this.executionEnvelope?.output.effective,
+               requestedOutputBudget: this.requestedOutputBudget,
+               effectiveOutputBudget: this.maxTokens,
               wirePolicyHash: this.lastWirePolicyHash,
               executionEnvelopeHash: this.executionEnvelope?.configurationHash,
               outputMaterial: options.outputMaterial ?? outputText,
@@ -412,7 +464,7 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
         provider: this.providerId,
         model: this.model,
         status,
-        ...(status === 'delivered' ? { usage_metadata: this.getLastInvocationMetadata() } : {}),
+        usage_metadata: this.getLastInvocationMetadata(),
         observed_model_id: observedModelId,
         upstream_provider: upstreamProvider,
         output_digest: createHash('sha256').update(outputText).digest('hex'),
@@ -424,10 +476,13 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
         }),
         normalized_finish_reason: finish.normalized,
         failure_attribution: finish.attribution.kind,
+        provider_finish_reason: safeProviderFinishReason(options.providerFinishReason ?? finishReason),
+        requested_output_budget: this.requestedOutputBudget,
+        effective_output_budget: this.maxTokens,
+        sent_output_budget: options.inferenceStarted === false ? null : sentOutputBudget,
+        provider_effective_output_budget: null,
         ...(this.executionEnvelope
           ? {
-              requested_output_budget: this.executionEnvelope.output.requested ?? null,
-              effective_output_budget: this.executionEnvelope.output.effective ?? null,
               wire_policy_hash: this.lastWirePolicyHash,
               execution_envelope_hash: this.executionEnvelope.configurationHash,
             }
@@ -475,40 +530,16 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
     if (vcrPlayer) {
       const lines = await vcrPlayer.readAllLines();
       let text = '';
-      const streamState = {
-        ttftMs: null as number | null,
-        generationMs: null as number | null,
-        usage: null as ChatResponse['usage'] | null,
-        observedModelId: null as string | null,
-        upstreamProvider: null as string | null,
-        routerMetadata: null as OpenRouterResponseMetadata | null,
-        finishReason: null as string | null,
-        partialModelOutput: false,
-        outputReceipt: '',
-        sawDone: false,
-      };
+      const streamState = createTextResponseState();
       let firstChunkReceived = false;
       for (const line of lines) {
         const payload = ssePayloadFromTrimmedLine(line);
         if (payload !== null) {
-          const parsed = parseSseLine(`data: ${payload}`);
-          if (parsed.malformed) throw new Error(parsed.malformed);
-          if (parsed.observedModelId) {
-            streamState.observedModelId = parsed.observedModelId;
-          }
-          if (parsed.upstreamProvider) {
-            streamState.upstreamProvider = parsed.upstreamProvider;
-          }
-          if (parsed.routerMetadata) {
-            streamState.routerMetadata = parsed.routerMetadata;
-          }
-          if (parsed.finishReason) {
-            streamState.finishReason = parsed.finishReason;
-          }
-          if (parsed.isDone) {
+          if (payload === '[DONE]') {
             streamState.generationMs = Date.now() - startedAt - (streamState.ttftMs ?? 0);
             break;
           }
+          const parsed = readTextSseFrame(payload, streamState);
           if (parsed.delta) {
             if (!firstChunkReceived) {
               firstChunkReceived = true;
@@ -526,9 +557,6 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
           if (parsed.reasoning) {
             recordStreamingOutput(streamState, 'reasoning', parsed.reasoning);
             callbacks?.onThought?.(parsed.reasoning);
-          }
-          if (parsed.usage) {
-            streamState.usage = parsed.usage;
           }
         }
       }
@@ -621,6 +649,16 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
         }
         campaignSession.settleUnknownOnOpenAdmission();
         this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
+        if (isCallerCancelError(err, signal)) {
+          settleRetry('cancelled');
+          notifyPhase('provider_error', undefined, 'cancelled');
+          notifyCompleted('failed', null, '', null, null, null, this.maxTokens, {
+            details: { message: `[${this.providerId}] Request cancelled` },
+            failureStage: 'request',
+            interrupted: true,
+          });
+          throw err;
+        }
         lastError = new Error(
           isAbortError(err)
             ? `[${this.providerId}] request timeout after ${requestTimeoutMs}ms (${this.model})`
@@ -793,7 +831,7 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
         failureStage: 'response',
       });
       const retryNote = isRetryableStatus(response.status)
-        ? ` after ${REQUEST_MAX_RETRIES} attempt(s)`
+        ? ` after ${lastAttempt} attempt(s)`
         : '';
       throw new ProviderHttpError(this.providerId, this.model, response.status, 'response', providerRequestIdFromResponse(response),
         `[${this.providerId}] HTTP ${response.status}${retryNote} (${this.model})`, providerErrorCodeFromBody(body));
@@ -805,18 +843,8 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
 
     // ── Read response (streaming or non-streaming) ────────────────────────────
     let text = '';
-    const streamState = {
-      ttftMs: null as number | null,
-      generationMs: null as number | null,
-      usage: null as ChatResponse['usage'] | null,
-      observedModelId: null as string | null,
-      upstreamProvider: null as string | null,
-      routerMetadata: null as OpenRouterResponseMetadata | null,
-      finishReason: null as string | null,
-      partialModelOutput: false,
-      outputReceipt: '',
-      sawDone: false,
-    };
+    let streamState = createTextResponseState();
+    let bufferedResponse: unknown;
 
     if (isStreaming && !response.body) {
       const error = new Error(`[${this.providerId}] Streaming response had no body.`);
@@ -860,10 +888,24 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
           if (
             !isStreamIdleTimeoutError(error) ||
             streamState.partialModelOutput ||
+            streamState.finishReason !== null ||
+            streamState.usage !== null ||
             streamAttempt >= streamMaxRetries
           ) {
             settleRetry(isAbortError(error) ? 'cancelled' : 'failed');
-            notifyPhase('provider_error', undefined, isAbortError(error) ? 'timeout' : 'stream');
+            const cancelled = isCallerCancelError(error, signal);
+            const disposition = error instanceof TextResponseFinishError ? error.disposition : null;
+            const protocolError = error instanceof ConflictingStreamFinishError ||
+              error instanceof MalformedChatCompletionsResponseError;
+            if (disposition || protocolError) {
+              notifyPhase('response_normalization_failed', undefined,
+                disposition?.finishReason ?? (error instanceof ConflictingStreamFinishError ? 'conflicting_finish' : 'malformed_sse'));
+            } else {
+              notifyPhase('provider_error', undefined, cancelled ? 'cancelled' : 'stream');
+            }
+            this.lastInvocationMetadata = buildStreamingInvocationMetadata(
+              this.providerId, this.model, Date.now() - startedAt, streamState, sentOutputBudget,
+            );
             notifyCompleted(
               'failed',
               streamState.observedModelId,
@@ -877,8 +919,12 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
                 details: {
                   message: error instanceof Error ? error.message : String(error),
                   providerRequestId: providerRequestIdFromResponse(response),
+                  ...(error instanceof TextProviderResponseError ? { apiErrorCode: error.apiErrorCode } : {}),
                 },
-                failureStage: isStreamIdleTimeoutError(error) ? 'stream' : 'stream',
+                failureStage: disposition || protocolError ? 'response_normalization' : 'stream',
+                interrupted: cancelled,
+                providerFinishReason: streamState.providerFinishReason ?? null,
+                ...(disposition ? { errorKind: disposition.errorKind } : {}),
                 partialModelOutput: streamState.partialModelOutput,
                 outputMaterial: streamState.outputReceipt,
               },
@@ -1046,24 +1092,15 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
               `[${this.providerId}] HTTP ${response.status} during stream retry (${this.model})`, providerErrorCodeFromBody(body));
           }
           settleRetry('succeeded');
+          // The next response belongs to a new physical attempt. Prelude
+          // telemetry from the old response cannot identify or price it.
+          streamState = createTextResponseState();
         }
       }
-      this.lastInvocationMetadata = buildInvocationMetadata(
-        this.providerId,
-        this.model,
-        Date.now() - startedAt,
-        streamState.usage ?? undefined,
-        streamState.ttftMs,
-        streamState.generationMs,
-        undefined,
-        streamState.observedModelId,
-        streamState.upstreamProvider,
-        streamState.routerMetadata,
-        streamState.finishReason,
-        this.maxTokens,
+      this.lastInvocationMetadata = buildStreamingInvocationMetadata(
+        this.providerId, this.model, Date.now() - startedAt, streamState, sentOutputBudget,
       );
     } else {
-      let data: ChatResponse;
       let rawDataText = '';
       try {
         rawDataText = await readResponseBodyText(response, {
@@ -1073,26 +1110,7 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
           ...(signal ? { signal } : {}),
           onFirstByte: () => { notifyPhase('first_byte'); },
         });
-        data = JSON.parse(rawDataText) as ChatResponse;
-        streamState.usage = data.usage ?? null;
-        this.lastInvocationMetadata = buildInvocationMetadata(
-          this.providerId,
-          this.model,
-          Date.now() - startedAt,
-          data.usage,
-          undefined,
-          undefined,
-          undefined,
-          data.model,
-          upstreamProviderFromResponse(data),
-          data.openrouter_metadata ?? null,
-          data.choices?.[0]?.finish_reason ?? null,
-          this.maxTokens,
-        );
-        streamState.observedModelId = data.model ?? null;
-        streamState.upstreamProvider = upstreamProviderFromResponse(data);
-        streamState.routerMetadata = data.openrouter_metadata ?? null;
-        streamState.finishReason = data.choices?.[0]?.finish_reason ?? null;
+        bufferedResponse = JSON.parse(rawDataText) as unknown;
       } catch (err) {
         this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
         if (isCallerCancelError(err, signal) || isAbortError(err)) {
@@ -1134,23 +1152,56 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
           cause: err instanceof Error ? err : undefined,
         });
       }
-      text = data?.choices?.[0]?.message?.content ?? '';
     }
 
     if (isStreaming) notifyPhase('stream_completed');
     try {
+      if (!isStreaming) {
+        text = readBufferedTextResponse(bufferedResponse, streamState).text;
+        recordStreamingOutput(streamState, 'text', text);
+        this.lastInvocationMetadata = buildStreamingInvocationMetadata(
+          this.providerId, this.model, Date.now() - startedAt, streamState, sentOutputBudget,
+        );
+      }
       this.validateObservedModelId(streamState.observedModelId);
       this.validateObservedUpstream(streamState.upstreamProvider);
       this.validateObservedRouterMetadata(streamState.routerMetadata, streamState.observedModelId, streamState.upstreamProvider);
+      if (!isStreaming && (streamState.finishReason !== null || text.trim())) {
+        assertTextResponseFinish(streamState.finishReason, `[${this.providerId}]`);
+      }
+      if (!text.trim()) {
+        throw buildStructuredOutputError({
+          failure_kind: 'empty_response',
+          provider: this.providerId,
+          model: this.model,
+          message: `[${this.providerId}] Empty response from model "${this.model}".`,
+          raw_output: text,
+        });
+      }
       notifyPhase('response_normalized');
-      notifyCompleted('delivered', streamState.observedModelId, text, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens);
+      notifyCompleted('delivered', streamState.observedModelId, text, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
+        providerFinishReason: streamState.providerFinishReason ?? null,
+      });
     } catch (error) {
+      const disposition = error instanceof TextResponseFinishError ? error.disposition : null;
+      const providerError = error instanceof TextProviderResponseError ? error : null;
+      if (!isStreaming) {
+        this.lastInvocationMetadata = buildStreamingInvocationMetadata(
+          this.providerId, this.model, Date.now() - startedAt, streamState, sentOutputBudget,
+        );
+      }
+      notifyPhase('response_normalization_failed', undefined, 'response_incomplete_or_invalid');
       notifyCompleted('failed', streamState.observedModelId, text, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
         actualAttempt: lastAttempt,
-        details: { message: error instanceof Error ? error.message : String(error) },
+        details: {
+          message: error instanceof Error ? error.message : String(error),
+          ...(providerError ? { apiErrorCode: providerError.apiErrorCode } : {}),
+        },
         failureStage: 'response_normalization',
         partialModelOutput: streamState.partialModelOutput,
         outputMaterial: streamState.outputReceipt,
+        providerFinishReason: streamState.providerFinishReason ?? null,
+        ...(providerError ? { errorKind: 'provider' } : disposition ? { errorKind: disposition.errorKind } : {}),
       });
       throw error;
     }

@@ -17,6 +17,19 @@ import {
 import { resolveChatEngineLimits, isSweChatProfileEnabled } from './chatEngineLimits.js';
 
 describe('chatTaskClass', () => {
+  test('a declarative code point routes to Work only from active user prose', () => {
+    const goal = 'We need computeDiscount to return 10 for a total of 100.';
+    const requirements = '\nRequirements:\n- npm test must pass.';
+    for (const request of [goal, `Goal: ${goal}`, `## Task\nObjective: ${goal}`, `${goal} Implement this change.`]) {
+      const task = `${request}${requirements}`;
+      assert.equal(resolveTaskShape(task).operation, 'MUTATING', request);
+      assert.equal(resolveTaskShape(task, 'READ_ONLY').operation, 'READ_ONLY');
+      assert.equal(resolveTaskShape(`${task}\nDo not edit any files.`).operation, 'READ_ONLY');
+    }
+    for (const request of [`> ${goal}`, `    ${goal}`, `## Examples\n${goal}`, `"${goal}"`, `Review this request:\n${goal}`]) {
+      assert.equal(resolveTaskShape(`${request}${requirements}`).operation, 'READ_ONLY', request);
+    }
+  });
   test('opening labeled Make routes like bare Make without overriding edit restrictions', () => {
     const goal = 'Make the export include every record.';
     const requirement = '\nRequirements:\n- `npm test` must pass.';

@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { getAvailableModels, resolveModelByKey } from '../modelPolicy.js'
 import { buildProviderRouteReport } from '../runners/providerRouteReport.js'
 import { getProviderSpec, isProviderId, listProviderSpecs } from '../runners/providerRegistry.js'
-import { readUserSettings, resolveEffectiveSettings, updateUserSettings, type Connection, type UserPreferences } from '../config/userSettings.js'
+import { mergeUserPreferences, readUserSettings, resolveEffectiveSettings, updateUserSettings, type Connection, type UserPreferences } from '../config/userSettings.js'
 import { connectionModelSelector } from '../config/connectionModelPolicy.js'
 
 export interface SelectionSession { [key: string]: unknown; connection?: string; model?: string | undefined; modelsByConnection?: Record<string, string> }
@@ -12,14 +12,13 @@ export type SaveScope = 'user' | 'project'
 /** Store only an explicit user choice; project scope remains in the private user profile. */
 export function savePreferences(preferences: UserPreferences, scope: SaveScope, projectRoot = process.cwd()): void {
   if (scope === 'user') {
-    const settings = readUserSettings()
-    updateUserSettings({ defaults: { ...preferences, ...(preferences.modelsByConnection ? { modelsByConnection: { ...settings.defaults?.modelsByConnection, ...preferences.modelsByConnection } } : {}) } })
+    updateUserSettings({ defaults: preferences })
+    return
   }
-  else {
-    const settings = readUserSettings()
-    const key = resolve(projectRoot)
-    updateUserSettings({ projects: { ...settings.projects, [key]: { ...settings.projects?.[key], ...preferences, ...(preferences.modelsByConnection ? { modelsByConnection: { ...settings.projects?.[key]?.modelsByConnection, ...preferences.modelsByConnection } } : {}), ...(preferences.plans ? { plans: { ...settings.projects?.[key]?.plans, ...preferences.plans } } : {}) } } })
-  }
+  const key = resolve(projectRoot)
+  updateUserSettings(settings => ({
+    projects: { [key]: mergeUserPreferences(settings.projects?.[key], preferences) },
+  }))
 }
 
 /** Create an account configuration without selecting it or making a network call. */
@@ -28,11 +27,12 @@ export function connectProvider(provider: string, options: {
 } = {}): Connection {
   if (!isProviderId(provider)) throw new Error('Unknown provider. Use babel-harness provider list.')
   const id = options.name ?? provider
-  const previous = readUserSettings().connections[id]
-  if (previous && previous.provider !== provider) throw new Error('Connection name already belongs to another provider; choose another --name.')
-  const connection: Connection = { ...previous, ...options, id, provider }
-  updateUserSettings({ connections: { [id]: connection } })
-  return connection
+  const settings = updateUserSettings(current => {
+    const previous = current.connections[id]
+    if (previous && previous.provider !== provider) throw new Error('Connection name already belongs to another provider; choose another --name.')
+    return { connections: { [id]: { ...previous, ...options, id, provider } } }
+  })
+  return settings.connections[id]!
 }
 
 /** Report only declared non-secret fields; never dump arbitrary preference content. */

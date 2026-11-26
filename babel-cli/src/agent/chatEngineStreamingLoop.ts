@@ -17,6 +17,7 @@ import { finalizeStreamingTurnLimit } from "./chatEngineStreamingFinalizer.js";
 import { recoverStreamingRequestAdmission } from './chatEngineRequestRecovery.js';
 import { ProviderHttpError } from '../runners/providerHttpError.js';
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
+import { requiredLocalExecutionBlock } from './requestedLocalExecution.js';
 import { normalizeChatAnswer, requestedChatJsonKind } from './chatResponseContract.js';
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 import { writeFileSync } from "node:fs";
@@ -1529,6 +1530,15 @@ export class ChatEngineStreamingLoop {
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
           yield this.host.streamStopped(executedStop);
+          return;
+        }
+
+        const requiredOperation = requiredLocalExecutionBlock(this.host.toolCallLog, { final: false });
+        if (requiredOperation) {
+          endSpan(_turnSpan, SpanStatusCode.OK);
+          _turnSpan = null;
+          this.host.conversation.push({ role: "assistant", content: requiredOperation.answer });
+          yield this.host.streamDone(requiredOperation.answer, { blockedReport: requiredOperation.blockedReport });
           return;
         }
 

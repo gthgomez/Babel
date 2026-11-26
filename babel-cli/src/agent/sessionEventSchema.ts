@@ -195,7 +195,12 @@ export type SessionEvent =
       retryable?: boolean;
       tool_call_count?: number | null;
       requested_output_budget?: number | null;
+      /** Local policy resolution, separate from the wire and provider limits. */
       effective_output_budget?: number | null;
+      sent_output_budget?: number | null;
+      provider_effective_output_budget?: number | null;
+      provider_finish_reason?: string | null;
+      normalized_finish_reason?: string | null;
       wire_policy_hash?: string | null;
       execution_envelope_hash?: string | null;
       route_receipt?: ModelRouteReceiptV1;

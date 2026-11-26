@@ -61,7 +61,7 @@ test('OllamaApiRunner getLastInvocationMetadata returns null tokens and unknown 
   globalThis.fetch = (async () => {
     return new Response(
       JSON.stringify({
-        choices: [{ message: { content: '{"ok":true}' } }],
+        choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
         // No usage field — Ollama may not report token counts
       }),
       { status: 200 },
@@ -88,7 +88,7 @@ test('OllamaApiRunner preserves token counts when Ollama reports them', async ()
   globalThis.fetch = (async () => {
     return new Response(
       JSON.stringify({
-        choices: [{ message: { content: 'hello' } }],
+        choices: [{ message: { content: 'hello' }, finish_reason: 'stop' }],
         usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
       }),
       { status: 200 },

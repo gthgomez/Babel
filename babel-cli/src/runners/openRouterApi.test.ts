@@ -13,7 +13,7 @@ test('OpenRouter carries reported and withheld billing through buffered and nati
     for (const mode of ['buffered', 'native', 'structured_stream']) {
       globalThis.fetch = (async () => mode !== 'buffered'
         ? new Response(`data: ${JSON.stringify({ model, provider: 'FixtureProvider', choices: [{ delta: { content: mode === 'native' ? 'fixture' : '{"ok":true}' }, finish_reason: 'stop' }], usage })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
-        : new Response(JSON.stringify({ model, provider: 'FixtureProvider', choices: [{ message: { content: '{"ok":true}' } }], usage }))) as typeof fetch
+        : new Response(JSON.stringify({ model, provider: 'FixtureProvider', choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }], usage }))) as typeof fetch
       const runner = new OpenRouterApiRunner(model, { maxTokens: 100 }, { env: { OPENROUTER_API_KEY: 'synthetic-fixture-key' } })
       if (mode === 'native') {
         for await (const _event of runner.executeWithToolsStream([{ role: 'user', content: 'Reply' }], [])) { /* consume actual receiver */ }
@@ -61,7 +61,7 @@ test('OpenRouter uses the declared credential variable and sampling body', async
       JSON.stringify({
         model: 'example/fixed-model',
         provider: 'ExampleProvider',
-        choices: [{ message: { content: '{"ok":true}' } }],
+        choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
         usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
       }),
       { status: 200 },
@@ -115,7 +115,7 @@ test('OpenRouter telemetry reports the OpenRouter retry provider and pinned cost
       JSON.stringify({
         model: 'z-ai/glm-5.3-flash',
         provider: 'ExampleProvider',
-        choices: [{ message: { content: '{"ok":true}' } }],
+        choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
         usage: { prompt_tokens: 1_000_000, completion_tokens: 1_000_000, total_tokens: 2_000_000 },
       }),
       { status: 200 },
@@ -158,7 +158,7 @@ test('scientific OpenRouter routing disables silent upstream fallback', async ()
       openrouter_metadata: {
         endpoints: { available: [{ provider: 'ExampleProvider', selected: true }] },
       },
-      choices: [{ message: { content: '{"ok":true}' } }],
+      choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
     }), { status: 200 })
   }) as typeof fetch
 
@@ -225,7 +225,7 @@ test('OpenRouter exact GLM route rejects a different observed model', async () =
     new Response(
       JSON.stringify({
         model: 'z-ai/another-model',
-        choices: [{ message: { content: '{"ok":true}' } }],
+        choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
       }),
       { status: 200 },
     )) as typeof fetch
@@ -245,7 +245,7 @@ test('OpenRouter exact GLM route rejects a missing observed model identity', asy
   globalThis.fetch = (async () =>
     new Response(
       JSON.stringify({
-        choices: [{ message: { content: '{"ok":true}' } }],
+        choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
       }),
       { status: 200 },
     )) as typeof fetch
@@ -268,7 +268,7 @@ test('OpenRouter exact DeepSeek route pins the full provider model id', async ()
     return new Response(
       JSON.stringify({
         model: 'deepseek/deepseek-v4-flash-0731',
-        choices: [{ message: { content: '{"ok":true}' } }],
+        choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
       }),
       { status: 200 },
     )
@@ -288,7 +288,7 @@ test('OpenRouter exact DeepSeek route pins the full provider model id', async ()
 test('OpenRouter exact DeepSeek route rejects observed model substitution', async () => {
   globalThis.fetch = (async () => new Response(JSON.stringify({
     model: 'deepseek/deepseek-v4-pro',
-    choices: [{ message: { content: '{"ok":true}' } }],
+    choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
   }), { status: 200 })) as typeof fetch
 
   const runner = new OpenRouterApiRunner(

@@ -169,9 +169,9 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
       if (line.trim() === '```') {
         ctx.inPaste = false;
         ctx.rl.setPrompt('Input › ');
-        const fullInput = ctx.pasteBuffer.join('\n').trim();
+        const fullInput = ctx.pasteBuffer.join('\n');
         ctx.pasteBuffer = [];
-        if (!fullInput) {
+        if (!fullInput.trim()) {
           release = await coordinator.acquire('repl');
           ctx.rl.prompt();
           return;
@@ -229,7 +229,10 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
 
     // Agent busy: queue follow-up instead of parallel execution (C2).
     if ((lineInFlight || ctx.isRunning || ctx.preparingRun) && !input.startsWith('/')) {
-      enqueueComposerMessage(input);
+      if (!enqueueComposerMessage(line)) {
+        setAdapterDraft(ctx, line);
+        OutputBuffer.getInstance().write(muted('\n  Follow-up queue is full.\n'));
+      }
       ctx.rl.prompt();
       return;
     }
@@ -265,7 +268,7 @@ export async function runReplLoop(ctx: ReplContext, deps: ReplLoopDeps): Promise
     } else {
       lineInFlight = true;
       try {
-        await executeTaskAndDrainQueue(ctx, deps, input);
+        await executeTaskAndDrainQueue(ctx, deps, line);
       } finally {
         lineInFlight = false;
       }

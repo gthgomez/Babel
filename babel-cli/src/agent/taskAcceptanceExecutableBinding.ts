@@ -8,7 +8,10 @@ import {
   parseStructuredVerifierCommand,
 } from './completionGatePolicy.js'
 import type { AcceptanceRequirementV1, AcceptanceRequirementType, VerificationSpecV1 } from './taskContract.js'
-import { labeledBehavioralGoalText, type AcceptanceMeaningSource, type TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
+import { isQuantifiedArithmeticBehavior, labeledBehavioralGoalText, type AcceptanceMeaningSource, type TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
+import { taskBehaviorPoint, taskBehaviorPointForVerification } from './taskBehaviorPoint.js'
+import { pointVerifierWitness } from './pointVerifierWitness.js'
+import { legacyTaskProhibitsCommand, taskProhibitsCommand, v3TaskProhibitsCommand } from './taskCommandProhibitions.js'
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
 import { assertionEvidenceMatches, stripJsComments } from './verifierBehaviorEvidence.js'
 import { markAdvisoryDocsGoals } from './advisoryDocsGoal.js'
@@ -246,6 +249,11 @@ interface ExplicitCriterionVerifierLink {
   command: string
 }
 
+/** The exact behavioral statement for a point receipt, with any separate verifier clause removed. */
+export function acceptanceCriterionPoint(criterion: AcceptanceRequirementV1) {
+  return taskBehaviorPointForVerification(explicitCriterionVerifierLink(criterion)?.behavior ?? criterion.description)
+}
+
 /**
  * Parse a task-authored verifier link from one criterion only. The command is
  * intentionally required to follow the exact `verified by:` marker and to be
@@ -289,7 +297,9 @@ function normalizedCriterionText(value: string, meaning: TaskAcceptanceMeaning):
   // distinct user requirements share verifier authority. Conservative misses
   // simply leave the inferred criterion unbound and therefore unverified.
   const text = value.trim()
-  const behavior = meaning.interpretation_version === 4 ? labeledBehavioralGoalText(text) ?? text : text
+  const behavior = meaning.interpretation_version >= 4
+    ? labeledBehavioralGoalText(text, meaning.interpretation_version >= 5, meaning.interpretation_version >= 6) ?? text
+    : text
   return behavior.replace(/[.!?]+$/, '')
 }
 
@@ -609,9 +619,17 @@ function relevantTrustedCommands(input: {
   trusted: readonly string[]
   projectRoot: string
   fs: VerifierCommandInputOverrides
-}): string[] {
+  meaningVersion: TaskAcceptanceMeaning['interpretation_version']
+}): { command: string; target?: string }[] {
   if (isUnresolvedCriterion(input.criterion)) return []
   if (!input.criterion.verification.verifier_id.startsWith('meaning:')) return []
+  const point = input.meaningVersion >= 6 ? acceptanceCriterionPoint(input.criterion) : undefined
+  const designated = point ? explicitCriterionVerifierLink(input.criterion)?.command : undefined
+  if (point) return input.trusted.flatMap(command => {
+    if (designated && !commandsMatchForExecutableBinding(designated, command)) return []
+    const witness = pointVerifierWitness(input.projectRoot, command, point, input.fs)
+    return witness ? [{ command, target: witness.target }] : []
+  })
   const spec = relevanceSpec(input.criterion.description)
   if (!spec) return []
   return input.trusted.filter(command => {
@@ -628,7 +646,7 @@ function relevantTrustedCommands(input: {
         fs: input.fs,
       })
     })
-  })
+  }).map(command => ({ command }))
 }
 
 /**
@@ -642,11 +660,15 @@ function explicitVerifierObservesStatedResult(input: {
   command: string
   projectRoot?: string
   fs?: VerifierCommandInputOverrides
+  meaningVersion: TaskAcceptanceMeaning['interpretation_version']
 }): boolean {
   if (!input.projectRoot) return true
+  const fs = input.fs ?? {}
+  const point = input.meaningVersion >= 6 ? taskBehaviorPoint(input.criterion.description) : undefined
+  // Fresh point constraints must use the case-level relevance binding below.
+  if (point) return false
   const spec = relevanceSpec(input.criterion.description)
   if (!spec || spec.fragment === null) return true
-  const fs = input.fs ?? {}
   const inputFiles = verifierCommandInputFiles(input.projectRoot, input.command, fs)
     .filter(file => file !== 'package.json')
   if (inputFiles.length === 0) return true
@@ -667,6 +689,7 @@ function bindRelevanceWitness(
   command: string,
   defaultWorkingDirectory?: string,
   existingVerifierInputFiles?: readonly string[],
+  target?: string,
 ): AcceptanceRequirementV1 {
   const verification = materializeExecutableVerification(
     command,
@@ -678,7 +701,7 @@ function bindRelevanceWitness(
     ...criterion,
     type: requirementTypeForCommand(command),
     verification_strategy: `The task names an observable behavior and its frozen verifier input exercises that same target; this is the ${RELEVANCE_WITNESS_MARKER} for the requirement.`,
-    verification,
+    verification: target ? { ...verification, target } : verification,
   }
 }
 
@@ -744,12 +767,20 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
    */
   projectRoot?: string
   relevanceFs?: VerifierCommandInputOverrides
+  /** Historical descriptors already froze their executable interpretation. */
+  replayBinding?: 'v2' | 'v3'
+  /** New amendments apply current evidence rules to any retained meaning version. */
+  requirePointWitness?: boolean
 }): TaskAcceptanceMeaning {
+  const prohibits = input.replayBinding === 'v2' ? legacyTaskProhibitsCommand
+    : input.replayBinding === 'v3' ? v3TaskProhibitsCommand : taskProhibitsCommand
+  const currentBinding = input.requirePointWitness === true || input.meaning.interpretation_version >= 6
   const trusted = [
     ...new Set(
       input.trustedVerifierCommands
         .map((command) => command.trim())
-        .filter((command) => command.length > 0),
+        .filter(command => command.length > 0 &&
+          (!currentBinding || !prohibits(input.meaning.activeProse, command))),
     ),
   ]
   if (trusted.length === 0 || input.meaning.unresolved) return input.meaning
@@ -770,10 +801,10 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     return bound
   })
 
-  // V1/V2 replay cannot gain a task-authored link on reload. Only v4 treats
+  // V1/V2 replay cannot gain a task-authored link on reload. V4 onward treats
   // recognized goal labels as framing when comparing the linked behavior.
   if (input.meaning.interpretation_version >= 3) {
-    const bindEquivalentExplicitLinks = input.meaning.interpretation_version === 4
+    const bindEquivalentExplicitLinks = input.meaning.interpretation_version >= 4
     const linked = input.meaning.criteria.flatMap((criterion) => {
       const source = input.meaning.sources.find(item => item.criterion_id === criterion.id)
       if (source?.status !== 'explicit') return []
@@ -808,14 +839,24 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
       })
       for (const criterion of matchingCriteria) {
         const explicit = explicitById.get(criterion.id)
-        if (!explicit && !explicitVerifierObservesStatedResult({
+        const point = !input.replayBinding && currentBinding
+          ? taskBehaviorPointForVerification(explicit?.behavior ?? criterion.description)
+          : undefined
+        const pointWitness = point && input.projectRoot
+          ? pointVerifierWitness(input.projectRoot, command, point, input.relevanceFs ?? {})
+          : undefined
+        if (point && !pointWitness) continue
+        if (!explicit && !pointWitness && !explicitVerifierObservesStatedResult({
           criterion,
           command,
+          meaningVersion: input.meaning.interpretation_version,
           ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
           ...(input.relevanceFs ? { fs: input.relevanceFs } : {}),
         })) continue
         const link = explicit ?? designated
-        const bound = bindExplicitCriterionLink(
+        const bound = pointWitness ? bindRelevanceWitness(
+          criterion, command, input.defaultWorkingDirectory, input.existingVerifierInputFiles, pointWitness.target,
+        ) : bindExplicitCriterionLink(
           criterion,
           command,
           link.behavior,
@@ -897,14 +938,23 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     const projectRoot = input.projectRoot
     const fs = input.relevanceFs ?? {}
     relevanceBound = explicitCriteria.map((criterion) => {
-      const matches = relevantTrustedCommands({ criterion, trusted, projectRoot, fs })
+      // The relevance matcher can pair a call and result from an illustration.
+      // A matching example cannot establish the surrounding requirement.
+      if (input.meaning.interpretation_version >= 5 && (
+        isQuantifiedArithmeticBehavior(criterion.description) ||
+        /\b(?:for example|e\.g\.|such as)(?=[\s,:])/i.test(criterion.description)
+      )) return criterion
+      const matches = relevantTrustedCommands({
+        criterion, trusted, projectRoot, fs, meaningVersion: input.meaning.interpretation_version,
+      })
       if (matches.length !== 1) return criterion
-      const command = matches[0]!
+      const { command, target } = matches[0]!
       const bound = bindRelevanceWitness(
         criterion,
         command,
         input.defaultWorkingDirectory,
         input.existingVerifierInputFiles,
+        target,
       )
       if (bound.verification.verifier_id === criterion.verification.verifier_id) return criterion
       bindingProvenance.push({

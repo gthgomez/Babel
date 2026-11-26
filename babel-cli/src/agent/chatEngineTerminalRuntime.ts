@@ -108,6 +108,7 @@ import {
 } from './preservedUnverifiedTerminal.js'
 import { requestedChatJsonKind } from './chatResponseContract.js'
 import { describeUnverifiedVerifierStatus } from './unverifiedFileDelivery.js'
+import { requiredLocalExecutionBlock } from './requestedLocalExecution.js'
 
 export const SESSION_EVENT_PERSISTENCE_FINALIZE_MESSAGE =
   'session event persistence failed before terminal evidence could be durably recorded'
@@ -253,6 +254,7 @@ function formatTerminalAnswerForOutcome(input: {
   outcome: TerminalOutcome
   status: ChatResult['status']
   hasMutation: boolean
+  requiredExecutionBlocked?: boolean
   task: string
   toolCallLog: ChatTerminalSnapshot['evidence']['observability']['toolCallLog']
   verifierReceipt?: BoundChatVerifierReceipt | null | undefined
@@ -302,6 +304,9 @@ function formatTerminalAnswerForOutcome(input: {
   if ((!unverifiedTerminal && !blockedRecovery) || !input.hasMutation) return input.answer
 
   const artifactRefs = collectConfirmedMutationArtifactPaths(input.toolCallLog)
+  const blockedAnswerLabel = input.requiredExecutionBlocked
+    ? 'Babel execution status:'
+    : 'Model response (task remains blocked):'
   if (blockedRecovery && input.preservedUnverifiedCandidate) {
     const confirmedRefs = new Set(artifactRefs)
     const retainedRefs = input.preservedUnverifiedCandidate.artifactRefs
@@ -325,7 +330,7 @@ function formatTerminalAnswerForOutcome(input: {
         'A policy or recovery boundary stopped this attempt; task completion is not certified.',
         'The host recorded a mutation but could not provide an enumerated artifact path.',
         '',
-        'Model response (task remains blocked):',
+        blockedAnswerLabel,
         '---',
         input.answer,
         '',
@@ -363,7 +368,7 @@ function formatTerminalAnswerForOutcome(input: {
       describeUnverifiedVerifierStatus(input.toolCallLog))
   } else {
     if (unverifiedTerminal) lines.push('', 'Unverified model response:', '---', input.answer)
-    else lines.push('', 'Model response (task remains blocked):', '---', input.answer)
+    else lines.push('', blockedAnswerLabel, '---', input.answer)
     lines.push('', 'Verification status:', describeUnverifiedVerifierStatus(input.toolCallLog))
   }
   return unverifiedTerminal || blockedRecovery
@@ -609,6 +614,18 @@ export function completeChatStream(
   const { snapshot, effects } = input
   effects.settleActiveExecution()
   const hasMutation = snapshot.outcome.hasMutation
+  const requiredExecution = !extra?.stopRequest && !extra?.reason && !extra?.needsHumanDecision &&
+    !snapshot.outcome.budgetExceeded && !snapshot.outcome.verifierTampered && !extra?.verifierTampered &&
+    (!snapshot.outcome.terminatingLimiter || snapshot.outcome.terminatingLimiter === 'stall') &&
+    (!extra?.blockedReport || extra.blockedReport.reason_code === 'recovery_exhausted' ||
+      extra.blockedReport.reason.startsWith('DENY_MISSING_AUTHORITY:'))
+    ? requiredLocalExecutionBlock(snapshot.evidence.observability.toolCallLog, { final: true })
+    : null
+  const originalAnswer = answer
+  if (requiredExecution) {
+    answer = requiredExecution.answer
+    extra = { ...extra, blockedReport: requiredExecution.blockedReport }
+  }
   const needsHumanDecision = extra?.needsHumanDecision === true &&
     !snapshot.outcome.budgetExceeded && !snapshot.outcome.verifierTampered && !extra?.blockedReport && !extra?.verifierTampered
   const {
@@ -744,7 +761,8 @@ export function completeChatStream(
     hasMutation,
     task: snapshot.context.options.task,
     toolCallLog: snapshot.evidence.observability.toolCallLog,
-    ...(preservedUnverifiedCandidate !== undefined
+    ...(requiredExecution ? { requiredExecutionBlocked: true } : {}),
+    ...(preservedUnverifiedCandidate !== undefined && !requiredExecution
       ? { preservedUnverifiedCandidate }
       : {}),
     ...(decision.acceptanceEvidence ? { acceptanceEvidence: decision.acceptanceEvidence } : {}),
@@ -756,7 +774,7 @@ export function completeChatStream(
   })
   replaceLastMatchingAssistantAnswer(
     snapshot.presentation.conversation,
-    answer,
+    originalAnswer,
     deliveredAnswer,
   )
   const finalizeResult = effects.finalizeTurn(

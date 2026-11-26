@@ -23,6 +23,7 @@ export function restoreTurnRuntime(log:ThreadEventLog):TurnRuntimeSnapshot|null{
       // Old logs did not retain explicit READ_ONLY host overrides. Recover
       // their objective conservatively; prose cannot prove a lost policy.
       operation:event.requestedOperation??'READ_ONLY',
+      replayOperation:event.objectiveOperation??'legacy',
       ...(event.requestedTaskIntent!==undefined?{taskIntent:event.requestedTaskIntent}:{}),
       continueTask,classifyIntent:classifyChatTaskIntent,previous,
     })
