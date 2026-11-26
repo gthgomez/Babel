@@ -132,7 +132,9 @@ function isStageTelemetryEntry(value: unknown, stage: RoutingStage): value is Wa
     value.attempts > 0 &&
     'tiers_skipped' in value &&
     Array.isArray(value.tiers_skipped) &&
-    value.tiers_skipped.every((tier: unknown) => typeof tier === 'string' && tier.trim().length > 0);
+    value.tiers_skipped.every((tier: unknown) => typeof tier === 'string' && tier.trim().length > 0) &&
+    !value.tiers_skipped.includes(value.tier_succeeded) &&
+    new Set(value.tiers_skipped).size === value.tiers_skipped.length;
 }
 
 function loadStageTelemetry(
@@ -227,7 +229,7 @@ function scoreTier(
  * Returns `null` (keep original order) when:
  *   - Dynamic routing is disabled and `options.enabled` is not explicitly `true`
  *   - The waterfall has only one tier
- *   - Fewer than `MIN_SAMPLES` stage-specific telemetry entries exist
+ *   - Fewer than `MIN_SAMPLES` valid observations include a current tier
  *
  * The caller is responsible for reordering the waterfall using `selectedIndex`
  * (see `reorderWaterfallByStartIndex`).
@@ -242,11 +244,15 @@ export function selectBestTierForStage(
 
   const runsDir = options?.runsDir ?? getDefaultRunsDir();
   const { entries, runsScanned } = loadStageTelemetry(stage, runsDir);
+  const currentTiers = new Set(waterfallNames);
+  const relevantEntries = entries.filter(entry =>
+    currentTiers.has(entry.tier_succeeded) || entry.tiers_skipped.some(tier => currentTiers.has(tier)),
+  );
 
-  if (entries.length < MIN_SAMPLES) return null;
+  if (relevantEntries.length < MIN_SAMPLES) return null;
 
   const scoredTiers = waterfallNames
-    .map((name, index) => scoreTier(name, index, entries, waterfallNames.length))
+    .map((name, index) => scoreTier(name, index, relevantEntries, waterfallNames.length))
     .sort((a, b) => b.score - a.score);
 
   const winner = scoredTiers[0]!;
@@ -257,7 +263,7 @@ export function selectBestTierForStage(
     selectedName: winner.name,
     telemetryRunsScanned: runsScanned,
     scoredTiers,
-    reason: `Dynamic Routing v1 — scored ${entries.length} entries across ${runsScanned} runs.`,
+    reason: `Dynamic Routing v1 — scored ${relevantEntries.length} entries across ${runsScanned} runs.`,
   };
 }
 

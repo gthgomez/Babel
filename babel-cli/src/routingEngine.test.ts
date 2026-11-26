@@ -316,7 +316,15 @@ describe('selectBestTierForStage — scoring selects best tier', () => {
       ]
       const options = { enabled: true, runsDir }
       const waterfall = ['TierA', 'TierB', 'TierC']
-      writeTelemetry(runsDir, 'mixed', [valid, ...invalid, valid])
+      const offline = {
+        ...valid,
+        tier_succeeded: 'pipeline-v9-offline-fixture',
+        tiers_skipped: [],
+        tier_index: -1,
+      }
+      const contradictory = { ...valid, tiers_skipped: ['TierA', 'TierB'] }
+      const duplicateSkip = { ...valid, tiers_skipped: ['TierA', 'TierA'] }
+      writeTelemetry(runsDir, 'mixed', [valid, ...invalid, offline, contradictory, duplicateSkip, valid])
       assert.equal(selectBestTierForStage('executor', waterfall, options), null)
 
       writeTelemetry(runsDir, 'additional', [valid])
@@ -326,6 +334,10 @@ describe('selectBestTierForStage — scoring selects best tier', () => {
       assert.equal(decision?.scoredTiers.find(tier => tier.name === 'TierB')?.wins, 3)
       assert.ok(decision?.scoredTiers.every(tier => Number.isFinite(tier.score)))
       assert.deepEqual(reorderWaterfallByStartIndex(waterfall, decision?.selectedIndex), ['TierB', 'TierA', 'TierC'])
+
+      writeTelemetry(runsDir, 'mixed', [valid, valid])
+      clearRoutingCache()
+      assert.deepEqual(selectBestTierForStage('executor', waterfall, options), decision)
     } finally {
       rmSync(runsDir, { recursive: true, force: true })
       clearRoutingCache()
