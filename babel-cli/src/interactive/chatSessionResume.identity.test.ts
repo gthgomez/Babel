@@ -29,9 +29,12 @@ import { ChatEngine, type ChatEvent, type TaskIntent } from '../agent/chatEngine
 import { getOpenAdmissionStoreCount } from '../runtime/admissionTestHooks.js';
 import { HistoryCellViewport } from '../ui/historyCells/viewport.js';
 import { ScreenManager } from '../ui/screenManager.js';
+import { ShellRuntimeBinding } from '../ui/shell/shellRuntimeBinding.js';
+import type { ShellHost } from '../ui/shell/shellHost.js';
 import type { AgentTargetContext } from '../services/targetResolver.js';
 import type { ReplContext } from './context.js';
-import { formatResumedTerminalNotice, resumeChatSession } from './chatSessionResume.js';
+import { resumeChatSession } from './chatSessionResume.js';
+import { handleResume } from './commands/resume.js';
 import type { SessionState } from './types.js';
 import { loadExecutionPolicyRecord, persistExecutionPolicyRecord } from '../config/executionPolicySelection.js';
 import { acquireSessionPolicyLease } from '../config/sessionPolicyLease.js';
@@ -167,12 +170,16 @@ test('cold conversation resume dispatches exact continuation, status, and amendm
     initial.closeAdmissionStore();
 
     ctx = makeResumeCtx(makeTarget(targetRoot));
-    const resumed = await resumeChatSession(ctx, sessionId);
-    assert.equal(resumed.ok, true);
-    if (!resumed.ok) return;
+    const hosted = new ShellRuntimeBinding();
+    const frames: string[] = [];
+    ctx.shellRuntime = hosted;
+    ctx.shellHost = {
+      renderNow: () => frames.push(hosted.getVisibleRows(96, 20).join('\n')),
+    } as unknown as ShellHost;
+    await handleResume(ctx, [sessionId]);
+    assert.equal(ctx.chatEngine?.getEngineRunId(), sessionId);
+    assert.match(frames.join('\n'), /Latest turn was cancelled\. Task completion is unverified\./);
     assert.equal(ctx.state.lastRunUserStatus, 'cancelled');
-    assert.equal(resumed.terminal.turn_id, turnId);
-    assert.equal(formatResumedTerminalNotice(resumed.terminal), 'Latest turn was cancelled. Task completion is unverified.');
     assert.match(ctx.lastAssistantAnswer ?? '', /prior calculation/);
     const engine = ctx.chatEngine!;
     const target = makeTarget(targetRoot);

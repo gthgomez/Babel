@@ -264,12 +264,14 @@ export class ShellRuntimeBinding {
         this.lastOutcome = event.outcome ?? 'CANCELLED';
         break;
       case 'done':
-        // Some providers return the whole answer only in the terminal event.
-        // Preserve it when no answer chunk was streamed, so the hosted shell
-        // never depends on the legacy direct-stdout fallback.
-        if (typeof event.answer === 'string' && event.answer.trim() &&
-            this.transcript.getAnswerText().trim().length === 0) {
-          this.transcript.onAnswerChunk(event.answer);
+        // A terminal-only answer or a block that supersedes provisional
+        // success must be visible in the hosted conversation.
+        if (typeof event.answer === 'string' && event.answer.trim()) {
+          const provisional = this.transcript.getAnswerText().trim();
+          if (!provisional) this.transcript.onAnswerChunk(event.answer);
+          else if (event.blockedReport && event.answer.trim() !== provisional) {
+            this.transcript.replaceAnswer(event.answer);
+          }
         }
         this.activity = 'idle';
         this.lastOutcome = event.outcome ?? event.status ?? 'completed';

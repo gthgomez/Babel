@@ -1,5 +1,7 @@
-import { resolve } from 'node:path'
+import { relative, resolve } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
+import { extractPatchTargets } from '../authority/patchTargets.js'
+import { canonicalizeContained } from '../bridge/workspaceBound.js'
 import type { BlockedReport } from '../schemas/agentContracts.js'
 import { formatArgvAsCommand, parseCommandArgv } from '../utils/commandArgv.js'
 import { redactSecrets } from '../utils/redaction.js'
@@ -173,6 +175,34 @@ export function requiredLocalExecutionScope(
   return hasRef(1, 'mixed') || hasRef(1, 'standalone') ? 'mixed' : null
 }
 
+/** A direct edit cannot substitute for an explicitly requested process output. */
+export function substitutesRequestedProcessOutput(
+  records: readonly TaskContractProvenanceRecord[],
+  activeProse: readonly string[],
+  action: Extract<ChatToolAction, { type: 'write_file' | 'str_replace' | 'apply_patch' }>,
+  projectRoot: string,
+): boolean {
+  const admitted = new Set(records.filter(record => record.kind === 'derived_acceptance' &&
+    record.ref.startsWith(`${REF_PREFIX}:v2:`)).map(record => record.ref))
+  if (admitted.size === 0) return false
+  const clauses = activeClauses(activeProse, true)
+  const scripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
+  const requiredOutputs = new Set(clauses.flatMap(clause => jobArgv(clause, scripts)
+    .filter(argv => {
+      const digest = operationDigest(argv)
+      return admitted.has(executionRef(2, 'mixed', digest)) || admitted.has(executionRef(2, 'standalone', digest))
+    })
+    .map(argv => resolve(projectRoot, argv[3]!))))
+  if (requiredOutputs.size === 0) return false
+  const paths = action.type === 'apply_patch' ? extractPatchTargets(action.patch, projectRoot)
+    : [resolve(projectRoot, action.type === 'write_file' ? action.path : action.file_path)]
+  return [...requiredOutputs].some(output => paths.some(path => {
+    if (relative(output, path) === '') return true
+    try { return relative(canonicalizeContained(output), canonicalizeContained(path)) === '' }
+    catch { return false }
+  }))
+}
+
 /** The executor marks only a typed hard denial with host-confirmed zero dispatch. */
 export function requiredLocalExecutionDenialMarker(
   scope: ExecutionScope,
@@ -231,7 +261,7 @@ export function requiredLocalExecutionBlock(
   const reason = `DENY_MISSING_AUTHORITY: ${cause}`
   const missing = `Successful settlement of required foreground command: ${target}`
   return {
-    answer: `Babel denied the required command before dispatch: \`${target}\`. ${cause} No process started for this attempt, and this denial was ineligible for approval. The requested effect remains unconfirmed.`,
+    answer: `Required command denied before dispatch: \`${target}\`. ${cause} No process started for this attempt, and this denial was ineligible for approval. The requested effect remains unconfirmed.`,
     blockedReport: {
       schema_version: 1,
       status: 'BLOCKED',

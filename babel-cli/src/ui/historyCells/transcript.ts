@@ -222,6 +222,13 @@ export class HistoryTranscript {
     return parts.join('');
   }
 
+  /** Replace provisional assistant prose while keeping tool and inspection history. */
+  replaceAnswer(text: string): void {
+    if (this.active?.kind === 'assistant_message') this.active = null;
+    this.committed = this.committed.filter(cell => cell.kind !== 'assistant_message');
+    this.onAnswerChunk(text);
+  }
+
   getAllRecords(): HistoryCellRecord[] {
     const records = this.getCommittedRecords();
     const active = this.getActiveRecord();

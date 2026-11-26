@@ -84,6 +84,9 @@ async function resumeSession(
   if (ctx.shellRuntime) {
     ctx.shellRuntime.hydrateTurns(ctx.turns, outcome.sessionId);
     ctx.shellRuntime.appendNotice(`Resumed session ${outcome.sessionId} — ${outcome.turnCount} turns loaded\n${notice}`);
+    // The REPL holds repaints after uncaptured commands. Paint the hydrated
+    // conversation before that hold so the notice does not need another key.
+    ctx.shellHost?.renderNow();
     return;
   }
   buf.write(

@@ -66,7 +66,7 @@ import { acceptToolStop, settlePreventedChatAction } from './chatEngineRunContro
 import { actionRequestFromAction } from '../authority/actionRequest.js';
 import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js';
 import { taskProhibitsCommand } from './taskCommandProhibitions.js';
-import { requiredLocalExecutionDenialMarker, requiredLocalExecutionScope } from './requestedLocalExecution.js';
+import { requiredLocalExecutionDenialMarker, requiredLocalExecutionScope, substitutesRequestedProcessOutput } from './requestedLocalExecution.js';
 import { RunStoppedError } from '../runtime/run-control.js';
 import { ProcessTerminationError } from '../sandbox.js';
 import { chatReadToolExecutor } from "./chatReadExecutor.js";
@@ -204,6 +204,14 @@ export class ChatEngineActionExecutor {
     let observedToolExecution = false;
 
     try {
+    if ((action.type === 'write_file' || action.type === 'str_replace' || action.type === 'apply_patch') && turnRuntime &&
+      substitutesRequestedProcessOutput(this.host.parity.liveAuthority?.taskContract.provenance.records ?? [],
+        inferFreshTaskAcceptance(turnRuntime.taskText).activeProse, action, requireProjectRoot(this.host.options))) {
+      const detail = 'requested-process-output';
+      this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
+      callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
+      return { index: meta.index, observation: 'The user required the process to produce this file. Leave it untouched by direct edits; report the unmet operation if the process cannot run.' };
+    }
     if ((action.type === 'run_command' || action.type === 'test_run') && turnRuntime &&
       taskProhibitsCommand(inferFreshTaskAcceptance(turnRuntime.taskText).activeProse, action.command)) {
       const detail = 'task-command-prohibited';
