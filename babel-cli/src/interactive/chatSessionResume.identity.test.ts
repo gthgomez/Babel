@@ -9,7 +9,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,7 +25,7 @@ import {
   recordTurnEnded,
   recordUserSubmitted,
 } from '../agent/sessionEvents.js';
-import { ChatEngine } from '../agent/chatEngine.js';
+import { ChatEngine, type ChatEvent, type TaskIntent } from '../agent/chatEngine.js';
 import { getOpenAdmissionStoreCount } from '../runtime/admissionTestHooks.js';
 import { HistoryCellViewport } from '../ui/historyCells/viewport.js';
 import { ScreenManager } from '../ui/screenManager.js';
@@ -140,7 +140,7 @@ function writeThreadIdentity(sessionDir: string, sessionId: string, projectRoot:
   persistThreadEventLog(sessionDir, log);
 }
 
-test('cold conversation resume exposes cancellation and admits a continuation of the same objective', async () => {
+test('cold conversation resume dispatches exact continuation, status, and amendment text to the same objective', async (t) => {
   const fixture = withTempRunsDir();
   const targetRoot = mkdtempSync(join(tmpdir(), 'babel-cold-continue-'));
   const sessionId = 'cold-continuation';
@@ -150,6 +150,7 @@ test('cold conversation resume exposes cancellation and admits a continuation of
   let ctx: ReplContext | undefined;
   try {
     const sessionDir = writeTranscript(fixture.root, sessionId, task);
+    appendFileSync(join(sessionDir, 'transcript.jsonl'), `${JSON.stringify({ role: 'assistant', content: 'The prior calculation task is unfinished.' })}\n`, 'utf8');
     initial = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: targetRoot, runId: sessionId });
     const admitted = initial.admitUserSubmission({ userInput: task }, route);
     assert.equal(admitted.status, 'committed');
@@ -172,10 +173,62 @@ test('cold conversation resume exposes cancellation and admits a continuation of
     assert.equal(ctx.state.lastRunUserStatus, 'cancelled');
     assert.equal(resumed.terminal.turn_id, turnId);
     assert.equal(formatResumedTerminalNotice(resumed.terminal), 'Latest turn was cancelled. Task completion is unverified.');
+    assert.match(ctx.lastAssistantAnswer ?? '', /prior calculation/);
     const engine = ctx.chatEngine!;
-    const continued = engine.admitUserSubmission({ userInput: 'continue' }, route);
-    assert.equal(continued.status, 'committed');
+    const target = makeTarget(targetRoot);
+    const { executeTask } = await import('./execution/dispatch.js');
+    const { runChatEngineOnce } = await import('./execution/chatCore.js');
+    const { appendTurn } = await import('./turns.js');
+    const { globalCostTracker } = await import('../services/costTracker.js');
+    ctx.scheduleIndexWarmup = () => {};
+    const repl = ctx;
+    repl.appendTurn = (turn) => appendTurn(repl, turn);
+
+    const observed: Array<{ text: string; intent: TaskIntent | undefined; operation: string | undefined }> = [];
+    let streamError: unknown;
+    t.mock.method(engine, 'submitMessageStream', async function* (text: string, intent?: TaskIntent): AsyncGenerator<ChatEvent> {
+      try {
+        const admitted = engine.admitUserSubmission({ userInput: text, ...(intent ? { taskIntent: intent } : {}) }, route);
+        assert.equal(admitted.status, 'committed');
+        observed.push({ text, intent, operation: engine.getTurnRuntimeSnapshot()?.effectiveOperation });
+        assert.equal(engine.getTaskContract()?.task_id, taskId);
+        const current = engine.getParityRuntime();
+        assert.ok(current.turnId);
+        endTurn(current.eventLog, current.turnId, 'NO_CHANGE_REQUIRED', 'completed');
+        recordTurnEnded(current.sessionEvents, { turn_id: current.turnId, outcome: 'NO_CHANGE_REQUIRED', status: 'completed' });
+        await persistThreadEventLog(sessionDir, current.eventLog);
+        flushSessionEventLog(sessionDir, current.sessionEvents);
+        yield { type: 'done', answer: 'Fixture settlement', outcome: 'NO_CHANGE_REQUIRED', usage: globalCostTracker.getSessionSummary() };
+      } catch (error) {
+        streamError = error;
+        throw error;
+      }
+    });
+
+    const messages = ['  continue  ', '  status?  ', '  Also require:\n- The task survives restart.  '];
+    for (const text of messages) {
+      await executeTask(repl, text, {
+        loadSessionIdentity: async () => '',
+        executeChatTask: async (_ctx, input, submitted, dispatchedTarget) => {
+          assert.equal(input, text);
+          assert.equal(dispatchedTarget.targetRoot, target.targetRoot);
+          const result = await runChatEngineOnce({ task: submitted, target: dispatchedTarget, engine, useStreaming: true });
+          if (streamError !== undefined) throw streamError;
+          assert.equal(result.outcome, 'NO_CHANGE_REQUIRED', 'fixture stream did not settle');
+        },
+      });
+    }
+    assert.deepEqual(observed, [
+      { text: messages[0], intent: 'execute', operation: 'MUTATING' },
+      { text: messages[1], intent: 'explain', operation: 'READ_ONLY' },
+      { text: messages[2], intent: 'execute', operation: 'MUTATING' },
+    ]);
+    assert.deepEqual(
+      engine.getParityEventLog().events.filter(event => event.kind === 'turn_started').slice(-3).map(event => event.task),
+      messages,
+    );
     assert.equal(engine.getTaskContract()?.task_id, taskId);
+    assert.ok(engine.getTaskContract()?.acceptance_criteria.includes('The task survives restart.'));
     assert.equal(engine.getTurnRuntimeSnapshot()?.durableObjective, task);
     assert.equal(engine.getParityRuntime().sessionEvents.events.filter(event => event.kind === 'tool_started').length, 0);
   } finally {

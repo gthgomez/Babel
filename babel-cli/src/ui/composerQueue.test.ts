@@ -25,6 +25,13 @@ describe('ComposerQueue', () => {
     assert.equal(q.length, 0);
   });
 
+  it('keeps every byte of a nonempty multiline draft', () => {
+    const q = new ComposerQueue();
+    const draft = '  Inspect src/über.ts  \n\t[Pasted Content 1200 chars]\n ';
+    assert.equal(q.enqueue(draft), true);
+    assert.equal(q.dequeue(), draft);
+  });
+
   it('caps at max depth', () => {
     const q = new ComposerQueue(2);
     assert.equal(q.enqueue('a'), true);

@@ -1964,8 +1964,8 @@ export class PromptInput {
   /** Queue current draft for post-turn execution; keep composer active (C2). */
   private queueSubmit(): void {
     const rawText = this.lines.join("\n");
-    const text = this.pasteStore.expand(rawText).trim();
-    if (!text || !this.config.onQueue) return;
+    const text = this.pasteStore.expand(rawText);
+    if (!text.trim() || !this.config.onQueue) return;
 
     const queued = this.config.onQueue(text);
     if (!queued) return;
@@ -1983,9 +1983,8 @@ export class PromptInput {
     }
     const rawText = this.lines.join("\n");
     // Expand paste placeholders before submit (C5)
-    const expanded = this.pasteStore.expand(rawText);
-    const text = expanded.trim();
-    if (!text && !this.config.allowEmptySubmit) return;
+    const text = this.pasteStore.expand(rawText);
+    if (!text.trim() && !this.config.allowEmptySubmit) return;
 
     this.pasteStore.clear();
     this.addHistory(text);

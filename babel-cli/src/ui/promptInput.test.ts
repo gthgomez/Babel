@@ -2,6 +2,7 @@ import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { PromptInput, type PromptInputConfig } from './promptInput.js';
 import { FrameScheduler } from './frameScheduler.js';
+import { ComposerQueue } from './composerQueue.js';
 import { OutputBuffer } from './outputBuffer.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -1081,26 +1082,32 @@ describe('PromptInput', () => {
       assert.equal(input.getState().text, '');
     });
 
-    it('busy Enter retains a full-queue draft and enqueues the same text once space opens', () => {
-      const draft = 'follow up: 検索.txt';
-      const submitted: string[] = [];
-      const attempted: string[] = [];
-      let hasSpace = false;
-      const input = createTestInput({
-        isTaskRunning: () => true,
-        onSubmit: text => submitted.push(text),
-        onQueue: text => { attempted.push(text); return hasSpace; },
+    for (const gesture of ['enter', 'tab']) {
+      it(`busy ${gesture} retains a full-queue draft and queues the exact multiline text when space opens`, async (t) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'babel-busy-queue-'));
+        t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+        const draft = '  Inspect src/検索.txt  \n  [Pasted Content 1200 chars]  ';
+        const queue = new ComposerQueue(1);
+        queue.enqueue('already queued');
+        const submitted: string[] = [];
+        const input = createTestInput({
+          historyFile: path.join(root, 'history.json'),
+          isTaskRunning: () => true,
+          onSubmit: text => submitted.push(text),
+          onQueue: text => queue.enqueue(text),
+        });
+        input.handleKey(key('paste', { sequence: draft }));
+        input.handleKey(key(gesture));
+        assert.equal(input.getState().text, draft);
+        assert.equal(queue.dequeue(), 'already queued');
+        input.handleKey(key(gesture));
+        assert.equal(input.getState().text, '');
+        assert.equal(queue.dequeue(), draft);
+        assert.equal(queue.length, 0);
+        assert.deepEqual(submitted, []);
+        await input.historySaveQueue;
       });
-      type(input, draft);
-      input.handleKey(key('enter'));
-      assert.equal(input.getState().text, draft);
-      assert.deepEqual(submitted, []);
-      hasSpace = true;
-      input.handleKey(key('enter'));
-      assert.equal(input.getState().text, '');
-      assert.deepEqual(attempted, [draft, draft]);
-      assert.deepEqual(submitted, []);
-    });
+    }
 
     it('Tab completes when task is not running', () => {
       const queued: string[] = [];

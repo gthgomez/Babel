@@ -56,9 +56,12 @@ export async function executeTask(
         '[DEPRECATED] `bl` prefix is deprecated. Use `babel` instead. Continuing with babel prefix.',
       );
     }
+    const lane = explicitDailyCommand?.verb ?? Turn.classifyInteractiveLane(ctx, input);
+    const chatOwnsConversation = lane !== 'deep' &&
+      (ctx.state.mode === 'chat' || ctx.state.mode === 'chat-headless');
     const resolvedTask = explicitDailyCommand
       ? explicitDailyCommand.task
-      : Turn.resolveInteractiveTask(ctx, input);
+      : Turn.resolveInteractiveTask(ctx, input, chatOwnsConversation);
     const currentTarget = ctx.resolveCurrentTarget();
     ctx.scheduleIndexWarmup(currentTarget.targetRoot);
     const target =
@@ -82,8 +85,8 @@ export async function executeTask(
     const systemContext = await resolveIdentity(ctx, target.targetRoot);
     if (preparationCancelled) throw new Error('Task preparation was cancelled before execution.');
 
-    const lane = explicitDailyCommand?.verb ?? Turn.classifyInteractiveLane(ctx, input);
     const approvalFollowUp =
+      !chatOwnsConversation &&
       !explicitDailyCommand &&
       ctx.lastAssistantStatus !== null &&
       APPROVAL_READY_STATUSES.has(ctx.lastAssistantStatus) &&
@@ -96,7 +99,7 @@ export async function executeTask(
       handleAmbiguousConfirmation(ctx, input, target);
       return;
     }
-    if (!resolvedTask || emptyExplicitTask) {
+    if (!resolvedTask.trim() || emptyExplicitTask) {
       console.log(
         primary('\n  Please include task text after `babel`. Try: babel "describe the task"\n'),
       );
@@ -120,15 +123,11 @@ export async function executeTask(
       }
       // Chat mode: direct streaming ChatEngine — no waterfall, no pipeline, no Zod.
       // Use 'babel deep' or /mode deep to access the full governed pipeline.
-      if (ctx.state.mode === 'chat' || ctx.state.mode === 'chat-headless') {
+      if (chatOwnsConversation) {
         if (ctx.state.mode === 'chat-headless') {
           process.env['BABEL_HEADLESS'] = '1';
         }
-        if (explicitDailyCommand?.verb === 'deep') {
-          await executeGovernedTask(ctx, input, resolvedTask, target, 'deep');
-          return;
-        }
-        await executeChatTask(ctx, input, effectiveTask, target, systemContext);
+        await Turn.trackInteractiveChatTurn(ctx, () => executeChatTask(ctx, input, effectiveTask, target, systemContext));
         return;
       }
       // Legacy governed path (non-chat modes)

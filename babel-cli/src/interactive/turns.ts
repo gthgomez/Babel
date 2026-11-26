@@ -11,6 +11,29 @@ import { APPROVAL_READY_STATUSES } from './types.js';
 import type { ReplContext } from './context.js';
 import type { InteractiveTurn } from './types.js';
 
+// The dispatcher retains the previous engine turn until the next admission
+// commits. Engine creation or repository preparation alone is not admission.
+const previousChatTurns = new WeakMap<ReplContext, string | null>();
+
+/** Mark the interactive Chat execution window for live run diagnostics. */
+export async function trackInteractiveChatTurn(ctx: ReplContext, execute: () => Promise<void>): Promise<void> {
+  previousChatTurns.set(ctx, ctx.chatEngine?.getParityRuntime?.().turnId ?? null);
+  try {
+    await execute();
+  } finally {
+    previousChatTurns.delete(ctx);
+  }
+}
+
+/** A newly admitted Chat turn supersedes older assistant records in the REPL. */
+export function getActiveAdmittedChatSession(ctx: ReplContext): string | undefined {
+  const previousTurn = previousChatTurns.get(ctx);
+  if (previousTurn === undefined) return undefined;
+  const currentTurn = ctx.chatEngine?.getParityRuntime?.().turnId;
+  if (!currentTurn || currentTurn === previousTurn) return undefined;
+  return ctx.chatEngine?.getEngineRunId();
+}
+
 export function appendTurn(
   ctx: ReplContext,
   turn: Omit<InteractiveTurn, 'schema_version' | 'turn_id' | 'ts'>,
@@ -40,8 +63,10 @@ export function isFollowUpInput(ctx: ReplContext, input: string): boolean {
   );
 }
 
-export function resolveInteractiveTask(ctx: ReplContext, input: string): string {
-  if (!isFollowUpInput(ctx, input)) {
+export function resolveInteractiveTask(ctx: ReplContext, input: string, chatOwnsConversation = false): string {
+  // Chat receives the actual user submission and rebuilds the previous context
+  // from its thread. Pasting assistant prose into this string changes intent.
+  if (chatOwnsConversation || !isFollowUpInput(ctx, input)) {
     return input;
   }
   const parts = [

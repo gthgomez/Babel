@@ -39,6 +39,7 @@ import { readApprovalProfileStatus } from '../../config/approvalProfiles.js';
 import { terminalReasonGuidance } from '../../agent/chatTerminalReason.js';
 import { TerminalReasonCodeSchema } from '../../schemas/agentContracts.js';
 import { readDurableTerminalTruth } from '../../services/durableTerminalTruth.js';
+import { getActiveAdmittedChatSession } from '../turns.js';
 
 // ── Shared helper ────────────────────────────────────────────────────────────
 
@@ -251,8 +252,9 @@ export function handleTarget(ctx: ReplContext, _args: string[]): void {
 export function handleWhyStopped(ctx: ReplContext, args: string[]): void {
   const selection = args.join(' ').trim().replace(/^"(.+)"$/, '$1');
   const explicit = selection !== '' && selection.toLowerCase() !== 'latest';
-  const sessionId = ctx.chatEngine?.getEngineRunId?.();
-  const latestRun = ctx.turns.filter((turn) => turn.role === 'assistant').at(-1)?.run_dir;
+  const activeSessionId = getActiveAdmittedChatSession(ctx);
+  const sessionId = activeSessionId ?? ctx.chatEngine?.getEngineRunId?.();
+  const latestRun = activeSessionId ? null : ctx.turns.filter((turn) => turn.role === 'assistant').at(-1)?.run_dir;
   let runDir = latestRun ?? (sessionId ? chatSessionDir(sessionId) : null);
   let expectedSessionId = latestRun ? undefined : sessionId;
   if (explicit) {
@@ -275,9 +277,13 @@ export function handleWhyStopped(ctx: ReplContext, args: string[]): void {
     return;
   }
   const truth = readDurableTerminalTruth(runDir, expectedSessionId);
+  const isLive = activeSessionId !== undefined && path.resolve(runDir) === path.resolve(chatSessionDir(activeSessionId));
   console.log(`    ${explicit ? 'Selected run' : 'Conversation run'}: ${path.basename(runDir)}`);
   if (truth.turn_id) console.log(`    Turn: ${truth.turn_id}`);
-  console.log(`    Outcome: ${truth.outcome ?? truth.status ?? 'No durable outcome recorded'}`);
+  const outcome = isLive && truth.turn_state === 'active'
+    ? 'IN_PROGRESS — no terminal outcome recorded'
+    : truth.outcome ?? truth.status ?? 'No durable outcome recorded';
+  console.log(`    Outcome: ${outcome}`);
   if (truth.reason_code) {
     const reason = TerminalReasonCodeSchema.safeParse(truth.reason_code);
     const guidance = reason.success ? terminalReasonGuidance(reason.data) : null;

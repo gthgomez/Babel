@@ -6,6 +6,7 @@ import { resolveEffectiveExecutionBoundary } from '../../config/effectiveExecuti
 import { acquireSessionPolicyLease, type SessionPolicyLease } from '../../config/sessionPolicyLease.js';
 import { chatInspectionCoverage } from '../../agent/chatInspectionCoverage.js';
 import { terminalReasonGuidance } from '../../agent/chatTerminalReason.js';
+import { isAmendmentPrompt, isContinuationPrompt, isStatusPrompt } from '../../agent/turnRuntime.js';
 // ─── Chat Core ──────────────────────────────────────────────────────────────
 // Shared chat execution primitives used by REPL (executeChatTask) and CLI
 // one-shot paths. Dependency-injectable for integration tests.
@@ -889,7 +890,15 @@ async function runChatEngineOnceScoped(input: RunChatEngineOnceInput): Promise<C
     input.useStreaming ??
     (convRenderer !== null ? isChatStreamingEnabled() : true);
   assertExternalTurnActive();
-  const resolvedIntent = effectiveOperation === 'READ_ONLY' ? 'explain'
+  // The retained objective, not the literal "continue" or "also …", owns
+  // the operation. Ask the same admission classifier without committing it.
+  const retainedSubmission = input.engine && typeof engine.prepareUserSubmission === 'function' &&
+    (isContinuationPrompt(input.task) || isStatusPrompt(input.task) || isAmendmentPrompt(input.task))
+    ? engine.prepareUserSubmission({ userInput: input.task }).runtime
+    : null;
+  const resolvedIntent = retainedSubmission?.objectiveContinuation
+    ? retainedSubmission.effectiveOperation === 'READ_ONLY' ? 'explain' : 'execute'
+    : effectiveOperation === 'READ_ONLY' ? 'explain'
     : input.operation === 'CHANGE' ? 'execute'
     : input.taskIntent ?? ChatEngine.classifyChatTaskIntent(input.task);
 

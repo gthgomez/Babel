@@ -7,6 +7,7 @@ import { createSessionEventLog, flushSessionEventLogStrict, recordTurnEnded, rec
 import { createThreadEventLog, persistThreadEventLog, startTurn } from '../../agent/threadEventLog.js'
 import { globalCostTracker } from '../../services/costTracker.js'
 import type { ReplContext } from '../context.js'
+import { trackInteractiveChatTurn } from '../turns.js'
 import { handleCost } from './config.js'
 import { handleStatus, handleWhyStopped } from './info.js'
 
@@ -47,14 +48,37 @@ test('/why-stopped selects the current conversation and supports an explicit sav
     task: 'Current task', model: 'fixture', provider: 'fixture', projectRoot: root, policyPreset: 'workspace_write',
   })
   recordUserSubmitted(sessionLog, { turn_id: turnId, task: 'Current task', projectRoot: root })
-  await persistThreadEventLog(currentRun, threadLog)
-  flushSessionEventLogStrict(currentRun, sessionLog)
-  const ctx = { turns: [], lastRunDir: otherRun, chatEngine: { getEngineRunId: () => 'current' } } as unknown as ReplContext
+  const runtime = { turnId: 'prior' }
+  const turns: Array<{ role: 'assistant' | 'user'; run_dir?: string | null; input?: string }> = [
+    { role: 'assistant', run_dir: otherRun },
+    { role: 'user', input: 'Current task' },
+  ]
+  const ctx = {
+    turns, isRunning: true, lastRunDir: otherRun,
+    chatEngine: { getEngineRunId: () => 'current', getParityRuntime: () => runtime },
+  } as unknown as ReplContext
 
-  handleWhyStopped(ctx, ['latest'])
-  assert.match(messages.join('\n'), /Conversation run: current[\s\S]*Outcome: INTERRUPTED/)
-  assert.doesNotMatch(messages.join('\n'), /VERIFIED_COMPLETE|another run/)
+  await trackInteractiveChatTurn(ctx, async () => {
+    handleWhyStopped(ctx, [])
+    assert.match(messages.join('\n'), /Conversation run: another run[\s\S]*VERIFIED_COMPLETE/)
 
+    messages.length = 0
+    await persistThreadEventLog(currentRun, threadLog)
+    flushSessionEventLogStrict(currentRun, sessionLog)
+    runtime.turnId = turnId
+    handleWhyStopped(ctx, ['latest'])
+    assert.match(messages.join('\n'), /Conversation run: current[\s\S]*Outcome: IN_PROGRESS/)
+    assert.doesNotMatch(messages.join('\n'), /VERIFIED_COMPLETE|another run/)
+
+    messages.length = 0
+    handleWhyStopped(ctx, [otherRun])
+    assert.match(messages.join('\n'), /Selected run: another run[\s\S]*Outcome: VERIFIED_COMPLETE/)
+  })
+
+  // Once the live window closes, the latest Chat answer has no separate
+  // pipeline run directory; its engine still owns the conversation archive.
+  ctx.isRunning = false
+  turns.push({ role: 'assistant', run_dir: null })
   messages.length = 0
   recordTurnEnded(sessionLog, {
     turn_id: turnId, outcome: 'BLOCKED_POLICY', status: 'blocked',
@@ -70,6 +94,7 @@ test('/why-stopped selects the current conversation and supports an explicit sav
 
   messages.length = 0
   ctx.chatEngine = undefined
+  ctx.turns = []
   handleWhyStopped(ctx, [])
   assert.match(messages.join('\n'), /No recorded run in this conversation/)
   assert.doesNotMatch(messages.join('\n'), /VERIFIED_COMPLETE/)

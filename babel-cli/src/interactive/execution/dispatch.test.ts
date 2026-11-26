@@ -423,12 +423,17 @@ describe('executeTask dispatch routing', { concurrency: 1 }, () => {
     assert.deepEqual(shellEvents.map((event) => event.type), ['begin', 'settle']);
   });
 
-  test('queued follow-up executions each get their own accepted lifecycle', async () => {
-    const ctx = makeContext({ mode: 'chat' });
-    const queued = ['first queued task', 'second queued task'];
-    for (const input of queued) {
-      await executeTask(ctx, input, testDeps);
-    }
+  test('queued follow-up executions drain byte-for-byte into dispatch with their own accepted lifecycle', async (t) => {
+    const { clearComposerQueue, enqueueComposerMessage } = await import('../../ui/composerQueue.js');
+    const { drainQueuedTasks } = await import('../repl/replLoop.js');
+    const ctx = makeContext({ mode: 'chat', lastAssistantAnswer: 'Previous answer', lastAssistantStatus: 'ANSWER_READY' });
+    const queued = ['  continue  ', '  also inspect src/検索.ts  \n  [Pasted Content 1200 chars]  '];
+    clearComposerQueue();
+    t.after(clearComposerQueue);
+    for (const input of queued) assert.equal(enqueueComposerMessage(input), true);
+    await drainQueuedTasks(ctx, { executeTask: input => executeTask(ctx, input, testDeps) });
+    assert.deepEqual(calls.map(call => call.task), queued);
+    assert.deepEqual(ctx.turns.map(turn => turn.input), queued);
     assert.deepEqual(shellEvents.map((event) => event.type), [
       'begin', 'settle', 'begin', 'settle',
     ]);

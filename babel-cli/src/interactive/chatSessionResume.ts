@@ -259,6 +259,8 @@ async function resumeChatSessionOwned(
       }
       if (threadStoreExists(sessionId)) hydrateResumedThreadToScreen(ctx, sessionId);
       else ctx.screenManager?.getHistoryCellViewport()?.setCells([]);
+      ctx.lastTargetRoot = target.targetRoot;
+      ctx.lastWorkspaceRoot = target.workspaceRoot ?? null;
       ctx.lastSessionRunDir = sessionDir;
       ctx.saveSessionState();
       return { ok: true, sessionId, source, terminal, ...turns, ...degraded };
