@@ -7,12 +7,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { ChatEngineP11Authority, type ChatEngineP11Host } from './chatEngineP11Authority.js'
+import { ChatEngine } from './chatEngine.js'
 import { createParityRuntime, parityOnUserTurn } from './chatEngineParityBridge.js'
-import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
+import { loadLiveSessionSnapshot, resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import { createWorkingState } from './codingLoop/workingState.js'
 import { RevisionManager } from '../evidence/revisionBoundReceipt.js'
+import { resolveObservation } from '../evidence/observationStore.js'
 import { openAdmissionStore } from '../runtime/admission.js'
+import { chatSessionDir } from '../cli/runsLayout.js'
 import { validateContextCheckpoint } from '../runtime/contextCheckpoints.js'
+import type { ToolStreamEvent } from '../runners/base.js'
 
 const route = { compiled_request_identity: 'fixture-request', tool_profile: 'native-tools', model_route: 'fixture:model' }
 
@@ -314,3 +318,96 @@ test('a command with unknown physical settlement remains indeterminate in the du
   const admission = parity.admissionStore!.readAdmission(claim.threadId, claim.commandId)
   assert.equal(admission?.state, 'indeterminate')
 })
+
+async function checkColdContinuation(t: TestContext, payload: 'intact' | 'corrupt'): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), 'babel-p11-cold-observation-'))
+  const projectRoot = join(root, 'workspace')
+  mkdirSync(projectRoot)
+  const text = 'The fixture contains 17 widgets.\n'
+  writeFileSync(join(projectRoot, 'source.txt'), text)
+  const previousRuns = process.env['BABEL_RUNS_DIR']
+  const runsDir = join(root, 'runs')
+  mkdirSync(runsDir)
+  const opened = openAdmissionStore({ authorizedRoot: root, runDir: runsDir })
+  process.env['BABEL_RUNS_DIR'] = runsDir
+  t.after(() => {
+    if (opened.ok) opened.store.close()
+    if (previousRuns === undefined) delete process.env['BABEL_RUNS_DIR']
+    else process.env['BABEL_RUNS_DIR'] = previousRuns
+    rmSync(root, { recursive: true, force: true })
+  })
+  assert.ok(opened.ok)
+  const task = 'Inspect source.txt and report the widget count without changing the file.'
+  const options = { projectRoot, task, model: 'deepseek-v4-flash', maxTurns: 4, admissionStore: opened.store }
+  const runId = 'cold-tail-observation'
+  const original = new ChatEngine({ ...options, runId })
+  let continuedCalls = 0
+  const runner = {
+    async *executeWithToolsStream(): AsyncGenerator<ToolStreamEvent> {
+      yield { type: 'tool_use', id: 'inspect-source', name: 'read_range',
+        input: { file_path: 'source.txt', start_line: 1, end_line: 1 } }
+      yield { type: 'done', finishReason: 'tool_calls' }
+    },
+    execute: async () => ({ type: 'completion', answer: 'The fixture contains 17 widgets.' }),
+    executeRaw: async () => 'The fixture contains 17 widgets.',
+    getLastInvocationMetadata: () => null,
+  }
+  Object.assign(original, { deliberationRunner: runner, synthesisRunner: runner, shouldUseNativeTools: () => true })
+  for await (const event of original.submitMessageStream(task, 'explain')) {
+    if (event.type === 'tool_complete' && event.toolCallId === 'inspect-source') original.cancel()
+  }
+
+  const sessionDir = chatSessionDir(runId)
+  const membership = loadLiveSessionSnapshot(sessionDir)?.authorized_observation_ids
+  assert.ok(membership)
+  assert.equal(membership.length, 1)
+  const persisted = JSON.parse(readFileSync(join(sessionDir, 'context-checkpoint.json'), 'utf8'))
+  assert.deepEqual(persisted.observation_manifest, [])
+  assert.ok(original.getParityRuntime().sessionEvents.events.some(event =>
+    event.kind === 'tool_completed' && event.tool_call_id === 'inspect-source'))
+  const originalTask = original.getParityRuntime().liveAuthority?.taskContract.task_id
+  assert.ok(originalTask)
+
+  if (payload === 'corrupt') {
+    const observationDir = join(sessionDir, 'observations')
+    const ref = resolveObservation(membership[0]!, {
+      principal_id: 'agent:main',
+      authorized_observation_ids: membership,
+    }, { storage_root: observationDir, clock: () => new Date().toISOString() })
+    assert.equal(ref.status, 'resolved')
+    writeFileSync(join(observationDir, ref.payloads[0]!.object_key), 'Invalid fixture bytes')
+  }
+  const resumed = await ChatEngine.restore(runId, options)
+  const hydrated = resumed.hydrateInstalledContextAuthority(sessionDir)
+  assert.equal(hydrated.applied, false)
+  if (payload === 'intact') assert.deepEqual(hydrated.issues, [])
+  else assert.match(hydrated.issues.join('; '), /payload object (?:hash|size) mismatch/)
+  Object.assign(resumed, {
+    deliberationRunner: { ...runner, async *executeWithToolsStream(): AsyncGenerator<ToolStreamEvent> {
+      continuedCalls++
+      yield { type: 'text_delta', text: 'The fixture contains 17 widgets.' }
+      yield { type: 'done', finishReason: 'stop' }
+    } },
+    synthesisRunner: runner,
+    shouldUseNativeTools: () => true,
+  })
+  const result = await resumed.submitMessage('  continue  ', {})
+  if (payload === 'intact') {
+    assert.equal(continuedCalls, 1, result.answer)
+    assert.deepEqual(resumed.getParityRuntime().contextCheckpoint?.observation_manifest.map(ref => ref.observation_id), membership)
+    assert.match(result.answer, /17 widgets/)
+  } else {
+    assert.equal(continuedCalls, 0)
+    assert.equal(result.reason_code, 'context_preparation_failed')
+    assert.equal(resumed.getParityRuntime().contextCheckpoint, undefined)
+  }
+  assert.equal(resumed.getParityRuntime().liveAuthority?.taskContract.task_id, originalTask)
+  assert.equal(resumed.getParityRuntime().sessionEvents.events.filter(event =>
+    event.kind === 'tool_started' && event.tool_call_id === 'inspect-source').length, 1)
+  assert.equal(readFileSync(join(projectRoot, 'source.txt'), 'utf8'), text)
+}
+
+test('cold continuation recovers a settled observation from an intact payload',
+  t => checkColdContinuation(t, 'intact'))
+test('cold continuation blocks before dispatch if the settled observation payload is corrupt',
+  t => checkColdContinuation(t, 'corrupt'))

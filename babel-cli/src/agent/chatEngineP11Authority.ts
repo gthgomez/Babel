@@ -4,6 +4,7 @@ import { getActiveExecutionPolicyChoice } from '../config/executionPolicySelecti
 import { existsSync, readFileSync } from 'node:fs';
 import {
   captureApprovedObservation,
+  deriveObservationId,
   resolveObservation,
   type ObservationRefV1,
 } from '../evidence/observationStore.js';
@@ -779,6 +780,28 @@ export class ChatEngineP11Authority {
     );
   }
 
+  private isSettledObservationFromCurrentTask(observation: ObservationRefV1): boolean {
+    const { invocation } = observation;
+    const taskId = this.host.parity.liveAuthority?.taskContract.task_id;
+    if (
+      invocation.run_id !== this.host.engineRunId ||
+      invocation.task_id !== taskId ||
+      invocation.attempt_id !== invocation.operation_id ||
+      observation.observation_id !== deriveObservationId(invocation)
+    ) return false;
+
+    const events = this.host.parity.sessionEvents.events;
+    return events.some(event =>
+      event.kind === 'user_submitted' && event.turn_id === invocation.turn_id && event.task_id === taskId,
+    ) && events.some(event =>
+      (event.kind === 'tool_completed' || event.kind === 'tool_failed') &&
+      event.turn_id === invocation.turn_id &&
+      event.tool_call_id === invocation.operation_id &&
+      event.idempotency_key === invocation.operation_id &&
+      event.preDispatchNoEffect !== true,
+    );
+  }
+
   /**
    * Authoritative context-authority hydration — the single path used by every
    * resume/construction entrypoint. Loads `context-checkpoint.json`, requires
@@ -809,60 +832,66 @@ export class ChatEngineP11Authority {
         threadEvents: this.host.parity.eventLog.events,
         sessionEvents: this.host.parity.sessionEvents.events,
       };
-      const coldResume = validateContextCheckpoint(checkpoint, {
+      const authorizedObservationIds = [...(this.host.parity.authorizedObservationIds ?? [])];
+      const validationInput = {
         expectedThreadId: threadId,
         currentOwner: durableOwner,
-        requireInstalledLineage: true,
-        authorizedObservationIds: [
-          ...(this.host.parity.authorizedObservationIds ?? []),
-        ],
+        requireInstalledLineage: true as const,
+        authorizedObservationIds,
         lineageEvidence,
-      });
+      };
+      const coldResume = validateContextCheckpoint(checkpoint, validationInput);
       if (coldResume.status !== "valid") {
-        issues.push(coldResume.reasons.join("; "));
-        return { applied: false, issues };
+        // A stop can durably settle work after the last pre-provider checkpoint.
+        // Confirm the empty checkpoint is otherwise sound for its old context;
+        // it is never installed with the historical membership.
+        const emptyCheckpointLag = authorizedObservationIds.length > 0 &&
+          Array.isArray(checkpoint?.observation_manifest) && checkpoint.observation_manifest.length === 0 &&
+          coldResume.reasons.every(reason => reason === 'observation_manifest_incomplete') &&
+          validateContextCheckpoint(checkpoint, {
+            ...validationInput,
+            authorizedObservationIds: [],
+          }).status === 'valid';
+        if (!emptyCheckpointLag) {
+          issues.push(coldResume.reasons.join("; "));
+          return { applied: false, issues };
+        }
       }
-      const authorizedObservationIds = [
-        ...(this.host.parity.authorizedObservationIds ?? []),
-      ];
-      const resolvedObservations = checkpoint.observation_manifest.map(
-        (observation) =>
-        resolveObservation(
-          observation.observation_id,
+      const checkpointIds = new Set(checkpoint.observation_manifest.map(observation => observation.observation_id));
+      const recovered: ObservationRefV1[] = [];
+      for (const observationId of authorizedObservationIds) {
+        const resolved = resolveObservation(
+          observationId,
           {
-              principal_id: "agent:main",
+            principal_id: "agent:main",
             authorized_observation_ids: authorizedObservationIds,
           },
           {
-              storage_root: join(this.host.engineRunDir, "observations"),
+            storage_root: join(this.host.engineRunDir, "observations"),
             clock: () => new Date().toISOString(),
-              policy: { durability: "none" },
+            policy: { durability: "none" },
           },
-        ),
-      );
-      const unavailable = resolvedObservations
-        .map((result, index) =>
-          result.status === "resolved"
-            ? null
-            : `observation ${checkpoint.observation_manifest[index]?.observation_id ?? "unknown"} unavailable: ${result.reason}`,
-        )
-        .filter((issue): issue is string => issue !== null);
-      if (unavailable.length > 0) {
+        );
+        if (resolved.status !== 'resolved') {
+          issues.push(`observation ${observationId} unavailable: ${resolved.reason}`);
+        } else if (!checkpointIds.has(observationId) && !this.isSettledObservationFromCurrentTask(resolved.observation)) {
+          issues.push(`observation ${observationId} has no matching durable tool settlement in the current task`);
+        } else {
+          recovered.push(resolved.observation);
+        }
+      }
+      if (issues.length > 0) {
         // An authorized id with no durable payload must not silently
         // reconstruct partial trusted context.
-        this.host.p11ObservationCaptureIssues = unavailable;
-        issues.push(...unavailable);
+        this.host.p11ObservationCaptureIssues = [...issues];
+        return { applied: false, issues };
+      }
+      this.host.p11ObservationRefs = recovered;
+      if (checkpointIds.size !== authorizedObservationIds.length) {
+        // The next live admitted owner installs the complete manifest.
         return { applied: false, issues };
       }
       this.host.parity.contextCheckpoint = checkpoint;
-      this.host.p11ObservationRefs = resolvedObservations
-        .map((result) =>
-          result.status === "resolved" ? result.observation : null,
-        )
-        .filter(
-          (observation): observation is ObservationRefV1 =>
-            observation !== null,
-        );
       return { applied: true, issues };
     } catch (err) {
       // A malformed or stale context checkpoint is unavailable evidence;
