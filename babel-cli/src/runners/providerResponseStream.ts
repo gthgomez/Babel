@@ -2,7 +2,7 @@ import { type ProviderMessage, type RunnerCallbacks, type RunnerInvocationMetada
 import { mapProviderMessagesToWire } from './providerMessages.js';
 import { type VcrRecorder } from '../services/streamingVcr.js';
 import { createInvocationDeadline, invocationNowMs, readPositiveIntEnv } from './providerResponsePolicy.js';
-import { accumulateStreamFinish, classifyStreamFinish } from './providerNormalize.js';
+import { accumulateStreamFinish, classifyStreamFinish, type StreamFinishDisposition } from './providerNormalize.js';
 import type { ProviderId } from './providerRegistry.js';
 import {
   type ChatResponse,
@@ -256,19 +256,22 @@ export function parseSseLine(line: string): SseLineResult {
 }
 
 
-function assertExecuteRawStreamTerminal(state: StreamingState): void {
-  // Text-only transports have no tool payload. A missing, filtered,
-  // truncated or unrecognized finish is a failed invocation; partial output
-  // stays available in the streaming state for the failure receipt but is not
-  // returned as a completed answer.
+/** A complete transport body carried a failed text finish, not a read failure. */
+export class TextResponseFinishError extends Error {
+  constructor(readonly disposition: Extract<StreamFinishDisposition, { status: 'failed' }>, source: string) {
+    super(`${source} ${disposition.message}`);
+    this.name = 'TextResponseFinishError';
+  }
+}
+
+/** Text is actionable only after a reported finish; buffered JSON is not itself a finish. */
+export function assertTextResponseFinish(reported: string | null, source: string): void {
   const disposition = classifyStreamFinish({
-    reported: state.finishReason,
-    sawDone: state.sawDone,
+    reported,
+    sawDone: true,
     hasToolCalls: false,
   });
-  if (disposition.status === 'failed') {
-    throw new Error(`[provider stream] ${disposition.message}`);
-  }
+  if (disposition.status === 'failed') throw new TextResponseFinishError(disposition, source);
 }
 
 export async function readStreamingResponse(
@@ -299,7 +302,7 @@ export async function readStreamingResponse(
 
   const completeStreamingRead = async (): Promise<string> => {
     signal?.throwIfAborted();
-    assertExecuteRawStreamTerminal(state);
+    assertTextResponseFinish(state.finishReason, '[provider stream]');
     return text;
   };
 
@@ -316,8 +319,9 @@ export async function readStreamingResponse(
       return true;
     }
     try {
-      const envelope = JSON.parse(payload) as { error?: { message?: string } };
+      const envelope = JSON.parse(payload) as { error?: { message?: string }; usage?: ChatResponse['usage'] };
       if (envelope.error) {
+        if (envelope.usage) state.usage = envelope.usage;
         throw new Error(
           `[provider stream] Provider stream error: ${envelope.error.message || JSON.stringify(envelope.error)}`,
         );
@@ -334,6 +338,7 @@ export async function readStreamingResponse(
       state.finishReason = accumulateStreamFinish(state.finishReason, parsed.finishReason);
       state.providerFinishReason = parsed.finishReason;
     }
+    if (parsed.usage) state.usage = parsed.usage;
     if (parsed.isDone) {
       state.sawDone = true;
       state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
@@ -348,7 +353,6 @@ export async function readStreamingResponse(
       recordStreamingOutput(state, 'reasoning', parsed.reasoning);
       callbacks?.onThought?.(parsed.reasoning);
     }
-    if (parsed.usage) state.usage = parsed.usage;
     return false;
   };
 
@@ -408,6 +412,12 @@ export async function readStreamingResponse(
   }
   if (json) {
     signal?.throwIfAborted();
+    state.observedModelId = json.model ?? state.observedModelId;
+    state.upstreamProvider = upstreamProviderFromResponse(json) ?? state.upstreamProvider;
+    state.routerMetadata = json.openrouter_metadata ?? state.routerMetadata;
+    state.finishReason = json.choices?.[0]?.finish_reason ?? state.finishReason;
+    state.providerFinishReason = json.choices?.[0]?.finish_reason ?? null;
+    state.usage = json.usage ?? state.usage;
     const content = json.choices?.[0]?.message?.content ?? '';
     if (content) {
       text += content;
@@ -419,12 +429,6 @@ export async function readStreamingResponse(
       recordStreamingOutput(state, 'reasoning', reasoning);
       callbacks?.onThought?.(reasoning);
     }
-    state.observedModelId = json.model ?? state.observedModelId;
-    state.upstreamProvider = upstreamProviderFromResponse(json) ?? state.upstreamProvider;
-    state.routerMetadata = json.openrouter_metadata ?? state.routerMetadata;
-    state.finishReason = json.choices?.[0]?.finish_reason ?? state.finishReason;
-    state.providerFinishReason = json.choices?.[0]?.finish_reason ?? null;
-    state.usage = json.usage ?? state.usage;
     state.sawDone = true;
     state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
     return await completeStreamingRead();

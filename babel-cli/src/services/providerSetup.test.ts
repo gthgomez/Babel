@@ -4,10 +4,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-test('noninteractive setup prints the private file and a placeholder example', async () => {
+test('noninteractive setup prints the private file and a placeholder example', async t => {
   const { runProviderSetup } = await import('./providerSetup.js')
   const dir = mkdtempSync(join(tmpdir(), 'babel-setup-example-'))
-  const env = { BABEL_CONFIG_DIR: dir, OPENROUTER_API_KEY: 'sentinel-do-not-print' }
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const env = { BABEL_CONFIG_DIR: dir, BABEL_STATE_DIR: dir, OPENROUTER_API_KEY: 'sentinel-do-not-print' }
   let output = ''
   const result = await runProviderSetup({ env, interactive: false, write: text => { output += text } })
   assert.equal(result.state, 'setup_required')

@@ -95,7 +95,7 @@ test('Windows Go reservations commit before transport and remain debited after u
   globalThis.fetch = (async () => {
     calls++
     assert.equal(state(options.statePath).attempts, calls, 'committed reservation precedes fetch')
-    return new Response(JSON.stringify({ model: 'deepseek-v4.1-flash', choices: [{ message: { content: 'ok' } }] }))
+    return new Response(JSON.stringify({ model: 'deepseek-v4.1-flash', choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }))
   }) as typeof fetch
   const runner = new OpenCodeGoApiRunner('deepseek-v4.1-flash', { maxTokens: 16 }, {
     budget: new OpenCodeGoBudget(options), credentialSource: 'explicit-test', explicitCredential: 'synthetic-go',

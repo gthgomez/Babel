@@ -71,7 +71,7 @@ test('OpenCode Go rejects non-canonical and substituted models without fallback'
   )
   globalThis.fetch = (async () => new Response(JSON.stringify({
     model: 'longcat-2.0',
-    choices: [{ message: { content: '{"ok":true}' } }],
+    choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
   }), { status: 200 })) as typeof fetch
   const runner = new OpenCodeGoApiRunner('mimo-v2.5', {}, {
     credentialSource: 'explicit-test',
@@ -85,7 +85,7 @@ test('OpenCode Go rejects non-canonical and substituted models without fallback'
 
 test('OpenCode Go rejects missing response identity for structured and raw calls', async () => {
   globalThis.fetch = (async () => new Response(JSON.stringify({
-    choices: [{ message: { content: '{"ok":true}' } }],
+    choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
   }), { status: 200 })) as typeof fetch
   const structured = new OpenCodeGoApiRunner('mimo-v2.5', {}, {
     credentialSource: 'explicit-test',
@@ -157,7 +157,7 @@ test('OpenCode Go does not retain prior usage when a later response omits usage'
     calls += 1
     return new Response(JSON.stringify({
       model: 'mimo-v2.5',
-      choices: [{ message: { content: '{"ok":true}' } }],
+      choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
       ...(calls === 1 ? { usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } } : {}),
     }), { status: 200 })
   }) as typeof fetch

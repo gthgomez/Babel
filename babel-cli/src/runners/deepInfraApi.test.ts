@@ -39,7 +39,7 @@ test('DeepInfra API runner retries retryable HTTP failures before parsing JSON',
     }
     return new Response(
       JSON.stringify({
-        choices: [{ message: { content: '{"ok":true}' } }],
+        choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
         usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
       }),
       { status: 200 },
@@ -72,7 +72,7 @@ test('DeepInfra API runner retries transport aborts before failing the call', as
     }
     return new Response(
       JSON.stringify({
-        choices: [{ message: { content: '{"status":"ok"}' } }],
+        choices: [{ message: { content: '{"status":"ok"}' }, finish_reason: 'stop' }],
       }),
       { status: 200 },
     );
@@ -95,7 +95,7 @@ test('DeepInfra API runner throws structured invalid JSON errors with raw output
   globalThis.fetch = (async () =>
     new Response(
       JSON.stringify({
-        choices: [{ message: { content: 'not json' } }],
+        choices: [{ message: { content: 'not json' }, finish_reason: 'stop' }],
       }),
       { status: 200 },
     )) as typeof fetch;

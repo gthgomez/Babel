@@ -405,13 +405,10 @@ export function buildProviderRetryCallbacks(host: ChatProviderRetryHost, context
       },
       onInvocationCompleted: (event) => {
         if (event.status === 'failed' && context.usageScope?.chargeId === event.inference_id) {
-          // A fully received response can fail argument normalization after the
-          // provider has supplied usage. Keep that charge's observed tokens;
-          // transport failures without a usage receipt remain unknown.
-          context.usageScope.usageMetadata = event.failure_stage === 'response_normalization'
-            && event.usage_metadata?.prompt_tokens != null
-            && event.usage_metadata.completion_tokens != null
-              ? { ...event.usage_metadata } : null;
+          // A failed attempt may already have supplied usage or a reported charge.
+          // The failure stage does not establish whether billing was observed.
+          context.usageScope.usageMetadata = event.inference_started === true && event.usage_metadata
+            ? { ...event.usage_metadata } : null;
           context.usageScope.modelId = event.model;
           if (event.inference_started === false) {
             const scope = context.usageScope;

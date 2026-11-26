@@ -44,7 +44,7 @@ if (!isSyntheticProviderFixtureReady()) {
   test.afterEach(() => { globalThis.fetch = originalFetch })
   const runner = () => new ProviderEngine({ provider: 'command-code', modelId: model, sampling: { maxTokens: 128 }, env: { COMMAND_CODE_API_KEY: credential } })
   const buffered = (observedModel = model, usage: Record<string, number> = { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 }) =>
-    new Response(JSON.stringify({ model: observedModel, choices: [{ message: { content: '{"ok":true}' } }], usage }))
+    new Response(JSON.stringify({ model: observedModel, choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }], usage }))
   const sse = (delta: object) => new Response(`data: ${JSON.stringify({ model, choices: [{ delta, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24 } })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
 
   test('registers Command Code with its own credential and native operation capability', () => {
