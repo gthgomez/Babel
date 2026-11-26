@@ -27,7 +27,8 @@ function strictTestCommand(projectRoot: string, command: string, fs: VerifierCom
   }
 }
 
-export const POINT_TARGET_PREFIX = 'node-test-point:v1:'
+const LEGACY_POINT_TARGET_PREFIX = 'node-test-point:v1:'
+export const POINT_TARGET_PREFIX = 'node-test-point:v2:'
 
 interface PointVerifierWitness {
   target: string
@@ -101,7 +102,7 @@ function simpleAssertion(test: CallExpression): CallExpression | undefined {
 export function pointVerifierWitness(
   projectRoot: string,
   command: string,
-  point: TaskBehaviorPoint,
+  point: TaskBehaviorPoint & { modulePath?: string },
   fs: VerifierCommandInputOverrides,
 ): PointVerifierWitness | undefined {
   const entry = strictTestCommand(projectRoot, command, fs)
@@ -214,6 +215,7 @@ export function nodePointExecuted(stdout: string, witness: Omit<PointVerifierWit
 /** A later same-scope run without this case must not inherit an earlier case result. */
 export function retainCurrentPointReceipts(receipts: readonly BoundChatVerifierReceipt[]): BoundChatVerifierReceipt[] {
   return receipts.filter(receipt => {
+    if (receipt.target?.startsWith(LEGACY_POINT_TARGET_PREFIX)) return false
     if (!receipt.target?.startsWith(POINT_TARGET_PREFIX)) return true
     const order = receipt.order
     const command = verifierExecutionFingerprint(receipt.command)

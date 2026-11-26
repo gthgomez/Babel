@@ -9,7 +9,7 @@ import {
 } from './completionGatePolicy.js'
 import type { AcceptanceRequirementV1, AcceptanceRequirementType, VerificationSpecV1 } from './taskContract.js'
 import { isQuantifiedArithmeticBehavior, labeledBehavioralGoalText, type AcceptanceMeaningSource, type TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
-import { taskBehaviorPoint } from './taskBehaviorPoint.js'
+import { taskBehaviorPoint, taskBehaviorPointForVerification } from './taskBehaviorPoint.js'
 import { pointVerifierWitness } from './pointVerifierWitness.js'
 import { taskProhibitsCommand } from './taskCommandProhibitions.js'
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
@@ -247,6 +247,11 @@ function pickTrustedCommand(
 interface ExplicitCriterionVerifierLink {
   behavior: string
   command: string
+}
+
+/** The exact behavioral statement for a point receipt, with any separate verifier clause removed. */
+export function acceptanceCriterionPoint(criterion: AcceptanceRequirementV1) {
+  return taskBehaviorPointForVerification(explicitCriterionVerifierLink(criterion)?.behavior ?? criterion.description)
 }
 
 /**
@@ -618,8 +623,10 @@ function relevantTrustedCommands(input: {
 }): { command: string; target?: string }[] {
   if (isUnresolvedCriterion(input.criterion)) return []
   if (!input.criterion.verification.verifier_id.startsWith('meaning:')) return []
-  const point = input.meaningVersion >= 6 ? taskBehaviorPoint(input.criterion.description) : undefined
+  const point = input.meaningVersion >= 6 ? acceptanceCriterionPoint(input.criterion) : undefined
+  const designated = point ? explicitCriterionVerifierLink(input.criterion)?.command : undefined
   if (point) return input.trusted.flatMap(command => {
+    if (designated && !commandsMatchForExecutableBinding(designated, command)) return []
     const witness = pointVerifierWitness(input.projectRoot, command, point, input.fs)
     return witness ? [{ command, target: witness.target }] : []
   })
@@ -825,7 +832,14 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
       })
       for (const criterion of matchingCriteria) {
         const explicit = explicitById.get(criterion.id)
-        if (!explicit && !explicitVerifierObservesStatedResult({
+        const point = input.projectRoot && input.meaning.interpretation_version >= 6
+          ? taskBehaviorPointForVerification(explicit?.behavior ?? criterion.description)
+          : undefined
+        const pointWitness = point && input.projectRoot
+          ? pointVerifierWitness(input.projectRoot, command, point, input.relevanceFs ?? {})
+          : undefined
+        if (point && !pointWitness) continue
+        if (!explicit && !pointWitness && !explicitVerifierObservesStatedResult({
           criterion,
           command,
           meaningVersion: input.meaning.interpretation_version,
@@ -833,7 +847,9 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
           ...(input.relevanceFs ? { fs: input.relevanceFs } : {}),
         })) continue
         const link = explicit ?? designated
-        const bound = bindExplicitCriterionLink(
+        const bound = pointWitness ? bindRelevanceWitness(
+          criterion, command, input.defaultWorkingDirectory, input.existingVerifierInputFiles, pointWitness.target,
+        ) : bindExplicitCriterionLink(
           criterion,
           command,
           link.behavior,

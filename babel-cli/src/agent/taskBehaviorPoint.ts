@@ -3,7 +3,6 @@ export interface TaskBehaviorPoint {
   symbol: string
   args: number[]
   expected: number
-  modulePath?: string
 }
 
 const NUMBER = String.raw`-?(?:0|[1-9]\d*)(?:\.\d+)?`
@@ -17,8 +16,7 @@ const PROSE_POINT = new RegExp(
   'i',
 )
 const CALL_POINT = new RegExp(
-  '^' + POINT_FRAME + String.raw`(?:(?<fileQuote>\x60?)(?<modulePath>(?:[\w.-]+/)*[\w.-]+\.[cm]?js)\k<fileQuote>\s+so\s+)?` +
-  String.raw`(?<quote>\x60?)(?<symbol>${SYMBOL})` +
+  '^' + POINT_FRAME + String.raw`(?<quote>\x60?)(?<symbol>${SYMBOL})` +
   String.raw`\(\s*(?<input>${NUMBER}(?:\s*,\s*${NUMBER})*)\s*\)\k<quote>` +
   String.raw`\s+(?:to\s+return|returns|equals)\s+(?<expected>${NUMBER})[.!]?$`,
   'i',
@@ -32,8 +30,16 @@ export function taskBehaviorPoint(text: string): TaskBehaviorPoint | undefined {
   const args = point.input!.split(',').map(Number)
   const expected = Number(point.expected)
   if (![...args, expected].every(Number.isFinite)) return undefined
-  const modulePath = point.modulePath?.replace(/^\.\//, '')
-  return { symbol: point.symbol!, args, expected, ...(modulePath ? { modulePath } : {}) }
+  return { symbol: point.symbol!, args, expected }
+}
+
+/** A verifier-only path qualifier does not change the frozen meaning of historical submissions. */
+export function taskBehaviorPointForVerification(text: string): (TaskBehaviorPoint & { modulePath?: string }) | undefined {
+  const qualifier = /^(?<verb>(?:please\s+)?(?:fix|repair|change|update|make|ensure))\s+(?<quote>`?)(?<path>(?:[\w.-]+\/)*[\w.-]+\.[cm]?js)\k<quote>\s+so\s+(?<call>.+)$/i
+    .exec(text.trim())?.groups
+  if (!qualifier) return taskBehaviorPoint(withoutPointImplementationFraming(text))
+  const point = taskBehaviorPoint(withoutPointImplementationFraming(`${qualifier.verb} ${qualifier.call}`))
+  return point && { ...point, modulePath: qualifier.path!.replace(/^\.\//, '') }
 }
 
 /** An optional terminal instruction to implement the already stated point adds no obligation. */

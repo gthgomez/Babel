@@ -1,9 +1,10 @@
 import { parseCommandArgv } from '../utils/commandArgv.js'
 import { hasVerifierShellComposition, isAuthoritativeVerifierCommand } from './completionGatePolicy.js'
 
-const COMMAND_PROHIBITION = /^(?:please\s+)?(?:do not|don['’]t|never)\s+(?:(?:edit|change|modify)\b.*?\s+(?:or|and)\s+)?(?:run|execute)\s+(.+)$/i
+const COMMAND_PROHIBITION = /^(?:please\s+)?(?:you\s+)?(?:do not|don['’]t|must not|never)\s+(?:(?:edit|change|modify)\b.*?\s+(?:or|and)\s+)?(?:run|execute)\s+(.+)$/i
 const GENERAL_COMMANDS = /^(?:(?:any|all|the)\s+)?(?:shell commands?|commands?|shell|scripts?)$/i
 const TESTS = /^(?:(?:any|all|the)\s+)?tests?(?:\s+suites?)?$/i
+const WHOLE_TASK_SCOPE = /\s+(?:during|throughout|for)\s+(?:this|the)\s+(?:task|session|run)$/i
 
 function executableName(value: string): string {
   return value.replace(/\\/g, '/').split('/').at(-1)!.replace(/\.(?:cmd|exe|bat)$/i, '').toLowerCase()
@@ -27,7 +28,8 @@ function commandTargets(line: string): string[] {
   const prose = line.trim().replace(/^(?:[-*+•]|\d+[.)])\s+/, '').replace(/^requirements?:\s*/i, '')
   return splitProse(prose, /[.;!?](?=\s|$)/).flatMap(clause => {
     const target = COMMAND_PROHIBITION.exec(clause)?.[1]
-    return target ? splitProse(target, /\s+(?:or|and)\s+|,\s+/) : []
+    return target ? splitProse(target, /(?:,\s*(?:or|and)\s+|\s+(?:or|and)\s+|,\s+)/)
+      .map(part => (COMMAND_PROHIBITION.exec(part)?.[1] ?? part).replace(WHOLE_TASK_SCOPE, '')) : []
   })
 }
 

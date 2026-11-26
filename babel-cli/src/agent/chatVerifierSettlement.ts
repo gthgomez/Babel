@@ -15,9 +15,8 @@ import { invalidateVerifierLedger } from './chatEngineSupport.js'
 import { isFatalWindowsProcessExit } from './verifierFailFast.js'
 import { makeFailureCapsule } from './taskContract.js'
 import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js'
-import { frozenVerificationMatchesTrustedCommand } from './taskAcceptanceExecutableBinding.js'
+import { acceptanceCriterionPoint, frozenVerificationMatchesTrustedCommand } from './taskAcceptanceExecutableBinding.js'
 import { nodePointExecuted, POINT_TARGET_PREFIX, pointVerifierWitness } from './pointVerifierWitness.js'
-import { taskBehaviorPoint } from './taskBehaviorPoint.js'
 
 /** One receipt and repair-state settlement path for foreground and completed background verifiers. */
 export async function settleChatVerifierResult(input: {
@@ -89,7 +88,7 @@ export async function settleChatVerifierResult(input: {
       const boundTarget = requirement.verification.target
       if (!boundTarget?.startsWith(POINT_TARGET_PREFIX) ||
         !frozenVerificationMatchesTrustedCommand(requirement.verification, target)) continue
-      const point = taskBehaviorPoint(requirement.description)
+      const point = acceptanceCriterionPoint(requirement)
       if (!point) continue
       const witness = pointVerifierWitness(projectRoot, target, point, {})
       if (witness?.target === boundTarget && nodePointExecuted(lastResult.stdout, witness)) {

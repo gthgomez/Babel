@@ -123,6 +123,13 @@ test('a numeric point binds only to an exact assertion in the admitted Node test
   writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: 'node --test discount.test.mjs' } }))
   writeFileSync(join(root, 'discount.test.mjs'), testFile(`test("point", () => ${assertPoint})`))
   assert.equal(contract(goal).acceptance[0]?.verification.executable_id, 'npm')
+  const linked = 'Requirements:\n- Fix computeDiscount so it returns 10 for a total of 100; verified by: npm test must pass.\n- npm test must pass.'
+  assert.ok(contract(linked).acceptance[0]?.verification.target?.startsWith(POINT_TARGET_PREFIX))
+  assert.equal(contract(linked).acceptance[1]?.verification.target, undefined)
+  writeFileSync(join(root, 'discount.test.mjs'), testFile('test("other", () => assert.equal(1, 1))'))
+  assert.equal(contract(linked).acceptance[0]?.verification.executable_id, undefined)
+  assert.equal(contract(linked).acceptance[1]?.verification.executable_id, 'npm')
+  writeFileSync(join(root, 'discount.test.mjs'), testFile(`test("point", () => ${assertPoint})`))
   assert.equal(contract(`${goal}\nDo not run npm.`).acceptance[0]?.verification.executable_id, undefined)
   assert.deepEqual(contract(`${goal}\nDo not run npm.`).verifier_requirements, [])
   writeFileSync(join(root, '.npmrc'), '# fixture configuration\n')
@@ -147,6 +154,9 @@ test('task command restrictions are exact and do not turn quoted evidence into a
   assert.equal(taskProhibitsCommand(['The log said "Skipped. Do not run npm." Repair the parser.'], 'npm test'), false)
   assert.equal(taskProhibitsCommand(['Do not run npm or yarn.'], 'npm test'), true)
   assert.equal(taskProhibitsCommand(['Do not run npm or yarn.'], 'yarn test'), true)
+  assert.equal(taskProhibitsCommand(['You must not run npm.'], 'npm test'), true)
+  assert.equal(taskProhibitsCommand(['Do not run npm during this task.'], 'npm test'), true)
+  assert.equal(taskProhibitsCommand(['Do not run npm and do not run yarn.'], 'yarn test'), true)
   assert.equal(taskProhibitsCommand(['Do not run `npm test` or `yarn build`.'], 'yarn test'), false)
   assert.equal(taskProhibitsCommand(['Do not edit files or run any tests or shell commands.'], 'node file.mjs'), true)
   assert.equal(taskProhibitsCommand(['The issue said "Do not run npm".'], 'npm test'), false)
@@ -172,6 +182,7 @@ test('a point needs the complete frozen runner report and newer same-scope check
   const later = { command: 'npm  test', exit_code: 0, summary: 'different test passed',
     order: { sessionId: 'current', seq: 4 }, working_directory: '.', environment_policy: 'host-process' }
   assert.deepEqual(retainCurrentPointReceipts([green, later]), [later])
+  assert.deepEqual(retainCurrentPointReceipts([{ ...green, target: 'node-test-point:v1:legacy' }]), [])
   assert.deepEqual(retainCurrentPointReceipts([green, { ...later, working_directory: 'other' }]),
     [green, { ...later, working_directory: 'other' }])
 })
