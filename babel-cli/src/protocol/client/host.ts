@@ -343,6 +343,8 @@ function materializeEngine(state: ProtocolHostState, descriptor: SessionDescript
       state.admissionStores.get(descriptor.threadId)?.close();
       state.admissionStores.set(descriptor.threadId, admission.store);
       attachable.attachAdmissionStore(admission.store);
+    } else if (retained && report?.source === 'thread_event_log') {
+      throw new Error(`Cannot restore thread ${descriptor.threadId}: admission store unavailable (${admission.reasonCode})`);
     }
   }
   if (report?.resumable && report.source !== 'none') {

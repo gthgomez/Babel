@@ -403,4 +403,25 @@ test('a capsule becomes provider authority only through a matching installed lin
     false,
     'an event-id mismatch must not expose the capsule',
   );
+
+  appendThreadEvent(log, {
+    kind: 'compaction_capsule',
+    turn_id: turn,
+    ownership_generation: 1,
+    content: 'later uncommitted capsule',
+    preserved_tool_call_ids: [],
+  });
+  appendThreadEvent(log, {
+    kind: 'compaction_summary',
+    turn_id: turn,
+    ownership_generation: 1,
+    content: 'later uncommitted summary',
+    provenance: 'model',
+    authoritative: false,
+  });
+  const retained = rebuildProviderMessagesFromEvents(log, {
+    installedContextCheckpoint: buildCheckpoint(matchingLineage),
+  });
+  assert.ok(retained.some(message => message.name === 'compaction_capsule' && message.content === CAPSULE_BODY));
+  assert.ok(!retained.some(message => message.name === 'compaction_summary'));
 });

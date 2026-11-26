@@ -487,15 +487,24 @@ export function rebuildProviderMessagesFromEvents(
   // New logs carry the summary as a sibling advisory event. Legacy logs may
   // contain the old combined marker; split it into assistant context so old
   // model text is never re-promoted to system authority on resume.
-  const summaryEvent = lastCapsuleIdx < 0 && options.installedContextCheckpoint !== undefined ? undefined : events
-    .slice(lastCapsuleIdx + 1)
-    .find((event): event is Extract<ThreadEvent, { kind: 'compaction_summary' }> =>
-      event.kind === 'compaction_summary' &&
-      (lastCapsuleIdx >= 0
-        ? event.ownership_generation === undefined ||
-          event.ownership_generation === lastCapsuleEvent?.ownership_generation
-        : event.ownership_generation === currentOwnershipGeneration),
-    );
+  let summaryEvent: Extract<ThreadEvent, { kind: 'compaction_summary' }> | undefined;
+  if (options.installedContextCheckpoint !== undefined) {
+    const sibling = events[lastCapsuleIdx + 1];
+    if (lastCapsuleEvent && sibling?.kind === 'compaction_summary' &&
+        sibling.turn_id === lastCapsuleEvent.turn_id &&
+        sibling.ownership_generation === lastCapsuleEvent.ownership_generation) {
+      summaryEvent = sibling;
+    }
+  } else {
+    summaryEvent = events.slice(lastCapsuleIdx + 1)
+      .find((event): event is Extract<ThreadEvent, { kind: 'compaction_summary' }> =>
+        event.kind === 'compaction_summary' &&
+        (lastCapsuleIdx >= 0
+          ? event.ownership_generation === undefined ||
+            event.ownership_generation === lastCapsuleEvent?.ownership_generation
+          : event.ownership_generation === currentOwnershipGeneration),
+      );
+  }
   if (summaryEvent) {
     summaryContent = summaryEvent.content;
   } else if (capsuleContent?.includes('\n\n--- compaction_summary ---\n')) {

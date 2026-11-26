@@ -643,6 +643,23 @@ test('control 2: an omitted membership source blocks the checkpoint with observa
   }
 });
 
+test('event-log protocol resume refuses materialization when its admission store cannot open', async t => {
+  const fixture = withTempRunsDir();
+  const host = makeHost();
+  t.after(() => {
+    closeProtocolHostState(host);
+    fixture.cleanup();
+  });
+  const threadId = await createThread(host, fixture.root);
+  seedDurableLogs(threadId, fixture.root);
+  mkdirSync(join(chatSessionDir(threadId), 'runtime-facts.sqlite'));
+
+  const response = await submitTurn(host, threadId, 'continue');
+  assert.ok('error' in response, JSON.stringify(response));
+  assert.match(response.error.message, /admission store/i);
+  assert.equal(host.engines.has(threadId), false);
+});
+
 test('control 3: wrong/missing durable owner stays fail-closed on the protocol path (owner_missing / stale_owner)', async () => {
   const fixture = withTempRunsDir();
   const hosts: ProtocolHost[] = [];
