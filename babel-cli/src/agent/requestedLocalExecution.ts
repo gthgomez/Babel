@@ -4,10 +4,11 @@ import type { BlockedReport } from '../schemas/agentContracts.js'
 import { parseCommandArgv } from '../utils/commandArgv.js'
 import { redactSecrets } from '../utils/redaction.js'
 import type { ChatToolAction } from './chatToolDefinitions.js'
-import type { TaskContractProvenanceRecord } from './taskContract.js'
+import type { AcceptanceRequirementV1, TaskContractProvenanceRecord } from './taskContract.js'
 
-const REF_PREFIX = 'babel:requested-local-execution:v1'
+const REF_PREFIX = 'babel:requested-local-execution'
 const DENIAL_PREFIX = 'required_local_execution_denied'
+export const REQUESTED_LOCAL_EXECUTION_KIND = 'requested_local_execution'
 const EXACT_RUN = /^(?:please\s+)?(?:run|execute)\s+`([^`]+)`$/i
 const RESTRICTED_RUN = /\b(?:do\s+not|don['’]t|never|skip|avoid|without)\s+(?:[a-z]+\s+){0,2}(?:run|execute|running|executing)\b/i
 const EXAMPLE_FRAME = /^(?:for example|an? example|example|sample|illustration|logs?|quoted text)(?:\s*:|\s*$)/i
@@ -32,8 +33,12 @@ function argvForLocalOperation(command: string): string[] | null {
   }
 }
 
-function executionRef(scope: ExecutionScope, argv: readonly string[]): string {
-  return `${REF_PREFIX}:${scope}:${sha256Canonical({ argv, cwd: '.' })}`
+function operationDigest(argv: readonly string[]): string {
+  return sha256Canonical({ argv, cwd: '.' })
+}
+
+function executionRef(version: 1 | 2, scope: ExecutionScope, digest: string): string {
+  return `${REF_PREFIX}:v${version}:${scope}:${digest}`
 }
 
 function activeClauses(activeProse: readonly string[]): string[] {
@@ -46,7 +51,7 @@ function activeClauses(activeProse: readonly string[]): string[] {
       if (index % 2 === 1) {
         clauses[clauses.length - 1] += piece
       } else {
-        const [start, ...rest] = piece.split(/[.!?](?=\s|$)|;/)
+        const [start, ...rest] = piece.split(/[.!](?=\s|$)|(?<=\?)\s+|;/)
         clauses[clauses.length - 1] += start ?? ''
         clauses.push(...rest)
       }
@@ -64,32 +69,64 @@ function jobArgv(clause: string, declaredScripts: readonly string[]): string[][]
   return executables.map(executable => [executable, script, job[3]!, job[2]!])
 }
 
-function jobScope(clauses: readonly string[], index: number, argv: readonly string[]): ExecutionScope {
-  if (clauses.length === 1) return 'standalone'
-  // The declared script and its generated output form one deliverable. Only
-  // the narrow single-job frame can settle early; independent instructions
-  // before or after it keep the rest of the task moving.
-  if (DECLARED_SCRIPT.exec(clauses[0] ?? '')?.[1] !== argv[1]) return 'mixed'
-  if (!clauses.slice(1, index).every(clause => /^(?:it should|use|keep)\b/i.test(clause))) return 'mixed'
-  return clauses.slice(index + 1).every(clause =>
-    /^(?:show|report) (?:the )?verification(?: you performed)?$/i.test(clause) ||
-    clause === `Leave ${argv[2]} unchanged`,
-  ) ? 'standalone' : 'mixed'
+function coveredByExactVerifier(argv: readonly string[], criteria: readonly AcceptanceRequirementV1[]): boolean {
+  return criteria.some(({ required, verification }) => required &&
+    verification.executable_id !== undefined && verification.executable_id === argv[0] && verification.argv !== undefined &&
+    (verification.working_directory ?? '.') === '.' &&
+    operationDigest([verification.executable_id, ...verification.argv]) === operationDigest(argv))
 }
 
-/** Freeze conservative, root-relative operation identities without retaining argv or granting execution authority. */
-export function requestedLocalExecutionRefs(activeProse: readonly string[]): TaskContractProvenanceRecord[] {
-  const clauses = activeClauses(activeProse)
-  if (clauses.some(clause => EXAMPLE_FRAME.test(clause) || RESTRICTED_RUN.test(clause.replace(/`[^`]*`/g, '')))) return []
-  const declaredScripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
+/** Admit task-authored foreground effects into completion, independently of verifier authority. */
+export function requestedLocalExecutionAcceptance(input: {
+  request: string
+  activeProse: readonly string[]
+  existingCriteria: readonly AcceptanceRequirementV1[]
+}): { criteria: AcceptanceRequirementV1[]; provenance: TaskContractProvenanceRecord[] } {
+  const clauses = activeClauses(input.activeProse)
+  const criteria: AcceptanceRequirementV1[] = []
   const refs = new Set<string>()
-  for (const [index, clause] of clauses.entries()) {
+  if (clauses.some(clause => EXAMPLE_FRAME.test(clause) || RESTRICTED_RUN.test(clause.replace(/`[^`]*`/g, ''))))
+    return { criteria, provenance: [] }
+
+  const declaredScripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
+  // Only a sole operation proves that no independent work remains.
+  const scope = clauses.length === 1 && input.request.trim().replace(/[.!]$/, '') === clauses[0]
+    ? 'standalone' : 'mixed'
+  const sourceDigest = sha256Canonical(input.request)
+  let descriptions: Set<string> | undefined
+  for (const clause of new Set(clauses)) {
+    // A derived operation must be traceable to literal user text. Its source
+    // reference binds the original request and exact active clause.
+    if (!input.request.includes(clause)) continue
     const command = EXACT_RUN.exec(clause)?.[1]
     const exactArgv = command ? argvForLocalOperation(command) : null
-    if (exactArgv) refs.add(executionRef(clauses.length === 1 ? 'standalone' : 'mixed', exactArgv))
-    for (const argv of jobArgv(clause, declaredScripts)) refs.add(executionRef(jobScope(clauses, index, argv), argv))
+    const argvAlternatives = exactArgv ? [exactArgv] : jobArgv(clause, declaredScripts)
+    if (argvAlternatives.length === 0) continue
+    const operations = argvAlternatives.map(operationDigest)
+    for (const digest of operations) refs.add(executionRef(2, scope, digest))
+    if (exactArgv && coveredByExactVerifier(exactArgv, input.existingCriteria)) continue
+
+    const clauseDigest = sha256Canonical(clause)
+    const identity = sha256Canonical({ sourceDigest, clauseDigest, operations })
+    const id = `acceptance:requested-local-execution:${identity.slice(0, 32)}`
+    const baseDescription = `Requested foreground effect: ${redactSecrets(clause)}`
+    descriptions ??= new Set(input.existingCriteria.map(item => redactSecrets(item.description)))
+    let description = baseDescription
+    for (let suffix = 2; descriptions.has(description); suffix++)
+      description = `${baseDescription} (${suffix})`
+    descriptions.add(description)
+    criteria.push({
+      id, description, required: true, type: 'runtime',
+      verification_strategy: 'Require a governed runtime observation that the requested operation produced its effect.',
+      verification: {
+        kind: REQUESTED_LOCAL_EXECUTION_KIND,
+        verifier_id: `requested-local-execution:${identity}`,
+        working_directory: '.',
+      },
+    })
+    refs.add(`${REF_PREFIX}:criterion:v1:${sourceDigest}:${clauseDigest}:${id}`)
   }
-  return [...refs].map(ref => ({ kind: 'derived_acceptance', ref }))
+  return { criteria, provenance: [...refs].map(ref => ({ kind: 'derived_acceptance', ref })) }
 }
 
 /** Match a foreground proposal to an admission-time operation identity, for settlement only. */
@@ -102,11 +139,14 @@ export function requiredLocalExecutionScope(
   if (resolve(projectRoot, action.cwd ?? '.') !== resolve(projectRoot)) return null
   const argv = argvForLocalOperation(action.command)
   if (!argv) return null
-  const mixedRef = executionRef('mixed', argv)
-  const standaloneRef = executionRef('standalone', argv)
-  return records.some(record => record.kind === 'derived_acceptance' && record.ref === mixedRef) ? 'mixed'
-    : records.some(record => record.kind === 'derived_acceptance' && record.ref === standaloneRef) ? 'standalone'
-    : null
+  const digest = operationDigest(argv)
+  const hasRef = (version: 1 | 2, scope: ExecutionScope) =>
+    records.some(record => record.kind === 'derived_acceptance' && record.ref === executionRef(version, scope, digest))
+  if (hasRef(2, 'mixed')) return 'mixed'
+  if (hasRef(2, 'standalone')) return 'standalone'
+  // Archived V1 contracts never acquire a criterion on restore, and their
+  // broader frame recognition cannot justify an early stop.
+  return hasRef(1, 'mixed') || hasRef(1, 'standalone') ? 'mixed' : null
 }
 
 /** The executor marks only a typed hard denial with host-confirmed zero dispatch. */
@@ -130,6 +170,10 @@ interface ExecutionLogRow {
   working_directory?: string | undefined
   preDispatchNoEffect?: true | undefined
   processExecuted?: boolean | undefined
+  processCompleted?: boolean | undefined
+  exit_code?: number | undefined
+  simulated?: boolean | undefined
+  error?: string | undefined
 }
 
 /** Report a remaining hard denial after its batch, or at completion after independent work. */
@@ -137,27 +181,33 @@ export function requiredLocalExecutionBlock(
   log: readonly ExecutionLogRow[],
   options: { final: boolean },
 ): { answer: string; blockedReport: BlockedReport } | null {
-  const rows = log.filter(row => row.tool === 'run_command' || row.tool === 'test_run')
-  const outstanding = rows.filter(row => row.preDispatchNoEffect === true && row.detail?.startsWith(`${DENIAL_PREFIX}:`)).reverse()
-  const blocked = outstanding.find(row => {
+  const completed = new Map<string, boolean>()
+  let blocked: ExecutionLogRow | undefined
+  let authority = ''
+  for (const row of [...log].reverse()) {
+    if ((row.tool !== 'run_command' && row.tool !== 'test_run') || !row.working_directory ||
+        row.detail?.startsWith('background started ')) continue
     const argv = argvForLocalOperation(row.target)
-    if (!argv || (!options.final && !row.detail?.startsWith(`${DENIAL_PREFIX}:standalone:`))) return false
-    const ref = executionRef('mixed', argv)
-    return !rows.some(other => {
-      if (!other.processExecuted || other.working_directory !== row.working_directory ||
-          other.detail?.startsWith('background started ')) return false
-      const performedArgv = argvForLocalOperation(other.target)
-      return performedArgv !== null && executionRef('mixed', performedArgv) === ref
-    })
-  })
+    if (!argv) continue
+    const key = sha256Canonical({ argv, cwd: row.working_directory })
+    if (row.processExecuted === true && row.preDispatchNoEffect !== true && row.simulated !== true &&
+        !completed.has(key))
+      completed.set(key, row.processCompleted === true && row.exit_code === 0 && !row.error)
+    if (row.preDispatchNoEffect !== true || row.processExecuted === true || completed.get(key) === true) continue
+    const marker = /^required_local_execution_denied:(standalone|mixed):(no_lease|missing_capability|unresolved)$/.exec(row.detail ?? '')
+    if (!marker || (!options.final && marker[1] !== 'standalone')) continue
+    blocked = row
+    authority = marker[2]!
+    break
+  }
   if (!blocked) return null
 
   const target = redactSecrets(blocked.target).replace(/[\r\n\t]+/g, ' ').slice(0, 240)
-  const cause = authorityExplanation(blocked.detail?.split(':').at(-1) ?? '')
+  const cause = authorityExplanation(authority)
   const reason = `DENY_MISSING_AUTHORITY: ${cause}`
-  const missing = `Required foreground command still to run: ${target}`
+  const missing = `Successful settlement of required foreground command: ${target}`
   return {
-    answer: `Babel denied the required command before dispatch: \`${target}\`. ${cause} No process started for this attempt, and this denial was ineligible for approval. The command remains to be run in an environment authorized for it.`,
+    answer: `Babel denied the required command before dispatch: \`${target}\`. ${cause} No process started for this attempt, and this denial was ineligible for approval. The requested effect remains unconfirmed.`,
     blockedReport: {
       schema_version: 1,
       status: 'BLOCKED',

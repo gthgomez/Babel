@@ -15,6 +15,9 @@ import { invalidateVerifierLedger } from './chatEngineSupport.js'
 import { isFatalWindowsProcessExit } from './verifierFailFast.js'
 import { makeFailureCapsule } from './taskContract.js'
 import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js'
+import { frozenVerificationMatchesTrustedCommand } from './taskAcceptanceExecutableBinding.js'
+import { nodePointExecuted, POINT_TARGET_PREFIX, pointVerifierWitness } from './pointVerifierWitness.js'
+import { taskBehaviorPoint } from './taskBehaviorPoint.js'
 
 /** One receipt and repair-state settlement path for foreground and completed background verifiers. */
 export async function settleChatVerifierResult(input: {
@@ -78,9 +81,24 @@ export async function settleChatVerifierResult(input: {
   const executionBackend = input.executionBackend && resultBackend && input.executionBackend !== resultBackend
     ? undefined
     : input.executionBackend ?? resultBackend
+  const projectRoot = requireProjectRoot(host.options)
+  const pointTargets = new Set<string>()
+  if (executionBackend === 'host-process' && lastResult.exit_code === 0) {
+    for (const requirement of host.parity.liveAuthority?.taskContract.acceptance ?? []) {
+      const boundTarget = requirement.verification.target
+      if (!boundTarget?.startsWith(POINT_TARGET_PREFIX) ||
+        !frozenVerificationMatchesTrustedCommand(requirement.verification, target)) continue
+      const point = taskBehaviorPoint(requirement.description)
+      if (!point) continue
+      const witness = pointVerifierWitness(projectRoot, target, point, {})
+      if (witness?.target === boundTarget && nodePointExecuted(lastResult.stdout, witness.testName)) {
+        pointTargets.add(boundTarget)
+      }
+    }
+  }
   try {
     receipt = await captureAndRecordVerifierReceipt({
-      projectRoot: requireProjectRoot(host.options),
+      projectRoot,
       canPublish: () => isOwnerCurrent() && (input.canPublish?.() ?? true),
       command: target,
       ...(input.verifierOwner ? { verifierOwner: input.verifierOwner } : {}),
@@ -95,6 +113,7 @@ export async function settleChatVerifierResult(input: {
       ...(lastResult.stdout !== undefined ? { stdout: lastResult.stdout } : {}),
       ...(lastResult.stderr !== undefined ? { stderr: lastResult.stderr } : {}),
       ...(executionBackend ? { executionBackend } : {}),
+      ...(pointTargets.size === 1 ? { verifiedPointTarget: [...pointTargets][0]! } : {}),
       mutationPaths: mutationPathsFromSessionEvents(
         host.parity.sessionEvents.events,
       ),

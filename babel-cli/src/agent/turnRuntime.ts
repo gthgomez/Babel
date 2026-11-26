@@ -188,7 +188,8 @@ export function beginUserSubmission(input: BeginUserSubmissionInput): TurnRuntim
     ? prev.taskShape
     : resolveTaskShape(taskText, input.operation, input.replayOperation !== 'legacy');
   const replayOperation = input.replayOperation === 'legacy' ? undefined : input.replayOperation;
-  const preserveReadOnly = amendment && input.operation !== 'CHANGE' && prev?.taskShape?.operation === 'READ_ONLY';
+  const preserveReadOnly = input.replayOperation !== 'legacy' &&
+    amendment && input.operation !== 'CHANGE' && prev?.taskShape?.operation === 'READ_ONLY';
   const narrowerOperation = preserveReadOnly || input.operation === 'READ_ONLY' ||
     (replayOperation !== undefined && hasExplicitEditDenial(taskText));
   const taskShape: TaskShape = {

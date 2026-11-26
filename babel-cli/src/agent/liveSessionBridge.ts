@@ -18,7 +18,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import {normalizeChatExecutionScope} from './chatExecutionScope.js';
 import {inferFreshTaskAcceptance} from './taskAcceptanceMeaning.js';
-import { requestedLocalExecutionRefs } from './requestedLocalExecution.js';
+import { requestedLocalExecutionAcceptance } from './requestedLocalExecution.js';
 import {
   bindExecutableVerifiersToTaskAcceptance,
   mergeTrustedVerifierCommands,
@@ -388,6 +388,15 @@ export function resolveLiveSessionAuthority(input: {
         }) }] : []
       })()
     : [];
+  // Only fresh project contracts acquire these criteria. Retained contracts
+  // are loaded and continued with their original hashed acceptance rows.
+  const requestedExecution = scope.kind === 'project'
+    ? requestedLocalExecutionAcceptance({
+        request: input.task,
+        activeProse: meaning.activeProse,
+        existingCriteria: meaning.criteria,
+      })
+    : { criteria: [], provenance: [] };
   const contract = freezeTaskContract(
     buildTaskContractV1({
       mode: input.mode,
@@ -395,7 +404,7 @@ export function resolveLiveSessionAuthority(input: {
       user_request: input.task,
       task_class:
         (input.taskClass as TaskContractV1['task_class'] | undefined) ?? 'unknown',
-      acceptance: meaning.criteria,
+      acceptance: [...meaning.criteria, ...requestedExecution.criteria],
       non_goals: ['Do not expand scope beyond the user request'],
       protected_paths: [...protectedPaths],
       verifier_requirements: requiredVerifierCommands,
@@ -412,7 +421,7 @@ export function resolveLiveSessionAuthority(input: {
       source: 'liveSessionBridge.resolveLiveSessionAuthority',
     provenance:[
       ...meaning.provenance,
-      ...requestedLocalExecutionRefs(meaning.activeProse),
+      ...requestedExecution.provenance,
       ...publicApiRecords,
       ...(input.objectiveLifecycle ? [{kind:'risk_analysis' as const,ref:OBJECTIVE_LIFECYCLE_REF}] : []),
     ],

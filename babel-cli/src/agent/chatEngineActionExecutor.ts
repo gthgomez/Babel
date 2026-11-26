@@ -64,6 +64,8 @@ import { settleChatVerifierResult } from "./chatVerifierSettlement.js";
 import { isAuthoritativeVerifierCommand } from "./completionGatePolicy.js";
 import { acceptToolStop, settlePreventedChatAction } from './chatEngineRunControl.js';
 import { actionRequestFromAction } from '../authority/actionRequest.js';
+import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js';
+import { taskProhibitsCommand } from './taskCommandProhibitions.js';
 import { requiredLocalExecutionDenialMarker, requiredLocalExecutionScope } from './requestedLocalExecution.js';
 import { RunStoppedError } from '../runtime/run-control.js';
 import { ProcessTerminationError } from '../sandbox.js';
@@ -202,6 +204,13 @@ export class ChatEngineActionExecutor {
     let observedToolExecution = false;
 
     try {
+    if ((action.type === 'run_command' || action.type === 'test_run') && turnRuntime &&
+      taskProhibitsCommand(inferFreshTaskAcceptance(turnRuntime.taskText).activeProse, action.command)) {
+      const detail = 'task-command-prohibited';
+      this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
+      callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
+      return { index: meta.index, observation: 'The user explicitly prohibited running this command. No process started.' };
+    }
     const frozenVerifierDispatch = action.type === 'run_command' || action.type === 'test_run' ? {
       owner: this.host.currentVerifierOwner(), candidate: this.host.currentRecoveryBinding(),
       proofCandidate: freezeChatVerifierCandidate(requireProjectRoot(this.host.options)),
@@ -1648,10 +1657,9 @@ export class ChatEngineActionExecutor {
         target: projectedTarget,
         ...(frozenVerifierDispatch ? { working_directory: frozenVerifierDispatch.identity.cwd } : {}),
         ...((action.type === 'run_command' || action.type === 'test_run') ? {
-          processExecuted: lastResult?.process_started === true && lastResult.simulated !== true && lastResult.launch_failure === undefined,
-          processCompleted: lastResult?.process_started === true && lastResult.exit_code !== undefined &&
-            lastResult.simulated !== true && lastResult.launch_failure === undefined &&
-            lastResult.process_termination === 'exited',
+          processExecuted: observedToolExecution && lastResult?.process_started === true && lastResult.launch_failure === undefined,
+          processCompleted: observedToolExecution && lastResult?.process_started === true &&
+            lastResult.exit_code !== undefined && lastResult.launch_failure === undefined && lastResult.process_termination === 'exited',
         } : {}),
         ...(verifierSemanticSignature ? { verifierSemanticSignature } : {}),
         ...(readRevisionHash && !result.policyBlocked && result.results.length > 0 &&

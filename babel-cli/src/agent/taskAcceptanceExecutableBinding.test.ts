@@ -15,6 +15,8 @@ import {
   mergeTrustedVerifierCommands,
 } from './taskAcceptanceExecutableBinding.js'
 import { inferTaskAcceptance, inferTaskAcceptanceV2, inferTaskAcceptanceV3, inferTaskAcceptanceV4 } from './taskAcceptanceMeaning.js'
+import { nodePointExecuted, POINT_TARGET_PREFIX, retainCurrentPointReceipts } from './pointVerifierWitness.js'
+import { taskProhibitsCommand } from './taskCommandProhibitions.js'
 import { applyWorkingStateEvent, createWorkingState, formatWorkingStateBlock } from './codingLoop/workingState.js'
 
 test('plain-text npm test passes binds with suffix-anchored grammar', () => {
@@ -79,6 +81,8 @@ test('a numeric point binds only to an exact assertion in the admitted Node test
     ['unrelated assertion', 'node --test discount.test.mjs', 'test("other", () => assert.equal(10, 10))', false],
     ['skipped', 'node --test discount.test.mjs', `test.skip("point", () => ${assertPoint})`, false],
     ['shadowed', 'node --test discount.test.mjs', `test("point", (discount) => ${assertPoint})`, false],
+    ['duplicate case name', 'node --test discount.test.mjs',
+      `test("point", () => ${assertPoint}); test("point", () => assert.equal(10, 10))`, false],
     ['unregistered', 'node --test discount.test.mjs', `const example = () => ${assertPoint}`, false],
     ['filtered', 'node --test --test-name-pattern=other discount.test.mjs', `test("point", () => ${assertPoint})`, false],
     ['different entry', 'node --test other.test.mjs', `test("point", () => ${assertPoint})`, false],
@@ -105,9 +109,51 @@ test('a numeric point binds only to an exact assertion in the admitted Node test
       assert.match(behavior.description, /computeDiscount/)
       assert.equal(behavior.verification.executable_id, binds ? 'npm' : undefined, label)
       assert.equal(command?.verification.executable_id, 'npm', label)
-      if (binds) assert.ok(taskContract.protected_paths.includes('discount.test.mjs'))
+      if (binds) {
+        assert.ok(taskContract.protected_paths.includes('discount.test.mjs'))
+        assert.ok(behavior.verification.target?.startsWith(POINT_TARGET_PREFIX))
+      }
     }
   }
+
+  const goal = 'We need computeDiscount to return 10 for a total of 100.'
+  const contract = (task: string) => resolveLiveSessionAuthority({
+    mode: 'chat', task, projectRoot: root, projectTestCommands: ['npm test'],
+  }).taskContract
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: 'node --test discount.test.mjs' } }))
+  writeFileSync(join(root, 'discount.test.mjs'), testFile(`test("point", () => ${assertPoint})`))
+  assert.equal(contract(goal).acceptance[0]?.verification.executable_id, 'npm')
+  assert.equal(contract(`${goal}\nDo not run npm.`).acceptance[0]?.verification.executable_id, undefined)
+  assert.deepEqual(contract(`${goal}\nDo not run npm.`).verifier_requirements, [])
+  writeFileSync(join(root, '.npmrc'), '# fixture configuration\n')
+  assert.equal(contract(goal).acceptance[0]?.verification.executable_id, undefined)
+  rmSync(join(root, '.npmrc'))
+  writeFileSync(join(root, 'example.mjs'), 'export function computeDiscount() { return 5; }\n')
+  assert.equal(contract(goal).acceptance[0]?.verification.executable_id, undefined)
+})
+
+test('task command restrictions are exact and do not turn quoted evidence into a denial', () => {
+  const active = ['Repair the parser. Do not run `npm test`.']
+  assert.equal(taskProhibitsCommand(active, 'npm run test'), true)
+  assert.equal(taskProhibitsCommand(active, 'node --test other.mjs'), false)
+  assert.equal(taskProhibitsCommand(['Do not edit files or run any tests or shell commands.'], 'node file.mjs'), true)
+  assert.equal(taskProhibitsCommand(['The issue said "Do not run npm".'], 'npm test'), false)
+})
+
+test('a point needs its own observed TAP result, and a newer same-scope check supersedes it', () => {
+  assert.equal(nodePointExecuted('TAP version 13\nok 1 - discount point\n', 'discount point'), true)
+  assert.equal(nodePointExecuted('✔ discount point (3.245ms)\nℹ tests 1\n', 'discount point'), true)
+  assert.equal(nodePointExecuted('✔ discount point (3.245ms)\n✔ other (1ms)\nℹ tests 1\n', 'discount point'), false)
+  for (const result of ['ok 1 - other', 'ok 1 - discount point # SKIP', 'not ok 1 - discount point', '# ok 1 - discount point']) {
+    assert.equal(nodePointExecuted(`TAP version 13\n${result}\n`, 'discount point'), false)
+  }
+  const green = { command: 'npm test', exit_code: 0, summary: 'pass', target: POINT_TARGET_PREFIX + 'frozen',
+    order: { sessionId: 'current', seq: 3 }, working_directory: '.', environment_policy: 'host-process' }
+  const later = { command: green.command, exit_code: 0, summary: 'different test passed',
+    order: { sessionId: 'current', seq: 4 }, working_directory: '.', environment_policy: 'host-process' }
+  assert.deepEqual(retainCurrentPointReceipts([green, later]), [later])
+  assert.deepEqual(retainCurrentPointReceipts([green, { ...later, working_directory: 'other' }]),
+    [green, { ...later, working_directory: 'other' }])
 })
 
 test('negated command-success assertions do not bind', () => {

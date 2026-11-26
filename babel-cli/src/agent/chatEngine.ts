@@ -435,6 +435,7 @@ import {
 import {restoreTurnRuntime} from './restoreTurnRuntime.js';
 import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjectiveSubmission,type ObjectiveAdmissionHost,type ObjectiveAdmissionResult} from './chatEngineObjectiveAdmission.js';
 import type { CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
+import { retainCurrentPointReceipts } from './pointVerifierWitness.js';
 import { chatFinalRevisionWitness, chatFinalRevisionRequiredForChat } from '../authority/finalRevision.js';
 import {requiresObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog} from './taskObjectiveLifecycle.js';
 
@@ -2681,7 +2682,9 @@ export class ChatEngine {
       ? ['Settled failed verifier execution requires newer covering current green evidence'] : [];
     proofSelection.evidenceErrors.push(...historyErrors);
     const selectedChatReceipts = selectLedgerReceiptsById(this.executedVerifierLedger, proofSelection.selectedCoveringReceipts);
-    const criterionChatReceipts = currentOwnerReceipts.filter(receipt => attemptSelection.currentAttempts.some(attempt => attempt.receiptId === receipt.receiptId));
+    const criterionChatReceipts = retainCurrentPointReceipts(
+      currentOwnerReceipts.filter(receipt => attemptSelection.currentAttempts.some(attempt => attempt.receiptId === receipt.receiptId)),
+    );
     return { ...canonical, verifierEvidenceErrors: canonical.verifierEvidenceErrors, requiredVerifierCommands, requiredVerifiers, verifierOwner, currentWorkspaceRevisionHash, currentReceiptRevisionHashes, unplannedAttemptEnvironmentFingerprint, proofSelection, selectedChatReceipts, criterionChatReceipts };
   }
 

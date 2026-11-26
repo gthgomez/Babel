@@ -10,7 +10,8 @@ import {
 import type { AcceptanceRequirementV1, AcceptanceRequirementType, VerificationSpecV1 } from './taskContract.js'
 import { isQuantifiedArithmeticBehavior, labeledBehavioralGoalText, type AcceptanceMeaningSource, type TaskAcceptanceMeaning } from './taskAcceptanceMeaning.js'
 import { taskBehaviorPoint } from './taskBehaviorPoint.js'
-import { hasPointVerifierWitness } from './pointVerifierWitness.js'
+import { pointVerifierWitness } from './pointVerifierWitness.js'
+import { taskProhibitsCommand } from './taskCommandProhibitions.js'
 import { analyzeVerifierIdentity } from '../services/verifierIdentity.js'
 import { assertionEvidenceMatches, stripJsComments } from './verifierBehaviorEvidence.js'
 import { markAdvisoryDocsGoals } from './advisoryDocsGoal.js'
@@ -614,13 +615,14 @@ function relevantTrustedCommands(input: {
   projectRoot: string
   fs: VerifierCommandInputOverrides
   meaningVersion: TaskAcceptanceMeaning['interpretation_version']
-}): string[] {
+}): { command: string; target?: string }[] {
   if (isUnresolvedCriterion(input.criterion)) return []
   if (!input.criterion.verification.verifier_id.startsWith('meaning:')) return []
   const point = input.meaningVersion >= 6 ? taskBehaviorPoint(input.criterion.description) : undefined
-  if (point) return input.trusted.filter(command =>
-    hasPointVerifierWitness(input.projectRoot, command, point, input.fs),
-  )
+  if (point) return input.trusted.flatMap(command => {
+    const witness = pointVerifierWitness(input.projectRoot, command, point, input.fs)
+    return witness ? [{ command, target: witness.target }] : []
+  })
   const spec = relevanceSpec(input.criterion.description)
   if (!spec) return []
   return input.trusted.filter(command => {
@@ -637,7 +639,7 @@ function relevantTrustedCommands(input: {
         fs: input.fs,
       })
     })
-  })
+  }).map(command => ({ command }))
 }
 
 /**
@@ -656,7 +658,8 @@ function explicitVerifierObservesStatedResult(input: {
   if (!input.projectRoot) return true
   const fs = input.fs ?? {}
   const point = input.meaningVersion >= 6 ? taskBehaviorPoint(input.criterion.description) : undefined
-  if (point) return hasPointVerifierWitness(input.projectRoot, input.command, point, fs)
+  // Fresh point constraints must use the case-level relevance binding below.
+  if (point) return false
   const spec = relevanceSpec(input.criterion.description)
   if (!spec || spec.fragment === null) return true
   const inputFiles = verifierCommandInputFiles(input.projectRoot, input.command, fs)
@@ -679,6 +682,7 @@ function bindRelevanceWitness(
   command: string,
   defaultWorkingDirectory?: string,
   existingVerifierInputFiles?: readonly string[],
+  target?: string,
 ): AcceptanceRequirementV1 {
   const verification = materializeExecutableVerification(
     command,
@@ -690,7 +694,7 @@ function bindRelevanceWitness(
     ...criterion,
     type: requirementTypeForCommand(command),
     verification_strategy: `The task names an observable behavior and its frozen verifier input exercises that same target; this is the ${RELEVANCE_WITNESS_MARKER} for the requirement.`,
-    verification,
+    verification: target ? { ...verification, target } : verification,
   }
 }
 
@@ -761,7 +765,8 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     ...new Set(
       input.trustedVerifierCommands
         .map((command) => command.trim())
-        .filter((command) => command.length > 0),
+        .filter(command => command.length > 0 &&
+          (input.meaning.interpretation_version < 6 || !taskProhibitsCommand(input.meaning.activeProse, command))),
     ),
   ]
   if (trusted.length === 0 || input.meaning.unresolved) return input.meaning
@@ -920,12 +925,13 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
         criterion, trusted, projectRoot, fs, meaningVersion: input.meaning.interpretation_version,
       })
       if (matches.length !== 1) return criterion
-      const command = matches[0]!
+      const { command, target } = matches[0]!
       const bound = bindRelevanceWitness(
         criterion,
         command,
         input.defaultWorkingDirectory,
         input.existingVerifierInputFiles,
+        target,
       )
       if (bound.verification.verifier_id === criterion.verification.verifier_id) return criterion
       bindingProvenance.push({

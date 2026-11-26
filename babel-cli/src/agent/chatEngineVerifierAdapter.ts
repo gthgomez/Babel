@@ -367,6 +367,8 @@ export async function captureAndRecordVerifierReceipt(input: {
   resolvedExecutable?: string;
   /** Host-owned shell executor selected for the actual invocation. */
   executionBackend?: 'docker-container' | 'host-process';
+  /** Host-owned observed case identity from the actual test runner output. */
+  verifiedPointTarget?: string;
   /** The command was not started. A synthetic exit must not enter the ledger. */
   simulated?: boolean;
   /** Recheck suspended execution ownership/candidate immediately before publishing evidence. */
@@ -408,7 +410,9 @@ export async function captureAndRecordVerifierReceipt(input: {
     execution: {
       working_directory: relativeCwd,
       ...(input.executionBackend ? { environment_policy: input.executionBackend } : {}),
-      ...(commandIdentity?.scope === 'targeted' && commandIdentity.targetSelectors.length > 0
+      ...(input.verifiedPointTarget
+        ? { target: input.verifiedPointTarget }
+        : commandIdentity?.scope === 'targeted' && commandIdentity.targetSelectors.length > 0
         ? { target: commandIdentity.targetSelectors.join(',') }
         : {}),
     },
