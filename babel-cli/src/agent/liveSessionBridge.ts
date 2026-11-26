@@ -353,10 +353,19 @@ export function resolveLiveSessionAuthority(input: {
   const existingVerifierInputFiles = input.projectRoot
     ? existingNodeVerifierInputFiles(input.projectRoot, inferredMeaning, undefined, trustedVerifierCommands)
     : []
+  const publicApiRecords = input.projectRoot && hasPublicApiPreservationClause(input.task)
+    ? (() => {
+        const surface = computePublicApiSurface(input.projectRoot!)
+        return surface ? [{ kind: 'derived_acceptance' as const, ref: publicApiFreezeRef(surface, {
+          mode: publicApiPreservationMode(input.task),
+        }) }] : []
+      })()
+    : [];
   const meaning = bindExecutableVerifiersToTaskAcceptance({
     meaning: inferredMeaning,
     trustedVerifierCommands,
     existingVerifierInputFiles,
+    publicApiFrozen: publicApiRecords.length > 0,
     ...(input.projectRoot ? { defaultWorkingDirectory: '.', projectRoot: input.projectRoot } : {}),
   });
   // A designated regression witness makes the already-present tests and their
@@ -381,14 +390,6 @@ export function resolveLiveSessionAuthority(input: {
     ...(input.verifierRequirements ?? []),
     ...relevanceBoundVerifierCommands(meaning),
   ])].filter(command => !taskProhibitsCommand(meaning.activeProse, command));
-  const publicApiRecords = input.projectRoot && hasPublicApiPreservationClause(input.task)
-    ? (() => {
-        const surface = computePublicApiSurface(input.projectRoot!)
-        return surface ? [{ kind: 'derived_acceptance' as const, ref: publicApiFreezeRef(surface, {
-          mode: publicApiPreservationMode(input.task),
-        }) }] : []
-      })()
-    : [];
   // Only fresh project contracts acquire these criteria. Retained contracts
   // are loaded and continued with their original hashed acceptance rows.
   const requestedExecution = scope.kind === 'project'

@@ -25,7 +25,8 @@ import {
   computeVerifierDependencyHashes,
   hasVerifierDependencyTamper,
 } from './verifierIntegrity.js'
-import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
+import { acceptanceCriterionPoint, bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
+import { nodePointExecuted, pointVerifierWitness } from './pointVerifierWitness.js'
 import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
 import { buildTaskContractV1, freezeTaskContract } from './taskContract.js'
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
@@ -718,7 +719,7 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
   ].join('\n') + '\n')
 
   const command = 'node --test "test files/parser.test.mjs"'
-  const behavior = 'Fix parser.js so parseSum(2, 3) returns 5'
+  const behavior = 'Fix src/parser.js so parseSum(2, 3) returns 5'
   const task = [
     `${behavior}.`,
     'Requirements:',
@@ -735,6 +736,7 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
   assert.ok(linked.every(item => item.verification.verifier_id === 'verifier:node'))
   assert.ok(linked.every(item => JSON.stringify(item.verification.argv) === JSON.stringify(['--test', 'test files/parser.test.mjs'])))
   assert.ok(linked.every(item => item.verification.command_hash))
+  assert.ok(contract.protected_paths.includes('test files/parser.test.mjs'))
 
   const runId = 'criterion-explicit-verifier-link'
   const service = createCriterionCompletionServiceV1(() => ({ contract, runId, projectRoot: root }))
@@ -766,6 +768,11 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
   const exitCode = policy.results[0]?.exit_code ?? 1
   assert.equal(exitCode, 0, stdout)
   assert.match(stdout, /pass 1/)
+  const point = acceptanceCriterionPoint(linked[0]!)
+  assert.ok(point)
+  const witness = pointVerifierWitness(root, command, point, {})
+  assert.ok(witness)
+  assert.ok(nodePointExecuted(stdout, witness), stdout)
   const cacheIdentity = resolveVerifierCacheIdentity({
     projectRoot: root, command, envKey: verifierEnvironmentKey(env),
   })
@@ -774,6 +781,7 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
     stderr: policy.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
     sessionEvents, turnId: runId, ledger: [], cache: new Map(), writeCount: 1,
     cacheIdentity, verifierOwner, executionBackend: 'host-process',
+    verifiedPointTarget: witness.target,
   })
   assert.ok(receipt)
   assert.equal(receipt.tests_total, 1)

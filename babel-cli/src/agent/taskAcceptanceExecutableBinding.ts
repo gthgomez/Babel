@@ -767,6 +767,8 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
    */
   projectRoot?: string
   relevanceFs?: VerifierCommandInputOverrides
+  /** Export-surface proof was frozen by this admission, independently of tests. */
+  publicApiFrozen?: boolean
   /** Historical descriptors already froze their executable interpretation. */
   replayBinding?: 'v2' | 'v3'
   /** New amendments apply current evidence rules to any retained meaning version. */
@@ -783,7 +785,7 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
           (!currentBinding || !prohibits(input.meaning.activeProse, command))),
     ),
   ]
-  if (trusted.length === 0 || input.meaning.unresolved) return input.meaning
+  if ((trusted.length === 0 && !input.publicApiFrozen) || input.meaning.unresolved) return input.meaning
 
   const bindingProvenance: TaskAcceptanceMeaning['provenance'] = []
   const explicitBound = input.meaning.criteria.map((criterion) => {
@@ -884,7 +886,7 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   // behavioral goal's observable result. Compound text that cannot be split
   // cleanly stays required (fail closed) rather than being weakened.
   let explicitCriteria = explicitBound
-  if (input.projectRoot && explicitBound.some(criterion => criterion.required &&
+  if (input.publicApiFrozen && explicitBound.some(criterion => criterion.required &&
     isPublicApiPreservationStatement(criterion.description))) {
     const split: AcceptanceRequirementV1[] = []
     const ids = new Set(explicitBound.map(criterion => criterion.id))
@@ -934,7 +936,7 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
   // observable call. A live project root is required; replay/amendment callers
   // omit it and stay deterministic from recorded contract data.
   let relevanceBound = explicitCriteria
-  if (input.projectRoot && input.meaning.interpretation_version >= 3) {
+  if (trusted.length > 0 && input.projectRoot && input.meaning.interpretation_version >= 3) {
     const projectRoot = input.projectRoot
     const fs = input.relevanceFs ?? {}
     relevanceBound = explicitCriteria.map((criterion) => {
@@ -997,7 +999,7 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     }
   }
 
-  if (input.projectRoot && input.meaning.interpretation_version >= 3) {
+  if (trusted.length > 0 && input.projectRoot && input.meaning.interpretation_version >= 3) {
     const advisory = markAdvisoryDocsGoals({
       criteria,
       sources: input.meaning.sources,
@@ -1011,10 +1013,9 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     }
   }
 
-  // The preservation sentence was split before witness binding; the derived
-  // invariant is non-required and enforced by the frozen export surface.
-
-  if (!bindingProvenance.length) return input.meaning
+  // Export-surface preservation is enforced separately from executable
+  // witness binding. Keep its projected criteria even when no verifier bound.
+  if (!bindingProvenance.length && explicitCriteria === explicitBound) return input.meaning
   return {
     ...input.meaning,
     criteria,

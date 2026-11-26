@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -232,16 +232,24 @@ test('explicit direct Node verifier freezes its existing test file against task-
   assert.ok(String(result.results[0]?.stderr).includes('protected_path'));
 });
 
-test('live admission binds only a pre-existing exact Node test file, never a task-created verifier', () => {
+test('live admission binds only a pre-existing exact Node test file, never a task-created verifier', t => {
   const command = 'node --test test/parser.test.mjs';
   const task = [
-    'Fix parser.js so parseSum(2, 3) returns 5.',
+    'Fix src/parser.js so parseSum(2, 3) returns 5.',
     'Requirements:',
     `- parseSum(2, 3) returns 5; verified by: \`${command}\` must pass.`,
   ].join('\n');
   const existingRoot = mkdtempSync(join(tmpdir(), 'babel-existing-node-verifier-'));
+  t.after(() => rmSync(existingRoot, { recursive: true, force: true }));
   mkdirSync(join(existingRoot, 'test'), { recursive: true });
-  writeFileSync(join(existingRoot, 'test', 'parser.test.mjs'), 'assert.equal(parseSum(2, 3), 5)\n');
+  mkdirSync(join(existingRoot, 'src'), { recursive: true });
+  writeFileSync(join(existingRoot, 'src', 'parser.js'), 'export function parseSum(a, b) { return a + b; }\n');
+  writeFileSync(join(existingRoot, 'test', 'parser.test.mjs'), [
+    'import test from "node:test";',
+    'import assert from "node:assert/strict";',
+    'import { parseSum } from "../src/parser.js";',
+    'test("sum", () => assert.equal(parseSum(2, 3), 5));',
+  ].join('\n'));
   const admitted = resolveLiveSessionAuthority({
     mode: 'chat', task, projectRoot: existingRoot, verifierRequirements: [command],
   }).taskContract;
@@ -250,6 +258,7 @@ test('live admission binds only a pre-existing exact Node test file, never a tas
   assert.ok(admitted.protected_paths.includes('test/parser.test.mjs'));
 
   const missingRoot = mkdtempSync(join(tmpdir(), 'babel-missing-node-verifier-'));
+  t.after(() => rmSync(missingRoot, { recursive: true, force: true }));
   const missing = resolveLiveSessionAuthority({
     mode: 'chat', task, projectRoot: missingRoot, verifierRequirements: [command],
   }).taskContract;

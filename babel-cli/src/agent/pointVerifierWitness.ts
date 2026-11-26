@@ -115,7 +115,7 @@ export function pointVerifierWitness(
   const parsed = parseStructuredVerifierCommand(entry)
   if (parsed?.executable !== 'node' || parsed.args.length !== 2 || parsed.args[0] !== '--test') return undefined
   const testPath = parsed.args[1]!.replace(/^\.\//, '')
-  if (!/^[\w./-]+\.[cm]?js$/.test(testPath)) return undefined
+  if (!/^[\w ./-]+\.[cm]?js$/.test(testPath)) return undefined
   const files = verifierCommandInputFiles(projectRoot, entry, fs)
   if (!files.includes(testPath)) return undefined
   const content = readVerifierCommandInput(projectRoot, testPath, fs)

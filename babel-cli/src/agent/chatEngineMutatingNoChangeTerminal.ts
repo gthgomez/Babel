@@ -8,6 +8,7 @@ import {
   type CriterionCompletionServiceV1,
   type CriterionPrivateEvidenceRefreshV1,
 } from '../authority/criterionCompletion.js';
+import { chatReceiptDispatchesToRequirement } from '../authority/criterionVerifierDispatch.js';
 import { hasInspectedNoChangeEvidence, type GateToolLogEntry } from './completionGatePolicy.js';
 import type { TaskOperation } from '../config/chatTaskClass.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
@@ -18,6 +19,7 @@ import {
   canonicalCommandFromFrozenVerification,
   commandsMatchForExecutableBinding,
 } from './taskAcceptanceExecutableBinding.js';
+import { isLegacyPointTarget, POINT_TARGET_PREFIX } from './pointVerifierWitness.js';
 
 /** Trim framing whitespace only — never collapse spaces inside quoted argv. */
 function trimCommandForComparison(command: string): string {
@@ -136,6 +138,16 @@ function requiredCriterionStillOpen(input: {
     (row) => row.requirement_id === input.item.id && row.status !== 'satisfied',
   );
   const listedMissing = input.missingRequired.includes(input.item.id);
+
+  const target = input.item.verification.target;
+  if (isLegacyPointTarget(target)) return true;
+  if (target?.startsWith(POINT_TARGET_PREFIX)) {
+    // The controller supplies only current owner-bound receipts. A tool row
+    // or a generic green receipt cannot show that the required case executed.
+    return !input.receipts.some(receipt =>
+      receipt.stale !== true && chatReceiptDispatchesToRequirement(receipt, input.item),
+    );
+  }
 
   if (isMeaningBoundAcceptance(input.item)) {
     if (advisoryOpen || listedMissing) return true;

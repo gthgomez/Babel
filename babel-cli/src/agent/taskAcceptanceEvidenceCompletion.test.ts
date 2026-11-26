@@ -1,6 +1,6 @@
 /**
  * W01 round-2 controls: a relevance-bound witness must be able to certify a
- * correct patch without spawning a process, a documentation goal must be
+ * correct patch using the observed test case, a documentation goal must be
  * mechanically checked rather than blocking forever, and a public-surface
  * preservation clause must veto an API-breaking candidate.
  */
@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
+import { acceptanceCriterionPoint } from './taskAcceptanceExecutableBinding.js'
+import { nodePointExecuted, pointVerifierWitness } from './pointVerifierWitness.js'
 import { createCriterionCompletionServiceV1 } from '../authority/criterionCompletion.js'
 import {
   chatFinalRevisionRequiredForChat,
@@ -33,9 +35,9 @@ import {
   publicApiPreservationViolation,
 } from './publicApiPreservation.js'
 
-const GOAL = 'Fix parser.js so parseSum(2, 3) returns 5.'
+const GOAL = 'Fix src/parser.js so parseSum(2, 3) returns 5.'
 const DOC_GOAL = 'Update README.md so the example shows parseSum usage.'
-const VERIFIER = 'node --test --test-force-exit --experimental-test-isolation=none test/parser.test.mjs'
+const VERIFIER = 'node --test test/parser.test.mjs'
 const TEST_SOURCE = [
   'import assert from "node:assert/strict";',
   'import test from "node:test";',
@@ -98,15 +100,27 @@ test('P2-3 positive: a relevance-bound witness certifies VERIFIED_COMPLETE', asy
   assert.ok(owner)
   const requiredVerifiers = chatVerifierRequirements(owner, [VERIFIER], contract.user_request, root)
   assert.equal(requiredVerifiers.length, 1)
+  const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '0' }
+  delete env.NODE_TEST_CONTEXT
+  const child = spawnSync(process.execPath, ['--test', 'test/parser.test.mjs'], {
+    cwd: root, encoding: 'utf8', timeout: 20_000, env,
+  })
+  assert.ifError(child.error)
+  assert.equal(child.status, 0, child.stderr)
+  const point = acceptanceCriterionPoint(goal)
+  assert.ok(point)
+  const witness = pointVerifierWitness(root, VERIFIER, point, {})
+  assert.ok(witness)
+  assert.ok(nodePointExecuted(child.stdout, witness), child.stdout)
   const receipt = await captureChatVerifierReceipt({
     projectRoot: root,
     command: VERIFIER,
     exitCode: 0,
     summary: 'parseSum passed',
-    stdout: TAP,
+    stdout: child.stdout,
     mutationPaths: ['src/parser.js'],
     executionContext: requiredVerifiers[0]!.executionContext,
-    execution: { working_directory: '.', environment_policy: 'host-process' },
+    execution: { working_directory: '.', environment_policy: 'host-process', target: witness.target },
   })
   assert.ok(receipt)
   receipt.order = { sessionId, seq: 1 }

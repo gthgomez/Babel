@@ -21,6 +21,10 @@ import { createCriterionCompletionServiceV1 } from '../authority/criterionComple
 import { resolveAcceptedReadOnlyTerminal } from './chatEngineMutatingNoChangeTerminal.js'
 import type { GateToolLogEntry } from './completionGatePolicy.js'
 import { publicApiPreservationViolation } from './publicApiPreservation.js'
+import { acceptanceCriterionPoint } from './taskAcceptanceExecutableBinding.js'
+import { nodePointExecuted, pointVerifierWitness } from './pointVerifierWitness.js'
+import { captureChatVerifierReceipt } from './chatEngineVerifierAdapter.js'
+import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js'
 
 const MODEL = 'deepseek-v4-flash'
 const NATIVE_RESERVED = 4_096
@@ -171,8 +175,8 @@ const UNRELATED_TEST = [
   '',
 ].join('\n')
 
-const GOAL = 'Fix parser.js so parseSum(2, 3) returns 5.'
-const VERIFIER = 'node --test --test-force-exit --experimental-test-isolation=none test/parser.test.mjs'
+const GOAL = 'Fix src/parser.js so parseSum(2, 3) returns 5.'
+const VERIFIER = 'node --test test/parser.test.mjs'
 
 function parserFixture(opts: { parser: string; test: string }): string {
   const root = mkdtempSync(join(tmpdir(), 'babel-w01-journey-'))
@@ -238,7 +242,7 @@ test('TF-07 journey: scoped preservation constraint cannot turn an untested repa
     'the wrong behavior stays on disk because it was never proven correct')
 })
 
-test('TF-12 decision: a relevant frozen green command closes inspection-only no-change', t => {
+test('TF-12 decision: only a relevant executed case closes inspection-only no-change', async t => {
   const root = parserFixture({
     parser: 'export function parseSum(a, b) { return a + b; }\n',
     test: RELEVANT_TEST,
@@ -252,6 +256,7 @@ test('TF-12 decision: a relevant frozen green command closes inspection-only no-
     verifierRequirements: [VERIFIER],
   }).taskContract
   const goal = contract.acceptance.find(item => item.description === GOAL)
+  assert.ok(goal)
   assert.equal(goal?.verification.verifier_id, 'verifier:node')
 
   const runId = 'w01-tf12-decision'
@@ -264,13 +269,41 @@ test('TF-12 decision: a relevant frozen green command closes inspection-only no-
     { tool: 'read_file', target: 'src/parser.js', detail: '49 B', exit_code: 0 },
     { tool: 'run_command', target: VERIFIER, exit_code: 0, effect_status: 'confirmed_no_change' },
   ]
-  const allowed = resolveAcceptedReadOnlyTerminal({
+  const decision = {
     effectiveOperation: 'MUTATING',
     ambientReadOnly: false,
     hasAnyWrites: false,
     toolCallLog,
     criterionCompletion: service,
     buildCriterionRefresh: () => ({ criterionChatReceipts: [], candidate_sha: null, has_mutation: false }),
+  } as const
+  assert.equal(resolveAcceptedReadOnlyTerminal(decision), false,
+    'a green tool row without the executed point is not behavior evidence')
+  const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '0' }
+  delete env.NODE_TEST_CONTEXT
+  const child = spawnSync(process.execPath, ['--test', 'test/parser.test.mjs'], {
+    cwd: root, encoding: 'utf8', timeout: 20_000, env,
+  })
+  assert.ifError(child.error)
+  assert.equal(child.status, 0, child.stderr)
+  const point = acceptanceCriterionPoint(goal)
+  assert.ok(point)
+  const witness = pointVerifierWitness(root, VERIFIER, point, {})
+  assert.ok(witness)
+  assert.ok(nodePointExecuted(child.stdout, witness), child.stdout)
+  const owner = chatVerifierOwner({ projectRoot: root, sessionId: runId, taskId: contract.task_id, contractHash: contract.contract_hash })
+  assert.ok(owner)
+  const receipt = await captureChatVerifierReceipt({
+    projectRoot: root, command: VERIFIER, exitCode: 0, summary: 'parseSum passed',
+    stdout: child.stdout, mutationPaths: [], allowRepositoryScopeForGreenNoChange: true,
+    executionContext: chatVerifierRequirements(owner, [VERIFIER], GOAL, root)[0]!.executionContext,
+    execution: { working_directory: '.', environment_policy: 'host-process', target: witness.target },
+  })
+  assert.ok(receipt)
+  receipt.order = { sessionId: runId, seq: 1 }
+  const allowed = resolveAcceptedReadOnlyTerminal({
+    ...decision,
+    buildCriterionRefresh: () => ({ criterionChatReceipts: [receipt], candidate_sha: null, has_mutation: false }),
   })
   assert.equal(allowed, true,
     'the goal is command-bound and the exact frozen command ran green on the inspected tree')
@@ -311,7 +344,7 @@ test('TF-16 journey: unverified patch names the missing evidence and a next acti
     o.outcome === 'UNVERIFIED_PATCH' || o.outcome === 'BLOCKED_POLICY',
     `correct patch without adequate witness stays visible and non-certified (got ${o.outcome})`,
   )
-  assert.match(o.answer, /Fix parser\.js so parseSum\(2, 3\) returns 5\./,
+  assert.match(o.answer, /Fix src\/parser\.js so parseSum\(2, 3\) returns 5\./,
     'the unverified report names the requirement that remains open')
   assert.match(o.answer, /required evidence:/,
     'the unverified report says which evidence would complete certification')

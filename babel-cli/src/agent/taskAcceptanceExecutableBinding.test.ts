@@ -75,6 +75,7 @@ test('a numeric point binds only to an exact assertion in the admitted Node test
     body,
   ].join('\n')
   const checks = [
+    ['quoted entry', 'node --test "discount check.test.mjs"', `test("point", () => ${assertPoint})`, true],
     ['direct', 'node --test discount.test.mjs', `test("point", () => ${assertPoint})`, true],
     ['wrong argument', 'node --test discount.test.mjs', 'test("other", () => assert.equal(discount(101), 10))', false],
     ['wrong expected type', 'node --test discount.test.mjs', 'test("other", () => assert.equal(discount(100), "10"))', false],
@@ -91,7 +92,8 @@ test('a numeric point binds only to an exact assertion in the admitted Node test
   writeFileSync(join(root, 'other.test.mjs'), 'import test from "node:test"; test("other", () => {});\n')
   for (const [label, script, body, binds] of checks) {
     writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: script } }))
-    writeFileSync(join(root, 'discount.test.mjs'), testFile(body))
+    const inputFile = label === 'quoted entry' ? 'discount check.test.mjs' : 'discount.test.mjs'
+    writeFileSync(join(root, inputFile), testFile(body))
     for (const goal of [
       'Fix computeDiscount so it returns 10 for a total of 100.',
       'We need computeDiscount to return 10 for a total of 100.',
@@ -110,10 +112,11 @@ test('a numeric point binds only to an exact assertion in the admitted Node test
       assert.equal(behavior.verification.executable_id, binds ? 'npm' : undefined, label)
       assert.equal(command?.verification.executable_id, 'npm', label)
       if (binds) {
-        assert.ok(taskContract.protected_paths.includes('discount.test.mjs'))
+        assert.ok(taskContract.protected_paths.includes(inputFile))
         assert.ok(behavior.verification.target?.startsWith(POINT_TARGET_PREFIX))
       }
     }
+    if (label === 'quoted entry') rmSync(join(root, inputFile))
   }
 
   const goal = 'We need computeDiscount to return 10 for a total of 100.'

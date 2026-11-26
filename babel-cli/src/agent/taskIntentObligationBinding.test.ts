@@ -14,7 +14,8 @@ import {
   contractVerifierCommands,
   seedChatVerifierDependencyHashes,
 } from './verifierDependencyAdmission.js'
-import { contractMeaningVerifierCommands } from './taskAcceptanceExecutableBinding.js'
+import { bindExecutableVerifiersToTaskAcceptance, contractMeaningVerifierCommands } from './taskAcceptanceExecutableBinding.js'
+import { inferTaskAcceptanceForVersion } from './taskAcceptanceMeaning.js'
 import { chatReceiptMatchesRequirement } from '../authority/criterionVerifierDispatch.js'
 
 function parserProject(input: {
@@ -57,7 +58,15 @@ const UNRELATED_TEST = [
   'test("unrelated", () => assert.equal(2 + 2, 4));',
 ].join('\n') + '\n'
 
-const TASK = 'Fix parser.js so parseSum(2, 3) returns 5.'
+const TASK = 'Fix src/parser.js so parseSum(2, 3) returns 5.'
+
+function legacyGoal(projectRoot: string, task = TASK) {
+  return bindExecutableVerifiersToTaskAcceptance({
+    meaning: inferTaskAcceptanceForVersion(task, 5),
+    trustedVerifierCommands: ['npm test'],
+    projectRoot,
+  }).criteria.find(item => item.description === task)
+}
 
 test('TF-03: a relevant frozen project verifier binds the inferred behavioral goal', t => {
   const root = parserProject({ testFile: 'parser.test.mjs', testSource: RELEVANT_TEST })
@@ -71,6 +80,7 @@ test('TF-03: a relevant frozen project verifier binds the inferred behavioral go
   const goal = contract.acceptance.find(item => item.description === TASK)
   assert.ok(goal)
   assert.equal(goal.verification.verifier_id, 'verifier:npm')
+  assert.ok(goal.verification.target)
   assert.deepEqual(goal.verification.argv, ['test'])
   assert.equal(goal.type, 'unit_test')
   assert.ok(contract.protected_paths.includes('test/parser.test.mjs'),
@@ -186,8 +196,10 @@ test('TF-03 dispatch: only the bound command receipt covers the inferred goal', 
     working_directory: '.',
     environment_policy: 'host-process',
   }
-  assert.equal(chatReceiptMatchesRequirement(receipt, goal), true,
-    'a current green run of the relevance-bound command proves the goal')
+  assert.equal(chatReceiptMatchesRequirement(receipt, goal), false,
+    'the exact command without the executed case cannot prove the goal')
+  assert.equal(chatReceiptMatchesRequirement({ ...receipt, target: goal.verification.target! }, goal), true,
+    'a green run with the expected case identity covers the goal')
   const unrelated = {
     ...receipt,
     verifierId: 'verifier:node',
@@ -372,7 +384,7 @@ test('P1 dead guard: a falsy literal block is not assertion evidence', t => {
   }
 })
 
-test('P1 over-tightening: const and computed expected values still bind', t => {
+test('V5 recognizes const and computed values; V6 requires the direct case', t => {
   const sources = [
     [
       'import assert from "node:assert/strict";',
@@ -396,7 +408,8 @@ test('P1 over-tightening: const and computed expected values still bind', t => {
     const goal = resolveLiveSessionAuthority({
       mode: 'chat', task: TASK, projectRoot: root, projectTestCommands: ['npm test'],
     }).taskContract.acceptance.find(item => item.description === TASK)
-    assert.equal(goal?.verification.verifier_id, 'verifier:npm', `literal idiom ${index}`)
+    assert.ok(goal?.verification.verifier_id.startsWith('meaning:'), `V6 literal idiom ${index}`)
+    assert.equal(legacyGoal(root)?.verification.verifier_id, 'verifier:npm', `V5 literal idiom ${index}`)
   }
 })
 
@@ -421,7 +434,7 @@ test('P1 let reassignment is not resolved as a const literal', t => {
     'a mutable let must stay unbound rather than resolve its stale declaration')
 })
 
-test('P2 live synchronous iteration callbacks still bind', t => {
+test('V5 binds live synchronous callbacks; V6 requires a direct assertion', t => {
   for (const method of ['forEach', 'map', 'filter']) {
     const root = parserProject({
       testFile: 'parser.test.mjs',
@@ -439,7 +452,8 @@ test('P2 live synchronous iteration callbacks still bind', t => {
     const goal = resolveLiveSessionAuthority({
       mode: 'chat', task: TASK, projectRoot: root, projectTestCommands: ['npm test'],
     }).taskContract.acceptance.find(item => item.description === TASK)
-    assert.equal(goal?.verification.verifier_id, 'verifier:npm', method)
+    assert.ok(goal?.verification.verifier_id.startsWith('meaning:'), method)
+    assert.equal(legacyGoal(root)?.verification.verifier_id, 'verifier:npm', method)
   }
 })
 
@@ -485,7 +499,7 @@ test('P2 no-call goal requires the target module symbol in the assertion', t => 
     'an unrelated value equal to the fragment cannot bind a no-call goal')
 })
 
-test('P2 scope-aware consts resolve transitive and do not leak across tests', t => {
+test('V5 scope-aware consts resolve transitively and do not leak across tests', t => {
   const transitive = parserProject({
     testFile: 'parser.test.mjs',
     testSource: [
@@ -501,9 +515,7 @@ test('P2 scope-aware consts resolve transitive and do not leak across tests', t 
     ].join('\n'),
   })
   t.after(() => rmSync(transitive, { recursive: true, force: true }))
-  const bound = resolveLiveSessionAuthority({
-    mode: 'chat', task: TASK, projectRoot: transitive, projectTestCommands: ['npm test'],
-  }).taskContract.acceptance.find(item => item.description === TASK)
+  const bound = legacyGoal(transitive)
   assert.equal(bound?.verification.verifier_id, 'verifier:npm')
 
   const shadowed = parserProject({
@@ -524,9 +536,7 @@ test('P2 scope-aware consts resolve transitive and do not leak across tests', t 
     ].join('\n'),
   })
   t.after(() => rmSync(shadowed, { recursive: true, force: true }))
-  const unbound = resolveLiveSessionAuthority({
-    mode: 'chat', task: TASK, projectRoot: shadowed, projectTestCommands: ['npm test'],
-  }).taskContract.acceptance.find(item => item.description === TASK)
+  const unbound = legacyGoal(shadowed)
   assert.ok(unbound?.verification.verifier_id.startsWith('meaning:'),
     'a later test const cannot rewrite an earlier assertion operand')
 })
@@ -577,8 +587,8 @@ test('P1 shadowing: a local let/var drops the outer const binding', t => {
   }
 })
 
-test('P1 shadowing: a local const honestly overrides the outer const', t => {
-  const goalLine = 'Fix parser.js so parseSum(2, 3) returns 6.'
+test('V5 shadowing: a local const overrides the outer const', t => {
+  const goalLine = 'Fix src/parser.js so parseSum(2, 3) returns 6.'
   const root = parserProject({
     testFile: 'parser.test.mjs',
     testSource: [
@@ -594,13 +604,11 @@ test('P1 shadowing: a local const honestly overrides the outer const', t => {
     ].join('\n'),
   })
   t.after(() => rmSync(root, { recursive: true, force: true }))
-  const goal = resolveLiveSessionAuthority({
-    mode: 'chat', task: goalLine, projectRoot: root, projectTestCommands: ['npm test'],
-  }).taskContract.acceptance.find(item => item.description === goalLine)
+  const goal = legacyGoal(root, goalLine)
   assert.equal(goal?.verification.verifier_id, 'verifier:npm')
 })
 
-test('P2 top-level const declared after the test is visible', t => {
+test('V5 resolves a top-level const declared after the test', t => {
   const root = parserProject({
     testFile: 'parser.test.mjs',
     testSource: [
@@ -613,9 +621,7 @@ test('P2 top-level const declared after the test is visible', t => {
     ].join('\n'),
   })
   t.after(() => rmSync(root, { recursive: true, force: true }))
-  const goal = resolveLiveSessionAuthority({
-    mode: 'chat', task: TASK, projectRoot: root, projectTestCommands: ['npm test'],
-  }).taskContract.acceptance.find(item => item.description === TASK)
+  const goal = legacyGoal(root)
   assert.equal(goal?.verification.verifier_id, 'verifier:npm')
 })
 
