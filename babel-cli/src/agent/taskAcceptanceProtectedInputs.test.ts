@@ -13,6 +13,7 @@ import {
   type ProtectedInputFs,
 } from './taskAcceptanceProtectedInputs.js';
 import { resolveExistingVerifierInputPaths } from './verifierInputPaths.js';
+import { computeVerifierDependencyHashes } from './verifierIntegrity.js';
 import { inferTaskAcceptance, inferTaskAcceptanceV3 } from './taskAcceptanceMeaning.js';
 import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js';
 
@@ -265,6 +266,19 @@ test('live admission binds only a pre-existing exact Node test file, never a tas
   const missingCriterion = missing.acceptance.find(item => item.description.includes('verified by'));
   assert.ok(missingCriterion?.verification.verifier_id.startsWith('meaning:'));
   assert.equal(missing.protected_paths.includes('test/parser.test.mjs'), false);
+});
+
+test('a quoted npm test file has a content hash at verifier admission', t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-quoted-npm-verifier-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const path = 'test files/parser.test.mjs';
+  mkdirSync(join(root, 'test files'));
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: `node --test "${path}"` } }));
+  writeFileSync(join(root, path), 'export const fixture = 1;\n');
+  const before = computeVerifierDependencyHashes(root, ['npm test']);
+  assert.match(before[path] ?? '', /^[0-9a-f]{64}$/);
+  writeFileSync(join(root, path), 'export const fixture = 2;\n');
+  assert.notEqual(computeVerifierDependencyHashes(root, ['npm test'])[path], before[path]);
 });
 
 test('canonical verifier-input aliases are protected and out-of-root symlinks are excluded', async () => {

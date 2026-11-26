@@ -765,6 +765,10 @@ async *executeWithToolsStream(
         streamState.finishReason = disposition.finishReason;
       } else {
         signal?.throwIfAborted();
+        if (!partialModelOutput && !streamState.observedModelId &&
+            !streamState.upstreamProvider && !streamState.routerMetadata) {
+          throw new Error(`[${this.providerId}] stream closed before terminal [DONE] marker`);
+        }
       }
       // Preserve route attribution even at premature EOF, before reporting a transport failure.
       try {

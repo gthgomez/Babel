@@ -481,6 +481,12 @@ function observationRefKey(observationId: string): string {
   return join('refs', hex.slice(0, 2), `${hex}.json`);
 }
 
+/** An existing capture can identify a revoked observation without reading its bytes. */
+export function hasStoredObservationReference(storageRoot: string, observationId: string): boolean {
+  if (!/^obs:[0-9a-f]{64}$/.test(observationId)) return false;
+  return existsSync(join(storageRoot, observationRefKey(observationId)));
+}
+
 const COMPLETENESS_RANK: Record<ObservationCompletenessV1, number> = {
   unknown: 0,
   decoded_upstream: 1,

@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import {
   captureApprovedObservation,
   deriveObservationId,
+  hasStoredObservationReference,
   resolveObservation,
   type ObservationRefV1,
 } from '../evidence/observationStore.js';
@@ -418,6 +419,13 @@ export class ChatEngineP11Authority {
       compiled_request_identity: PENDING_COMPILED_REQUEST_IDENTITY,
     });
     if (!sources) return null;
+    const membership = this.host.parity.authorizedObservationIds;
+    const manifest = sources.observation_manifest ?? [];
+    if (!membership || manifest.length !== membership.size ||
+        manifest.some(ref => !membership.has(ref.observation_id))) {
+      this.noteP11InstallBlock('prepare_blocked', ['observation_manifest_incomplete']);
+      return false;
+    }
     const prepared = prepareConversationCheckpoint(this.p11CheckpointPreparationInput(owner, sources));
     return prepared.status === 'prepared' ? prepared : null;
   }
@@ -804,6 +812,27 @@ export class ChatEngineP11Authority {
     );
   }
 
+  private hasRevokedSettledObservation(sessionDir: string, membership: ReadonlySet<string>): boolean {
+    const taskId = this.host.parity.liveAuthority?.taskContract.task_id;
+    if (!taskId) return false;
+    const events = this.host.parity.sessionEvents.events;
+    const turns = new Set(events.flatMap(event =>
+      event.kind === 'user_submitted' && event.task_id === taskId ? [event.turn_id] : [],
+    ));
+    return events.some(event => {
+      if ((event.kind !== 'tool_completed' && event.kind !== 'tool_failed') ||
+          !turns.has(event.turn_id) || event.preDispatchNoEffect === true) return false;
+      const id = deriveObservationId({
+        run_id: this.host.engineRunId,
+        task_id: taskId,
+        turn_id: event.turn_id,
+        operation_id: event.idempotency_key,
+        attempt_id: event.idempotency_key,
+      });
+      return !membership.has(id) && hasStoredObservationReference(join(sessionDir, 'observations'), id);
+    });
+  }
+
   /**
    * Authoritative context-authority hydration — the single path used by every
    * resume/construction entrypoint. Loads `context-checkpoint.json`, requires
@@ -845,13 +874,17 @@ export class ChatEngineP11Authority {
           validCheckpoint = checkpoint;
         } else {
           issues.push(coldResume.reasons.join("; "));
-          membershipRevoked = coldResume.reasons.includes('observation_membership_unavailable');
+          const activeTask = this.host.parity.liveAuthority?.taskContract.task_id;
+          membershipRevoked = coldResume.reasons.includes('observation_membership_unavailable') &&
+            Array.isArray(checkpoint.observation_manifest) &&
+            checkpoint.observation_manifest.some(ref =>
+              ref?.invocation?.task_id === activeTask && !membership?.has(ref.observation_id));
         }
       }
     } catch (err) {
       issues.push(err instanceof Error ? err.message : String(err));
     }
-    if (!membership || membershipRevoked) {
+    if (!membership || membershipRevoked || this.hasRevokedSettledObservation(sessionDir, membership)) {
       this.host.p11ObservationCaptureIssues = ['observation_membership_unavailable'];
       return { applied: false, issues: [...issues, ...this.host.p11ObservationCaptureIssues] };
     }
@@ -863,20 +896,24 @@ export class ChatEngineP11Authority {
     const recoveryIssues: string[] = [];
     const recovered: ObservationRefV1[] = [];
     for (const observationId of authorizedObservationIds) {
-      const resolved = resolveObservation(observationId, {
-        principal_id: "agent:main",
-        authorized_observation_ids: authorizedObservationIds,
-      }, {
-        storage_root: join(sessionDir, "observations"),
-        clock: () => new Date().toISOString(),
-        policy: { durability: "none" },
-      });
-      if (resolved.status !== 'resolved') {
-        recoveryIssues.push(`observation ${observationId} unavailable: ${resolved.reason}`);
-      } else if (!checkpointIds.has(observationId) && !this.isSettledObservationFromCurrentTask(resolved.observation)) {
-        recoveryIssues.push(`observation ${observationId} has no matching durable tool settlement in the current task`);
-      } else {
-        recovered.push(resolved.observation);
+      try {
+        const resolved = resolveObservation(observationId, {
+          principal_id: "agent:main",
+          authorized_observation_ids: authorizedObservationIds,
+        }, {
+          storage_root: join(sessionDir, "observations"),
+          clock: () => new Date().toISOString(),
+          policy: { durability: "none" },
+        });
+        if (resolved.status !== 'resolved') {
+          recoveryIssues.push(`observation ${observationId} unavailable: ${resolved.reason}`);
+        } else if (!checkpointIds.has(observationId) && !this.isSettledObservationFromCurrentTask(resolved.observation)) {
+          recoveryIssues.push(`observation ${observationId} has no matching durable tool settlement in the current task`);
+        } else {
+          recovered.push(resolved.observation);
+        }
+      } catch {
+        recoveryIssues.push(`observation ${observationId} has an invalid durable reference`);
       }
     }
     if (recoveryIssues.length > 0) {

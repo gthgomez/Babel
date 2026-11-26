@@ -328,7 +328,8 @@ test('a command with unknown physical settlement remains indeterminate in the du
 
 async function checkColdContinuation(
   t: TestContext,
-  scenario: 'intact' | 'corrupt' | 'compacted' | 'missing-membership' | 'invalid-membership' | 'revoked-after-restore',
+  scenario: 'intact' | 'corrupt' | 'corrupt-exhausted' | 'compacted' | 'missing-membership' |
+    'invalid-membership' | 'revoked-before-restore' | 'revoked-after-restore',
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), 'babel-p11-cold-observation-'))
   const projectRoot = join(root, 'workspace')
@@ -348,7 +349,8 @@ async function checkColdContinuation(
   })
   assert.ok(opened.ok)
   const task = 'Inspect source.txt and report the widget count without changing the file.'
-  const options = { projectRoot, task, model: 'deepseek-v4-flash', maxTurns: 4, admissionStore: opened.store }
+  const options = { projectRoot, task, model: 'deepseek-v4-flash',
+    maxTurns: scenario === 'corrupt-exhausted' ? 1 : 4, admissionStore: opened.store }
   const runId = 'cold-tail-observation'
   const original = new ChatEngine({ ...options, runId })
   let continuedCalls = 0
@@ -406,7 +408,12 @@ async function checkColdContinuation(
   const snapshotPath = join(sessionDir, LIVE_SESSION_SNAPSHOT_FILENAME)
   if (scenario === 'missing-membership') rmSync(snapshotPath)
   if (scenario === 'invalid-membership') writeFileSync(snapshotPath, '{')
-  if (scenario === 'corrupt') {
+  if (scenario === 'revoked-before-restore') {
+    const snapshot = loadLiveSessionSnapshot(sessionDir)
+    assert.ok(snapshot)
+    persistLiveSessionSnapshot(sessionDir, { ...snapshot, authorized_observation_ids: [] })
+  }
+  if (scenario === 'corrupt' || scenario === 'corrupt-exhausted') {
     const observationDir = join(sessionDir, 'observations')
     const ref = resolveObservation(membership[0]!, {
       principal_id: 'agent:main',
@@ -422,7 +429,9 @@ async function checkColdContinuation(
     assert.deepEqual(hydrated.issues, ['observation_manifest_incomplete'])
   }
   if (scenario === 'compacted') assert.match(hydrated.issues.join('; '), /lineage_superseded/)
-  if (scenario === 'corrupt') assert.match(hydrated.issues.join('; '), /payload object (?:hash|size) mismatch/)
+  if (scenario === 'corrupt' || scenario === 'corrupt-exhausted') {
+    assert.match(hydrated.issues.join('; '), /payload object (?:hash|size) mismatch/)
+  }
   if (scenario === 'revoked-after-restore') {
     const snapshot = loadLiveSessionSnapshot(sessionDir)
     assert.ok(snapshot)
@@ -435,7 +444,10 @@ async function checkColdContinuation(
       yield { type: 'text_delta', text: 'The fixture contains 17 widgets.' }
       yield { type: 'done', finishReason: 'stop' }
     } },
-    synthesisRunner: runner,
+    synthesisRunner: { ...runner,
+      execute: async () => { continuedCalls++; return runner.execute() },
+      executeRaw: async () => { continuedCalls++; return runner.executeRaw() },
+    },
     shouldUseNativeTools: () => true,
   })
   const result = await resumed.submitMessage('  continue  ', {})
@@ -457,7 +469,7 @@ async function checkColdContinuation(
   }
   if (scenario === 'missing-membership') assert.equal(fs.existsSync(snapshotPath), false)
   if (scenario === 'invalid-membership') assert.equal(readFileSync(snapshotPath, 'utf8'), '{')
-  if (scenario === 'revoked-after-restore') {
+  if (scenario === 'revoked-before-restore' || scenario === 'revoked-after-restore') {
     assert.deepEqual(loadLiveSessionSnapshot(sessionDir)?.authorized_observation_ids, [])
   }
   assert.equal(resumed.getParityRuntime().liveAuthority?.taskContract.task_id, originalTask)
@@ -470,6 +482,8 @@ test('cold continuation recovers a settled observation from an intact payload',
   t => checkColdContinuation(t, 'intact'))
 test('cold continuation blocks before dispatch if the settled observation payload is corrupt',
   t => checkColdContinuation(t, 'corrupt'))
+test('cold continuation with no remaining turns does not synthesize from a corrupt observation',
+  t => checkColdContinuation(t, 'corrupt-exhausted'))
 test('cold continuation recovers settled observations after compaction supersedes the checkpoint',
   t => checkColdContinuation(t, 'compacted'))
 test('cold continuation does not rewrite missing observation membership as empty',
@@ -478,3 +492,5 @@ test('cold continuation does not rewrite corrupt observation membership as empty
   t => checkColdContinuation(t, 'invalid-membership'))
 test('retained admission does not restore membership revoked after hydration',
   t => checkColdContinuation(t, 'revoked-after-restore'))
+test('cold continuation refuses replay of a settled capture revoked before hydration',
+  t => checkColdContinuation(t, 'revoked-before-restore'))
