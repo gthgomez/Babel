@@ -299,7 +299,7 @@ function preserveBehavioralGoal(
       if (labeled || currentGoal || OPERATIVE_GOAL_LINE.test(line)) {
         const original = labeled?.text ?? line.trim()
         const text = includeDeclarative ? withoutPointImplementationFraming(original) : original
-        if (!seenCandidate.has(text)) {
+        if ((!includeDeclarative || text.length <= MAX_CRITERION_CHARS) && !seenCandidate.has(text)) {
           seenCandidate.add(text)
           candidates.push({ text, start: offset, end: offset + line.length, labeled: labeled !== undefined })
         }
@@ -517,6 +517,11 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions, v4?: V
       const inline = line.match(/^\s{0,3}(?:acceptance criteria|requirements?)\s*:\s*(.+?)\s*$/i)
       if (inline) { requirementRegion = true; if (opts.version === 2) activeProse.push(line.trim()); add(inline[1]!, 'explicit', start, end); continue }
       const trimmedLine = line.trim()
+      if (v4?.includeDeclarative && trimmedLine.length > MAX_CRITERION_CHARS &&
+        (opening?.start === start || isCurrentBehavioralGoal(trimmedLine))) {
+        incomplete = true
+        continue
+      }
       const lineIndent = line.match(/^( *)/)?.[1]?.length ?? 0
       const indentedCodeLine = lineIndent >= 4 || /^ {0,3}\t/.test(line)
       const listContinuation =
@@ -662,7 +667,9 @@ function inferTaskAcceptanceWithBehavioralGoals(request: string, version: 3 | 4 
       ref: record.ref.startsWith(v2Prefix) ? record.ref.replace(v2Prefix, `${meaningRef}:`) : record.ref,
     })),
   }
-  return preserveBehavioralGoal(versioned, request, meaningRef, includeArithmetic, v4?.opening)
+  return includeDeclarative && request.length > MAX_INPUT_CHARS
+    ? versioned
+    : preserveBehavioralGoal(versioned, request, meaningRef, includeArithmetic, v4?.opening)
 }
 
 /** Frozen v3 replay preserves the original behavioral-goal interpretation. */

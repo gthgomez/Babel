@@ -92,6 +92,7 @@ test('a numeric point binds only to an exact assertion in the admitted Node test
       'Fix computeDiscount so it returns 10 for a total of 100.',
       'We need computeDiscount to return 10 for a total of 100.',
       'We need computeDiscount to return 10 for a total of 100. Implement this change.',
+      'Goal: We need the `computeDiscount` function to return 10 when the total is 100.',
     ]) {
       const task = `${goal}\nRequirements:\n- npm test must pass.`
       const { taskContract } = resolveLiveSessionAuthority({
