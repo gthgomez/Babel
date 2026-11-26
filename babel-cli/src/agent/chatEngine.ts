@@ -2914,10 +2914,11 @@ export class ChatEngine {
       budgetUsd: Number.isFinite(this.limits.maxCostUsd) ? this.limits.maxCostUsd : 'unlimited' };
   }
 
-  getProviderConversation(): ProviderMessage[] {
+  getProviderConversation(systemPrompt?: string): ProviderMessage[] {
     return this.services.conversation.rebuildProviderMessages(
       this.parity.eventLog,
       {
+        ...(systemPrompt === undefined ? {} : { systemPrompt }),
         ...(this.parity.contextCheckpoint || this.parity.admissionStore
           ? { installedContextCheckpoint: this.parity.contextCheckpoint ?? null }
           : {}),

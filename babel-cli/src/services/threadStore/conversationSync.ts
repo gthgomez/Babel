@@ -7,6 +7,7 @@ import type { ChatMessage } from '../../agent/chatToolDefinitions.js';
 import { ChatEngine, type ChatEngineOptions } from '../../agent/chatEngine.js';
 import type { ProviderMessage } from '../../runners/base.js';
 import { providerMessagesToChatMessages } from '../../agent/providerMessagesToChatMessages.js';
+import { resumedToolRecoveryGuidance } from '../../agent/sessionEvents.js';
 export { providerMessagesToChatMessages } from '../../agent/providerMessagesToChatMessages.js';
 import {
   rebuildProviderMessagesFromEvents,
@@ -49,12 +50,25 @@ export function applyEventLogToChatEngine(
   options: { systemPrompt?: string } = {},
 ): ProviderMessage[] {
   engine.restoreEventLog(log);
-  const providerMessages = rebuildProviderMessagesFromEvents(log, {
-    ...(options.systemPrompt !== undefined
-      ? { systemPrompt: options.systemPrompt }
-      : {}),
-  });
-  engine.replaceConversation(providerMessagesToChatMessages(providerMessages));
+  return syncRestoredEventLogConversation(engine, log, options);
+}
+
+/** Mirror the authoritative event projection after retained authority is hydrated. */
+export function syncRestoredEventLogConversation(
+  engine: ChatEngine,
+  log: ThreadEventLog,
+  options: { systemPrompt?: string } = {},
+): ProviderMessage[] {
+  const providerMessages = typeof engine.getProviderConversation === 'function'
+    ? engine.getProviderConversation(options.systemPrompt)
+    : rebuildProviderMessagesFromEvents(log, options);
+  const conversation = providerMessagesToChatMessages(providerMessages);
+  const sessionEvents = engine.getParityRuntime?.()?.sessionEvents;
+  const guidance = sessionEvents && resumedToolRecoveryGuidance(sessionEvents);
+  if (guidance && !conversation.some(message => message.content === guidance)) {
+    conversation.push({ role: 'system', content: guidance });
+  }
+  engine.replaceConversation(conversation);
   if (typeof engine.replaceProviderConversation === 'function') {
     engine.replaceProviderConversation(providerMessages);
   }
@@ -126,9 +140,6 @@ export function createEngineFromEventLog(
   systemPrompt?: string,
 ): ChatEngine {
   const engine = constructResumedEngine(log.thread_id,options);
-  applyEventLogToChatEngine(engine, log, {
-    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-  });
   engine.restoreEventLog(log);
   // R1: load durable observation membership before session-event restore, which
   // re-persists the snapshot from `parity.authorizedObservationIds`.
@@ -138,5 +149,6 @@ export function createEngineFromEventLog(
   // R1: the primary resume path must run the same context-authority hydration
   // as `ChatEngine.restore`, not silently skip checkpoint validation.
   engine.hydrateInstalledContextAuthority();
+  syncRestoredEventLogConversation(engine, log, systemPrompt === undefined ? {} : { systemPrompt });
   return engine;
 }

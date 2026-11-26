@@ -487,7 +487,7 @@ export function rebuildProviderMessagesFromEvents(
   // New logs carry the summary as a sibling advisory event. Legacy logs may
   // contain the old combined marker; split it into assistant context so old
   // model text is never re-promoted to system authority on resume.
-  const summaryEvent = options.installedContextCheckpoint === null ? undefined : events
+  const summaryEvent = lastCapsuleIdx < 0 && options.installedContextCheckpoint !== undefined ? undefined : events
     .slice(lastCapsuleIdx + 1)
     .find((event): event is Extract<ThreadEvent, { kind: 'compaction_summary' }> =>
       event.kind === 'compaction_summary' &&

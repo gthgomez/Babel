@@ -36,8 +36,10 @@ import { join } from 'node:path';
 import { ChatEngine, type ChatEngineOptions } from '../../agent/chatEngine.js';
 import {
   THREAD_EVENT_LOG_FILENAME,
+  appendThreadEvent,
   createThreadEventLog,
   endTurn,
+  loadThreadEventLogFromDir,
   recordAssistantToolCalls,
   recordToolResult,
   serializeThreadEventLog,
@@ -481,6 +483,27 @@ test('control 2+3: protocol restore restores membership and consumes the install
     const contractHash = loadLiveSessionAuthorityStrict(sessionDir).taskContract.contract_hash;
     writeCheckpointFixture(threadId, owner, [observation.ref], contractHash);
 
+    const log = loadThreadEventLogFromDir(sessionDir);
+    assert.ok(log);
+    const turn = log.events.find(event => event.kind === 'turn_started');
+    assert.ok(turn?.ownership_generation);
+    appendThreadEvent(log, {
+      kind: 'compaction_capsule',
+      turn_id: turn.turn_id,
+      content: 'uncommitted protocol capsule',
+      preserved_tool_call_ids: [],
+      ownership_generation: turn.ownership_generation,
+    });
+    appendThreadEvent(log, {
+      kind: 'compaction_summary',
+      turn_id: turn.turn_id,
+      content: 'uncommitted protocol summary',
+      provenance: 'model',
+      authoritative: false,
+      ownership_generation: turn.ownership_generation,
+    });
+    writeFileSync(join(sessionDir, THREAD_EVENT_LOG_FILENAME), serializeThreadEventLog(log));
+
     const host = makeHost();
     hosts.push(host);
     const submitted = await submitTurn(host, threadId, 'resume and consume the checkpoint');
@@ -499,6 +522,10 @@ test('control 2+3: protocol restore restores membership and consumes the install
       'durable observation membership restored before session-event restore',
     );
     assert.ok(parity.sessionEvents.events.length === 3, 'session events restored alongside authority');
+    const conversation = engine.getConversation();
+    assert.ok(conversation.some(message => message.content.includes('protocol-sentinel')));
+    assert.ok(!conversation.some(message => message.content.includes('uncommitted protocol')));
+    assert.ok(!engine.getProviderConversation().some(message => message.name === 'compaction_summary'));
 
     // Independent revalidation through the same seam agrees: applies cleanly.
     const recheck = engine.hydrateInstalledContextAuthority();
