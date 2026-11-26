@@ -71,7 +71,8 @@ export function verifierCommandInputFiles(
     if (typeof script !== 'string' || script.trim().length === 0) return []
     const files = new Set<string>()
     if (merged.exists(join(projectRoot, PACKAGE_JSON))) files.add(PACKAGE_JSON)
-    const tokens = explicitNodeTestFileArgs(script) ??
+    const nodeTestOperands = explicitNodeTestFileArgs(script)
+    const tokens = nodeTestOperands?.length ? nodeTestOperands :
       [...script.matchAll(TEST_FILE_TOKEN_RE)].map(match => match[0])
     for (const path of resolveInputs(projectRoot, tokens, merged)) files.add(path)
     return [...files].sort()

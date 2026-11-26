@@ -14,6 +14,7 @@ import {
 } from './taskAcceptanceProtectedInputs.js';
 import { resolveExistingVerifierInputPaths } from './verifierInputPaths.js';
 import { computeVerifierDependencyHashes } from './verifierIntegrity.js';
+import { verifierCommandInputFiles } from './verifierCommandInputs.js';
 import { inferTaskAcceptance, inferTaskAcceptanceV3 } from './taskAcceptanceMeaning.js';
 import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js';
 
@@ -283,6 +284,7 @@ test('a quoted npm test file has a content hash at verifier admission', t => {
   // Preserve hash coverage for legacy scripts which cannot supply a point witness.
   writeFileSync(join(root, 'flat.test.mjs'), 'export const fixture = 1;\n');
   writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node --test --test-update-snapshots flat.test.mjs' } }));
+  assert.deepEqual(verifierCommandInputFiles(root, 'npm test'), ['flat.test.mjs', 'package.json']);
   assert.match(computeVerifierDependencyHashes(root, ['npm test'])['flat.test.mjs'] ?? '', /^[0-9a-f]{64}$/);
 });
 

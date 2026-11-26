@@ -24,7 +24,7 @@ import {
   inspectThreadRepoIdentityOnHydration,
   RepoIdentityMismatchError,
 } from '../../services/threadStore/sessionHydration.js';
-import { constructResumedEngine } from '../../services/threadStore/conversationSync.js';
+import { restoreEngineWithRetainedAuthority } from '../../services/threadStore/conversationSync.js';
 import {
   commandCodeNativeOwnershipViolation,
   openCodeNativeOwnershipViolation,
@@ -264,7 +264,10 @@ function defaultEngineFactory(descriptor: SessionDescriptor, retained = false): 
     ...(prepared.model !== 'default' ? { model: prepared.model } : {}),
     ...(prepared.provider !== 'default' ? { provider: prepared.provider } : {}),
   };
-  if (retained) return constructResumedEngine(descriptor.threadId, options);
+  if (retained) {
+    const resumed = restoreEngineWithRetainedAuthority(descriptor.threadId, options);
+    if (resumed) return resumed;
+  }
   const engine = new ChatEngine({
     ...options,
     executionProfile: modeExecutionProfile(prepared.mode),

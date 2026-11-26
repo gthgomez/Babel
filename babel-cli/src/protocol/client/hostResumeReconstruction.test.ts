@@ -54,6 +54,7 @@ import {
 import { LIVE_SESSION_SNAPSHOT_FILENAME, TASK_CONTRACT_FILENAME } from '../../agent/liveSessionBridge.js';
 import { chatSessionDir } from '../../cli/runsLayout.js';
 import { inspectSessionRestoreState } from '../../services/threadStore/sessionHydration.js';
+import { appendTurnCells } from '../../services/threadStore/threadStore.js';
 import {
   captureApprovedObservation,
   type ObservationRefV1,
@@ -64,6 +65,7 @@ import {
   type LiveOperationalSourcesV1,
 } from '../../runtime/contextCheckpoints.js';
 import { getOpenAdmissionStoreCount } from '../../runtime/admissionTestHooks.js';
+import { RUNTIME_COORDINATOR_ENV } from '../../runtime/coordinator.js';
 import {
   closeProtocolHostState,
   createProtocolHostState,
@@ -157,9 +159,11 @@ async function submitTurn(
 test('default protocol materialization preserves an existing objective before replay', async t => {
   const fixture = withTempRunsDir();
   const host = createProtocolHostState({ executeWithoutNotifications: true });
-  host.runCanonicalChatTurn = async ({ emit }) => emit({ type: 'done', answer: 'Fixture', usage: {
-    totalCostUSD: 0, totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0, modelBreakdown: {},
-  } });
+  host.coordinator.submit = async function* () {
+    yield { type: 'done', answer: 'Fixture', usage: {
+      totalCostUSD: 0, totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0, modelBreakdown: {},
+    } };
+  };
   const settings = {
     BABEL_STATE_DIR: join(fixture.root, 'state'),
     BABEL_CONFIG_DIR: join(fixture.root, 'config'),
@@ -167,6 +171,7 @@ test('default protocol materialization preserves an existing objective before re
     BABEL_PROVIDER: 'openrouter',
     BABEL_OFFLINE: undefined,
     BABEL_CONNECTION: undefined,
+    [RUNTIME_COORDINATOR_ENV]: 'on',
   };
   const previousSettings = Object.entries(settings).map(([key, value]) => {
     const previous = process.env[key];
@@ -198,6 +203,23 @@ test('default protocol materialization preserves an existing objective before re
   assert.ok(engine);
   assert.equal(engine.getParityRuntime().liveAuthority?.taskContract.task_id, originalTask);
   assert.equal(readFileSync(contractPath, 'utf8'), before);
+
+  const legacyResponse = await handleProtocolRequest({
+    jsonrpc: '2.0', id: 3, method: 'thread.create', params: { project_root: fixture.root, mode: 'plan' },
+  }, host);
+  assert.ok('result' in legacyResponse, JSON.stringify(legacyResponse));
+  const legacyThread = (legacyResponse.result as { thread_id: string }).thread_id;
+  appendTurnCells(legacyThread, 1, [{
+    schema_version: 1, cell_id: 'legacy-plan', thread_id: legacyThread, turn_id: 1,
+    ts: new Date().toISOString(), kind: 'user_message', lifecycle: 'committed', revision: 0,
+    payload: { message: 'A historical plan' },
+  }]);
+  const continuedLegacy = await submitTurn(host, legacyThread, 'Inspect the fixture and suggest a plan', 4);
+  assert.ok('result' in continuedLegacy, JSON.stringify(continuedLegacy));
+  const legacyEngine = host.engines.get(legacyThread);
+  assert.ok(legacyEngine);
+  assert.equal(legacyEngine.getParityRuntime().liveAuthority?.taskContract.mode, 'plan');
+  assert.ok(legacyEngine.getConversation().some(message => message.content === 'A historical plan'));
 });
 
 /**

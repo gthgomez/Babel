@@ -82,8 +82,8 @@ export function resyncEngineToThreadCells(
   }finally{engine.resyncTurnStateAfterBranch();}
 }
 
-/** Inspect existing authority before any constructor can replace its artifacts. */
-export function constructResumedEngine(threadId:string,options:ChatEngineOptions):ChatEngine{
+/** Restore saved authority before constructing an engine; absent legacy authority is not synthesized here. */
+export function restoreEngineWithRetainedAuthority(threadId:string,options:ChatEngineOptions):ChatEngine|null{
   const runDir=chatSessionDir(threadId);recoverCheckpointArtifacts(runDir);
   if([INSTRUCTION_MANIFEST_FILENAME,TASK_CONTRACT_FILENAME,TASK_MODE_HISTORY_FILENAME].some(name=>existsSync(join(runDir,name)))){
     const retained=loadLiveSessionAuthorityStrict(runDir);
@@ -95,6 +95,12 @@ export function constructResumedEngine(threadId:string,options:ChatEngineOptions
     if(log)engine.restoreEventLog(log);
     return engine;
   }
+  return null;
+}
+
+function constructResumedEngine(threadId:string,options:ChatEngineOptions):ChatEngine{
+  const retained=restoreEngineWithRetainedAuthority(threadId,options);
+  if(retained)return retained;
   const engine=new ChatEngine({...options,runtimeMode:options.runtimeMode??'direct',retainedHistory:true});
   engine.assignRunId(threadId);return engine;
 }
