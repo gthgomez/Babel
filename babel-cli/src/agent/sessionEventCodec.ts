@@ -328,12 +328,20 @@ export function parseSessionEventLog(
       for (const [field, expectedType] of [
         ['requested_output_budget', 'number'],
         ['effective_output_budget', 'number'],
+        ['sent_output_budget', 'number'],
+        ['provider_effective_output_budget', 'number'],
       ] as const) {
         const value = ev[field];
         if (
           value !== undefined && value !== null &&
           (typeof value !== expectedType || !Number.isFinite(value as number) || (value as number) < 0)
         ) {
+          throw new Error(`Invalid session event at line ${index + 1}: ${field} is invalid`)
+        }
+      }
+      for (const field of ['provider_finish_reason', 'normalized_finish_reason'] as const) {
+        const value = ev[field];
+        if (value !== undefined && value !== null && (typeof value !== 'string' || !/^[a-z_]{1,48}$/i.test(value))) {
           throw new Error(`Invalid session event at line ${index + 1}: ${field} is invalid`)
         }
       }

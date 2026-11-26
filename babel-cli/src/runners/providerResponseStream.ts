@@ -8,6 +8,7 @@ import {
   type ChatResponse,
   type OpenRouterResponseMetadata,
   buildInvocationMetadata,
+  safeProviderFinishReason,
   upstreamProviderFromResponse,
 } from './providerResponseMetadata.js';
 
@@ -175,6 +176,7 @@ export interface StreamingState {
   upstreamProvider: string | null;
   routerMetadata: OpenRouterResponseMetadata | null;
   finishReason: string | null;
+  providerFinishReason?: string | null;
   /** True after any model-generated material becomes observable to the caller. */
   partialModelOutput: boolean;
   /** Local, non-durable material used to produce a truthful failure digest. */
@@ -190,12 +192,15 @@ export function buildStreamingInvocationMetadata(
   state: StreamingState,
   configuredOutputBudget?: number | null,
 ): RunnerInvocationMetadata {
-  return buildInvocationMetadata(
-    provider, model, latencyMs, state.usage ?? undefined, state.ttftMs, state.generationMs,
-    undefined, state.observedModelId, state.upstreamProvider,
-    state.routerMetadata, state.finishReason,
-    configuredOutputBudget,
-  );
+  return {
+    ...buildInvocationMetadata(
+      provider, model, latencyMs, state.usage ?? undefined, state.ttftMs, state.generationMs,
+      undefined, state.observedModelId, state.upstreamProvider,
+      state.routerMetadata, state.finishReason,
+      configuredOutputBudget,
+    ),
+    provider_finish_reason: safeProviderFinishReason(state.providerFinishReason ?? state.finishReason),
+  };
 }
 
 
@@ -325,7 +330,10 @@ export async function readStreamingResponse(
     if (parsed.observedModelId) state.observedModelId = parsed.observedModelId;
     if (parsed.upstreamProvider) state.upstreamProvider = parsed.upstreamProvider;
     if (parsed.routerMetadata) state.routerMetadata = parsed.routerMetadata;
-    if (parsed.finishReason) state.finishReason = accumulateStreamFinish(state.finishReason, parsed.finishReason);
+    if (parsed.finishReason) {
+      state.finishReason = accumulateStreamFinish(state.finishReason, parsed.finishReason);
+      state.providerFinishReason = parsed.finishReason;
+    }
     if (parsed.isDone) {
       state.sawDone = true;
       state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
@@ -415,6 +423,7 @@ export async function readStreamingResponse(
     state.upstreamProvider = upstreamProviderFromResponse(json) ?? state.upstreamProvider;
     state.routerMetadata = json.openrouter_metadata ?? state.routerMetadata;
     state.finishReason = json.choices?.[0]?.finish_reason ?? state.finishReason;
+    state.providerFinishReason = json.choices?.[0]?.finish_reason ?? null;
     state.usage = json.usage ?? state.usage;
     state.sawDone = true;
     state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);

@@ -801,6 +801,12 @@ test('round-trips causal model input and result-delivery receipts', () => {
     status: 'delivered',
     observed_model_id: 'z-ai/glm-5.3-flash',
     upstream_provider: 'ExampleProvider',
+    requested_output_budget: null,
+    effective_output_budget: 32_000,
+    sent_output_budget: 32_000,
+    provider_effective_output_budget: null,
+    provider_finish_reason: 'stop',
+    normalized_finish_reason: 'NATURAL_COMPLETION',
     output_digest: digest,
     route_receipt: buildModelRouteReceipt({
       projectRef: hashRouteReference('project'),
@@ -868,6 +874,12 @@ test('round-trips causal model input and result-delivery receipts', () => {
   if (result.kind === 'model_result_delivery') {
     assert.equal(result.observed_model_id, 'z-ai/glm-5.3-flash');
     assert.equal(result.upstream_provider, 'ExampleProvider');
+    assert.equal(result.requested_output_budget, null);
+    assert.equal(result.effective_output_budget, 32_000);
+    assert.equal(result.sent_output_budget, 32_000);
+    assert.equal(result.provider_effective_output_budget, null);
+    assert.equal(result.provider_finish_reason, 'stop');
+    assert.equal(result.normalized_finish_reason, 'NATURAL_COMPLETION');
     assert.equal(result.route_receipt?.observed_model_id, 'z-ai/glm-5.3-flash');
     assert.equal(result.route_receipt?.upstream_provider, 'ExampleProvider');
     assert.equal(result.route_receipt?.retry_count, 1);

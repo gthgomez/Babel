@@ -176,7 +176,7 @@ export function providerFailureClass(details: ProviderFailureDetails = {}): stri
   if (/stream idle|stream read|timeout|timed out|abort/.test(message)) return 'TIMEOUT';
   if (/network|transport|econnreset|connection/.test(message)) return 'TRANSPORT_FAILURE';
   if (/content.?filter|recitation|filtered|safety/.test(message)) return 'UNKNOWN_PROVIDER_FAILURE';
-  if (/budget exhausted|finish_reason: length|token limit|max_tokens/.test(message)) return 'INCOMPLETE_STREAM';
+  if (/budget exhausted|finish_reason: length|token limit|max_tokens|closed before terminal/.test(message)) return 'INCOMPLETE_STREAM';
   if (/parse|malformed|protocol|normalization/.test(message)) return 'PROTOCOL_ERROR';
   return 'UNKNOWN';
 }
