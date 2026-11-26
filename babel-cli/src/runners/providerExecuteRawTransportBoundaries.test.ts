@@ -123,6 +123,58 @@ function heldOpenStreamAfterDone(ssePrefix: string): { response: Response; onCan
 }
 
 describe('executeRaw transport boundaries (mocked)', { concurrency: 1 }, () => {
+  for (const streaming of [false, true]) {
+    const mode = streaming ? 'JSON fallback' : 'buffered JSON'
+    for (const indexes of [[1], [0, 1], [0, 0]]) {
+      it(`${mode} rejects choices with indexes ${indexes.join(', ')} and retains usage`, async t => {
+        t.mock.method(globalThis, 'fetch', async () => Response.json({
+          model: ROUTED_MODEL,
+          provider: 'fixture upstream',
+          choices: indexes.map(index => ({ index, message: { content: 'discard this' }, finish_reason: 'stop' })),
+          usage: { prompt_tokens: 17, completion_tokens: 3, cost: 0.01 },
+        }))
+        const chunks: string[] = []
+        const completed: ProviderInvocationCompleted[] = []
+        const runner = new OpenRouterApiRunner(ROUTED_MODEL, {}, { explicitCredential: 'fixture-only', env: {} })
+        await assert.rejects(runner.executeRaw('probe', {
+          ...(streaming ? { onChunk: (chunk: string) => { chunks.push(chunk) } } : {}),
+          onInvocationCompleted: event => completed.push(event),
+        }), /single choice/i)
+        assert.deepEqual(chunks, [])
+        assert.equal(completed.length, 1)
+        assert.equal(completed[0]?.status, 'failed')
+        assert.equal(completed[0]?.normalized_finish_reason, 'PROTOCOL_ERROR')
+        assert.equal(completed[0]?.provider_finish_reason, null)
+        assert.equal(completed[0]?.observed_model_id, ROUTED_MODEL)
+        assert.equal(completed[0]?.upstream_provider, 'fixture upstream')
+        assert.equal(completed[0]?.usage_metadata?.completion_tokens, 3)
+        assert.equal(completed[0]?.usage_metadata?.provider_reported_total_charge_usd, 0.01)
+      })
+    }
+
+    it(`${mode} preserves an explicit provider error even when choices are invalid`, async t => {
+      t.mock.method(globalThis, 'fetch', async () => Response.json({
+        model: ROUTED_MODEL,
+        choices: [{ index: 1, message: { content: 'discard this' }, finish_reason: 'stop' }],
+        error: { message: 'fixture rejection', code: 'rate_limit_exceeded' },
+        usage: { cost: 0.01 },
+      }))
+      const chunks: string[] = []
+      const completed: ProviderInvocationCompleted[] = []
+      const runner = new OpenRouterApiRunner(ROUTED_MODEL, {}, { explicitCredential: 'fixture-only', env: {} })
+      await assert.rejects(runner.executeRaw('probe', {
+        ...(streaming ? { onChunk: (chunk: string) => { chunks.push(chunk) } } : {}),
+        onInvocationCompleted: event => completed.push(event),
+      }), /fixture rejection/i)
+      assert.deepEqual(chunks, [])
+      assert.equal(completed.length, 1)
+      assert.equal(completed[0]?.status, 'failed')
+      assert.equal(completed[0]?.normalized_finish_reason, 'PROVIDER_ERROR')
+      assert.equal(completed[0]?.api_error_code, 'rate_limit_exceeded')
+      assert.equal(completed[0]?.usage_metadata?.provider_reported_total_charge_usd, 0.01)
+    })
+  }
+
   it('only one choice may contribute text, and no output may follow its finish', async t => {
     const first = { choices: [{ index: 0, delta: { content: 'prefix' } }] }
     const stop = { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }
@@ -290,7 +342,11 @@ describe('executeRaw transport boundaries (mocked)', { concurrency: 1 }, () => {
           for (const finish of [undefined, null, 'stop', 'end_turn']) {
             globalThis.fetch = async () => Response.json({
               model: ROUTED_MODEL,
-              choices: [{ message: { content: 'fixture answer' }, finish_reason: finish }],
+              choices: [{
+                ...(finish === 'stop' ? { index: 0 } : {}),
+                message: { content: 'fixture answer' },
+                finish_reason: finish,
+              }],
               usage: { prompt_tokens: 11, completion_tokens: 3 },
             })
             const completed: ProviderInvocationCompleted[] = []

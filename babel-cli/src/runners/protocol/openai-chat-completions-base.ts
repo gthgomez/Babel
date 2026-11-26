@@ -59,6 +59,7 @@ import {
   isStreamIdleTimeoutError,
   mapProviderMessages,
   releaseStreamReader,
+  readBufferedTextResponse,
   readTextSseFrame,
   readErrorBody,
   readStreamWithLimits,
@@ -68,15 +69,14 @@ import {
   buildStreamingInvocationMetadata,
   assertTextResponseFinish,
   TextResponseFinishError,
+  TextProviderResponseError,
   type StreamingState,
 } from '../providerResponseStream.js';
 import {
   buildInvocationMetadata,
   routerMetadataProvenance,
   safeProviderFinishReason,
-  type ChatResponse,
   type OpenRouterResponseMetadata,
-  upstreamProviderFromResponse,
 } from '../providerResponseMetadata.js';
 import {
   CampaignBudgetDeniedError,
@@ -84,7 +84,7 @@ import {
 } from '../campaignDispatchGate.js';
 import { assertOfflineEndpointAllowed } from '../../config/offlineMode.js';
 
-import { MalformedChatCompletionsStreamError, ssePayloadFromTrimmedLine } from './openai-chat-completions-sse.js';
+import { MalformedChatCompletionsResponseError, ssePayloadFromTrimmedLine } from './openai-chat-completions-sse.js';
 import type { PreparedProviderRequest } from '../preparedProviderRequest.js';
 import { CampaignPhysicalFetchSession } from '../providerCampaignPhysicalFetch.js';
 import type { ProviderInvocationCompleted } from '../base.js';
@@ -844,6 +844,7 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
     // ── Read response (streaming or non-streaming) ────────────────────────────
     let text = '';
     let streamState = createTextResponseState();
+    let bufferedResponse: unknown;
 
     if (isStreaming && !response.body) {
       const error = new Error(`[${this.providerId}] Streaming response had no body.`);
@@ -895,7 +896,7 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
             const cancelled = isCallerCancelError(error, signal);
             const disposition = error instanceof TextResponseFinishError ? error.disposition : null;
             const protocolError = error instanceof ConflictingStreamFinishError ||
-              error instanceof MalformedChatCompletionsStreamError;
+              error instanceof MalformedChatCompletionsResponseError;
             if (disposition || protocolError) {
               notifyPhase('response_normalization_failed', undefined,
                 disposition?.finishReason ?? (error instanceof ConflictingStreamFinishError ? 'conflicting_finish' : 'malformed_sse'));
@@ -918,6 +919,7 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
                 details: {
                   message: error instanceof Error ? error.message : String(error),
                   providerRequestId: providerRequestIdFromResponse(response),
+                  ...(error instanceof TextProviderResponseError ? { apiErrorCode: error.apiErrorCode } : {}),
                 },
                 failureStage: disposition || protocolError ? 'response_normalization' : 'stream',
                 interrupted: cancelled,
@@ -1099,7 +1101,6 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
         this.providerId, this.model, Date.now() - startedAt, streamState, sentOutputBudget,
       );
     } else {
-      let data: ChatResponse;
       let rawDataText = '';
       try {
         rawDataText = await readResponseBodyText(response, {
@@ -1109,27 +1110,7 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
           ...(signal ? { signal } : {}),
           onFirstByte: () => { notifyPhase('first_byte'); },
         });
-        data = JSON.parse(rawDataText) as ChatResponse;
-        streamState.usage = data.usage ?? null;
-        this.lastInvocationMetadata = buildInvocationMetadata(
-          this.providerId,
-          this.model,
-          Date.now() - startedAt,
-          data.usage,
-          undefined,
-          undefined,
-          undefined,
-          data.model,
-          upstreamProviderFromResponse(data),
-          data.openrouter_metadata ?? null,
-          data.choices?.[0]?.finish_reason ?? null,
-          sentOutputBudget,
-        );
-        streamState.observedModelId = data.model ?? null;
-        streamState.upstreamProvider = upstreamProviderFromResponse(data);
-        streamState.routerMetadata = data.openrouter_metadata ?? null;
-        streamState.finishReason = data.choices?.[0]?.finish_reason ?? null;
-        streamState.providerFinishReason = streamState.finishReason;
+        bufferedResponse = JSON.parse(rawDataText) as unknown;
       } catch (err) {
         this.lastInvocationMetadata = buildInvocationMetadata(this.providerId, this.model, Date.now() - startedAt);
         if (isCallerCancelError(err, signal) || isAbortError(err)) {
@@ -1171,15 +1152,17 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
           cause: err instanceof Error ? err : undefined,
         });
       }
-      const content = data?.choices?.[0]?.message?.content;
-      if (typeof content === 'string') {
-        text = content;
-        recordStreamingOutput(streamState, 'text', content);
-      }
     }
 
     if (isStreaming) notifyPhase('stream_completed');
     try {
+      if (!isStreaming) {
+        text = readBufferedTextResponse(bufferedResponse, streamState).text;
+        recordStreamingOutput(streamState, 'text', text);
+        this.lastInvocationMetadata = buildStreamingInvocationMetadata(
+          this.providerId, this.model, Date.now() - startedAt, streamState, sentOutputBudget,
+        );
+      }
       this.validateObservedModelId(streamState.observedModelId);
       this.validateObservedUpstream(streamState.upstreamProvider);
       this.validateObservedRouterMetadata(streamState.routerMetadata, streamState.observedModelId, streamState.upstreamProvider);
@@ -1201,15 +1184,24 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
       });
     } catch (error) {
       const disposition = error instanceof TextResponseFinishError ? error.disposition : null;
+      const providerError = error instanceof TextProviderResponseError ? error : null;
+      if (!isStreaming) {
+        this.lastInvocationMetadata = buildStreamingInvocationMetadata(
+          this.providerId, this.model, Date.now() - startedAt, streamState, sentOutputBudget,
+        );
+      }
       notifyPhase('response_normalization_failed', undefined, 'response_incomplete_or_invalid');
       notifyCompleted('failed', streamState.observedModelId, text, streamState.upstreamProvider, streamState.routerMetadata, streamState.finishReason, this.maxTokens, {
         actualAttempt: lastAttempt,
-        details: { message: error instanceof Error ? error.message : String(error) },
+        details: {
+          message: error instanceof Error ? error.message : String(error),
+          ...(providerError ? { apiErrorCode: providerError.apiErrorCode } : {}),
+        },
         failureStage: 'response_normalization',
         partialModelOutput: streamState.partialModelOutput,
         outputMaterial: streamState.outputReceipt,
         providerFinishReason: streamState.providerFinishReason ?? null,
-        ...(disposition ? { errorKind: disposition.errorKind } : {}),
+        ...(providerError ? { errorKind: 'provider' } : disposition ? { errorKind: disposition.errorKind } : {}),
       });
       throw error;
     }

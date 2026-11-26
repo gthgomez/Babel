@@ -59,7 +59,7 @@ import {
 } from '../campaignDispatchGate.js';
 import { CampaignPhysicalFetchSession } from '../providerCampaignPhysicalFetch.js';
 import {
-  MalformedChatCompletionsStreamError,
+  MalformedChatCompletionsResponseError,
   parseChatCompletionsStreamFrame,
   readChatCompletionsStreamChoice,
   ssePayloadFromTrimmedLine,
@@ -716,7 +716,7 @@ async *executeWithToolsStream(
               const acc = pendingToolCalls.get(idx)!;
               if ((tc.id && acc.id && tc.id !== acc.id) ||
                   (tc.function?.name && acc.name && tc.function.name !== acc.name)) {
-                throw new MalformedChatCompletionsStreamError('Malformed SSE event chunk (conflicting tool identity)');
+                throw new MalformedChatCompletionsResponseError('Malformed SSE event chunk (conflicting tool identity)');
               }
               if (tc.id) {
                 acc.id = tc.id;
@@ -794,7 +794,7 @@ async *executeWithToolsStream(
 
       signal?.throwIfAborted();
       if (!disposition.executeTools && !hasText) {
-        throw new MalformedChatCompletionsStreamError('Empty provider response: no answer text or actionable tool calls');
+        throw new MalformedChatCompletionsResponseError('Empty provider response: no answer text or actionable tool calls');
       }
 
       // ── Yield accumulated tool calls ──────────────────────────────────
@@ -864,7 +864,7 @@ async *executeWithToolsStream(
     } catch (err) {
       if (responseValidationFailed) throw err;
       const cancelled = isCallerCancelError(err, signal);
-      const protocolError = err instanceof ConflictingStreamFinishError || err instanceof MalformedChatCompletionsStreamError;
+      const protocolError = err instanceof ConflictingStreamFinishError || err instanceof MalformedChatCompletionsResponseError;
       const errMessage = cancelled ? `[${this.providerId}] Request cancelled` : err instanceof Error ? err.message : String(err);
       notifyPhase('provider_error', undefined, cancelled ? 'cancelled' : 'stream');
       settleStream({ stage: protocolError ? 'response_normalization' : 'stream', message: errMessage, interrupted: cancelled });

@@ -2,6 +2,7 @@ import { type ProviderMessage, type RunnerCallbacks, type RunnerInvocationMetada
 import { mapProviderMessagesToWire } from './providerMessages.js';
 import { type VcrRecorder } from '../services/streamingVcr.js';
 import { createInvocationDeadline, invocationNowMs, readPositiveIntEnv } from './providerResponsePolicy.js';
+import { safeProviderErrorCode } from './providerHttpError.js';
 import { accumulateStreamFinish, classifyStreamFinish, type StreamFinishDisposition } from './providerNormalize.js';
 import type { ProviderId } from './providerRegistry.js';
 import {
@@ -13,7 +14,9 @@ import {
 } from './providerResponseMetadata.js';
 import {
   parseChatCompletionsStreamFrame,
+  readChatCompletionsEnvelope,
   readChatCompletionsStreamChoice,
+  readSingleChatCompletionsChoice,
   ssePayloadFromTrimmedLine,
 } from './protocol/openai-chat-completions-sse.js';
 
@@ -203,9 +206,24 @@ export function recordStreamingOutput(state: StreamingState, kind: string, value
 }
 
 
-/** Retain envelope evidence even when the frame cannot contribute answer text. */
-export function readTextSseFrame(payload: string, state: StreamingState): { delta: string; reasoning: string } {
-  const frame = parseChatCompletionsStreamFrame(payload);
+/** An explicit provider error outranks malformed choice data in the same envelope. */
+export class TextProviderResponseError extends Error {
+  readonly apiErrorCode: string | null;
+
+  constructor(error: unknown, source: string) {
+    const fields = typeof error === 'object' && error !== null ? error as Record<string, unknown> : {};
+    const detail = typeof error === 'string' ? error : typeof fields['message'] === 'string' ? fields['message'] : null;
+    super(`${source}${detail ? `: ${detail}` : ''}`);
+    const code = fields['code'] ?? fields['type'];
+    this.apiErrorCode = safeProviderErrorCode(typeof code === 'string' ? code : null);
+  }
+}
+
+function recordTextEnvelope(
+  frame: ReturnType<typeof readChatCompletionsEnvelope>,
+  state: StreamingState,
+  providerErrorSource: string,
+): void {
   if (frame.model) state.observedModelId = frame.model;
   const router = frame.openrouter_metadata as OpenRouterResponseMetadata | null | undefined;
   const upstream = upstreamProviderFromResponse({
@@ -215,17 +233,33 @@ export function readTextSseFrame(payload: string, state: StreamingState): { delt
   if (upstream) state.upstreamProvider = upstream;
   if (router) state.routerMetadata = router;
   if (frame.usage) state.usage = frame.usage;
-  if (frame.error) {
-    const detail = typeof frame.error === 'object' && 'message' in frame.error && typeof frame.error.message === 'string'
-      ? frame.error.message : null;
-    throw new Error(`[provider stream] Provider stream error${detail ? `: ${detail}` : ''}`);
-  }
+  if (frame.error != null) throw new TextProviderResponseError(frame.error, providerErrorSource);
+}
+
+/** Retain envelope evidence even when the frame cannot contribute answer text. */
+export function readTextSseFrame(payload: string, state: StreamingState): { delta: string; reasoning: string } {
+  const frame = parseChatCompletionsStreamFrame(payload);
+  recordTextEnvelope(frame, state, '[provider stream] Provider stream error');
   const choice = readChatCompletionsStreamChoice(frame.choices, state.finishReason);
   if (choice?.finish_reason?.trim()) {
     state.finishReason = accumulateStreamFinish(state.finishReason, choice.finish_reason);
     state.providerFinishReason ??= choice.finish_reason;
   }
   return { delta: choice?.delta?.content ?? '', reasoning: choice?.delta?.reasoning_content ?? '' };
+}
+
+/** Complete JSON uses the same choice identity contract as streamed deltas. */
+export function readBufferedTextResponse(value: unknown, state: StreamingState): { text: string; reasoning: string } {
+  const source = 'Malformed Chat Completions JSON response';
+  const envelope = readChatCompletionsEnvelope(value, source);
+  recordTextEnvelope(envelope, state, '[provider response] Provider error');
+  const choice = readSingleChatCompletionsChoice(envelope.choices, source);
+  state.finishReason = choice?.finish_reason ?? null;
+  state.providerFinishReason = state.finishReason;
+  return {
+    text: choice?.message?.content ?? '',
+    reasoning: typeof envelope['reasoning_content'] === 'string' ? envelope['reasoning_content'] : '',
+  };
 }
 
 
@@ -350,29 +384,22 @@ export async function readStreamingResponse(
   // when stream=true. Accept that only as a complete response; an SSE stream
   // that closes without [DONE] is a truthful truncated-stream failure.
   const rawTrimmed = raw.trim();
-  let json: ChatResponse | undefined;
+  let json: unknown;
   if (!state.sawDone && rawTrimmed.startsWith('{')) {
     try {
-      json = JSON.parse(rawTrimmed) as ChatResponse;
+      json = JSON.parse(rawTrimmed) as unknown;
     } catch {
       // Malformed JSON falls through to the truncated-stream error below.
     }
   }
-  if (json) {
+  if (json !== undefined) {
     signal?.throwIfAborted();
-    state.observedModelId = json.model ?? state.observedModelId;
-    state.upstreamProvider = upstreamProviderFromResponse(json) ?? state.upstreamProvider;
-    state.routerMetadata = json.openrouter_metadata ?? state.routerMetadata;
-    state.finishReason = json.choices?.[0]?.finish_reason ?? state.finishReason;
-    state.providerFinishReason = json.choices?.[0]?.finish_reason ?? null;
-    state.usage = json.usage ?? state.usage;
-    const content = json.choices?.[0]?.message?.content ?? '';
+    const { text: content, reasoning } = readBufferedTextResponse(json, state);
     if (content) {
       text += content;
       recordStreamingOutput(state, 'text', content);
       if (callbacks?.onChunk) await callbacks.onChunk(content);
     }
-    const reasoning = (json as ChatResponse & { reasoning_content?: string }).reasoning_content;
     if (reasoning) {
       recordStreamingOutput(state, 'reasoning', reasoning);
       callbacks?.onThought?.(reasoning);
