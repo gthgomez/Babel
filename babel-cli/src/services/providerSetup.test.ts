@@ -184,3 +184,28 @@ test('invalid confirmed setup is rejected before requesting or saving a credenti
   assert.equal(existsSync(userSettingsPath(env)), false)
   assert.equal(existsSync(join(directory, '.env')), false)
 })
+
+test('confirming a switch preserves the legacy exact model on the prior account', async t => {
+  const { runProviderSetup } = await import('./providerSetup.js')
+  const { readUserSettings, resolveEffectiveSettings, userSettingsPath } = await import('../config/userSettings.js')
+  const { writeFileSync } = await import('node:fs')
+  const directory = mkdtempSync(join(tmpdir(), 'babel-setup-switch-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const env = { BABEL_STATE_DIR: directory, BABEL_CONFIG_DIR: directory, OPENROUTER_API_KEY: 'fixture-only' }
+  writeFileSync(userSettingsPath(env), JSON.stringify({
+    schemaVersion: 1,
+    connections: {
+      personal: { id: 'personal', provider: 'openrouter', model: 'vendor/older-model' },
+      office: { id: 'office', provider: 'openrouter', model: 'vendor/office' },
+    },
+    defaults: { connection: 'personal', model: 'vendor/Personal-Exact', budgetUsd: 2 },
+  }))
+  const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected setup request') })
+  const answers = ['', 'office', '', '', '', '', 'yes']
+  const result = await runProviderSetup({ env, interactive: true, question: async () => answers.shift()!, write: () => {} })
+  assert.equal(result.connection, 'office')
+  assert.equal(result.model, 'vendor/office')
+  const settings = readUserSettings({ env })
+  assert.equal(resolveEffectiveSettings({ settings, env, session: { connection: 'personal' } }).model.value, 'vendor/Personal-Exact')
+  assert.equal(fetch.mock.callCount(), 0)
+})
