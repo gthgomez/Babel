@@ -329,7 +329,7 @@ test('a command with unknown physical settlement remains indeterminate in the du
 async function checkColdContinuation(
   t: TestContext,
   scenario: 'intact' | 'corrupt' | 'corrupt-exhausted' | 'compacted' | 'missing-membership' |
-    'invalid-membership' | 'revoked-before-restore' | 'revoked-after-restore',
+    'invalid-membership' | 'revoked-before-restore' | 'revoked-with-deleted-ref' | 'revoked-after-restore',
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), 'babel-p11-cold-observation-'))
   const projectRoot = join(root, 'workspace')
@@ -408,10 +408,14 @@ async function checkColdContinuation(
   const snapshotPath = join(sessionDir, LIVE_SESSION_SNAPSHOT_FILENAME)
   if (scenario === 'missing-membership') rmSync(snapshotPath)
   if (scenario === 'invalid-membership') writeFileSync(snapshotPath, '{')
-  if (scenario === 'revoked-before-restore') {
+  if (scenario === 'revoked-before-restore' || scenario === 'revoked-with-deleted-ref') {
     const snapshot = loadLiveSessionSnapshot(sessionDir)
     assert.ok(snapshot)
     persistLiveSessionSnapshot(sessionDir, { ...snapshot, authorized_observation_ids: [] })
+    if (scenario === 'revoked-with-deleted-ref') {
+      const digest = membership[0]!.slice(4)
+      rmSync(join(sessionDir, 'observations', 'refs', digest.slice(0, 2), `${digest}.json`))
+    }
   }
   if (scenario === 'corrupt' || scenario === 'corrupt-exhausted') {
     const observationDir = join(sessionDir, 'observations')
@@ -469,7 +473,7 @@ async function checkColdContinuation(
   }
   if (scenario === 'missing-membership') assert.equal(fs.existsSync(snapshotPath), false)
   if (scenario === 'invalid-membership') assert.equal(readFileSync(snapshotPath, 'utf8'), '{')
-  if (scenario === 'revoked-before-restore' || scenario === 'revoked-after-restore') {
+  if (scenario.startsWith('revoked-')) {
     assert.deepEqual(loadLiveSessionSnapshot(sessionDir)?.authorized_observation_ids, [])
   }
   assert.equal(resumed.getParityRuntime().liveAuthority?.taskContract.task_id, originalTask)
@@ -494,3 +498,5 @@ test('retained admission does not restore membership revoked after hydration',
   t => checkColdContinuation(t, 'revoked-after-restore'))
 test('cold continuation refuses replay of a settled capture revoked before hydration',
   t => checkColdContinuation(t, 'revoked-before-restore'))
+test('cold continuation refuses surviving raw tool output after revocation and ref deletion',
+  t => checkColdContinuation(t, 'revoked-with-deleted-ref'))

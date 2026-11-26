@@ -812,12 +812,20 @@ export class ChatEngineP11Authority {
     );
   }
 
-  private hasRevokedSettledObservation(sessionDir: string, membership: ReadonlySet<string>): boolean {
+  private hasUnauthorizedSettledObservation(
+    sessionDir: string,
+    membership: ReadonlySet<string>,
+    observationGovernedHistory: boolean,
+  ): boolean {
     const taskId = this.host.parity.liveAuthority?.taskContract.task_id;
     if (!taskId) return false;
     const events = this.host.parity.sessionEvents.events;
     const turns = new Set(events.flatMap(event =>
       event.kind === 'user_submitted' && event.task_id === taskId ? [event.turn_id] : [],
+    ));
+    const toolResults = new Set(this.host.parity.eventLog.events.flatMap(event =>
+      event.kind === 'tool_result' && !event.context_copy && event.content
+        ? [JSON.stringify([event.turn_id, event.tool_call_id])] : [],
     ));
     return events.some(event => {
       if ((event.kind !== 'tool_completed' && event.kind !== 'tool_failed') ||
@@ -829,7 +837,12 @@ export class ChatEngineP11Authority {
         operation_id: event.idempotency_key,
         attempt_id: event.idempotency_key,
       });
-      return !membership.has(id) && hasStoredObservationReference(join(sessionDir, 'observations'), id);
+      // Raw result text can outlive both the authorization and the ref file.
+      // Do not send it during cold continuation of observation-governed history.
+      return !membership.has(id) && (
+        (observationGovernedHistory && toolResults.has(JSON.stringify([event.turn_id, event.tool_call_id]))) ||
+        hasStoredObservationReference(join(sessionDir, 'observations'), id)
+      );
     });
   }
 
@@ -856,10 +869,12 @@ export class ChatEngineP11Authority {
     const issues: string[] = [];
     let validCheckpoint: ContextCheckpoint | undefined;
     let membershipRevoked = false;
+    let observationGovernedHistory = existsSync(join(sessionDir, 'observations'));
     try {
       if (existsSync(checkpointPath)) {
         const checkpoint = JSON.parse(readFileSync(checkpointPath, "utf8")) as ContextCheckpoint;
         const threadId = this.host.parity.eventLog.thread_id;
+        observationGovernedHistory ||= checkpoint?.schema_version === 2 && checkpoint.threadId === threadId;
         const coldResume = validateContextCheckpoint(checkpoint, {
           expectedThreadId: threadId,
           currentOwner: this.host.parity.admissionStore?.readOwner(threadId) ?? null,
@@ -884,7 +899,8 @@ export class ChatEngineP11Authority {
     } catch (err) {
       issues.push(err instanceof Error ? err.message : String(err));
     }
-    if (!membership || membershipRevoked || this.hasRevokedSettledObservation(sessionDir, membership)) {
+    if (!membership || membershipRevoked ||
+        this.hasUnauthorizedSettledObservation(sessionDir, membership, observationGovernedHistory)) {
       this.host.p11ObservationCaptureIssues = ['observation_membership_unavailable'];
       return { applied: false, issues: [...issues, ...this.host.p11ObservationCaptureIssues] };
     }

@@ -76,6 +76,7 @@ test('a numeric point binds only to an exact assertion in the admitted Node test
   ].join('\n')
   const checks = [
     ['quoted entry', 'node --test "discount check.test.mjs"', `test("point", () => ${assertPoint})`, true],
+    ['nonportable single quote', "node --test 'discount check.test.mjs'", `test("point", () => ${assertPoint})`, false],
     ['direct', 'node --test discount.test.mjs', `test("point", () => ${assertPoint})`, true],
     ['wrong argument', 'node --test discount.test.mjs', 'test("other", () => assert.equal(discount(101), 10))', false],
     ['wrong expected type', 'node --test discount.test.mjs', 'test("other", () => assert.equal(discount(100), "10"))', false],
@@ -92,7 +93,7 @@ test('a numeric point binds only to an exact assertion in the admitted Node test
   writeFileSync(join(root, 'other.test.mjs'), 'import test from "node:test"; test("other", () => {});\n')
   for (const [label, script, body, binds] of checks) {
     writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: script } }))
-    const inputFile = label === 'quoted entry' ? 'discount check.test.mjs' : 'discount.test.mjs'
+    const inputFile = script.includes('discount check.test.mjs') ? 'discount check.test.mjs' : 'discount.test.mjs'
     writeFileSync(join(root, inputFile), testFile(body))
     for (const goal of [
       'Fix computeDiscount so it returns 10 for a total of 100.',
@@ -116,7 +117,7 @@ test('a numeric point binds only to an exact assertion in the admitted Node test
         assert.ok(behavior.verification.target?.startsWith(POINT_TARGET_PREFIX))
       }
     }
-    if (label === 'quoted entry') rmSync(join(root, inputFile))
+    if (inputFile === 'discount check.test.mjs') rmSync(join(root, inputFile))
   }
 
   const goal = 'We need computeDiscount to return 10 for a total of 100.'

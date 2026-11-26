@@ -279,6 +279,11 @@ test('a quoted npm test file has a content hash at verifier admission', t => {
   assert.match(before[path] ?? '', /^[0-9a-f]{64}$/);
   writeFileSync(join(root, path), 'export const fixture = 2;\n');
   assert.notEqual(computeVerifierDependencyHashes(root, ['npm test'])[path], before[path]);
+
+  // Preserve hash coverage for legacy scripts which cannot supply a point witness.
+  writeFileSync(join(root, 'flat.test.mjs'), 'export const fixture = 1;\n');
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node --test --test-update-snapshots flat.test.mjs' } }));
+  assert.match(computeVerifierDependencyHashes(root, ['npm test'])['flat.test.mjs'] ?? '', /^[0-9a-f]{64}$/);
 });
 
 test('canonical verifier-input aliases are protected and out-of-root symlinks are excluded', async () => {

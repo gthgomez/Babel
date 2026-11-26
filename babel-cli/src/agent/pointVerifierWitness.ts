@@ -21,7 +21,9 @@ function strictTestCommand(projectRoot: string, command: string, fs: VerifierCom
     const name = npmScript[1]!
     if (!scripts || Object.hasOwn(scripts, `pre${name}`) || Object.hasOwn(scripts, `post${name}`)) return undefined
     const script = scripts[name]
-    return typeof script === 'string' ? script.trim() : undefined
+    // npm runs through the platform shell. Single quotes do not group argv
+    // in the Windows default shell, even though the structured parser accepts them.
+    return typeof script === 'string' && !script.includes("'") ? script.trim() : undefined
   } catch {
     return undefined
   }

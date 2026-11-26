@@ -133,7 +133,7 @@ export function computeVerifierDependencyHashes(
       const scriptCmd = scripts?.[scriptName];
       if (typeof scriptCmd === 'string') {
         const nodeTestFiles = explicitNodeTestFileArgs(scriptCmd);
-        if (nodeTestFiles !== null) {
+        if (nodeTestFiles?.length) {
           for (const path of resolveInputPaths(projectRoot, nodeTestFiles)) filesToHash.add(path);
         } else {
           for (const path of scriptCmd.match(/([^\s"'`]+\.(?:mjs|js|cjs|ts))\b/g) ?? []) {
