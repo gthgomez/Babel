@@ -21,17 +21,7 @@ function makeTmpRunsDir(): string {
   return dir;
 }
 
-interface TelemetryEntry {
-  stage: string;
-  tier_succeeded: string;
-  tier_index: number;
-  attempts: number;
-  tiers_skipped: string[];
-  cascade_reason: string;
-  ts: string;
-}
-
-function writeTelemetry(runsDir: string, runId: string, entries: TelemetryEntry[]): void {
+function writeTelemetry(runsDir: string, runId: string, entries: readonly unknown[]): void {
   const runDir = join(runsDir, runId);
   mkdirSync(runDir, { recursive: true });
   writeFileSync(join(runDir, '05_waterfall_telemetry.json'), JSON.stringify(entries));
@@ -300,6 +290,45 @@ describe('selectBestTierForStage — scoring selects best tier', () => {
       );
     } finally {
       rmSync(altDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores incomplete JSON rows without counting them toward the sample minimum', () => {
+    const runsDir = makeTmpRunsDir()
+    try {
+      const valid = {
+        stage: 'executor',
+        tier_succeeded: 'TierB',
+        attempts: 1,
+        tiers_skipped: ['TierA'],
+      }
+      const invalid = [
+        { stage: 'executor' },
+        { ...valid, tier_succeeded: ' ' },
+        { ...valid, attempts: '1' },
+        { ...valid, attempts: 0 },
+        { ...valid, attempts: -1 },
+        { ...valid, attempts: 1.5 },
+        { ...valid, attempts: 1e30 },
+        { ...valid, tiers_skipped: 'TierA' },
+        { ...valid, tiers_skipped: ['TierA', null] },
+        { ...valid, tiers_skipped: ['TierA', ' '] },
+      ]
+      const options = { enabled: true, runsDir }
+      const waterfall = ['TierA', 'TierB', 'TierC']
+      writeTelemetry(runsDir, 'mixed', [valid, ...invalid, valid])
+      assert.equal(selectBestTierForStage('executor', waterfall, options), null)
+
+      writeTelemetry(runsDir, 'additional', [valid])
+      clearRoutingCache()
+      const decision = selectBestTierForStage('executor', waterfall, options)
+      assert.equal(decision?.selectedName, 'TierB')
+      assert.equal(decision?.scoredTiers.find(tier => tier.name === 'TierB')?.wins, 3)
+      assert.ok(decision?.scoredTiers.every(tier => Number.isFinite(tier.score)))
+      assert.deepEqual(reorderWaterfallByStartIndex(waterfall, decision?.selectedIndex), ['TierB', 'TierA', 'TierC'])
+    } finally {
+      rmSync(runsDir, { recursive: true, force: true })
+      clearRoutingCache()
     }
   });
 });

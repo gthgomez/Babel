@@ -43,11 +43,8 @@ export type RoutingStage = 'orchestrator' | 'planning' | 'qa' | 'executor';
 interface WaterfallTelemetryEntry {
   stage: string;
   tier_succeeded: string;
-  tier_index: number;
   attempts: number;
   tiers_skipped: string[];
-  cascade_reason: string;
-  ts: string;
 }
 
 /** Per-tier scoring breakdown. */
@@ -121,6 +118,23 @@ function listRecentRunDirs(runsDir: string): string[] {
     .map((name) => join(runsDir, name));
 }
 
+function isStageTelemetryEntry(value: unknown, stage: RoutingStage): value is WaterfallTelemetryEntry {
+  return value !== null &&
+    typeof value === 'object' &&
+    'stage' in value &&
+    value.stage === stage &&
+    'tier_succeeded' in value &&
+    typeof value.tier_succeeded === 'string' &&
+    value.tier_succeeded.trim().length > 0 &&
+    'attempts' in value &&
+    typeof value.attempts === 'number' &&
+    Number.isSafeInteger(value.attempts) &&
+    value.attempts > 0 &&
+    'tiers_skipped' in value &&
+    Array.isArray(value.tiers_skipped) &&
+    value.tiers_skipped.every((tier: unknown) => typeof tier === 'string' && tier.trim().length > 0);
+}
+
 function loadStageTelemetry(
   stage: RoutingStage,
   runsDir: string,
@@ -141,13 +155,8 @@ function loadStageTelemetry(
       if (!Array.isArray(raw)) continue;
 
       for (const item of raw) {
-        if (
-          item !== null &&
-          typeof item === 'object' &&
-          typeof (item as Record<string, unknown>)['stage'] === 'string' &&
-          (item as Record<string, unknown>)['stage'] === stage
-        ) {
-          entries.push(item as WaterfallTelemetryEntry);
+        if (isStageTelemetryEntry(item, stage)) {
+          entries.push(item);
         }
       }
     } catch {
