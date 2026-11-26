@@ -1,16 +1,17 @@
 import { resolve } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
 import type { BlockedReport } from '../schemas/agentContracts.js'
-import { parseCommandArgv } from '../utils/commandArgv.js'
+import { formatArgvAsCommand, parseCommandArgv } from '../utils/commandArgv.js'
 import { redactSecrets } from '../utils/redaction.js'
 import type { ChatToolAction } from './chatToolDefinitions.js'
+import type { AcceptanceMeaningSource } from './taskAcceptanceMeaning.js'
+import { taskProhibitsCommand } from './taskCommandProhibitions.js'
 import type { AcceptanceRequirementV1, TaskContractProvenanceRecord } from './taskContract.js'
 
 const REF_PREFIX = 'babel:requested-local-execution'
 const DENIAL_PREFIX = 'required_local_execution_denied'
 export const REQUESTED_LOCAL_EXECUTION_KIND = 'requested_local_execution'
 const EXACT_RUN = /^(?:please\s+)?(?:run|execute)\s+`([^`]+)`$/i
-const RESTRICTED_RUN = /\b(?:do\s+not|don['’]t|never|skip|avoid|without)\s+(?:[a-z]+\s+){0,2}(?:run|execute|running|executing)\b/i
 const EXAMPLE_FRAME = /^(?:for example|an? example|example|sample|illustration|logs?|quoted text)(?:\s*:|\s*$)/i
 const SCRIPT_PATH = String.raw`(?:\./)?[\p{L}\p{N}_-][\p{L}\p{N}_.\/-]*\.(?:py|[cm]?js)`
 const FILE_PATH = String.raw`(?:\./)?[\p{L}\p{N}_-][\p{L}\p{N}_.\/-]*`
@@ -41,11 +42,12 @@ function executionRef(version: 1 | 2, scope: ExecutionScope, digest: string): st
   return `${REF_PREFIX}:v${version}:${scope}:${digest}`
 }
 
-function activeClauses(activeProse: readonly string[]): string[] {
+function activeClauses(activeProse: readonly string[], amendment: boolean): string[] {
   return activeProse.flatMap(line => {
-    const cleaned = line.trim()
+    let cleaned = line.trim()
       .replace(/^(?:[-*+•]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, '')
       .replace(/^(?:acceptance criteria|requirements?)\s*:\s*/i, '')
+    if (amendment) cleaned = cleaned.replace(/^(?:also|additionally|and)\b[\s,:]*/i, '')
     // Split only outside code spans; quoted argv can contain punctuation.
     return cleaned.split(/(`[^`]*`)/g).reduce<string[]>((clauses, piece, index) => {
       if (index % 2 === 1) {
@@ -81,35 +83,48 @@ export function requestedLocalExecutionAcceptance(input: {
   request: string
   activeProse: readonly string[]
   existingCriteria: readonly AcceptanceRequirementV1[]
-}): { criteria: AcceptanceRequirementV1[]; provenance: TaskContractProvenanceRecord[] } {
-  const clauses = activeClauses(input.activeProse)
+  amendment?: boolean
+}): {
+  criteria: AcceptanceRequirementV1[]
+  provenance: TaskContractProvenanceRecord[]
+  sources: AcceptanceMeaningSource[]
+} {
+  const clauses = activeClauses(input.activeProse, input.amendment === true)
   const criteria: AcceptanceRequirementV1[] = []
+  const sources: AcceptanceMeaningSource[] = []
   const refs = new Set<string>()
-  if (clauses.some(clause => EXAMPLE_FRAME.test(clause) || RESTRICTED_RUN.test(clause.replace(/`[^`]*`/g, ''))))
-    return { criteria, provenance: [] }
+  if (clauses.some(clause => EXAMPLE_FRAME.test(clause))) return { criteria, provenance: [], sources }
 
   const declaredScripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
   // Only a sole operation proves that no independent work remains.
-  const scope = clauses.length === 1 && input.request.trim().replace(/[.!]$/, '') === clauses[0]
+  const scope = !input.amendment && clauses.length === 1 && input.request.trim().replace(/[.!]$/, '') === clauses[0]
     ? 'standalone' : 'mixed'
   const sourceDigest = sha256Canonical(input.request)
   let descriptions: Set<string> | undefined
   for (const clause of new Set(clauses)) {
     // A derived operation must be traceable to literal user text. Its source
     // reference binds the original request and exact active clause.
-    if (!input.request.includes(clause)) continue
+    const start = input.request.indexOf(clause)
+    if (start === -1) continue
+    const uniqueSource = input.request.indexOf(clause, start + clause.length) === -1
+    // Amendment descriptors require exact offsets. Fresh admission can still
+    // bind a repeated active clause by digest without inventing a span.
+    if (input.amendment && !uniqueSource) continue
     const command = EXACT_RUN.exec(clause)?.[1]
     const exactArgv = command ? argvForLocalOperation(command) : null
-    const argvAlternatives = exactArgv ? [exactArgv] : jobArgv(clause, declaredScripts)
+    const argvAlternatives = (exactArgv ? [exactArgv] : jobArgv(clause, declaredScripts))
+      .filter(argv => !taskProhibitsCommand(input.activeProse, formatArgvAsCommand(argv)))
     if (argvAlternatives.length === 0) continue
     const operations = argvAlternatives.map(operationDigest)
+    const baseDescription = `Requested foreground effect: ${redactSecrets(clause)}`
+    if (input.amendment && input.existingCriteria.some(item =>
+      item.required && item.verification.kind === REQUESTED_LOCAL_EXECUTION_KIND && item.description === baseDescription)) continue
     for (const digest of operations) refs.add(executionRef(2, scope, digest))
     if (exactArgv && coveredByExactVerifier(exactArgv, input.existingCriteria)) continue
 
     const clauseDigest = sha256Canonical(clause)
     const identity = sha256Canonical({ sourceDigest, clauseDigest, operations })
     const id = `acceptance:requested-local-execution:${identity.slice(0, 32)}`
-    const baseDescription = `Requested foreground effect: ${redactSecrets(clause)}`
     descriptions ??= new Set(input.existingCriteria.map(item => redactSecrets(item.description)))
     let description = baseDescription
     for (let suffix = 2; descriptions.has(description); suffix++)
@@ -125,8 +140,15 @@ export function requestedLocalExecutionAcceptance(input: {
       },
     })
     refs.add(`${REF_PREFIX}:criterion:v1:${sourceDigest}:${clauseDigest}:${id}`)
+    if (uniqueSource)
+      sources.push({ criterion_id: id, status: 'explicit', input_digest: sourceDigest, start, end: start + clause.length })
   }
-  return { criteria, provenance: [...refs].map(ref => ({ kind: 'derived_acceptance', ref })) }
+  return { criteria, provenance: [...refs].map(ref => ({ kind: 'derived_acceptance', ref })), sources }
+}
+
+/** Recognize only the request-operation provenance families written by amendment admission. */
+export function isRequestedOperationAmendmentRef(ref: string): boolean {
+  return /^babel:requested-local-execution:(?:v2:mixed:[0-9a-f]{64}|criterion:v1:[0-9a-f]{64}:[0-9a-f]{64}:acceptance:requested-local-execution:[0-9a-f]{32})$/.test(ref)
 }
 
 /** Match a foreground proposal to an admission-time operation identity, for settlement only. */

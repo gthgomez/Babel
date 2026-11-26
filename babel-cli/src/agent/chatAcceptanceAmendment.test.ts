@@ -19,6 +19,7 @@ import {isAcceptanceMeaningDerivedRef} from './taskAcceptanceMeaning.js'
 import {validateTaskModeCompanion} from './taskModeRevision.js'
 import {createWorkingState,type WorkingState} from './codingLoop/workingState.js'
 import {assertObjectiveLifecycle} from './taskObjectiveLifecycle.js'
+import { REQUESTED_LOCAL_EXECUTION_KIND, requiredLocalExecutionScope } from './requestedLocalExecution.js'
 
 const request = 'Update fixture behavior.\nAcceptance criteria:\n- Preserve the existing API.'
 const addition = 'Also require:\n- The task survives restart.'
@@ -120,6 +121,37 @@ test('executable-bound amendment survives authenticated canonical cold replay', 
     '- `npm test` must pass.',
     '- Preserve the parser API.',
   ].join('\n'), ['npm test']))
+
+test('a requested operation amendment adds a source-linked effect without changing frozen policy', () => {
+  const originalCommand = 'node tools/build-index.mjs'
+  const newCommand = 'node tools/export-feed.mjs'
+  const changedInput = `Also run \`${newCommand}\`.`
+  return fixture((engine, runDir, root) => {
+    const before = engine.getTaskContract()!
+    assert.ok(before.acceptance.some(item => item.verification.kind === REQUESTED_LOCAL_EXECUTION_KIND))
+    engine.admitUserSubmission({ userInput: changedInput }, route)
+    const current = engine.getTaskContract()!
+    assert.equal(current.task_id, before.task_id)
+    assert.deepEqual(current.acceptance.slice(0, before.acceptance.length), before.acceptance)
+    assert.deepEqual(current.authority, before.authority)
+    assert.deepEqual(current.allowed_effects, before.allowed_effects)
+    assert.deepEqual(current.protected_paths, before.protected_paths)
+    assert.deepEqual(current.verifier_requirements, before.verifier_requirements)
+    const effect = current.acceptance.at(-1)!
+    assert.equal(effect.verification.kind, REQUESTED_LOCAL_EXECUTION_KIND)
+    assert.equal(effect.required, true)
+    for (const command of [originalCommand, newCommand])
+      assert.equal(requiredLocalExecutionScope(current.provenance.records, { type: 'run_command', command }, root), 'mixed')
+    const amendment = engine.getParityEventLog().events.find(event => event.kind === 'task_acceptance_amended')
+    assert.equal(amendment?.descriptor.schema_version, 3)
+    const source = amendment?.descriptor.meaning_sources.find(item => item.criterion_id === effect.id)
+    assert.ok(source)
+    assert.equal(changedInput.slice(source.start, source.end), `run \`${newCommand}\``)
+    assert.equal(loadLiveSessionAuthorityStrict(runDir).taskContract.contract_hash, current.contract_hash)
+    engine.admitUserSubmission({ userInput: 'continue' }, route)
+    assert.equal(engine.getTaskContract()!.contract_hash, current.contract_hash)
+  }, 'chat', false, `Update the project index. Run \`${originalCommand}\`.`)
+})
 
 test('status and continuation preserve amended requirements through mode changes and cold restore', () =>
   fixture(async (engine, runDir, root) => {

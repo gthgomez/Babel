@@ -48,6 +48,7 @@ test('freezes exact required foreground argv and does not retain a command in pr
     activeProse: [directRequest], existingCriteria: [],
   }).provenance
   assert.equal(requiredLocalExecutionScope(projected, { type: 'run_command', command }, root), 'mixed')
+  assert.equal(admit([directRequest, directRequest]).criteria.length, 1)
 })
 
 test('does not create a required effect from optional, prohibited, quoted or composite commands', () => {
@@ -61,7 +62,20 @@ test('does not create a required effect from optional, prohibited, quoted or com
     `Example: Run \`${command}\`.`,
     `For example. Run \`${command}\`.`,
     `Run \`${command} && echo ok\`.`,
-  ]) assert.deepEqual(admit([prose]), { criteria: [], provenance: [] }, prose)
+  ]) assert.deepEqual(admit([prose]), { criteria: [], provenance: [], sources: [] }, prose)
+})
+
+test('an unrelated prohibition does not erase an independently required operation', () => {
+  const denied = 'npm test'
+  const { criteria, provenance } = admit([directRequest, `Do not run \`${denied}\`.`, `Run \`${denied}\`.`])
+  assert.deepEqual(criteria.map(item => item.required), [true])
+  assert.equal(requiredLocalExecutionScope(provenance, { type: 'run_command', command }, root), 'mixed')
+  assert.equal(requiredLocalExecutionScope(provenance, { type: 'test_run', command: denied }, root), null)
+
+  const exportCommand = 'python3 export.py input.json output.csv'
+  const job = admit(['Add export.py, a local CLI.', 'Run the exporter to create output.csv from input.json.', 'Do not run tests.'])
+  assert.equal(job.criteria.length, 1)
+  assert.equal(requiredLocalExecutionScope(job.provenance, { type: 'run_command', command: exportCommand }, root), 'mixed')
 })
 
 test('binds the declared warehouse pattern and a renamed pre-existing non-CSV job', () => {
