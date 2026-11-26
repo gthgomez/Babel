@@ -419,13 +419,6 @@ export class ChatEngineP11Authority {
       compiled_request_identity: PENDING_COMPILED_REQUEST_IDENTITY,
     });
     if (!sources) return null;
-    const membership = this.host.parity.authorizedObservationIds;
-    const manifest = sources.observation_manifest ?? [];
-    if (!membership || manifest.length !== membership.size ||
-        manifest.some(ref => !membership.has(ref.observation_id))) {
-      this.noteP11InstallBlock('prepare_blocked', ['observation_manifest_incomplete']);
-      return false;
-    }
     const prepared = prepareConversationCheckpoint(this.p11CheckpointPreparationInput(owner, sources));
     return prepared.status === 'prepared' ? prepared : null;
   }
@@ -698,6 +691,13 @@ export class ChatEngineP11Authority {
     // Same checkpoint id / epoch / lineage derivation as the R1/T5 candidate
     // prepare (p11CheckpointPreparationInput), now with the REAL compiled
     // request identity computed from this turn's rebuilt messages.
+    const membership = this.host.parity.authorizedObservationIds;
+    const manifest = sources.observation_manifest ?? [];
+    if (!membership || manifest.length !== membership.size ||
+        manifest.some(ref => !membership.has(ref.observation_id))) {
+      this.noteP11InstallBlock('prepare_blocked', ['observation_manifest_incomplete']);
+      return false;
+    }
     const prepared = prepareConversationCheckpoint(this.p11CheckpointPreparationInput(owner, sources));
     if (prepared.status !== 'prepared') {
       this.noteP11InstallBlock('prepare_blocked', [
@@ -821,7 +821,7 @@ export class ChatEngineP11Authority {
     ));
     return events.some(event => {
       if ((event.kind !== 'tool_completed' && event.kind !== 'tool_failed') ||
-          !turns.has(event.turn_id) || event.preDispatchNoEffect === true) return false;
+          event.turn_id === null || !turns.has(event.turn_id) || event.preDispatchNoEffect === true) return false;
       const id = deriveObservationId({
         run_id: this.host.engineRunId,
         task_id: taskId,
