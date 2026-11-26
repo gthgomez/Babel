@@ -302,6 +302,9 @@ function formatTerminalAnswerForOutcome(input: {
   if ((!unverifiedTerminal && !blockedRecovery) || !input.hasMutation) return input.answer
 
   const artifactRefs = collectConfirmedMutationArtifactPaths(input.toolCallLog)
+  const blockedAnswerLabel = input.toolCallLog.some(entry => entry.detail === 'requested_execution_denied')
+    ? 'Babel execution status:'
+    : 'Model response (task remains blocked):'
   if (blockedRecovery && input.preservedUnverifiedCandidate) {
     const confirmedRefs = new Set(artifactRefs)
     const retainedRefs = input.preservedUnverifiedCandidate.artifactRefs
@@ -325,7 +328,7 @@ function formatTerminalAnswerForOutcome(input: {
         'A policy or recovery boundary stopped this attempt; task completion is not certified.',
         'The host recorded a mutation but could not provide an enumerated artifact path.',
         '',
-        'Model response (task remains blocked):',
+        blockedAnswerLabel,
         '---',
         input.answer,
         '',
@@ -363,7 +366,7 @@ function formatTerminalAnswerForOutcome(input: {
       describeUnverifiedVerifierStatus(input.toolCallLog))
   } else {
     if (unverifiedTerminal) lines.push('', 'Unverified model response:', '---', input.answer)
-    else lines.push('', 'Model response (task remains blocked):', '---', input.answer)
+    else lines.push('', blockedAnswerLabel, '---', input.answer)
     lines.push('', 'Verification status:', describeUnverifiedVerifierStatus(input.toolCallLog))
   }
   return unverifiedTerminal || blockedRecovery

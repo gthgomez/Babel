@@ -39,15 +39,20 @@ function acceptance(task: string) {
 }
 
 test('a green-test requirement does not displace the requested arithmetic repair', () => {
-  const goal = 'Repair addition in src/math.js so it correctly adds any two numbers.'
-  const task = `${goal}\nRequirements: npm test must pass`
-  const { taskContract } = resolveLiveSessionAuthority({
-    mode: 'chat', task, projectRoot: null, executionScope: { kind: 'conversation' },
-    verifierRequirements: ['npm test'],
-  })
-  assert.deepEqual(taskContract.acceptance_criteria, [goal, 'npm test must pass'])
-  assert.match(taskContract.acceptance[0]!.verification.verifier_id, /^meaning:/)
-  assert.deepEqual(inferTaskAcceptanceForVersion(task, 4).criteria.map(item => item.description), ['npm test must pass'])
+  for (const goal of [
+    'Repair addition in src/math.js so it correctly adds any two numbers.',
+    'Fix add() to correctly add two numbers.',
+    'Repair the add function to add any two numbers.',
+  ]) {
+    const task = `${goal}\nRequirements: npm test must pass`
+    const { taskContract } = resolveLiveSessionAuthority({
+      mode: 'chat', task, projectRoot: null, executionScope: { kind: 'conversation' },
+      verifierRequirements: ['npm test'],
+    })
+    assert.deepEqual(taskContract.acceptance_criteria, [goal, 'npm test must pass'])
+    assert.match(taskContract.acceptance[0]!.verification.verifier_id, /^meaning:/)
+    assert.deepEqual(inferTaskAcceptanceForVersion(task, 4).criteria.map(item => item.description), ['npm test must pass'])
+  }
 })
 
 test('initial acceptance captures explicit user criteria before publishing the frozen seed', () => {

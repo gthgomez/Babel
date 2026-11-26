@@ -1615,9 +1615,10 @@ export class ChatEngineActionExecutor {
           : target;
 
       const requestedExecutionDenied = control && action.type === 'run_command' &&
-        action.background !== true && result.policyDecision === 'deny' && result.preDispatchNoEffect === true &&
+        action.background !== true && action.detached !== true && (action.cwd === undefined || action.cwd === '.') &&
+        result.policyDecision === 'deny' && result.preDispatchNoEffect === true &&
         result.reasonCode === 'DENY_MISSING_AUTHORITY' &&
-        requestsLocalExporterExecution(this.host.options.task, action.command, this.host.toolCallLog.flatMap(entry =>
+        requestsLocalExporterExecution(this.host.options.task, action.command, requireProjectRoot(this.host.options), this.host.toolCallLog.flatMap(entry =>
           entry.effect_status === 'confirmed_change' ? entry.mutation_paths ?? [] : [],
         ));
 
@@ -1669,10 +1670,10 @@ export class ChatEngineActionExecutor {
       });
 
       if (result.policyBlocked) {
-        callbacks?.onToolComplete?.(toolId, "blocked", "blocked", 1);
         if (requestedExecutionDenied) control.requestStop({
           owner: control.owner, kind: 'blocked', reasonCode: 'permission_denied', source: 'executor',
         });
+        callbacks?.onToolComplete?.(toolId, "blocked", "blocked", 1);
       } else {
         const hasErr = lastResult && lastResult.exit_code !== 0;
         callbacks?.onToolComplete?.(

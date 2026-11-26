@@ -35,8 +35,9 @@ const BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:ACTION:\s*)?(?:please\s+)?(?:fix|repair
 // without a "so ... is" clause and must not be displaced by a command-only
 // Requirements list.
 const QUANTIFIED_BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:please\s+)?(?:fix|repair|change|update|implement|make|ensure|support|add|extend)\b.{1,240}\b(?:include|includes|excluding|exclude|excludes|return|returns|export|exports|cover|covers|handle|handles|preserve|preserves|keep)\b.{1,200}\b(?:every|all|each|any|none|only)\b.{0,120}[.!]?\s*$/i
-const ARITHMETIC_GOAL_FRAME = /^ {0,3}(?:ACTION:\s*)?(?:please\s+)?(?:fix|repair|change|update|implement|make|ensure)\b.{1,240}\bso\b/i
-const QUANTIFIED_ARITHMETIC = /\b(?:(?:adds?|sums?|subtracts?|multipl(?:y|ies)|divides?)\s+(?:(?:any|all)\s+(?:two\s+)?|(?:its|the)\s+two\s+)(?:numbers|integers|operands|inputs)|(?:sum|difference|product|quotient)\s+for\s+(?:any|each|every)\s+pair)\b/i
+const ARITHMETIC_GOAL_FRAME = /^ {0,3}(?:ACTION:\s*)?(?:please\s+)?(?:fix|repair|change|update|implement|make|ensure)\b.{1,240}\b(?:so|to)\b/i
+const ARITHMETIC_OPERANDS = /\b(?:adds?|sums?|subtracts?|multipl(?:y|ies)|divides?)\s+(?:(?:any|all)\s+(?:two\s+)?|(?:(?:its|the)\s+)?two\s+)(?:numbers|integers|operands|inputs)\b/i
+const ARITHMETIC_RESULT_DOMAIN = /\b(?:sum|difference|product|quotient|addition|subtraction|multiplication|division)(?:\s+works)?\s+(?:for|of)\s+(?:any|all|each|every)\s+(?:pairs?|(?:two\s+)?(?:signed\s+)?(?:numbers|integers|operands|inputs))\b/i
 // Additional operative goal lines in the same opening prose block. They are
 // only admitted when at least one sibling line states an observable behavioral
 // objective, so ordinary context or a lone vague instruction is unchanged.
@@ -129,7 +130,7 @@ function isObservableGoal(line: string, includeArithmetic: boolean): boolean {
 
 /** Such a goal cannot inherit coverage from a verifier that only matches one illustrative input. */
 export function isQuantifiedArithmeticBehavior(description: string): boolean {
-  return QUANTIFIED_ARITHMETIC.test(description)
+  return ARITHMETIC_OPERANDS.test(description) || ARITHMETIC_RESULT_DOMAIN.test(description)
 }
 
 function isOperativeBehavioralGoal(body: string, includeArithmetic: boolean): boolean {

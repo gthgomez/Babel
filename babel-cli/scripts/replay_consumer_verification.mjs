@@ -74,18 +74,22 @@ const steps = scenario === 'warehouse' ? [
   tool('run_command', { command: exporterCommand }),
   tool('write_file', { path: 'warehouse.csv', content: expected }),
   'Created the exporter and CSV.',
+] : scenario === 'prohibited' ? [
+  tool('read_file', { path: 'math.js' }),
+  tool('test_run', { command: 'npm test' }),
+  'Inspection finished.',
 ] : [
   tool('read_file', { path: 'math.js' }),
   tool('str_replace', { file_path: 'math.js', old_str: 'a - b', new_str: wrongPatch ? '5' : 'a + b' }),
-  ...(scenario === 'prohibited' ? [] : [tool('test_run', { command: 'npm test' })]),
+  tool('test_run', { command: 'npm test' }),
   'Fixed addition in math.js.',
 ]
 const goals = {
-  'wrong-domain': 'Fix math.js so add correctly adds any two integers, for example add(2, 3) returns 5.',
+  'wrong-domain': 'Fix math.js so add returns the correct sum for any two integers, for example add(2, 3) returns 5.',
   'right-add': 'Fix math.js so add(2, 3) returns 5.',
 }
 const prompt = scenario === 'warehouse' ? warehousePrompt
-  : scenario === 'prohibited' ? addGoal + ' Do not run any shell commands or tests.'
+  : scenario === 'prohibited' ? 'Inspect math.js and report the calculation it implements. Do not edit files or run any shell commands or tests.'
     : (goals[scenario] ?? addGoal) + '\nRequirements: npm test must pass'
 const readEvents = () => readdirSync(runs, { recursive: true })
   .filter(path => path.endsWith('session-events.jsonl'))
@@ -189,7 +193,7 @@ try {
       { wait_for: 'str_replace', timeout_ms: 20_000 }, { sleep_ms: 900 },
       { key: 'ctrl-c' }, { wait_for: 'Cancelled', timeout_ms: 5000 },
     ] : [
-      { wait_for: scenario === 'warehouse' ? 'Not run' : 'Fixed addition', timeout_ms: 20_000 },
+      { wait_for: scenario === 'warehouse' ? 'Not run' : scenario === 'prohibited' ? 'Inspection finished' : 'Fixed addition', timeout_ms: 20_000 },
     ]),
     { sleep_ms: 1800 },
     ...exitSteps,
@@ -228,11 +232,17 @@ try {
     assert.match(transcript, /denied before dispatch/i)
     assert.equal(existsSync(join(workspace, 'warehouse.csv')), false, 'do not substitute a hand-written CSV for execution')
     assert.equal(trace.length, 3, 'the hard denial should settle without another provider turn')
+  } else if (scenario === 'prohibited') {
+    assert.ok(trace.some(step => step.tool === 'test_run'), 'the scripted provider attempted the prohibited command')
+    assert.ok(events.every(event => event.kind !== 'tool_started' || !['run_command', 'test_run'].includes(event.tool_name)))
+    assert.equal(readFileSync(join(workspace, 'math.js'), 'utf8'), 'export const add = (a, b) => a - b\n')
+    console.log(JSON.stringify({ scenario, terminal: terminal.outcome, attemptedCommand: 'npm test', babelTestStarted: false }))
   } else {
     const graderFile = join(grader, 'check.mjs')
+    writeFileSync(join(grader, 'candidate.mjs'), readFileSync(join(workspace, 'math.js')))
     writeFileSync(graderFile, [
       'import assert from "node:assert/strict"',
-      'import { add } from ' + JSON.stringify(pathToFileURL(join(workspace, 'math.js')).href),
+      'import { add } from "./candidate.mjs"',
       'for (const [a,b,expected] of [[2,3,5],[-4,7,3],[0,0,0],[8,-11,-3],[0.25,0.5,0.75]]) {',
       '  assert.equal(add(a,b),expected)',
       '}',
@@ -255,8 +265,6 @@ try {
       assert.match(resumed, /Latest turn is not verified\./)
       assert.deepEqual(readEvents().filter(event => event.kind === 'turn_ended'), terminals)
       assert.equal(readFileSync(join(root, 'provider.jsonl'), 'utf8').trim().split('\n').length, trace.length)
-    } else if (scenario === 'prohibited') {
-      assert.ok(events.every(event => event.kind !== 'tool_started' || !['run_command', 'test_run'].includes(event.tool_name)))
     } else {
       assert.equal(npmStarted, true)
       assert.equal(npmGreen, true)
