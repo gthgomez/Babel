@@ -435,8 +435,8 @@ export function rebuildProviderMessagesFromEvents(
   options: {
     systemPrompt?: string;
     upToSeq?: number;
-    /** Production reconstruction must name the durably installed context root. */
-    installedContextCheckpoint?: ContextCheckpoint;
+    /** null means no installed root; omission preserves legacy reconstruction. */
+    installedContextCheckpoint?: ContextCheckpoint | null;
   } = {},
 ): ProviderMessage[] {
   const events =
@@ -487,7 +487,7 @@ export function rebuildProviderMessagesFromEvents(
   // New logs carry the summary as a sibling advisory event. Legacy logs may
   // contain the old combined marker; split it into assistant context so old
   // model text is never re-promoted to system authority on resume.
-  const summaryEvent = events
+  const summaryEvent = options.installedContextCheckpoint === null ? undefined : events
     .slice(lastCapsuleIdx + 1)
     .find((event): event is Extract<ThreadEvent, { kind: 'compaction_summary' }> =>
       event.kind === 'compaction_summary' &&
@@ -634,8 +634,9 @@ function isCurrentCompactionGeneration(
   event: Extract<ThreadEvent, { kind: 'compaction_capsule' }>,
   currentOwnershipGeneration: number,
   currentOwnerTurnId: string | undefined,
-  installedContextCheckpoint?: ContextCheckpoint,
+  installedContextCheckpoint?: ContextCheckpoint | null,
 ): boolean {
+  if (installedContextCheckpoint === null) return false;
   if (installedContextCheckpoint !== undefined) {
     const lineage = installedContextCheckpoint.installed_lineage;
     if (!lineage || lineage.checkpoint_id !== installedContextCheckpoint.checkpointId) return false;

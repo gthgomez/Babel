@@ -378,8 +378,8 @@ export class ChatEngineStreamingLoop {
             this.host.parity.eventLog,
             {
               systemPrompt: activeSystemPrompt,
-              ...(rebuildRoot
-                ? { installedContextCheckpoint: rebuildRoot }
+               ...(rebuildRoot || this.host.parity.admissionStore
+                 ? { installedContextCheckpoint: rebuildRoot ?? null }
                 : {}),
             },
           )

@@ -2327,8 +2327,8 @@ export class ChatEngine {
       this.parity.eventLog,
       {
         systemPrompt,
-        ...(this.parity.contextCheckpoint
-          ? { installedContextCheckpoint: this.parity.contextCheckpoint }
+        ...(this.parity.contextCheckpoint || this.parity.admissionStore
+          ? { installedContextCheckpoint: this.parity.contextCheckpoint ?? null }
           : {}),
       },
     );
@@ -2918,8 +2918,8 @@ export class ChatEngine {
     return this.services.conversation.rebuildProviderMessages(
       this.parity.eventLog,
       {
-        ...(this.parity.contextCheckpoint
-          ? { installedContextCheckpoint: this.parity.contextCheckpoint }
+        ...(this.parity.contextCheckpoint || this.parity.admissionStore
+          ? { installedContextCheckpoint: this.parity.contextCheckpoint ?? null }
           : {}),
       },
     );

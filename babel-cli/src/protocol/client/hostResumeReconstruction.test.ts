@@ -33,7 +33,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { ChatEngine } from '../../agent/chatEngine.js';
+import { ChatEngine, type ChatEngineOptions } from '../../agent/chatEngine.js';
 import {
   THREAD_EVENT_LOG_FILENAME,
   createThreadEventLog,
@@ -51,8 +51,9 @@ import {
   recordTurnEnded,
   recordUserSubmitted,
 } from '../../agent/sessionEvents.js';
-import { LIVE_SESSION_SNAPSHOT_FILENAME, TASK_CONTRACT_FILENAME } from '../../agent/liveSessionBridge.js';
+import { LIVE_SESSION_SNAPSHOT_FILENAME, TASK_CONTRACT_FILENAME, loadLiveSessionAuthorityStrict } from '../../agent/liveSessionBridge.js';
 import { chatSessionDir } from '../../cli/runsLayout.js';
+import { restoreEngineWithRetainedAuthority } from '../../services/threadStore/conversationSync.js';
 import { inspectSessionRestoreState } from '../../services/threadStore/sessionHydration.js';
 import { appendTurnCells } from '../../services/threadStore/threadStore.js';
 import {
@@ -101,14 +102,16 @@ interface ProtocolDescriptor {
  * `materializeEngine` → admission attach → `hydrateEngineFromRestore`
  * production path end to end.
  */
-function realEngineFactory(descriptor: ProtocolDescriptor): ChatEngine {
-  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
+function realEngineFactory(descriptor: ProtocolDescriptor, retained = false): ChatEngine {
+  const options: ChatEngineOptions = { model: 'deepseek-v4-flash-openrouter',
     task: `R1 6b-2 protocol resume ${descriptor.threadId}`,
     projectRoot: descriptor.projectRoot,
     runtimeMode: 'direct',
     executionProfile: 'chat',
-  });
-  engine.assignRunId(descriptor.threadId);
+  };
+  const restored = retained ? restoreEngineWithRetainedAuthority(descriptor.threadId, options) : null;
+  const engine = restored ?? new ChatEngine(options);
+  if (!restored) engine.assignRunId(descriptor.threadId);
   (
     engine as unknown as {
       submitMessageStream: (message: string, intent?: string) => AsyncGenerator<unknown>;
@@ -307,13 +310,13 @@ function writeMembershipSnapshot(threadId: string, authorizedIds: readonly strin
   );
 }
 
-function sources(manifest: readonly ObservationRefV1[]): LiveOperationalSourcesV1 {
+function sources(manifest: readonly ObservationRefV1[], contractHash: string): LiveOperationalSourcesV1 {
   return {
     resumed: false,
     task_contract: {
       goal: 'protocol restore reconstructs durable session state',
       acceptance_clause_ids: ['clause-1'],
-      contract_hash: 'contract-hash-1',
+      contract_hash: contractHash,
     },
     working_state: {
       current_hypothesis: 'the protocol seam must mirror the primary resume sequence',
@@ -351,13 +354,14 @@ function writeCheckpointFixture(
   threadId: string,
   owner: ContextCheckpointOwnerV1,
   manifest: readonly ObservationRefV1[] = [],
+  contractHash = 'unused-without-durable-owner',
 ): void {
   const dir = chatSessionDir(threadId);
   mkdirSync(dir, { recursive: true });
   const prepared = prepareContextCheckpoint({
     checkpointId: `cp-${threadId}`,
     owner,
-    sources: sources(manifest),
+    sources: sources(manifest, contractHash),
     turnId: 'turn-1',
     contextEpoch: '1:revision-1:capture-epoch-1',
   });
@@ -474,7 +478,8 @@ test('control 2+3: protocol restore restores membership and consumes the install
     // Installed checkpoint + durable membership + payload present.
     const observation = captureObservation(sessionDir, 'present');
     writeMembershipSnapshot(threadId, [observation.observationId]);
-    writeCheckpointFixture(threadId, owner, [observation.ref]);
+    const contractHash = loadLiveSessionAuthorityStrict(sessionDir).taskContract.contract_hash;
+    writeCheckpointFixture(threadId, owner, [observation.ref], contractHash);
 
     const host = makeHost();
     hosts.push(host);
@@ -521,7 +526,8 @@ test('control 2: missing observation payload fails closed while membership stays
     const owner = await admitDurableOwner(threadId, fixture.root);
     const observation = captureObservation(sessionDir, 'missing-payload');
     writeMembershipSnapshot(threadId, [observation.observationId]);
-    writeCheckpointFixture(threadId, owner, [observation.ref]);
+    const contractHash = loadLiveSessionAuthorityStrict(sessionDir).taskContract.contract_hash;
+    writeCheckpointFixture(threadId, owner, [observation.ref], contractHash);
     // The durable membership and the manifest entry exist; the payload object
     // does not. The checkpoint must stay inert rather than reconstruct partial
     // trusted context.
