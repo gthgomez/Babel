@@ -18,6 +18,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import {normalizeChatExecutionScope} from './chatExecutionScope.js';
 import {inferFreshTaskAcceptance} from './taskAcceptanceMeaning.js';
+import { taskProhibitsCommand } from './taskCommandProhibitions.js';
 import { requestedLocalExecutionAcceptance } from './requestedLocalExecution.js';
 import {
   bindExecutableVerifiersToTaskAcceptance,
@@ -379,7 +380,7 @@ export function resolveLiveSessionAuthority(input: {
   const requiredVerifierCommands = [...new Set([
     ...(input.verifierRequirements ?? []),
     ...relevanceBoundVerifierCommands(meaning),
-  ])];
+  ])].filter(command => !taskProhibitsCommand(meaning.activeProse, command));
   const publicApiRecords = input.projectRoot && hasPublicApiPreservationClause(input.task)
     ? (() => {
         const surface = computePublicApiSurface(input.projectRoot!)

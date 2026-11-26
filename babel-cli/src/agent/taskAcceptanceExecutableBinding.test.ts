@@ -130,26 +130,46 @@ test('a numeric point binds only to an exact assertion in the admitted Node test
   rmSync(join(root, '.npmrc'))
   writeFileSync(join(root, 'example.mjs'), 'export function computeDiscount() { return 5; }\n')
   assert.equal(contract(goal).acceptance[0]?.verification.executable_id, undefined)
+  assert.equal(contract('Fix example.mjs so computeDiscount(100) returns 10.').acceptance[0]?.verification.executable_id, undefined)
+  rmSync(join(root, 'example.mjs'))
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    type: 'module', exports: './production.mjs', scripts: { test: 'node --test discount.test.mjs' },
+  }))
+  writeFileSync(join(root, 'production.mjs'), 'export default function (total) { return total * 0.05; }\n')
+  assert.equal(contract(goal).acceptance[0]?.verification.executable_id, undefined)
 })
 
 test('task command restrictions are exact and do not turn quoted evidence into a denial', () => {
   const active = ['Repair the parser. Do not run `npm test`.']
   assert.equal(taskProhibitsCommand(active, 'npm run test'), true)
   assert.equal(taskProhibitsCommand(active, 'node --test other.mjs'), false)
+  assert.equal(taskProhibitsCommand(['Please don’t run npm. Repair the parser.'], 'npm test'), true)
+  assert.equal(taskProhibitsCommand(['The log said "Skipped. Do not run npm." Repair the parser.'], 'npm test'), false)
+  assert.equal(taskProhibitsCommand(['Do not run npm or yarn.'], 'npm test'), true)
+  assert.equal(taskProhibitsCommand(['Do not run npm or yarn.'], 'yarn test'), true)
+  assert.equal(taskProhibitsCommand(['Do not run `npm test` or `yarn build`.'], 'yarn test'), false)
   assert.equal(taskProhibitsCommand(['Do not edit files or run any tests or shell commands.'], 'node file.mjs'), true)
   assert.equal(taskProhibitsCommand(['The issue said "Do not run npm".'], 'npm test'), false)
 })
 
-test('a point needs its own observed TAP result, and a newer same-scope check supersedes it', () => {
-  assert.equal(nodePointExecuted('TAP version 13\nok 1 - discount point\n', 'discount point'), true)
-  assert.equal(nodePointExecuted('✔ discount point (3.245ms)\nℹ tests 1\n', 'discount point'), true)
-  assert.equal(nodePointExecuted('✔ discount point (3.245ms)\n✔ other (1ms)\nℹ tests 1\n', 'discount point'), false)
+test('a point needs the complete frozen runner report and newer same-scope checks supersede it', () => {
+  const witness = { entry: 'node --test point.test.mjs', npmScript: false, testNames: ['discount point'] }
+  const summary = (prefix: string) => [
+    'tests 1', 'suites 0', 'pass 1', 'fail 0', 'cancelled 0', 'skipped 0', 'todo 0', 'duration_ms 10.9',
+  ].map(line => `${prefix} ${line}`).join('\n')
+  const tap = `TAP version 13\nok 1 - discount point\n1..1\n${summary('#')}\n`
+  const spec = `✔ discount point (3.245ms)\n${summary('ℹ')}\n`
+  assert.equal(nodePointExecuted(tap, witness), true)
+  assert.equal(nodePointExecuted(spec, witness), true)
+  assert.equal(nodePointExecuted(`\n> project@1.0.0 test\n> ${witness.entry}\n\n${spec}`, { ...witness, npmScript: true }), true)
+  assert.equal(nodePointExecuted(`\n> project@1.0.0 test\n> node --test other.test.mjs\n\n${spec}`, { ...witness, npmScript: true }), false)
+  assert.equal(nodePointExecuted(`${tap}\n✔ other (1ms)\n${summary('ℹ')}`, witness), false)
   for (const result of ['ok 1 - other', 'ok 1 - discount point # SKIP', 'not ok 1 - discount point', '# ok 1 - discount point']) {
-    assert.equal(nodePointExecuted(`TAP version 13\n${result}\n`, 'discount point'), false)
+    assert.equal(nodePointExecuted(tap.replace('ok 1 - discount point', result), witness), false)
   }
   const green = { command: 'npm test', exit_code: 0, summary: 'pass', target: POINT_TARGET_PREFIX + 'frozen',
     order: { sessionId: 'current', seq: 3 }, working_directory: '.', environment_policy: 'host-process' }
-  const later = { command: green.command, exit_code: 0, summary: 'different test passed',
+  const later = { command: 'npm  test', exit_code: 0, summary: 'different test passed',
     order: { sessionId: 'current', seq: 4 }, working_directory: '.', environment_policy: 'host-process' }
   assert.deepEqual(retainCurrentPointReceipts([green, later]), [later])
   assert.deepEqual(retainCurrentPointReceipts([green, { ...later, working_directory: 'other' }]),

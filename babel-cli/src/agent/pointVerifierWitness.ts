@@ -1,9 +1,10 @@
 import { parse, type AnyNode, type CallExpression, type ImportDeclaration } from 'acorn'
-import { existsSync } from 'node:fs'
+import { existsSync, lstatSync } from 'node:fs'
 import { join, posix } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
 import { discoverVerifierInputClosure } from '../evidence/revisionBoundReceipt.js'
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js'
+import { verifierExecutionFingerprint } from '../services/verifierIdentity.js'
 import { parseStructuredVerifierCommand } from './completionGatePolicy.js'
 import type { TaskBehaviorPoint } from './taskBehaviorPoint.js'
 import { readVerifierCommandInput, verifierCommandInputFiles, type VerifierCommandInputOverrides } from './verifierCommandInputs.js'
@@ -12,9 +13,10 @@ function strictTestCommand(projectRoot: string, command: string, fs: VerifierCom
   const npmScript = /^npm\s+(?:run\s+)?([\w:.-]+)$/.exec(command)
   if (!npmScript) return command
   if ((fs.exists ?? existsSync)(join(projectRoot, '.npmrc'))) return undefined
-  const packageText = readVerifierCommandInput(projectRoot, 'package.json', fs)
-  if (!packageText) return undefined
   try {
+    if (!fs.readFile && !lstatSync(join(projectRoot, 'package.json')).isFile()) return undefined
+    const packageText = readVerifierCommandInput(projectRoot, 'package.json', fs)
+    if (!packageText) return undefined
     const scripts = (JSON.parse(packageText) as { scripts?: Record<string, unknown> }).scripts
     const name = npmScript[1]!
     if (!scripts || Object.hasOwn(scripts, `pre${name}`) || Object.hasOwn(scripts, `post${name}`)) return undefined
@@ -29,7 +31,20 @@ export const POINT_TARGET_PREFIX = 'node-test-point:v1:'
 
 interface PointVerifierWitness {
   target: string
-  testName: string
+  entry: string
+  npmScript: boolean
+  testNames: string[]
+}
+
+function matchesDeclaredEntry(projectRoot: string, target: string, fs: VerifierCommandInputOverrides): boolean {
+  const manifest = readVerifierCommandInput(projectRoot, 'package.json', fs)
+  if (manifest === null) return !(fs.exists ?? existsSync)(join(projectRoot, 'package.json'))
+  const { main, exports } = JSON.parse(manifest) as { main?: unknown; exports?: unknown }
+  if (main === undefined && exports === undefined) return true
+  // A package can expose different entries by condition or subpath. Without an
+  // explicit task path, do not guess which of those entries is the objective.
+  const entry = exports ?? main
+  return typeof entry === 'string' && posix.normalize(entry) === target
 }
 
 function uniquelyNamedTarget(
@@ -40,7 +55,8 @@ function uniquelyNamedTarget(
   fs: VerifierCommandInputOverrides,
 ): boolean {
   const closure = discoverVerifierInputClosure(projectRoot)
-  if (closure.mode !== 'bound' || !closure.paths.includes(targetPath)) return false
+  if (closure.mode !== 'bound' || !closure.paths.includes(targetPath) ||
+    !matchesDeclaredEntry(projectRoot, targetPath, fs)) return false
   for (const path of closure.paths) {
     if (path === testPath || path === targetPath || !/\.[cm]?[jt]sx?$/i.test(path)) continue
     const source = readVerifierCommandInput(projectRoot, path, fs)
@@ -120,8 +136,9 @@ export function pointVerifierWitness(
       )
     })
     const importedTarget = importedTargets[0]
-    if (importedTargets.length !== 1 || !importedTarget ||
-      !uniquelyNamedTarget(projectRoot, testPath, importedTarget.path, point.symbol, fs)) return undefined
+    if (importedTargets.length !== 1 || !importedTarget) return undefined
+    if (point.modulePath ? importedTarget.path !== point.modulePath
+      : !uniquelyNamedTarget(projectRoot, testPath, importedTarget.path, point.symbol, fs)) return undefined
 
     let witnessName: string | undefined
     const registeredNames = new Set<string>()
@@ -136,7 +153,8 @@ export function pointVerifierWitness(
         assertion.callee.property.type !== 'Identifier' ||
         !['equal', 'strictEqual'].includes(assertion.callee.property.name)) return undefined
       const name = node.expression.arguments[0]
-      if (name?.type !== 'Literal' || typeof name.value !== 'string' || registeredNames.has(name.value)) return undefined
+      if (name?.type !== 'Literal' || typeof name.value !== 'string' || registeredNames.has(name.value) ||
+        !/^[\p{L}\p{N} ._'-]{1,120}$/u.test(name.value) || name.value !== name.value.trim()) return undefined
       registeredNames.add(name.value)
       const [actual, expected] = assertion.arguments
       if (assertion.arguments.length === 2 && actual?.type === 'CallExpression' &&
@@ -144,48 +162,67 @@ export function pointVerifierWitness(
         actual.arguments.length === point.args.length &&
         point.args.every((value, index) => Object.is(value, numericLiteral(actual.arguments[index]))) &&
         Object.is(point.expected, numericLiteral(expected))) {
-        if (witnessName || !/^[\p{L}\p{N} ._'-]{1,120}$/u.test(name.value) || name.value !== name.value.trim()) return undefined
+        if (witnessName) return undefined
         witnessName = name.value
       }
     }
     if (!witnessName) return undefined
     return {
       target: POINT_TARGET_PREFIX + sha256Canonical({
-        testPath, test: witnessName, checkDigest: sha256Canonical(content), path: importedTarget.path, point,
+        entry, testPath, test: witnessName, checkDigest: sha256Canonical(content), path: importedTarget.path, point,
       }),
-      testName: witnessName,
+      entry,
+      npmScript: command !== entry,
+      testNames: [...registeredNames],
     }
   } catch {
     return undefined
   }
 }
 
-/** A suite exit cannot establish a selected case was executed. Require its runner result. */
-export function nodePointExecuted(stdout: string, testName: string): boolean {
-  const lines = stdout.split(/\r?\n/)
-  if (lines.includes('TAP version 13')) {
-    const results = lines.map(line => /^(not )?ok \d+ - (.+)$/.exec(line)).filter(result => result !== null)
-    const matching = results.filter(result => result[2] === testName)
-    return matching.length === 1 && matching[0]?.[1] === undefined
+/** Reconcile the complete runner report with the frozen registration, not an isolated stdout marker. */
+export function nodePointExecuted(stdout: string, witness: Omit<PointVerifierWitness, 'target'>): boolean {
+  const lines = stdout.trim().split(/\r?\n/).filter(line => line.trim() !== '')
+  if (witness.npmScript) {
+    if (!lines[0]?.startsWith('> ') || lines[1] !== `> ${witness.entry}`) return false
+    lines.splice(0, 2)
   }
-  // Supported Node versions also use the spec reporter by default. Its
-  // result rows are interleaved with stdout, so reconcile the runner count.
-  const totals = lines.flatMap(line => /^ℹ tests (\d+)$/.exec(line)?.[1] ?? [])
-  const results = lines.map(line => /^([✔✖﹣]) (.+) \(\d+(?:\.\d+)?ms\)$/.exec(line)).filter(result => result !== null)
-  const matching = results.filter(result => result[2] === testName)
-  return totals.length === 1 && results.length === Number(totals[0]) &&
-    matching.length === 1 && matching[0]?.[1] === '✔'
+  const isTap = lines[0] === 'TAP version 13'
+  const count = witness.testNames.length
+  const prefix = isTap ? '#' : 'ℹ'
+  const footer = [
+    ...(isTap ? [`1..${count}`] : []),
+    `${prefix} tests ${count}`, `${prefix} suites 0`, `${prefix} pass ${count}`,
+    ...['fail', 'cancelled', 'skipped', 'todo'].map(label => `${prefix} ${label} 0`),
+  ]
+  if (!/^(?:#|ℹ) duration_ms \d+(?:\.\d+)?$/.test(lines.at(-1) ?? '') ||
+    !lines.at(-1)?.startsWith(prefix)) return false
+  const summary = lines.slice(-footer.length - 1, -1)
+  if (summary.length !== footer.length || summary.some((line, index) => line !== footer[index])) return false
+
+  const caseRows = lines.slice(isTap ? 1 : 0, -footer.length - 1)
+  const results = caseRows.flatMap(line => {
+    if (isTap) return /^ok \d+ - (.+)$/.exec(line)?.[1] ?? []
+    return /^✔ (.+) \(\d+(?:\.\d+)?ms\)$/.exec(line)?.[1] ?? []
+  })
+  // A second reporter or plan in the body is ambiguous, even if its rows look green.
+  if (caseRows.some(line => /^TAP version |^\d+\.\.\d+|^(?:#|ℹ) (?:tests|pass|fail) \d+/.test(line))) return false
+  return results.length === count && new Set(results).size === count &&
+    witness.testNames.every(name => results.includes(name))
 }
 
 /** A later same-scope run without this case must not inherit an earlier case result. */
 export function retainCurrentPointReceipts(receipts: readonly BoundChatVerifierReceipt[]): BoundChatVerifierReceipt[] {
   return receipts.filter(receipt => {
     if (!receipt.target?.startsWith(POINT_TARGET_PREFIX)) return true
-    return !!receipt.order && !receipts.some(other =>
-      other.order?.sessionId === receipt.order!.sessionId && other.order.seq > receipt.order!.seq &&
+    const order = receipt.order
+    const command = verifierExecutionFingerprint(receipt.command)
+    if (!order || !command) return false
+    return !receipts.some(other =>
+      other.order?.sessionId === order.sessionId && other.order.seq > order.seq &&
       other.working_directory === receipt.working_directory && other.environment_policy === receipt.environment_policy &&
       other.executionContext?.environmentFingerprint === receipt.executionContext?.environmentFingerprint &&
-      other.command === receipt.command,
+      verifierExecutionFingerprint(other.command) === command,
     )
   })
 }

@@ -83,7 +83,8 @@ export async function settleChatVerifierResult(input: {
     : input.executionBackend ?? resultBackend
   const projectRoot = requireProjectRoot(host.options)
   const pointTargets = new Set<string>()
-  if (executionBackend === 'host-process' && lastResult.exit_code === 0) {
+  if (started && dispatch?.owner && dispatch.identity.cwd === dispatch.owner.workspaceRoot &&
+    executionBackend === 'host-process' && lastResult.process_termination === 'exited' && lastResult.exit_code === 0) {
     for (const requirement of host.parity.liveAuthority?.taskContract.acceptance ?? []) {
       const boundTarget = requirement.verification.target
       if (!boundTarget?.startsWith(POINT_TARGET_PREFIX) ||
@@ -91,7 +92,7 @@ export async function settleChatVerifierResult(input: {
       const point = taskBehaviorPoint(requirement.description)
       if (!point) continue
       const witness = pointVerifierWitness(projectRoot, target, point, {})
-      if (witness?.target === boundTarget && nodePointExecuted(lastResult.stdout, witness.testName)) {
+      if (witness?.target === boundTarget && nodePointExecuted(lastResult.stdout, witness)) {
         pointTargets.add(boundTarget)
       }
     }

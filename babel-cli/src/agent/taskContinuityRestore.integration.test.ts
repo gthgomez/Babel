@@ -100,8 +100,8 @@ if(!isSyntheticProviderFixtureReady()){
   })
   test('historical AUTO replay preserves the old amendment classification and subsequent continuation', async () => {
     const engine = await restore('continuity-legacy-amendment', [
-      { text: 'Review the README.', metadata: { requestedOperation: 'AUTO' } },
-      { text: 'Also require:\n- Add a usage example to README.md.', metadata: { requestedOperation: 'AUTO' } },
+      { text: 'Inspect the fixture.', metadata: { requestedOperation: 'AUTO' } },
+      { text: 'Also implement the usage example.', metadata: { requestedOperation: 'AUTO' } },
     ])
     try {
       assert.equal(engine.getTurnRuntimeSnapshot()?.effectiveOperation, 'HYBRID')
