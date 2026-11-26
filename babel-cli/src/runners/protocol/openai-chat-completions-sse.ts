@@ -14,7 +14,7 @@ const toolDelta = z.object({
   type: z.literal('function').nullish(),
   function: z.object({ name: optionalString, arguments: optionalString }).nullish(),
 });
-const toolStreamFrame = z.object({
+const streamFrame = z.object({
   model: optionalString,
   provider: optionalString,
   error: z.unknown().optional(),
@@ -25,30 +25,48 @@ const toolStreamFrame = z.object({
     }).nullish(),
     attempts: z.array(z.object({}).passthrough()).nullish(),
   }).passthrough().nullish(),
-  choices: z.array(z.object({
-    // The request asks for one choice. A fragment from another choice must
-    // not be combined with a pending call from the first.
-    index: z.literal(0).optional(),
-    delta: z.object({
-      content: optionalString,
-      reasoning_content: optionalString,
-      tool_calls: z.array(toolDelta).nullish(),
-    }).nullish(),
-    finish_reason: optionalString,
-  })).max(1).nullish(),
+  choices: z.unknown().optional(),
 }).passthrough();
 
-export class MalformedToolStreamError extends Error {}
+const singleChoice = z.array(z.object({
+  // The request asks for one choice, and some compatible providers omit its index.
+  index: z.literal(0).optional(),
+  delta: z.object({
+    content: optionalString,
+    reasoning_content: optionalString,
+    tool_calls: z.array(toolDelta).nullish(),
+  }).nullish(),
+  finish_reason: optionalString,
+})).max(1).nullish();
 
-/** Validate executable stream fragments before any can enter the tool accumulator. */
-export function parseToolStreamFrame(data: string): z.infer<typeof toolStreamFrame> {
+export class MalformedChatCompletionsStreamError extends Error {}
+
+/** Parse envelope evidence before validating the choice that could produce output. */
+export function parseChatCompletionsStreamFrame(data: string): z.infer<typeof streamFrame> {
   let value: unknown;
   try {
     value = JSON.parse(data) as unknown;
   } catch {
-    throw new MalformedToolStreamError('Malformed SSE event chunk');
+    throw new MalformedChatCompletionsStreamError('Malformed SSE event chunk');
   }
-  const parsed = toolStreamFrame.safeParse(value);
-  if (!parsed.success) throw new MalformedToolStreamError('Malformed SSE event chunk (invalid frame fields)');
+  const parsed = streamFrame.safeParse(value);
+  if (!parsed.success) throw new MalformedChatCompletionsStreamError('Malformed SSE event chunk (invalid frame fields)');
   return parsed.data;
+}
+
+/** Enforce the shared single-choice and no-output-after-finish contract. */
+export function readChatCompletionsStreamChoice(
+  choices: unknown,
+  priorFinish: string | null,
+): NonNullable<z.infer<typeof singleChoice>>[number] | undefined {
+  const parsed = singleChoice.safeParse(choices);
+  if (!parsed.success) {
+    throw new MalformedChatCompletionsStreamError('Malformed SSE event chunk (expected a single choice at index 0 with valid fields)');
+  }
+  const choice = parsed.data?.[0];
+  const delta = choice?.delta;
+  if (priorFinish && (delta?.content || delta?.reasoning_content || delta?.tool_calls?.length)) {
+    throw new MalformedChatCompletionsStreamError('Malformed SSE event chunk (output after the reported finish)');
+  }
+  return choice;
 }

@@ -59,8 +59,9 @@ import {
 } from '../campaignDispatchGate.js';
 import { CampaignPhysicalFetchSession } from '../providerCampaignPhysicalFetch.js';
 import {
-  MalformedToolStreamError,
-  parseToolStreamFrame,
+  MalformedChatCompletionsStreamError,
+  parseChatCompletionsStreamFrame,
+  readChatCompletionsStreamChoice,
   ssePayloadFromTrimmedLine,
 } from './openai-chat-completions-sse.js';
 import { OpenAiCompatibleRunnerBase } from './openai-chat-completions-base.js';
@@ -660,7 +661,7 @@ async *executeWithToolsStream(
             streamState.sawDone = true;
             break;
           }
-          const json = parseToolStreamFrame(data);
+          const json = parseChatCompletionsStreamFrame(data);
           if (json.model) streamState.observedModelId = json.model;
           const router = json.openrouter_metadata as OpenRouterResponseMetadata | null | undefined;
           const upstreamProvider = upstreamProviderFromResponse({
@@ -679,12 +680,9 @@ async *executeWithToolsStream(
             return;
           }
 
-          const choice = json.choices?.[0];
+          const choice = readChatCompletionsStreamChoice(json.choices, finishReason);
           if (!choice) continue;
           const delta = choice.delta;
-          if (finishReason && (delta?.content || delta?.reasoning_content || delta?.tool_calls?.length)) {
-            throw new MalformedToolStreamError('Malformed SSE event chunk (output after the reported finish)');
-          }
           if (choice.finish_reason?.trim()) {
             finishReason = accumulateStreamFinish(finishReason, choice.finish_reason);
             reportedProviderFinish ??= choice.finish_reason;
@@ -718,7 +716,7 @@ async *executeWithToolsStream(
               const acc = pendingToolCalls.get(idx)!;
               if ((tc.id && acc.id && tc.id !== acc.id) ||
                   (tc.function?.name && acc.name && tc.function.name !== acc.name)) {
-                throw new MalformedToolStreamError('Malformed SSE event chunk (conflicting tool identity)');
+                throw new MalformedChatCompletionsStreamError('Malformed SSE event chunk (conflicting tool identity)');
               }
               if (tc.id) {
                 acc.id = tc.id;
@@ -796,7 +794,7 @@ async *executeWithToolsStream(
 
       signal?.throwIfAborted();
       if (!disposition.executeTools && !hasText) {
-        throw new MalformedToolStreamError('Empty provider response: no answer text or actionable tool calls');
+        throw new MalformedChatCompletionsStreamError('Empty provider response: no answer text or actionable tool calls');
       }
 
       // ── Yield accumulated tool calls ──────────────────────────────────
@@ -866,7 +864,7 @@ async *executeWithToolsStream(
     } catch (err) {
       if (responseValidationFailed) throw err;
       const cancelled = isCallerCancelError(err, signal);
-      const protocolError = err instanceof ConflictingStreamFinishError || err instanceof MalformedToolStreamError;
+      const protocolError = err instanceof ConflictingStreamFinishError || err instanceof MalformedChatCompletionsStreamError;
       const errMessage = cancelled ? `[${this.providerId}] Request cancelled` : err instanceof Error ? err.message : String(err);
       notifyPhase('provider_error', undefined, cancelled ? 'cancelled' : 'stream');
       settleStream({ stage: protocolError ? 'response_normalization' : 'stream', message: errMessage, interrupted: cancelled });

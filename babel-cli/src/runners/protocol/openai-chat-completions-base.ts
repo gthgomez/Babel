@@ -59,7 +59,7 @@ import {
   isStreamIdleTimeoutError,
   mapProviderMessages,
   releaseStreamReader,
-  parseSseLine,
+  readTextSseFrame,
   readErrorBody,
   readStreamWithLimits,
   readResponseBodyText,
@@ -84,7 +84,7 @@ import {
 } from '../campaignDispatchGate.js';
 import { assertOfflineEndpointAllowed } from '../../config/offlineMode.js';
 
-import { ssePayloadFromTrimmedLine } from './openai-chat-completions-sse.js';
+import { MalformedChatCompletionsStreamError, ssePayloadFromTrimmedLine } from './openai-chat-completions-sse.js';
 import type { PreparedProviderRequest } from '../preparedProviderRequest.js';
 import { CampaignPhysicalFetchSession } from '../providerCampaignPhysicalFetch.js';
 import type { ProviderInvocationCompleted } from '../base.js';
@@ -530,40 +530,16 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
     if (vcrPlayer) {
       const lines = await vcrPlayer.readAllLines();
       let text = '';
-      const streamState = {
-        ttftMs: null as number | null,
-        generationMs: null as number | null,
-        usage: null as ChatResponse['usage'] | null,
-        observedModelId: null as string | null,
-        upstreamProvider: null as string | null,
-        routerMetadata: null as OpenRouterResponseMetadata | null,
-        finishReason: null as string | null,
-        partialModelOutput: false,
-        outputReceipt: '',
-        sawDone: false,
-      };
+      const streamState = createTextResponseState();
       let firstChunkReceived = false;
       for (const line of lines) {
         const payload = ssePayloadFromTrimmedLine(line);
         if (payload !== null) {
-          const parsed = parseSseLine(`data: ${payload}`);
-          if (parsed.malformed) throw new Error(parsed.malformed);
-          if (parsed.observedModelId) {
-            streamState.observedModelId = parsed.observedModelId;
-          }
-          if (parsed.upstreamProvider) {
-            streamState.upstreamProvider = parsed.upstreamProvider;
-          }
-          if (parsed.routerMetadata) {
-            streamState.routerMetadata = parsed.routerMetadata;
-          }
-          if (parsed.finishReason) {
-            streamState.finishReason = parsed.finishReason;
-          }
-          if (parsed.isDone) {
+          if (payload === '[DONE]') {
             streamState.generationMs = Date.now() - startedAt - (streamState.ttftMs ?? 0);
             break;
           }
+          const parsed = readTextSseFrame(payload, streamState);
           if (parsed.delta) {
             if (!firstChunkReceived) {
               firstChunkReceived = true;
@@ -581,9 +557,6 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
           if (parsed.reasoning) {
             recordStreamingOutput(streamState, 'reasoning', parsed.reasoning);
             callbacks?.onThought?.(parsed.reasoning);
-          }
-          if (parsed.usage) {
-            streamState.usage = parsed.usage;
           }
         }
       }
@@ -921,9 +894,11 @@ export class OpenAiCompatibleRunnerBase extends CompatibleConfiguration implemen
             settleRetry(isAbortError(error) ? 'cancelled' : 'failed');
             const cancelled = isCallerCancelError(error, signal);
             const disposition = error instanceof TextResponseFinishError ? error.disposition : null;
-            const protocolError = error instanceof ConflictingStreamFinishError;
+            const protocolError = error instanceof ConflictingStreamFinishError ||
+              error instanceof MalformedChatCompletionsStreamError;
             if (disposition || protocolError) {
-              notifyPhase('response_normalization_failed', undefined, disposition?.finishReason ?? 'conflicting_finish');
+              notifyPhase('response_normalization_failed', undefined,
+                disposition?.finishReason ?? (error instanceof ConflictingStreamFinishError ? 'conflicting_finish' : 'malformed_sse'));
             } else {
               notifyPhase('provider_error', undefined, cancelled ? 'cancelled' : 'stream');
             }
