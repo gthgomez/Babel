@@ -899,7 +899,12 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
     const projectRoot = input.projectRoot
     const fs = input.relevanceFs ?? {}
     relevanceBound = explicitCriteria.map((criterion) => {
-      if (input.meaning.interpretation_version >= 5 && isQuantifiedArithmeticBehavior(criterion.description)) return criterion
+      // The relevance matcher can pair a call and result from an illustration.
+      // A matching example cannot establish the surrounding requirement.
+      if (input.meaning.interpretation_version >= 5 && (
+        isQuantifiedArithmeticBehavior(criterion.description) ||
+        /\b(?:for example|e\.g\.|such as)(?=[\s,:])/i.test(criterion.description)
+      )) return criterion
       const matches = relevantTrustedCommands({ criterion, trusted, projectRoot, fs })
       if (matches.length !== 1) return criterion
       const command = matches[0]!

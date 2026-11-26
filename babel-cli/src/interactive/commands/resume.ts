@@ -80,10 +80,14 @@ async function resumeSession(
     return;
   }
 
+  const latestTurnStatus = ctx.state.lastRunUserStatus;
+  const verificationNotice = latestTurnStatus === 'cancelled'
+    ? 'Latest turn was cancelled. Task completion is unverified.'
+    : latestTurnStatus === 'not_verified' ? 'Latest turn is not verified.' : '';
   buf.write(
     `\n  ${accentBright('Resumed session')} ${primary(sessionId)}` +
       `\n  ${muted(`${outcome.turnCount} turns loaded (${outcome.exchangeCount} exchanges)`)}` +
-      (ctx.state.lastRunUserStatus === 'not_verified' ? `\n  ${warning('Latest turn is not verified.')}` : '') +
+      (verificationNotice ? `\n  ${warning(verificationNotice)}` : '') +
       `\n  ${muted('Type a message to continue the conversation, or /clear to start fresh.')}\n`,
   );
 }

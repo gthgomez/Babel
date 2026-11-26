@@ -246,6 +246,8 @@ test('a frozen single-case verifier cannot cover a broader arithmetic goal', t =
     ['Fix math.js so add(2, 3) returns 5.', /^verifier:npm$/],
     ['Fix math.js so add returns the correct sum for any two integers, for example add(2, 3) returns 5.', /^meaning:/],
     ['Fix math.js so addition works for all signed integers, e.g. add(2, 3) returns 5.', /^meaning:/],
+    ['Fix math.js so add returns the sum of its two operands for all integer inputs, e.g. add(2, 3) returns 5.', /^meaning:/],
+    ['Fix math.js so add always returns the sum of its two inputs, e.g. add(2, 3) returns 5.', /^meaning:/],
   ] as const) {
     const { taskContract } = resolveLiveSessionAuthority({
       mode: 'chat', task: `${goal}\nRequirements: npm test must pass`, projectRoot: root,

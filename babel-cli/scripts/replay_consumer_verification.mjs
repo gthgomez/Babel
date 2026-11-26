@@ -262,7 +262,7 @@ try {
         { sleep_ms: 2100 }, { send: '/resume ' + terminal.session_id }, { key: 'enter' },
         { wait_for: 'Resumed session', timeout_ms: 12_000 }, { sleep_ms: 600 }, ...exitSteps,
       ])
-      assert.match(resumed, /Latest turn is not verified\./)
+      assert.match(resumed, /Latest turn was cancelled\. Task completion is unverified\./)
       assert.deepEqual(readEvents().filter(event => event.kind === 'turn_ended'), terminals)
       assert.equal(readFileSync(join(root, 'provider.jsonl'), 'utf8').trim().split('\n').length, trace.length)
     } else {
