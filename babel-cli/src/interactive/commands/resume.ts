@@ -3,8 +3,8 @@
 // session. Lists available sessions when called without arguments.
 
 import type { ReplContext } from '../context.js';
-import { resumeChatSession, type ResumeChatSessionOptions } from '../chatSessionResume.js';
-import { accentBright, muted, primary, error, warning } from '../../ui/theme.js';
+import { formatResumedTerminalNotice, resumeChatSession, type ResumeChatSessionOptions } from '../chatSessionResume.js';
+import { accentBright, muted, primary, error } from '../../ui/theme.js';
 import { listResumableSessions } from '../../services/chatSessionIndex.js';
 import { SessionPicker } from '../../ui/sessionPicker.js';
 import { OutputBuffer } from '../../ui/outputBuffer.js';
@@ -80,10 +80,16 @@ async function resumeSession(
     return;
   }
 
+  const notice = formatResumedTerminalNotice(outcome.terminal);
+  if (ctx.shellRuntime) {
+    ctx.shellRuntime.hydrateTurns(ctx.turns, outcome.sessionId);
+    ctx.shellRuntime.appendNotice(`Resumed session ${outcome.sessionId} — ${outcome.turnCount} turns loaded\n${notice}`);
+    return;
+  }
   buf.write(
     `\n  ${accentBright('Resumed session')} ${primary(sessionId)}` +
       `\n  ${muted(`${outcome.turnCount} turns loaded (${outcome.exchangeCount} exchanges)`)}` +
-      (ctx.state.lastRunUserStatus === 'not_verified' ? `\n  ${warning('Latest turn is not verified.')}` : '') +
+      `\n  ${notice}` +
       `\n  ${muted('Type a message to continue the conversation, or /clear to start fresh.')}\n`,
   );
 }

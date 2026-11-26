@@ -19,6 +19,7 @@ import { globalCostTracker } from '../../services/costTracker.js';
 import { buildRunStats, formatRunStatsHuman } from '../../services/runStats.js';
 import { runDoctor, formatDoctorHuman } from '../../doctor.js';
 import { BABEL_ROOT } from '../../cli/constants.js';
+import { chatSessionDir, resolveBabelRunsDir } from '../../cli/runsLayout.js';
 import { copyFileToClipboard } from '../../cli/helpers.js';
 import { copyToClipboardWithFeedback, isClipboardSupported } from '../../ui/clipboard.js';
 import { renderChatTranscript } from '../../ui/chatPanel.js';
@@ -35,10 +36,9 @@ import {
   getTerminalWidth,
 } from '../../ui/theme.js';
 import { readApprovalProfileStatus } from '../../config/approvalProfiles.js';
-import {
-  detectEnvBlockedFromText,
-  formatWhyStopped,
-} from '../../agent/implementorPolicy.js';
+import { terminalReasonGuidance } from '../../agent/chatTerminalReason.js';
+import { TerminalReasonCodeSchema } from '../../schemas/agentContracts.js';
+import { readDurableTerminalTruth } from '../../services/durableTerminalTruth.js';
 
 // ── Shared helper ────────────────────────────────────────────────────────────
 
@@ -245,108 +245,50 @@ export function handleTarget(ctx: ReplContext, _args: string[]): void {
   console.log(muted('\n  Use /retarget <path> to override, or /retarget to clear the override.'));
 }
 
-// ── Why stopped (implementor W1.5) ───────────────────────────────────────────
+// ── Why stopped ─────────────────────────────────────────────────────────────
 
-/**
- * Explain the last run terminal from harness policy events / cards when present.
- * Falls back to session hints when no run dir is available.
- */
+/** Explain the terminal recorded for the current conversation or selected run. */
 export function handleWhyStopped(ctx: ReplContext, args: string[]): void {
-  let status = 'unknown';
-  let hasAnyWrites = false;
-  let envBlocked = false;
-  let lastPolicyEvents: Array<{ kind: string; detail?: string; at_turn?: number; tool?: string }> =
-    [];
-  let topBlockedReason: string | undefined;
-  let blockedAttempts: Array<{ reason: string; tool: string }> | undefined;
-
-  try {
-    const runDir = resolveRunDir(ctx, args[0]);
-    const harnessCandidates = [
-      path.join(runDir, 'harness.json'),
-      ...fs
-        .readdirSync(runDir)
-        .filter((f) => f.endsWith('-harness.json'))
-        .map((f) => path.join(runDir, f)),
-    ];
-    for (const hp of harnessCandidates) {
-      if (!fs.existsSync(hp)) continue;
-      const raw = JSON.parse(fs.readFileSync(hp, 'utf8')) as Record<string, unknown>;
-      type CliPayload = {
-        status?: unknown;
-        answer?: string;
-        policy_events?: Array<{ kind: string; detail?: string; at_turn?: number; tool?: string }>;
-      };
-      const cliPayload = raw['cli_payload'] as CliPayload | undefined;
-      status = String(raw['status'] ?? cliPayload?.status ?? 'unknown');
-      const patch = raw['patch_reality'] as { empty_patch?: boolean } | undefined;
-      if (patch) hasAnyWrites = patch.empty_patch === false;
-      const writeCount = raw['write_count'];
-      if (typeof writeCount === 'number') hasAnyWrites = writeCount > 0;
-      const policy = cliPayload?.policy_events;
-      if (Array.isArray(policy)) lastPolicyEvents = policy;
-      const blocked = raw['blocked_attempt_counts'] as { byReason?: Record<string, number> } | undefined;
-      if (blocked?.byReason) {
-        const top = Object.entries(blocked.byReason).sort((a, b) => b[1] - a[1])[0];
-        if (top) topBlockedReason = top[0];
+  const selection = args.join(' ').trim().replace(/^"(.+)"$/, '$1');
+  const explicit = selection !== '' && selection.toLowerCase() !== 'latest';
+  const sessionId = ctx.chatEngine?.getEngineRunId?.();
+  const latestRun = ctx.turns.filter((turn) => turn.role === 'assistant').at(-1)?.run_dir;
+  let runDir = latestRun ?? (sessionId ? chatSessionDir(sessionId) : null);
+  let expectedSessionId = latestRun ? undefined : sessionId;
+  if (explicit) {
+    runDir = path.resolve(selection);
+    expectedSessionId = undefined;
+    if (/^[\w-]{1,80}$/.test(selection)) {
+      const conversationDir = chatSessionDir(selection);
+      const savedRunDir = path.join(resolveBabelRunsDir(), selection);
+      if (fs.existsSync(conversationDir)) {
+        runDir = conversationDir;
+        expectedSessionId = selection;
+      } else if (fs.existsSync(savedRunDir)) {
+        runDir = savedRunDir;
       }
-      // W1.2: blocked_attempts ledger for phase-gate write-block visibility
-      const attempts = raw['blocked_attempts'];
-      if (Array.isArray(attempts)) {
-        blockedAttempts = attempts as Array<{ reason: string; tool: string }>;
-      }
-      // Also accept top-level phase-gate counters if present
-      const answer = String(cliPayload?.answer ?? '');
-      envBlocked =
-        detectEnvBlockedFromText(answer, { hasAnyWrites }) ||
-        status === 'ENV_BLOCKED';
-      break;
-    }
-    const policyPath = path.join(runDir, 'policy-events.jsonl');
-    if (lastPolicyEvents.length === 0 && fs.existsSync(policyPath)) {
-      lastPolicyEvents = fs
-        .readFileSync(policyPath, 'utf8')
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => {
-          try {
-            return JSON.parse(line) as {
-              kind: string;
-              detail?: string;
-              at_turn?: number;
-              tool?: string;
-            };
-          } catch {
-            return null;
-          }
-        })
-        .filter(
-          (x): x is { kind: string; detail?: string; at_turn?: number; tool?: string } => x != null,
-        );
-    }
-  } catch {
-    status = ctx.lastAssistantAnswer ? 'session_answer' : 'no_run';
-    if (ctx.lastAssistantAnswer) {
-      envBlocked = detectEnvBlockedFromText(ctx.lastAssistantAnswer);
     }
   }
-
   console.log(primary('\n  Why stopped:\n'));
-  console.log(
-    formatWhyStopped({
-      status,
-      hasAnyWrites,
-      envBlocked,
-      lastPolicyEvents,
-      ...(topBlockedReason ? { topBlockedReason } : {}),
-      ...(blockedAttempts ? { blockedAttempts } : {}),
-    }),
-  );
-  console.log(
-    muted(
-      '\n  Tip: run a chat task first, then `/why-stopped` or `/why-stopped latest`. See docs/guides/CHAT_RUN_EVIDENCE_AND_CODING_PROFILE.md.\n',
-    ),
-  );
+  if (!runDir) {
+    console.log('    No recorded run in this conversation. Use /why-stopped <run-dir> to inspect a saved run.');
+    return;
+  }
+  const truth = readDurableTerminalTruth(runDir, expectedSessionId);
+  console.log(`    ${explicit ? 'Selected run' : 'Conversation run'}: ${path.basename(runDir)}`);
+  if (truth.turn_id) console.log(`    Turn: ${truth.turn_id}`);
+  console.log(`    Outcome: ${truth.outcome ?? truth.status ?? 'No durable outcome recorded'}`);
+  if (truth.reason_code) {
+    const reason = TerminalReasonCodeSchema.safeParse(truth.reason_code);
+    const guidance = reason.success ? terminalReasonGuidance(reason.data) : null;
+    console.log(`    Reason: ${truth.reason_code}${guidance ? ` — ${guidance.message}` : ''}`);
+  }
+  const changedFiles = [...new Set(truth.changed_files)];
+  if (changedFiles.length > 0) {
+    console.log(`    Recorded changed files (${changedFiles.length}): ${changedFiles.join(', ')}`);
+  }
+  if (truth.corrupt) console.log(`    Unreadable evidence: ${truth.corrupt_sources.join(', ')}`);
+  else if (truth.disagreement) console.log('    Durable records disagree; the outcome shown is conservative.');
 }
 
 // ── Stats ────────────────────────────────────────────────────────────────────

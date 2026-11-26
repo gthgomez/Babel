@@ -1,28 +1,41 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import type { ReplContext } from '../../interactive/context.js'
 import type { ChatEngine } from '../../agent/chatEngine.js'
+import { readDurableTerminalTruth } from '../../services/durableTerminalTruth.js'
 import {
   createShellCommandOperations,
   resetHostedConversation,
   runShellCommand,
 } from './shellOperations.js'
 
-test('production resume wiring calls resumeChatSession and rebinds the active thread', async () => {
+test('production resume wiring rebinds the active thread before showing the archived cancellation', async (t) => {
+  const runDir = mkdtempSync(join(tmpdir(), 'babel-shell-resume-'))
+  t.after(() => rmSync(runDir, { recursive: true, force: true }))
+  const sessionDir = join(runDir, 'sess-9')
+  mkdirSync(sessionDir)
+  writeFileSync(join(sessionDir, 'terminal_status_summary.json'), JSON.stringify({ terminal_outcome: 'CANCELLED' }))
+  const terminal = readDurableTerminalTruth(sessionDir)
   const engine = { getEngineRunId: () => 'resumed-engine' } as unknown as ChatEngine
-  const ctx = { chatEngine: undefined } as unknown as ReplContext
-  const changed: Array<string | undefined> = []
+  const updates: Array<string | undefined> = []
+  const ctx = {
+    chatEngine: undefined,
+    shellRuntime: { appendNotice: (notice: string) => updates.push(notice) },
+  } as unknown as ReplContext
   let receivedId: string | undefined
 
   const operations = createShellCommandOperations(
     ctx,
-    { invalidate: () => {}, onSessionChanged: (id) => changed.push(id) },
+    { invalidate: () => {}, onSessionChanged: (id) => updates.push(id) },
     {
       resumeChatSession: async (targetCtx, sessionId) => {
         receivedId = sessionId
         targetCtx.chatEngine = engine
-        return { ok: true, sessionId, turnCount: 3, exchangeCount: 2, source: 'transcript' }
+        return { ok: true, sessionId, turnCount: 3, exchangeCount: 2, source: 'transcript', terminal }
       },
     },
   )
@@ -30,7 +43,7 @@ test('production resume wiring calls resumeChatSession and rebinds the active th
   const outcome = await runShellCommand({ kind: 'session.resume', id: 'sess-9' }, operations)
   assert.equal(outcome.handled, true)
   assert.equal(receivedId, 'sess-9')
-  assert.deepEqual(changed, ['resumed-engine'])
+  assert.deepEqual(updates, ['resumed-engine', 'Latest turn was cancelled. Task completion is unverified.'])
 })
 
 test('resume failure is surfaced and does not rebind the active thread', async () => {

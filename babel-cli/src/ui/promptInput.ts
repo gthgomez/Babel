@@ -964,7 +964,7 @@ export class PromptInput {
 
     // Tab (non-popup): queue, autocomplete, tab completion
     if (event.name === "tab") {
-      if (this.shouldQueueOnTab()) {
+      if (this.shouldQueueDraft()) {
         this.queueSubmit();
         return;
       }
@@ -1952,8 +1952,8 @@ export class PromptInput {
 
   // ── Submit ──────────────────────────────────────────────────────────────────
 
-  /** True when Tab should enqueue the current draft instead of completing (C2). */
-  private shouldQueueOnTab(): boolean {
+  /** Busy follow-ups use the queue; slash commands still submit directly. */
+  private shouldQueueDraft(): boolean {
     if (!this.config.isTaskRunning?.()) return false;
     const text = this.lines.join("\n").trim();
     if (!text) return false;
@@ -1977,6 +1977,10 @@ export class PromptInput {
   }
 
   private submit(): void {
+    if (this.shouldQueueDraft()) {
+      this.queueSubmit();
+      return;
+    }
     const rawText = this.lines.join("\n");
     // Expand paste placeholders before submit (C5)
     const expanded = this.pasteStore.expand(rawText);

@@ -259,7 +259,7 @@ export function getContextualNextActions(
 
 export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   const kind = classifyReviewCard(input);
-  const files = input.changedFiles ?? [];
+  const files = [...new Set(input.changedFiles ?? [])];
   const v = input.verification;
   const hasDeliveryMutations = files.length > 0 || input.mutated === true;
   const isVerificationNotApplicable =
@@ -288,7 +288,7 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   lines.push(paintTitle(kind, title, isVerificationNotApplicable));
 
   if (files.length > 0) {
-    lines.push(dim('Changed'));
+    lines.push(dim(`Changed files (${files.length})`));
     for (const f of files.slice(0, 12)) {
       lines.push(`  ${dim('±')} ${f}`);
     }
@@ -303,7 +303,7 @@ export function buildReviewCard(input: ReviewCardInput): ReviewCard {
   }
 
   if (!isVerificationNotApplicable) {
-    lines.push(dim('Verified'));
+    lines.push(dim('Checks'));
     if (v?.ran && v.passed) {
       lines.push(`  ${success('✓')} ${v.command ?? 'verifier'} (exit ${v.exitCode ?? 0})`);
     } else if (v?.ran && v.passed === false) {

@@ -1081,6 +1081,27 @@ describe('PromptInput', () => {
       assert.equal(input.getState().text, '');
     });
 
+    it('busy Enter retains a full-queue draft and enqueues the same text once space opens', () => {
+      const draft = 'follow up: 検索.txt';
+      const submitted: string[] = [];
+      const attempted: string[] = [];
+      let hasSpace = false;
+      const input = createTestInput({
+        isTaskRunning: () => true,
+        onSubmit: text => submitted.push(text),
+        onQueue: text => { attempted.push(text); return hasSpace; },
+      });
+      type(input, draft);
+      input.handleKey(key('enter'));
+      assert.equal(input.getState().text, draft);
+      assert.deepEqual(submitted, []);
+      hasSpace = true;
+      input.handleKey(key('enter'));
+      assert.equal(input.getState().text, '');
+      assert.deepEqual(attempted, [draft, draft]);
+      assert.deepEqual(submitted, []);
+    });
+
     it('Tab completes when task is not running', () => {
       const queued: string[] = [];
       const input = createTestInput({

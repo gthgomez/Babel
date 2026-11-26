@@ -749,7 +749,7 @@ async function runChatEngineOnceScoped(input: RunChatEngineOnceInput): Promise<C
   const requestedOperation = isReadOnlyChat() ? 'READ_ONLY' : input.operation;
   const taskShape = resolveTaskShape(input.task, requestedOperation);
   const effectiveOperation: TaskOperation = taskShape.operation;
-  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true, operation: requestedOperation });
+  const resolvedTaskClass = resolveChatTaskClass({ taskText: input.task, autoClassify: true, taskShape });
   const limits = resolveChatEngineLimits(
     {},
     input.model,
@@ -1151,6 +1151,25 @@ export function buildChatRunPayload(
   },
   opts?: { taskIntent?: TaskIntent },
 ): Record<string, unknown> {
+  const verifier = result.verifierReceipt;
+  const gatePolicy = result.gatePolicy;
+  const turnId = result.turnTelemetry?.turnId;
+  const journal = result.runDir && turnId
+    ? inspectSessionEventLogFromDir(result.runDir, path.basename(result.runDir))
+    : null;
+  const turnEvents = journal?.kind === 'valid'
+    ? journal.log.events.filter(event => event.turn_id === turnId)
+    : [];
+  const settledChecks = new Map<string, { command: string; exit_code: number }>();
+  for (const event of turnEvents) {
+    if (event.kind !== 'verifier_attempt' || !event.tool_call_id ||
+      event.exit_code === undefined || (!event.receipt && !event.failed_execution)) continue;
+    // One check can produce both recovery and verification receipts.
+    settledChecks.set(event.tool_call_id, { command: event.command_preview, exit_code: event.exit_code });
+  }
+  const recordedChecks = [...settledChecks.values()];
+  const displayedCheck = journal?.kind === 'valid' ? recordedChecks.at(-1)
+    : journal?.kind === 'invalid' ? undefined : verifier;
   // Map truthful TerminalOutcome to legacy AskAnswer status.
   // Falls back to old heuristics when outcome is absent (test fixtures).
   const answerStatus = (() => {
@@ -1224,7 +1243,10 @@ export function buildChatRunPayload(
     'transcript.jsonl', 'policy-events.jsonl',
     'native-tool-rejection.json',
   ].map(name => path.join(result.runDir!, name)).filter(file => fs.existsSync(file)) : [];
-  payload['checks'] = ['chat engine path'];
+  payload['checks'] = recordedChecks.length
+    ? [...new Set(recordedChecks.map(check => check.command))]
+    : displayedCheck ? [displayedCheck.command] : [];
+  payload['verifier_receipt_settlement_count'] = turnEvents.length > 0 ? settledChecks.size : null;
   // Ensure terminal_outcome is always visible on the run payload when known.
   if (result.outcome !== undefined) {
     payload['terminal_outcome'] = result.outcome;
@@ -1244,16 +1266,16 @@ export function buildChatRunPayload(
   if (result.cause_class !== undefined) {
     payload['cause_class'] = result.cause_class;
   }
-  payload['verification'] = result.verifierReceipt
+  payload['verification'] = displayedCheck
     ? {
-        status: 'completed',
-        commands: [result.verifierReceipt.command],
-        exit_code: result.verifierReceipt.exit_code,
+        status: displayedCheck.exit_code === 0 ? 'passed' : 'failed',
+        commands: [displayedCheck.command],
+        exit_code: displayedCheck.exit_code,
       }
     : {
-        status: 'not_required',
-        commands: ['chat engine path'],
-        skipped_reason: 'chat mode',
+        status: gatePolicy === 'none' || !isExecute ? 'not_required' : 'skipped',
+        commands: [],
+        skipped_reason: 'No settled verifier receipt was recorded',
       };
   payload['routing'] = {
     orchestrator: 'chat_engine',
@@ -1267,8 +1289,6 @@ export function buildChatRunPayload(
     selected_entry_ids: [],
     prompt_manifest_count: 0,
   };
-  const verifier = result.verifierReceipt;
-  const gatePolicy = result.gatePolicy;
   let status: 'pass' | 'fail' | 'not_required' | 'not_run';
   let required: boolean;
   let reason: string;
@@ -1285,6 +1305,12 @@ export function buildChatRunPayload(
       status = 'not_run';
       required = gatePolicy === 'required' || gatePolicy === 'strict';
       reason = `Verifier "${verifier.command}" is not an authoritative project/dataset test command (install, ad-hoc, or probe).`;
+      verification = verifier;
+    } else if (verifier.exit_code === 0 && result.outcome !== undefined &&
+      result.outcome !== 'VERIFIED_COMPLETE' && result.outcome !== 'NO_CHANGE_REQUIRED') {
+      status = 'not_run';
+      required = gatePolicy === 'required' || gatePolicy === 'strict';
+      reason = `Check "${verifier.command}" passed; the recorded outcome does not establish completion verification.`;
       verification = verifier;
     } else {
       status = verifier.exit_code === 0 ? 'pass' : 'fail';
@@ -1339,63 +1365,33 @@ export function buildChatRunPayload(
   payload['policy_events'] = policyEventsOut;
 
   // A1: Aggregate tool call counts derived from toolCalls
-  if (result.toolCalls && result.toolCalls.length > 0) {
-    const aggregates = result.toolCallAggregates ?? computeToolCallAggregates(
-      result.toolCalls.map(tc => ({
-        tool: tc.tool,
-        ...(tc.error !== undefined ? { error: tc.error } : {}),
-        ...(tc.effect_scope !== undefined ? { effect_scope: tc.effect_scope } : {}),
-        ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
-      }))
-    );
-    payload['tool_call_count'] = aggregates.tool_call_count;
-    payload['write_count'] = aggregates.write_count;
-    // Keep the historical field for consumers; the explicit alias clarifies it is an invocation count.
-    payload['verifier_attempt_count'] = aggregates.verifier_attempt_count;
-    payload['verifier_tool_call_count'] = aggregates.verifier_attempt_count;
-    payload['verifier_execution_count'] = result.toolCallAggregates?.verifier_execution_count ?? null;
-    // C2: Count tools before first successful mutation
-    payload['tools_before_first_write'] = computeToolsBeforeFirstWrite(
-      result.toolCalls.map(tc => ({
-        tool: tc.tool,
-        ...(tc.error !== undefined ? { error: tc.error } : {}),
-        ...(tc.effect_scope !== undefined ? { effect_scope: tc.effect_scope } : {}),
-        ...(tc.effect_status !== undefined ? { effect_status: tc.effect_status } : {}),
-      }))
-    );
-  } else {
-    payload['tool_call_count'] = 0;
-    payload['write_count'] = 0;
-    payload['verifier_attempt_count'] = result.toolCallAggregates?.verifier_attempt_count ?? 0;
-    payload['verifier_tool_call_count'] = result.toolCallAggregates?.verifier_attempt_count ?? 0;
-    payload['verifier_execution_count'] = result.toolCallAggregates?.verifier_execution_count ?? null;
-    payload['tools_before_first_write'] = 0;
-  }
+  const toolCalls = result.toolCalls ?? [];
+  const aggregates = result.toolCallAggregates ?? computeToolCallAggregates(toolCalls);
+  payload['tool_call_count'] = aggregates.tool_call_count;
+  // Keep the historical field for consumers; the explicit alias clarifies it is an invocation count.
+  payload['verifier_attempt_count'] = aggregates.verifier_attempt_count;
+  payload['verifier_tool_call_count'] = aggregates.verifier_attempt_count;
+  payload['verifier_execution_count'] = result.toolCallAggregates?.verifier_execution_count ?? null;
+  payload['tools_before_first_write'] = computeToolsBeforeFirstWrite(toolCalls);
 
   // A4: Patch reality snapshot (derived from toolCalls; harness fills git fields)
-  const writeCountFromTools = result.toolCalls
-    ? result.toolCalls.filter(tc => isConfirmedMutation({
+  const writeCountFromTools = toolCalls.filter(tc => isConfirmedMutation({
       tool: tc.tool,
       error: tc.error,
       effectStatus: tc.effect_status,
       effectScope: tc.effect_scope,
       mutationPaths: tc.mutation_paths,
-    })).length
-    : 0;
-  const changedFiles = result.toolCalls && result.toolCalls.length > 0
-    ? [...new Set(
-        result.toolCalls
-          .flatMap(tc => confirmedMutationPaths({
-            tool: tc.tool,
-            target: tc.target,
-            error: tc.error,
-            effectStatus: tc.effect_status,
-            effectScope: tc.effect_scope,
-            mutationPaths: tc.mutation_paths,
-          }))
-          .filter((t): t is string => typeof t === 'string' && t.length > 0)
-      )]
-    : [];
+    })).length;
+  const changedFiles = [...new Set(toolCalls.flatMap(tc => confirmedMutationPaths({
+    tool: tc.tool,
+    target: tc.target,
+    error: tc.error,
+    effectStatus: tc.effect_status,
+    effectScope: tc.effect_scope,
+    mutationPaths: tc.mutation_paths,
+  })))];
+  payload['write_count'] = writeCountFromTools;
+  payload['changed_files'] = changedFiles;
   payload['patch_reality'] = {
     patch_bytes: 0,  // harness fills this; CLI can't know git diff
     changed_files: changedFiles,
@@ -1407,25 +1403,6 @@ export function buildChatRunPayload(
 
   // A4: Transcript path — set by harness if available
   payload['transcript_path'] = null;
-
-  // Surface changed_files derived from toolCalls (includes str_replace)
-  if (result.toolCalls && result.toolCalls.length > 0) {
-    const changedFiles = [...new Set(
-      result.toolCalls
-        .flatMap(tc => confirmedMutationPaths({
-          tool: tc.tool,
-          target: tc.target,
-          error: tc.error,
-          effectStatus: tc.effect_status,
-          effectScope: tc.effect_scope,
-          mutationPaths: tc.mutation_paths,
-        }))
-        .filter((t): t is string => typeof t === 'string' && t.length > 0)
-    )];
-    payload['changed_files'] = changedFiles;
-  } else {
-    payload['changed_files'] = [];
-  }
 
   // Surface verifier receipt
   if (result.verifierReceipt) {
