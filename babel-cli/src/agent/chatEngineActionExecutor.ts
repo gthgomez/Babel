@@ -206,7 +206,8 @@ export class ChatEngineActionExecutor {
     try {
     if ((action.type === 'write_file' || action.type === 'str_replace' || action.type === 'apply_patch') && turnRuntime &&
       substitutesRequestedProcessOutput(this.host.parity.liveAuthority?.taskContract.provenance.records ?? [],
-        inferFreshTaskAcceptance(turnRuntime.taskText).activeProse, action, requireProjectRoot(this.host.options))) {
+        [turnRuntime.durableObjective ?? turnRuntime.taskText, ...(turnRuntime.amendments ?? [])],
+        action, requireProjectRoot(this.host.options))) {
       const detail = 'requested-process-output';
       this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
       callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);

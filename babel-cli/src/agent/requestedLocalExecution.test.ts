@@ -105,12 +105,16 @@ test('binds the declared warehouse pattern and a renamed pre-existing non-CSV jo
 test('process-owned outputs reject direct substitutes without blocking independent edits', () => {
   const prose = ['Add export.py, a local CLI.', 'Run the exporter to create warehouse.csv from warehouse.json.']
   const records = admit(prose).provenance
-  assert.equal(substitutesRequestedProcessOutput(records, prose, { type: 'write_file', path: './warehouse.csv', content: 'substitute' }, root), true)
-  assert.equal(substitutesRequestedProcessOutput(records, prose, {
+  const requests = [prose.join('\n'), 'Also require:\n- Add preview.py.']
+  assert.equal(substitutesRequestedProcessOutput(records, requests, { type: 'write_file', path: './warehouse.csv', content: 'substitute' }, root), true)
+  assert.equal(substitutesRequestedProcessOutput(records, requests, {
     type: 'apply_patch', patch: '--- /dev/null\n+++ b/warehouse.csv\n@@ -0,0 +1 @@\n+substitute\n',
   }, root), true)
-  assert.equal(substitutesRequestedProcessOutput(records, prose, { type: 'str_replace', file_path: 'export.py', old_str: 'old', new_str: 'new' }, root), false)
-  assert.equal(substitutesRequestedProcessOutput([], prose, { type: 'write_file', path: 'warehouse.csv', content: 'untied' }, root), false)
+  assert.equal(substitutesRequestedProcessOutput(records, requests, {
+    type: 'apply_patch', patch: '--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n--- warehouse.csv\n+++ warehouse.csv\n',
+  }, root), false)
+  assert.equal(substitutesRequestedProcessOutput(records, requests, { type: 'str_replace', file_path: 'export.py', old_str: 'old', new_str: 'new' }, root), false)
+  assert.equal(substitutesRequestedProcessOutput([], requests, { type: 'write_file', path: 'warehouse.csv', content: 'untied' }, root), false)
 })
 
 test('a skipped runtime effect remains missing alongside a green governed verifier', async t => {

@@ -264,12 +264,12 @@ export class ShellRuntimeBinding {
         this.lastOutcome = event.outcome ?? 'CANCELLED';
         break;
       case 'done':
-        // A terminal-only answer or a block that supersedes provisional
-        // success must be visible in the hosted conversation.
+        // The settled answer can correct provisional output or add the
+        // completion limits established by the runtime.
         if (typeof event.answer === 'string' && event.answer.trim()) {
           const provisional = this.transcript.getAnswerText().trim();
           if (!provisional) this.transcript.onAnswerChunk(event.answer);
-          else if (event.blockedReport && event.answer.trim() !== provisional) {
+          else if (event.answer.trim() !== provisional) {
             this.transcript.replaceAnswer(event.answer);
           }
         }

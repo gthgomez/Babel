@@ -1,12 +1,12 @@
 import { relative, resolve } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
-import { extractPatchTargets } from '../authority/patchTargets.js'
 import { canonicalizeContained } from '../bridge/workspaceBound.js'
 import type { BlockedReport } from '../schemas/agentContracts.js'
 import { formatArgvAsCommand, parseCommandArgv } from '../utils/commandArgv.js'
 import { redactSecrets } from '../utils/redaction.js'
 import type { ChatToolAction } from './chatToolDefinitions.js'
-import type { AcceptanceMeaningSource } from './taskAcceptanceMeaning.js'
+import { parseUnifiedDiff } from './codingLoop/patchApply.js'
+import { inferFreshTaskAcceptance, type AcceptanceMeaningSource } from './taskAcceptanceMeaning.js'
 import { taskProhibitsCommand, v3TaskProhibitsCommand } from './taskCommandProhibitions.js'
 import type { AcceptanceRequirementV1, TaskContractProvenanceRecord } from './taskContract.js'
 
@@ -178,24 +178,36 @@ export function requiredLocalExecutionScope(
 /** A direct edit cannot substitute for an explicitly requested process output. */
 export function substitutesRequestedProcessOutput(
   records: readonly TaskContractProvenanceRecord[],
-  activeProse: readonly string[],
+  sourceRequests: readonly string[],
   action: Extract<ChatToolAction, { type: 'write_file' | 'str_replace' | 'apply_patch' }>,
   projectRoot: string,
 ): boolean {
   const admitted = new Set(records.filter(record => record.kind === 'derived_acceptance' &&
     record.ref.startsWith(`${REF_PREFIX}:v2:`)).map(record => record.ref))
   if (admitted.size === 0) return false
-  const clauses = activeClauses(activeProse, true)
-  const scripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
-  const requiredOutputs = new Set(clauses.flatMap(clause => jobArgv(clause, scripts)
+  // Resolve "the exporter" within each request as admission did. Later
+  // amendments must not make a script declaration in the objective ambiguous.
+  const operations = sourceRequests.flatMap((request, index) => {
+    const clauses = activeClauses(inferFreshTaskAcceptance(request).activeProse, index > 0)
+    const scripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
+    return clauses.flatMap(clause => jobArgv(clause, scripts))
+  })
+  const requiredOutputs = new Set(operations
     .filter(argv => {
       const digest = operationDigest(argv)
       return admitted.has(executionRef(2, 'mixed', digest)) || admitted.has(executionRef(2, 'standalone', digest))
     })
-    .map(argv => resolve(projectRoot, argv[3]!))))
+    .map(argv => resolve(projectRoot, argv[3]!)))
   if (requiredOutputs.size === 0) return false
-  const paths = action.type === 'apply_patch' ? extractPatchTargets(action.patch, projectRoot)
-    : [resolve(projectRoot, action.type === 'write_file' ? action.path : action.file_path)]
+  let targets: string[]
+  if (action.type === 'apply_patch') {
+    const parsed = parseUnifiedDiff(action.patch)
+    if (!parsed.ok) return false // Rejected by the patch executor before any edit.
+    targets = parsed.files.map(file => file.newPath || file.oldPath)
+  } else {
+    targets = [action.type === 'write_file' ? action.path : action.file_path]
+  }
+  const paths = targets.map(target => resolve(projectRoot, target))
   return [...requiredOutputs].some(output => paths.some(path => {
     if (relative(output, path) === '') return true
     try { return relative(canonicalizeContained(output), canonicalizeContained(path)) === '' }

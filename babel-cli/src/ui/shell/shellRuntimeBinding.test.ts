@@ -158,6 +158,20 @@ describe('ShellRuntimeBinding', () => {
     assert.doesNotMatch(rows, /Created the exporter and CSV/);
   });
 
+  it('displays a corrected unverified answer without a blocked report', () => {
+    const binding = new ShellRuntimeBinding({ width: 100 });
+    binding.beginTurn(12, 'Fix the calculation and verify it');
+    binding.onChatEvent({ type: 'answer_chunk', text: 'The calculation is verified.' });
+    binding.onChatEvent({
+      type: 'done',
+      answer: 'The calculation changed, but the check did not establish correctness.',
+      usage: {} as never,
+      outcome: 'UNVERIFIED_PATCH',
+    });
+    assert.match(binding.getVisibleRows(100, 20).join('\n'), /did not establish correctness/);
+    assert.doesNotMatch(binding.getVisibleRows(100, 20).join('\n'), /The calculation is verified/);
+  });
+
   it('retains an explicit cancellation outcome when settling a turn', () => {
     const binding = new ShellRuntimeBinding({ width: 80 });
     binding.beginTurn(8, 'cancel this task');
