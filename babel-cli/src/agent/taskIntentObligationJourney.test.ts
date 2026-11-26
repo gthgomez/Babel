@@ -301,6 +301,11 @@ test('TF-12 decision: only a relevant executed case closes inspection-only no-ch
   })
   assert.ok(receipt)
   receipt.order = { sessionId: runId, seq: 1 }
+  const { target: _pointTarget, ...commandReceipt } = receipt
+  assert.equal(resolveAcceptedReadOnlyTerminal({
+    ...decision,
+    buildCriterionRefresh: () => ({ criterionChatReceipts: [commandReceipt], candidate_sha: null, has_mutation: false }),
+  }), false, 'a matching receipt without point identity does not prove that case')
   const allowed = resolveAcceptedReadOnlyTerminal({
     ...decision,
     buildCriterionRefresh: () => ({ criterionChatReceipts: [receipt], candidate_sha: null, has_mutation: false }),
