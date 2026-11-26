@@ -77,6 +77,8 @@ export interface ChatActionResult {
   stop?: boolean
   /** Only successful project reads that passed path admission may set this. */
   admittedProjectRead?: true
+  /** Path admission returned a diagnostic without opening the requested file. */
+  projectReadDeniedBeforeDispatch?: true
 }
 
 /** Classifies the user's intent for a chat turn.

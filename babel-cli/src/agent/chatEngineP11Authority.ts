@@ -488,6 +488,9 @@ export class ChatEngineP11Authority {
     meta: { index: number; idempotencyKey: string; ownerGeneration: number },
   ): void {
     if (!result.observation || !this.host.isSubmissionCurrent(meta.ownerGeneration)) return;
+    // A host-generated admission refusal is already tool feedback. No file
+    // bytes were read, so there is no observation payload to recover.
+    if (result.projectReadDeniedBeforeDispatch) return;
     const taskId = this.host.parity.liveAuthority?.taskContract.task_id ?? this.host.engineRunId;
     const operationId = meta.idempotencyKey;
     const turnId = this.host.parity.turnId ?? `turn-${this.host._turnIndex}`;
@@ -886,7 +889,11 @@ export class ChatEngineP11Authority {
           },
         });
         if (coldResume.status === "valid") {
-          validCheckpoint = checkpoint;
+          if (checkpoint.taskContractReference === this.host.parity.liveAuthority?.taskContract.contract_hash) {
+            validCheckpoint = checkpoint;
+          } else {
+            issues.push('task_contract_superseded');
+          }
         } else {
           issues.push(coldResume.reasons.join("; "));
           const activeTask = this.host.parity.liveAuthority?.taskContract.task_id;

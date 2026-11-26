@@ -724,11 +724,13 @@ export class ChatEngineActionExecutor {
             error: admitted.code,
             index: meta.index,
             exit_code: 1,
+            preDispatchNoEffect: true,
           });
           callbacks?.onToolComplete?.(toolId, "denied", admitted.code, 1);
           return {
             index: meta.index,
             observation: `### ${tool} ${target}\nexit_code: 1\n\`\`\`\n${detail}\n\`\`\``,
+            projectReadDeniedBeforeDispatch: true,
           };
         }
       }

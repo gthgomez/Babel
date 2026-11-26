@@ -143,6 +143,30 @@ test('physical recovery proof stays separate from a conversation checkpoint', as
   }).status, 'valid')
 })
 
+test('cold hydration leaves an empty checkpoint from a replaced objective inactive', async t => {
+  const { projectRoot, authority, host, parity } = fixture(t)
+  assert.equal(await authority.installP11ContextCheckpoint(route), true, host.p11InstallBlock?.code)
+  const previous = parity.contextCheckpoint
+  assert.ok(previous)
+  assert.deepEqual(previous.observation_manifest, [])
+  assert.equal(authority.hydrateInstalledContextAuthority().applied, true)
+
+  // Preserve the old installed file while committing the replacement contract,
+  // as when the process stops before preparing the next provider request.
+  parity.liveAuthority = resolveLiveSessionAuthority({
+    mode: 'chat', projectRoot, task: 'Explain a different objective.',
+  })
+  assert.notEqual(parity.liveAuthority.taskContract.contract_hash, previous.taskContractReference)
+  delete parity.contextCheckpoint
+  const receipt = checkpointParityEventLogStrictSync(parity, host.engineRunDir)
+  assert.equal(receipt.status, 'committed', receipt.error)
+  const restored = authority.hydrateInstalledContextAuthority()
+  assert.equal(restored.applied, false)
+  assert.equal(parity.contextCheckpoint, undefined)
+  assert.deepEqual([...parity.authorizedObservationIds ?? []], [])
+  assert.deepEqual(host.p11ObservationCaptureIssues, [])
+})
+
 test('recovery binding changes with validated Docker execution arguments and fails closed on invalid arguments', t => {
   const { authority } = fixture(t)
   const previous = process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']
