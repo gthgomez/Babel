@@ -83,7 +83,7 @@ export function resyncEngineToThreadCells(
 }
 
 /** Inspect existing authority before any constructor can replace its artifacts. */
-function constructResumedEngine(threadId:string,options:ChatEngineOptions):ChatEngine{
+export function constructResumedEngine(threadId:string,options:ChatEngineOptions):ChatEngine{
   const runDir=chatSessionDir(threadId);recoverCheckpointArtifacts(runDir);
   if([INSTRUCTION_MANIFEST_FILENAME,TASK_CONTRACT_FILENAME,TASK_MODE_HISTORY_FILENAME].some(name=>existsSync(join(runDir,name)))){
     const retained=loadLiveSessionAuthorityStrict(runDir);

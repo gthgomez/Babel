@@ -29,7 +29,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -51,7 +51,7 @@ import {
   recordTurnEnded,
   recordUserSubmitted,
 } from '../../agent/sessionEvents.js';
-import { LIVE_SESSION_SNAPSHOT_FILENAME } from '../../agent/liveSessionBridge.js';
+import { LIVE_SESSION_SNAPSHOT_FILENAME, TASK_CONTRACT_FILENAME } from '../../agent/liveSessionBridge.js';
 import { chatSessionDir } from '../../cli/runsLayout.js';
 import { inspectSessionRestoreState } from '../../services/threadStore/sessionHydration.js';
 import {
@@ -153,6 +153,52 @@ async function submitTurn(
     host,
   );
 }
+
+test('default protocol materialization preserves an existing objective before replay', async t => {
+  const fixture = withTempRunsDir();
+  const host = createProtocolHostState({ executeWithoutNotifications: true });
+  host.runCanonicalChatTurn = async ({ emit }) => emit({ type: 'done', answer: 'Fixture', usage: {
+    totalCostUSD: 0, totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0, modelBreakdown: {},
+  } });
+  const settings = {
+    BABEL_STATE_DIR: join(fixture.root, 'state'),
+    BABEL_CONFIG_DIR: join(fixture.root, 'config'),
+    BABEL_MODEL: 'deepseek-v4-flash-openrouter',
+    BABEL_PROVIDER: 'openrouter',
+    BABEL_OFFLINE: undefined,
+    BABEL_CONNECTION: undefined,
+  };
+  const previousSettings = Object.entries(settings).map(([key, value]) => {
+    const previous = process.env[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+    return [key, previous] as const;
+  });
+  t.after(() => {
+    closeProtocolHostState(host);
+    for (const [key, value] of previousSettings) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fixture.cleanup();
+  });
+  const threadId = await createThread(host, fixture.root);
+  const original = new ChatEngine({
+    runId: threadId, projectRoot: fixture.root, task: 'Inspect the original fixture objective.',
+    runtimeMode: 'direct', executionProfile: 'chat', model: 'deepseek-v4-flash-openrouter',
+  });
+  const originalTask = original.getParityRuntime().liveAuthority?.taskContract.task_id;
+  assert.ok(originalTask);
+  seedDurableLogs(threadId, fixture.root);
+  const contractPath = join(chatSessionDir(threadId), TASK_CONTRACT_FILENAME);
+  const before = readFileSync(contractPath, 'utf8');
+  const response = await submitTurn(host, threadId, 'continue');
+  assert.ok('result' in response, JSON.stringify(response));
+  const engine = host.engines.get(threadId);
+  assert.ok(engine);
+  assert.equal(engine.getParityRuntime().liveAuthority?.taskContract.task_id, originalTask);
+  assert.equal(readFileSync(contractPath, 'utf8'), before);
+});
 
 /**
  * Durable fixture exactly shaped like the agent4 witness: a typed thread event
