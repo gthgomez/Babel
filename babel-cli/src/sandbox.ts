@@ -295,9 +295,10 @@ export interface ForegroundOutputCapture {
   settle(record: () => true): true | undefined;
 }
 type CapturedOutput = { readonly path: string; readonly digest: string };
+type HostShellInvocation = { cwd: string; argv: readonly string[]; capturedOutput?: CapturedOutput };
 type ShellExecutionProvenance =
   | { backend: 'docker-container' }
-  | { backend: 'host-process'; cwd: string; argv: readonly string[]; capturedOutput?: CapturedOutput };
+  | { backend: 'host-process'; invocation: HostShellInvocation | undefined };
 const trustedShellExecution = new WeakMap<object, ShellExecutionProvenance>();
 const FOREGROUND_OUTPUT_HEADER = Buffer.from('BABEL_FOREGROUND_OUTPUT_V1\n', 'ascii');
 
@@ -311,7 +312,7 @@ export function getTrustedHostShellInvocation(
   result: ToolResult,
 ): { cwd: string; argv: readonly string[]; capturedOutput?: CapturedOutput } | undefined {
   const execution = trustedShellExecution.get(result);
-  if (execution?.backend === 'host-process') return execution;
+  if (execution?.backend === 'host-process') return execution.invocation;
 }
 
 /** Copy an existing trusted backend fact across a host-created result projection. */
@@ -326,10 +327,14 @@ function attachExecutionBackend(
 ): ToolResult {
   if (result.process_started !== true) return result
   if (prepared.ownedContainerName) trustedShellExecution.set(result, { backend: 'docker-container' })
-  else if (prepared.commandArgv) trustedShellExecution.set(result, Object.freeze({
-    backend: 'host-process', cwd: prepared.cwd, argv: Object.freeze([...prepared.commandArgv]),
-    ...(output ? { capturedOutput: Object.freeze(output) } : {}),
-  }))
+  else if (prepared.commandArgv) {
+    const invocation = prepared.canonicalHostCwd === undefined ? undefined : Object.freeze({
+      cwd: prepared.canonicalHostCwd,
+      argv: Object.freeze([...prepared.commandArgv]),
+      ...(output ? { capturedOutput: Object.freeze(output) } : {}),
+    });
+    trustedShellExecution.set(result, Object.freeze({ backend: 'host-process', invocation }));
+  }
   return result
 }
 
@@ -1525,18 +1530,30 @@ export class SafeExecutor {
       hostArgs = buildWindowsCommandShellArgs([resolvedExecutable!.path, ...argv.slice(1)]);
     }
 
-    return useDockerSandbox
-      ? prepareOwnedContainerInvocation({ dockerImage: benchmarkDockerImage!, projectRoot: this.projectRoot, cwd: safeCwd, command }, env)
-      : {
-          executable: hostExecutable,
-          args: hostArgs,
-          cwd: resolvedCwd,
-          commandArgv: argv,
-          env,
-          validateExecutable: () =>
-            isResolvedCommandCurrent(resolvedExecutable!) &&
-            (commandShell === undefined || isResolvedCommandCurrent(commandShell)),
-        };
+    if (useDockerSandbox) {
+      return prepareOwnedContainerInvocation({ dockerImage: benchmarkDockerImage!, projectRoot: this.projectRoot, cwd: safeCwd, command }, env);
+    }
+    // Keep the spawn cwd unchanged, but retain a native physical identity for
+    // foreground custody.  A failed probe is represented as absent and makes
+    // capture ineligible rather than certifying an unproved workspace.
+    let canonicalHostCwd: string | undefined;
+    try {
+      canonicalHostCwd = realpathSync.native(resolvedCwd);
+    } catch {
+      // The child may still run as an ordinary host process; no capture receipt
+      // may be issued without this identity.
+    }
+    return {
+      executable: hostExecutable,
+      args: hostArgs,
+      cwd: resolvedCwd,
+      commandArgv: argv,
+      ...(canonicalHostCwd === undefined ? {} : { canonicalHostCwd }),
+      env,
+      validateExecutable: () =>
+        isResolvedCommandCurrent(resolvedExecutable!) &&
+        (commandShell === undefined || isResolvedCommandCurrent(commandShell)),
+    };
   }
 
   /**
@@ -1634,8 +1651,16 @@ export class SafeExecutor {
     if (signal?.aborted) return cancelledBeforeSpawnShellResult();
     const prepared = this.prepareShellExecution(command, cwd, toolName, readonlyRuntimeQuery);
     if ('exit_code' in prepared) return prepared;
-    const hostCapture = capture && prepared.commandArgv && !prepared.ownedContainerName && !this.shadowRoot &&
-      prepared.cwd === this.projectRoot && toolName === 'shell_exec' ? capture : undefined;
+    let hostCapture: ForegroundOutputCapture | undefined;
+    if (capture && prepared.commandArgv && prepared.canonicalHostCwd !== undefined &&
+        !prepared.ownedContainerName && !this.shadowRoot && prepared.cwd === this.projectRoot &&
+        toolName === 'shell_exec') {
+      try {
+        if (relative(prepared.canonicalHostCwd, realpathSync.native(this.projectRoot)) === '') hostCapture = capture;
+      } catch {
+        // The ordinary command can still run; capture needs both cwd identities.
+      }
+    }
 
     let transientRetryCount = 0;
     let result: AsyncSpawnResult;
