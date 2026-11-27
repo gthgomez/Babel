@@ -3,10 +3,19 @@ import type { ProviderMessage, ToolDefinition } from "../runners/base.js";
 import type { ResolvedExecutionEnvelope } from "./types.js";
 
 export interface WireRequestOptions {
-  messages: ProviderMessage[];
+  /** Provider-neutral messages or already-normalized compatible wire messages. */
+  messages: readonly WireMessageInput[];
   stream: boolean;
   tools?: ToolDefinition[];
   toolChoice?: "auto" | "required" | "specific";
+}
+
+export interface WireMessageInput {
+  role: string;
+  content: string;
+  tool_call_id?: string;
+  tool_calls?: ProviderMessage['tool_calls'];
+  name?: string;
 }
 
 /** The provider-neutral request body generated only from a resolved envelope. */
@@ -29,7 +38,7 @@ export interface WireRequest {
   };
 }
 
-function toWireMessage(message: ProviderMessage): Record<string, unknown> {
+function toWireMessage(message: WireMessageInput): Record<string, unknown> {
   return {
     role: message.role,
     content: message.content,

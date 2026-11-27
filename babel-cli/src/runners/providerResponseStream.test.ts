@@ -114,6 +114,32 @@ test('an unknown finish reason fails rather than becoming a stop', async () => {
   );
 });
 
+test('conflicting model identity fails closed and cannot be erased by a later matching frame', async () => {
+  const streamState = state();
+  const first = sseFrame({ content: 'partial' }, null).replace('fixture-model', 'model-a');
+  const conflicting = sseFrame({ content: 'more' }, null).replace('fixture-model', 'model-b');
+  const matching = sseFrame({ content: 'again' }, 'stop').replace('fixture-model', 'model-a');
+  await assert.rejects(
+    readStreamingResponse(
+      new Response(`${first}${conflicting}${matching}data: [DONE]\n\n`, {
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+      undefined,
+      1_000,
+      Date.now(),
+      streamState,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      Date.now() + 5_000,
+      5_000,
+    ),
+    /conflicting model identity/i,
+  );
+  assert.equal(streamState.observedModelId, 'model-a');
+});
+
 test('a stream that closes without [DONE] still fails as truncated', async () => {
   await assert.rejects(
     read(sseFrame({ content: 'text' }, 'stop')),
