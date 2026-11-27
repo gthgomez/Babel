@@ -11,7 +11,7 @@
  *   node scripts/verify_consumer_pty.mjs --archive babel-harness-0.2.1.tgz
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,6 +19,10 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..')
 const artifactDir = join(repoRoot, 'artifacts', 'pty')
+const fixtureCredential = 'synthetic-router-credential'
+const model = 'deepseek-v4.1-flash-openrouter'
+const followup = 'Summarize the change in one sentence.\nMention café and 東京.'
+const redactFixture = value => value.replaceAll(fixtureCredential, '[synthetic]')
 
 function arg(name) {
   const index = process.argv.indexOf(`--${name}`)
@@ -26,7 +30,7 @@ function arg(name) {
 }
 
 function fail(message, detail) {
-  console.error(JSON.stringify({ ok: false, error: message, detail }, null, 2))
+  console.error(redactFixture(JSON.stringify({ ok: false, error: message, detail }, null, 2)))
   process.exit(1)
 }
 
@@ -39,11 +43,11 @@ writeFileSync(join(root, 'state', 'preferences.json'), JSON.stringify({
   schemaVersion: 1,
   connections: {
     openrouter: {
-      id: 'openrouter', provider: 'openrouter', model: 'glm-5.3-flash',
+      id: 'openrouter', provider: 'openrouter', model,
       apiKeyEnvVar: 'OPENROUTER_API_KEY',
     },
   },
-  defaults: { connection: 'openrouter', model: 'glm-5.3-flash' },
+  defaults: { connection: 'openrouter', model },
   setup: { completed: true },
 }))
 
@@ -68,10 +72,15 @@ writeFileSync(join(workspace, 'test.mjs'), [
 git(['add', '.'])
 git(['commit', '-qm', 'fixture'])
 
+const wireTrace = join(root, 'wire.jsonl')
 writeFileSync(join(root, 'preload.mjs'), `
+import { appendFileSync } from 'node:fs'
+import ${JSON.stringify(new URL('./block_consumer_network.mjs', import.meta.url).href)}
 globalThis.__calls = 0
 globalThis.fetch = async (url, init) => {
+  if (String(url) !== 'https://openrouter.ai/api/v1/chat/completions') throw new Error('Unexpected provider for offline acceptance')
   const body = JSON.parse(String(init?.body ?? '{}'))
+  if (body.stream) appendFileSync(${JSON.stringify(wireTrace)}, JSON.stringify(body.messages.filter(message => message.role === 'user').at(-1)?.content ?? null) + '\\n')
   const n = ++globalThis.__calls
   const tool = (name, args) => ({ index: 0, id: 'native-' + n, type: 'function', function: { name, arguments: JSON.stringify(args) } })
   let delta, finish
@@ -91,7 +100,7 @@ const steps = [
   { key: 'enter' },
   // Submitted while the first turn is active: the shell must queue it and run
   // it exactly once after the first turn settles.
-  { send: 'Summarize the change in one sentence.' },
+  { send: '\x1b[200~' + followup + '\x1b[201~' },
   { key: 'enter' },
   { wait_for: 'Fixed math.js', timeout_ms: 90000 },
   { wait_for: 'Second task acknowledged.', timeout_ms: 90000 },
@@ -117,23 +126,18 @@ if (archive) {
 if (!existsSync(bin)) fail(`CLI entry not found: ${bin}`)
 
 const env = {
-  ...process.env,
+  PATH: process.env.PATH,
+  LANG: 'C.UTF-8',
   HOME: join(root, 'home'),
+  XDG_CONFIG_HOME: join(root, 'config'),
+  XDG_CACHE_HOME: join(root, 'cache'),
   BABEL_CONFIG_DIR: join(root, 'config'),
   BABEL_STATE_DIR: join(root, 'state'),
   BABEL_CACHE_DIR: join(root, 'cache'),
   BABEL_RUNS_DIR: join(root, 'runs'),
   BABEL_PROJECT_ROOT: workspace,
-  BABEL_ALLOW_HOST_FALLBACK: '1',
-  BABEL_LIVE: 'true',
-  OPENROUTER_API_KEY: 'synthetic-router-credential',
+  OPENROUTER_API_KEY: fixtureCredential,
   TERM: 'xterm-256color',
-}
-// This is a real PTY journey. A CI/headless marker inherited from the runner
-// would deliberately select the non-interactive fallback and hide the very
-// renderer, composer queue and tool cells this test exists to qualify.
-for (const name of ['CI', 'GITHUB_ACTIONS', 'CONTINUOUS_INTEGRATION', 'NO_COLOR', 'BABEL_HEADLESS']) {
-  delete env[name]
 }
 const driver = spawnSync('python3', [
   join(here, 'pty_driver.py'),
@@ -150,13 +154,20 @@ const transcript = existsSync(join(root, 'transcript.txt'))
   ? readFileSync(join(root, 'transcript.txt'), 'utf8')
   : result.transcript_tail ?? ''
 mkdirSync(artifactDir, { recursive: true })
-writeFileSync(join(artifactDir, 'chat-journey.json'), JSON.stringify({ ...result, root, bin }, null, 2))
+writeFileSync(join(artifactDir, 'chat-journey.json'), redactFixture(JSON.stringify({ ...result, root, bin }, null, 2)))
 if (existsSync(join(root, 'transcript.txt'))) {
-  writeFileSync(join(artifactDir, 'chat-journey.txt'), readFileSync(join(root, 'transcript.txt'), 'utf8'))
+  writeFileSync(join(artifactDir, 'chat-journey.txt'), redactFixture(readFileSync(join(root, 'transcript.txt'), 'utf8')))
 }
 
 const firstAnswerAt = transcript.indexOf('Fixed math.js')
 const secondAnswerAt = transcript.indexOf('Second task acknowledged.')
+const submissions = readdirSync(join(root, 'runs'), { recursive: true })
+  .filter(path => path.endsWith('session-events.jsonl'))
+  .flatMap(path => readFileSync(join(root, 'runs', path), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse))
+  .filter(event => event.kind === 'user_submitted')
+const streamedInputs = existsSync(wireTrace)
+  ? readFileSync(wireTrace, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
+  : []
 const checks = {
   driver_ok: result.ok === true,
   clean_exit: result.exit_code === 0,
@@ -171,6 +182,8 @@ const checks = {
   queued_followup_admitted: transcript.includes('Queued (Tab)'),
   // A queued message must run after the active turn settles, not inside it.
   queued_followup_ran_after_first: firstAnswerAt >= 0 && secondAnswerAt > firstAnswerAt,
+  queued_followup_wire_bytes: streamedInputs.includes(followup),
+  queued_followup_single_admission: submissions.filter(row => row.task_preview === followup).length === 1,
   resize_applied: result.events.some(event => event.resize?.[1] === 160) &&
     result.events.some(event => event.resize?.[1] === 120),
   cursor_restored: result.cursor_restored === true,
