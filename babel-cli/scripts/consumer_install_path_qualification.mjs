@@ -11,8 +11,21 @@ import { resolve } from 'node:path'
  *   env: Record<string, string | undefined>
  *   scratch: string
  *   phase: string
+ *   npmProxy?: string
+ *   npmCaCert?: string
  *   timeoutMs?: number
  * }} NpmInstallProbeInput */
+
+/** Validate an explicit credential-free HTTP(S) proxy origin for npm only. */
+export function validateNpmInstallProxy(value) {
+  if (value === undefined || value === '') return null
+  let parsed
+  try { parsed = new URL(value) } catch { throw new Error('BABEL_CONSUMER_NPM_PROXY must be an absolute HTTP(S) URL') }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+    throw new Error('BABEL_CONSUMER_NPM_PROXY must be a credential-free HTTP(S) origin')
+  }
+  return parsed.origin
+}
 
 /** @param {string} installPrefix */
 export function installPathClass(installPrefix) {
@@ -49,12 +62,25 @@ export function runtimeProjectPathClass(projectPath) {
  */
 export function npmInstallProbe(input) {
   const timeoutMs = input.timeoutMs ?? 300000
+  const npmProxy = validateNpmInstallProxy(input.npmProxy)
   mkdirSync(input.installPrefix, { recursive: true })
   const started = Date.now()
   const installEnv = {
     ...input.env,
     npm_config_cache: `${input.scratch}/npm-cache`,
     npm_config_prefer_offline: 'true',
+  }
+  if (npmProxy) {
+    installEnv.HTTP_PROXY = npmProxy
+    installEnv.HTTPS_PROXY = npmProxy
+    installEnv.http_proxy = npmProxy
+    installEnv.https_proxy = npmProxy
+    installEnv.npm_config_proxy = npmProxy
+    installEnv.npm_config_http_proxy = npmProxy
+    installEnv.npm_config_https_proxy = npmProxy
+    installEnv.NO_PROXY = 'localhost,127.0.0.1,::1'
+    installEnv.no_proxy = installEnv.NO_PROXY
+    if (input.npmCaCert) installEnv.NODE_EXTRA_CA_CERTS = input.npmCaCert
   }
   const result = spawnSync(
     process.execPath,
@@ -75,6 +101,7 @@ export function npmInstallProbe(input) {
     elapsed_ms: Date.now() - started,
     timeout_ms: timeoutMs,
     npm_config_cache: installEnv.npm_config_cache,
+    proxy_opt_in: Boolean(npmProxy),
     error: result.error
       ? { message: result.error.message, code: result.error.code, errno: result.error.errno }
       : null,
