@@ -6,6 +6,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
+import { sha256Canonical } from '../acceptance/canonical.js'
 import { ChatEngineP11Authority, type ChatEngineP11Host } from './chatEngineP11Authority.js'
 import { ChatEngine } from './chatEngine.js'
 import { checkpointParityEventLogStrictSync, createParityRuntime, parityOnUserTurn } from './chatEngineParityBridge.js'
@@ -352,7 +353,7 @@ test('a command with unknown physical settlement remains indeterminate in the du
 
 async function checkColdContinuation(
   t: TestContext,
-  scenario: 'intact' | 'corrupt' | 'corrupt-exhausted' | 'compacted' | 'missing-membership' |
+  scenario: 'intact' | 'corrupt' | 'corrupt-exhausted' | 'malformed-checkpoint' | 'incompatible-checkpoint' | 'compacted' | 'missing-membership' |
     'invalid-membership' | 'revoked-before-restore' | 'revoked-with-deleted-ref' | 'revoked-after-restore',
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), 'babel-p11-cold-observation-'))
@@ -450,6 +451,13 @@ async function checkColdContinuation(
     assert.equal(ref.status, 'resolved')
     writeFileSync(join(observationDir, ref.payloads[0]!.object_key), 'Invalid fixture bytes')
   }
+  const checkpointPath = join(sessionDir, 'context-checkpoint.json')
+  if (scenario === 'malformed-checkpoint') writeFileSync(checkpointPath, '{')
+  if (scenario === 'incompatible-checkpoint') {
+    const { checkpoint_digest: _digest, ...originalCheckpoint } = persisted
+    const unsupported = { ...originalCheckpoint, schema_version: 999 }
+    writeFileSync(checkpointPath, JSON.stringify({ ...unsupported, checkpoint_digest: sha256Canonical(unsupported) }))
+  }
   const resumed = await ChatEngine.restore(runId, options)
   const hydrated = resumed.hydrateInstalledContextAuthority(sessionDir)
   assert.equal(hydrated.applied, false)
@@ -495,6 +503,10 @@ async function checkColdContinuation(
     assert.equal(result.reason_code, 'context_preparation_failed')
     assert.equal(resumed.getParityRuntime().contextCheckpoint, undefined)
   }
+  if (scenario === 'malformed-checkpoint') assert.equal(readFileSync(checkpointPath, 'utf8'), '{')
+  if (scenario === 'incompatible-checkpoint') {
+    assert.equal(JSON.parse(readFileSync(checkpointPath, 'utf8')).schema_version, 999)
+  }
   if (scenario === 'missing-membership') assert.equal(fs.existsSync(snapshotPath), false)
   if (scenario === 'invalid-membership') assert.equal(readFileSync(snapshotPath, 'utf8'), '{')
   if (scenario.startsWith('revoked-')) {
@@ -512,6 +524,10 @@ test('cold continuation blocks before dispatch if the settled observation payloa
   t => checkColdContinuation(t, 'corrupt'))
 test('cold continuation with no remaining turns does not synthesize from a corrupt observation',
   t => checkColdContinuation(t, 'corrupt-exhausted'))
+test('cold continuation blocks before dispatch when the installed checkpoint is malformed',
+  t => checkColdContinuation(t, 'malformed-checkpoint'))
+test('cold continuation blocks before dispatch for an unsupported checkpoint schema even with a valid digest',
+  t => checkColdContinuation(t, 'incompatible-checkpoint'))
 test('cold continuation recovers settled observations after compaction supersedes the checkpoint',
   t => checkColdContinuation(t, 'compacted'))
 test('cold continuation does not rewrite missing observation membership as empty',

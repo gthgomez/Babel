@@ -4,6 +4,7 @@ import { z } from 'zod'
 
 import { createProviderRunner } from './providerEngine.js'
 import { OpenCodeGoError } from './openCodeGoApi.js'
+import { OpenCodeGoBudgetError } from './openCodeGoBudget.js'
 
 const schema = z.object({ ok: z.boolean() })
 
@@ -123,8 +124,12 @@ test('ProviderEngine registers explicit OpenCode Go with exact model selection',
 
 test('ProviderEngine fails closed for unknown and substituted benchmark models', async (t) => {
   assert.throws(
-    () => createProviderRunner({ provider: 'opencode-go', modelId: 'glm-5.3-flash', credentialSource: 'explicit-test', explicitCredential: 'synthetic-go-key' }),
+    () => createProviderRunner({ provider: 'opencode-go', modelId: 'unsupported-fixture-model', credentialSource: 'explicit-test', explicitCredential: 'synthetic-go-key' }),
     (error: unknown) => error instanceof OpenCodeGoError && error.code === 'MODEL_UNAVAILABLE',
+  )
+  assert.throws(
+    () => createProviderRunner({ provider: 'opencode-go', modelId: 'glm-5.3-flash', credentialSource: 'explicit-test', explicitCredential: 'synthetic-go-key' }),
+    (error: unknown) => error instanceof OpenCodeGoBudgetError && error.code === 'GO_BUDGET_DENIED',
   )
   const priorFetch = globalThis.fetch
   t.after(() => { globalThis.fetch = priorFetch })

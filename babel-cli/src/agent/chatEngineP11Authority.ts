@@ -855,8 +855,8 @@ export class ChatEngineP11Authority {
    * the durable owner and installed lineage to validate, independently
    * re-authorizes the observation manifest against durable session membership,
    * and only then promotes the checkpoint to provider context. A checkpoint
-   * that cannot prove ownership, lineage, and observation membership stays
-   * advisory/inert and the durable thread/session logs remain the only source.
+   * superseded by later valid evidence stays inert. An unreadable, corrupt, or
+   * incompatible checkpoint blocks execution while leaving history inspectable.
    */
   hydrateInstalledContextAuthority(sessionDir: string = this.host.engineRunDir): {
     applied: boolean;
@@ -896,6 +896,12 @@ export class ChatEngineP11Authority {
           }
         } else {
           issues.push(coldResume.reasons.join("; "));
+          if (coldResume.reasons.some(reason =>
+            reason === 'invalid_schema' || reason === 'checkpoint_digest_mismatch' ||
+            reason === 'expected_thread_mismatch')) {
+            this.host.p11ObservationCaptureIssues = ['installed_context_checkpoint_invalid'];
+            return { applied: false, issues };
+          }
           const activeTask = this.host.parity.liveAuthority?.taskContract.task_id;
           membershipRevoked = coldResume.reasons.includes('observation_membership_unavailable') &&
             Array.isArray(checkpoint.observation_manifest) &&
@@ -905,6 +911,8 @@ export class ChatEngineP11Authority {
       }
     } catch (err) {
       issues.push(err instanceof Error ? err.message : String(err));
+      this.host.p11ObservationCaptureIssues = ['installed_context_checkpoint_unreadable'];
+      return { applied: false, issues };
     }
     if (!membership || membershipRevoked ||
         this.hasUnauthorizedSettledObservation(sessionDir, membership, observationGovernedHistory)) {
