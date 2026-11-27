@@ -43,11 +43,8 @@ export type RoutingStage = 'orchestrator' | 'planning' | 'qa' | 'executor';
 interface WaterfallTelemetryEntry {
   stage: string;
   tier_succeeded: string;
-  tier_index: number;
   attempts: number;
   tiers_skipped: string[];
-  cascade_reason: string;
-  ts: string;
 }
 
 /** Per-tier scoring breakdown. */
@@ -121,6 +118,25 @@ function listRecentRunDirs(runsDir: string): string[] {
     .map((name) => join(runsDir, name));
 }
 
+function isStageTelemetryEntry(value: unknown, stage: RoutingStage): value is WaterfallTelemetryEntry {
+  return value !== null &&
+    typeof value === 'object' &&
+    'stage' in value &&
+    value.stage === stage &&
+    'tier_succeeded' in value &&
+    typeof value.tier_succeeded === 'string' &&
+    value.tier_succeeded.trim().length > 0 &&
+    'attempts' in value &&
+    typeof value.attempts === 'number' &&
+    Number.isSafeInteger(value.attempts) &&
+    value.attempts > 0 &&
+    'tiers_skipped' in value &&
+    Array.isArray(value.tiers_skipped) &&
+    value.tiers_skipped.every((tier: unknown) => typeof tier === 'string' && tier.trim().length > 0) &&
+    !value.tiers_skipped.includes(value.tier_succeeded) &&
+    new Set(value.tiers_skipped).size === value.tiers_skipped.length;
+}
+
 function loadStageTelemetry(
   stage: RoutingStage,
   runsDir: string,
@@ -141,13 +157,8 @@ function loadStageTelemetry(
       if (!Array.isArray(raw)) continue;
 
       for (const item of raw) {
-        if (
-          item !== null &&
-          typeof item === 'object' &&
-          typeof (item as Record<string, unknown>)['stage'] === 'string' &&
-          (item as Record<string, unknown>)['stage'] === stage
-        ) {
-          entries.push(item as WaterfallTelemetryEntry);
+        if (isStageTelemetryEntry(item, stage)) {
+          entries.push(item);
         }
       }
     } catch {
@@ -218,7 +229,7 @@ function scoreTier(
  * Returns `null` (keep original order) when:
  *   - Dynamic routing is disabled and `options.enabled` is not explicitly `true`
  *   - The waterfall has only one tier
- *   - Fewer than `MIN_SAMPLES` stage-specific telemetry entries exist
+ *   - Fewer than `MIN_SAMPLES` valid observations include a current tier
  *
  * The caller is responsible for reordering the waterfall using `selectedIndex`
  * (see `reorderWaterfallByStartIndex`).
@@ -233,11 +244,15 @@ export function selectBestTierForStage(
 
   const runsDir = options?.runsDir ?? getDefaultRunsDir();
   const { entries, runsScanned } = loadStageTelemetry(stage, runsDir);
+  const currentTiers = new Set(waterfallNames);
+  const relevantEntries = entries.filter(entry =>
+    currentTiers.has(entry.tier_succeeded) || entry.tiers_skipped.some(tier => currentTiers.has(tier)),
+  );
 
-  if (entries.length < MIN_SAMPLES) return null;
+  if (relevantEntries.length < MIN_SAMPLES) return null;
 
   const scoredTiers = waterfallNames
-    .map((name, index) => scoreTier(name, index, entries, waterfallNames.length))
+    .map((name, index) => scoreTier(name, index, relevantEntries, waterfallNames.length))
     .sort((a, b) => b.score - a.score);
 
   const winner = scoredTiers[0]!;
@@ -248,7 +263,7 @@ export function selectBestTierForStage(
     selectedName: winner.name,
     telemetryRunsScanned: runsScanned,
     scoredTiers,
-    reason: `Dynamic Routing v1 — scored ${entries.length} entries across ${runsScanned} runs.`,
+    reason: `Dynamic Routing v1 — scored ${relevantEntries.length} entries across ${runsScanned} runs.`,
   };
 }
 

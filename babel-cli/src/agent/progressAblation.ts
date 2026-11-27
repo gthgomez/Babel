@@ -13,6 +13,7 @@ export interface ProgressAblationFixture {
   gateStrikes: number
   baselineStrikes: number
   completionAttempt?: boolean
+  budgetExhausted?: boolean
   expectedTerminal?: 'continue' | 'blocked_external' | 'budget_exhausted' | 'verified_complete'
 }
 
@@ -34,16 +35,16 @@ export const DEFAULT_PROGRESS_ABLATION_FIXTURES: readonly ProgressAblationFixtur
   { id: 'environment-blocked', signals: ['external_blocker_verified'], textOnlyTurn: false, gateStrikes: 0, baselineStrikes: 12, completionAttempt: true, expectedTerminal: 'blocked_external' },
   { id: 'repeated-read', signals: ['repeated_unchanged_read'], textOnlyTurn: true, gateStrikes: 2, baselineStrikes: 6 },
   { id: 'repeated-command', signals: ['repeated_identical_action'], textOnlyTurn: false, gateStrikes: 2, baselineStrikes: 6 },
-  { id: 'budget-stop', signals: [], textOnlyTurn: true, gateStrikes: 4, baselineStrikes: 12, expectedTerminal: 'budget_exhausted' },
+  { id: 'budget-stop', signals: [], textOnlyTurn: true, gateStrikes: 4, baselineStrikes: 12, budgetExhausted: true, expectedTerminal: 'budget_exhausted' },
 ]
 
 function terminalForFixture(
   fixture: ProgressAblationFixture,
-  intervention: ProgressInterventionLevel,
+  policyBlocked: boolean,
 ): TerminalOutcome | 'CONTINUE' {
   if (fixture.signals.includes('external_blocker_verified')) return 'BLOCKED_EXTERNAL'
-  if (fixture.expectedTerminal === 'budget_exhausted') return 'BUDGET_EXHAUSTED'
-  if (intervention === 'terminal_blocked') return 'BLOCKED_POLICY'
+  if (fixture.budgetExhausted === true) return 'BUDGET_EXHAUSTED'
+  if (policyBlocked) return 'BLOCKED_POLICY'
   return fixture.completionAttempt ? 'VERIFIED_COMPLETE' : 'CONTINUE'
 }
 
@@ -64,19 +65,21 @@ export function runProgressAblation(
   let recoveryAttempts = 0
 
   for (const fixture of fixtures) {
-    const baselineBlocked = fixture.baselineStrikes >= 12
     // Paired deterministic runs: the disabled arm uses the fixed baseline;
     // the enabled arm evaluates the same fixture through a fresh controller.
     const controller = new ProgressController()
     const result = controller.scoreTurn(fixture.signals, fixture.textOnlyTurn, fixture.gateStrikes)
     interventions[result.intervention] += 1
-    if (result.intervention === 'terminal_blocked') {
-      recoveryAttempts += 1
-      if (!baselineBlocked && fixture.signals.length > 0) prematureBlocks += 1
+    const enabledBlocked = result.intervention === 'terminal_blocked'
+    if (enabledBlocked) recoveryAttempts += 1
+    const enabledTerminal = terminalForFixture(fixture, enabledBlocked)
+    const baselineTerminal = terminalForFixture(fixture, fixture.baselineStrikes >= 12)
+    const expected = fixture.expectedTerminal ?? 'continue'
+    if (expected === 'continue' || expected === 'verified_complete') {
+      if (enabledTerminal === 'BLOCKED_POLICY') prematureBlocks += 1
+      if (baselineTerminal === 'BLOCKED_POLICY') baselinePrematureBlocks += 1
     }
-    if (baselineBlocked) baselinePrematureBlocks += 1
-    const enabledTerminal = terminalForFixture(fixture, result.intervention)
-    if (enabledTerminal === 'VERIFIED_COMPLETE' && fixture.expectedTerminal !== 'verified_complete') {
+    if (enabledTerminal === 'VERIFIED_COMPLETE' && expected !== 'verified_complete') {
       falseCompletes += 1
     }
   }
