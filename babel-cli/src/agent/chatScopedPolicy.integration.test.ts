@@ -75,7 +75,19 @@ for(const scenario of ['host','docker','file-output','captured-output','concurre
           yield {type:'done' as const,finishReason:'tool_calls' as const};
         }
         else{yield {type:'text_delta' as const,text:'Fixture command completed.'};yield {type:'done' as const,finishReason:'stop' as const};}
-      },getLastInvocationMetadata:()=>null,
+      },
+      async executeRaw() {
+        // The Go fixture may invoke the normal diff-critic lane in CI.
+        const output = join(root, 'result.txt');
+        const matches = existsSync(output) &&
+          readFileSync(output, 'utf8') === (fileOutput ? 'CAFÉ\n' : 'absent');
+        return JSON.stringify({
+          verdict: matches ? 'pass' : 'reject',
+          confidence: 1,
+          reasons: [matches ? 'Fixture output matches the expected bytes' : 'Fixture output is missing or different'],
+        });
+      },
+      getLastInvocationMetadata:()=>null,
     };
     const providerPolicy:ResolvedModelPolicy={policyPath:'fixture',family:'fixture',selectedTier:'cheap',resolvedBackendKey:'fixture',provider:'opencode-go',providerModelId:'fixture-model',expensive:false,enabled:true,experimental:true,blockedWithoutExplicitOptIn:false,approximateInputTokens:0,approximateOutputTokens:0,warnings:[],waterfall:[],stagePolicies:[],contextWindow:128000,contextLimit:128000,maxOutputTokens:1024,nativeToolUse:true};
     const choice=scenario!=='docker'?{profile:'host_native',source:'persisted',expectedBoundary:'host'} as const:{profile:'safe_repo',source:'persisted',expectedBoundary:'docker'} as const;
@@ -116,7 +128,8 @@ for(const scenario of ['host','docker','file-output','captured-output','concurre
         assert.equal(engine.getParityRuntime().sessionEvents.events.some(event=>event.kind==='tool_started'&&event.tool_name==='test_run'),false);
       }
       assert.equal(engine.getParityRuntime().sessionEvents.events.filter(event =>
-        event.kind==='tool_completed' && event.foreground_effect?.argv.join(' ')===command).length,1);
+        event.kind==='tool_completed' && event.foreground_effect?.argv.join(' ')===command).length,1,
+      `foreground custody missing; tools ${JSON.stringify(tools)}`);
       const terminal = events.at(-1) as { outcome?: string; reason_code?: string };
       const log = engine.getParityRuntime().sessionEvents;
       const ledger = loadEffectLedger(chatSessionDir(engine.getEngineRunId()));
