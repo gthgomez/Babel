@@ -7,8 +7,26 @@ import { resolveOwnedEffectPath } from '../executor/effectPathIdentity.js'
 import { WorkspaceTransactionManager } from '../services/workspaceTransactions.js'
 import { checkedFileBytes } from '../utils/checkedFileRead.js'
 import { isCredentialTargetPath } from './autonomyEnforcement.js'
+import { normalizeModelToolName } from './canonicalToolMapping.js'
 import type { SessionEvent, SessionEventLog } from './sessionEvents.js'
 import type { TaskContractV1 } from './taskContract.js'
+import type { TaskModeHistoryV2 } from './taskAcceptanceRevision.js'
+import { validateTaskModeCompanion } from './taskModeRevision.js'
+
+type Submission = Extract<SessionEvent, { kind: 'user_submitted' }>
+type ToolStart = Extract<SessionEvent, { kind: 'tool_started' }>
+
+function additiveContracts(contract: TaskContractV1, history?: TaskModeHistoryV2): Map<string, string> {
+  const accepted = new Map([[contract.contract_id, contract.contract_hash]])
+  if (!history || validateTaskModeCompanion(contract, history).length > 0) return accepted
+  for (let index = history.edges.length - 1; index >= 0; index--) {
+    const edge = history.edges[index]
+    const previous = history.revisions[index]
+    if (edge?.kind !== 'acceptance' || edge.descriptor.kind === 'initialize' || !previous) break
+    accepted.set(previous.contract_id, previous.contract_hash)
+  }
+  return accepted
+}
 
 function currentEffectPaths(root: string, effect: EffectLedgerRecord): string[] {
   const paths: string[] = []
@@ -37,31 +55,36 @@ export function recoverCurrentTaskMutationPaths(input: {
   projectRoot: string
   turnId: string
   contract: TaskContractV1
+  /** Authority history already validated against accepted user submissions. */
+  history?: TaskModeHistoryV2
 }): string[] {
   const { log, contract } = input
-  const priorTurns = new Set<string>()
-  const starts = new Map<string, Set<string>>()
-  const batches = new Map<string, Extract<SessionEvent, { kind: 'mutation_batch' }>>()
-  const current = log.events.find(event => event.kind === 'user_submitted' &&
-    event.turn_id === input.turnId && event.task_id === contract.task_id &&
-    event.contract_id === contract.contract_id && event.contract_hash === contract.contract_hash &&
-    event.session_id === log.session_id)
-  if (!current) return []
+  const submissions = new Map<string, Submission | null>()
   for (const event of log.events) {
-    if (event.seq >= current.seq || event.session_id !== log.session_id || !event.turn_id) continue
-    if (event.kind === 'user_submitted' && event.task_id === contract.task_id &&
-        event.contract_id === contract.contract_id && event.contract_hash === contract.contract_hash) priorTurns.add(event.turn_id)
-    if (!priorTurns.has(event.turn_id)) continue
-    if (event.kind === 'tool_started' && event.effect_class === 'reconcilable_mutation') {
-      const calls = starts.get(event.turn_id) ?? new Set<string>()
-      calls.add(event.tool_call_id)
-      starts.set(event.turn_id, calls)
-    }
-    if (event.kind === 'mutation_batch' && event.status === 'committed' && event.batch_id)
-      batches.set(event.batch_id, event)
+    if (event.kind === 'user_submitted' && event.session_id === log.session_id && event.turn_id)
+      submissions.set(event.turn_id, submissions.has(event.turn_id) ? null : event)
   }
-  if (starts.size === 0 && batches.size === 0) return []
+  const current = submissions.get(input.turnId)
+  if (!current || current.task_id !== contract.task_id || current.contract_id !== contract.contract_id ||
+      current.contract_hash !== contract.contract_hash) return []
   try {
+    const contracts = additiveContracts(contract, input.history)
+    const starts = new Map<string, Map<string, ToolStart | null>>()
+    const batches = new Map<string, Extract<SessionEvent, { kind: 'mutation_batch' }> | null>()
+    for (const event of log.events) {
+      if (event.seq >= current.seq || event.session_id !== log.session_id || !event.turn_id) continue
+      const source = submissions.get(event.turn_id)
+      if (!source?.contract_id || !source.contract_hash || source.task_id !== contract.task_id ||
+          source.seq >= event.seq || contracts.get(source.contract_id) !== source.contract_hash) continue
+      if (event.kind === 'tool_started') {
+        const calls = starts.get(event.turn_id) ?? new Map<string, ToolStart | null>()
+        calls.set(event.tool_call_id, calls.has(event.tool_call_id) ? null : event)
+        starts.set(event.turn_id, calls)
+      }
+      if (event.kind === 'mutation_batch' && event.batch_id)
+        batches.set(event.batch_id, batches.has(event.batch_id) ? null : event)
+    }
+    if (starts.size === 0 && batches.size === 0) return []
     const ledger = loadEffectLedgerWithDiagnostics(input.runDir)
     if (ledger.malformedLines > 0) return []
     const intents = new Map<string, EffectLedgerRecord>()
@@ -96,9 +119,11 @@ export function recoverCurrentTaskMutationPaths(input: {
       // before publishing the later mutation_batch event. Legacy rows must
       // join the canonical mutation batch; do not infer their task from bytes.
       const batch = batches.get(record.mutationBatchId)
+      const start = record.turnId && record.toolCallId ? starts.get(record.turnId)?.get(record.toolCallId) : null
       const linked = record.toolCallId && record.turnId
-        ? starts.get(record.turnId)?.has(record.toolCallId)
-        : !record.toolCallId && record.turnId === null && batch?.pre_image_hashes && batch.post_image_hashes &&
+        ? start?.effect_class === record.effectClass && start.idempotency_key === record.toolCallId &&
+          start.tool_name === normalizeModelToolName(record.toolName)
+        : !record.toolCallId && record.turnId === null && batch?.status === 'committed' && batch.pre_image_hashes && batch.post_image_hashes &&
           sha256Canonical(batch.pre_image_hashes) === sha256Canonical(intent.preImageHashes) &&
           sha256Canonical(batch.post_image_hashes) === sha256Canonical(post)
       if (linked) {
