@@ -329,6 +329,18 @@ try {
   Assert-AgentTest (@($missingEvidence.reviewPolicy.independentReviewEvidenceErrors) -contains 'autonomous_review_evidence_missing') 'missing evidence diagnostic must remain visible'
 
   $fakeGhHealthy = Get-Content -Raw -LiteralPath $fakeGh
+  try {
+    $noisyGh = $fakeGhHealthy
+    foreach ($payload in @($prJson, $graphqlJson, $mainRefJson)) {
+      $noisyGh = $noisyGh.Replace("Write-Output '$payload'", ('[Console]::Error.WriteLine("synthetic advisory"); ' + "Write-Output '$payload'"))
+    }
+    $noisyGh | Set-Content -LiteralPath $fakeGh -Encoding utf8
+    $noisyGateRun = Invoke-TestScript -Script $prGateScript -Arguments $gateArguments
+    $noisyGate = $noisyGateRun.text | ConvertFrom-Json
+    Assert-AgentTest ($noisyGateRun.exitCode -eq 0 -and $noisyGate.status -eq 'MERGE_READY') 'valid PR metadata and review threads must survive native stderr advisories'
+    Assert-AgentTest ($noisyGate.checks.CI_HEAD_MATCH -and $noisyGate.checks.REQUIRED_CHECKS_GREEN) 'advisories must preserve exact-head check enforcement'
+  } finally { $fakeGhHealthy | Set-Content -LiteralPath $fakeGh -Encoding utf8 }
+
   foreach ($malformedBase in @('{}', '{"object":{}}', '{"object":{"sha":"invalid"}}', 'null')) {
     try {
       $fakeGhHealthy.Replace("Write-Output '$mainRefJson'", "Write-Output '$malformedBase'") | Set-Content -LiteralPath $fakeGh -Encoding utf8

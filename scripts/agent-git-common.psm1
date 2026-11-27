@@ -41,8 +41,10 @@ function Invoke-AgentProcess {
         $null = $process.WaitForExit(2000)
         return [pscustomobject]@{ exitCode = 124; output = @(); text = 'agent_request_timeout' }
       }
-      $text = $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult()
-      return [pscustomobject]@{ exitCode = $process.ExitCode; output = @($text -split "`r?`n"); text = $text }
+      $standardOutput = $stdout.GetAwaiter().GetResult()
+      $standardError = $stderr.GetAwaiter().GetResult()
+      $text = $standardOutput + $standardError
+      return [pscustomobject]@{ exitCode = $process.ExitCode; output = @($text -split "`r?`n"); text = $text; stdout = $standardOutput }
     } catch {
       return [pscustomobject]@{ exitCode = 127; output = @(); text = 'agent_process_unavailable' }
     } finally { $process.Dispose() }
