@@ -22,6 +22,7 @@ import { buildReadOnlyAgentTurnPrompt } from './lanes/readOnlyAgentLoop.js';
 import type { ChatEngineOptions } from './chatEngineContracts.js';
 import { mapAgentActionToToolCalls } from './toolExecutor.js';
 import type { AgentAction } from './actions.js';
+import { recordToolProposed, recordToolStarted, recordToolTerminal } from './sessionEvents.js';
 
 const roots: string[] = [];
 const previousOffline = process.env['BABEL_LITE_OFFLINE'];
@@ -56,6 +57,8 @@ async function dispatchSubAgent(
   observation: string;
   entry: SubAgentToolLogEntry;
   runParentAction: (action: ChatToolAction) => Promise<{ index: number; observation: string; stop?: boolean }>;
+  runSameChildAction: () => Promise<{ index: number; observation: string; stop?: boolean }>;
+  runChildActionWithKey: (key: string) => Promise<{ index: number; observation: string; stop?: boolean }>;
 }> {
   const root = mkdtempSync(join(tmpdir(), 'babel-child-dispatch-'));
   roots.push(root);
@@ -95,15 +98,23 @@ async function dispatchSubAgent(
     {},
     { index: 1, idempotencyKey: 'call-parent-followup' },
   );
+  const childAction = { type: 'sub_agent', task, mutation: false, ...(typeof action === 'function' ? action(engine) : action) } as ChatToolAction;
   const result = await internals.executeOneAction(
-    { type: 'sub_agent', task, mutation: false, ...(typeof action === 'function' ? action(engine) : action) } as ChatToolAction,
+    childAction,
     toolContext,
     {},
     { index: 0, idempotencyKey: 'call-0' },
   );
   const entry = [...internals.toolCallLog].reverse().find((row) => row.tool === 'sub_agent');
   assert.ok(entry, 'sub_agent tool log entry must exist');
-  return { engine, root, observation: result.observation, entry: entry!, runParentAction };
+  const runChildActionWithKey = (key: string) => internals.executeOneAction(
+    childAction,
+    toolContext,
+    {},
+    { index: 0, idempotencyKey: key },
+  );
+  const runSameChildAction = () => runChildActionWithKey('call-0');
+  return { engine, root, observation: result.observation, entry: entry!, runParentAction, runSameChildAction, runChildActionWithKey };
 }
 
 describe('S02/#212 production dispatch — child conclusion reaches the parent tool message', () => {
@@ -325,6 +336,47 @@ describe('S02/#212 production dispatch — child conclusion reaches the parent t
     assert.match(text, /Child evidence references/, 'evidence section must survive');
     assert.match(text, /\[child conclusion truncated/);
   });
+});
+
+test('a settled parent idempotency key skips child redispatch before attempt allocation', async () => {
+  const previousOffline = process.env['BABEL_LITE_OFFLINE'];
+  delete process.env['BABEL_LITE_OFFLINE'];
+  let childCalls = 0;
+  try {
+  const result = await dispatchSubAgent('Inspect a settled child', {}, undefined, {
+    useDeterministicMock: false,
+    actionResolver: async () => {
+      childCalls += 1;
+      return [{ type: 'finish' as const, summary: 'one child run', verification: [] }];
+    },
+  });
+  assert.equal(childCalls, 1);
+  const runtime = result.engine.getParityRuntime();
+  // This is the persisted terminal seam used by resume/replay. The initial
+  // dispatch above has already produced the real child result; retain only
+  // the canonical terminal marker for the duplicate call probe.
+  const turnId = runtime.turnId ?? 'settled-child-turn';
+  recordToolProposed(runtime.sessionEvents, { turn_id: turnId, tool_call_id: 'call-0', tool_name: 'sub_agent' });
+  recordToolStarted(runtime.sessionEvents, { turn_id: turnId, tool_call_id: 'call-0', tool_name: 'sub_agent' });
+  recordToolTerminal(runtime.sessionEvents, { turn_id: turnId, tool_call_id: 'call-0', tool_name: 'sub_agent', exit_code: 0 });
+  const skipped = await result.runSameChildAction();
+  assert.match(skipped.observation, /retained terminal/);
+  assert.match(skipped.observation, /terminal=completed/);
+  assert.match(skipped.observation, /no child execution was scheduled/);
+  assert.equal(childCalls, 1, 'a settled key must not invoke the child runner again');
+  assert.equal((result.engine as unknown as { childAttempts: Map<string, number> }).childAttempts.size, 1,
+    'duplicate terminal must not allocate a new attempt');
+
+  recordToolProposed(runtime.sessionEvents, { turn_id: turnId, tool_call_id: 'call-failed', tool_name: 'sub_agent' });
+  recordToolStarted(runtime.sessionEvents, { turn_id: turnId, tool_call_id: 'call-failed', tool_name: 'sub_agent' });
+  recordToolTerminal(runtime.sessionEvents, { turn_id: turnId, tool_call_id: 'call-failed', tool_name: 'sub_agent', failed: true, exit_code: 1 });
+  const failedAction = await result.runChildActionWithKey('call-failed');
+  assert.match(failedAction.observation, /terminal=failed \(exit_code=1\)/);
+  assert.equal(childCalls, 1, 'failed retained terminal must not invoke the child runner');
+  } finally {
+    if (previousOffline === undefined) delete process.env['BABEL_LITE_OFFLINE'];
+    else process.env['BABEL_LITE_OFFLINE'] = previousOffline;
+  }
 });
 
 describe('S03/#213 production dispatch — resolved spec reaches the child', () => {
