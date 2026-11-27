@@ -1,6 +1,6 @@
 // License: Apache-2.0 — see LICENSE
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -11,7 +11,37 @@ import {
   npmInstallProbe,
   runtimeProjectPathClass,
   validateAsciiInstallControlPrefix,
+  validateNpmInstallProxy,
 } from './consumer_install_path_qualification.mjs'
+
+test('npm install proxy is explicit, credential-free and origin-only', () => {
+  assert.equal(validateNpmInstallProxy(undefined), null)
+  assert.equal(validateNpmInstallProxy('http://proxy:8080'), 'http://proxy:8080')
+  for (const value of ['https://user:pass@proxy:8080', 'file:///tmp/proxy', 'http://proxy:8080/path', 'http://proxy:8080/?x=1', 'not-a-url']) {
+    assert.throws(() => validateNpmInstallProxy(value), /BABEL_CONSUMER_NPM_PROXY/)
+  }
+})
+
+test('npm proxy stays scoped to the install child and never rides the guarded environment', () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'babel proxy-scope-'))
+  try {
+    const child = join(scratch, 'npm-fixture.mjs')
+    const seen = join(scratch, 'seen.json')
+    writeFileSync(child, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(seen)}, JSON.stringify(process.env));`)
+    const env = consumerEnvironment({ ...process.env, HTTPS_PROXY: 'http://ambient.invalid:8080' }, scratch)
+    const probe = npmInstallProbe({
+      installPrefix: join(scratch, 'install prefix é'), artifact: join(scratch, 'fixture.tgz'), npmCli: child,
+      project: scratch, env, scratch, phase: 'proxy_scope', npmProxy: 'http://proxy:8080', npmCaCert: '/explicit/ca.pem',
+    })
+    assert.equal(probe.success, true)
+    const observed = JSON.parse(readFileSync(seen, 'utf8'))
+    assert.equal(observed.HTTP_PROXY, 'http://proxy:8080')
+    assert.equal(observed.HTTPS_PROXY, 'http://proxy:8080')
+    assert.equal(observed.npm_config_proxy, 'http://proxy:8080')
+    assert.equal(observed.NODE_EXTRA_CA_CERTS, '/explicit/ca.pem')
+    assert.equal(env.HTTPS_PROXY, undefined)
+  } finally { rmSync(scratch, { recursive: true, force: true }) }
+})
 
 test('installPathClass and runtimeProjectPathClass distinguish unicode install vs control paths', () => {
   assert.equal(installPathClass('/tmp/install prefix é'), 'unicode_install_prefix')

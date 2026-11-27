@@ -14,6 +14,7 @@ import {
   installPathClass,
   npmInstallProbe,
   runtimeProjectPathClass,
+  validateNpmInstallProxy,
   validateAsciiInstallControlPrefix,
 } from './consumer_install_path_qualification.mjs'
 
@@ -38,6 +39,11 @@ const npmCli = process.env.npm_execpath
 assert.ok(npmCli && existsSync(npmCli), 'Run through npm run test:consumer-artifact')
 const sha = bytes => createHash('sha256').update(bytes).digest('hex')
 const env = consumerEnvironment(process.env, scratch)
+const npmProxy = validateNpmInstallProxy(process.env.BABEL_CONSUMER_NPM_PROXY)
+// A proxy may terminate TLS with an operator-installed CA. This trust anchor
+// is admitted only alongside the explicit npm proxy and never enters product
+// children or the guarded runtime environment.
+const npmCaCert = npmProxy ? process.env.BABEL_CONSUMER_NPM_CA_CERT ?? process.env.NODE_EXTRA_CA_CERTS : undefined
 writeFileSync(env.npm_config_userconfig, '')
 writeFileSync(env.npm_config_globalconfig, '')
 const guardedEnv = { ...env, NODE_OPTIONS: `--import=${pathToFileURL(guard).href}` }
@@ -97,7 +103,7 @@ function npm(args, options = {}) {
   return command(process.execPath, [npmCli, ...args], { timeout: 300000, diagPhase: 'npm', ...options })
 }
 function npmProbeInput(installPrefix, artifact, phase) {
-  return { installPrefix, artifact, npmCli, project, env, scratch, phase }
+  return { installPrefix, artifact, npmCli, project, env, scratch, phase, npmProxy, npmCaCert }
 }
 function writeInstallPathComparison(comparison) {
   try {
