@@ -32,3 +32,15 @@ test('malformed OpenRouter cost does not expose a provider total for campaign se
   assert.equal(metadata.provider_reported_total_charge_usd, null)
   assert.equal(metadata.cost_precision, 'unknown')
 })
+
+test('invalid token counters remain unknown instead of producing fabricated totals', () => {
+  const metadata = buildInvocationMetadata('openrouter', 'unpriced-fixture-model', 1, {
+    prompt_tokens: -1,
+    completion_tokens: 1.5,
+    total_tokens: 20,
+  });
+  assert.equal(metadata.prompt_tokens, null);
+  assert.equal(metadata.completion_tokens, null);
+  assert.equal(metadata.total_tokens, 20);
+  assert.equal(metadata.estimated_cost_usd, null);
+});

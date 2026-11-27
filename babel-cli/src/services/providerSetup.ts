@@ -26,6 +26,10 @@ export function getSetupStatus(env: NodeJS.ProcessEnv = process.env, session: Se
 
 type AskSetup = (prompt: string, allowBack?: boolean) => Promise<string>
 const backChoice = '/back'
+const setupDefaultModelKeys = new Map<ProviderId, string>([
+  ['openrouter', 'deepseek-v4.1-flash-openrouter'],
+  ['command-code', 'command-code/deepseek-v4.1-flash'],
+])
 
 async function chooseSetupModel(
   provider: ProviderId, remembered: string | undefined, ask: AskSetup, write: (text: string) => void,
@@ -170,7 +174,10 @@ export async function runProviderSetup(options: {
     const connection = { ...saved, id, provider: selected, ...(baseUrl ? { baseUrl } : {}), ...(authentication ? { authentication } : {}) }
     const remembered = (previous.defaults?.connection === id ? previous.defaults.model : undefined)
       ?? previous.defaults?.modelsByConnection?.[id] ?? saved?.model
-    const reviewed = await reviewSetupSelection(connection, remembered, previous.defaults?.budgetUsd, ask, write)
+    const defaultKey = setupDefaultModelKeys.get(selected)
+    const suggestedModel = remembered ?? (defaultKey && getAvailableModels().find(({ key, entry }) =>
+      key === defaultKey && entry.provider === selected && entry.enabled !== false && entry.native_tool_use !== false)?.entry.model_id)
+    const reviewed = await reviewSetupSelection(connection, suggestedModel, previous.defaults?.budgetUsd, ask, write)
     if (!reviewed) {
       write(`Setup left your active connection unchanged. Run ${CLI_COMMAND} setup to try again.\n`)
       return cancelled()

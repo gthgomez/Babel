@@ -75,6 +75,13 @@ test('a blocked transformation closes only after the one declared setup write ha
   try {
     const write = { tool: 'write_file', target: 'export.py', effect_status: 'confirmed_change', mutation_paths: ['export.py'] }
     assert.equal(inspect(task, [write]), true)
+    assert.equal(inspect(task.replace('taking an input JSON file and an output CSV path', 'with input and output arguments'), [write]), true)
+    const inputFirst = task.replace(
+      'Run the exporter to create output.csv from input.json and leave both the exporter and generated CSV in the repository.',
+      'Execute export.py using input.json and save the resulting CSV as output.csv. Keep the program and its output in the project.',
+    )
+    assert.equal(inspect(inputFirst, [write]), true)
+    assert.equal(inspect(`${inputFirst} Document the data format in README.`, [write]), false)
     assert.equal(inspect(task, []), false)
     assert.equal(inspect(`${task} Update README independently.`, [write]), false)
     assert.equal(inspect(task.replace('sorted by aisle and then sku', 'sorted by aisle and then sku and update README'), [write]), false)
@@ -96,6 +103,11 @@ test('does not create a required effect from optional, prohibited, quoted or com
     `Example: Run \`${command}\`.`,
     `For example. Run \`${command}\`.`,
     `Run \`${command} && echo ok\`.`,
+  ]) assert.deepEqual(admit([prose]), { criteria: [], provenance: [], sources: [] }, prose)
+  for (const prose of [
+    'Execute export.py using input.json and save the resulting CSV as output.csv if possible.',
+    'Execute export.py using ../input.json and save the resulting CSV as output.csv.',
+    'Execute export.py using input.json and save the resulting CSV as output.csv. Do not run shell commands.',
   ]) assert.deepEqual(admit([prose]), { criteria: [], provenance: [], sources: [] }, prose)
 })
 

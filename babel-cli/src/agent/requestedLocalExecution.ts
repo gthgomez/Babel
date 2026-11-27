@@ -18,6 +18,8 @@ const SCRIPT_PATH = String.raw`(?:\./)?[\p{L}\p{N}_-][\p{L}\p{N}_.\/-]*\.(?:py|[
 const FILE_PATH = String.raw`(?:\./)?[\p{L}\p{N}_-][\p{L}\p{N}_.\/-]*`
 const DECLARED_SCRIPT = new RegExp(String.raw`^(?:please\s+)?(?:add|create|write)\s+\x60?(${SCRIPT_PATH})\x60?(?=$|[\s,])`, 'iu')
 const LOCAL_JOB = new RegExp(String.raw`^(?:please\s+)?(?:run|execute)\s+(?:the exporter|\x60?(${SCRIPT_PATH})\x60?)\s+to\s+(?:create|generate)\s+\x60?(${FILE_PATH})\x60?\s+from\s+\x60?(${FILE_PATH})\x60?(?:\s+and\s+leave\s+both\b[^.;]*)?$`, 'iu')
+const INPUT_FIRST_JOB = new RegExp(String.raw`^(?:please\s+)?(?:run|execute)\s+(?:the exporter|\x60?(${SCRIPT_PATH})\x60?)\s+(?:using|with)\s+\x60?(${FILE_PATH})\x60?\s+and\s+(?:save|write)\s+the\s+(?:result|output|resulting\s+(?:CSV|JSON|text))\s+(?:as|to)\s+\x60?(${FILE_PATH})\x60?$`, 'iu')
+const DECLARED_CLI_PARAMETERS = /^,\s+an?\s+[\w -]*\bCLI (?:taking an input [\w -]+ file and an output [\w -]+ path|with input and output (?:arguments|parameters))$/i
 
 type LocalRun = Extract<ChatToolAction, { type: 'run_command' | 'test_run' }>
 type ExecutionScope = 'standalone' | 'mixed'
@@ -31,13 +33,17 @@ function executionRef(version: 1 | 2, scope: ExecutionScope, digest: string): st
   return `${REF_PREFIX}:v${version}:${scope}:${digest}`
 }
 
-function jobArgv(clause: string, declaredScripts: readonly string[]): string[][] {
+function jobArgv(clause: string, declaredScripts: readonly string[], acceptInputFirst = true): string[][] {
+  if (/\b(?:if|unless|when|optional)\b/i.test(clause)) return []
   const job = LOCAL_JOB.exec(clause)
-  if (!job || /\b(?:if|unless|when|optional)\b/i.test(clause)) return []
-  const script = job[1] ?? (declaredScripts.length === 1 ? declaredScripts[0] : undefined)
-  if (!script || [script, job[2], job[3]].some(path => path?.split('/').includes('..'))) return []
+  const inputFirst = !job && acceptInputFirst ? INPUT_FIRST_JOB.exec(clause) : null
+  if (!job && !inputFirst) return []
+  const script = (job?.[1] ?? inputFirst?.[1]) ?? (declaredScripts.length === 1 ? declaredScripts[0] : undefined)
+  const source = job?.[3] ?? inputFirst?.[2]
+  const destination = job?.[2] ?? inputFirst?.[3]
+  if (!script || !source || !destination || [script, source, destination].some(path => path.split('/').includes('..'))) return []
   const executables = /\.py$/i.test(script) ? ['python3', 'python'] : ['node']
-  return executables.map(executable => [executable, script, job[3]!, job[2]!])
+  return executables.map(executable => [executable, script, source, destination])
 }
 
 function coveredByExactVerifier(argv: readonly string[], criteria: readonly AcceptanceRequirementV1[]): boolean {
@@ -81,7 +87,8 @@ export function requestedLocalExecutionAcceptance(input: {
     // bind a repeated active clause by digest without inventing a span.
     if (input.amendment && !uniqueSource) continue
     const exactArgv = parseForegroundCommandClause(clause)
-    const argvAlternatives = (exactArgv ? [exactArgv] : jobArgv(clause, declaredScripts))
+    // Frozen amendment descriptors replay their original operation grammar.
+    const argvAlternatives = (exactArgv ? [exactArgv] : jobArgv(clause, declaredScripts, !input.amendment))
       .filter(argv => !prohibits(input.activeProse, formatArgvAsCommand(argv)))
     if (argvAlternatives.length === 0) continue
     const operations = argvAlternatives.map(operationDigest)
@@ -154,7 +161,7 @@ export function frozenExactForegroundCommands(
   const inputs = new Map([contract.user_request, ...amendments].map((request, index) => {
     const clauses = foregroundTaskClauses(inferFreshTaskAcceptance(request).activeProse, index > 0)
     const scripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
-    return [sha256Canonical(request), { clauses, scripts }] as const
+    return [sha256Canonical(request), { clauses, scripts, amendment: index > 0 }] as const
   }))
   for (const criterion of contract.acceptance) {
     if (!criterion.required || criterion.verification.kind !== REQUESTED_LOCAL_EXECUTION_KIND ||
@@ -170,7 +177,7 @@ export function frozenExactForegroundCommands(
     const source = inputs.get(sourceDigest)
     if (!source?.clauses.includes(clause)) continue
     const sourceProse = [...activeProse, ...source.clauses]
-    const candidates = (exact ? [exact] : jobArgv(clause, source.scripts)).filter(argv => {
+    const candidates = (exact ? [exact] : jobArgv(clause, source.scripts, !source.amendment)).filter(argv => {
       const command = formatArgvAsCommand(argv)
       return redactSecrets(command) === command && !taskProhibitsCommand(sourceProse, command)
     })
@@ -249,7 +256,7 @@ export function substitutesRequestedProcessOutput(
   const operations = sourceRequests.flatMap((request, index) => {
     const clauses = foregroundTaskClauses(inferFreshTaskAcceptance(request).activeProse, index > 0)
     const scripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
-    return clauses.flatMap(clause => jobArgv(clause, scripts))
+    return clauses.flatMap(clause => jobArgv(clause, scripts, index === 0))
   })
   const requiredOutputs = new Set(operations
     .filter(argv => {
@@ -318,12 +325,11 @@ export function hasSettledLocalJobSetup(input: {
   // Other prose remains eligible for independent work. These forms describe
   // the declared script, its output format, or an input to leave unchanged.
   if (!declaration || !declared || declared[1] !== script ||
-      !/^,\s+an?\s+[\w -]*\bCLI taking an input [\w -]+ file and an output [\w -]+ path$/i
-        .test(declaration.slice(declared[0].length))) return false
+      !DECLARED_CLI_PARAMETERS.test(declaration.slice(declared[0].length))) return false
   if (clauses.filter(clause => jobArgv(clause, [script]).some(args =>
     operationDigest(args) === operationDigest(effect.argv))).length !== 1) return false
   if (clauses.slice(1).some(clause => {
-    if (LOCAL_JOB.test(clause)) {
+    if (LOCAL_JOB.test(clause) || INPUT_FIRST_JOB.test(clause)) {
       const suffix = /\s+and\s+leave\s+both\b.*$/i.exec(clause)?.[0]
       return (suffix !== undefined && !/^\s+and leave both the (?:script|exporter|program|CLI) and (?:the )?generated [\w -]+ in the (?:repository|project|workspace)$/i.test(suffix)) ||
         !jobArgv(clause, [script]).some(args => operationDigest(args) === operationDigest(effect.argv))
@@ -332,6 +338,7 @@ export function hasSettledLocalJobSetup(input: {
         !/\b(?:and|also|then|or)\s+(?:add|create|edit|update|write|run|check|review|verify|test|fix|repair|remove)\b/i.test(clause)) return false
     if (/^Use (?:UTF-\d+|ASCII) and (?:LF|CRLF) line endings$/i.test(clause)) return false
     if (/^Keep [\p{L}\p{N} ,_-]+ intact(?: using [\p{L}\p{N} -]+)?$/iu.test(clause)) return false
+    if (/^Keep the (?:script|exporter|program|CLI) and its output in the (?:repository|project|workspace)$/i.test(clause)) return false
     if (/^Show the verification you performed$/i.test(clause)) return false
     const preserved = /^Leave\s+`?([^`\s]+)`?\s+unchanged$/i.exec(clause)?.[1]
     return preserved !== source

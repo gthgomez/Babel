@@ -98,7 +98,10 @@ export function upstreamProviderFromResponse(value: {
 }
 
 function normalizeTokenCount(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  // Provider telemetry is advisory. Negative, fractional, or non-finite
+  // counters are invalid observations and must remain UNKNOWN rather than
+  // entering totals/cost calculations.
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 

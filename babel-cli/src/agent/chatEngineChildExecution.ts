@@ -273,6 +273,20 @@ export async function executeSubAgentAction(
     throw new Error('Campaign delegation requires a current parent run control');
   }
 
+  // Continuation can reach this boundary before rebuilding its planner state.
+  // Reuse the parent journal's outcome before allocating another child attempt.
+  const parentIdempotencyKey = meta.idempotencyKey;
+  const retained = parentIdempotencyKey && [...host.parity.sessionEvents.events].reverse().find(event =>
+    (event.kind === 'tool_completed' || event.kind === 'tool_failed' || event.kind === 'tool_cancelled') &&
+    event.idempotency_key === parentIdempotencyKey);
+  if (retained) {
+    const classification = retained.kind === 'tool_failed'
+      ? `failed${retained.exit_code === undefined ? '' : ` (exit_code=${retained.exit_code})`}`
+      : retained.kind === 'tool_cancelled' ? 'cancelled' : 'completed';
+    const detail = `retained terminal=${classification}; no child execution was scheduled`;
+    return { index: meta.index, observation: `### ${tool} ${target}\n${detail}` };
+  }
+
   let childModel = (action as { model?: string }).model ?? null;
   if (host.modelPolicy) {
     try {
@@ -292,14 +306,8 @@ export async function executeSubAgentAction(
     ...(host.parity.authoritySession ? { authoritySession: host.parity.authoritySession } : {}),
   };
 
-  // S03/#213 slice 2: stable delegation id + per-attempt evidence dir.
-  //
-  // M7 (open, disclosed): this makes retry *identity* stable and prevents
-  // the retry from overwriting attempt-1 evidence, but it does NOT yet
-  // replay a terminal idempotency key instead of re-running the child.
-  // The recon's full T05 dedupe gate remains unimplemented; the existing
-  // recovered-outcome authorization gate (above) still blocks unknown
-  // outcomes until reconciliation.
+  // A stable delegation ID keeps separate authorized attempts in the same
+  // lineage. Each attempt has its own directory to preserve earlier evidence.
   const subId = host.childDelegationIdForAction(action, meta);
   const attempt = (host.childAttempts.get(subId) ?? 0) + 1;
   host.childAttempts.set(subId, attempt);

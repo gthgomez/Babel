@@ -44,6 +44,8 @@ import {
   readErrorBody,
   readStreamWithLimits,
   buildStreamingInvocationMetadata,
+  recordObservedModelId,
+  ProviderModelIdentityConflictError,
   type StreamingState,
 } from '../providerResponseStream.js';
 import {
@@ -662,7 +664,7 @@ async *executeWithToolsStream(
             break;
           }
           const json = parseChatCompletionsStreamFrame(data);
-          if (json.model) streamState.observedModelId = json.model;
+          recordObservedModelId(streamState, json.model);
           const router = json.openrouter_metadata as OpenRouterResponseMetadata | null | undefined;
           const upstreamProvider = upstreamProviderFromResponse({
             ...(json.provider ? { provider: json.provider } : {}),
@@ -872,6 +874,12 @@ async *executeWithToolsStream(
       yield { type: 'done', finishReason: disposition.finishReason };
     } catch (err) {
       if (responseValidationFailed) throw err;
+      if (err instanceof ProviderModelIdentityConflictError) {
+        responseValidationFailed = true;
+        const message = err.message;
+        settleStream({ stage: 'response_normalization', message });
+        throw err;
+      }
       const cancelled = isCallerCancelError(err, signal);
       const protocolError = err instanceof ConflictingStreamFinishError || err instanceof MalformedChatCompletionsResponseError;
       const errMessage = cancelled ? `[${this.providerId}] Request cancelled` : err instanceof Error ? err.message : String(err);

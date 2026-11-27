@@ -1430,12 +1430,15 @@ export class ChatEngine {
   /** Recheck same-objective ledger paths for verifier capture and completion. */
   public recoveredTaskMutationPaths(): string[] {
     const runtime = this.lastTurnRuntime;
-    const contract = this.parity.liveAuthority?.taskContract;
+    const authority = this.parity.liveAuthority;
+    const contract = authority?.taskContract;
+    const history = authority?.taskModeHistory;
     const { turnId, sessionEvents: log } = this.parity;
     const projectRoot = this.options.projectRoot;
     return runtime?.objectiveContinuation && runtime.effectiveOperation === 'MUTATING' &&
       !runtime.presentationOnly && contract && turnId && projectRoot
-      ? recoverCurrentTaskMutationPaths({ log, runDir: this.engineRunDir, projectRoot, turnId, contract })
+      ? recoverCurrentTaskMutationPaths({ log, runDir: this.engineRunDir, projectRoot, turnId, contract,
+        ...(history?.schema_version === 2 ? { history } : {}) })
       : [];
   }
 

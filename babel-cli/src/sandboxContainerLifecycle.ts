@@ -8,6 +8,8 @@ export interface PreparedShellInvocation {
   cwd: string;
   /** Parsed user command, before the platform-specific executable shim. */
   commandArgv?: readonly string[];
+  /** Physical host cwd resolved before spawn for foreground custody. */
+  canonicalHostCwd?: string;
   env: NodeJS.ProcessEnv;
   validateExecutable?: () => boolean;
   ownedContainerName?: string;

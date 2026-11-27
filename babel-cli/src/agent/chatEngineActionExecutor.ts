@@ -1481,6 +1481,8 @@ export class ChatEngineActionExecutor {
               ? { hasRecoveredMutationWitness: () => recoverCurrentTaskMutationPaths({
                   log: this.host.parity.sessionEvents, runDir: ownerRunDir,
                   projectRoot: effectRoot, turnId: dispatchTurnId, contract: taskContract,
+                  ...(this.host.parity.liveAuthority?.taskModeHistory?.schema_version === 2
+                    ? { history: this.host.parity.liveAuthority.taskModeHistory } : {}),
                 }).length > 0 }
              : {}),
           // Privileged ops: lease/PDP decides. Benchmark pair is the only
