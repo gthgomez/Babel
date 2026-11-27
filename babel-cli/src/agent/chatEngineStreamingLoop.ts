@@ -120,6 +120,9 @@ function isEmptyStreamTransportReset(message: string): boolean {
   return /connection reset|econnreset|socket hang up|network error/i.test(message);
 }
 
+class RetryableBlankStopError extends Error {
+}
+
 export class ChatEngineStreamingLoop {
   constructor(private readonly host: ChatEngineStreamingLoopHost) {}
 
@@ -712,6 +715,7 @@ export class ChatEngineStreamingLoop {
               }
               case "error":
                 if (event.failure instanceof ProviderHttpError && (event.failure.status === 401 || event.failure.status === 403)) throw event.failure;
+                if (event.retryableBlankStop) throw new RetryableBlankStopError(event.message);
                 if (event.malformedToolArguments) {
                   const malformed = event.malformedToolArguments;
                   nativeProtocolInvalid = true;
@@ -821,6 +825,32 @@ export class ChatEngineStreamingLoop {
           if (admissionRecovery === 'recovered') continue;
           if (admissionRecovery === 'stopped') return;
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
+          if (err instanceof RetryableBlankStopError) {
+            this.host.trackRunnerUsage(runner, usageScope);
+            endSpan(_turnSpan, SpanStatusCode.ERROR);
+            _turnSpan = null;
+            const cancelled = this.host.emitCancelledIfOperatorAbort(err);
+            if (cancelled) { yield cancelled; return; }
+            if (
+              !sameRouteTransportRetryUsed &&
+              answerText.trim().length === 0 &&
+              nativeActions.length === 0 &&
+              receivedToolCallIds.size === 0 &&
+              !toolsAnnouncedInStream &&
+              !this.host.abortController.signal.aborted &&
+              this.host.checkBudgets(true).ok
+            ) {
+              sameRouteTransportRetryUsed = true;
+              answerText = "";
+              visibleNativeAnswerLength = 0;
+              nativeFinishReason = undefined;
+              nativeStreamExhausted = false;
+              nativeIdentityNormalized = false;
+              continue;
+            }
+            yield this.host.streamFailed(err.message);
+            return;
+          }
           // Retry the same runner once when the attempt produced no text and
           // no tool call. A different provider is not a substitute, and an
           // operator abort must not match this path.

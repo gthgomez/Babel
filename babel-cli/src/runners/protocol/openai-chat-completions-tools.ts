@@ -805,7 +805,21 @@ async *executeWithToolsStream(
 
       signal?.throwIfAborted();
       if (!disposition.executeTools && !hasText) {
-        throw new MalformedChatCompletionsResponseError('Empty provider response: no answer text or actionable tool calls');
+        const emptyMessage = 'Empty provider response: no answer text or actionable tool calls';
+        const retryableBlankStop = this.providerId === 'openrouter' &&
+          disposition.finishReason === 'stop' &&
+          streamState.sawDone &&
+          typeof streamState.observedModelId === 'string' &&
+          streamState.observedModelId.trim().length > 0 &&
+          pendingToolCalls.size === 0 &&
+          outputReceipt.trim().length === 0 &&
+          !signal?.aborted;
+        if (retryableBlankStop) {
+          settleStream({ stage: 'response_normalization', message: emptyMessage });
+          yield { type: 'error', message: `[${this.providerId}] ${emptyMessage}`, retryableBlankStop: true };
+          return;
+        }
+        throw new MalformedChatCompletionsResponseError(emptyMessage);
       }
 
       // ── Yield accumulated tool calls ──────────────────────────────────

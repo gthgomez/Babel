@@ -22,9 +22,9 @@ const tools: ToolDefinition[] = [{
 }];
 
 class FixtureRunner extends OpenAiCompatibleRunner {
-  constructor(private readonly body: string) {
+  constructor(private readonly body: string, provider: 'openai' | 'openrouter' = 'openai') {
     super('fixture-model', 'FIXTURE_KEY', {}, {
-      provider: 'openai',
+      provider,
       explicitCredential: 'fixture-credential',
       env: {},
     });
@@ -41,6 +41,34 @@ class FixtureRunner extends OpenAiCompatibleRunner {
     });
   }
 }
+
+test('OpenRouter blank stop is marked retryable only after a complete validated stream', async () => {
+  const runner = new FixtureRunner(`${frame({ content: '\n' }, 'stop')}${done}`, 'openrouter');
+  const events: ToolStreamEvent[] = [];
+  for await (const event of runner.executeWithToolsStream(
+    [{ role: 'user', content: 'Continue the fixture.' }],
+    tools,
+  )) events.push(event);
+  const error = events.at(-1);
+  assert.equal(error?.type, 'error');
+  assert.equal(error?.type === 'error' && error.retryableBlankStop, true);
+  assert.equal(events.some(event => event.type === 'tool_use'), false);
+});
+
+test('OpenRouter blank stop without observed identity is never marked retryable', async () => {
+  const runner = new FixtureRunner(
+    `${frame({ content: '\n' }, 'stop')}${done}`.replace('model":"fixture-model",', ''),
+    'openrouter',
+  );
+  const events: ToolStreamEvent[] = [];
+  for await (const event of runner.executeWithToolsStream(
+    [{ role: 'user', content: 'Continue the fixture.' }],
+    tools,
+  )) events.push(event);
+  const error = events.at(-1);
+  assert.equal(error?.type, 'error');
+  assert.equal(error?.type === 'error' && error.retryableBlankStop, undefined);
+});
 
 function frame(delta: Record<string, unknown>, finishReason: string | null): string {
   return `data: ${JSON.stringify({

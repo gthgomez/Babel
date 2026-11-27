@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { ChatEngine } from './chatEngine.js';
 import { runCliChatTask } from '../interactive/execution/chatCore.js';
 import { OpenCodeGoApiRunner } from '../runners/openCodeGoApi.js';
+import { OpenRouterApiRunner } from '../runners/openRouterApi.js';
 import { babelReviewModelPolicy } from '../services/babelChatReview.js';
 import { validateProviderMessageProtocol } from '../runners/providerMessages.js';
 
@@ -31,7 +32,7 @@ type WireMessage = {
   name?: string;
 };
 
-type CapturedRequest = { messages: WireMessage[]; toolNames: string[] };
+type CapturedRequest = { model?: string; messages: WireMessage[]; toolNames: string[] };
 
 function sseResponse(delta: Record<string, unknown>, finishReason: string): Response {
   return new Response(
@@ -53,6 +54,7 @@ interface HarnessOptions {
   maxTurns?: number;
   keepRuns?: boolean;
   fixtureContent?: string;
+  provider?: 'opencode-go' | 'openrouter';
 }
 
 interface Harness {
@@ -112,10 +114,12 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, init) => {
     const body = JSON.parse(String(init?.body)) as {
+      model?: unknown;
       messages: WireMessage[];
       tools?: Array<{ function: { name: string } }>;
     };
     captures.push({
+      ...(typeof body['model'] === 'string' ? { model: body['model'] } : {}),
       messages: body.messages,
       toolNames: (body.tools ?? []).map((tool) => tool.function.name),
     });
@@ -124,7 +128,9 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     return sseResponse(textDelta('Investigation complete.'), 'stop');
   };
 
-  const runner = new OpenCodeGoApiRunner('mimo-v2.5', {}, { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
+  const runner = options.provider === 'openrouter'
+    ? new OpenRouterApiRunner('mimo-v2.5', {}, { env: {}, explicitCredential: 'fixture-only' })
+    : new OpenCodeGoApiRunner('mimo-v2.5', {}, { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
   const run = async (task: string) => {
     const result = await runCliChatTask({
       task,
@@ -138,7 +144,9 @@ function makeHarness(options: HarnessOptions = {}): Harness {
           maxTurns: options.maxTurns ?? 8,
           ...(options.maxEstimatedTokens ? { maxEstimatedTokens: options.maxEstimatedTokens } : {}),
           providerRunner: runner,
-          providerPolicy: babelReviewModelPolicy('mimo-v2.5', source),
+          providerPolicy: options.provider === 'openrouter'
+            ? { ...babelReviewModelPolicy('mimo-v2.5', source), family: 'OpenRouter', provider: 'openrouter' }
+            : babelReviewModelPolicy('mimo-v2.5', source),
         });
       },
     });
@@ -167,6 +175,33 @@ function makeHarness(options: HarnessOptions = {}): Harness {
 function hardIssues(messages: WireMessage[]) {
   return validateProviderMessageProtocol(messages).filter((issue) => issue.code !== 'system_in_user_content');
 }
+
+test('OpenRouter blank stop retries once on the same wire and preserves a later answer', async () => {
+  const harness = makeHarness({ provider: 'openrouter' });
+  try {
+    harness.respond.push(() => sseResponse({ content: '\n' }, 'stop'));
+    harness.respond.push(() => sseResponse(textDelta('Recovered answer.'), 'stop'));
+    const { payload } = await harness.run('Explain the fixture without changing files.');
+    assert.equal(harness.captures.length, 2, 'blank response gets exactly one same-route retry');
+    assert.equal(harness.captures[0]?.model, harness.captures[1]?.model, 'retry keeps the exact model');
+    assert.deepEqual(harness.captures[0]?.messages, harness.captures[1]?.messages, 'retry keeps the same wire messages');
+    assert.equal(payload['status'], 'ANSWER_READY', 'recovered response reaches a completed terminal');
+  } finally {
+    harness.dispose();
+  }
+});
+
+test('repeated OpenRouter blank stops remain bounded at two requests', async () => {
+  const harness = makeHarness({ provider: 'openrouter' });
+  try {
+    harness.respond.push(() => sseResponse({ content: '\n' }, 'stop'));
+    harness.respond.push(() => sseResponse({ content: '\n' }, 'stop'));
+    await harness.run('Explain the fixture without changing files.');
+    assert.equal(harness.captures.length, 2, 'repeated blank response must not loop or fall back');
+  } finally {
+    harness.dispose();
+  }
+});
 
 function toolResultsFor(messages: WireMessage[], callId: string): WireMessage[] {
   return messages.filter((message) => message.role === 'tool' && message.tool_call_id === callId);
