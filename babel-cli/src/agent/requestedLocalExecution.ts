@@ -2,7 +2,7 @@ import { relative, resolve } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
 import { canonicalizeContained } from '../bridge/workspaceBound.js'
 import type { BlockedReport } from '../schemas/agentContracts.js'
-import { formatArgvAsCommand, parseCommandArgv } from '../utils/commandArgv.js'
+import { formatArgvAsCommand, parseForegroundCommandClause, parseSingleProcessArgv } from '../utils/commandArgv.js'
 import { redactSecrets } from '../utils/redaction.js'
 import type { ChatToolAction } from './chatToolDefinitions.js'
 import { parseUnifiedDiff } from './codingLoop/patchApply.js'
@@ -13,7 +13,6 @@ import type { AcceptanceRequirementV1, TaskContractProvenanceRecord } from './ta
 const REF_PREFIX = 'babel:requested-local-execution'
 const DENIAL_PREFIX = 'required_local_execution_denied'
 export const REQUESTED_LOCAL_EXECUTION_KIND = 'requested_local_execution'
-const EXACT_RUN = /^(?:please\s+)?(?:run|execute)\s+`([^`]+)`$/i
 const EXAMPLE_FRAME = /^(?:for example|an? example|example|sample|illustration|logs?|quoted text)(?:\s*:|\s*$)/i
 const SCRIPT_PATH = String.raw`(?:\./)?[\p{L}\p{N}_-][\p{L}\p{N}_.\/-]*\.(?:py|[cm]?js)`
 const FILE_PATH = String.raw`(?:\./)?[\p{L}\p{N}_-][\p{L}\p{N}_.\/-]*`
@@ -23,18 +22,6 @@ const LOCAL_JOB = new RegExp(String.raw`^(?:please\s+)?(?:run|execute)\s+(?:the 
 type LocalRun = Extract<ChatToolAction, { type: 'run_command' | 'test_run' }>
 type ExecutionScope = 'standalone' | 'mixed'
 export type MissingLocalExecutionAuthority = 'no_lease' | 'missing_capability' | 'unresolved'
-
-function argvForLocalOperation(command: string): string[] | null {
-  // This matcher identifies a single process request. Shell constructs and
-  // expansions are intentionally outside its meaning; policy still owns them.
-  if (/[;&|<>$`%^!\r\n\0]/.test(command)) return null
-  try {
-    const argv = parseCommandArgv(command)
-    return argv[0] && !argv[0].includes('=') ? argv : null
-  } catch {
-    return null
-  }
-}
 
 function operationDigest(argv: readonly string[]): string {
   return sha256Canonical({ argv, cwd: '.' })
@@ -114,8 +101,7 @@ export function requestedLocalExecutionAcceptance(input: {
     // Amendment descriptors require exact offsets. Fresh admission can still
     // bind a repeated active clause by digest without inventing a span.
     if (input.amendment && !uniqueSource) continue
-    const command = EXACT_RUN.exec(clause)?.[1]
-    const exactArgv = command ? argvForLocalOperation(command) : null
+    const exactArgv = parseForegroundCommandClause(clause)
     const argvAlternatives = (exactArgv ? [exactArgv] : jobArgv(clause, declaredScripts))
       .filter(argv => !prohibits(input.activeProse, formatArgvAsCommand(argv)))
     if (argvAlternatives.length === 0) continue
@@ -155,6 +141,12 @@ export function isRequestedOperationAmendmentRef(ref: string): boolean {
   return /^babel:requested-local-execution:(?:v2:mixed:[0-9a-f]{64}|criterion:v1:[0-9a-f]{64}:[0-9a-f]{64}:acceptance:requested-local-execution:[0-9a-f]{32})$/.test(ref)
 }
 
+/** Required foreground execution can already be covered by an exact verifier criterion. */
+export function hasRequestedLocalExecution(records: readonly TaskContractProvenanceRecord[]): boolean {
+  return records.some(record => record.kind === 'derived_acceptance' &&
+    /^babel:requested-local-execution:v2:(?:mixed|standalone):[0-9a-f]{64}$/.test(record.ref))
+}
+
 /** Match a foreground proposal to an admission-time operation identity, for settlement only. */
 export function requiredLocalExecutionScope(
   records: readonly TaskContractProvenanceRecord[],
@@ -163,7 +155,7 @@ export function requiredLocalExecutionScope(
 ): ExecutionScope | null {
   if (action.type === 'run_command' && (action.background || action.detached)) return null
   if (resolve(projectRoot, action.cwd ?? '.') !== resolve(projectRoot)) return null
-  const argv = argvForLocalOperation(action.command)
+  const argv = parseSingleProcessArgv(action.command)
   if (!argv) return null
   const digest = operationDigest(argv)
   const hasRef = (version: 1 | 2, scope: ExecutionScope) =>
@@ -253,7 +245,7 @@ export function requiredLocalExecutionBlock(
   for (const row of [...log].reverse()) {
     if ((row.tool !== 'run_command' && row.tool !== 'test_run') || !row.working_directory ||
         row.detail?.startsWith('background started ')) continue
-    const argv = argvForLocalOperation(row.target)
+    const argv = parseSingleProcessArgv(row.target)
     if (!argv) continue
     const key = sha256Canonical({ argv, cwd: row.working_directory })
     if (row.processExecuted === true && row.preDispatchNoEffect !== true && row.simulated !== true &&

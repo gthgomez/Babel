@@ -133,6 +133,22 @@ test('read-only routing cannot declare no change while a foreground effect is re
   }), false)
 })
 
+test('read-only routing cannot close an exact foreground request covered by a verifier', () => {
+  const criterionCompletion = {
+    currentRequest: () => ({
+      contract: {
+        acceptance: [{ required: true, verification: { kind: 'unit_test' } }],
+        provenance: { records: [{ kind: 'derived_acceptance',
+          ref: `babel:requested-local-execution:v2:mixed:${'0'.repeat(64)}` }] },
+      },
+    }),
+  } as never
+  assert.equal(resolveAcceptedReadOnlyTerminal({
+    effectiveOperation: 'READ_ONLY', ambientReadOnly: false, hasAnyWrites: false, toolCallLog: [],
+    criterionCompletion, buildCriterionRefresh: () => null,
+  }), false)
+})
+
 test('argument-qualified npm run must match full frozen argv for no-change', () => {
   const requiredCommand = 'npm run test:unit -- --filter critical'
   const criterionCompletion = {

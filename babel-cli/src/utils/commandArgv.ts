@@ -12,6 +12,23 @@ export class CommandArgvParseError extends Error {
   }
 }
 
+/** Recognize a single, task-authored foreground command clause without shell composition. */
+export function parseForegroundCommandClause(clause: string): string[] | null {
+  const command = /^(?:please\s+)?(?:run|execute)\s+`([^`]+)`$/i.exec(clause)?.[1]
+  return command === undefined ? null : parseSingleProcessArgv(command)
+}
+
+/** Identify one process and its arguments. Execution policy still owns authorization. */
+export function parseSingleProcessArgv(command: string): string[] | null {
+  if (/[;&|<>$`%^!\r\n\0]/.test(command)) return null
+  try {
+    const argv = parseCommandArgv(command)
+    return argv[0] && !argv[0].includes('=') ? argv : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Parse a non-shell command string while preserving quoted whitespace and
  * empty quoted arguments.

@@ -37,10 +37,11 @@ for(const scenario of ['host','docker'] as const)test(`a scoped ${scenario} sess
     };
     const providerPolicy:ResolvedModelPolicy={policyPath:'fixture',family:'fixture',selectedTier:'cheap',resolvedBackendKey:'fixture',provider:'opencode-go',providerModelId:'fixture-model',expensive:false,enabled:true,experimental:true,blockedWithoutExplicitOptIn:false,approximateInputTokens:0,approximateOutputTokens:0,warnings:[],waterfall:[],stagePolicies:[],contextWindow:128000,contextLimit:128000,maxOutputTokens:1024,nativeToolUse:true};
     const choice=scenario==='host'?{profile:'host_native',source:'persisted',expectedBoundary:'host'} as const:{profile:'safe_repo',source:'persisted',expectedBoundary:'docker'} as const;
-    engine=withExecutionPolicyChoice(choice,()=>new ChatEngine({task:'Run the fixture check.',operation:'CHANGE',projectRoot:root,model:'fixture-model',providerRunner:runner as never,providerPolicy,executionPolicy:choice}));
+    const task='Run `node check.mjs`.';
+    engine=withExecutionPolicyChoice(choice,()=>new ChatEngine({task,projectRoot:root,model:'fixture-model',providerRunner:runner as never,providerPolicy,executionPolicy:choice}));
     attachSessionAdmissionStore(engine);
     const events:unknown[]=[];
-    for await(const event of engine.submitMessageStream('Run node check.mjs and report the result.','execute'))events.push(event);
+    for await(const event of engine.submitMessageStream(task))events.push(event);
     const scrub=(value:unknown)=>String(value??'').replaceAll(canary,'[redacted]').replaceAll('synthetic-other-provider-canary','[redacted]').replaceAll(root,'[fixture]').slice(0,600);
     const summary=events.map(raw=>{
       const event=raw as Record<string,unknown>;
@@ -54,6 +55,7 @@ for(const scenario of ['host','docker'] as const)test(`a scoped ${scenario} sess
     if(scenario==='host'){
       assert.equal(existsSync(join(root,'result.txt')),true,`the actual host child must have run; event summary ${JSON.stringify(summary)} tool summary ${JSON.stringify(tools)}`);
       assert.equal(readFileSync(join(root,'result.txt'),'utf8'),'absent');
+      assert.equal(rows.filter(row=>row['target']==='node check.mjs'&&row['processCompleted']===true).length,1);
       const timing=engine.getLastTurnTelemetry()?.timing;
       assert.ok(timing,'the real engine must publish its turn timing');
       assert.equal(typeof timing.objectiveAdmissionMs,'number');

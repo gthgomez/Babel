@@ -20,7 +20,7 @@ import {
   commandsMatchForExecutableBinding,
 } from './taskAcceptanceExecutableBinding.js';
 import { isLegacyPointTarget, POINT_TARGET_PREFIX } from './pointVerifierWitness.js';
-import { REQUESTED_LOCAL_EXECUTION_KIND } from './requestedLocalExecution.js';
+import { hasRequestedLocalExecution, REQUESTED_LOCAL_EXECUTION_KIND } from './requestedLocalExecution.js';
 
 /** Trim framing whitespace only — never collapse spaces inside quoted argv. */
 function trimCommandForComparison(command: string): string {
@@ -179,6 +179,7 @@ export function resolveAcceptedReadOnlyTerminal(input: {
 }): boolean {
   if (input.effectiveOperation === 'READ_ONLY' || input.ambientReadOnly) {
     const contract = input.criterionCompletion?.currentRequest()?.contract;
+    if (contract?.provenance && hasRequestedLocalExecution(contract.provenance.records)) return false;
     return !contract?.acceptance.some(item =>
       item.required && item.verification.kind === REQUESTED_LOCAL_EXECUTION_KIND,
     );
