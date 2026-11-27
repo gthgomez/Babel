@@ -557,7 +557,7 @@ test('started shell results identify the selected host backend and denials ident
     const validated = validateHighRiskToolResult('test_run', started);
     assert.equal(getTrustedShellExecutionBackend(validated), 'host-process', 'the trusted fact survives the output contract copy');
     assert.deepEqual(getTrustedHostShellInvocation(validated)?.argv, ['node', '--version']);
-    assert.equal(getTrustedHostShellInvocation(validated)?.cwd, realpathSync(fixture.projectRoot));
+    assert.equal(getTrustedHostShellInvocation(validated)?.cwd, realpathSync.native(fixture.projectRoot));
     const forged = { ...started, execution_backend: 'docker-container' as const };
     assert.equal(getTrustedShellExecutionBackend(forged), undefined, 'a result property cannot forge host provenance');
     assert.equal(getTrustedHostShellInvocation(forged), undefined);
@@ -1305,6 +1305,38 @@ test('shellExecAsync preserves shellExec result shape for a successful command',
     const asyncResult = await executor.shellExecAsync('echo ok', '.', 5_000);
     assert.deepEqual(asyncResult, syncResult);
   } finally {
+    fixture.cleanup();
+  }
+});
+
+test('foreground capture is withheld when native cwd custody cannot be resolved', async (t) => {
+  const fixture = makeFixture();
+  try {
+    writeFileSync(join(fixture.projectRoot, 'emit-foreground.mjs'),
+      "process.stdout.write('BABEL_FOREGROUND_OUTPUT_V1\\nowned bytes')");
+    const nativeRealpath = realpathSync.native;
+    t.mock.method(realpathSync, 'native', (path: string) => {
+      if (path === fixture.projectRoot) throw new Error('synthetic native cwd resolution failure');
+      return nativeRealpath(path);
+    });
+    syncBuiltinESMExports();
+    let publishCalls = 0;
+    const result = await new SafeExecutor(fixture.projectRoot).shellExecAsync(
+      'node emit-foreground.mjs', fixture.projectRoot, 5_000, undefined, undefined, undefined, {
+        path: 'declared-output.txt',
+        publish: () => { publishCalls += 1; return undefined; },
+        settle: () => true,
+      },
+    );
+    assert.equal(result.process_started, true);
+    assert.equal(result.exit_code, 0, result.stderr);
+    assert.match(result.stdout, /BABEL_FOREGROUND_OUTPUT_V1/);
+    assert.equal(getTrustedShellExecutionBackend(result), 'host-process');
+    assert.equal(getTrustedHostShellInvocation(result), undefined);
+    assert.equal(publishCalls, 0, 'unresolved cwd must not publish a foreground output');
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
     fixture.cleanup();
   }
 });
