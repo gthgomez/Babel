@@ -503,6 +503,15 @@ const COORD_SEPARATOR = '\\s*(?:,?\\s*(?:or|nor|and)|,|/)\\s*';
 const READ_ONLY_VERB_LIST = `${READ_ONLY_VERB_SOURCE}(?:${COORD_SEPARATOR}${READ_ONLY_VERB_SOURCE})*`;
 const READ_ONLY_GERUND_LIST = `${READ_ONLY_VERB_GERUND_SOURCE}(?:${COORD_SEPARATOR}${READ_ONLY_VERB_GERUND_SOURCE})*`;
 const READ_ONLY_DIRECTIVE_SOURCE = `\\b(without (any )?${READ_ONLY_GERUND_LIST}|read-?only|(?:do\\s*not|don't|never)\\s+${READ_ONLY_VERB_LIST}|dry-?run)\\b`;
+// An instruction document can declare an input and required output without
+// using an edit verb. Admit only that narrow headed form; this is intent
+// classification only — executor authority and leases remain required.
+const DECLARATIVE_PROJECT_SPEC =
+  /^[ \t]*#[ \t]+Instructions[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*Given[ \t]+(?:an?|the)[ \t]+input(?:[ \t]+[a-z][\w-]*)?(?:[ \t]*,[ \t]*|[ \t]+)(?:output|return|produce)[ \t]+(?:it|the|an?)\b/i;
+
+function isDeclarativeProjectSpec(taskText: string): boolean {
+  return DECLARATIVE_PROJECT_SPEC.test(taskText) && !new RegExp(READ_ONLY_DIRECTIVE_SOURCE, 'i').test(taskText);
+}
 const SEQUENCED_MUTATION_SOURCE =
   '\\b(?:then|afterwards|and\\s+then)\\s+(?:fix|implement|repair|modify|update|apply|patch|change|edit|optimize|bump|convert|migrate)\\b';
 // Protecting these inputs is compatible with a production repair. Admit only
@@ -654,6 +663,7 @@ export function analyzeTaskShape(taskText: string, allowDeclarativePoint = true)
   });
   const hasMutationTokens =
     declarativePoint ||
+    (allowDeclarativePoint && isDeclarativeProjectSpec(taskText)) ||
     foreground ||
     /^(?:(?:can|could|would)\s+you\s+|please\s+)?(?:make|order|sort)\b/i.test(positiveMutationScope.trim()) ||
     /\b(?:and|then)\s+(?:make|order|sort)\s+(?:this|it|the|[\w-]+\s+(?:by|from))\b/i.test(positiveMutationScope) ||

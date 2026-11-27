@@ -16,6 +16,23 @@ const MULTI_GOAL_WITH_REQUIREMENTS = [
   '- `npm test` must pass.',
 ].join('\n')
 
+test('exercise-style input/output specification enters execution intent', () => {
+  const task = '# Instructions\nGiven an input text, output it transposed.\nPad short rows on the left.'
+  assert.equal(classifyChatTaskIntent(task), 'execute')
+  assert.notEqual(analyzeTaskShape(task).operation, 'READ_ONLY')
+})
+
+test('exercise-style read-only framing remains explanation intent', () => {
+  for (const task of [
+    'Explain how to transpose an input text. Do not edit files.',
+    'Review the transpose algorithm without changing the project.',
+    'Given an input text, describe the transposed output; do not modify anything.',
+  ]) {
+    assert.equal(classifyChatTaskIntent(task), 'explain', task)
+    assert.equal(analyzeTaskShape(task).operation, 'READ_ONLY', task)
+  }
+})
+
 test('TF-01: v3 keeps every operative goal line before a requirements section', () => {
   const meaning = inferTaskAcceptanceV3(MULTI_GOAL_WITH_REQUIREMENTS)
   assert.deepEqual(meaning.criteria.map(item => item.description), [
