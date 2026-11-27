@@ -57,6 +57,30 @@ test('setup saves explicit provider model and budget without persisting a key', 
   assert.equal(JSON.stringify(settings).includes(env.OPENROUTER_API_KEY), false)
 })
 
+for (const [provider, key, expected] of [
+  ['openrouter', 'OPENROUTER_API_KEY', 'deepseek/deepseek-v4.1-flash-1017'],
+  ['command-code', 'COMMAND_CODE_API_KEY', 'deepseek/deepseek-v4.1-flash'],
+] as const) {
+  test(`fresh ${provider} setup offers DeepSeek Flash 4.1 after explicit provider choice`, async t => {
+    const { getSetupStatus, runProviderSetup } = await import('./providerSetup.js')
+    const directory = mkdtempSync(join(tmpdir(), 'babel-setup-default-'))
+    t.after(() => rmSync(directory, { recursive: true, force: true }))
+    const env = { BABEL_STATE_DIR: directory, BABEL_CONFIG_DIR: directory, [key]: 'fixture-only' }
+    const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected setup request') })
+    assert.equal(getSetupStatus(env).provider, null)
+    const answers = [provider, '', '', '', '', '5', 'yes']
+    const prompts: string[] = []
+    const result = await runProviderSetup({ env, interactive: true, question: async prompt => {
+      prompts.push(prompt)
+      return answers.shift()!
+    }, write: () => {} })
+    assert.ok(prompts.find(prompt => prompt.startsWith('Exact model ID'))?.includes(`[${expected}]`))
+    assert.equal(result.model, expected)
+    assert.equal(result.state, 'configured_unverified')
+    assert.equal(fetch.mock.callCount(), 0)
+  })
+}
+
 for (const legacy of [false, true]) {
   test(`declining setup preserves the ${legacy ? 'legacy' : 'explicit'} account selection and preferences`, async t => {
     const { getSetupStatus, runProviderSetup } = await import('./providerSetup.js')
