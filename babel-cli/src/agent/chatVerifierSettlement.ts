@@ -113,7 +113,7 @@ export async function settleChatVerifierResult(input: {
       ...(lastResult.stdout !== undefined ? { stdout: lastResult.stdout } : {}),
       ...(lastResult.stderr !== undefined ? { stderr: lastResult.stderr } : {}),
       ...(executionBackend ? { executionBackend } : {}),
-      ...(pointTargets.size === 1 ? { verifiedPointTarget: [...pointTargets][0]! } : {}),
+      ...(pointTargets.size > 0 ? { verifiedPointTargets: [...pointTargets] } : {}),
       mutationPaths: mutationPathsFromSessionEvents(
         host.parity.sessionEvents.events,
       ),

@@ -26,7 +26,7 @@ import {
   hasVerifierDependencyTamper,
 } from './verifierIntegrity.js'
 import { acceptanceCriterionPoint, bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
-import { nodePointExecuted, pointVerifierWitness } from './pointVerifierWitness.js'
+import { nodePointExecuted, pointVerifierWitness, retainCurrentPointReceipts } from './pointVerifierWitness.js'
 import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
 import { buildTaskContractV1, freezeTaskContract } from './taskContract.js'
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
@@ -716,6 +716,7 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
     'import test from "node:test";',
     'import { parseSum } from "../src/parser.js";',
     'test("parseSum returns the required value", () => assert.equal(parseSum(2, 3), 5));',
+    'test("parseSum returns the other required value", () => assert.equal(parseSum(5, 7), 12));',
   ].join('\n') + '\n')
 
   const command = 'node --test "test files/parser.test.mjs"'
@@ -724,6 +725,7 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
     `${behavior}.`,
     'Requirements:',
     `- ${behavior}; verified by: \`${command}\` must pass.`,
+    `- Fix src/parser.js so parseSum(5, 7) returns 12; verified by: \`${command}\` must pass.`,
   ].join('\n')
   const contract = resolveLiveSessionAuthority({
     mode: 'chat', task, projectRoot: root,
@@ -767,32 +769,37 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
   const stdout = policy.results[0]?.stdout ?? ''
   const exitCode = policy.results[0]?.exit_code ?? 1
   assert.equal(exitCode, 0, stdout)
-  assert.match(stdout, /pass 1/)
-  const point = acceptanceCriterionPoint(linked[0]!)
-  assert.ok(point)
-  const witness = pointVerifierWitness(root, command, point, {})
-  assert.ok(witness)
-  assert.ok(nodePointExecuted(stdout, witness), stdout)
+  assert.match(stdout, /pass 2/)
+  const targets = [...new Set(contract.acceptance.map(requirement => {
+    const point = acceptanceCriterionPoint(requirement)
+    assert.ok(point)
+    const witness = pointVerifierWitness(root, command, point, {})
+    assert.ok(witness)
+    assert.ok(nodePointExecuted(stdout, witness), stdout)
+    return witness.target
+  }))]
+  assert.equal(targets.length, 2)
   const cacheIdentity = resolveVerifierCacheIdentity({
     projectRoot: root, command, envKey: verifierEnvironmentKey(env),
   })
   const receipt = await captureAndRecordVerifierReceipt({
-    projectRoot: root, command, exitCode, summary: '1/1 parser behavior test passed', stdout,
+    projectRoot: root, command, exitCode, summary: '2/2 parser behavior tests passed', stdout,
     stderr: policy.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
     sessionEvents, turnId: runId, ledger: [], cache: new Map(), writeCount: 1,
     cacheIdentity, verifierOwner, executionBackend: 'host-process',
-    verifiedPointTarget: witness.target,
+    verifiedPointTargets: targets,
   })
   assert.ok(receipt)
-  assert.equal(receipt.tests_total, 1)
+  assert.equal(receipt.tests_total, 2)
+  assert.equal(sessionEvents.events.filter(event => event.kind === 'verifier_attempt').length, 1)
   const candidate = candidateShaFromReceipt(root, receipt)
   service.refreshPrivateEvidence({
-    proof: { compliant: true }, receipts: [receipt], candidate_sha: candidate, has_mutation: true,
+    proof: { compliant: true }, receipts: retainCurrentPointReceipts([receipt]), candidate_sha: candidate, has_mutation: true,
   })
   const result = evaluateCriterionCompletionV1(request)
   assert.equal(result.verified, true, JSON.stringify(result))
   assert.deepEqual(result.missing_requirements, [])
-  assert.equal(result.satisfied_requirements.length, 2)
+  assert.equal(result.satisfied_requirements.length, 3)
 })
 
 test('kernel negative: lowercase-only witness cannot certify uppercase literal goal', async t => {

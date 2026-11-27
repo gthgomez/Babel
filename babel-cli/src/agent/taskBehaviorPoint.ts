@@ -35,10 +35,11 @@ export function taskBehaviorPoint(text: string): TaskBehaviorPoint | undefined {
 
 /** A verifier-only path qualifier does not change the frozen meaning of historical submissions. */
 export function taskBehaviorPointForVerification(text: string): (TaskBehaviorPoint & { modulePath?: string }) | undefined {
+  const normalized = text.trim().replace(/\b(returns|to return|equals)\s+the value\s+(?=-?\d)/i, '$1 ')
   const qualifier = /^(?<verb>(?:please\s+)?(?:fix|repair|change|update|make|ensure))\s+(?<quote>`?)(?<path>(?:[\w.-]+\/)*[\w.-]+\.[cm]?js)\k<quote>\s+so\s+(?<call>.+)$/i
-    .exec(text.trim())?.groups
-  if (!qualifier) return taskBehaviorPoint(withoutPointImplementationFraming(text)) ??
-    taskBehaviorPoint(`Ensure ${text.trim()}`)
+    .exec(normalized)?.groups
+  if (!qualifier) return taskBehaviorPoint(withoutPointImplementationFraming(normalized)) ??
+    taskBehaviorPoint(`Ensure ${normalized}`)
   const point = taskBehaviorPoint(withoutPointImplementationFraming(`${qualifier.verb} ${qualifier.call}`))
   return point && { ...point, modulePath: qualifier.path!.replace(/^\.\//, '') }
 }

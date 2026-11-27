@@ -367,8 +367,8 @@ export async function captureAndRecordVerifierReceipt(input: {
   resolvedExecutable?: string;
   /** Host-owned shell executor selected for the actual invocation. */
   executionBackend?: 'docker-container' | 'host-process';
-  /** Host-owned observed case identity from the actual test runner output. */
-  verifiedPointTarget?: string;
+  /** Host-owned observed case identities from the actual test runner output. */
+  verifiedPointTargets?: readonly string[];
   /** The command was not started. A synthetic exit must not enter the ledger. */
   simulated?: boolean;
   /** Recheck suspended execution ownership/candidate immediately before publishing evidence. */
@@ -384,6 +384,7 @@ export async function captureAndRecordVerifierReceipt(input: {
   const relativeCwd =
     path.relative(realpathSync.native(input.projectRoot), identity.cwd).replaceAll('\\', '/') || '.';
   const commandIdentity = analyzeVerifierIdentity(input.command);
+  const [pointTarget, ...additionalPointTargets] = input.verifiedPointTargets ?? [];
   const receipt = await captureChatVerifierReceipt({
     projectRoot: input.projectRoot,
     command: input.command,
@@ -410,8 +411,8 @@ export async function captureAndRecordVerifierReceipt(input: {
     execution: {
       working_directory: relativeCwd,
       ...(input.executionBackend ? { environment_policy: input.executionBackend } : {}),
-      ...(input.verifiedPointTarget
-        ? { target: input.verifiedPointTarget }
+      ...(pointTarget
+        ? { target: pointTarget }
         : commandIdentity?.scope === 'targeted' && commandIdentity.targetSelectors.length > 0
         ? { target: commandIdentity.targetSelectors.join(',') }
         : {}),
@@ -419,6 +420,7 @@ export async function captureAndRecordVerifierReceipt(input: {
   });
   if (!receipt) return null;
   if (input.canPublish && !input.canPublish()) return null;
+  if (additionalPointTargets.length) receipt.additionalPointTargets = additionalPointTargets;
   const caveats = verifierEvidenceCaveats(receipt);
   if (caveats.length > 0 && !receipt.summary.includes(caveats[0]!)) {
     receipt.summary = [receipt.summary, ...caveats].join('\n');

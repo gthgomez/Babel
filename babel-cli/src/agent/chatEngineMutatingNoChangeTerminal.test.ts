@@ -59,8 +59,10 @@ const npmBoundCriterion = {
   context: { schema_version: 1, kind: 'criterion-completion:v1' },
 } as never
 
-test('sole meaning criterion stays open despite informal npm test prose and green npm', () => {
-  const task = 'Fix add so it returns the sum of its arguments; run npm test before finishing.'
+for (const task of [
+  'Fix add so it returns the sum of its arguments; run npm test before finishing.',
+  'Fix math.mjs so add(2, 3) returns 5; verified by: `npm test` must pass.',
+]) test(`a green command does not satisfy an unbound goal: ${task}`, () => {
   const toolCallLog = [
     { tool: 'read_file', target: 'parser.ts', detail: 'ok', exit_code: 0 },
     { tool: 'run_command', target: 'npm test', exit_code: 0, effect_status: 'confirmed_no_change' as const },
@@ -109,6 +111,26 @@ test('sole meaning criterion stays open despite informal npm test prose and gree
     toolCallLog,
     buildCriterionRefresh,
   }), true)
+})
+
+test('read-only routing cannot declare no change while a foreground effect is required', () => {
+  const criterionCompletion = {
+    currentRequest: () => ({
+      contract: { acceptance: [{
+        id: 'requested:effect',
+        required: true,
+        verification: { kind: 'requested_local_execution', verifier_id: 'requested-local-execution:effect' },
+      }] },
+    }),
+  } as never
+  assert.equal(resolveAcceptedReadOnlyTerminal({
+    effectiveOperation: 'READ_ONLY',
+    ambientReadOnly: false,
+    hasAnyWrites: false,
+    toolCallLog: [],
+    criterionCompletion,
+    buildCriterionRefresh: () => null,
+  }), false)
 })
 
 test('argument-qualified npm run must match full frozen argv for no-change', () => {

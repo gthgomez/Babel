@@ -61,6 +61,8 @@ export type BoundChatVerifierReceipt = {
   environment_policy?: string;
   /** Target selector/path when the verifier was targeted (not full suite). */
   target?: string;
+  /** Case identities observed together in one host-owned verifier execution. */
+  additionalPointTargets?: string[];
   /**
    * H5: verifier scope. Must be preserved into completion promotion —
    * never silently upgraded from targeted → full_suite.

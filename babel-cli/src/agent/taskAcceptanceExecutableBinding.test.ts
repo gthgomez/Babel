@@ -166,6 +166,30 @@ test('task command restrictions are exact and do not turn quoted evidence into a
   assert.equal(taskProhibitsCommand(['The issue said "Do not run npm".'], 'npm test'), false)
 })
 
+test('a qualified call with value phrasing cannot bind a different module’s function', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-point-module-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  writeFileSync(join(root, 'math.mjs'), 'export const add = () => 0\n')
+  writeFileSync(join(root, 'other.mjs'), 'export const add = (a, b) => a + b\n')
+  const run = 'node --test test.mjs'
+  const goal = 'Fix math.mjs so add(2, 3) returns the value 5.'
+  const binding = () => resolveLiveSessionAuthority({
+    mode: 'chat', task: `${goal}\nRequirements: ${run} must pass.`,
+    projectRoot: root, projectTestCommands: [run],
+  }).taskContract.acceptance.find(item => item.description === goal)?.verification
+  const testFile = (target: string) => [
+    'import test from "node:test"',
+    'import assert from "node:assert/strict"',
+    'import "./math.mjs"',
+    `import { add } from "./${target}"`,
+    'test("addition", () => assert.equal(add(2, 3), 5))',
+  ].join('\n')
+  writeFileSync(join(root, 'test.mjs'), testFile('other.mjs'))
+  assert.match(binding()?.verifier_id ?? '', /^meaning:/)
+  writeFileSync(join(root, 'test.mjs'), testFile('math.mjs'))
+  assert.ok(binding()?.target?.startsWith(POINT_TARGET_PREFIX))
+})
+
 test('a point needs the complete frozen runner report and newer same-scope checks supersede it', () => {
   const witness = { entry: 'node --test point.test.mjs', npmScript: false, testNames: ['discount point'] }
   const summary = (prefix: string) => [
@@ -189,6 +213,11 @@ test('a point needs the complete frozen runner report and newer same-scope check
   assert.deepEqual(retainCurrentPointReceipts([{ ...green, target: 'node-test-point:v1:legacy' }]), [])
   assert.deepEqual(retainCurrentPointReceipts([green, { ...later, working_directory: 'other' }]),
     [green, { ...later, working_directory: 'other' }])
+  const secondPoint = POINT_TARGET_PREFIX + 'a'.repeat(64)
+  const multiple = { ...green, additionalPointTargets: [secondPoint, secondPoint, 'not-a-point'] }
+  assert.deepEqual(retainCurrentPointReceipts([multiple]),
+    [multiple, { ...multiple, target: secondPoint }])
+  assert.deepEqual(retainCurrentPointReceipts([multiple, later]), [later])
 })
 
 test('negated command-success assertions do not bind', () => {

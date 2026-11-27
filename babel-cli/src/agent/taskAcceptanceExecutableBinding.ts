@@ -501,6 +501,10 @@ function relevanceSpec(description: string): RelevanceSpec | null {
   return { targetPaths, callPattern, fragment }
 }
 
+function isNumericCallRelevance(spec: RelevanceSpec | null): boolean {
+  return Boolean(spec?.callPattern && /^-?\d+(?:\.\d+)?$/.test(spec.fragment ?? ''))
+}
+
 /** References inside a verifier input that resolve to an existing project file. */
 function referencedExistingPaths(
   projectRoot: string,
@@ -631,7 +635,8 @@ function relevantTrustedCommands(input: {
     return witness ? [{ command, target: witness.target }] : []
   })
   const spec = relevanceSpec(input.criterion.description)
-  if (!spec) return []
+  // A lexical call match does not establish which implementation was tested.
+  if (!spec || (input.meaningVersion >= 6 && isNumericCallRelevance(spec))) return []
   return input.trusted.filter(command => {
     const inputFiles = verifierCommandInputFiles(input.projectRoot, command, input.fs)
       .filter(file => file !== 'package.json')
@@ -841,13 +846,15 @@ export function bindExecutableVerifiersToTaskAcceptance(input: {
       })
       for (const criterion of matchingCriteria) {
         const explicit = explicitById.get(criterion.id)
+        const behavior = explicit?.behavior ?? criterion.description
         const point = !input.replayBinding && currentBinding
-          ? taskBehaviorPointForVerification(explicit?.behavior ?? criterion.description)
+          ? taskBehaviorPointForVerification(behavior)
           : undefined
         const pointWitness = point && input.projectRoot
           ? pointVerifierWitness(input.projectRoot, command, point, input.relevanceFs ?? {})
           : undefined
-        if (point && !pointWitness) continue
+        if (!pointWitness && !input.replayBinding && currentBinding &&
+            (point || isNumericCallRelevance(relevanceSpec(behavior)))) continue
         if (!explicit && !pointWitness && !explicitVerifierObservesStatedResult({
           criterion,
           command,

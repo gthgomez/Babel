@@ -221,7 +221,7 @@ export function nodePointExecuted(stdout: string, witness: Omit<PointVerifierWit
 
 /** A later same-scope run without this case must not inherit an earlier case result. */
 export function retainCurrentPointReceipts(receipts: readonly BoundChatVerifierReceipt[]): BoundChatVerifierReceipt[] {
-  return receipts.filter(receipt => {
+  const currentReceipts = receipts.filter(receipt => {
     if (isLegacyPointTarget(receipt.target)) return false
     if (!receipt.target?.startsWith(POINT_TARGET_PREFIX)) return true
     const order = receipt.order
@@ -233,5 +233,17 @@ export function retainCurrentPointReceipts(receipts: readonly BoundChatVerifierR
       other.executionContext?.environmentFingerprint === receipt.executionContext?.environmentFingerprint &&
       verifierExecutionFingerprint(other.command) === command,
     )
+  })
+  return currentReceipts.flatMap(receipt => {
+    if (!receipt.target?.startsWith(POINT_TARGET_PREFIX) ||
+        !Array.isArray(receipt.additionalPointTargets) || receipt.exit_code !== 0) return [receipt]
+    // Only project cases after selecting the current physical attempt. The
+    // event, disposition, execution context and revision remain the same.
+    const targets = new Set(receipt.additionalPointTargets.filter(target =>
+      typeof target === 'string' && target.startsWith(POINT_TARGET_PREFIX) &&
+      /^[a-f0-9]{64}$/.test(target.slice(POINT_TARGET_PREFIX.length)),
+    ))
+    targets.delete(receipt.target)
+    return [receipt, ...[...targets].map(target => ({ ...receipt, target }))]
   })
 }
