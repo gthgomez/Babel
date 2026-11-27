@@ -169,3 +169,53 @@ test('cold completion can use a committed, current effect before the mutation ev
   assert.deepEqual(recoverCurrentTaskMutationPaths(input), [])
   assert.equal(proof().compliant, false)
 })
+
+test('kernel string replacement custody links its write ledger operation without widening patch ownership', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'babel-mutation-witness-tool-compat-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const root = realpathSync.native(directory)
+  const projectRoot = join(root, 'project')
+  const runDir = join(root, 'runs')
+  mkdirSync(projectRoot)
+  const hash = (value: string) => createHash('sha256').update(value).digest('hex')
+  const path = join(projectRoot, 'math.js')
+  writeFileSync(path, 'before')
+  const contract = freezeTaskContract(buildTaskContractV1({ mode: 'chat', task_id: 'task:tool-compat', user_request: 'Fix math.js.' }))
+  const binding = { task: contract.user_request, task_id: contract.task_id, contract_id: contract.contract_id, contract_hash: contract.contract_hash }
+  const log = createSessionEventLog('tool-compat-session')
+  recordUserSubmitted(log, { ...binding, turn_id: 'first-turn', attempt_id: 'attempt:first' })
+  const dispatch = { turn_id: 'first-turn', tool_call_id: 'same-key', tool_name: 'str_replace', idempotency_key: 'same-key', effect_class: 'reconcilable_mutation' as const }
+  recordToolProposed(log, dispatch)
+  recordToolStarted(log, dispatch)
+  const intent = recordEffectIntent({ runDir, sessionId: log.session_id, turnId: 'first-turn', toolCallId: 'same-key',
+    mutationBatchId: 'batch:compat', toolName: 'write_file', effectClass: 'reconcilable_mutation',
+    targetPaths: [path], preImageHashes: { [path]: hash('before') }, intendedContent: 'after' })
+  writeFileSync(path, 'after')
+  recordEffectTerminal(runDir, intent, { status: 'completed', postImageHashes: { [path]: hash('after') } })
+
+  // A same-key operation from another turn without its own canonical start is
+  // not allowed to borrow the string-replacement custody.
+  const unrelated = join(projectRoot, 'unrelated.txt')
+  writeFileSync(unrelated, 'before')
+  const unrelatedIntent = recordEffectIntent({ runDir, sessionId: log.session_id, turnId: 'other-turn', toolCallId: 'same-key',
+    mutationBatchId: 'batch:unrelated', toolName: 'write_file', effectClass: 'reconcilable_mutation',
+    targetPaths: [unrelated], preImageHashes: { [unrelated]: hash('before') }, intendedContent: 'after' })
+  writeFileSync(unrelated, 'after')
+  recordEffectTerminal(runDir, unrelatedIntent, { status: 'completed', postImageHashes: { [unrelated]: hash('after') } })
+
+  // An apply_patch start must not satisfy the special str_replace/write_file
+  // compatibility pair, even when it reuses the same call key.
+  const patchPath = join(projectRoot, 'patch.txt')
+  writeFileSync(patchPath, 'before')
+  recordUserSubmitted(log, { ...binding, turn_id: 'patch-turn', attempt_id: 'attempt:patch' })
+  recordToolProposed(log, { ...dispatch, turn_id: 'patch-turn', tool_name: 'apply_patch' })
+  recordToolStarted(log, { ...dispatch, turn_id: 'patch-turn', tool_name: 'apply_patch' })
+  const patchIntent = recordEffectIntent({ runDir, sessionId: log.session_id, turnId: 'patch-turn', toolCallId: 'same-key',
+    mutationBatchId: 'batch:patch', toolName: 'write_file', effectClass: 'reconcilable_mutation',
+    targetPaths: [patchPath], preImageHashes: { [patchPath]: hash('before') }, intendedContent: 'after' })
+  writeFileSync(patchPath, 'after')
+  recordEffectTerminal(runDir, patchIntent, { status: 'completed', postImageHashes: { [patchPath]: hash('after') } })
+
+  recordUserSubmitted(log, { ...binding, turn_id: 'resumed-turn', attempt_id: 'attempt:resumed' })
+  assert.deepEqual(recoverCurrentTaskMutationPaths({ log, runDir, projectRoot, turnId: 'resumed-turn', contract }), ['math.js'])
+})

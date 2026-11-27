@@ -120,9 +120,12 @@ export function recoverCurrentTaskMutationPaths(input: {
       // join the canonical mutation batch; do not infer their task from bytes.
       const batch = batches.get(record.mutationBatchId)
       const start = record.turnId && record.toolCallId ? starts.get(record.turnId)?.get(record.toolCallId) : null
+      const ledgerToolName = normalizeModelToolName(record.toolName)
+      // Kernel string replacement delegates its physical effect to the
+      // governed write operation. The session retains the model action name.
       const linked = record.toolCallId && record.turnId
         ? start?.effect_class === record.effectClass && start.idempotency_key === record.toolCallId &&
-          start.tool_name === normalizeModelToolName(record.toolName)
+          (start.tool_name === ledgerToolName || (start.tool_name === 'str_replace' && ledgerToolName === 'write_file'))
         : !record.toolCallId && record.turnId === null && batch?.status === 'committed' && batch.pre_image_hashes && batch.post_image_hashes &&
           sha256Canonical(batch.pre_image_hashes) === sha256Canonical(intent.preImageHashes) &&
           sha256Canonical(batch.post_image_hashes) === sha256Canonical(post)
