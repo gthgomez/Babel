@@ -324,7 +324,13 @@ test('a real submission admits the command before execution and settles it at te
       const records = store.listAdmissions(runId).records;
       assert.equal(records.length, 1, 'exactly one admitted chat command');
       assert.equal(records[0]?.state, 'settled', 'settled at command settlement (stream termination)');
-      assert.match(records[0]?.commandId ?? '', /:s\d+$/, 'command ids are epoch-scoped per instance');
+      const accepted = engine.getParityRuntime().liveAuthority?.taskObjectiveLifecycle?.attempts[0];
+      assert.ok(accepted);
+      assert.equal(records[0]?.commandId, `chat-attempt:${accepted.attempt_id}`);
+      const outbox = store.readOutbox(records[0]!.admissionId);
+      assert.equal(outbox?.operationId, `chat-submission:${runId}:${records[0]!.commandId}`);
+      assert.equal(outbox?.state, 'committed');
+      assert.deepEqual(outbox?.postImageHashes, { accepted_input: accepted.input_digest });
       assert.ok(mode.providerCalls >= 1, 'the turn really executed');
 
       assert.equal(internals(engine).currentP11Owner(), null, 'no live claim after settlement');

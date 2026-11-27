@@ -37,6 +37,8 @@ import {
   prepareProviderRequest,
 } from '../runners/preparedProviderRequest.js';
 import { chatSessionDir, openSessionAdmissionStore } from '../cli/runsLayout.js';
+import { acquireSessionPolicyLease } from '../config/sessionPolicyLease.js';
+import { chatAttemptCommandId } from './chatEngineAdmissionState.js';
 import type { AdmissionStore } from '../runtime/admission.js';
 import {
   inspectSessionEventLogFromDir,
@@ -303,10 +305,12 @@ function makeCrashDriver(
   const chatEngine = new URL('./chatEngine.ts', import.meta.url).href;
   const observability = new URL('./chatEngineObservability.ts', import.meta.url).href;
   const runsLayout = new URL('../cli/runsLayout.ts', import.meta.url).href;
+  const policyLease = new URL('../config/sessionPolicyLease.ts', import.meta.url).href;
   const source = `
 const { ChatEngine } = await import(${JSON.stringify(chatEngine)});
 const { persistTranscriptToDisk } = await import(${JSON.stringify(observability)});
-const { chatSessionDir } = await import(${JSON.stringify(runsLayout)});
+const { chatSessionDir, openSessionAdmissionStore } = await import(${JSON.stringify(runsLayout)});
+const { acquireSessionPolicyLease } = await import(${JSON.stringify(policyLease)});
 const runId = process.env.BABEL_LIFECYCLE_RUN_ID;
 const projectRoot = process.env.BABEL_LIFECYCLE_PROJECT_ROOT;
 const command = ${JSON.stringify(command)}.replace('__BABEL_LIFECYCLE_PARENT_PID__', String(process.pid));
@@ -320,12 +324,16 @@ const runner = {
   async executeRaw() { return 'unreachable'; },
   getLastInvocationMetadata() { return null; },
 };
+const lease = acquireSessionPolicyLease(runId, { create: true });
+const admission = openSessionAdmissionStore(runId);
+if (!admission.ok) throw new Error('crash fixture admission store unavailable: ' + admission.detail);
 const engine = new ChatEngine({
   task: 'Create the marker with the crash-after-effect lifecycle fixture',
   projectRoot,
   runId,
   model: 'deepseek-v4-flash',
   maxTurns: 4,
+  admissionStore: admission.store,
   providerRunner: runner,
   providerPolicy: {
     policyPath: 'test-fixture', family: 'test-fixture', selectedTier: 'cheap',
@@ -335,6 +343,7 @@ const engine = new ChatEngine({
     contextWindow: 128000, contextLimit: 128000, maxOutputTokens: 4096, nativeToolUse: true,
   },
 });
+engine.attachSessionPolicyLease(lease);
 await persistTranscriptToDisk(chatSessionDir(runId), [
   { role: 'system', content: 'deterministic lifecycle fixture' },
   { role: 'user', content: 'Create the marker with the crash-after-effect lifecycle fixture' },
@@ -845,6 +854,9 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
 
   test('crash after a real effect before terminal settlement is reconciled on restart without duplicate execution', async () => {
     const fixture = makeFixture();
+    let restored: ChatEngine | undefined;
+    let admission: AdmissionStore | undefined;
+    let lease: ReturnType<typeof acquireSessionPolicyLease> | undefined;
     try {
       const runId = 'crash-after-effect';
       const marker = join(fixture.project, 'crash-marker.txt');
@@ -861,6 +873,8 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
         BABEL_LIFECYCLE_RUN_ID: runId,
         BABEL_LIFECYCLE_PROJECT_ROOT: fixture.project,
       });
+      assert.ok(existsSync(join(chatSessionDir(runId), 'session-events.jsonl')),
+        `crash fixture did not admit the task: child_code=${child.code}; signal=${child.signal}; stderr=${child.stderr}`);
       const crashEvents = readEvents(runId);
       const crashSummary = crashEvents.map(event => ({
         kind: event.kind,
@@ -890,14 +904,55 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
               { type: 'done', finishReason: 'stop' },
             ],
       );
-      const restored = await ChatEngine.restore(runId, {
+      const opened = openSessionAdmissionStore(runId);
+      assert.ok(opened.ok);
+      admission = opened.store;
+      const submitted = before.find(event => event.kind === 'user_submitted');
+      assert.ok(submitted?.kind === 'user_submitted' && submitted.attempt_id);
+      const commandId = chatAttemptCommandId(submitted.attempt_id);
+      const interruptedClaim = admission.readAdmission(runId, commandId);
+      assert.ok(interruptedClaim);
+      assert.equal(interruptedClaim.state, 'claimed');
+      assert.equal(admission.readOutbox(interruptedClaim.admissionId)?.state, 'intent');
+      lease = acquireSessionPolicyLease(runId);
+      const owner = admission.readOwner(runId);
+      assert.ok(owner);
+      const legacyCommand = 'legacy-epoch:s1';
+      const legacyClaim = admission.admitCommand({
+        digestInput: {
+          threadId: runId,
+          commandId: legacyCommand,
+          taskId: submitted.task_id!,
+          mode: 'chat',
+          resolvedOperationPolicy: {},
+          taskShapeClass: 'quick_fix',
+          targetRoot: fixture.project,
+          offeredToolSchemaVersion: 'chat-tools-v1',
+          contextSnapshotId: legacyCommand,
+          payload: { kind: 'chat_submission' },
+        },
+        ownerGeneration: owner.generation,
+        ownerToken: owner.token,
+        effectClass: 'reconcilable_mutation',
+        operationId: `chat-submission:${runId}:${legacyCommand}`,
+      });
+      assert.equal(legacyClaim.kind, 'admitted');
+      restored = await ChatEngine.restore(runId, {
         task: 'Create the marker with the crash-after-effect lifecycle fixture',
         projectRoot: fixture.project,
         model: 'deepseek-v4-flash',
         maxTurns: 4,
         providerRunner: resumeRunner as never,
         providerPolicy: FIXTURE_PROVIDER_POLICY,
+        admissionStore: admission,
       });
+      restored.attachSessionPolicyLease(lease);
+      lease = undefined;
+      assert.equal(admission.readAdmission(runId, commandId)?.state, 'aborted');
+      assert.equal(admission.readOutbox(interruptedClaim.admissionId)?.state, 'committed');
+      const unchanged = admission.readAdmission(runId, legacyCommand);
+      assert.equal(unchanged?.state, 'claimed');
+      assert.equal(unchanged && admission.readOutbox(unchanged.admissionId)?.state, 'intent');
       const recovery = restored
         .getParityRuntime()
         .sessionEvents.events.find((event) => event.kind === 'tool_cancelled' && event.recovery_state === 'TOOL_OUTCOME_UNKNOWN');
@@ -909,7 +964,16 @@ describe('ChatEngine lifecycle and crash qualification', { concurrency: false },
       assert.equal(after.filter((event) => event.kind === 'tool_started').length, 1);
       assert.equal(after.filter((event) => event.kind === 'tool_completed' || event.kind === 'tool_failed').length, 0);
       assert.ok(after.some((event) => event.kind === 'tool_cancelled' && event.recovery_state === 'TOOL_OUTCOME_UNKNOWN'));
+      const continuation = after.filter(event => event.kind === 'user_submitted').at(-1);
+      assert.ok(continuation?.kind === 'user_submitted' && continuation.attempt_id && continuation.attempt_id !== submitted.attempt_id);
+      const continuedClaim = admission.readAdmission(runId, chatAttemptCommandId(continuation.attempt_id));
+      assert.ok(continuedClaim);
+      assert.equal(continuedClaim.state, 'settled');
+      assert.equal(admission.readOutbox(continuedClaim.admissionId)?.state, 'committed');
     } finally {
+      restored?.closeAdmissionStore();
+      lease?.release();
+      admission?.close();
       fixture.cleanup();
     }
   });

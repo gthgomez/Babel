@@ -104,7 +104,7 @@ export async function* settleStreamingCompletion(input: {
   if (gateResult === "reject" && !retainedPaths) {
     host.gatePolicy = verification.effectiveGatePolicy;
     const plan = planCompletionGateReject({
-      hasWrites: host.hasAnyWrites(),
+      hasWrites: host.hasTaskMutationForCompletion(),
       hasInspectedNoChange: hasInspectedNoChangeEvidence(host.toolCallLog),
       policy: verification.effectiveGatePolicy,
       hardGate,

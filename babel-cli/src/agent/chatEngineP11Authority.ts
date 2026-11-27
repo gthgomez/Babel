@@ -45,6 +45,7 @@ import { recoveryBindingUnavailableReason, recoveryWorkspaceRevision } from './c
 import { validateDockerIsolationArgs } from '../config/dockerIsolationArgs.js';
 import { resolveExecutorDryRun } from '../config/dryRun.js';
 import { readRuntimeMode } from '../config/runtimeMode.js';
+import { chatAttemptCommandId, committedChatSubmission } from './chatEngineAdmissionState.js';
 
 const CHAT_ADMISSION_TOOL_SCHEMA_VERSION = 'chat-tools-v1';
 const PENDING_COMPILED_REQUEST_IDENTITY = 'pending-compiled-request-identity';
@@ -142,13 +143,13 @@ export class ChatEngineP11Authority {
   admitCurrentSubmission(
     submissionGeneration: number,
     userInput: string,
-    objective?: {taskId:string;taskClass:ChatTaskClass},
+    objective?: {taskId:string;taskClass:ChatTaskClass;attemptId:string},
   ): ChatEngineAdmissionClaim | null {
     const store = this.host.parity.admissionStore;
     if (!store) return null;
     try {
       const threadId = this.host.parity.eventLog.thread_id;
-      const commandId = `${this.host.admissionEpoch}:s${submissionGeneration}`;
+      const commandId = objective ? chatAttemptCommandId(objective.attemptId) : `${this.host.admissionEpoch}:s${submissionGeneration}`;
       const prior = this.host.activeAdmissionClaim;
       let ownerGeneration: number;
       let ownerToken: string;
@@ -242,6 +243,13 @@ export class ChatEngineP11Authority {
     try {
       const store = this.host.parity.admissionStore;
       if (store) {
+        // The staged parity generation is installed only after the canonical
+        // submission, attempt and authority companion were saved together.
+        const attempt = this.host.parity.eventLog.thread_id === claim.threadId
+          ? this.host.parity.liveAuthority?.taskObjectiveLifecycle?.attempts.find(
+              candidate => chatAttemptCommandId(candidate.attempt_id) === claim.commandId,
+            )
+          : undefined;
         const input = {
           threadId: claim.threadId,
           commandId: claim.commandId,
@@ -249,6 +257,7 @@ export class ChatEngineP11Authority {
           ownerToken: claim.token,
           state,
           outcome,
+          ...(attempt ? { outbox: committedChatSubmission(attempt) } : {}),
         } as const;
         const decision = store.settleAdmission(input);
         // A1: a gen-N command superseded before settlement can no longer

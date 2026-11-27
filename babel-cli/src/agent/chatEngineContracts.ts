@@ -700,6 +700,7 @@ export interface ChatEngineStreamingLoopHost {
     ownerGeneration?: number,
   ) => Promise<ChatResult | null>
   readonly hasAnyWrites: () => boolean
+  readonly hasTaskMutationForCompletion: () => boolean
   readonly hasPendingCompactionAuthority: () => boolean
   readonly installP11ContextCheckpoint: (
     routeOverride?: NonNullable<LiveOperationalSourcesV1['route']>,

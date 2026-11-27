@@ -1,5 +1,6 @@
 import { computeCriticRepairCostBudget, computePostWriteRepairBudget } from './chatEngineBudgetPolicy.js';
-import { durableAdmissionState } from './chatEngineAdmissionState.js';
+import { durableAdmissionState, reconcileChatSubmissions } from './chatEngineAdmissionState.js';
+import { hasRecoveredMutationWitness } from './recoveredMutationWitness.js';
 import type { ChatLlmRunner } from '../runners/base.js'
 import { restoreFailedVerifierHistory, unresolvedFailedVerifierHistory, attestedFailedVerifierExecution } from './codingLoop/failedVerifierExecution.js';
 import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js';
@@ -1146,6 +1147,7 @@ export class ChatEngine {
         task: this.options.task,
         taskClass: this.taskClass,
         toolCallLog: this.toolCallLog,
+        recoveredTaskMutation: this.hasRecoveredTaskMutation(),
         lastVerifierReceipt: this.lastVerifierReceipt,
         executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
         verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
@@ -1182,7 +1184,7 @@ export class ChatEngine {
       taskClass: this.taskClass,
       toolCallLog: this.toolCallLog,
       lastVerifierReceipt: this.lastVerifierReceipt,
-      hasAnyWrites: this.hasAnyWrites(),
+      hasAnyWrites: this.hasTaskMutationForCompletion(),
       gateStrikes: this.gateStrikes,
       executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
       verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
@@ -1423,6 +1425,20 @@ export class ChatEngine {
 
   private hasAnyWrites(): boolean {
     return sessionHasAnyWrites(this.toolCallLog);
+  }
+
+  private hasRecoveredTaskMutation(): boolean {
+    const runtime = this.lastTurnRuntime;
+    const contract = this.parity.liveAuthority?.taskContract;
+    const { turnId, sessionEvents: log } = this.parity;
+    const projectRoot = this.options.projectRoot;
+    return Boolean(runtime?.continuedTask && runtime.effectiveOperation === 'MUTATING' &&
+      !runtime.presentationOnly && contract && turnId && projectRoot &&
+      hasRecoveredMutationWitness({ log, runDir: this.engineRunDir, projectRoot, turnId, contract }));
+  }
+
+  private hasTaskMutationForCompletion(): boolean {
+    return this.hasAnyWrites() || this.hasRecoveredTaskMutation();
   }
 
   /**
@@ -2224,7 +2240,7 @@ export class ChatEngine {
       ...(submitOpts?.continueTask !== undefined ? {continueTask:submitOpts.continueTask} : {}),
     });
     const claim = this.admitCurrentSubmission(submissionGeneration, userInput, {
-      taskId: objective.taskId, taskClass: objective.submission.runtime.taskClass,
+      taskId: objective.taskId, taskClass: objective.submission.runtime.taskClass, attemptId: objective.attemptId,
     });
     let loopFinished = false;
     let terminalObserved = false;
@@ -2903,6 +2919,8 @@ export class ChatEngine {
 
   attachSessionPolicyLease(lease: SessionPolicyLease): void {
     if (this.sessionPolicyLease) throw new Error('Session policy ownership is already attached.');
+    if (lease.sessionId !== this.engineRunId) throw new Error('Session policy ownership is for a different session.');
+    if (!this.activeAdmissionClaim && this.options.resumeExisting) reconcileChatSubmissions(this.parity);
     this.sessionPolicyLease = lease;
   }
 
@@ -3442,7 +3460,7 @@ export class ChatEngine {
   private admitCurrentSubmission(
     submissionGeneration: number,
     userInput: string,
-    objective?: {taskId:string;taskClass:ChatTaskClass},
+    objective?: {taskId:string;taskClass:ChatTaskClass;attemptId:string},
   ): ChatEngineAdmissionClaim | null {
     return this.p11Authority.admitCurrentSubmission(
       submissionGeneration,
@@ -4064,7 +4082,7 @@ export class ChatEngine {
       refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, this.lastVerifierReceipt);
       for (const receipt of this.executedVerifierLedger) refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, receipt);
     }
-    if (unsupportedMutationClaim(answer, this.hasAnyWrites()) || unsupportedTestClaim(answer, this.lastVerifierReceipt, this.executedVerifierLedger)) {
+    if (unsupportedMutationClaim(answer, this.hasTaskMutationForCompletion()) || unsupportedTestClaim(answer, this.lastVerifierReceipt, this.executedVerifierLedger)) {
       throw new Error('RESPONSE_EVIDENCE_INVALID: terminal synthesis claimed completed work without corresponding execution or mutation evidence.');
     }
     return normalizeChatAnswer(answer, currentRequest);
@@ -4598,7 +4616,7 @@ export class ChatEngine {
   }
 
   private buildVerifierBlockedReport(reason: string): BlockedReport {
-    return buildVerifierBlockedReportFromHost({ workingState: this.workingState, lastVerifierReceipt: this.lastVerifierReceipt, hasAnyWrites: () => this.hasAnyWrites() }, reason);
+    return buildVerifierBlockedReportFromHost({ workingState: this.workingState, lastVerifierReceipt: this.lastVerifierReceipt, hasAnyWrites: () => this.hasTaskMutationForCompletion() }, reason);
   }
 
   private hashContent(content: string): string {
@@ -4741,7 +4759,7 @@ export class ChatEngine {
           acceptedOperation: this.lastTurnRuntime?.effectiveOperation ?? this.lastTurnRuntime?.taskShape?.operation,
         },
         outcome: {
-          hasMutation: this.hasAnyWrites(),
+          hasMutation: this.hasTaskMutationForCompletion(),
           readOnly: this.isAcceptedReadOnlyTerminal(),
           budgetExceeded: this.budgetExceeded,
           terminatingLimiter: this.terminatingLimiter,

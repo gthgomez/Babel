@@ -68,6 +68,7 @@ export interface ObjectiveAdmissionHost {
 export interface PreparedObjectiveSubmission {
   submission: PreparedUserSubmission
   taskId: string
+  attemptId: string
   previousContractHash: string
 }
 
@@ -89,6 +90,7 @@ export function prepareObjectiveSubmission(
     taskId: retainIdentity
       ? authority.taskContract.task_id
       : `task:${randomUUID()}`,
+    attemptId: randomUUID(),
     previousContractHash: authority.taskContract.contract_hash,
   }
 }
@@ -248,7 +250,7 @@ export function admitObjectiveSubmission(
     ...(objectiveOperation ? { objectiveOperation } : {}),
   }
   const inputDigest = acceptedObjectiveInputDigest({ task: input.userInput, ...acceptedOperation })
-  const attemptId=randomUUID()
+  const attemptId = objective.attemptId
   const amendments: NonNullable<ReturnType<typeof createTaskAcceptanceRevision>>[] = []
   const acceptRevision = (amendment: ReturnType<typeof createTaskAcceptanceRevision>) => {
     if (!amendment) return
