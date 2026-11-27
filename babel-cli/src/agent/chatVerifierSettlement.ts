@@ -114,6 +114,7 @@ export async function settleChatVerifierResult(input: {
       ...(pointWitnesses.size > 0 ? { pointWitnesses: [...pointWitnesses.values()] } : {}),
       mutationPaths: mutationPathsFromSessionEvents(
         host.parity.sessionEvents.events,
+        host.recoveredTaskMutationPaths(),
       ),
       allowRepositoryScopeForRedRecovery: lastResult.exit_code !== 0,
       allowRepositoryScopeForGreenNoChange:

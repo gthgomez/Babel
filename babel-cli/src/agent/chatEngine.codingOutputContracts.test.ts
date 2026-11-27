@@ -184,6 +184,7 @@ function makeHost(
     finishRecoveryLocalizationInspection: () => {},
     getFrozenForegroundAmendments: () => [],
     captureForegroundEffectFence: () => undefined,
+    recoveredTaskMutationPaths: () => [],
     getResolvedRequiredVerifiers: () => [],
     getTurnRuntimeSnapshot: () => null,
     getLiveSession: () => ({

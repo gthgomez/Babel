@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { bindChatVerifierReceipt, evaluateChatCompletionProof } from '../evidence/chatRevisionBinding.js'
+import { evaluateChatCompletionProof } from '../evidence/chatRevisionBinding.js'
 import { recordEffectIntent, recordEffectTerminal } from '../executor/effectLedger.js'
+import { captureAndRecordVerifierReceipt } from './chatEngineVerifierAdapter.js'
 import { recoverCurrentTaskMutationPaths } from './recoveredMutationWitness.js'
-import { createSessionEventLog, recordMutationBatch, recordToolProposed, recordToolStarted, recordUserSubmitted, recordVerifierAttempt } from './sessionEvents.js'
+import { createSessionEventLog, recordMutationBatch, recordToolProposed, recordToolStarted, recordUserSubmitted } from './sessionEvents.js'
 import { buildTaskContractV1, freezeTaskContract } from './taskContract.js'
 
 test('cold completion can use a committed, current effect before the mutation event was published', async t => {
@@ -19,7 +21,7 @@ test('cold completion can use a committed, current effect before the mutation ev
   mkdirSync(projectRoot)
   const path = join(projectRoot, 'fixture.txt')
   const contract = freezeTaskContract(buildTaskContractV1({
-    mode: 'chat', task_id: 'task:recover-fixture', user_request: 'Update the fixture and run npm test.',
+    mode: 'chat', task_id: 'task:recover-fixture', user_request: 'Update the fixture and run node --test check.test.mjs.',
   }))
   const log = createSessionEventLog('fixture-session')
   const binding = { task: contract.user_request, task_id: contract.task_id, contract_hash: contract.contract_hash,
@@ -45,12 +47,30 @@ test('cold completion can use a committed, current effect before the mutation ev
     row.kind !== 'tool_started') } }), [], 'the ledger must name a canonical dispatch')
   assert.deepEqual(recoverCurrentTaskMutationPaths({ ...input, contract: { ...contract, task_id: 'task:successor' } }), [])
 
-  const receipt = await bindChatVerifierReceipt({
-    projectRoot, command: 'npm test', exit_code: 0, summary: 'fixture verifier passed',
-    mutationPaths: ['fixture.txt'], structured: { verifierId: 'npm-test', authoritySource: 'built_in_runner',
-      executable: 'npm', args: ['test'] },
+  writeFileSync(join(projectRoot, 'check.test.mjs'), [
+    "import { test } from 'node:test'",
+    "import assert from 'node:assert/strict'",
+    "import { readFileSync } from 'node:fs'",
+    "test('retained change', () => assert.equal(readFileSync('fixture.txt', 'utf8'), 'after'))",
+  ].join('\n'))
+  const env = { ...process.env }
+  delete env['NODE_TEST_CONTEXT']
+  const execution = spawnSync(process.execPath, ['--test', '--test-reporter=tap', 'check.test.mjs'],
+    { cwd: projectRoot, env, encoding: 'utf8', timeout: 5_000, windowsHide: true })
+  assert.equal(execution.status, 0)
+  const capture = {
+    projectRoot, command: 'node --test check.test.mjs', exitCode: execution.status,
+    summary: 'fixture verifier passed', stdout: execution.stdout, stderr: execution.stderr,
+    allowRepositoryScopeForGreenNoChange: true, sessionEvents: log, turnId: input.turnId,
+    ledger: [], cache: new Map(), writeCount: 0, executionBackend: 'host-process' as const,
+  }
+  assert.equal(await captureAndRecordVerifierReceipt({ ...capture, mutationPaths: [] }), null)
+  const receipt = await captureAndRecordVerifierReceipt({
+    ...capture,
+    mutationPaths: recoverCurrentTaskMutationPaths(input),
   })
-  recordVerifierAttempt(log, { turn_id: input.turnId, command_preview: 'npm test', authoritative: true, exit_code: 0 })
+  assert.ok(receipt)
+  assert.ok(receipt.boundRevision?.fileHashes['fixture.txt'])
   const proof = () => evaluateChatCompletionProof({
     projectRoot, hasMutation: true, verifierTampered: false, receipt, events: log.events,
     recoveredMutationPaths: recoverCurrentTaskMutationPaths(input), isAuthoritativeCommand: () => true,

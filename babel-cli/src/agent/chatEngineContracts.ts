@@ -888,6 +888,7 @@ export interface ChatEngineActionExecutorHost {
   getResolvedRequiredVerifiers: () => string[]
   getFrozenForegroundAmendments: () => string[]
   captureForegroundEffectFence: () => (<T>(effect: () => T) => T | undefined) | undefined
+  recoveredTaskMutationPaths: () => string[]
   getLiveSession: (
     c?:
       | {

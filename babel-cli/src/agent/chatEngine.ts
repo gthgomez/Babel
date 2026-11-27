@@ -1427,7 +1427,8 @@ export class ChatEngine {
     return sessionHasAnyWrites(this.toolCallLog);
   }
 
-  private recoveredTaskMutationPaths(): string[] {
+  /** Recheck same-objective ledger paths for verifier capture and completion. */
+  public recoveredTaskMutationPaths(): string[] {
     const runtime = this.lastTurnRuntime;
     const contract = this.parity.liveAuthority?.taskContract;
     const { turnId, sessionEvents: log } = this.parity;
@@ -2683,17 +2684,18 @@ export class ChatEngine {
     const canonical = prepareKernelVerifierInput(this.lastVerifierReceipt, this.executedVerifierLedger);
     const currentOwnerReceipts = this.executedVerifierLedger.filter(receipt => receipt.executionContext?.taskId === verifierOwner?.taskId &&
       receipt.executionContext?.contractHash === verifierOwner?.contractHash && receipt.executionContext?.workspaceRoot === verifierOwner?.workspaceRoot);
+    const mutationPaths = mutationPathsFromSessionEvents(this.parity.sessionEvents.events, this.recoveredTaskMutationPaths());
     const currentReceiptRevisionHashes: Record<string,string> = {};
     for (const receipt of currentOwnerReceipts) {
       try {
-        const live = captureCompletionWorkspaceRevisionHash(this.options, mutationPathsFromSessionEvents(this.parity.sessionEvents.events), receipt);
+        const live = captureCompletionWorkspaceRevisionHash(this.options, mutationPaths, receipt);
         if (live && receipt.receiptId) currentReceiptRevisionHashes[receipt.receiptId] = live;
       } catch { /* This receipt cannot establish live currency. */ }
     }
     let currentWorkspaceRevisionHash: string | undefined;
     try {
       currentWorkspaceRevisionHash = captureCompletionWorkspaceRevisionHash(this.options,
-        mutationPathsFromSessionEvents(this.parity.sessionEvents.events), currentOwnerReceipts.at(-1) ?? null);
+        mutationPaths, currentOwnerReceipts.at(-1) ?? null);
     } catch { /* Missing live evidence remains missing, never copied from a receipt. */ }
     if (this.testWorkspaceRevisionHash !== undefined) {
       currentWorkspaceRevisionHash = this.testWorkspaceRevisionHash ?? undefined;
@@ -3917,6 +3919,7 @@ export class ChatEngine {
     try {
       const raw = mutationPathsFromSessionEvents(
         this.parity.sessionEvents.events,
+        this.recoveredTaskMutationPaths(),
       );
       if (raw.length === 0) return null;
       // Session mutation batches may carry absolute or repo-relative paths;
