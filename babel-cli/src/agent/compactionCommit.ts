@@ -1196,7 +1196,7 @@ export function buildNativeProviderRequestBodyForAdmission(input: {
     systemPrompt: input.systemPrompt,
     stream: input.stream ?? true,
     mapMessages: (msgs, defaultSystem, override) =>
-      mapProviderMessages(msgs, defaultSystem, override) as unknown[],
+      mapProviderMessages(msgs, defaultSystem, override),
   });
 }
 

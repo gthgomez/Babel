@@ -16,6 +16,10 @@ import {
   resolveCompactionAdmissionContext,
 } from '../agent/compactionCommit.js';
 import { prepareProviderRequest } from './preparedProviderRequest.js';
+import { buildOpenAiCompatibleNativeWireBody } from './openAiCompatibleNativeWire.js';
+import { mapProviderMessages } from './providerResponseStream.js';
+import type { ProviderMessage } from './base.js';
+import type { ResolvedExecutionEnvelope } from '../intelligence/types.js';
 
 const tools: ToolDefinition[] = [{
   type: 'function',
@@ -100,4 +104,53 @@ test('DeepInfra native transport body matches compaction admission helper', () =
     contextLimitTokens: 128_000,
   }).admission;
   assert.equal(compactionAdmission, transportAdmission);
+});
+
+function envelopeFor(provider: 'openrouter' | 'command-code'): ResolvedExecutionEnvelope {
+  return {
+    configurationHash: 'e'.repeat(64),
+    model: { requested: 'fixture-model', resolved: 'fixture-model' },
+    output: { requested: 64, effective: 64, source: 'configured' },
+    reasoning: { effectiveEffort: null, wireParameter: null },
+    sampling: { temperature: { effective: 0 }, topP: {}, seed: {} },
+    tools: { effective: true, choice: 'auto' },
+    structuredOutput: { mode: 'none' },
+    provider: { gateway: provider },
+    routing: { allowFallbacks: false, requireParameters: true, order: [] },
+  } as unknown as ResolvedExecutionEnvelope;
+}
+
+test('configured and ordinary compatible wires share effective messages across both qualified routes', () => {
+  const messages: ProviderMessage[] = [
+    { role: 'system', content: 'base policy' },
+    { role: 'system', content: 'committed capsule', name: 'compaction_capsule', provenance: 'controller', authoritative: true },
+    { role: 'user', content: 'inspect the fixture' },
+    {
+      role: 'assistant', content: '', tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'read_range', arguments: '{"path":"fixture.txt"}' } }],
+    },
+    { role: 'tool', content: 'fixture contents', tool_call_id: 'call-1' },
+    { role: 'assistant', content: 'advisory prior answer', name: 'compaction_summary', provenance: 'model', authoritative: false },
+  ];
+  for (const provider of ['openrouter', 'command-code'] as const) {
+    for (const systemPrompt of [undefined, 'caller recovery guidance']) {
+      const input = {
+        model: 'fixture-model', maxTokens: 64, temperature: 0, messages, tools,
+        ...(systemPrompt === undefined ? {} : { systemPrompt }), stream: true,
+        mapMessages: mapProviderMessages,
+      };
+      const ordinary = JSON.parse(buildOpenAiCompatibleNativeWireBody(input));
+      const configured = JSON.parse(buildOpenAiCompatibleNativeWireBody({
+        ...input, executionEnvelope: envelopeFor(provider),
+      }));
+      assert.deepEqual(configured.messages, ordinary.messages, `${provider} effective messages must be identical`);
+      assert.match(configured.messages[0].content, /committed capsule/);
+      assert.match(configured.messages[0].content, /advisory context rule/i);
+      assert.equal(configured.messages[3].tool_call_id, 'call-1');
+      assert.equal(configured.messages[3].role, 'tool');
+      if (systemPrompt) {
+        assert.match(configured.messages[0].content, /caller recovery guidance/);
+        assert.doesNotMatch(configured.messages[0].content, /^base policy$/);
+      }
+    }
+  }
 });

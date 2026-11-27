@@ -2,7 +2,7 @@
  * Shared OpenAI-compatible native tool-call wire body used by API runners
  * and Chat compaction prepared-request admission (must match POST bytes).
  */
-import { buildWireRequestFromEnvelope } from '../intelligence/wire.js';
+import { buildWireRequestFromEnvelope, type WireMessageInput } from '../intelligence/wire.js';
 import type { ResolvedExecutionEnvelope } from '../intelligence/types.js';
 import type { ProviderMessage, ToolDefinition } from './base.js';
 
@@ -29,7 +29,7 @@ export interface OpenAiCompatibleNativeWireInput {
     messages: ProviderMessage[],
     defaultSystemPrompt: string,
     systemPrompt?: string,
-  ) => unknown[];
+  ) => WireMessageInput[];
 }
 
 /** Serialize the exact JSON body POSTed for native tool streams. */
@@ -41,10 +41,18 @@ export function buildOpenAiCompatibleNativeWireBody(
       '[openAiCompatibleNativeWire] tools were requested but the resolved envelope disabled tools.',
     );
   }
+  // Resolve the effective message sequence once.  Both envelope and legacy
+  // serialization must carry the same system override and durable context;
+  // otherwise admission hashes one request while dispatch sends another.
+  const effectiveMessages = input.mapMessages(
+    input.messages,
+    CHAT_NATIVE_DEFAULT_SYSTEM_PROMPT,
+    input.systemPrompt,
+  );
   const envelopeBody = input.executionEnvelope
     ? buildWireRequestFromEnvelope(input.executionEnvelope, {
         stream: input.stream,
-        messages: input.messages,
+        messages: effectiveMessages,
         tools: input.tools,
         toolChoice: input.toolChoice ?? 'auto',
       })
@@ -54,22 +62,12 @@ export function buildOpenAiCompatibleNativeWireBody(
         temperature: input.temperature,
         tools: input.tools,
         tool_choice: (input.toolChoice ?? 'auto') as 'auto' | 'required',
-        messages: input.mapMessages(
-          input.messages,
-          CHAT_NATIVE_DEFAULT_SYSTEM_PROMPT,
-          input.systemPrompt,
-        ),
+        messages: effectiveMessages,
       };
   return JSON.stringify({
     ...envelopeBody,
     stream: input.stream,
     ...(input.requestBodyExtras ?? {}),
-    messages: input.executionEnvelope
-      ? envelopeBody.messages
-      : input.mapMessages(
-          input.messages,
-          CHAT_NATIVE_DEFAULT_SYSTEM_PROMPT,
-          input.systemPrompt,
-        ),
+    messages: envelopeBody.messages,
   });
 }

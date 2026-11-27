@@ -179,6 +179,32 @@ export interface StreamingState {
   sawDone: boolean;
 }
 
+/** A response declared two different model identities in one invocation. */
+export class ProviderModelIdentityConflictError extends Error {
+  constructor(first: string, next: string) {
+    super(`[provider response] response model mismatch: conflicting model identity observed ${first} then ${next}`);
+    this.name = 'ProviderModelIdentityConflictError';
+  }
+}
+
+/**
+ * Record response identity without allowing a later frame to erase evidence
+ * of a contradiction.  A provider stream is one logical response: observing
+ * two model ids is a protocol failure, even if a subsequent frame happens to
+ * repeat the first id.
+ */
+export function recordObservedModelId(state: Pick<StreamingState, 'observedModelId'>, value: unknown): void {
+  if (typeof value !== 'string' || value.trim().length === 0) return;
+  const model = value.trim();
+  if (state.observedModelId === null) {
+    state.observedModelId = model;
+    return;
+  }
+  if (state.observedModelId !== model) {
+    throw new ProviderModelIdentityConflictError(state.observedModelId, model);
+  }
+}
+
 /** Build accounting metadata from the state shared by compatible stream adapters. */
 export function buildStreamingInvocationMetadata(
   provider: ProviderId,
@@ -224,7 +250,7 @@ function recordTextEnvelope(
   state: StreamingState,
   providerErrorSource: string,
 ): void {
-  if (frame.model) state.observedModelId = frame.model;
+  recordObservedModelId(state, frame.model);
   const router = frame.openrouter_metadata as OpenRouterResponseMetadata | null | undefined;
   const upstream = upstreamProviderFromResponse({
     ...(frame.provider ? { provider: frame.provider } : {}),
