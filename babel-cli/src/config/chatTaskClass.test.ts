@@ -17,6 +17,31 @@ import {
 import { resolveChatEngineLimits, isSweChatProfileEnabled } from './chatEngineLimits.js';
 
 describe('chatTaskClass', () => {
+  test('exercise-style input/output specifications are executable without edit verbs', () => {
+    const task = '# Instructions\nGiven an input text, output it transposed.\nPad short rows on the left.';
+    assert.equal(resolveTaskShape(task).operation, 'MUTATING');
+    assert.equal(classifyChatTaskClassFromText(task), 'default');
+    for (const readOnly of [
+      'Explain how to transpose an input text. Do not edit files.',
+      'Review the transpose algorithm without changing the project.',
+      'Given an input text, describe the transposed output; do not modify anything.',
+      'Given an input text, explain the expected output.',
+      'Given an input, what output should I expect?',
+      '# Instructions\nGiven an input text explain how to output it.',
+      '# Instructions\nGiven an input\ntext output it.',
+    ]) {
+      assert.equal(resolveTaskShape(readOnly).operation, 'READ_ONLY', readOnly);
+    }
+    assert.equal(analyzeTaskShape(task, false).operation, 'READ_ONLY');
+    for (const evidence of [
+      'Review this request:\n# Instructions\nGiven an input text, output it transposed.',
+      '```text\n# Instructions\nGiven an input text, output it transposed.\n```',
+      'Hello — # Instructions\nGiven an input text, output it transposed.',
+    ]) {
+      assert.equal(resolveTaskShape(evidence).operation, 'READ_ONLY', evidence);
+    }
+  });
+
   test('a declarative code point routes to Work only from active user prose', () => {
     const goal = 'We need computeDiscount to return 10 for a total of 100.';
     const requirements = '\nRequirements:\n- npm test must pass.';
