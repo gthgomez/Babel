@@ -191,7 +191,13 @@ test('process interruption after restoration preserves uncertain cold history an
     const capture = cold[0]?.compensation.compensationCapturePath
     assert.ok(capture)
     assert.equal(fs.readFileSync(capture, 'utf8'), 'after')
-  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  } finally {
+    // On Windows the child exits deliberately at the ledger boundary while
+    // its directory-anchor helper observes parent termination asynchronously.
+    // Bound cleanup retries so transient sharing violations do not turn the
+    // cold-history assertion into a hosted-only EBUSY failure.
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 25 })
+  }
 })
 
 for (const created of [false, true]) {
