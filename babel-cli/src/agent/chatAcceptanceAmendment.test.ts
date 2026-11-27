@@ -175,6 +175,15 @@ test('an amended point binds the unchanged predecessor verifier and replays from
     assert.deepEqual(current.authority, previous.authority)
     const event = engine.getParityEventLog().events.find(item => item.kind === 'task_acceptance_amended')
     assert.equal(event?.descriptor.schema_version, 5)
+    const recorded = event?.descriptor.point_bindings?.[0]
+    assert.ok(recorded)
+    const otherPoint = addFrozenPoint.replace('add(2, 3) returns 5', 'add(5, 7) returns 12')
+    const inferred = projectTaskAcceptanceRevision(previous, otherPoint, 'add', 4).added[0]!
+    const reassigned = projectTaskAcceptanceRevision(previous, otherPoint, 'add', 5, [{
+      ...recorded, criterion_id: inferred.id,
+    }])
+    assert.notEqual(reassigned.added[0]?.verification.target, requirement.verification.target,
+      'a case recorded for one point cannot be borrowed to prove a different point')
     // Replay must reconstruct authority without reading today's potentially changed test.
     writeFileSync(join(root, 'math.test.mjs'), 'changed after admission\n')
     assert.deepEqual(loadLiveSessionAuthorityStrict(runDir).taskContract.acceptance, current.acceptance)

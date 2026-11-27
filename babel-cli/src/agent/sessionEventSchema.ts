@@ -267,6 +267,7 @@ export type SessionEvent =
       idempotency_key: string;
       exit_code?: number;
       output_digest?: string;
+      verifier_stdout_digest?: string;
       action_index?: number;
       batch_id?: string;
       target_summary?: string;
@@ -329,7 +330,7 @@ export type SessionEvent =
       /** Durable revision-bound receipt used to reconstruct verifier state. */
       receipt?: BoundChatVerifierReceipt;
       /** Host-observed point cases bound to this physical attempt. */
-      point_execution?: { targets: string[]; digest: string };
+      point_execution?: { targets: string[]; stdout_digest: string; digest: string };
       failed_execution?: import('./codingLoop/failedVerifierExecution.js').SettledFailedVerifierExecution;
     })
   | (SessionEventBase & {

@@ -871,7 +871,6 @@ export class ChatEngineP11Authority {
     const checkpointPath = join(sessionDir, "context-checkpoint.json");
     const issues: string[] = [];
     let validCheckpoint: ContextCheckpoint | undefined;
-    let membershipRevoked = false;
     let observationGovernedHistory = existsSync(join(sessionDir, 'observations'));
     try {
       if (existsSync(checkpointPath)) {
@@ -888,25 +887,32 @@ export class ChatEngineP11Authority {
             sessionEvents: this.host.parity.sessionEvents.events,
           },
         });
-        if (coldResume.status === "valid") {
-          if (checkpoint.taskContractReference === this.host.parity.liveAuthority?.taskContract.contract_hash) {
-            validCheckpoint = checkpoint;
-          } else {
-            issues.push('task_contract_superseded');
-          }
-        } else {
+        if (coldResume.status !== 'valid') {
           issues.push(coldResume.reasons.join("; "));
-          if (coldResume.reasons.some(reason =>
-            reason === 'invalid_schema' || reason === 'checkpoint_digest_mismatch' ||
-            reason === 'expected_thread_mismatch')) {
+          // The validator identifies newer committed lineage. An empty
+          // checkpoint manifest can also legitimately predate a durable tool
+          // capture, but the tail below must prove every newly authorized ref.
+          const superseded = coldResume.reasons.every(reason => reason === 'lineage_superseded' ||
+            (reason === 'observation_manifest_incomplete' &&
+              Array.isArray(checkpoint?.observation_manifest) && checkpoint.observation_manifest.length === 0 &&
+              authorizedObservationIds.length > 0));
+          if (!superseded) {
             this.host.p11ObservationCaptureIssues = ['installed_context_checkpoint_invalid'];
             return { applied: false, issues };
           }
-          const activeTask = this.host.parity.liveAuthority?.taskContract.task_id;
-          membershipRevoked = coldResume.reasons.includes('observation_membership_unavailable') &&
-            Array.isArray(checkpoint.observation_manifest) &&
-            checkpoint.observation_manifest.some(ref =>
-              ref?.invocation?.task_id === activeTask && !membership?.has(ref.observation_id));
+        }
+        const authority = this.host.parity.liveAuthority;
+        const contract = checkpoint.taskContractReference;
+        if (contract === authority?.taskContract.contract_hash) {
+          if (coldResume.status === 'valid') validCheckpoint = checkpoint;
+        } else if (authority?.taskModeHistory?.revisions.some(revision => revision.contract_hash === contract) ||
+            authority?.taskObjectiveLifecycle?.objectives.some(objective =>
+              objective.taskContract.contract_hash === contract ||
+              objective.taskModeHistory?.revisions.some(revision => revision.contract_hash === contract))) {
+          issues.push('task_contract_superseded');
+        } else {
+          this.host.p11ObservationCaptureIssues = ['installed_context_checkpoint_contract_unknown'];
+          return { applied: false, issues: [...issues, ...this.host.p11ObservationCaptureIssues] };
         }
       }
     } catch (err) {
@@ -914,7 +920,7 @@ export class ChatEngineP11Authority {
       this.host.p11ObservationCaptureIssues = ['installed_context_checkpoint_unreadable'];
       return { applied: false, issues };
     }
-    if (!membership || membershipRevoked ||
+    if (!membership ||
         this.hasUnauthorizedSettledObservation(sessionDir, membership, observationGovernedHistory)) {
       this.host.p11ObservationCaptureIssues = ['observation_membership_unavailable'];
       return { applied: false, issues: [...issues, ...this.host.p11ObservationCaptureIssues] };

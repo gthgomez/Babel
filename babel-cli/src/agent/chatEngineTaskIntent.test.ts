@@ -37,6 +37,14 @@ test('routes an exact foreground command for execution even when a requirement r
   }
   assert.equal(resolveTaskShape('Explain how to run `node tools/export.mjs`.').operation, 'READ_ONLY')
   assert.equal(resolveTaskShape('Run `node tools/export.mjs && echo ok`.').operation, 'READ_ONLY')
+  for (const request of [
+    'Inspect the repository.\nRun `node tools/export.mjs`.',
+    'Inspect the repository.\nRequirements:\n- Run `node tools/export.mjs`.',
+    'Explain the inputs.\nRun `node tools/export.mjs`.',
+  ]) {
+    assert.equal(resolveTaskShape(request).operation, 'HYBRID', request)
+    assert.equal(classifyChatTaskIntent(request), 'execute')
+  }
 })
 
 test('implementation with a third-party dependency constraint retains mutation intent', () => {

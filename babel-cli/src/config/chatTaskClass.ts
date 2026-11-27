@@ -12,9 +12,9 @@
 import type { ChatEngineLimits } from './chatEngineLimits.js';
 import { autonomyClassFromEnv, autonomyTaskClassFor } from './autonomyPolicy.js';
 import { Marked, type Token, type Tokens } from 'marked';
-import { findOpeningLabeledGoal } from '../agent/taskAcceptanceMeaning.js';
+import { findOpeningLabeledGoal, inferFreshTaskAcceptance } from '../agent/taskAcceptanceMeaning.js';
 import { isDeclarativeBehaviorPoint } from '../agent/taskBehaviorPoint.js';
-import { parseForegroundCommandClause } from '../utils/commandArgv.js';
+import { foregroundTaskClauses, parseForegroundCommandClause } from '../utils/commandArgv.js';
 
 /** Supported chat task classes (product-facing). */
 export type ChatTaskClass =
@@ -637,10 +637,12 @@ export function analyzeTaskShape(taskText: string, allowDeclarativePoint = true)
       ? isDeclarativeBehaviorPoint(goal.text)
       : firstProseLine !== undefined && /^ {0,3}\S/.test(firstProseLine) && isDeclarativeBehaviorPoint(firstProseLine)
   );
+  const foreground = allowDeclarativePoint && /\b(?:run|execute)\s+`/i.test(taskText) &&
+    foregroundTaskClauses(inferFreshTaskAcceptance(taskText).activeProse)
+      .some(clause => taskText.includes(clause) && parseForegroundCommandClause(clause) !== null);
   const hasMutationTokens =
     declarativePoint ||
-    (allowDeclarativePoint && firstProseLine !== undefined && /^ {0,3}\S/.test(firstProseLine) &&
-      parseForegroundCommandClause(firstProseLine.trim().replace(/[.!]$/, '')) !== null) ||
+    foreground ||
     /^(?:(?:can|could|would)\s+you\s+|please\s+)?(?:make|order|sort)\b/i.test(positiveMutationScope.trim()) ||
     /\b(?:and|then)\s+(?:make|order|sort)\s+(?:this|it|the|[\w-]+\s+(?:by|from))\b/i.test(positiveMutationScope) ||
     new RegExp(`\\b(clean\\s*up\\s+and\\s+delete|${MUTATION_VERB_SOURCE})\\b`, 'i').test(
@@ -648,7 +650,7 @@ export function analyzeTaskShape(taskText: string, allowDeclarativePoint = true)
     ) ||
     (!hasReadOnlyDirective &&
       new RegExp(`\\b(?:${DESTRUCTIVE_VERB_SOURCE})\\b`, 'i').test(positiveMutationScope));
-  const hasMutation = hasMutationTokens && !isReadOnlyTaskFrame(t);
+  const hasMutation = foreground || (hasMutationTokens && !isReadOnlyTaskFrame(t));
 
   // 3. Exploratory keywords (find, scan, list, check, explain, analyze, review, compare)
   const hasExploratory =

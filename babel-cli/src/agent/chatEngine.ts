@@ -420,6 +420,7 @@ import { RepetitionDetector } from "./repetitionDetector.js";
 import { captureThought } from "./thoughtCapture.js";
 import { persistPreambleBudget } from "./preambleBudgetDiagnostics.js";
 import {
+  attestChatPointReceipt,
   captureCompletionWorkspaceRevisionHash,
   prepareKernelVerifierInput,
   resolveVerifierCacheIdentity,
@@ -2690,7 +2691,8 @@ export class ChatEngine {
     proofSelection.evidenceErrors.push(...historyErrors);
     const selectedChatReceipts = selectLedgerReceiptsById(this.executedVerifierLedger, proofSelection.selectedCoveringReceipts);
     const criterionChatReceipts = retainCurrentPointReceipts(
-      currentOwnerReceipts.filter(receipt => attemptSelection.currentAttempts.some(attempt => attempt.receiptId === receipt.receiptId)),
+      currentOwnerReceipts.filter(receipt => attemptSelection.currentAttempts.some(attempt => attempt.receiptId === receipt.receiptId))
+        .map(receipt => attestChatPointReceipt(this.parity.sessionEvents, receipt)),
     );
     return { ...canonical, verifierEvidenceErrors: canonical.verifierEvidenceErrors, requiredVerifierCommands, requiredVerifiers, verifierOwner, currentWorkspaceRevisionHash, currentReceiptRevisionHashes, unplannedAttemptEnvironmentFingerprint, proofSelection, selectedChatReceipts, criterionChatReceipts };
   }

@@ -23,11 +23,12 @@ import {
 } from './taskAcceptanceExecutableBinding.js'
 import { isRequestedOperationAmendmentRef, requestedLocalExecutionAcceptance, REQUESTED_LOCAL_EXECUTION_KIND } from './requestedLocalExecution.js'
 import { isAmendmentPrompt, isStatusPrompt } from './turnRuntime.js'
-import { POINT_TARGET_PREFIX, pointVerifierInputRefPrefix, pointVerifierWitness, snapshotPointVerifierInputs } from './pointVerifierWitness.js'
+import { pointTargetForCase, pointVerifierCaseInputDigest, pointVerifierInputRefPrefix, pointVerifierWitness,
+  snapshotPointVerifierInputs, type PointVerifierCase } from './pointVerifierWitness.js'
 import { taskProhibitsCommand } from './taskCommandProhibitions.js'
 
 export const ACCEPTANCE_AMENDMENT_REF = `user:task-${'acceptance-amendment:v1'}` as const
-type AmendmentPointBinding = { criterion_id: string; command: string; input_ref: string; target: string }
+type AmendmentPointBinding = { criterion_id: string; command: string; input_ref: string; case: PointVerifierCase }
 export interface TaskAcceptanceDescriptorV1 {
   /** V4 applies current command restrictions and requires case evidence for point links. */
   schema_version: 1 | 2 | 3 | 4 | 5
@@ -106,12 +107,15 @@ export function projectTaskAcceptanceRevision(
   const usedPointBindings = new Set<string>()
   const standard = meaning.criteria.filter(item => !descriptions.has(item.description)).map(item => {
     const binding = version === 5 ? pointBindings.find(entry => entry.criterion_id === item.id) : undefined
-    if (!binding || !eligibleAmendmentPoint(previous, item, binding.command, meaning.activeProse) ||
-        !binding.input_ref.startsWith(pointVerifierInputRefPrefix(binding.command)) ||
+    if (!binding) return item
+    const point = eligibleAmendmentPoint(previous, item, binding.command, meaning.activeProse)
+    if (!point?.modulePath ||
+        !binding.input_ref.startsWith(`${pointVerifierInputRefPrefix(binding.command)}${pointVerifierCaseInputDigest(binding.case)}:`) ||
         !previous.provenance.records.some(record => record.kind === 'derived_acceptance' && record.ref === binding.input_ref))
       return item
-    const bound = bindRelevanceWitness(item, binding.command, '.', previous.protected_paths, binding.target)
-    if (bound.verification.target === binding.target) usedPointBindings.add(binding.criterion_id)
+    const target = pointTargetForCase(binding.case, point.modulePath, point)
+    const bound = bindRelevanceWitness(item, binding.command, '.', previous.protected_paths, target)
+    if (bound.verification.target === target) usedPointBindings.add(binding.criterion_id)
     return bound
   })
   const requested = version >= 3 ? requestedLocalExecutionAcceptance({
@@ -159,7 +163,7 @@ function captureAmendmentPoints(
       const inputs = snapshotPointVerifierInputs(projectRoot, command, protectedPaths)
       if (!inputs || !inputRefs.has(inputs.ref)) return []
       const witness = pointVerifierWitness(projectRoot, command, point, inputs.fs)
-      return witness ? [{ criterion_id: item.id, command, input_ref: inputs.ref, target: witness.target }] : []
+      return witness ? [{ criterion_id: item.id, command, input_ref: inputs.ref, case: witness.case }] : []
     })
     if (matches.length === 1) bindings.push(matches[0]!)
   }
@@ -256,9 +260,11 @@ export function isTaskAcceptanceDescriptor(value:unknown):value is TaskAcceptanc
     points.every(point => point && Object.keys(point).length === 4 &&
       typeof point.criterion_id === 'string' && typeof point.command === 'string' &&
       point.command.length > 0 && point.command.length <= 1024 &&
-      typeof point.input_ref === 'string' && /^babel:point-verifier-inputs:v1:[a-f0-9]{64}:[a-f0-9]{64}$/.test(point.input_ref) &&
-      typeof point.target === 'string' && point.target.startsWith(POINT_TARGET_PREFIX) &&
-      /^[a-f0-9]{64}$/.test(point.target.slice(POINT_TARGET_PREFIX.length)))
+      typeof point.input_ref === 'string' && /^babel:point-verifier-inputs:v1:(?:[a-f0-9]{64}:){2}[a-f0-9]{64}$/.test(point.input_ref) &&
+      point.case && Object.keys(point.case).length === 4 &&
+      typeof point.case.checkDigest === 'string' && /^[a-f0-9]{64}$/.test(point.case.checkDigest) &&
+      [point.case.entry, point.case.testPath, point.case.test].every(value =>
+        typeof value === 'string' && value.length > 0 && value.length <= 1024))
   )
   const hasOperation = Array.isArray(descriptor.added_acceptance) &&
     descriptor.added_acceptance.some(item => item?.verification?.kind === REQUESTED_LOCAL_EXECUTION_KIND)

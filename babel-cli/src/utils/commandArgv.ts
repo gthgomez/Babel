@@ -18,6 +18,28 @@ export function parseForegroundCommandClause(clause: string): string[] | null {
   return command === undefined ? null : parseSingleProcessArgv(command)
 }
 
+/** Split active task prose outside code spans; examples cannot require execution. */
+export function foregroundTaskClauses(activeProse: readonly string[], amendment = false): string[] {
+  const clauses = activeProse.flatMap(line => {
+    let cleaned = line.trim()
+      .replace(/^(?:[-*+•]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, '')
+      .replace(/^(?:acceptance criteria|requirements?)\s*:\s*/i, '')
+    if (amendment) cleaned = cleaned.replace(/^(?:also|additionally|and)\b[\s,:]*/i, '')
+    return cleaned.split(/(`[^`]*`)/g).reduce<string[]>((parts, piece, index) => {
+      if (index % 2 === 1) {
+        parts[parts.length - 1] += piece
+      } else {
+        const [start, ...rest] = piece.split(/[.!](?=\s|$)|(?<=\?)\s+|;/)
+        parts[parts.length - 1] += start ?? ''
+        parts.push(...rest)
+      }
+      return parts
+    }, ['']).map(clause => clause.trim()).filter(Boolean)
+  })
+  const example = /^(?:for example|an? example|example|sample|illustration|logs?|quoted text)(?:\s*:|\s*$)/i
+  return clauses.some(clause => example.test(clause)) ? [] : clauses
+}
+
 /** Identify one process and its arguments. Execution policy still owns authorization. */
 export function parseSingleProcessArgv(command: string): string[] | null {
   if (/[;&|<>$`%^!\r\n\0]/.test(command)) return null

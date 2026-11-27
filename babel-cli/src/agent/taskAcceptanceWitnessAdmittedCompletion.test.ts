@@ -15,7 +15,7 @@ import {
 } from '../authority/criterionCompletion.js'
 import { captureChatVerifierReceipt, captureAndRecordVerifierReceipt, captureCompletionWorkspaceRevisionHash, prepareKernelVerifierInput, resolveVerifierCacheIdentity, restorePersistedVerifierEvidence, verifierEnvironmentKey } from './chatEngineVerifierAdapter.js'
 import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js'
-import { createSessionEventLog, parseSessionEventLog, serializeSessionEventLog } from './sessionEvents.js'
+import { createSessionEventLog, parseSessionEventLog, recordToolProposed, recordToolStarted, recordToolTerminal, serializeSessionEventLog } from './sessionEvents.js'
 import { createExecutorKernel } from '../executor/kernel.js'
 import {
   resolveGovernedCriterionCandidateRevisionSha,
@@ -779,6 +779,10 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
     return [witness.target, witness] as const
   })).values()]
   assert.equal(witnesses.length, 2)
+  const tool = { turn_id: runId, tool_call_id: 'point-physical', tool_name: 'test_run',
+    target_summary: command, effect_class: 'idempotent' as const }
+  recordToolProposed(sessionEvents, tool)
+  recordToolStarted(sessionEvents, tool)
   const cacheIdentity = resolveVerifierCacheIdentity({
     projectRoot: root, command, envKey: verifierEnvironmentKey(env),
   })
@@ -787,19 +791,32 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
     stderr: policy.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
     sessionEvents, turnId: runId, ledger: [], cache: new Map(), writeCount: 1,
     cacheIdentity, verifierOwner, executionBackend: 'host-process',
-    pointWitnesses: witnesses,
+    pointWitnesses: witnesses, toolCallId: tool.tool_call_id,
   })
   assert.ok(receipt)
   assert.equal(receipt.tests_total, 2)
   assert.equal(sessionEvents.events.filter(event => event.kind === 'verifier_attempt').length, 1)
+  const beforeSettlement = restorePersistedVerifierEvidence(sessionEvents, [], verifierOwner)
+  assert.equal(beforeSettlement?.target, undefined)
+  const { createHash } = await import('node:crypto')
+  recordToolTerminal(sessionEvents, { ...tool, exit_code: 0, content: stdout,
+    verifier_stdout_digest: createHash('sha256').update(stdout).digest('hex') })
   const candidate = candidateShaFromReceipt(root, receipt)
   const persisted = parseSessionEventLog(serializeSessionEventLog(sessionEvents))
   const restored = restorePersistedVerifierEvidence(persisted, [], verifierOwner)
-  assert.deepEqual(restored, JSON.parse(JSON.stringify(receipt)))
+  assert.deepEqual(restored, { ...JSON.parse(JSON.stringify(receipt)), additionalPointTargets: [witnesses[1]!.target] })
   const event = persisted.events.find(row => row.kind === 'verifier_attempt')
   assert.ok(event?.receipt)
   const proof = event.point_execution
   assert.ok(proof)
+  const completed = persisted.events.find(row => row.kind === 'tool_completed')
+  assert.ok(completed)
+  completed.target_summary = 'node --test unrelated.mjs'
+  assert.equal(restorePersistedVerifierEvidence(persisted, [], verifierOwner)?.target, undefined)
+  completed.target_summary = command
+  completed.verifier_stdout_digest = '0'.repeat(64)
+  assert.equal(restorePersistedVerifierEvidence(persisted, [], verifierOwner)?.target, undefined)
+  completed.verifier_stdout_digest = proof.stdout_digest
   event.receipt.additionalPointTargets = [witnesses[1]!.target]
   delete event.point_execution
   const uncorroborated = restorePersistedVerifierEvidence(persisted, [], verifierOwner)

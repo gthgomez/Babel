@@ -144,7 +144,7 @@ test('physical recovery proof stays separate from a conversation checkpoint', as
   }).status, 'valid')
 })
 
-test('cold hydration leaves an empty checkpoint from a replaced objective inactive', async t => {
+test('cold hydration blocks an empty checkpoint whose contract is absent from authority history', async t => {
   const { projectRoot, authority, host, parity } = fixture(t)
   assert.equal(await authority.installP11ContextCheckpoint(route), true, host.p11InstallBlock?.code)
   const previous = parity.contextCheckpoint
@@ -152,8 +152,8 @@ test('cold hydration leaves an empty checkpoint from a replaced objective inacti
   assert.deepEqual(previous.observation_manifest, [])
   assert.equal(authority.hydrateInstalledContextAuthority().applied, true)
 
-  // Preserve the old installed file while committing the replacement contract,
-  // as when the process stops before preparing the next provider request.
+  // An unrelated replacement without an admitted predecessor is not proof
+  // that the retained checkpoint was legitimately superseded.
   parity.liveAuthority = resolveLiveSessionAuthority({
     mode: 'chat', projectRoot, task: 'Explain a different objective.',
   })
@@ -165,7 +165,7 @@ test('cold hydration leaves an empty checkpoint from a replaced objective inacti
   assert.equal(restored.applied, false)
   assert.equal(parity.contextCheckpoint, undefined)
   assert.deepEqual([...parity.authorizedObservationIds ?? []], [])
-  assert.deepEqual(host.p11ObservationCaptureIssues, [])
+  assert.deepEqual(host.p11ObservationCaptureIssues, ['installed_context_checkpoint_contract_unknown'])
 })
 
 test('recovery binding changes with validated Docker execution arguments and fails closed on invalid arguments', t => {
@@ -353,7 +353,8 @@ test('a command with unknown physical settlement remains indeterminate in the du
 
 async function checkColdContinuation(
   t: TestContext,
-  scenario: 'intact' | 'corrupt' | 'corrupt-exhausted' | 'malformed-checkpoint' | 'incompatible-checkpoint' | 'compacted' | 'missing-membership' |
+  scenario: 'intact' | 'corrupt' | 'corrupt-exhausted' | 'malformed-checkpoint' | 'incompatible-checkpoint' |
+    'checkpoint-manifest-mismatch' | 'checkpoint-lineage-mismatch' | 'replaced-objective' | 'compacted' | 'missing-membership' |
     'invalid-membership' | 'revoked-before-restore' | 'revoked-with-deleted-ref' | 'revoked-after-restore',
 ): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), 'babel-p11-cold-observation-'))
@@ -406,6 +407,18 @@ async function checkColdContinuation(
   const originalTask = original.getParityRuntime().liveAuthority?.taskContract.task_id
   assert.ok(originalTask)
 
+  if (scenario === 'replaced-objective') {
+    original.admitUserSubmission({ userInput: 'Explain a different objective.' }, { provider: 'ollama', model: 'fixture-only' })
+    const successor = original.getTaskContract()
+    assert.ok(successor && successor.task_id !== originalTask)
+    const resumed = await ChatEngine.restore(runId, options)
+    assert.equal(resumed.getTaskContract()?.task_id, successor.task_id)
+    assert.deepEqual(resumed.hydrateInstalledContextAuthority(sessionDir),
+      { applied: false, issues: ['task_contract_superseded'] })
+    assert.deepEqual((resumed as unknown as ChatEngineP11Host).p11ObservationCaptureIssues, [])
+    return
+  }
+
   if (scenario === 'compacted') {
     const parity = original.getParityRuntime()
     assert.ok(parity.turnId)
@@ -453,10 +466,15 @@ async function checkColdContinuation(
   }
   const checkpointPath = join(sessionDir, 'context-checkpoint.json')
   if (scenario === 'malformed-checkpoint') writeFileSync(checkpointPath, '{')
-  if (scenario === 'incompatible-checkpoint') {
+  if (scenario === 'incompatible-checkpoint' || scenario === 'checkpoint-manifest-mismatch' ||
+      scenario === 'checkpoint-lineage-mismatch') {
     const { checkpoint_digest: _digest, ...originalCheckpoint } = persisted
-    const unsupported = { ...originalCheckpoint, schema_version: 999 }
-    writeFileSync(checkpointPath, JSON.stringify({ ...unsupported, checkpoint_digest: sha256Canonical(unsupported) }))
+    const incompatible = scenario === 'incompatible-checkpoint'
+      ? { ...originalCheckpoint, schema_version: 999 }
+      : scenario === 'checkpoint-manifest-mismatch'
+        ? { ...originalCheckpoint, observation_manifest_digest: '0'.repeat(64) }
+        : { ...originalCheckpoint, installed_lineage: { ...originalCheckpoint.installed_lineage, checkpoint_id: 'other' } }
+    writeFileSync(checkpointPath, JSON.stringify({ ...incompatible, checkpoint_digest: sha256Canonical(incompatible) }))
   }
   const resumed = await ChatEngine.restore(runId, options)
   const hydrated = resumed.hydrateInstalledContextAuthority(sessionDir)
@@ -528,8 +546,14 @@ test('cold continuation blocks before dispatch when the installed checkpoint is 
   t => checkColdContinuation(t, 'malformed-checkpoint'))
 test('cold continuation blocks before dispatch for an unsupported checkpoint schema even with a valid digest',
   t => checkColdContinuation(t, 'incompatible-checkpoint'))
+test('cold continuation blocks before dispatch for an inconsistent checkpoint manifest',
+  t => checkColdContinuation(t, 'checkpoint-manifest-mismatch'))
+test('cold continuation blocks before dispatch for inconsistent checkpoint lineage',
+  t => checkColdContinuation(t, 'checkpoint-lineage-mismatch'))
 test('cold continuation recovers settled observations after compaction supersedes the checkpoint',
   t => checkColdContinuation(t, 'compacted'))
+test('cold hydration leaves a checkpoint from a durably replaced objective inactive without blocking the new task',
+  t => checkColdContinuation(t, 'replaced-objective'))
 test('cold continuation does not rewrite missing observation membership as empty',
   t => checkColdContinuation(t, 'missing-membership'))
 test('cold continuation does not rewrite corrupt observation membership as empty',

@@ -602,6 +602,7 @@ export function parityRecordToolBatch(
       exit_code?: number;
       target?: string;
       contentHash?: string;
+      verifier_stdout_digest?: string;
       preDispatchNoEffect?: true;
       discoverySuppressed?: boolean;
       action_index?: number;
@@ -729,6 +730,7 @@ export function parityRecordToolBatch(
             ? {
                 content: r.content,
                 ...(r.exit_code !== undefined ? { exit_code: r.exit_code } : {}),
+                ...(hasStart && r.verifier_stdout_digest ? { verifier_stdout_digest: r.verifier_stdout_digest } : {}),
               }
             : {
                 cancelled: true,

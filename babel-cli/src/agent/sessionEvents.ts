@@ -699,6 +699,7 @@ export function recordToolTerminal(
     exit_code?: number;
     preDispatchNoEffect?: true;
     content?: string;
+    verifier_stdout_digest?: string;
     failed?: boolean;
     cancelled?: boolean;
     reason?: string;
@@ -754,6 +755,7 @@ export function recordToolTerminal(
     idempotency_key: key,
     ...(input.exit_code !== undefined ? { exit_code: input.exit_code } : {}),
     ...(digest !== undefined ? { output_digest: digest } : {}),
+    ...(input.verifier_stdout_digest !== undefined ? { verifier_stdout_digest: input.verifier_stdout_digest } : {}),
     ...(input.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
     ...correlation,
   });
@@ -768,7 +770,7 @@ export function recordVerifierAttempt(
     exit_code?: number;
     tool_call_id?: string;
     receipt?: BoundChatVerifierReceipt;
-    point_execution?: { targets: string[]; digest: string };
+    point_execution?: { targets: string[]; stdout_digest: string; digest: string };
     failed_execution?: import('./codingLoop/failedVerifierExecution.js').SettledFailedVerifierExecution;
   },
 ): SessionEvent {

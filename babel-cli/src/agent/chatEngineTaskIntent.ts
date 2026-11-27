@@ -39,8 +39,8 @@ export function classifyChatTaskIntent(task: string): TaskIntent {
   task = stripFencedCodeBodies(task)
     .replace(/\b(?:do\s+not|don't|never)\s+(?:edit|modify|change|write|delete|remove)[\s\S]*?(?:\.(?=\s|$)|[;!?\r\n]|$)/gi, ' ')
   if (!task.trim()) return 'explain'
-  if (isReadOnlyTaskFrame(task)) return 'explain'
   if (analyzeTaskShape(task).operation !== 'READ_ONLY') return 'execute'
+  if (isReadOnlyTaskFrame(task)) return 'explain'
   if (/\b(?:without\s+(?:editing|modifying|changing|writing)|do\s+not|don't|never)\b/i.test(task)) return 'explain'
   if (/^\s*(?:explain|describe|summarize|review|audit)\b/i.test(task)) return 'explain'
 

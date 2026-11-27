@@ -36,6 +36,24 @@ export function pointVerifierInputRefPrefix(command: string): string {
   return `babel:point-verifier-inputs:v1:${sha256Canonical(command.trim())}:`
 }
 
+type PointVerifierInput = { entry: string; testPath: string; checkDigest: string }
+export type PointVerifierCase = PointVerifierInput & { test: string }
+
+/** Bind a frozen test case to one exact behavioral point. */
+export function pointTargetForCase(
+  test: PointVerifierCase, path: string, point: TaskBehaviorPoint & { modulePath?: string },
+): string {
+  const retainSign = (value: number) => Object.is(value, -0) ? '-0' : value
+  return POINT_TARGET_PREFIX + sha256Canonical({
+    ...test, path, point: { ...point, args: point.args.map(retainSign), expected: retainSign(point.expected) },
+  })
+}
+
+/** Commit the exact runner entry and test bytes independently of the case requested later. */
+export function pointVerifierCaseInputDigest(input: PointVerifierInput): string {
+  return sha256Canonical({ entry: input.entry, testPath: input.testPath, checkDigest: input.checkDigest })
+}
+
 /** Freeze protected Node test inputs and let admission prove a case against those same bytes. */
 export function snapshotPointVerifierInputs(
   root: string, command: string, protectedPaths: ReadonlySet<string>,
@@ -68,7 +86,8 @@ export function snapshotPointVerifierInputs(
     if (content === null || content.length > 256_000) return
     inputs[path] = sha256Canonical(content)
   }
-  return { ref: pointVerifierInputRefPrefix(command) + sha256Canonical(inputs), fs }
+  const inputDigest = pointVerifierCaseInputDigest({ entry, testPath, checkDigest: inputs[testPath]! })
+  return { ref: `${pointVerifierInputRefPrefix(command)}${inputDigest}:${sha256Canonical(inputs)}`, fs }
 }
 
 /** Retained objectives keep their original point identity until resubmitted. */
@@ -78,6 +97,7 @@ export function isLegacyPointTarget(target: string | undefined): boolean {
 
 export interface PointVerifierWitness {
   target: string
+  case: PointVerifierCase
   entry: string
   npmScript: boolean
   testNames: string[]
@@ -214,10 +234,10 @@ export function pointVerifierWitness(
       }
     }
     if (!witnessName) return undefined
+    const testCase = { entry, testPath, test: witnessName, checkDigest: sha256Canonical(content) }
     return {
-      target: POINT_TARGET_PREFIX + sha256Canonical({
-        entry, testPath, test: witnessName, checkDigest: sha256Canonical(content), path: importedTarget.path, point,
-      }),
+      target: pointTargetForCase(testCase, importedTarget.path, point),
+      case: testCase,
       entry,
       npmScript: command !== entry,
       testNames: [...registeredNames],
@@ -228,7 +248,7 @@ export function pointVerifierWitness(
 }
 
 /** Reconcile the complete runner report with the frozen registration, not an isolated stdout marker. */
-export function nodePointExecuted(stdout: string, witness: Omit<PointVerifierWitness, 'target'>): boolean {
+export function nodePointExecuted(stdout: string, witness: Pick<PointVerifierWitness, 'entry' | 'npmScript' | 'testNames'>): boolean {
   const lines = stdout.trim().split(/\r?\n/).filter(line => line.trim() !== '')
   if (witness.npmScript) {
     if (!lines[0]?.startsWith('> ') || lines[1] !== `> ${witness.entry}`) return false

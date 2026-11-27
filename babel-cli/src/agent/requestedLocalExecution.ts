@@ -2,7 +2,7 @@ import { relative, resolve } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
 import { canonicalizeContained } from '../bridge/workspaceBound.js'
 import type { BlockedReport } from '../schemas/agentContracts.js'
-import { formatArgvAsCommand, parseForegroundCommandClause, parseSingleProcessArgv } from '../utils/commandArgv.js'
+import { foregroundTaskClauses, formatArgvAsCommand, parseForegroundCommandClause, parseSingleProcessArgv } from '../utils/commandArgv.js'
 import { redactSecrets } from '../utils/redaction.js'
 import type { ChatToolAction } from './chatToolDefinitions.js'
 import { parseUnifiedDiff } from './codingLoop/patchApply.js'
@@ -13,7 +13,6 @@ import type { AcceptanceRequirementV1, TaskContractProvenanceRecord } from './ta
 const REF_PREFIX = 'babel:requested-local-execution'
 const DENIAL_PREFIX = 'required_local_execution_denied'
 export const REQUESTED_LOCAL_EXECUTION_KIND = 'requested_local_execution'
-const EXAMPLE_FRAME = /^(?:for example|an? example|example|sample|illustration|logs?|quoted text)(?:\s*:|\s*$)/i
 const SCRIPT_PATH = String.raw`(?:\./)?[\p{L}\p{N}_-][\p{L}\p{N}_.\/-]*\.(?:py|[cm]?js)`
 const FILE_PATH = String.raw`(?:\./)?[\p{L}\p{N}_-][\p{L}\p{N}_.\/-]*`
 const DECLARED_SCRIPT = new RegExp(String.raw`^(?:please\s+)?(?:add|create|write)\s+\x60?(${SCRIPT_PATH})\x60?(?=$|[\s,])`, 'iu')
@@ -29,26 +28,6 @@ function operationDigest(argv: readonly string[]): string {
 
 function executionRef(version: 1 | 2, scope: ExecutionScope, digest: string): string {
   return `${REF_PREFIX}:v${version}:${scope}:${digest}`
-}
-
-function activeClauses(activeProse: readonly string[], amendment: boolean): string[] {
-  return activeProse.flatMap(line => {
-    let cleaned = line.trim()
-      .replace(/^(?:[-*+•]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, '')
-      .replace(/^(?:acceptance criteria|requirements?)\s*:\s*/i, '')
-    if (amendment) cleaned = cleaned.replace(/^(?:also|additionally|and)\b[\s,:]*/i, '')
-    // Split only outside code spans; quoted argv can contain punctuation.
-    return cleaned.split(/(`[^`]*`)/g).reduce<string[]>((clauses, piece, index) => {
-      if (index % 2 === 1) {
-        clauses[clauses.length - 1] += piece
-      } else {
-        const [start, ...rest] = piece.split(/[.!](?=\s|$)|(?<=\?)\s+|;/)
-        clauses[clauses.length - 1] += start ?? ''
-        clauses.push(...rest)
-      }
-      return clauses
-    }, ['']).map(clause => clause.trim()).filter(Boolean)
-  })
 }
 
 function jobArgv(clause: string, declaredScripts: readonly string[]): string[][] {
@@ -79,11 +58,10 @@ export function requestedLocalExecutionAcceptance(input: {
   provenance: TaskContractProvenanceRecord[]
   sources: AcceptanceMeaningSource[]
 } {
-  const clauses = activeClauses(input.activeProse, input.amendment === true)
+  const clauses = foregroundTaskClauses(input.activeProse, input.amendment === true)
   const criteria: AcceptanceRequirementV1[] = []
   const sources: AcceptanceMeaningSource[] = []
   const refs = new Set<string>()
-  if (clauses.some(clause => EXAMPLE_FRAME.test(clause))) return { criteria, provenance: [], sources }
 
   const declaredScripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
   // Only a sole operation proves that no independent work remains.
@@ -180,7 +158,7 @@ export function substitutesRequestedProcessOutput(
   // Resolve "the exporter" within each request as admission did. Later
   // amendments must not make a script declaration in the objective ambiguous.
   const operations = sourceRequests.flatMap((request, index) => {
-    const clauses = activeClauses(inferFreshTaskAcceptance(request).activeProse, index > 0)
+    const clauses = foregroundTaskClauses(inferFreshTaskAcceptance(request).activeProse, index > 0)
     const scripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
     return clauses.flatMap(clause => jobArgv(clause, scripts))
   })

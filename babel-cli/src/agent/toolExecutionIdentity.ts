@@ -26,6 +26,7 @@ export interface DurableToolLogRow {
   exit_code?: number
   /** Host-origin execution provenance; never inferred from observation text. */
   verifierExecuted?: boolean
+  processCompleted?: boolean
   verifierSemanticSignature?: string
   preDispatchNoEffect?: true
   stdout?: string
@@ -47,6 +48,7 @@ export interface DurableToolResultProjection {
   exit_code?: number
   /** Host-origin execution provenance; never inferred from observation text. */
   verifierExecuted?: boolean
+  verifier_stdout_digest?: string
   verifierSemanticSignature?: string
   preDispatchNoEffect?: true
   contentHash?: string
@@ -153,6 +155,8 @@ export function projectDurableToolBatch(input: {
       content,
       target: row.target,
       ...(row.verifierExecuted !== undefined ? { verifierExecuted: row.verifierExecuted } : {}),
+      ...(row.verifierExecuted && row.processCompleted && row.exit_code === 0 && typeof row.stdout === 'string'
+        ? { verifier_stdout_digest: createHash('sha256').update(row.stdout).digest('hex') } : {}),
       ...(row.verifierSemanticSignature ? { verifierSemanticSignature: row.verifierSemanticSignature } : {}),
       ...(row.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
       ...(row.exit_code !== undefined ? { exit_code: row.exit_code } : {}),
