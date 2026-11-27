@@ -258,6 +258,8 @@ export type SessionEvent =
       action_index?: number;
       batch_id?: string;
       target_summary?: string;
+      command_digest?: string;
+      foreground_criterion_id?: string;
     })
   | (SessionEventBase & {
       kind: 'tool_completed';
@@ -268,6 +270,10 @@ export type SessionEvent =
       exit_code?: number;
       output_digest?: string;
       verifier_stdout_digest?: string;
+      verifier_command_digest?: string;
+      verifier_passed_case_digests?: string[];
+      command_digest?: string;
+      foreground_effect?: import('./foregroundEffectReceipt.js').ForegroundEffectReceipt;
       action_index?: number;
       batch_id?: string;
       target_summary?: string;
@@ -330,7 +336,7 @@ export type SessionEvent =
       /** Durable revision-bound receipt used to reconstruct verifier state. */
       receipt?: BoundChatVerifierReceipt;
       /** Host-observed point cases bound to this physical attempt. */
-      point_execution?: { targets: string[]; stdout_digest: string; digest: string };
+      point_execution?: { cases: import('./pointVerifierWitness.js').ExecutedPointClaim[]; stdout_digest: string; digest: string };
       failed_execution?: import('./codingLoop/failedVerifierExecution.js').SettledFailedVerifierExecution;
     })
   | (SessionEventBase & {

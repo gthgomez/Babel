@@ -26,7 +26,8 @@ import {
   hasVerifierDependencyTamper,
 } from './verifierIntegrity.js'
 import { acceptanceCriterionPoint, bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
-import { nodePointExecuted, pointVerifierWitness, retainCurrentPointReceipts } from './pointVerifierWitness.js'
+import { nodePointExecuted, pointVerifierWitness, retainCurrentPointReceipts, settledNodePointReport } from './pointVerifierWitness.js'
+import { sha256Canonical } from '../acceptance/canonical.js'
 import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
 import { buildTaskContractV1, freezeTaskContract } from './taskContract.js'
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
@@ -800,7 +801,9 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
   assert.equal(beforeSettlement?.target, undefined)
   const { createHash } = await import('node:crypto')
   recordToolTerminal(sessionEvents, { ...tool, exit_code: 0, content: stdout,
-    verifier_stdout_digest: createHash('sha256').update(stdout).digest('hex') })
+    verifier_stdout_digest: createHash('sha256').update(stdout).digest('hex'),
+    verifier_command_digest: createHash('sha256').update(command).digest('hex'),
+    verifier_passed_case_digests: settledNodePointReport(stdout)! })
   const candidate = candidateShaFromReceipt(root, receipt)
   const persisted = parseSessionEventLog(serializeSessionEventLog(sessionEvents))
   const restored = restorePersistedVerifierEvidence(persisted, [], verifierOwner)
@@ -817,11 +820,15 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
   completed.verifier_stdout_digest = '0'.repeat(64)
   assert.equal(restorePersistedVerifierEvidence(persisted, [], verifierOwner)?.target, undefined)
   completed.verifier_stdout_digest = proof.stdout_digest
+  const observed = completed.verifier_passed_case_digests
+  completed.verifier_passed_case_digests = [sha256Canonical('neighbor case')]
+  assert.equal(restorePersistedVerifierEvidence(persisted, [], verifierOwner)?.target, undefined)
+  if (observed) completed.verifier_passed_case_digests = observed
   event.receipt.additionalPointTargets = [witnesses[1]!.target]
   delete event.point_execution
   const uncorroborated = restorePersistedVerifierEvidence(persisted, [], verifierOwner)
   assert.deepEqual(retainCurrentPointReceipts([uncorroborated!]).map(entry => entry.target), [undefined])
-  event.point_execution = { ...proof, targets: [...proof.targets].reverse() }
+  event.point_execution = { ...proof, cases: [...proof.cases].reverse() }
   const altered = restorePersistedVerifierEvidence(persisted, [], verifierOwner)
   assert.equal(altered?.target, undefined)
   assert.equal(altered?.additionalPointTargets, undefined)

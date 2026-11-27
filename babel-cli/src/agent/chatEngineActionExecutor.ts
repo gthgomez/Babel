@@ -66,7 +66,11 @@ import { acceptToolStop, settlePreventedChatAction } from './chatEngineRunContro
 import { actionRequestFromAction } from '../authority/actionRequest.js';
 import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js';
 import { taskProhibitsCommand } from './taskCommandProhibitions.js';
-import { requiredLocalExecutionDenialMarker, requiredLocalExecutionScope, substitutesRequestedProcessOutput } from './requestedLocalExecution.js';
+import { hasSettledLocalJobSetup, isReadOnlyForegroundQuery, requestedForegroundEffect, requestedProcessScope, requiredLocalExecutionDenialMarker,
+  requiredLocalExecutionScope, substitutesRequestedProcessOutput } from './requestedLocalExecution.js';
+import { canPublishForegroundOutput, foregroundStarted, prepareForegroundEffect, settleForegroundEffect } from './foregroundEffectReceipt.js';
+import { hasRecoveredMutationWitness } from './recoveredMutationWitness.js';
+import { commandsMatchForExecutableBinding } from './taskAcceptanceExecutableBinding.js';
 import { RunStoppedError } from '../runtime/run-control.js';
 import { ProcessTerminationError } from '../sandbox.js';
 import { chatReadToolExecutor } from "./chatReadExecutor.js";
@@ -88,7 +92,7 @@ import {
   executeSubAgentAction,
   type ChatEngineChildExecutionHost,
 } from "./chatEngineChildExecution.js";
-import { executeTool, renderGitDiff, type ToolContext } from "../localTools.js";
+import { executeTool, isInvocationLive, refreshDryRunState, renderGitDiff, type ToolContext } from "../localTools.js";
 import { classifyShellCapability } from "./progressController.js";
 import { executeChatLspAction } from "./chatEngineLspAction.js";
 import { assessMutationEffect } from "./mutationTools.js";
@@ -184,12 +188,21 @@ export class ChatEngineActionExecutor {
     const ownerRunDir = this.host.engineRunDir;
     const turnRuntime = this.host.getTurnRuntimeSnapshot();
     const acceptedOperation = turnRuntime?.effectiveOperation;
+    const taskContract = this.host.parity.liveAuthority?.taskContract;
+    const projectRoot = requireProjectRoot(this.host.options);
+    const foregroundEffect = !turnRuntime?.presentationOnly && taskContract &&
+        (action.type === 'run_command' || action.type === 'test_run')
+      ? requestedForegroundEffect(taskContract, action, projectRoot, this.host.getFrozenForegroundAmendments()) : undefined;
     const taskReadOnlyDenied = deniesReadOnlyTaskAction(action, acceptedOperation,
-      acceptedOperation === "READ_ONLY" ? this.host.getResolvedRequiredVerifiers() : []);
+      acceptedOperation === "READ_ONLY" ? this.host.getResolvedRequiredVerifiers() : [],
+      foregroundEffect !== undefined && isReadOnlyForegroundQuery(foregroundEffect.argv));
     // R0-7: the parent turn at dispatch time. Child mutation evidence must be
     // attributed to the turn that produced it, never to whatever turn is live
     // when the child finally resolves.
     const dispatchTurnId = this.host.parity.turnId;
+    const toolCallId = meta.idempotencyKey ?? this.host._streamNativeToolCallIds[meta.index] ??
+      `tool_call_${this.host._turnIndex}_${meta.index}`;
+    toolContext = { ...toolContext, toolCallId };
     // R0-10: indices restart each round. Match this invocation's index only
     // in rows appended to its dispatch log after this baseline.
     const toolCallLog = this.host.toolCallLog;
@@ -204,9 +217,16 @@ export class ChatEngineActionExecutor {
     let observedToolExecution = false;
 
     try {
+    if (taskContract?.frozen && action.type === 'run_command' && (action.background || action.detached) &&
+        requestedProcessScope(taskContract.provenance.records, action, projectRoot)) {
+      const detail = 'required_foreground_run_command';
+      this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
+      callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
+      return { index: meta.index, observation: 'This required process must run in the foreground. No process started.' };
+    }
     if ((action.type === 'write_file' || action.type === 'str_replace' || action.type === 'apply_patch') && turnRuntime &&
       substitutesRequestedProcessOutput(this.host.parity.liveAuthority?.taskContract.provenance.records ?? [],
-        [turnRuntime.durableObjective ?? turnRuntime.taskText, ...(turnRuntime.amendments ?? [])],
+        [taskContract?.user_request ?? turnRuntime.durableObjective ?? turnRuntime.taskText, ...this.host.getFrozenForegroundAmendments()],
         action, requireProjectRoot(this.host.options))) {
       const detail = 'requested-process-output';
       this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
@@ -830,7 +850,7 @@ export class ChatEngineActionExecutor {
             context: toolContext,
             preset: "workspace_write",
             executor: this.host.options.toolExecutorForTesting ?? defaultToolExecutor,
-            onDispatchAuthorized: recoveryDispatchAuthorization,
+           onDispatchAuthorized: recoveryDispatchAuthorization,
             onBeforeExecutorExecute: () =>
               this.host.persistToolStartedAtExecutorDispatch(action, meta),
             ...(this.host.parity.authoritySession
@@ -1375,7 +1395,6 @@ export class ChatEngineActionExecutor {
       // Standard tool execution via policy gate
       const agentAction = mapChatActionToAgentAction(action);
       const authoritySession = this.host.parity.authoritySession;
-      const taskContract = this.host.parity.liveAuthority?.taskContract;
       const classC = resolveClassCGateDecision({
         executionProfile: this.host.executionProfile,
       });
@@ -1385,6 +1404,25 @@ export class ChatEngineActionExecutor {
             tool, target, toolId, index: meta.index, ownerGeneration, meta, callbacks,
           })
         : null;
+      const effectRoot = frozenVerifierDispatch?.owner?.workspaceRoot;
+      const requestedEffect = taskContract && effectRoot && frozenVerifierDispatch?.identity.cwd === effectRoot &&
+        !this.host.options.toolExecutorForTesting ? foregroundEffect : undefined;
+      if (requestedEffect && action.type === 'test_run') {
+        const detail = 'required_foreground_run_command';
+        this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
+        callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
+        return { index: meta.index, observation: 'Use run_command for the required foreground effect so its execution and effects can be recorded. No process started.' };
+      }
+      const foregroundAlreadyStarted = () => requestedEffect && taskContract &&
+        foregroundStarted(this.host.parity.sessionEvents, taskContract.task_id, requestedEffect.criterionId);
+      if (foregroundAlreadyStarted()) {
+        const detail = 'required_foreground_already_started';
+        this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
+        callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
+        return { index: meta.index, observation: 'The required foreground operation already crossed dispatch for this task. No duplicate process started; use its settled evidence or request reconciliation.' };
+      }
+      let preparedEffect: ReturnType<typeof prepareForegroundEffect>;
+      const foregroundFence = requestedEffect?.outputPath ? this.host.captureForegroundEffectFence() : undefined;
       const pendingResult = executeActionWithPolicy(
         agentAction,
         // Task/profile scope only narrows capability; executor authority,
@@ -1403,12 +1441,9 @@ export class ChatEngineActionExecutor {
               : this.host.executionProfile === "deep"
                 ? "deep"
                 : "chat",
-          completedIdempotencyKeys:
-            this.host.getLiveSession().tools.completed_idempotency_keys,
-          idempotencyKey:
-            meta.idempotencyKey ??
-            this.host._streamNativeToolCallIds[meta.index] ??
-            `tool_call_${this.host._turnIndex}_${meta.index}`,
+           completedIdempotencyKeys:
+             this.host.getLiveSession().tools.completed_idempotency_keys,
+           idempotencyKey: toolCallId,
           ...(this.host.parity.liveAuthority?.taskContract.contract_id
             ? {
                 taskId: this.host.parity.liveAuthority.taskContract.contract_id,
@@ -1420,10 +1455,34 @@ export class ChatEngineActionExecutor {
                   this.host.parity.liveAuthority.taskContract.protected_paths,
               }
             : {}),
-          ...(authoritySession ? { authoritySession } : {}),
-          onDispatchAuthorized: recoveryDispatchAuthorization,
-          onBeforeExecutorExecute: () =>
-            this.host.persistToolStartedAtExecutorDispatch(action, meta),
+           ...(authoritySession ? { authoritySession } : {}),
+           onDispatchAuthorized: () => foregroundAlreadyStarted()
+             ? { allowed: false, message: 'The required foreground operation already crossed dispatch for this task.' }
+             : recoveryDispatchAuthorization(),
+             ...(requestedEffect ? { requestedForegroundEffect: true as const } : {}),
+             ...(acceptedOperation === 'READ_ONLY' && requestedEffect && isReadOnlyForegroundQuery(requestedEffect.argv)
+               ? { readonlyRuntimeQuery: true as const } : {}),
+             ...(requestedEffect?.outputPath && effectRoot && foregroundFence ? { foregroundOutput: {
+               path: requestedEffect.outputPath,
+               publish: write => foregroundFence(() =>
+                 this.host.isSubmissionCurrent(ownerGeneration) && !toolContext.runControl?.stop() &&
+                   canPublishForegroundOutput(effectRoot, preparedEffect) ? write() : undefined),
+               settle: record => foregroundFence(record),
+            } } : {}),
+           onBeforeExecutorExecute: () => {
+             if (requestedEffect) refreshDryRunState();
+             const foreground = isInvocationLive() ? requestedEffect : undefined;
+             if (foreground && effectRoot) preparedEffect = prepareForegroundEffect(effectRoot, foreground);
+             this.host.persistToolStartedAtExecutorDispatch(action, meta, foreground?.criterionId);
+           },
+           ...(taskContract && dispatchTurnId && effectRoot && frozenVerifierDispatch?.foreground &&
+               frozenVerifierDispatch.identity.cwd === effectRoot && !this.host.options.toolExecutorForTesting &&
+               taskContract.verifier_requirements.some(command => commandsMatchForExecutableBinding(command, target))
+             ? { hasRecoveredMutationWitness: () => hasRecoveredMutationWitness({
+                 log: this.host.parity.sessionEvents, runDir: ownerRunDir,
+                 projectRoot: effectRoot, turnId: dispatchTurnId, contract: taskContract,
+               }) }
+             : {}),
           // Privileged ops: lease/PDP decides. Benchmark pair is the only
           // remaining auto-approve exception. TTY is not authority.
           ...this.host.isolationBrokerFlags(),
@@ -1635,6 +1694,9 @@ export class ChatEngineActionExecutor {
         action.type === "apply_patch" && result.mutationPaths?.[0]
           ? result.mutationPaths[0]
           : target;
+      const settledForegroundEffect = preparedEffect && requestedEffect && effectRoot && taskContract
+        ? settleForegroundEffect({ root: effectRoot, command: target, contract: taskContract,
+            effect: requestedEffect, prepared: preparedEffect, result, toolCallId }) : undefined;
 
       let executionDenial: string | undefined;
       if (result.policyDecision === 'deny' && result.policyBlocked && result.preDispatchNoEffect === true &&
@@ -1645,12 +1707,17 @@ export class ChatEngineActionExecutor {
             ? 'missing_capability'
             : 'unresolved';
         obsParts.push(`[BABEL POLICY] DENY_MISSING_AUTHORITY (${authority}): no process was dispatched and no approval applied.`);
-        const requiredExecution = acceptedOperation !== undefined && acceptedOperation !== 'READ_ONLY' && taskContract?.frozen
+        const requiredExecution = taskContract?.frozen &&
+          (foregroundEffect || (acceptedOperation !== undefined && acceptedOperation !== 'READ_ONLY'))
           ? requiredLocalExecutionScope(taskContract.provenance.records, action, requireProjectRoot(this.host.options))
           : null;
         if (requiredExecution) {
           // Additive amendments retain older provenance, but may add independent work.
-          executionDenial = requiredLocalExecutionDenialMarker(turnRuntime?.amendments?.length ? 'mixed' : requiredExecution, authority);
+          const scope = turnRuntime?.amendments?.length ? 'mixed'
+            : requiredExecution === 'mixed' && foregroundEffect && taskContract &&
+              hasSettledLocalJobSetup({ contract: taskContract, effect: foregroundEffect, root: projectRoot, log: toolCallLog })
+              ? 'standalone' : requiredExecution;
+          executionDenial = requiredLocalExecutionDenialMarker(scope, authority);
           obsParts.push('[BABEL ADVISORY] This denied command is required. Continue independent work; a substitute artifact does not establish that the command ran.');
         }
       }
@@ -1673,6 +1740,7 @@ export class ChatEngineActionExecutor {
             lastResult.exit_code !== undefined && lastResult.launch_failure === undefined && lastResult.process_termination === 'exited',
         } : {}),
         ...(verifierSemanticSignature ? { verifierSemanticSignature } : {}),
+        ...(settledForegroundEffect ? { foregroundEffect: settledForegroundEffect } : {}),
         ...(readRevisionHash && !result.policyBlocked && result.results.length > 0 &&
           result.results.every(entry => entry.exit_code === 0 && !entry.denial) && !toolError
           ? { read_revision_hash: readRevisionHash }

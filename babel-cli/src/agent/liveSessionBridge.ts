@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 import {normalizeChatExecutionScope} from './chatExecutionScope.js';
 import {inferFreshTaskAcceptance} from './taskAcceptanceMeaning.js';
 import { taskProhibitsCommand } from './taskCommandProhibitions.js';
-import { requestedLocalExecutionAcceptance } from './requestedLocalExecution.js';
+import { hasRequestedLocalExecution, requestedLocalExecutionAcceptance } from './requestedLocalExecution.js';
 import {
   bindExecutableVerifiersToTaskAcceptance,
   mergeTrustedVerifierCommands,
@@ -393,8 +393,8 @@ export function resolveLiveSessionAuthority(input: {
   ])].filter(command => !taskProhibitsCommand(meaning.activeProse, command));
   const amendmentInputRecords = input.projectRoot && scope.kind === 'project'
     ? requiredVerifierCommands.flatMap(command => {
-        const ref = snapshotPointVerifierInputs(input.projectRoot!, command, protectedPaths)?.ref;
-        return ref ? [{ kind: 'derived_acceptance' as const, ref }] : [];
+        const inputs = snapshotPointVerifierInputs(input.projectRoot!, command, protectedPaths);
+        return (inputs?.caseRefs ?? []).map(ref => ({ kind: 'derived_acceptance' as const, ref }));
       })
     : [];
   // Only fresh project contracts acquire these criteria. Retained contracts
@@ -406,6 +406,11 @@ export function resolveLiveSessionAuthority(input: {
         existingCriteria: meaning.criteria,
       })
     : { criteria: [], provenance: [] };
+  const replacesUnresolvedCommandMeaning = requestedExecution.criteria.length === 1 &&
+    hasRequestedLocalExecution(requestedExecution.provenance, 'standalone') &&
+    (meaning.unresolved || (meaning.criteria.length === 1 &&
+      meaning.criteria[0]?.description.trim() === input.task.trim() &&
+      meaning.criteria[0].verification.verifier_id.startsWith('meaning:')));
   const contract = freezeTaskContract(
     buildTaskContractV1({
       mode: input.mode,
@@ -413,7 +418,7 @@ export function resolveLiveSessionAuthority(input: {
       user_request: input.task,
       task_class:
         (input.taskClass as TaskContractV1['task_class'] | undefined) ?? 'unknown',
-      acceptance: [...meaning.criteria, ...requestedExecution.criteria],
+       acceptance: [...(replacesUnresolvedCommandMeaning ? [] : meaning.criteria), ...requestedExecution.criteria],
       non_goals: ['Do not expand scope beyond the user request'],
       protected_paths: [...protectedPaths],
       verifier_requirements: requiredVerifierCommands,

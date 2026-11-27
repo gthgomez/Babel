@@ -8,6 +8,25 @@ import type { ObjectiveAuthorityRecord, ObjectiveAttempt } from './taskObjective
 import type { ThreadEventLog, ThreadEvent } from './threadEventLog.js'
 import type { SessionEventLog } from './sessionEvents.js'
 
+/** Return the original accepted text for frozen foreground obligations. */
+export function frozenForegroundAmendmentSources(
+  lifecycle: { attempts: readonly ObjectiveAttempt[] } | undefined,
+  history: import('./taskAcceptanceRevision.js').TaskModeHistoryV2 | undefined,
+  thread: ThreadEventLog,
+): string[] {
+  if (!history || !lifecycle) return []
+  const attempts = new Map(lifecycle.attempts.map(attempt => [attempt.attempt_id, attempt]))
+  const starts = new Map(thread.events.flatMap(event => event.kind === 'turn_started' && !event.context_copy
+    ? [[event.turn_id, event.task] as const] : []))
+  return history.edges.flatMap(edge => {
+    if (edge.kind !== 'acceptance' || !edge.descriptor.requested_execution_refs?.length) return []
+    const attempt = attempts.get(edge.descriptor.source_attempt_id)
+    const text = attempt && starts.get(attempt.turn_id)
+    return text && attempt.task_id === edge.descriptor.task_id && sha256Canonical(text) === edge.descriptor.text_digest
+      ? [text] : []
+  })
+}
+
 /** Semantic revisions require their actual, uniquely accepted canonical input. */
 export function assertCanonicalAcceptanceAmendments(
   objectives: readonly ObjectiveAuthorityRecord[],

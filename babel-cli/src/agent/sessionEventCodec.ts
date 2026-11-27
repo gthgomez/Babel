@@ -1,5 +1,6 @@
 import { validFailedVerifierExecution } from './codingLoop/failedVerifierExecution.js';
 import { join } from 'node:path';
+import { z } from 'zod';
 import {assertTaskAttemptBinding} from './taskObjectiveLifecycle.js';
 import { type ToolEffectClass } from '../executor/contracts.js';
 import { createBdnsObservationBus } from '../diagnostics/bdns/observationBus.js';
@@ -33,6 +34,18 @@ import {
   assertRecoveryReconciliationCausality,
   assertSessionEventToolLifecycleCausality,
 } from './sessionEventCausality.js';
+
+const hash = z.string().regex(/^[a-f0-9]{64}$/);
+const foregroundEffectReceipt = z.object({
+  contract_hash: z.string().min(1), task_id: z.string().min(1), criterion_id: z.string().min(1),
+  command_digest: hash, argv: z.array(z.string()).min(1), cwd: z.literal('.'),
+  operation_id: z.string().min(1), policy_decision_id: z.string().min(1),
+  input_hashes: z.record(z.string(), hash),
+  output: z.object({ path: z.string().min(1), before: hash.nullable(), after: hash,
+    source: z.literal('child_stdout').optional() }).optional(),
+  pre_revision: z.string().regex(/^[a-f0-9]{32}$/),
+  post_revision: z.string().regex(/^[a-f0-9]{32}$/), stdout_digest: hash,
+});
 
 export class SessionEventLogRestoreError extends Error {
   readonly code: SessionEventLogRestoreCode
@@ -175,6 +188,31 @@ export function parseSessionEventLog(
     }
     if (ev.target_summary !== undefined && typeof ev.target_summary !== 'string') {
       throw new Error(`Invalid session event at line ${index + 1}: target_summary must be a string`)
+    }
+    if (ev.preDispatchNoEffect !== undefined && (ev.preDispatchNoEffect !== true ||
+        (ev.kind !== 'tool_cancelled' && ev.kind !== 'tool_completed' && ev.kind !== 'tool_failed'))) {
+      throw new Error(`Invalid session event at line ${index + 1}: pre-dispatch settlement is invalid`)
+    }
+    if (ev.command_digest !== undefined &&
+        ((ev.kind !== 'tool_started' && ev.kind !== 'tool_completed') || !hash.safeParse(ev.command_digest).success)) {
+      throw new Error(`Invalid session event at line ${index + 1}: command identity is invalid`)
+    }
+    if (ev.foreground_criterion_id !== undefined && (ev.kind !== 'tool_started' || ev.command_digest === undefined ||
+        typeof ev.foreground_criterion_id !== 'string' || ev.foreground_criterion_id.length === 0)) {
+      throw new Error(`Invalid session event at line ${index + 1}: foreground dispatch is invalid`)
+    }
+    if (ev.foreground_effect !== undefined && (ev.kind !== 'tool_completed' || ev.command_digest === undefined ||
+        !foregroundEffectReceipt.safeParse(ev.foreground_effect).success)) {
+      throw new Error(`Invalid session event at line ${index + 1}: foreground settlement is invalid`)
+    }
+    for (const key of ['verifier_stdout_digest', 'verifier_command_digest'] as const) {
+      if (ev[key] !== undefined && (ev.kind !== 'tool_completed' || !hash.safeParse(ev[key]).success))
+        throw new Error(`Invalid session event at line ${index + 1}: ${key} is invalid`)
+    }
+    if (ev.verifier_passed_case_digests !== undefined && (ev.kind !== 'tool_completed' ||
+        ev.verifier_stdout_digest === undefined || ev.verifier_command_digest === undefined ||
+        !z.array(hash).safeParse(ev.verifier_passed_case_digests).success)) {
+      throw new Error(`Invalid session event at line ${index + 1}: verifier case identities are invalid`)
     }
     if (ev.reconciliation !== undefined && (ev.kind !== 'tool_cancelled' || !reconciliationValues.includes(ev.reconciliation as InterruptedToolRecovery['reconciliation']))) {
       throw new Error(`Invalid session event at line ${index + 1}: reconciliation is invalid`)

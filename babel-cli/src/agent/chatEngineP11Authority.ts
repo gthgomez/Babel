@@ -793,9 +793,8 @@ export class ChatEngineP11Authority {
     else delete this.host.parity.authorizedObservationIds;
   }
 
-  private isSettledObservationFromCurrentTask(observation: ObservationRefV1): boolean {
+  private isSettledObservationForTask(observation: ObservationRefV1, taskId: string | undefined): boolean {
     const { invocation } = observation;
-    const taskId = this.host.parity.liveAuthority?.taskContract.task_id;
     if (
       invocation.run_id !== this.host.engineRunId ||
       invocation.task_id !== taskId ||
@@ -877,11 +876,26 @@ export class ChatEngineP11Authority {
         const checkpoint = JSON.parse(readFileSync(checkpointPath, "utf8")) as ContextCheckpoint;
         const threadId = this.host.parity.eventLog.thread_id;
         observationGovernedHistory ||= checkpoint?.schema_version === 2 && checkpoint.threadId === threadId;
+        const authority = this.host.parity.liveAuthority;
+        const contract = checkpoint?.taskContractReference;
+        const predecessor = authority?.taskObjectiveLifecycle?.objectives
+          .flatMap(objective => objective.taskModeHistory?.revisions ?? [objective.taskContract])
+          .find(revision => revision.contract_hash === contract && revision.task_id !== authority.taskContract.task_id);
+        // A different, durably retained objective no longer owns the active
+        // membership. Check its manifests against past physical settlements,
+        // solely to recognize obsolete state; never recover those captures.
+        const historicalIds = predecessor && Array.isArray(checkpoint?.observation_manifest) &&
+          checkpoint.observation_manifest.every(ref => this.isSettledObservationForTask(ref, predecessor.task_id))
+          ? checkpoint.observation_manifest.map(ref => ref.observation_id)
+          : undefined;
+        const currentOwner = this.host.parity.admissionStore?.readOwner(threadId) ?? null;
+        const supersededOwner = currentOwner !== null && checkpoint?.owner?.threadId === threadId &&
+          Number.isSafeInteger(checkpoint.owner.generation) && checkpoint.owner.generation < currentOwner.generation;
         const coldResume = validateContextCheckpoint(checkpoint, {
           expectedThreadId: threadId,
-          currentOwner: this.host.parity.admissionStore?.readOwner(threadId) ?? null,
+          currentOwner,
           requireInstalledLineage: true,
-          authorizedObservationIds,
+          authorizedObservationIds: historicalIds ?? authorizedObservationIds,
           lineageEvidence: {
             threadEvents: this.host.parity.eventLog.events,
             sessionEvents: this.host.parity.sessionEvents.events,
@@ -892,7 +906,10 @@ export class ChatEngineP11Authority {
           // The validator identifies newer committed lineage. An empty
           // checkpoint manifest can also legitimately predate a durable tool
           // capture, but the tail below must prove every newly authorized ref.
+          // The newer durable owner can rebuild from settlements. Never load
+          // its predecessor's payload, or tolerate a wrong same-generation token.
           const superseded = coldResume.reasons.every(reason => reason === 'lineage_superseded' ||
+            (reason === 'stale_owner' && supersededOwner) ||
             (reason === 'observation_manifest_incomplete' &&
               Array.isArray(checkpoint?.observation_manifest) && checkpoint.observation_manifest.length === 0 &&
               authorizedObservationIds.length > 0));
@@ -901,11 +918,9 @@ export class ChatEngineP11Authority {
             return { applied: false, issues };
           }
         }
-        const authority = this.host.parity.liveAuthority;
-        const contract = checkpoint.taskContractReference;
         if (contract === authority?.taskContract.contract_hash) {
           if (coldResume.status === 'valid') validCheckpoint = checkpoint;
-        } else if (authority?.taskModeHistory?.revisions.some(revision => revision.contract_hash === contract) ||
+        } else if (historicalIds !== undefined || authority?.taskModeHistory?.revisions.some(revision => revision.contract_hash === contract) ||
             authority?.taskObjectiveLifecycle?.objectives.some(objective =>
               objective.taskContract.contract_hash === contract ||
               objective.taskModeHistory?.revisions.some(revision => revision.contract_hash === contract))) {
@@ -944,7 +959,9 @@ export class ChatEngineP11Authority {
         });
         if (resolved.status !== 'resolved') {
           recoveryIssues.push(`observation ${observationId} unavailable: ${resolved.reason}`);
-        } else if (!checkpointIds.has(observationId) && !this.isSettledObservationFromCurrentTask(resolved.observation)) {
+        } else if (!checkpointIds.has(observationId) && !this.isSettledObservationForTask(
+          resolved.observation, this.host.parity.liveAuthority?.taskContract.task_id,
+        )) {
           recoveryIssues.push(`observation ${observationId} has no matching durable tool settlement in the current task`);
         } else {
           recovered.push(resolved.observation);

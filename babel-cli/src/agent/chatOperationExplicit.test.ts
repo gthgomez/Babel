@@ -180,6 +180,26 @@ test('read-only verifier schemas and legacy manual expose only exact foreground 
   assert.doesNotMatch(prompt, /background\?|detached\?/)
 })
 
+test('a task-bound foreground effect is advertised only as run_command in read-only chat', () => {
+  const definitions = buildChatToolDefinitions()
+  const policy = {
+    operation: 'READ_ONLY' as const,
+    foregroundCommands: ['node check.mjs'],
+    env: {},
+  }
+  const tools = availableChatTools(definitions, policy)
+  const command = tools.find(tool => tool.function.name === 'run_command')
+  assert.ok(command)
+  assert.ok(!tools.some(tool => ['test_run', 'write_file', 'str_replace', 'apply_patch'].includes(tool.function.name)))
+  const parameters = command.function.parameters as { properties: Record<string, { enum?: string[] }> }
+  assert.deepEqual(parameters.properties['command']?.enum, ['node check.mjs'])
+  const prompt = buildChatSystemPrompt({ projectRoot: '.', availableToolDefinitions: tools })
+  assert.match(prompt, /command="node check\.mjs"/)
+  assert.doesNotMatch(prompt, /background\?|detached\?/)
+  const ambient = availableChatTools(definitions, { ...policy, env: { BABEL_READ_ONLY: 'true' } })
+  assert.ok(!ambient.some(tool => tool.function.name === 'run_command'))
+})
+
 test('no-change completion requires real inspection and never certifies a patch', () => {
   const read: GateToolLogEntry = { tool: 'read_file', target: 'fixture.ts', detail: '1 line: export const answer = 42' }
   const gate = (log: GateToolLogEntry[], task = 'Fix the fixture.', extra = {}) => evaluateCompletionGateForEngine({

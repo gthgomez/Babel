@@ -8,10 +8,11 @@ import type { ChatToolAction } from './chatToolDefinitions.js'
 import { parseUnifiedDiff } from './codingLoop/patchApply.js'
 import { inferFreshTaskAcceptance, type AcceptanceMeaningSource } from './taskAcceptanceMeaning.js'
 import { taskProhibitsCommand, v3TaskProhibitsCommand } from './taskCommandProhibitions.js'
-import type { AcceptanceRequirementV1, TaskContractProvenanceRecord } from './taskContract.js'
+import type { AcceptanceRequirementV1, TaskContractProvenanceRecord, TaskContractV1 } from './taskContract.js'
 
 const REF_PREFIX = 'babel:requested-local-execution'
 const DENIAL_PREFIX = 'required_local_execution_denied'
+const DESCRIPTION_PREFIX = 'Requested foreground effect: '
 export const REQUESTED_LOCAL_EXECUTION_KIND = 'requested_local_execution'
 const SCRIPT_PATH = String.raw`(?:\./)?[\p{L}\p{N}_-][\p{L}\p{N}_.\/-]*\.(?:py|[cm]?js)`
 const FILE_PATH = String.raw`(?:\./)?[\p{L}\p{N}_-][\p{L}\p{N}_.\/-]*`
@@ -84,7 +85,7 @@ export function requestedLocalExecutionAcceptance(input: {
       .filter(argv => !prohibits(input.activeProse, formatArgvAsCommand(argv)))
     if (argvAlternatives.length === 0) continue
     const operations = argvAlternatives.map(operationDigest)
-    const baseDescription = `Requested foreground effect: ${redactSecrets(clause)}`
+    const baseDescription = `${DESCRIPTION_PREFIX}${redactSecrets(clause)}`
     if (input.amendment && input.existingCriteria.some(item =>
       item.required && item.verification.kind === REQUESTED_LOCAL_EXECUTION_KIND && item.description === baseDescription)) continue
     for (const digest of operations) refs.add(executionRef(2, scope, digest))
@@ -120,9 +121,88 @@ export function isRequestedOperationAmendmentRef(ref: string): boolean {
 }
 
 /** Required foreground execution can already be covered by an exact verifier criterion. */
-export function hasRequestedLocalExecution(records: readonly TaskContractProvenanceRecord[]): boolean {
+export function hasRequestedLocalExecution(
+  records: readonly TaskContractProvenanceRecord[], scope?: ExecutionScope,
+): boolean {
   return records.some(record => record.kind === 'derived_acceptance' &&
-    /^babel:requested-local-execution:v2:(?:mixed|standalone):[0-9a-f]{64}$/.test(record.ref))
+    /^babel:requested-local-execution:v2:(?:mixed|standalone):[0-9a-f]{64}$/.test(record.ref) &&
+    (!scope || record.ref.startsWith(`${REF_PREFIX}:v2:${scope}:`)))
+}
+
+export interface RequestedForegroundEffect {
+  criterionId: string
+  argv: string[]
+  inputPaths: string[]
+  outputPath?: string
+}
+
+/** This native runtime query does not evaluate project code or write workspace files. */
+export function isReadOnlyForegroundQuery(argv: readonly string[]): boolean {
+  return argv.length === 2 && argv[0] === 'node' && argv[1] === '--version'
+}
+
+/** Resolve literal commands from the frozen criterion and its task-authored provenance. */
+export function frozenExactForegroundCommands(
+  contract: TaskContractV1, amendments: readonly string[] = [],
+): Map<string, RequestedForegroundEffect> {
+  const commands = new Map<string, RequestedForegroundEffect>()
+  if (!contract.frozen) return commands
+  const ambiguous = new Set<string>()
+  const records = new Set(contract.provenance.records.filter(record => record.kind === 'derived_acceptance')
+    .map(record => record.ref))
+  const activeProse = inferFreshTaskAcceptance(contract.user_request).activeProse
+  const inputs = new Map([contract.user_request, ...amendments].map((request, index) => {
+    const clauses = foregroundTaskClauses(inferFreshTaskAcceptance(request).activeProse, index > 0)
+    const scripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
+    return [sha256Canonical(request), { clauses, scripts }] as const
+  }))
+  for (const criterion of contract.acceptance) {
+    if (!criterion.required || criterion.verification.kind !== REQUESTED_LOCAL_EXECUTION_KIND ||
+        criterion.verification.working_directory !== '.' || !criterion.description.startsWith(DESCRIPTION_PREFIX)) continue
+    const clause = criterion.description.slice(DESCRIPTION_PREFIX.length)
+    const clauseDigest = sha256Canonical(clause)
+    const claim = [...records].filter(ref => ref.startsWith(`${REF_PREFIX}:criterion:v1:`) &&
+      ref.endsWith(`:${clauseDigest}:${criterion.id}`))
+    if (claim.length !== 1) continue
+    const sourceDigest = claim[0]!.split(':')[4]
+    if (!sourceDigest || !/^[a-f0-9]{64}$/.test(sourceDigest)) continue
+    const exact = parseForegroundCommandClause(clause)
+    const source = inputs.get(sourceDigest)
+    if (!source?.clauses.includes(clause)) continue
+    const sourceProse = [...activeProse, ...source.clauses]
+    const candidates = (exact ? [exact] : jobArgv(clause, source.scripts)).filter(argv => {
+      const command = formatArgvAsCommand(argv)
+      return redactSecrets(command) === command && !taskProhibitsCommand(sourceProse, command)
+    })
+    const operations = candidates.map(operationDigest)
+    const identity = sha256Canonical({ sourceDigest, clauseDigest, operations })
+    if (criterion.id !== `acceptance:requested-local-execution:${identity.slice(0, 32)}` ||
+        criterion.verification.verifier_id !== `requested-local-execution:${identity}`) continue
+    for (const argv of candidates) {
+      const digest = operationDigest(argv)
+      if (!records.has(executionRef(2, 'mixed', digest)) && !records.has(executionRef(2, 'standalone', digest))) continue
+      const command = formatArgvAsCommand(argv)
+      const script = argv[1]
+      const inputPaths = script && new RegExp(`^${SCRIPT_PATH}$`, 'u').test(script) ? [script] : []
+      const outputPath = exact ? undefined : argv[3]
+      if (outputPath) inputPaths.push(argv[2]!)
+      if (commands.has(command)) ambiguous.add(command)
+      commands.set(command, { criterionId: criterion.id, argv, inputPaths, ...(outputPath ? { outputPath } : {}) })
+    }
+  }
+  for (const command of ambiguous) commands.delete(command)
+  return commands
+}
+
+/** Resolve a frozen exact process or the initial objective's declared file effect for receipt capture. */
+export function requestedForegroundEffect(
+  contract: TaskContractV1, action: LocalRun, projectRoot: string, amendments: readonly string[] = [],
+): RequestedForegroundEffect | undefined {
+  if (!contract.frozen || redactSecrets(action.command) !== action.command ||
+      !requiredLocalExecutionScope(contract.provenance.records, action, projectRoot)) return
+  const argv = parseSingleProcessArgv(action.command)
+  if (!argv) return
+  return frozenExactForegroundCommands(contract, amendments).get(formatArgvAsCommand(argv))
 }
 
 /** Match a foreground proposal to an admission-time operation identity, for settlement only. */
@@ -132,6 +212,15 @@ export function requiredLocalExecutionScope(
   projectRoot: string,
 ): ExecutionScope | null {
   if (action.type === 'run_command' && (action.background || action.detached)) return null
+  return requestedProcessScope(records, action, projectRoot)
+}
+
+/** Match a task-required process independently of a proposed foreground/background lane. */
+export function requestedProcessScope(
+  records: readonly TaskContractProvenanceRecord[],
+  action: LocalRun,
+  projectRoot: string,
+): ExecutionScope | null {
   if (resolve(projectRoot, action.cwd ?? '.') !== resolve(projectRoot)) return null
   const argv = parseSingleProcessArgv(action.command)
   if (!argv) return null
@@ -210,6 +299,50 @@ interface ExecutionLogRow {
   exit_code?: number | undefined
   simulated?: boolean | undefined
   error?: string | undefined
+}
+
+/** Finish a blocked transformation only when the request's independent setup already settled. */
+export function hasSettledLocalJobSetup(input: {
+  contract: TaskContractV1
+  effect: RequestedForegroundEffect
+  root: string
+  log: readonly (ExecutionLogRow & { effect_status?: string; mutation_paths?: readonly string[] })[]
+}): boolean {
+  const { contract, effect, root, log } = input
+  const [, script, source, destination] = effect.argv
+  if (!effect.outputPath || !script || !source || destination !== effect.outputPath ||
+      contract.verifier_requirements.length > 0) return false
+  const clauses = foregroundTaskClauses(inferFreshTaskAcceptance(contract.user_request).activeProse)
+  const declaration = clauses[0]
+  const declared = declaration && DECLARED_SCRIPT.exec(declaration)
+  // Other prose remains eligible for independent work. These forms describe
+  // the declared script, its output format, or an input to leave unchanged.
+  if (!declaration || !declared || declared[1] !== script ||
+      !/^,\s+an?\s+[\w -]*\bCLI taking an input [\w -]+ file and an output [\w -]+ path$/i
+        .test(declaration.slice(declared[0].length))) return false
+  if (clauses.filter(clause => jobArgv(clause, [script]).some(args =>
+    operationDigest(args) === operationDigest(effect.argv))).length !== 1) return false
+  if (clauses.slice(1).some(clause => {
+    if (LOCAL_JOB.test(clause)) {
+      const suffix = /\s+and\s+leave\s+both\b.*$/i.exec(clause)?.[0]
+      return (suffix !== undefined && !/^\s+and leave both the (?:script|exporter|program|CLI) and (?:the )?generated [\w -]+ in the (?:repository|project|workspace)$/i.test(suffix)) ||
+        !jobArgv(clause, [script]).some(args => operationDigest(args) === operationDigest(effect.argv))
+    }
+    if (/^It (?:should|must) (?:read|export|convert|transform|write)\b[^;!?]+$/i.test(clause) &&
+        !/\b(?:and|also|then|or)\s+(?:add|create|edit|update|write|run|check|review|verify|test|fix|repair|remove)\b/i.test(clause)) return false
+    if (/^Use (?:UTF-\d+|ASCII) and (?:LF|CRLF) line endings$/i.test(clause)) return false
+    if (/^Keep [\p{L}\p{N} ,_-]+ intact(?: using [\p{L}\p{N} -]+)?$/iu.test(clause)) return false
+    if (/^Show the verification you performed$/i.test(clause)) return false
+    const preserved = /^Leave\s+`?([^`\s]+)`?\s+unchanged$/i.exec(clause)?.[1]
+    return preserved !== source
+  })) return false
+  const required = contract.acceptance.filter(item => item.required && item.id !== effect.criterionId)
+  if (required.some(item => item.description !== contract.user_request ||
+      !item.verification.verifier_id.startsWith('meaning:'))) return false
+  const writes = log.filter(row => row.effect_status === 'confirmed_change' && !row.error)
+  return writes.length > 0 && writes.every(row => row.tool === 'write_file' &&
+    (row.mutation_paths?.length ?? 0) === 1 &&
+    relative(resolve(root, script), resolve(root, row.mutation_paths![0]!)) === '')
 }
 
 /** Report a remaining hard denial after its batch, or at completion after independent work. */

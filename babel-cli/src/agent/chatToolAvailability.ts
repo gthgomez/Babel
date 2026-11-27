@@ -1,6 +1,6 @@
 import type { ToolDefinition } from '../runners/base.js'
 import type { TaskOperation } from '../config/chatTaskClass.js'
-import { filterChatToolNamesForTask } from './chatReadOnly.js'
+import { filterChatToolNamesForTask, readOnlyTaskShellCommands } from './chatReadOnly.js'
 import { canUseChatLsp } from './chatLspPolicy.js'
 import type {ChatExecutionScope} from './chatExecutionScope.js'
 
@@ -8,6 +8,7 @@ export interface ChatToolAvailability {
   executionScope?: ChatExecutionScope | undefined
   operation?: TaskOperation | undefined
   requiredVerifiers?: readonly string[] | undefined
+  foregroundCommands?: readonly string[] | undefined
   hostFallbackAllowed?: boolean | undefined
   env?: NodeJS.ProcessEnv | undefined
 }
@@ -16,7 +17,9 @@ export interface ChatToolAvailability {
 export function availableChatToolNames(names: readonly string[], policy: ChatToolAvailability): string[] {
   if(policy.executionScope?.kind==='conversation')return []
   const env = policy.env ?? process.env
-  const taskNames = filterChatToolNamesForTask(names, policy.operation, policy.requiredVerifiers ?? [], env)
+  const taskNames = filterChatToolNamesForTask(
+    names, policy.operation, policy.requiredVerifiers ?? [], env, policy.foregroundCommands,
+  )
   const allowLsp = canUseChatLsp({ hostFallbackAllowed: policy.hostFallbackAllowed === true,
     ...(policy.operation ? { operation: policy.operation } : {}), env })
   return [...new Set(taskNames)].filter(name => name !== 'lsp' || allowLsp)
@@ -30,9 +33,10 @@ export function availableChatTools(tools: ToolDefinition[], policy: ChatToolAvai
     const parameters = tool.function.parameters as { properties?: Record<string, unknown> }
     const properties = Object.fromEntries(Object.entries(parameters.properties ?? {})
       .filter(([name]) => name !== 'background' && name !== 'detached'))
-    properties['command'] = { type: 'string', enum: [...new Set(policy.requiredVerifiers?.map(command => command.trim()) ?? [])] }
+    const commands = readOnlyTaskShellCommands(tool.function.name, policy.requiredVerifiers ?? [], policy.foregroundCommands)
+    properties['command'] = { type: 'string', enum: [...new Set(commands.map(command => command.trim()))] }
     return { ...tool, function: { ...tool.function,
-      description: 'Run one of the required verifier commands in the foreground within the governed project scope.',
+      description: 'Run an exact command required by the task in the foreground within the governed project scope.',
       parameters: { ...tool.function.parameters, properties, additionalProperties: false },
     } }
   })

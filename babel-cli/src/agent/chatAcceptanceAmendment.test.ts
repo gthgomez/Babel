@@ -19,7 +19,7 @@ import {ACCEPTANCE_MEANING_REF_V6,acceptanceMeaningRefForVersion,isAcceptanceMea
 import {validateTaskModeCompanion} from './taskModeRevision.js'
 import {createWorkingState,type WorkingState} from './codingLoop/workingState.js'
 import {assertObjectiveLifecycle} from './taskObjectiveLifecycle.js'
-import { REQUESTED_LOCAL_EXECUTION_KIND, requiredLocalExecutionScope } from './requestedLocalExecution.js'
+import { REQUESTED_LOCAL_EXECUTION_KIND, requestedForegroundEffect, requiredLocalExecutionScope } from './requestedLocalExecution.js'
 
 const request = 'Update fixture behavior.\nAcceptance criteria:\n- Preserve the existing API.'
 const addition = 'Also require:\n- The task survives restart.'
@@ -174,16 +174,32 @@ test('an amended point binds the unchanged predecessor verifier and replays from
     assert.deepEqual(current.protected_paths, previous.protected_paths)
     assert.deepEqual(current.authority, previous.authority)
     const event = engine.getParityEventLog().events.find(item => item.kind === 'task_acceptance_amended')
-    assert.equal(event?.descriptor.schema_version, 5)
+    assert.equal(event?.descriptor.schema_version, 6)
     const recorded = event?.descriptor.point_bindings?.[0]
-    assert.ok(recorded)
+    assert.ok(recorded && 'case' in recorded)
     const otherPoint = addFrozenPoint.replace('add(2, 3) returns 5', 'add(5, 7) returns 12')
     const inferred = projectTaskAcceptanceRevision(previous, otherPoint, 'add', 4).added[0]!
-    const reassigned = projectTaskAcceptanceRevision(previous, otherPoint, 'add', 5, [{
+    const reassigned = projectTaskAcceptanceRevision(previous, otherPoint, 'add', 6, [{
       ...recorded, criterion_id: inferred.id,
     }])
     assert.notEqual(reassigned.added[0]?.verification.target, requirement.verification.target,
       'a case recorded for one point cannot be borrowed to prove a different point')
+    assert.equal(reassigned.unresolved, true)
+    const invented = projectTaskAcceptanceRevision(previous, addFrozenPoint, 'add', 6, [{
+      ...recorded, case: { ...recorded.case, test: 'invented case' },
+    }])
+    assert.equal(invented.unresolved, true)
+    assert.match(invented.added[0]!.verification.verifier_id, /^meaning:/)
+    const inputRefSegments = recorded.input_ref.split(':')
+    inputRefSegments.splice(4, 1)
+    const historicalBinding = { criterion_id: recorded.criterion_id, command: recorded.command,
+      input_ref: inputRefSegments.join(':'), target: requirement.verification.target! }
+    const historicalPredecessor = { ...previous, provenance: { ...previous.provenance,
+      records: [...previous.provenance.records.filter(record => !record.ref.startsWith('babel:point-verifier-case:')),
+        { kind: 'derived_acceptance' as const, ref: historicalBinding.input_ref }] } }
+    const historical = projectTaskAcceptanceRevision(historicalPredecessor, addFrozenPoint, 'add', 5, [historicalBinding])
+    assert.equal(historical.unresolved, false)
+    assert.equal(historical.added[0]?.verification.target, requirement.verification.target)
     // Replay must reconstruct authority without reading today's potentially changed test.
     writeFileSync(join(root, 'math.test.mjs'), 'changed after admission\n')
     assert.deepEqual(loadLiveSessionAuthorityStrict(runDir).taskContract.acceptance, current.acceptance)
@@ -195,6 +211,21 @@ test('an edited predecessor verifier cannot bind an amended point', () =>
     engine.admitUserSubmission({ userInput: addFrozenPoint }, route)
     assert.match(engine.getTaskContract()!.acceptance.at(-1)!.verification.verifier_id, /^meaning:/)
   }, 'chat', false, initialPointAmendmentTask, ['npm test'], preparePointInputs))
+
+test('a declared output added by amendment retains its original source and exact process identity', () =>
+  fixture((engine, runDir, root) => {
+    const amendment = 'Also run `check.mjs` to create `result.txt` from `input.txt`.  '
+    engine.admitUserSubmission({ userInput: amendment }, route)
+    const current = loadLiveSessionAuthorityStrict(runDir).taskContract
+    const command = { type: 'run_command' as const, command: 'node check.mjs input.txt result.txt' }
+    const sources = engine.getFrozenForegroundAmendments()
+    assert.deepEqual(sources, [amendment])
+    assert.equal(requestedForegroundEffect(current, command, root), undefined)
+    const effect = requestedForegroundEffect(current, command, root, sources)
+    assert.equal(effect?.outputPath, 'result.txt')
+    assert.deepEqual(effect?.inputPaths, ['check.mjs', 'input.txt'])
+    assert.equal(requestedForegroundEffect(current, { ...command, cwd: 'different' }, root, sources), undefined)
+  }))
 
 test('a requested operation amendment adds a source-linked effect without changing frozen policy', () => {
   const originalCommand = 'node tools/build-index.mjs'

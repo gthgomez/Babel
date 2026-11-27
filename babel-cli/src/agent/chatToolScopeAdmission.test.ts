@@ -91,4 +91,11 @@ if(!isSyntheticProviderFixtureReady()){
     assert.equal(readOnlyExecutionConflictReport({...input,presentationOnly:true}),null)
     assert.equal(readOnlyExecutionConflictReport({...input,operation:'HYBRID'}),null)
   })
+  test('read-only preflight retains only the exact frozen no-output command',()=>{
+    const input={taskText:'Run `node check.mjs`.',operation:'READ_ONLY' as const,executionProfile:'chat'}
+    assert.equal(readOnlyExecutionConflictReport({...input,foregroundCommands:['node check.mjs']}),null)
+    assert.ok(readOnlyExecutionConflictReport({...input,foregroundCommands:['node another.mjs']}))
+    assert.ok(readOnlyExecutionConflictReport({...input,taskText:'Run `node check.mjs` to create result.csv.',
+      foregroundCommands:['node check.mjs']}))
+  })
 }

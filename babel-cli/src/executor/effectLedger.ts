@@ -17,6 +17,8 @@ export interface EffectLedgerRecord {
   operationId: string
   sessionId: string
   turnId: string | null
+  /** Parent journal call when an interactive tool owns this effect. */
+  toolCallId?: string
   mutationBatchId: string
   effectClass: ToolEffectClass
   toolName: string
@@ -40,7 +42,7 @@ export interface EffectLedgerRecord {
 const stringMap = z.record(z.string(), z.string())
 const EffectLedgerRecordSchema = z.object({
   schemaVersion: z.literal(1), operationId: z.string().min(1), sessionId: z.string().min(1),
-  turnId: z.string().nullable(), mutationBatchId: z.string().min(1),
+  turnId: z.string().nullable(), toolCallId: z.string().min(1).optional(), mutationBatchId: z.string().min(1),
   effectClass: z.enum(['read_only', 'idempotent', 'reconcilable_mutation', 'non_idempotent_local_effect', 'external_side_effect']),
   toolName: z.string().min(1), targetPaths: z.array(z.string()), preImageHashes: stringMap,
   intendedDigest: z.string().optional(), compensatesOperationId: z.string().optional(),
@@ -131,6 +133,7 @@ export function recordEffectIntent(input: {
   runDir: string
   sessionId: string
   turnId?: string | null
+  toolCallId?: string
   mutationBatchId: string
   effectClass: ToolEffectClass
   toolName: string
@@ -148,6 +151,7 @@ export function recordEffectIntent(input: {
     operationId: randomUUID(),
     sessionId: input.sessionId,
     turnId: input.turnId ?? null,
+    ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
     mutationBatchId: input.mutationBatchId,
     effectClass: input.effectClass,
     toolName: input.toolName,

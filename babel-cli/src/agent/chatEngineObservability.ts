@@ -138,6 +138,7 @@ export type ToolCallLogEntry = {
   /** Internal terminal evidence: distinguish host-pre-dispatch denial from execution. */
   preDispatchNoEffect?: true;
   verifierExecuted?: boolean;
+  foregroundEffect?: import('./foregroundEffectReceipt.js').ForegroundEffectReceipt;
   effect_status?: MutationEffectStatus;
   effect_scope?: import('./mutationTools.js').MutationEffectScope;
   mutation_paths?: string[];

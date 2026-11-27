@@ -14,7 +14,10 @@ import { autonomyClassFromEnv, autonomyTaskClassFor } from './autonomyPolicy.js'
 import { Marked, type Token, type Tokens } from 'marked';
 import { findOpeningLabeledGoal, inferFreshTaskAcceptance } from '../agent/taskAcceptanceMeaning.js';
 import { isDeclarativeBehaviorPoint } from '../agent/taskBehaviorPoint.js';
-import { foregroundTaskClauses, parseForegroundCommandClause } from '../utils/commandArgv.js';
+import { foregroundTaskClauses, formatArgvAsCommand, parseForegroundCommandClause } from '../utils/commandArgv.js';
+import { GENERAL_COMMANDS, TESTS, prohibitedArgv, prohibitedCommandTargets } from '../utils/commandDenialProse.js';
+import { analyzeVerifierIdentity } from '../services/verifierIdentity.js';
+import { isVerifierCommand } from '../services/terminalStatus.js';
 
 /** Supported chat task classes (product-facing). */
 export type ChatTaskClass =
@@ -637,9 +640,18 @@ export function analyzeTaskShape(taskText: string, allowDeclarativePoint = true)
       ? isDeclarativeBehaviorPoint(goal.text)
       : firstProseLine !== undefined && /^ {0,3}\S/.test(firstProseLine) && isDeclarativeBehaviorPoint(firstProseLine)
   );
-  const foreground = allowDeclarativePoint && /\b(?:run|execute)\s+`/i.test(taskText) &&
-    foregroundTaskClauses(inferFreshTaskAcceptance(taskText).activeProse)
-      .some(clause => taskText.includes(clause) && parseForegroundCommandClause(clause) !== null);
+  const activeProse = allowDeclarativePoint && /\b(?:run|execute)\s+`/i.test(taskText)
+    ? inferFreshTaskAcceptance(taskText).activeProse : [];
+  const commandDenials = prohibitedCommandTargets(activeProse);
+  const foreground = foregroundTaskClauses(activeProse).some(clause => {
+    const argv = taskText.includes(clause) ? parseForegroundCommandClause(clause) : null;
+    if (!argv) return false;
+    const command = formatArgvAsCommand(argv);
+    const verifier = analyzeVerifierIdentity(command);
+    const testLike = isVerifierCommand(command) || (verifier !== null && verifier.family !== 'unknown');
+    return !commandDenials.some(target => GENERAL_COMMANDS.test(target) ||
+      (TESTS.test(target) ? testLike : prohibitedArgv(target, argv)));
+  });
   const hasMutationTokens =
     declarativePoint ||
     foreground ||

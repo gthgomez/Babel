@@ -7,7 +7,8 @@ import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { sha256Canonical } from '../acceptance/canonical.js';
-import { nodePointExecuted, POINT_TARGET_PREFIX, type PointVerifierWitness } from './pointVerifierWitness.js';
+import { nodePointExecuted, POINT_TARGET_PREFIX, pointTargetForCase,
+  type ExecutedPointClaim, type PointVerifierWitness } from './pointVerifierWitness.js';
 import { canonicalizeContained } from '../bridge/workspaceBound.js';
 import { isCredentialTargetPath } from './autonomyEnforcement.js';
 import { requireProjectRoot, type ChatScopeInput } from './chatExecutionScope.js';
@@ -290,16 +291,17 @@ export function upsertVerifierReceipt(
 }
 
 function pointExecutionDigest(
-  receipt: BoundChatVerifierReceipt, targets: readonly string[], stdoutDigest: string, sessionId: string,
+  receipt: BoundChatVerifierReceipt, cases: readonly ExecutedPointClaim[], stdoutDigest: string, sessionId: string,
   turnId: string | null, seq: number, toolCallId: string,
 ): string {
-  return sha256Canonical({ receipt, targets, stdoutDigest, sessionId, turnId, seq, toolCallId });
+  return sha256Canonical({ receipt, cases, stdoutDigest, sessionId, turnId, seq, toolCallId });
 }
 
 /** Resolve point claims only after the same governed command has physically settled. */
 export function attestChatPointReceipt(log: SessionEventLog, receipt: BoundChatVerifierReceipt): BoundChatVerifierReceipt {
   if (typeof receipt.target !== 'string' || !receipt.target.startsWith(POINT_TARGET_PREFIX)) return receipt;
   const { additionalPointTargets: _projection, target, ...withoutPoint } = receipt;
+  if (typeof receipt.command !== 'string') return withoutPoint;
   const event = log.events.find(row => row.seq === receipt.order?.seq && row.kind === 'verifier_attempt');
   if (event?.kind !== 'verifier_attempt' || !event.turn_id || !event.tool_call_id ||
       event.authoritative !== true || event.exit_code !== 0 || event.session_id !== log.session_id ||
@@ -307,10 +309,8 @@ export function attestChatPointReceipt(log: SessionEventLog, receipt: BoundChatV
       event.receipt?.target !== target || event.command_preview !== receipt.command.slice(0, 500) ||
       receipt.exit_code !== 0 || receipt.environment_policy !== 'host-process') return withoutPoint;
   const proof = event.point_execution;
-  if (!proof || !Array.isArray(proof.targets) || proof.targets[0] !== target ||
-      proof.targets.length > (receipt.tests_total ?? 0) || new Set(proof.targets).size !== proof.targets.length ||
-      !proof.targets.every(value => typeof value === 'string' && value.startsWith(POINT_TARGET_PREFIX) &&
-        /^[a-f0-9]{64}$/.test(value.slice(POINT_TARGET_PREFIX.length))) ||
+  if (!proof || !Array.isArray(proof.cases) || proof.cases[0]?.target !== target ||
+      proof.cases.length > (receipt.tests_total ?? 0) ||
       !/^[a-f0-9]{64}$/.test(proof.stdout_digest)) return withoutPoint;
   const lifecycle = log.events.filter(row =>
     (row.kind === 'tool_started' || row.kind === 'tool_completed' || row.kind === 'tool_failed' || row.kind === 'tool_cancelled') &&
@@ -320,14 +320,22 @@ export function attestChatPointReceipt(log: SessionEventLog, receipt: BoundChatV
       !['run_command', 'test_run'].includes(started.tool_name) || started.tool_name !== completed.tool_name ||
       started.seq >= event.seq || completed.seq <= event.seq || completed.exit_code !== 0 ||
       completed.preDispatchNoEffect || completed.verifier_stdout_digest !== proof.stdout_digest ||
+      completed.verifier_command_digest !== createHash('sha256').update(receipt.command).digest('hex') ||
       started.idempotency_key !== completed.idempotency_key ||
-      started.target_summary !== receipt.command || completed.target_summary !== receipt.command) return withoutPoint;
+      started.target_summary !== receipt.command.slice(0, 240) ||
+      completed.target_summary !== receipt.command.slice(0, 240)) return withoutPoint;
+  let targets: string[];
   try {
-    if (proof.digest !== pointExecutionDigest(event.receipt, proof.targets, proof.stdout_digest,
+    const observed = completed.verifier_passed_case_digests;
+    if (!Array.isArray(observed) || !proof.cases.every(claim => claim.target === pointTargetForCase(claim.case, claim.modulePath, claim.point) &&
+        observed.includes(sha256Canonical(claim.case.test)))) return withoutPoint;
+    targets = proof.cases.map(claim => claim.target);
+    if (new Set(targets).size !== targets.length ||
+      proof.digest !== pointExecutionDigest(event.receipt, proof.cases, proof.stdout_digest,
       event.session_id, event.turn_id, event.seq, event.tool_call_id)) return withoutPoint;
   } catch { return withoutPoint; }
   return { ...withoutPoint, target,
-    ...(proof.targets.length > 1 ? { additionalPointTargets: proof.targets.slice(1) } : {}),
+    ...(targets.length > 1 ? { additionalPointTargets: targets.slice(1) } : {}),
   };
 }
 
@@ -431,11 +439,11 @@ export async function captureAndRecordVerifierReceipt(input: {
   const relativeCwd =
     path.relative(realpathSync.native(input.projectRoot), identity.cwd).replaceAll('\\', '/') || '.';
   const commandIdentity = analyzeVerifierIdentity(input.command);
-  const targets = input.toolCallId && input.exitCode === 0 && input.executionBackend === 'host-process' && relativeCwd === '.'
-    ? [...new Set(input.pointWitnesses?.filter(witness => nodePointExecuted(input.stdout ?? '', witness))
-      .map(witness => witness.target))]
+  const cases = input.toolCallId && input.exitCode === 0 && input.executionBackend === 'host-process' && relativeCwd === '.'
+    ? [...new Map(input.pointWitnesses?.filter(witness => nodePointExecuted(input.stdout ?? '', witness))
+      .map(({ target, case: testCase, modulePath, point }) => [target, { target, case: testCase, modulePath, point }] as const)).values()]
     : [];
-  const [pointTarget] = targets;
+  const pointTarget = cases[0]?.target;
   const receipt = await captureChatVerifierReceipt({
     projectRoot: input.projectRoot,
     command: input.command,
@@ -471,7 +479,7 @@ export async function captureAndRecordVerifierReceipt(input: {
   });
   if (!receipt) return null;
   if (input.canPublish && !input.canPublish()) return null;
-  if (pointTarget && targets.length > (receipt.tests_total ?? 0)) delete receipt.target;
+  if (pointTarget && cases.length > (receipt.tests_total ?? 0)) delete receipt.target;
   const caveats = verifierEvidenceCaveats(receipt);
   if (caveats.length > 0 && !receipt.summary.includes(caveats[0]!)) {
     receipt.summary = [receipt.summary, ...caveats].join('\n');
@@ -485,8 +493,8 @@ export async function captureAndRecordVerifierReceipt(input: {
     ...(input.toolCallId !== undefined ? { tool_call_id: input.toolCallId } : {}),
     receipt,
     ...(input.toolCallId && stdoutDigest && pointTarget && receipt.target === pointTarget ? { point_execution: {
-      targets, stdout_digest: stdoutDigest,
-      digest: pointExecutionDigest(receipt, targets, stdoutDigest, input.sessionEvents.session_id, input.turnId,
+      cases, stdout_digest: stdoutDigest,
+      digest: pointExecutionDigest(receipt, cases, stdoutDigest, input.sessionEvents.session_id, input.turnId,
         input.sessionEvents.nextSeq, input.toolCallId),
     } } : {}),
   });

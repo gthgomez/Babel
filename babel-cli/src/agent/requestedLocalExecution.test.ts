@@ -10,6 +10,8 @@ import { captureChatVerifierReceipt } from './chatEngineVerifierAdapter.js'
 import { loadLiveSessionAuthority, persistLiveSessionAuthority, resolveLiveSessionAuthority } from './liveSessionBridge.js'
 import {
   REQUESTED_LOCAL_EXECUTION_KIND,
+  hasSettledLocalJobSetup,
+  requestedForegroundEffect,
   requestedLocalExecutionAcceptance,
   requiredLocalExecutionBlock,
   requiredLocalExecutionDenialMarker,
@@ -50,6 +52,37 @@ test('freezes exact required foreground argv and does not retain a command in pr
   }).provenance
   assert.equal(requiredLocalExecutionScope(projected, { type: 'run_command', command }, root), 'mixed')
   assert.equal(admit([directRequest, directRequest]).criteria.length, 1)
+})
+
+test('a blocked transformation closes only after the one declared setup write has settled', () => {
+  const task = [
+    'Add export.py, a Python 3 standard-library CLI taking an input JSON file and an output CSV path.',
+    'It should export every record in input.json, sorted by aisle and then sku.',
+    'Use UTF-8 and LF line endings.',
+    'Keep empty notes and non-ASCII text intact using standard CSV quoting.',
+    'Run the exporter to create output.csv from input.json and leave both the exporter and generated CSV in the repository.',
+    'Leave input.json unchanged. Show the verification you performed.',
+  ].join(' ')
+  const scopeRoot = mkdtempSync(join(tmpdir(), 'babel-local-job-scope-'))
+  const inspect = (request: string, log: Parameters<typeof hasSettledLocalJobSetup>[0]['log']) => {
+    const { taskContract: contract } = resolveLiveSessionAuthority({ mode: 'chat', task: request, projectRoot: scopeRoot })
+    const effect = requestedForegroundEffect(contract, {
+      type: 'run_command', command: 'python3 export.py input.json output.csv',
+    }, scopeRoot)
+    assert.ok(effect)
+    return hasSettledLocalJobSetup({ contract, effect, root: scopeRoot, log })
+  }
+  try {
+    const write = { tool: 'write_file', target: 'export.py', effect_status: 'confirmed_change', mutation_paths: ['export.py'] }
+    assert.equal(inspect(task, [write]), true)
+    assert.equal(inspect(task, []), false)
+    assert.equal(inspect(`${task} Update README independently.`, [write]), false)
+    assert.equal(inspect(task.replace('sorted by aisle and then sku', 'sorted by aisle and then sku and update README'), [write]), false)
+    assert.equal(inspect(task.replace('in the repository', 'in the repository, then update README'), [write]), false)
+    assert.equal(inspect(task, [{ ...write, mutation_paths: ['input.json'] }]), false)
+  } finally {
+    rmSync(scopeRoot, { recursive: true, force: true })
+  }
 })
 
 test('does not create a required effect from optional, prohibited, quoted or composite commands', () => {

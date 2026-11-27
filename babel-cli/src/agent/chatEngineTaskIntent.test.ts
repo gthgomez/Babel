@@ -37,6 +37,9 @@ test('routes an exact foreground command for execution even when a requirement r
   }
   assert.equal(resolveTaskShape('Explain how to run `node tools/export.mjs`.').operation, 'READ_ONLY')
   assert.equal(resolveTaskShape('Run `node tools/export.mjs && echo ok`.').operation, 'READ_ONLY')
+  assert.equal(resolveTaskShape('Run `node tools/export.mjs`.\nDo not run commands.').operation, 'READ_ONLY')
+  assert.equal(resolveTaskShape('Run `node tools/export.mjs`.\nDo not run tests.').operation, 'MUTATING')
+  assert.equal(resolveTaskShape('Run `node --test test.mjs`.\nDo not run tests.').operation, 'READ_ONLY')
   for (const request of [
     'Inspect the repository.\nRun `node tools/export.mjs`.',
     'Inspect the repository.\nRequirements:\n- Run `node tools/export.mjs`.',

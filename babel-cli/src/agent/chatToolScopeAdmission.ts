@@ -2,6 +2,8 @@ import type {ChatCallbacks,ChatEngineActionExecutorHost} from './chatEngineContr
 import {chatActionToolName,chatActionTarget,type ChatToolAction} from './chatToolDefinitions.js'
 import type {BlockedReport} from '../schemas/agentContracts.js'
 import {analyzeTaskShape,isReadOnlyTaskFrame,stripFencedCodeBodies,TASK_REQUEST_PREFIX_SOURCE,type TaskOperation} from '../config/chatTaskClass.js'
+import { foregroundTaskClauses, formatArgvAsCommand, parseForegroundCommandClause } from '../utils/commandArgv.js'
+import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js'
 
 export {requireProjectRoot} from './chatExecutionScope.js'
 export const PROJECT_REQUIRED_MESSAGE='PROJECT_REQUIRED: Select and authorize a project before using tools.'
@@ -14,10 +16,18 @@ export function readOnlyExecutionConflictReport(input:{
   operation:TaskOperation
   executionProfile:string
   presentationOnly?:boolean
+  foregroundCommands?:readonly string[]
 }):BlockedReport|null {
   if(input.operation!=='READ_ONLY'||input.executionProfile==='plan'||input.presentationOnly)return null
   const prose=stripFencedCodeBodies(input.taskText)
   if(isReadOnlyTaskFrame(prose)||analyzeTaskShape(prose).operation==='READ_ONLY')return null
+  if(input.foregroundCommands?.length){
+    const active=foregroundTaskClauses(inferFreshTaskAcceptance(input.taskText).activeProse,true)
+    if(active.length>0&&active.every(clause=>{
+      const argv=parseForegroundCommandClause(clause)
+      return argv!==null&&input.foregroundCommands!.includes(formatArgvAsCommand(argv))
+    }))return null
+  }
   const positiveClauseBoundary=String.raw`\b(?:but|however|instead|yet|then|afterwards|and\s+then)\s+`
   // A negation owns its clause, not a subsequent affirmative instruction.
   const executionProse=prose.replace(new RegExp(`\\b(?:do\\s+not|don't|never)\\s+(?:(?:actually|really)\\s+)?(?:execute|run)\\b(?:(?!${positiveClauseBoundary})[^.;!?\\n])*`,'gi'),' ')

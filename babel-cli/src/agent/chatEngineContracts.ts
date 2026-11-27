@@ -691,6 +691,7 @@ export interface ChatEngineStreamingLoopHost {
     mode?: 'native' | 'legacy' | 'text',
   ) => string
   readonly getResolvedRequiredVerifiers: () => string[]
+  readonly getReadOnlyForegroundCommands: () => string[]
   readonly isolationBrokerFlags: () => ReturnType<typeof import('./chatEngineIsolationFlags.js').resolveIsolationBrokerFlags>
   readonly handleBudgetKill: (
     reason: string,
@@ -884,6 +885,8 @@ export interface ChatEngineActionExecutorHost {
   fullReadCounts: Map<string, number>
   getTurnRuntimeSnapshot: () => TurnRuntimeSnapshot | null
   getResolvedRequiredVerifiers: () => string[]
+  getFrozenForegroundAmendments: () => string[]
+  captureForegroundEffectFence: () => (<T>(effect: () => T) => T | undefined) | undefined
   getLiveSession: (
     c?:
       | {
@@ -914,6 +917,7 @@ export interface ChatEngineActionExecutorHost {
   persistToolStartedAtExecutorDispatch: (
     action: ChatToolAction,
     meta: { index: number; idempotencyKey?: string },
+    foregroundCriterionId?: string,
   ) => void
   platformUnusableVerifiers: Set<string>
   policyEventLog: PolicyEventLog

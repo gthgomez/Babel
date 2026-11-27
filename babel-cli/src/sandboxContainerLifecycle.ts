@@ -6,6 +6,9 @@ export interface PreparedShellInvocation {
   executable: string;
   args: string[];
   cwd: string;
+  /** Parsed user command, before the platform-specific executable shim. */
+  commandArgv?: readonly string[];
+  trustedExecutable?: true;
   env: NodeJS.ProcessEnv;
   validateExecutable?: () => boolean;
   ownedContainerName?: string;

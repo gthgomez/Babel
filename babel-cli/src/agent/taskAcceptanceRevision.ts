@@ -23,15 +23,16 @@ import {
 } from './taskAcceptanceExecutableBinding.js'
 import { isRequestedOperationAmendmentRef, requestedLocalExecutionAcceptance, REQUESTED_LOCAL_EXECUTION_KIND } from './requestedLocalExecution.js'
 import { isAmendmentPrompt, isStatusPrompt } from './turnRuntime.js'
-import { pointTargetForCase, pointVerifierCaseInputDigest, pointVerifierInputRefPrefix, pointVerifierWitness,
+import { POINT_TARGET_PREFIX, pointTargetForCase, pointVerifierCaseInputDigest, pointVerifierCaseRef, pointVerifierInputRefPrefix, pointVerifierWitness,
   snapshotPointVerifierInputs, type PointVerifierCase } from './pointVerifierWitness.js'
 import { taskProhibitsCommand } from './taskCommandProhibitions.js'
 
 export const ACCEPTANCE_AMENDMENT_REF = `user:task-${'acceptance-amendment:v1'}` as const
-type AmendmentPointBinding = { criterion_id: string; command: string; input_ref: string; case: PointVerifierCase }
+type AmendmentPointBinding = { criterion_id: string; command: string; input_ref: string } &
+  ({ target: string } | { case: PointVerifierCase })
 export interface TaskAcceptanceDescriptorV1 {
   /** V4 applies current command restrictions and requires case evidence for point links. */
-  schema_version: 1 | 2 | 3 | 4 | 5
+  schema_version: 1 | 2 | 3 | 4 | 5 | 6
   kind: 'add' | 'initialize' | 'migrate_addition'
   amendment_id: string
   task_id: string
@@ -106,14 +107,21 @@ export function projectTaskAcceptanceRevision(
   const descriptions = new Set(retained.map(item => item.description))
   const usedPointBindings = new Set<string>()
   const standard = meaning.criteria.filter(item => !descriptions.has(item.description)).map(item => {
-    const binding = version === 5 ? pointBindings.find(entry => entry.criterion_id === item.id) : undefined
-    if (!binding) return item
+    const binding = version >= 5 ? pointBindings.find(entry => entry.criterion_id === item.id) : undefined
+    if (!binding || !binding.input_ref.startsWith(pointVerifierInputRefPrefix(binding.command))) return item
     const point = eligibleAmendmentPoint(previous, item, binding.command, meaning.activeProse)
-    if (!point?.modulePath ||
-        !binding.input_ref.startsWith(`${pointVerifierInputRefPrefix(binding.command)}${pointVerifierCaseInputDigest(binding.case)}:`) ||
-        !previous.provenance.records.some(record => record.kind === 'derived_acceptance' && record.ref === binding.input_ref))
-      return item
-    const target = pointTargetForCase(binding.case, point.modulePath, point)
+    if (!point) return item
+    let target: string
+    let frozenRef = binding.input_ref
+    if (version === 5 && 'target' in binding) {
+      target = binding.target
+    } else if (version === 6 && 'case' in binding && point.modulePath &&
+        binding.input_ref.startsWith(`${pointVerifierInputRefPrefix(binding.command)}${pointVerifierCaseInputDigest(binding.case)}:`)) {
+      target = pointTargetForCase(binding.case, point.modulePath, point)
+      frozenRef = pointVerifierCaseRef(binding.input_ref, target)
+    } else return item
+    if (!previous.provenance.records.some(record => record.kind === 'derived_acceptance' &&
+        record.ref === frozenRef)) return item
     const bound = bindRelevanceWitness(item, binding.command, '.', previous.protected_paths, target)
     if (bound.verification.target === target) usedPointBindings.add(binding.criterion_id)
     return bound
@@ -161,9 +169,10 @@ function captureAmendmentPoints(
       const point = eligibleAmendmentPoint(previous, item, command, prose)
       if (!point) return []
       const inputs = snapshotPointVerifierInputs(projectRoot, command, protectedPaths)
-      if (!inputs || !inputRefs.has(inputs.ref)) return []
+      if (!inputs) return []
       const witness = pointVerifierWitness(projectRoot, command, point, inputs.fs)
-      return witness ? [{ criterion_id: item.id, command, input_ref: inputs.ref, case: witness.case }] : []
+      if (!witness || !inputRefs.has(pointVerifierCaseRef(inputs.ref, witness.target))) return []
+      return [{ criterion_id: item.id, command, input_ref: inputs.ref, case: witness.case }]
     })
     if (matches.length === 1) bindings.push(matches[0]!)
   }
@@ -201,7 +210,7 @@ export function createTaskAcceptanceRevision(
   const projected = projectTaskAcceptanceRevision(current, source.userInput, kind, initialVersion)
   const points = kind === 'add' && projectRoot && !projected.unresolved
     ? captureAmendmentPoints(current, source.userInput, projected.added, projectRoot) : []
-  const version = points.length ? 5 : initialVersion
+  const version = points.length ? 6 : initialVersion
   const { added, meaningSources, operationRefs, unresolved } = points.length
     ? projectTaskAcceptanceRevision(current, source.userInput, kind, version, points) : projected
   if (unresolved)
@@ -252,19 +261,24 @@ export function isTaskAcceptanceDescriptor(value:unknown):value is TaskAcceptanc
     'previous_contract_hash', 'source_attempt_id', 'input_digest', 'text_digest', 'added_acceptance', 'meaning_sources']
   if (descriptor.schema_version === 3 || (descriptor.schema_version >= 4 && Object.hasOwn(descriptor, 'requested_execution_refs')))
     fields.push('requested_execution_refs')
-  if (descriptor.schema_version === 5) fields.push('point_bindings')
+  const hasPointBindings = descriptor.schema_version === 5 || descriptor.schema_version === 6
+  if (hasPointBindings) fields.push('point_bindings')
   const points = descriptor.point_bindings
-  const validPoints = descriptor.schema_version !== 5 || (
+  const validPoints = !hasPointBindings || (
     Array.isArray(points) && points.length > 0 && points.length <= 128 &&
     new Set(points.map(point => point?.criterion_id)).size === points.length &&
     points.every(point => point && Object.keys(point).length === 4 &&
       typeof point.criterion_id === 'string' && typeof point.command === 'string' &&
       point.command.length > 0 && point.command.length <= 1024 &&
-      typeof point.input_ref === 'string' && /^babel:point-verifier-inputs:v1:(?:[a-f0-9]{64}:){2}[a-f0-9]{64}$/.test(point.input_ref) &&
-      point.case && Object.keys(point.case).length === 4 &&
-      typeof point.case.checkDigest === 'string' && /^[a-f0-9]{64}$/.test(point.case.checkDigest) &&
-      [point.case.entry, point.case.testPath, point.case.test].every(value =>
-        typeof value === 'string' && value.length > 0 && value.length <= 1024))
+      typeof point.input_ref === 'string' && (descriptor.schema_version === 5
+        ? 'target' in point && /^babel:point-verifier-inputs:v1:[a-f0-9]{64}:[a-f0-9]{64}$/.test(point.input_ref) &&
+          typeof point.target === 'string' && point.target.startsWith(POINT_TARGET_PREFIX) &&
+          /^[a-f0-9]{64}$/.test(point.target.slice(POINT_TARGET_PREFIX.length))
+        : 'case' in point && /^babel:point-verifier-inputs:v1:(?:[a-f0-9]{64}:){2}[a-f0-9]{64}$/.test(point.input_ref) &&
+          point.case && Object.keys(point.case).length === 4 &&
+          typeof point.case.checkDigest === 'string' && /^[a-f0-9]{64}$/.test(point.case.checkDigest) &&
+          [point.case.entry, point.case.testPath, point.case.test].every(value =>
+            typeof value === 'string' && value.length > 0 && value.length <= 1024)))
   )
   const hasOperation = Array.isArray(descriptor.added_acceptance) &&
     descriptor.added_acceptance.some(item => item?.verification?.kind === REQUESTED_LOCAL_EXECUTION_KIND)
@@ -277,7 +291,7 @@ export function isTaskAcceptanceDescriptor(value:unknown):value is TaskAcceptanc
   )
   return Object.keys(descriptor).length===fields.length&&fields.every(field=>Object.hasOwn(descriptor,field))&&
     validOperationRefs && validPoints && (descriptor.schema_version===1||descriptor.schema_version===2||descriptor.schema_version===3||
-      ((descriptor.schema_version===4||descriptor.schema_version===5)&&descriptor.kind==='add'))&&['add','initialize','migrate_addition'].includes(descriptor.kind)&&
+      ((descriptor.schema_version===4||hasPointBindings)&&descriptor.kind==='add'))&&['add','initialize','migrate_addition'].includes(descriptor.kind)&&
     [descriptor.amendment_id,descriptor.task_id,descriptor.previous_contract_id,descriptor.source_attempt_id].every(field=>typeof field==='string'&&field.length>0&&field.length<=512)&&
     /^[0-9a-f]{32,64}$/.test(descriptor.previous_contract_hash)&&/^[0-9a-f]{64}$/.test(descriptor.input_digest)&&/^[0-9a-f]{64}$/.test(descriptor.text_digest)&&
     Array.isArray(descriptor.added_acceptance)&&descriptor.added_acceptance.length>0&&descriptor.added_acceptance.length<=128&&

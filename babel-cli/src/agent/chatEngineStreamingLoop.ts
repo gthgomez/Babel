@@ -572,8 +572,9 @@ export class ChatEngineStreamingLoop {
                 nextTools.mode === "full" ? "act_or_verify" : nextTools.mode,
               )
             : this.host.services.tools.buildDefinitions(),
-          { executionScope:this.host.options.executionScope,operation: effectiveOperation,
-          requiredVerifiers: isReadOnlyInspection ? this.host.getResolvedRequiredVerifiers() : [],
+           { executionScope:this.host.options.executionScope,operation: effectiveOperation,
+           requiredVerifiers: isReadOnlyInspection ? this.host.getResolvedRequiredVerifiers() : [],
+           foregroundCommands: this.host.getReadOnlyForegroundCommands(),
           hostFallbackAllowed: this.host.isolationBrokerFlags().hostFallbackAllowed });
         const nativeActions: ChatToolAction[] = [];
         const nativeToolCallIds: string[] = [];

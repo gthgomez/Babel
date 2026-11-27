@@ -38,15 +38,30 @@ export function pointVerifierInputRefPrefix(command: string): string {
 
 type PointVerifierInput = { entry: string; testPath: string; checkDigest: string }
 export type PointVerifierCase = PointVerifierInput & { test: string }
+export type ExecutedPointClaim = Pick<PointVerifierWitness, 'target' | 'case' | 'modulePath' | 'point'>
+type PointValue = number | '-0'
+type JournalPoint = Omit<TaskBehaviorPoint, 'args' | 'expected'> & {
+  modulePath?: string
+  args: PointValue[]
+  expected: PointValue
+}
+
+function journalPoint(point: JournalPoint): JournalPoint {
+  const retainSign = (value: PointValue) => Object.is(value, -0) ? '-0' : value
+  return { ...point, args: point.args.map(retainSign), expected: retainSign(point.expected) }
+}
+
+function nodeTestPath(entry: string): string | undefined {
+  const parsed = parseStructuredVerifierCommand(entry)
+  if (parsed?.executable === 'node' && parsed.args.length === 2 && parsed.args[0] === '--test')
+    return parsed.args[1]!.replace(/^\.\//, '')
+}
 
 /** Bind a frozen test case to one exact behavioral point. */
 export function pointTargetForCase(
-  test: PointVerifierCase, path: string, point: TaskBehaviorPoint & { modulePath?: string },
+  test: PointVerifierCase, path: string, point: JournalPoint,
 ): string {
-  const retainSign = (value: number) => Object.is(value, -0) ? '-0' : value
-  return POINT_TARGET_PREFIX + sha256Canonical({
-    ...test, path, point: { ...point, args: point.args.map(retainSign), expected: retainSign(point.expected) },
-  })
+  return POINT_TARGET_PREFIX + sha256Canonical({ ...test, path, point: journalPoint(point) })
 }
 
 /** Commit the exact runner entry and test bytes independently of the case requested later. */
@@ -54,10 +69,14 @@ export function pointVerifierCaseInputDigest(input: PointVerifierInput): string 
   return sha256Canonical({ entry: input.entry, testPath: input.testPath, checkDigest: input.checkDigest })
 }
 
+export function pointVerifierCaseRef(inputRef: string, target: string): string {
+  return `${inputRef}:${sha256Canonical(target)}`
+}
+
 /** Freeze protected Node test inputs and let admission prove a case against those same bytes. */
 export function snapshotPointVerifierInputs(
   root: string, command: string, protectedPaths: ReadonlySet<string>,
-): { ref: string; fs: VerifierCommandInputOverrides } | undefined {
+): { ref: string; caseRefs: string[]; fs: VerifierCommandInputOverrides } | undefined {
   const contents = new Map<string, string | null>()
   const fs: VerifierCommandInputOverrides = { readFile: absolute => {
     if (!contents.has(absolute)) {
@@ -75,9 +94,8 @@ export function snapshotPointVerifierInputs(
   } }
   const entry = strictTestCommand(root, command, fs)
   if (!entry) return
-  const parsed = parseStructuredVerifierCommand(entry)
-  if (!parsed || parsed.executable !== 'node' || parsed.args.length !== 2 || parsed.args[0] !== '--test') return
-  const testPath = parsed.args[1]!.replace(/^\.\//, '')
+  const testPath = nodeTestPath(entry)
+  if (!testPath) return
   if (!verifierCommandInputFiles(root, entry).includes(testPath)) return
   const paths = (command !== entry || protectedPaths.has('package.json')) ? [testPath, 'package.json'] : [testPath]
   const inputs: Record<string, string> = {}
@@ -87,7 +105,32 @@ export function snapshotPointVerifierInputs(
     inputs[path] = sha256Canonical(content)
   }
   const inputDigest = pointVerifierCaseInputDigest({ entry, testPath, checkDigest: inputs[testPath]! })
-  return { ref: `${pointVerifierInputRefPrefix(command)}${inputDigest}:${sha256Canonical(inputs)}`, fs }
+  const ref = `${pointVerifierInputRefPrefix(command)}${inputDigest}:${sha256Canonical(inputs)}`
+  try {
+    const ast = parse(readVerifierCommandInput(root, testPath, fs)!, { ecmaVersion: 'latest', sourceType: 'module' })
+    if (ast.body.length > 128) return
+    const imports = new Map<string, { modulePath: string; symbol: string }>()
+    for (const node of ast.body) {
+      if (node.type !== 'ImportDeclaration' || typeof node.source.value !== 'string' || !node.source.value.startsWith('.')) continue
+      const modulePath = posix.normalize(posix.join(posix.dirname(testPath), node.source.value))
+      for (const item of node.specifiers) {
+        if (item.type === 'ImportSpecifier' && item.imported.type === 'Identifier')
+          imports.set(item.local.name, { modulePath, symbol: item.imported.name })
+      }
+    }
+    const caseRefs = ast.body.flatMap(node => {
+      if (node.type !== 'ExpressionStatement' || node.expression.type !== 'CallExpression') return []
+      const [call, result] = simpleAssertion(node.expression)?.arguments ?? []
+      if (call?.type !== 'CallExpression' || call.callee.type !== 'Identifier') return []
+      const imported = imports.get(call.callee.name)
+      const expected = numericLiteral(result)
+      const args = call.arguments.map(numericLiteral)
+      if (!imported || expected === undefined || !args.every((arg): arg is number => arg !== undefined)) return []
+      const witness = pointVerifierWitness(root, command, { ...imported, args, expected }, fs)
+      return witness ? [pointVerifierCaseRef(ref, witness.target)] : []
+    })
+    return { ref, caseRefs: [...new Set(caseRefs)], fs }
+  } catch { return }
 }
 
 /** Retained objectives keep their original point identity until resubmitted. */
@@ -98,6 +141,8 @@ export function isLegacyPointTarget(target: string | undefined): boolean {
 export interface PointVerifierWitness {
   target: string
   case: PointVerifierCase
+  modulePath: string
+  point: JournalPoint
   entry: string
   npmScript: boolean
   testNames: string[]
@@ -173,10 +218,8 @@ export function pointVerifierWitness(
 ): PointVerifierWitness | undefined {
   const entry = strictTestCommand(projectRoot, command, fs)
   if (!entry) return undefined
-  const parsed = parseStructuredVerifierCommand(entry)
-  if (parsed?.executable !== 'node' || parsed.args.length !== 2 || parsed.args[0] !== '--test') return undefined
-  const testPath = parsed.args[1]!.replace(/^\.\//, '')
-  if (!/^[\w ./-]+\.[cm]?js$/.test(testPath)) return undefined
+  const testPath = nodeTestPath(entry)
+  if (!testPath || !/^[\w ./-]+\.[cm]?js$/.test(testPath)) return undefined
   const files = verifierCommandInputFiles(projectRoot, entry, fs)
   if (!files.includes(testPath)) return undefined
   const content = readVerifierCommandInput(projectRoot, testPath, fs)
@@ -238,6 +281,8 @@ export function pointVerifierWitness(
     return {
       target: pointTargetForCase(testCase, importedTarget.path, point),
       case: testCase,
+      modulePath: importedTarget.path,
+      point: journalPoint(point),
       entry,
       npmScript: command !== entry,
       testNames: [...registeredNames],
@@ -249,23 +294,32 @@ export function pointVerifierWitness(
 
 /** Reconcile the complete runner report with the frozen registration, not an isolated stdout marker. */
 export function nodePointExecuted(stdout: string, witness: Pick<PointVerifierWitness, 'entry' | 'npmScript' | 'testNames'>): boolean {
+  const report = nodePointReport(stdout, witness.npmScript ? witness.entry : undefined)
+  return report !== undefined && report.length === witness.testNames.length &&
+    witness.testNames.every(name => report.includes(name))
+}
+
+/** Read only a complete passing runner report, retaining no arbitrary stdout. */
+export function nodePointReport(stdout: string, npmEntry?: string): string[] | undefined {
   const lines = stdout.trim().split(/\r?\n/).filter(line => line.trim() !== '')
-  if (witness.npmScript) {
-    if (!lines[0]?.startsWith('> ') || lines[1] !== `> ${witness.entry}`) return false
+  if (npmEntry !== undefined) {
+    if (!lines[0]?.startsWith('> ') || lines[1] !== `> ${npmEntry}`) return
     lines.splice(0, 2)
   }
   const isTap = lines[0] === 'TAP version 13'
-  const count = witness.testNames.length
   const prefix = isTap ? '#' : 'ℹ'
+  const plan = lines.at(-8)
+  const count = Number(new RegExp(`^${prefix} tests (\\d+)$`).exec(plan ?? '')?.[1])
+  if (!Number.isSafeInteger(count) || count < 1 || count > 1024) return
   const footer = [
     ...(isTap ? [`1..${count}`] : []),
     `${prefix} tests ${count}`, `${prefix} suites 0`, `${prefix} pass ${count}`,
     ...['fail', 'cancelled', 'skipped', 'todo'].map(label => `${prefix} ${label} 0`),
   ]
   if (!/^(?:#|ℹ) duration_ms \d+(?:\.\d+)?$/.test(lines.at(-1) ?? '') ||
-    !lines.at(-1)?.startsWith(prefix)) return false
+      !lines.at(-1)?.startsWith(prefix)) return
   const summary = lines.slice(-footer.length - 1, -1)
-  if (summary.length !== footer.length || summary.some((line, index) => line !== footer[index])) return false
+  if (summary.length !== footer.length || summary.some((line, index) => line !== footer[index])) return
 
   const caseRows = lines.slice(isTap ? 1 : 0, -footer.length - 1)
   const results = caseRows.flatMap(line => {
@@ -273,9 +327,16 @@ export function nodePointExecuted(stdout: string, witness: Pick<PointVerifierWit
     return /^✔ (.+) \(\d+(?:\.\d+)?ms\)$/.exec(line)?.[1] ?? []
   })
   // A second reporter or plan in the body is ambiguous, even if its rows look green.
-  if (caseRows.some(line => /^TAP version |^\d+\.\.\d+|^(?:#|ℹ) (?:tests|pass|fail) \d+/.test(line))) return false
-  return results.length === count && new Set(results).size === count &&
-    witness.testNames.every(name => results.includes(name))
+  if (caseRows.some(line => /^TAP version |^\d+\.\.\d+|^(?:#|ℹ) (?:tests|pass|fail) \d+/.test(line))) return
+  if (results.length === count && new Set(results).size === count) return results
+}
+
+/** Hash passing case names at the independent physical tool settlement boundary. */
+export function settledNodePointReport(stdout: string): string[] | undefined {
+  const lines = stdout.trim().split(/\r?\n/).filter(line => line.trim() !== '')
+  const entry = lines[0]?.startsWith('> ') && lines[1]?.startsWith('> ') ? lines[1].slice(2) : undefined
+  const npmEntry = entry && nodeTestPath(entry) ? entry : undefined
+  return nodePointReport(stdout, npmEntry)?.map(name => sha256Canonical(name))
 }
 
 /** A later same-scope run without this case must not inherit an earlier case result. */

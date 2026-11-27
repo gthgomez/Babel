@@ -171,6 +171,8 @@ export interface AdmissionStore {
    */
   listAdmissions(threadId: string): AdmissionListing;
   readOwner(threadId: string): OwnerRecordV1 | null;
+  /** Fence a bounded synchronous effect against a concurrent owner handoff. */
+  withCurrentOwner<T>(owner: OwnerRecordV1, commandId: string, effect: () => T): T | undefined;
   readOutbox(admissionId: string): OutboxRecordV1 | null;
   close(): void;
 }
@@ -591,6 +593,9 @@ function refCountedStore(inner: AdmissionStore): AdmissionStore {
     },
     readOwner(threadId) {
       return released ? null : inner.readOwner(threadId);
+    },
+    withCurrentOwner(owner, commandId, effect) {
+      return released ? undefined : inner.withCurrentOwner(owner, commandId, effect);
     },
     readOutbox(admissionId) {
       return released ? null : inner.readOutbox(admissionId);
@@ -1119,6 +1124,21 @@ export function openAdmissionStore(options: AdmissionStoreOptions): AdmissionOpe
         return rowToOwner(row);
       } catch {
         return null;
+      }
+    },
+
+    withCurrentOwner(owner, commandId, effect) {
+      // The same SQLite write reservation guards admission's owner updates.
+      // No database state changes here; the caller owns effect settlement.
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const current = store.readOwner(owner.threadId);
+        const admission = store.readAdmission(owner.threadId, commandId);
+        if (current?.generation === owner.generation && current.token === owner.token &&
+            admission?.ownerGeneration === owner.generation && admission.state === 'claimed') return effect();
+        return undefined;
+      } finally {
+        db.exec('ROLLBACK');
       }
     },
 

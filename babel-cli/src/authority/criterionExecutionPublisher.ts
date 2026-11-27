@@ -1,6 +1,12 @@
 import { realpathSync } from 'node:fs'
+import { sha256Canonical } from '../acceptance/canonical.js'
+import { currentForegroundEffects } from '../agent/foregroundEffectReceipt.js'
+import { REQUESTED_LOCAL_EXECUTION_KIND } from '../agent/requestedLocalExecution.js'
+import type { SessionEventLog } from '../agent/sessionEvents.js'
+import { loadEffectLedgerWithDiagnostics } from '../executor/effectLedger.js'
 import { buildAgentEndpointV1 } from '../agent/agentEndpoint.js'
 import type { TaskContractV1 } from '../agent/taskContract.js'
+import type { TaskModeHistoryV2 } from '../agent/taskAcceptanceRevision.js'
 import {
   resolveGovernedCriterionCandidateRevisionSha,
   toRevisionBoundReceipt,
@@ -18,6 +24,7 @@ import {
 } from './criterionVerifierDispatch.js'
 
 export const CHAT_CRITERION_VERIFIER_ENDPOINT_ID = 'verifier:chat-governed'
+const FOREGROUND_OBSERVER_ID = 'observer:chat-governed-foreground'
 const TEST_VERIFIER_FAMILIES = new Set([
   'npm-test', 'node-test', 'pytest', 'unittest', 'doctest', 'jest', 'vitest', 'mocha',
   'go-test', 'cargo-test', 'gradle-test', 'deno-test', 'dotnet-test',
@@ -127,6 +134,57 @@ function hasAdmissibleCriterionResult(
     && Number.isFinite(skipped) && skipped >= 0 && skipped < total
 }
 
+function publishForegroundObservations(input: {
+  graph: EvidenceGraph
+  supervisor: TrustedExecutionAuthorityV1
+  contract: TaskContractV1
+  runId: string
+  projectRoot: string
+  runDir: string
+  log: SessionEventLog
+  history?: TaskModeHistoryV2
+  amendments?: readonly string[]
+  candidateSha: string | null
+}): string | null {
+  if (input.log.session_id !== input.runId || !input.contract.acceptance.some(item => item.required &&
+      item.verification.kind === REQUESTED_LOCAL_EXECUTION_KIND)) return null
+  const ledger = loadEffectLedgerWithDiagnostics(input.runDir)
+  if (ledger.malformedLines > 0) return null
+  const repository = realpathSync.native(input.projectRoot)
+  // Snapshot-only output remains an observation. Publication requires the
+  // authorized child's isolated stdout and the same settled effect record.
+  const receipts = currentForegroundEffects(repository, input.contract, input.log, ledger.records, input.history, input.amendments)
+    .filter(receipt => receipt.output === undefined || receipt.output.source === 'child_stdout')
+  const candidate = input.candidateSha ?? receipts.at(-1)?.post_revision
+  if (!candidate || !receipts.length) return null
+  const executionDomain = 'governed-foreground-observation'
+  if (!input.supervisor.read.get(input.runId, FOREGROUND_OBSERVER_ID)) input.supervisor.assign({
+    run_id: input.runId, task_id: input.contract.task_id, contract_hash: input.contract.contract_hash,
+    role: 'observer',
+    endpoint: buildAgentEndpointV1({
+      endpoint_id: FOREGROUND_OBSERVER_ID, identity: FOREGROUND_OBSERVER_ID, harness: 'babel-chat',
+      model: 'governed', provider: 'babel', capabilities: ['run_local_command'], location: 'local',
+      execution_domain: executionDomain,
+    }),
+  })
+  for (const receipt of receipts) {
+    const requirement = input.contract.acceptance.find(item => item.id === receipt.criterion_id)
+    if (!requirement) continue
+    input.graph.addNode({
+      id: `criterion:${requirement.id}`, type: 'runtime_observation', parents: [],
+      data: { status: 'observed', passed: true, exit_code: 0, verifier_id: requirement.verification.verifier_id,
+        verifier_spec_hash: sha256Canonical(requirement.verification), working_directory: receipt.cwd,
+        argv: receipt.argv, command_digest: receipt.command_digest, effect: receipt },
+      binding: { run_id: input.runId, task_id: input.contract.task_id, contract_hash: input.contract.contract_hash,
+        repository, base_sha: input.contract.base_sha, candidate_sha: candidate, requirement_id: requirement.id },
+      producer_role: 'observer',
+      producer_identity: { kind: 'agent_endpoint', endpoint_id: FOREGROUND_OBSERVER_ID,
+        role: 'observer', execution_domain: executionDomain },
+    })
+  }
+  return candidate
+}
+
 /** Publish governed Chat execution into the private criterion evidence graph. */
 export function publishCriterionEvidenceFromChatExecution(input: {
   graph: EvidenceGraph
@@ -140,22 +198,26 @@ export function publishCriterionEvidenceFromChatExecution(input: {
   receipt?: BoundChatVerifierReceipt | null
   receipts?: readonly BoundChatVerifierReceipt[] | null
   hasMutation: boolean
+  foreground?: { runDir: string; log: SessionEventLog; history?: TaskModeHistoryV2; amendments?: readonly string[] }
 }): string | null {
+  if (!input.proof.compliant && input.allowPartialEvidence !== true) return null
+  const foregroundSha = input.foreground ? publishForegroundObservations({
+    ...input, ...input.foreground,
+  }) : null
   const ledger = [
     ...(input.receipts ?? []),
     ...(input.receipt ? [input.receipt] : []),
   ].filter((entry, index, all) => all.indexOf(entry) === index)
   if (
-    (!input.proof.compliant && input.allowPartialEvidence !== true) ||
     !input.hasMutation ||
     !input.candidateSha ||
     ledger.length === 0
   ) {
-    return null
+    return foregroundSha
   }
   const repository = realpathSync.native(input.projectRoot)
   const required = input.contract.acceptance.filter(item => item.required)
-  if (required.length === 0) return null
+  if (required.length === 0) return foregroundSha
 
   const dispatches: Array<{
     requirement: TaskContractV1['acceptance'][number]
@@ -180,6 +242,7 @@ export function publishCriterionEvidenceFromChatExecution(input: {
   // the completion evaluator still requires every required criterion before it
   // can return VERIFIED.
   for (const requirement of required) {
+    if (requirement.verification.kind === REQUESTED_LOCAL_EXECUTION_KIND) continue
     const receipt = latestAttemptFor(requirement)
     if (receipt && hasAdmissibleCriterionResult(requirement, receipt)) dispatches.push({ requirement, receipt })
   }
@@ -207,7 +270,7 @@ export function publishCriterionEvidenceFromChatExecution(input: {
     if (!node) continue
     nodes.push(node)
   }
-  if (!revisionSha || nodes.length === 0) return null
+  if (!revisionSha || nodes.length === 0) return foregroundSha
 
   ensureGovernedVerifierAssignment({
     supervisor: input.supervisor,

@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { loadEffectLedger } from '../executor/effectLedger.js'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test, { mock, type TestContext } from 'node:test'
@@ -581,17 +582,19 @@ if (!isSyntheticProviderFixtureReady()) {
     } finally { globalThis.fetch = savedFetch }
   })
 
-  test('C07 stopping at the persisted dispatch intent cannot execute or roll back an unstarted mutation', async () => {
+  test('C07 stopping at the dispatch marker cannot leave an effect intent or roll back an unstarted mutation', async () => {
     const root = mkdtempSync(join(process.env['BABEL_PROJECT_ROOT']!, 'stop-mutation-'))
     const path = join(root, 'target.txt')
+    const runDir = join(root, 'runs')
     writeFileSync(path, 'before\n')
     const control = createRunControl({ runId: 'mutation-stop', turnId: 'fixture-turn', generation: 1 })
     let physicalStarts = 0
     let intentRecorded = false
     const result = await executeActionWithPolicy({ type: 'write_file', path: 'target.txt', content: 'candidate\n' }, 'workspace_write',
-      { runId: control.owner.runId, agentId: 'fixture', babelRoot: root, projectRoot: root, runControl: control }, {
+      { runId: control.owner.runId, runDir, agentId: 'fixture', babelRoot: root, projectRoot: root, runControl: control }, {
         decide: () => 'allow', hostFallbackAllowed: true, isolationAvailable: false,
         onBeforeExecutorExecute: () => {
+          assert.deepEqual(loadEffectLedger(runDir), [], 'a crash before the dispatch marker must leave no effect intent')
           intentRecorded = true
           writeFileSync(path, 'concurrent user edit\n')
           control.requestStop({ owner: control.owner, kind: 'cancelled', source: 'user', reasonCode: 'cancelled' })
@@ -601,6 +604,7 @@ if (!isSyntheticProviderFixtureReady()) {
     assert.equal(intentRecorded, true)
     assert.equal(physicalStarts, 0)
     assert.equal(result.notStarted?.owner, control.owner)
+    assert.deepEqual(loadEffectLedger(runDir), [])
     assert.equal(readFileSync(path, 'utf8'), 'concurrent user edit\n')
   })
 

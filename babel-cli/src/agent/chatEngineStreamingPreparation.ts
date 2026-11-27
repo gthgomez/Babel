@@ -89,6 +89,7 @@ export async function prepareStreamingSubmission(
   const scopeConflict = host.options.executionScope?.kind === 'conversation' ? null : readOnlyExecutionConflictReport({
     taskText: runtime.taskText, operation: effectiveOperation,
     executionProfile: host.executionProfile, presentationOnly: runtime.presentationOnly === true,
+    foregroundCommands: host.getReadOnlyForegroundCommands(),
   });
   if (scopeConflict) {
     host.conversation.push({ role: 'assistant', content: scopeConflict.reason });

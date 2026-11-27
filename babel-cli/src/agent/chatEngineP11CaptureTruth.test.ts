@@ -168,6 +168,22 @@ test('cold hydration blocks an empty checkpoint whose contract is absent from au
   assert.deepEqual(host.p11ObservationCaptureIssues, ['installed_context_checkpoint_contract_unknown'])
 })
 
+test('cold hydration rebuilds after durable owner handoff without promoting the old checkpoint', async t => {
+  const { authority, host, parity } = fixture(t)
+  assert.equal(await authority.installP11ContextCheckpoint(route), true, host.p11InstallBlock?.code)
+  const installed = parity.contextCheckpoint
+  assert.ok(installed)
+  const takeover = authority.admitCurrentSubmission(2, 'Inspect the fixture source.')
+  assert.ok(takeover)
+  assert.equal(takeover.generation, installed.owner.generation + 1)
+
+  const restored = authority.hydrateInstalledContextAuthority()
+  assert.equal(restored.applied, false)
+  assert.ok(restored.issues.includes('stale_owner'))
+  assert.equal(parity.contextCheckpoint, undefined)
+  assert.deepEqual(host.p11ObservationCaptureIssues, [])
+})
+
 test('recovery binding changes with validated Docker execution arguments and fails closed on invalid arguments', t => {
   const { authority } = fixture(t)
   const previous = process.env['BABEL_BENCHMARK_DOCKER_EXTRA_ARGS']
@@ -381,8 +397,14 @@ async function checkColdContinuation(
   const original = new ChatEngine({ ...options, runId })
   let continuedCalls = 0
   let continuedMessages: readonly ProviderMessage[] = []
+  let initialCalls = 0
   const runner = {
     async *executeWithToolsStream(): AsyncGenerator<ToolStreamEvent> {
+      if (initialCalls++ > 0) {
+        yield { type: 'text_delta', text: 'The fixture contains 17 widgets.' }
+        yield { type: 'done', finishReason: 'stop' }
+        return
+      }
       yield { type: 'tool_use', id: 'inspect-source', name: 'read_range',
         input: { file_path: 'source.txt', start_line: 1, end_line: 1 } }
       yield { type: 'done', finishReason: 'tool_calls' }
@@ -393,7 +415,8 @@ async function checkColdContinuation(
   }
   Object.assign(original, { deliberationRunner: runner, synthesisRunner: runner, shouldUseNativeTools: () => true })
   for await (const event of original.submitMessageStream(task, 'explain')) {
-    if (event.type === 'tool_complete' && event.toolCallId === 'inspect-source') original.cancel()
+    if (scenario !== 'replaced-objective' && event.type === 'tool_complete' &&
+        event.toolCallId === 'inspect-source') original.cancel()
   }
 
   const sessionDir = chatSessionDir(runId)
@@ -401,7 +424,7 @@ async function checkColdContinuation(
   assert.ok(membership)
   assert.equal(membership.length, 1)
   const persisted = JSON.parse(readFileSync(join(sessionDir, 'context-checkpoint.json'), 'utf8'))
-  assert.deepEqual(persisted.observation_manifest, [])
+  assert.equal(persisted.observation_manifest.length, scenario === 'replaced-objective' ? 1 : 0)
   assert.ok(original.getParityRuntime().sessionEvents.events.some(event =>
     event.kind === 'tool_completed' && event.tool_call_id === 'inspect-source'))
   const originalTask = original.getParityRuntime().liveAuthority?.taskContract.task_id

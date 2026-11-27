@@ -22,6 +22,7 @@ import {
   SafeExecutor,
   getTrustedFileCreationEvidence,
   getTrustedShellExecutionBackend,
+  getTrustedHostShellInvocation,
   validateHighRiskToolResult,
   awaitPendingProcessTerminations,
   spawnCommandAsync,
@@ -555,8 +556,11 @@ test('started shell results identify the selected host backend and denials ident
     assert.equal(getTrustedShellExecutionBackend(started), 'host-process');
     const validated = validateHighRiskToolResult('test_run', started);
     assert.equal(getTrustedShellExecutionBackend(validated), 'host-process', 'the trusted fact survives the output contract copy');
+    assert.deepEqual(getTrustedHostShellInvocation(validated)?.argv, ['node', '--version']);
+    assert.equal(getTrustedHostShellInvocation(validated)?.cwd, realpathSync(fixture.projectRoot));
     const forged = { ...started, execution_backend: 'docker-container' as const };
     assert.equal(getTrustedShellExecutionBackend(forged), undefined, 'a result property cannot forge host provenance');
+    assert.equal(getTrustedHostShellInvocation(forged), undefined);
     const denied = new SafeExecutor(fixture.projectRoot, null, 'plan').shellExec('node --version', fixture.projectRoot, 5_000);
     assert.equal(denied.process_started, undefined);
     assert.equal(getTrustedShellExecutionBackend(denied), undefined);
