@@ -1297,6 +1297,7 @@ export class SafeExecutor {
     command: string,
     cwd: string,
     toolName: string,
+    readonlyRuntimeQuery?: true,
   ): PreparedShellInvocation | ToolResult {
     const planDenial = this.checkPlanModeDenial(toolName);
     if (planDenial) return planDenial;
@@ -1494,8 +1495,15 @@ export class SafeExecutor {
 
     let hostExecutable = resolvedExecutable?.path ?? normalizedRawCmd;
     let hostArgs = argv.slice(1);
+    if (readonlyRuntimeQuery && (useDockerSandbox || !resolvedExecutable?.trusted ||
+        relative(resolvedExecutable.path, process.execPath) !== '' ||
+        argv.length !== 2 || argv[0] !== 'node' || argv[1] !== '--version')) {
+      return policyDeniedResult('isolation_required', '[sandbox] The read-only task requires a trusted runtime query.', toolName, []);
+    }
     let commandShell: ResolvedCommandExecutable | undefined;
-    if (isWin && !useDockerSandbox) {
+    // Launch the validated native runtime directly so a shell cannot
+    // reinterpret the executable path.
+    if (isWin && !useDockerSandbox && !readonlyRuntimeQuery) {
       const hostSystem32 = hostWindowsSystem32Directory();
       const expectedShell = hostSystem32 ? resolve(hostSystem32, 'cmd.exe') : undefined;
       const resolvedShell = expectedShell ? resolveCommandExecutable(expectedShell, {
@@ -1523,9 +1531,7 @@ export class SafeExecutor {
           executable: hostExecutable,
           args: hostArgs,
           cwd: resolvedCwd,
-           commandArgv: argv,
-           ...(resolvedExecutable?.trusted && relative(resolvedExecutable.path, process.execPath) === ''
-             ? { usesCurrentNode: true as const } : {}),
+          commandArgv: argv,
           env,
           validateExecutable: () =>
             isResolvedCommandCurrent(resolvedExecutable!) &&
@@ -1626,12 +1632,8 @@ export class SafeExecutor {
   ): Promise<ToolResult> {
     // Settle cancellation before lookup; Windows shell built-ins may be unresolvable.
     if (signal?.aborted) return cancelledBeforeSpawnShellResult();
-    const prepared = this.prepareShellExecution(command, cwd, toolName);
+    const prepared = this.prepareShellExecution(command, cwd, toolName, readonlyRuntimeQuery);
     if ('exit_code' in prepared) return prepared;
-    if (readonlyRuntimeQuery && (!prepared.usesCurrentNode || prepared.commandArgv?.length !== 2 ||
-        prepared.commandArgv[0] !== 'node' || prepared.commandArgv[1] !== '--version')) {
-      return policyDeniedResult('isolation_required', '[sandbox] The read-only task requires a trusted runtime query.', toolName, []);
-    }
     const hostCapture = capture && prepared.commandArgv && !prepared.ownedContainerName && !this.shadowRoot &&
       prepared.cwd === this.projectRoot && toolName === 'shell_exec' ? capture : undefined;
 

@@ -69,7 +69,7 @@ import { taskProhibitsCommand } from './taskCommandProhibitions.js';
 import { hasSettledLocalJobSetup, isReadOnlyForegroundQuery, requestedForegroundEffect, requestedProcessScope, requiredLocalExecutionDenialMarker,
   requiredLocalExecutionScope, substitutesRequestedProcessOutput } from './requestedLocalExecution.js';
 import { canPublishForegroundOutput, foregroundStarted, prepareForegroundEffect, settleForegroundEffect } from './foregroundEffectReceipt.js';
-import { hasRecoveredMutationWitness } from './recoveredMutationWitness.js';
+import { recoverCurrentTaskMutationPaths } from './recoveredMutationWitness.js';
 import { commandsMatchForExecutableBinding } from './taskAcceptanceExecutableBinding.js';
 import { RunStoppedError } from '../runtime/run-control.js';
 import { ProcessTerminationError } from '../sandbox.js';
@@ -1478,10 +1478,10 @@ export class ChatEngineActionExecutor {
            ...(taskContract && dispatchTurnId && effectRoot && frozenVerifierDispatch?.foreground &&
                frozenVerifierDispatch.identity.cwd === effectRoot && !this.host.options.toolExecutorForTesting &&
                taskContract.verifier_requirements.some(command => commandsMatchForExecutableBinding(command, target))
-             ? { hasRecoveredMutationWitness: () => hasRecoveredMutationWitness({
-                 log: this.host.parity.sessionEvents, runDir: ownerRunDir,
-                 projectRoot: effectRoot, turnId: dispatchTurnId, contract: taskContract,
-               }) }
+              ? { hasRecoveredMutationWitness: () => recoverCurrentTaskMutationPaths({
+                  log: this.host.parity.sessionEvents, runDir: ownerRunDir,
+                  projectRoot: effectRoot, turnId: dispatchTurnId, contract: taskContract,
+                }).length > 0 }
              : {}),
           // Privileged ops: lease/PDP decides. Benchmark pair is the only
           // remaining auto-approve exception. TTY is not authority.

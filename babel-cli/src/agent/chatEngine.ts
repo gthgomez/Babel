@@ -1,6 +1,6 @@
 import { computeCriticRepairCostBudget, computePostWriteRepairBudget } from './chatEngineBudgetPolicy.js';
 import { durableAdmissionState, reconcileChatSubmissions } from './chatEngineAdmissionState.js';
-import { hasRecoveredMutationWitness } from './recoveredMutationWitness.js';
+import { recoverCurrentTaskMutationPaths } from './recoveredMutationWitness.js';
 import type { ChatLlmRunner } from '../runners/base.js'
 import { restoreFailedVerifierHistory, unresolvedFailedVerifierHistory, attestedFailedVerifierExecution } from './codingLoop/failedVerifierExecution.js';
 import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js';
@@ -1147,7 +1147,7 @@ export class ChatEngine {
         task: this.options.task,
         taskClass: this.taskClass,
         toolCallLog: this.toolCallLog,
-        recoveredTaskMutation: this.hasRecoveredTaskMutation(),
+        recoveredTaskMutation: this.recoveredTaskMutationPaths().length > 0,
         lastVerifierReceipt: this.lastVerifierReceipt,
         executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
         verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
@@ -1427,18 +1427,19 @@ export class ChatEngine {
     return sessionHasAnyWrites(this.toolCallLog);
   }
 
-  private hasRecoveredTaskMutation(): boolean {
+  private recoveredTaskMutationPaths(): string[] {
     const runtime = this.lastTurnRuntime;
     const contract = this.parity.liveAuthority?.taskContract;
     const { turnId, sessionEvents: log } = this.parity;
     const projectRoot = this.options.projectRoot;
-    return Boolean(runtime?.continuedTask && runtime.effectiveOperation === 'MUTATING' &&
-      !runtime.presentationOnly && contract && turnId && projectRoot &&
-      hasRecoveredMutationWitness({ log, runDir: this.engineRunDir, projectRoot, turnId, contract }));
+    return runtime?.objectiveContinuation && runtime.effectiveOperation === 'MUTATING' &&
+      !runtime.presentationOnly && contract && turnId && projectRoot
+      ? recoverCurrentTaskMutationPaths({ log, runDir: this.engineRunDir, projectRoot, turnId, contract })
+      : [];
   }
 
   private hasTaskMutationForCompletion(): boolean {
-    return this.hasAnyWrites() || this.hasRecoveredTaskMutation();
+    return this.hasAnyWrites() || this.recoveredTaskMutationPaths().length > 0;
   }
 
   /**
@@ -1450,12 +1451,14 @@ export class ChatEngine {
     errors?: string[];
   } {
     const selected = this.buildVerifierInput();
+    const recoveredMutationPaths = this.recoveredTaskMutationPaths();
     const proofs = selected.selectedChatReceipts.map(receipt => evaluateChatCompletionProof({
       projectRoot: requireProjectRoot(this.options),
       hasMutation,
       verifierTampered: this.verifierTampered,
       receipt,
       events: this.parity.sessionEvents.events,
+      recoveredMutationPaths,
       isAuthoritativeCommand: isAuthoritativeVerifierCommand,
     }));
     const errors = [...selected.proofSelection.evidenceErrors, ...selected.proofSelection.integrityFindings,

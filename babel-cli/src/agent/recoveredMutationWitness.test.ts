@@ -4,12 +4,13 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { bindChatVerifierReceipt, evaluateChatCompletionProof } from '../evidence/chatRevisionBinding.js'
 import { recordEffectIntent, recordEffectTerminal } from '../executor/effectLedger.js'
-import { hasRecoveredMutationWitness } from './recoveredMutationWitness.js'
-import { createSessionEventLog, recordMutationBatch, recordToolProposed, recordToolStarted, recordUserSubmitted } from './sessionEvents.js'
+import { recoverCurrentTaskMutationPaths } from './recoveredMutationWitness.js'
+import { createSessionEventLog, recordMutationBatch, recordToolProposed, recordToolStarted, recordUserSubmitted, recordVerifierAttempt } from './sessionEvents.js'
 import { buildTaskContractV1, freezeTaskContract } from './taskContract.js'
 
-test('a cold verifier can use a committed, current effect from this task before the mutation event was published', t => {
+test('cold completion can use a committed, current effect before the mutation event was published', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'babel-mutation-witness-'))
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   const root = realpathSync.native(directory)
@@ -37,12 +38,25 @@ test('a cold verifier can use a committed, current effect from this task before 
   writeFileSync(path, 'after')
   recordUserSubmitted(log, { ...binding, turn_id: 'resumed-turn', attempt_id: 'attempt:resumed' })
   const input = { log, runDir, projectRoot, turnId: 'resumed-turn', contract }
-  assert.equal(hasRecoveredMutationWitness(input), false, 'post-image alone does not settle an intent')
+  assert.deepEqual(recoverCurrentTaskMutationPaths(input), [], 'post-image alone does not settle an intent')
   recordEffectTerminal(runDir, intent, { status: 'completed', postImageHashes: { [path]: hash('after') } })
-  assert.equal(hasRecoveredMutationWitness(input), true)
-  assert.equal(hasRecoveredMutationWitness({ ...input, log: { ...log, events: log.events.filter(row =>
-    row.kind !== 'tool_started') } }), false, 'the ledger must name a canonical dispatch')
-  assert.equal(hasRecoveredMutationWitness({ ...input, contract: { ...contract, task_id: 'task:successor' } }), false)
+  assert.deepEqual(recoverCurrentTaskMutationPaths(input), ['fixture.txt'])
+  assert.deepEqual(recoverCurrentTaskMutationPaths({ ...input, log: { ...log, events: log.events.filter(row =>
+    row.kind !== 'tool_started') } }), [], 'the ledger must name a canonical dispatch')
+  assert.deepEqual(recoverCurrentTaskMutationPaths({ ...input, contract: { ...contract, task_id: 'task:successor' } }), [])
+
+  const receipt = await bindChatVerifierReceipt({
+    projectRoot, command: 'npm test', exit_code: 0, summary: 'fixture verifier passed',
+    mutationPaths: ['fixture.txt'], structured: { verifierId: 'npm-test', authoritySource: 'built_in_runner',
+      executable: 'npm', args: ['test'] },
+  })
+  recordVerifierAttempt(log, { turn_id: input.turnId, command_preview: 'npm test', authoritative: true, exit_code: 0 })
+  const proof = () => evaluateChatCompletionProof({
+    projectRoot, hasMutation: true, verifierTampered: false, receipt, events: log.events,
+    recoveredMutationPaths: recoverCurrentTaskMutationPaths(input), isAuthoritativeCommand: () => true,
+    env: {}, executionProfile: 'safe_repo',
+  })
+  assert.deepEqual(proof(), { compliant: true })
 
   const legacyLog = createSessionEventLog('legacy-session')
   const legacyRunDir = join(root, 'legacy-runs')
@@ -55,7 +69,8 @@ test('a cold verifier can use a committed, current effect from this task before 
   recordMutationBatch(legacyLog, 'first-turn', { paths: [path], batch_id: legacyIntent.mutationBatchId,
     pre_image_hashes: legacyIntent.preImageHashes, post_image_hashes: { [path]: hash('after') }, status: 'committed' })
   recordUserSubmitted(legacyLog, { ...binding, turn_id: 'resumed-turn', attempt_id: 'attempt:resumed' })
-  assert.equal(hasRecoveredMutationWitness({ ...input, log: legacyLog, runDir: legacyRunDir }), true)
+  assert.deepEqual(recoverCurrentTaskMutationPaths({ ...input, log: legacyLog, runDir: legacyRunDir }), ['fixture.txt'])
   writeFileSync(path, 'changed after restart')
-  assert.equal(hasRecoveredMutationWitness(input), false)
+  assert.deepEqual(recoverCurrentTaskMutationPaths(input), [])
+  assert.equal(proof().compliant, false)
 })

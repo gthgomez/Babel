@@ -77,14 +77,19 @@ export function reconcileChatSubmissions(parity: ParityRuntime): void {
     const terminal = terminals.get(attempt.turn_id);
     // An interrupted submission is no longer executing under this lease. An
     // aborted admission does not assert that its physical tools had no effect.
-    if (terminal && claim.ownerGeneration !== owner.generation) continue;
-    store.settleAdmission({
+    const superseded = claim.ownerGeneration < owner.generation;
+    const finalOutcome = superseded ? 'SUBMISSION_SUPERSEDED'
+      : terminal ? 'CHAT_TERMINAL_RECORDED' : 'SUBMISSION_INTERRUPTED';
+    const settled = store.settleAdmission({
       threadId, commandId, ownerGeneration: claim.ownerGeneration, ownerToken: owner.token,
-      state: !terminal || terminal.outcome === 'CANCELLED' ? 'aborted' : 'settled',
-      outcome: terminal
-        ? { finalOutcome: 'CHAT_TERMINAL_RECORDED', turnId: attempt.turn_id, terminalEventId: terminal.event_id }
-        : { finalOutcome: 'SUBMISSION_INTERRUPTED', turnId: attempt.turn_id },
+      state: superseded || !terminal || terminal.outcome === 'CANCELLED' ? 'aborted' : 'settled',
+      outcome: {
+        finalOutcome,
+        turnId: attempt.turn_id,
+        ...(terminal ? { terminalEventId: terminal.event_id } : {}),
+      },
       outbox: committedChatSubmission(attempt),
     });
+    if (!settled.settled) throw new Error(`Could not reconcile the accepted submission: ${settled.reasonCode}`);
   }
 }

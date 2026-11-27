@@ -10,14 +10,14 @@ import { isCredentialTargetPath } from './autonomyEnforcement.js'
 import type { SessionEvent, SessionEventLog } from './sessionEvents.js'
 import type { TaskContractV1 } from './taskContract.js'
 
-/** Recover the default live-verifier trigger from a prior committed mutation of this task. */
-export function hasRecoveredMutationWitness(input: {
+/** Recover current project-relative paths from a prior committed mutation of this task. */
+export function recoverCurrentTaskMutationPaths(input: {
   log: SessionEventLog
   runDir: string
   projectRoot: string
   turnId: string
   contract: TaskContractV1
-}): boolean {
+}): string[] {
   const { log, contract } = input
   const priorTurns = new Set<string>()
   const starts = new Map<string, Set<string>>()
@@ -25,7 +25,7 @@ export function hasRecoveredMutationWitness(input: {
   const current = log.events.find(event => event.kind === 'user_submitted' &&
     event.turn_id === input.turnId && event.task_id === contract.task_id &&
     event.contract_hash === contract.contract_hash && event.session_id === log.session_id)
-  if (!current) return false
+  if (!current) return []
   for (const event of log.events) {
     if (event.seq >= current.seq || event.session_id !== log.session_id || !event.turn_id) continue
     if (event.kind === 'user_submitted' && event.task_id === contract.task_id &&
@@ -39,10 +39,10 @@ export function hasRecoveredMutationWitness(input: {
     if (event.kind === 'mutation_batch' && event.status === 'committed' && event.batch_id)
       batches.set(event.batch_id, event)
   }
-  if (starts.size === 0 && batches.size === 0) return false
+  if (starts.size === 0 && batches.size === 0) return []
   try {
     const ledger = loadEffectLedgerWithDiagnostics(input.runDir)
-    if (ledger.malformedLines > 0) return false
+    if (ledger.malformedLines > 0) return []
     const intents = new Map<string, EffectLedgerRecord>()
     const compensated = new Set(ledger.records.map(record => record.compensatesOperationId))
     let latest: EffectLedgerRecord | undefined
@@ -72,23 +72,26 @@ export function hasRecoveredMutationWitness(input: {
           sha256Canonical(batch.post_image_hashes) === sha256Canonical(post)
       if (linked) latest = record
     }
-    if (!latest?.postImageHashes) return false
+    if (!latest?.postImageHashes) return []
     const root = realpathSync.native(input.projectRoot)
-    const paths = Object.entries(latest.postImageHashes)
-    return paths.length > 0 && paths.every(([path, digest]) => {
-      if (!isAbsolute(path)) return false
+    const paths: string[] = []
+    for (const [path, digest] of Object.entries(latest.postImageHashes)) {
+      if (!isAbsolute(path)) return []
       const fromRoot = relative(root, path).replaceAll('\\', '/')
       if (!fromRoot || fromRoot === '..' || fromRoot.startsWith('../') || isAbsolute(fromRoot) ||
-          isCredentialTargetPath(fromRoot)) return false
+          isCredentialTargetPath(fromRoot)) return []
       if (digest === WorkspaceTransactionManager.missingPathDigest()) {
         const parent = latest.targetParentIdentities?.[path]
-        if (!parent || relative(path, resolveOwnedEffectPath(path, parent)) !== '') return false
-        return lstatSync(path, { throwIfNoEntry: false }) === undefined
+        if (!parent || relative(path, resolveOwnedEffectPath(path, parent)) !== '' ||
+            lstatSync(path, { throwIfNoEntry: false }) !== undefined) return []
+      } else {
+        const bytes = checkedFileBytes(path, 16 * 1024 * 1024, () => relative(path, realpathSync.native(path)) === '')
+        if (!bytes || createHash('sha256').update(bytes).digest('hex') !== digest) return []
       }
-      const bytes = checkedFileBytes(path, 16 * 1024 * 1024, () => relative(path, realpathSync.native(path)) === '')
-      return bytes !== null && createHash('sha256').update(bytes).digest('hex') === digest
-    })
+      paths.push(fromRoot)
+    }
+    return paths
   } catch {
-    return false
+    return []
   }
 }
