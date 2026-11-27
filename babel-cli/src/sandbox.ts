@@ -1524,7 +1524,8 @@ export class SafeExecutor {
           args: hostArgs,
           cwd: resolvedCwd,
            commandArgv: argv,
-           ...(resolvedExecutable?.trusted ? { trustedExecutable: true as const } : {}),
+           ...(resolvedExecutable?.trusted && relative(resolvedExecutable.path, process.execPath) === ''
+             ? { usesCurrentNode: true as const } : {}),
           env,
           validateExecutable: () =>
             isResolvedCommandCurrent(resolvedExecutable!) &&
@@ -1627,7 +1628,7 @@ export class SafeExecutor {
     if (signal?.aborted) return cancelledBeforeSpawnShellResult();
     const prepared = this.prepareShellExecution(command, cwd, toolName);
     if ('exit_code' in prepared) return prepared;
-    if (readonlyRuntimeQuery && (!prepared.trustedExecutable || prepared.commandArgv?.length !== 2 ||
+    if (readonlyRuntimeQuery && (!prepared.usesCurrentNode || prepared.commandArgv?.length !== 2 ||
         prepared.commandArgv[0] !== 'node' || prepared.commandArgv[1] !== '--version')) {
       return policyDeniedResult('isolation_required', '[sandbox] The read-only task requires a trusted runtime query.', toolName, []);
     }
