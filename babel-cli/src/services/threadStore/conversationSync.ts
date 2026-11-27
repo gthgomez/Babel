@@ -7,6 +7,7 @@ import type { ChatMessage } from '../../agent/chatToolDefinitions.js';
 import { ChatEngine, type ChatEngineOptions } from '../../agent/chatEngine.js';
 import type { ProviderMessage } from '../../runners/base.js';
 import { providerMessagesToChatMessages } from '../../agent/providerMessagesToChatMessages.js';
+import { resumedToolRecoveryGuidance } from '../../agent/sessionEvents.js';
 export { providerMessagesToChatMessages } from '../../agent/providerMessagesToChatMessages.js';
 import {
   rebuildProviderMessagesFromEvents,
@@ -49,12 +50,25 @@ export function applyEventLogToChatEngine(
   options: { systemPrompt?: string } = {},
 ): ProviderMessage[] {
   engine.restoreEventLog(log);
-  const providerMessages = rebuildProviderMessagesFromEvents(log, {
-    ...(options.systemPrompt !== undefined
-      ? { systemPrompt: options.systemPrompt }
-      : {}),
-  });
-  engine.replaceConversation(providerMessagesToChatMessages(providerMessages));
+  return syncRestoredEventLogConversation(engine, log, options);
+}
+
+/** Mirror the authoritative event projection after retained authority is hydrated. */
+export function syncRestoredEventLogConversation(
+  engine: ChatEngine,
+  log: ThreadEventLog,
+  options: { systemPrompt?: string } = {},
+): ProviderMessage[] {
+  const providerMessages = typeof engine.getProviderConversation === 'function'
+    ? engine.getProviderConversation(options.systemPrompt)
+    : rebuildProviderMessagesFromEvents(log, options);
+  const conversation = providerMessagesToChatMessages(providerMessages);
+  const sessionEvents = engine.getParityRuntime?.()?.sessionEvents;
+  const guidance = sessionEvents && resumedToolRecoveryGuidance(sessionEvents);
+  if (guidance && !conversation.some(message => message.content === guidance)) {
+    conversation.push({ role: 'system', content: guidance });
+  }
+  engine.replaceConversation(conversation);
   if (typeof engine.replaceProviderConversation === 'function') {
     engine.replaceProviderConversation(providerMessages);
   }
@@ -82,8 +96,8 @@ export function resyncEngineToThreadCells(
   }finally{engine.resyncTurnStateAfterBranch();}
 }
 
-/** Inspect existing authority before any constructor can replace its artifacts. */
-function constructResumedEngine(threadId:string,options:ChatEngineOptions):ChatEngine{
+/** Restore saved authority before constructing an engine; absent legacy authority is not synthesized here. */
+export function restoreEngineWithRetainedAuthority(threadId:string,options:ChatEngineOptions):ChatEngine|null{
   const runDir=chatSessionDir(threadId);recoverCheckpointArtifacts(runDir);
   if([INSTRUCTION_MANIFEST_FILENAME,TASK_CONTRACT_FILENAME,TASK_MODE_HISTORY_FILENAME].some(name=>existsSync(join(runDir,name)))){
     const retained=loadLiveSessionAuthorityStrict(runDir);
@@ -95,6 +109,12 @@ function constructResumedEngine(threadId:string,options:ChatEngineOptions):ChatE
     if(log)engine.restoreEventLog(log);
     return engine;
   }
+  return null;
+}
+
+function constructResumedEngine(threadId:string,options:ChatEngineOptions):ChatEngine{
+  const retained=restoreEngineWithRetainedAuthority(threadId,options);
+  if(retained)return retained;
   const engine=new ChatEngine({...options,runtimeMode:options.runtimeMode??'direct',retainedHistory:true});
   engine.assignRunId(threadId);return engine;
 }
@@ -120,9 +140,6 @@ export function createEngineFromEventLog(
   systemPrompt?: string,
 ): ChatEngine {
   const engine = constructResumedEngine(log.thread_id,options);
-  applyEventLogToChatEngine(engine, log, {
-    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-  });
   engine.restoreEventLog(log);
   // R1: load durable observation membership before session-event restore, which
   // re-persists the snapshot from `parity.authorizedObservationIds`.
@@ -132,5 +149,6 @@ export function createEngineFromEventLog(
   // R1: the primary resume path must run the same context-authority hydration
   // as `ChatEngine.restore`, not silently skip checkpoint validation.
   engine.hydrateInstalledContextAuthority();
+  syncRestoredEventLogConversation(engine, log, systemPrompt === undefined ? {} : { systemPrompt });
   return engine;
 }

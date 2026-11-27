@@ -29,15 +29,17 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { ChatEngine } from '../../agent/chatEngine.js';
+import { ChatEngine, type ChatEngineOptions } from '../../agent/chatEngine.js';
 import {
   THREAD_EVENT_LOG_FILENAME,
+  appendThreadEvent,
   createThreadEventLog,
   endTurn,
+  loadThreadEventLogFromDir,
   recordAssistantToolCalls,
   recordToolResult,
   serializeThreadEventLog,
@@ -51,9 +53,11 @@ import {
   recordTurnEnded,
   recordUserSubmitted,
 } from '../../agent/sessionEvents.js';
-import { LIVE_SESSION_SNAPSHOT_FILENAME } from '../../agent/liveSessionBridge.js';
+import { LIVE_SESSION_SNAPSHOT_FILENAME, TASK_CONTRACT_FILENAME, loadLiveSessionAuthorityStrict } from '../../agent/liveSessionBridge.js';
 import { chatSessionDir } from '../../cli/runsLayout.js';
+import { restoreEngineWithRetainedAuthority } from '../../services/threadStore/conversationSync.js';
 import { inspectSessionRestoreState } from '../../services/threadStore/sessionHydration.js';
+import { appendTurnCells } from '../../services/threadStore/threadStore.js';
 import {
   captureApprovedObservation,
   type ObservationRefV1,
@@ -64,6 +68,7 @@ import {
   type LiveOperationalSourcesV1,
 } from '../../runtime/contextCheckpoints.js';
 import { getOpenAdmissionStoreCount } from '../../runtime/admissionTestHooks.js';
+import { RUNTIME_COORDINATOR_ENV } from '../../runtime/coordinator.js';
 import {
   closeProtocolHostState,
   createProtocolHostState,
@@ -99,14 +104,16 @@ interface ProtocolDescriptor {
  * `materializeEngine` → admission attach → `hydrateEngineFromRestore`
  * production path end to end.
  */
-function realEngineFactory(descriptor: ProtocolDescriptor): ChatEngine {
-  const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter',
+function realEngineFactory(descriptor: ProtocolDescriptor, retained = false): ChatEngine {
+  const options: ChatEngineOptions = { model: 'deepseek-v4-flash-openrouter',
     task: `R1 6b-2 protocol resume ${descriptor.threadId}`,
     projectRoot: descriptor.projectRoot,
     runtimeMode: 'direct',
     executionProfile: 'chat',
-  });
-  engine.assignRunId(descriptor.threadId);
+  };
+  const restored = retained ? restoreEngineWithRetainedAuthority(descriptor.threadId, options) : null;
+  const engine = restored ?? new ChatEngine(options);
+  if (!restored) engine.assignRunId(descriptor.threadId);
   (
     engine as unknown as {
       submitMessageStream: (message: string, intent?: string) => AsyncGenerator<unknown>;
@@ -153,6 +160,72 @@ async function submitTurn(
     host,
   );
 }
+
+test('default protocol materialization preserves an existing objective before replay', async t => {
+  const fixture = withTempRunsDir();
+  const host = createProtocolHostState({ executeWithoutNotifications: true });
+  host.coordinator.submit = async function* () {
+    yield { type: 'done', answer: 'Fixture', usage: {
+      totalCostUSD: 0, totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0, modelBreakdown: {},
+    } };
+  };
+  const settings = {
+    BABEL_STATE_DIR: join(fixture.root, 'state'),
+    BABEL_CONFIG_DIR: join(fixture.root, 'config'),
+    BABEL_MODEL: 'deepseek-v4-flash-openrouter',
+    BABEL_PROVIDER: 'openrouter',
+    BABEL_OFFLINE: undefined,
+    BABEL_CONNECTION: undefined,
+    [RUNTIME_COORDINATOR_ENV]: 'on',
+  };
+  const previousSettings = Object.entries(settings).map(([key, value]) => {
+    const previous = process.env[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+    return [key, previous] as const;
+  });
+  t.after(() => {
+    closeProtocolHostState(host);
+    for (const [key, value] of previousSettings) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fixture.cleanup();
+  });
+  const threadId = await createThread(host, fixture.root);
+  const original = new ChatEngine({
+    runId: threadId, projectRoot: fixture.root, task: 'Inspect the original fixture objective.',
+    runtimeMode: 'direct', executionProfile: 'chat', model: 'deepseek-v4-flash-openrouter',
+  });
+  const originalTask = original.getParityRuntime().liveAuthority?.taskContract.task_id;
+  assert.ok(originalTask);
+  seedDurableLogs(threadId, fixture.root);
+  const contractPath = join(chatSessionDir(threadId), TASK_CONTRACT_FILENAME);
+  const before = readFileSync(contractPath, 'utf8');
+  const response = await submitTurn(host, threadId, 'continue');
+  assert.ok('result' in response, JSON.stringify(response));
+  const engine = host.engines.get(threadId);
+  assert.ok(engine);
+  assert.equal(engine.getParityRuntime().liveAuthority?.taskContract.task_id, originalTask);
+  assert.equal(readFileSync(contractPath, 'utf8'), before);
+
+  const legacyResponse = await handleProtocolRequest({
+    jsonrpc: '2.0', id: 3, method: 'thread.create', params: { project_root: fixture.root, mode: 'plan' },
+  }, host);
+  assert.ok('result' in legacyResponse, JSON.stringify(legacyResponse));
+  const legacyThread = (legacyResponse.result as { thread_id: string }).thread_id;
+  appendTurnCells(legacyThread, 1, [{
+    schema_version: 1, cell_id: 'legacy-plan', thread_id: legacyThread, turn_id: 1,
+    ts: new Date().toISOString(), kind: 'user_message', lifecycle: 'committed', revision: 0,
+    payload: { message: 'A historical plan' },
+  }]);
+  const continuedLegacy = await submitTurn(host, legacyThread, 'Inspect the fixture and suggest a plan', 4);
+  assert.ok('result' in continuedLegacy, JSON.stringify(continuedLegacy));
+  const legacyEngine = host.engines.get(legacyThread);
+  assert.ok(legacyEngine);
+  assert.equal(legacyEngine.getParityRuntime().liveAuthority?.taskContract.mode, 'plan');
+  assert.ok(legacyEngine.getConversation().some(message => message.content === 'A historical plan'));
+});
 
 /**
  * Durable fixture exactly shaped like the agent4 witness: a typed thread event
@@ -239,13 +312,13 @@ function writeMembershipSnapshot(threadId: string, authorizedIds: readonly strin
   );
 }
 
-function sources(manifest: readonly ObservationRefV1[]): LiveOperationalSourcesV1 {
+function sources(manifest: readonly ObservationRefV1[], contractHash: string): LiveOperationalSourcesV1 {
   return {
     resumed: false,
     task_contract: {
       goal: 'protocol restore reconstructs durable session state',
       acceptance_clause_ids: ['clause-1'],
-      contract_hash: 'contract-hash-1',
+      contract_hash: contractHash,
     },
     working_state: {
       current_hypothesis: 'the protocol seam must mirror the primary resume sequence',
@@ -283,13 +356,14 @@ function writeCheckpointFixture(
   threadId: string,
   owner: ContextCheckpointOwnerV1,
   manifest: readonly ObservationRefV1[] = [],
+  contractHash = 'unused-without-durable-owner',
 ): void {
   const dir = chatSessionDir(threadId);
   mkdirSync(dir, { recursive: true });
   const prepared = prepareContextCheckpoint({
     checkpointId: `cp-${threadId}`,
     owner,
-    sources: sources(manifest),
+    sources: sources(manifest, contractHash),
     turnId: 'turn-1',
     contextEpoch: '1:revision-1:capture-epoch-1',
   });
@@ -406,7 +480,29 @@ test('control 2+3: protocol restore restores membership and consumes the install
     // Installed checkpoint + durable membership + payload present.
     const observation = captureObservation(sessionDir, 'present');
     writeMembershipSnapshot(threadId, [observation.observationId]);
-    writeCheckpointFixture(threadId, owner, [observation.ref]);
+    const contractHash = loadLiveSessionAuthorityStrict(sessionDir).taskContract.contract_hash;
+    writeCheckpointFixture(threadId, owner, [observation.ref], contractHash);
+
+    const log = loadThreadEventLogFromDir(sessionDir);
+    assert.ok(log);
+    const turn = log.events.find(event => event.kind === 'turn_started');
+    assert.ok(turn?.ownership_generation);
+    appendThreadEvent(log, {
+      kind: 'compaction_capsule',
+      turn_id: turn.turn_id,
+      content: 'uncommitted protocol capsule',
+      preserved_tool_call_ids: [],
+      ownership_generation: turn.ownership_generation,
+    });
+    appendThreadEvent(log, {
+      kind: 'compaction_summary',
+      turn_id: turn.turn_id,
+      content: 'uncommitted protocol summary',
+      provenance: 'model',
+      authoritative: false,
+      ownership_generation: turn.ownership_generation,
+    });
+    writeFileSync(join(sessionDir, THREAD_EVENT_LOG_FILENAME), serializeThreadEventLog(log));
 
     const host = makeHost();
     hosts.push(host);
@@ -426,6 +522,10 @@ test('control 2+3: protocol restore restores membership and consumes the install
       'durable observation membership restored before session-event restore',
     );
     assert.ok(parity.sessionEvents.events.length === 3, 'session events restored alongside authority');
+    const conversation = engine.getConversation();
+    assert.ok(conversation.some(message => message.content.includes('protocol-sentinel')));
+    assert.ok(!conversation.some(message => message.content.includes('uncommitted protocol')));
+    assert.ok(!engine.getProviderConversation().some(message => message.name === 'compaction_summary'));
 
     // Independent revalidation through the same seam agrees: applies cleanly.
     const recheck = engine.hydrateInstalledContextAuthority();
@@ -453,7 +553,8 @@ test('control 2: missing observation payload fails closed while membership stays
     const owner = await admitDurableOwner(threadId, fixture.root);
     const observation = captureObservation(sessionDir, 'missing-payload');
     writeMembershipSnapshot(threadId, [observation.observationId]);
-    writeCheckpointFixture(threadId, owner, [observation.ref]);
+    const contractHash = loadLiveSessionAuthorityStrict(sessionDir).taskContract.contract_hash;
+    writeCheckpointFixture(threadId, owner, [observation.ref], contractHash);
     // The durable membership and the manifest entry exist; the payload object
     // does not. The checkpoint must stay inert rather than reconstruct partial
     // trusted context.
@@ -540,6 +641,23 @@ test('control 2: an omitted membership source blocks the checkpoint with observa
     for (const host of hosts) closeProtocolHostState(host);
     fixture.cleanup();
   }
+});
+
+test('event-log protocol resume refuses materialization when its admission store cannot open', async t => {
+  const fixture = withTempRunsDir();
+  const host = makeHost();
+  t.after(() => {
+    closeProtocolHostState(host);
+    fixture.cleanup();
+  });
+  const threadId = await createThread(host, fixture.root);
+  seedDurableLogs(threadId, fixture.root);
+  mkdirSync(join(chatSessionDir(threadId), 'runtime-facts.sqlite'));
+
+  const response = await submitTurn(host, threadId, 'continue');
+  assert.ok('error' in response, JSON.stringify(response));
+  assert.match(response.error.message, /admission store/i);
+  assert.equal(host.engines.has(threadId), false);
 });
 
 test('control 3: wrong/missing durable owner stays fail-closed on the protocol path (owner_missing / stale_owner)', async () => {

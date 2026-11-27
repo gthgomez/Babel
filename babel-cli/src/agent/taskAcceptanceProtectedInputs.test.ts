@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -13,6 +13,8 @@ import {
   type ProtectedInputFs,
 } from './taskAcceptanceProtectedInputs.js';
 import { resolveExistingVerifierInputPaths } from './verifierInputPaths.js';
+import { computeVerifierDependencyHashes } from './verifierIntegrity.js';
+import { verifierCommandInputFiles } from './verifierCommandInputs.js';
 import { inferTaskAcceptance, inferTaskAcceptanceV3 } from './taskAcceptanceMeaning.js';
 import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js';
 
@@ -232,16 +234,24 @@ test('explicit direct Node verifier freezes its existing test file against task-
   assert.ok(String(result.results[0]?.stderr).includes('protected_path'));
 });
 
-test('live admission binds only a pre-existing exact Node test file, never a task-created verifier', () => {
+test('live admission binds only a pre-existing exact Node test file, never a task-created verifier', t => {
   const command = 'node --test test/parser.test.mjs';
   const task = [
-    'Fix parser.js so parseSum(2, 3) returns 5.',
+    'Fix src/parser.js so parseSum(2, 3) returns 5.',
     'Requirements:',
     `- parseSum(2, 3) returns 5; verified by: \`${command}\` must pass.`,
   ].join('\n');
   const existingRoot = mkdtempSync(join(tmpdir(), 'babel-existing-node-verifier-'));
+  t.after(() => rmSync(existingRoot, { recursive: true, force: true }));
   mkdirSync(join(existingRoot, 'test'), { recursive: true });
-  writeFileSync(join(existingRoot, 'test', 'parser.test.mjs'), 'assert.equal(parseSum(2, 3), 5)\n');
+  mkdirSync(join(existingRoot, 'src'), { recursive: true });
+  writeFileSync(join(existingRoot, 'src', 'parser.js'), 'export function parseSum(a, b) { return a + b; }\n');
+  writeFileSync(join(existingRoot, 'test', 'parser.test.mjs'), [
+    'import test from "node:test";',
+    'import assert from "node:assert/strict";',
+    'import { parseSum } from "../src/parser.js";',
+    'test("sum", () => assert.equal(parseSum(2, 3), 5));',
+  ].join('\n'));
   const admitted = resolveLiveSessionAuthority({
     mode: 'chat', task, projectRoot: existingRoot, verifierRequirements: [command],
   }).taskContract;
@@ -250,12 +260,32 @@ test('live admission binds only a pre-existing exact Node test file, never a tas
   assert.ok(admitted.protected_paths.includes('test/parser.test.mjs'));
 
   const missingRoot = mkdtempSync(join(tmpdir(), 'babel-missing-node-verifier-'));
+  t.after(() => rmSync(missingRoot, { recursive: true, force: true }));
   const missing = resolveLiveSessionAuthority({
     mode: 'chat', task, projectRoot: missingRoot, verifierRequirements: [command],
   }).taskContract;
   const missingCriterion = missing.acceptance.find(item => item.description.includes('verified by'));
   assert.ok(missingCriterion?.verification.verifier_id.startsWith('meaning:'));
   assert.equal(missing.protected_paths.includes('test/parser.test.mjs'), false);
+});
+
+test('a quoted npm test file has a content hash at verifier admission', t => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-quoted-npm-verifier-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const path = 'test files/parser.test.mjs';
+  mkdirSync(join(root, 'test files'));
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: `node --test "${path}"` } }));
+  writeFileSync(join(root, path), 'export const fixture = 1;\n');
+  const before = computeVerifierDependencyHashes(root, ['npm test']);
+  assert.match(before[path] ?? '', /^[0-9a-f]{64}$/);
+  writeFileSync(join(root, path), 'export const fixture = 2;\n');
+  assert.notEqual(computeVerifierDependencyHashes(root, ['npm test'])[path], before[path]);
+
+  // Preserve hash coverage for legacy scripts which cannot supply a point witness.
+  writeFileSync(join(root, 'flat.test.mjs'), 'export const fixture = 1;\n');
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node --test --test-update-snapshots flat.test.mjs' } }));
+  assert.deepEqual(verifierCommandInputFiles(root, 'npm test'), ['flat.test.mjs', 'package.json']);
+  assert.match(computeVerifierDependencyHashes(root, ['npm test'])['flat.test.mjs'] ?? '', /^[0-9a-f]{64}$/);
 });
 
 test('canonical verifier-input aliases are protected and out-of-root symlinks are excluded', async () => {

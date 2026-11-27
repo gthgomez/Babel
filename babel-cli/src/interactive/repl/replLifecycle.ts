@@ -149,11 +149,12 @@ export async function maybeShowResumePicker(ctx: ReplContext): Promise<void> {
         ? sessions[0]?.id
         : requested;
     if (id) {
-      const { resumeChatSession } = await import('../chatSessionResume.js');
+      const { formatResumedTerminalNotice, resumeChatSession } = await import('../chatSessionResume.js');
       const outcome = await resumeChatSession(ctx, id);
       const buf = OutputBuffer.getInstance();
       if (outcome.ok) {
         buf.write(primary(`\n  Resumed ${id} — ${outcome.turnCount} turns loaded\n`));
+        buf.write(`  ${formatResumedTerminalNotice(outcome.terminal)}\n`);
         buf.write(muted('  Type a message to continue, or /help for commands.\n'));
       } else {
         buf.write(error(`\n  ${outcome.reason === 'cancelled' ? outcome.message : `Failed to resume ${id}: ${outcome.message}`}\n`));
@@ -178,11 +179,12 @@ export async function maybeShowResumePicker(ctx: ReplContext): Promise<void> {
   ctx.isRunning = false;
 
   if (choice.action === 'resume') {
-    const { resumeChatSession } = await import('../chatSessionResume.js');
+    const { formatResumedTerminalNotice, resumeChatSession } = await import('../chatSessionResume.js');
     const outcome = await resumeChatSession(ctx, choice.sessionId);
     const buf = OutputBuffer.getInstance();
     if (outcome.ok) {
       buf.write(primary(`\n  Resumed ${choice.sessionId} — ${outcome.turnCount} turns loaded\n`));
+      buf.write(`  ${formatResumedTerminalNotice(outcome.terminal)}\n`);
       buf.write(muted('  Type a message to continue, or /help for commands.\n'));
     } else {
       buf.write(error(`\n  ${outcome.reason === 'cancelled' ? outcome.message : `Failed to resume ${choice.sessionId}: ${outcome.message}`}\n`));

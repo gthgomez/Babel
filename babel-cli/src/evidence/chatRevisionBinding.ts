@@ -61,6 +61,8 @@ export type BoundChatVerifierReceipt = {
   environment_policy?: string;
   /** Target selector/path when the verifier was targeted (not full suite). */
   target?: string;
+  /** Case identities observed together in one host-owned verifier execution. */
+  additionalPointTargets?: string[];
   /**
    * H5: verifier scope. Must be preserved into completion promotion —
    * never silently upgraded from targeted → full_suite.
@@ -74,11 +76,12 @@ export type BoundChatVerifierReceipt = {
   inputClosure?: { mode: "bound"; paths: string[]; digests: Record<string, string>; reuseEligible?: false } | { mode: "unsupported"; reason: string };
 };
 
-/** Collect unique mutation paths from SessionEventV1 mutation_batch events. */
+/** Collect unique mutation paths from the journal and any validated recovery settlement. */
 export function mutationPathsFromSessionEvents(
   events: readonly { kind: string; paths?: readonly string[] }[],
+  recovered: readonly string[] = [],
 ): string[] {
-  const set = new Set<string>();
+  const set = new Set(recovered);
   for (const event of events) {
     if (event.kind !== 'mutation_batch' || !event.paths) continue;
     for (const p of event.paths) {
@@ -588,8 +591,9 @@ export function evaluateChatEvidenceGraph(input: {
     exit_code?: number;
   }[];
   hasMutation: boolean;
+  recoveredMutationPaths?: readonly string[];
 }): CompletionEvidenceEvaluation {
-  const mutationPaths = mutationPathsFromSessionEvents(input.events);
+  const mutationPaths = mutationPathsFromSessionEvents(input.events, input.recoveredMutationPaths);
   const graph = buildChatEvidenceGraph({
     receipt: input.receipt,
     mutationPaths,
@@ -622,6 +626,8 @@ export function evaluateChatCompletionProof(input: {
     authoritative?: boolean;
     exit_code?: number;
   }[];
+  /** Host-resolved paths from durable, current mutation settlements. */
+  recoveredMutationPaths?: readonly string[];
   isAuthoritativeCommand: (command: string) => boolean;
   /** Optional env override for IndependentVerifier opt-in tests. */
   env?: NodeJS.ProcessEnv;
@@ -647,7 +653,7 @@ export function evaluateChatCompletionProof(input: {
     errors.push(...revisionBindingProofErrors(receipt));
   }
 
-  if (!input.events.some((event) => event.kind === 'mutation_batch')) {
+  if (!input.recoveredMutationPaths?.length && !input.events.some((event) => event.kind === 'mutation_batch')) {
     errors.push('missing mutation transaction evidence');
   }
   if (
@@ -667,6 +673,7 @@ export function evaluateChatCompletionProof(input: {
     receipt: input.receipt,
     events: input.events,
     hasMutation: input.hasMutation,
+    ...(input.recoveredMutationPaths ? { recoveredMutationPaths: input.recoveredMutationPaths } : {}),
   });
   for (const missing of evidence.missing) {
     errors.push(`missing evidence: ${missing}`);
@@ -678,7 +685,7 @@ export function evaluateChatCompletionProof(input: {
   // Opt-in clean-room IndependentVerifier (default off — no hot-path tree copy).
   // High-assurance profiles may default ON; env still overrides.
   if (receipt && receipt.exit_code === 0) {
-    const mutationPaths = mutationPathsFromSessionEvents(input.events);
+    const mutationPaths = mutationPathsFromSessionEvents(input.events, input.recoveredMutationPaths);
     const env = input.env ?? process.env;
     const executionProfile =
       input.executionProfile ?? getScopedExecutionProfile(env['BABEL_EXECUTION_PROFILE']);

@@ -6,7 +6,11 @@
  */
 
 import { createHash } from 'node:crypto'
+import { sha256Canonical } from '../acceptance/canonical.js'
+import { parseSingleProcessArgv } from '../utils/commandArgv.js'
+import type { ForegroundEffectReceipt } from './foregroundEffectReceipt.js'
 import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js'
+import { settledNodePointReport } from './pointVerifierWitness.js'
 import { hashDiscoveryContent, isDiscoveryTool } from './discoveryProgress.js'
 
 export interface ToolExecutionIdentity {
@@ -26,6 +30,8 @@ export interface DurableToolLogRow {
   exit_code?: number
   /** Host-origin execution provenance; never inferred from observation text. */
   verifierExecuted?: boolean
+  processCompleted?: boolean
+  foregroundEffect?: ForegroundEffectReceipt
   verifierSemanticSignature?: string
   preDispatchNoEffect?: true
   stdout?: string
@@ -47,6 +53,11 @@ export interface DurableToolResultProjection {
   exit_code?: number
   /** Host-origin execution provenance; never inferred from observation text. */
   verifierExecuted?: boolean
+  verifier_stdout_digest?: string
+  verifier_command_digest?: string
+  verifier_passed_case_digests?: string[]
+  command_digest?: string
+  foreground_effect?: ForegroundEffectReceipt
   verifierSemanticSignature?: string
   preDispatchNoEffect?: true
   contentHash?: string
@@ -147,12 +158,21 @@ export function projectDurableToolBatch(input: {
       (row.detail === 'cached' || row.detail === 'read_limit')
     const hashed = discoverySuppressed ? undefined :
       (input.contentHashFor ?? hashDiscoveryContent)(row.tool, content)
+    const verifierFacts = row.verifierExecuted && row.processCompleted && row.exit_code === 0 && typeof row.stdout === 'string'
+      ? { verifier_stdout_digest: createHash('sha256').update(row.stdout).digest('hex'),
+          verifier_command_digest: createHash('sha256').update(row.target).digest('hex'),
+          verifier_passed_case_digests: settledNodePointReport(row.stdout) ?? [] } : undefined
+    const foregroundArgv = row.foregroundEffect && parseSingleProcessArgv(row.target)
     results.push({
       tool_call_id: toolCallId,
       tool_name: row.tool,
       content,
       target: row.target,
       ...(row.verifierExecuted !== undefined ? { verifierExecuted: row.verifierExecuted } : {}),
+      ...verifierFacts,
+      ...(foregroundArgv && row.foregroundEffect ? {
+        command_digest: sha256Canonical(foregroundArgv), foreground_effect: row.foregroundEffect,
+      } : {}),
       ...(row.verifierSemanticSignature ? { verifierSemanticSignature: row.verifierSemanticSignature } : {}),
       ...(row.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
       ...(row.exit_code !== undefined ? { exit_code: row.exit_code } : {}),

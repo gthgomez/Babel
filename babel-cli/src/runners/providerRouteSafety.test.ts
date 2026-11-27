@@ -110,6 +110,20 @@ if (!isSyntheticProviderFixtureReady()) {
       assert.equal(completed[0]?.observed_model_id, route.model)
     })
 
+    test(`${route.provider} empty native EOF reports a transport failure without inventing model identity`, async () => {
+      globalThis.fetch = async () => new Response('', { headers: { 'content-type': 'text/event-stream' } })
+      const completed: ProviderInvocationCompleted[] = []
+      const received: ToolStreamEvent[] = []
+      for await (const event of runner().executeWithToolsStream([{ role: 'user', content: 'Inspect' }], [], undefined, undefined, 'auto', {
+        onInvocationCompleted: receipt => { completed.push(receipt) },
+      })) received.push(event)
+      assert.deepEqual(received.map(event => event.type), ['error'])
+      assert.match(received[0]?.type === 'error' ? received[0].message : '', /closed before terminal/)
+      assert.equal(completed.length, 1)
+      assert.equal(completed[0]?.status, 'failed')
+      assert.equal(completed[0]?.observed_model_id, null)
+    })
+
     for (const status of [401, 429]) test(`${route.provider} HTTP ${status} fails on the selected route without credential leakage`, async () => {
       let requests = 0
       globalThis.fetch = async () => { requests++; return new Response(JSON.stringify({ error: { message: 'fixture rejection' } }), { status }) }
@@ -225,12 +239,13 @@ if (!isSyntheticProviderFixtureReady()) {
             onInvocationCompleted: value => { completed.push(value) },
             onInvocationPhase: value => { phases.push(value.phase) },
           })) events.push(event)
-        }, /model|identity/i)
-        assert.deepEqual(events.filter(event => event.type === 'tool_use' || event.type === 'done').map(event => event.type), [])
+        }, { message: /^\[LIVE_MODEL_POLICY\].*response model mismatch/ })
+        assert.deepEqual(events.map(event => event.type), payload === 'text' ? ['text_delta'] : [])
         assert.equal(phases.includes('response_normalized'), false)
         assert.equal(completed.length, 1)
         assert.equal(completed[0]?.status, 'failed')
         assert.equal(completed[0]?.failure_receipt?.failure_stage, terminal ? 'response_normalization' : 'stream')
+        assert.equal(completed[0]?.failure_receipt?.partial_model_output, true)
         assert.equal(api.getLastInvocationMetadata()?.observed_model_id, observed)
         assert.equal(api.getLastInvocationMetadata()?.sent_model_id, route.model)
         assert.equal(requests, 1)

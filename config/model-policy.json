@@ -171,6 +171,18 @@
         "Do not substitute another provider or model when this backend is requested."
       ]
     },
+    "opencode-go/glm-5.3-flash": {
+      "provider": "opencode-go",
+      "model_id": "glm-5.3-flash",
+      "tier": "standard",
+      "enabled": true,
+      "experimental": true,
+      "native_tool_use": true,
+      "source_url": "https://opencode.ai/inference/go/v1/models",
+      "verified_at": "2026-11-26",
+      "expires_at": "2027-02-24",
+      "selection_reason": "Explicit OpenCode Go coding route for GLM 5.3 Flash. Requires a caller-owned task budget and never selects another model."
+    },
     "opencode-go/deepseek-v4.1-flash": {
       "provider": "opencode-go",
       "model_id": "deepseek-v4.1-flash",

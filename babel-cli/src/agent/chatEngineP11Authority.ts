@@ -4,6 +4,8 @@ import { getActiveExecutionPolicyChoice } from '../config/executionPolicySelecti
 import { existsSync, readFileSync } from 'node:fs';
 import {
   captureApprovedObservation,
+  deriveObservationId,
+  hasStoredObservationReference,
   resolveObservation,
   type ObservationRefV1,
 } from '../evidence/observationStore.js';
@@ -34,7 +36,7 @@ import { ADMISSION_REASONS } from '../runtime/admissionContracts.js';
 import type { ParityRuntime, PersistenceReceipt } from './chatEngineParityBridge.js';
 import { interruptedToolRecoveries, type SessionEventLog } from './sessionEvents.js';
 import { checkpointParityEventLogStrict } from './chatEngineParityBridge.js';
-import { loadLiveSessionSnapshot } from './liveSessionBridge.js';
+import { loadLiveObservationMembership } from './liveSessionBridge.js';
 import { recordWorkingStateSnapshot } from './sessionEvents.js';
 import type { WorkingState } from './codingLoop/workingState.js';
 import type { RecoveryCandidateBinding } from './codingLoop/index.js';
@@ -43,6 +45,7 @@ import { recoveryBindingUnavailableReason, recoveryWorkspaceRevision } from './c
 import { validateDockerIsolationArgs } from '../config/dockerIsolationArgs.js';
 import { resolveExecutorDryRun } from '../config/dryRun.js';
 import { readRuntimeMode } from '../config/runtimeMode.js';
+import { chatAttemptCommandId, committedChatSubmission } from './chatEngineAdmissionState.js';
 
 const CHAT_ADMISSION_TOOL_SCHEMA_VERSION = 'chat-tools-v1';
 const PENDING_COMPILED_REQUEST_IDENTITY = 'pending-compiled-request-identity';
@@ -140,13 +143,13 @@ export class ChatEngineP11Authority {
   admitCurrentSubmission(
     submissionGeneration: number,
     userInput: string,
-    objective?: {taskId:string;taskClass:ChatTaskClass},
+    objective?: {taskId:string;taskClass:ChatTaskClass;attemptId:string},
   ): ChatEngineAdmissionClaim | null {
     const store = this.host.parity.admissionStore;
     if (!store) return null;
     try {
       const threadId = this.host.parity.eventLog.thread_id;
-      const commandId = `${this.host.admissionEpoch}:s${submissionGeneration}`;
+      const commandId = objective ? chatAttemptCommandId(objective.attemptId) : `${this.host.admissionEpoch}:s${submissionGeneration}`;
       const prior = this.host.activeAdmissionClaim;
       let ownerGeneration: number;
       let ownerToken: string;
@@ -240,6 +243,13 @@ export class ChatEngineP11Authority {
     try {
       const store = this.host.parity.admissionStore;
       if (store) {
+        // The staged parity generation is installed only after the canonical
+        // submission, attempt and authority companion were saved together.
+        const attempt = this.host.parity.eventLog.thread_id === claim.threadId
+          ? this.host.parity.liveAuthority?.taskObjectiveLifecycle?.attempts.find(
+              candidate => chatAttemptCommandId(candidate.attempt_id) === claim.commandId,
+            )
+          : undefined;
         const input = {
           threadId: claim.threadId,
           commandId: claim.commandId,
@@ -247,6 +257,7 @@ export class ChatEngineP11Authority {
           ownerToken: claim.token,
           state,
           outcome,
+          ...(attempt ? { outbox: committedChatSubmission(attempt) } : {}),
         } as const;
         const decision = store.settleAdmission(input);
         // A1: a gen-N command superseded before settlement can no longer
@@ -464,11 +475,15 @@ export class ChatEngineP11Authority {
     }
   }
 
-  /** Conversation recovery is fenced by admitted ownership, never repository capture. */
+  /** Fence compaction by admitted ownership and recovered observation authority. */
   prepareCompactionGuard(): () => boolean {
     const owner = this.currentP11Owner();
     if (!owner) throw new ContextPreparationError(this.host.options.projectRoot ?? '',
       'owner_unavailable', 'context owner unavailable', this.host.engineRunDir);
+    if (!this.host.parity.authorizedObservationIds || this.host.p11ObservationCaptureIssues.length > 0) {
+      throw new ContextPreparationError(this.host.options.projectRoot ?? '',
+        'observation_recovery_unavailable', 'observation recovery is incomplete', this.host.engineRunDir);
+    }
     return () => {
       const currentOwner = this.currentP11Owner();
       if (!currentOwner || currentOwner.generation !== owner.generation || currentOwner.token !== owner.token) return false;
@@ -482,6 +497,9 @@ export class ChatEngineP11Authority {
     meta: { index: number; idempotencyKey: string; ownerGeneration: number },
   ): void {
     if (!result.observation || !this.host.isSubmissionCurrent(meta.ownerGeneration)) return;
+    // A host-generated admission refusal is already tool feedback. No file
+    // bytes were read, so there is no observation payload to recover.
+    if (result.projectReadDeniedBeforeDispatch) return;
     const taskId = this.host.parity.liveAuthority?.taskContract.task_id ?? this.host.engineRunId;
     const operationId = meta.idempotencyKey;
     const turnId = this.host.parity.turnId ?? `turn-${this.host._turnIndex}`;
@@ -685,6 +703,13 @@ export class ChatEngineP11Authority {
     // Same checkpoint id / epoch / lineage derivation as the R1/T5 candidate
     // prepare (p11CheckpointPreparationInput), now with the REAL compiled
     // request identity computed from this turn's rebuilt messages.
+    const membership = this.host.parity.authorizedObservationIds;
+    const manifest = sources.observation_manifest ?? [];
+    if (!membership || manifest.length !== membership.size ||
+        manifest.some(ref => !membership.has(ref.observation_id))) {
+      this.noteP11InstallBlock('prepare_blocked', ['observation_manifest_incomplete']);
+      return false;
+    }
     const prepared = prepareConversationCheckpoint(this.p11CheckpointPreparationInput(owner, sources));
     if (prepared.status !== 'prepared') {
       this.noteP11InstallBlock('prepare_blocked', [
@@ -768,15 +793,68 @@ export class ChatEngineP11Authority {
     return true;
   }
 
-  /**
-   * Execute a batch of tool actions sequentially through the policy gate.
-   * Each action emits start/complete callbacks for the ConversationalRenderer.
-   */
+  /** Load current durable membership before projecting restored session state. */
   loadObservationMembership(sessionDir: string = this.host.engineRunDir): void {
-    const liveSnapshot = loadLiveSessionSnapshot(sessionDir);
-    this.host.parity.authorizedObservationIds = new Set(
-      liveSnapshot?.authorized_observation_ids ?? [],
+    const membership = loadLiveObservationMembership(
+      sessionDir, this.host.parity.eventLog.thread_id,
     );
+    if (membership) this.host.parity.authorizedObservationIds = membership;
+    else delete this.host.parity.authorizedObservationIds;
+  }
+
+  private isSettledObservationForTask(observation: ObservationRefV1, taskId: string | undefined): boolean {
+    const { invocation } = observation;
+    if (
+      invocation.run_id !== this.host.engineRunId ||
+      invocation.task_id !== taskId ||
+      invocation.attempt_id !== invocation.operation_id ||
+      observation.observation_id !== deriveObservationId(invocation)
+    ) return false;
+
+    const events = this.host.parity.sessionEvents.events;
+    return events.some(event =>
+      event.kind === 'user_submitted' && event.turn_id === invocation.turn_id && event.task_id === taskId,
+    ) && events.some(event =>
+      (event.kind === 'tool_completed' || event.kind === 'tool_failed') &&
+      event.turn_id === invocation.turn_id &&
+      event.tool_call_id === invocation.operation_id &&
+      event.idempotency_key === invocation.operation_id &&
+      event.preDispatchNoEffect !== true,
+    );
+  }
+
+  private hasUnauthorizedSettledObservation(
+    sessionDir: string,
+    membership: ReadonlySet<string>,
+    observationGovernedHistory: boolean,
+  ): boolean {
+    const taskId = this.host.parity.liveAuthority?.taskContract.task_id;
+    if (!taskId) return false;
+    const events = this.host.parity.sessionEvents.events;
+    const turns = new Set(events.flatMap(event =>
+      event.kind === 'user_submitted' && event.task_id === taskId ? [event.turn_id] : [],
+    ));
+    const toolResults = new Set(this.host.parity.eventLog.events.flatMap(event =>
+      event.kind === 'tool_result' && !event.context_copy && event.content
+        ? [JSON.stringify([event.turn_id, event.tool_call_id])] : [],
+    ));
+    return events.some(event => {
+      if ((event.kind !== 'tool_completed' && event.kind !== 'tool_failed') ||
+          event.turn_id === null || !turns.has(event.turn_id) || event.preDispatchNoEffect === true) return false;
+      const id = deriveObservationId({
+        run_id: this.host.engineRunId,
+        task_id: taskId,
+        turn_id: event.turn_id,
+        operation_id: event.idempotency_key,
+        attempt_id: event.idempotency_key,
+      });
+      // Raw result text can outlive both the authorization and the ref file.
+      // Do not send it during cold continuation of observation-governed history.
+      return !membership.has(id) && (
+        (observationGovernedHistory && toolResults.has(JSON.stringify([event.turn_id, event.tool_call_id]))) ||
+        hasStoredObservationReference(join(sessionDir, 'observations'), id)
+      );
+    });
   }
 
   /**
@@ -785,91 +863,130 @@ export class ChatEngineP11Authority {
    * the durable owner and installed lineage to validate, independently
    * re-authorizes the observation manifest against durable session membership,
    * and only then promotes the checkpoint to provider context. A checkpoint
-   * that cannot prove ownership, lineage, and observation membership stays
-   * advisory/inert and the durable thread/session logs remain the only source.
+   * superseded by later valid evidence stays inert. An unreadable, corrupt, or
+   * incompatible checkpoint blocks execution while leaving history inspectable.
    */
   hydrateInstalledContextAuthority(sessionDir: string = this.host.engineRunDir): {
     applied: boolean;
     issues: string[];
   } {
-    const issues: string[] = [];
-    const checkpointPath = join(sessionDir, "context-checkpoint.json");
-    if (!existsSync(checkpointPath)) return { applied: false, issues };
-    const threadId = this.host.parity.eventLog.thread_id;
-    // Durable session membership for model-readable observations is loaded from
-    // the live-session snapshot; a checkpoint manifest cannot grant its own.
     this.loadObservationMembership(sessionDir);
+    delete this.host.parity.contextCheckpoint;
+    this.host.p11ObservationRefs = [];
+    this.host.p11ObservationCaptureIssues = [];
+    const membership = this.host.parity.authorizedObservationIds;
+    const authorizedObservationIds = [...(membership ?? [])];
+    const checkpointPath = join(sessionDir, "context-checkpoint.json");
+    const issues: string[] = [];
+    let validCheckpoint: ContextCheckpoint | undefined;
+    let observationGovernedHistory = existsSync(join(sessionDir, 'observations'));
     try {
-      const checkpoint = JSON.parse(
-        readFileSync(checkpointPath, "utf8"),
-      ) as ContextCheckpoint;
-      const durableOwner =
-        this.host.parity.admissionStore?.readOwner(threadId) ?? null;
-      const lineageEvidence: ContextCheckpointLineageEvidenceV1 = {
-        threadEvents: this.host.parity.eventLog.events,
-        sessionEvents: this.host.parity.sessionEvents.events,
-      };
-      const coldResume = validateContextCheckpoint(checkpoint, {
-        expectedThreadId: threadId,
-        currentOwner: durableOwner,
-        requireInstalledLineage: true,
-        authorizedObservationIds: [
-          ...(this.host.parity.authorizedObservationIds ?? []),
-        ],
-        lineageEvidence,
-      });
-      if (coldResume.status !== "valid") {
-        issues.push(coldResume.reasons.join("; "));
-        return { applied: false, issues };
-      }
-      const authorizedObservationIds = [
-        ...(this.host.parity.authorizedObservationIds ?? []),
-      ];
-      const resolvedObservations = checkpoint.observation_manifest.map(
-        (observation) =>
-        resolveObservation(
-          observation.observation_id,
-          {
-              principal_id: "agent:main",
-            authorized_observation_ids: authorizedObservationIds,
+      if (existsSync(checkpointPath)) {
+        const checkpoint = JSON.parse(readFileSync(checkpointPath, "utf8")) as ContextCheckpoint;
+        const threadId = this.host.parity.eventLog.thread_id;
+        observationGovernedHistory ||= checkpoint?.schema_version === 2 && checkpoint.threadId === threadId;
+        const authority = this.host.parity.liveAuthority;
+        const contract = checkpoint?.taskContractReference;
+        const predecessor = authority?.taskObjectiveLifecycle?.objectives
+          .flatMap(objective => objective.taskModeHistory?.revisions ?? [objective.taskContract])
+          .find(revision => revision.contract_hash === contract && revision.task_id !== authority.taskContract.task_id);
+        // A different, durably retained objective no longer owns the active
+        // membership. Check its manifests against past physical settlements,
+        // solely to recognize obsolete state; never recover those captures.
+        const historicalIds = predecessor && Array.isArray(checkpoint?.observation_manifest) &&
+          checkpoint.observation_manifest.every(ref => this.isSettledObservationForTask(ref, predecessor.task_id))
+          ? checkpoint.observation_manifest.map(ref => ref.observation_id)
+          : undefined;
+        const currentOwner = this.host.parity.admissionStore?.readOwner(threadId) ?? null;
+        const supersededOwner = currentOwner !== null && checkpoint?.owner?.threadId === threadId &&
+          Number.isSafeInteger(checkpoint.owner.generation) && checkpoint.owner.generation < currentOwner.generation;
+        const coldResume = validateContextCheckpoint(checkpoint, {
+          expectedThreadId: threadId,
+          currentOwner,
+          requireInstalledLineage: true,
+          authorizedObservationIds: historicalIds ?? authorizedObservationIds,
+          lineageEvidence: {
+            threadEvents: this.host.parity.eventLog.events,
+            sessionEvents: this.host.parity.sessionEvents.events,
           },
-          {
-              storage_root: join(this.host.engineRunDir, "observations"),
-            clock: () => new Date().toISOString(),
-              policy: { durability: "none" },
-          },
-        ),
-      );
-      const unavailable = resolvedObservations
-        .map((result, index) =>
-          result.status === "resolved"
-            ? null
-            : `observation ${checkpoint.observation_manifest[index]?.observation_id ?? "unknown"} unavailable: ${result.reason}`,
-        )
-        .filter((issue): issue is string => issue !== null);
-      if (unavailable.length > 0) {
-        // An authorized id with no durable payload must not silently
-        // reconstruct partial trusted context.
-        this.host.p11ObservationCaptureIssues = unavailable;
-        issues.push(...unavailable);
-        return { applied: false, issues };
+        });
+        if (coldResume.status !== 'valid') {
+          issues.push(coldResume.reasons.join("; "));
+          // The validator identifies newer committed lineage. An empty
+          // checkpoint manifest can also legitimately predate a durable tool
+          // capture, but the tail below must prove every newly authorized ref.
+          // The newer durable owner can rebuild from settlements. Never load
+          // its predecessor's payload, or tolerate a wrong same-generation token.
+          const superseded = coldResume.reasons.every(reason => reason === 'lineage_superseded' ||
+            (reason === 'stale_owner' && supersededOwner) ||
+            (reason === 'observation_manifest_incomplete' &&
+              Array.isArray(checkpoint?.observation_manifest) && checkpoint.observation_manifest.length === 0 &&
+              authorizedObservationIds.length > 0));
+          if (!superseded) {
+            this.host.p11ObservationCaptureIssues = ['installed_context_checkpoint_invalid'];
+            return { applied: false, issues };
+          }
+        }
+        if (contract === authority?.taskContract.contract_hash) {
+          if (coldResume.status === 'valid') validCheckpoint = checkpoint;
+        } else if (historicalIds !== undefined || authority?.taskModeHistory?.revisions.some(revision => revision.contract_hash === contract) ||
+            authority?.taskObjectiveLifecycle?.objectives.some(objective =>
+              objective.taskContract.contract_hash === contract ||
+              objective.taskModeHistory?.revisions.some(revision => revision.contract_hash === contract))) {
+          issues.push('task_contract_superseded');
+        } else {
+          this.host.p11ObservationCaptureIssues = ['installed_context_checkpoint_contract_unknown'];
+          return { applied: false, issues: [...issues, ...this.host.p11ObservationCaptureIssues] };
+        }
       }
-      this.host.parity.contextCheckpoint = checkpoint;
-      this.host.p11ObservationRefs = resolvedObservations
-        .map((result) =>
-          result.status === "resolved" ? result.observation : null,
-        )
-        .filter(
-          (observation): observation is ObservationRefV1 =>
-            observation !== null,
-        );
-      return { applied: true, issues };
     } catch (err) {
-      // A malformed or stale context checkpoint is unavailable evidence;
-      // durable thread/session logs remain the only resume source.
       issues.push(err instanceof Error ? err.message : String(err));
+      this.host.p11ObservationCaptureIssues = ['installed_context_checkpoint_unreadable'];
       return { applied: false, issues };
     }
+    if (!membership ||
+        this.hasUnauthorizedSettledObservation(sessionDir, membership, observationGovernedHistory)) {
+      this.host.p11ObservationCaptureIssues = ['observation_membership_unavailable'];
+      return { applied: false, issues: [...issues, ...this.host.p11ObservationCaptureIssues] };
+    }
+
+    // A stop can leave a newer durable tool tail or compaction commit than
+    // the pre-provider checkpoint names. Recover references independently and
+    // leave installation to the next live admitted owner.
+    const checkpointIds = new Set(validCheckpoint?.observation_manifest.map(ref => ref.observation_id));
+    const recoveryIssues: string[] = [];
+    const recovered: ObservationRefV1[] = [];
+    for (const observationId of authorizedObservationIds) {
+      try {
+        const resolved = resolveObservation(observationId, {
+          principal_id: "agent:main",
+          authorized_observation_ids: authorizedObservationIds,
+        }, {
+          storage_root: join(sessionDir, "observations"),
+          clock: () => new Date().toISOString(),
+          policy: { durability: "none" },
+        });
+        if (resolved.status !== 'resolved') {
+          recoveryIssues.push(`observation ${observationId} unavailable: ${resolved.reason}`);
+        } else if (!checkpointIds.has(observationId) && !this.isSettledObservationForTask(
+          resolved.observation, this.host.parity.liveAuthority?.taskContract.task_id,
+        )) {
+          recoveryIssues.push(`observation ${observationId} has no matching durable tool settlement in the current task`);
+        } else {
+          recovered.push(resolved.observation);
+        }
+      } catch {
+        recoveryIssues.push(`observation ${observationId} has an invalid durable reference`);
+      }
+    }
+    if (recoveryIssues.length > 0) {
+      this.host.p11ObservationCaptureIssues = recoveryIssues;
+      return { applied: false, issues: [...issues, ...recoveryIssues] };
+    }
+    this.host.p11ObservationRefs = recovered;
+    if (!validCheckpoint || checkpointIds.size !== membership.size) return { applied: false, issues };
+    this.host.parity.contextCheckpoint = validCheckpoint;
+    return { applied: true, issues };
   }
 
 }

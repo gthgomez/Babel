@@ -8,6 +8,7 @@ import {
   type CriterionCompletionServiceV1,
   type CriterionPrivateEvidenceRefreshV1,
 } from '../authority/criterionCompletion.js';
+import { chatReceiptDispatchesToRequirement } from '../authority/criterionVerifierDispatch.js';
 import { hasInspectedNoChangeEvidence, type GateToolLogEntry } from './completionGatePolicy.js';
 import type { TaskOperation } from '../config/chatTaskClass.js';
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js';
@@ -18,6 +19,8 @@ import {
   canonicalCommandFromFrozenVerification,
   commandsMatchForExecutableBinding,
 } from './taskAcceptanceExecutableBinding.js';
+import { isLegacyPointTarget, POINT_TARGET_PREFIX } from './pointVerifierWitness.js';
+import { hasRequestedLocalExecution, REQUESTED_LOCAL_EXECUTION_KIND } from './requestedLocalExecution.js';
 
 /** Trim framing whitespace only — never collapse spaces inside quoted argv. */
 function trimCommandForComparison(command: string): string {
@@ -31,7 +34,7 @@ function commandHintFromDescription(description: string): string | null {
 
 function declaredAcceptanceCommand(item: AcceptanceRequirementV1): string | null {
   const verification = item.verification;
-  if (!verification) return null;
+  if (!verification || isMeaningBoundAcceptance(item)) return null;
   const fromFrozen = canonicalCommandFromFrozenVerification(verification);
   if (fromFrozen) return fromFrozen;
   return commandHintFromDescription(item.description);
@@ -55,11 +58,12 @@ function receiptStructuredArgvConsistent(receipt: BoundChatVerifierReceipt): boo
 }
 
 function isMeaningBoundAcceptance(item: AcceptanceRequirementV1): boolean {
+  if (item.verification.verifier_id.startsWith('meaning:') ||
+      item.verification.kind === REQUESTED_LOCAL_EXECUTION_KIND) return true;
   if (commandHintFromDescription(item.description)) return false;
   // A frozen executable spec is command evidence even when its requirement
   // type is generic (for example a direct node script witness).
-  if (!item.verification.verifier_id.startsWith('meaning:') &&
-    item.verification.executable_id && item.verification.argv?.length) return false;
+  if (item.verification.executable_id && item.verification.argv?.length) return false;
   return item.verification_strategy === 'meaning'
     || (item.type === 'custom' && item.verification?.kind === 'custom');
 }
@@ -137,6 +141,16 @@ function requiredCriterionStillOpen(input: {
   );
   const listedMissing = input.missingRequired.includes(input.item.id);
 
+  const target = input.item.verification.target;
+  if (isLegacyPointTarget(target)) return true;
+  if (target?.startsWith(POINT_TARGET_PREFIX)) {
+    // The controller supplies only current owner-bound receipts. A tool row
+    // or a generic green receipt cannot show that the required case executed.
+    return !input.receipts.some(receipt =>
+      receipt.stale !== true && chatReceiptDispatchesToRequirement(receipt, input.item),
+    );
+  }
+
   if (isMeaningBoundAcceptance(input.item)) {
     if (advisoryOpen || listedMissing) return true;
     return false;
@@ -164,7 +178,11 @@ export function resolveAcceptedReadOnlyTerminal(input: {
   buildCriterionRefresh: () => MutatingNoChangeRefreshInput | null;
 }): boolean {
   if (input.effectiveOperation === 'READ_ONLY' || input.ambientReadOnly) {
-    return true;
+    const contract = input.criterionCompletion?.currentRequest()?.contract;
+    if (contract?.provenance && hasRequestedLocalExecution(contract.provenance.records)) return false;
+    return !contract?.acceptance.some(item =>
+      item.required && item.verification.kind === REQUESTED_LOCAL_EXECUTION_KIND,
+    );
   }
   if (
     !input.hasAnyWrites

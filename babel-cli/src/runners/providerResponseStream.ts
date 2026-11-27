@@ -2,14 +2,23 @@ import { type ProviderMessage, type RunnerCallbacks, type RunnerInvocationMetada
 import { mapProviderMessagesToWire } from './providerMessages.js';
 import { type VcrRecorder } from '../services/streamingVcr.js';
 import { createInvocationDeadline, invocationNowMs, readPositiveIntEnv } from './providerResponsePolicy.js';
-import { accumulateStreamFinish, classifyStreamFinish } from './providerNormalize.js';
+import { safeProviderErrorCode } from './providerHttpError.js';
+import { accumulateStreamFinish, classifyStreamFinish, type StreamFinishDisposition } from './providerNormalize.js';
 import type { ProviderId } from './providerRegistry.js';
 import {
   type ChatResponse,
   type OpenRouterResponseMetadata,
   buildInvocationMetadata,
+  safeProviderFinishReason,
   upstreamProviderFromResponse,
 } from './providerResponseMetadata.js';
+import {
+  parseChatCompletionsStreamFrame,
+  readChatCompletionsEnvelope,
+  readChatCompletionsStreamChoice,
+  readSingleChatCompletionsChoice,
+  ssePayloadFromTrimmedLine,
+} from './protocol/openai-chat-completions-sse.js';
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60_000;
 
@@ -154,19 +163,6 @@ export function mapProviderMessages(
   return mapProviderMessagesToWire(messages, defaultSystemPrompt, systemPromptOverride);
 }
 
-interface SseLineResult {
-  delta: string;
-  reasoning: string;
-  usage: ChatResponse['usage'] | null;
-  observedModelId: string | null;
-  upstreamProvider: string | null;
-  routerMetadata: OpenRouterResponseMetadata | null;
-  finishReason: string | null;
-  isDone: boolean;
-  malformed?: string;
-}
-
-
 export interface StreamingState {
   ttftMs: number | null;
   generationMs: number | null;
@@ -175,6 +171,7 @@ export interface StreamingState {
   upstreamProvider: string | null;
   routerMetadata: OpenRouterResponseMetadata | null;
   finishReason: string | null;
+  providerFinishReason?: string | null;
   /** True after any model-generated material becomes observable to the caller. */
   partialModelOutput: boolean;
   /** Local, non-durable material used to produce a truthful failure digest. */
@@ -190,12 +187,15 @@ export function buildStreamingInvocationMetadata(
   state: StreamingState,
   configuredOutputBudget?: number | null,
 ): RunnerInvocationMetadata {
-  return buildInvocationMetadata(
-    provider, model, latencyMs, state.usage ?? undefined, state.ttftMs, state.generationMs,
-    undefined, state.observedModelId, state.upstreamProvider,
-    state.routerMetadata, state.finishReason,
-    configuredOutputBudget,
-  );
+  return {
+    ...buildInvocationMetadata(
+      provider, model, latencyMs, state.usage ?? undefined, state.ttftMs, state.generationMs,
+      undefined, state.observedModelId, state.upstreamProvider,
+      state.routerMetadata, state.finishReason,
+      configuredOutputBudget,
+    ),
+    provider_finish_reason: safeProviderFinishReason(state.providerFinishReason ?? state.finishReason),
+  };
 }
 
 
@@ -206,64 +206,79 @@ export function recordStreamingOutput(state: StreamingState, kind: string, value
 }
 
 
-export function parseSseLine(line: string): SseLineResult {
-  const normalized = line.replace(/\r$/, '').trim();
-  if (!normalized.startsWith('data:')) {
-    return { delta: '', reasoning: '', usage: null, observedModelId: null, upstreamProvider: null, routerMetadata: null, finishReason: null, isDone: false };
-  }
-  const data = normalized.slice(5).trimStart();
-  if (data === '[DONE]') {
-    return { delta: '', reasoning: '', usage: null, observedModelId: null, upstreamProvider: null, routerMetadata: null, finishReason: null, isDone: true };
-  }
-  try {
-    const json = JSON.parse(data) as {
-      model?: string;
-      provider?: string;
-      openrouter_metadata?: OpenRouterResponseMetadata;
-      choices?: Array<{ delta?: { content?: string; reasoning_content?: string }; finish_reason?: string | null }>;
-      usage?: ChatResponse['usage'];
-    };
-    const delta = json.choices?.[0]?.delta?.content || '';
-    const reasoning = json.choices?.[0]?.delta?.reasoning_content || '';
-    return {
-      delta,
-      reasoning,
-      usage: json.usage ?? null,
-      observedModelId: json.model ?? null,
-      upstreamProvider: upstreamProviderFromResponse(json),
-      routerMetadata: json.openrouter_metadata ?? null,
-      finishReason: json.choices?.[0]?.finish_reason ?? null,
-      isDone: false,
-    };
-  } catch {
-    return {
-      delta: '',
-      reasoning: '',
-      usage: null,
-      observedModelId: null,
-      upstreamProvider: null,
-      routerMetadata: null,
-      finishReason: null,
-      isDone: false,
-      malformed: `[provider stream] Malformed SSE event chunk: ${data.slice(0, 100)}`,
-    };
+/** An explicit provider error outranks malformed choice data in the same envelope. */
+export class TextProviderResponseError extends Error {
+  readonly apiErrorCode: string | null;
+
+  constructor(error: unknown, source: string) {
+    const fields = typeof error === 'object' && error !== null ? error as Record<string, unknown> : {};
+    const detail = typeof error === 'string' ? error : typeof fields['message'] === 'string' ? fields['message'] : null;
+    super(`${source}${detail ? `: ${detail}` : ''}`);
+    const code = fields['code'] ?? fields['type'];
+    this.apiErrorCode = safeProviderErrorCode(typeof code === 'string' ? code : null);
   }
 }
 
+function recordTextEnvelope(
+  frame: ReturnType<typeof readChatCompletionsEnvelope>,
+  state: StreamingState,
+  providerErrorSource: string,
+): void {
+  if (frame.model) state.observedModelId = frame.model;
+  const router = frame.openrouter_metadata as OpenRouterResponseMetadata | null | undefined;
+  const upstream = upstreamProviderFromResponse({
+    ...(frame.provider ? { provider: frame.provider } : {}),
+    ...(router ? { openrouter_metadata: router } : {}),
+  });
+  if (upstream) state.upstreamProvider = upstream;
+  if (router) state.routerMetadata = router;
+  if (frame.usage) state.usage = frame.usage;
+  if (frame.error != null) throw new TextProviderResponseError(frame.error, providerErrorSource);
+}
 
-function assertExecuteRawStreamTerminal(state: StreamingState): void {
-  // Text-only transports have no tool payload. A missing, filtered,
-  // truncated or unrecognized finish is a failed invocation; partial output
-  // stays available in the streaming state for the failure receipt but is not
-  // returned as a completed answer.
+/** Retain envelope evidence even when the frame cannot contribute answer text. */
+export function readTextSseFrame(payload: string, state: StreamingState): { delta: string; reasoning: string } {
+  const frame = parseChatCompletionsStreamFrame(payload);
+  recordTextEnvelope(frame, state, '[provider stream] Provider stream error');
+  const choice = readChatCompletionsStreamChoice(frame.choices, state.finishReason);
+  if (choice?.finish_reason?.trim()) {
+    state.finishReason = accumulateStreamFinish(state.finishReason, choice.finish_reason);
+    state.providerFinishReason ??= choice.finish_reason;
+  }
+  return { delta: choice?.delta?.content ?? '', reasoning: choice?.delta?.reasoning_content ?? '' };
+}
+
+/** Complete JSON uses the same choice identity contract as streamed deltas. */
+export function readBufferedTextResponse(value: unknown, state: StreamingState): { text: string; reasoning: string } {
+  const source = 'Malformed Chat Completions JSON response';
+  const envelope = readChatCompletionsEnvelope(value, source);
+  recordTextEnvelope(envelope, state, '[provider response] Provider error');
+  const choice = readSingleChatCompletionsChoice(envelope.choices, source);
+  state.finishReason = choice?.finish_reason ?? null;
+  state.providerFinishReason = state.finishReason;
+  return {
+    text: choice?.message?.content ?? '',
+    reasoning: typeof envelope['reasoning_content'] === 'string' ? envelope['reasoning_content'] : '',
+  };
+}
+
+
+/** A complete transport body carried a failed text finish, not a read failure. */
+export class TextResponseFinishError extends Error {
+  constructor(readonly disposition: Extract<StreamFinishDisposition, { status: 'failed' }>, source: string) {
+    super(`${source} ${disposition.message}`);
+    this.name = 'TextResponseFinishError';
+  }
+}
+
+/** Text is actionable only after a reported finish; buffered JSON is not itself a finish. */
+export function assertTextResponseFinish(reported: string | null, source: string): void {
   const disposition = classifyStreamFinish({
-    reported: state.finishReason,
-    sawDone: state.sawDone,
+    reported,
+    sawDone: true,
     hasToolCalls: false,
   });
-  if (disposition.status === 'failed') {
-    throw new Error(`[provider stream] ${disposition.message}`);
-  }
+  if (disposition.status === 'failed') throw new TextResponseFinishError(disposition, source);
 }
 
 export async function readStreamingResponse(
@@ -294,7 +309,7 @@ export async function readStreamingResponse(
 
   const completeStreamingRead = async (): Promise<string> => {
     signal?.throwIfAborted();
-    assertExecuteRawStreamTerminal(state);
+    assertTextResponseFinish(state.finishReason, '[provider stream]');
     return text;
   };
 
@@ -302,35 +317,15 @@ export async function readStreamingResponse(
     signal?.throwIfAborted();
     if (state.sawDone) return true;
     const normalizedLine = line.replace(/\r$/, '').trim();
-    if (!normalizedLine.startsWith('data:')) return false;
+    const payload = ssePayloadFromTrimmedLine(normalizedLine);
+    if (payload === null) return false;
     vcrRecorder?.record(normalizedLine);
-    const payload = normalizedLine.slice(5).trimStart();
     if (payload === '[DONE]') {
       state.sawDone = true;
       state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
       return true;
     }
-    try {
-      const envelope = JSON.parse(payload) as { error?: { message?: string } };
-      if (envelope.error) {
-        throw new Error(
-          `[provider stream] Provider stream error: ${envelope.error.message || JSON.stringify(envelope.error)}`,
-        );
-      }
-    } catch (error) {
-      if (!(error instanceof SyntaxError)) throw error;
-    }
-    const parsed = parseSseLine(`data: ${payload}`);
-    if (parsed.malformed) throw new Error(parsed.malformed);
-    if (parsed.observedModelId) state.observedModelId = parsed.observedModelId;
-    if (parsed.upstreamProvider) state.upstreamProvider = parsed.upstreamProvider;
-    if (parsed.routerMetadata) state.routerMetadata = parsed.routerMetadata;
-    if (parsed.finishReason) state.finishReason = accumulateStreamFinish(state.finishReason, parsed.finishReason);
-    if (parsed.isDone) {
-      state.sawDone = true;
-      state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
-      return true;
-    }
+    const parsed = readTextSseFrame(payload, state);
     if (parsed.delta) {
       text += parsed.delta;
       recordStreamingOutput(state, 'text', parsed.delta);
@@ -340,7 +335,6 @@ export async function readStreamingResponse(
       recordStreamingOutput(state, 'reasoning', parsed.reasoning);
       callbacks?.onThought?.(parsed.reasoning);
     }
-    if (parsed.usage) state.usage = parsed.usage;
     return false;
   };
 
@@ -390,32 +384,26 @@ export async function readStreamingResponse(
   // when stream=true. Accept that only as a complete response; an SSE stream
   // that closes without [DONE] is a truthful truncated-stream failure.
   const rawTrimmed = raw.trim();
-  let json: ChatResponse | undefined;
+  let json: unknown;
   if (!state.sawDone && rawTrimmed.startsWith('{')) {
     try {
-      json = JSON.parse(rawTrimmed) as ChatResponse;
+      json = JSON.parse(rawTrimmed) as unknown;
     } catch {
       // Malformed JSON falls through to the truncated-stream error below.
     }
   }
-  if (json) {
+  if (json !== undefined) {
     signal?.throwIfAborted();
-    const content = json.choices?.[0]?.message?.content ?? '';
+    const { text: content, reasoning } = readBufferedTextResponse(json, state);
     if (content) {
       text += content;
       recordStreamingOutput(state, 'text', content);
       if (callbacks?.onChunk) await callbacks.onChunk(content);
     }
-    const reasoning = (json as ChatResponse & { reasoning_content?: string }).reasoning_content;
     if (reasoning) {
       recordStreamingOutput(state, 'reasoning', reasoning);
       callbacks?.onThought?.(reasoning);
     }
-    state.observedModelId = json.model ?? state.observedModelId;
-    state.upstreamProvider = upstreamProviderFromResponse(json) ?? state.upstreamProvider;
-    state.routerMetadata = json.openrouter_metadata ?? state.routerMetadata;
-    state.finishReason = json.choices?.[0]?.finish_reason ?? state.finishReason;
-    state.usage = json.usage ?? state.usage;
     state.sawDone = true;
     state.generationMs = Date.now() - startedAt - (state.ttftMs ?? 0);
     return await completeStreamingRead();

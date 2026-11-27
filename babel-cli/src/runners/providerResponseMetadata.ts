@@ -53,6 +53,14 @@ interface RouterMetadataProvenance {
   contextTransformationOccurred: boolean;
 }
 
+/** Keep only recognized protocol status values in durable diagnostics. */
+export function safeProviderFinishReason(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const reason = value.trim().toLowerCase();
+  return ['stop', 'end_turn', 'completed', 'tool_calls', 'function_call', 'length',
+    'max_tokens', 'max_output_tokens', 'content_filter', 'safety', 'recitation', 'error'].includes(reason)
+    ? reason : null;
+}
 
 export function routerMetadataProvenance(metadata: OpenRouterResponseMetadata | null | undefined): RouterMetadataProvenance | null {
   if (!metadata) return null;
@@ -135,7 +143,8 @@ export function buildInvocationMetadata(
       ? null
       : normalizeBabelFinishReason({
           raw: finishReason,
-          ...(configuredOutputBudget === undefined ? {} : { configuredOutputBudget }),
+           // A length finish does not establish that our sent cap was reached.
+           configuredOutputBudget: completionTokens === null ? null : configuredOutputBudget ?? null,
           actualCompletionTokens: completionTokens,
         });
 
@@ -152,6 +161,7 @@ export function buildInvocationMetadata(
       : {
           normalized_finish_reason: finish.normalized,
           failure_attribution: finish.attribution.kind,
+          provider_finish_reason: safeProviderFinishReason(finishReason),
         }),
     ...(router === null ? {} : {
       router_metadata_hash: router.hash,

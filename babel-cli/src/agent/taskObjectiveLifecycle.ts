@@ -11,7 +11,7 @@ import {
   MODE_REVISION_HISTORY_REF,
   type TaskModeHistory,
 } from './taskModeRevision.js'
-import type { ThreadEventLog } from './threadEventLog.js'
+import type { ThreadEvent, ThreadEventLog } from './threadEventLog.js'
 import type { SessionEventLog } from './sessionEvents.js'
 import {assertCanonicalAcceptanceAmendments} from './taskAcceptanceSource.js'
 
@@ -40,6 +40,20 @@ export interface TaskObjectiveLifecycleV1 {
   active_task_id: string
   objectives: ObjectiveAuthorityRecord[]
   attempts: ObjectiveAttempt[]
+}
+
+/** Bind accepted host inputs and, when recorded, the resolved objective operation. */
+export function acceptedObjectiveInputDigest(
+  input: Pick<Extract<ThreadEvent, { kind: 'turn_started' }>,
+    'task' | 'requestedOperation' | 'requestedTaskIntent' | 'requestedContinueTask' | 'objectiveOperation'>,
+): string {
+  return sha256Canonical({
+    task: input.task,
+    requestedOperation: input.requestedOperation ?? 'AUTO',
+    requestedTaskIntent: input.requestedTaskIntent ?? null,
+    requestedContinueTask: input.requestedContinueTask ?? false,
+    ...(input.objectiveOperation ? { objectiveOperation: input.objectiveOperation } : {}),
+  })
 }
 
 export function requiresObjectiveLifecycle(contract: TaskContractV1): boolean {
@@ -239,12 +253,7 @@ export function assertObjectiveLifecycle(
           throw new Error('OBJECTIVE_LIFECYCLE_INVALID: Canonical binding')
       if (
         submission.turn_id !== attempt.turn_id ||
-        sha256Canonical({
-          task: event.task,
-          requestedOperation: event.requestedOperation ?? 'AUTO',
-          requestedTaskIntent: event.requestedTaskIntent ?? null,
-          requestedContinueTask: event.requestedContinueTask ?? false,
-        }) !== attempt.input_digest
+        acceptedObjectiveInputDigest(event) !== attempt.input_digest
       )
         throw new Error('OBJECTIVE_LIFECYCLE_INVALID: Accepted input')
     }

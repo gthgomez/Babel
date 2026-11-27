@@ -49,10 +49,13 @@ for (const provider of ['gemini', 'anthropic', 'openai', 'openai-compatible'] as
       for await (const event of engine.submitMessageStream('Explain the README')) events.push(event)
       assert.equal(engine.getProviderSelectionStatus().requestedModel, 'fixture-native');
       assert.equal(engine.getProviderSelectionStatus().observedModel, 'fixture-native', JSON.stringify({ runner: runner.getLastInvocationMetadata(), selection: engine.getProviderSelectionStatus() }));
+      const parity = engine.getParityRuntime()
       engine.closeAdmissionStore()
       assert.ok(requests >= 2, 'expected a tool request and a result-delivery request')
       assert.equal(deliveredDenial, true)
       assert.equal(events.some(event => event.type === 'tool_failed' && /denied|blocked|credential|forbidden/i.test(event.error ?? '')), true)
+      assert.ok(!parity.sessionEvents.events.some(event => event.kind === 'tool_started' && event.tool_call_id === 'native-call'))
+      assert.deepEqual([...parity.authorizedObservationIds ?? []], [])
     } finally {
       globalThis.fetch = before.fetch
       if (before.state === undefined) delete process.env['BABEL_STATE_DIR']; else process.env['BABEL_STATE_DIR'] = before.state

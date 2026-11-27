@@ -29,7 +29,17 @@ export function filterReadOnlyChatTools(tools: ToolDefinition[], env: NodeJS.Pro
   return isReadOnlyChat(env) ? tools.filter(tool => !deniesReadOnlyChatAction(tool.function.name, env)) : tools;
 }
 
-function allowsReadOnlyTaskTool(tool: string, requiredVerifiers: readonly string[]): boolean {
+/** A foreground effect is advertised as a command, never as a test-tool substitute. */
+export function readOnlyTaskShellCommands(
+  tool: string, requiredVerifiers: readonly string[], foregroundCommands: readonly string[] = [],
+): readonly string[] {
+  if (tool === 'run_command') return [...requiredVerifiers, ...foregroundCommands];
+  return tool === 'test_run' ? requiredVerifiers : [];
+}
+
+function allowsReadOnlyTaskTool(
+  tool: string, requiredVerifiers: readonly string[], foregroundCommands: readonly string[] = [],
+): boolean {
   // A decision request only pauses the turn and cannot broaden its scope.
   if (tool === 'request_user_decision') return true;
   // External reads are not repository writes. Offline mode and unknown MCP
@@ -38,16 +48,17 @@ function allowsReadOnlyTaskTool(tool: string, requiredVerifiers: readonly string
   if (tool === 'sub_agent') return true;
   return classifyToolEffect(tool) === 'read_only'
     || tool === 'finish' || tool === 'todo_write'
-    || ((tool === 'run_command' || tool === 'test_run') && requiredVerifiers.length > 0);
+    || readOnlyTaskShellCommands(tool, requiredVerifiers, foregroundCommands).length > 0;
 }
 
 /** One name projection for native schemas and text/legacy manuals; admission still checks actions. */
 export function filterChatToolNamesForTask(
   names: readonly string[], operation: TaskOperation | undefined, requiredVerifiers: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
+  foregroundCommands: readonly string[] = [],
 ): string[] {
   return names.filter(name => !deniesReadOnlyChatAction(name, env)
-    && (operation !== 'READ_ONLY' || allowsReadOnlyTaskTool(name, requiredVerifiers)));
+    && (operation !== 'READ_ONLY' || allowsReadOnlyTaskTool(name, requiredVerifiers, foregroundCommands)));
 }
 
 /** Accepted task scope narrows ordinary Chat; it never broadens profile grants. */
@@ -55,16 +66,17 @@ export function deniesReadOnlyTaskAction(
   action: ChatToolAction,
   operation: TaskOperation | undefined,
   requiredVerifiers: readonly string[],
+  matchesForegroundEffect = false,
 ): boolean {
   if (operation !== 'READ_ONLY') return false;
-  if (!allowsReadOnlyTaskTool(action.type, requiredVerifiers)) return true;
   if (action.type === 'run_command' || action.type === 'test_run') {
     if (action.type === 'run_command' && (action.background || action.detached)) return true;
     // Checker coverage/family matching is evidence logic, not authority to run
     // extra commands. The existing executor still applies profile/grant policy.
+    if (action.type === 'run_command' && matchesForegroundEffect) return false;
     return !requiredVerifiers.some(command => command.trim() === action.command.trim());
   }
-  return false;
+  return !allowsReadOnlyTaskTool(action.type, requiredVerifiers);
 }
 
 /** Native advertisement projects the same accepted scope as action admission. */

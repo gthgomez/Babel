@@ -55,6 +55,16 @@ test('current covering green supersedes stale red including stale last display r
   assert.equal(gate(['node --test'], [red]), 'reject')
 })
 
+test('a settled retained change counts without requiring a second edit, but still requires current proof', () => {
+  const command = 'node --test'
+  const green = receipt(command, 1)
+  const resumed = { toolCallLog: [], recoveredTaskMutation: true }
+  assert.equal(gate([command], [green], { toolCallLog: [] }), 'reject')
+  assert.equal(gate([command], [green], resumed), 'allow')
+  assert.equal(gate([command], [], resumed), 'reject')
+  assert.equal(gate([command], [green], { ...resumed, currentWorkspaceRevisionHash: 'changed' }), 'reject')
+})
+
 test('durable order wins over timestamps and array replacement position', () => {
   const green = receipt('node --test', 3, { capturedAt: 1 })
   const red = receipt('node --test', 2, { exit_code: 1, capturedAt: 999 })

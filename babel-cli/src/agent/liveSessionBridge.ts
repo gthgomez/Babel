@@ -18,12 +18,15 @@ import {
 import { randomUUID } from 'node:crypto';
 import {normalizeChatExecutionScope} from './chatExecutionScope.js';
 import {inferFreshTaskAcceptance} from './taskAcceptanceMeaning.js';
+import { taskProhibitsCommand } from './taskCommandProhibitions.js';
+import { hasRequestedLocalExecution, requestedLocalExecutionAcceptance } from './requestedLocalExecution.js';
 import {
   bindExecutableVerifiersToTaskAcceptance,
   mergeTrustedVerifierCommands,
   relevanceBoundVerifierCommands,
   relevanceBoundVerifierInputFiles,
 } from './taskAcceptanceExecutableBinding.js';
+import { snapshotPointVerifierInputs } from './pointVerifierWitness.js';
 import { designatedWitnessProtectedInputs, existingNodeVerifierInputFiles } from './taskAcceptanceProtectedInputs.js';
 import {
   computePublicApiSurface,
@@ -351,10 +354,19 @@ export function resolveLiveSessionAuthority(input: {
   const existingVerifierInputFiles = input.projectRoot
     ? existingNodeVerifierInputFiles(input.projectRoot, inferredMeaning, undefined, trustedVerifierCommands)
     : []
+  const publicApiRecords = input.projectRoot && hasPublicApiPreservationClause(input.task)
+    ? (() => {
+        const surface = computePublicApiSurface(input.projectRoot!)
+        return surface ? [{ kind: 'derived_acceptance' as const, ref: publicApiFreezeRef(surface, {
+          mode: publicApiPreservationMode(input.task),
+        }) }] : []
+      })()
+    : [];
   const meaning = bindExecutableVerifiersToTaskAcceptance({
     meaning: inferredMeaning,
     trustedVerifierCommands,
     existingVerifierInputFiles,
+    publicApiFrozen: publicApiRecords.length > 0,
     ...(input.projectRoot ? { defaultWorkingDirectory: '.', projectRoot: input.projectRoot } : {}),
   });
   // A designated regression witness makes the already-present tests and their
@@ -378,15 +390,27 @@ export function resolveLiveSessionAuthority(input: {
   const requiredVerifierCommands = [...new Set([
     ...(input.verifierRequirements ?? []),
     ...relevanceBoundVerifierCommands(meaning),
-  ])];
-  const publicApiRecords = input.projectRoot && hasPublicApiPreservationClause(input.task)
-    ? (() => {
-        const surface = computePublicApiSurface(input.projectRoot!)
-        return surface ? [{ kind: 'derived_acceptance' as const, ref: publicApiFreezeRef(surface, {
-          mode: publicApiPreservationMode(input.task),
-        }) }] : []
-      })()
+  ])].filter(command => !taskProhibitsCommand(meaning.activeProse, command));
+  const amendmentInputRecords = input.projectRoot && scope.kind === 'project'
+    ? requiredVerifierCommands.flatMap(command => {
+        const inputs = snapshotPointVerifierInputs(input.projectRoot!, command, protectedPaths);
+        return (inputs?.caseRefs ?? []).map(ref => ({ kind: 'derived_acceptance' as const, ref }));
+      })
     : [];
+  // Only fresh project contracts acquire these criteria. Retained contracts
+  // are loaded and continued with their original hashed acceptance rows.
+  const requestedExecution = scope.kind === 'project'
+    ? requestedLocalExecutionAcceptance({
+        request: input.task,
+        activeProse: meaning.activeProse,
+        existingCriteria: meaning.criteria,
+      })
+    : { criteria: [], provenance: [] };
+  const replacesUnresolvedCommandMeaning = requestedExecution.criteria.length === 1 &&
+    hasRequestedLocalExecution(requestedExecution.provenance, 'standalone') &&
+    (meaning.unresolved || (meaning.criteria.length === 1 &&
+      meaning.criteria[0]?.description.trim() === input.task.trim() &&
+      meaning.criteria[0].verification.verifier_id.startsWith('meaning:')));
   const contract = freezeTaskContract(
     buildTaskContractV1({
       mode: input.mode,
@@ -394,7 +418,7 @@ export function resolveLiveSessionAuthority(input: {
       user_request: input.task,
       task_class:
         (input.taskClass as TaskContractV1['task_class'] | undefined) ?? 'unknown',
-      acceptance: meaning.criteria,
+       acceptance: [...(replacesUnresolvedCommandMeaning ? [] : meaning.criteria), ...requestedExecution.criteria],
       non_goals: ['Do not expand scope beyond the user request'],
       protected_paths: [...protectedPaths],
       verifier_requirements: requiredVerifierCommands,
@@ -409,7 +433,13 @@ export function resolveLiveSessionAuthority(input: {
               'non_idempotent_local_effect',
             ],
       source: 'liveSessionBridge.resolveLiveSessionAuthority',
-      provenance:[...meaning.provenance,...publicApiRecords,...(input.objectiveLifecycle?[{kind:'risk_analysis' as const,ref:OBJECTIVE_LIFECYCLE_REF}]:[])],
+    provenance:[
+      ...meaning.provenance,
+      ...requestedExecution.provenance,
+      ...publicApiRecords,
+      ...amendmentInputRecords,
+      ...(input.objectiveLifecycle ? [{kind:'risk_analysis' as const,ref:OBJECTIVE_LIFECYCLE_REF}] : []),
+    ],
     }),
   );
 
@@ -587,6 +617,24 @@ export function loadLiveSessionSnapshot(runDir: string): LiveSessionV1 | null {
   } catch {
     return null;
   }
+}
+
+/** Read the session's observation membership without treating lost authority as an empty set. */
+export function loadLiveObservationMembership(runDir: string, sessionId: string): Set<string> | undefined {
+  const snapshot = loadLiveSessionSnapshot(runDir);
+  const ids = snapshot?.authorized_observation_ids;
+  if (snapshot?.schema_version === 1 && snapshot.session_id === sessionId &&
+    Array.isArray(ids) && ids.every(id => typeof id === 'string' && id.length > 0)) {
+    return new Set(ids);
+  }
+  // Older sessions without observation artifacts did not need a membership record.
+  const legacy = snapshot?.schema_version === 1 && snapshot.session_id === sessionId && ids === undefined;
+  const absent = snapshot === null && !existsSync(join(runDir, LIVE_SESSION_SNAPSHOT_FILENAME));
+  if ((legacy || absent) && !existsSync(join(runDir, 'context-checkpoint.json')) &&
+    !existsSync(join(runDir, 'observations'))) {
+    return new Set();
+  }
+  return undefined;
 }
 
 /**

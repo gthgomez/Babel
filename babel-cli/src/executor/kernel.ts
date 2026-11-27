@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { evaluateCriterionCompletionV1 } from '../authority/criterionCompletion.js';
+import { evaluateCriterionCompletionV1, isForegroundOnlyAcceptance } from '../authority/criterionCompletion.js';
 import type {
   ToolCallRequest,
   ToolContext,
@@ -246,7 +246,12 @@ function decideCompletion(input: ExecutorCompletionInput): CompletionDecision {
   // acceptance is not satisfied even though no bytes were edited.
   const noChangeRedVeto = noChangeRequested && knownRedRequiredVerifier(input);
   const noChangeRejected = noChangeUnproven || noChangeRedVeto;
-  const verified = input.proof?.compliant === true && gate.allow && acceptance?.verified === true &&
+  const directForegroundProof = acceptance?.verified === true && isForegroundOnlyAcceptance(input.acceptance?.contract) &&
+    (input.requiredVerifierCommands?.length ?? 0) === 0 && (input.requiredVerifiers?.length ?? 0) === 0 &&
+    (input.verifierEvidenceErrors?.length ?? 0) === 0 && !input.lastVerifierReceipt &&
+    (input.executedVerifierLedger?.length ?? 0) === 0 &&
+    (gate.reason === 'no_writes' || gate.reason === 'verifier_missing' || gate.reason === 'verifier_receipt_invalid');
+  const verified = input.proof?.compliant === true && (gate.allow || directForegroundProof) && acceptance?.verified === true &&
     !finalRevisionStale && !effectUnproven && !noChangeRejected;
   const finalOutcome: TerminalOutcome =
     input.requestedOutcome === "VERIFIED_COMPLETE" && verified

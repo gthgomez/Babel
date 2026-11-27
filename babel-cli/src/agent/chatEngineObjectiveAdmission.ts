@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { sha256Canonical } from '../acceptance/canonical.js'
+import { ContextPreparationError } from './chatContextFailure.js'
 import type {
   ChatEngineOptions,
   ChatTaskAllowanceSnapshot,
@@ -21,6 +22,7 @@ import {
 } from './chatEngineLiveSession.js'
 import {
   bindInitialObjective,
+  acceptedObjectiveInputDigest,
   assertObjectiveLifecycle,
   type ObjectiveAuthorityRecord,
   type TaskObjectiveLifecycleV1,
@@ -66,6 +68,7 @@ export interface ObjectiveAdmissionHost {
 export interface PreparedObjectiveSubmission {
   submission: PreparedUserSubmission
   taskId: string
+  attemptId: string
   previousContractHash: string
 }
 
@@ -87,6 +90,7 @@ export function prepareObjectiveSubmission(
     taskId: retainIdentity
       ? authority.taskContract.task_id
       : `task:${randomUUID()}`,
+    attemptId: randomUUID(),
     previousContractHash: authority.taskContract.contract_hash,
   }
 }
@@ -150,7 +154,7 @@ export function admitObjectiveSubmission(
     episodeStream: structuredClone(previous.episodeStream),
     loop: structuredClone(previous.loop),
     progress: structuredClone(previous.progress),
-    authorizedObservationIds: new Set(previous.authorizedObservationIds),
+    ...(previous.authorizedObservationIds ? { authorizedObservationIds: new Set(previous.authorizedObservationIds) } : {}),
   }
   const authority = previous.liveAuthority
   if (!authority) throw new Error('OBJECTIVE_AUTHORITY_MISSING')
@@ -187,7 +191,20 @@ export function admitObjectiveSubmission(
     !lifecycle &&
     authority.taskContract.user_request === runtime.taskText
   const preserve = prepared.objectiveDisposition === 'preserve'
-  if (!preserve && !initialSeed) staged.authorizedObservationIds = new Set()
+  if (preserve) {
+    const membership = staged.authorizedObservationIds
+    const previousIds = previous.authorizedObservationIds
+    if (!membership || !previousIds || previousIds.size !== membership.size ||
+        [...previousIds].some(id => !membership.has(id))) {
+      // Failure settlement can still project the previous runtime. Never let
+      // that projection write stale membership back over the source of record.
+      delete previous.authorizedObservationIds
+      delete previous.contextCheckpoint
+      throw new ContextPreparationError(host.options.projectRoot ?? '',
+        'observation_membership_unavailable', 'durable observation membership is unavailable or changed; reopen this session',
+        host.engineRunDir)
+    }
+  } else if (!initialSeed) staged.authorizedObservationIds = new Set()
   const delivered = prepareEngineInstructionAuthority(context)
   if (
     (preserve || initialSeed) &&
@@ -225,13 +242,15 @@ export function admitObjectiveSubmission(
   const marked = bindInitialObjective(candidate)
   candidate = { ...candidate, ...marked }
   const requestedOperation = input.operation ?? options.operation ?? 'AUTO'
-  const inputDigest = sha256Canonical({
-    task: input.userInput,
+  const objectiveOperation = runtime.taskShape?.operation
+  const acceptedOperation = {
     requestedOperation,
-    requestedTaskIntent: input.taskIntent ?? null,
+    ...(input.taskIntent !== undefined ? { requestedTaskIntent: input.taskIntent } : {}),
     requestedContinueTask: input.continueTask === true,
-  })
-  const attemptId=randomUUID()
+    ...(objectiveOperation ? { objectiveOperation } : {}),
+  }
+  const inputDigest = acceptedObjectiveInputDigest({ task: input.userInput, ...acceptedOperation })
+  const attemptId = objective.attemptId
   const amendments: NonNullable<ReturnType<typeof createTaskAcceptanceRevision>>[] = []
   const acceptRevision = (amendment: ReturnType<typeof createTaskAcceptanceRevision>) => {
     if (!amendment) return
@@ -260,7 +279,7 @@ export function admitObjectiveSubmission(
   }
   if (preserve) acceptRevision(createTaskAcceptanceRevision(candidate.taskContract, {
     userInput: input.userInput, inputDigest, attemptId,
-  }))
+  }, 'add', options.projectRoot ?? undefined))
   const binding = {
     task_id: candidate.taskContract.task_id,
     contract_id: candidate.taskContract.contract_id,
@@ -282,11 +301,7 @@ export function admitObjectiveSubmission(
     gatePolicy: runtime.gatePolicy ?? 'required',
     submissionIndex: runtime.submissionIndex,
     continuedTask: runtime.continuedTask,
-    requestedOperation,
-    ...(input.taskIntent !== undefined
-      ? { requestedTaskIntent: input.taskIntent }
-      : {}),
-    requestedContinueTask: input.continueTask === true,
+    ...acceptedOperation,
     taskAttempt: binding,
   })
   const submitted = [...staged.sessionEvents.events]

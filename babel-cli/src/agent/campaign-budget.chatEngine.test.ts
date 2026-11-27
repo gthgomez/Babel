@@ -172,7 +172,7 @@ test('engine-owned callback integration: critic path attaches campaign meter fro
     physicalFetch++
     return new Response(JSON.stringify({
       model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
-      choices: [{ message: { content: 'critic ok' } }],
+      choices: [{ message: { content: 'critic ok' }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 8, completion_tokens: 4, cost: 0.00001 },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }
@@ -229,7 +229,7 @@ test('engine-owned callback integration: retry reserves once per physical transp
     }
     return new Response(JSON.stringify({
       model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
-      choices: [{ message: { content: 'ok' } }],
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.00001 },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }

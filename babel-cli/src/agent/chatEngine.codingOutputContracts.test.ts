@@ -182,6 +182,9 @@ function makeHost(
       taskId: parity.liveAuthority!.taskContract.task_id, contractHash: parity.liveAuthority!.taskContract.contract_hash }),
     currentRecoveryBinding: () => null,
     finishRecoveryLocalizationInspection: () => {},
+    getFrozenForegroundAmendments: () => [],
+    captureForegroundEffectFence: () => undefined,
+    recoveredTaskMutationPaths: () => [],
     getResolvedRequiredVerifiers: () => [],
     getTurnRuntimeSnapshot: () => null,
     getLiveSession: () => ({

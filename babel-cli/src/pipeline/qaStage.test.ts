@@ -142,7 +142,7 @@ function mockFetchResponse(verdictText: string) {
   return (async () => {
     return new Response(
       JSON.stringify({
-        choices: [{ message: { content: JSON.stringify(JSON.parse(verdictText)) } }],
+        choices: [{ message: { content: JSON.stringify(JSON.parse(verdictText)) }, finish_reason: 'stop' }],
         usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
       }),
       { status: 200 },

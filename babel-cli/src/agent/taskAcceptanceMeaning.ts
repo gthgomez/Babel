@@ -1,5 +1,6 @@
 import { sha256Canonical } from '../acceptance/canonical.js'
 import type { AcceptanceRequirementV1, TaskContractProvenanceRecord, TaskContractV1 } from './taskContract.js'
+import { taskBehaviorPoint, withoutPointImplementationFraming } from './taskBehaviorPoint.js'
 
 /** Frozen replay / amendments recorded under v1 provenance. */
 export const ACCEPTANCE_MEANING_REF_V1 = 'task-acceptance-meaning:v1'
@@ -9,15 +10,21 @@ export const ACCEPTANCE_MEANING_REF_V2 = 'task-acceptance-meaning:v2'
 export const ACCEPTANCE_MEANING_REF_V3 = 'task-acceptance-meaning:v3'
 /** Fresh admission also preserves narrowly labeled opening behavioral goals. */
 export const ACCEPTANCE_MEANING_REF_V4 = 'task-acceptance-meaning:v4'
+/** Frozen v5 recognizes quantified arithmetic behavior. */
+export const ACCEPTANCE_MEANING_REF_V5 = 'task-acceptance-meaning:v5'
+/** V6 keeps declarative behavior separate from subordinate check requirements. */
+export const ACCEPTANCE_MEANING_REF_V6 = 'task-acceptance-meaning:v6'
 /** @deprecated Use ACCEPTANCE_MEANING_REF_V1; default export alias preserves v1 replay. */
 export const ACCEPTANCE_MEANING_REF = ACCEPTANCE_MEANING_REF_V1
 
-export type TaskAcceptanceMeaningVersion = 1 | 2 | 3 | 4
+export type TaskAcceptanceMeaningVersion = 1 | 2 | 3 | 4 | 5 | 6
 const ACCEPTANCE_MEANING_REFS: ReadonlyMap<TaskAcceptanceMeaningVersion, string> = new Map([
   [1, ACCEPTANCE_MEANING_REF_V1],
   [2, ACCEPTANCE_MEANING_REF_V2],
   [3, ACCEPTANCE_MEANING_REF_V3],
   [4, ACCEPTANCE_MEANING_REF_V4],
+  [5, ACCEPTANCE_MEANING_REF_V5],
+  [6, ACCEPTANCE_MEANING_REF_V6],
 ])
 
 const MAX_INPUT_CHARS = 65_536
@@ -32,6 +39,9 @@ const BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:ACTION:\s*)?(?:please\s+)?(?:fix|repair
 // without a "so ... is" clause and must not be displaced by a command-only
 // Requirements list.
 const QUANTIFIED_BEHAVIORAL_GOAL_LINE = /^\s{0,3}(?:please\s+)?(?:fix|repair|change|update|implement|make|ensure|support|add|extend)\b.{1,240}\b(?:include|includes|excluding|exclude|excludes|return|returns|export|exports|cover|covers|handle|handles|preserve|preserves|keep)\b.{1,200}\b(?:every|all|each|any|none|only)\b.{0,120}[.!]?\s*$/i
+const ARITHMETIC_GOAL_FRAME = /^ {0,3}(?:ACTION:\s*)?(?:please\s+)?(?:fix|repair|change|update|implement|make|ensure)\b.{1,240}\b(?:so|to)\b/i
+const ARITHMETIC_OPERANDS = /\b(?:adds?|sums?|subtracts?|multipl(?:y|ies)|divides?)\s+(?:(?:any|all)\s+(?:two\s+)?|(?:(?:its|the)\s+)?two\s+)(?:numbers|integers|operands|inputs)\b/i
+const ARITHMETIC_RESULT_DOMAIN = /\b(?:sum|difference|product|quotient|addition|subtraction|multiplication|division)(?:\s+works)?\s+(?:for|of)\s+(?:any|all|each|every)\s+(?:pairs?|(?:two\s+)?(?:signed\s+)?(?:numbers|integers|operands|inputs))\b/i
 // Additional operative goal lines in the same opening prose block. They are
 // only admitted when at least one sibling line states an observable behavioral
 // objective, so ordinary context or a lone vague instruction is unchanged.
@@ -39,6 +49,7 @@ const OPERATIVE_GOAL_LINE = /^\s{0,3}(?:ACTION:\s*)?(?:please\s+)?(?:(?:also|add
 const GOAL_LABEL = /^ {0,3}(?:(?:goal|objective):|\*\*(?:goal|objective):\*\*)[ \t]+/i
 const OPENING_TASK_HEADING = /^ {0,3}#{1,6}[ \t]+task(?:[ \t]+#+)?[ \t]*$/i
 const NON_OPERATIVE_GOAL_QUALIFIER = /\([ \t]*(?:example only|not required)(?:[ \t]*[;,][ \t]*(?:example only|not required))*[ \t]*\)[.!]?[ \t]*$/i
+const DECLARATIVE_BEHAVIOR = /^(?:we|i)\s+need\s+`?[A-Za-z_$][\w$]*`?\s+to\s+(?:return|produce|output|export|include|exclude|preserve|handle|reject|accept|become|equal)\b\s+\S/i
 export type AcceptanceMeaningStatus = 'explicit' | 'inferred' | 'unresolved'
 export interface AcceptanceMeaningSource {
   criterion_id: string
@@ -117,24 +128,36 @@ function behaviorBeforeVerifierLink(body: string): string {
   return body
 }
 
-function isObservableGoal(line: string): boolean {
-  return BEHAVIORAL_GOAL_LINE.test(line) || QUANTIFIED_BEHAVIORAL_GOAL_LINE.test(line)
+function isObservableGoal(line: string, includeArithmetic: boolean): boolean {
+  return BEHAVIORAL_GOAL_LINE.test(line) || QUANTIFIED_BEHAVIORAL_GOAL_LINE.test(line) ||
+    (includeArithmetic && ARITHMETIC_GOAL_FRAME.test(line) && isQuantifiedArithmeticBehavior(line))
 }
 
-function isOperativeBehavioralGoal(body: string): boolean {
-  return isObservableGoal(body) && OPERATIVE_GOAL_LINE.test(body)
+/** Such a goal cannot inherit coverage from a verifier that only matches one illustrative input. */
+export function isQuantifiedArithmeticBehavior(description: string): boolean {
+  return ARITHMETIC_OPERANDS.test(description) || ARITHMETIC_RESULT_DOMAIN.test(description)
+}
+
+function isCurrentBehavioralGoal(body: string): boolean {
+  return !NON_OPERATIVE_GOAL_QUALIFIER.test(body) &&
+    (taskBehaviorPoint(withoutPointImplementationFraming(body)) !== undefined || DECLARATIVE_BEHAVIOR.test(body))
+}
+
+function isOperativeBehavioralGoal(body: string, includeArithmetic: boolean, includeDeclarative = false): boolean {
+  return (isObservableGoal(body, includeArithmetic) && OPERATIVE_GOAL_LINE.test(body)) ||
+    (includeDeclarative && isCurrentBehavioralGoal(body))
 }
 
 /** V4 comparison text: remove only a recognized behavioral goal's outer label. */
-export function labeledBehavioralGoalText(line: string): string | undefined {
+export function labeledBehavioralGoalText(line: string, includeArithmetic = false, includeDeclarative = false): string | undefined {
   const body = labeledGoalBody(line)
-  return body && isOperativeBehavioralGoal(body) && !NON_OPERATIVE_GOAL_QUALIFIER.test(body)
+  return body && isOperativeBehavioralGoal(body, includeArithmetic, includeDeclarative) && !NON_OPERATIVE_GOAL_QUALIFIER.test(body)
     ? body
     : undefined
 }
 
 /** V4 opening framing, also used by task routing. Offsets refer to the original labeled line. */
-export function findOpeningLabeledGoal(request: string): OpeningLabeledGoal | undefined {
+export function findOpeningLabeledGoal(request: string, includeArithmetic = false, includeDeclarative = false): OpeningLabeledGoal | undefined {
   if (request.length > MAX_INPUT_CHARS) return undefined
   let start = 0
   let seenTaskHeading = false
@@ -147,7 +170,7 @@ export function findOpeningLabeledGoal(request: string): OpeningLabeledGoal | un
         const text = labeledGoalBody(line)
         if (!text) return undefined
         const operative = !NON_OPERATIVE_GOAL_QUALIFIER.test(behaviorBeforeVerifierLink(text))
-        if (operative && !isOperativeBehavioralGoal(text)) return undefined
+        if (operative && !isOperativeBehavioralGoal(text, includeArithmetic, includeDeclarative)) return undefined
         return { text, start, end: start + line.length, operative }
       }
     }
@@ -156,13 +179,13 @@ export function findOpeningLabeledGoal(request: string): OpeningLabeledGoal | un
   return undefined
 }
 
-type V4GoalProjection = { opening: OpeningLabeledGoal | undefined }
+type V4GoalProjection = { opening: OpeningLabeledGoal | undefined; includeArithmetic: boolean; includeDeclarative: boolean }
 
 function projectV4Criterion(
   description: string,
   status: AcceptanceMeaningStatus,
   start: number,
-  opening: OpeningLabeledGoal | undefined,
+  { opening, includeArithmetic, includeDeclarative }: V4GoalProjection,
 ): string | undefined {
   if (status === 'inferred' && opening?.start === start)
     return opening.operative ? opening.text : undefined
@@ -174,7 +197,7 @@ function projectV4Criterion(
   // can recognize an unchanged goal without rewriting any literal in its body.
   const behavior = behaviorBeforeVerifierLink(body)
   if (NON_OPERATIVE_GOAL_QUALIFIER.test(behavior)) return undefined
-  return behavior === body && isOperativeBehavioralGoal(body) ? body : description
+  return behavior === body && isOperativeBehavioralGoal(body, includeArithmetic, includeDeclarative) ? body : description
 }
 
 function sortCriteriaBySourceSpan(
@@ -196,6 +219,7 @@ function preserveBehavioralGoal(
   meaning: TaskAcceptanceMeaning,
   request: string,
   meaningRef: string,
+  includeArithmetic: boolean,
   opening?: OpeningLabeledGoal,
 ): TaskAcceptanceMeaning {
   // Limit this bridge to a directly stated, observable opening goal. Do not
@@ -214,6 +238,7 @@ function preserveBehavioralGoal(
   let behavioral = false
   const seenCandidate = new Set<string>()
   const candidates: { text: string; start: number; end: number; labeled: boolean }[] = []
+  const includeDeclarative = meaning.interpretation_version >= 6
   for (const raw of lines) {
     const line = raw.replace(/\r$/, '')
     // Markdown indented code may use four spaces or a tab. Keep it outside
@@ -269,10 +294,12 @@ function preserveBehavioralGoal(
     if (/^\s{0,3}(?:[-*+•]|\d+[.)])\s+/.test(line)) break
     if (line.trim() && headingDepth === undefined) {
       const labeled = opening?.start === offset && opening.operative ? opening : undefined
-      if (!labeled && isObservableGoal(line)) behavioral = true
-      if (labeled || OPERATIVE_GOAL_LINE.test(line)) {
-        const text = labeled?.text ?? line.trim()
-        if (!seenCandidate.has(text)) {
+      const currentGoal = includeDeclarative && isCurrentBehavioralGoal(line.trim())
+      if (!labeled && (currentGoal || isObservableGoal(line, includeArithmetic))) behavioral = true
+      if (labeled || currentGoal || OPERATIVE_GOAL_LINE.test(line)) {
+        const original = labeled?.text ?? line.trim()
+        const text = includeDeclarative ? withoutPointImplementationFraming(original) : original
+        if ((!includeDeclarative || text.length <= MAX_CRITERION_CHARS) && !seenCandidate.has(text)) {
           seenCandidate.add(text)
           candidates.push({ text, start: offset, end: offset + line.length, labeled: labeled !== undefined })
         }
@@ -284,8 +311,10 @@ function preserveBehavioralGoal(
   // make neighboring imperatives operative as an unlabeled v3 goal would.
   if (candidates.length === 0) return meaning
   const existing = new Set(meaning.criteria.map(item => item.description))
+  const hasPoint = includeDeclarative && candidates.some(item => taskBehaviorPoint(item.text) !== undefined)
   const preserved = candidates.filter(item =>
     (behavioral || item.labeled) && !existing.has(item.text) &&
+    !(hasPoint && /^(?:please\s+)?implement this change[.!]?$/i.test(item.text)) &&
     // The base projection can already have admitted the full labeled line.
     (!item.labeled || !existing.has(request.slice(item.start, item.end).trim())),
   )
@@ -391,7 +420,8 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions, v4?: V
   let incomplete = request.length > MAX_INPUT_CHARS
   const add = (description: string, status: AcceptanceMeaningStatus, start: number, end: number) => {
     const text = description.trim()
-    const normalized = v4 ? projectV4Criterion(text, status, start, opening) : text
+    const projected = v4 ? projectV4Criterion(text, status, start, v4) : text
+    const normalized = projected && v4?.includeDeclarative ? withoutPointImplementationFraming(projected) : projected
     if (!normalized || seen.has(normalized)) return
     if (normalized.length > MAX_CRITERION_CHARS || criteria.length >= MAX_CRITERIA) {
       incomplete = true
@@ -459,7 +489,9 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions, v4?: V
       if (/^(?:(?:for )?examples?(?: (?:input|output|text|code)| of [^:]{1,100})?|sample(?: (?:input|output|text|code))?|logs?|quoted (?:text|content))(?:\s*:|\s*$)/i.test(heading)) { example = true; exampleDepth = sectionDepth; plainExample = headingDepth === undefined; continue }
       if (/^(?:non[-\s]*goals?|out[-\s]+of[-\s]+scope|exclusions?|not required)(?:\s*:|\s*$)/i.test(heading)) { activeProse.push(line.trim()); exclusionDepth = sectionDepth; plainExclusion = headingDepth === undefined; continue }
       // Frozen v1 records active lines before heading/list handling, including blanks.
-      if (opts.version === 1) activeProse.push(line.trim())
+      if (opts.version === 1 && !(v4?.includeDeclarative && /^(?: {4,}| {0,3}\t)/.test(line))) {
+        activeProse.push(line.trim())
+      }
       if (/^\s{0,3}#{1,6}\s+/.test(line)) {
         if (opts.version === 2) activeProse.push(line.trim())
         example = false
@@ -485,6 +517,11 @@ function interpretTaskAcceptance(request: string, opts: InterpretOptions, v4?: V
       const inline = line.match(/^\s{0,3}(?:acceptance criteria|requirements?)\s*:\s*(.+?)\s*$/i)
       if (inline) { requirementRegion = true; if (opts.version === 2) activeProse.push(line.trim()); add(inline[1]!, 'explicit', start, end); continue }
       const trimmedLine = line.trim()
+      if (v4?.includeDeclarative && trimmedLine.length > MAX_CRITERION_CHARS &&
+        (opening?.start === start || isCurrentBehavioralGoal(trimmedLine))) {
+        incomplete = true
+        continue
+      }
       const lineIndent = line.match(/^( *)/)?.[1]?.length ?? 0
       const indentedCodeLine = lineIndent >= 4 || /^ {0,3}\t/.test(line)
       const listContinuation =
@@ -613,8 +650,12 @@ export function inferTaskAcceptanceV2(request: string): TaskAcceptanceMeaning {
   return interpretV2Projection(request)
 }
 
-function inferTaskAcceptanceWithBehavioralGoals(request: string, version: 3 | 4): TaskAcceptanceMeaning {
-  const v4 = version === 4 ? { opening: findOpeningLabeledGoal(request) } : undefined
+function inferTaskAcceptanceWithBehavioralGoals(request: string, version: 3 | 4 | 5 | 6): TaskAcceptanceMeaning {
+  const includeArithmetic = version >= 5
+  const includeDeclarative = version >= 6
+  const v4 = version >= 4
+    ? { opening: findOpeningLabeledGoal(request, includeArithmetic, includeDeclarative), includeArithmetic, includeDeclarative }
+    : undefined
   const previous = interpretV2Projection(request, v4)
   const v2Prefix = `${ACCEPTANCE_MEANING_REF_V2}:`
   const meaningRef = acceptanceMeaningRefForVersion(version)
@@ -626,7 +667,9 @@ function inferTaskAcceptanceWithBehavioralGoals(request: string, version: 3 | 4)
       ref: record.ref.startsWith(v2Prefix) ? record.ref.replace(v2Prefix, `${meaningRef}:`) : record.ref,
     })),
   }
-  return preserveBehavioralGoal(versioned, request, meaningRef, v4?.opening)
+  return includeDeclarative && request.length > MAX_INPUT_CHARS
+    ? versioned
+    : preserveBehavioralGoal(versioned, request, meaningRef, includeArithmetic, v4?.opening)
 }
 
 /** Frozen v3 replay preserves the original behavioral-goal interpretation. */
@@ -640,7 +683,9 @@ export function inferTaskAcceptanceV4(request: string): TaskAcceptanceMeaning {
 }
 
 /** Live acceptance admission and verifier dependency selection share this policy. */
-export const inferFreshTaskAcceptance = inferTaskAcceptanceV4
+export function inferFreshTaskAcceptance(request: string): TaskAcceptanceMeaning {
+  return inferTaskAcceptanceWithBehavioralGoals(request, 6)
+}
 
 /** Default export path preserves v1 outputs for existing callers and replay tests. */
 export function inferTaskAcceptance(request: string): TaskAcceptanceMeaning {
@@ -651,6 +696,8 @@ export function inferTaskAcceptanceForVersion(
   request: string,
   version: TaskAcceptanceMeaningVersion,
 ): TaskAcceptanceMeaning {
+  if (version === 6) return inferFreshTaskAcceptance(request)
+  if (version === 5) return inferTaskAcceptanceWithBehavioralGoals(request, 5)
   if (version === 4) return inferTaskAcceptanceV4(request)
   if (version === 3) return inferTaskAcceptanceV3(request)
   return version === 2 ? inferTaskAcceptanceV2(request) : inferTaskAcceptanceV1(request)

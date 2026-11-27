@@ -13,13 +13,15 @@ import { resolveConnectionModelPolicy } from '../config/connectionModelPolicy.js
 import { resolveEffectiveSettings } from '../config/userSettings.js';
 import { selectedConnectionModel } from '../services/connectionSettings.js';
 import { assertOfflineProviderAllowed, isOfflineMode } from '../config/offlineMode.js';
+import { OPENCODE_GO_GLM_FLASH_MODEL } from '../runners/openCodeGoApi.js';
 
 /** Exact existing Go routes allowed for explicit Chat selection; native budget gates still apply. */
 export function isChatOpenCodeGoRoute(
   policy: Pick<ResolvedModelPolicy, 'provider' | 'providerModelId'> | undefined,
 ): boolean {
   return policy?.provider === 'opencode-go' &&
-    (policy.providerModelId === 'deepseek-v4-flash' || policy.providerModelId === 'deepseek-v4.1-flash') &&
+    (policy.providerModelId === 'deepseek-v4-flash' || policy.providerModelId === 'deepseek-v4.1-flash' ||
+      policy.providerModelId === OPENCODE_GO_GLM_FLASH_MODEL) &&
     getProviderSpec('opencode-go').authorityConformance === 'certified' &&
     providerSupportsOperation('opencode-go', 'native_tool_stream');
 }

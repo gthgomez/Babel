@@ -289,24 +289,47 @@ function attachTrustedFileCreationEvidence<T extends object>(
 }
 
 export type ShellExecutionBackend = 'docker-container' | 'host-process';
-const trustedShellExecutionBackend = new WeakMap<object, ShellExecutionBackend>();
+export interface ForegroundOutputCapture {
+  path: string;
+  publish(write: () => ToolResult | undefined): ToolResult | undefined;
+  settle(record: () => true): true | undefined;
+}
+type CapturedOutput = { readonly path: string; readonly digest: string };
+type ShellExecutionProvenance =
+  | { backend: 'docker-container' }
+  | { backend: 'host-process'; cwd: string; argv: readonly string[]; capturedOutput?: CapturedOutput };
+const trustedShellExecution = new WeakMap<object, ShellExecutionProvenance>();
+const FOREGROUND_OUTPUT_HEADER = Buffer.from('BABEL_FOREGROUND_OUTPUT_V1\n', 'ascii');
 
 /** Return only backend provenance attached by this module to a real SafeExecutor result. */
 export function getTrustedShellExecutionBackend(result: ToolResult): ShellExecutionBackend | undefined {
-  return trustedShellExecutionBackend.get(result);
+  return trustedShellExecution.get(result)?.backend;
+}
+
+/** Return the host-attested argv and cwd used to prepare an actual process start. */
+export function getTrustedHostShellInvocation(
+  result: ToolResult,
+): { cwd: string; argv: readonly string[]; capturedOutput?: CapturedOutput } | undefined {
+  const execution = trustedShellExecution.get(result);
+  if (execution?.backend === 'host-process') return execution;
 }
 
 /** Copy an existing trusted backend fact across a host-created result projection. */
 export function preserveTrustedShellExecutionBackend<T extends object>(source: object, destination: T): T {
-  const backend = trustedShellExecutionBackend.get(source);
-  if (backend) trustedShellExecutionBackend.set(destination, backend);
+  const execution = trustedShellExecution.get(source);
+  if (execution) trustedShellExecution.set(destination, execution);
   return destination;
 }
 
-function attachExecutionBackend(result: ToolResult, prepared: PreparedShellInvocation): ToolResult {
+function attachExecutionBackend(
+  result: ToolResult, prepared: PreparedShellInvocation, output?: CapturedOutput,
+): ToolResult {
   if (result.process_started !== true) return result
-  const backend = prepared.ownedContainerName ? 'docker-container' : 'host-process'
-  trustedShellExecutionBackend.set(result, backend)
+  if (prepared.ownedContainerName) trustedShellExecution.set(result, { backend: 'docker-container' })
+  else if (prepared.commandArgv) trustedShellExecution.set(result, Object.freeze({
+    backend: 'host-process', cwd: prepared.cwd, argv: Object.freeze([...prepared.commandArgv]),
+    ...(output ? { capturedOutput: Object.freeze(output) } : {}),
+  }))
   return result
 }
 
@@ -1274,6 +1297,7 @@ export class SafeExecutor {
     command: string,
     cwd: string,
     toolName: string,
+    readonlyRuntimeQuery?: true,
   ): PreparedShellInvocation | ToolResult {
     const planDenial = this.checkPlanModeDenial(toolName);
     if (planDenial) return planDenial;
@@ -1471,8 +1495,15 @@ export class SafeExecutor {
 
     let hostExecutable = resolvedExecutable?.path ?? normalizedRawCmd;
     let hostArgs = argv.slice(1);
+    if (readonlyRuntimeQuery && (useDockerSandbox || !resolvedExecutable?.trusted ||
+        relative(resolvedExecutable.path, process.execPath) !== '' ||
+        argv.length !== 2 || argv[0] !== 'node' || argv[1] !== '--version')) {
+      return policyDeniedResult('isolation_required', '[sandbox] The read-only task requires a trusted runtime query.', toolName, []);
+    }
     let commandShell: ResolvedCommandExecutable | undefined;
-    if (isWin && !useDockerSandbox) {
+    // Launch the validated native runtime directly so a shell cannot
+    // reinterpret the executable path.
+    if (isWin && !useDockerSandbox && !readonlyRuntimeQuery) {
       const hostSystem32 = hostWindowsSystem32Directory();
       const expectedShell = hostSystem32 ? resolve(hostSystem32, 'cmd.exe') : undefined;
       const resolvedShell = expectedShell ? resolveCommandExecutable(expectedShell, {
@@ -1500,6 +1531,7 @@ export class SafeExecutor {
           executable: hostExecutable,
           args: hostArgs,
           cwd: resolvedCwd,
+          commandArgv: argv,
           env,
           validateExecutable: () =>
             isResolvedCommandCurrent(resolvedExecutable!) &&
@@ -1595,11 +1627,15 @@ export class SafeExecutor {
     toolName = 'shell_exec',
     signal?: AbortSignal,
     processContext?: Pick<ProcessWitnessInput, 'sessionId' | 'turnId' | 'toolCallId'>,
+    capture?: ForegroundOutputCapture,
+    readonlyRuntimeQuery?: true,
   ): Promise<ToolResult> {
     // Settle cancellation before lookup; Windows shell built-ins may be unresolvable.
     if (signal?.aborted) return cancelledBeforeSpawnShellResult();
-    const prepared = this.prepareShellExecution(command, cwd, toolName);
+    const prepared = this.prepareShellExecution(command, cwd, toolName, readonlyRuntimeQuery);
     if ('exit_code' in prepared) return prepared;
+    const hostCapture = capture && prepared.commandArgv && !prepared.ownedContainerName && !this.shadowRoot &&
+      prepared.cwd === this.projectRoot && toolName === 'shell_exec' ? capture : undefined;
 
     let transientRetryCount = 0;
     let result: AsyncSpawnResult;
@@ -1611,7 +1647,8 @@ export class SafeExecutor {
       result = await spawnCommandAsync(prepared.executable, prepared.args, {
         cwd: prepared.cwd,
         timeoutMs,
-        env: prepared.env,
+        env: hostCapture ? { ...prepared.env, BABEL_FOREGROUND_OUTPUT_PATH: hostCapture.path } : prepared.env,
+        ...(hostCapture ? { captureStdout: true as const } : {}),
         ...(prepared.validateExecutable ? { validateExecutable: prepared.validateExecutable } : {}),
         ...(signal ? { signal } : {}),
         ...(this.processWitness ? { processWitness: this.processWitness } : {}),
@@ -1694,14 +1731,38 @@ export class SafeExecutor {
         process_started: result.processStarted,
       }, prepared);
     }
-    return attachExecutionBackend({ ...normalizeShellOutput(
+    const settled = { ...normalizeShellOutput(
       result.status,
       result.stdout,
       result.stderr,
       result.stdoutTruncated,
       result.stderrTruncated,
     ), process_started: result.processStarted,
-      process_termination: result.aborted ? 'cancelled' : result.timedOut ? 'timed_out' : result.status === null ? 'terminated' : 'exited' }, prepared);
+      process_termination: result.aborted ? 'cancelled' : result.timedOut ? 'timed_out' : result.status === null ? 'terminated' : 'exited' } satisfies ToolResult;
+    const bytes = result.stdoutBuffer;
+    if (!hostCapture || !bytes?.subarray(0, FOREGROUND_OUTPUT_HEADER.length).equals(FOREGROUND_OUTPUT_HEADER))
+      return attachExecutionBackend(settled, prepared);
+    const output = bytes.subarray(FOREGROUND_OUTPUT_HEADER.length);
+    // The process owns a private pipe; the host exclusively creates the one
+    // path declared at admission. A writer racing for that path cannot win
+    // publication and still be mistaken for process-produced bytes.
+    if (result.processStarted && result.status === 0 && !result.stdoutTruncated &&
+        settled.process_termination === 'exited' && !signal?.aborted) {
+      const text = output.toString('utf8');
+      if (Buffer.from(text, 'utf8').equals(output)) {
+        const written = hostCapture.publish(() => this.fileWrite(hostCapture.path, text, { createOnly: true }));
+        const ownership = written && getTrustedFileCreationEvidence(written);
+        if (written?.exit_code === 0 && ownership && !ownership.settlementIncomplete) {
+          return attachExecutionBackend({ ...settled, stdout: written.stdout }, prepared, {
+            path: relative(this.projectRoot, resolve(this.projectRoot, hostCapture.path)).replaceAll('\\', '/'),
+            digest: createHash('sha256').update(output).digest('hex'),
+          });
+        }
+      }
+    }
+    return attachExecutionBackend({
+      ...settled, exit_code: 1, stdout: '', stderr: '[sandbox] Declared process output could not be published safely.',
+    }, prepared);
   }
 
   /** Sugar over shellExec with a default timeout suitable for test runners. */

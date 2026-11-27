@@ -77,6 +77,8 @@ export interface ChatActionResult {
   stop?: boolean
   /** Only successful project reads that passed path admission may set this. */
   admittedProjectRead?: true
+  /** Path admission returned a diagnostic without opening the requested file. */
+  projectReadDeniedBeforeDispatch?: true
 }
 
 /** Classifies the user's intent for a chat turn.
@@ -689,6 +691,7 @@ export interface ChatEngineStreamingLoopHost {
     mode?: 'native' | 'legacy' | 'text',
   ) => string
   readonly getResolvedRequiredVerifiers: () => string[]
+  readonly getReadOnlyForegroundCommands: () => string[]
   readonly isolationBrokerFlags: () => ReturnType<typeof import('./chatEngineIsolationFlags.js').resolveIsolationBrokerFlags>
   readonly handleBudgetKill: (
     reason: string,
@@ -697,12 +700,14 @@ export interface ChatEngineStreamingLoopHost {
     ownerGeneration?: number,
   ) => Promise<ChatResult | null>
   readonly hasAnyWrites: () => boolean
+  readonly hasTaskMutationForCompletion: () => boolean
   readonly hasPendingCompactionAuthority: () => boolean
   readonly installP11ContextCheckpoint: (
     routeOverride?: NonNullable<LiveOperationalSourcesV1['route']>,
   ) => Promise<boolean>
   /** Structured diagnostic from the most recent refused P11 install (codes only). */
   p11InstallBlock: { code: string; details: string[] } | null
+  readonly p11ObservationCaptureIssues?: readonly string[]
   investigateSoftNudgeDone: boolean
   readonly isSubmissionCurrent: (ownerGeneration: number) => boolean
   readonly lastCriticReceipt: DiffCriticVerdict | null
@@ -881,6 +886,9 @@ export interface ChatEngineActionExecutorHost {
   fullReadCounts: Map<string, number>
   getTurnRuntimeSnapshot: () => TurnRuntimeSnapshot | null
   getResolvedRequiredVerifiers: () => string[]
+  getFrozenForegroundAmendments: () => string[]
+  captureForegroundEffectFence: () => (<T>(effect: () => T) => T | undefined) | undefined
+  recoveredTaskMutationPaths: () => string[]
   getLiveSession: (
     c?:
       | {
@@ -911,6 +919,7 @@ export interface ChatEngineActionExecutorHost {
   persistToolStartedAtExecutorDispatch: (
     action: ChatToolAction,
     meta: { index: number; idempotencyKey?: string },
+    foregroundCriterionId?: string,
   ) => void
   platformUnusableVerifiers: Set<string>
   policyEventLog: PolicyEventLog

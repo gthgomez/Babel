@@ -1,5 +1,6 @@
 import { computeCriticRepairCostBudget, computePostWriteRepairBudget } from './chatEngineBudgetPolicy.js';
-import { durableAdmissionState } from './chatEngineAdmissionState.js';
+import { durableAdmissionState, reconcileChatSubmissions } from './chatEngineAdmissionState.js';
+import { recoverCurrentTaskMutationPaths } from './recoveredMutationWitness.js';
 import type { ChatLlmRunner } from '../runners/base.js'
 import { restoreFailedVerifierHistory, unresolvedFailedVerifierHistory, attestedFailedVerifierExecution } from './codingLoop/failedVerifierExecution.js';
 import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js';
@@ -420,6 +421,7 @@ import { RepetitionDetector } from "./repetitionDetector.js";
 import { captureThought } from "./thoughtCapture.js";
 import { persistPreambleBudget } from "./preambleBudgetDiagnostics.js";
 import {
+  attestChatPointReceipt,
   captureCompletionWorkspaceRevisionHash,
   prepareKernelVerifierInput,
   resolveVerifierCacheIdentity,
@@ -434,7 +436,14 @@ import {
 } from "./turnRuntime.js";
 import {restoreTurnRuntime} from './restoreTurnRuntime.js';
 import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjectiveSubmission,type ObjectiveAdmissionHost,type ObjectiveAdmissionResult} from './chatEngineObjectiveAdmission.js';
-import type { CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
+import { evaluateCriterionCompletionV1, isForegroundOnlyAcceptance, type CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
+import { retainCurrentPointReceipts } from './pointVerifierWitness.js';
+import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js';
+import { taskProhibitsCommand } from './taskCommandProhibitions.js';
+import { frozenExactForegroundCommands, isReadOnlyForegroundQuery } from './requestedLocalExecution.js';
+import { frozenForegroundAmendmentSources } from './taskAcceptanceSource.js';
+import { sha256Canonical } from '../acceptance/canonical.js';
+import { parseSingleProcessArgv } from '../utils/commandArgv.js';
 import { chatFinalRevisionWitness, chatFinalRevisionRequiredForChat } from '../authority/finalRevision.js';
 import {requiresObjectiveLifecycle,activeObjectiveSessionLog,activeAcceptanceSessionLog} from './taskObjectiveLifecycle.js';
 
@@ -944,6 +953,12 @@ export class ChatEngine {
       contract: this.parity.liveAuthority?.taskContract,
       runId: this.engineRunId,
       projectRoot: this.options.projectRoot ?? null,
+      foreground: {
+        runDir: this.engineRunDir, log: this.parity.sessionEvents,
+        ...(this.parity.liveAuthority?.taskModeHistory?.schema_version === 2
+          ? { history: this.parity.liveAuthority.taskModeHistory } : {}),
+        amendments: this.getFrozenForegroundAmendments(),
+      },
     }));
     if (options.admissionStore)
       this.parity.admissionStore = options.admissionStore;
@@ -1125,12 +1140,14 @@ export class ChatEngine {
         .map((entry) => entry.command)
         .filter((command) => command.trim().length > 0);
       const verifierInput = this.buildVerifierInput();
+      if (turnResult.type === 'completion' && this.verifiedForegroundOnly(verifierInput)) return 'allow';
       return evaluateCompletionGateForEngine({
         turnType: turnResult.type,
         taskIntent,
         task: this.options.task,
         taskClass: this.taskClass,
         toolCallLog: this.toolCallLog,
+        recoveredTaskMutation: this.recoveredTaskMutationPaths().length > 0,
         lastVerifierReceipt: this.lastVerifierReceipt,
         executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
         verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
@@ -1167,7 +1184,7 @@ export class ChatEngine {
       taskClass: this.taskClass,
       toolCallLog: this.toolCallLog,
       lastVerifierReceipt: this.lastVerifierReceipt,
-      hasAnyWrites: this.hasAnyWrites(),
+      hasAnyWrites: this.hasTaskMutationForCompletion(),
       gateStrikes: this.gateStrikes,
       executedVerifierLedger: verifierInput.executedVerifierLedger ?? null,
       verifierEvidenceErrors: verifierInput.verifierEvidenceErrors ?? null,
@@ -1410,6 +1427,22 @@ export class ChatEngine {
     return sessionHasAnyWrites(this.toolCallLog);
   }
 
+  /** Recheck same-objective ledger paths for verifier capture and completion. */
+  public recoveredTaskMutationPaths(): string[] {
+    const runtime = this.lastTurnRuntime;
+    const contract = this.parity.liveAuthority?.taskContract;
+    const { turnId, sessionEvents: log } = this.parity;
+    const projectRoot = this.options.projectRoot;
+    return runtime?.objectiveContinuation && runtime.effectiveOperation === 'MUTATING' &&
+      !runtime.presentationOnly && contract && turnId && projectRoot
+      ? recoverCurrentTaskMutationPaths({ log, runDir: this.engineRunDir, projectRoot, turnId, contract })
+      : [];
+  }
+
+  private hasTaskMutationForCompletion(): boolean {
+    return this.hasAnyWrites() || this.recoveredTaskMutationPaths().length > 0;
+  }
+
   /**
    * Build the synchronous proof summary passed to the shared completion
    * authority. Uses SessionEventV1 + bound receipts, then kernel evaluateEvidenceSync.
@@ -1419,12 +1452,14 @@ export class ChatEngine {
     errors?: string[];
   } {
     const selected = this.buildVerifierInput();
+    const recoveredMutationPaths = this.recoveredTaskMutationPaths();
     const proofs = selected.selectedChatReceipts.map(receipt => evaluateChatCompletionProof({
       projectRoot: requireProjectRoot(this.options),
       hasMutation,
       verifierTampered: this.verifierTampered,
       receipt,
       events: this.parity.sessionEvents.events,
+      recoveredMutationPaths,
       isAuthoritativeCommand: isAuthoritativeVerifierCommand,
     }));
     const errors = [...selected.proofSelection.evidenceErrors, ...selected.proofSelection.integrityFindings,
@@ -2209,7 +2244,7 @@ export class ChatEngine {
       ...(submitOpts?.continueTask !== undefined ? {continueTask:submitOpts.continueTask} : {}),
     });
     const claim = this.admitCurrentSubmission(submissionGeneration, userInput, {
-      taskId: objective.taskId, taskClass: objective.submission.runtime.taskClass,
+      taskId: objective.taskId, taskClass: objective.submission.runtime.taskClass, attemptId: objective.attemptId,
     });
     let loopFinished = false;
     let terminalObserved = false;
@@ -2324,8 +2359,8 @@ export class ChatEngine {
       this.parity.eventLog,
       {
         systemPrompt,
-        ...(this.parity.contextCheckpoint
-          ? { installedContextCheckpoint: this.parity.contextCheckpoint }
+        ...(this.parity.contextCheckpoint || this.parity.admissionStore
+          ? { installedContextCheckpoint: this.parity.contextCheckpoint ?? null }
           : {}),
       },
     );
@@ -2582,11 +2617,16 @@ export class ChatEngine {
   }
 
   public getResolvedRequiredVerifiers(): string[] {
-    return [...new Set([...(this.parity.liveAuthority?.taskContract.verifier_requirements ?? []),...resolveEngineRequiredVerifiers({
-      task: this.options.task,
-      projectTestCommands: this.discoveredTestCommands.map((e) => e.command),
-      requiredVerifierCommands: this.options.requiredVerifierCommands ?? null,
-    })])];
+    const activeProse = inferFreshTaskAcceptance(this.getTurnRuntimeSnapshot()?.taskText ?? this.options.task).activeProse;
+    const commands = new Set([
+      ...(this.parity.liveAuthority?.taskContract.verifier_requirements ?? []),
+      ...resolveEngineRequiredVerifiers({
+        task: this.options.task,
+        projectTestCommands: this.discoveredTestCommands.map((entry) => entry.command),
+        requiredVerifierCommands: this.options.requiredVerifierCommands ?? null,
+      }),
+    ]);
+    return [...commands].filter(command => !taskProhibitsCommand(activeProse, command));
   }
 
   private clearVerifierEvidenceState(): void {
@@ -2644,17 +2684,18 @@ export class ChatEngine {
     const canonical = prepareKernelVerifierInput(this.lastVerifierReceipt, this.executedVerifierLedger);
     const currentOwnerReceipts = this.executedVerifierLedger.filter(receipt => receipt.executionContext?.taskId === verifierOwner?.taskId &&
       receipt.executionContext?.contractHash === verifierOwner?.contractHash && receipt.executionContext?.workspaceRoot === verifierOwner?.workspaceRoot);
+    const mutationPaths = mutationPathsFromSessionEvents(this.parity.sessionEvents.events, this.recoveredTaskMutationPaths());
     const currentReceiptRevisionHashes: Record<string,string> = {};
     for (const receipt of currentOwnerReceipts) {
       try {
-        const live = captureCompletionWorkspaceRevisionHash(this.options, mutationPathsFromSessionEvents(this.parity.sessionEvents.events), receipt);
+        const live = captureCompletionWorkspaceRevisionHash(this.options, mutationPaths, receipt);
         if (live && receipt.receiptId) currentReceiptRevisionHashes[receipt.receiptId] = live;
       } catch { /* This receipt cannot establish live currency. */ }
     }
     let currentWorkspaceRevisionHash: string | undefined;
     try {
       currentWorkspaceRevisionHash = captureCompletionWorkspaceRevisionHash(this.options,
-        mutationPathsFromSessionEvents(this.parity.sessionEvents.events), currentOwnerReceipts.at(-1) ?? null);
+        mutationPaths, currentOwnerReceipts.at(-1) ?? null);
     } catch { /* Missing live evidence remains missing, never copied from a receipt. */ }
     if (this.testWorkspaceRevisionHash !== undefined) {
       currentWorkspaceRevisionHash = this.testWorkspaceRevisionHash ?? undefined;
@@ -2681,7 +2722,10 @@ export class ChatEngine {
       ? ['Settled failed verifier execution requires newer covering current green evidence'] : [];
     proofSelection.evidenceErrors.push(...historyErrors);
     const selectedChatReceipts = selectLedgerReceiptsById(this.executedVerifierLedger, proofSelection.selectedCoveringReceipts);
-    const criterionChatReceipts = currentOwnerReceipts.filter(receipt => attemptSelection.currentAttempts.some(attempt => attempt.receiptId === receipt.receiptId));
+    const criterionChatReceipts = retainCurrentPointReceipts(
+      currentOwnerReceipts.filter(receipt => attemptSelection.currentAttempts.some(attempt => attempt.receiptId === receipt.receiptId))
+        .map(receipt => attestChatPointReceipt(this.parity.sessionEvents, receipt)),
+    );
     return { ...canonical, verifierEvidenceErrors: canonical.verifierEvidenceErrors, requiredVerifierCommands, requiredVerifiers, verifierOwner, currentWorkspaceRevisionHash, currentReceiptRevisionHashes, unplannedAttemptEnvironmentFingerprint, proofSelection, selectedChatReceipts, criterionChatReceipts };
   }
 
@@ -2703,6 +2747,43 @@ export class ChatEngine {
     });
   }
 
+  /** Advertise the same frozen foreground command identities that dispatch can admit. */
+  public getReadOnlyForegroundCommands(): string[] {
+    const runtime = this.getTurnRuntimeSnapshot();
+    const contract = this.parity.liveAuthority?.taskContract;
+    if (!contract || runtime?.effectiveOperation !== 'READ_ONLY' || runtime.presentationOnly || isReadOnlyChat() ||
+        this.executionProfile === 'plan' || this.hardPlanMode) return [];
+    const activeProse = inferFreshTaskAcceptance(runtime.taskText).activeProse;
+    return [...frozenExactForegroundCommands(contract, this.getFrozenForegroundAmendments())]
+      .filter(([command, effect]) => isReadOnlyForegroundQuery(effect.argv) && !taskProhibitsCommand(activeProse, command))
+      .map(([command]) => command);
+  }
+
+  /** Read exact amendment text from the accepted thread lineage. */
+  public getFrozenForegroundAmendments(): string[] {
+    const authority = this.parity.liveAuthority;
+    return frozenForegroundAmendmentSources(
+      authority?.taskObjectiveLifecycle,
+      authority?.taskModeHistory?.schema_version === 2 ? authority.taskModeHistory : undefined,
+      this.parity.eventLog,
+    );
+  }
+
+  private verifiedForegroundOnly(verifier: ReturnType<ChatEngine['buildVerifierInput']>): boolean {
+    const service = this.criterionCompletion
+    const request = service?.currentRequest()
+    if (!service || !request || this.executionProfile === 'plan' || !isForegroundOnlyAcceptance(request.contract) ||
+        !request.contract.allowed_effects.includes('non_idempotent_local_effect') || this.verifierTampered ||
+        this.verifierInputsUnfrozen || verifier.requiredVerifierCommands.length || verifier.requiredVerifiers.length ||
+        verifier.verifierEvidenceErrors?.length || verifier.proofSelection.integrityFindings.length ||
+        contractPreservationErrors(request.contract, this.options.projectRoot).length) return false;
+    service.refreshPrivateEvidence({
+      proof: { compliant: false }, allowPartialEvidence: true, receipts: verifier.criterionChatReceipts,
+      candidate_sha: this.criterionCandidateRevisionSha(), has_mutation: this.hasAnyWrites(),
+    });
+    return evaluateCriterionCompletionV1(request).verified;
+  }
+
   private decideCompletion(
     requestedOutcome: TerminalOutcome | "PLAN_COMPLETE",
     hasMutation: boolean,
@@ -2711,8 +2792,13 @@ export class ChatEngine {
     refreshChatCompletionVerifierCurrency(this.options, hasMutation, this.lastVerifierReceipt, this.executedVerifierLedger);
     const verifierInput = this.buildVerifierInput();
     const finalRevision = publicationRevision ?? chatFinalRevisionWitness(this.options.projectRoot, toGateToolLog(this.toolCallLog), verifierInput.requiredVerifierCommands);
-    const evidenceProof = requestedOutcome === "VERIFIED_COMPLETE" || hasMutation ? this.buildCompletionProof(hasMutation) : { compliant: false, errors: ["no mutation-bound verifier evidence is available"] };
-    if (this.criterionCompletion && (requestedOutcome === 'VERIFIED_COMPLETE' || hasMutation)) {
+    const foregroundVerified = (requestedOutcome === 'UNVERIFIED_PATCH' || requestedOutcome === 'VERIFIED_COMPLETE') &&
+      this.verifiedForegroundOnly(verifierInput);
+    if (foregroundVerified) requestedOutcome = 'VERIFIED_COMPLETE';
+    const evidenceProof = foregroundVerified ? { compliant: true }
+      : requestedOutcome === "VERIFIED_COMPLETE" || hasMutation ? this.buildCompletionProof(hasMutation)
+      : { compliant: false, errors: ["no mutation-bound verifier evidence is available"] };
+    if (!foregroundVerified && this.criterionCompletion && (requestedOutcome === 'VERIFIED_COMPLETE' || hasMutation)) {
       this.criterionCompletion.refreshPrivateEvidence({
         proof: evidenceProof,
         allowPartialEvidence: !this.verifierTampered && !this.verifierInputsUnfrozen,
@@ -2838,6 +2924,8 @@ export class ChatEngine {
 
   attachSessionPolicyLease(lease: SessionPolicyLease): void {
     if (this.sessionPolicyLease) throw new Error('Session policy ownership is already attached.');
+    if (lease.sessionId !== this.engineRunId) throw new Error('Session policy ownership is for a different session.');
+    if (!this.activeAdmissionClaim && this.options.resumeExisting) reconcileChatSubmissions(this.parity);
     this.sessionPolicyLease = lease;
   }
 
@@ -2904,12 +2992,13 @@ export class ChatEngine {
       budgetUsd: Number.isFinite(this.limits.maxCostUsd) ? this.limits.maxCostUsd : 'unlimited' };
   }
 
-  getProviderConversation(): ProviderMessage[] {
+  getProviderConversation(systemPrompt?: string): ProviderMessage[] {
     return this.services.conversation.rebuildProviderMessages(
       this.parity.eventLog,
       {
-        ...(this.parity.contextCheckpoint
-          ? { installedContextCheckpoint: this.parity.contextCheckpoint }
+        ...(systemPrompt === undefined ? {} : { systemPrompt }),
+        ...(this.parity.contextCheckpoint || this.parity.admissionStore
+          ? { installedContextCheckpoint: this.parity.contextCheckpoint ?? null }
           : {}),
       },
     );
@@ -3359,14 +3448,24 @@ export class ChatEngine {
     return this.p11Authority.buildP11Sources(routeOverride);
   }
 
-  private currentP11Owner(): ContextCheckpointOwnerV1 | null {
+  /** Return the currently admitted owner only while it matches durable authority. */
+  public currentP11Owner(): ContextCheckpointOwnerV1 | null {
     return this.p11Authority.currentP11Owner();
+  }
+
+  /** Fence one synchronous foreground effect with the currently claimed submission. */
+  public captureForegroundEffectFence(): (<T>(effect: () => T) => T | undefined) | undefined {
+    const owner = this.currentP11Owner();
+    const store = this.parity.admissionStore;
+    const claim = this.activeAdmissionClaim;
+    if (!owner || !store || !claim) return undefined;
+    return effect => store.withCurrentOwner(owner, claim.commandId, effect);
   }
 
   private admitCurrentSubmission(
     submissionGeneration: number,
     userInput: string,
-    objective?: {taskId:string;taskClass:ChatTaskClass},
+    objective?: {taskId:string;taskClass:ChatTaskClass;attemptId:string},
   ): ChatEngineAdmissionClaim | null {
     return this.p11Authority.admitCurrentSubmission(
       submissionGeneration,
@@ -3627,11 +3726,14 @@ export class ChatEngine {
   private persistToolStartedAtExecutorDispatch(
     action: ChatToolAction,
     meta: { index: number; idempotencyKey?: string },
+    foregroundCriterionId?: string,
   ): void {
     const idempotencyKey =
       meta.idempotencyKey ??
       this._streamNativeToolCallIds[meta.index] ??
       `tool_call_${this._turnIndex}_${meta.index}`;
+    const argv = action.type === 'run_command' || action.type === 'test_run'
+      ? parseSingleProcessArgv(action.command) : null;
     const started = paritySettleToolStarted(
       this.parity,
       {
@@ -3642,6 +3744,8 @@ export class ChatEngine {
           ? { batch_id: this._activeToolBatchId }
           : {}),
         target_summary: chatActionTarget(action),
+        ...(argv ? { command_digest: sha256Canonical(argv) } : {}),
+        ...(foregroundCriterionId ? { foreground_criterion_id: foregroundCriterionId } : {}),
       },
       this.engineRunDir,
     );
@@ -3815,6 +3919,7 @@ export class ChatEngine {
     try {
       const raw = mutationPathsFromSessionEvents(
         this.parity.sessionEvents.events,
+        this.recoveredTaskMutationPaths(),
       );
       if (raw.length === 0) return null;
       // Session mutation batches may carry absolute or repo-relative paths;
@@ -3983,7 +4088,7 @@ export class ChatEngine {
       refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, this.lastVerifierReceipt);
       for (const receipt of this.executedVerifierLedger) refreshChatVerifierReceiptStalenessSync(this.options.projectRoot, receipt);
     }
-    if (unsupportedMutationClaim(answer, this.hasAnyWrites()) || unsupportedTestClaim(answer, this.lastVerifierReceipt, this.executedVerifierLedger)) {
+    if (unsupportedMutationClaim(answer, this.hasTaskMutationForCompletion()) || unsupportedTestClaim(answer, this.lastVerifierReceipt, this.executedVerifierLedger)) {
       throw new Error('RESPONSE_EVIDENCE_INVALID: terminal synthesis claimed completed work without corresponding execution or mutation evidence.');
     }
     return normalizeChatAnswer(answer, currentRequest);
@@ -4028,6 +4133,7 @@ export class ChatEngine {
       executionScope:this.options.executionScope,
       operation,
       requiredVerifiers: this.getResolvedRequiredVerifiers(),
+      foregroundCommands: this.getReadOnlyForegroundCommands(),
       hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed,
     });
     const nativeWireRunner = runner as {
@@ -4287,6 +4393,7 @@ export class ChatEngine {
       acceptedOperation: this.getTurnRuntimeSnapshot()?.effectiveOperation,
       executionScope:this.options.executionScope,
       requiredVerifierCommands: this.getResolvedRequiredVerifiers(),
+      foregroundCommands: this.getReadOnlyForegroundCommands(),
       hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed,
       systemPrompt: (mode) => this.getOrBuildSystemPrompt(mode),
       useTextTools: () => this.shouldUseTextTools(),
@@ -4356,9 +4463,11 @@ export class ChatEngine {
     const textTools = mode === "text";
     const operation = this.lastTurnRuntime?.effectiveOperation
       ?? resolveTaskShape(this.options.task, this.options.operation).operation;
+    const foregroundCommands = this.getReadOnlyForegroundCommands();
     const availableToolNames = availableChatToolNames(
       [...this.services.tools.buildDefinitions().map(tool => tool.function.name), ...TEXT_TOOL_NAMES],
-      { executionScope:this.options.executionScope, operation, requiredVerifiers: operation === "READ_ONLY" ? this.getResolvedRequiredVerifiers() : [],
+      { executionScope:this.options.executionScope, operation, foregroundCommands,
+        requiredVerifiers: operation === "READ_ONLY" ? this.getResolvedRequiredVerifiers() : [],
         hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed },
     );
     const systemCtx = [this.options.systemContext, this.options.compiledChatStack?.system_context]
@@ -4369,7 +4478,7 @@ export class ChatEngine {
       textTools,
       availableToolNames,
       availableToolDefinitions: availableChatTools(this.services.tools.buildDefinitions(), {
-        executionScope:this.options.executionScope, operation, requiredVerifiers: this.getResolvedRequiredVerifiers(),
+        executionScope:this.options.executionScope, operation, foregroundCommands, requiredVerifiers: this.getResolvedRequiredVerifiers(),
         hostFallbackAllowed: this.isolationBrokerFlags().hostFallbackAllowed,
       }),
       executionFirst: isMutationExecutionTask(
@@ -4382,6 +4491,15 @@ export class ChatEngine {
     if (isReadOnlyChat()) {
       systemContent +=
         "\n\nRead-only capability boundary: only read_file, read_range, list_dir, grep and glob are available. Do not request shell commands, writes, subagents or shared memory. If a read/search fails, use another available reading tool or report the missing evidence; unavailable tools cannot work around this boundary.";
+    }
+    const contract = this.parity.liveAuthority?.taskContract;
+    if (contract && operation !== 'READ_ONLY' && !isReadOnlyChat() &&
+        [...frozenExactForegroundCommands(contract, this.getFrozenForegroundAmendments()).values()].some(effect => effect.outputPath)) {
+      systemContent += '\n\nDeclared foreground output: run the exact requested process with its input and output arguments. ' +
+        'When creating its script, support captured UTF-8 output: if BABEL_FOREGROUND_OUTPUT_PATH equals the output argument, ' +
+        'emit BABEL_FOREGROUND_OUTPUT_V1 followed by LF and the exact file bytes to stdout, without writing the destination. ' +
+        'Send diagnostics to stderr. Otherwise write normally to the output argument. Babel can publish a captured result ' +
+        'to a new destination without replacing another writer’s file. A separate artifact check still decides correctness.';
     }
 
     if (this.options.projectRoot && this.discoveredTestCommands.length === 0) {
@@ -4504,7 +4622,7 @@ export class ChatEngine {
   }
 
   private buildVerifierBlockedReport(reason: string): BlockedReport {
-    return buildVerifierBlockedReportFromHost({ workingState: this.workingState, lastVerifierReceipt: this.lastVerifierReceipt, hasAnyWrites: () => this.hasAnyWrites() }, reason);
+    return buildVerifierBlockedReportFromHost({ workingState: this.workingState, lastVerifierReceipt: this.lastVerifierReceipt, hasAnyWrites: () => this.hasTaskMutationForCompletion() }, reason);
   }
 
   private hashContent(content: string): string {
@@ -4647,7 +4765,7 @@ export class ChatEngine {
           acceptedOperation: this.lastTurnRuntime?.effectiveOperation ?? this.lastTurnRuntime?.taskShape?.operation,
         },
         outcome: {
-          hasMutation: this.hasAnyWrites(),
+          hasMutation: this.hasTaskMutationForCompletion(),
           readOnly: this.isAcceptedReadOnlyTerminal(),
           budgetExceeded: this.budgetExceeded,
           terminatingLimiter: this.terminatingLimiter,

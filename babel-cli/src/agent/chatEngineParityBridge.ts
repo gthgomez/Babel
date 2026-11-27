@@ -231,6 +231,7 @@ export function parityOnUserTurn(
     submissionIndex?: number;
     continuedTask?: boolean;
     requestedOperation?: import('../config/chatTaskClass.js').RequestedTaskOperation;
+    objectiveOperation?: import('../config/chatTaskClass.js').TaskOperation;
     requestedTaskIntent?: import('./turnRuntime.js').TurnTaskIntent;
     requestedContinueTask?: boolean;
     taskAttempt?: TaskAttemptBinding;
@@ -252,6 +253,7 @@ export function parityOnUserTurn(
     ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
     ...(input.requestedOperation !== undefined ? { requestedOperation: input.requestedOperation } : {}),
+    ...(input.objectiveOperation !== undefined ? { objectiveOperation: input.objectiveOperation } : {}),
     ...(input.requestedTaskIntent !== undefined ? { requestedTaskIntent: input.requestedTaskIntent } : {}),
     ...(input.requestedContinueTask !== undefined ? { requestedContinueTask: input.requestedContinueTask } : {}),
     ...input.taskAttempt,
@@ -422,7 +424,8 @@ export function paritySettleProposeTools(
 /** Persist the irreversible dispatch boundary immediately before tool execution. */
 export function paritySettleToolStarted(
   rt: ParityRuntime,
-  tool: { id: string; name: string; action_index?: number; batch_id?: string; target_summary?: string },
+  tool: { id: string; name: string; action_index?: number; batch_id?: string; target_summary?: string;
+    command_digest?: string; foreground_criterion_id?: string },
   runDir?: string,
 ): boolean {
   if (!rt.turnId || completedToolIdempotencyKeys(rt.sessionEvents).has(tool.id)) return false;
@@ -436,6 +439,8 @@ export function paritySettleToolStarted(
     tool_name: tool.name,
     idempotency_key: tool.id,
     effect_class: classifyToolEffect(tool.name),
+    ...(tool.command_digest ? { command_digest: tool.command_digest } : {}),
+    ...(tool.foreground_criterion_id ? { foreground_criterion_id: tool.foreground_criterion_id } : {}),
     ...(tool.action_index !== undefined ? { action_index: tool.action_index } : {}),
     ...(tool.batch_id !== undefined ? { batch_id: tool.batch_id } : {}),
     ...(tool.target_summary !== undefined ? { target_summary: tool.target_summary } : {}),
@@ -498,6 +503,7 @@ export function paritySettleToolNotStarted(
     idempotency_key: tool.id,
     cancelled: true,
     reason,
+    ...(confirmedPrevention ? { preDispatchNoEffect: true as const } : {}),
     ...(!alreadyStarted ? { recovery_state: 'TOOL_NOT_STARTED' as const } : {}),
     effect_class: classifyToolEffect(tool.name),
     ...(tool.action_index !== undefined ? { action_index: tool.action_index } : {}),
@@ -600,6 +606,11 @@ export function parityRecordToolBatch(
       exit_code?: number;
       target?: string;
       contentHash?: string;
+      verifier_stdout_digest?: string;
+      verifier_command_digest?: string;
+      verifier_passed_case_digests?: string[];
+      command_digest?: string;
+      foreground_effect?: import('./foregroundEffectReceipt.js').ForegroundEffectReceipt;
       preDispatchNoEffect?: true;
       discoverySuppressed?: boolean;
       action_index?: number;
@@ -727,6 +738,11 @@ export function parityRecordToolBatch(
             ? {
                 content: r.content,
                 ...(r.exit_code !== undefined ? { exit_code: r.exit_code } : {}),
+                ...(hasStart && r.verifier_stdout_digest ? { verifier_stdout_digest: r.verifier_stdout_digest } : {}),
+                ...(hasStart && r.verifier_command_digest ? { verifier_command_digest: r.verifier_command_digest } : {}),
+                ...(hasStart && r.verifier_passed_case_digests ? { verifier_passed_case_digests: r.verifier_passed_case_digests } : {}),
+                ...(hasStart && r.command_digest && r.foreground_effect
+                  ? { command_digest: r.command_digest, foreground_effect: r.foreground_effect } : {}),
               }
             : {
                 cancelled: true,
@@ -1268,7 +1284,7 @@ function persistParityLiveSessionArtifacts(rt: ParityRuntime, runDir: string): v
     authorizedObservationIds: [...(rt.authorizedObservationIds ?? [])],
   });
   rt.liveSession = live;
-  persistLiveSessionSnapshot(runDir, live);
+  if (rt.authorizedObservationIds !== undefined) persistLiveSessionSnapshot(runDir, live);
 }
 
 function tryPersistParityLiveSessionArtifacts(rt: ParityRuntime, runDir: string): boolean {
@@ -1500,6 +1516,7 @@ export function checkpointParityEventLogStrictSync(
     });
 
     if (!rt.liveAuthority) throw new Error('live authority is missing');
+    if (rt.authorizedObservationIds === undefined) throw new Error('observation membership is unavailable');
     assertAuthorityModeHistory(rt.liveAuthority);
     assertObjectiveLifecycle(rt.liveAuthority,rt.liveAuthority.taskObjectiveLifecycle,{thread:rt.eventLog,session:rt.sessionEvents});
 

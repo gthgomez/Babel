@@ -35,7 +35,7 @@ import { chatSessionDir } from '../../cli/runsLayout.js';
 import type { BabelMode } from '../../executor/contracts.js';
 import type { RestoreReport, RestoreRepoIdentity } from '../../executor/modeAdapters.js';
 import { recoverCheckpointArtifacts } from '../../agent/liveSessionBridge.js';
-import { applyCellsToChatEngine, applyEventLogToChatEngine } from './conversationSync.js';
+import { applyCellsToChatEngine, syncRestoredEventLogConversation } from './conversationSync.js';
 import { loadThreadCells } from './threadStore.js';
 
 function message(err: unknown): string {
@@ -280,12 +280,13 @@ export function hydrateEngineFromRestore(
   // before any read, and the host never caches an engine that throws here.
   recoverCheckpointArtifacts(sessionDir);
 
+  let restoredLog: ThreadEventLog | null = null;
   if (report.source === 'thread_event_log') {
-    const log = loadThreadEventLogFromDir(sessionDir);
-    if (!log || log.events.length === 0) {
+    restoredLog = loadThreadEventLogFromDir(sessionDir);
+    if (!restoredLog || restoredLog.events.length === 0) {
       throw new Error(`Thread event log for ${report.threadId} is no longer available`);
     }
-    applyEventLogToChatEngine(engine, log);
+    engine.restoreEventLog(restoredLog);
   } else if (report.source === 'history_cells') {
     const cells = loadThreadCells(report.threadId);
     if (cells.length === 0) {
@@ -315,4 +316,5 @@ export function hydrateEngineFromRestore(
   if (typeof engine.hydrateInstalledContextAuthority === 'function') {
     engine.hydrateInstalledContextAuthority(sessionDir);
   }
+  if (restoredLog) syncRestoredEventLogConversation(engine, restoredLog);
 }

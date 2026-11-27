@@ -27,6 +27,13 @@ export async function* finalizeStreamingTurnLimit(input: {
     effectiveIntent,
     maxTurns,
   } = input;
+  if (host.p11ObservationCaptureIssues?.length) {
+    yield host.streamFailed(
+      "Could not prepare context: observation recovery is incomplete. Inspect the run evidence before retrying.",
+      { code: 'context_preparation_failed', cause_class: 'harness', detail: 'observation_recovery_unavailable' },
+    );
+    return;
+  }
   // maxTurns exceeded
   host.terminatingLimiter = host.terminatingLimiter ?? "turns";
   host.terminalLimiterReason =

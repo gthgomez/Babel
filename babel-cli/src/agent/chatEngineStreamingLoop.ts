@@ -17,6 +17,7 @@ import { finalizeStreamingTurnLimit } from "./chatEngineStreamingFinalizer.js";
 import { recoverStreamingRequestAdmission } from './chatEngineRequestRecovery.js';
 import { ProviderHttpError } from '../runners/providerHttpError.js';
 import { settleStreamingCompletion } from "./chatEngineStreamingCompletion.js";
+import { requiredLocalExecutionBlock } from './requestedLocalExecution.js';
 import { normalizeChatAnswer, requestedChatJsonKind } from './chatResponseContract.js';
 import { recordChatHarnessFeedback } from "./chatHarnessFeedback.js";
 import { writeFileSync } from "node:fs";
@@ -194,6 +195,16 @@ export class ChatEngineStreamingLoop {
         return;
       }
 
+      // Neither compaction nor the last-chance critic may consume a provider
+      // call when the observation authority required by this turn is incomplete.
+      if (this.host.p11ObservationCaptureIssues?.length) {
+        yield this.host.streamFailed(
+          "Could not prepare context: observation recovery is incomplete. Inspect the run evidence before retrying.",
+          { code: 'context_preparation_failed', cause_class: 'harness', detail: 'observation_recovery_unavailable' },
+        );
+        return;
+      }
+
       // Budget checks (P1): cost, wall-clock — honest receipts + last-chance critic
       if (this.host.terminatingLimiter === "child_exhaustion") {
         if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
@@ -367,8 +378,8 @@ export class ChatEngineStreamingLoop {
             this.host.parity.eventLog,
             {
               systemPrompt: activeSystemPrompt,
-              ...(rebuildRoot
-                ? { installedContextCheckpoint: rebuildRoot }
+               ...(rebuildRoot || this.host.parity.admissionStore
+                 ? { installedContextCheckpoint: rebuildRoot ?? null }
                 : {}),
             },
           )
@@ -561,8 +572,9 @@ export class ChatEngineStreamingLoop {
                 nextTools.mode === "full" ? "act_or_verify" : nextTools.mode,
               )
             : this.host.services.tools.buildDefinitions(),
-          { executionScope:this.host.options.executionScope,operation: effectiveOperation,
-          requiredVerifiers: isReadOnlyInspection ? this.host.getResolvedRequiredVerifiers() : [],
+           { executionScope:this.host.options.executionScope,operation: effectiveOperation,
+           requiredVerifiers: isReadOnlyInspection ? this.host.getResolvedRequiredVerifiers() : [],
+           foregroundCommands: this.host.getReadOnlyForegroundCommands(),
           hostFallbackAllowed: this.host.isolationBrokerFlags().hostFallbackAllowed });
         const nativeActions: ChatToolAction[] = [];
         const nativeToolCallIds: string[] = [];
@@ -1529,6 +1541,15 @@ export class ChatEngineStreamingLoop {
           endSpan(_turnSpan, SpanStatusCode.OK);
           _turnSpan = null;
           yield this.host.streamStopped(executedStop);
+          return;
+        }
+
+        const requiredOperation = requiredLocalExecutionBlock(this.host.toolCallLog, { final: false });
+        if (requiredOperation) {
+          endSpan(_turnSpan, SpanStatusCode.OK);
+          _turnSpan = null;
+          this.host.conversation.push({ role: "assistant", content: requiredOperation.answer });
+          yield this.host.streamDone(requiredOperation.answer, { blockedReport: requiredOperation.blockedReport });
           return;
         }
 

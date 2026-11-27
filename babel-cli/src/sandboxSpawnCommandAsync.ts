@@ -12,6 +12,7 @@ import { spawnOwnedWindowsCommand, type OwnedWindowsCommand } from './windowsPro
 export interface AsyncSpawnResult {
   status: number | null
   stdout: string
+  stdoutBuffer?: Buffer
   stderr: string
   error?: Error
   stdoutTruncated: boolean
@@ -69,6 +70,7 @@ export function spawnCommandAsync(
     validateExecutable?: () => boolean
     signal?: AbortSignal
     processWitness?: ProcessWitness
+    captureStdout?: true
     processContext?: Pick<ProcessWitnessInput, 'sessionId' | 'turnId' | 'toolCallId' | 'toolName' | 'projectRoot'>
     testContext?: SpawnCommandAsyncTestContext
   },
@@ -186,9 +188,11 @@ export function spawnCommandAsync(
       if (timeout) clearTimeout(timeout)
       if (abortSettle) clearTimeout(abortSettle)
       options.signal?.removeEventListener('abort', onAbort)
+      const stdout = Buffer.concat(stdoutChunks)
       resolveResult({
         status,
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+        stdout: stdout.toString('utf8'),
+        ...(options.captureStdout ? { stdoutBuffer: stdout } : {}),
         stderr: Buffer.concat(stderrChunks).toString('utf8'),
         ...(error ? { error } : {}),
         stdoutTruncated,

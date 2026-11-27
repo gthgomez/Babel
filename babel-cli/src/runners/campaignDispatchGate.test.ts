@@ -398,7 +398,7 @@ test('rejected campaign reservation never reaches physical fetch on runner path'
   const saved = globalThis.fetch
   globalThis.fetch = async () => {
     physicalFetch++
-    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 })
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }), { status: 200 })
   }
   t.after(() => { globalThis.fetch = saved })
   const model = CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID
@@ -433,7 +433,7 @@ test('admitted reservation reaches fetch once and leaves durable ledger evidence
     physicalFetch++
     return new Response(JSON.stringify({
       model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
-      choices: [{ message: { content: 'ok' } }],
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.00001 },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }
@@ -480,7 +480,7 @@ test('each physical transport retry reserves before wire', async (t) => {
     }
     return new Response(JSON.stringify({
       model: CAMPAIGN_QUALIFIED_OPENROUTER_MODEL_ID,
-      choices: [{ message: { content: 'ok' } }],
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.00001 },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }
@@ -512,7 +512,7 @@ test('campaign gate admits Command Code qualified deepseek route only', async (t
     physicalFetch++
     return new Response(JSON.stringify({
       model: 'deepseek/deepseek-v4.1-flash',
-      choices: [{ message: { content: 'ok' } }],
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 10, completion_tokens: 5 },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }

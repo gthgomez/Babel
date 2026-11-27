@@ -119,11 +119,12 @@ test('checkpointParityEventLogStrict atomic commit and failure recovery', async 
       recoveryTried: false,
       lastFailover: null,
       liveAuthority: authority,
+      authorizedObservationIds: new Set<string>(),
     }
 
     // 1. Initial happy-path checkpoint
     const initialReceipt = await checkpointParityEventLogStrict(rt, runDir)
-    assert.equal(initialReceipt.status, 'committed')
+    assert.equal(initialReceipt.status, 'committed', initialReceipt.error)
     assert.ok(initialReceipt.artifacts.every((a) => a.status === 'committed'))
     assert.ok(existsSync(join(runDir, INSTRUCTION_MANIFEST_FILENAME)))
     assert.ok(existsSync(join(runDir, TASK_CONTRACT_FILENAME)))

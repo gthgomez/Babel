@@ -19,7 +19,7 @@ import {
   type OpenCodeGoCredentialSource,
 } from './openCodeGoCredential.js'
 
-/** The only OpenCode Go model identifiers accepted by this direct transport. */
+/** Exact OpenCode Go identifiers retained for the existing review selector. */
 export const OPENCODE_GO_MODELS = [
   'deepseek-v4.1-flash',
   'deepseek-v4-flash',
@@ -28,6 +28,8 @@ export const OPENCODE_GO_MODELS = [
 ] as const
 
 export type OpenCodeGoModel = (typeof OPENCODE_GO_MODELS)[number]
+export const OPENCODE_GO_GLM_FLASH_MODEL = 'glm-5.3-flash'
+type OpenCodeGoTransportModel = OpenCodeGoModel | typeof OPENCODE_GO_GLM_FLASH_MODEL
 
 export const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
 /** Identifies Babel's explicit-only OpenCode Go transport to the provider. */
@@ -81,9 +83,13 @@ export interface OpenCodeGoRunnerOptions {
   requestTimeoutMs?: number
 }
 
-/** Return whether a model id is an exact supported OpenCode Go model. */
+/** Match the existing Go review selector without admitting coding-only models. */
 export function isOpenCodeGoModel(value: string): value is OpenCodeGoModel {
   return (OPENCODE_GO_MODELS as readonly string[]).includes(value)
+}
+
+function requiresGoBudget(model: OpenCodeGoTransportModel): boolean {
+  return model === 'deepseek-v4.1-flash' || model === OPENCODE_GO_GLM_FLASH_MODEL
 }
 
 function statusFromMessage(message: string): number | null {
@@ -124,7 +130,7 @@ function classifyError(error: unknown): OpenCodeGoError {
 export class OpenCodeGoApiRunner extends OpenAiCompatibleRunner {
   private readonly budget: OpenCodeGoBudget | undefined
   private readonly outputTokenLimit: number
-  private readonly pinnedModel: OpenCodeGoModel
+  private readonly pinnedModel: OpenCodeGoTransportModel
   private readonly sessionId: string
   private readonly requestTimeoutMs: number
 
@@ -142,10 +148,10 @@ export class OpenCodeGoApiRunner extends OpenAiCompatibleRunner {
     sampling: { maxTokens?: number; temperature?: number } = {},
     options: OpenCodeGoRunnerOptions = {},
   ) {
-    if (!isOpenCodeGoModel(model)) {
+    if (model !== OPENCODE_GO_GLM_FLASH_MODEL && !isOpenCodeGoModel(model)) {
       throw new OpenCodeGoError('MODEL_UNAVAILABLE', `OpenCode Go does not allow model "${model}".`)
     }
-    if (model === 'deepseek-v4.1-flash' && !options.budget) throw new OpenCodeGoBudgetError()
+    if (requiresGoBudget(model) && !options.budget) throw new OpenCodeGoBudgetError()
     const nativeResolved=(usesDesktopResolvedCredentials(process.env)||usesDesktopResolvedCredentials(options.env??{}))&&options.credentialSource!=='explicit-test'
     const credentialSource = nativeResolved?'network-secret':options.credentialSource ?? (options.explicitCredential ? 'explicit-test' :
       (options.env ?? process.env)['BABEL_OPENCODE_GO_API_KEY']?.trim() ? 'network-secret' : 'opencode-auth-helper')
@@ -183,7 +189,7 @@ export class OpenCodeGoApiRunner extends OpenAiCompatibleRunner {
       (body.max_tokens as number) <= 0 || (body.max_tokens as number) > this.outputTokenLimit) {
       throw new OpenCodeGoBudgetError()
     }
-    if (this.pinnedModel === 'deepseek-v4.1-flash' && !this.budget) throw new OpenCodeGoBudgetError()
+    if (requiresGoBudget(this.pinnedModel) && !this.budget) throw new OpenCodeGoBudgetError()
     if (control?.stop()) throw new RunStoppedError(control.stop()!)
     if (init.signal?.aborted) throw new OpenCodeGoError('ABORTED', 'OpenCode Go request was interrupted.')
     await this.budget?.reserve(Buffer.byteLength(init.body, 'utf8'), body.max_tokens as number)
@@ -199,7 +205,7 @@ export class OpenCodeGoApiRunner extends OpenAiCompatibleRunner {
   }
 
   /** Content-free configured identity for secondary calls that must retain this route. */
-  getPinnedModelId(): OpenCodeGoModel {
+  getPinnedModelId(): OpenCodeGoTransportModel {
     return this.pinnedModel
   }
 

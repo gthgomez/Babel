@@ -86,6 +86,8 @@ export function isolateEngineForFreshUserSubmission(
   if (!runtime.objectiveContinuation) {
     host.taskMutationOwnership?.retire()
     host.taskMutationOwnership = null
+    host.p11ObservationRefs = []
+    host.p11ObservationCaptureIssues = []
   }
   host.progressController.resetTaskLocal()
   host.taskCostScopeUnavailable = false
@@ -97,8 +99,6 @@ export function isolateEngineForFreshUserSubmission(
   host.clearVerifierEvidenceState()
   host.reseedVerifierGuardAfterFreshIsolation?.()
   host.workingState = createWorkingState(runtime.taskText.slice(0, 240))
-  host.p11ObservationRefs = []
-  host.p11ObservationCaptureIssues = []
   host.p11InstallBlock = null
   delete host.parity.contextCheckpoint
   host.failureBudgetTracker = createFailureBudgetTrackerFromContract(

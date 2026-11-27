@@ -292,14 +292,34 @@ test('reviewer requests the explicit non-thinking profile for every canonical mo
 test('invalid native finishes and empty finals withhold all content and cannot request format repair', async () => {
   const original = globalThis.fetch;
   const validLookingVerdict = '{"verdict":"APPROVE","uncertain":false,"reviewed_files":["fixture.ts"],"findings":[],"blocking_findings":[]}';
+  const cases = [
+    ['length', validLookingVerdict, null, 'UNKNOWN'],
+    ['length', '', null, 'UNKNOWN'],
+    ['length', validLookingVerdict, REVIEW_OUTPUT_TOKEN_BUDGET - 1, 'UNKNOWN'],
+    ['length', validLookingVerdict, REVIEW_OUTPUT_TOKEN_BUDGET, 'OUTPUT_BUDGET_EXHAUSTED'],
+    ['content_filter', validLookingVerdict, null, null],
+    ['interrupted', validLookingVerdict, null, null],
+    ['unexpected', validLookingVerdict, null, null],
+    ['stop', '', null, null],
+    ['stop', ' \n ', null, null],
+    ['tool_calls', '', null, null],
+  ] as const;
   try {
     for (const model of ['mimo-v2.5', 'longcat-2.0', 'deepseek-v4-flash'] as const) {
-      for (const [finish, content] of [['length', validLookingVerdict], ['length', ''], ['content_filter', validLookingVerdict], ['interrupted', validLookingVerdict], ['unexpected', validLookingVerdict], ['stop', ''], ['stop', ' \n '], ['tool_calls', '']] as const) {
+      for (const [finish, content, completionTokens, expectedLengthAttribution] of cases) {
         const calls: BabelReviewCall[] = []; let requests = 0;
         const runner = new ObservedBabelReviewRunner(model, call => calls.push(call), { credentialSource: 'explicit-test', explicitCredential: 'fixture-only' });
-        globalThis.fetch = async () => {
+        globalThis.fetch = async (_url, init) => {
           requests++;
-          return new Response(`data: ${JSON.stringify({ model, choices: [{ delta: { reasoning_content: 'fixture thought', content }, finish_reason: finish }] })}\n\ndata: [DONE]\n\n`);
+          const body = JSON.parse(String(init?.body));
+          assert.equal(body.max_tokens, REVIEW_OUTPUT_TOKEN_BUDGET);
+          const frame = { model, choices: [{ delta: { reasoning_content: 'fixture thought', content }, finish_reason: finish }] };
+          const usage = completionTokens === null ? '' : `data: ${JSON.stringify({
+            model,
+            choices: [],
+            usage: { prompt_tokens: 20, completion_tokens: completionTokens, total_tokens: 20 + completionTokens },
+          })}\n\n`;
+          return new Response(`data: ${JSON.stringify(frame)}\n\n${usage}data: [DONE]\n\n`);
         };
         const events: ToolStreamEvent[] = [];
         for await (const event of runner.executeWithToolsStream([{ role: 'user', content: 'test' }], [])) events.push(event);
@@ -307,14 +327,20 @@ test('invalid native finishes and empty finals withhold all content and cannot r
         assert.equal(events.length, 1); assert.equal(events[0]?.type, 'error');
         assert.equal(calls[0]?.status, 'failed'); assert.equal(calls[0]?.retry_reason, undefined);
         assert.equal(calls[0]?.metadata?.observed_model_id, model);
-        assert.equal(calls[0]?.metadata?.completion_tokens, null);
-        if (finish === 'length') assert.equal(calls[0]?.metadata?.normalized_finish_reason, 'OUTPUT_BUDGET_EXHAUSTED');
+        assert.equal(calls[0]?.metadata?.completion_tokens, completionTokens);
+        if (expectedLengthAttribution) {
+          assert.equal(calls[0]?.metadata?.provider_finish_reason, 'length');
+          assert.equal(calls[0]?.metadata?.normalized_finish_reason, expectedLengthAttribution);
+        }
         let parses = 0; let formatRepairs = 0;
         try { parseObservedBabelReviewAnswer(calls, model, () => { parses++; return JSON.parse('OK'); }); }
         catch (error) { if (error instanceof SyntaxError) formatRepairs++; }
         assert.equal(parses, 0); assert.equal(formatRepairs, 0);
         assert.throws(() => parseObservedBabelReviewAnswer(calls, model, () => JSON.parse(validLookingVerdict)), { message: /^CHAT_REVIEW_ATTRIBUTION_INCOMPLETE(_INVALID_CALL_[A-Z_]+)?$/ });
-        if (finish === 'length') assert.throws(() => parseObservedBabelReviewAnswer(calls, model, () => JSON.parse(validLookingVerdict)), { message: /^CHAT_REVIEW_ATTRIBUTION_INCOMPLETE_INVALID_CALL_OUTPUT_BUDGET_EXHAUSTED$/ });
+        if (expectedLengthAttribution) {
+          assert.throws(() => parseObservedBabelReviewAnswer(calls, model, () => JSON.parse(validLookingVerdict)),
+            { message: `CHAT_REVIEW_ATTRIBUTION_INCOMPLETE_INVALID_CALL_${expectedLengthAttribution}` });
+        }
       }
     }
   } finally { globalThis.fetch = original; }

@@ -229,7 +229,7 @@ if (!isSyntheticProviderFixtureReady()) {
       requests.push({ url: String(input), model: body.model })
       if (String(input) !== 'https://opencode.ai/zen/go/v1/chat/completions') throw new Error('unexpected synthetic endpoint')
       return Response.json({ model: body.model,
-        choices: [{ message: { content: '{"verdict":"reject","confidence":0.9,"reasons":["verification absent"]}' } }],
+        choices: [{ message: { content: '{"verdict":"reject","confidence":0.9,"reasons":["verification absent"]}' }, finish_reason: 'stop' }],
         usage: { prompt_tokens: 10, completion_tokens: 5 } })
     }) as typeof fetch
     for (const resolve of [resolveOrCreateCriticRunner, resolveOrCreateCriticProRunner]) {
@@ -280,7 +280,7 @@ if (!isSyntheticProviderFixtureReady()) {
       if (body.stream !== true) {
         criticRequests++
         return Response.json({ model: body.model,
-          choices: [{ message: { content: '{"verdict":"reject","confidence":0.9,"reasons":["required verification has not run"]}' } }],
+          choices: [{ message: { content: '{"verdict":"reject","confidence":0.9,"reasons":["required verification has not run"]}' }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 10, completion_tokens: 5 } })
       }
       primaryRequests++

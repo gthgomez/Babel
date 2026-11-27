@@ -2,6 +2,7 @@
 
 import type { ReplContext } from '../../interactive/context.js'
 import {
+  formatResumedTerminalNotice,
   resumeChatSession,
   type ResumeChatSessionOutcome,
 } from '../../interactive/chatSessionResume.js'
@@ -132,6 +133,7 @@ export function createShellCommandOperations(
       const outcome = await resume(ctx, id)
       if (outcome.ok) {
         host.onSessionChanged(ctx.chatEngine?.getEngineRunId() ?? id)
+        ctx.shellRuntime?.appendNotice(formatResumedTerminalNotice(outcome.terminal))
         return { ok: true }
       }
       return { ok: false, message: outcome.message }

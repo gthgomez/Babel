@@ -195,7 +195,12 @@ export type SessionEvent =
       retryable?: boolean;
       tool_call_count?: number | null;
       requested_output_budget?: number | null;
+      /** Local policy resolution, separate from the wire and provider limits. */
       effective_output_budget?: number | null;
+      sent_output_budget?: number | null;
+      provider_effective_output_budget?: number | null;
+      provider_finish_reason?: string | null;
+      normalized_finish_reason?: string | null;
       wire_policy_hash?: string | null;
       execution_envelope_hash?: string | null;
       route_receipt?: ModelRouteReceiptV1;
@@ -253,6 +258,8 @@ export type SessionEvent =
       action_index?: number;
       batch_id?: string;
       target_summary?: string;
+      command_digest?: string;
+      foreground_criterion_id?: string;
     })
   | (SessionEventBase & {
       kind: 'tool_completed';
@@ -262,6 +269,11 @@ export type SessionEvent =
       idempotency_key: string;
       exit_code?: number;
       output_digest?: string;
+      verifier_stdout_digest?: string;
+      verifier_command_digest?: string;
+      verifier_passed_case_digests?: string[];
+      command_digest?: string;
+      foreground_effect?: import('./foregroundEffectReceipt.js').ForegroundEffectReceipt;
       action_index?: number;
       batch_id?: string;
       target_summary?: string;
@@ -323,6 +335,8 @@ export type SessionEvent =
       tool_call_id?: string;
       /** Durable revision-bound receipt used to reconstruct verifier state. */
       receipt?: BoundChatVerifierReceipt;
+      /** Host-observed point cases bound to this physical attempt. */
+      point_execution?: { cases: import('./pointVerifierWitness.js').ExecutedPointClaim[]; stdout_digest: string; digest: string };
       failed_execution?: import('./codingLoop/failedVerifierExecution.js').SettledFailedVerifierExecution;
     })
   | (SessionEventBase & {

@@ -137,7 +137,12 @@ export interface RunnerInvocationMetadata {
   execution_envelope_hash?: string | null;
   wire_policy_hash?: string | null;
   requested_output_budget?: number | null;
+  /** Locally resolved budget; does not establish an upstream limit. */
   effective_output_budget?: number | null;
+  /** Output limit in the exact serialized request body. */
+  sent_output_budget?: number | null;
+  provider_effective_output_budget?: number | null;
+  provider_finish_reason?: string | null;
   actual_reasoning_tokens?: number | null;
   normalized_finish_reason?: string | null;
   failure_attribution?: string | null;
@@ -213,6 +218,8 @@ export interface ProviderInvocationStarted {
   wire_policy_hash?: string;
   requested_output_budget?: number | null;
   effective_output_budget?: number | null;
+  /** Cap in the prepared body; the dispatch phase records the attempt. */
+  sent_output_budget?: number | null;
 }
 
 export interface ProviderCapabilityBinding {
@@ -261,6 +268,11 @@ export interface ProviderInvocationCompleted {
   tool_call_count?: number | null;
   requested_output_budget?: number | null;
   effective_output_budget?: number | null;
+  sent_output_budget?: number | null;
+  /** Null when no authoritative upstream limit is observed. */
+  provider_effective_output_budget?: number | null;
+  /** Provider-reported finish, independent of normalized disposition. */
+  provider_finish_reason?: string | null;
   wire_policy_hash?: string | null;
   execution_envelope_hash?: string | null;
 }

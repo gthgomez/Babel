@@ -3,11 +3,29 @@ import {
   inferTaskAcceptanceForVersion,
   requireAcceptanceMeaningVersion,
 } from './taskAcceptanceMeaning.js'
-import { isAcceptanceAddition } from './taskAcceptanceRevision.js'
-import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
+import { isAcceptanceAddition, projectTaskAcceptanceRevision } from './taskAcceptanceRevision.js'
 import type { ObjectiveAuthorityRecord, ObjectiveAttempt } from './taskObjectiveLifecycle.js'
 import type { ThreadEventLog, ThreadEvent } from './threadEventLog.js'
 import type { SessionEventLog } from './sessionEvents.js'
+
+/** Return the original accepted text for frozen foreground obligations. */
+export function frozenForegroundAmendmentSources(
+  lifecycle: { attempts: readonly ObjectiveAttempt[] } | undefined,
+  history: import('./taskAcceptanceRevision.js').TaskModeHistoryV2 | undefined,
+  thread: ThreadEventLog,
+): string[] {
+  if (!history || !lifecycle) return []
+  const attempts = new Map(lifecycle.attempts.map(attempt => [attempt.attempt_id, attempt]))
+  const starts = new Map(thread.events.flatMap(event => event.kind === 'turn_started' && !event.context_copy
+    ? [[event.turn_id, event.task] as const] : []))
+  return history.edges.flatMap(edge => {
+    if (edge.kind !== 'acceptance' || !edge.descriptor.requested_execution_refs?.length) return []
+    const attempt = attempts.get(edge.descriptor.source_attempt_id)
+    const text = attempt && starts.get(attempt.turn_id)
+    return text && attempt.task_id === edge.descriptor.task_id && sha256Canonical(text) === edge.descriptor.text_digest
+      ? [text] : []
+  })
+}
 
 /** Semantic revisions require their actual, uniquely accepted canonical input. */
 export function assertCanonicalAcceptanceAmendments(
@@ -118,25 +136,10 @@ export function assertCanonicalAcceptanceAmendments(
     try {
       if (requireAcceptanceMeaningVersion(current.provenance.records, current) !== predecessorVersion) fail()
     } catch { fail() }
-    const replayedMeaning = inferTaskAcceptanceForVersion(started.task, predecessorVersion)
-    // V1 descriptors predate executable binding. Rebinding those records here
-    // changes the canonical historical authority on cold load. V2 records are
-    // created with binding and replay that exact interpretation.
-    const meaning = descriptor.schema_version === 1
-      ? replayedMeaning
-      : bindExecutableVerifiersToTaskAcceptance({
-          meaning: replayedMeaning,
-          trustedVerifierCommands: current.verifier_requirements,
-          defaultWorkingDirectory: '.',
-          existingVerifierInputFiles: current.protected_paths,
-        })
-    const prior = new Set(descriptor.kind === 'initialize' ? [] : previous.acceptance_criteria)
-    const added = meaning.criteria.filter(item => !prior.has(item.description))
-    const ids = new Set(added.map(item => item.id))
-    if (meaning.unresolved || sha256Canonical(added) !== sha256Canonical(descriptor.added_acceptance) ||
-      sha256Canonical(meaning.sources.filter(source => ids.has(source.criterion_id))) !== sha256Canonical(descriptor.meaning_sources)) fail()
-    if (meaning.provenance.filter(record => added.some(item => record.ref.endsWith(`:${item.id}`)))
-      .some(record => !current.provenance.records.some(actual => actual.kind === record.kind && actual.ref === record.ref))) fail()
+    const replay = projectTaskAcceptanceRevision(previous, started.task, descriptor.kind, descriptor.schema_version, descriptor.point_bindings)
+    if (replay.unresolved || sha256Canonical(replay.added) !== sha256Canonical(descriptor.added_acceptance) ||
+      sha256Canonical(replay.meaningSources) !== sha256Canonical(descriptor.meaning_sources) ||
+      sha256Canonical(replay.operationRefs) !== sha256Canonical(descriptor.requested_execution_refs ?? [])) fail()
     group.lastIndex = index
     group.lastSeq = event.seq
     group.lastContract = current.contract_id

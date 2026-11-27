@@ -4,6 +4,7 @@ import test from "node:test";
 import { join } from "node:path";
 import { z } from "zod";
 import { OpenRouterApiRunner } from "../runners/openRouterApi.js";
+import { TextResponseFinishError } from "../runners/providerResponseStream.js";
 import {
   createHarnessTuningProfile,
   createLabModelSpec,
@@ -947,7 +948,12 @@ test("OpenRouter runner consumes strict envelope policy on the intercepted wire"
         executionEnvelope: strictEnvelope(),
       },
     );
-    await runner.execute("respond", z.object({ ok: z.literal(true) }));
+    await assert.rejects(
+      runner.execute("respond", z.object({ ok: z.literal(true) })),
+      (error: unknown) =>
+        error instanceof TextResponseFinishError &&
+        error.disposition.finishReason === "length",
+    );
     assert.equal(body.model, "z-ai/glm-5.3-flash");
     assert.equal(body.max_tokens, 8192);
     assert.deepEqual(body.provider, {

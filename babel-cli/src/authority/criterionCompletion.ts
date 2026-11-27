@@ -16,6 +16,12 @@ export interface CriterionCompletionOwnerV1 {
   contract: TaskContractV1 | undefined
   runId: string
   projectRoot: string | null
+  foreground?: {
+    runDir: string
+    log: import('../agent/sessionEvents.js').SessionEventLog
+    history?: import('../agent/taskAcceptanceRevision.js').TaskModeHistoryV2
+    amendments?: readonly string[]
+  }
 }
 export interface CriterionCompletionRequestV1 {
   context: CriterionCompletionContextV1
@@ -40,6 +46,12 @@ export interface CriterionCompletionServiceV1 {
   refreshPrivateEvidence(input: CriterionPrivateEvidenceRefreshV1): void
   /** Host-owned, non-certifying criterion report for truthful partial delivery. */
   reportAdvisoryEvidence(): readonly CriterionEvidenceResultV1[]
+}
+
+/** A foreground-only task may close on its own runtime receipts, without an unrelated verifier. */
+export function isForegroundOnlyAcceptance(contract: TaskContractV1 | undefined): boolean {
+  const required = contract?.acceptance.filter(item => item.required) ?? []
+  return required.length > 0 && required.every(item => item.verification.kind === 'requested_local_execution')
 }
 interface CompletionAuthority {
   readOwner: () => CriterionCompletionOwnerV1
@@ -98,6 +110,7 @@ export function createCriterionCompletionServiceV1(
           ...(input.receipt !== undefined ? { receipt: input.receipt } : {}),
           ...(input.receipts !== undefined ? { receipts: input.receipts } : {}),
           hasMutation: input.has_mutation,
+          ...(owner.foreground ? { foreground: owner.foreground } : {}),
         })
         if (published) authority.candidateSha = published
       } catch { /* fail closed: leave graph empty */ }

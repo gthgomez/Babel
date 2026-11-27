@@ -1690,6 +1690,8 @@ export function evaluateCompletionGateForEngine(opts: {
   task: string;
   taskClass: ChatTaskClass;
   toolCallLog: GateToolLogEntry[];
+  /** A durably settled, current mutation of this retained objective. */
+  recoveredTaskMutation?: boolean;
   lastVerifierReceipt: VerifierReceipt | null | undefined;
   projectTestCommands?: readonly string[] | null;
   requiredVerifierCommands?: readonly string[] | null;
@@ -1726,7 +1728,7 @@ export function evaluateCompletionGateForEngine(opts: {
   if (opts.turnType !== 'completion') return 'allow';
 
   const log = opts.toolCallLog;
-  const hasWrite = hasLoggedWrites(log);
+  const hasWrite = hasLoggedWrites(log) || opts.recoveredTaskMutation === true;
   const verification = resolveCompletionVerificationContext({
     taskClass: opts.taskClass,
     task: opts.task,

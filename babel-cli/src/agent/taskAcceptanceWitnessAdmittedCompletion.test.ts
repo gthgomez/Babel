@@ -13,9 +13,9 @@ import {
   createCriterionCompletionServiceV1,
   evaluateCriterionCompletionV1,
 } from '../authority/criterionCompletion.js'
-import { captureChatVerifierReceipt, captureAndRecordVerifierReceipt, captureCompletionWorkspaceRevisionHash, prepareKernelVerifierInput, resolveVerifierCacheIdentity, verifierEnvironmentKey } from './chatEngineVerifierAdapter.js'
+import { captureChatVerifierReceipt, captureAndRecordVerifierReceipt, captureCompletionWorkspaceRevisionHash, prepareKernelVerifierInput, resolveVerifierCacheIdentity, restorePersistedVerifierEvidence, verifierEnvironmentKey } from './chatEngineVerifierAdapter.js'
 import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js'
-import { createSessionEventLog } from './sessionEvents.js'
+import { createSessionEventLog, parseSessionEventLog, recordToolProposed, recordToolStarted, recordToolTerminal, serializeSessionEventLog } from './sessionEvents.js'
 import { createExecutorKernel } from '../executor/kernel.js'
 import {
   resolveGovernedCriterionCandidateRevisionSha,
@@ -25,7 +25,9 @@ import {
   computeVerifierDependencyHashes,
   hasVerifierDependencyTamper,
 } from './verifierIntegrity.js'
-import { bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
+import { acceptanceCriterionPoint, bindExecutableVerifiersToTaskAcceptance } from './taskAcceptanceExecutableBinding.js'
+import { nodePointExecuted, pointVerifierWitness, retainCurrentPointReceipts, settledNodePointReport } from './pointVerifierWitness.js'
+import { sha256Canonical } from '../acceptance/canonical.js'
 import { inferTaskAcceptance } from './taskAcceptanceMeaning.js'
 import { buildTaskContractV1, freezeTaskContract } from './taskContract.js'
 import { resolveLiveSessionAuthority } from './liveSessionBridge.js'
@@ -715,14 +717,16 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
     'import test from "node:test";',
     'import { parseSum } from "../src/parser.js";',
     'test("parseSum returns the required value", () => assert.equal(parseSum(2, 3), 5));',
+    'test("parseSum returns the other required value", () => assert.equal(parseSum(5, 7), 12));',
   ].join('\n') + '\n')
 
   const command = 'node --test "test files/parser.test.mjs"'
-  const behavior = 'Fix parser.js so parseSum(2, 3) returns 5'
+  const behavior = 'Fix src/parser.js so parseSum(2, 3) returns 5'
   const task = [
     `${behavior}.`,
     'Requirements:',
     `- ${behavior}; verified by: \`${command}\` must pass.`,
+    `- Fix src/parser.js so parseSum(5, 7) returns 12; verified by: \`${command}\` must pass.`,
   ].join('\n')
   const contract = resolveLiveSessionAuthority({
     mode: 'chat', task, projectRoot: root,
@@ -735,6 +739,7 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
   assert.ok(linked.every(item => item.verification.verifier_id === 'verifier:node'))
   assert.ok(linked.every(item => JSON.stringify(item.verification.argv) === JSON.stringify(['--test', 'test files/parser.test.mjs'])))
   assert.ok(linked.every(item => item.verification.command_hash))
+  assert.ok(contract.protected_paths.includes('test files/parser.test.mjs'))
 
   const runId = 'criterion-explicit-verifier-link'
   const service = createCriterionCompletionServiceV1(() => ({ contract, runId, projectRoot: root }))
@@ -765,26 +770,75 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
   const stdout = policy.results[0]?.stdout ?? ''
   const exitCode = policy.results[0]?.exit_code ?? 1
   assert.equal(exitCode, 0, stdout)
-  assert.match(stdout, /pass 1/)
+  assert.match(stdout, /pass 2/)
+  const witnesses = [...new Map(contract.acceptance.map(requirement => {
+    const point = acceptanceCriterionPoint(requirement)
+    assert.ok(point)
+    const witness = pointVerifierWitness(root, command, point, {})
+    assert.ok(witness)
+    assert.ok(nodePointExecuted(stdout, witness), stdout)
+    return [witness.target, witness] as const
+  })).values()]
+  assert.equal(witnesses.length, 2)
+  const tool = { turn_id: runId, tool_call_id: 'point-physical', tool_name: 'test_run',
+    target_summary: command, effect_class: 'idempotent' as const }
+  recordToolProposed(sessionEvents, tool)
+  recordToolStarted(sessionEvents, tool)
   const cacheIdentity = resolveVerifierCacheIdentity({
     projectRoot: root, command, envKey: verifierEnvironmentKey(env),
   })
   const receipt = await captureAndRecordVerifierReceipt({
-    projectRoot: root, command, exitCode, summary: '1/1 parser behavior test passed', stdout,
+    projectRoot: root, command, exitCode, summary: '2/2 parser behavior tests passed', stdout,
     stderr: policy.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
     sessionEvents, turnId: runId, ledger: [], cache: new Map(), writeCount: 1,
     cacheIdentity, verifierOwner, executionBackend: 'host-process',
+    pointWitnesses: witnesses, toolCallId: tool.tool_call_id,
   })
   assert.ok(receipt)
-  assert.equal(receipt.tests_total, 1)
+  assert.equal(receipt.tests_total, 2)
+  assert.equal(sessionEvents.events.filter(event => event.kind === 'verifier_attempt').length, 1)
+  const beforeSettlement = restorePersistedVerifierEvidence(sessionEvents, [], verifierOwner)
+  assert.equal(beforeSettlement?.target, undefined)
+  const { createHash } = await import('node:crypto')
+  recordToolTerminal(sessionEvents, { ...tool, exit_code: 0, content: stdout,
+    verifier_stdout_digest: createHash('sha256').update(stdout).digest('hex'),
+    verifier_command_digest: createHash('sha256').update(command).digest('hex'),
+    verifier_passed_case_digests: settledNodePointReport(stdout)! })
   const candidate = candidateShaFromReceipt(root, receipt)
+  const persisted = parseSessionEventLog(serializeSessionEventLog(sessionEvents))
+  const restored = restorePersistedVerifierEvidence(persisted, [], verifierOwner)
+  assert.deepEqual(restored, { ...JSON.parse(JSON.stringify(receipt)), additionalPointTargets: [witnesses[1]!.target] })
+  const event = persisted.events.find(row => row.kind === 'verifier_attempt')
+  assert.ok(event?.receipt)
+  const proof = event.point_execution
+  assert.ok(proof)
+  const completed = persisted.events.find(row => row.kind === 'tool_completed')
+  assert.ok(completed)
+  completed.target_summary = 'node --test unrelated.mjs'
+  assert.equal(restorePersistedVerifierEvidence(persisted, [], verifierOwner)?.target, undefined)
+  completed.target_summary = command
+  completed.verifier_stdout_digest = '0'.repeat(64)
+  assert.equal(restorePersistedVerifierEvidence(persisted, [], verifierOwner)?.target, undefined)
+  completed.verifier_stdout_digest = proof.stdout_digest
+  const observed = completed.verifier_passed_case_digests
+  completed.verifier_passed_case_digests = [sha256Canonical('neighbor case')]
+  assert.equal(restorePersistedVerifierEvidence(persisted, [], verifierOwner)?.target, undefined)
+  if (observed) completed.verifier_passed_case_digests = observed
+  event.receipt.additionalPointTargets = [witnesses[1]!.target]
+  delete event.point_execution
+  const uncorroborated = restorePersistedVerifierEvidence(persisted, [], verifierOwner)
+  assert.deepEqual(retainCurrentPointReceipts([uncorroborated!]).map(entry => entry.target), [undefined])
+  event.point_execution = { ...proof, cases: [...proof.cases].reverse() }
+  const altered = restorePersistedVerifierEvidence(persisted, [], verifierOwner)
+  assert.equal(altered?.target, undefined)
+  assert.equal(altered?.additionalPointTargets, undefined)
   service.refreshPrivateEvidence({
-    proof: { compliant: true }, receipts: [receipt], candidate_sha: candidate, has_mutation: true,
+    proof: { compliant: true }, receipts: retainCurrentPointReceipts([restored!]), candidate_sha: candidate, has_mutation: true,
   })
   const result = evaluateCriterionCompletionV1(request)
   assert.equal(result.verified, true, JSON.stringify(result))
   assert.deepEqual(result.missing_requirements, [])
-  assert.equal(result.satisfied_requirements.length, 2)
+  assert.equal(result.satisfied_requirements.length, 3)
 })
 
 test('kernel negative: lowercase-only witness cannot certify uppercase literal goal', async t => {

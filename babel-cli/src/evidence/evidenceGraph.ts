@@ -312,6 +312,13 @@ function certifyingEvidenceError(
       data["passed"] !== true
     )
       return "runtime observation is not a passing observation";
+    if (requirement.verification.kind === 'requested_local_execution' &&
+        (node.producer_identity?.endpoint_id !== 'observer:chat-governed-foreground' ||
+          node.producer_identity.execution_domain !== 'governed-foreground-observation' ||
+          data['exit_code'] !== 0 || !Array.isArray(data['argv']) ||
+          data['argv'].length === 0 || !data['argv'].every(value => typeof value === 'string') ||
+          data['command_digest'] !== sha256Canonical(data['argv'])))
+      return 'foreground observation has no exact governed command receipt';
     return undefined;
   }
   const status = String(data["status"] ?? "").toLowerCase();
@@ -672,7 +679,7 @@ export function evaluateCompletionGateV1(input: {
         continue;
       }
       const certificationError = certifyingEvidenceError(node, requirement);
-      const requiredCapability = requiredCapabilityForAcceptanceType(
+      const requiredCapability = requirement.verification.kind === 'requested_local_execution' ? 'run_local_command' : requiredCapabilityForAcceptanceType(
         requirement.type,
       );
       const registryResult = certificationError

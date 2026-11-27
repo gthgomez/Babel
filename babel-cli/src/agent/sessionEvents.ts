@@ -486,6 +486,10 @@ export function recordModelResultDelivery(
     tool_call_count?: number | null;
     requested_output_budget?: number | null;
     effective_output_budget?: number | null;
+    sent_output_budget?: number | null;
+    provider_effective_output_budget?: number | null;
+    provider_finish_reason?: string | null;
+    normalized_finish_reason?: string | null;
     wire_policy_hash?: string | null;
     execution_envelope_hash?: string | null;
     route_receipt?: ModelRouteReceiptV1;
@@ -549,6 +553,12 @@ export function recordModelResultDelivery(
     ...(input.effective_output_budget !== undefined
       ? { effective_output_budget: input.effective_output_budget }
       : {}),
+    ...(input.sent_output_budget !== undefined ? { sent_output_budget: input.sent_output_budget } : {}),
+    ...(input.provider_effective_output_budget !== undefined
+      ? { provider_effective_output_budget: input.provider_effective_output_budget }
+      : {}),
+    ...(input.provider_finish_reason !== undefined ? { provider_finish_reason: input.provider_finish_reason } : {}),
+    ...(input.normalized_finish_reason !== undefined ? { normalized_finish_reason: input.normalized_finish_reason } : {}),
     ...(input.wire_policy_hash !== undefined
       ? { wire_policy_hash: input.wire_policy_hash }
       : {}),
@@ -666,10 +676,14 @@ export function recordToolStarted(
     action_index?: number;
     batch_id?: string;
     target_summary?: string;
+    command_digest?: string;
+    foreground_criterion_id?: string;
   },
 ): SessionEvent {
   return appendSessionEvent(log, {
     kind: 'tool_started',
+    ...(input.command_digest ? { command_digest: input.command_digest } : {}),
+    ...(input.foreground_criterion_id ? { foreground_criterion_id: input.foreground_criterion_id } : {}),
     turn_id: input.turn_id,
     tool_call_id: input.tool_call_id,
     tool_name: input.tool_name,
@@ -689,6 +703,11 @@ export function recordToolTerminal(
     exit_code?: number;
     preDispatchNoEffect?: true;
     content?: string;
+    verifier_stdout_digest?: string;
+    verifier_command_digest?: string;
+    verifier_passed_case_digests?: string[];
+    command_digest?: string;
+    foreground_effect?: import('./foregroundEffectReceipt.js').ForegroundEffectReceipt;
     failed?: boolean;
     cancelled?: boolean;
     reason?: string;
@@ -744,6 +763,11 @@ export function recordToolTerminal(
     idempotency_key: key,
     ...(input.exit_code !== undefined ? { exit_code: input.exit_code } : {}),
     ...(digest !== undefined ? { output_digest: digest } : {}),
+    ...(input.verifier_stdout_digest !== undefined ? { verifier_stdout_digest: input.verifier_stdout_digest } : {}),
+    ...(input.verifier_command_digest !== undefined ? { verifier_command_digest: input.verifier_command_digest } : {}),
+    ...(input.verifier_passed_case_digests !== undefined ? { verifier_passed_case_digests: [...input.verifier_passed_case_digests] } : {}),
+    ...(input.command_digest !== undefined ? { command_digest: input.command_digest } : {}),
+    ...(input.foreground_effect !== undefined ? { foreground_effect: structuredClone(input.foreground_effect) } : {}),
     ...(input.preDispatchNoEffect === true ? { preDispatchNoEffect: true as const } : {}),
     ...correlation,
   });
@@ -758,6 +782,7 @@ export function recordVerifierAttempt(
     exit_code?: number;
     tool_call_id?: string;
     receipt?: BoundChatVerifierReceipt;
+    point_execution?: Extract<SessionEvent, { kind: 'verifier_attempt' }>['point_execution'];
     failed_execution?: import('./codingLoop/failedVerifierExecution.js').SettledFailedVerifierExecution;
   },
 ): SessionEvent {
@@ -769,6 +794,7 @@ export function recordVerifierAttempt(
     ...(input.exit_code !== undefined ? { exit_code: input.exit_code } : {}),
     ...(input.tool_call_id !== undefined ? { tool_call_id: input.tool_call_id } : {}),
     ...(input.receipt !== undefined ? { receipt: structuredClone(input.receipt) } : {}),
+    ...(input.point_execution !== undefined ? { point_execution: structuredClone(input.point_execution) } : {}),
     ...(input.failed_execution !== undefined ? { failed_execution: structuredClone(input.failed_execution) } : {}),
   });
 }

@@ -14,11 +14,12 @@ import {recordVerifierAttempt,recordWorkingStateSnapshot} from './sessionEvents.
 import {sha256Canonical} from '../acceptance/canonical.js'
 import {parityOnUserTurn,checkpointParityEventLogStrictSync} from './chatEngineParityBridge.js'
 import {bindChatVerifierReceipt} from '../evidence/chatRevisionBinding.js'
-import {validateTaskAcceptanceRevision} from './taskAcceptanceRevision.js'
-import {isAcceptanceMeaningDerivedRef} from './taskAcceptanceMeaning.js'
+import {projectTaskAcceptanceRevision,validateTaskAcceptanceRevision} from './taskAcceptanceRevision.js'
+import {ACCEPTANCE_MEANING_REF_V6,acceptanceMeaningRefForVersion,isAcceptanceMeaningDerivedRef} from './taskAcceptanceMeaning.js'
 import {validateTaskModeCompanion} from './taskModeRevision.js'
 import {createWorkingState,type WorkingState} from './codingLoop/workingState.js'
 import {assertObjectiveLifecycle} from './taskObjectiveLifecycle.js'
+import { REQUESTED_LOCAL_EXECUTION_KIND, requestedForegroundEffect, requiredLocalExecutionScope } from './requestedLocalExecution.js'
 
 const request = 'Update fixture behavior.\nAcceptance criteria:\n- Preserve the existing API.'
 const addition = 'Also require:\n- The task survives restart.'
@@ -44,7 +45,7 @@ function appendLegacySubmission(engine: ChatEngine, runDir: string, text: string
   assert.equal(checkpointParityEventLogStrictSync(parity,runDir,{taskAllowance:engine.getTaskAllowanceSnapshot()!}).status,'committed')
 }
 
-async function fixture(body: (engine: ChatEngine, runDir: string, root: string) => void | Promise<void>, mode: 'chat' | 'plan' = 'chat', legacy = false, initialTask = request, requiredVerifierCommands: readonly string[] = []) {
+async function fixture(body: (engine: ChatEngine, runDir: string, root: string) => void | Promise<void>, mode: 'chat' | 'plan' = 'chat', legacy = false, initialTask = request, requiredVerifierCommands: readonly string[] = [], prepare?: (root: string) => void) {
   const root = mkdtempSync(join(tmpdir(), 'babel-acceptance-amendment-'))
   const previous = process.env['BABEL_RUNS_DIR']
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
@@ -52,6 +53,7 @@ async function fixture(body: (engine: ChatEngine, runDir: string, root: string) 
     if (initialTask.includes('`npm test`')) {
       writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: 'node --test' } }))
     }
+    prepare?.(root)
     const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: initialTask, projectRoot: root, executionProfile: mode, requiredVerifierCommands })
     if(legacy){
       const authority=engine.getParityRuntime().liveAuthority!
@@ -102,16 +104,29 @@ test('an explicit additive amendment creates a frozen same-task revision and can
     assert.ok(readFileSync(join(runDir, 'task-mode-history.json'), 'utf8').includes(before.contract_hash))
   }))
 
-test('executable-bound amendment survives authenticated canonical cold replay', () =>
+test('an amended point remains required without a governed case and survives cold replay', () =>
   fixture((engine, runDir) => {
     const initialTask = engine.getTaskContract()!.user_request
+    const previous = engine.getTaskContract()!
     assert.ok(initialTask.includes('npm test'))
     const amendment = 'Also require:\n- parseSum(2, 3) returns 5; verified by: `npm test` must pass.'
     engine.admitUserSubmission({ userInput: amendment }, route)
     const current = engine.getTaskContract()!
     const amended = current.acceptance.find(item => item.description.includes('parseSum(2, 3)'))!
     assert.ok(amended)
-    assert.equal(amended.verification.verifier_id, 'verifier:npm', JSON.stringify(current.verifier_requirements))
+    assert.equal(amended.required, true)
+    assert.match(amended.verification.verifier_id, /^meaning:/)
+    assert.equal(projectTaskAcceptanceRevision(previous, amendment, 'add', 2).added[0]?.verification.verifier_id, 'verifier:npm')
+    for (const version of [4, 5] as const) {
+      const older = { ...previous, provenance: {
+        ...previous.provenance,
+        records: previous.provenance.records.map(record => ({
+          ...record, ref: record.ref.replace(ACCEPTANCE_MEANING_REF_V6, acceptanceMeaningRefForVersion(version)),
+        })),
+      } }
+      const projected = projectTaskAcceptanceRevision(older, amendment, 'add', 4)
+      assert.match(projected.added[0]!.verification.verifier_id, /^meaning:/)
+    }
     const restored = loadLiveSessionAuthorityStrict(runDir)
     assert.equal(restored.taskContract.contract_hash, current.contract_hash)
     assert.deepEqual(restored.taskContract.acceptance, current.acceptance)
@@ -120,6 +135,128 @@ test('executable-bound amendment survives authenticated canonical cold replay', 
     '- `npm test` must pass.',
     '- Preserve the parser API.',
   ].join('\n'), ['npm test']))
+
+test('historical verifier binding replays without widening current command dispatch', () =>
+  fixture(engine => {
+    const previous = engine.getTaskContract()!
+    const amendment = 'Also require:\n- `npm test` must pass.\nYou must not run npm.'
+    for (const version of [2, 3, 4] as const) {
+      const projected = projectTaskAcceptanceRevision(previous, amendment, 'add', version)
+      const check = projected.added.find(item => item.description.includes('npm test'))
+      assert.ok(check)
+      assert.equal(check.verification.executable_id, version < 4 ? 'npm' : undefined)
+    }
+  }, 'chat', false, request, ['npm test']))
+
+const frozenPointTests = [
+  'import test from "node:test"',
+  'import assert from "node:assert/strict"',
+  'import { add } from "./math.mjs"',
+  'test("sum", () => assert.equal(add(2, 3), 5))',
+].join('\n')
+const initialPointAmendmentTask = 'Fix the arithmetic module.\nRequirements:\n- `npm test` must pass.'
+const addFrozenPoint = 'Also require:\n- Fix math.mjs so add(2, 3) returns 5; verified by: `npm test` must pass.'
+function preparePointInputs(root: string) {
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: 'node --test math.test.mjs' } }))
+  writeFileSync(join(root, 'math.mjs'), 'export const add = (a, b) => a + b\n')
+  writeFileSync(join(root, 'math.test.mjs'), frozenPointTests)
+}
+
+test('an amended point binds the unchanged predecessor verifier and replays from the recorded witness', () =>
+  fixture((engine, runDir, root) => {
+    const previous = engine.getTaskContract()!
+    engine.admitUserSubmission({ userInput: addFrozenPoint }, route)
+    const current = engine.getTaskContract()!
+    const requirement = current.acceptance.at(-1)!
+    assert.equal(requirement.verification.verifier_id, 'verifier:npm')
+    assert.match(requirement.verification.target ?? '', /^node-test-point:v2:/)
+    assert.deepEqual(current.verifier_requirements, previous.verifier_requirements)
+    assert.deepEqual(current.protected_paths, previous.protected_paths)
+    assert.deepEqual(current.authority, previous.authority)
+    const event = engine.getParityEventLog().events.find(item => item.kind === 'task_acceptance_amended')
+    assert.equal(event?.descriptor.schema_version, 6)
+    const recorded = event?.descriptor.point_bindings?.[0]
+    assert.ok(recorded && 'case' in recorded)
+    const otherPoint = addFrozenPoint.replace('add(2, 3) returns 5', 'add(5, 7) returns 12')
+    const inferred = projectTaskAcceptanceRevision(previous, otherPoint, 'add', 4).added[0]!
+    const reassigned = projectTaskAcceptanceRevision(previous, otherPoint, 'add', 6, [{
+      ...recorded, criterion_id: inferred.id,
+    }])
+    assert.notEqual(reassigned.added[0]?.verification.target, requirement.verification.target,
+      'a case recorded for one point cannot be borrowed to prove a different point')
+    assert.equal(reassigned.unresolved, true)
+    const invented = projectTaskAcceptanceRevision(previous, addFrozenPoint, 'add', 6, [{
+      ...recorded, case: { ...recorded.case, test: 'invented case' },
+    }])
+    assert.equal(invented.unresolved, true)
+    assert.match(invented.added[0]!.verification.verifier_id, /^meaning:/)
+    const inputRefSegments = recorded.input_ref.split(':')
+    inputRefSegments.splice(4, 1)
+    const historicalBinding = { criterion_id: recorded.criterion_id, command: recorded.command,
+      input_ref: inputRefSegments.join(':'), target: requirement.verification.target! }
+    const historicalPredecessor = { ...previous, provenance: { ...previous.provenance,
+      records: [...previous.provenance.records.filter(record => !record.ref.startsWith('babel:point-verifier-case:')),
+        { kind: 'derived_acceptance' as const, ref: historicalBinding.input_ref }] } }
+    const historical = projectTaskAcceptanceRevision(historicalPredecessor, addFrozenPoint, 'add', 5, [historicalBinding])
+    assert.equal(historical.unresolved, false)
+    assert.equal(historical.added[0]?.verification.target, requirement.verification.target)
+    // Replay must reconstruct authority without reading today's potentially changed test.
+    writeFileSync(join(root, 'math.test.mjs'), 'changed after admission\n')
+    assert.deepEqual(loadLiveSessionAuthorityStrict(runDir).taskContract.acceptance, current.acceptance)
+  }, 'chat', false, initialPointAmendmentTask, ['npm test'], preparePointInputs))
+
+test('an edited predecessor verifier cannot bind an amended point', () =>
+  fixture((engine, _runDir, root) => {
+    writeFileSync(join(root, 'math.test.mjs'), frozenPointTests.replace('"sum"', '"replaced sum"'))
+    engine.admitUserSubmission({ userInput: addFrozenPoint }, route)
+    assert.match(engine.getTaskContract()!.acceptance.at(-1)!.verification.verifier_id, /^meaning:/)
+  }, 'chat', false, initialPointAmendmentTask, ['npm test'], preparePointInputs))
+
+test('a declared output added by amendment retains its original source and exact process identity', () =>
+  fixture((engine, runDir, root) => {
+    const amendment = 'Also run `check.mjs` to create `result.txt` from `input.txt`.  '
+    engine.admitUserSubmission({ userInput: amendment }, route)
+    const current = loadLiveSessionAuthorityStrict(runDir).taskContract
+    const command = { type: 'run_command' as const, command: 'node check.mjs input.txt result.txt' }
+    const sources = engine.getFrozenForegroundAmendments()
+    assert.deepEqual(sources, [amendment])
+    assert.equal(requestedForegroundEffect(current, command, root), undefined)
+    const effect = requestedForegroundEffect(current, command, root, sources)
+    assert.equal(effect?.outputPath, 'result.txt')
+    assert.deepEqual(effect?.inputPaths, ['check.mjs', 'input.txt'])
+    assert.equal(requestedForegroundEffect(current, { ...command, cwd: 'different' }, root, sources), undefined)
+  }))
+
+test('a requested operation amendment adds a source-linked effect without changing frozen policy', () => {
+  const originalCommand = 'node tools/build-index.mjs'
+  const newCommand = 'node tools/export-feed.mjs'
+  const changedInput = `Also run \`${newCommand}\`.`
+  return fixture((engine, runDir, root) => {
+    const before = engine.getTaskContract()!
+    assert.ok(before.acceptance.some(item => item.verification.kind === REQUESTED_LOCAL_EXECUTION_KIND))
+    engine.admitUserSubmission({ userInput: changedInput }, route)
+    const current = engine.getTaskContract()!
+    assert.equal(current.task_id, before.task_id)
+    assert.deepEqual(current.acceptance.slice(0, before.acceptance.length), before.acceptance)
+    assert.deepEqual(current.authority, before.authority)
+    assert.deepEqual(current.allowed_effects, before.allowed_effects)
+    assert.deepEqual(current.protected_paths, before.protected_paths)
+    assert.deepEqual(current.verifier_requirements, before.verifier_requirements)
+    const effect = current.acceptance.at(-1)!
+    assert.equal(effect.verification.kind, REQUESTED_LOCAL_EXECUTION_KIND)
+    assert.equal(effect.required, true)
+    for (const command of [originalCommand, newCommand])
+      assert.equal(requiredLocalExecutionScope(current.provenance.records, { type: 'run_command', command }, root), 'mixed')
+    const amendment = engine.getParityEventLog().events.find(event => event.kind === 'task_acceptance_amended')
+    assert.equal(amendment?.descriptor.schema_version, 4)
+    const source = amendment?.descriptor.meaning_sources.find(item => item.criterion_id === effect.id)
+    assert.ok(source)
+    assert.equal(changedInput.slice(source.start, source.end), `run \`${newCommand}\``)
+    assert.equal(loadLiveSessionAuthorityStrict(runDir).taskContract.contract_hash, current.contract_hash)
+    engine.admitUserSubmission({ userInput: 'continue' }, route)
+    assert.equal(engine.getTaskContract()!.contract_hash, current.contract_hash)
+  }, 'chat', false, `Update the project index. Run \`${originalCommand}\`.`)
+})
 
 test('status and continuation preserve amended requirements through mode changes and cold restore', () =>
   fixture(async (engine, runDir, root) => {

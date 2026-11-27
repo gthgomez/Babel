@@ -8,6 +8,7 @@ import {
   OPENCODE_GO_USER_AGENT,
   OpenCodeGoApiRunner,
   OpenCodeGoError,
+  isOpenCodeGoModel,
 } from './openCodeGoApi.js'
 
 const originalFetch = globalThis.fetch
@@ -17,13 +18,14 @@ test.afterEach(() => {
   delete process.env['BABEL_DEEPINFRA_REQUEST_MAX_RETRIES']
 })
 
-test('OpenCode Go admits only the canonical direct model identifiers', () => {
+test('OpenCode Go preserves the existing review model identifiers', () => {
   assert.deepEqual(OPENCODE_GO_MODELS, [
     'deepseek-v4.1-flash',
     'deepseek-v4-flash',
     'mimo-v2.5',
     'longcat-2.0',
   ])
+  assert.equal(isOpenCodeGoModel('glm-5.3-flash'), false, 'the coding route does not expand review admission')
 })
 
 test('OpenCode Go pins endpoint, model, stable session, and invocation attribution', async () => {
@@ -63,7 +65,7 @@ test('OpenCode Go pins endpoint, model, stable session, and invocation attributi
 
 test('OpenCode Go rejects non-canonical and substituted models without fallback', async () => {
   assert.throws(
-    () => new OpenCodeGoApiRunner('glm-5.3-flash', {}, {
+    () => new OpenCodeGoApiRunner('GLM-5.3-Flash', {}, {
       credentialSource: 'explicit-test',
       explicitCredential: 'synthetic-go-key',
     }),
@@ -71,7 +73,7 @@ test('OpenCode Go rejects non-canonical and substituted models without fallback'
   )
   globalThis.fetch = (async () => new Response(JSON.stringify({
     model: 'longcat-2.0',
-    choices: [{ message: { content: '{"ok":true}' } }],
+    choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
   }), { status: 200 })) as typeof fetch
   const runner = new OpenCodeGoApiRunner('mimo-v2.5', {}, {
     credentialSource: 'explicit-test',
@@ -85,7 +87,7 @@ test('OpenCode Go rejects non-canonical and substituted models without fallback'
 
 test('OpenCode Go rejects missing response identity for structured and raw calls', async () => {
   globalThis.fetch = (async () => new Response(JSON.stringify({
-    choices: [{ message: { content: '{"ok":true}' } }],
+    choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
   }), { status: 200 })) as typeof fetch
   const structured = new OpenCodeGoApiRunner('mimo-v2.5', {}, {
     credentialSource: 'explicit-test',
@@ -157,7 +159,7 @@ test('OpenCode Go does not retain prior usage when a later response omits usage'
     calls += 1
     return new Response(JSON.stringify({
       model: 'mimo-v2.5',
-      choices: [{ message: { content: '{"ok":true}' } }],
+      choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
       ...(calls === 1 ? { usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } } : {}),
     }), { status: 200 })
   }) as typeof fetch
@@ -215,8 +217,42 @@ test('OpenCode Go classifies authentication failure without switching provider',
   assert.equal(runner.getLastInvocationMetadata()?.provider, 'opencode-go')
 })
 
-test('exact V4.1 refuses missing shared budget before resolving a credential', () => {
-  assert.throws(() => new OpenCodeGoApiRunner('deepseek-v4.1-flash', { maxTokens: 32 }, { credentialSource: 'explicit-test', explicitCredential: 'synthetic' }), /budget/i)
+test('exact Flash coding routes refuse missing shared budget before credential lookup', () => {
+  for (const model of ['deepseek-v4.1-flash', 'glm-5.3-flash']) {
+    assert.throws(() => new OpenCodeGoApiRunner(model, { maxTokens: 32 }, {
+      credentialSource: 'explicit-test', explicitCredential: 'synthetic',
+    }), /budget/i)
+  }
+})
+
+test('GLM Flash uses the pinned Go endpoint, settled owner grant, and stable session header', async () => {
+  const { OpenCodeGoBudget } = await import('./openCodeGoBudget.js')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const budget = new OpenCodeGoBudget({
+    statePath: join(tmpdir(), 'unused-go-glm-owner.json'),
+    jobId: 'fixture-glm',
+    limitUsd: Infinity,
+    currentGrant: () => ({ grantId: 'fixture', revision: 0, limitUsd: Infinity }),
+  })
+  let requests = 0
+  globalThis.fetch = async (url, init) => {
+    requests += 1
+    assert.equal(String(url), `${OPENCODE_GO_BASE_URL}/chat/completions`)
+    assert.equal((init?.headers as Record<string, string>)['x-opencode-session'], 'fixture-glm')
+    assert.equal(JSON.parse(String(init?.body)).model, 'glm-5.3-flash')
+    return Response.json({
+      model: 'glm-5.3-flash',
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+    })
+  }
+  const runner = new OpenCodeGoApiRunner('glm-5.3-flash', { maxTokens: 32 }, {
+    budget, credentialSource: 'explicit-test', explicitCredential: 'synthetic',
+    sessionId: 'fixture-glm',
+  })
+  for (const prompt of ['original', 'continue']) assert.equal(await runner.executeRaw(prompt), 'ok')
+  assert.equal(requests, 2)
+  assert.equal(runner.getLastInvocationMetadata()?.observed_model_id, 'glm-5.3-flash')
 })
 
 test('Go rechecks the actual task authority after an asynchronous reservation before dispatch', async () => {

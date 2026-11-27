@@ -9,27 +9,32 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   createThreadEventLog,
+  endTurn,
   persistThreadEventLog,
   startTurn,
 } from '../agent/threadEventLog.js';
 import {
   createSessionEventLog,
   flushSessionEventLog,
+  recordTurnEnded,
   recordUserSubmitted,
 } from '../agent/sessionEvents.js';
-import { ChatEngine } from '../agent/chatEngine.js';
+import { ChatEngine, type ChatEvent, type TaskIntent } from '../agent/chatEngine.js';
 import { getOpenAdmissionStoreCount } from '../runtime/admissionTestHooks.js';
 import { HistoryCellViewport } from '../ui/historyCells/viewport.js';
 import { ScreenManager } from '../ui/screenManager.js';
+import { ShellRuntimeBinding } from '../ui/shell/shellRuntimeBinding.js';
+import type { ShellHost } from '../ui/shell/shellHost.js';
 import type { AgentTargetContext } from '../services/targetResolver.js';
 import type { ReplContext } from './context.js';
 import { resumeChatSession } from './chatSessionResume.js';
+import { handleResume } from './commands/resume.js';
 import type { SessionState } from './types.js';
 import { loadExecutionPolicyRecord, persistExecutionPolicyRecord } from '../config/executionPolicySelection.js';
 import { acquireSessionPolicyLease } from '../config/sessionPolicyLease.js';
@@ -137,6 +142,109 @@ function writeThreadIdentity(sessionDir: string, sessionId: string, projectRoot:
   startTurn(log, { task: 't', model: 'm', provider: 'p', projectRoot, policyPreset: 'workspace_write' });
   persistThreadEventLog(sessionDir, log);
 }
+
+test('cold conversation resume dispatches exact continuation, status, and amendment text to the same objective', async (t) => {
+  const fixture = withTempRunsDir();
+  const targetRoot = mkdtempSync(join(tmpdir(), 'babel-cold-continue-'));
+  const sessionId = 'cold-continuation';
+  const task = 'Fix the fixture calculation';
+  const route = { model: 'fixture', provider: 'ollama' };
+  let initial: ChatEngine | undefined;
+  let ctx: ReplContext | undefined;
+  try {
+    const sessionDir = writeTranscript(fixture.root, sessionId, task);
+    appendFileSync(join(sessionDir, 'transcript.jsonl'), `${JSON.stringify({ role: 'assistant', content: 'The prior calculation task is unfinished.' })}\n`, 'utf8');
+    initial = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task, projectRoot: targetRoot, runId: sessionId });
+    const admitted = initial.admitUserSubmission({ userInput: task }, route);
+    assert.equal(admitted.status, 'committed');
+    const taskId = initial.getTaskContract()?.task_id;
+    assert.ok(taskId);
+    const runtime = initial.getParityRuntime();
+    const turnId = runtime.turnId;
+    assert.ok(turnId);
+    const reason = { code: 'cancelled', cause_class: null } as const;
+    endTurn(runtime.eventLog, turnId, 'CANCELLED', 'cancelled', reason);
+    recordTurnEnded(runtime.sessionEvents, { turn_id: turnId, outcome: 'CANCELLED', status: 'cancelled', reason });
+    await persistThreadEventLog(sessionDir, runtime.eventLog);
+    flushSessionEventLog(sessionDir, runtime.sessionEvents);
+    initial.closeAdmissionStore();
+
+    ctx = makeResumeCtx(makeTarget(targetRoot));
+    const hosted = new ShellRuntimeBinding();
+    const frames: string[] = [];
+    ctx.shellRuntime = hosted;
+    ctx.shellHost = {
+      renderNow: () => frames.push(hosted.getVisibleRows(96, 20).join('\n')),
+    } as unknown as ShellHost;
+    await handleResume(ctx, [sessionId]);
+    assert.equal(ctx.chatEngine?.getEngineRunId(), sessionId);
+    assert.match(frames.join('\n'), /Latest turn was cancelled\. Task completion is unverified\./);
+    assert.equal(ctx.state.lastRunUserStatus, 'cancelled');
+    assert.match(ctx.lastAssistantAnswer ?? '', /prior calculation/);
+    const engine = ctx.chatEngine!;
+    const target = makeTarget(targetRoot);
+    const { executeTask } = await import('./execution/dispatch.js');
+    const { runChatEngineOnce } = await import('./execution/chatCore.js');
+    const { appendTurn } = await import('./turns.js');
+    const { globalCostTracker } = await import('../services/costTracker.js');
+    ctx.scheduleIndexWarmup = () => {};
+    const repl = ctx;
+    repl.appendTurn = (turn) => appendTurn(repl, turn);
+
+    const observed: Array<{ text: string; intent: TaskIntent | undefined; operation: string | undefined }> = [];
+    let streamError: unknown;
+    t.mock.method(engine, 'submitMessageStream', async function* (text: string, intent?: TaskIntent): AsyncGenerator<ChatEvent> {
+      try {
+        const admitted = engine.admitUserSubmission({ userInput: text, ...(intent ? { taskIntent: intent } : {}) }, route);
+        assert.equal(admitted.status, 'committed');
+        observed.push({ text, intent, operation: engine.getTurnRuntimeSnapshot()?.effectiveOperation });
+        assert.equal(engine.getTaskContract()?.task_id, taskId);
+        const current = engine.getParityRuntime();
+        assert.ok(current.turnId);
+        endTurn(current.eventLog, current.turnId, 'NO_CHANGE_REQUIRED', 'completed');
+        recordTurnEnded(current.sessionEvents, { turn_id: current.turnId, outcome: 'NO_CHANGE_REQUIRED', status: 'completed' });
+        await persistThreadEventLog(sessionDir, current.eventLog);
+        flushSessionEventLog(sessionDir, current.sessionEvents);
+        yield { type: 'done', answer: 'Fixture settlement', outcome: 'NO_CHANGE_REQUIRED', usage: globalCostTracker.getSessionSummary() };
+      } catch (error) {
+        streamError = error;
+        throw error;
+      }
+    });
+
+    const messages = ['  continue  ', '  status?  ', '  Also require:\n- The task survives restart.  '];
+    for (const text of messages) {
+      await executeTask(repl, text, {
+        loadSessionIdentity: async () => '',
+        executeChatTask: async (_ctx, input, submitted, dispatchedTarget) => {
+          assert.equal(input, text);
+          assert.equal(dispatchedTarget.targetRoot, target.targetRoot);
+          const result = await runChatEngineOnce({ task: submitted, target: dispatchedTarget, engine, useStreaming: true });
+          if (streamError !== undefined) throw streamError;
+          assert.equal(result.outcome, 'NO_CHANGE_REQUIRED', 'fixture stream did not settle');
+        },
+      });
+    }
+    assert.deepEqual(observed, [
+      { text: messages[0], intent: 'execute', operation: 'MUTATING' },
+      { text: messages[1], intent: 'explain', operation: 'READ_ONLY' },
+      { text: messages[2], intent: 'execute', operation: 'MUTATING' },
+    ]);
+    assert.deepEqual(
+      engine.getParityEventLog().events.filter(event => event.kind === 'turn_started').slice(-3).map(event => event.task),
+      messages,
+    );
+    assert.equal(engine.getTaskContract()?.task_id, taskId);
+    assert.ok(engine.getTaskContract()?.acceptance_criteria.includes('The task survives restart.'));
+    assert.equal(engine.getTurnRuntimeSnapshot()?.durableObjective, task);
+    assert.equal(engine.getParityRuntime().sessionEvents.events.filter(event => event.kind === 'tool_started').length, 0);
+  } finally {
+    initial?.closeAdmissionStore();
+    ctx?.chatEngine?.closeAdmissionStore();
+    fixture.cleanup();
+    rmSync(targetRoot, { recursive: true, force: true });
+  }
+});
 
 test('an unknown legacy policy needs a deliberate selection before interactive resume',async()=>{
   const fixture=withTempRunsDir();const target=mkdtempSync(join(tmpdir(),'babel-resume-policy-'));

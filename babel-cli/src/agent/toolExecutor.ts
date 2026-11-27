@@ -47,7 +47,8 @@ import {
   type ToolResult,
 } from '../localTools.js';
 import { resolveExecutorDryRun } from '../config/dryRun.js';
-import { awaitPendingProcessTerminations, getTrustedFileCreationEvidence, creationOwnershipFromTrustedEvidence } from '../sandbox.js';
+import { awaitPendingProcessTerminations, getTrustedFileCreationEvidence, getTrustedHostShellInvocation,
+  creationOwnershipFromTrustedEvidence, type ForegroundOutputCapture } from '../sandbox.js';
 import { isAuthoritativeVerifierCommand } from './completionGatePolicy.js';
 import { isPathInside } from '../services/targetResolver.js';
 import type { AgentAction } from './actions.js';
@@ -807,8 +808,14 @@ export async function executeActionWithPolicy(
     governanceFs?: import('../authority/governanceReconcile.js').ReconcileFs;
     /** B2: final authorization check after policy/approval but before an effect ledger intent. */
     onDispatchAuthorized?: () => { allowed: boolean; message?: string };
-    /** B2: invoked immediately before executor.execute after durable effect intent persistence. */
+    /** B2: persist the tool dispatch marker before opening its effect ledger intent. */
     onBeforeExecutorExecute?: () => void;
+    /** Host-only continuation proof, consulted only for certification commands under the default mode. */
+    hasRecoveredMutationWitness?: () => boolean;
+    /** Exact frozen foreground effect, already subject to all tool policy and lease checks. */
+    requestedForegroundEffect?: true;
+    foregroundOutput?: ForegroundOutputCapture;
+    readonlyRuntimeQuery?: true;
     /** H4: task / plan-step linkage for effect transaction records. */
     taskId?: string;
     planStepId?: string;
@@ -911,7 +918,9 @@ export async function executeActionWithPolicy(
   );
   const idempotencyKey =
     deps.idempotencyKey ?? defaultIdempotencyKeyForAction(action);
-  const targetPath = targetPathFromAction(action);
+  const foregroundOutput = action.type === 'run_command' && deps.requestedForegroundEffect
+    ? deps.foregroundOutput : undefined;
+  const targetPath = foregroundOutput?.path ?? targetPathFromAction(action);
   if (!isControlAction) {
     const classifyName = toolName === 'search' ? 'semantic_search' : toolName;
     effectClass = classifyToolEffect(classifyName);
@@ -1172,8 +1181,14 @@ export async function executeActionWithPolicy(
   }
 
   let batchTx: Awaited<ReturnType<typeof WorkspaceTransactionManager.beginBatch>> | null = null;
-  let effectIntent: ReturnType<typeof recordEffectIntent> | null = null;
+  const dispatchEffect: { intent?: ReturnType<typeof recordEffectIntent> } = {};
+  let effectIntentInput: Parameters<typeof recordEffectIntent>[0] | null = null;
   let effectTx: EffectTransactionRecord | null = null;
+  const effectOwner = {
+    sessionId: context.runId,
+    turnId: context.turnId ?? null,
+    ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
+  };
   if (txPaths.length > 0) {
     batchTx = await WorkspaceTransactionManager.beginBatch(txPaths, {
       sessionId: context.runId,
@@ -1210,10 +1225,9 @@ export async function executeActionWithPolicy(
         : {}),
     });
     if (context.runDir) {
-      effectIntent = recordEffectIntent({
+      effectIntentInput = {
         runDir: context.runDir,
-        sessionId: context.runId,
-        turnId: null,
+        ...effectOwner,
         mutationBatchId: batchTx.batchId,
         effectClass: classifyToolEffect(action.type),
         toolName: action.type,
@@ -1225,7 +1239,7 @@ export async function executeActionWithPolicy(
           : action.type === 'apply_patch'
             ? { intendedContent: action.patch }
             : {}),
-      });
+      };
     }
   } else if (
     effectClass === 'non_idempotent_local_effect' ||
@@ -1245,16 +1259,15 @@ export async function executeActionWithPolicy(
       ...(idempotencyKey !== undefined ? { idempotency_key: idempotencyKey } : {}),
     });
     if (context.runDir) {
-      effectIntent = recordEffectIntent({
+      effectIntentInput = {
         runDir: context.runDir,
-        sessionId: context.runId,
-        turnId: null,
+        ...effectOwner,
         mutationBatchId: effectTx.transaction_id,
         effectClass,
         toolName: action.type,
         targetPaths: [],
         preImageHashes: { workspace: preRevision.compositeTreeHash },
-      });
+      };
     }
   }
 
@@ -1296,7 +1309,6 @@ export async function executeActionWithPolicy(
 
   const physicalDispatch = { started: false };
   try {
-    deps.onBeforeExecutorExecute?.();
     const mapped = actionRequestFromAction(action);
     // An explicit host_profile/host_escalated boundary is a supported fallback
     // when Docker isolation is unavailable. The isolation broker has already
@@ -1340,23 +1352,37 @@ export async function executeActionWithPolicy(
     // isolated. An operator's explicit choice (persisted flags, BABEL_DRY_RUN,
     // BABEL_LIVE) and shadow capture runs are unaffected.
     const defaultLive = resolveInvocationLiveDefault();
-    // The live override stays on this dispatch. After a confirmed governed
-    // mutation, a later authoritative verifier in the same run is also live;
-    // every other command, and any explicit dry-run or shadow session, is not.
-    const invocationLive =
-      (effectClass === 'reconcilable_mutation' && defaultLive) ||
-      (defaultLive &&
+    // This changes only the default simulation mode after the normal dispatch
+    // gates pass. Explicit dry-run and shadow capture still take precedence.
+    const invocationLive = defaultLive && (
+      effectClass === 'reconcilable_mutation' ||
+      deps.requestedForegroundEffect === true ||
+      (
         liveCertificationEpochs.get(context.runId) === certificationEpoch &&
-        liveCertifiedRunIds.has(context.runId) &&
-        isCertificationCommand(action));
+        isCertificationCommand(action) &&
+        (liveCertifiedRunIds.has(context.runId) || deps.hasRecoveredMutationWitness?.() === true)
+      )
+    );
     const executionContext: ToolContext = {
       ...context,
       dispatchObservation: physicalDispatch,
       sessionId: context.sessionId ?? context.runId,
       ...(idempotencyKey ? { toolCallId: context.toolCallId ?? idempotencyKey } : {}),
+      ...(deps.readonlyRuntimeQuery ? { readonlyRuntimeQuery: true as const } : {}),
+      ...(foregroundOutput ? { foregroundOutput: {
+        ...foregroundOutput,
+        publish: write => foregroundOutput.publish(() =>
+          decideWithLease({ type: 'write_file', path: foregroundOutput.path, content: '', createOnly: true },
+            preset, leaseCtx).decision === 'allow' ? write() : undefined),
+      } } : {}),
     };
     const executeInvocation = () => dispatchRunOperation(context.runControl, 'tool', dispatchId, () => {
       signal?.throwIfAborted();
+      deps.onBeforeExecutorExecute?.();
+      const prevented = context.runControl?.stop();
+      if (prevented) throw new RunStoppedError(prevented);
+      signal?.throwIfAborted();
+      if (effectIntentInput) dispatchEffect.intent = recordEffectIntent(effectIntentInput);
       executionStarted = true;
       return executor.execute(action, executionContext, budget);
     });
@@ -1365,6 +1391,7 @@ export async function executeActionWithPolicy(
           invocationLive ? runWithLiveExecution(executeInvocation) : executeInvocation(),
         )
       : await (invocationLive ? runWithLiveExecution(executeInvocation) : executeInvocation());
+    let effectIntent = dispatchEffect.intent;
     if (execution.stopRequest) context.runControl?.requestStop(execution.stopRequest);
     if (batchTx && action.type === 'write_file' && action.createOnly) {
       const target = resolveWriteFileMutationPath(action.path, workspaceRoot);
@@ -1446,9 +1473,11 @@ export async function executeActionWithPolicy(
 
     if (toolFailed) {
       let rollbackConflicts: string[] = [];
+      const foregroundDeniedBeforeStart = deps.requestedForegroundEffect === true &&
+        execution.results.length === 1 && toolDenied && execution.results[0]?.process_started !== true;
       if (effectIntent && context.runDir) {
         effectIntent = recordEffectTerminal(context.runDir, effectIntent, {
-          status: 'failed',
+          status: foregroundDeniedBeforeStart ? 'cancelled' : 'failed',
           error: toolDenied ? 'tool execution denied' : 'tool returned a nonzero exit code',
         });
       }
@@ -1489,6 +1518,7 @@ export async function executeActionWithPolicy(
         } : {}),
         policyDecision: toolDenied ? 'deny' : policyDecision,
         policyBlocked: toolDenied,
+        ...(foregroundDeniedBeforeStart ? { preDispatchNoEffect: true as const } : {}),
         ...(effectIntent ? { effectLedgerRecord: effectIntent } : {}),
         ...(effectTx ? { effectTransaction: effectTx } : {}),
       };
@@ -1637,10 +1667,25 @@ export async function executeActionWithPolicy(
       const postRevision = captureWorkspaceRevisionIdentity(workspaceRoot);
       effectTx = commitEffectTransaction(effectTx, postRevision);
       if (effectIntent && context.runDir) {
-        recordEffectTerminal(context.runDir, effectIntent, {
-          status: 'completed',
-          postImageHashes: { workspace: postRevision.compositeTreeHash },
-        });
+        const captured = execution.results.length === 1 && execution.results[0]
+          ? getTrustedHostShellInvocation(execution.results[0])?.capturedOutput : undefined;
+        const intent = effectIntent;
+        const runDir = context.runDir;
+        const recordTerminal = (): true => {
+          recordEffectTerminal(runDir, intent, {
+            status: 'completed',
+            postImageHashes: {
+              workspace: postRevision.compositeTreeHash,
+              ...(captured ? { [`output:${captured.path}`]: captured.digest } : {}),
+            },
+          });
+          return true;
+        };
+        if (captured && foregroundOutput?.settle(recordTerminal) !== true) {
+          return { action, terminal: false, policyDecision: 'deny', policyBlocked: true,
+            results: [{ exit_code: 1, stdout: '', stderr: 'Output was written, but its owner could not settle the effect.' }] };
+        }
+        if (!captured) recordTerminal();
       }
     }
 
@@ -1676,6 +1721,7 @@ export async function executeActionWithPolicy(
       } : {})
     };
   } catch (error) {
+    const effectIntent = dispatchEffect.intent;
     let errorToThrow: unknown = error;
     let rollbackConflicts: string[] = [];
     if (effectIntent && context.runDir) {

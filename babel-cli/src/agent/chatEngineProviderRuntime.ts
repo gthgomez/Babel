@@ -253,6 +253,7 @@ export interface ChatDeliberationInput {
   executionScope?: import('./chatExecutionScope.js').ChatExecutionScope | undefined
   hostFallbackAllowed?: boolean | undefined
   requiredVerifierCommands?: readonly string[]
+  foregroundCommands?: readonly string[]
   systemPrompt: (mode: 'native' | 'text') => string
   useTextTools: () => boolean
   effects: ChatProviderUsageEffects
@@ -293,7 +294,8 @@ export async function deliberateChatTurn(
           )
         : input.tools.buildDefinitions(),
       { executionScope:input.executionScope,operation: input.acceptedOperation,
-      requiredVerifiers: input.requiredVerifierCommands,
+       requiredVerifiers: input.requiredVerifierCommands,
+       foregroundCommands: input.foregroundCommands,
       hostFallbackAllowed: input.hostFallbackAllowed })
     const nativeActions: ChatToolAction[] = []
     let answerText = ''

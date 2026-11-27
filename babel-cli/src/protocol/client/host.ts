@@ -3,7 +3,7 @@
  * D2 stub; future babel-app-server will reuse these handlers.
  */
 
-import { ChatEngine, type ChatEvent } from '../../agent/chatEngine.js';
+import { ChatEngine, type ChatEngineOptions, type ChatEvent } from '../../agent/chatEngine.js';
 import { openSessionAdmissionStore } from '../../cli/runsLayout.js';
 import type { AdmissionStore } from '../../runtime/admission.js';
 import type { BabelMode, SessionDescriptor } from '../../executor/contracts.js';
@@ -24,6 +24,7 @@ import {
   inspectThreadRepoIdentityOnHydration,
   RepoIdentityMismatchError,
 } from '../../services/threadStore/sessionHydration.js';
+import { restoreEngineWithRetainedAuthority } from '../../services/threadStore/conversationSync.js';
 import {
   commandCodeNativeOwnershipViolation,
   openCodeNativeOwnershipViolation,
@@ -105,7 +106,7 @@ export interface ProtocolHostState {
   /** Per-thread monotonic generation counter for active launches. */
   launchCounters: Map<string, number>;
   descriptors: Map<string, SessionDescriptor>;
-  engineFactory: (descriptor: SessionDescriptor) => ChatEngine;
+  engineFactory: (descriptor: SessionDescriptor, retained?: boolean) => ChatEngine;
   executeWithoutNotifications: boolean;
   /** Optional authorization handle — not a sandbox. */
   projectRootGuard?: (projectRoot: string) => string;
@@ -254,14 +255,21 @@ function modeExecutionProfile(mode: BabelMode): 'chat' | 'plan' | 'deep' {
   return mode;
 }
 
-function defaultEngineFactory(descriptor: SessionDescriptor): ChatEngine {
+function defaultEngineFactory(descriptor: SessionDescriptor, retained = false): ChatEngine {
   const prepared = buildPreparedTurn(descriptor);
-  const engine = new ChatEngine({
+  const options: ChatEngineOptions = {
     task: prepared.task,
     projectRoot: prepared.projectRoot,
     runtimeMode: 'direct',
     ...(prepared.model !== 'default' ? { model: prepared.model } : {}),
     ...(prepared.provider !== 'default' ? { provider: prepared.provider } : {}),
+  };
+  if (retained) {
+    const resumed = restoreEngineWithRetainedAuthority(descriptor.threadId, options);
+    if (resumed) return resumed;
+  }
+  const engine = new ChatEngine({
+    ...options,
     executionProfile: modeExecutionProfile(prepared.mode),
     hardPlanMode: prepared.mode === 'plan',
   });
@@ -317,7 +325,9 @@ function descriptorFromCreate(threadId: string, params: ThreadCreateParams): Ses
 function materializeEngine(state: ProtocolHostState, descriptor: SessionDescriptor): ChatEngine {
   const existing = state.engines.get(descriptor.threadId);
   if (existing) return existing;
-  const engine = state.engineFactory(descriptor);
+  const report = state.restoreReports.get(descriptor.threadId);
+  const retained = report?.resumable === true && report.source !== 'none';
+  const engine = state.engineFactory(descriptor, retained);
   // P05/P11 (A4): open the session-scoped durable admission store and attach
   // it before hydration so protocol turns admit commands and fence P11
   // checkpoint installs to their own admitted identity. Test-injected stub
@@ -333,9 +343,10 @@ function materializeEngine(state: ProtocolHostState, descriptor: SessionDescript
       state.admissionStores.get(descriptor.threadId)?.close();
       state.admissionStores.set(descriptor.threadId, admission.store);
       attachable.attachAdmissionStore(admission.store);
+    } else if (retained && report?.source === 'thread_event_log') {
+      throw new Error(`Cannot restore thread ${descriptor.threadId}: admission store unavailable (${admission.reasonCode})`);
     }
   }
-  const report = state.restoreReports.get(descriptor.threadId);
   if (report?.resumable && report.source !== 'none') {
     if (!engineSupportsHydration(engine)) {
       throw new Error(

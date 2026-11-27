@@ -69,6 +69,7 @@ function makeHost(projectRoot: string): ChatEngineActionExecutorHost {
     finishRecoveryLocalizationInspection: () => {},
     getResolvedRequiredVerifiers: () => [],
     getTurnRuntimeSnapshot: () => null,
+    _streamNativeToolCallIds: [],
     hashContent: (content: string) => content,
     hashFilePath: async () => 'hash',
     isSubmissionCurrent: () => true,

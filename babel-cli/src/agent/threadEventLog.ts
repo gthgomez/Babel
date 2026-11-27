@@ -85,6 +85,8 @@ export type ThreadEvent =
       continuedTask?: boolean;
       /** Accepted host inputs, distinct from derived status/counter policy. */
       requestedOperation?: import('../config/chatTaskClass.js').RequestedTaskOperation;
+      /** Accepted objective operation; status presentation may be narrower. */
+      objectiveOperation?: import('../config/chatTaskClass.js').TaskOperation;
       requestedTaskIntent?: import('./turnRuntime.js').TurnTaskIntent;
       requestedContinueTask?: boolean;
       task_id?:string;
@@ -250,6 +252,7 @@ export function startTurn(
     submissionIndex?: number;
     continuedTask?: boolean;
     requestedOperation?: import('../config/chatTaskClass.js').RequestedTaskOperation;
+    objectiveOperation?: import('../config/chatTaskClass.js').TaskOperation;
     requestedTaskIntent?: import('./turnRuntime.js').TurnTaskIntent;
     requestedContinueTask?: boolean;
     task_id?:string;
@@ -280,6 +283,7 @@ export function startTurn(
     ...(input.submissionIndex !== undefined ? { submissionIndex: input.submissionIndex } : {}),
     ...(input.continuedTask !== undefined ? { continuedTask: input.continuedTask } : {}),
     ...(input.requestedOperation !== undefined ? { requestedOperation: input.requestedOperation } : {}),
+    ...(input.objectiveOperation !== undefined ? { objectiveOperation: input.objectiveOperation } : {}),
     ...(input.requestedTaskIntent !== undefined ? { requestedTaskIntent: input.requestedTaskIntent } : {}),
     ...(input.requestedContinueTask !== undefined ? { requestedContinueTask: input.requestedContinueTask } : {}),
     ...(input.task_id!==undefined?{task_id:input.task_id,contract_id:input.contract_id!,contract_hash:input.contract_hash!,attempt_id:input.attempt_id!}:{}),
@@ -431,8 +435,8 @@ export function rebuildProviderMessagesFromEvents(
   options: {
     systemPrompt?: string;
     upToSeq?: number;
-    /** Production reconstruction must name the durably installed context root. */
-    installedContextCheckpoint?: ContextCheckpoint;
+    /** null means no installed root; omission preserves legacy reconstruction. */
+    installedContextCheckpoint?: ContextCheckpoint | null;
   } = {},
 ): ProviderMessage[] {
   const events =
@@ -483,15 +487,24 @@ export function rebuildProviderMessagesFromEvents(
   // New logs carry the summary as a sibling advisory event. Legacy logs may
   // contain the old combined marker; split it into assistant context so old
   // model text is never re-promoted to system authority on resume.
-  const summaryEvent = events
-    .slice(lastCapsuleIdx + 1)
-    .find((event): event is Extract<ThreadEvent, { kind: 'compaction_summary' }> =>
-      event.kind === 'compaction_summary' &&
-      (lastCapsuleIdx >= 0
-        ? event.ownership_generation === undefined ||
-          event.ownership_generation === lastCapsuleEvent?.ownership_generation
-        : event.ownership_generation === currentOwnershipGeneration),
-    );
+  let summaryEvent: Extract<ThreadEvent, { kind: 'compaction_summary' }> | undefined;
+  if (options.installedContextCheckpoint !== undefined) {
+    const sibling = events[lastCapsuleIdx + 1];
+    if (lastCapsuleEvent && sibling?.kind === 'compaction_summary' &&
+        sibling.turn_id === lastCapsuleEvent.turn_id &&
+        sibling.ownership_generation === lastCapsuleEvent.ownership_generation) {
+      summaryEvent = sibling;
+    }
+  } else {
+    summaryEvent = events.slice(lastCapsuleIdx + 1)
+      .find((event): event is Extract<ThreadEvent, { kind: 'compaction_summary' }> =>
+        event.kind === 'compaction_summary' &&
+        (lastCapsuleIdx >= 0
+          ? event.ownership_generation === undefined ||
+            event.ownership_generation === lastCapsuleEvent?.ownership_generation
+          : event.ownership_generation === currentOwnershipGeneration),
+      );
+  }
   if (summaryEvent) {
     summaryContent = summaryEvent.content;
   } else if (capsuleContent?.includes('\n\n--- compaction_summary ---\n')) {
@@ -630,8 +643,9 @@ function isCurrentCompactionGeneration(
   event: Extract<ThreadEvent, { kind: 'compaction_capsule' }>,
   currentOwnershipGeneration: number,
   currentOwnerTurnId: string | undefined,
-  installedContextCheckpoint?: ContextCheckpoint,
+  installedContextCheckpoint?: ContextCheckpoint | null,
 ): boolean {
+  if (installedContextCheckpoint === null) return false;
   if (installedContextCheckpoint !== undefined) {
     const lineage = installedContextCheckpoint.installed_lineage;
     if (!lineage || lineage.checkpoint_id !== installedContextCheckpoint.checkpointId) return false;
@@ -963,6 +977,7 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
       requireOptionalInteger(event, 'submissionIndex', context);
       requireOptionalBoolean(event, 'continuedTask', context);
       if(event['requestedOperation']!==undefined&&!['AUTO','READ_ONLY','CHANGE'].includes(event['requestedOperation'] as string))throw new Error(`${context} has invalid requestedOperation`);
+      if(event['objectiveOperation']!==undefined&&!['READ_ONLY','MUTATING','HYBRID'].includes(event['objectiveOperation'] as string))throw new Error(`${context} has invalid objectiveOperation`);
       if(event['requestedTaskIntent']!==undefined&&!['execute','explain'].includes(event['requestedTaskIntent'] as string))throw new Error(`${context} has invalid requestedTaskIntent`);
       requireOptionalBoolean(event, 'requestedContinueTask', context);
       requireOptionalInteger(event, 'ownership_generation', context);

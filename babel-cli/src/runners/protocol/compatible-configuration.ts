@@ -3,9 +3,13 @@ import { resolveProviderCredential } from '../credentialHub.js';
 import type { ProviderId } from '../providerRegistry.js';
 import type { ResolvedExecutionEnvelope } from '../../intelligence/types.js';
 
-const _rawTokens = Number(process.env['BABEL_PROVIDER_TOKENS'] ?? process.env['BABEL_DEEPINFRA_TOKENS'] ?? '32000');
+const defaultMaxTokens = 32_000;
 
-const MAX_TOKENS = Number.isFinite(_rawTokens) && _rawTokens > 0 ? _rawTokens : 32000;
+function positiveTokenLimit(value: number | undefined): number | null {
+  if (value === undefined) return null;
+  const tokens = Math.floor(value);
+  return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : null;
+}
 
 export class CompatibleConfiguration {
   protected readonly apiKey: string;
@@ -14,6 +18,7 @@ export class CompatibleConfiguration {
   protected readonly contextWindowTokens: number | undefined;
   protected readonly executionEnvelope: ResolvedExecutionEnvelope | undefined;
   protected readonly maxTokens: number | null;
+  protected readonly requestedOutputBudget: number | null;
   protected readonly temperature: number;
   /** Explicit caller environment; process-wide offline authority still applies. */
   protected readonly transportEnvironment: NodeJS.ProcessEnv | undefined;
@@ -60,11 +65,14 @@ export class CompatibleConfiguration {
       ...(credential.env ? { env: credential.env } : {}),
     }) ?? '';
     this.model = model;
+    const env = credential.env ?? process.env;
+    this.requestedOutputBudget = this.executionEnvelope
+      ? this.executionEnvelope.output.requested ?? null
+      : positiveTokenLimit(sampling.maxTokens)
+        ?? positiveTokenLimit(Number(env['BABEL_PROVIDER_TOKENS'] ?? env['BABEL_DEEPINFRA_TOKENS']));
     this.maxTokens = this.executionEnvelope
       ? this.executionEnvelope.output.effective ?? null
-      : typeof sampling.maxTokens === 'number' && Number.isFinite(sampling.maxTokens) && sampling.maxTokens > 0
-        ? Math.floor(sampling.maxTokens)
-        : MAX_TOKENS;
+      : this.requestedOutputBudget ?? defaultMaxTokens;
     this.temperature =
       typeof sampling.temperature === 'number' && Number.isFinite(sampling.temperature)
         ? sampling.temperature

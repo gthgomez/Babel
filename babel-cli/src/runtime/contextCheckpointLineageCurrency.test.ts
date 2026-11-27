@@ -698,13 +698,12 @@ test('production hydrate: a stale historical checkpoint A fails validation after
   await withRunsDir(async () => {
     const threadId = 'r1-task4-stale-lineage-hydrate';
     const projectRoot = makeProjectRoot();
+    let engine1: ChatEngine | undefined;
     try {
       const dir = chatSessionDir(threadId);
       mkdirSync(dir, { recursive: true });
-      persistLiveSessionAuthority(
-        dir,
-        resolveLiveSessionAuthority({ mode: 'chat', projectRoot, task: 'task 4 currency fixture' }),
-      );
+      const authority = resolveLiveSessionAuthority({ mode: 'chat', projectRoot, task: 'task 4 currency fixture' });
+      persistLiveSessionAuthority(dir, authority);
 
       // Durable generation A: turn + capsule A committed (real commit path).
       const threadLog = createThreadEventLog(threadId);
@@ -726,7 +725,7 @@ test('production hydrate: a stale historical checkpoint A fails validation after
       // Phase 1: restore (no checkpoint yet) and admit the durable owner of
       // record through the real production seam.
       const store = requireStore(threadId);
-      const engine1 = await ChatEngine.restore(threadId, { model: 'deepseek-v4-flash-openrouter',
+      engine1 = await ChatEngine.restore(threadId, { model: 'deepseek-v4-flash-openrouter',
         task: 'task 4 currency fixture',
         projectRoot,
         admissionStore: store,
@@ -742,7 +741,13 @@ test('production hydrate: a stale historical checkpoint A fails validation after
 
       // Install checkpoint A (lineage naming commit A) while A is current.
       // Empty observation membership: this fixture isolates the lineage rule.
-      const emptySources: LiveOperationalSourcesV1 = { ...sources(), observations: [], observation_manifest: [] };
+      const existing = sources();
+      const emptySources: LiveOperationalSourcesV1 = {
+        ...existing,
+        task_contract: { ...existing.task_contract!, contract_hash: authority.taskContract.contract_hash },
+        observations: [],
+        observation_manifest: [],
+      };
       const cpA = buildCheckpoint(
         'cp-stale-a',
         owner,
@@ -798,10 +803,31 @@ test('production hydrate: a stale historical checkpoint A fails validation after
         });
         assert.equal(capsuleShown(msgs, 'BETA_MARKER'), true, 'committed B is the context root');
         assert.equal(capsuleShown(msgs, 'ALPHA_MARKER'), false, 'stale A must not suppress B');
+
+        // A thread-only candidate has no session-side commit. The production
+        // projection must not elevate it while the installed root is absent.
+        appendThreadEvent(parity.eventLog, {
+          kind: 'compaction_capsule',
+          turn_id: turnB,
+          content: 'UNCOMMITTED_MARKER thread-only capsule',
+          preserved_tool_call_ids: [],
+        });
+        appendThreadEvent(parity.eventLog, {
+          kind: 'compaction_summary',
+          turn_id: turnB,
+          content: 'UNCOMMITTED_MARKER thread-only summary',
+          provenance: 'model',
+          authoritative: false,
+          ownership_generation: owner.generation,
+        });
+        const productionMessages = engine2.getProviderConversation();
+        assert.equal(capsuleShown(productionMessages, 'UNCOMMITTED_MARKER'), false);
+        assert.equal(productionMessages.some(message => message.name === 'compaction_summary'), false);
       } finally {
         engine2.closeAdmissionStore();
       }
     } finally {
+      engine1?.closeAdmissionStore();
       rmSync(projectRoot, { recursive: true, force: true });
     }
   });

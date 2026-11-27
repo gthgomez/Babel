@@ -248,7 +248,7 @@ test('exact GLM synthesis dispatch stays on the locked OpenRouter model', async 
     return new Response(
       JSON.stringify({
         model: 'z-ai/glm-5.3-flash',
-        choices: [{ message: { content: 'synthesis complete' } }],
+        choices: [{ message: { content: 'synthesis complete' }, finish_reason: 'stop' }],
       }),
       { status: 200 },
     );

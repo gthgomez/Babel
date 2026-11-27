@@ -4,6 +4,7 @@ import { z } from 'zod'
 
 import { createProviderRunner } from './providerEngine.js'
 import { OpenCodeGoError } from './openCodeGoApi.js'
+import { OpenCodeGoBudgetError } from './openCodeGoBudget.js'
 
 const schema = z.object({ ok: z.boolean() })
 
@@ -30,7 +31,7 @@ test('ProviderEngine keeps OpenAI model and sampling controls in its protocol bo
   let body: Record<string, unknown> = {}
   globalThis.fetch = (async (_input, init) => {
     body = JSON.parse(String(init?.body)) as Record<string, unknown>
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), {
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }] }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     })
@@ -123,12 +124,16 @@ test('ProviderEngine registers explicit OpenCode Go with exact model selection',
 
 test('ProviderEngine fails closed for unknown and substituted benchmark models', async (t) => {
   assert.throws(
-    () => createProviderRunner({ provider: 'opencode-go', modelId: 'glm-5.3-flash', credentialSource: 'explicit-test', explicitCredential: 'synthetic-go-key' }),
+    () => createProviderRunner({ provider: 'opencode-go', modelId: 'unsupported-fixture-model', credentialSource: 'explicit-test', explicitCredential: 'synthetic-go-key' }),
     (error: unknown) => error instanceof OpenCodeGoError && error.code === 'MODEL_UNAVAILABLE',
+  )
+  assert.throws(
+    () => createProviderRunner({ provider: 'opencode-go', modelId: 'glm-5.3-flash', credentialSource: 'explicit-test', explicitCredential: 'synthetic-go-key' }),
+    (error: unknown) => error instanceof OpenCodeGoBudgetError && error.code === 'GO_BUDGET_DENIED',
   )
   const priorFetch = globalThis.fetch
   t.after(() => { globalThis.fetch = priorFetch })
-  globalThis.fetch = (async () => new Response(JSON.stringify({ model: 'longcat-2.0', choices: [{ message: { content: '{"ok":true}' } }] }), { status: 200 })) as typeof fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({ model: 'longcat-2.0', choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }] }), { status: 200 })) as typeof fetch
   const runner = createProviderRunner({ provider: 'opencode-go', modelId: 'mimo-v2.5', credentialSource: 'explicit-test', explicitCredential: 'synthetic-go-key' })
   await assert.rejects(runner.execute('probe', schema), (error: unknown) => error instanceof OpenCodeGoError && error.code === 'MODEL_ATTRIBUTION_FAILURE')
 })

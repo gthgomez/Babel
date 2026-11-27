@@ -22,10 +22,9 @@ export class ComposerQueue {
 
   /** Returns false when the queue is at capacity. */
   enqueue(text: string): boolean {
-    const trimmed = text.trim();
-    if (!trimmed) return false;
+    if (!text.trim()) return false;
     if (this.items.length >= this.maxDepth) return false;
-    this.items.push(trimmed);
+    this.items.push(text);
     return true;
   }
 

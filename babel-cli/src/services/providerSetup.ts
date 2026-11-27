@@ -183,7 +183,7 @@ export async function runProviderSetup(options: {
       }
       return {
         connections: { [id]: updated },
-        defaults: { connection: id, model, budgetUsd: budget, modelsByConnection: { ...latest.defaults?.modelsByConnection, [id]: model } },
+        defaults: { connection: id, model, budgetUsd: budget, modelsByConnection: { [id]: model } },
         setup: { completed: true, step: 'complete', connection: id },
       }
     }
