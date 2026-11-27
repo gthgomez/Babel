@@ -29,6 +29,8 @@ export interface CanaryTaskSpec {
 }
 
 export interface CanaryTrialResult {
+  /** False-completion probes are retained but excluded from ordinary rates. */
+  ordinary_eligible?: boolean;
   /** Legacy hidden_ok=false sentinels are not observed oracle failures. */
   grading_status?: 'complete' | 'not_run' | 'unknown';
   false_completion_assessment?: 'confirmed' | 'not_observed' | 'unknown';
@@ -98,9 +100,13 @@ export interface CanaryReport {
   /** All scheduled rows, including preflight refusals; legacy qualified rates remain separate. */
   attempt_accounting?: {
     scheduled: number;
+    /** All retained rows, including negative controls excluded from ordinary rates. */
+    scheduled_all?: number;
+    negative_controls?: number;
     /** Valid (non-invalid_task) scheduled rows. */
     scheduled_valid?: number;
     launched: number;
+    launched_all?: number;
     /** Valid scheduled rows with launch_status launched. */
     launched_valid?: number;
     not_launched: number;
@@ -119,5 +125,11 @@ export interface CanaryReport {
     cost_complete: boolean;
     known_cost_usd: number | null;
     cost_per_success_usd: number | null;
+  };
+  controls?: {
+    negative_controls: number;
+    negative_control_failures: number;
+    negative_control_false_completions: number;
+    negative_control_unknown: number;
   };
 }

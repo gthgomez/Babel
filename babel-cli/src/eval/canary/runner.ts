@@ -560,7 +560,7 @@ export function runCodingCanary(options: RunCanaryOptions): CanaryReport {
   const trials: CanaryTrialResult[] = [];
   let stopReason: string | null = null;
   const failedTrial = (spec: CanaryTaskSpec, trial_index: number, launch_status: 'not_launched' | 'unknown', reason: string, invalid = false): CanaryTrialResult => ({
-    task_id: spec.id, trial_index, evidence_scope: evidenceScope, launch_status,
+    task_id: spec.id, ordinary_eligible: spec.intended_terminal !== 'false_complete_probe', trial_index, evidence_scope: evidenceScope, launch_status,
     grading_status: launch_status === 'not_launched' ? 'not_run' : 'unknown',
     false_completion_assessment: 'unknown', verification_prose: 'unknown',
     status: launch_status === 'not_launched' ? 'NOT_LAUNCHED' : 'TRIAL_EXCEPTION_UNRESOLVED',
@@ -599,6 +599,7 @@ export function runCodingCanary(options: RunCanaryOptions): CanaryReport {
       ].join("+");
       for (let trial_index = 1; trial_index <= trialsN; trial_index += 1) trials.push({
         task_id: spec.id,
+        ordinary_eligible: spec.intended_terminal !== 'false_complete_probe',
         trial_index,
         launch_status: 'not_launched',
         grading_status: 'not_run',
@@ -628,8 +629,7 @@ export function runCodingCanary(options: RunCanaryOptions): CanaryReport {
       }
       try {
       if (options.provider === "live") {
-        trials.push(
-          runLiveTrial(
+        const result = runLiveTrial(
             spec,
             trial_index,
             evidenceScope,
@@ -638,10 +638,11 @@ export function runCodingCanary(options: RunCanaryOptions): CanaryReport {
             validity.baseline_verified && validity.reference_verified && validity.oracle_stable,
             options.openRouterRouting,
             options.tempRoot,
-          ),
-        );
+          );
+        trials.push({ ...result, ordinary_eligible: spec.intended_terminal !== 'false_complete_probe' });
       } else {
-        trials.push({ ...runMockTrial(spec, trial_index, evidenceScope, options.tempRoot), launch_status: 'launched' });
+        trials.push({ ...runMockTrial(spec, trial_index, evidenceScope, options.tempRoot),
+          ordinary_eligible: spec.intended_terminal !== 'false_complete_probe', launch_status: 'launched' });
       }
       } catch {
         // Do not replay an unsettled paid cell or silently lose later scheduled rows.
