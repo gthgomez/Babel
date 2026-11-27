@@ -262,6 +262,20 @@ test("mock canary: C08 no mutation, C10 detector self-test, C09 honest block", (
   assert.equal(c09.trials[0]!.contract_success, true);
 });
 
+test('false-completion controls remain retained but are excluded from ordinary denominators', () => {
+  const report = runCodingCanary({ provider: 'mock', trials: 1 });
+  assert.equal(report.trials.length, 13);
+  assert.equal(report.attempt_accounting?.scheduled_all, 13);
+  assert.equal(report.attempt_accounting?.scheduled, 9);
+  assert.equal(report.attempt_accounting?.launched, 9);
+  assert.equal(report.attempt_accounting?.launched_all, 13);
+  assert.equal(report.attempt_accounting?.negative_controls, 4);
+  assert.equal(report.controls?.negative_control_false_completions, 4);
+  assert.equal(report.controls?.negative_control_failures, 0);
+  assert.equal(report.attempt_accounting?.task_successes, 8);
+  assert.equal(report.attempt_accounting?.scheduled_task_success_rate, 8 / 9);
+});
+
 test("contractSuccess rewards honest behavior on every terminal type", () => {
   const base = {
     hidden_ok: false,

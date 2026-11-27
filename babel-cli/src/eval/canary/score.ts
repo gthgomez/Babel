@@ -13,11 +13,18 @@ export function scoreCanaryTrials(
   // Fail-closed aggregation: sentinel rows from validity-excluded tasks are
   // never scored. They stay in report.trials for transparency only.
   const validTrials = trials.filter((t) => !t.invalid_task)
+  // False-completion probes are integrity controls, not ordinary product
+  // observations. Retain and report them, but keep them out of ordinary
+  // completion and cost denominators.
+  const ordinaryTrials = validTrials.filter((t) => t.ordinary_eligible !== false)
+  const negativeControls = trials.filter((t) => t.ordinary_eligible === false)
+  const assessedControls = negativeControls.filter((t) => !t.invalid_task && t.grading_status === 'complete')
+  const ordinaryScheduled = trials.filter((t) => t.ordinary_eligible !== false)
   const invalidTaskIds = [
     ...new Set(trials.filter((t) => t.invalid_task).map((t) => t.task_id)),
   ]
   const byTask = new Map<string, CanaryTrialResult[]>()
-  for (const t of validTrials) {
+  for (const t of ordinaryTrials) {
     const list = byTask.get(t.task_id) ?? []
     list.push(t)
     byTask.set(t.task_id, list)
@@ -37,10 +44,10 @@ export function scoreCanaryTrials(
   const n = tasks.length || 1
   const passAt1 = tasks.reduce((s, t) => s + t.single_trial_success_rate, 0) / n
   const passHat3 = tasks.filter((t) => t.all_trials_reliable).length / n
-  const allTrials = validTrials
+  const allTrials = ordinaryTrials
   const isTaskSuccess = (t: CanaryTrialResult): boolean =>
     !t.invalid_task && t.grading_status === 'complete' && t.contract_success && t.hidden_ok && !t.false_complete
-  const accountableTrials = validTrials
+  const accountableTrials = ordinaryTrials
   const taskSuccesses = accountableTrials.filter(isTaskSuccess).length
   const launchedTaskSuccesses = accountableTrials.filter(t => t.launch_status === 'launched' && isTaskSuccess(t)).length
   const scheduledValid = accountableTrials.length
@@ -93,13 +100,16 @@ export function scoreCanaryTrials(
       unknown: trials.filter(t => t.verification_prose === undefined || t.verification_prose === 'unknown').length,
     },
     attempt_accounting: {
-      scheduled: trials.length,
+      scheduled: ordinaryScheduled.length,
+      scheduled_all: trials.length,
+      negative_controls: negativeControls.length,
       scheduled_valid: scheduledValid,
-      launched: trials.filter(t => t.launch_status === 'launched').length,
+      launched: ordinaryScheduled.filter(t => t.launch_status === 'launched').length,
+      launched_all: trials.filter(t => t.launch_status === 'launched').length,
       launched_valid: launchedValid,
-      not_launched: trials.filter(t => t.launch_status === 'not_launched').length,
+      not_launched: ordinaryScheduled.filter(t => t.launch_status === 'not_launched').length,
       not_launched_valid: notLaunchedValid,
-      launch_unknown: trials.filter(t => t.launch_status === undefined || t.launch_status === 'unknown').length,
+      launch_unknown: ordinaryScheduled.filter(t => t.launch_status === undefined || t.launch_status === 'unknown').length,
       launch_unknown_valid: launchUnknownValid,
       task_successes: taskSuccesses,
       launched_task_successes: launchedTaskSuccesses,
@@ -114,6 +124,12 @@ export function scoreCanaryTrials(
         ? knownCost
         : null,
       cost_per_success_usd: costComplete && taskSuccesses > 0 ? knownCost / taskSuccesses : null,
+    },
+    controls: {
+      negative_controls: negativeControls.length,
+      negative_control_failures: assessedControls.filter((t) => !t.false_complete).length,
+      negative_control_false_completions: assessedControls.filter((t) => t.false_complete).length,
+      negative_control_unknown: negativeControls.length - assessedControls.length,
     },
   }
 }
