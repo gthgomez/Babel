@@ -276,7 +276,7 @@ export async function executeSubAgentAction(
   // Continuation can reach this boundary before rebuilding its planner state.
   // Reuse the parent journal's outcome before allocating another child attempt.
   const parentIdempotencyKey = meta.idempotencyKey;
-  const retained = parentIdempotencyKey && host.parity.sessionEvents.events.findLast(event =>
+  const retained = parentIdempotencyKey && [...host.parity.sessionEvents.events].reverse().find(event =>
     (event.kind === 'tool_completed' || event.kind === 'tool_failed' || event.kind === 'tool_cancelled') &&
     event.idempotency_key === parentIdempotencyKey);
   if (retained) {
