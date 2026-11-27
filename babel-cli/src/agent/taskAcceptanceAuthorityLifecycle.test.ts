@@ -46,7 +46,7 @@ const refreshContext = (runtime: ReturnType<typeof createParityRuntime>, root: s
   engineRunDir: root,
 })
 
-test('refresh retains frozen v1 acceptance while the builder alone would emit v4', () => {
+test('refresh retains frozen v1 acceptance while the builder alone would emit v5', () => {
   const root = mkdtempSync(join(tmpdir(), 'babel-acceptance-lifecycle-'))
   const task = 'Fix it'
   try {
@@ -59,8 +59,8 @@ test('refresh retains frozen v1 acceptance while the builder alone would emit v4
     const resolved = prepareEngineInstructionAuthority(refreshContext(runtime, root, task))
     assert.equal(
       requireAcceptanceMeaningVersion(resolved.taskContract.provenance.records, resolved.taskContract),
-      4,
-      'resolveLiveSessionAuthority is a fresh v4 builder; its contract is not adopted on refresh',
+      5,
+      'resolveLiveSessionAuthority is a fresh v5 builder; its contract is not adopted on refresh',
     )
 
     refreshEngineInstructionManifest(refreshContext(runtime, root, task))
