@@ -260,7 +260,7 @@ export function acceptanceCriterionPoint(criterion: AcceptanceRequirementV1) {
  * the entire remaining positive-success clause. A neighboring green command
  * or a phrase that merely mentions a test never creates this link.
  */
-function explicitCriterionVerifierLink(
+export function explicitCriterionVerifierLink(
   criterion: AcceptanceRequirementV1,
 ): ExplicitCriterionVerifierLink | null {
   const markers = [...criterion.description.matchAll(/[.;]\s+verified by:\s*/gi)]
@@ -689,7 +689,7 @@ function explicitVerifierObservesStatedResult(input: {
   })
 }
 
-function bindRelevanceWitness(
+export function bindRelevanceWitness(
   criterion: AcceptanceRequirementV1,
   command: string,
   defaultWorkingDirectory?: string,

@@ -768,6 +768,7 @@ export function recordVerifierAttempt(
     exit_code?: number;
     tool_call_id?: string;
     receipt?: BoundChatVerifierReceipt;
+    point_execution?: { targets: string[]; digest: string };
     failed_execution?: import('./codingLoop/failedVerifierExecution.js').SettledFailedVerifierExecution;
   },
 ): SessionEvent {
@@ -779,6 +780,7 @@ export function recordVerifierAttempt(
     ...(input.exit_code !== undefined ? { exit_code: input.exit_code } : {}),
     ...(input.tool_call_id !== undefined ? { tool_call_id: input.tool_call_id } : {}),
     ...(input.receipt !== undefined ? { receipt: structuredClone(input.receipt) } : {}),
+    ...(input.point_execution !== undefined ? { point_execution: structuredClone(input.point_execution) } : {}),
     ...(input.failed_execution !== undefined ? { failed_execution: structuredClone(input.failed_execution) } : {}),
   });
 }

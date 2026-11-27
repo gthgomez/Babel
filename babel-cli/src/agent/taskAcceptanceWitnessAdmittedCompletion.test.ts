@@ -13,9 +13,9 @@ import {
   createCriterionCompletionServiceV1,
   evaluateCriterionCompletionV1,
 } from '../authority/criterionCompletion.js'
-import { captureChatVerifierReceipt, captureAndRecordVerifierReceipt, captureCompletionWorkspaceRevisionHash, prepareKernelVerifierInput, resolveVerifierCacheIdentity, verifierEnvironmentKey } from './chatEngineVerifierAdapter.js'
+import { captureChatVerifierReceipt, captureAndRecordVerifierReceipt, captureCompletionWorkspaceRevisionHash, prepareKernelVerifierInput, resolveVerifierCacheIdentity, restorePersistedVerifierEvidence, verifierEnvironmentKey } from './chatEngineVerifierAdapter.js'
 import { chatVerifierOwner, chatVerifierRequirements } from './chatVerifierContext.js'
-import { createSessionEventLog } from './sessionEvents.js'
+import { createSessionEventLog, parseSessionEventLog, serializeSessionEventLog } from './sessionEvents.js'
 import { createExecutorKernel } from '../executor/kernel.js'
 import {
   resolveGovernedCriterionCandidateRevisionSha,
@@ -770,15 +770,15 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
   const exitCode = policy.results[0]?.exit_code ?? 1
   assert.equal(exitCode, 0, stdout)
   assert.match(stdout, /pass 2/)
-  const targets = [...new Set(contract.acceptance.map(requirement => {
+  const witnesses = [...new Map(contract.acceptance.map(requirement => {
     const point = acceptanceCriterionPoint(requirement)
     assert.ok(point)
     const witness = pointVerifierWitness(root, command, point, {})
     assert.ok(witness)
     assert.ok(nodePointExecuted(stdout, witness), stdout)
-    return witness.target
-  }))]
-  assert.equal(targets.length, 2)
+    return [witness.target, witness] as const
+  })).values()]
+  assert.equal(witnesses.length, 2)
   const cacheIdentity = resolveVerifierCacheIdentity({
     projectRoot: root, command, envKey: verifierEnvironmentKey(env),
   })
@@ -787,14 +787,29 @@ test('a task-authored exact verifier link admits only the matching behavioral ev
     stderr: policy.results[0]?.stderr ?? '', mutationPaths: [mutationPath],
     sessionEvents, turnId: runId, ledger: [], cache: new Map(), writeCount: 1,
     cacheIdentity, verifierOwner, executionBackend: 'host-process',
-    verifiedPointTargets: targets,
+    pointWitnesses: witnesses,
   })
   assert.ok(receipt)
   assert.equal(receipt.tests_total, 2)
   assert.equal(sessionEvents.events.filter(event => event.kind === 'verifier_attempt').length, 1)
   const candidate = candidateShaFromReceipt(root, receipt)
+  const persisted = parseSessionEventLog(serializeSessionEventLog(sessionEvents))
+  const restored = restorePersistedVerifierEvidence(persisted, [], verifierOwner)
+  assert.deepEqual(restored, JSON.parse(JSON.stringify(receipt)))
+  const event = persisted.events.find(row => row.kind === 'verifier_attempt')
+  assert.ok(event?.receipt)
+  const proof = event.point_execution
+  assert.ok(proof)
+  event.receipt.additionalPointTargets = [witnesses[1]!.target]
+  delete event.point_execution
+  const uncorroborated = restorePersistedVerifierEvidence(persisted, [], verifierOwner)
+  assert.deepEqual(retainCurrentPointReceipts([uncorroborated!]).map(entry => entry.target), [undefined])
+  event.point_execution = { ...proof, targets: [...proof.targets].reverse() }
+  const altered = restorePersistedVerifierEvidence(persisted, [], verifierOwner)
+  assert.equal(altered?.target, undefined)
+  assert.equal(altered?.additionalPointTargets, undefined)
   service.refreshPrivateEvidence({
-    proof: { compliant: true }, receipts: retainCurrentPointReceipts([receipt]), candidate_sha: candidate, has_mutation: true,
+    proof: { compliant: true }, receipts: retainCurrentPointReceipts([restored!]), candidate_sha: candidate, has_mutation: true,
   })
   const result = evaluateCriterionCompletionV1(request)
   assert.equal(result.verified, true, JSON.stringify(result))

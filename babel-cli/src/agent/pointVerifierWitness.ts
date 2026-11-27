@@ -1,6 +1,6 @@
 import { parse, type AnyNode, type CallExpression, type ImportDeclaration } from 'acorn'
 import { existsSync, lstatSync } from 'node:fs'
-import { join, posix } from 'node:path'
+import { join, posix, relative } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
 import { discoverVerifierInputClosure } from '../evidence/revisionBoundReceipt.js'
 import type { BoundChatVerifierReceipt } from '../evidence/chatRevisionBinding.js'
@@ -32,12 +32,51 @@ function strictTestCommand(projectRoot: string, command: string, fs: VerifierCom
 const LEGACY_POINT_TARGET_PREFIX = 'node-test-point:v1:'
 export const POINT_TARGET_PREFIX = 'node-test-point:v2:'
 
+export function pointVerifierInputRefPrefix(command: string): string {
+  return `babel:point-verifier-inputs:v1:${sha256Canonical(command.trim())}:`
+}
+
+/** Freeze protected Node test inputs and let admission prove a case against those same bytes. */
+export function snapshotPointVerifierInputs(
+  root: string, command: string, protectedPaths: ReadonlySet<string>,
+): { ref: string; fs: VerifierCommandInputOverrides } | undefined {
+  const contents = new Map<string, string | null>()
+  const fs: VerifierCommandInputOverrides = { readFile: absolute => {
+    if (!contents.has(absolute)) {
+      const path = relative(root, absolute).replaceAll('\\', '/')
+      let content: string | null = null
+      if (protectedPaths.has(path)) {
+        try {
+          const stat = lstatSync(absolute)
+          if (stat.isFile() && stat.size <= 256_000) content = readVerifierCommandInput(root, path)
+        } catch { /* An unproved input cannot establish a binding. */ }
+      }
+      contents.set(absolute, content)
+    }
+    return contents.get(absolute) ?? null
+  } }
+  const entry = strictTestCommand(root, command, fs)
+  if (!entry) return
+  const parsed = parseStructuredVerifierCommand(entry)
+  if (!parsed || parsed.executable !== 'node' || parsed.args.length !== 2 || parsed.args[0] !== '--test') return
+  const testPath = parsed.args[1]!.replace(/^\.\//, '')
+  if (!verifierCommandInputFiles(root, entry).includes(testPath)) return
+  const paths = (command !== entry || protectedPaths.has('package.json')) ? [testPath, 'package.json'] : [testPath]
+  const inputs: Record<string, string> = {}
+  for (const path of paths) {
+    const content = readVerifierCommandInput(root, path, fs)
+    if (content === null || content.length > 256_000) return
+    inputs[path] = sha256Canonical(content)
+  }
+  return { ref: pointVerifierInputRefPrefix(command) + sha256Canonical(inputs), fs }
+}
+
 /** Retained objectives keep their original point identity until resubmitted. */
 export function isLegacyPointTarget(target: string | undefined): boolean {
   return target?.startsWith(LEGACY_POINT_TARGET_PREFIX) ?? false
 }
 
-interface PointVerifierWitness {
+export interface PointVerifierWitness {
   target: string
   entry: string
   npmScript: boolean

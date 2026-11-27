@@ -117,7 +117,7 @@ export function assertCanonicalAcceptanceAmendments(
     try {
       if (requireAcceptanceMeaningVersion(current.provenance.records, current) !== predecessorVersion) fail()
     } catch { fail() }
-    const replay = projectTaskAcceptanceRevision(previous, started.task, descriptor.kind, descriptor.schema_version)
+    const replay = projectTaskAcceptanceRevision(previous, started.task, descriptor.kind, descriptor.schema_version, descriptor.point_bindings)
     if (replay.unresolved || sha256Canonical(replay.added) !== sha256Canonical(descriptor.added_acceptance) ||
       sha256Canonical(replay.meaningSources) !== sha256Canonical(descriptor.meaning_sources) ||
       sha256Canonical(replay.operationRefs) !== sha256Canonical(descriptor.requested_execution_refs ?? [])) fail()

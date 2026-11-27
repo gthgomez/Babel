@@ -328,6 +328,8 @@ export type SessionEvent =
       tool_call_id?: string;
       /** Durable revision-bound receipt used to reconstruct verifier state. */
       receipt?: BoundChatVerifierReceipt;
+      /** Host-observed point cases bound to this physical attempt. */
+      point_execution?: { targets: string[]; digest: string };
       failed_execution?: import('./codingLoop/failedVerifierExecution.js').SettledFailedVerifierExecution;
     })
   | (SessionEventBase & {

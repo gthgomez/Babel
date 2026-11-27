@@ -26,6 +26,7 @@ import {
   relevanceBoundVerifierCommands,
   relevanceBoundVerifierInputFiles,
 } from './taskAcceptanceExecutableBinding.js';
+import { snapshotPointVerifierInputs } from './pointVerifierWitness.js';
 import { designatedWitnessProtectedInputs, existingNodeVerifierInputFiles } from './taskAcceptanceProtectedInputs.js';
 import {
   computePublicApiSurface,
@@ -390,6 +391,12 @@ export function resolveLiveSessionAuthority(input: {
     ...(input.verifierRequirements ?? []),
     ...relevanceBoundVerifierCommands(meaning),
   ])].filter(command => !taskProhibitsCommand(meaning.activeProse, command));
+  const amendmentInputRecords = input.projectRoot && scope.kind === 'project'
+    ? requiredVerifierCommands.flatMap(command => {
+        const ref = snapshotPointVerifierInputs(input.projectRoot!, command, protectedPaths)?.ref;
+        return ref ? [{ kind: 'derived_acceptance' as const, ref }] : [];
+      })
+    : [];
   // Only fresh project contracts acquire these criteria. Retained contracts
   // are loaded and continued with their original hashed acceptance rows.
   const requestedExecution = scope.kind === 'project'
@@ -425,6 +432,7 @@ export function resolveLiveSessionAuthority(input: {
       ...meaning.provenance,
       ...requestedExecution.provenance,
       ...publicApiRecords,
+      ...amendmentInputRecords,
       ...(input.objectiveLifecycle ? [{kind:'risk_analysis' as const,ref:OBJECTIVE_LIFECYCLE_REF}] : []),
     ],
     }),

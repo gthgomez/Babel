@@ -277,7 +277,7 @@ export function admitObjectiveSubmission(
   }
   if (preserve) acceptRevision(createTaskAcceptanceRevision(candidate.taskContract, {
     userInput: input.userInput, inputDigest, attemptId,
-  }))
+  }, 'add', options.projectRoot ?? undefined))
   const binding = {
     task_id: candidate.taskContract.task_id,
     contract_id: candidate.taskContract.contract_id,

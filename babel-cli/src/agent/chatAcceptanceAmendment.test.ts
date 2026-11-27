@@ -45,7 +45,7 @@ function appendLegacySubmission(engine: ChatEngine, runDir: string, text: string
   assert.equal(checkpointParityEventLogStrictSync(parity,runDir,{taskAllowance:engine.getTaskAllowanceSnapshot()!}).status,'committed')
 }
 
-async function fixture(body: (engine: ChatEngine, runDir: string, root: string) => void | Promise<void>, mode: 'chat' | 'plan' = 'chat', legacy = false, initialTask = request, requiredVerifierCommands: readonly string[] = []) {
+async function fixture(body: (engine: ChatEngine, runDir: string, root: string) => void | Promise<void>, mode: 'chat' | 'plan' = 'chat', legacy = false, initialTask = request, requiredVerifierCommands: readonly string[] = [], prepare?: (root: string) => void) {
   const root = mkdtempSync(join(tmpdir(), 'babel-acceptance-amendment-'))
   const previous = process.env['BABEL_RUNS_DIR']
   process.env['BABEL_RUNS_DIR'] = join(root, 'runs')
@@ -53,6 +53,7 @@ async function fixture(body: (engine: ChatEngine, runDir: string, root: string) 
     if (initialTask.includes('`npm test`')) {
       writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: 'node --test' } }))
     }
+    prepare?.(root)
     const engine = new ChatEngine({ model: 'deepseek-v4-flash-openrouter', task: initialTask, projectRoot: root, executionProfile: mode, requiredVerifierCommands })
     if(legacy){
       const authority=engine.getParityRuntime().liveAuthority!
@@ -146,6 +147,45 @@ test('historical verifier binding replays without widening current command dispa
       assert.equal(check.verification.executable_id, version < 4 ? 'npm' : undefined)
     }
   }, 'chat', false, request, ['npm test']))
+
+const frozenPointTests = [
+  'import test from "node:test"',
+  'import assert from "node:assert/strict"',
+  'import { add } from "./math.mjs"',
+  'test("sum", () => assert.equal(add(2, 3), 5))',
+].join('\n')
+const initialPointAmendmentTask = 'Fix the arithmetic module.\nRequirements:\n- `npm test` must pass.'
+const addFrozenPoint = 'Also require:\n- Fix math.mjs so add(2, 3) returns 5; verified by: `npm test` must pass.'
+function preparePointInputs(root: string) {
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: 'node --test math.test.mjs' } }))
+  writeFileSync(join(root, 'math.mjs'), 'export const add = (a, b) => a + b\n')
+  writeFileSync(join(root, 'math.test.mjs'), frozenPointTests)
+}
+
+test('an amended point binds the unchanged predecessor verifier and replays from the recorded witness', () =>
+  fixture((engine, runDir, root) => {
+    const previous = engine.getTaskContract()!
+    engine.admitUserSubmission({ userInput: addFrozenPoint }, route)
+    const current = engine.getTaskContract()!
+    const requirement = current.acceptance.at(-1)!
+    assert.equal(requirement.verification.verifier_id, 'verifier:npm')
+    assert.match(requirement.verification.target ?? '', /^node-test-point:v2:/)
+    assert.deepEqual(current.verifier_requirements, previous.verifier_requirements)
+    assert.deepEqual(current.protected_paths, previous.protected_paths)
+    assert.deepEqual(current.authority, previous.authority)
+    const event = engine.getParityEventLog().events.find(item => item.kind === 'task_acceptance_amended')
+    assert.equal(event?.descriptor.schema_version, 5)
+    // Replay must reconstruct authority without reading today's potentially changed test.
+    writeFileSync(join(root, 'math.test.mjs'), 'changed after admission\n')
+    assert.deepEqual(loadLiveSessionAuthorityStrict(runDir).taskContract.acceptance, current.acceptance)
+  }, 'chat', false, initialPointAmendmentTask, ['npm test'], preparePointInputs))
+
+test('an edited predecessor verifier cannot bind an amended point', () =>
+  fixture((engine, _runDir, root) => {
+    writeFileSync(join(root, 'math.test.mjs'), frozenPointTests.replace('"sum"', '"replaced sum"'))
+    engine.admitUserSubmission({ userInput: addFrozenPoint }, route)
+    assert.match(engine.getTaskContract()!.acceptance.at(-1)!.verification.verifier_id, /^meaning:/)
+  }, 'chat', false, initialPointAmendmentTask, ['npm test'], preparePointInputs))
 
 test('a requested operation amendment adds a source-linked effect without changing frozen policy', () => {
   const originalCommand = 'node tools/build-index.mjs'

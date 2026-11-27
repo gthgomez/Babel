@@ -6,6 +6,8 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
+import { sha256Canonical } from '../acceptance/canonical.js';
+import { nodePointExecuted, POINT_TARGET_PREFIX, type PointVerifierWitness } from './pointVerifierWitness.js';
 import { canonicalizeContained } from '../bridge/workspaceBound.js';
 import { isCredentialTargetPath } from './autonomyEnforcement.js';
 import { requireProjectRoot, type ChatScopeInput } from './chatExecutionScope.js';
@@ -287,6 +289,12 @@ export function upsertVerifierReceipt(
   else ledger.push(receipt);
 }
 
+function pointExecutionDigest(
+  receipt: BoundChatVerifierReceipt, targets: readonly string[], sessionId: string, turnId: string | null, seq: number, toolCallId?: string,
+): string {
+  return sha256Canonical({ receipt, targets, sessionId, turnId, seq, toolCallId: toolCallId ?? null });
+}
+
 /** Restore the durable verifier ledger and return its latest valid receipt. */
 export function restorePersistedVerifierEvidence(
   log: SessionEventLog,
@@ -302,7 +310,26 @@ export function restorePersistedVerifierEvidence(
       .every(value => typeof value === 'string' && value.trim().length > 0);
     if (owner && (event.session_id !== owner.sessionId || (knownOwner
       && (context.workspaceRoot !== owner.workspaceRoot || context.taskId !== owner.taskId || context.contractHash !== owner.contractHash)))) continue;
-    const restored = { ...event.receipt, order: { sessionId: event.session_id, seq: event.seq } };
+    const { additionalPointTargets: _untrustedProjection, ...recordedReceipt } = event.receipt;
+    const restored: BoundChatVerifierReceipt & { order: NonNullable<BoundChatVerifierReceipt['order']> } = {
+      ...recordedReceipt, order: { sessionId: event.session_id, seq: event.seq },
+    };
+    if (restored.target?.startsWith(POINT_TARGET_PREFIX)) {
+      const proof = event.point_execution;
+      const targets = proof?.targets;
+      try {
+        const verified = proof && event.exit_code === 0 && restored.exit_code === 0 &&
+          restored.environment_policy === 'host-process' && Array.isArray(targets) &&
+          targets.length > 0 && targets.length <= (restored.tests_total ?? 0) &&
+          targets[0] === restored.target && new Set(targets).size === targets.length &&
+          targets.every(target => typeof target === 'string' && target.startsWith(POINT_TARGET_PREFIX) &&
+            /^[a-f0-9]{64}$/.test(target.slice(POINT_TARGET_PREFIX.length))) &&
+          proof.digest === pointExecutionDigest(recordedReceipt, targets, event.session_id, event.turn_id, event.seq, event.tool_call_id);
+        if (verified) {
+          if (targets.length > 1) restored.additionalPointTargets = targets.slice(1);
+        } else delete restored.target;
+      } catch { delete restored.target; }
+    }
     // Preserve malformed same-owner packets too: adaptation must report their
     // errors rather than silently deleting a possibly later failed attempt.
     if (!latest || restored.order.seq > latest.order!.seq) latest = restored;
@@ -367,8 +394,8 @@ export async function captureAndRecordVerifierReceipt(input: {
   resolvedExecutable?: string;
   /** Host-owned shell executor selected for the actual invocation. */
   executionBackend?: 'docker-container' | 'host-process';
-  /** Host-owned observed case identities from the actual test runner output. */
-  verifiedPointTargets?: readonly string[];
+  /** Frozen witnesses to reconcile with this attempt's actual runner report. */
+  pointWitnesses?: readonly PointVerifierWitness[];
   /** The command was not started. A synthetic exit must not enter the ledger. */
   simulated?: boolean;
   /** Recheck suspended execution ownership/candidate immediately before publishing evidence. */
@@ -384,7 +411,11 @@ export async function captureAndRecordVerifierReceipt(input: {
   const relativeCwd =
     path.relative(realpathSync.native(input.projectRoot), identity.cwd).replaceAll('\\', '/') || '.';
   const commandIdentity = analyzeVerifierIdentity(input.command);
-  const [pointTarget, ...additionalPointTargets] = input.verifiedPointTargets ?? [];
+  const targets = input.exitCode === 0 && input.executionBackend === 'host-process' && relativeCwd === '.'
+    ? [...new Set(input.pointWitnesses?.filter(witness => nodePointExecuted(input.stdout ?? '', witness))
+      .map(witness => witness.target))]
+    : [];
+  const [pointTarget, ...additionalPointTargets] = targets;
   const receipt = await captureChatVerifierReceipt({
     projectRoot: input.projectRoot,
     command: input.command,
@@ -420,7 +451,7 @@ export async function captureAndRecordVerifierReceipt(input: {
   });
   if (!receipt) return null;
   if (input.canPublish && !input.canPublish()) return null;
-  if (additionalPointTargets.length) receipt.additionalPointTargets = additionalPointTargets;
+  if (pointTarget && targets.length > (receipt.tests_total ?? 0)) delete receipt.target;
   const caveats = verifierEvidenceCaveats(receipt);
   if (caveats.length > 0 && !receipt.summary.includes(caveats[0]!)) {
     receipt.summary = [receipt.summary, ...caveats].join('\n');
@@ -432,10 +463,18 @@ export async function captureAndRecordVerifierReceipt(input: {
     exit_code: input.exitCode,
     ...(input.toolCallId !== undefined ? { tool_call_id: input.toolCallId } : {}),
     receipt,
+    ...(pointTarget && receipt.target === pointTarget ? { point_execution: {
+      targets,
+      digest: pointExecutionDigest(receipt, targets, input.sessionEvents.session_id, input.turnId,
+        input.sessionEvents.nextSeq, input.toolCallId),
+    } } : {}),
   });
   // The event wrapper is already serialized. Project its order onto a new
   // live receipt; restore reconstructs this same projection from the wrapper.
-  const orderedReceipt = { ...receipt, order: { sessionId: event.session_id, seq: event.seq } };
+  const orderedReceipt = { ...receipt,
+    ...(receipt.target === pointTarget && additionalPointTargets.length > 0 ? { additionalPointTargets } : {}),
+    order: { sessionId: event.session_id, seq: event.seq },
+  };
   upsertVerifierReceipt(input.ledger, orderedReceipt);
   input.cache.set(identity.key, {
     receipt: orderedReceipt,
