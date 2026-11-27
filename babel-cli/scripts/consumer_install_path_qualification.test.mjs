@@ -16,6 +16,7 @@ import {
 
 test('npm install proxy is explicit, credential-free and origin-only', () => {
   assert.equal(validateNpmInstallProxy(undefined), null)
+  assert.equal(validateNpmInstallProxy(null), null)
   assert.equal(validateNpmInstallProxy('http://proxy:8080'), 'http://proxy:8080')
   for (const value of ['https://user:pass@proxy:8080', 'file:///tmp/proxy', 'http://proxy:8080/path', 'http://proxy:8080/?x=1', 'not-a-url']) {
     assert.throws(() => validateNpmInstallProxy(value), /BABEL_CONSUMER_NPM_PROXY/)

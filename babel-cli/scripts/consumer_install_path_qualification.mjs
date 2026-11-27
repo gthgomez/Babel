@@ -11,14 +11,17 @@ import { resolve } from 'node:path'
  *   env: Record<string, string | undefined>
  *   scratch: string
  *   phase: string
- *   npmProxy?: string
+ *   npmProxy?: string | null
  *   npmCaCert?: string
  *   timeoutMs?: number
  * }} NpmInstallProbeInput */
 
-/** Validate an explicit credential-free HTTP(S) proxy origin for npm only. */
+/**
+ * Validate an explicit credential-free HTTP(S) proxy origin for npm only.
+ * @param {string | null | undefined} value
+ */
 export function validateNpmInstallProxy(value) {
-  if (value === undefined || value === '') return null
+  if (value === undefined || value === null || value === '') return null
   let parsed
   try { parsed = new URL(value) } catch { throw new Error('BABEL_CONSUMER_NPM_PROXY must be an absolute HTTP(S) URL') }
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
