@@ -32,6 +32,11 @@ const PRIVATE_TEST_PATH_SEGMENTS = new Set([
 ]);
 const PRIVATE_TEST_BASENAME = /(?:^|[._-])(?:api[_-]?keys?|credentials?|id_rsa|id_ed25519|passwords?|private|secrets?|tokens?)(?:[._-]|$)/i;
 
+export function isConventionallyNamedTestSource(fileName: string): boolean {
+  const extension = fileName.slice(fileName.lastIndexOf('.')).toLowerCase();
+  return TEST_SOURCE_EXTENSIONS.has(extension) && /(?:^|[._-])(?:test|spec)(?:[._-]|$)/i.test(fileName);
+}
+
 /**
  * Only fresh, conventionally named test source is shared with the test runner.
  * Parent directory permissions are never changed; they must already permit
@@ -43,9 +48,7 @@ export function isSandboxReadableTestPath(inputPath: string): boolean {
     segment === '..' || segment.startsWith('.') || PRIVATE_TEST_PATH_SEGMENTS.has(segment.toLowerCase()) ||
     PRIVATE_TEST_BASENAME.test(segment)
   )) return false;
-  const basename = segments.at(-1)!;
-  const extension = basename.slice(basename.lastIndexOf('.')).toLowerCase();
-  return TEST_SOURCE_EXTENSIONS.has(extension) && /(?:^|[._-])(?:test|spec)(?:[._-]|$)/i.test(basename) && !PRIVATE_TEST_BASENAME.test(basename);
+  return isConventionallyNamedTestSource(segments.at(-1)!);
 }
 
 let writeUtf8ToFd: WriteUtf8ToFd = (fd, content) => {

@@ -19,7 +19,9 @@ export function parseForegroundCommandClause(clause: string): string[] | null {
 }
 
 /** Split active task prose outside code spans; examples cannot require execution. */
-export function foregroundTaskClauses(activeProse: readonly string[], amendment = false): string[] {
+export function foregroundTaskClauses(
+  activeProse: readonly string[], amendment = false, examplePolicy: 'discard-all' | 'keep-prefix' = 'discard-all',
+): string[] {
   const clauses = activeProse.flatMap(line => {
     let cleaned = line.trim()
       .replace(/^(?:[-*+•]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, '')
@@ -37,7 +39,9 @@ export function foregroundTaskClauses(activeProse: readonly string[], amendment 
     }, ['']).map(clause => clause.trim()).filter(Boolean)
   })
   const example = /^(?:for example|an? example|example|sample|illustration|logs?|quoted text)(?:\s*:|\s*$)/i
-  return clauses.some(clause => example.test(clause)) ? [] : clauses
+  const exampleStart = clauses.findIndex(clause => example.test(clause))
+  if (exampleStart === -1) return clauses
+  return examplePolicy === 'keep-prefix' ? clauses.slice(0, exampleStart) : []
 }
 
 /** Identify one process and its arguments. Execution policy still owns authorization. */
