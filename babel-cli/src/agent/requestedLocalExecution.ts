@@ -97,7 +97,7 @@ export function requestedLocalExecutionAcceptance(input: {
     if (!input.amendment && !exactArgv && argvAlternatives[0]?.[3] &&
         taskProhibitsRequestedOutput(input.activeProse, argvAlternatives[0][3], input.projectRoot ?? process.cwd())) continue
     if (!input.amendment && argvAlternatives.every(argv =>
-      taskProhibitsForegroundCommand(input.activeProse, formatArgvAsCommand(argv), input.projectRoot))) continue
+      taskProhibitsRequestedCommand(input.activeProse, formatArgvAsCommand(argv), input.projectRoot ?? process.cwd()))) continue
     const operations = argvAlternatives.map(operationDigest)
     const baseDescription = `${DESCRIPTION_PREFIX}${redactSecrets(clause)}`
     if (input.amendment && input.existingCriteria.some(item =>

@@ -115,6 +115,7 @@ test('does not create a required effect from optional, prohibited, quoted or com
     'Add export.py, a local CLI. Run the exporter to create output.csv from input.json. Do not run it.',
     'Execute export.py using input.json and save the resulting CSV as output.csv. Do not execute `export.py`.',
     'Execute export.py using input.json and save the resulting CSV as output.csv. Do not generate output.csv.',
+    'Execute export.py using input.json and save the resulting CSV as output.csv. Run `python3 export.py input.json output.csv`. Do not generate output.csv.',
   ]) assert.deepEqual(admit([prose]), { criteria: [], provenance: [], sources: [] }, prose)
 })
 
