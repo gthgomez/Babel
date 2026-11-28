@@ -85,9 +85,11 @@ const HOST_EXECUTABLE_ALIASES: Readonly<Record<string, ReadonlySet<string>>> = {
   npx: new Set(['npx-cli.js']),
 };
 
-function hostExecutableNameMatches(invokedBase: string, canonicalBase: string): boolean {
+function hostExecutableNameMatches(invokedBase: string, canonicalBase: string, platform: NodeJS.Platform): boolean {
   const invoked = normalizeExecutionBase(invokedBase);
   const canonical = normalizeExecutionBase(canonicalBase);
+  // POSIX distributions commonly point python3 at a versioned CPython binary.
+  if (platform !== 'win32' && invoked === 'python3' && /^python3\.\d+$/.test(canonicalBase)) return true;
   return canonical === invoked || HOST_EXECUTABLE_ALIASES[invoked]?.has(canonical) === true;
 }
 
@@ -390,7 +392,7 @@ export function resolveCommandExecutable(
     const rootOwnedSystemPath = platform !== 'win32' && (options.effectiveUid ?? process.geteuid?.()) === 0 &&
       trustedRoot !== undefined && isPathChainOwnedByUid(canonical, platform, 0, ownerUid) && !sharedWritablePath;
     const invokedBase = normalizeExecutionBase(command);
-    const compatibleHostIdentity = hostExecutableNameMatches(invokedBase, api.basename(canonical));
+    const compatibleHostIdentity = hostExecutableNameMatches(invokedBase, api.basename(canonical), platform);
     // The already-running interpreter has a stronger identity source than a
     // PATH name: its canonical process.execPath is captured by this process.
     // It remains project-code risk, so this only lets semantic parsing retain
