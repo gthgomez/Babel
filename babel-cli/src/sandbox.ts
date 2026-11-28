@@ -80,6 +80,7 @@ import {
   requestDependencyInstallApproval,
 } from './services/approvalQueue.js';
 import { getSafeEnv } from './utils/safeEnv.js';
+import { workspaceMountPath } from './utils/projectPath.js';
 import { childEnvForSandbox, hardenGitHostEnvironment } from './authority/unprivilegedChildEnv.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
 import {
@@ -707,23 +708,10 @@ export class SafeExecutor {
 
   private resolveProjectPath(inputPath: string): string {
     const trimmed = inputPath.trim();
-    const canonical = trimmed.replace(/\\/g, '/');
-    const canonicalLower = canonical.toLowerCase();
-    const projectPrefix = '/project';
-    const appPrefix = '/app';
-
-    if (canonicalLower === projectPrefix || canonicalLower.startsWith(`${projectPrefix}/`)) {
-      const rest = canonical.slice(projectPrefix.length).replace(/^\/+/, '');
-      return resolve(this.projectRoot, sanitizePath(rest));
-    }
-
     const profile = resolveExecutionProfile(getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']));
-    if (
-      profile.name === 'benchmark_container' &&
-      (canonicalLower === appPrefix || canonicalLower.startsWith(`${appPrefix}/`))
-    ) {
-      const rest = canonical.slice(appPrefix.length).replace(/^\/+/, '');
-      return resolve(this.projectRoot, sanitizePath(rest));
+    const mounted = workspaceMountPath(trimmed, profile.name === 'benchmark_container');
+    if (mounted !== undefined) {
+      return resolve(this.projectRoot, sanitizePath(mounted));
     }
 
     if (isAbsolute(trimmed)) {

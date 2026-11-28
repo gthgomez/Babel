@@ -16,7 +16,7 @@ import {
 } from './taskAcceptanceExecutableBinding.js'
 import { inferTaskAcceptance, inferTaskAcceptanceV2, inferTaskAcceptanceV3, inferTaskAcceptanceV4 } from './taskAcceptanceMeaning.js'
 import { nodePointExecuted, POINT_TARGET_PREFIX, retainCurrentPointReceipts } from './pointVerifierWitness.js'
-import { taskProhibitsCommand } from './taskCommandProhibitions.js'
+import { taskProhibitsCommand, taskProhibitsForegroundCommand } from './taskCommandProhibitions.js'
 import { applyWorkingStateEvent, createWorkingState, formatWorkingStateBlock } from './codingLoop/workingState.js'
 
 test('plain-text npm test passes binds with suffix-anchored grammar', () => {
@@ -164,6 +164,71 @@ test('task command restrictions are exact and do not turn quoted evidence into a
   assert.equal(taskProhibitsCommand(['Do not run `npm test` or `yarn build`.'], 'yarn test'), false)
   assert.equal(taskProhibitsCommand(['Do not edit files or run any tests or shell commands.'], 'node file.mjs'), true)
   assert.equal(taskProhibitsCommand(['The issue said "Do not run npm".'], 'npm test'), false)
+})
+
+test('a script named in a no-run constraint stays off limits through its interpreter', () => {
+  const exportCommand = 'python3 export_warehouse.py warehouse.json warehouse.csv'
+  const request = 'Add export_warehouse.py, a Python CLI. Run the exporter to create warehouse.csv from warehouse.json.'
+  for (const constraint of [
+    'Do not run the exporter or generate warehouse.csv.',
+    'Do not execute `export_warehouse.py`.',
+    'Do not actually run it.',
+  ]) {
+    const prose = [request, constraint]
+    assert.equal(taskProhibitsForegroundCommand(prose, exportCommand), true, constraint)
+    assert.equal(taskProhibitsForegroundCommand(prose, 'python3.12 -B ./export_warehouse.py warehouse.json warehouse.csv'), true, constraint)
+    assert.equal(taskProhibitsForegroundCommand(prose, 'python3 -B jobs/../export_warehouse.py'), true, constraint)
+    assert.equal(taskProhibitsForegroundCommand(prose, 'python3 -X dev export_warehouse.py'), true, constraint)
+    assert.equal(taskProhibitsForegroundCommand(prose, 'python3 -m export_warehouse'), true, constraint)
+    assert.equal(taskProhibitsForegroundCommand(prose, 'python3 -m doctest export_warehouse.py'), true, constraint)
+    assert.equal(taskProhibitsForegroundCommand(prose, 'python3 -m unittest export_warehouse'), true, constraint)
+    assert.equal(taskProhibitsForegroundCommand(prose, 'python3 -m pytest export_warehouse.py'), true, constraint)
+    assert.equal(taskProhibitsForegroundCommand(prose, 'pytest export_warehouse.py::test_selected'), true, constraint)
+    assert.equal(taskProhibitsForegroundCommand(prose, 'python3 -m doctest other.py'), false, constraint)
+    assert.equal(taskProhibitsForegroundCommand(prose, './export_warehouse.py warehouse.json warehouse.csv'), true, constraint)
+    assert.equal(taskProhibitsForegroundCommand(prose, 'python3 -m unittest check_export'), false, constraint)
+    assert.equal(taskProhibitsForegroundCommand(prose, 'python3 other.py export_warehouse.py'), false, constraint)
+  }
+  assert.equal(taskProhibitsForegroundCommand(['Fix export_warehouse.py but do not run it.'], exportCommand), true)
+  assert.equal(taskProhibitsForegroundCommand([request, 'The logs said "Do not run the exporter".'], exportCommand), false)
+  assert.equal(taskProhibitsForegroundCommand(['Fix the exporter but do not run it.'], exportCommand), true)
+  assert.equal(taskProhibitsForegroundCommand(['Fix the exporter but do not run it.'], 'git status'), false)
+  assert.equal(taskProhibitsForegroundCommand(['Fix export_warehouse.py. Add other.py. Do not run it.'], exportCommand), true)
+  assert.equal(taskProhibitsForegroundCommand(['Fix export_warehouse.py. Add other.py. Do not run it.'], 'python3 other.py'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Fix export_warehouse.py. Add other.py. Do not run it.'], 'python3 -m unittest check_export'), false)
+  assert.equal(taskProhibitsForegroundCommand(['Fix export_warehouse.py. Add other.py. Do not run it.'], 'git status'), false)
+  assert.equal(taskProhibitsForegroundCommand([request, 'Also do not run the exporter.'], exportCommand), true)
+  const job = 'Execute export_warehouse.py using warehouse.json and save the resulting CSV as warehouse.csv. Do not run it.'
+  assert.equal(taskProhibitsForegroundCommand([job], exportCommand), true)
+  assert.equal(taskProhibitsForegroundCommand([job], 'git status'), false)
+  assert.equal(taskProhibitsForegroundCommand(['Fix the exporter but do not run it. Add lint.py.'], exportCommand), true)
+  assert.equal(taskProhibitsForegroundCommand(['Add lint.py. Fix the exporter but do not run it.'], exportCommand), true)
+  assert.equal(taskProhibitsForegroundCommand(['Fix the exporter. Add lint.py. Do not run the exporter.'], exportCommand), true)
+  assert.equal(taskProhibitsForegroundCommand(['Also do not run any shell commands.'], 'git status'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Also do not run `python3 export_warehouse.py`.'], exportCommand), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run export.py or execute gen.py.'], 'python3 gen.py'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not generate warehouse.csv or execute export_warehouse.py.'], exportCommand), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not edit or run export_warehouse.py.'], exportCommand), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `old/export_warehouse.py`.'], exportCommand), false)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `old/export_warehouse.py`.'], 'python3 old/export_warehouse.py'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `old/export_warehouse.py`.'], 'python3 export_warehouse.py', process.cwd(), 'old'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `old/export_warehouse.py`.'], 'python3 export_warehouse.py', process.cwd(), ' old '), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `old/export_warehouse.py`.'], 'python3 export_warehouse.py', process.cwd(), '/project/old'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `old/export_warehouse.py`.'], 'python3 export_warehouse.py', process.cwd(), '/app/old'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `old/export_warehouse.py`.'], './export_warehouse.py'), false)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run "old\\export_warehouse.py".'], 'python3 old/export_warehouse.py'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run "export_warehouse.py".'], exportCommand), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run "warehouse exporter.py".'], 'python3 "warehouse exporter.py"'), true)
+  const namedAbsolute = join(process.cwd(), 'export_warehouse.py')
+  assert.equal(taskProhibitsForegroundCommand([`Do not run "${namedAbsolute}".`], exportCommand), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `old/export_warehouse.py`.'], './export_warehouse.py', process.cwd(), 'old'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `export.mjs`.'], 'node --no-warnings export.mjs'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `export.mjs`.'], 'nodejs export.mjs'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `export.mjs`.'], 'bun run export.mjs'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `export.mjs`.'], 'deno run export.mjs'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `export.mjs`.'], 'node --test other.test.mjs'), false)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `export.mjs`.'], 'node --no-warnings --test export.mjs'), true)
+  assert.equal(taskProhibitsForegroundCommand(['Do not run `export_warehouse.py`.'], 'python3 EXPORT_WAREHOUSE.PY'), process.platform === 'win32')
 })
 
 test('a qualified call with value phrasing cannot bind a different module’s function', (t) => {

@@ -3,18 +3,20 @@ import { sha256Canonical } from '../acceptance/canonical.js'
 import { canonicalizeContained } from '../bridge/workspaceBound.js'
 import type { BlockedReport } from '../schemas/agentContracts.js'
 import { foregroundTaskClauses, formatArgvAsCommand, parseForegroundCommandClause, parseSingleProcessArgv } from '../utils/commandArgv.js'
+import { foregroundDenialTargets, invokesProhibitedScript, LOCAL_SCRIPT_PATH as SCRIPT_PATH } from '../utils/commandDenialProse.js'
+import { workspaceMountPath } from '../utils/projectPath.js'
 import { redactSecrets } from '../utils/redaction.js'
 import type { ChatToolAction } from './chatToolDefinitions.js'
+import { explicitNodeTestFileArgs } from './completionGatePolicy.js'
 import { parseUnifiedDiff } from './codingLoop/patchApply.js'
 import { inferFreshTaskAcceptance, type AcceptanceMeaningSource } from './taskAcceptanceMeaning.js'
-import { taskProhibitsCommand, v3TaskProhibitsCommand } from './taskCommandProhibitions.js'
+import { taskProhibitsCommand, taskProhibitsForegroundCommand, v3TaskProhibitsCommand } from './taskCommandProhibitions.js'
 import type { AcceptanceRequirementV1, TaskContractProvenanceRecord, TaskContractV1 } from './taskContract.js'
 
 const REF_PREFIX = 'babel:requested-local-execution'
 const DENIAL_PREFIX = 'required_local_execution_denied'
 const DESCRIPTION_PREFIX = 'Requested foreground effect: '
 export const REQUESTED_LOCAL_EXECUTION_KIND = 'requested_local_execution'
-const SCRIPT_PATH = String.raw`(?:\./)?[\p{L}\p{N}_-][\p{L}\p{N}_.\/-]*\.(?:py|[cm]?js)`
 const FILE_PATH = String.raw`(?:\./)?[\p{L}\p{N}_-][\p{L}\p{N}_.\/-]*`
 const DECLARED_SCRIPT = new RegExp(String.raw`^(?:please\s+)?(?:add|create|write)\s+\x60?(${SCRIPT_PATH})\x60?(?=$|[\s,])`, 'iu')
 const LOCAL_JOB = new RegExp(String.raw`^(?:please\s+)?(?:run|execute)\s+(?:the exporter|\x60?(${SCRIPT_PATH})\x60?)\s+to\s+(?:create|generate)\s+\x60?(${FILE_PATH})\x60?\s+from\s+\x60?(${FILE_PATH})\x60?(?:\s+and\s+leave\s+both\b[^.;]*)?$`, 'iu')
@@ -57,6 +59,7 @@ function coveredByExactVerifier(argv: readonly string[], criteria: readonly Acce
 export function requestedLocalExecutionAcceptance(input: {
   request: string
   activeProse: readonly string[]
+  projectRoot?: string
   existingCriteria: readonly AcceptanceRequirementV1[]
   amendment?: boolean
   replayV3?: boolean
@@ -75,6 +78,7 @@ export function requestedLocalExecutionAcceptance(input: {
   const scope = !input.amendment && clauses.length === 1 && input.request.trim().replace(/[.!]$/, '') === clauses[0]
     ? 'standalone' : 'mixed'
   const sourceDigest = sha256Canonical(input.request)
+  // Existing amendment descriptors retain their original hashed operations.
   const prohibits = input.replayV3 ? v3TaskProhibitsCommand : taskProhibitsCommand
   let descriptions: Set<string> | undefined
   for (const clause of new Set(clauses)) {
@@ -91,6 +95,10 @@ export function requestedLocalExecutionAcceptance(input: {
     const argvAlternatives = (exactArgv ? [exactArgv] : jobArgv(clause, declaredScripts, !input.amendment))
       .filter(argv => !prohibits(input.activeProse, formatArgvAsCommand(argv)))
     if (argvAlternatives.length === 0) continue
+    if (!input.amendment && !exactArgv && argvAlternatives[0]?.[3] &&
+        taskProhibitsRequestedOutput(input.activeProse, argvAlternatives[0][3], input.projectRoot ?? process.cwd())) continue
+    if (!input.amendment && argvAlternatives.every(argv =>
+      taskProhibitsForegroundCommand(input.activeProse, formatArgvAsCommand(argv), input.projectRoot))) continue
     const operations = argvAlternatives.map(operationDigest)
     const baseDescription = `${DESCRIPTION_PREFIX}${redactSecrets(clause)}`
     if (input.amendment && input.existingCriteria.some(item =>
@@ -228,7 +236,8 @@ export function requestedProcessScope(
   action: LocalRun,
   projectRoot: string,
 ): ExecutionScope | null {
-  if (resolve(projectRoot, action.cwd ?? '.') !== resolve(projectRoot)) return null
+  const cwd = action.cwd?.trim() ?? '.'
+  if (resolve(projectRoot, workspaceMountPath(cwd, true) ?? cwd) !== resolve(projectRoot)) return null
   const argv = parseSingleProcessArgv(action.command)
   if (!argv) return null
   const digest = operationDigest(argv)
@@ -247,23 +256,27 @@ export function substitutesRequestedProcessOutput(
   sourceRequests: readonly string[],
   action: Extract<ChatToolAction, { type: 'write_file' | 'str_replace' | 'apply_patch' }>,
   projectRoot: string,
+  currentProse: readonly string[] = [],
 ): boolean {
   const admitted = new Set(records.filter(record => record.kind === 'derived_acceptance' &&
     record.ref.startsWith(`${REF_PREFIX}:v2:`)).map(record => record.ref))
-  if (admitted.size === 0) return false
   // Resolve "the exporter" within each request as admission did. Later
   // amendments must not make a script declaration in the objective ambiguous.
-  const operations = sourceRequests.flatMap((request, index) => {
-    const clauses = foregroundTaskClauses(inferFreshTaskAcceptance(request).activeProse, index > 0)
+  const directDenials = foregroundDenialTargets(currentProse).outputs
+  const requiredOutputs = new Set([...directDenials, ...sourceRequests.flatMap((request, index) => {
+    const { activeProse } = inferFreshTaskAcceptance(request)
+    const { outputs } = foregroundDenialTargets(activeProse)
+    const clauses = foregroundTaskClauses(activeProse, index > 0)
     const scripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
-    return clauses.flatMap(clause => jobArgv(clause, scripts, index === 0))
-  })
-  const requiredOutputs = new Set(operations
-    .filter(argv => {
-      const digest = operationDigest(argv)
-      return admitted.has(executionRef(2, 'mixed', digest)) || admitted.has(executionRef(2, 'standalone', digest))
-    })
-    .map(argv => resolve(projectRoot, argv[3]!)))
+    const processOutputs = clauses.flatMap(clause => jobArgv(clause, scripts, index === 0))
+      .filter(argv => {
+        const digest = operationDigest(argv)
+        return admitted.has(executionRef(2, 'mixed', digest)) || admitted.has(executionRef(2, 'standalone', digest)) ||
+          taskProhibitsForegroundCommand(activeProse, formatArgvAsCommand(argv), projectRoot)
+      })
+      .map(argv => argv[3]!)
+    return [...outputs, ...processOutputs]
+  })])
   if (requiredOutputs.size === 0) return false
   let targets: string[]
   if (action.type === 'apply_patch') {
@@ -273,12 +286,37 @@ export function substitutesRequestedProcessOutput(
   } else {
     targets = [action.type === 'write_file' ? action.path : action.file_path]
   }
-  const paths = targets.map(target => resolve(projectRoot, target))
-  return [...requiredOutputs].some(output => paths.some(path => {
-    if (relative(output, path) === '') return true
-    try { return relative(canonicalizeContained(output), canonicalizeContained(path)) === '' }
-    catch { return false }
-  }))
+  return [...requiredOutputs].some(output => targets.some(target => sameRequestedOutput(output, target, projectRoot)))
+}
+
+function sameRequestedOutput(left: string, right: string, projectRoot: string, cwd = '.'): boolean {
+  const workingDirectory = resolve(projectRoot, workspaceMountPath(cwd, true) ?? cwd.trim())
+  const mounted = workspaceMountPath(right, true)
+  const resolvedLeft = resolve(projectRoot, workspaceMountPath(left, true) ?? left)
+  const resolvedRight = mounted === undefined ? resolve(workingDirectory, right) : resolve(projectRoot, mounted)
+  if (relative(resolvedLeft, resolvedRight) === '') return true
+  try { return relative(canonicalizeContained(resolvedLeft), canonicalizeContained(resolvedRight)) === '' }
+  catch { return false }
+}
+
+export function taskProhibitsRequestedOutput(activeProse: readonly string[], output: string, projectRoot: string): boolean {
+  return foregroundDenialTargets(activeProse).outputs.some(target => sameRequestedOutput(target, output, projectRoot))
+}
+
+/** Recognize a declared job's prohibited destination independently of receipt eligibility. */
+export function taskProhibitsDeclaredJob(
+  activeProse: readonly string[], command: string, projectRoot: string, cwd = '.',
+): boolean {
+  const { outputs } = foregroundDenialTargets(activeProse)
+  if (outputs.length === 0) return false
+  const argv = parseSingleProcessArgv(command)
+  if (!argv || argv.length < 3) return false
+  if (!argv.slice(1).some(operand => outputs.some(path => sameRequestedOutput(path, operand, projectRoot, cwd)))) return false
+  const clauses = foregroundTaskClauses(activeProse)
+  const scripts = [...new Set(clauses.flatMap(clause => DECLARED_SCRIPT.exec(clause)?.[1] ?? []))]
+  return clauses.flatMap(clause => jobArgv(clause, scripts)).some(job =>
+    invokesProhibitedScript(argv, [job[1]!], projectRoot, cwd, explicitNodeTestFileArgs, ([, destination]) =>
+      destination !== undefined && outputs.some(path => sameRequestedOutput(path, destination, projectRoot, cwd))))
 }
 
 /** The executor marks only a typed hard denial with host-confirmed zero dispatch. */

@@ -65,9 +65,9 @@ import { isAuthoritativeVerifierCommand } from "./completionGatePolicy.js";
 import { acceptToolStop, settlePreventedChatAction } from './chatEngineRunControl.js';
 import { actionRequestFromAction } from '../authority/actionRequest.js';
 import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js';
-import { taskProhibitsCommand } from './taskCommandProhibitions.js';
+import { taskProhibitsForegroundCommand } from './taskCommandProhibitions.js';
 import { hasSettledLocalJobSetup, isReadOnlyForegroundQuery, requestedForegroundEffect, requestedProcessScope, requiredLocalExecutionDenialMarker,
-  requiredLocalExecutionScope, substitutesRequestedProcessOutput } from './requestedLocalExecution.js';
+  requiredLocalExecutionScope, substitutesRequestedProcessOutput, taskProhibitsDeclaredJob } from './requestedLocalExecution.js';
 import { canPublishForegroundOutput, foregroundStarted, prepareForegroundEffect, settleForegroundEffect } from './foregroundEffectReceipt.js';
 import { recoverCurrentTaskMutationPaths } from './recoveredMutationWitness.js';
 import { commandsMatchForExecutableBinding } from './taskAcceptanceExecutableBinding.js';
@@ -217,6 +217,8 @@ export class ChatEngineActionExecutor {
     let observedToolExecution = false;
 
     try {
+    const activeProse = turnRuntime && ['run_command', 'test_run', 'write_file', 'str_replace', 'apply_patch'].includes(action.type)
+      ? inferFreshTaskAcceptance(turnRuntime.taskText).activeProse : [];
     if (taskContract?.frozen && action.type === 'run_command' && (action.background || action.detached) &&
         requestedProcessScope(taskContract.provenance.records, action, projectRoot)) {
       const detail = 'required_foreground_run_command';
@@ -227,18 +229,19 @@ export class ChatEngineActionExecutor {
     if ((action.type === 'write_file' || action.type === 'str_replace' || action.type === 'apply_patch') && turnRuntime &&
       substitutesRequestedProcessOutput(this.host.parity.liveAuthority?.taskContract.provenance.records ?? [],
         [taskContract?.user_request ?? turnRuntime.durableObjective ?? turnRuntime.taskText, ...this.host.getFrozenForegroundAmendments()],
-        action, requireProjectRoot(this.host.options))) {
+        action, projectRoot, activeProse)) {
       const detail = 'requested-process-output';
       this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
       callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
-      return { index: meta.index, observation: 'The user required the process to produce this file. Leave it untouched by direct edits; report the unmet operation if the process cannot run.' };
+      return { index: meta.index, observation: 'The task restricts direct edits to this output file. Leave it untouched and report what could be verified within the current limits.' };
     }
     if ((action.type === 'run_command' || action.type === 'test_run') && turnRuntime &&
-      taskProhibitsCommand(inferFreshTaskAcceptance(turnRuntime.taskText).activeProse, action.command)) {
+      (taskProhibitsForegroundCommand(activeProse, action.command, projectRoot, action.cwd) ||
+        taskProhibitsDeclaredJob(activeProse, action.command, projectRoot, action.cwd))) {
       const detail = 'task-command-prohibited';
       this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
       callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
-      return { index: meta.index, observation: 'The user explicitly prohibited running this command. No process started.' };
+      return { index: meta.index, observation: 'The task restricts this command or the output it would generate. No process started. Continue permitted work or ask the user to resolve any remaining ambiguity.' };
     }
     const frozenVerifierDispatch = action.type === 'run_command' || action.type === 'test_run' ? {
       owner: this.host.currentVerifierOwner(), candidate: this.host.currentRecoveryBinding(),

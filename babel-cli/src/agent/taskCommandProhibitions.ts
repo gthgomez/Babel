@@ -1,6 +1,6 @@
 import { parseCommandArgv } from '../utils/commandArgv.js'
-import { GENERAL_COMMANDS, TESTS, prohibitedArgv, prohibitedCommandTargets, splitProse } from '../utils/commandDenialProse.js'
-import { hasVerifierShellComposition, isAuthoritativeVerifierCommand } from './completionGatePolicy.js'
+import { GENERAL_COMMANDS, TESTS, foregroundDenialTargets, invokesProhibitedScript, prohibitedArgv, prohibitedCommandTargets, splitProse } from '../utils/commandDenialProse.js'
+import { explicitNodeTestFileArgs, hasVerifierShellComposition, isAuthoritativeVerifierCommand } from './completionGatePolicy.js'
 
 const LEGACY_PROHIBITION = /^(?:do not|don't|never)\s+(?:(?:edit|change|modify)\b[^.;!?]*?\s+(?:or|and)\s+)?(?:run|execute)\s+(.+)$/i
 const V3_PROHIBITION = /^(?:please\s+)?(?:do not|don['’]t|never)\s+(?:(?:edit|change|modify)\b.*?\s+(?:or|and)\s+)?(?:run|execute)\s+(.+)$/i
@@ -8,6 +8,23 @@ const V3_PROHIBITION = /^(?:please\s+)?(?:do not|don['’]t|never)\s+(?:(?:edit|
 /** Honor explicit command denials from active operator prose, including verifier dispatch. */
 export function taskProhibitsCommand(activeProse: readonly string[], command: string): boolean {
   return prohibitsCommand(prohibitedCommandTargets(activeProse), command)
+}
+
+/** Apply current script-specific denials at fresh foreground admission and dispatch. */
+export function taskProhibitsForegroundCommand(
+  activeProse: readonly string[], command: string, projectRoot = process.cwd(), cwd = '.',
+): boolean {
+  const { commands, scripts, unresolvedReference } = foregroundDenialTargets(activeProse)
+  if (prohibitsCommand(commands, command)) return true
+  if (scripts.length === 0 && !unresolvedReference) return false
+  if (hasVerifierShellComposition(command)) return true
+  try {
+    const argv = parseCommandArgv(command)
+    // An unidentified script can block execution while leaving an exact repository inspection available.
+    if (unresolvedReference && (argv.length !== 2 || argv[0] !== 'git' || argv[1] !== 'status')) return true
+    return scripts.length > 0 && invokesProhibitedScript(argv, scripts, projectRoot, cwd, explicitNodeTestFileArgs)
+  }
+  catch { return true }
 }
 
 /** Replay the prohibition grammar used by V2 acceptance amendment descriptors. */

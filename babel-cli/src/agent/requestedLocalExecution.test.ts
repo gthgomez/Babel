@@ -17,6 +17,8 @@ import {
   requiredLocalExecutionDenialMarker,
   requiredLocalExecutionScope,
   substitutesRequestedProcessOutput,
+  taskProhibitsDeclaredJob,
+  taskProhibitsRequestedOutput,
 } from './requestedLocalExecution.js'
 import { buildTaskContractV1, freezeTaskContract } from './taskContract.js'
 
@@ -40,6 +42,7 @@ test('freezes exact required foreground argv and does not retain a command in pr
     record.ref.endsWith(`:${admitted.criteria[0]?.id}`)))
   assert.equal(requiredLocalExecutionScope(refs, { type: 'run_command', command }, root), 'standalone')
   assert.equal(requiredLocalExecutionScope(refs, { type: 'run_command', command, cwd: '.' }, root), 'standalone')
+  assert.equal(requiredLocalExecutionScope(refs, { type: 'run_command', command, cwd: '/project' }, root), 'standalone')
   assert.equal(requiredLocalExecutionScope(refs, { type: 'run_command', command, cwd: 'tools' }, root), null)
   assert.equal(requiredLocalExecutionScope(refs, { type: 'run_command', command, background: true }, root), null)
   assert.equal(requiredLocalExecutionScope(refs, { type: 'run_command', command: `${command} --dry-run` }, root), null)
@@ -108,6 +111,10 @@ test('does not create a required effect from optional, prohibited, quoted or com
     'Execute export.py using input.json and save the resulting CSV as output.csv if possible.',
     'Execute export.py using ../input.json and save the resulting CSV as output.csv.',
     'Execute export.py using input.json and save the resulting CSV as output.csv. Do not run shell commands.',
+    'Add export.py, a local CLI. Run the exporter to create output.csv from input.json. Do not run the exporter.',
+    'Add export.py, a local CLI. Run the exporter to create output.csv from input.json. Do not run it.',
+    'Execute export.py using input.json and save the resulting CSV as output.csv. Do not execute `export.py`.',
+    'Execute export.py using input.json and save the resulting CSV as output.csv. Do not generate output.csv.',
   ]) assert.deepEqual(admit([prose]), { criteria: [], provenance: [], sources: [] }, prose)
 })
 
@@ -160,6 +167,40 @@ test('process-owned outputs reject direct substitutes without blocking independe
   }, root), false)
   assert.equal(substitutesRequestedProcessOutput(records, requests, { type: 'str_replace', file_path: 'export.py', old_str: 'old', new_str: 'new' }, root), false)
   assert.equal(substitutesRequestedProcessOutput([], requests, { type: 'write_file', path: 'warehouse.csv', content: 'untied' }, root), false)
+  const noRun = [prose.join('\n') + '\nDo not run the exporter.']
+  assert.equal(substitutesRequestedProcessOutput([], noRun, { type: 'write_file', path: 'warehouse.csv', content: 'substitute' }, root), true)
+  assert.equal(substitutesRequestedProcessOutput([], noRun, { type: 'write_file', path: 'export.py', content: 'ready' }, root), false)
+  const noGenerate = ['Add export.py, a local CLI. Do not run the exporter or generate warehouse.csv.']
+  assert.equal(substitutesRequestedProcessOutput([], noGenerate, { type: 'write_file', path: 'warehouse.csv', content: 'substitute' }, root), true)
+  assert.equal(substitutesRequestedProcessOutput([], noGenerate, { type: 'write_file', path: 'preview.csv', content: 'separate' }, root), false)
+  const retainedDenial = ['Also do not generate warehouse.csv.']
+  assert.equal(substitutesRequestedProcessOutput([], [], { type: 'write_file', path: '/project/warehouse.csv', content: 'substitute' }, root, retainedDenial), true)
+  assert.equal(taskProhibitsRequestedOutput(retainedDenial, '/project/warehouse.csv', root), true)
+  assert.equal(taskProhibitsRequestedOutput(['Do not generate "warehouse.csv".'], 'warehouse.csv', root), true)
+  assert.equal(taskProhibitsRequestedOutput(['Do not generate warehouse.csv or execute export.py.'], 'warehouse.csv', root), true)
+  assert.equal(taskProhibitsRequestedOutput(['Do not generate warehouse.csv or preview.csv.'], 'preview.csv', root), true)
+  assert.equal(taskProhibitsRequestedOutput(['Do not generate "reports\\warehouse.csv".'], 'reports/warehouse.csv', root), true)
+  assert.equal(taskProhibitsRequestedOutput(['Do not generate reports\\warehouse.csv.'], 'reports/warehouse.csv', root), true)
+  assert.equal(taskProhibitsRequestedOutput(retainedDenial, 'preview.csv', root), false)
+})
+
+test('a prohibited declared output is denied even when equivalent argv cannot earn a positive receipt', () => {
+  const request = ['Add export.py, a local CLI.', 'Run the exporter to create output.csv from input.json.', 'Do not generate output.csv.']
+  assert.equal(taskProhibitsDeclaredJob(request, 'python3 export.py input.json output.csv', root), true)
+  assert.equal(taskProhibitsDeclaredJob(request, 'python3 ./export.py ./input.json ./output.csv', root, '/project'), true)
+  assert.equal(taskProhibitsDeclaredJob(request, 'python3 ./export.py ./another.json ./output.csv', root, '/project'), true)
+  assert.equal(taskProhibitsDeclaredJob(request, 'python3 -B export.py input.json output.csv --verbose', root), true)
+  assert.equal(taskProhibitsDeclaredJob(request, 'python3 -B export.py output.csv preview.csv --verbose', root), false)
+  assert.equal(taskProhibitsDeclaredJob(request, 'python3 other.py input.json output.csv', root), false)
+  assert.equal(taskProhibitsDeclaredJob(request, 'python3 export.py input.json preview.csv', root), false)
+})
+
+test('does not demand a verifier that the current no-run restriction prohibits', () => {
+  const { taskContract } = resolveLiveSessionAuthority({
+    mode: 'chat', task: 'Update README.md. Do not run export.mjs.', projectRoot: root,
+    verifierRequirements: ['node --test export.mjs', 'node --test independent.test.mjs'],
+  })
+  assert.deepEqual(taskContract.verifier_requirements, ['node --test independent.test.mjs'])
 })
 
 test('a skipped runtime effect remains missing alongside a green governed verifier', async t => {

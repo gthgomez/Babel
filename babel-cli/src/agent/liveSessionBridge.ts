@@ -18,7 +18,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import {normalizeChatExecutionScope} from './chatExecutionScope.js';
 import {inferFreshTaskAcceptance} from './taskAcceptanceMeaning.js';
-import { taskProhibitsCommand } from './taskCommandProhibitions.js';
+import { taskProhibitsForegroundCommand } from './taskCommandProhibitions.js';
 import { hasRequestedLocalExecution, requestedLocalExecutionAcceptance } from './requestedLocalExecution.js';
 import {
   bindExecutableVerifiersToTaskAcceptance,
@@ -350,7 +350,7 @@ export function resolveLiveSessionAuthority(input: {
   const trustedVerifierCommands = mergeTrustedVerifierCommands({
     requiredVerifierCommands: input.verifierRequirements ?? [],
     projectTestCommands: input.projectTestCommands ?? [],
-  })
+  }).filter(command => !taskProhibitsForegroundCommand(inferredMeaning.activeProse, command, input.projectRoot ?? undefined))
   const existingVerifierInputFiles = input.projectRoot
     ? existingNodeVerifierInputFiles(input.projectRoot, inferredMeaning, undefined, trustedVerifierCommands)
     : []
@@ -390,7 +390,7 @@ export function resolveLiveSessionAuthority(input: {
   const requiredVerifierCommands = [...new Set([
     ...(input.verifierRequirements ?? []),
     ...relevanceBoundVerifierCommands(meaning),
-  ])].filter(command => !taskProhibitsCommand(meaning.activeProse, command));
+  ])].filter(command => !taskProhibitsForegroundCommand(meaning.activeProse, command, input.projectRoot ?? undefined));
   const amendmentInputRecords = input.projectRoot && scope.kind === 'project'
     ? requiredVerifierCommands.flatMap(command => {
         const inputs = snapshotPointVerifierInputs(input.projectRoot!, command, protectedPaths);
@@ -403,6 +403,7 @@ export function resolveLiveSessionAuthority(input: {
     ? requestedLocalExecutionAcceptance({
         request: input.task,
         activeProse: meaning.activeProse,
+        ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
         existingCriteria: meaning.criteria,
       })
     : { criteria: [], provenance: [] };

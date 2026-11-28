@@ -5,6 +5,13 @@
 
 import { isAbsolute, resolve } from 'node:path';
 
+/** Resolve the lexical part of a model-facing workspace mount alias. */
+export function workspaceMountPath(inputPath: string, includeApp = false): string | undefined {
+  const normalized = inputPath.trim().replace(/\\/g, '/');
+  const match = (includeApp ? /^\/(?:project|app)(?:\/|$)/i : /^\/project(?:\/|$)/i).exec(normalized);
+  return match ? normalized.slice(match[0].length).replace(/^\/+/, '') : undefined;
+}
+
 /**
  * True for POSIX absolute paths, Windows drive paths, and UNC paths —
  * even when the host Node is running on Linux (SWE harness / CI).

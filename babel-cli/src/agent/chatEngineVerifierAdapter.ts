@@ -10,6 +10,10 @@ import { sha256Canonical } from '../acceptance/canonical.js';
 import { nodePointExecuted, POINT_TARGET_PREFIX, pointTargetForCase,
   type ExecutedPointClaim, type PointVerifierWitness } from './pointVerifierWitness.js';
 import { canonicalizeContained } from '../bridge/workspaceBound.js';
+import { shouldUseDockerSandbox } from '../config/benchmarkContainer.js';
+import { getScopedExecutionProfile } from '../config/executionPolicySelection.js';
+import { resolveExecutionProfile } from '../config/executionProfiles.js';
+import { workspaceMountPath } from '../utils/projectPath.js';
 import { isCredentialTargetPath } from './autonomyEnforcement.js';
 import { requireProjectRoot, type ChatScopeInput } from './chatExecutionScope.js';
 
@@ -531,7 +535,11 @@ export function resolveVerifierCacheIdentity(input: {
   cwd?: string;
   envKey?: string;
 }): { key: string; cwd: string; envKey: string } {
-  const cwd = canonicalizeContained(path.resolve(input.projectRoot, input.cwd ?? '.'));
+  const requested = input.cwd?.trim() ?? '.';
+  const profile = getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']);
+  const appAlias = /^[/\\]app(?:[/\\]|$)/i.test(requested.trim()) &&
+    (resolveExecutionProfile(profile).name === 'benchmark_container' || shouldUseDockerSandbox(profile));
+  const cwd = canonicalizeContained(path.resolve(input.projectRoot, workspaceMountPath(requested, appAlias) ?? requested));
   const envKey = input.envKey ?? verifierEnvironmentKey({ ...process.env, BABEL_PROJECT_ROOT: path.resolve(input.projectRoot) });
   return {
     key: `${verifierReceiptIdentityKey(input.command)}::cwd=${cwd}::env=${envKey}`,
