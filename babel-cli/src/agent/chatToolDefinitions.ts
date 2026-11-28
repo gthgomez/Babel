@@ -735,7 +735,7 @@ export function parseChatTurn(rawText: string): ChatTurn {
 
 const RECOVERY_PLAN_PARAMETER = {
   ...z.toJSONSchema(RecoveryPlanProposalSchema, { target: 'draft-7' }),
-  description: 'Required after a failed repair: cite the current failure, revision, inspected observation IDs, verifier criterion, scoped targets, and proposed strategy. The controller validates it against the actual edit.',
+  description: 'Supply this plan for a concrete edit when working_state.recovery_plan is required. Use the current gate reference, revision, verifier criterion, target files, and observation IDs from delivered reads. The controller validates the plan against the actual edit.',
 } as const;
 
 /**

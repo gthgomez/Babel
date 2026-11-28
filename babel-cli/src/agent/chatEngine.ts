@@ -172,6 +172,7 @@ import {
   formatTestCommandsForGate,
   type DiscoveredTestCommand,
   discoverProjectTestCommands,
+  formatTestDiscoveryGuidance,
 } from "./projectTestDiscovery.js";
 
 import {
@@ -628,6 +629,7 @@ export class ChatEngine {
   private repoMapCache: string | null = null;
   /** Map value baked into the rendered prompt caches. Null means no map. */
   private renderedRepoMapIdentity: string | null = null;
+  private renderedDiscoveryWriteCount = 0
   /** True after a write drops repoMapCache until the next refresh attempt. */
   private repoMapInvalidated = false;
   /**
@@ -3120,7 +3122,6 @@ export class ChatEngine {
     }
 
     const previousTask = this.options.task;
-    const previousClass = this.taskClass;
     this.options = { ...this.options, task: runtime.taskText,...(accepted?.compiledChatStack?{compiledChatStack:accepted.compiledChatStack}:{}) };
     this.taskClass = runtime.taskClass;
     const continuationScopeUnavailable =
@@ -3131,10 +3132,9 @@ export class ChatEngine {
     if ((previousTask !== runtime.taskText || accepted?.acceptanceChanged) && !isolateFresh) {
       this.initializeVerifierGuard();
     }
-    if (previousTask !== runtime.taskText || previousClass !== runtime.taskClass
-      || this.lastTurnRuntime?.effectiveOperation !== runtime.effectiveOperation) {
-      this.clearSystemPromptCache();
-    }
+    // Workspace check discovery can change between submissions even when the
+    // accepted objective and mutation count carry forward.
+    this.clearSystemPromptCache()
     this.gatePolicy = runtime.gatePolicy;
     this.writeCount = runtime.writeCount;
     this.gateStrikes = runtime.gateStrikes;
@@ -4447,11 +4447,12 @@ export class ChatEngine {
   private getOrBuildSystemPrompt(
     mode: "native" | "legacy" | "text" = "legacy",
   ): string {
-    // The rendered prompt embeds repoMapCache, including when the map is absent.
-    // A later refresh must not reuse a prompt built for a different identity.
-    if (this.renderedRepoMapIdentity !== this.repoMapCache) {
+    // Repo map and test discovery are snapshots. A confirmed write can change
+    // available development checks without altering frozen verifier authority.
+    if (this.renderedRepoMapIdentity !== this.repoMapCache || this.renderedDiscoveryWriteCount !== this.writeCount) {
       this.clearSystemPromptCache();
       this.renderedRepoMapIdentity = this.repoMapCache;
+      this.renderedDiscoveryWriteCount = this.writeCount
     }
     if (mode === "native" && this.cachedSystemPromptNative !== null) {
       return this.cachedSystemPromptNative;
@@ -4503,9 +4504,9 @@ export class ChatEngine {
         'and publishes the settled file to the requested destination if it is absent. Check the published artifact against the user’s requirements.';
     }
 
-    if (this.options.projectRoot && this.discoveredTestCommands.length === 0) {
-      systemContent +=
-        '\n\nTest discovery: the host found no project test command from repository metadata or conventional test files. Do not invent a test filename or choose a runtime from habit. Inspect the repository language and available test configuration first; if no project tests or compatible runner are available, report that verification was not performed. A command denied before dispatch did not run; distinguish that from a command that started and failed.';
+    if (this.options.projectRoot) {
+      const checks = discoverProjectTestCommands(this.options.projectRoot, { includeUnittestHints: true })
+      systemContent += '\n\n' + formatTestDiscoveryGuidance(checks)
     }
 
     // Packet D2: the active edit format is visible in the preamble — format
