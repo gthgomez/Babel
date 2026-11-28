@@ -38,6 +38,7 @@ import {
   setDockerImageRuntimeIdentityForTest,
   resetDockerAvailabilityCache,
 } from './config/benchmarkContainer.js';
+import { withExecutionPolicyChoice } from './config/executionPolicySelection.js';
 import { approveApproval, requestDependencyInstallApproval } from './services/approvalQueue.js';
 
 // H13: unit sandbox tests exercise host path policy without a Docker image.
@@ -1307,6 +1308,40 @@ test('shellExecAsync preserves shellExec result shape for a successful command',
   } finally {
     fixture.cleanup();
   }
+});
+
+test('shellExecAsync Python verification keeps bytecode out of the workspace', async t => {
+  const python = process.platform === 'win32' ? 'python' : 'python3';
+  const version = childProcess.spawnSync(python, ['--version'], { encoding: 'utf8', timeout: 5_000 });
+  if (version.status !== 0 || !/^Python 3\./.test(version.stdout)) {
+    t.skip('Python 3 is unavailable');
+    return;
+  }
+
+  const fixture = makeFixture();
+  t.after(fixture.cleanup);
+  writeFileSync(join(fixture.projectRoot, 'subject.py'), 'value = 42\n');
+  writeFileSync(join(fixture.projectRoot, 'test_subject.py'), [
+    'from unittest import TestCase',
+    'from subject import value',
+    'class SubjectTest(TestCase):',
+    '    def test_value(self):',
+    '        self.assertEqual(value, 42)',
+    '',
+  ].join('\n'));
+
+  const result = await withExecutionPolicyChoice(
+    { profile: 'host_native', source: 'persisted', expectedBoundary: 'host' },
+    () => new SafeExecutor(fixture.projectRoot).shellExecAsync(
+      `${python} -m unittest test_subject`, '.', 20_000, 'test_run',
+    ),
+  );
+
+  assert.equal(result.process_started, true, result.stderr);
+  assert.equal(getTrustedShellExecutionBackend(result), 'host-process');
+  assert.equal(result.exit_code, 0, result.stderr);
+  assert.match(result.stderr, /Ran 1 test/);
+  assert.equal(existsSync(join(fixture.projectRoot, '__pycache__')), false);
 });
 
 test('declared foreground output never starts when native cwd custody cannot be resolved', async (t) => {

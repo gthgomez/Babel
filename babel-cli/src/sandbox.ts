@@ -88,6 +88,7 @@ import {
   parseCommandArgv,
 } from './utils/commandArgv.js';
 import { classifyExecutionRisk, requiresDockerIsolation } from './authority/commandSpec.js';
+import { isPythonTestCommand } from './authority/commandDecoder.js';
 import { classifyResolvedCommand, commandControlledRoots, hostWindowsSystem32Directory, isCanonicalWindowsSystemShell, isResolvedCommandCurrent, resolveCommandExecutable, type ResolvedCommandExecutable } from './authority/commandResolver.js';
 import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
@@ -1536,6 +1537,9 @@ export class SafeExecutor {
     if (useDockerSandbox) {
       return prepareOwnedContainerInvocation({ dockerImage: benchmarkDockerImage!, projectRoot: this.projectRoot, cwd: safeCwd, command }, env);
     }
+    // Match container verification: imported tests and source should not create
+    // bytecode that changes the candidate during a governed test run.
+    if (toolName === 'test_run' && isPythonTestCommand(command)) env['PYTHONDONTWRITEBYTECODE'] = '1';
     // Keep the spawn cwd unchanged, but retain a native physical identity for
     // foreground custody.  A failed probe is represented as absent and makes
     // capture ineligible rather than certifying an unproved workspace.
