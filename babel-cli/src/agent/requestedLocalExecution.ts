@@ -1,10 +1,9 @@
 import { relative, resolve } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
-import { canonicalizeContained } from '../bridge/workspaceBound.js'
 import type { BlockedReport } from '../schemas/agentContracts.js'
 import { foregroundTaskClauses, formatArgvAsCommand, parseForegroundCommandClause, parseSingleProcessArgv } from '../utils/commandArgv.js'
 import { foregroundDenialTargets, invokesProhibitedScript, LOCAL_SCRIPT_PATH as SCRIPT_PATH } from '../utils/commandDenialProse.js'
-import { workspaceMountPath } from '../utils/projectPath.js'
+import { physicalWorkspacePath, resolveSandboxProjectPath, workspaceMountPath } from '../utils/projectPath.js'
 import { redactSecrets } from '../utils/redaction.js'
 import type { ChatToolAction } from './chatToolDefinitions.js'
 import { explicitNodeTestFileArgs } from './completionGatePolicy.js'
@@ -236,8 +235,7 @@ export function requestedProcessScope(
   action: LocalRun,
   projectRoot: string,
 ): ExecutionScope | null {
-  const cwd = action.cwd?.trim() ?? '.'
-  if (resolve(projectRoot, workspaceMountPath(cwd, true) ?? cwd) !== resolve(projectRoot)) return null
+  if (resolveSandboxProjectPath(projectRoot, action.cwd ?? '.', true) !== resolve(projectRoot)) return null
   const argv = parseSingleProcessArgv(action.command)
   if (!argv) return null
   const digest = operationDigest(argv)
@@ -286,17 +284,16 @@ export function substitutesRequestedProcessOutput(
   } else {
     targets = [action.type === 'write_file' ? action.path : action.file_path]
   }
-  return [...requiredOutputs].some(output => targets.some(target => sameRequestedOutput(output, target, projectRoot)))
+  const resolvedTargets = targets.map(target => resolveSandboxProjectPath(projectRoot, target, true))
+  return [...requiredOutputs].some(output => resolvedTargets.some(target => sameRequestedOutput(output, target, projectRoot)))
 }
 
 function sameRequestedOutput(left: string, right: string, projectRoot: string, cwd = '.'): boolean {
-  const workingDirectory = resolve(projectRoot, workspaceMountPath(cwd, true) ?? cwd.trim())
+  const workingDirectory = physicalWorkspacePath(projectRoot, resolveSandboxProjectPath(projectRoot, cwd, true))
   const mounted = workspaceMountPath(right, true)
-  const resolvedLeft = resolve(projectRoot, workspaceMountPath(left, true) ?? left)
-  const resolvedRight = mounted === undefined ? resolve(workingDirectory, right) : resolve(projectRoot, mounted)
-  if (relative(resolvedLeft, resolvedRight) === '') return true
-  try { return relative(canonicalizeContained(resolvedLeft), canonicalizeContained(resolvedRight)) === '' }
-  catch { return false }
+  const resolvedLeft = physicalWorkspacePath(projectRoot, workspaceMountPath(left, true) ?? left)
+  const resolvedRight = mounted === undefined ? physicalWorkspacePath(workingDirectory, right) : physicalWorkspacePath(projectRoot, mounted)
+  return relative(resolvedLeft, resolvedRight) === ''
 }
 
 export function taskProhibitsRequestedOutput(activeProse: readonly string[], output: string, projectRoot: string): boolean {

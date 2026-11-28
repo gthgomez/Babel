@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -175,6 +175,7 @@ test('process-owned outputs reject direct substitutes without blocking independe
   assert.equal(substitutesRequestedProcessOutput([], noGenerate, { type: 'write_file', path: 'preview.csv', content: 'separate' }, root), false)
   const retainedDenial = ['Also do not generate warehouse.csv.']
   assert.equal(substitutesRequestedProcessOutput([], [], { type: 'write_file', path: '/project/warehouse.csv', content: 'substitute' }, root, retainedDenial), true)
+  assert.equal(substitutesRequestedProcessOutput([], [], { type: 'write_file', path: ' warehouse.csv ', content: 'substitute' }, root, retainedDenial), true)
   assert.equal(taskProhibitsRequestedOutput(retainedDenial, '/project/warehouse.csv', root), true)
   assert.equal(taskProhibitsRequestedOutput(['Do not generate "warehouse.csv".'], 'warehouse.csv', root), true)
   assert.equal(taskProhibitsRequestedOutput(['Do not generate warehouse.csv or execute export.py.'], 'warehouse.csv', root), true)
@@ -193,6 +194,21 @@ test('a prohibited declared output is denied even when equivalent argv cannot ea
   assert.equal(taskProhibitsDeclaredJob(request, 'python3 -B export.py output.csv preview.csv --verbose', root), false)
   assert.equal(taskProhibitsDeclaredJob(request, 'python3 other.py input.json output.csv', root), false)
   assert.equal(taskProhibitsDeclaredJob(request, 'python3 export.py input.json preview.csv', root), false)
+})
+
+test('a missing destination resolves relative to the physical command cwd', t => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'babel-output-path-'))
+  t.after(() => rmSync(projectRoot, { recursive: true, force: true }))
+  const jobDir = join(projectRoot, 'nested', 'tools')
+  mkdirSync(jobDir, { recursive: true })
+  symlinkSync(jobDir, join(projectRoot, 'job-alias'), 'junction')
+  const request = [
+    'Add nested/tools/export.py, a local CLI.',
+    'Run the exporter to create nested/output.csv from nested/input.json.',
+    'Do not generate nested/output.csv.',
+  ]
+  assert.equal(taskProhibitsDeclaredJob(request, 'python3 export.py ../input.json ../output.csv', projectRoot, 'job-alias'), true)
+  assert.equal(taskProhibitsDeclaredJob(request, 'python3 export.py ../input.json ../preview.csv', projectRoot, 'job-alias'), false)
 })
 
 test('does not demand a verifier that the current no-run restriction prohibits', () => {

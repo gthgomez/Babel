@@ -1,7 +1,5 @@
-import { realpathSync } from 'node:fs'
-import { isAbsolute, resolve, sep } from 'node:path'
 import { formatArgvAsCommand, parseCommandArgv } from './commandArgv.js'
-import { workspaceMountPath } from './projectPath.js'
+import { physicalWorkspacePath, resolveSandboxProjectPath, workspaceMountPath } from './projectPath.js'
 
 const COMMAND_PROHIBITION = /^(?:please\s+)?(?:you\s+)?(?:do not|don['’]t|must not|never)\s+(?:(?:edit|change|modify)\b.*?\s+(?:or|and)\s+)?(?:run|execute)\s+(.+)$/i
 const WHOLE_TASK_SCOPE = /\s+(?:during|throughout|for)\s+(?:this|the)\s+(?:task|session|run)$/i
@@ -103,15 +101,8 @@ function executableName(value: string): string {
 }
 
 function scriptPathKey(base: string, path: string): string {
-  const absolute = physicalPath(base, path)
+  const absolute = physicalWorkspacePath(base, path)
   return process.platform === 'win32' ? absolute.toLowerCase() : absolute
-}
-
-function physicalPath(base: string, path: string): string {
-  // A process resolves relative arguments from its real cwd. Keep parent
-  // components intact until native resolution so junction traversal agrees.
-  try { return realpathSync.native(isAbsolute(path) ? path : `${base}${sep}${path}`) }
-  catch { return resolve(base, path) }
 }
 
 /** Match the executable or interpreter entry point, while allowing filenames used as data. */
@@ -123,7 +114,7 @@ export function invokesProhibitedScript(
   const [program, ...args] = argv
   if (!program) return false
   const launcher = executableName(program)
-  const workingDirectory = physicalPath(projectRoot, workspaceMountPath(cwd, true) ?? cwd.trim())
+  const workingDirectory = physicalWorkspacePath(projectRoot, resolveSandboxProjectPath(projectRoot, cwd, true))
   const denied = new Set(targets.map(target => scriptPathKey(projectRoot, workspaceMountPath(target, true) ?? target)))
   const matches = (entry: string) => {
     const mounted = workspaceMountPath(entry, true)

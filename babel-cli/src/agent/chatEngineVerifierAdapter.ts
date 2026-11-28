@@ -13,7 +13,7 @@ import { canonicalizeContained } from '../bridge/workspaceBound.js';
 import { shouldUseDockerSandbox } from '../config/benchmarkContainer.js';
 import { getScopedExecutionProfile } from '../config/executionPolicySelection.js';
 import { resolveExecutionProfile } from '../config/executionProfiles.js';
-import { workspaceMountPath } from '../utils/projectPath.js';
+import { resolveSandboxProjectPath } from '../utils/projectPath.js';
 import { isCredentialTargetPath } from './autonomyEnforcement.js';
 import { requireProjectRoot, type ChatScopeInput } from './chatExecutionScope.js';
 
@@ -539,7 +539,7 @@ export function resolveVerifierCacheIdentity(input: {
   const profile = getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']);
   const appAlias = /^[/\\]app(?:[/\\]|$)/i.test(requested.trim()) &&
     (resolveExecutionProfile(profile).name === 'benchmark_container' || shouldUseDockerSandbox(profile));
-  const cwd = canonicalizeContained(path.resolve(input.projectRoot, workspaceMountPath(requested, appAlias) ?? requested));
+  const cwd = canonicalizeContained(resolveSandboxProjectPath(input.projectRoot, requested, appAlias));
   const envKey = input.envKey ?? verifierEnvironmentKey({ ...process.env, BABEL_PROJECT_ROOT: path.resolve(input.projectRoot) });
   return {
     key: `${verifierReceiptIdentityKey(input.command)}::cwd=${cwd}::env=${envKey}`,

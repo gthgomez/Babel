@@ -80,7 +80,7 @@ import {
   requestDependencyInstallApproval,
 } from './services/approvalQueue.js';
 import { getSafeEnv } from './utils/safeEnv.js';
-import { workspaceMountPath } from './utils/projectPath.js';
+import { resolveSandboxProjectPath } from './utils/projectPath.js';
 import { childEnvForSandbox, hardenGitHostEnvironment } from './authority/unprivilegedChildEnv.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
 import {
@@ -91,7 +91,6 @@ import {
 import { classifyExecutionRisk, requiresDockerIsolation } from './authority/commandSpec.js';
 import { isPythonTestCommand } from './authority/commandDecoder.js';
 import { classifyResolvedCommand, commandControlledRoots, hostWindowsSystem32Directory, isCanonicalWindowsSystemShell, isResolvedCommandCurrent, resolveCommandExecutable, type ResolvedCommandExecutable } from './authority/commandResolver.js';
-import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
 import { isSandboxReadableTestPath, writeUtf8FileSafely, type TrustedFileCreationEvidence } from './sandboxFileWrites.js';
@@ -707,18 +706,8 @@ export class SafeExecutor {
   // ── Path safety ─────────────────────────────────────────────────────────────
 
   private resolveProjectPath(inputPath: string): string {
-    const trimmed = inputPath.trim();
     const profile = resolveExecutionProfile(getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']));
-    const mounted = workspaceMountPath(trimmed, profile.name === 'benchmark_container');
-    if (mounted !== undefined) {
-      return resolve(this.projectRoot, sanitizePath(mounted));
-    }
-
-    if (isAbsolute(trimmed)) {
-      return resolve(trimmed);
-    }
-
-    return resolve(this.projectRoot, sanitizePath(trimmed));
+    return resolveSandboxProjectPath(this.projectRoot, inputPath, profile.name === 'benchmark_container');
   }
 
   private isWithinProjectRoot(candidatePath: string): boolean {
