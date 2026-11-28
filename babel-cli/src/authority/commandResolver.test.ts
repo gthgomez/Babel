@@ -45,6 +45,24 @@ test('trusted resolved Git keeps its ordinary command policy', () => {
   assert.equal(isResolvedCommandCurrent(resolution!, { realpath: (path) => path, fileIdentity: () => 'file-v2' }), false);
 });
 
+test('protected Python 3 aliases retain project-code policy with a versioned interpreter', () => {
+  const python = (target: string) => resolveCommandExecutable('python3', {
+    platform: 'linux', cwd: '/workspace/repo', env: { PATH: '/usr/bin' },
+    trustedRoots: ['/usr/bin'], controlledRoots: ['/workspace/repo'],
+    isFile: path => path === '/usr/bin/python3',
+    realpath: path => path === '/usr/bin/python3' ? target : path,
+    fileIdentity: () => 'pinned-test-interpreter',
+    isWritableByCurrentUser: () => false,
+    isOwnedByCurrentUser: () => false,
+  });
+  const executable = python('/usr/bin/python3.12');
+  assert.equal(executable?.trusted, true);
+  assert.equal(classifyResolvedCommand(executable!, ['export.py'], { invokedBase: 'python3' }).executionRisk, 'project_code');
+  assert.equal(python('/usr/bin/python3.12-wrapper')?.trusted, false);
+  assert.equal(python('/usr/bin/python3.12.cmd')?.trusted, false);
+  assert.equal(python('/workspace/repo/python3.12')?.trusted, false);
+});
+
 test('trusted system roots cannot lend Git semantics to a canonical Node target', () => {
   const resolution = resolveCommandExecutable('git', {
     platform: 'linux', cwd: '/workspace/repo', env: { PATH: '/opt/protected-tools' },

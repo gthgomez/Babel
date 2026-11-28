@@ -94,25 +94,4 @@ export {
   transcriptPath,
 } from './runsLayout.js';
 
-/**
- * Sanitize a path component so it is safe to use as a filesystem name segment.
- * Strips Windows drive-letter prefixes (C:, D:, etc.), replaces characters
- * that are invalid in Windows/NTFS filenames (< > : " | ? *), and normalizes
- * backslashes to forward slashes. Does NOT strip path separators — callers
- * should split on separators before passing individual segments.
- */
-export function sanitizePathComponent(segment: string): string {
-  return segment
-    .replace(/^[A-Za-z]:(?=\\|$)/, '') // Strip Windows drive letter (e.g. "C:\" → "\")
-    .replace(/[<>:"|?*]/g, '-') // Replace NTFS-invalid filename chars
-    .replace(/\\/g, '/'); // Normalize to POSIX separators
-}
-
-/**
- * Sanitize a full path string by applying sanitizePathComponent to each
- * segment. Preserves the directory structure while cleaning each component.
- */
-export function sanitizePath(fullPath: string): string {
-  const segments = fullPath.split(/[/\\]+/).filter(Boolean);
-  return segments.map(sanitizePathComponent).join('/');
-}
+export { sanitizePath, sanitizePathComponent } from '../utils/projectPath.js';

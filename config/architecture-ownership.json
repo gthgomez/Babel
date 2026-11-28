@@ -74,6 +74,7 @@
         "babel-cli/src/sandboxCommands.ts",
         "babel-cli/src/sandboxContainerLifecycle.ts",
         "babel-cli/src/sandboxFileWrites.ts",
+        "babel-cli/src/sandboxForegroundFile.ts",
         "babel-cli/src/sandboxProcessTermination.ts",
         "babel-cli/src/sandboxSpawnCommandAsync.ts",
         "babel-cli/src/windowsProcessSettlement.ts",

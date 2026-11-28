@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -15,8 +16,10 @@ import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../conf
 import { currentForegroundEffects } from './foregroundEffectReceipt.js';
 import { loadEffectLedger } from '../executor/effectLedger.js';
 import { parseSessionEventLog, serializeSessionEventLog } from './sessionEvents.js';
+import { SafeExecutor, type ForegroundOutputCapture } from '../sandbox.js';
+import { __testOnlySetWriteUtf8ToFd } from '../sandboxFileWrites.js';
 
-for(const scenario of ['host','docker','file-output','captured-output','concurrent-output','dry-run','retained-read-only'] as const)test(`a scoped ${scenario} session enforces its boundary through a real engine tool call`, {timeout:45000},async()=>{
+for(const scenario of ['host','docker','file-output','captured-output','concurrent-output','concurrent-file-output','failed-file-output','missing-owner-output','partial-publication-output','invalid-staged-file-output','dry-run','retained-read-only'] as const)test(`a scoped ${scenario} session enforces its boundary through a real engine tool call`, {timeout:45000},async()=>{
   const fixtureRoot=mkdtempSync(join(tmpdir(),'babel-engine-scope-'));
   const root=join(fixtureRoot,'project');
   mkdirSync(root);
@@ -28,7 +31,7 @@ for(const scenario of ['host','docker','file-output','captured-output','concurre
     process.env['BABEL_RUNS_DIR']=join(fixtureRoot,'runs');process.env['BABEL_EXECUTION_PROFILE']=scenario!=='docker'?'safe_repo':'host_native';
     delete process.env['BABEL_ALLOW_HOST_FALLBACK'];delete process.env['BABEL_DOCKER_DISABLE'];delete process.env['BABEL_BENCHMARK_DOCKER_IMAGE'];setDockerAvailableForTest(false);
     process.env['BABEL_BENCHMARK_MODE']='1';process.env['BABEL_BENCHMARK_AUTO_APPROVE']='1';
-    if(scenario==='file-output'||scenario==='captured-output'||scenario==='concurrent-output'){
+    if(scenario.endsWith('output')){
       delete process.env['BABEL_DRY_RUN'];delete process.env['BABEL_DRY_RUN_SOURCE'];
     }else{
       process.env['BABEL_DRY_RUN']=scenario==='dry-run'?'1':'0';process.env['BABEL_DRY_RUN_SOURCE']='session';
@@ -37,23 +40,33 @@ for(const scenario of ['host','docker','file-output','captured-output','concurre
     process.env['OPENROUTER_API_KEY']=canary;process.env['COMMAND_CODE_API_KEY']='synthetic-other-provider-canary';
     process.env['BABEL_AUTONOMY_LEASE']=JSON.stringify({version:2,leaseId:'synthetic-scoped-policy',scope:{repository:'fixture',objective:'verify scoped execution'},allowedCapabilities:['run_arbitrary_code','run_local_command','run_tests','edit_task_files','inspect_repository']});
     const capturedOutput = scenario === 'captured-output';
-    const concurrentOutput = scenario === 'concurrent-output';
-    const fileOutput = scenario === 'file-output' || capturedOutput || concurrentOutput;
+    const concurrentOutput = scenario === 'concurrent-output' || scenario === 'concurrent-file-output';
+    const failedOutput = scenario === 'failed-file-output';
+    const missingOwner = scenario === 'missing-owner-output';
+    const partialPublication = scenario === 'partial-publication-output';
+    const invalidStage = scenario === 'invalid-staged-file-output';
+    const fileOutput = scenario.endsWith('output');
     const retainedReadOnly = scenario === 'retained-read-only';
-    writeFileSync(join(root,'check.mjs'),capturedOutput || concurrentOutput ? [
-      "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+    writeFileSync(join(root,'check.mjs'), fileOutput ? [
+      "import { existsSync, readFileSync, truncateSync, writeFileSync } from 'node:fs';",
       "import { setTimeout as delay } from 'node:timers/promises';",
       "const bytes = readFileSync(process.argv[2], 'utf8').toUpperCase();",
-      "if (process.env.BABEL_FOREGROUND_OUTPUT_PATH === process.argv[3]) {",
       ...(concurrentOutput ? [
         "  writeFileSync('child-started', 'running');",
-        "  for (let i = 0; !existsSync(process.argv[3]) && i < 500; i++) await delay(20);",
+        "  for (let i = 0; !existsSync('result.txt') && i < 500; i++) await delay(20);",
       ] : []),
-      "  process.stdout.write('BABEL_FOREGROUND_OUTPUT_V1\\n' + bytes);",
-      "} else writeFileSync(process.argv[3], bytes);",
-    ].join('\n') : fileOutput
-      ? "import {readFileSync,writeFileSync} from 'node:fs'; writeFileSync(process.argv[3],readFileSync(process.argv[2],'utf8').toUpperCase());"
-      : retainedReadOnly ? "console.log('checked in a real process');"
+      ...(capturedOutput || scenario === 'concurrent-output' ? [
+        "if (process.env.BABEL_FOREGROUND_OUTPUT_PATH === process.argv[3]) {",
+        "  process.stdout.write('BABEL_FOREGROUND_OUTPUT_V1\\n' + bytes);",
+        "} else writeFileSync(process.argv[3], bytes);",
+      ] : ["writeFileSync(process.argv[3], bytes);"]),
+      ...(invalidStage ? [
+        "truncateSync(process.argv[3], 16 * 1024 * 1024 + 1);",
+        "process.stdout.write('BABEL_FOREGROUND_OUTPUT_V1\\n' + bytes);",
+      ] : []),
+      ...(!capturedOutput ? ["console.log('exporter completed');"] : []),
+      ...(failedOutput ? ["process.exitCode = 7;"] : []),
+    ].join('\n') : retainedReadOnly ? "console.log('checked in a real process');"
         : "import {writeFileSync} from 'node:fs'; const bad=['OPENROUTER_API_KEY','COMMAND_CODE_API_KEY'].some(k=>Object.hasOwn(process.env,k)); writeFileSync('result.txt',bad?'present':'absent');");
     if(fileOutput)writeFileSync(join(root,'input.txt'),'café\n');
     for(const args of [['init','-q','--initial-branch=main'],['add','--','.'],['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','fixture']])execFileSync('git',args,{cwd:root,windowsHide:true,stdio:'ignore'});
@@ -95,7 +108,11 @@ for(const scenario of ['host','docker','file-output','captured-output','concurre
     const task=retainedReadOnly?'Also run `node --version`.':fileOutput?'Run check.mjs to create result.txt from input.txt.':'Run `node check.mjs`.';
     const initialTask = initial ?? task;
     engine=withExecutionPolicyChoice(choice,()=>new ChatEngine({task:initialTask,projectRoot:root,model:'fixture-model',providerRunner:runner as never,providerPolicy,executionPolicy:choice}));
-    attachSessionAdmissionStore(engine);
+    if (!missingOwner) attachSessionAdmissionStore(engine);
+    if (partialPublication) __testOnlySetWriteUtf8ToFd(fd => {
+      writeSync(fd, 'CA');
+      throw new Error('injected partial publication');
+    });
     if (initial) engine.admitUserSubmission({ userInput: initial }, { model: 'fixture-model', provider: 'opencode-go' });
     const concurrentWriter = concurrentOutput ? (async () => {
       for (let i = 0; i < 1000; i++) {
@@ -119,7 +136,7 @@ for(const scenario of ['host','docker','file-output','captured-output','concurre
     });
     const rows=(engine as unknown as {toolCallLog:Array<Record<string,unknown>>}).toolCallLog;
     const tools=rows.map(row=>({tool:row['tool'],detail:scrub(row['detail']),error:scrub(row['error']),stderr:scrub(row['stderr']),exit:row['exit_code'],started:row['processExecuted']}));
-    if(scenario==='host'||(fileOutput&&!concurrentOutput)){
+    if(scenario==='host'||(fileOutput&&!concurrentOutput&&!failedOutput&&!missingOwner&&!partialPublication&&!invalidStage)){
       assert.equal(existsSync(join(root,'result.txt')),true,`the actual host child must have run; event summary ${JSON.stringify(summary)} tool summary ${JSON.stringify(tools)}`);
       assert.equal(readFileSync(join(root,'result.txt'),'utf8'),fileOutput?'CAFÉ\n':'absent');
       assert.equal(rows.filter(row=>row['target']===command&&row['processCompleted']===true).length,1);
@@ -134,7 +151,7 @@ for(const scenario of ['host','docker','file-output','captured-output','concurre
       const log = engine.getParityRuntime().sessionEvents;
       const ledger = loadEffectLedger(chatSessionDir(engine.getEngineRunId()));
       const effects = currentForegroundEffects(root, engine.getTaskContract()!, log, ledger);
-      assert.equal(terminal?.outcome,fileOutput&&!capturedOutput?'BLOCKED_POLICY':'VERIFIED_COMPLETE', JSON.stringify({
+      assert.equal(terminal?.outcome,'VERIFIED_COMPLETE', JSON.stringify({
         reason: terminal?.reason_code, terminal: summary.at(-1), matches: effects.length,
       }));
       assert.equal(effects.length,1);
@@ -150,11 +167,18 @@ for(const scenario of ['host','docker','file-output','captured-output','concurre
         assert.equal(rows.filter(row=>row['detail']==='required_foreground_already_started').length,1);
         assert.equal(effects[0]?.output?.path,'result.txt');
         assert.equal(effects[0]?.output?.before,null);
-        assert.equal(effects[0]?.output?.source, capturedOutput ? 'child_stdout' : undefined);
+        assert.equal(effects[0]?.output?.source, capturedOutput ? 'child_stdout' : 'child_file');
+        if (!capturedOutput) {
+          assert.equal(effects[0]?.stdout_digest, createHash('sha256').update('exporter completed\n').digest('hex'));
+        }
         const withoutPublication = ledger.map(row => row.status === 'completed' && row.postImageHashes
           ? { ...row, postImageHashes: { workspace: row.postImageHashes['workspace']! } } : row);
-        if (capturedOutput) assert.equal(currentForegroundEffects(root, engine.getTaskContract()!, log, withoutPublication).length, 0);
+        assert.equal(currentForegroundEffects(root, engine.getTaskContract()!, log, withoutPublication).length, 0);
         assert.deepEqual(Object.keys(effects[0]!.input_hashes).sort(),['check.mjs','input.txt']);
+        const substitute = join(fixtureRoot, 'same-bytes.txt');
+        writeFileSync(substitute, readFileSync(join(root, 'result.txt')));
+        renameSync(substitute, join(root, 'result.txt'));
+        assert.equal(currentForegroundEffects(root, engine.getTaskContract()!, log, ledger).length,0);
       }
       const withoutStart = { ...log, events: log.events.filter(event => event.kind !== 'tool_started') };
       assert.equal(currentForegroundEffects(root, engine.getTaskContract()!, withoutStart, ledger).length,0);
@@ -171,7 +195,26 @@ for(const scenario of ['host','docker','file-output','captured-output','concurre
       assert.equal(await concurrentWriter,true);
       assert.equal(readFileSync(join(root,'result.txt'),'utf8'),'other writer\n');
       assert.equal(engine.getParityRuntime().sessionEvents.events.some(event =>
-        event.kind==='tool_completed' && event.foreground_effect?.output?.source === 'child_stdout'),false);
+        event.kind==='tool_completed' && event.foreground_effect?.output?.source !== undefined),false);
+      assert.notEqual((events.at(-1) as {outcome?:string})?.outcome,'VERIFIED_COMPLETE');
+    }else if(failedOutput){
+      assert.equal(rows.some(row => row['target'] === command && row['exit_code'] === 7), true);
+      assert.equal(existsSync(join(root,'result.txt')), false);
+      assert.notEqual((events.at(-1) as {outcome?:string})?.outcome,'VERIFIED_COMPLETE');
+    }else if(missingOwner){
+      assert.equal(rows.some(row => row['detail'] === 'foreground_output_owner_unavailable'), true);
+      assert.equal(existsSync(join(root,'result.txt')), false);
+      assert.equal(engine.getParityRuntime().sessionEvents.events.some(event =>
+        event.kind === 'tool_started' && event.tool_name === 'run_command'), false);
+    }else if(partialPublication){
+      assert.equal(readFileSync(join(root,'result.txt'),'utf8'), 'CA');
+      assert.equal(rows.some(row => String(row['stderr']).includes('Reconcile the incomplete destination')), true);
+      assert.equal(engine.getParityRuntime().sessionEvents.events.some(event =>
+        event.kind === 'tool_completed' && event.foreground_effect !== undefined), false);
+    }else if(invalidStage){
+      assert.equal(existsSync(join(root,'result.txt')), false);
+      assert.equal(engine.getParityRuntime().sessionEvents.events.some(event =>
+        event.kind === 'tool_completed' && event.foreground_effect !== undefined), false);
       assert.notEqual((events.at(-1) as {outcome?:string})?.outcome,'VERIFIED_COMPLETE');
     }else if(retainedReadOnly){
       assert.equal(engine.getTurnRuntimeSnapshot()?.effectiveOperation, 'READ_ONLY');
@@ -195,9 +238,51 @@ for(const scenario of ['host','docker','file-output','captured-output','concurre
     }
     assert.equal(JSON.stringify(events).includes(canary),false);
   }finally{
+    if(scenario==='partial-publication-output') __testOnlySetWriteUtf8ToFd(null);
     if(engine){engine.closeAdmissionStore();await bindBdnsAfterCanonicalFlush({sessionId:engine.getEngineRunId(),runDir:chatSessionDir(engine.getEngineRunId()),close:true});}
     resetDockerAvailabilityCache();
     for(const [key,value] of prior){if(value===undefined)delete process.env[key];else process.env[key]=value;}
     rmSync(fixtureRoot,{recursive:true,force:true});
   }
+});
+
+test('a release-time refusal never starts the exporter and allows a fresh authorized launch', {
+  timeout: 45_000,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-foreground-release-'));
+  try {
+    writeFileSync(join(root, 'check.mjs'), "import { writeFileSync } from 'node:fs'; writeFileSync(process.argv[3], 'complete');");
+    writeFileSync(join(root, 'input.txt'), 'unchanged');
+    const executor = new SafeExecutor(root);
+    const choice = { profile: 'host_native', source: 'persisted', expectedBoundary: 'host' } as const;
+    const run = (release: ForegroundOutputCapture['release'], signal?: AbortSignal) => withExecutionPolicyChoice(choice, () => executor.shellExecAsync(
+      'node check.mjs input.txt result.txt', root, 15_000, 'shell_exec', signal, undefined, {
+        path: 'result.txt', canStage: () => true, release,
+        publish: write => write(), settle: record => record(),
+      },
+    ));
+    const declined = await run(() => undefined);
+    assert.equal(declined.denial?.reason_code, 'foreground_output_unavailable');
+    assert.notEqual(declined.process_started, true);
+    assert.equal(existsSync(join(root, 'result.txt')), false);
+    const controller = new AbortController();
+    const cancelled = await run(launch => { controller.abort(); return launch(); }, controller.signal);
+    assert.notEqual(cancelled.process_started, true);
+    assert.equal(cancelled.process_termination, 'cancelled');
+    assert.equal(cancelled.denial, undefined);
+    assert.equal(existsSync(join(root, 'result.txt')), false);
+    if (process.platform === 'win32') {
+      const afterHandoff = new AbortController();
+      const interrupted = await run(launch => {
+        const dispatched = launch();
+        afterHandoff.abort();
+        return dispatched;
+      }, afterHandoff.signal);
+      assert.equal(interrupted.process_termination, 'cancelled');
+      assert.equal(existsSync(join(root, 'result.txt')), false);
+    }
+    const allowed = await run(launch => launch());
+    assert.equal(allowed.exit_code, 0, allowed.stderr);
+    assert.equal(readFileSync(join(root, 'result.txt'), 'utf8'), 'complete');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

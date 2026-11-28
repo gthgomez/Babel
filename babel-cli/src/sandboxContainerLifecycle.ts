@@ -10,6 +10,8 @@ export interface PreparedShellInvocation {
   commandArgv?: readonly string[];
   /** Physical host cwd resolved before spawn for foreground custody. */
   canonicalHostCwd?: string;
+  /** Validated native executable before wrapping a Windows shell invocation. */
+  nativeHostExecutable?: string;
   env: NodeJS.ProcessEnv;
   validateExecutable?: () => boolean;
   ownedContainerName?: string;

@@ -38,6 +38,7 @@ import {
   setDockerImageRuntimeIdentityForTest,
   resetDockerAvailabilityCache,
 } from './config/benchmarkContainer.js';
+import { withExecutionPolicyChoice } from './config/executionPolicySelection.js';
 import { approveApproval, requestDependencyInstallApproval } from './services/approvalQueue.js';
 
 // H13: unit sandbox tests exercise host path policy without a Docker image.
@@ -1309,11 +1310,46 @@ test('shellExecAsync preserves shellExec result shape for a successful command',
   }
 });
 
-test('foreground capture is withheld when native cwd custody cannot be resolved', async (t) => {
+test('shellExecAsync Python verification keeps bytecode out of the workspace', async t => {
+  const python = process.platform === 'win32' ? 'python' : 'python3';
+  const version = childProcess.spawnSync(python, ['--version'], { encoding: 'utf8', timeout: 5_000 });
+  if (version.status !== 0 || !/^Python 3\./.test(version.stdout)) {
+    t.skip('Python 3 is unavailable');
+    return;
+  }
+
+  const fixture = makeFixture();
+  t.after(fixture.cleanup);
+  writeFileSync(join(fixture.projectRoot, 'subject.py'), 'value = 42\n');
+  writeFileSync(join(fixture.projectRoot, 'test_subject.py'), [
+    'from unittest import TestCase',
+    'from subject import value',
+    'class SubjectTest(TestCase):',
+    '    def test_value(self):',
+    '        self.assertEqual(value, 42)',
+    '',
+  ].join('\n'));
+
+  const result = await withExecutionPolicyChoice(
+    { profile: 'host_native', source: 'persisted', expectedBoundary: 'host' },
+    () => new SafeExecutor(fixture.projectRoot).shellExecAsync(
+      `${python} -m unittest test_subject`, '.', 20_000, 'test_run',
+    ),
+  );
+
+  assert.equal(result.process_started, true, result.stderr);
+  assert.equal(getTrustedShellExecutionBackend(result), 'host-process');
+  assert.equal(result.exit_code, 0, result.stderr);
+  assert.match(result.stderr, /Ran 1 test/);
+  assert.equal(existsSync(join(fixture.projectRoot, '__pycache__')), false);
+});
+
+test('declared foreground output never starts when native cwd custody cannot be resolved', async (t) => {
   const fixture = makeFixture();
   try {
     writeFileSync(join(fixture.projectRoot, 'emit-foreground.mjs'),
       "process.stdout.write('BABEL_FOREGROUND_OUTPUT_V1\\nowned bytes')");
+    writeFileSync(join(fixture.projectRoot, 'input.txt'), 'unchanged');
     const nativeRealpath = realpathSync.native;
     t.mock.method(realpathSync, 'native', (path: string) => {
       if (path === fixture.projectRoot) throw new Error('synthetic native cwd resolution failure');
@@ -1322,16 +1358,18 @@ test('foreground capture is withheld when native cwd custody cannot be resolved'
     syncBuiltinESMExports();
     let publishCalls = 0;
     const result = await new SafeExecutor(fixture.projectRoot).shellExecAsync(
-      'node emit-foreground.mjs', fixture.projectRoot, 5_000, undefined, undefined, undefined, {
+      'node emit-foreground.mjs input.txt declared-output.txt', fixture.projectRoot, 5_000, undefined, undefined, undefined, {
         path: 'declared-output.txt',
+        canStage: () => true,
+        release: launch => launch(),
         publish: () => { publishCalls += 1; return undefined; },
         settle: () => true,
       },
     );
-    assert.equal(result.process_started, true);
-    assert.equal(result.exit_code, 0, result.stderr);
-    assert.match(result.stdout, /BABEL_FOREGROUND_OUTPUT_V1/);
-    assert.equal(getTrustedShellExecutionBackend(result), 'host-process');
+    assert.notEqual(result.process_started, true);
+    assert.equal(result.denial?.reason_code, 'foreground_output_unavailable');
+    assert.equal(result.stdout, '');
+    assert.equal(getTrustedShellExecutionBackend(result), undefined);
     assert.equal(getTrustedHostShellInvocation(result), undefined);
     assert.equal(publishCalls, 0, 'unresolved cwd must not publish a foreground output');
   } finally {

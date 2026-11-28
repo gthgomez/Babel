@@ -68,6 +68,7 @@ export function testCommandsFromMakefile(
  */
 export function testCommandsFromConventions(opts: {
   hasPytestConfig: boolean;    // pytest.ini, pyproject.toml [tool.pytest], setup.cfg [tool:pytest]
+  hasUnittestFiles?: boolean
   hasJestConfig: boolean;      // jest.config.*, "jest" in package.json
   hasCargoToml: boolean;       // Cargo.toml (Rust)
   hasGoMod: boolean;           // go.mod (Go)
@@ -77,6 +78,10 @@ export function testCommandsFromConventions(opts: {
   const out: DiscoveredTestCommand[] = [];
   if (opts.hasPytestConfig) {
     out.push({ command: 'python -m pytest', source: 'convention (pytest config)' });
+  }
+  if (opts.hasUnittestFiles) {
+    const python = process.platform === 'win32' ? 'python' : 'python3'
+    out.push({ command: `${python} -m unittest discover`, source: 'convention (Python test files)' })
   }
   if (opts.hasJestConfig) {
     out.push({ command: 'npx jest', source: 'convention (jest config)' });
@@ -130,6 +135,28 @@ export function formatTestCommandsForGate(
   return names.join(', ');
 }
 
+/** Give the provider the current workspace's development check options. */
+export function formatTestDiscoveryGuidance(commands: DiscoveredTestCommand[]): string {
+  const npmRunPrefix = 'npm run '
+  const safeCommands = commands.filter(({ command }) => {
+    // Package script names come from the repository. Only offer plain tokens
+    // as command arguments in the system prompt.
+    if (!command.startsWith(npmRunPrefix)) return true
+    const name = command.slice(npmRunPrefix.length)
+    return name.length <= 128 && /^[A-Za-z0-9_]/.test(name) && !/[^A-Za-z0-9_.:-]/.test(name)
+  })
+  const listed = formatTestCommandsForGate(safeCommands)
+  if (listed) {
+    return `Test discovery: ${listed}. Use a relevant check when it is available and authorized. ` +
+      'Keep a new check diagnostic until the contract accepts it.'
+  }
+  return 'Test discovery: the host found no project test command from repository metadata or conventional test files. ' +
+    'Inspect the repository language and available test configuration. If the task authorizes verification and a compatible ' +
+    'runner is available, a focused requirement-based development check can guide the work. Keep a new check diagnostic ' +
+    'until the contract accepts it. If no check can run, report the specific missing prerequisite. A command denied before ' +
+    'dispatch did not run. Distinguish that from a command that started and failed.'
+}
+
 /**
  * Discover project test commands by probing the filesystem at `projectRoot`.
  * Checks package.json scripts, Makefile targets, and common test-runner
@@ -137,6 +164,7 @@ export function formatTestCommandsForGate(
  */
 export function discoverProjectTestCommands(
   projectRoot: string,
+  options: { includeUnittestHints?: boolean } = {},
 ): DiscoveredTestCommand[] {
   const found: DiscoveredTestCommand[][] = [];
 
@@ -166,9 +194,10 @@ export function discoverProjectTestCommands(
   }
 
   // Convention-based detection from config files present in the project root
-  const rootEntries = (() => {
-    try { return readdirSync(projectRoot); } catch { return []; }
+  const entries = (() => {
+    try { return readdirSync(projectRoot, { withFileTypes: true }); } catch { return []; }
   })();
+  const rootEntries = entries.map(entry => entry.name)
   const rootFiles = new Set(rootEntries.map((e) => e.toLowerCase()));
 
   found.push(
@@ -178,6 +207,8 @@ export function discoverProjectTestCommands(
         rootFiles.has('pyproject.toml') ||
         rootFiles.has('setup.cfg') ||
         rootFiles.has('conftest.py'),
+      hasUnittestFiles: options.includeUnittestHints === true &&
+        entries.some(entry => entry.isFile() && /^test_.*\.py$/.test(entry.name)),
       hasJestConfig:
         rootFiles.has('jest.config.js') ||
         rootFiles.has('jest.config.ts') ||

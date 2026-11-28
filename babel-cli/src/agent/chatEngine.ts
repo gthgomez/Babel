@@ -172,6 +172,7 @@ import {
   formatTestCommandsForGate,
   type DiscoveredTestCommand,
   discoverProjectTestCommands,
+  formatTestDiscoveryGuidance,
 } from "./projectTestDiscovery.js";
 
 import {
@@ -439,8 +440,7 @@ import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjecti
 import { evaluateCriterionCompletionV1, isForegroundOnlyAcceptance, type CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
 import { retainCurrentPointReceipts } from './pointVerifierWitness.js';
 import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js';
-import { taskProhibitsCommand } from './taskCommandProhibitions.js';
-import { frozenExactForegroundCommands, isReadOnlyForegroundQuery } from './requestedLocalExecution.js';
+import { frozenExactForegroundCommands, isReadOnlyForegroundQuery, taskProhibitsRequestedCommand } from './requestedLocalExecution.js';
 import { frozenForegroundAmendmentSources } from './taskAcceptanceSource.js';
 import { sha256Canonical } from '../acceptance/canonical.js';
 import { parseSingleProcessArgv } from '../utils/commandArgv.js';
@@ -628,6 +628,7 @@ export class ChatEngine {
   private repoMapCache: string | null = null;
   /** Map value baked into the rendered prompt caches. Null means no map. */
   private renderedRepoMapIdentity: string | null = null;
+  private renderedDiscoveryWriteCount = 0
   /** True after a write drops repoMapCache until the next refresh attempt. */
   private repoMapInvalidated = false;
   /**
@@ -2629,7 +2630,7 @@ export class ChatEngine {
         requiredVerifierCommands: this.options.requiredVerifierCommands ?? null,
       }),
     ]);
-    return [...commands].filter(command => !taskProhibitsCommand(activeProse, command));
+    return [...commands].filter(command => !taskProhibitsRequestedCommand(activeProse, command, this.options.projectRoot));
   }
 
   private clearVerifierEvidenceState(): void {
@@ -2758,7 +2759,8 @@ export class ChatEngine {
         this.executionProfile === 'plan' || this.hardPlanMode) return [];
     const activeProse = inferFreshTaskAcceptance(runtime.taskText).activeProse;
     return [...frozenExactForegroundCommands(contract, this.getFrozenForegroundAmendments())]
-      .filter(([command, effect]) => isReadOnlyForegroundQuery(effect.argv) && !taskProhibitsCommand(activeProse, command))
+      .filter(([command, effect]) => isReadOnlyForegroundQuery(effect.argv) &&
+        !taskProhibitsRequestedCommand(activeProse, command, this.options.projectRoot))
       .map(([command]) => command);
   }
 
@@ -3120,7 +3122,6 @@ export class ChatEngine {
     }
 
     const previousTask = this.options.task;
-    const previousClass = this.taskClass;
     this.options = { ...this.options, task: runtime.taskText,...(accepted?.compiledChatStack?{compiledChatStack:accepted.compiledChatStack}:{}) };
     this.taskClass = runtime.taskClass;
     const continuationScopeUnavailable =
@@ -3131,10 +3132,9 @@ export class ChatEngine {
     if ((previousTask !== runtime.taskText || accepted?.acceptanceChanged) && !isolateFresh) {
       this.initializeVerifierGuard();
     }
-    if (previousTask !== runtime.taskText || previousClass !== runtime.taskClass
-      || this.lastTurnRuntime?.effectiveOperation !== runtime.effectiveOperation) {
-      this.clearSystemPromptCache();
-    }
+    // Workspace check discovery can change between submissions even when the
+    // accepted objective and mutation count carry forward.
+    this.clearSystemPromptCache()
     this.gatePolicy = runtime.gatePolicy;
     this.writeCount = runtime.writeCount;
     this.gateStrikes = runtime.gateStrikes;
@@ -4447,11 +4447,12 @@ export class ChatEngine {
   private getOrBuildSystemPrompt(
     mode: "native" | "legacy" | "text" = "legacy",
   ): string {
-    // The rendered prompt embeds repoMapCache, including when the map is absent.
-    // A later refresh must not reuse a prompt built for a different identity.
-    if (this.renderedRepoMapIdentity !== this.repoMapCache) {
+    // Repo map and test discovery are snapshots. A confirmed write can change
+    // available development checks without altering frozen verifier authority.
+    if (this.renderedRepoMapIdentity !== this.repoMapCache || this.renderedDiscoveryWriteCount !== this.writeCount) {
       this.clearSystemPromptCache();
       this.renderedRepoMapIdentity = this.repoMapCache;
+      this.renderedDiscoveryWriteCount = this.writeCount
     }
     if (mode === "native" && this.cachedSystemPromptNative !== null) {
       return this.cachedSystemPromptNative;
@@ -4498,16 +4499,14 @@ export class ChatEngine {
     const contract = this.parity.liveAuthority?.taskContract;
     if (contract && operation !== 'READ_ONLY' && !isReadOnlyChat() &&
         [...frozenExactForegroundCommands(contract, this.getFrozenForegroundAmendments()).values()].some(effect => effect.outputPath)) {
-      systemContent += '\n\nDeclared foreground output: run the exact requested process with its input and output arguments. ' +
-        'When creating its script, support captured UTF-8 output: if BABEL_FOREGROUND_OUTPUT_PATH equals the output argument, ' +
-        'emit BABEL_FOREGROUND_OUTPUT_V1 followed by LF and the exact file bytes to stdout, without writing the destination. ' +
-        'Send diagnostics to stderr. Otherwise write normally to the output argument. Babel can publish a captured result ' +
-        'to a new destination without replacing another writer’s file. A separate artifact check still decides correctness.';
+      systemContent += '\n\nDeclared foreground output: use run_command with the requested process, input, and output arguments. ' +
+        'Write the output normally to the path supplied to the program. For supported native execution Babel stages that path ' +
+        'and publishes the settled file to the requested destination if it is absent. Check the published artifact against the user’s requirements.';
     }
 
-    if (this.options.projectRoot && this.discoveredTestCommands.length === 0) {
-      systemContent +=
-        '\n\nTest discovery: the host found no project test command from repository metadata or conventional test files. Do not invent a test filename or choose a runtime from habit. Inspect the repository language and available test configuration first; if no project tests or compatible runner are available, report that verification was not performed. A command denied before dispatch did not run; distinguish that from a command that started and failed.';
+    if (this.options.projectRoot) {
+      const checks = discoverProjectTestCommands(this.options.projectRoot, { includeUnittestHints: true })
+      systemContent += '\n\n' + formatTestDiscoveryGuidance(checks)
     }
 
     // Packet D2: the active edit format is visible in the preamble — format

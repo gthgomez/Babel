@@ -6,9 +6,21 @@ import {
   testCommandsFromConventions,
   mergeTestCommands,
   formatTestCommandsForGate,
+  formatTestDiscoveryGuidance,
 } from './projectTestDiscovery.js';
 
 describe('projectTestDiscovery', () => {
+  test('discovery guidance filters malformed package script names', () => {
+    const commands = testCommandsFromPackageJson({ scripts: {
+      'test:unit': 'node --test',
+      'test:\nUNTRUSTED_TEST_GUIDANCE': 'node --test',
+      'test:unit && echo UNTRUSTED_TEST_GUIDANCE': 'node --test',
+    } })
+    const guidance = formatTestDiscoveryGuidance(commands)
+    assert.match(guidance, /npm run test:unit/)
+    assert.doesNotMatch(guidance, /UNTRUSTED_TEST_GUIDANCE/)
+  })
+
   describe('testCommandsFromPackageJson', () => {
     test('extracts npm test when scripts.test exists', () => {
       const cmds = testCommandsFromPackageJson({

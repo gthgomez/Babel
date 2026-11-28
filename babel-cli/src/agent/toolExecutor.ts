@@ -1371,6 +1371,8 @@ export async function executeActionWithPolicy(
       ...(deps.readonlyRuntimeQuery ? { readonlyRuntimeQuery: true as const } : {}),
       ...(foregroundOutput ? { foregroundOutput: {
         ...foregroundOutput,
+        release: launch => foregroundOutput.release(() =>
+          decideWithLease(action, preset, leaseCtx).decision === 'allow' ? launch() : undefined),
         publish: write => foregroundOutput.publish(() =>
           decideWithLease({ type: 'write_file', path: foregroundOutput.path, content: '', createOnly: true },
             preset, leaseCtx).decision === 'allow' ? write() : undefined),
@@ -1676,7 +1678,8 @@ export async function executeActionWithPolicy(
             status: 'completed',
             postImageHashes: {
               workspace: postRevision.compositeTreeHash,
-              ...(captured ? { [`output:${captured.path}`]: captured.digest } : {}),
+              ...(captured ? { [`output:${captured.path}`]: captured.digest,
+                [`output-identity:${captured.path}`]: captured.identity } : {}),
             },
           });
           return true;

@@ -42,7 +42,7 @@ const foregroundEffectReceipt = z.object({
   operation_id: z.string().min(1), policy_decision_id: z.string().min(1),
   input_hashes: z.record(z.string(), hash),
   output: z.object({ path: z.string().min(1), before: hash.nullable(), after: hash,
-    source: z.literal('child_stdout').optional() }).optional(),
+    source: z.enum(['child_stdout', 'child_file']).optional(), identity: hash.optional() }).optional(),
   pre_revision: z.string().regex(/^[a-f0-9]{32}$/),
   post_revision: z.string().regex(/^[a-f0-9]{32}$/), stdout_digest: hash,
 });

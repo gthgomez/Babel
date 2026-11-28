@@ -1,6 +1,7 @@
 import { formatFileReadContent, type ReadDeliveryWindow, type ReadByteCompleteness } from './services/readDelivery.js';
 import { createHash } from 'node:crypto';
 import { checkedFileBytes } from './utils/checkedFileRead.js';
+import { foregroundFileIdentity, stageForegroundFile } from './sandboxForegroundFile.js';
 import { acquireEffectDirectoryAnchors, type EffectDirectoryAnchors } from './executor/effectDirectoryAnchors.js';
 /**
  * sandbox.ts — SafeExecutor: sandboxed tool execution for the CLI Executor stage
@@ -79,6 +80,7 @@ import {
   requestDependencyInstallApproval,
 } from './services/approvalQueue.js';
 import { getSafeEnv } from './utils/safeEnv.js';
+import { resolveSandboxProjectPath } from './utils/projectPath.js';
 import { childEnvForSandbox, hardenGitHostEnvironment } from './authority/unprivilegedChildEnv.js';
 import { contextAwareOperatorCheck } from './utils/cmdTokenizer.js';
 import {
@@ -87,8 +89,8 @@ import {
   parseCommandArgv,
 } from './utils/commandArgv.js';
 import { classifyExecutionRisk, requiresDockerIsolation } from './authority/commandSpec.js';
+import { isPythonTestCommand } from './authority/commandDecoder.js';
 import { classifyResolvedCommand, commandControlledRoots, hostWindowsSystem32Directory, isCanonicalWindowsSystemShell, isResolvedCommandCurrent, resolveCommandExecutable, type ResolvedCommandExecutable } from './authority/commandResolver.js';
-import { sanitizePath } from './cli/constants.js';
 import { isCanonicalMcpSuccessResult } from './tools/mcpTransport.js';
 import { OutputBuffer } from './ui/outputBuffer.js';
 import { isSandboxReadableTestPath, writeUtf8FileSafely, type TrustedFileCreationEvidence } from './sandboxFileWrites.js';
@@ -291,10 +293,12 @@ function attachTrustedFileCreationEvidence<T extends object>(
 export type ShellExecutionBackend = 'docker-container' | 'host-process';
 export interface ForegroundOutputCapture {
   path: string;
+  canStage(): boolean;
+  release<T>(launch: () => T): T | undefined;
   publish(write: () => ToolResult | undefined): ToolResult | undefined;
   settle(record: () => true): true | undefined;
 }
-type CapturedOutput = { readonly path: string; readonly digest: string };
+type CapturedOutput = { readonly path: string; readonly digest: string; readonly identity: string; readonly source: 'child_stdout' | 'child_file' };
 type HostShellInvocation = { cwd: string; argv: readonly string[]; capturedOutput?: CapturedOutput };
 type ShellExecutionProvenance =
   | { backend: 'docker-container' }
@@ -307,7 +311,7 @@ export function getTrustedShellExecutionBackend(result: ToolResult): ShellExecut
   return trustedShellExecution.get(result)?.backend;
 }
 
-/** Return the host-attested argv and cwd used to prepare an actual process start. */
+/** Return the admitted command and physical cwd witnessed at a real process start. */
 export function getTrustedHostShellInvocation(
   result: ToolResult,
 ): { cwd: string; argv: readonly string[]; capturedOutput?: CapturedOutput } | undefined {
@@ -702,31 +706,8 @@ export class SafeExecutor {
   // ── Path safety ─────────────────────────────────────────────────────────────
 
   private resolveProjectPath(inputPath: string): string {
-    const trimmed = inputPath.trim();
-    const canonical = trimmed.replace(/\\/g, '/');
-    const canonicalLower = canonical.toLowerCase();
-    const projectPrefix = '/project';
-    const appPrefix = '/app';
-
-    if (canonicalLower === projectPrefix || canonicalLower.startsWith(`${projectPrefix}/`)) {
-      const rest = canonical.slice(projectPrefix.length).replace(/^\/+/, '');
-      return resolve(this.projectRoot, sanitizePath(rest));
-    }
-
     const profile = resolveExecutionProfile(getScopedExecutionProfile(process.env['BABEL_EXECUTION_PROFILE']));
-    if (
-      profile.name === 'benchmark_container' &&
-      (canonicalLower === appPrefix || canonicalLower.startsWith(`${appPrefix}/`))
-    ) {
-      const rest = canonical.slice(appPrefix.length).replace(/^\/+/, '');
-      return resolve(this.projectRoot, sanitizePath(rest));
-    }
-
-    if (isAbsolute(trimmed)) {
-      return resolve(trimmed);
-    }
-
-    return resolve(this.projectRoot, sanitizePath(trimmed));
+    return resolveSandboxProjectPath(this.projectRoot, inputPath, profile.name === 'benchmark_container');
   }
 
   private isWithinProjectRoot(candidatePath: string): boolean {
@@ -1533,6 +1514,9 @@ export class SafeExecutor {
     if (useDockerSandbox) {
       return prepareOwnedContainerInvocation({ dockerImage: benchmarkDockerImage!, projectRoot: this.projectRoot, cwd: safeCwd, command }, env);
     }
+    // Match container verification: imported tests and source should not create
+    // bytecode that changes the candidate during a governed test run.
+    if (toolName === 'test_run' && isPythonTestCommand(command)) env['PYTHONDONTWRITEBYTECODE'] = '1';
     // Keep the spawn cwd unchanged, but retain a native physical identity for
     // foreground custody.  A failed probe is represented as absent and makes
     // capture ineligible rather than certifying an unproved workspace.
@@ -1548,6 +1532,7 @@ export class SafeExecutor {
       args: hostArgs,
       cwd: resolvedCwd,
       commandArgv: argv,
+      ...(resolvedExecutable?.trusted ? { nativeHostExecutable: resolvedExecutable.path } : {}),
       ...(canonicalHostCwd === undefined ? {} : { canonicalHostCwd }),
       env,
       validateExecutable: () =>
@@ -1662,6 +1647,40 @@ export class SafeExecutor {
       }
     }
 
+    const stageEligible = hostCapture && prepared.commandArgv?.length === 4 &&
+      prepared.commandArgv[3] === hostCapture.path && prepared.nativeHostExecutable &&
+      (process.platform !== 'win32' || /\.exe$/i.test(prepared.nativeHostExecutable));
+    let stage: ReturnType<typeof stageForegroundFile> | undefined;
+    if (capture) {
+      if (!stageEligible || !capture.canStage()) return policyDeniedResult('foreground_output_unavailable',
+        '[sandbox] The declared output requires a supported native invocation and an absent destination.', toolName, []);
+      try { stage = stageForegroundFile(capture.path); }
+      catch { return policyDeniedResult('foreground_output_unavailable', '[sandbox] Unable to prepare a private process output.', toolName, []); }
+    }
+    try {
+      return await this.executePreparedShellAsync(prepared, toolName, timeoutMs, signal, processContext, hostCapture, stage);
+    } finally { stage?.remove(); }
+  }
+
+  private async executePreparedShellAsync(
+    prepared: PreparedShellInvocation,
+    toolName: string,
+    timeoutMs: number,
+    signal: AbortSignal | undefined,
+    processContext: Pick<ProcessWitnessInput, 'sessionId' | 'turnId' | 'toolCallId'> | undefined,
+    hostCapture: ForegroundOutputCapture | undefined,
+    stage: ReturnType<typeof stageForegroundFile> | undefined,
+  ): Promise<ToolResult> {
+    const executable = stage ? prepared.nativeHostExecutable! : prepared.executable;
+    const args = stage ? [...prepared.commandArgv!.slice(1, 3), stage.path] : prepared.args;
+    let declinedForegroundRelease = false;
+    const release = stage
+      ? <T>(launch: () => T): T | undefined => {
+          const released = hostCapture?.release(() => signal?.aborted ? undefined : launch());
+          declinedForegroundRelease = released === undefined && !signal?.aborted;
+          return released;
+        }
+      : undefined;
     let transientRetryCount = 0;
     let result: AsyncSpawnResult;
     const sessionId = processContext?.sessionId ?? process.env['BABEL_SESSION_ID'];
@@ -1669,12 +1688,13 @@ export class SafeExecutor {
       if (prepared.validateExecutable && !prepared.validateExecutable()) {
         return policyDeniedResult('executable_identity_changed', '[sandbox] Command rejected — executable identity changed before spawn.', toolName, [prepared.executable]);
       }
-      result = await spawnCommandAsync(prepared.executable, prepared.args, {
+      result = await spawnCommandAsync(executable, args, {
         cwd: prepared.cwd,
         timeoutMs,
-        env: hostCapture ? { ...prepared.env, BABEL_FOREGROUND_OUTPUT_PATH: hostCapture.path } : prepared.env,
+        env: hostCapture ? { ...prepared.env, BABEL_FOREGROUND_OUTPUT_PATH: stage?.path ?? hostCapture.path } : prepared.env,
         ...(hostCapture ? { captureStdout: true as const } : {}),
         ...(prepared.validateExecutable ? { validateExecutable: prepared.validateExecutable } : {}),
+        ...(release ? { release } : {}),
         ...(signal ? { signal } : {}),
         ...(this.processWitness ? { processWitness: this.processWitness } : {}),
         processContext: {
@@ -1685,6 +1705,12 @@ export class SafeExecutor {
           ...(processContext?.toolCallId ? { toolCallId: processContext.toolCallId } : {}),
         },
       });
+      if (stage && !result.termination && !result.processStarted && signal?.aborted) {
+        return cancelledBeforeSpawnShellResult();
+      }
+      if (declinedForegroundRelease && !result.processStarted && !result.aborted) {
+        return policyDeniedResult('foreground_output_unavailable', '[sandbox] Foreground output authority or its inputs changed before spawn.', toolName, []);
+      }
       if (!result.error || result.aborted || isChildRuntimeSupervisorError(result.error, result.processStarted, result.timedOut) || !isTransientSpawnError(result.error.message)) break;
       transientRetryCount += 1;
       if (transientRetryCount > MAX_TRANSIENT_SPAWN_RETRIES) break;
@@ -1765,23 +1791,34 @@ export class SafeExecutor {
     ), process_started: result.processStarted,
       process_termination: result.aborted ? 'cancelled' : result.timedOut ? 'timed_out' : result.status === null ? 'terminated' : 'exited' } satisfies ToolResult;
     const bytes = result.stdoutBuffer;
-    if (!hostCapture || !bytes?.subarray(0, FOREGROUND_OUTPUT_HEADER.length).equals(FOREGROUND_OUTPUT_HEADER))
-      return attachExecutionBackend(settled, prepared);
-    const output = bytes.subarray(FOREGROUND_OUTPUT_HEADER.length);
-    // The process owns a private pipe; the host exclusively creates the one
-    // path declared at admission. A writer racing for that path cannot win
-    // publication and still be mistaken for process-produced bytes.
-    if (result.processStarted && result.status === 0 && !result.stdoutTruncated &&
+    const framedOutput = bytes?.subarray(0, FOREGROUND_OUTPUT_HEADER.length).equals(FOREGROUND_OUTPUT_HEADER)
+      ? bytes.subarray(FOREGROUND_OUTPUT_HEADER.length) : undefined;
+    if (!hostCapture || (!stage && !framedOutput)) return attachExecutionBackend(settled, prepared);
+    if (result.status !== 0) return attachExecutionBackend(settled, prepared);
+    const fileOutput = stage?.read();
+    const output = fileOutput === null ? undefined : fileOutput ?? (result.stdoutTruncated ? undefined : framedOutput);
+    const stageCleared = stage?.remove() ?? true;
+    // The child writes a private destination or pipe. Only the host can publish
+    // into the declared path, exclusively and after the process has settled.
+    if (output && stageCleared && result.processStarted &&
         settled.process_termination === 'exited' && !signal?.aborted) {
       const text = output.toString('utf8');
       if (Buffer.from(text, 'utf8').equals(output)) {
         const written = hostCapture.publish(() => this.fileWrite(hostCapture.path, text, { createOnly: true }));
         const ownership = written && getTrustedFileCreationEvidence(written);
         if (written?.exit_code === 0 && ownership && !ownership.settlementIncomplete) {
-          return attachExecutionBackend({ ...settled, stdout: written.stdout }, prepared, {
+          return attachExecutionBackend(fileOutput ? settled : { ...settled, stdout: written.stdout }, prepared, {
             path: relative(this.projectRoot, resolve(this.projectRoot, hostCapture.path)).replaceAll('\\', '/'),
             digest: createHash('sha256').update(output).digest('hex'),
+            identity: foregroundFileIdentity(ownership.device, ownership.inode),
+            source: fileOutput ? 'child_file' : 'child_stdout',
           });
+        }
+        if (ownership?.settlementIncomplete) {
+          return attachExecutionBackend(attachTrustedFileCreationEvidence({
+            ...settled, exit_code: 1, stdout: fileOutput ? settled.stdout : '',
+            stderr: '[sandbox] Output publication was interrupted after creating the destination. Reconcile the incomplete destination before retrying.',
+          }, ownership), prepared);
         }
       }
     }

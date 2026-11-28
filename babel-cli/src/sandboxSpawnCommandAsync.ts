@@ -68,6 +68,7 @@ export function spawnCommandAsync(
     timeoutMs: number
     env: NodeJS.ProcessEnv
     validateExecutable?: () => boolean
+    release?: <T>(launch: () => T) => T | undefined
     signal?: AbortSignal
     processWitness?: ProcessWitness
     captureStdout?: true
@@ -103,14 +104,26 @@ export function spawnCommandAsync(
     let windowsJob: OwnedWindowsCommand | undefined
     let processStarted = false
     try {
-      if (process.platform === 'win32') windowsJob = spawnOwnedWindowsCommand(executable, args, options, spawn)
-      child = windowsJob?.child ?? spawn(executable, args, {
-        cwd: options.cwd,
-        env: options.env,
-        windowsHide: true,
-        // POSIX: new process group so terminateChildTree can SIGTERM -pid.
-        detached: true,
-      }) as ChildProcessWithoutNullStreams
+      if (process.platform === 'win32') {
+        windowsJob = spawnOwnedWindowsCommand(executable, args, options, spawn)
+        child = windowsJob.child
+      } else {
+        const launch = () => {
+          if (options.release && options.validateExecutable?.() === false) {
+            throw new Error('Foreground executable identity changed before launch')
+          }
+          return spawn(executable, args, {
+            cwd: options.cwd,
+            env: options.env,
+            windowsHide: true,
+            // POSIX: new process group so terminateChildTree can SIGTERM -pid.
+            detached: true,
+          }) as ChildProcessWithoutNullStreams
+        }
+        const started = options.release ? options.release(launch) : launch()
+        if (!started) throw new Error('Foreground launch authorization was revoked')
+        child = started
+      }
     } catch (err) {
       if (executionId) options.processWitness?.failedToStart(processInput, executionId, err)
       resolveResult({
@@ -198,7 +211,8 @@ export function spawnCommandAsync(
         stdoutTruncated,
         stderrTruncated,
         aborted,
-        processStarted,
+        // A Windows start receipt can arrive while the abort caller waits for settlement.
+        get processStarted() { return processStarted },
         timedOut,
         ...(termination ? { termination } : {}),
       })

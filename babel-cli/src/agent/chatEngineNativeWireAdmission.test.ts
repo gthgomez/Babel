@@ -26,6 +26,7 @@ import type { CompactionRecoveryPressure } from './compactionRequestPressure.js'
 import { CompactionManager, HeuristicTruncationStrategy, type ChatMessage } from './chatCompaction.js'
 import { recordAssistantMessage } from './threadEventLog.js'
 import { buildChatTurnPrompt } from './chatToolDefinitions.js'
+import { noteChatWorkspaceMutation } from './chatEngineSupport.js'
 
 const DEEPINFRA_POLICY: ResolvedModelPolicy = {
   policyPath: 'native-wire-binding',
@@ -61,7 +62,7 @@ const DEEPSEEK_POLICY: ResolvedModelPolicy = {
 function seedEngine(
   runner: DeepInfraApiRunner | DeepSeekApiRunner,
   policy: ResolvedModelPolicy,
-): { engine: ChatEngine; parity: { eventLog: ThreadEventLog; turnId: string | null }; runner: typeof runner } {
+): { root: string; engine: ChatEngine; parity: { eventLog: ThreadEventLog; turnId: string | null }; runner: typeof runner } {
   const root = mkdtempSync(join(tmpdir(), 'babel-native-wire-binding-'))
   mkdirSync(join(root, 'src'), { recursive: true })
   const engine = new ChatEngine({
@@ -81,7 +82,7 @@ function seedEngine(
   })
   parity.turnId = turnId
   recordUserMessage(parity.eventLog, turnId, 'seed message for admission wire')
-  return { engine, parity, runner }
+  return { root, engine, parity, runner }
 }
 
 function expectedWireBody(
@@ -131,10 +132,77 @@ test('empty Python workspace guidance does not invent a Node test target', () =>
     const prompt = internal.getOrBuildSystemPrompt('native')
     assert.equal(internal.discoveredTestCommands.length, 0)
     assert.match(prompt, /host found no project test command/i)
-    assert.match(prompt, /Do not invent a test filename or choose a runtime from habit/i)
+    assert.match(prompt, /compatible runner is available/i)
+    assert.match(prompt, /Keep a new check diagnostic until the contract accepts it/i)
     assert.match(prompt, /denied before dispatch did not run/i)
     assert.doesNotMatch(prompt, /tests\/solution\.test\.js|node --test tests\/solution/i)
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('a Python check created in the current task refreshes native wire guidance without altering admission', () => {
+  const runner = new DeepInfraApiRunner('deepseek-v4-flash', 'DEEPINFRA_API_KEY',
+    { maxTokens: 4096 }, { provider: 'deepinfra', explicitCredential: 'fixture-only' })
+  const { root, engine } = seedEngine(runner, DEEPINFRA_POLICY)
+  const state = engine as unknown as Parameters<typeof noteChatWorkspaceMutation>[0] & {
+    discoveredTestCommands: unknown[]
+  }
+  const systemPrompt = () => {
+    const wire = engine.buildNativeCompactionAdmissionWireBody()
+    assert.ok(wire)
+    const parsed = JSON.parse(wire) as { messages: Array<{ role: string; content: string }> }
+    return parsed.messages.find(message => message.role === 'system')?.content ?? ''
+  }
+  try {
+    assert.match(systemPrompt(), /host found no project test command/i)
+    const path = join(root, 'test_solution.py')
+    const config = join(root, 'pyproject.toml')
+    writeFileSync(config, '[project]\nname = "example"\n')
+    writeFileSync(path, [
+      'import unittest',
+      'class ExampleTest(unittest.TestCase):',
+      '    def test_addition(self):',
+      '        self.assertEqual(2 + 3, 5)',
+      '',
+    ].join('\n'))
+    noteChatWorkspaceMutation(state)
+
+    const refreshed = systemPrompt()
+    assert.match(refreshed, /Test discovery:.*python3? -m unittest discover/i)
+    assert.doesNotMatch(refreshed, /host found no project test command/i)
+    assert.deepEqual(state.discoveredTestCommands, [])
+    const reopened = new ChatEngine({ model: DEEPINFRA_POLICY.providerModelId,
+      task: 'Inspect verification options', projectRoot: root, providerRunner: runner as never,
+      providerPolicy: DEEPINFRA_POLICY }) as unknown as Pick<typeof state, 'discoveredTestCommands'>
+    assert.deepEqual(reopened.discoveredTestCommands, [{ command: 'python -m pytest', source: 'convention (pytest config)' }])
+
+    rmSync(path)
+    rmSync(config)
+    noteChatWorkspaceMutation(state)
+    assert.match(systemPrompt(), /host found no project test command/i)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('an explicit continuation refreshes test guidance after an external Makefile edit', () => {
+  const root = mkdtempSync(join(tmpdir(), 'babel-continue-test-discovery-'))
+  try {
+    const engine = new ChatEngine({ task: 'Fix the fixture and verify the change',
+      projectRoot: root, model: DEEPINFRA_POLICY.providerModelId })
+    const internal = engine as unknown as { getOrBuildSystemPrompt(mode: 'native'): string }
+    const makefile = join(root, 'Makefile')
+    writeFileSync(makefile, 'build:\n\techo build\n')
+    engine.applyPreparedUserSubmission(engine.prepareUserSubmission({ userInput: 'Fix the fixture and verify the change' }))
+    assert.match(internal.getOrBuildSystemPrompt('native'), /host found no project test command/i)
+
+    writeFileSync(makefile, 'build:\n\techo build\ntest:\n\techo check\n')
+    const continued = engine.prepareUserSubmission({ userInput: 'continue', continueTask: true })
+    assert.equal(continued.runtime.continuedTask, true)
+    engine.applyPreparedUserSubmission(continued)
+    assert.match(internal.getOrBuildSystemPrompt('native'), /Test discovery: make test/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('ChatEngine native admission wire matches DeepSeek-direct runner transport bytes', () => {
