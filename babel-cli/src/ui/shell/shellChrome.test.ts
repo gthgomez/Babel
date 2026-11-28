@@ -127,3 +127,14 @@ test('shell transcript uses speaker labels, tool detail only when present, and h
   assert.equal(withoutDetail.includes('lines'), false)
   assert.match(withoutDetail, /> read/)
 })
+
+test('streamed heading markers advance as text until a heading has a title', () => {
+  for (const marker of ['#', '# ', '## ', '### \t']) {
+    const partial = plain(formatShellSpeaker('BABEL', marker, 80))
+    assert.ok(partial.split('\n').some(line => line.trim() === marker.trim()))
+    assert.doesNotMatch(partial, /┌/)
+  }
+  const complete = plain(formatShellSpeaker('BABEL', '# 1. Inspect the repository\nA body line', 80))
+  assert.match(complete, /┌.*1\. Inspect the repository/)
+  assert.match(complete, /A body line/)
+})

@@ -2,6 +2,8 @@ import { border, dim, error, sectionLabel, success, wrapText } from '../theme.js
 import { measureDisplayWidth, truncateDisplay } from '../textLayout.js'
 import type { ToolCallPayload } from '../historyCells/types.js'
 
+const markdownHeading = /^#{1,3}\s+(\S.*)$/
+
 function clip(text: string, width: number): string {
   if (width <= 0) return ''
   if (measureDisplayWidth(text) <= width) return text
@@ -32,7 +34,7 @@ export function formatShellSpeaker(label: 'YOU' | 'BABEL', body: string, width: 
   const source = body.replace(/\r\n/g, '\n').split('\n')
   let index = 0
   while (index < source.length) {
-    const heading = /^#{1,3}\s+(.+)$/.exec(source[index] ?? '')
+    const heading = markdownHeading.exec(source[index] ?? '')
     if (heading) {
       const title = heading[1]!.trim()
       const cardBody: string[] = []
@@ -46,7 +48,7 @@ export function formatShellSpeaker(label: 'YOU' | 'BABEL', body: string, width: 
       continue
     }
     const paragraph: string[] = []
-    while (index < source.length && source[index] !== '' && !/^#{1,3}\s+/.test(source[index] ?? '')) {
+    while (index < source.length && source[index] !== '' && !markdownHeading.test(source[index] ?? '')) {
       paragraph.push(source[index]!)
       index += 1
     }
