@@ -316,6 +316,14 @@ export function taskProhibitsDeclaredJob(
       destination !== undefined && outputs.some(path => sameRequestedOutput(path, destination, projectRoot, cwd))))
 }
 
+/** Keep live verifier selection and action dispatch under the same user constraints. */
+export function taskProhibitsRequestedCommand(
+  activeProse: readonly string[], command: string, projectRoot?: string | null, cwd?: string,
+): boolean {
+  return taskProhibitsForegroundCommand(activeProse, command, projectRoot ?? undefined, cwd) ||
+    (projectRoot != null && taskProhibitsDeclaredJob(activeProse, command, projectRoot, cwd))
+}
+
 /** The executor marks only a typed hard denial with host-confirmed zero dispatch. */
 export function requiredLocalExecutionDenialMarker(
   scope: ExecutionScope,

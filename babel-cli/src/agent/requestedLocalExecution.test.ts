@@ -219,6 +219,15 @@ test('does not demand a verifier that the current no-run restriction prohibits',
   assert.deepEqual(taskContract.verifier_requirements, ['node --test independent.test.mjs'])
 })
 
+test('a command denied by the declared output policy never enters the required verifier list', () => {
+  const { taskContract } = resolveLiveSessionAuthority({
+    mode: 'chat', projectRoot: root,
+    task: 'Add export.py, a local CLI. Run the exporter to create output.csv from input.json. Do not generate "output.csv".',
+    verifierRequirements: ['python3 export.py input.json output.csv', 'node --test independent.test.mjs'],
+  })
+  assert.deepEqual(taskContract.verifier_requirements, ['node --test independent.test.mjs'])
+})
+
 test('a skipped runtime effect remains missing alongside a green governed verifier', async t => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'babel-local-operation-'))
   t.after(() => rmSync(projectRoot, { recursive: true, force: true }))

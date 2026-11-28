@@ -65,9 +65,8 @@ import { isAuthoritativeVerifierCommand } from "./completionGatePolicy.js";
 import { acceptToolStop, settlePreventedChatAction } from './chatEngineRunControl.js';
 import { actionRequestFromAction } from '../authority/actionRequest.js';
 import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js';
-import { taskProhibitsForegroundCommand } from './taskCommandProhibitions.js';
 import { hasSettledLocalJobSetup, isReadOnlyForegroundQuery, requestedForegroundEffect, requestedProcessScope, requiredLocalExecutionDenialMarker,
-  requiredLocalExecutionScope, substitutesRequestedProcessOutput, taskProhibitsDeclaredJob } from './requestedLocalExecution.js';
+  requiredLocalExecutionScope, substitutesRequestedProcessOutput, taskProhibitsRequestedCommand } from './requestedLocalExecution.js';
 import { canPublishForegroundOutput, foregroundStarted, prepareForegroundEffect, settleForegroundEffect } from './foregroundEffectReceipt.js';
 import { recoverCurrentTaskMutationPaths } from './recoveredMutationWitness.js';
 import { commandsMatchForExecutableBinding } from './taskAcceptanceExecutableBinding.js';
@@ -236,8 +235,7 @@ export class ChatEngineActionExecutor {
       return { index: meta.index, observation: 'The task restricts direct edits to this output file. Leave it untouched and report what could be verified within the current limits.' };
     }
     if ((action.type === 'run_command' || action.type === 'test_run') && turnRuntime &&
-      (taskProhibitsForegroundCommand(activeProse, action.command, projectRoot, action.cwd) ||
-        taskProhibitsDeclaredJob(activeProse, action.command, projectRoot, action.cwd))) {
+      taskProhibitsRequestedCommand(activeProse, action.command, projectRoot, action.cwd)) {
       const detail = 'task-command-prohibited';
       this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
       callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);

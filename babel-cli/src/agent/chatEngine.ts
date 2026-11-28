@@ -440,8 +440,7 @@ import {admitObjectiveSubmission,prepareObjectiveSubmission,type PreparedObjecti
 import { evaluateCriterionCompletionV1, isForegroundOnlyAcceptance, type CriterionCompletionServiceV1 } from '../authority/criterionCompletion.js';
 import { retainCurrentPointReceipts } from './pointVerifierWitness.js';
 import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js';
-import { taskProhibitsForegroundCommand } from './taskCommandProhibitions.js';
-import { frozenExactForegroundCommands, isReadOnlyForegroundQuery } from './requestedLocalExecution.js';
+import { frozenExactForegroundCommands, isReadOnlyForegroundQuery, taskProhibitsRequestedCommand } from './requestedLocalExecution.js';
 import { frozenForegroundAmendmentSources } from './taskAcceptanceSource.js';
 import { sha256Canonical } from '../acceptance/canonical.js';
 import { parseSingleProcessArgv } from '../utils/commandArgv.js';
@@ -2631,7 +2630,7 @@ export class ChatEngine {
         requiredVerifierCommands: this.options.requiredVerifierCommands ?? null,
       }),
     ]);
-    return [...commands].filter(command => !taskProhibitsForegroundCommand(activeProse, command, this.options.projectRoot ?? undefined));
+    return [...commands].filter(command => !taskProhibitsRequestedCommand(activeProse, command, this.options.projectRoot));
   }
 
   private clearVerifierEvidenceState(): void {
@@ -2761,7 +2760,7 @@ export class ChatEngine {
     const activeProse = inferFreshTaskAcceptance(runtime.taskText).activeProse;
     return [...frozenExactForegroundCommands(contract, this.getFrozenForegroundAmendments())]
       .filter(([command, effect]) => isReadOnlyForegroundQuery(effect.argv) &&
-        !taskProhibitsForegroundCommand(activeProse, command, this.options.projectRoot ?? undefined))
+        !taskProhibitsRequestedCommand(activeProse, command, this.options.projectRoot))
       .map(([command]) => command);
   }
 
