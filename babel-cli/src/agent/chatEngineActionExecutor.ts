@@ -66,7 +66,7 @@ import { acceptToolStop, settlePreventedChatAction } from './chatEngineRunContro
 import { actionRequestFromAction } from '../authority/actionRequest.js';
 import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js';
 import { hasSettledLocalJobSetup, isReadOnlyForegroundQuery, requestedForegroundEffect, requestedProcessScope, requiredLocalExecutionDenialMarker,
-  requiredLocalExecutionScope, substitutesRequestedProcessOutput, taskProhibitsRequestedCommand } from './requestedLocalExecution.js';
+  requiredLocalExecutionScope, substitutesRequestedProcessOutput, taskProhibitsDirectTestEdit, taskProhibitsRequestedCommand } from './requestedLocalExecution.js';
 import { canPublishForegroundOutput, foregroundStarted, prepareForegroundEffect, settleForegroundEffect } from './foregroundEffectReceipt.js';
 import { recoverCurrentTaskMutationPaths } from './recoveredMutationWitness.js';
 import { commandsMatchForExecutableBinding } from './taskAcceptanceExecutableBinding.js';
@@ -225,14 +225,20 @@ export class ChatEngineActionExecutor {
       callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
       return { index: meta.index, observation: 'This required process must run in the foreground. No process started.' };
     }
-    if ((action.type === 'write_file' || action.type === 'str_replace' || action.type === 'apply_patch') && turnRuntime &&
-      substitutesRequestedProcessOutput(this.host.parity.liveAuthority?.taskContract.provenance.records ?? [],
-        [taskContract?.user_request ?? turnRuntime.durableObjective ?? turnRuntime.taskText, ...this.host.getFrozenForegroundAmendments()],
-        action, projectRoot, activeProse)) {
-      const detail = 'requested-process-output';
-      this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
-      callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
-      return { index: meta.index, observation: 'The task restricts direct edits to this output file. Leave it untouched and report what could be verified within the current limits.' };
+    if ((action.type === 'write_file' || action.type === 'str_replace' || action.type === 'apply_patch') && turnRuntime) {
+      const requests = [taskContract?.user_request ?? turnRuntime.durableObjective ?? turnRuntime.taskText,
+        ...this.host.getFrozenForegroundAmendments()];
+      const testsProtected = [activeProse, ...requests.map(request => inferFreshTaskAcceptance(request).activeProse)]
+        .some(prose => taskProhibitsDirectTestEdit(prose, action, projectRoot));
+      if (testsProtected || substitutesRequestedProcessOutput(taskContract?.provenance.records ?? [], requests, action, projectRoot, activeProse)) {
+        const detail = testsProtected ? 'task-test-edit-prohibited' : 'requested-process-output';
+        this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
+        callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
+        const observation = testsProtected
+          ? 'The task prohibits editing test files. No files were changed by this action. Continue permitted source work or report the unavailable verification.'
+          : 'The task restricts direct edits to this output file. Leave it untouched and report what could be verified within the current limits.';
+        return { index: meta.index, observation };
+      }
     }
     if ((action.type === 'run_command' || action.type === 'test_run') && turnRuntime &&
       taskProhibitsRequestedCommand(activeProse, action.command, projectRoot, action.cwd)) {

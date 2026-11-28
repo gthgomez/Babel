@@ -1,5 +1,6 @@
-import { relative, resolve } from 'node:path'
+import { basename, relative, resolve } from 'node:path'
 import { sha256Canonical } from '../acceptance/canonical.js'
+import { isConventionallyNamedTestSource } from '../sandboxFileWrites.js'
 import type { BlockedReport } from '../schemas/agentContracts.js'
 import { foregroundTaskClauses, formatArgvAsCommand, parseForegroundCommandClause, parseSingleProcessArgv } from '../utils/commandArgv.js'
 import { foregroundDenialTargets, invokesProhibitedScript, LOCAL_SCRIPT_PATH as SCRIPT_PATH } from '../utils/commandDenialProse.js'
@@ -23,6 +24,7 @@ const INPUT_FIRST_JOB = new RegExp(String.raw`^(?:please\s+)?(?:run|execute)\s+(
 const DECLARED_CLI_PARAMETERS = /^,\s+an?\s+[\w -]*\bCLI (?:taking an input [\w -]+ file and an output [\w -]+ path|with input and output (?:arguments|parameters))$/i
 
 type LocalRun = Extract<ChatToolAction, { type: 'run_command' | 'test_run' }>
+type DirectEdit = Extract<ChatToolAction, { type: 'write_file' | 'str_replace' | 'apply_patch' }>
 type ExecutionScope = 'standalone' | 'mixed'
 export type MissingLocalExecutionAuthority = 'no_lease' | 'missing_capability' | 'unresolved'
 
@@ -252,7 +254,7 @@ export function requestedProcessScope(
 export function substitutesRequestedProcessOutput(
   records: readonly TaskContractProvenanceRecord[],
   sourceRequests: readonly string[],
-  action: Extract<ChatToolAction, { type: 'write_file' | 'str_replace' | 'apply_patch' }>,
+  action: DirectEdit,
   projectRoot: string,
   currentProse: readonly string[] = [],
 ): boolean {
@@ -276,16 +278,52 @@ export function substitutesRequestedProcessOutput(
     return [...outputs, ...processOutputs]
   })])
   if (requiredOutputs.size === 0) return false
-  let targets: string[]
-  if (action.type === 'apply_patch') {
-    const parsed = parseUnifiedDiff(action.patch)
-    if (!parsed.ok) return false // Rejected by the patch executor before any edit.
-    targets = parsed.files.map(file => file.newPath || file.oldPath)
-  } else {
-    targets = [action.type === 'write_file' ? action.path : action.file_path]
-  }
-  const resolvedTargets = targets.map(target => resolveSandboxProjectPath(projectRoot, target, true))
+  const resolvedTargets = directEditTargets(action).map(({ path }) => resolveSandboxProjectPath(projectRoot, path, true))
   return [...requiredOutputs].some(output => resolvedTargets.some(target => sameRequestedOutput(output, target, projectRoot)))
+}
+
+function directEditTargets(action: DirectEdit): { path: string; createOnly: boolean }[] {
+  if (action.type !== 'apply_patch') return [{ path: action.type === 'write_file' ? action.path : action.file_path, createOnly: false }]
+  const parsed = parseUnifiedDiff(action.patch)
+  if (!parsed.ok) return [] // The patch executor rejects an invalid patch before editing.
+  return parsed.files.map(file => ({ path: file.newPath || file.oldPath, createOnly: file.createsFile }))
+}
+
+/** Honor explicit test preservation for conventional test paths before a direct workspace edit. */
+export function taskProhibitsDirectTestEdit(activeProse: readonly string[], action: DirectEdit, projectRoot: string): boolean {
+  const testEdit = String.raw`(?:add|create|write|edit|change|modify|replace|rename|delete|remove|touch|update)`
+  const separator = String.raw`(?:,?\s+(?:and|or|nor)\s+|,\s*)`
+  const negative = String.raw`(?:please\s+)?(?:do\s+not|don['’]t|must\s+not|never)\s+`
+  const scope = String.raw`(${testEdit}(?:${separator}${testEdit})*)\s+(?:to\s+)?((?:(?:the|any|all|existing|current|new)(?:\s+(?:and|or))?\s+)*)tests?(?:\s+files?)?(?:\s+(?:and|or)\s+fixtures?)?(?:\s+(?:for|in|during)\s+(?:this|the current)\s+(?:task|repair|change|request|turn))?`
+  const boundary = String.raw`(?=$|(?:,\s*|\s+)(?:(?:and|but)\s+)?(?:(?:just|only)\s+)?(?:run|execute|use)\b|,?\s+(?:and|or|nor|but)\s+(?:${negative}|${testEdit}\b))`
+  const denial = new RegExp(String.raw`(?:^|\b(?:and|but|or|nor)\s+)${negative}${scope}${boundary}`, 'gi')
+  const implicitDenial = new RegExp(String.raw`^,?\s+(?:or|nor)\s+${scope}${boundary}`, 'i')
+  const quotedEvidence = /(`+).*?\1|"(?:\\.|[^"\\])*"|“[^”]*”|‘[^’]*’|(?<![\p{L}\p{N}])'(?:\\.|[^'\\])*'(?![\p{L}\p{N}])/gu
+  const clauses = activeProse.flatMap(line => {
+    // Sentence punctuation inside a closing quotation can end active prose.
+    const unquoted = line.replace(quotedEvidence, span => span.match(/[.!?](?=[`"'”’]+$)/)?.[0] ?? ' ')
+    return foregroundTaskClauses([unquoted], true, 'keep-prefix')
+  })
+  const restrictions = clauses.flatMap(clause => [...clause.matchAll(denial)].flatMap(match => {
+    const next = clause.slice(match.index + match[0].length).match(implicitDenial)
+    return next ? [match, next] : [match]
+  }))
+  if (restrictions.length === 0) return false
+  const creationOnly = new RegExp(`^(?:add|create)(?:${separator}(?:add|create))*$`, 'i')
+  const existing = /\b(?:current|existing)\b/i
+  const added = /\bnew\b/i
+  const prohibitsCreation = restrictions.some(match => !existing.test(match[2]!) || added.test(match[2]!))
+  const prohibitsExisting = restrictions.some(match => (!added.test(match[2]!) || existing.test(match[2]!)) && !creationOnly.test(match[1]!))
+  const isTestPath = (path: string) => isConventionallyNamedTestSource(basename(path)) ||
+    /(?:^|[\\/])(?:tests?|__tests__)[\\/]|_test\.go$/i.test(path)
+  const root = physicalWorkspacePath(projectRoot, projectRoot)
+  return directEditTargets(action).some(target => {
+    const resolved = resolveSandboxProjectPath(projectRoot, target.path, true)
+    const physical = physicalWorkspacePath(projectRoot, resolved)
+    if (!isTestPath(relative(projectRoot, resolved)) && !isTestPath(relative(root, physical))) return false
+    // The sandbox's ordinary write may create or replace at dispatch time.
+    return prohibitsCreation || (!target.createOnly && prohibitsExisting)
+  })
 }
 
 function sameRequestedOutput(left: string, right: string, projectRoot: string, cwd = '.'): boolean {

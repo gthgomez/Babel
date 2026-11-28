@@ -17,6 +17,7 @@ import {
   requiredLocalExecutionDenialMarker,
   requiredLocalExecutionScope,
   substitutesRequestedProcessOutput,
+  taskProhibitsDirectTestEdit,
   taskProhibitsDeclaredJob,
   taskProhibitsRequestedOutput,
 } from './requestedLocalExecution.js'
@@ -184,6 +185,47 @@ test('process-owned outputs reject direct substitutes without blocking independe
   assert.equal(taskProhibitsRequestedOutput(['Do not generate "reports\\warehouse.csv".'], 'reports/warehouse.csv', root), true)
   assert.equal(taskProhibitsRequestedOutput(['Do not generate reports\\warehouse.csv.'], 'reports/warehouse.csv', root), true)
   assert.equal(taskProhibitsRequestedOutput(retainedDenial, 'preview.csv', root), false)
+})
+
+test('explicit test edit restrictions guard additions, replacements and mixed patches without forbidding source edits', () => {
+  const prose = ['Update label.py. Do not add or change tests. Use the existing module if available.']
+  const root = process.cwd()
+  const writesTest = { type: 'write_file', path: '/project/test_development.py', content: 'test fixture' } as const
+  assert.equal(taskProhibitsDirectTestEdit(prose, writesTest, root), true)
+  for (const path of ['test.py', 'test.js', 'test-label.js', 'candidate_test.go'])
+    assert.equal(taskProhibitsDirectTestEdit(prose, { ...writesTest, path }, root), true)
+  assert.equal(taskProhibitsDirectTestEdit(['Never modify the test files.'], {
+    type: 'str_replace', file_path: 'packages/unit/format_label.spec.ts', old_str: 'old', new_str: 'new',
+  }, root), true)
+  assert.equal(taskProhibitsDirectTestEdit(prose, {
+    type: 'apply_patch', patch: '--- a/src/label.py\n+++ b/src/label.py\n@@ -1 +1 @@\n-old\n+new\n' +
+      '--- a/tests/test_label.py\n+++ b/tests/test_label.py\n@@ -1 +1 @@\n-old\n+new\n',
+  }, root), true)
+  assert.equal(taskProhibitsDirectTestEdit(prose, { ...writesTest, path: 'label.py' }, root), false)
+  assert.equal(taskProhibitsDirectTestEdit(['Do not run tests.'], writesTest, root), false)
+  assert.equal(taskProhibitsDirectTestEdit(['- Do not change tests, but run the existing check.'], writesTest, root), true)
+  assert.equal(taskProhibitsDirectTestEdit(['Update label.py. Do not change tests. Example: use input AA.'], writesTest, root), true)
+  assert.equal(taskProhibitsDirectTestEdit(['Update label.py. Example: use input AA.', 'Do not change tests.'], writesTest, root), true)
+  assert.equal(taskProhibitsDirectTestEdit(['Fix label.py, but do not add or change tests.'], writesTest, root), true)
+  assert.equal(taskProhibitsDirectTestEdit(['Do not modify tests or fixtures.'], writesTest, root), true)
+  assert.equal(taskProhibitsDirectTestEdit(['Do not add or change tests and run the existing test suite.'], writesTest, root), true)
+  assert.equal(taskProhibitsDirectTestEdit(['Do not add new tests.'], writesTest, root), true)
+  assert.equal(taskProhibitsDirectTestEdit(['Do not add new tests.'], { ...writesTest, path: 'src/agent/requestedLocalExecution.test.ts' }, root), true)
+  assert.equal(taskProhibitsDirectTestEdit(['Do not change the existing tests.'], writesTest, root), true)
+  const addsTest = {
+    type: 'apply_patch', patch: '--- /dev/null\n+++ b/test_development.py\n@@ -0,0 +1 @@\n+new\n',
+  } as const
+  assert.equal(taskProhibitsDirectTestEdit(['Do not change the existing tests.'], addsTest, root), false)
+  for (const request of ['Do not add new tests and do not modify existing tests.',
+    'Do not add new tests or change existing tests.', 'Do not add or edit any new or existing test files.',
+    'Do not add or change tests in this task.', 'Do not add or change tests, just run them.']) {
+    assert.equal(taskProhibitsDirectTestEdit([request], writesTest, root), true)
+    assert.equal(taskProhibitsDirectTestEdit([request], addsTest, root), true)
+  }
+  assert.equal(taskProhibitsDirectTestEdit(['Example: Do not change tests.'], writesTest, root), false)
+  for (const example of ['`prepare input and do not add tests but run the suite`', '“prepare input. And do not add tests.”'])
+    assert.equal(taskProhibitsDirectTestEdit([`The message says ${example}. Add the missing test.`], writesTest, root), false)
+  assert.equal(taskProhibitsDirectTestEdit(['The README says "Add the missing test." Do not add or change tests.'], writesTest, root), true)
 })
 
 test('a prohibited declared output is denied even when equivalent argv cannot earn a positive receipt', () => {
