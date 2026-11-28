@@ -231,7 +231,7 @@ export class ChatEngineActionExecutor {
       const testsProtected = [activeProse, ...requests.map(request => inferFreshTaskAcceptance(request).activeProse)]
         .some(prose => taskProhibitsDirectTestEdit(prose, action, projectRoot));
       if (testsProtected || substitutesRequestedProcessOutput(taskContract?.provenance.records ?? [], requests, action, projectRoot, activeProse)) {
-        const detail = testsProtected ? 'task-test-edit-prohibited' : 'requested-process-output';
+        const detail = testsProtected ? 'test-edit-prohibited' : 'requested-process-output';
         this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
         callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
         const observation = testsProtected
