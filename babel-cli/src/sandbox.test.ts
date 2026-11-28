@@ -1309,11 +1309,12 @@ test('shellExecAsync preserves shellExec result shape for a successful command',
   }
 });
 
-test('foreground capture is withheld when native cwd custody cannot be resolved', async (t) => {
+test('declared foreground output never starts when native cwd custody cannot be resolved', async (t) => {
   const fixture = makeFixture();
   try {
     writeFileSync(join(fixture.projectRoot, 'emit-foreground.mjs'),
       "process.stdout.write('BABEL_FOREGROUND_OUTPUT_V1\\nowned bytes')");
+    writeFileSync(join(fixture.projectRoot, 'input.txt'), 'unchanged');
     const nativeRealpath = realpathSync.native;
     t.mock.method(realpathSync, 'native', (path: string) => {
       if (path === fixture.projectRoot) throw new Error('synthetic native cwd resolution failure');
@@ -1322,16 +1323,18 @@ test('foreground capture is withheld when native cwd custody cannot be resolved'
     syncBuiltinESMExports();
     let publishCalls = 0;
     const result = await new SafeExecutor(fixture.projectRoot).shellExecAsync(
-      'node emit-foreground.mjs', fixture.projectRoot, 5_000, undefined, undefined, undefined, {
+      'node emit-foreground.mjs input.txt declared-output.txt', fixture.projectRoot, 5_000, undefined, undefined, undefined, {
         path: 'declared-output.txt',
+        canStage: () => true,
+        release: launch => launch(),
         publish: () => { publishCalls += 1; return undefined; },
         settle: () => true,
       },
     );
-    assert.equal(result.process_started, true);
-    assert.equal(result.exit_code, 0, result.stderr);
-    assert.match(result.stdout, /BABEL_FOREGROUND_OUTPUT_V1/);
-    assert.equal(getTrustedShellExecutionBackend(result), 'host-process');
+    assert.notEqual(result.process_started, true);
+    assert.equal(result.denial?.reason_code, 'foreground_output_unavailable');
+    assert.equal(result.stdout, '');
+    assert.equal(getTrustedShellExecutionBackend(result), undefined);
     assert.equal(getTrustedHostShellInvocation(result), undefined);
     assert.equal(publishCalls, 0, 'unresolved cwd must not publish a foreground output');
   } finally {

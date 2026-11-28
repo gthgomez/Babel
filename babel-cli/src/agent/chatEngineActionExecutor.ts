@@ -1423,6 +1423,12 @@ export class ChatEngineActionExecutor {
       }
       let preparedEffect: ReturnType<typeof prepareForegroundEffect>;
       const foregroundFence = requestedEffect?.outputPath ? this.host.captureForegroundEffectFence() : undefined;
+      if (foregroundEffect?.outputPath && !foregroundFence && !this.host.options.toolExecutorForTesting) {
+        const detail = 'foreground_output_owner_unavailable';
+        this.host.toolCallLog.push({ tool, target, detail, error: 'blocked', index: meta.index, exit_code: 1, preDispatchNoEffect: true });
+        callbacks.onToolComplete?.(toolId, detail, 'blocked', 1);
+        return { index: meta.index, observation: 'The declared file output needs a current execution owner. No process started; restore the task session before running it.' };
+      }
       const pendingResult = executeActionWithPolicy(
         agentAction,
         // Task/profile scope only narrows capability; executor authority,
@@ -1464,6 +1470,12 @@ export class ChatEngineActionExecutor {
                ? { readonlyRuntimeQuery: true as const } : {}),
              ...(requestedEffect?.outputPath && effectRoot && foregroundFence ? { foregroundOutput: {
                path: requestedEffect.outputPath,
+               canStage: () => foregroundFence(() =>
+                 this.host.isSubmissionCurrent(ownerGeneration) && !toolContext.runControl?.stop() &&
+                   canPublishForegroundOutput(effectRoot, preparedEffect)) === true,
+               release: launch => foregroundFence(() =>
+                 this.host.isSubmissionCurrent(ownerGeneration) && !toolContext.runControl?.stop() &&
+                   canPublishForegroundOutput(effectRoot, preparedEffect) ? launch() : undefined),
                publish: write => foregroundFence(() =>
                  this.host.isSubmissionCurrent(ownerGeneration) && !toolContext.runControl?.stop() &&
                    canPublishForegroundOutput(effectRoot, preparedEffect) ? write() : undefined),

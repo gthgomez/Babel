@@ -3,7 +3,7 @@
   "algorithm": "sha256",
   "purpose": "drift_detection_not_authorization",
   "normalization": "utf8_crlf_to_lf",
-  "policy_bundle_id": "96d80f6851377029fd2789949200d8d26e7ba63f466a239918e6aeaa7c713758",
+  "policy_bundle_id": "e719a22991429fcffa6c9e8ae94883dc079ff84a995a71c8bc5fbcc22604a5b6",
   "files": {
     ".github/workflows/public-pr-metadata.yml": "67e630d700055533ee77157ed05fc347161c7c041e35151f2652ffd9b9973023",
     ".github/workflows/publish-npm.yml": "54036b704d59e513cbbb981efa00e82121e40871d6dfe789c8636bd0159f8c9e",
@@ -28,7 +28,7 @@
     "babel-cli/src/authority/criterionCompletion.test.ts": "0d372f1eb54602b6fb131239783b9005ae6e4fe11a7300e768627d90d2020283",
     "babel-cli/src/authority/criterionCompletion.ts": "5bd0fe1155c224425956dc5c7b50d5ce92fc9cbc96fbdba0ae610f3746c089f4",
     "babel-cli/src/authority/criterionExecutionPublisher.test.ts": "b8e7f70e4d6de00723c4a677480dd608d7e477a79f79b3f1a8e92af52529d948",
-    "babel-cli/src/authority/criterionExecutionPublisher.ts": "bf08cc8f0de729b88470d00165f91bd663e3c9828338a7239e26ba5b5bdb1e95",
+    "babel-cli/src/authority/criterionExecutionPublisher.ts": "ade85fb8d8c6f8b5704ca81f725bd206f718df7fc3f1d421ad77d5976be83c06",
     "babel-cli/src/authority/criterionVerifierDispatch.ts": "5bdafece66c141d3261d6caa8e3b84ad06e35916c19bc382d08f8392e858625e",
     "babel-cli/src/authority/filesystemPathListVerifier.test.ts": "c95e4742002e07c9d2e2c21d74653292a919e45cf0547994d01b03a4f4e06c44",
     "babel-cli/src/authority/filesystemPathListVerifier.ts": "8234d06821e9642fcc84c099dbe4942c822ca5a2c468d8a9bdb258e41d9de3c0",

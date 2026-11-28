@@ -4498,11 +4498,9 @@ export class ChatEngine {
     const contract = this.parity.liveAuthority?.taskContract;
     if (contract && operation !== 'READ_ONLY' && !isReadOnlyChat() &&
         [...frozenExactForegroundCommands(contract, this.getFrozenForegroundAmendments()).values()].some(effect => effect.outputPath)) {
-      systemContent += '\n\nDeclared foreground output: run the exact requested process with its input and output arguments. ' +
-        'When creating its script, support captured UTF-8 output: if BABEL_FOREGROUND_OUTPUT_PATH equals the output argument, ' +
-        'emit BABEL_FOREGROUND_OUTPUT_V1 followed by LF and the exact file bytes to stdout, without writing the destination. ' +
-        'Send diagnostics to stderr. Otherwise write normally to the output argument. Babel can publish a captured result ' +
-        'to a new destination without replacing another writer’s file. A separate artifact check still decides correctness.';
+      systemContent += '\n\nDeclared foreground output: use run_command with the requested process, input, and output arguments. ' +
+        'Write the output normally to the path supplied to the program. For supported native execution Babel stages that path ' +
+        'and publishes the settled file to the requested destination if it is absent. Check the published artifact against the user’s requirements.';
     }
 
     if (this.options.projectRoot && this.discoveredTestCommands.length === 0) {

@@ -304,7 +304,7 @@ function encodeEnvironment(env: NodeJS.ProcessEnv): string {
 export function spawnOwnedWindowsCommand(
   executable: string,
   args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; validateExecutable?: () => boolean },
+  options: { cwd: string; env: NodeJS.ProcessEnv; validateExecutable?: () => boolean; release?: <T>(launch: () => T) => T | undefined },
   launch: (file: string, argv: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams,
 ): OwnedWindowsCommand {
   const system32 = hostWindowsSystem32Directory()
@@ -343,10 +343,16 @@ export function spawnOwnedWindowsCommand(
       // Recheck authority after the expensive native compilation, before
       // releasing the helper's suspended launch protocol.
       try {
-        if (!isResolvedCommandCurrent(resolved) || options.validateExecutable?.() === false) {
-          throw new Error('Windows command executable identity changed before launch')
+        const release = (): true => {
+          if (!isResolvedCommandCurrent(resolved) || options.validateExecutable?.() === false) {
+            throw new Error('Windows command executable identity changed before launch')
+          }
+          child.stdin.write('A')
+          return true
         }
-        child.stdin.write('A')
+        if (options.release) {
+          if (options.release(release) !== true) throw new Error('Foreground launch authorization was revoked')
+        } else release()
       } catch {
         launchError = new Error('Windows command executable identity could not be confirmed before launch')
         requestStop()

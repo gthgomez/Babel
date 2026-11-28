@@ -151,10 +151,10 @@ function publishForegroundObservations(input: {
   const ledger = loadEffectLedgerWithDiagnostics(input.runDir)
   if (ledger.malformedLines > 0) return null
   const repository = realpathSync.native(input.projectRoot)
-  // Snapshot-only output remains an observation. Publication requires the
-  // authorized child's isolated stdout and the same settled effect record.
+  // Snapshot-only output remains an observation. Publication requires bytes
+  // captured from the authorized child and the same settled effect record.
   const receipts = currentForegroundEffects(repository, input.contract, input.log, ledger.records, input.history, input.amendments)
-    .filter(receipt => receipt.output === undefined || receipt.output.source === 'child_stdout')
+    .filter(receipt => receipt.output === undefined || receipt.output.source !== undefined)
   const candidate = input.candidateSha ?? receipts.at(-1)?.post_revision
   if (!candidate || !receipts.length) return null
   const executionDomain = 'governed-foreground-observation'

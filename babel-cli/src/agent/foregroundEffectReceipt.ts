@@ -12,6 +12,7 @@ import { frozenExactForegroundCommands, type RequestedForegroundEffect } from '.
 import { formatArgvAsCommand, parseSingleProcessArgv } from '../utils/commandArgv.js'
 import { captureWorkspaceRevisionIdentity } from './capabilityBroker.js'
 import { checkedFileBytes } from '../utils/checkedFileRead.js'
+import { foregroundFileIdentity } from '../sandboxForegroundFile.js'
 
 const SHA256 = /^[a-f0-9]{64}$/
 const MAX_BYTES = 16 * 1024 * 1024
@@ -27,7 +28,7 @@ export interface ForegroundEffectReceipt {
   operation_id: string
   policy_decision_id: string
   input_hashes: Record<string, string>
-  output?: { path: string; before: string | null; after: string; source?: 'child_stdout' }
+  output?: { path: string; before: string | null; after: string; source?: 'child_stdout' | 'child_file'; identity?: string }
   pre_revision: string
   post_revision: string
   stdout_digest: string
@@ -36,6 +37,7 @@ export interface ForegroundEffectReceipt {
 interface FileSnapshot {
   path: string
   digest: string | null
+  identity?: string
 }
 
 function snapshotFile(root: string, file: string): FileSnapshot | undefined {
@@ -44,8 +46,10 @@ function snapshotFile(root: string, file: string): FileSnapshot | undefined {
   if (!path || path === '..' || path.startsWith('../') || isAbsolute(path) || isCredentialTargetPath(path)) return
   try {
     const stat = lstatSync(absolute)
-    const bytes = checkedFileBytes(absolute, MAX_BYTES, () => relative(absolute, realpathSync.native(absolute)) === '', stat)
-    if (bytes !== null) return { path, digest: createHash('sha256').update(bytes).digest('hex') }
+    const exact = lstatSync(absolute, { bigint: true })
+    const bytes = checkedFileBytes(absolute, MAX_BYTES, () => relative(absolute, realpathSync.native(absolute)) === '', stat, exact)
+    if (bytes !== null) return { path, digest: createHash('sha256').update(bytes).digest('hex'),
+      identity: foregroundFileIdentity(exact.dev, exact.ino) }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return
     try {
@@ -109,14 +113,14 @@ export function settleForegroundEffect(input: {
   const output = prepared.output && snapshotFile(root, prepared.output.path)
   if (prepared.output && (!output?.digest || output.digest === prepared.output.digest)) return
   const captured = invocation.capturedOutput
-  const source = captured && output && prepared.output?.digest === null &&
-    captured.path === output.path && captured.digest === output.digest ? 'child_stdout' : undefined
+  const ownedOutput = captured && output && prepared.output?.digest === null &&
+    captured.path === output.path && captured.digest === output.digest && captured.identity === output.identity ? captured : undefined
   return {
     contract_hash: input.contract.contract_hash, task_id: input.contract.task_id, criterion_id: effect.criterionId,
     command_digest: sha256Canonical(argv), argv: [...effect.argv], cwd: '.',
     operation_id: tx.transaction_id, policy_decision_id: tx.policy_decision_id, input_hashes: prepared.inputs,
     ...(prepared.output && output?.digest ? { output: { path: output.path, before: prepared.output.digest, after: output.digest,
-      ...(source ? { source } : {}) } } : {}),
+      ...(ownedOutput ? { source: ownedOutput.source, identity: ownedOutput.identity } : {}) } } : {}),
     pre_revision: before.compositeTreeHash, post_revision: after.compositeTreeHash,
     stdout_digest: createHash('sha256').update(actual.stdout).digest('hex'),
   }
@@ -199,8 +203,11 @@ export function currentForegroundEffects(
       const output = snapshotFile(root, effect.outputPath)
       if (!output?.digest || !receipt.output || output.path !== receipt.output.path ||
           output.digest !== receipt.output.after || receipt.output.before === receipt.output.after) continue
-      if (receipt.output.source === 'child_stdout' && (receipt.output.before !== null ||
+      if (receipt.output.source !== undefined && (receipt.output.before !== null ||
           completed.postImageHashes?.[`output:${output.path}`] !== receipt.output.after)) continue
+      const publishedIdentity = completed.postImageHashes?.[`output-identity:${output.path}`]
+      if ((receipt.output.source === 'child_file' || publishedIdentity !== undefined || receipt.output.identity !== undefined) &&
+          (!publishedIdentity || receipt.output.identity !== publishedIdentity || output.identity !== publishedIdentity)) continue
     } else if (receipt.output) continue
     accepted.set(receipt.criterion_id, receipt)
   }
