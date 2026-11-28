@@ -232,6 +232,10 @@
       "class": "core",
       "capability": "sandbox file writes"
     },
+    "dist/sandboxForegroundFile.js": {
+      "class": "core",
+      "capability": "native foreground file custody"
+    },
     "dist/sandboxProcessTermination.js": {
       "class": "core",
       "capability": "sandbox process termination"
