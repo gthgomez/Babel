@@ -893,7 +893,8 @@ async function runChatEngineOnceScoped(input: RunChatEngineOnceInput): Promise<C
   // The retained objective, not the literal "continue" or "also …", owns
   // the operation. Ask the same admission classifier without committing it.
   const retainedSubmission = input.engine && typeof engine.prepareUserSubmission === 'function' &&
-    (isContinuationPrompt(input.task) || isStatusPrompt(input.task) || isAmendmentPrompt(input.task))
+    (isContinuationPrompt(input.task) || isStatusPrompt(input.task) || isAmendmentPrompt(input.task) ||
+      (typeof engine.isPendingDecisionReply === 'function' && engine.isPendingDecisionReply(input.task)))
     ? engine.prepareUserSubmission({ userInput: input.task }).runtime
     : null;
   const resolvedIntent = retainedSubmission?.objectiveContinuation

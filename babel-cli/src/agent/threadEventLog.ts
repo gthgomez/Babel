@@ -21,8 +21,16 @@ import {sha256Canonical} from '../acceptance/canonical.js';
 
 export const THREAD_EVENT_LOG_VERSION = 1 as const;
 
-/** Presentation evidence only; never reconstructed as provider context or authority. */
-export type ThreadTerminalResponse = { kind: 'answer' | 'error'; content: string };
+export interface ThreadDecisionContext {
+  question: string;
+  options: readonly string[];
+  impact: string;
+}
+
+/** Rendered content is presentation evidence; only structured decision context can be projected. */
+export type ThreadTerminalResponse =
+  | { kind: 'answer'; content: string; decision_context?: ThreadDecisionContext }
+  | { kind: 'error'; content: string };
 
 /** A present-but-invalid durable log must never be downgraded to legacy resume. */
 export class ThreadEventLogRestoreError extends Error {
@@ -343,6 +351,7 @@ export function amendLatestTurnEndedForTurn(
     const event = log.events[i];
     if (event?.kind === 'turn_ended' && event.turn_id === turnId) {
       event.outcome = input.outcome;
+      if (input.outcome !== 'NEEDS_HUMAN_DECISION' && event.response?.kind === 'answer') delete event.response.decision_context;
       event.status = input.status;
       event.reason_code = input.reason.code;
       if (input.reason.detail !== undefined) event.reason_detail = input.reason.detail;
@@ -622,6 +631,15 @@ export function rebuildProviderMessagesFromEvents(
           name: e.tool_name,
         });
         break;
+      case 'turn_ended': {
+        const decision = e.outcome === 'NEEDS_HUMAN_DECISION' && e.response?.kind === 'answer'
+          ? e.response.decision_context : undefined;
+        if (decision) messages.push({
+          role: 'assistant',
+          content: [decision.question, ...decision.options.map(option => `- ${option}`), decision.impact].join('\n'),
+        });
+        break;
+      }
       default:
         break;
     }
@@ -1043,6 +1061,17 @@ function assertThreadEventPayload(event: Record<string, unknown>, kind: string, 
         const response = requireRecord(event['response'], `${context} response`);
         if (response['kind'] !== 'answer' && response['kind'] !== 'error') throw new Error(`${context} has invalid response kind`);
         requireString(response, 'content', `${context} response`);
+        if (response['decision_context'] !== undefined) {
+          const decision = requireRecord(response['decision_context'], `${context} decision context`);
+          const validText = (value: unknown, limit: number) => typeof value === 'string' &&
+            value.length > 0 && value.length <= limit && value === value.trim();
+          if (event['outcome'] !== 'NEEDS_HUMAN_DECISION' || response['kind'] !== 'answer' ||
+              !validText(decision['question'], 1000) || !validText(decision['impact'], 1000) ||
+              !Array.isArray(decision['options']) || decision['options'].length < 2 || decision['options'].length > 6 ||
+              !decision['options'].every(choice => validText(choice, 300))) {
+            throw new Error(`${context} has invalid decision context`);
+          }
+        }
       }
       if (event['outcome'] !== undefined) {
         if (typeof event['outcome'] !== 'string' || !TERMINAL_OUTCOMES.has(event['outcome'] as TerminalOutcome)) {

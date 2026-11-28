@@ -107,6 +107,7 @@ export interface PreparedUserSubmission {
   input: UserSubmissionInput;
   runtime: TurnRuntimeSnapshot;
   objectiveDisposition: 'initial'|'preserve'|'replace';
+  decisionContinuation?: true;
 }
 
 export function emptyTurnCounters(): TurnRuntimeCounters {

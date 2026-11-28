@@ -661,10 +661,15 @@ export function analyzeTaskShape(taskText: string, allowDeclarativePoint = true)
     return !commandDenials.some(target => GENERAL_COMMANDS.test(target) ||
       (TESTS.test(target) ? testLike : prohibitedArgv(target, argv)));
   });
+  // Recognize a single adjacent transposition of "fix" when the opening
+  // imperative names a defect. Explicit edit denials still own the decision.
+  const transposedRepair = allowDeclarativePoint && /^(?:fxi|ifx)\s+(?:the|this|that|a)\s+[^.;!?\r\n]{0,100}\b(?:bug|regression|typo|issue)\b/i
+    .test(stripTaskRequestPrefix(positiveMutationScope.trim()));
   const hasMutationTokens =
     declarativePoint ||
     (allowDeclarativePoint && isDeclarativeProjectSpec(taskText)) ||
     foreground ||
+    transposedRepair ||
     /^(?:(?:can|could|would)\s+you\s+|please\s+)?(?:make|order|sort)\b/i.test(positiveMutationScope.trim()) ||
     /\b(?:and|then)\s+(?:make|order|sort)\s+(?:this|it|the|[\w-]+\s+(?:by|from))\b/i.test(positiveMutationScope) ||
     new RegExp(`\\b(clean\\s*up\\s+and\\s+delete|${MUTATION_VERB_SOURCE})\\b`, 'i').test(

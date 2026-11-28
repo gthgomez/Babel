@@ -84,7 +84,8 @@ import {
 } from './childSpec.js'
 import { confirmedMutationPaths } from './mutationTools.js'
 import { detectAndBuildBlockedReport } from './chatEngineSupport.js'
-import type { ThreadTerminalResponse } from './threadEventLog.js'
+import type { ThreadDecisionContext, ThreadTerminalResponse } from './threadEventLog.js'
+import { redactSecrets } from '../utils/redaction.js'
 import type {
   FinalizeParityTurnExtras,
   FinalizeParityTurnResult,
@@ -467,6 +468,7 @@ export type ChatStreamDoneExtra = {
   stopRequest?: import('../runtime/run-control.js').StopRequest
   /** Controller-only deferral; never accepted as a model tool argument. */
   needsHumanDecision?: boolean
+  decisionContext?: ThreadDecisionContext
   blockedReport?: BlockedReport | null
   verifierTampered?: boolean
   criticReceipt?: import('./diffCritic.js').DiffCriticVerdict | null
@@ -630,6 +632,7 @@ export function completeChatStream(
     !snapshot.outcome.budgetExceeded && !snapshot.outcome.verifierTampered && !extra?.blockedReport && !extra?.verifierTampered
   const {
     needsHumanDecision: _privateDecision,
+    decisionContext,
     stopRequest: stop,
     preservedUnverifiedCandidate,
     ...publicExtra
@@ -784,6 +787,9 @@ export function completeChatStream(
     {
       kind: 'answer',
       content: deliveredAnswer,
+      ...(terminal.outcome === 'NEEDS_HUMAN_DECISION' && decisionContext &&
+          [decisionContext.question, ...decisionContext.options, decisionContext.impact].every(text => redactSecrets(text) === text)
+        ? { decision_context: { ...decisionContext, options: [...decisionContext.options] } } : {}),
     },
     { completionDecision: completionDecisionPayload },
   )
