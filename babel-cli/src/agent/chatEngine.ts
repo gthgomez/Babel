@@ -156,8 +156,10 @@ import {
 import {
   resolveTaskShape,
   getChatTaskTune,
+  hasExplicitEditDenial,
   isMutationExecutionTask,
   resolveChatTaskClass,
+  stripScopedEditProhibitions,
   type ChatTaskClass,
   type VerificationPolicy,
   type RequestedTaskOperation,
@@ -441,6 +443,7 @@ import { evaluateCriterionCompletionV1, isForegroundOnlyAcceptance, type Criteri
 import { retainCurrentPointReceipts } from './pointVerifierWitness.js';
 import { inferFreshTaskAcceptance } from './taskAcceptanceMeaning.js';
 import { frozenExactForegroundCommands, isReadOnlyForegroundQuery, taskProhibitsRequestedCommand } from './requestedLocalExecution.js';
+import { decisionHasExecutionLimits, matchesDecisionChoice } from './chatDecisionRequest.js';
 import { frozenForegroundAmendmentSources } from './taskAcceptanceSource.js';
 import { sha256Canonical } from '../acceptance/canonical.js';
 import { parseSingleProcessArgv } from '../utils/commandArgv.js';
@@ -3050,6 +3053,25 @@ export class ChatEngine {
 
   taskMutationOwnership: import('./taskMutationOwnership.js').TaskMutationOwnership | null = null;
 
+  isPendingDecisionReply(input: string): boolean {
+    return this.pendingDecisionReply(input) === 'continue';
+  }
+
+  private pendingDecisionReply(input: string): 'continue' | 'restricted' | undefined {
+    const events = [...this.parity.eventLog.events].reverse();
+    const latest = events.find(event => !event.context_copy && (event.kind === 'turn_started' || event.kind === 'turn_ended'));
+    if (latest?.kind !== 'turn_ended' || latest.outcome !== 'NEEDS_HUMAN_DECISION' || latest.response?.kind !== 'answer') return;
+    const decision = latest.response.decision_context;
+    if (!decision || !matchesDecisionChoice(decision.options, input)) return;
+    const start = events.find(event => !event.context_copy && event.turn_id === latest.turn_id && event.kind === 'turn_started');
+    if (start?.kind !== 'turn_started' || start.task_id === undefined ||
+        start.task_id !== this.parity.liveAuthority?.taskContract.task_id || start.projectRoot !== this.options.projectRoot) return;
+    // Admission needs a full request when the choice or its context would narrow the task's authority.
+    return decisionHasExecutionLimits(input, 'choice') ||
+      [decision.question, decision.impact].some(text => decisionHasExecutionLimits(text, 'context')) ||
+      hasExplicitEditDenial(input) || stripScopedEditProhibitions(input) !== input ? 'restricted' : 'continue';
+  }
+
   /**
    * W0.3: open TurnRuntime for a user submission.
    * Isolates write/gate counters by default so a prior task's patch cannot
@@ -3058,6 +3080,12 @@ export class ChatEngine {
    */
   prepareUserSubmission(input: import('./turnRuntime.js').UserSubmissionInput): import('./turnRuntime.js').PreparedUserSubmission {
     const previous = this.snapshotPreviousForBegin();
+    const decision = previous === null ? undefined : this.pendingDecisionReply(input.userInput);
+    if (decision === 'restricted') {
+      throw new Error('Restate the requested action and its execution limits in a new request.');
+    }
+    const decisionContinuation = input.continueTask === undefined && decision === 'continue';
+    const continueTask = input.continueTask ?? (decisionContinuation ? true : undefined);
     const runtime = beginUserSubmission({
       userInput: input.userInput,
       projectRoot: this.options.projectRoot,
@@ -3070,13 +3098,14 @@ export class ChatEngine {
       ...(input.taskIntent !== undefined
         ? { taskIntent: input.taskIntent }
         : {}),
-      ...(input.continueTask !== undefined
-        ? { continueTask: input.continueTask }
+      ...(continueTask !== undefined
+        ? { continueTask }
         : {}),
       classifyIntent: (text) => ChatEngine.classifyChatTaskIntent(text),
       previous,
     });
-    return {input:{...input},runtime,objectiveDisposition:previous===null?'initial':runtime.objectiveContinuation?'preserve':'replace'};
+    return {input:{...input},runtime,objectiveDisposition:previous===null?'initial':runtime.objectiveContinuation?'preserve':'replace',
+      ...(decisionContinuation ? { decisionContinuation: true } : {})};
   }
 
   private resolveSubmissionLimits(runtime:TurnRuntimeSnapshot):ChatEngineLimits {

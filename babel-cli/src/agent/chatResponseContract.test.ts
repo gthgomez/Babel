@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ChatEngine } from './chatEngine.js'
+import { decisionHasExecutionLimits, matchesDecisionChoice } from './chatDecisionRequest.js'
 import { DeepInfraApiRunner } from '../runners/deepInfraApi.js'
 import type { ToolStreamEvent } from '../runners/base.js'
 import { SafeExecutor } from '../sandbox.js'
@@ -11,12 +12,54 @@ import { resetDockerAvailabilityCache, setDockerAvailableForTest } from '../conf
 import { normalizeChatAnswer } from './chatResponseContract.js'
 import { buildChatToolDefinitions } from './chatToolDefinitions.js'
 import { parseTextToolTurn } from './textToolParser.js'
+import { amendLatestTurnEndedForTurn, createThreadEventLog, endTurn, parseThreadEventLog, rebuildProviderMessagesFromEvents,
+  serializeThreadEventLog, startTurn } from './threadEventLog.js'
 
 test('native tools expose a bounded decision request that does not carry action authority', () => {
   const tool = buildChatToolDefinitions().find(item => item.function.name === 'request_user_decision')
   assert.ok(tool)
   assert.deepEqual(tool.function.parameters.required, ['question', 'options', 'impact'])
   assert.equal(tool.function.parameters.additionalProperties, false)
+})
+
+test('decision continuation recognizes one complete displayed choice and keeps case-sensitive choices distinct', () => {
+  const choices = ['Preserve A', 'Preserve a', 'Preserve both lines\nKeep the separator']
+  assert.equal(matchesDecisionChoice(choices, 'Preserve A'), true)
+  assert.equal(matchesDecisionChoice(choices, 'preserve a'), false)
+  assert.equal(matchesDecisionChoice(choices, 'Preserve'), false)
+  assert.equal(matchesDecisionChoice(choices, 'Preserve A\nAnd run a command'), false)
+  assert.equal(matchesDecisionChoice(choices, 'Preserve both lines\nKeep the separator'), true)
+  for (const restricted of ['Skip invalid rows and do not run the exporter', 'Skip invalid rows and do not generate output.csv',
+    'Inspect only', 'A. Inspect only', '1. Stop', 'Option C: Please cancel this task', '- Only review the source',
+    'Option A - Inspect only', 'Option A — Inspect only', '(A) Inspect only'])
+    assert.equal(decisionHasExecutionLimits(restricted, 'choice'), true)
+  assert.equal(decisionHasExecutionLimits('B. Apply the fix', 'choice'), false)
+  assert.equal(decisionHasExecutionLimits('Save the report as JSON', 'choice'), false)
+  for (const label of ['B', '(B)', '[2]', 'Option B', 'Choose option B', '*** Continue ***',
+    'Choose the alternative [2]', 'Please choose Option (C)', 'Select plan — 6', '👍'])
+    assert.equal(decisionHasExecutionLimits(label, 'choice'), true)
+  assert.equal(decisionHasExecutionLimits('Choose A to apply the fix, or B to inspect only.', 'context'), true)
+  assert.equal(decisionHasExecutionLimits('How should invalid rows be handled in the report?', 'context'), false)
+})
+
+test('provider history restores structured decision context and drops it on terminal correction', () => {
+  const log = createThreadEventLog()
+  const turnId = startTurn(log, { task: 'Fix the export.', model: 'fixture', provider: 'fixture', projectRoot: process.cwd(), policyPreset: 'fixture' })
+  const content = 'Presentation-only text that must not enter provider history.'
+  endTurn(log, turnId, 'NEEDS_HUMAN_DECISION', 'blocked', undefined, {
+    kind: 'answer', content, decision_context: { question: 'How should invalid rows be handled?', options: ['A. Skip them', 'B. Stop'], impact: 'The result differs.' },
+  })
+  const restored = parseThreadEventLog(serializeThreadEventLog(log))
+  const user = { role: 'user', content: 'Fix the export.' }
+  assert.deepEqual(rebuildProviderMessagesFromEvents(restored), [user, {
+    role: 'assistant', content: 'How should invalid rows be handled?\n- A. Skip them\n- B. Stop\nThe result differs.',
+  }])
+  assert.ok(amendLatestTurnEndedForTurn(restored, turnId, { outcome: 'INFRA_FAILURE', status: 'failed', reason: { code: 'unknown', cause_class: null } }))
+  const corrected = parseThreadEventLog(serializeThreadEventLog(restored))
+  assert.deepEqual(rebuildProviderMessagesFromEvents(corrected), [user])
+  const terminal = corrected.events.at(-1)
+  assert.ok(terminal?.kind === 'turn_ended')
+  assert.deepEqual(terminal.response, { kind: 'answer', content })
 })
 
 test('text-tool requests preserve a structured blocking choice', () => {
@@ -55,9 +98,17 @@ test('bare JSON normalization is confined to the explicit current-user contract 
     assert.equal(normalizeChatAnswer(answer, 'Return only a JSON object.'), answer)
 })
 
-for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'partial_then_decision', 'optional_question', 'historical_choice', 'hypothetical_choice'] as const)
+for (const scenario of ['json_format', 'deferred_choice', 'plain_choice', 'alternative_choice', 'partial_then_decision', 'restricted_context', 'opaque_choice', 'inspection_choice', 'optional_question', 'historical_choice', 'hypothetical_choice'] as const)
 test(`response contract ${scenario} settles without speculative continuation`, async t => {
-  const isChoice = scenario === 'deferred_choice' || scenario === 'plain_choice' || scenario === 'alternative_choice' || scenario === 'partial_then_decision'
+  const isChoice = scenario === 'deferred_choice' || scenario === 'plain_choice' || scenario === 'alternative_choice' || scenario === 'partial_then_decision' || scenario === 'restricted_context' || scenario === 'opaque_choice' || scenario === 'inspection_choice'
+  const decisionQuestion = scenario === 'restricted_context'
+    ? 'If you choose one of these labels, do not run the exporter. How should I inspect it?'
+    : scenario === 'opaque_choice' ? 'Choose between implementation [1] and inspection [2].'
+      : scenario === 'inspection_choice' ? 'How should I proceed?' : 'How should invalid rows be handled?'
+  const decisionOptions = scenario === 'restricted_context' ? ['Inspect only', 'Proceed', 'Also apply option B']
+    : scenario === 'opaque_choice' ? ['Choose the alternative [1]', 'Choose the alternative [2]']
+      : scenario === 'inspection_choice' ? ['Inspect only', 'A. Inspect only', '(A) Inspect only', 'Option A — Inspect only', '1. Stop', 'Save the report as JSON']
+        : ['Skip invalid rows', 'Fail the export', 'Do not edit any files', 'Do not run the exporter', 'Do not generate output.csv']
   const root = mkdtempSync(join(tmpdir(), 'chat-response-contract-'))
   const names = ['BABEL_NATIVE_TOOLS', 'BABEL_EXECUTION_PROFILE', 'BABEL_BENCHMARK_DOCKER_IMAGE',
     'BABEL_DOCKER_DISABLE', 'BABEL_ALLOW_HOST_FALLBACK', 'BABEL_BENCHMARK_DOCKER_EXTRA_ARGS'] as const
@@ -111,8 +162,8 @@ test(`response contract ${scenario} settles without speculative continuation`, a
         yield { type: 'done', finishReason: 'tool_calls' }
       } else if (isChoice && this.turns === 2) {
         yield { type: 'tool_use', id: 'decision-request', name: 'request_user_decision', input: {
-          question: 'How should invalid rows be handled?',
-          options: ['Skip invalid rows', 'Fail the export'],
+          question: decisionQuestion,
+          options: decisionOptions,
           impact: 'This changes the exported result and error behavior.',
         } }
         yield { type: 'tool_use', id: 'must-not-run', name: 'test_run', input: { command: 'npm test' } }
@@ -147,8 +198,8 @@ test(`response contract ${scenario} settles without speculative continuation`, a
   let streamedAnswer=''
   const result = await engine.submitMessage(task, {onAnswerChunk:chunk=>{streamedAnswer+=chunk}})
   const structuredDecisionAnswer = [
-    'I need your decision before proceeding: How should invalid rows be handled?',
-    '', 'Options:', '- Skip invalid rows', '- Fail the export', '',
+    `I need your decision before proceeding: ${decisionQuestion}`,
+    '', 'Options:', ...decisionOptions.map(option => `- ${option}`), '',
     'Why it matters: This changes the exported result and error behavior.',
     'No actions in this turn were started. Earlier changes, if any, remain unverified.',
   ].join('\n')
@@ -177,6 +228,34 @@ test(`response contract ${scenario} settles without speculative continuation`, a
     assert.ok(result.toolCalls?.some(call => call.tool === 'request_user_decision'))
     assert.ok(result.toolCalls?.some(call => call.tool === 'test_run' && call.error === 'decision_required'))
     assert.ok(result.toolCalls?.some(call => call.tool === 'write_file' && call.error === 'decision_required'))
+    if (scenario === 'restricted_context' || scenario === 'opaque_choice') {
+      for (const choice of decisionOptions)
+        assert.throws(() => engine.prepareUserSubmission({ userInput: choice }), /Restate the requested action and its execution limits/)
+    }
+    if (scenario === 'inspection_choice') {
+      for (const userInput of decisionOptions.slice(0, -1))
+        assert.throws(() => engine.prepareUserSubmission({ userInput }), /Restate the requested action and its execution limits/)
+      assert.equal(engine.prepareUserSubmission({ userInput: 'Save the report as JSON' }).objectiveDisposition, 'preserve')
+    }
+    if (scenario === 'partial_then_decision') {
+      const picked = engine.prepareUserSubmission({ userInput: 'Skip invalid rows' })
+      assert.equal(picked.objectiveDisposition, 'preserve')
+      assert.equal(picked.runtime.continuedTask, true)
+      assert.equal(picked.runtime.durableObjective, task)
+      assert.equal(engine.prepareUserSubmission({ userInput: 'Skip invalid rows', operation: 'READ_ONLY' }).runtime.effectiveOperation, 'READ_ONLY')
+      assert.equal(engine.prepareUserSubmission({ userInput: 'Something else' }).objectiveDisposition, 'replace')
+      for (const restriction of ['Do not edit any files', 'Do not run the exporter', 'Do not generate output.csv'])
+        assert.throws(() => engine.prepareUserSubmission({ userInput: restriction }), /Restate the requested action and its execution limits/)
+      const taskId = engine.getTaskContract()?.task_id
+      const owner = engine.getTaskAllowanceSnapshot()?.taskOwnerId
+      assert.ok(taskId && owner)
+      await engine.submitMessage('Skip invalid rows', {})
+      assert.equal(engine.getTaskContract()?.task_id, taskId)
+      assert.equal(engine.getTaskAllowanceSnapshot()?.taskOwnerId, owner)
+      assert.equal(engine.getTurnRuntimeSnapshot()?.continuedTask, true)
+      assert.equal(engine.getWriteCount(), 1)
+      assert.equal(engine.prepareUserSubmission({ userInput: 'Skip invalid rows' }).objectiveDisposition, 'replace')
+    }
   } else {
     assert.notEqual(result.outcome, 'NEEDS_HUMAN_DECISION')
     if (scenario === 'json_format') {

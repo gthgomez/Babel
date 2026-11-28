@@ -246,7 +246,7 @@ export function admitObjectiveSubmission(
   const acceptedOperation = {
     requestedOperation,
     ...(input.taskIntent !== undefined ? { requestedTaskIntent: input.taskIntent } : {}),
-    requestedContinueTask: input.continueTask === true,
+    requestedContinueTask: input.continueTask === true || prepared.decisionContinuation === true,
     ...(objectiveOperation ? { objectiveOperation } : {}),
   }
   const inputDigest = acceptedObjectiveInputDigest({ task: input.userInput, ...acceptedOperation })

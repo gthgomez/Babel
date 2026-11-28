@@ -7,6 +7,24 @@ export function findDecisionRequest(actions: readonly ChatToolAction[]): Decisio
   return actions.find((action): action is DecisionRequest => action.type === 'request_user_decision')
 }
 
+/** Match a complete choice from the structured controller record. */
+export function matchesDecisionChoice(options: readonly string[], reply: string): boolean {
+  const choice = reply.trim()
+  const exact = options.filter(option => option === choice).length
+  return exact > 0 ? exact === 1 : options.filter(option => option.toLowerCase() === choice.toLowerCase()).length === 1
+}
+
+/** Do not carry the old authority when the decision text introduces a limit. */
+export function decisionHasExecutionLimits(text: string, kind: 'choice' | 'context'): boolean {
+  const denial = /\b(?:do\s+not|don['’]t|must\s+not|never|without|read[ -]?only|dry[ -]?run|no\s+(?:edits?|writes?|changes?|file\s+changes|commands?|tests?|execution|output)|skip\s+(?:(?:all|the)\s+)?tests?)\b/i
+  const inspection = /\b(?:inspect|read|review|audit|explain|describe|summarize|observe|show|report)\b(?:[ \t]+[\w'-]+){0,4}[ \t]+only\b|\b(?:only|just|merely)\s+(?:inspect|read|review|audit|explain|describe|summarize|observe|show|report)\b/i
+  const restrictedClause = /(?:^|[.!?,:;()\n–—-]|\b(?:or|rather|then|and|to)\s+)\s*(?:please\s+)?(?:inspect|read|review|audit|explain|describe|summarize|observe|show|report|stop|abort|cancel)\b/i
+  const opaqueChoice = /^(?:(?:please\s+)?(?:(?:use|choose|select|take)\s+|go\s+with\s+)?(?:the\s+)?(?:option|choice|alternative|plan)\s+)?[^ ]+$/i
+  const choiceText = text.match(/[\p{L}\p{M}\p{N}_]+(?:-[\p{L}\p{M}\p{N}_]+)*/gu)?.join(' ')
+  return denial.test(text) || inspection.test(text) || restrictedClause.test(text.trim()) ||
+    (kind === 'choice' && (!choiceText || opaqueChoice.test(choiceText)))
+}
+
 /** Convert a structured decision action batch into a blocked terminal payload. */
 export function buildDecisionRequestDeferral(input: {
   request: DecisionRequest

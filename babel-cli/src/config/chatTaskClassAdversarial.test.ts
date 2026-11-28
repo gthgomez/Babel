@@ -12,6 +12,7 @@ import {
   analyzeTaskShape,
   classifyChatTaskClassFromText,
   getChatTaskTune,
+  resolveTaskShape,
   type ChatTaskClass,
   type TaskComplexity,
   type TaskOperation,
@@ -444,6 +445,17 @@ describe('S07 class regression: coordinated no-edit negations are stripped in fu
     assert.equal(analyzeTaskShape('do not clean up and delete the logs').operation, 'READ_ONLY');
     assert.equal(analyzeTaskShape('never clean up and delete the logs').operation, 'READ_ONLY');
   });
+});
+
+test('a transposed repair imperative requires an operative bug request', () => {
+  assert.notEqual(resolveTaskShape('Fxi the output count bug per the repository contract. Run the available check.').operation, 'READ_ONLY');
+  assert.notEqual(resolveTaskShape('Could you please ifx this parser regression?').operation, 'READ_ONLY');
+  assert.notEqual(resolveTaskShape('Fxi the bug.').operation, 'READ_ONLY');
+  assert.notEqual(resolveTaskShape('Ifx this issue.').operation, 'READ_ONLY');
+  assert.equal(resolveTaskShape('Fxi the output count bug. Do not edit any files.').operation, 'READ_ONLY');
+  assert.equal(resolveTaskShape('Explain the request "Fxi the output count bug".').operation, 'READ_ONLY');
+  assert.equal(resolveTaskShape('```text\nFxi the output count bug\n```\nDescribe the quote.').operation, 'READ_ONLY');
+  assert.equal(resolveTaskShape('Fxi is the name of the issue tracker.').operation, 'READ_ONLY');
 });
 
 test('ordinary "change" edit requests classify as mutating; noun/negation usage stays read-only', () => {

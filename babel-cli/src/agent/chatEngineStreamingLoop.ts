@@ -1239,7 +1239,9 @@ export class ChatEngineStreamingLoop {
           });
           if (!this.host.isSubmissionCurrent(submissionGeneration)) return;
           this.host.conversation.push({ role: 'assistant', content: deferral.answer });
-          yield this.host.streamDone(deferral.answer, { needsHumanDecision: true });
+          yield this.host.streamDone(deferral.answer, { needsHumanDecision: true, decisionContext: {
+            question: decisionRequest.question, options: decisionRequest.options, impact: decisionRequest.impact,
+          } });
           return;
         }
         if (turnResult.thinking) {
